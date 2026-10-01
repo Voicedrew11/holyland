@@ -5,10 +5,14 @@ Reads SYSTEM.CNF from the ISO9660 filesystem, follows its BOOT2 entry
 (e.g. ``BOOT2 = cdrom0:\\SLUS_203.18;1``) and writes that file out.
 
 Usage:
-    extract_elf.py <iso-path> <output-dir>
+    extract_elf.py [--all] <iso-path> <output-dir>
 
 Writes <output-dir>/<BOOT_ELF_NAME> and prints the game id (the ELF name).
 Byte-identical to the on-disc file extent.
+
+With --all, unpacks the whole disc tree instead (the runtime reads loose files
+from its working directory). Files named DUMMY*.OUT are skipped: they are disc
+padding.
 """
 
 import os
@@ -61,14 +65,42 @@ def norm(name: bytes) -> str:
     return s.upper()
 
 
-def find_file(f, path_parts):
+def root_entries(f):
     # PVD root record lives at sector 16, offset 156
     f.seek(16 * SECTOR)
     pvd = f.read(SECTOR)
     if pvd[0] != 1 or pvd[1:6] != b"CD001":
         raise SystemExit("not an ISO9660 image (bad PVD)")
     root, _ = parse_dir_record(pvd, 156)
-    entries = read_dir(f, root["extent"], root["size"])
+    return read_dir(f, root["extent"], root["size"])
+
+
+def extract_tree(f, entries, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    for e in entries:
+        n = norm(e["name"])
+        if n in ("\x00", "\x01"):
+            continue
+        path = os.path.join(out_dir, n)
+        if e["is_dir"]:
+            extract_tree(f, read_dir(f, e["extent"], e["size"]), path)
+        elif n.startswith("DUMMY") and n.endswith(".OUT"):
+            continue
+        else:
+            f.seek(e["extent"] * SECTOR)
+            remaining = e["size"]
+            with open(path, "wb") as out:
+                while remaining:
+                    chunk = f.read(min(remaining, 1 << 24))
+                    if not chunk:
+                        raise SystemExit(f"short read extracting {n}")
+                    out.write(chunk)
+                    remaining -= len(chunk)
+            print(f"wrote {path} ({e['size']} bytes)")
+
+
+def find_file(f, path_parts):
+    entries = root_entries(f)
     for i, part in enumerate(path_parts):
         want = part.upper()
         match = None
@@ -92,10 +124,13 @@ def find_file(f, path_parts):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"usage: {sys.argv[0]} <iso-path> <output-dir>", file=sys.stderr)
+    args = sys.argv[1:]
+    extract_all = "--all" in args
+    args = [a for a in args if a != "--all"]
+    if len(args) != 2:
+        print(f"usage: {sys.argv[0]} [--all] <iso-path> <output-dir>", file=sys.stderr)
         return 2
-    iso_path, out_dir = sys.argv[1], sys.argv[2]
+    iso_path, out_dir = args
     os.makedirs(out_dir, exist_ok=True)
 
     with open(iso_path, "rb") as f:
@@ -121,6 +156,8 @@ def main():
         rec = find_file(f, parts)
         f.seek(rec["extent"] * SECTOR)
         data = f.read(rec["size"])
+        if extract_all:
+            extract_tree(f, root_entries(f), out_dir)
 
     name = parts[-1].upper()
     out_path = os.path.join(out_dir, name)

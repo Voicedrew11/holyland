@@ -4,109 +4,86 @@ Native PC port of **King's Field: The Ancient City** (FromSoftware, 2002,
 US release `SLUS-20318`) built with
 [PS2Recomp](https://github.com/ran-j/PS2Recomp), a PlayStation 2 static
 recompiler that translates the game's MIPS R5900 ELF into C++ and runs it
-against a portable runtime — no emulation loop, a real native binary.
+against a portable runtime: no emulation loop, a real native binary.
 
-> **You must supply your own disc image.** Nothing in this repo contains game
-> data, and the build requires your legally owned copy of the game. The ISO
-> name in this folder is an example; any dump of the same release works.
+> **You must supply your own disc image.** This repo contains no game data.
+> You recompile from your legally owned copy of the US release; the build
+> checks the boot ELF's hash and refuses anything else.
 
-## Status: exploring (day 1)
+## Status: early, boots but not playable
 
-First analyzer-only pass on `SLUS_203.18` recompiles **cleanly**:
+- Recompiles cleanly: 28,008 functions, 27,719 recompiled, 289 SDK stubs,
+  **0 errors**.
+- Boots through EE/IOP init, loads the real IOP modules, and runs the game's
+  main loop. Keyboard and gamepad input reach the game.
+- A GIF `NLOOP=0` bug that corrupted the display registers (no text or
+  textures) is fixed in [`patches/`](patches); rendering still needs
+  verifying from a clean boot.
+- No audio yet (not implemented in the PS2Recomp runtime). Not a complete
+  game yet.
 
-| Metric | Result |
-|---|---|
-| Functions processed | 3208 |
-| Recompiled | 3019 |
-| Stubs (SDK bindings) | 189 |
-| Skipped | 0 |
-| Decode failures | 0 |
-| Errors | **0** |
-| Output | 3218 `.cpp` files, ~84 MB |
-
-No runaway function boundaries (the classic failure mode on other titles).
-Remaining warnings are `JR`/`JALR` fallback promotions for switch tables,
-which is normal. See [`docs/NOTES.md`](docs/NOTES.md) for the work log.
+Details and open questions: [`docs/NOTES.md`](docs/NOTES.md).
 
 ## How it works (N64Recomp model)
 
-Ship the tooling plus the per-game configuration; the user recompiles from
-their own disc. The generated C++ is the game's own code translated, and the
-disc image is needed at run time anyway (the game issues raw sector reads).
-The per-game configuration (`kfiv/config.toml` + function map, ~60 KB) **is
-the deliverable** — everything else is derived.
+This repo ships the tooling and the per-game data; you recompile from your own
+disc. The generated C++ is the game's own code translated, so it is never
+distributed. The per-game data in [`kfiv/`](kfiv) is small:
+
+- `config.toml`: recompiler config with the SDK stub list;
+- `SLUS_203.18.functions.csv`: function boundaries (from a Ghidra analysis), so
+  **you don't need Ghidra**;
+- `SLUS_203.18.sha256`: the exact boot ELF this data matches.
+
+## Quick start (Linux)
+
+1. Put your disc image in [`disc/`](disc) (it is git-ignored), or anywhere.
+2. Install the prerequisites in [`docs/building.md`](docs/building.md).
+3. Run:
+
+```sh
+./scripts/00-build-tools.sh                          # once: build PS2Recomp tools
+./scripts/01-extract.sh "disc/King's Field The Ancient City.iso"
+./scripts/02-recompile.sh                            # expect errors: 0
+./scripts/03-build-runner.sh                         # long link step
+./scripts/04-run.sh
+```
+
+Everything generated (unpacked disc, C++ output, runner build) goes to
+`~/.local/share/kfiv-pc` by default, outside this repo. Pass a game dir as the
+last argument to any script to change it. Full walkthrough, controls and
+troubleshooting: [`docs/building.md`](docs/building.md).
 
 ## Layout
 
 ```
 KFIV-PC/
-├── README.md               this file
-├── .recomp.json            third-party project descriptor (recomp.fyi schema)
-├── kfiv/
-│   └── config.toml         recompiler config: analyzer SDK stubs + MMIO/perf data
-├── scripts/
-│   ├── extract_elf.py      ISO -> boot ELF (stdlib only, no 7z needed)
-│   ├── 01-extract.sh       pull SLUS_203.18 out of your ISO
-│   ├── 02-analyze.sh       run ps2_analyzer (SDK stub names)
-│   ├── 03-recompile.sh     run ps2_recomp (ELF -> C++)
-│   ├── 04-build-runner.sh  build ps2EntryRunner with generated sources
-│   └── 05-run.sh           run the port (needs the disc image)
-└── docs/
-    ├── NOTES.md            work log: blocker, findings, ruled-out avenues
-    └── workflow.md         end-to-end Linux pipeline
+├── kfiv/             per-game data: config, function map, ELF hash
+├── patches/          patches applied to PS2Recomp at runner build time
+├── scripts/          00-build-tools .. 04-run (end users), maintainer/ (Ghidra-side)
+├── disc/             put your disc image here (contents git-ignored)
+├── docs/
+│   ├── building.md     step-by-step build and run guide
+│   ├── maintainers.md  regenerating the function map (Ghidra), patch workflow
+│   └── NOTES.md        work log: findings, ruled-out avenues
+├── .recomp.json      project descriptor (PS2Recomp game-project format)
+└── LICENSE           MIT (patches/ are GPL-3.0, derived from PS2Recomp)
 ```
-
-Game data (`ISO`, extracted `ELF`, generated `output/`, `_build/`) lives
-**outside git** — see [`.gitignore`](.gitignore). Recommended local layout:
-
-```
-~/.local/share/kfiv-pc/     # or anywhere outside this repo
-├── SLUS_203.18             # extracted boot ELF
-├── output/                 # generated C++ (disposable, regenerated)
-└── _build/                 # PS2Recomp clone + runner build (disposable)
-```
-
-## Quick start (Linux)
-
-```sh
-# 0. one-off: clone + build the PS2Recomp tools (analyzer + recompiler)
-git clone --recurse-submodules https://github.com/ran-j/PS2Recomp.git /path/to/PS2Recomp
-cmake -S /path/to/PS2Recomp -B /path/to/PS2Recomp-build \
-  -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_RUNTIME=OFF \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build /path/to/PS2Recomp-build --config Release -j"$(nproc)"
-
-# 1. extract the boot ELF from your disc
-./scripts/01-extract.sh "/path/to/King's Field The Ancient City.iso" ~/.local/share/kfiv-pc
-
-# 2-3. analyze + recompile
-./scripts/02-analyze.sh ~/.local/share/kfiv-pc   # refreshes kfiv/config.toml stubs
-./scripts/03-recompile.sh ~/.local/share/kfiv-pc # ELF -> output/*.cpp, expect errors: 0
-
-# 4-5. build the runner and play (see docs/workflow.md for GUI deps)
-./scripts/04-build-runner.sh ~/.local/share/kfiv-pc
-./scripts/05-run.sh ~/.local/share/kfiv-pc "/path/to/King's Field The Ancient City.iso"
-```
-
-Ghidra boundary refinement (recommended before serious debugging) is
-documented in [`docs/workflow.md`](docs/workflow.md) step 4.
 
 ## Next steps
 
-1. **Ghidra import/export** for exact function boundaries (analyzer heuristics
-   alone miss `J`-only targets); merge analyzer stubs + Ghidra CSV.
-2. **Runner build + boot test**; triage `guest-branch:missing-target` /
-   syscall TODOs per `docs/workflow.md`.
-3. **Game overrides** (`ps2xRuntime` `PS2_REGISTER_GAME_OVERRIDE`) for
-   per-build routing, keyed by ELF metadata — never global hacks.
-4. Packaging deferred until it boots (measure `/O2` compile time on the
-   ~84 MB of generated C++).
+1. Confirm textures and text render after the GIF fix; triage what the first
+   in-game screens expose.
+2. Per-game overrides via PS2Recomp's `PS2_REGISTER_GAME_OVERRIDE`, keyed by
+   ELF metadata, never global hacks.
+3. Upstream the runtime fixes in `patches/` to PS2Recomp.
+4. Packaging, once it is playable.
 
 ## Acknowledgments
 
 - [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j (GPL-3.0),
   inspired by N64Recomp; ELF parsing via ELFIO, TOML via toml11, formatting
   via fmt; runtime reference PCSX2.
-- End-to-end methodology informed by
+- Methodology informed by
   [ps2recomp-workbench](https://github.com/phmdacosta/ps2recomp-workbench)
   (Windows-focused; this repo adapts it to Linux).

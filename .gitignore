@@ -1,6 +1,6 @@
 # Game data + derived artifacts: never commit these.
 # The user supplies their own disc image and the toolchain regenerates the rest.
-# The per-game deliverable is kfiv/config.toml (+ function CSV once Ghidra runs).
+# The per-game deliverable is kfiv/ (config, function map, ELF hash).
 
 # Disc images (any dump of the game); disc/ holds the user's own dump
 disc/*
@@ -24,6 +24,9 @@ SLPM_*
 SCUS_*
 SCES_*
 SCPS_*
+# ...except the committed per-game data, which shares the serial prefix.
+!kfiv/SLUS_*.csv
+!kfiv/SLUS_*.sha256
 *.elf
 *.ELF
 

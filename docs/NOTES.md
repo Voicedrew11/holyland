@@ -3,12 +3,16 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-09-30, session 1)
+## Current state (2026-09-30)
 
-- **Stage:** exploring. Analyzer-only recompile is clean (errors: 0).
-  Ghidra boundaries + runner boot not yet attempted.
-- **Next step:** Ghidra import/export for exact boundaries, then runner build
-  + boot test per `workflow.md`.
+- **Stage:** boots and runs its main loop on the Linux runner. Input works;
+  the menu loop is vsync-paced idle (normal). No audio yet (not implemented
+  in the runtime).
+- **Last fix:** GIF `NLOOP=0` handling (see `patches/`), which was feeding
+  texture bytes into GS register writes and corrupting DISPFB1. Re-verify that
+  textures and text now render from a clean boot.
+- **Next step:** confirm textures/text render, then triage whatever the first
+  in-game screens expose (per `maintainers.md`, iteration loop).
 
 ## Findings
 
@@ -27,30 +31,29 @@ place as state changes; link session logs at the point they support.
 - Leading-underscore bindings present (`_sceSDC`, `_printf`, `_malloc_r`,
   …). Per workbench experience the runtime registers them *without* the
   underscore — normalize before trusting stub coverage; validate against
-  `ps2_call_list.h` (see `workflow.md` step 5).
+  `ps2_call_list.h` (see `maintainers.md` step 2).
 - PS2Recomp Linux configure: full build with `PS2X_BUILD_STUDIO=OFF` still
   pulls raylib/GLFW (Xinerama headers missing on this Fedora box) — the GUI
   dependency comes from the runtime host backend (raylib is unconditional;
   `DEBUG_UI=OFF` only drops imgui). Analyzer+recompiler build with
   `-DPS2X_BUILD_RUNTIME=OFF` is clean. Runner needs
-  `sudo dnf install libXinerama-devel ...` first.
+  the X11 dev packages listed in `building.md` first.
 - Ghidra 12.1.3 + EmotionEngine extension, import 2026-09-30:
   `function_count = 3185` (analyzer: 3208 — consistent), 28008 CSV records,
   but only **47 stubs** vs analyzer's 264. Merge strategy confirmed: Ghidra
   for boundaries, analyzer for SDK names. Raw export also demonstrated the
-  known trap: stale paths (`output=/home/voicedrew/output`,
-  `ghidra_output=.../Bitwig Studio/share`) — never use it directly.
-  Export saved as `<game-dir>/ghidra.toml` (reference only).
+  known trap: stale absolute paths for `output` and `ghidra_output` — never
+  use it directly. Export saved as `<game-dir>/ghidra.toml` (reference only).
 - 2026-09-30: runner links (83 MB) after moving generated code into
   `ps2xRuntime/src/runner/` + `include/` (replacing the default table) and
   setting `TMPDIR` under the game dir (/tmp tmpfs too small for the LTO
   link). First boot with game code: boots through EE init, IOP modules,
   GS output — no missing-targets. Two traps fixed along the way: upstream
-  sets no x86 SIMD flags (`-msse4.1` needed); `05-run.sh` originally passed
+  sets no x86 SIMD flags (`-msse4.1` needed); `04-run.sh` originally passed
   a nonexistent `--iso` flag (runner takes ELF as argv[1], no CDVD support).
 - 2026-09-30: extracting the ISO into the game dir lets the IOP emulator
   load all 9 real IRXs (was: HLE fallbacks, 4 sound modules with no
-  provider). `cdRoot` defaults to CWD, so `05-run.sh` now `cd`s to the game
+  provider). `cdRoot` defaults to CWD, so `04-run.sh` now `cd`s to the game
   dir. Game now runs its main loop: dma/gif counters climb, pad polling
   live, pcs cycle 0x209d78/0x209660 (SIF-wait/main-loop). Understood the
   earlier "hang" at 0x1cb7e0: SDK `sceSifBindRpc` + poll-`server` retry
@@ -82,11 +85,12 @@ place as state changes; link session logs at the point they support.
   writes (TEXA, DISPFB1/DISPLAY1 ← font bytes from KF4.DAT). Fixed NLOOP
   0→32768 in `GS::processGIFPacket`, `visitPackedGifPacket`,
   `tryProcessNativeImageUploadPacket` (gs_frontend.cpp) and `gifTagNloop`
-  (ps2_memory.cpp) — spec-correct per Sony docs. Patched in
-  `~/src/PS2Recomp` (survives `04` re-clones) + incremental rebuild in
-  `_build`. Verify run: 0 texa lines, dispfb1 sane to tick 11880, 0
+  (ps2_memory.cpp) — spec-correct per Sony docs. Shipped as
+  `patches/0001-gs-gif-nloop-zero-means-32768.patch` (applied by
+  `03-build-runner.sh`). Verify run: 0 texa lines, dispfb1 sane to tick 11880, 0
   missing-targets. Textures/text should now render.
-  magenta. Magenta = `UploadFrame` fallback (`ps2_runtime.cpp`, blank
+- Earlier symptom, superseded by the root cause above: the screen turned
+  magenta mid-boot. Magenta = `UploadFrame` fallback (`ps2_runtime.cpp`, blank
   `MAGENTA` texture) when `copyLatchedHostPresentationFrame` fails. Deeper:
   tick snapshots show `dispfb1/display1` turning into ASCII (`=;3PPFbf`,
   `II?Z[Off`) — bytes traced to the font atlas in `DATA/KF4.DAT:6530096`.
@@ -101,7 +105,7 @@ place as state changes; link session logs at the point they support.
 
 - Do **not** run the raw Ghidra export alone: it rewrites `config.toml`
   wholesale (resets `skip`, writes stale absolute paths). Always
-  normalize + merge analyzer stubs afterwards (`workflow.md` step 5).
+  normalize + merge analyzer stubs afterwards (`maintainers.md` step 2).
 - `skip.txt` names must use the **recompiler's** `sub_XXXXXXXX` names, not
   Ghidra's `FUN_XXXXXXXX`, if a runaway boundary ever appears (none so far).
 - Game data (ISO/ELF/`output/`/`_build/`) stays out of git — `git clean -xfd`
