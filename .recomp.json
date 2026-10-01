@@ -1,0 +1,9 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "King's Field: The Ancient City",
+  "system": "PS2",
+  "type": "recomp",
+  "toolchain": "PS2Recomp",
+  "status": "exploring",
+  "original": { "region": "USA", "serial": "SLUS-20318" }
+}
