@@ -2,7 +2,9 @@
 # The user supplies their own disc image and the toolchain regenerates the rest.
 # The per-game deliverable is kfiv/config.toml (+ function CSV once Ghidra runs).
 
-# Disc images (any dump of the game)
+# Disc images (any dump of the game); disc/ holds the user's own dump
+disc/*
+!disc/README.md
 *.iso
 *.ISO
 *.bin
