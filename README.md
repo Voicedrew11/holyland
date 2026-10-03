@@ -10,15 +10,17 @@ against a portable runtime: no emulation loop, a real native binary.
 > You recompile from your legally owned copy of the US release; the build
 > checks the boot ELF's hash and refuses anything else.
 
-## Status: early, boots but not playable
+## Status: early, reaches gameplay but not playable yet
 
 - Recompiles cleanly: 28,008 functions, 27,719 recompiled, 289 SDK stubs,
   **0 errors**.
 - Boots through EE/IOP init, loads the real IOP modules, and runs the game's
   main loop. Keyboard and gamepad input reach the game.
-- A GIF `NLOOP=0` bug that corrupted the display registers (no text or
-  textures) is fixed in [`patches/`](patches); rendering still needs
-  verifying from a clean boot.
+- Title screen, menus and the first 3D area render; 3D graphics are partly
+  wrong and the opening movie is black.
+- Below full speed in 3D areas (~13 of 30 fps on an 8-core desktop CPU):
+  the software GS rasterizes on worker threads; the VU1 interpreter is now
+  the bottleneck. Menus run at full speed.
 - No audio yet (not implemented in the PS2Recomp runtime). Not a complete
   game yet.
 

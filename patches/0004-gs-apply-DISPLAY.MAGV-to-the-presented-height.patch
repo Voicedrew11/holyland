@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 12:21:29 -0400
-Subject: [PATCH 04/10] gs: apply DISPLAY.MAGV to the presented height
+Subject: [PATCH 04/14] gs: apply DISPLAY.MAGV to the presented height
 
 ---
  ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp | 5 ++++-

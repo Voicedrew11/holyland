@@ -9,9 +9,9 @@ place as state changes; link session logs at the point they support.
   render correctly; New Game goes through the opening-movie code path and
   into the first 3D area with the HUD. Confirmed on the user's machine.
 - **Known problems:** opening movie shows black (MPEG HLE); 3D graphics
-  partly wrong; in-game runs very slowly (software GS); the game auto-pauses
-  shortly after entering the 3D area with no input (pad state suspected);
-  no audio (SPU2 not emulated).
+  partly wrong; in-game below full speed (~13 fps of 30 in the first 3D
+  area, see Performance); the game auto-pauses shortly after entering the
+  3D area with no input (pad state suspected); no audio (SPU2 not emulated).
 - **What fixed the title screen:** the analyzer had stubbed libgraph's
   `sceGs*` functions with HLE versions that use invented struct layouts
   (`sceGsExecLoadImage` read a 12-byte fake struct, so textures were uploaded
@@ -28,9 +28,54 @@ place as state changes; link session logs at the point they support.
   pointer tables; symptom `missing-target ... op=JALR`).
 - **Next steps:** 3D rendering correctness (candidate branches from the
   rasterizer and libdma audits exist in the dev PS2Recomp checkout as
-  `agent/raster`, `agent/dmaaudit`, untested on 3D), performance (software
-  GS), the auto-pause, MPEG playback, SPU2 audio (`agent/audio` is an
-  untested start).
+  `agent/raster`, `agent/dmaaudit`, untested on 3D), performance (VU1
+  interpreter, see Performance), the auto-pause, MPEG playback, SPU2 audio
+  (`agent/audio` is an untested start).
+
+## Performance (2026-10-03)
+
+Benchmark: headless run into the first 3D area, `PS2X_STATS=1`, average
+display flips/s over ticks 3000–3600 (the game renders one frame per two
+VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
+(-O2, non-LTO) build.
+
+| State | Game fps |
+|---|---|
+| Before (patches 0001–0010), dev build | 3.0 |
+| + asynchronous parallel GS (0013) and part of 0012, dev build | ~8.2 |
+| + rest of the VU1 work (0012), dev build | 13.0 |
+| Same, Release (LTO, -O3) build | 13.8 |
+
+(Intermediate steps were also measured on the intro window, ticks
+2450–2750: synchronous parallel GS alone took it from ~2.7 to ~5.5.)
+
+- Where the time went at the start (one thread did everything): GS
+  rasterization ~57%, VU1 interpreter ~35% (mostly per-cycle pipeline
+  bookkeeping, not arithmetic), EE game code <10%. Per game frame: ~1,000
+  VU1 microprograms, ~800k VU1 cycles, ~10k primitives, ~4M pixels (13x a
+  640x448 screen: heavy full-screen multipass effects).
+- Now: the EE thread is ~85% VU1 interpreter (flat profile, no dominant
+  line). The GS workers are idle or at barriers more than half the time,
+  so the GS has headroom; it will matter again once VU1 is faster.
+- **VU1 is the remaining bottleneck.** Options, in rising cost: flag
+  liveness (skip MAC/status computation for microprograms that never read
+  them, ~25% of VU1 time), a leaner per-instruction loop, a VU1
+  recompiler.
+- **GS self-feedback draws** (~45 per frame here: 64-pixel-wide vertical
+  strips that sample the frame buffer they render to, at half-pixel
+  offsets, a blur/glow pass) run on one worker, row by row, because the
+  reference result depends on the exact row order (and on the single-page
+  texture cache). Parallelising them needs a decision on the intended
+  semantics (e.g. read-old-data snapshot), not just engineering.
+- Trap found on the way: **host FP rounding mode.** The VU1 interpreter
+  runs with `FE_TOWARDZERO` and PATH1 (XGKICK) draws used to be rasterized
+  inside it, so the reference GS rasterized those draws with truncating
+  float math. Executing them later on another thread changed pixels by
+  ±1–3; the queued draw now carries its rounding mode. Any future move of
+  work across threads must do the same.
+- Comparing frame dumps at fixed ticks stops working once rendering is
+  asynchronous (how many game frames run per tick depends on scheduling);
+  use the recorder/replay and the VU1 verifier below instead.
 
 ## Dev loop (maintainers)
 
@@ -41,7 +86,23 @@ place as state changes; link session logs at the point they support.
 - Headless runs: `PS2X_HIDDEN=1 PS2X_DUMP_EVERY=150 PS2X_EXIT_TICK=2400
   PS2X_INPUT="1100:START:10,1500:CROSS:10,1900:CROSS:10"` (START opens the
   title menu, CROSS picks New Game, CROSS confirms Brightness; in-game by
-  ~tick 2400). See patch 0001 for all variables.
+  ~tick 2400, playable 3D area after a fade at ~tick 2900). See patch 0001
+  for all variables. `PS2X_STATS=1` prints VSync ticks/s and flips/s.
+- Profiling without `perf`: sample the running process with `eu-stack -p
+  <pid>` in a loop (the dev harness `ctrl` file's `tick` command tells when
+  the run reaches the scene); add `-g` to a few sources for line info.
+- GS renderer regressions: record a session with `PS2X_GS_RECORD=<file>`
+  (~2.5 GB to tick 2300), build `scripts/maintainer/gsreplay/build.sh
+  <ps2recomp-checkout> <reference-rev>` and run `gsreplay <file>`: it
+  replays the trace through the current backend and the reference one and
+  compares VRAM at every sync point (deterministic, independent of guest
+  timing; also times both backends). `PS2X_GS_THREADS=1` and
+  `PS2X_GS_LOCKSTEP=1` narrow down threading problems.
+- VU1 regressions: apply `scripts/maintainer/dev/vu1-verify.patch` on top
+  of the series and run with `PS2X_VU1_VERIFY=1`: every microprogram also
+  runs on a frozen copy of the original interpreter, and registers, flags,
+  cycles, VU1 memory and XGKICK output are compared (`[vu1verify]` on
+  stderr; 720k runs into gameplay, 0 mismatches for patch 0012).
 
 ## Findings
 

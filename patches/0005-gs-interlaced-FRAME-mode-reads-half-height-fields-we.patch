@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 12:29:18 -0400
-Subject: [PATCH 05/10] gs: interlaced FRAME mode reads half-height fields;
+Subject: [PATCH 05/14] gs: interlaced FRAME mode reads half-height fields;
  weave fields on host
 
 With SMODE2.INT=1 and FFMD=1 the PCRTC reads every line of a field

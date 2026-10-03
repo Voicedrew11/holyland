@@ -72,3 +72,8 @@ Gamepads work if connected.
   (the script already uses the game dir).
 - Missing `X11/extensions/Xinerama.h` or similar: install the X11 dev
   packages listed above.
+- Low frame rate in 3D areas: expected for now (the VU1 interpreter is the
+  bottleneck; see `docs/NOTES.md`). Use the Release runner `04-run.sh`
+  picks, not a debug build. Graphics are rasterized on worker threads:
+  `PS2X_GS_THREADS=<n>` overrides their number (default: half the CPU
+  threads, at most 8).

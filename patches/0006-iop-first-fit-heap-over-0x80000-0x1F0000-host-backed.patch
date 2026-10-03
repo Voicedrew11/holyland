@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 13:04:09 -0400
-Subject: [PATCH 06/10] iop: first-fit heap over 0x80000-0x1F0000; host-backed
+Subject: [PATCH 06/14] iop: first-fit heap over 0x80000-0x1F0000; host-backed
  ioman file I/O
 
 The heap only searched above its high-water mark, so freed blocks were

@@ -18,6 +18,12 @@ commit); don't edit them by hand.
 | `0008-dev-harness-EE-thread-semaphore-dump-…` | Dev harness: `PS2X_THREADS_AT_EXIT=1` / ctrl `threads <file>` dump EE threads, semaphores and event flags (finds what a stuck game waits on). |
 | `0009-Show-guest-printf-output-…` | The game's own `printf` diagnostics (e.g. `SifAllocIopHeap Error`) were only printed under aggressive logging; IOP `printf` printed its raw format string. |
 | `0010-Run-interrupt-callback-handlers-on-stacks-in-EE-kern…` | Interrupt/callback handler stacks were carved from the top of RAM, on top of the main thread's stack, so every VBlank/DMAC handler overwrote saved registers (crash to `0x430000` when the opening movie starts). They now live in kernel RAM (0x20000–0x80000). |
+| `0011-dev-harness-PS2X_STATS-…` | Dev harness: `PS2X_STATS=1` prints VSync ticks/s and display flips/s (the game's frame rate) once per second. |
+| `0012-vu1-cut-interpreter-overhead-…` | VU1 interpreter ~2.3x faster with the same cycle and flag model: precomputed hazard slots, immediate write-back for interlocked VF/VI/ACC registers, bitmask pipelines, cheaper exact FMAC flag checks. Verified identical to the previous interpreter on every microprogram of a KFIV session. |
+| `0013-gs-rasterize-asynchronously-on-a-pool-of-worker-thre…` | The GS CPU backend rasterizes on worker threads (`PS2X_GS_THREADS`, default min(8, cores/2)) while the EE keeps running, each worker owning interleaved screen stripes. Page-level hazard tracking, per-draw FP rounding mode. Verified pixel-identical to the previous backend on a recorded session. |
+| `0014-gs-opt-in-recorder-of-raster-backend-calls-…` | `PS2X_GS_RECORD=<file>` records every GS backend call, for replaying through two backends with `scripts/maintainer/gsreplay`. |
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
-license. The rest of this repository is MIT (see `../LICENSE`).
+license, as are the maintainer tools built from its sources
+(`scripts/maintainer/gsreplay`, `scripts/maintainer/dev/vu1-verify.patch`).
+The rest of this repository is MIT (see `../LICENSE`).
