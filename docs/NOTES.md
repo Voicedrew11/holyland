@@ -3,16 +3,45 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-09-30)
+## Current state (2026-10-03)
 
-- **Stage:** boots and runs its main loop on the Linux runner. Input works;
-  the menu loop is vsync-paced idle (normal). No audio yet (not implemented
-  in the runtime).
-- **Last fix:** GIF `NLOOP=0` handling (see `patches/`), which was feeding
-  texture bytes into GS register writes and corrupting DISPFB1. Re-verify that
-  textures and text now render from a clean boot.
-- **Next step:** confirm textures/text render, then triage whatever the first
-  in-game screens expose (per `maintainers.md`, iteration loop).
+- **Stage:** reaches gameplay. Logos, title screen, menus and Brightness
+  render correctly; New Game goes through the opening-movie code path and
+  into the first 3D area with the HUD. Confirmed on the user's machine.
+- **Known problems:** opening movie shows black (MPEG HLE); 3D graphics
+  partly wrong; in-game runs very slowly (software GS); the game auto-pauses
+  shortly after entering the 3D area with no input (pad state suspected);
+  no audio (SPU2 not emulated).
+- **What fixed the title screen:** the analyzer had stubbed libgraph's
+  `sceGs*` functions with HLE versions that use invented struct layouts
+  (`sceGsExecLoadImage` read a 12-byte fake struct, so textures were uploaded
+  to the wrong VRAM). They are now unstubbed in `kfiv/config.toml` (also all
+  `sceVu0*`), so the game's own SDK code runs. That exposed a GS bug: GIF tag
+  state must persist across DMA transfers (patch 0002). The old patches
+  "NLOOP=0 means 32768" and "CT24 uses 32-bit words" were workarounds for the
+  broken stub and were wrong; they are gone.
+- **What got it in-game:** `sceCdDiskReady@0x0022EF30` binding (the analyzer
+  missed it; the game spun binding RPC 0x8000059A), IOP heap reuse + IOP
+  `ioman` file I/O (patch 0006), handler stacks off the main stack (0010),
+  and 411 functions Ghidra missed added to the function map with
+  `scripts/maintainer/fill-map-gaps.py` (code only reached through function
+  pointer tables; symptom `missing-target ... op=JALR`).
+- **Next steps:** 3D rendering correctness (candidate branches from the
+  rasterizer and libdma audits exist in the dev PS2Recomp checkout as
+  `agent/raster`, `agent/dmaaudit`, untested on 3D), performance (software
+  GS), the auto-pause, MPEG playback, SPU2 audio (`agent/audio` is an
+  untested start).
+
+## Dev loop (maintainers)
+
+- Non-LTO dev build of the runner: configure PS2Recomp with
+  `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -DNDEBUG"
+  -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF`. A full build is ~4 min; a runtime-only
+  change relinks in ~5 s (the default Release/LTO relink takes 5.5 min).
+- Headless runs: `PS2X_HIDDEN=1 PS2X_DUMP_EVERY=150 PS2X_EXIT_TICK=2400
+  PS2X_INPUT="1100:START:10,1500:CROSS:10,1900:CROSS:10"` (START opens the
+  title menu, CROSS picks New Game, CROSS confirms Brightness; in-game by
+  ~tick 2400). See patch 0001 for all variables.
 
 ## Findings
 
