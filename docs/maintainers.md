@@ -2,7 +2,8 @@
 
 How the per-game data in `kfiv/` was produced, and how to regenerate it. End
 users never need this: they use the committed function map
-(see [`building.md`](building.md)).
+(see [`building.md`](building.md)). For changing the runtime (patches), see
+[`contributing.md`](contributing.md).
 
 `kfiv/` holds:
 
@@ -72,7 +73,8 @@ Reference result (with the Ghidra map): 28008 processed / 27719 recompiled / 289
 ## Updating the pinned PS2Recomp commit or patches
 
 `scripts/common.sh` pins `PS2X_REF`. `03-build-runner.sh` checks out that
-commit and applies `patches/*.patch` in order. To add or refresh a patch, fix
-it in your PS2Recomp checkout, then `git diff > patches/NNNN-name.patch`
-(a patch must apply cleanly to the pinned commit). Prefer upstreaming fixes to
+commit and applies `patches/*.patch` in order. Patches are generated, never
+written by hand: commit fixes in the dev checkout and run
+`scripts/maintainer/export-patches.sh` (workflow and `PS2X_REF` updates:
+[`contributing.md`](contributing.md)). Prefer upstreaming fixes to
 PS2Recomp and dropping the patch once merged.

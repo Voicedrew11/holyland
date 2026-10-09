@@ -4,11 +4,12 @@ Patches applied to [PS2Recomp](https://github.com/ran-j/PS2Recomp) by
 `scripts/03-build-runner.sh`, in filename order, on top of the commit pinned
 as `PS2X_REF` in `scripts/common.sh`. They are generated with
 `scripts/maintainer/export-patches.sh` from a PS2Recomp branch (one fix per
-commit); don't edit them by hand.
+commit); don't edit them by hand. Workflow:
+[`docs/contributing.md`](../docs/contributing.md).
 
 | Patch | Why |
 |---|---|
-| `0001-kfiv-dev-harness-…` | Opt-in dev harness (env vars, off by default): PNG frame dumps, scripted pad input, a command file for live control, hidden window, auto-exit. See `docs/maintainers.md`. |
+| `0001-kfiv-dev-harness-…` | Opt-in dev harness (env vars, off by default): PNG frame dumps, scripted pad input, a command file for live control, hidden window, auto-exit. See `docs/contributing.md`. |
 | `0002-gs-keep-GIFtag-state-across-transfers-per-PATH` | The GIF unit keeps its tag state between DMA transfers. libgraph's `sceGsExecLoadImage` sends the A+D/IMAGE header and the pixels as two DMAs; the runtime restarted parsing at every packet, so pixel data was parsed as GIF tags (garbled title screen, hangs). Also: `NLOOP=0` is an empty tag, `FLG=3` acts as IMAGE. |
 | `0003-Add-opt-in-GS-diagnostics-…` | `PS2X_GS_TRACE` (register/transfer/primitive trace) and `PS2X_VRAM_DUMP` (raw 4 MB GS memory at exit). |
 | `0004-gs-apply-DISPLAY.MAGV-…` | The presented height ignored `DISPLAY.MAGV`. |

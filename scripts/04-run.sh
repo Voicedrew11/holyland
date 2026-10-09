@@ -7,8 +7,9 @@ set -eu
 GAMEDIR="${1:-$GAMEDIR_DEFAULT}"
 [ -f "$GAMEDIR/SLUS_203.18" ] || { echo "no ELF — run 01-extract.sh first" >&2; exit 1; }
 # Prefer the Release runner 03-build-runner.sh builds; other build trees
-# under _build (maintainer dev builds) are only a fallback.
-RUNNER="$GAMEDIR/_build/build/ps2xRuntime/ps2EntryRunner"
+# under _build are only a fallback. PS2X_RUNNER=<path> picks one explicitly
+# (e.g. the dev build, <game-dir>/dev-build/ps2xRuntime/ps2EntryRunner).
+RUNNER="${PS2X_RUNNER:-$GAMEDIR/_build/build/ps2xRuntime/ps2EntryRunner}"
 [ -f "$RUNNER" ] || RUNNER="$(find "$GAMEDIR/_build" -name ps2EntryRunner -type f 2>/dev/null | head -1 || true)"
 [ -n "$RUNNER" ] || { echo "no runner built — run 03-build-runner.sh first" >&2; exit 1; }
 # The runtime resolves cdrom0:/host:/mc0: paths under its working directory,

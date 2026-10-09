@@ -1,7 +1,8 @@
 #!/bin/sh
 # 03-build-runner.sh — build ps2EntryRunner with the generated sources.
-# Usage: 04-build-runner.sh [game-dir]
-# Clones PS2Recomp into <game-dir>/_build at the pinned commit, applies
+# Usage: 03-build-runner.sh [game-dir]
+# Rebuilds <game-dir>/_build from scratch: deletes it, clones PS2Recomp at
+# the pinned commit, applies
 # patches/*.patch, drops the generated code into the slots the runtime's CMake expects, and builds the runner:
 #   output/*.h   -> ps2xRuntime/include/   (PCH logic already looks for the
 #                                           generated headers there)
@@ -21,6 +22,16 @@ set -eu
 . "$(dirname "$0")/common.sh"
 GAMEDIR="${1:-$GAMEDIR_DEFAULT}"
 [ -d "$GAMEDIR/output" ] || { echo "no $GAMEDIR/output — run 02-recompile.sh first" >&2; exit 1; }
+# _build is disposable, but refuse to delete commits that exist nowhere else
+# (an old dev checkout at _build/repo). Develop in maintainer/dev-setup.sh's
+# checkout instead; KFIV_FORCE_CLEAN=1 deletes anyway.
+if [ -d "$GAMEDIR/_build/repo/.git" ] && [ "${KFIV_FORCE_CLEAN:-0}" != 1 ] &&
+   [ -n "$(git -C "$GAMEDIR/_build/repo" rev-list -n1 --branches --not --remotes)" ]; then
+  echo "error: $GAMEDIR/_build/repo has local commits that would be deleted:" >&2
+  git -C "$GAMEDIR/_build/repo" log --oneline --branches --not --remotes | head >&2
+  echo "export them first (maintainer/export-patches.sh) or set KFIV_FORCE_CLEAN=1" >&2
+  exit 1
+fi
 rm -rf "$GAMEDIR/_build"
 git clone "$PS2X_REPO" "$GAMEDIR/_build/repo"
 git -C "$GAMEDIR/_build/repo" checkout "$PS2X_REF"
@@ -31,7 +42,7 @@ for p in "$KFIV_ROOT"/patches/*.patch; do
 done
 cp "$GAMEDIR"/output/*.h "$GAMEDIR/_build/repo/ps2xRuntime/include/"
 # find+cp: 28k files exceed the shell's max argument list for a plain glob
-find "$GAMEDIR/output" -maxdepth 1 -name '*.cpp' -exec cp -t "$GAMEDIR/_build/repo/ps2xRuntime/src/runner/" {} +
+find "$GAMEDIR/output/" -maxdepth 1 -name '*.cpp' -exec cp -t "$GAMEDIR/_build/repo/ps2xRuntime/src/runner/" {} +
 cmake -S "$GAMEDIR/_build/repo" -B "$GAMEDIR/_build/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF \

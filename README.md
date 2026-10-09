@@ -56,18 +56,28 @@ Everything generated (unpacked disc, C++ output, runner build) goes to
 last argument to any script to change it. Full walkthrough, controls and
 troubleshooting: [`docs/building.md`](docs/building.md).
 
+## Contributing
+
+Runtime fixes are kept as `patches/` on top of a pinned PS2Recomp commit. The
+dev loop (persistent checkout, incremental build, headless test runs,
+exporting patches) is in [`docs/contributing.md`](docs/contributing.md);
+open problems are in [`docs/NOTES.md`](docs/NOTES.md). Using an AI coding
+agent? Point it at [`AGENTS.md`](AGENTS.md).
+
 ## Layout
 
 ```
 KFIV-PC/
 ├── kfiv/             per-game data: config, function map, ELF hash
 ├── patches/          patches applied to PS2Recomp at runner build time
-├── scripts/          00-build-tools .. 04-run (end users), maintainer/ (Ghidra-side)
+├── scripts/          00-build-tools .. 04-run (end users), maintainer/ (dev loop, Ghidra-side)
 ├── disc/             put your disc image here (contents git-ignored)
 ├── docs/
 │   ├── building.md     step-by-step build and run guide
-│   ├── maintainers.md  regenerating the function map (Ghidra), patch workflow
+│   ├── contributing.md changing the runtime: dev checkout, build, test, patches
+│   ├── maintainers.md  regenerating the function map (Ghidra)
 │   └── NOTES.md        work log: findings, ruled-out avenues
+├── AGENTS.md         orientation and rules for AI coding agents (CLAUDE.md imports it)
 ├── .recomp.json      project descriptor (PS2Recomp game-project format)
 └── LICENSE           MIT (patches/ are GPL-3.0, derived from PS2Recomp)
 ```

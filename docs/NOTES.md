@@ -7,7 +7,7 @@ place as state changes; link session logs at the point they support.
 
 - **Stage:** reaches gameplay. Logos, title screen, menus and Brightness
   render correctly; New Game goes through the opening-movie code path and
-  into the first 3D area with the HUD. Confirmed on the user's machine.
+  into the first 3D area with the HUD. Confirmed on the maintainer's machine.
 - **Known problems:** opening movie shows black (MPEG HLE); 3D graphics
   partly wrong; in-game below full speed (~13 fps of 30 in the first 3D
   area, see Performance); the game auto-pauses shortly after entering the
@@ -26,11 +26,15 @@ place as state changes; link session logs at the point they support.
   and 411 functions Ghidra missed added to the function map with
   `scripts/maintainer/fill-map-gaps.py` (code only reached through function
   pointer tables; symptom `missing-target ... op=JALR`).
-- **Next steps:** 3D rendering correctness (candidate branches from the
-  rasterizer and libdma audits exist in the dev PS2Recomp checkout as
-  `agent/raster`, `agent/dmaaudit`, untested on 3D), performance (VU1
-  interpreter, see Performance), the auto-pause, MPEG playback, SPU2 audio
-  (`agent/audio` is an untested start).
+- **Next steps:** 3D rendering correctness, performance (VU1 interpreter,
+  see Performance), the auto-pause, MPEG playback, SPU2 audio.
+- **Unpublished experiments** (exist only in the maintainer's local
+  PS2Recomp checkout, not in this repo; ask the maintainer if you want
+  one): AI-generated, untested, based on older states of the series.
+  `agent/raster` (rasterizer audit), `agent/dmaaudit` (libdma stub audit),
+  `agent/audio` (a first SPU2 implementation: 2 cores x 24 voices, ADSR,
+  ADPCM, raylib audio output). Treat them as hints of where to look, not
+  as known-good code.
 
 ## Performance (2026-10-03)
 
@@ -79,15 +83,11 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
 
 ## Dev loop (maintainers)
 
-- Non-LTO dev build of the runner: configure PS2Recomp with
-  `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -DNDEBUG"
-  -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF`. A full build is ~4 min; a runtime-only
-  change relinks in ~5 s (the default Release/LTO relink takes 5.5 min).
-- Headless runs: `PS2X_HIDDEN=1 PS2X_DUMP_EVERY=150 PS2X_EXIT_TICK=2400
-  PS2X_INPUT="1100:START:10,1500:CROSS:10,1900:CROSS:10"` (START opens the
-  title menu, CROSS picks New Game, CROSS confirms Brightness; in-game by
-  ~tick 2400, playable 3D area after a fade at ~tick 2900). See patch 0001
-  for all variables. `PS2X_STATS=1` prints VSync ticks/s and flips/s.
+- Setup, dev build, headless runs and the dev harness variables:
+  [`contributing.md`](contributing.md). The dev build
+  (`scripts/maintainer/dev-build.sh`, -O2, no LTO): full build ~4 min on
+  an 8-core desktop, a runtime-only change relinks in ~5 s (the
+  Release/LTO relink in `03-build-runner.sh` takes 5.5 min).
 - Profiling without `perf`: sample the running process with `eu-stack -p
   <pid>` in a loop (the dev harness `ctrl` file's `tick` command tells when
   the run reaches the scene); add `-g` to a few sources for line info.
@@ -178,7 +178,9 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   (ps2_memory.cpp) — spec-correct per Sony docs. Shipped as
   `patches/0001-gs-gif-nloop-zero-means-32768.patch` (applied by
   `03-build-runner.sh`). Verify run: 0 texa lines, dispfb1 sane to tick 11880, 0
-  missing-targets. Textures/text should now render.
+  missing-targets. Textures/text should now render. **Superseded
+  (2026-10-03):** this patch was a workaround for the broken `sceGs*` HLE
+  stub and was removed; see "Current state".
 - Earlier symptom, superseded by the root cause above: the screen turned
   magenta mid-boot. Magenta = `UploadFrame` fallback (`ps2_runtime.cpp`, blank
   `MAGENTA` texture) when `copyLatchedHostPresentationFrame` fails. Deeper:
@@ -206,5 +208,6 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
 - IOP modules on disc: `FSIOPSND, LIBSD, MCMAN, MCSERV, MODHSYN, MODMIDI,
   PADMAN, SDRDRV, SIO2MAN, IOPRP224.IMG`. Sound is MIDI/synth-heavy
   (MODHSYN/MODMIDI) — expect audio HLE to matter early.
-- Big data file `DATA/KF4.DAT` (503 MB); FMVs as `.PSS`. Runner needs the
-  **disc image** (raw sector reads), not loose files.
+- Big data file `DATA/KF4.DAT` (503 MB); FMVs as `.PSS`. The runner reads
+  the unpacked disc files from its working directory (`01-extract.sh`);
+  it has no ISO support.
