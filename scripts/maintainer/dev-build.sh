@@ -2,11 +2,13 @@
 # dev-build.sh — incremental dev build of the runner from the dev checkout.
 # Usage: dev-build.sh [game-dir]
 # Copies the generated code from <game-dir>/output into $PS2X_DEV (only
-# files that changed, so a rebuild stays incremental) and builds
+# files whose content changed, so a rebuild stays incremental) and builds
 # ps2EntryRunner in <game-dir>/dev-build: -O2, no LTO. First build takes
 # minutes; after a runtime .cpp change it recompiles that file and relinks
 # in seconds. Editing a header the game code includes (ps2xRuntime/include)
 # recompiles all 28k generated files.
+# Uses Ninja and mold when installed; ccache with KFIV_CCACHE=1 (see
+# docs/contributing.md).
 # Output: <game-dir>/dev-build/ps2xRuntime/ps2EntryRunner
 export CXXFLAGS="${CXXFLAGS:-} -msse4.1"   # see 03-build-runner.sh
 set -eu
@@ -23,17 +25,43 @@ for f in "$GAMEDIR"/output/*.h "$GAMEDIR/output/register_functions.cpp"; do
   case "$f" in *.h) d=include ;; *) d=src/runner ;; esac
   cmp -s "$f" "$REPO/ps2xRuntime/$d/$(basename "$f")" || cp "$f" "$REPO/ps2xRuntime/$d/"
 done
-# The other ~28k files: only those newer than the copy (find+cp: too many
-# for a plain glob).
-find "$GAMEDIR/output/" -maxdepth 1 -name '*.cpp' ! -name register_functions.cpp \
-  -exec cp -u -t "$REPO/ps2xRuntime/src/runner/" {} +
-if [ ! -f "$BUILD/CMakeCache.txt" ]; then
-  cmake -S "$REPO" -B "$BUILD" \
+# The other ~28k files: also by content. 02-recompile.sh rewrites every file
+# (new mtime, same content), so a timestamp test would rebuild everything.
+rsync -c -d --exclude=register_functions.cpp --include='*.cpp' --exclude='*' \
+  "$GAMEDIR/output/" "$REPO/ps2xRuntime/src/runner/"
+# Ninja and mold are used when installed (mold: 0.1 s link instead of 0.8 s).
+# KFIV_CCACHE=1 builds through ccache: a fresh tree, a reverted header edit
+# or a switch back to an earlier branch then rebuilds in ~1 min instead of
+# ~5. GCC's precompiled header is not byte-identical between rebuilds, which
+# would make every unity batch miss, so the PCH is off with ccache; a full
+# rebuild that misses the cache (e.g. a real header change) then takes ~2
+# min longer.
+GEN="Unix Makefiles"; command -v ninja >/dev/null && GEN=Ninja
+LAUNCHER=""; PCH=ON
+if [ "${KFIV_CCACHE:-0}" = 1 ]; then
+  command -v ccache >/dev/null || { echo "KFIV_CCACHE=1 but ccache is not installed" >&2; exit 1; }
+  LAUNCHER="env;CCACHE_DEPEND=1;CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime;ccache"
+  PCH=OFF
+fi
+LINK=""; command -v mold >/dev/null && LINK="-fuse-ld=mold"
+KEY="$GEN|$LAUNCHER|$PCH|$LINK"
+# A build tree can't switch generators; it is build output only, so start over.
+if [ -f "$BUILD/CMakeCache.txt" ] &&
+   ! grep -qx "CMAKE_GENERATOR:INTERNAL=$GEN" "$BUILD/CMakeCache.txt"; then
+  echo "generator is now $GEN: recreating $BUILD"
+  rm -rf "$BUILD"
+fi
+if [ ! -f "$BUILD/CMakeCache.txt" ] || [ "$(cat "$BUILD/kfiv-config" 2>/dev/null)" != "$KEY" ]; then
+  cmake -S "$REPO" -B "$BUILD" -G "$GEN" \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -DNDEBUG" \
     "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -DNDEBUG" \
+    "-DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER" "-DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER" \
+    "-DPS2X_ENABLE_SCCACHE=$([ -n "$LAUNCHER" ] && echo OFF || echo ON)" \
+    "-DPS2X_ENABLE_RUNNER_PCH=$PCH" "-DCMAKE_EXE_LINKER_FLAGS=$LINK" \
     -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF \
     -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF
+  echo "$KEY" > "$BUILD/kfiv-config"
 fi
 mkdir -p "$BUILD/tmp"
 TMPDIR="$BUILD/tmp" cmake --build "$BUILD" -j"$(nproc)" --target ps2EntryRunner

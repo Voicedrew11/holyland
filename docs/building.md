@@ -8,7 +8,7 @@ tools below. You do **not** need Ghidra: the function map is committed in
 ## Prerequisites
 
 - CMake 3.20+, a C++20 compiler (GCC 13+ / Clang 16+), Ninja or Make, git,
-  Python 3 (stdlib only).
+  rsync, Python 3 (stdlib only).
 - Runner only: X11 dev headers (raylib/GLFW) and the FFmpeg SDK. Fedora:
   `sudo dnf install libXinerama-devel libXrandr-devel libXcursor-devel
   libXi-devel ffmpeg-devel`.

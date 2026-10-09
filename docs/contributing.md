@@ -33,7 +33,22 @@ PS2X_RUNNER=~/.local/share/kfiv-pc/dev-build/ps2xRuntime/ps2EntryRunner \
 - The first `dev-build.sh` compiles all ~28k generated files (minutes).
   After that, changing a runtime `.cpp` recompiles that file and relinks
   in seconds. Changing a header that the game code includes
-  (`ps2xRuntime/include/**`) recompiles everything.
+  (`ps2xRuntime/include/**`) recompiles everything; put declarations only
+  the runtime needs in a header the generated code doesn't include.
+  Re-running `02-recompile.sh` costs nothing extra unless the generated
+  code actually changed (files are copied by content, not timestamp).
+- `dev-build.sh` uses Ninja and mold when installed (`ninja-build`,
+  `mold`). With `KFIV_CCACHE=1` it compiles through `ccache`: a fresh
+  build tree, a reverted header edit or a switch back to an earlier branch
+  then takes ~1 min instead of ~5. The precompiled header is off in that
+  mode (GCC's isn't byte-identical between rebuilds, so it would defeat
+  the cache), so a full rebuild that misses the cache, such as a real
+  header change, takes ~2 min longer. Use it when you switch branches or
+  rebuild trees often, not while editing headers. Switching the mode
+  reconfigures and rebuilds once.
+- Don't use `03-build-runner.sh` while iterating: it deletes `_build`,
+  re-clones, and builds `-O3` with LTO, where almost all the time is one
+  ~6 min link. Run it once at the end (step 3).
 - `dev-run.sh <out-dir> <exit-tick> [VAR=value ...]` runs with a hidden
   window in a private copy of the game dir (your memory cards are copied,
   not used) and writes `log.txt` and `final.png` into `<out-dir>`. 60 ticks

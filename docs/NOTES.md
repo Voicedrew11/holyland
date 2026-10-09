@@ -88,6 +88,18 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   (`scripts/maintainer/dev-build.sh`, -O2, no LTO): full build ~4 min on
   an 8-core desktop, a runtime-only change relinks in ~5 s (the
   Release/LTO relink in `03-build-runner.sh` takes 5.5 min).
+- Build-time findings (2026-10-09): the Release build's compile step is
+  only ~70 s because `-fno-fat-lto-objects` defers code generation to the
+  LTO link (~6 min). `ps2_recomp` rewrites every output file even when
+  unchanged, so anything that copies by mtime rebuilds all 889 unity
+  batches; `dev-build.sh` copies by content (`rsync -c`). GCC `.gch` files
+  differ between two compiles of the same input, so ccache misses every
+  unity batch after the PCH is rebuilt. Fresh dev tree, 16 threads: 292 s
+  with PCH and no ccache; 423 s with ccache (depend mode, PCH off) and an
+  empty cache; 66 s with a full cache. Hence ccache is opt-in
+  (`KFIV_CCACHE=1`). Linking the dev runner is not the bottleneck: 0.8 s
+  with GNU ld, 0.13 s with mold; the "~5 s relink" is mostly recompiling
+  the changed file.
 - Profiling without `perf`: sample the running process with `eu-stack -p
   <pid>` in a loop (the dev harness `ctrl` file's `tick` command tells when
   the run reaches the scene); add `-g` to a few sources for line info.
