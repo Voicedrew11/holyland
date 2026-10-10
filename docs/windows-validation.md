@@ -15,22 +15,63 @@ instructions. The diagnostics counted 119,442 registered fallback entries.
 The older 999-warning report was a historical
 baseline, before the final residual-entry regeneration.
 
-The added series changes 41 source/license/build files across Windows,
-controls, IOP file completion, audio, clocks, EE scheduling/callbacks,
-MPEG/IPU and the generator. Audio patch 0022 accounts for 31 of those files.
+The series now contains 23 patches: the existing 0001–0014 plus nine
+source-exported additions, 0015–0023. The additions change 42
+source/license/build files across Windows, controls, IOP file completion,
+audio, clocks, EE scheduling/callbacks,
+MPEG/IPU, the generator and GS depth testing. Audio patch 0022 accounts for
+31 of those files.
 The focused generator change is proposed upstream
 in [PS2Recomp PR #279](https://github.com/ran-j/PS2Recomp/pull/279).
+The disabled-depth fix is proposed separately in
+[PS2Recomp PR #280](https://github.com/ran-j/PS2Recomp/pull/280).
 Patch `0022` remains necessary for the pinned `c5a9d02` base until that pin
 moves to a version containing the fix. Rebuilding the tools and regenerating
 `register_functions.cpp` is required.
 
 ## Retail integration run
 
-A combined run reached tick 10,500 and exited normally with code 0 in
-233.323 seconds, without timeout or forced termination and with private
-test cards. Title/New Game/brightness selection entered the full opening
+The current depth-fixed build reached tick 10,600 and exited normally
+with code 0 in 248.218 seconds, without timeout or forced termination and
+with private test cards. Title/New Game/brightness selection entered the
+full opening movie. Captures show its pictures and audio, natural movie
+completion, and the first gameplay area. Interlace combing remains visible
+in some frames; this is not a complete rendering or A/V accuracy check.
+
+In that run, W at tick 9,000 changed player coordinates from
+`(-5656, 0, -10718)` to `(-5731.044, 0, -10365.910)` after gameplay became
+active. Inventory entry/back and pause/resume also completed. Space at
+tick 9,800 produced Square held/edge bits `0x8000` in both raw pad and
+guest input state. This proves attack input delivery; attack animation,
+damage and combat outcomes were not independently measured.
+
+The old black picture was a GS depth-test defect. Decoded RGB pixels
+reached texture memory, but `TEST.ZTE=0` still applied the stored
+`ZTST=NEVER` comparison. Patch 0023 bypasses depth comparison when ZTE is
+disabled and prevents depth writes. The original movie upload, textured
+sprite and display path now draw the picture without a replacement overlay.
+
+Audio counters showed zero underruns during the opening movie. After the
+transition into 3D gameplay, the final sampled counters recorded 256
+underrun frames and zero dropped frames. This run does not establish
+underrun-free gameplay audio.
+
+A separate smoke run used the installed executable and only host keyboard
+input for title/New Game/brightness. It displayed the opening forest and
+exited normally at tick 2,520 in 44.338 seconds, with no timeout or forced
+termination. Its stereo 48 kHz PCM capture contained 2,104,320 frames
+(43.84 seconds), peak 22,379 and zero clipped samples; sampled counters
+showed zero underruns and drops. This shorter run verifies installed movie
+output, rather than natural completion of the entire movie.
+
+### Earlier audio and keyboard integration
+
+Before the GS depth fix, a combined run reached tick 10,500 and exited
+normally with code 0 in 233.323 seconds, without timeout or forced
+termination and with private test cards. Title/New Game/brightness
+selection entered the full opening
 audio path. The MPEG stream accepted all 2,772 retail pictures, but the
-presented opening image remained black.
+presented opening image remained black in that earlier build.
 
 The opening ended naturally at tick 7,483, about 125.64 seconds into the
 run, before scripted Enter input at tick 9,300. The demux consumed the exact
@@ -58,8 +99,8 @@ input for title/New Game/brightness: Enter at 1,100, F at 1,500 and F at
 1,900. It reached natural movie completion, the first area and inventory,
 then exited normally at tick 8,800 in 178.336 seconds with private cards.
 The movie itself contains about 92 seconds of audio; loading and the
-original first-area intro add time before free movement. The black opening
-picture can therefore look like a hang, especially with PC audio muted.
+original first-area intro add time before free movement. The earlier black
+opening picture could look like a hang, especially with PC audio muted.
 Enter sends the game's original Start input to skip the movie after it
 begins; normal movie/audio cleanup and area loading still run.
 
@@ -70,7 +111,8 @@ transition, verifying keyboard movement after a skip. Space was first
 supplied at tick 4,100, after the movie had already been skipped.
 
 Music, sound effects and movie audio ran through the game's actual
-SDRDRV/LIBSD/SPU2 path. Optional PCM captures provided:
+SDRDRV/LIBSD/SPU2 path. Optional PCM captures from the earlier 233-second
+audio run provided:
 
 | Capture | Frames at 48 kHz | Peak | Clipped samples |
 |---|---:|---:|---:|
@@ -86,12 +128,27 @@ sound or A/V synchronization.
 
 ## Relocated repository checks
 
-All 16 [source-only packages](../tests/README.md) were independently
+The repository contains 17 [standalone source-only fixture packages](../tests/README.md),
+plus the separate audio-loopback diagnostic. The original 16 were independently
 configured, built and run from their new repository paths on native Windows:
 **26/26 CTest entries passed**, with `/fp:strict`. The process audio-loopback
 diagnostic also built. Existing production runtime libraries came from the
 verified `RelWithDebInfo` build; recompiler libraries came from `Release`.
 Fixtures use configurable paths rather than workspace defaults.
+
+The complete 23-patch series was replayed with tools/full phases and repeat
+application. After staging new files and Git line-ending normalization,
+its tree exactly matches the tested source export:
+`c06feee6032f665469ffbb6b245a5399160c5b0b`. All 57 managed source blobs
+also match the native build checkout after normalization.
+
+The added GS depth package compiles the actual CPU backend and local-memory
+code without retail assets. After relocation it passed 143,397 checks and
+**2/2 CTest entries**, including an expected-failure control that restores
+only the old ZTE behaviour. Focused upstream GS checks also passed **51/51**.
+The full legacy GS suite remains at **41/72 passed**: all 31 failures also
+occurred with the prior backend control. These results do not claim the
+complete legacy suite is green or that all GS behaviour is correct.
 
 The relocated `Test-KFIV.ps1` ran the installed executable to tick 900 in
 16.283 seconds: normal code 0, no timeout/forced stop and a final frame.
@@ -106,8 +163,8 @@ constitute a Linux build or execution test of the new changes.
 
 ## Remaining limits
 
-- Opening movie image remains black, although its audio and natural return
-  work. Other video paths remain unverified.
+- Opening pictures and audio work, but interlace combing remains visible
+  in some frames. Other video paths remain unverified.
 - 3D graphics are partly wrong and gameplay runs below full speed. The old
   Linux first-area measurements in `NOTES.md` are historical measurements,
   not a benchmark of this Windows build.

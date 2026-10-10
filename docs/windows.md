@@ -29,7 +29,8 @@ $cmake = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7
 
 Create a **new** private checkout. The helper rejects an existing checkout
 at another commit without resetting edits. Applying the full series also
-applies the generator fix needed by the tools.
+applies the generator fix needed by the tools. The series contains 23
+patches; patch 0023 fixes disabled GS depth testing for movie presentation.
 
 ```powershell
 git clone --recurse-submodules https://github.com/ran-j/PS2Recomp.git $checkout
@@ -135,10 +136,10 @@ $shortcut.Save()
 
 The game reads loose disc files from its working directory and stores cards
 in `mc0` and `mc1`. After accepting brightness with F, the opening movie
-plays audio for about 92 seconds while its picture remains black in this
-development build. Press Enter after the movie starts to skip it through
-the game's original Start input, or let it finish naturally. Loading and
-the first-area fade can take additional time.
+plays pictures and audio for about 92 seconds. Press Enter after the movie
+starts to skip it through the game's original Start input, or let it finish
+naturally. Interlace combing remains visible in some movie frames. Loading
+and the first-area fade can take additional time.
 
 | Input | Action |
 |---|---|

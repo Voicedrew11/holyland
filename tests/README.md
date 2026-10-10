@@ -2,9 +2,12 @@
 
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
-generated retail C++, compiled binaries or local result logs. Native Windows
-MSVC 19.44 x64 validation passed all 16 packages and 26 CTest entries after
-relocation here. They are not a full gameplay or PS2 hardware-equivalence
+generated retail C++, compiled binaries or local result logs. There are
+17 standalone fixture packages plus the separate audio-loopback diagnostic.
+Native Windows MSVC 19.44 x64 validation passed the original 16 packages
+and 26 CTest entries after relocation here. The added GS depth regression
+passed 143,397 checks and two CTest entries with a prior-behaviour control.
+They are not a full gameplay or PS2 hardware-equivalence
 test; retail evidence is recorded in [Windows validation](../docs/windows-validation.md).
 
 All files in `tests/` are provided under GPL-3.0, consistent with the
@@ -76,6 +79,7 @@ sources; expected failure behaviour is itself asserted.
 | `ee-callback-tests` | 244 | Actual scheduler/guest heap and synthetic guest callbacks; stale-entry cancellation, started continuations and tuple lifetime. Predicate-disabled scheduler is the control. |
 | `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |
+| `gs-depth-tests` | 143,397 | Actual CPU GS backend and local memory with synthetic colors/texture; disabled and enabled depth tests, depth-write masking, movie-style DECAL sprite and CRT2 scanout. A scratch control removes only the ZTE fix. No decoder or retail assets. |
 
 MPEG's 412 checks comprise 54 SDK lifecycle, 75 demux, 84 video, 93
 cancellation and 106 snapshot checks. They cover committed B9 completion
@@ -96,15 +100,27 @@ serial output. Combined parallel output encountered the pre-existing
 "combined output completion queue is missing index" issue in both fixed
 and control generators; it is outside this fix. KFIV uses separate files.
 
+The GS depth package's two CTest entries include an expected-failure
+control, which reproduces 143,369 failed checks with the previous ZTE
+behaviour. Focused upstream GS checks passed 51/51. The full legacy GS
+suite passed 41/72 in both fixed and prior controls, with the same 31
+failures; the complete legacy suite is not green.
+
 ## Script safety tests and audio diagnostic
 
 `python tests/test_apply_patches.py` runs seven portable stdlib/Git tests
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The real 22-patch series was also tested on native Windows with
+failure. The series now contains 23 patches. Before adding the GS depth
+fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
+
+The current 23-patch series was also replayed with tools application twice,
+full after tools, and full application twice. Staging new files and applying
+Git line-ending normalization reproduced the tested source-export tree
+`c06feee6032f665469ffbb6b245a5399160c5b0b` exactly.
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately
 with CMake and no PS2Recomp path settings. It requires Windows build 20348+
