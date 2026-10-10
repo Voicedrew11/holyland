@@ -5,6 +5,13 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-09)
 
+- **Vulkan GS:** patch 0027 adds optional paraLLEl-GS hardware rendering and
+  logical scanout. Native RTX 4090 verification reached tick 6000 normally,
+  preserving gameplay alignment, 448 rows, inventory and pause/resume.
+  A matched CPU/Vulkan pair took 196.591/187.781 seconds; overall gameplay
+  remains CPU limited despite moving rasterization to the GPU. RGBA image
+  readback feeds the existing Raylib window. One unsupported startup
+  scanout used CPU display conversion. See [Vulkan details](vulkan.md).
 - **Native Windows:** the USA build reaches the first gameplay area with
   Verdite keyboard/mouse controls, repeatable inventory entry/back,
   pause/resume and the capture-state glyph. Windows x64 MSVC 19.44,

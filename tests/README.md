@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-20 standalone fixture packages plus the separate audio-loopback diagnostic.
+21 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -15,6 +15,13 @@ All three new packages were rebuilt after relocation. The original packages
 were not rerun solely to add these fixtures.
 They are not a full gameplay or PS2 hardware-equivalence
 test; retail evidence is recorded in [Windows validation](../docs/windows-validation.md).
+
+The optional [GPU GS package](gpu-gs-tests/README.md) adds hardware Vulkan
+raster/transfer, cross-thread and scanout fixtures, pinned dependency setup,
+and a private recording replay. It contains synthetic inputs only and
+requires a compatible hardware GPU for its Vulkan cases. See
+[Vulkan rendering](../docs/vulkan.md) for native integration evidence and
+the limited whole-game speed improvement.
 
 All files in `tests/` are provided under GPL-3.0, consistent with the
 PS2Recomp code they exercise or derive from. See [LICENSE](LICENSE).
@@ -142,7 +149,7 @@ without asserting full cross-frame weave accuracy.
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The series now contains 26 patches. Before adding the GS depth
+failure. The series now contains 27 patches. Before adding the GS depth
 fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
@@ -152,6 +159,11 @@ full after tools, and full application twice. Staging new files and applying
 Git line-ending normalization reproduced the tested source-export tree
 `6c3edbccc9e71f1477863bd707e5758658e9b28b` exactly, with all 57 managed
 source files verified after normalization.
+
+The 27-patch Vulkan series was applied from a fresh pinned checkout and
+repeated idempotently; all 62 managed normalized files match the source
+export. GPU package relocation builds against this fresh patched source,
+rather than requiring generated game code or a private runtime library.
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately
 with CMake and no PS2Recomp path settings. It requires Windows build 20348+

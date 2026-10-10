@@ -2,7 +2,9 @@
 
 The USA boot ELF `SLUS_203.18` was statically recompiled and run as a native
 x64 executable on Windows 11 with MSVC 19.44. The IOP and VU1 remain
-interpreters in the supporting runtime; GS rendering is software based.
+interpreters in the supporting runtime. The earlier validation below uses
+the CPU GS; optional Vulkan GS is now verified separately in
+[Vulkan rendering](vulkan.md), including native timing and remaining limits.
 The verified build was `RelWithDebInfo`, `/O2 /Ob1 /DNDEBUG /fp:strict`,
 with FFmpeg enabled and matching shared runtime DLLs.
 
@@ -15,8 +17,9 @@ instructions. The diagnostics counted 119,442 registered fallback entries.
 The older 999-warning report was a historical
 baseline, before the final residual-entry regeneration.
 
-The series now contains 26 patches: the existing 0001–0014 plus twelve
-source-exported additions, 0015–0026. The additions change 43
+The earlier CPU verification covered 26 patches: the existing 0001–0014 plus twelve
+source-exported additions, 0015–0026. Patch 0027 now adds the optional Vulkan
+backend separately. The earlier additions change 43
 source/license/build files across Windows, controls, IOP file completion,
 audio, clocks, EE scheduling/callbacks,
 MPEG/IPU, the generator, GS depth testing, sprite alignment, source-height

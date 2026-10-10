@@ -93,6 +93,7 @@ All are off by default. `dev-run.sh` sets the first four for you.
 | `PS2X_VRAM_DUMP=<file>` | raw 4 MB GS memory at exit |
 | `PS2X_NO_WEAVE=1` | present the raw interlaced field instead of the woven frame |
 | `PS2X_GS_THREADS=<n>` | GS rasterizer worker threads (default min(8, cores/2)) |
+| `PS2X_GS_BACKEND=auto\|cpu\|vulkan` | Vulkan-enabled builds prefer hardware Vulkan in auto mode; cpu selects the reference rasterizer. Explicit vulkan fails if it cannot initialize. See `vulkan.md`. |
 | `PS2X_GS_LOCKSTEP=1` | wait for the GS workers after every batch, so guest timing matches synchronous rendering (needed to compare frame dumps between runs) |
 | `PS2X_GS_RECORD=<file>` | record every GS backend call for `scripts/maintainer/gsreplay` (big: ~2.5 GB to tick 2300) |
 

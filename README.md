@@ -3,8 +3,9 @@
 A native PC port of **King's Field: The Ancient City** (FromSoftware, USA
 `SLUS-20318`) built with [PS2Recomp](https://github.com/ran-j/PS2Recomp).
 The recompiler translates the game's MIPS R5900 executable into C++ compiled
-for the host CPU. The supporting runtime still interprets IOP and VU1 code
-and renders through a software GS.
+for the host CPU. The supporting runtime still interprets IOP and VU1 code.
+An optional Vulkan GS backend renders on the GPU; the software GS remains
+available as a reference and compatibility fallback.
 
 **Supply your own US disc image.** This repository contains tooling,
 function boundaries and patches, with no game executable, generated game
@@ -17,6 +18,10 @@ code or disc assets. The build checks the boot ELF's hash.
 - Gameplay's vertical strip corruption is fixed: walls and sky now align
   across the original framebuffer feedback passes, and scanout preserves
   all 448 gameplay rows.
+- Vulkan GS rendering was verified on native Windows with an RTX 4090.
+  It handles rasterization, textures, transfers and scanout on the GPU;
+  the existing window still receives a read-back RGBA image. See
+  [Vulkan rendering](docs/vulkan.md) for setup, timing and limitations.
 - Music, sound effects and opening-movie audio play through the game's
   sound driver and SPU2 implementation. The opening movie now displays its
   pictures and ends naturally in gameplay. Enter optionally skips the
@@ -60,8 +65,8 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 26 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twelve additions cover Windows input, audio, movie and
+of 27 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; thirteen additions cover Windows input, audio, movie and
 gameplay-rendering fixes, with bounded opt-in GS diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
