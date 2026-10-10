@@ -69,6 +69,25 @@ promise 30 updates/s when the host takes longer than a frame to execute the game
 
 ## Native Windows measurements, 2026-10-10
 
+**Local build correction:** the measurements in the following table used
+stale generated EE sources that predated patch 0029. The source fix remained
+in the PR, but the local delivered executable reintroduced the cave-door
+floor fall. These numbers describe that faulty build and must not be treated
+as acceptance measurements of a gameplay-preserving build. The same stale
+sources were used for the earlier Ubuntu retail captures below. Runtime/VU
+source-only tests are independent of that generated output.
+
+With freshly regenerated game code, a new 30-second capture measured
+**29.997 updates/s** (900 updates / 30.0032 s), with a **0.505 s** original
+15-update attack windup, a 120 FPS presentation limit and roughly 75–90
+graphics frames/s in the opening view. Animation/cooldown values remained
+contiguous; one animation/loop-label check was false under non-atomic reads.
+This corrected build was then driven through the cave, opening the door and
+walking into the next map without falling through the floor. Floor contact
+remained stable after additional movement. This is still a limited-area
+measurement, not a whole-game locked-30 guarantee; the older table below is
+retained only as explicitly qualified historical evidence.
+
 Same i9-13900KF / RTX 4090 / 64 GiB machine, native Windows, Vulkan, strict
 MSVC 19.44 arithmetic, bounded native VU catalog, upstream static lift disabled.
 The retained binary uses `/O2 /Ob2 /DNDEBUG /Zi /fp:strict` and MSVC PGO.
@@ -120,6 +139,21 @@ No whole-game performance guarantee follows from this opening-area capture.
 
 ## Correctness checks
 
+The local regression was traced to reused generated EE C++, rather than a
+reverted patch. Rebuilding the patched generator and regenerating the owned
+ELF again reported 28,429 processed / 28,161 recompiled / 268 stubs, 1,352
+warnings and zero errors. Exactly 124 generated sources changed; the entire
+generated C++ set matches the previously cave-tested output. All 148 patched
+square-root sites passed the new staging/build guard. Native Windows execution
+of the real translator passed 49 checks, with nine prior-bug control checks.
+The five authored guard tests passed on both Windows and Ubuntu.
+
+A separate corrected Windows session verified more than 4500 completed frames
+against the actual game backend's complete RGBA output and 4 MiB VRAM, including
+turning, attacking and opening/closing inventory. It reported no mismatches or
+endpoint fallbacks and exited normally. The cave-route session also exited
+normally and kept its test cards separate from the user's saves.
+
 Native Windows and Ubuntu both passed:
 
 - Three new fixtures using the rational pacer, actual runtime scheduler and
@@ -168,6 +202,10 @@ newer bounded-catalog implementation and its tests:
 - Link the new fixture to native Linux libraries and use portable environment
   setters. No Windows object or PGO profile is used by the Linux build.
 
+The stale-source guard is shared by Windows and Linux; it does not modify
+the owner's runtime work. Shell scripts are now explicitly checked out with
+LF endings so WSL can execute a Windows checkout with `core.autocrlf=true`.
+
 Ubuntu 26.04 under WSL2 used GCC 15.2 and CMake 4.2.3. The complete native Linux
 runner was compiled on ext4 from the same runtime and privately generated game
 sources, with a freshly generated native VU catalog. Owned disc files were
@@ -196,6 +234,16 @@ original presentation. This is functional Linux execution, **not a successful
 Linux 30 Hz / high-FPS result**. The final transition-aware build and all three
 new fixtures were rebuilt and rerun on Ubuntu. No system driver or security
 policy was changed.
+
+After regenerating the corrected game code, the Ubuntu runner was rebuilt
+and the three fixed-frame CTests passed again. A fresh CPU-renderer session
+completed a 30-second / 6001-sample capture at **21.933 updates/s**, with a
+**0.700 s** 15-update attack windup. Animation/cooldown sequences and their
+observed loop alignment were contiguous. This replaces the stale-source
+CPU measurements as the corrected build's result; it still falls short of
+the 30 Hz target. The unchanged WSL Vulkan failure was not retested for this
+generated-code-only correction, and cave-door progression was not tested on
+the Linux CPU renderer.
 
 The final 58-patch series was applied to a fresh pinned checkout, first in
 tools-only mode and then in full. Repeated application verified all 58 patches

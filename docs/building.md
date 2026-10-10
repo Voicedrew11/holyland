@@ -47,6 +47,13 @@ outside this repo.
 ./scripts/04-run.sh
 ```
 
+Both `03-build-runner.sh` and `maintainer/dev-build.sh` check generated sources
+before changing a build or staging files. They reject the old SQRT/RSQRT
+translation that caused a local cave-door floor regression. If rejected,
+rebuild the patched tools and regenerate the complete output. Updating the
+runtime alone cannot repair stale generated game C++. This is a targeted
+guard, not a proof of complete or correct generation.
+
 ## What each step does
 
 - **Build tools**: requires a checkout at the pinned commit and applies the

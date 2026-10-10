@@ -18,7 +18,8 @@ param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')][string]$Configuration = 'RelWithDebInfo',
     [ValidateRange(1, 256)][int]$Parallel = [Math]::Min(8, [Environment]::ProcessorCount),
     [string]$BuiltExecutable,
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [string]$PythonPath = 'python'
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +43,11 @@ $cachePath = Join-Path $buildPath 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
     throw "An already configured CMake build is required: $cachePath"
 }
+$sourceEntry = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$' | Select-Object -First 1
+if ($null -eq $sourceEntry) { throw "Missing runtime source directory in $cachePath" }
+$sourcePath = $sourceEntry.Matches[0].Groups[1].Value
+& $PythonPath (Join-Path $PSScriptRoot '../check-generated-sources.py') --checkout $sourcePath
+if ($LASTEXITCODE -ne 0) { throw 'Generated-source validation failed; runner was not rebuilt or copied.' }
 if ([string]::IsNullOrWhiteSpace($CMakePath)) {
     $cacheCommand = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_COMMAND:INTERNAL=(.*)$' | Select-Object -First 1
     if ($null -ne $cacheCommand) {

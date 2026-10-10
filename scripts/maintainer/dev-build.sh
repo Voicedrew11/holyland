@@ -18,6 +18,7 @@ REPO="$PS2X_DEV"
 BUILD="$GAMEDIR/$PS2X_DEV_BUILD_NAME"
 [ -d "$REPO/.git" ] || { echo "no $REPO — run maintainer/dev-setup.sh first" >&2; exit 1; }
 [ -d "$GAMEDIR/output" ] || { echo "no $GAMEDIR/output — run 02-recompile.sh first" >&2; exit 1; }
+python3 "$KFIV_ROOT/scripts/check-generated-sources.py" --output "$GAMEDIR/output"
 # Headers and the function table: copy when the content differs (the
 # checkout's own register_functions.cpp is newer than the generated one, so
 # a timestamp test would keep the upstream one and the boot would stall).

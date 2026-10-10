@@ -523,3 +523,22 @@ application of all 56 patches reproduced source tree
 source and cooperative contracts. Retail 30 Hz performance acceptance and
 native Linux execution remain pending; this foundation is not installed for
 the desktop shortcut.
+
+### Local performance delivery correction, 2026-10-10
+
+The first fixed-frame delivery accidentally compiled private generated EE
+sources from before patch 0029, despite retaining that patch in the PR.
+This reintroduced the cave-door floor fall locally. A fresh patched-tools
+build and complete generation changed 124 game sources and matched the
+previously cave-tested generated C++ set. Generation again had zero errors.
+Windows staging/rebuilding and both Linux runner build scripts now reject
+the legacy SQRT/RSQRT output before copying or building it.
+
+The corrected Windows executable was tested by entering the cave, opening
+its door, crossing into the next map and continuing to walk with stable floor
+contact. A separate 4500+ frame graphics/VRAM verification session had no
+mismatches. The corrected runner was also rebuilt and run natively on Ubuntu
+under WSL2, using CPU GS. See [the corrected measurements and remaining Linux
+limits](fixed-frame-performance.md). The older timing measurements from the
+stale-source delivery are explicitly marked as historical, not acceptance
+evidence for preserved gameplay.

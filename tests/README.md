@@ -1,5 +1,11 @@
 # Source-only regressions
 
+`python tests/generated-source-tests/test_guard.py` runs five source-only
+checks for stale SQRT/RSQRT output, mixed old/new output, missing required files,
+and rejection before staging changes a checkout. It uses authored snippets
+and no compiler or game assets. It passed on Windows and Ubuntu; the existing
+`recompiler-sqrt-tests` package separately executes the real translated math.
+
 The new [fixed-frame package](fixed-frame-tests/README.md) checks the rational
 game clock, actual scheduler integration and isolated graphics interpolation.
 Its three tests and the two seven-test native VU packages pass on native

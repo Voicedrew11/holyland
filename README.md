@@ -37,8 +37,9 @@ code or disc assets. The build checks the boot ELF's hash.
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
 - Gameplay timing is independent of host presentation. Interlaced NTSC uses
   roughly 59.94 fields and 29.97 ordinary gameplay updates per second.
-  An opt-in fixed-frame mode measured 29.73–29.97 game updates/s with roughly
-  80–90 graphics frames/s in the opening area on native Windows. It uses
+  An opt-in fixed-frame mode separates game updates from graphics. The corrected
+  build measured 29.997 game updates/s and roughly 75–90 graphics frames/s
+  in the opening area on native Windows, and passed the cave-door route. It uses
   isolated, conservative geometry interpolation; combat and physics remain
   on the original update loop. See [fixed-frame performance](docs/fixed-frame-performance.md)
   for launchers, timing, visual latency and Linux limits, and

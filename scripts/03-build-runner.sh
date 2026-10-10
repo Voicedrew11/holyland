@@ -22,6 +22,7 @@ set -eu
 . "$(dirname "$0")/common.sh"
 GAMEDIR="${1:-$GAMEDIR_DEFAULT}"
 [ -d "$GAMEDIR/output" ] || { echo "no $GAMEDIR/output — run 02-recompile.sh first" >&2; exit 1; }
+python3 "$KFIV_ROOT/scripts/check-generated-sources.py" --output "$GAMEDIR/output"
 NATIVE_ELF=""; NATIVE_METADATA=""
 case "${KFIV_VU_NATIVE:-1}" in
   1) NATIVE_ELF="$(cd "$GAMEDIR" && pwd)/SLUS_203.18"; NATIVE_METADATA="$KFIV_ROOT/kfiv/vu1-native.json" ;;
