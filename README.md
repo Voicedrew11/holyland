@@ -14,13 +14,16 @@ code or disc assets. The build checks the boot ELF's hash.
 
 - Native Windows x64 boots into the first gameplay area. Title screens,
   menus, movement, attack input, inventory and pause/resume have been checked.
+- Gameplay's vertical strip corruption is fixed: walls and sky now align
+  across the original framebuffer feedback passes, and scanout preserves
+  all 448 gameplay rows.
 - Music, sound effects and opening-movie audio play through the game's
   sound driver and SPU2 implementation. The opening movie now displays its
   pictures and ends naturally in gameplay. Enter optionally skips the
   opening through the game's original Start input.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
-- 3D rendering remains partly wrong and performance is below full speed.
+- Broader rendering accuracy remains unverified and performance is below full speed.
   The movie can show interlace combing. Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
   at a real save point remain unverified.
@@ -57,8 +60,9 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 23 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; nine additions cover Windows input, audio and movie fixes.
+of 26 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; twelve additions cover Windows input, audio, movie and
+gameplay-rendering fixes, with bounded opt-in GS diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

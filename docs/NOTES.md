@@ -12,7 +12,7 @@ place as state changes; link session logs at the point they support.
   W changed player coordinates; Space reached raw and guest Square edge
   state. Attack animation/damage was not independently measured.
 - **Audio:** music, effects and opening audio run through the original
-  SDRDRV/LIBSD modules and the new SPU2/host output. The current 248.218-second
+  SDRDRV/LIBSD modules and the new SPU2/host output. The earlier 248.218-second
   isolated run reached tick 10,600 and exited normally after natural movie
   completion and entry into gameplay. Its opening had no audio underruns;
   final sampled counters showed 256 underrun frames after entering 3D,
@@ -20,12 +20,38 @@ place as state changes; link session logs at the point they support.
   displayed the opening forest with zero sampled underruns/drops and no
   clipping in its 43.84-second PCM capture. Earlier source/device/process
   captures also showed no clipping.
+  The final 137.034-second gameplay-rendering check had zero sampled
+  underruns through the movie, then 2,304 cumulative underrun frames after
+  pause/3D gameplay, with zero drops. Underrun-free gameplay is not established.
 - **Movie presentation fixed:** decoded RGB already reached the correct
   GS texture, but disabled depth testing still applied `ZTST=NEVER` and
   rejected the original movie sprite. Patch 0023 honours `TEST.ZTE=0`
   and suppresses depth writes, so opening pictures and audio now play.
+- **Gameplay strip alignment fixed:** traced framebuffer feedback sprites
+  reversed both axes, but the rasterizer sorted XY without matching UV,
+  mirroring each 64-pixel strip. Patch 0024 preserves paired endpoints,
+  fractional XYOFFSET/UV, ceil-exclusive coverage, integer GS sample
+  positions and the second vertex's flat Q. The corrected preview reached
+  tick 4,500 normally in 128.879 seconds; walls and sky align continuously
+  at the same player position as the banded baseline. The texture-cache
+  policy and presentation remain unchanged by this fix.
+- **Bounded diagnostics:** patch 0025 makes every opt-in GS trace event
+  respect its tick interval, includes the active CRT2 registers, and reports
+  fractional XYOFFSET correctly. It changes diagnostics rather than pixels.
+- **Gameplay source height:** `DISPLAY2.DH=895` encodes 896 display lines
+  in interlaced FRAME mode. The early 512-row cap reduced this to 256 source
+  rows and triggered false field doubling. Patch 0026 converts the height
+  before capping it, retaining all 448 gameplay rows. The movie's existing
+  224-row field path and the general weave implementation are unchanged.
+- **Installed gameplay verification:** the final build reached tick 4,800
+  normally in 137.034 seconds, with 81 captures at 640×448 showing the full
+  scene and HUD. W movement, camera turning, inventory entry/back and
+  pause/resume were verified; opening movie pictures remained visible.
+  The installed executable, 28 matching DLLs and shortcut use that build.
+  This is visible integration evidence, not full PS2 pixel equivalence.
 - **Remaining problems:** interlace combing appears in some movie frames,
-  3D rendering is partly wrong, and gameplay remains below full speed.
+  broader 3D rendering accuracy remains unverified, and gameplay is below
+  full speed.
   Audio hardware details are approximate; later areas, a full playthrough,
   Windows controller integration and a real save/load roundtrip are unverified.
 - **Opening-screen controls:** after accepting brightness with F, the
@@ -34,17 +60,28 @@ place as state changes; link session logs at the point they support.
   loader still run. Earlier black-picture builds could look like a hang
   with PC audio muted. PR publication did not itself change the executable.
 - **Source delivery:** existing patches 0001–0014 are unchanged. New
-  source-exported patches 0015–0023 include Windows build/input, loader
-  completion, capture UI, timing, native audio/MPEG and GS depth fixes.
-  The 23-patch series has nine additions affecting 42 source/license/build
-  files. Generator hunks must be applied to tools before generating the game;
-  rebuilding only the runtime leaves stale continuation registration.
-- **Verification:** the repository now holds 17 standalone fixture packages.
+  source-exported patches 0015–0026 include Windows build/input, loader
+  completion, capture UI, timing, native audio/MPEG, GS depth and sprite fixes,
+  source-height decoding and bounded diagnostics. The 26-patch series has
+  twelve additions affecting 43 source/license/build files. Generator hunks must be applied to tools
+  before generating the game; rebuilding only the runtime leaves stale
+  continuation registration.
+- **Verification:** the repository now holds 20 standalone fixture packages.
   The original 16 passed 26 CTest entries on Windows, along with seven
   patch-helper tests and earlier full-series application/reruns. The new
   GS depth fixture passed 143,397 checks and 2/2 CTest entries; focused
-  upstream GS checks passed 51/51. The legacy GS suite remains 41/72 with
-  the same 31 failures in fixed and prior controls. Details and limits are in
+  upstream GS checks passed 51/51. At that depth-fix stage, the legacy GS suite was 41/72 with
+  the same 31 failures in fixed and prior controls. New sprite checks passed
+  853,552 assertions with one and eight workers; the prior-sprite control
+  reproduced 46,839 failures and 217 artificial strip-boundary steps.
+  The trace fixture passed 59 assertions in nine fixed cases, with six
+  old-behaviour controls and 15/15 CTest entries. Source-height checks passed
+  6,129,642 assertions in nine fixed cases; six pre-height controls reproduced
+  4,072,731 failures in 4,081,608 checks, with 15/15 CTest entries.
+  All three packages were rebuilt after relocation. Fresh tools/full/repeat
+  application of all 26 patches reproduced the source-export tree
+  `6c3edbccc9e71f1477863bd707e5758658e9b28b`, with all 57 managed files
+  verified after normalization. Details and limits are in
   [`windows-validation.md`](windows-validation.md); reproduction steps
   are in [`windows.md`](windows.md).
 - **Upstream:** the reusable continuation-ownership fix is submitted as
@@ -54,6 +91,8 @@ place as state changes; link session logs at the point they support.
   Holyland series still needs its generator hunks until the pin moves.
 - **GS upstream:** the generic disabled-depth fix is submitted separately as
   [PS2Recomp #280](https://github.com/ran-j/PS2Recomp/pull/280).
+  The sprite-coordinate fix is submitted as
+  [PS2Recomp #281](https://github.com/ran-j/PS2Recomp/pull/281).
 - **Next work:** interlace presentation, 3D rendering correctness/performance
   and broader game-path validation. The earlier Linux measurements and
   findings below remain historical; the new series has not been retested

@@ -32,6 +32,9 @@ commit); don't edit them by hand. Workflow:
 | `0021-Show-Verdite-mouse-capture-status-…` | The Verdite mouse glyph appears over the game picture when capture changes, with its MIT attribution. |
 | `0022-Restore-native-audio-…` | Native SPU2 mixing and host PCM output, original IOP driver timing/refills, shared CD sectors, guarded USA SDRDRV RPC, MPEG callback/lifecycle and IPU accounting, EE scheduling, and generated continuation registration. Includes the RecompOne SPU notice. |
 | `0023-Honor-disabled-GS-depth-testing-…` | Honour `TEST.ZTE=0`: bypass its stored depth comparison and suppress depth writes. The original opening-movie sprite now draws decoded texture pixels; inherited depth state cannot overwrite its texture. |
+| `0024-Preserve-sprite-coordinate-pairs-…` | Preserve matched XY/UV endpoints when reversing sprite axes, fractional XYOFFSET/UV, ceil-exclusive coverage, integer GS sampling and flat second-vertex Q. Corrects the original 64-pixel gameplay feedback strips without changing the texture-cache policy. |
+| `0025-Bound-GS-diagnostics-…` | Opt-in traces respect the selected tick interval for every event; privileged state includes CRT2, and primitive coordinates retain fractional XYOFFSET. Does not change rendering. |
+| `0026-Decode-interlaced-source-height-…` | Decode interlaced FRAME-mode source rows before the host-size cap. Gameplay's encoded 896 display lines retain all 448 source rows, rather than cropping to 256 and falsely doubling them. |
 
 The recompiler hunks in patch 0022 must also be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -40,15 +43,17 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 23-patch series retains patches 0001–0014 unchanged. Nine additions,
-0015–0023, were exported from source commits on top of that series and
-change 42 source/license/build files. The
+The 26-patch series retains patches 0001–0014 unchanged. Twelve additions,
+0015–0026, were exported from source commits on top of that series and
+change 43 source/license/build files. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in
 [PS2Recomp #279](https://github.com/ran-j/PS2Recomp/pull/279), and the
 disabled-depth fix separately in
 [PS2Recomp #280](https://github.com/ran-j/PS2Recomp/pull/280).
+The sprite-coordinate fix is proposed separately in
+[PS2Recomp #281](https://github.com/ran-j/PS2Recomp/pull/281).
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
 license, as are the maintainer tools built from its sources
