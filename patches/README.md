@@ -45,6 +45,9 @@ commit); don't edit them by hand. Workflow:
 | `0034-Truncate-and-saturate-EE-CVT.W.S-independently-of-ho` | EE CVT.W.S truncates toward zero and saturates by sign regardless of host rounding mode. Corrects shared angle range reduction used by skeletal matrices; no character-specific pose override. |
 | `0035-Service-registered-MPEG-input-callbacks-after-real-p` | Dispatch registered NODATA input service after UPDATE at each genuine decoded-picture handoff, preserving callback order and generation cancellation. |
 | `0036-Reclassify-resumed-IPU-input-chains-from-the-current` | On IPU-input STR starts, classify unread payload from the current CHCR tag instead of the previous cached terminal state; zero QWC fetches TADR. Promoted ring tails continue using only accepted-byte credit. |
+| `0037-Service-starved-MPEG-input-consumers-without-accepti.patch` | Service registered NODATA callbacks when a rejected video PES blocks an active decoder with no picture queued. Retain the packet for explicit retry and preserve cancellation, picture counts and accepted-byte accounting. Once-per-VSync service approximates the original SDK's empty-IPU wait loop, which services after every 5,001 polls. |
+| `0038-Preserve-active-IPU-input-channel-fields-when-suspen.patch` | Ignore STR-one CHCR writes while IPU input is active; a STR-zero write clears only STR and preserves the fetched tag and channel fields. STOP creates no credit, restart or completion; subsequent starts use the resumed-tag classification from patch 0036. |
+| `0039-Clear-MPEG-callback-registrations-when-recreating-a-.patch` | Successful Create clears only that MPEG handle's stream and ordinary callback registrations, preventing duplicate compressed-payload copies after recreation. Reset retains registrations; unrelated handles and cancellation guards remain intact. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -53,8 +56,8 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 36-patch series retains patches 0001–0014 unchanged. Twenty-two additions,
-0015–0036, were exported from source commits on top of that series. The
+The 39-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+0015–0039, were exported from source commits on top of that series. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

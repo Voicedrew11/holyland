@@ -271,6 +271,97 @@ void zeroQwcStartsAtTadr(PS2Memory &memory)
         expectIrq(memory, 1u);
     }
 }
+void activeChcrWriteSemantics(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2B000u, input = 0x74000u;
+    for (const uint32_t stopValue : {0u, 5u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input, true);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags, 0x1D5u); // REF with IRQ, TIE/TTE and ASP one.
+        memory.creditIpuInputBytes(16u);
+        memory.creditIpuInputBytes(3u);
+        const uint32_t fetched = memory.read32(channel);
+        const uint64_t starts = memory.m_dmaStartCount.load();
+        require((fetched & 0xF00000D5u) == 0xB00000D5u,
+            "active CHCR exposes fetched TAG/IRQ and configured MOD/TIE/TTE/ASP");
+        require(memory.m_ipuInputCredit == 3u && memory.m_ipuInputTagLoaded &&
+            memory.m_ipuInputEndAfterPayload,
+            "active IRQ-tag payload retains its fractional credit and classification");
+        // STR remains one: the active channel must ignore all requested changes.
+        memory.write32(channel, 0x70000101u);
+        require(memory.read32(channel) == fetched,
+            "active STR-one CHCR writes cannot replace the fetched tag or channel fields");
+        require(memory.m_dmaStartCount.load() == starts && memory.m_ipuInputCredit == 3u &&
+            memory.m_ipuInputTagLoaded && memory.m_ipuInputEndAfterPayload,
+            "ignored active CHCR writes neither restart DMA nor reclassify or earn credit");
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u,
+            "ignored active CHCR writes preserve all unread payload registers");
+        expectIrq(memory, 0u);
+        // The SDK writes literal five to STOP, then reads the retained TAG.
+        // Even a zero write may clear STR only while the channel is active.
+        memory.write32(channel, stopValue);
+        const uint32_t stopped = memory.read32(channel);
+        require(stopped == (fetched & ~0x100u),
+            "active STR-zero writes clear only STR and preserve TAG/IRQ/MOD/TIE/TTE/ASP");
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u && memory.m_dmaStartCount.load() == starts &&
+            memory.m_ipuInputCredit == 3u && memory.m_ipuInputEndAfterPayload,
+            "active STOP neither consumes bytes nor fabricates an interrupt or classification");
+        expectIrq(memory, 0u);
+        memory.write32(channel, stopped | 0x100u);
+        require(memory.read32(qwc) == 1u && memory.m_ipuInputCredit == 3u,
+            "resume preserves the three real fractional bytes");
+        memory.creditIpuInputBytes(13u);
+        require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+            memory.read32(tadr) == tags + 16u && (memory.read32(channel) & 0x100u) == 0u,
+            "resumed IRQ/TIE stops after exactly the current real payload");
+        require(memory.m_ipuInputCredit == 0u, "resumed terminal payload consumes each accepted byte once");
+        expectIrq(memory, 1u);
+    }
+}
+void sdkLiteralStopAndRetag(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2C000u, input = 0x75000u;
+    memory.resetIpuInputConsumption();
+    tag(memory, tags, 3u, 2u, input);
+    tag(memory, tags + 16u, 0u, 2u, input + 32u);
+    startChain(memory, tags);
+    memory.creditIpuInputBytes(16u);
+    memory.write32(channel, 5u);
+    const uint32_t stopped = memory.read32(channel);
+    require(stopped == 0x30000005u, "SDK STOP(5) preserves a partially consumed REF tag");
+    memory.creditIpuInputBytes(15u);
+    require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+        memory.m_ipuInputCredit == 15u, "real credits accumulate while SDK input DMA is stopped");
+    expectIrq(memory, 0u);
+    memory.write32(channel, stopped | 0x100u);
+    require(memory.read32(qwc) == 1u, "SDK REF resume cannot round fractional input credit up");
+    memory.creditIpuInputBytes(1u);
+    require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 2u &&
+        (memory.read32(channel) & 0x100u) != 0u,
+        "SDK STOP and snapshot resume retain the unread REF chain successor");
+    expectIrq(memory, 0u);
+    memory.creditIpuInputBytes(32u);
+    require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u &&
+        memory.m_ipuInputCredit == 0u, "SDK resume consumes real tail and successor credit exactly once");
+    expectIrq(memory, 1u);
+
+    memory.resetIpuInputConsumption();
+    startChain(memory, tags);
+    memory.creditIpuInputBytes(16u);
+    memory.write32(channel, 5u);
+    memory.write32(channel, 0x70000105u);
+    require(memory.read32(channel) == 0x70000105u,
+        "a stopped channel permits an explicit restored END tag on resume");
+    memory.creditIpuInputBytes(16u);
+    require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+        memory.read32(tadr) == tags + 16u && (memory.read32(channel) & 0x100u) == 0u,
+        "legal post-STOP retag completes without touching its queued successor");
+    expectIrq(memory, 1u);
+}
 void tagInterruptsAndMalformedChain(PS2Memory &memory)
 {
     memory.resetIpuInputConsumption();
@@ -356,8 +447,13 @@ int main()
         tagInterruptsAndMalformedChain(memory);
         inlineTagsAndScratchpad(memory);
         disabledControllerAndHardwareReset(memory);
+        activeChcrWriteSemantics(memory);
+        sdkLiteralStopAndRetag(memory);
 #ifdef IPU_RESUME_OLD_CONTROL
         throw std::runtime_error("old IPU resume control did not reproduce stale terminal classification");
+#endif
+#ifdef IPU_ACTIVE_CHCR_OLD_CONTROL
+        throw std::runtime_error("old active CHCR control did not reproduce an ignored active write");
 #endif
         std::cout << "kfiv_ipu_input_regression: " << checks << " checks, 0 failures\n";
         return 0;
@@ -369,6 +465,15 @@ int main()
             "resumed REF follows its successor instead of the cached terminal state")
         {
             std::cout << "kfiv_ipu_input_old_control: expected stale terminal classification after "
+                << checks << " checks\n";
+            return 0;
+        }
+#endif
+#ifdef IPU_ACTIVE_CHCR_OLD_CONTROL
+        if (std::string(error.what()) ==
+            "active STR-one CHCR writes cannot replace the fetched tag or channel fields")
+        {
+            std::cout << "kfiv_ipu_active_chcr_old_control: expected active-write corruption after "
                 << checks << " checks\n";
             return 0;
         }

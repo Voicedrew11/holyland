@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Omit only rejected-audio UPDATE service in a build-tree source copy."""
+"""Omit only rejected-video NODATA service in a build-tree source copy."""
 import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-marker = "                    if ((type == kMpegStrPCM || type == kMpegStrADPCM) &&"
+marker = "                    if (type == kMpegStrM2V && playback.picturesServed != 0u &&"
 if source.count(marker) != 1:
-    raise SystemExit("Expected exactly one rejected-audio service block")
+    raise SystemExit("Expected exactly one rejected-video service block")
 start = source.index(marker)
 cursor = source.index("{", start)
 depth = 1

@@ -3,7 +3,7 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-10-09)
+## Current state (2026-10-10)
 
 - **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
   prevent the initial floor fall. The next map was already loaded before
@@ -21,15 +21,19 @@ place as state changes; link session logs at the point they support.
   confirmed the NPC is seated upright. No model or animation override is used.
   The actual generated-instruction fixture passed 199,956 checks; the old
   macro produced 920 failures. This shared fix applies to all callers.
-- **Movie restart:** returning to title and starting again can stall the
-  intro when audio backpressure prevents further video, starving the
-  registered UPDATE callback which pumps its audio consumer. Patch 0033
-  adds bounded output service on that rejection path. The native MPEG
-  package passed all nine CTests and 789 checks. Patches 0035/0036 add the
-  original SDK's picture input-service boundary and reclassify resumed IPU
-  chains using the current CHCR tag. The actual-memory fixture passed 225
-  checks and an exact stale-terminal control; retail replay confirmation
-  remains in progress. No full playthrough is established.
+- **Movie restart:** recreating the same MPEG handle retained old callback
+  registrations. Each video packet was copied twice, while decoder credit
+  was earned once; live counters reproduce that mismatch exactly. Patch
+  0039 clears the recreated handle's registrations, as the original SDK
+  does, while Reset retains them. Patch 0038 preserves active CHCR tag and
+  channel fields when stopping input DMA. Patches 0033/0035/0037 restore
+  bounded registered audio/input service, and 0036 reclassifies resumed
+  chains from the current tag. Native Windows MPEG fixtures passed 1,133
+  checks and 13 CTests; actual-memory IPU fixtures passed 272 checks and
+  three CTests, including precise old-source controls. Native Windows replay
+  returned to title, started another game, and completed its second intro
+  without skipping. Movement and inventory worked afterward. No full
+  playthrough is established.
 
 - **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
   field to 448 rows on GPU. Earlier adaptive weave mixed previous
@@ -88,7 +92,7 @@ place as state changes; link session logs at the point they support.
   scene and HUD. W movement, camera turning, inventory entry/back and
   pause/resume were verified; opening movie pictures remained visible.
   The current installed executable includes the subsequent Vulkan, text,
-  cave-door and shared skeletal fixes, with 28 matching DLLs. The existing
+  cave-door, shared skeletal and movie-replay fixes, with 28 matching DLLs. The existing
   shortcut targets that executable. The user verified the cave route and
   seated guard interactively; that diagnostic copy was then closed at the
   user's request, rather than exiting normally at a fixed tick.
@@ -104,11 +108,12 @@ place as state changes; link session logs at the point they support.
   loader still run. Earlier black-picture builds could look like a hang
   with PC audio muted. PR publication did not itself change the executable.
 - **Source delivery:** existing patches 0001–0014 are unchanged. New
-  source-exported patches 0015–0036 include Windows build/input, loader
+  source-exported patches 0015–0039 include Windows build/input, loader
   completion, capture UI, timing, native audio/MPEG, GS depth and sprite fixes,
   source-height decoding, Vulkan, text presentation, collision arithmetic,
-  complete DMA chains, shared skeletal conversion and bounded diagnostics.
-  The 36-patch series has twenty-two additions and 65 managed source paths.
+  complete DMA chains, shared skeletal conversion, movie callback/input
+  lifetimes and bounded diagnostics. The 39-patch series has twenty-five
+  additions and 65 managed source paths.
   Generator hunks must be applied to tools
   before generating the game; rebuilding only the runtime leaves stale
   continuation registration.

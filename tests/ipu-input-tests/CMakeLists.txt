@@ -29,3 +29,17 @@ if(IPU_RESUME_OLD_CONTROL)
     target_compile_definitions(kfiv_ipu_input_old_control PRIVATE IPU_RESUME_OLD_CONTROL=1)
     add_test(NAME kfiv_ipu_input_dma_resume_old_control COMMAND kfiv_ipu_input_old_control)
 endif()
+
+option(IPU_ACTIVE_CHCR_OLD_CONTROL "Compare a scratch source copy with active CHCR overwrites" OFF)
+if(IPU_ACTIVE_CHCR_OLD_CONTROL)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(IPU_ACTIVE_CONTROL_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/active-chcr-control/ps2_memory.cpp")
+    add_custom_command(OUTPUT "${IPU_ACTIVE_CONTROL_SOURCE}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/make_active_chcr_control.py"
+            "${IPU_MEMORY_SOURCE}" "${IPU_ACTIVE_CONTROL_SOURCE}"
+        DEPENDS "${IPU_MEMORY_SOURCE}" "${CMAKE_CURRENT_SOURCE_DIR}/make_active_chcr_control.py"
+        VERBATIM)
+    configure_ipu_fixture(kfiv_ipu_active_chcr_old_control "${IPU_ACTIVE_CONTROL_SOURCE}")
+    target_compile_definitions(kfiv_ipu_active_chcr_old_control PRIVATE IPU_ACTIVE_CHCR_OLD_CONTROL=1)
+    add_test(NAME kfiv_ipu_input_active_chcr_old_control COMMAND kfiv_ipu_active_chcr_old_control)
+endif()

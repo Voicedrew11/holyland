@@ -40,8 +40,9 @@ code or disc assets. The build checks the boot ELF's hash.
   approximate in places. Later areas, a full playthrough and saving/loading
   at a real save point remain unverified.
 - Returning to the menu and starting another game could stall the intro.
-  Callback service and resumed input DMA are covered by source-only regressions; native
-  replay confirmation remains in progress.
+  Movie recreation now clears stale callback registrations, and suspended
+  input DMA preserves its active tag. Native Windows replay completed the
+  second intro without skipping, then verified movement and inventory.
 
 See [Windows validation](docs/windows-validation.md) for the tested compiler,
 source-only regressions, capture evidence and practical limits. Earlier
@@ -75,8 +76,8 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 36 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twenty-two additions cover Windows input, audio, movie,
+of 39 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; twenty-five additions cover Windows input, audio, movie,
 gameplay rendering, EE conversion/square-root translation and complete DMA chains,
 with opt-in diagnostics.
 Read [the development

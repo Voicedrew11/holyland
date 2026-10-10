@@ -287,8 +287,8 @@ matching the native checkout. No Linux build was performed for these fixes.
 This establishes progression past the reported doorway, not later-area or
 full-playthrough stability. The newly reached first NPC initially had an
 incorrect skeletal pose; the shared conversion follow-up below resolves it.
-Returning to title and starting again could hang the intro; native replay
-verification is ongoing.
+Returning to title and starting again exposed a separate movie-lifecycle
+defect, covered by the replay follow-up below.
 
 ### Shared skeletal conversion follow-up
 
@@ -336,24 +336,67 @@ invalidates that cache on STR starts. This follows the current-tag resume
 handling in [pinned PCSX2 dmaIPU1](https://github.com/PCSX2/pcsx2/blob/355608952714678b3c57832fb82dc6a42956ed25/pcsx2/IPU/IPUdma.cpp#L232-L266).
 Accepted decoder-byte credits remain the sole basis for payload retirement.
 
-The actual-memory package passed 225 native checks and both CTests,
-including a scratch source control reproducing stale terminal completion
-at check 103. It covers both retagging directions, unchanged resume,
-controller suspension, IRQ/TIE changes and zero-QWC TADR fetch. MPEG's
-production-source fixtures passed 789 checks and all nine CTests after
-rebuilding against the combined runtime, covering real FFmpeg handoff,
-callback ABI/order, cancellation and unchanged byte/picture accounting.
-Retail replay of the combined callback/retag build also stalled at ten
-pictures. The retag correction is independently verified, but does not
-clear this replay blockage. The SDK's input service during empty-decoder
-waits is the next investigation; these candidates have not replaced the
-installed, interactively verified cave/NPC build.
+Retail callback-only and combined callback/retag comparisons still stalled
+at ten pictures. The decisive live capture showed 252,532 bytes retired or
+credited to the decoder, but 509,141 cumulative bytes copied into ViBuf:
+`509141 = 2 * 252532 + 4077`. Each committed packet had been copied twice,
+and the first callback had also copied the pending rejected 4,077-byte PES.
+The second callback correctly rejected that packet when the ring filled.
 
-All 36 patches passed fresh and repeated tools/full application. The
-normalized tree is `ddbf17571c717e22afb0a6890030a35f8e86ce0a`, and all 65
+The native Create path retained registrations from the previous instance,
+then appended the game's new consumers. Original SDK Create clears those
+tables; the retail cleanup routine returns without calling native Delete.
+Patch 0039 clears registrations only for the successfully recreated handle.
+Reset retains registrations, unrelated handles remain intact, and existing
+cancellation guards release queued callbacks. Ring state and input credits
+are not reset to conceal the mismatch.
+
+Patch 0038 corrects another shared input-DMA defect: an active CHCR STOP
+write may clear only STR, preserving the fetched tag and channel fields;
+an active STR-one write is ignored. Previously the SDK's literal STOP value
+5 erased the fetched REF tag, changing the apparent chain termination.
+This follows [pinned PCSX2 active CHCR handling](https://github.com/PCSX2/pcsx2/blob/355608952714678b3c57832fb82dc6a42956ed25/pcsx2/Dmac.cpp#L213-L249).
+Stopped channels still permit explicit retagging. Patch 0037 also supplies
+registered NODATA on rejected video when the decoder is empty. The SDK
+services these IPU waits every 5,001 busy polls; the whole-frame HLE uses a
+bounded once-per-VSync approximation, retaining the rejected PES for an
+explicit accepted retry.
+
+The final actual-memory package passed 272 native checks and three CTests.
+Precise scratch controls reproduce stale resume classification and active
+CHCR overwrite. It covers both retagging directions, unchanged resume,
+active STOP/START fields, controller suspension, IRQ/TIE changes, fractional
+credit and zero-QWC TADR fetch. MPEG's production-source fixtures passed
+1,133 checks and all 13 CTests against the rebuilt final runtime: nine
+production fixtures and four precise controls. Recreation, Reset, Delete,
+unrelated handles, genuine FFmpeg pictures, callback cancellation and
+accepted-byte/picture accounting are exercised with synthetic inputs.
+
+The frozen combined build passed native Windows Vulkan replay. The scripted
+route skipped the first intro after genuine pictures, entered gameplay,
+selected Quit to title, and started another game. No input was sent after
+the second brightness confirmation until the intro ended naturally.
+Bounded traces show at least 1,856 genuine pictures, advancing audio-consumer
+transfers, producer EOF at 87,558,144 bytes and committed demux EOF at
+87,556,100 bytes. The native picture trace is sampled, so these observations
+do not supply an exact final picture count.
+
+World loading followed EOF normally, then active gameplay resumed. A
+40-tick forward press moved the player from `(-5656, 0, -10718)` to
+`(-5706.030, 0, -10483.273)`. Inventory opened with normal rendered text,
+and Back returned to gameplay. The hidden run quit normally with exit code
+0 after 378.707 seconds, without timeout or forced termination. The exact
+tested executable and 28 matching DLLs were installed for the existing
+desktop shortcut; its target, arguments and working directory were verified.
+Private cards were used throughout. This verifies the tested return-to-title
+route and subsequent controls, not every death/restart path or later area.
+
+All 39 patches passed fresh and repeated tools/full application. The
+normalized tree is `dc4e2ac51f72ace01706569091c99abceca3710a`; all 65
 managed source files match the native checkout and clean source export.
-No new generator change was made in these two patches; the native runner
-uses the previously regenerated game output.
+The frozen candidate's executable and source manifest also match. These
+movie follow-ups change no generator code and use the previously regenerated
+game output. No native Linux build or execution was performed.
 
 The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
 nearest bob of the current 224-row field. Title and inventory captures no
