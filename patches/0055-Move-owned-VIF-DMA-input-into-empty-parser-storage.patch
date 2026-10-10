@@ -1,0 +1,57 @@
+From 45159a337fe66212ab24601391e96c27882accc6 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 08:10:08 -0400
+Subject: [PATCH 55/56] Move owned VIF DMA input into empty parser storage
+
+---
+ ps2xRuntime/src/lib/ps2_memory.cpp           | 12 +++++++++++-
+ ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp | 10 +++++++++-
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index f09ecfb..ab0f197 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -2037,7 +2037,17 @@ void PS2Memory::processPendingTransfers()
+     {
+         if (!p.chainData.empty())
+         {
+-            processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
++            if (cooperativeVif1Enabled())
++            {
++                // The DMA snapshot already owns its payload. Transfer that
++                // allocation to the callback-safe incoming queue instead of
++                // copying it through the borrowed-pointer/FIFO append path.
++                const size_t acceptedBytes = p.chainData.size();
++                m_vif1Incoming.emplace_back(std::move(p.chainData));
++                m_vif1AcceptedBytes += acceptedBytes;
++            }
++            else
++                processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
+         }
+         else if (p.qwc > 0)
+         {
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index f196364..56c3811 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -894,7 +894,15 @@ void PS2Memory::serviceVif1Stream()
+         {
+             auto incoming = std::move(m_vif1Incoming.front());
+             m_vif1Incoming.pop_front();
+-            m_vif1Input.insert(m_vif1Input.end(), incoming.begin(), incoming.end());
++            if (m_vif1Input.empty())
++            {
++                // No parser has a live pointer at this safepoint. The first
++                // owned chunk can become the active allocation directly;
++                // later chunks still append across command/DMA boundaries.
++                m_vif1Input = std::move(incoming);
++            }
++            else
++                m_vif1Input.insert(m_vif1Input.end(), incoming.begin(), incoming.end());
+         }
+         // Retire the previous transfer before beginning a following transfer's
+         // MSCAL. Its completed VU barrier must not be attached to a later job.
+-- 
+2.55.0.windows.3
+

@@ -308,3 +308,31 @@ microphone or other applications' render streams. Its text summary reports
 frames, nonzero samples, peak, packets and discontinuities. The analyzer at
 `scripts/windows/Analyze-KFIVAudio.py` reads signed 16-bit stereo WAVs using
 only Python's standard library.
+
+## Cooperative VIF/VU and presentation foundation
+
+Patches 0053–0056 have five additional source-only fixture packages. Their
+relocated builds passed 94 active CTests on native Windows x64/MSVC 19.44,
+RelWithDebInfo: [VU stepping](vu-stepping-tests/README.md) (11),
+[compiled authored VU](vu-native-stepping-tests/README.md) (7),
+[DMA ownership](cooperative-dma-tests/README.md) (6),
+[actual runtime clock/scheduler](cooperative-runtime-tests/README.md) (61),
+and [GS presentation](gs-presentation-tests/README.md) (9).
+The retained obsolete Q no-floor assertion is explicitly disabled; its
+assumption conflicts with the independently advancing physical field clock.
+Other negative controls retain their assertions.
+
+The VU comparison uses actual candidate/reference interpreters with an explicit
+hash-pinned patch-0052 allocator and VIF/GS substitutes. The authored native
+catalog is generated in external scratch and checks native-issued counts in
+every positive case. DMA tests use actual memory/parser/GIF ownership with
+VU/GS substitutes. The clock/scheduler package builds the actual runtime
+dependency graph. Eight Vulkan comparisons check complete RGBA, metadata and
+all 4 MiB VRAM against the prior frontend; one host-policy case uses the exact
+UploadFrame body with host API substitutes. Vulkan cases selected RTX 4090.
+
+Configure packages separately outside their sources using each README's
+explicit candidate, reference and dependency paths. GNU/Clang strict FP flags
+are supplied, but Linux execution and retail performance acceptance remain
+separate checks. No game assets, retail catalogs, recordings, profiles,
+binaries or private execution logs are distributed with these fixtures.

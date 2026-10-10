@@ -1,0 +1,1085 @@
+From 716846d3d7b419043b2bbcf6763627f5a35876cb Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 08:10:08 -0400
+Subject: [PATCH 54/56] Service owned VIF input and bounded VU jobs
+ cooperatively with EE dispatch
+
+---
+ ps2xRuntime/include/ps2_runtime.h             |  22 ++
+ ps2xRuntime/include/runtime/ps2_memory.h      |  32 +++
+ ps2xRuntime/include/runtime/ps2_vu1.h         |  43 ++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    |  43 +++-
+ ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp       |   2 +
+ .../src/lib/Kernel/Stubs/Helpers/Support.h    |   9 +-
+ ps2xRuntime/src/lib/ps2_memory.cpp            |  43 +++-
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  80 ++++++-
+ ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp  | 162 ++++++++++++-
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp       | 226 ++++++++++++++++--
+ ps2xRuntime/tools/generate_vu_native.py       |   4 +-
+ 11 files changed, 631 insertions(+), 35 deletions(-)
+
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index 86cbadc..abf6393 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -386,6 +386,28 @@ public:
+     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
+ 
+     void drainCompletedDmacHandlers(uint8_t *rdram);
++    bool cooperativeVif1Pending() const noexcept { return m_memory.vif1WorkPending() || !m_vif1BarrierWaits.empty(); }
++    bool cooperativeVif1Runnable() const noexcept
++    {
++        if (m_memory.vif1Runnable()) return true;
++        for (const auto &wait : m_vif1BarrierWaits)
++            if (wait.epoch != m_memory.vif1Epoch() || (wait.dmaOnly ? !m_memory.vif1DmaBusy() : !m_memory.vif1WorkPending() && !m_memory.gifPathsBusy()))
++                return true;
++        return false;
++    }
++    void serviceCooperativeVif1(uint32_t quantum = 256u);
++    void publishVu1Control(R5900Context &context) const noexcept
++    {
++        context.vu0_vpu_stat = (context.vu0_vpu_stat & ~0x0700u) |
++            (m_vu1.jobActive() ? 0x0100u : 0u) |
++            (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
++            (m_vu1.state().stoppedByT ? 0x0400u : 0u);
++    }
++    void waitCooperativeVif1(R5900Context *ctx, uint8_t *rdram, bool dmaOnly);
++    struct Vif1BarrierWait { uint64_t token; uint64_t epoch; bool dmaOnly; };
++    std::vector<Vif1BarrierWait> m_vif1BarrierWaits;
++    bool m_servicingCooperativeVif1 = false;
++    uint64_t m_nextVif1WaitToken = 0u;
+ 
+     void requestStop();
+     bool isStopRequested() const;
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index cdeabc2..8836d60 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -6,6 +6,7 @@
+ #include <array>
+ #include <functional>
+ #include <vector>
++#include <deque>
+ #include <unordered_map>
+ #include <atomic>
+ #include <iostream>
+@@ -334,6 +335,23 @@ public:
+     using Vu1MscntCallback = std::function<void(uint32_t top, uint32_t itop)>;
+     void setVu1MscntCallback(Vu1MscntCallback cb) { m_vu1MscntCallback = std::move(cb); }
+ 
++    using Vu1JobActiveCallback = std::function<bool()>;
++    using Vu1JobCancelCallback = std::function<void()>;
++    void setVu1CooperativeCallbacks(Vu1JobActiveCallback active, Vu1JobCancelCallback cancel)
++    { m_vu1JobActive = std::move(active); m_vu1JobCancel = std::move(cancel); }
++    bool cooperativeVif1Enabled() const noexcept { return static_cast<bool>(m_vu1JobActive); }
++    bool vif1WorkPending() const noexcept;
++    bool vif1Runnable() const noexcept
++    {
++        return (m_vu1JobActive && m_vu1JobActive()) || !m_vif1Incoming.empty() || !m_pendingVif1Transfers.empty() ||
++            (!m_vif1WaitingForInput && (m_vif1Cursor < m_vif1Input.size() || !m_vif1DmaEnds.empty()));
++    }
++    bool gifPathsBusy() const noexcept { return !m_pendingGifTransfers.empty() || !m_path3MaskedFifo.empty() || (m_gifArbiter && !m_gifArbiter->empty()); }
++    bool vif1DmaBusy() const noexcept { return !m_vif1DmaEnds.empty() || !m_pendingVif1Transfers.empty(); }
++    uint64_t vif1Epoch() const noexcept { return m_vif1Epoch; }
++    void serviceVif1Stream();
++    void cancelVif1Work();
++
+     uint8_t *getVU1Code() { return m_vu1Code; }
+     const uint8_t *getVU1Code() const { return m_vu1Code; }
+     uint8_t *getVU1Data() { return m_vu1Data; }
+@@ -413,6 +431,20 @@ public:
+     GifArbiter *m_gifArbiter = nullptr;
+     Vu1MscalCallback m_vu1MscalCallback;
+     Vu1MscntCallback m_vu1MscntCallback;
++    Vu1JobActiveCallback m_vu1JobActive;
++    Vu1JobCancelCallback m_vu1JobCancel;
++    std::vector<uint8_t> m_vif1Input;
++    std::deque<std::vector<uint8_t>> m_vif1Incoming;
++    uint64_t m_vif1AcceptedBytes = 0;
++    size_t m_vif1Cursor = 0;
++    uint64_t m_vif1InputBase = 0;
++    uint64_t m_vif1Epoch = 1;
++    std::deque<uint64_t> m_vif1DmaEnds;
++    bool m_vif1Servicing = false;
++    bool m_vif1WaitingForInput = false;
++    uint32_t processVIF1Commands(const uint8_t *data, uint32_t sizeBytes);
++    void appendVif1Input(const uint8_t *data, uint32_t sizeBytes);
++    void completeVif1Dma();
+ 
+     uint8_t *m_vu0Code = nullptr;
+     uint8_t *m_vu0Data = nullptr;
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
+index ed13eb5..f2dbad4 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1.h
+@@ -61,6 +61,33 @@ public:
+                 GS &gs, PS2Memory *memory = nullptr,
+                 uint32_t top = 0, uint32_t itop = 0, uint32_t maxCycles = 65536);
+ 
++    enum class JobReason : uint8_t
++    {
++        NotRunning, Running, Draining, Ended, StoppedD, StoppedT,
++        BudgetExhausted, ReservedInstruction, InvalidPc, Cancelled, Faulted
++    };
++    struct JobResult
++    {
++        JobReason reason;
++        uint64_t cyclesAdvanced;
++        bool active;
++    };
++    // Executor-owned bindings must outlive the job. Host stepping is distinct
++    // from MSCNT: it never relatches TOP/ITOP or clears guest D/T stop state.
++    bool beginExecute(uint8_t *vuCode, uint32_t codeSize,
++                      uint8_t *vuData, uint32_t dataSize, GS &gs,
++                      PS2Memory *memory = nullptr, uint32_t startPC = 0,
++                      uint32_t top = 0, uint32_t itop = 0,
++                      uint32_t maxCycles = 65536);
++    bool beginResume(uint8_t *vuCode, uint32_t codeSize,
++                     uint8_t *vuData, uint32_t dataSize, GS &gs,
++                     PS2Memory *memory = nullptr, uint32_t top = 0,
++                     uint32_t itop = 0, uint32_t maxCycles = 65536);
++    JobResult stepJob(uint32_t maxVuCycles = 256);
++    bool jobActive() const { return m_jobActive; }
++    JobReason jobStatus() const { return m_jobStatus; }
++    void cancelJob();
++
+     VU1State &state() { return m_state; }
+     const VU1State &state() const { return m_state; }
+ 
+@@ -247,6 +274,22 @@ private:
+     bool m_stopRequested = false;
+     bool m_pendingHaltD = false;
+     bool m_pendingHaltT = false;
++    uint8_t *m_jobVuCode = nullptr;
++    uint32_t m_jobCodeSize = 0;
++    uint64_t m_jobIssueEnd = 0;
++    uint64_t m_jobEpoch = 0;
++    DecodedInstructionPair m_jobPendingPair{};
++    bool m_jobPendingPairValid = false;
++    bool m_jobActive = false;
++    bool m_jobDraining = false;
++    bool m_jobStepping = false;
++    JobReason m_jobStatus = JobReason::NotRunning;
++    JobReason m_jobEndReason = JobReason::Ended;
++
++    bool bindJob(uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData,
++                 uint32_t dataSize, GS &gs, PS2Memory *memory,
++                 uint32_t maxCycles);
++    void drainJobTo(uint64_t budgetEnd);
+ 
+     void run(uint8_t *vuCode, uint32_t codeSize,
+              uint8_t *vuData, uint32_t dataSize,
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 63f59c4..4200434 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -139,6 +139,7 @@ EeScheduler::~EeScheduler()
+ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+ {
+     m_executorThread = std::this_thread::get_id();
++    m_runtime.memory().cancelVif1Work();
+     m_rdram = rdram;
+     m_readyQueues = {};
+     m_threads.clear();
+@@ -241,7 +242,14 @@ void EeScheduler::run()
+                 copyMainContextToRuntime();
+                 publishIdleDebugContext();
+                 publishSnapshot();
+-                waitForEvent();
++                if (m_runtime.cooperativeVif1Runnable())
++                {
++                    // No runnable guest exists: an external DMA/GS waiter
++                    // must still be able to complete its executor-owned job.
++                    m_runtime.serviceCooperativeVif1();
++                    processPendingEvents();
++                }
++                else waitForEvent();
+                 continue;
+             }
+             if (next)
+@@ -364,6 +372,9 @@ void EeScheduler::run()
+             continue;
+         }
+ 
++        const int enteredThreadId = running->id;
++        const uint64_t enteredInvocationSequence = running->invocations.empty()
++            ? 0u : running->invocations.back().sequence;
+         try
+         {
+             if (!running->invocations.empty() && running->invocations.back().shouldExecute)
+@@ -383,6 +394,7 @@ void EeScheduler::run()
+             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
+             m_guestEntryTime = std::chrono::steady_clock::now();
+             m_guestEntryCycle = m_eeCycle;
++            m_runtime.publishVu1Control(context);
+             m_guestExecuting.store(true, std::memory_order_release);
+             function(m_rdram, &context, &m_runtime);
+             m_guestExecuting.store(false, std::memory_order_release);
+@@ -404,6 +416,27 @@ void EeScheduler::run()
+         // Ordinary returns and call safe points keep the awakened identity
+         // alive. Its next blocking wait or terminal state retires the hold.
+         processPendingEvents();
++        // Give queued/current guest interrupts their normal dispatcher entry
++        // before another VU quantum. Merely latching an ISR is not servicing it.
++        // A runnable base guest function already had its opportunity above.
++        const GuestThread *serviceOwner = currentThread();
++        // An invocation which already entered may itself poll VIF busy state.
++        // It needs one quantum at its safe continuation before it can return;
++        // normal non-nesting IRQ semantics defer newly queued handlers until
++        // that invocation completes. Never retain an owner pointer across the
++        // guest call, which may delete or suspend its own thread.
++        const bool invocationCanProgress = enteredInvocationSequence != 0u && serviceOwner &&
++            serviceOwner->id == enteredThreadId && !serviceOwner->invocations.empty() &&
++            serviceOwner->invocations.back().sequence == enteredInvocationSequence &&
++            serviceOwner->activeContext().pc != 0u;
++        if (m_runtime.cooperativeVif1Runnable() &&
++            (invocationCanProgress || (m_pendingInvocations.empty() &&
++                !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads) &&
++                (!serviceOwner || serviceOwner->invocations.empty()))))
++        {
++            m_runtime.serviceCooperativeVif1();
++            processPendingEvents();
++        }
+         if (m_rescheduleRequested && m_currentThreadId != 0)
+         {
+             GuestThread *preempted = currentThread();
+@@ -448,6 +481,11 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ {
+     accountCycles(cycles);
+     expireVBlankHandoffs();
++    // A pending job asks an executing generated function to return to its
++    // existing safe continuation. The pre-entry predicate never pumps or
++    // blocks guest entry, and this noexcept path never runs VU/GS callbacks.
++    if (m_guestExecuting.load(std::memory_order_acquire) && m_runtime.cooperativeVif1Runnable())
++        return true;
+ 
+     if (m_checkpointPending.load(std::memory_order_acquire) ||
+         m_stopRequested.load(std::memory_order_acquire))
+@@ -2097,7 +2135,8 @@ void EeScheduler::processDueDeadlines()
+                 // a future wall field. It may need to register its next wait.
+                 const bool ready = std::any_of(m_readyQueues.begin(), m_readyQueues.end(),
+                     [](const auto &queue) { return !queue.empty(); });
+-                if (PS2X_VBLANK_HOST_ELIGIBILITY && (m_currentThreadId != 0 || ready || !m_pendingInvocations.empty()))
++                if (PS2X_VBLANK_HOST_ELIGIBILITY && (m_currentThreadId != 0 || ready ||
++                    !m_pendingInvocations.empty() || m_runtime.cooperativeVif1Runnable()))
+                 {
+                     updateNextDeadline();
+                     return;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index 6340adb..2df2498 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -1225,6 +1225,8 @@ namespace ps2_stubs
+         if (mode == 0)
+         {
+             mem.processPendingTransfers();
++            if (mem.cooperativeVif1Enabled() && (mem.vif1WorkPending() || mem.gifPathsBusy()))
++                runtime->waitCooperativeVif1(ctx, rdram, false);
+ 
+             uint32_t count = 0;
+             constexpr uint32_t kTimeout = 0x1000000;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+index 17b6d28..da63ca2 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1383,7 +1383,7 @@ namespace
+         mem.processPendingTransfers();
+ 
+         std::vector<uint32_t> completedCauses = mem.consumeCompletedDmacCauses();
+-        if (completedCauses.empty() && (mem.readIORegister(channelBase + 0x00u) & 0x100u) == 0u)
++        if (!(channelBase == 0x10009000u && mem.cooperativeVif1Enabled()) && completedCauses.empty() && (mem.readIORegister(channelBase + 0x00u) & 0x100u) == 0u)
+         {
+             if (channelBase == 0x10008000u)
+             {
+@@ -1457,6 +1457,13 @@ namespace
+             return -1;
+         }
+ 
++        if (channelBase == 0x10009000u && runtime->memory().cooperativeVif1Enabled())
++        {
++            const bool busy = runtime->memory().vif1DmaBusy();
++            if (busy && mode == 0u) runtime->waitCooperativeVif1(ctx, rdram, true);
++            return busy ? 1 : 0;
++        }
++
+         bool modelBusy = false;
+         {
+             std::lock_guard<std::mutex> lock(g_dmaStubMutex);
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index c5cb77a..f09ecfb 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1277,6 +1277,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+         case 0x10003C10u:     // VIF1_FBRST
+             if (value & 0x1u) // RST
+             {
++                cancelVif1Work();
+                 const bool wasPath3Masked = m_path3Masked;
+                 std::memset(&vif1_regs, 0, sizeof(vif1_regs));
+                 m_vif1PendingPath2ImageQwc = 0u;
+@@ -1340,6 +1341,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+         return true;
+     }
+ 
++    if (address == 0x10009000u && cooperativeVif1Enabled() && (value & 0x100u) == 0u)
++        cancelVif1Work();
++
+     if (address >= 0x10008000 && address < 0x1000F000)
+     {
+         if ((address & 0xFF) == 0x00 && (value & 0x100))
+@@ -1630,6 +1634,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                     enqueueTransfer(madr, qwc);
+                 }
+ 
++                if (channelBase == 0x10009000u && cooperativeVif1Enabled() && m_pendingVif1Transfers.empty())
++                    m_pendingVif1Transfers.emplace_back(); // zero-byte accepted DMA
++
+                 const bool autoProcessTransfers =
+                     (channelBase == 0x1000A000u) ? (m_gifPacketCallback || m_gifArbiter != nullptr) : true;
+                 if (autoProcessTransfers)
+@@ -2025,7 +2032,7 @@ void PS2Memory::processPendingTransfers()
+     }
+     m_pendingVif0Transfers.clear();
+ 
+-    const bool hadVif1 = !m_pendingVif1Transfers.empty();
++    const bool hadVif1 = !m_pendingVif1Transfers.empty() && !cooperativeVif1Enabled();
+     for (auto &p : m_pendingVif1Transfers)
+     {
+         if (!p.chainData.empty())
+@@ -2080,6 +2087,7 @@ void PS2Memory::processPendingTransfers()
+                 }
+             }
+         }
++        if (cooperativeVif1Enabled()) m_vif1DmaEnds.push_back(m_vif1AcceptedBytes);
+     }
+     m_pendingVif1Transfers.clear();
+ 
+@@ -2567,6 +2575,37 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+         return val;
+     }
+ 
++    if (address >= 0x10003C00u && address <= 0x10003D70u)
++    {
++        switch (address)
++        {
++        case 0x10003C00u:
++        {
++            uint32_t stat = vif1_regs.stat & ~(0x1F000003u | (1u << 2));
++            if (vif1WorkPending()) stat |= 2u; // VPS waiting/decoding
++            if (m_vu1JobActive && m_vu1JobActive()) stat |= 1u << 2; // VEW
++            const size_t bytes = m_vif1Input.size() - m_vif1Cursor;
++            stat |= static_cast<uint32_t>(std::min<size_t>(16u, (bytes + 15u) / 16u)) << 24u;
++            return stat;
++        }
++        case 0x10003C40u: return vif1_regs.cycle;
++        case 0x10003C50u: return vif1_regs.mode;
++        case 0x10003C60u: return vif1_regs.num;
++        case 0x10003C70u: return vif1_regs.mask;
++        case 0x10003C80u: return vif1_regs.code;
++        case 0x10003C90u: return vif1_regs.itops;
++        case 0x10003CA0u: return vif1_regs.base;
++        case 0x10003CB0u: return vif1_regs.ofst;
++        case 0x10003CC0u: return vif1_regs.tops;
++        case 0x10003CD0u: return vif1_regs.itop;
++        case 0x10003CE0u: return vif1_regs.top;
++        default:
++            if (address >= 0x10003D00u && address <= 0x10003D30u) return vif1_regs.row[(address - 0x10003D00u) / 16u];
++            if (address >= 0x10003D40u && address <= 0x10003D70u) return vif1_regs.col[(address - 0x10003D40u) / 16u];
++            break;
++        }
++    }
++
+     if (address == 0x10003020u) // GIF_STAT
+     {
+         uint32_t stat = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
+@@ -2587,6 +2626,8 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+     {
+         if (address >= 0x10008000 && address < 0x1000F000)
+         {
++            if (address == 0x10009000u && cooperativeVif1Enabled())
++                return m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
+             if (address == 0x1000B400u)
+                 return m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
+             if ((address & 0xFF) == 0x00)
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index a9168d1..84328eb 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1021,13 +1021,11 @@ bool PS2Runtime::syncCoreSubsystems()
+                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+                                      m_vu1.state().tBitEnabled =
+                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+-                                     m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
++                                     if (!m_vu1.beginExecute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+-                                                   m_gs, &m_memory, startPC, top, itop, 65536);
+-                                     cpuContext->vu0_vpu_stat =
+-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
+-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
++                                                   m_gs, &m_memory, startPC, top, itop, 65536))
++                                         throw std::logic_error("cooperative VIF1 MSCAL overlaps active VU service");
++                                     publishVu1Control(*cpuContext); });
+     m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
+                                  {
+                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+@@ -1039,13 +1037,13 @@ bool PS2Runtime::syncCoreSubsystems()
+                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+                                      m_vu1.state().tBitEnabled =
+                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+-                                     m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
++                                     if (!m_vu1.beginResume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+-                                                  m_gs, &m_memory, top, itop, 65536);
+-                                     cpuContext->vu0_vpu_stat =
+-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
+-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
++                                                  m_gs, &m_memory, top, itop, 65536))
++                                         throw std::logic_error("cooperative VIF1 MSCNT overlaps active VU service");
++                                     publishVu1Control(*cpuContext); });
++    m_memory.setVu1CooperativeCallbacks([this] { return m_vu1.jobActive(); }, [this] { m_vu1.cancelJob(); });
++    m_memory.cancelVif1Work();
+     resetIop();
+     m_vu0.reset();
+     m_vu1.reset();
+@@ -2853,3 +2851,61 @@ void PS2Runtime::run()
+ 
+     RUNTIME_LOG("[run] exiting loop");
+ }
++
++void PS2Runtime::serviceCooperativeVif1(uint32_t quantum)
++{
++    // Throwing-capable, executor-only dispatcher service. No guest function is
++    // entered by the parser/VU/GIF work; resulting causes are queued afterward.
++    // Callbacks may reset/queue a new epoch, but cannot recursively enter the
++    // interpreter while its outer step still owns captured issue state.
++    if (m_servicingCooperativeVif1) return;
++    m_servicingCooperativeVif1 = true;
++    struct ServiceScope { bool &flag; ~ServiceScope() { flag = false; } } scope{m_servicingCooperativeVif1};
++    m_memory.processPendingTransfers();
++    if (m_vu1.jobActive())
++    {
++        const uint64_t jobEpoch = m_memory.vif1Epoch();
++        const auto result = m_vu1.stepJob(quantum);
++        if (!result.active)
++        {
++            using Reason = VU1Interpreter::JobReason;
++            if (result.reason != Reason::Ended && result.reason != Reason::StoppedD && result.reason != Reason::StoppedT)
++            {
++                std::cerr << "[cooperative-vif1] failed VU job reason=" << static_cast<int>(result.reason) << std::endl;
++                // A callback may already cancel the old epoch and enqueue a
++                // fresh stream. Retire the failed job without cancelling that
++                // newer stream a second time.
++                if (m_memory.vif1Epoch() == jobEpoch) m_memory.cancelVif1Work();
++            }
++            m_cpuContext.vu0_vpu_stat = (m_cpuContext.vu0_vpu_stat & ~0x0600u) |
++                (m_vu1.state().stoppedByD ? 0x0200u : 0u) | (m_vu1.state().stoppedByT ? 0x0400u : 0u);
++        }
++    }
++    else m_memory.serviceVif1Stream();
++    drainCompletedDmacHandlers(m_memory.getRDRAM());
++    auto completed = std::vector<std::pair<uint64_t, int>>{};
++    for (auto it = m_vif1BarrierWaits.begin(); it != m_vif1BarrierWaits.end();)
++    {
++        const bool cancelled = it->epoch != m_memory.vif1Epoch();
++        const bool ready = it->dmaOnly ? !m_memory.vif1DmaBusy() : !m_memory.vif1WorkPending() && !m_memory.gifPathsBusy();
++        if (cancelled || ready)
++        {
++            completed.emplace_back(it->token, cancelled ? -1 : 0);
++            it = m_vif1BarrierWaits.erase(it);
++        }
++        else ++it;
++    }
++    for (const auto &[token, result] : completed) m_eeScheduler->completeExternalWait(0x56494631u, token, result);
++}
++
++void PS2Runtime::waitCooperativeVif1(R5900Context *ctx, uint8_t *rdram, bool dmaOnly)
++{
++    if (!(dmaOnly ? m_memory.vif1DmaBusy() : m_memory.vif1WorkPending() || m_memory.gifPathsBusy())) return;
++    m_eeScheduler->bindMainContextForSyscall(*ctx, rdram);
++    const uint64_t token = ++m_nextVif1WaitToken;
++    m_vif1BarrierWaits.push_back({token, m_memory.vif1Epoch(), dmaOnly});
++    const uint32_t resumePc = getRegU32(ctx, 31);
++    ctx->pc = resumePc;
++    m_eeScheduler->waitExternal(EeWaitReason::External, 0x56494631u, token,
++        [resumePc](R5900Context &context) { context.pc = resumePc; });
++}
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 772aa85..f196364 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -297,13 +297,34 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+ 
+ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ {
+-    if (sizeBytes == 0u)
++    if (cooperativeVif1Enabled())
++    {
++        appendVif1Input(data, sizeBytes);
+         return;
++    }
++    processVIF1Commands(data, sizeBytes);
++}
++
++uint32_t PS2Memory::processVIF1Commands(const uint8_t *data, uint32_t sizeBytes)
++{
++    if (sizeBytes == 0u)
++        return 0u;
+ 
+     uint32_t pos = 0;
++    const uint64_t parseEpoch = m_vif1Epoch;
+ 
+     while (pos + 4 <= sizeBytes)
+     {
++        if (parseEpoch != m_vif1Epoch) return 0u;
++        if (cooperativeVif1Enabled())
++        {
++            const uint64_t consumed = m_vif1InputBase + m_vif1Cursor + pos;
++            while (!m_vif1DmaEnds.empty() && m_vif1DmaEnds.front() <= consumed)
++            {
++                m_vif1DmaEnds.pop_front();
++                completeVif1Dma();
++            }
++        }
+         if (m_vif1PendingPath2ImageQwc != 0u)
+         {
+             const uint32_t availableQw = (sizeBytes - pos) / 16u;
+@@ -321,6 +342,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
+             std::memcpy(imagePacket.data() + 16u, data + pos, static_cast<size_t>(chunkQw) * 16u);
+             submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
++            if (parseEpoch != m_vif1Epoch) return 0u;
+ 
+             pos += chunkQw * 16u;
+             m_vif1PendingPath2ImageQwc -= chunkQw;
+@@ -331,6 +353,32 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             continue;
+         }
+ 
++        // Do not modify any register or payload until the full command is
++        // buffered. DMA/FIFO chunks may end anywhere within a VIF command.
++        uint32_t pendingCode = 0;
++        std::memcpy(&pendingCode, data + pos, 4u);
++        const uint32_t pendingOp = (pendingCode >> 24u) & 0x7Fu;
++        const uint32_t rawNum = (pendingCode >> 16u) & 0xFFu;
++        const uint32_t pendingNum = rawNum ? rawNum : 256u;
++        uint32_t payload = 0;
++        if (pendingOp == VIF_STMASK) payload = 4u;
++        else if (pendingOp == VIF_STROW || pendingOp == VIF_STCOL) payload = 16u;
++        else if (pendingOp == VIF_MPG) payload = pendingNum * 8u;
++        else if (pendingOp == VIF_DIRECT || pendingOp == VIF_DIRECTHL)
++            payload = ((pendingCode & 0xFFFFu) ? (pendingCode & 0xFFFFu) : 65536u) * 16u;
++        else if ((pendingOp & 0x60u) == 0x60u)
++        {
++            const uint32_t vn = (pendingOp >> 2u) & 3u, vl = pendingOp & 3u;
++            const uint32_t bits = vl == 0 ? 32u : vl == 1 ? 16u : vl == 2 ? 8u : vn == 3 ? 4u : 16u;
++            const uint32_t vectorBytes = ((vl == 3u && vn == 3u ? 16u : (vn + 1u) * bits) + 7u) / 8u;
++            const uint32_t cl = std::max(1u, vif1_regs.cycle & 0xFFu);
++            const uint32_t wl = std::max(1u, (vif1_regs.cycle >> 8u) & 0xFFu);
++            const uint32_t sourceCount = cl < wl ? (pendingNum / wl) * cl + std::min(pendingNum % wl, cl) : pendingNum;
++            payload = (sourceCount * vectorBytes + 3u) & ~3u;
++        }
++        if (cooperativeVif1Enabled() && payload > sizeBytes - pos - 4u)
++            break;
++
+         uint32_t cmd;
+         memcpy(&cmd, data + pos, 4);
+         pos += 4;
+@@ -398,6 +446,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+         }
+         else if (opcode == VIF_FLUSHE || opcode == VIF_FLUSH || opcode == VIF_FLUSHA)
+         {
++            // The initial cooperative parser serializes VU launches, so FLUSHE
++            // reaches this point only after VU drain. FLUSH/FLUSHA drain the
++            // available GIF arbiter synchronously; masked PATH3 stays separate.
++            if (cooperativeVif1Enabled() && opcode != VIF_FLUSHE && m_gifArbiter)
++                m_gifArbiter->drain();
+             continue;
+         }
+         else if (opcode == VIF_MSCAL || opcode == VIF_MSCALF)
+@@ -418,6 +471,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ 
+             if (m_vu1MscalCallback)
+                 m_vu1MscalCallback(startPC, runTop, runItop);
++            if (parseEpoch != m_vif1Epoch) return 0u;
++            if (cooperativeVif1Enabled()) break;
+             continue;
+         }
+         else if (opcode == VIF_MSCNT)
+@@ -436,6 +491,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ 
+             if (m_vu1MscntCallback)
+                 m_vu1MscntCallback(runTop, runItop);
++            if (parseEpoch != m_vif1Epoch) return 0u;
++            if (cooperativeVif1Enabled()) break;
+             continue;
+         }
+         else if (opcode == VIF_STMASK)
+@@ -507,6 +564,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             {
+                 const bool directHl = (opcode == VIF_DIRECTHL);
+                 submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
++                if (parseEpoch != m_vif1Epoch) return 0u;
+ 
+                 const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
+                 if (pendingImageQw != 0u)
+@@ -642,7 +700,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+                     else if (vl <= 2u)
+                     {
+                         const uint32_t bytesPerComp = (vl == 0u) ? 4u : ((vl == 1u) ? 2u : 1u);
+-                        const uint32_t srcStride = srcIndex * bytesPerVector;
++                        const uint32_t srcStride = (srcIndex - 1u) * bytesPerVector;
+                         const uint32_t srcAvailable = sizeBytes - pos;
+                         const auto readComp = [&](uint32_t c) -> uint32_t
+                         {
+@@ -790,4 +848,104 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             continue;
+         }
+     }
++    return pos;
++}
++
++void PS2Memory::appendVif1Input(const uint8_t *data, uint32_t sizeBytes)
++{
++    if (data && sizeBytes)
++    {
++        // Callback-time submissions cannot invalidate a parser's current
++        // packet pointer. Merge this separately owned queue only at safepoints.
++        m_vif1Incoming.emplace_back(data, data + sizeBytes);
++        m_vif1AcceptedBytes += sizeBytes;
++    }
++}
++
++bool PS2Memory::vif1WorkPending() const noexcept
++{
++    return m_vif1Cursor < m_vif1Input.size() || !m_vif1Incoming.empty() || !m_vif1DmaEnds.empty() ||
++           !m_pendingVif1Transfers.empty() || (m_vu1JobActive && m_vu1JobActive());
++}
++
++void PS2Memory::completeVif1Dma()
++{
++    constexpr uint32_t dstatAddress = 0x1000E010u;
++    const bool alreadyLatched = (m_ioRegisters[dstatAddress] & 2u) != 0u;
++    uint32_t dstat = m_ioRegisters[dstatAddress] | 2u;
++    dstat = (dstat & ~(1u << 31)) | (((dstat & 0x3FFu) & ((dstat >> 16u) & 0x3FFu)) ? (1u << 31) : 0u);
++    m_ioRegisters[dstatAddress] = dstat;
++    if (!alreadyLatched) queueCompletedDmacCause(1u);
++    if (m_vif1DmaEnds.empty())
++    {
++        m_ioRegisters[0x10009000u] &= ~0x100u;
++        m_ioRegisters[0x10009020u] = 0u;
++    }
++}
++
++void PS2Memory::serviceVif1Stream()
++{
++    if (!cooperativeVif1Enabled() || m_vif1Servicing || m_vu1JobActive()) return;
++    m_vif1Servicing = true;
++    const uint64_t serviceEpoch = m_vif1Epoch;
++    try
++    {
++        while (!m_vif1Incoming.empty())
++        {
++            auto incoming = std::move(m_vif1Incoming.front());
++            m_vif1Incoming.pop_front();
++            m_vif1Input.insert(m_vif1Input.end(), incoming.begin(), incoming.end());
++        }
++        // Retire the previous transfer before beginning a following transfer's
++        // MSCAL. Its completed VU barrier must not be attached to a later job.
++        const auto retire = [this](uint64_t consumed)
++        {
++            while (!m_vif1DmaEnds.empty() && m_vif1DmaEnds.front() <= consumed)
++            {
++                m_vif1DmaEnds.pop_front();
++                completeVif1Dma();
++            }
++        };
++        retire(m_vif1InputBase + m_vif1Cursor);
++        const auto left = static_cast<uint32_t>(m_vif1Input.size() - m_vif1Cursor);
++        if (left) m_vif1Cursor += processVIF1Commands(m_vif1Input.data() + m_vif1Cursor, left);
++        if (serviceEpoch != m_vif1Epoch)
++        {
++            // Callback reset kept the active byte allocation alive until the
++            // parser returned. Discard its old cursor; new incoming data stays
++            // owned by the new epoch and will be consumed at the next service.
++            m_vif1Input.clear(); m_vif1Cursor = 0; m_vif1InputBase = 0;
++            m_vif1Servicing = false;
++            return;
++        }
++        m_vif1WaitingForInput = !m_vu1JobActive() && m_vif1Cursor != m_vif1Input.size();
++        if (!m_vu1JobActive())
++        {
++            retire(m_vif1InputBase + m_vif1Cursor);
++            // A partial command is already safely accepted into the VIF's
++            // owned input. DMA may retire at that FIFO boundary while VIF
++            // remains waiting for the following payload chunk. No launch or
++            // command-register mutation was performed by incomplete input.
++            if (m_vif1WaitingForInput) retire(m_vif1InputBase + m_vif1Input.size());
++        }
++        if (m_vif1Cursor == m_vif1Input.size())
++        {
++            m_vif1InputBase += m_vif1Cursor;
++            m_vif1Input.clear(); m_vif1Cursor = 0;
++        }
++    }
++    catch (...) { m_vif1Servicing = false; throw; }
++    m_vif1Servicing = false;
++}
++
++void PS2Memory::cancelVif1Work()
++{
++    ++m_vif1Epoch;
++    if (m_vu1JobCancel) m_vu1JobCancel();
++    if (!m_vif1Servicing) { m_vif1Input.clear(); m_vif1Cursor = 0; m_vif1InputBase = 0; }
++    m_vif1Incoming.clear(); m_vif1AcceptedBytes = 0;
++    m_vif1WaitingForInput = false;
++    m_vif1DmaEnds.clear(); m_pendingVif1Transfers.clear();
++    m_ioRegisters[0x10009000u] &= ~0x100u;
++    m_ioRegisters[0x10009020u] = 0u;
+ }
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 5ee9f44..10d0357 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -17,6 +17,7 @@
+ #include <limits>
+ #include <map>
+ #include <string>
++#include <stdexcept>
+ #include <vector>
+ #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+ #include <emmintrin.h>
+@@ -378,6 +379,11 @@ VU1Interpreter::VU1Interpreter(Unit unit)
+ 
+ void VU1Interpreter::resetScheduler()
+ {
++    ++m_jobEpoch;
++    m_jobStatus = m_jobActive ? JobReason::Cancelled : JobReason::NotRunning;
++    m_jobActive = false;
++    m_jobDraining = false;
++    m_jobPendingPairValid = false;
+     m_fdiv.valid = false;
+     for (auto &entry : m_efu) entry.valid = false;
+     // Packet bytes are overwritten as PATH1 transfers each qword. Reset the
+@@ -1250,6 +1256,7 @@ void VU1Interpreter::advanceTo(uint64_t targetCycle)
+ {
+     while (m_cycle < targetCycle)
+     {
++        if (m_jobStepping && !m_jobActive) return;
+         // With no XGKICK in flight a cycle does nothing until the next
+         // pipeline commit, so skip straight to the cycle before it.
+         if (!m_xgkick.active)
+@@ -2004,6 +2011,8 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
+                              uint32_t startPC, uint32_t top, uint32_t itop,
+                              uint32_t maxCycles)
+ {
++    if (m_jobActive || m_jobStepping)
++        throw std::logic_error("Synchronous VU execute overlaps a host job");
+     resetScheduler();
+     m_state.pc = startPC & microAddressMask();
+     m_state.ebit = false;
+@@ -2041,6 +2050,8 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
+                             GS &gs, PS2Memory *memory,
+                             uint32_t top, uint32_t itop, uint32_t maxCycles)
+ {
++    if (m_jobActive || m_jobStepping)
++        throw std::logic_error("Synchronous VU resume overlaps a host job");
+     m_state.top = top;
+     m_state.itop = itop;
+     m_state.stoppedByD = false;
+@@ -2058,6 +2069,158 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
+     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
+ }
+ 
++namespace
++{
++    class VuFpEnvironment
++    {
++        std::fenv_t m_previous{};
++        bool m_saved = false;
++        int m_previousRounding = -1;
++    public:
++        explicit VuFpEnvironment(bool active = true)
++        {
++            if (!active) return;
++            m_previousRounding = std::fegetround();
++            m_saved = std::fegetenv(&m_previous) == 0;
++            std::fesetround(FE_TOWARDZERO);
++        }
++        ~VuFpEnvironment() noexcept
++        {
++            if (m_saved) std::fesetenv(&m_previous);
++            else if (m_previousRounding != -1) std::fesetround(m_previousRounding);
++        }
++    };
++}
++
++bool VU1Interpreter::bindJob(uint8_t *vuCode, uint32_t codeSize,
++                            uint8_t *vuData, uint32_t dataSize,
++                            GS &gs, PS2Memory *memory, uint32_t maxCycles)
++{
++    m_jobVuCode = vuCode;
++    m_jobCodeSize = codeSize;
++    m_activeVuData = vuData;
++    m_activeVuDataSize = dataSize;
++    m_activeGs = &gs;
++    m_activeMemory = memory;
++    m_jobIssueEnd = m_cycle + maxCycles;
++    m_jobPendingPairValid = false;
++    m_jobDraining = false;
++    m_jobStatus = JobReason::Running;
++    m_jobActive = true;
++    ++m_jobEpoch;
++    return true;
++}
++
++bool VU1Interpreter::beginExecute(uint8_t *vuCode, uint32_t codeSize,
++                                 uint8_t *vuData, uint32_t dataSize,
++                                 GS &gs, PS2Memory *memory, uint32_t startPC,
++                                 uint32_t top, uint32_t itop, uint32_t maxCycles)
++{
++    if (m_jobActive || m_jobStepping) return false;
++    resetScheduler();
++    m_state.pc = startPC & microAddressMask();
++    m_state.ebit = false;
++    m_state.haltAfterDelaySlot = false;
++    m_state.stoppedByD = false;
++    m_state.stoppedByT = false;
++    m_state.top = top;
++    m_state.itop = itop;
++    m_state.branchPending = false;
++    m_state.branchTarget = 0;
++    m_state.branchDelay = 0;
++    m_state.vf[0][0] = 0.0f;
++    m_state.vf[0][1] = 0.0f;
++    m_state.vf[0][2] = 0.0f;
++    m_state.vf[0][3] = 1.0f;
++    return bindJob(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
++}
++
++bool VU1Interpreter::beginResume(uint8_t *vuCode, uint32_t codeSize,
++                                uint8_t *vuData, uint32_t dataSize,
++                                GS &gs, PS2Memory *memory,
++                                uint32_t top, uint32_t itop, uint32_t maxCycles)
++{
++    if (m_jobActive || m_jobStepping) return false;
++    m_state.top = top;
++    m_state.itop = itop;
++    m_state.stoppedByD = false;
++    m_state.stoppedByT = false;
++    return bindJob(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
++}
++
++void VU1Interpreter::cancelJob()
++{
++    resetScheduler();
++    m_jobStatus = JobReason::Cancelled;
++    m_state.ebit = false;
++    m_state.haltAfterDelaySlot = false;
++    m_state.cycles = m_cycle;
++}
++
++void VU1Interpreter::drainJobTo(uint64_t budgetEnd)
++{
++    while (m_jobActive && pipelinesPending() && m_cycle < budgetEnd)
++    {
++        if (!m_xgkick.active)
++        {
++            uint64_t next = m_nextCommitCycle;
++            if (m_writebackHorizon > m_cycle)
++                next = std::min(next, m_writebackHorizon);
++            next = std::min(next, budgetEnd);
++            if (next > m_cycle + 1u) m_cycle = next - 1u;
++        }
++        advanceOneCycle();
++    }
++    if (m_jobActive && !pipelinesPending())
++    {
++        m_state.ebit = false;
++        m_state.haltAfterDelaySlot = false;
++        m_pendingHaltD = false;
++        m_pendingHaltT = false;
++        m_jobDraining = false;
++        m_jobActive = false;
++        m_jobStatus = m_stopRequested ? JobReason::ReservedInstruction : m_jobEndReason;
++    }
++}
++
++VU1Interpreter::JobResult VU1Interpreter::stepJob(uint32_t maxVuCycles)
++{
++    const uint64_t before = m_cycle;
++    if (!m_jobActive || maxVuCycles == 0u || m_jobStepping)
++        return {m_jobStatus, 0u, m_jobActive};
++    const uint64_t epoch = m_jobEpoch;
++    const uint64_t end = m_cycle + maxVuCycles;
++    VuFpEnvironment fp;
++    m_jobStepping = true;
++    try
++    {
++        if (!m_jobDraining)
++        {
++            const uint64_t issueEnd = std::min(end, m_jobIssueEnd);
++            run(m_jobVuCode, m_jobCodeSize, m_activeVuData, m_activeVuDataSize,
++                *m_activeGs, m_activeMemory, static_cast<uint32_t>(issueEnd - m_cycle));
++            if (m_jobEpoch == epoch && m_jobActive && !m_jobDraining && m_cycle >= m_jobIssueEnd)
++            {
++                m_jobActive = false;
++                m_jobStatus = JobReason::BudgetExhausted;
++            }
++        }
++        if (m_jobEpoch == epoch && m_jobActive && m_jobDraining)
++            drainJobTo(end);
++        m_state.cycles = m_cycle;
++        m_jobStepping = false;
++        return {m_jobStatus, m_cycle >= before ? m_cycle - before : 0u, m_jobActive};
++    }
++    catch (...)
++    {
++        m_jobStepping = false;
++        m_jobActive = false;
++        m_jobStatus = JobReason::Faulted;
++        m_state.cycles = m_cycle;
++        throw;
++    }
++}
++
+ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+                          uint8_t *vuData, uint32_t dataSize,
+                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
+@@ -2067,33 +2230,43 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+     m_activeGs = &gs;
+     m_activeMemory = memory;
+ 
+-    const int previousRoundingMode = std::fegetround();
+-    const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
++    // stepJob already protects the whole issue-and-drain quantum. Keep an
++    // independent guard only for legacy synchronous execution.
++    VuFpEnvironment fp(!m_jobStepping);
++    const bool hostJob = m_jobStepping;
++    const uint64_t jobEpoch = m_jobEpoch;
+     // A lifted segment runs to its end; the cycle budget only bounds the
+     // interpreter's time slice.
+-    if (runLifted(vuCode, codeSize, dataSize, memory))
++    if (!hostJob && runLifted(vuCode, codeSize, dataSize, memory))
+     {
+-        if (useVuRounding && previousRoundingMode != -1)
+-            std::fesetround(previousRoundingMode);
+         return;
+     }
+     const uint64_t budgetEnd = m_cycle + maxCycles;
+     bool programEnded = false;
+-    while (m_cycle < budgetEnd && !m_stopRequested)
++    // A fault can be raised by XGKICK while this already-decoded pair stalls.
++    // The uninterrupted loop still issues that captured pair before observing
++    // stopRequested at its next loop boundary. A host quantum must do likewise.
++    while (m_cycle < budgetEnd && (!m_stopRequested || (hostJob && m_jobPendingPairValid)))
+     {
+         commitReadyPipelines();
+-        if (m_state.pc + 8u > codeSize)
++        if (hostJob && (!m_jobActive || m_jobEpoch != jobEpoch)) break;
++        if (vuCode == nullptr || m_state.pc + 8u > codeSize)
++        {
++            if (hostJob) { m_jobActive = false; m_jobStatus = JobReason::InvalidPc; }
+             break;
++        }
+ 
+-        const DecodedInstructionPair &decoded = getDecodedInstructionPairForPc(vuCode, codeSize, memory, m_state.pc);
++        const DecodedInstructionPair &decoded = hostJob && m_jobPendingPairValid
++            ? m_jobPendingPair : getDecodedInstructionPairForPc(vuCode, codeSize, memory, m_state.pc);
+         if (decoded.has(DecodedUpperReserved) || decoded.has(DecodedLowerReserved))
+         {
+             reportReservedInstruction(decoded.has(DecodedUpperReserved), decoded.has(DecodedUpperReserved) ? decoded.upper : decoded.lower);
++            if (hostJob) { m_jobActive = false; m_jobStatus = JobReason::ReservedInstruction; }
+             break;
+         }
+ 
+ #ifdef PS2X_VU1_NATIVE_CATALOG
+-        if (m_nativeCatalogMatched && m_decodedCodeCacheValid && m_unit == Unit::VU1 &&
++        if (!m_jobPendingPairValid && m_nativeCatalogMatched && m_decodedCodeCacheValid && m_unit == Unit::VU1 &&
+             memory != nullptr && vuCode == memory->getVU1Code() &&
+             m_cachedVuCode == vuCode && m_cachedMemory == memory &&
+             m_cachedCodeSize == codeSize && (m_state.pc & 7u) == 0u)
+@@ -2114,6 +2287,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         {
+             if (readyCycle >= budgetEnd)
+             {
++                if (m_jobStepping)
++                {
++                    m_jobPendingPair = decoded;
++                    m_jobPendingPairValid = true;
++                }
+                 advanceTo(budgetEnd);
+                 break;
+             }
+@@ -2125,6 +2303,8 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         }
+         if (m_cycle >= budgetEnd)
+             break;
++        if (m_jobStepping && !m_jobActive) break;
++        m_jobPendingPairValid = false;
+ 
+         const uint8_t writtenVi = decoded.firstViWrite;
+         const int32_t oldVi = writtenVi != 0u ? m_state.vi[writtenVi] : 0;
+@@ -2231,15 +2411,29 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+ 
+     if (programEnded)
+     {
+-        flushPipelines();
+-        m_state.ebit = false;
+-        m_state.haltAfterDelaySlot = false;
+-        m_pendingHaltD = false;
+-        m_pendingHaltT = false;
++        if (hostJob && m_jobActive && m_jobEpoch == jobEpoch)
++        {
++            m_jobDraining = true;
++            m_jobStatus = JobReason::Draining;
++            m_jobEndReason = m_stopRequested ? JobReason::ReservedInstruction
++                : m_state.stoppedByD ? JobReason::StoppedD
++                : m_state.stoppedByT ? JobReason::StoppedT : JobReason::Ended;
++        }
++        else if (!hostJob)
++        {
++            flushPipelines();
++            m_state.ebit = false;
++            m_state.haltAfterDelaySlot = false;
++            m_pendingHaltD = false;
++            m_pendingHaltT = false;
++        }
++    }
++    if (hostJob && m_jobActive && m_stopRequested && !m_jobDraining && !m_jobPendingPairValid)
++    {
++        m_jobActive = false;
++        m_jobStatus = JobReason::ReservedInstruction;
+     }
+     m_state.cycles = m_cycle;
+-    if (useVuRounding && previousRoundingMode != -1)
+-        std::fesetround(previousRoundingMode);
+ }
+ 
+ #ifdef PS2X_VU1_NATIVE_CATALOG
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+index ed5bd0c..df44f03 100644
+--- a/ps2xRuntime/tools/generate_vu_native.py
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -266,6 +266,8 @@ uint64_t vuNativeIssuedForTests() { return privateSpecializedIssued; }
+             if (m_xgkick.active) readyCycle = std::max(readyCycle, m_cycle + 1u);
+ ''')
+     issue = replace_once(issue, '        if (m_cycle >= budgetEnd)\n            break;', '        if (m_cycle >= budgetEnd)\n            return 3;')
++    issue = replace_once(issue, '        if (m_jobStepping && !m_jobActive) break;',
++                         '        if (m_jobStepping && !m_jobActive) return 3;')
+     issue = issue.replace('execUpper(decoded.upper);', 'execUpperSpecialized<upper>();')
+     issue = issue.replace('execLower(decoded.lower, vuData, dataSize, gs, memory, decoded.upper);',
+                           'execLowerSpecialized<lower, upper>(vuData, dataSize, gs, memory);')
+@@ -333,7 +335,7 @@ PRIVATE_VU_BLOCK_NOINLINE int VU1Interpreter::trySpecializedGroup<{base}u>(
+         const int outcome = issueSpecializedPair<0x{lo:08x}u, 0x{hi:08x}u>(vuData, dataSize, gs, memory, codeSize, budgetEnd);
+         if (outcome != 1) return outcome;
+         issuedAny = true;
+-        if (m_cycle >= budgetEnd || m_stopRequested || m_state.pc != {next_index*8}u)
++        if (m_cycle >= budgetEnd || m_stopRequested || (m_jobStepping && !m_jobActive) || m_state.pc != {next_index*8}u)
+             return 1;
+ ''')
+             if index + 1 == stop:
+-- 
+2.55.0.windows.3
+

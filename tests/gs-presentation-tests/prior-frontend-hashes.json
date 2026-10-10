@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "reference": "pre-W frontend; unchanged by cooperative U and input-move V",
+  "files": {
+    "include/runtime/gs/gs_frontend.h": "eae9ee7ad4bf5e968a72a2cad4a7f57d73174f961888d0d5b52ddfce67425cfb",
+    "src/lib/gs/gs_frontend.cpp": "98438cfde558226d749a24eca396ce83d3750eb4e9907378b2e864a8f4472596"
+  }
+}

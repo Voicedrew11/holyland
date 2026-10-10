@@ -61,6 +61,10 @@ commit); don't edit them by hand. Workflow:
 | `0050-Reduce-scheduler-wall-clock-…` | Avoid empty event scans and redundant clock sampling at inactive checkpoints while keeping active native/MMIO samples current. |
 | `0051-Select-interlaced-NTSC-field-timing-…` | Select 16,683,333 ns / 4,920,116-cycle fields through actual GS/BIOS interlaced NTSC mode calls, retaining parity history and pending End/alarm ordering. Other modes keep their prior fallback. |
 | `0052-Match-SDK-SyncV-completion-…` | Ordinary SDK waits return actual FIELD on continuation resumption; SetVSyncFlag publishes full captured CSR rather than a software tick. Fixed/progressive behavior is retained. |
+| `0053-Separate-physical-GS-field-phase-…` | Advance physical GS FIELD independently of delayed guest interrupt delivery, preserving chronological IRQ acknowledgement and the original field clock. |
+| `0054-Service-owned-VIF-input-and-bounded-VU-jobs-…` | Run bounded VU jobs through the EE dispatcher, retain owned VIF input across partial commands, and resume external SDK waits through cancellation-checked continuations. Preserve decoded pairs, XGKICK drains, guest cycles, DMA status and command boundaries. |
+| `0055-Move-owned-VIF-DMA-input-…` | Move owned DMA input into empty parser storage; continue copying borrowed RAM/FIFO input and appending nonempty tails. |
+| `0056-Defer-host-GS-snapshots-…` | Defer host readback while cooperative producers are runnable, cache unchanged scanout requests by content epoch, and retry deferred presentation without advancing guest time. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -69,10 +73,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 52-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 56-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
 0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
-0042–0052 are exported as separate source commits on top of them. The
+0042–0056 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

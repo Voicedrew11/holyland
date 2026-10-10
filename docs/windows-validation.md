@@ -493,3 +493,28 @@ lets LINK modify a separate working PGD. Six isolated alternating genuine
 replays reduced the actual VU-body median from 76.4821 to 65.5545 ms (14.29%);
 every replay remained exact. This is a VU-body benchmark. Whole-game update
 and attack measurements are required before accepting the optimized runner.
+
+Patches 0053–0056 separate physical FIELD progression from deferred guest
+interrupt delivery and service owned VIF input and bounded VU jobs at existing
+EE safe points. A blocked input stream retains its busy state; queued guest
+interrupts execute before later VU work. Reset/cancellation epochs preserve
+packet ownership and continuation lifetime. Moving owned DMA buffers into an
+empty parser avoids copies while borrowed RAM and nonempty streams retain
+their original handling.
+
+Host presentation defers a readback while cooperative producers can progress
+and caches unchanged scanout requests by VRAM mutation epoch. A deferred
+request retries without advancing guest time. The relocated public fixture
+packages passed 94 active native Windows CTests: VU stepping 11, compiled
+authored VU 7, DMA ownership 6, actual clock/scheduler runtime 61 and GS
+presentation 9. Eight GS cases compared complete RGBA, metadata and all
+4 MiB VRAM on RTX 4090; the ninth checked the UploadFrame body with host API
+substitutes. The obsolete Q no-floor control remains explicitly disabled,
+with its original assertion retained.
+
+Fresh tools, tools-repeat, full-after-tools, full-repeat and tools-after-full
+application of all 56 patches reproduced source tree
+`63634a67e02f064d62662202e807d3a86d5995cc`. These checks establish the tested
+source and cooperative contracts. Retail 30 Hz performance acceptance and
+native Linux execution remain pending; this foundation is not installed for
+the desktop shortcut.

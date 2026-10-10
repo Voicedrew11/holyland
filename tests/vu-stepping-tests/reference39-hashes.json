@@ -1,0 +1,25 @@
+{
+  "reference": "PS2Recomp c5a9d02573410a2085a4b4b831b0b68ba3515440 plus KFIV-PC patches 0001 through 0039",
+  "files": {
+    "include/runtime/ps2_vu1.h": {
+      "frozen_sha256": "206981cb24fb75b542b34e588f1f8b8aa1f0c0b861a4de57d9e6b73d02e367ec",
+      "lf_sha256": "50e38f6ae0e5ceacf1af6553beea6759b1c5da235c32d4b41297aa814dadbb04"
+    },
+    "src/lib/vu/ps2_vu1_core.cpp": {
+      "frozen_sha256": "7c4a594403ea75f77f7d880a6edd673099ee62f15c6e306a9fa47fa283085158",
+      "lf_sha256": "5e2f2f20e0521a9a03322bce53fc4c434ebbaac777238a232b653be94a4d63a8"
+    },
+    "src/lib/vu/ps2_vu1_upper.cpp": {
+      "frozen_sha256": "8dd307db424d814f258b0c1a1fd24c573b8c813caa38e27955391d72a86330f6",
+      "lf_sha256": "1fb774766f9a1cfe62448b4caa7e213c4cd917053af64fb55dec22b4eeb3f8bb"
+    },
+    "src/lib/vu/ps2_vu1_lower.cpp": {
+      "frozen_sha256": "b1e1cb064f8f5b5094114d9fa108e295155a8064bcee7eed0a257eec5fdc7b17",
+      "lf_sha256": "31442f50905229b4c7054bd8d1c3122bca29dc011a4c76cc5c8144bc05dbdb4c"
+    },
+    "src/lib/vu/ps2_vu1_detail.h": {
+      "frozen_sha256": "046d2f2faf5e9df6d5443822cf874af8799e4c69f841c415e2a748fc8cbaa4c7",
+      "lf_sha256": "f158a7c0fa1a557c7304c9b9742fef74b86502ff9560d07339f764e052c0441e"
+    }
+  }
+}

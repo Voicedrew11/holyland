@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+execute_process(COMMAND "${PROGRAM}" RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(result EQUAL 0)
+    message(FATAL_ERROR "Ownership corruption control unexpectedly passed")
+endif()
+string(FIND "${out}${err}" "${EXPECTED}" found)
+if(found LESS 0)
+    message(FATAL_ERROR "Unexpected control failure: ${out}${err}")
+endif()
+message(STATUS "Intended ownership control detected: ${err}")
