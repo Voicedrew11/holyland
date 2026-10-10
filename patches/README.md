@@ -50,6 +50,7 @@ commit); don't edit them by hand. Workflow:
 | `0039-Clear-MPEG-callback-registrations-when-recreating-a-.patch` | Successful Create clears only that MPEG handle's stream and ordinary callback registrations, preventing duplicate compressed-payload copies after recreation. Reset retains registrations; unrelated handles and cancellation guards remain intact. |
 | `0040-vu1-opt-in-microcode-census-…` | `PS2X_VU1_CENSUS=1` records which VU1 microprograms run, from which entry, and their cycle share. Off by default; does not change behaviour. |
 | `0041-vu1-run-lifted-microprogram-segments-…` | `PS2X_VU1_LIFT=1` runs VU1 microprogram segments that were lifted to C++ (`scripts/maintainer/vu1lift.py`), bit-exact with the interpreter including cycles, flags and XGKICK output. Off by default; with no lifted sources built in it does nothing. |
+| `0042-Speed-up-runner-links-…` | Build tools only: the generated function table (`register_functions.cpp`, one ~90k-statement constructor run once at startup) is compiled at `-O0` outside LTO, unity batches and the PCH (GCC/Clang; MSVC unchanged); GCC 15+ Release links cache code generation in `PS2X_LTO_CACHE_DIR` (`-flto-incremental`). Does not change runtime behaviour. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -58,9 +59,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 41-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 42-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
-0040–0041 (VU1 census and lift) are exported on top of 0039. The
+0040–0041 (VU1 census and lift) are exported on top of 0039, and 0042
+(build speed) on top of 0041. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

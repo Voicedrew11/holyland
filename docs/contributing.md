@@ -37,8 +37,7 @@ into the runtime checkout. Merely relinking a runner with an old
 ```sh
 ./scripts/maintainer/dev-build.sh                       # incremental, -O2, no LTO
 ./scripts/maintainer/dev-run.sh runs/smoke 900          # headless, exits at tick 900
-PS2X_RUNNER=~/.local/share/kfiv-pc/dev-build/ps2xRuntime/ps2EntryRunner \
-  ./scripts/04-run.sh                                   # play it in a window
+./scripts/04-run.sh             # play it in a window (newest of dev and Release)
 ```
 
 - The first `dev-build.sh` compiles all ~28k generated files (minutes).
@@ -57,9 +56,15 @@ PS2X_RUNNER=~/.local/share/kfiv-pc/dev-build/ps2xRuntime/ps2EntryRunner \
   header change, takes ~2 min longer. Use it when you switch branches or
   rebuild trees often, not while editing headers. Switching the mode
   reconfigures and rebuilds once.
+- `04-run.sh` runs whichever runner was built last, the dev build or the
+  Release one from `03-build-runner.sh`, and prints its path;
+  `PS2X_RUNNER=<path>` picks one.
 - Don't use `03-build-runner.sh` while iterating: it deletes `_build`,
-  re-clones, and builds `-O3` with LTO, where almost all the time is one
-  ~6 min link. Run it once at the end (step 3).
+  re-clones, and builds `-O3` with LTO, where the link generates all the
+  code. With GCC 15+ that work is cached in `<game-dir>/lto-cache` (patch
+  0042, up to ~3 GB): the first run takes ~7 min, a rerun ~3 min, and
+  relinking `_build/build` after a small runtime edit ~40 s, against
+  ~4 s for the dev build. Run it once at the end (step 3).
 - `dev-run.sh <out-dir> <exit-tick> [VAR=value ...]` runs with a hidden
   window in a private copy of the game dir (your memory cards are copied,
   not used) and writes `log.txt` and `final.png` into `<out-dir>`. 60 ticks

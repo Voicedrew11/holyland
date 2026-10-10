@@ -268,7 +268,8 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   [`contributing.md`](contributing.md). The dev build
   (`scripts/maintainer/dev-build.sh`, -O2, no LTO): full build ~4 min on
   an 8-core desktop, a runtime-only change relinks in ~5 s (the
-  Release/LTO relink in `03-build-runner.sh` takes 5.5 min).
+  Release/LTO relink in `03-build-runner.sh` took 5.5 min before patch
+  0042; see the link-time findings below).
 - Build-time findings (2026-10-09): the Release build's compile step is
   only ~70 s because `-fno-fat-lto-objects` defers code generation to the
   LTO link (~6 min). `ps2_recomp` rewrites every output file even when
@@ -281,6 +282,26 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   (`KFIV_CCACHE=1`). Linking the dev runner is not the bottleneck: 0.8 s
   with GNU ld, 0.13 s with mold; the "~5 s relink" is mostly recompiling
   the changed file.
+- Link-time findings (2026-10-10, 16 threads, GCC 16.2, 41-patch series):
+  the Release LTO link took 375 s and 58 CPU-minutes: 34 s of serial WPA,
+  ~230 s of 16 parallel LTRANS jobs, then ~110 s of one LTRANS job alone.
+  That job was the generated `register_functions.cpp`, one constructor of
+  ~90k stores into the function table (run once at startup): 53 s on its
+  own at -O2 (78% callgraph expansion: alias walking and dead-store
+  elimination over one function), 3.5 s at -O0. Patch 0042 compiles it at
+  -O0 outside LTO, unity batches and the PCH, and makes GCC 15+ Release
+  links use `-flto-incremental` with `-flto-partition=cache`
+  (`PS2X_LTO_CACHE_DIR`; `03-build-runner.sh` keeps it in
+  `<game-dir>/lto-cache`, which survives the deletion of `_build`).
+  Incremental LTO alone: unchanged relink 33 s (byte-identical output),
+  a one-line edit in `VU1Interpreter::reset()` 228 s. With both changes:
+  first `03-build-runner.sh` 402 s, a rerun 187 s, the same one-line edit
+  relinked in `_build/build` 39 s. Cache vs default partitioning, same
+  objects, `PS2X_GS_LOCKSTEP=1`, ticks 3000-3600, two runs each: default
+  59.5 and 59.4 flips/s, cache 59.5 and 59.4 (all at the 60 cap, so
+  this cannot rule out small differences in heavier scenes). The dev build is still the iteration loop:
+  a runtime `.cpp` change rebuilds in 3.8 s (2.2 s compile, 0.9 s mold
+  link), a no-op in 4.6 s (mostly `rsync -c` over the generated files).
 - Profiling without `perf`: sample the running process with `eu-stack -p
   <pid>` in a loop (the dev harness `ctrl` file's `tick` command tells when
   the run reaches the scene); add `-g` to a few sources for line info.
