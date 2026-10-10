@@ -1,0 +1,1184 @@
+From bd856fc9e139e2ea9c66f61cadab41f3d32c8b36 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 14:49:47 -0400
+Subject: [PATCH] Decouple KFIV fixed updates from interpolated presentation
+
+Guard the original frame limiter by game identity and instruction signatures. Yield its original continuation on rational NTSC deadlines while hardware time and callbacks continue. Render conservatively matched geometry on isolated GS copies without feeding presentation into guest memory. Keep queues bounded and verify unmodified endpoints before interpolation. Enable through explicit launch settings.
+---
+ ps2xRuntime/CMakeLists.txt                    |   2 +
+ ps2xRuntime/include/runtime/ee_scheduler.h    |   2 +
+ .../include/runtime/fixed_frame_pacer.h       |  46 ++
+ .../include/runtime/gs/gs_interpolation.h     |  17 +
+ ps2xRuntime/include/runtime/kfiv_frame.h      |   4 +
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    |  26 +-
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        |   4 +-
+ ps2xRuntime/src/lib/gs/gs_interpolation.cpp   | 656 ++++++++++++++++++
+ ps2xRuntime/src/lib/gs/gs_record.cpp          |   4 +-
+ ps2xRuntime/src/lib/gs/gs_record.h            |   3 +-
+ ps2xRuntime/src/lib/kfiv_frame.cpp            | 133 ++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  37 +-
+ 12 files changed, 923 insertions(+), 11 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/fixed_frame_pacer.h
+ create mode 100644 ps2xRuntime/include/runtime/gs/gs_interpolation.h
+ create mode 100644 ps2xRuntime/include/runtime/kfiv_frame.h
+ create mode 100644 ps2xRuntime/src/lib/gs/gs_interpolation.cpp
+ create mode 100644 ps2xRuntime/src/lib/kfiv_frame.cpp
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 797d3b0..45fd0e6 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -379,6 +379,7 @@ add_library(ps2_runtime STATIC
+     src/lib/game_overrides.cpp
+     src/lib/kfiv_input.cpp
+     src/lib/kfiv_runtime.cpp
++    src/lib/kfiv_frame.cpp
+     src/lib/gs/ps2_gif_arbiter.cpp
+     src/lib/ps2_audio.cpp
+     src/lib/ps2_audio_vag.cpp
+@@ -387,6 +388,7 @@ add_library(ps2_runtime STATIC
+     src/lib/gs/gs_cpu_backend.cpp
+     src/lib/gs/gs_trace.cpp
+     src/lib/gs/gs_record.cpp
++    src/lib/gs/gs_interpolation.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
+     src/lib/ps2_pad.cpp
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 791a114..d98e335 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -346,6 +346,8 @@ public:
+     void completeVSync(uint64_t tick);
+     void completeExternalWait(uint32_t type, uint64_t token, int result);
+     [[noreturn]] void waitExternal(EeWaitReason reason, uint32_t type, uint64_t token, std::function<void(R5900Context &)> completion = {});
++    [[noreturn]] void waitHostDeadline(std::chrono::steady_clock::time_point deadline,
++                                     uint32_t resumePc);
+ 
+     [[nodiscard]] GuestThread *thread(int id);
+     [[nodiscard]] const GuestThread *thread(int id) const;
+diff --git a/ps2xRuntime/include/runtime/fixed_frame_pacer.h b/ps2xRuntime/include/runtime/fixed_frame_pacer.h
+new file mode 100644
+index 0000000..973e89b
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/fixed_frame_pacer.h
+@@ -0,0 +1,46 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++#include <chrono>
++#include <cstdint>
++
++// A host deadline for each original game update. Presentation never calls this.
++// Keep the NTSC 30000/1001 cadence without a floating point clock or drift.
++class FixedFramePacer
++{
++public:
++    using Clock = std::chrono::steady_clock;
++    using TimePoint = Clock::time_point;
++    TimePoint next(TimePoint now)
++    {
++        constexpr auto period = std::chrono::nanoseconds(33366666);
++        if (!m_started)
++        {
++            m_deadline = now;
++            m_remainder = 0;
++            m_started = true;
++        }
++        else
++        {
++            m_deadline += period;
++            m_remainder += 20000;
++            if (m_remainder >= 30000)
++            {
++                m_deadline += std::chrono::nanoseconds(1);
++                m_remainder -= 30000;
++            }
++            // Keep ordinary late work on the same timeline. Rebasing on
++            // every small overrun permanently loses time even when the next
++            // update has ample spare time. A long stall discards backlog.
++            if (now > m_deadline + period * 4)
++            {
++                m_deadline = now;
++                m_remainder = 0;
++            }
++        }
++        return m_deadline;
++    }
++private:
++    TimePoint m_deadline{};
++    uint32_t m_remainder = 0;
++    bool m_started = false;
++};
+diff --git a/ps2xRuntime/include/runtime/gs/gs_interpolation.h b/ps2xRuntime/include/runtime/gs/gs_interpolation.h
+new file mode 100644
+index 0000000..8988f1e
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/gs/gs_interpolation.h
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++#include "runtime/gs/gs_backend.h"
++#include <memory>
++class GS;
++namespace ps2_gs_interpolation
++{
++// Presentation owns isolated renderers. These calls never modify guest VRAM.
++std::unique_ptr<GSRasterBackend> wrap(std::unique_ptr<GSRasterBackend> backend, GS *owner);
++void sealFrame(GS &owner, const GSPresentationRequest &request);
++// Leave the gameplay presentation stream for menus/movies. The next game
++// boundary checkpoints actual VRAM again before capturing any new frame.
++void suspend(GS &owner);
++// A negative phase uses the fixed-step clock. Explicit [0,1] phases support
++// deterministic graphics checks without advancing any gameplay state.
++PresentationFrame present(GS &owner, float phase = -1.0f);
++} // namespace ps2_gs_interpolation
+diff --git a/ps2xRuntime/include/runtime/kfiv_frame.h b/ps2xRuntime/include/runtime/kfiv_frame.h
+new file mode 100644
+index 0000000..1eff2eb
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/kfiv_frame.h
+@@ -0,0 +1,4 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++class PS2Runtime;
++namespace ps2_kfiv_frame { void registerOverrides(); void forgetRuntime(PS2Runtime &runtime); }
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 4200434..09d1993 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -246,7 +246,7 @@ void EeScheduler::run()
+                 {
+                     // No runnable guest exists: an external DMA/GS waiter
+                     // must still be able to complete its executor-owned job.
+-                    m_runtime.serviceCooperativeVif1();
++                    m_runtime.serviceCooperativeVif1(2048u);
+                     processPendingEvents();
+                 }
+                 else waitForEvent();
+@@ -434,7 +434,7 @@ void EeScheduler::run()
+                 !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads) &&
+                 (!serviceOwner || serviceOwner->invocations.empty()))))
+         {
+-            m_runtime.serviceCooperativeVif1();
++            m_runtime.serviceCooperativeVif1(2048u);
+             processPendingEvents();
+         }
+         if (m_rescheduleRequested && m_currentThreadId != 0)
+@@ -1655,6 +1655,17 @@ void EeScheduler::completeExternalWait(uint32_t type, uint64_t token, int result
+     blockCurrent(std::move(wait));
+ }
+ 
++[[noreturn]] void EeScheduler::waitHostDeadline(std::chrono::steady_clock::time_point deadline,
++                                               uint32_t resumePc)
++{
++    assertExecutor();
++    constexpr uint32_t hostFrameWait = 0x4846524Du;
++    const uint64_t token = ++m_eventSequence;
++    scheduleEvent(m_eeCycle, deadline, EeEvent{EeEventType::ExternalWake, hostFrameWait, token});
++    waitExternal(EeWaitReason::External, hostFrameWait, token,
++        [resumePc](R5900Context &context) { context.pc = resumePc; });
++}
++
+ GuestThread *EeScheduler::thread(int id)
+ {
+     auto it = m_threads.find(id);
+@@ -1747,7 +1758,13 @@ EeKernelSnapshot EeScheduler::snapshot() const
+ 
+ void EeScheduler::publishSnapshot()
+ {
+-    EeKernelSnapshot next{};
++    // This buffer is disposable capacity storage, not scheduler state. Every
++    // observable scalar and list is rebuilt before publication, including
++    // when several scheduler instances share this executor thread.
++    thread_local EeKernelSnapshot next{};
++    next.threads.clear();
++    next.semaphores.clear();
++    next.eventFlags.clear();
+     next.sequence = ++m_snapshotSequence;
+     next.eeCycle = m_eeCycle;
+     next.sliceEndCycle = m_sliceEndCycle;
+@@ -1806,7 +1823,7 @@ void EeScheduler::publishSnapshot()
+               { return left.id < right.id; });
+     {
+         std::lock_guard lock(m_snapshotMutex);
+-        m_snapshot = std::move(next);
++        std::swap(m_snapshot, next);
+     }
+ }
+ 
+@@ -2482,6 +2499,7 @@ void EeScheduler::retireVBlankHandoff(int threadId)
+ 
+ void EeScheduler::expireVBlankHandoffs()
+ {
++    if (m_vblankHandoffs.empty()) return;
+     const auto now = !m_guestExecuting.load(std::memory_order_acquire) && wallClockSampleOwner == this
+         ? wallClockSample : std::chrono::steady_clock::now();
+     if (!m_vblankHandoffs.empty() && now >= m_vblankHandoffExpiry)
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 5d7aa4e..25b4332 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -108,7 +108,7 @@ namespace
+ 
+ 
+ GS::GS()
+-    : m_backend(makeGsRasterBackend())
++    : m_backend(makeGsRasterBackend(this))
+ {
+     reset();
+ }
+@@ -119,7 +119,7 @@ void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
+     m_localMemorySize = vramSize;
+     m_privRegs = privRegs;
+     if (!m_backend)
+-        m_backend = makeGsRasterBackend();
++        m_backend = makeGsRasterBackend(this);
+     m_backend->Initialize(vram, vramSize);
+     GSTrace::initialize();
+     GSTrace::setLocalMemory(vram, vramSize);
+diff --git a/ps2xRuntime/src/lib/gs/gs_interpolation.cpp b/ps2xRuntime/src/lib/gs/gs_interpolation.cpp
+new file mode 100644
+index 0000000..02c15fe
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gs_interpolation.cpp
+@@ -0,0 +1,656 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "runtime/gs/gs_interpolation.h"
++#include "runtime/gs/gs_cpu_backend.h"
++#ifdef PS2X_HAS_VULKAN_GS
++#include "runtime/gs/gs_vulkan_backend.h"
++#endif
++#include <algorithm>
++#include <array>
++#include <bit>
++#include <cfenv>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <deque>
++#include <mutex>
++#include <unordered_map>
++#include <utility>
++#include <variant>
++#if defined(_MSC_VER) && defined(_M_X64)
++#include <xmmintrin.h>
++#endif
++
++namespace
++{
++using Clock = std::chrono::steady_clock;
++int currentRounding()
++{
++#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
++    switch (_mm_getcsr() & _MM_ROUND_MASK)
++    {
++    case _MM_ROUND_DOWN:
++        return FE_DOWNWARD;
++    case _MM_ROUND_UP:
++        return FE_UPWARD;
++    case _MM_ROUND_TOWARD_ZERO:
++        return FE_TOWARDZERO;
++    default:
++        return FE_TONEAREST;
++    }
++#else
++    return std::fegetround();
++#endif
++}
++struct Palette
++{
++    GSTex0Reg tex;
++    GSTexClutReg clut;
++};
++struct Image
++{
++    std::vector<uint8_t> bytes;
++};
++struct Clear
++{
++    GSContext context;
++    uint32_t rgba;
++};
++struct Write
++{
++    uint32_t psm, base, bw, x, y, value;
++};
++struct Draw
++{
++    GSPrimitiveBatch batch;
++    int rounding;
++};
++struct TextureFlush
++{
++};
++using Command = std::variant<Draw, Palette, GSTransferCommand, Image, Clear, Write, TextureFlush>;
++struct Frame
++{
++    std::vector<Command> commands;
++    std::vector<uint8_t> startVram;
++    GSPresentationRequest request{};
++    PresentationFrame canonical;
++    PresentationFrame verifiedCanonical;
++    std::vector<uint8_t> verifiedVram;
++    size_t bytes = 0;
++    Clock::time_point completed;
++    uint64_t number = 0;
++    bool valid = true;
++};
++
++// Match only perspective textured triangles with the same material and UVs.
++// HUD sprites, clipped/new geometry and ambiguous matches remain at their
++// original positions. No object or simulation state is guessed or written.
++uint64_t triangleKey(const GSPrimitiveBatch &b)
++{
++    if (b.vertexCount != 3 || !b.state.prim.tme || b.state.prim.fst)
++        return 0;
++    uint64_t key = 1469598103934665603ull;
++    auto add = [&](uint64_t value) { key = (key ^ value) * 1099511628211ull; };
++    const auto &s = b.state;
++    const auto &c = s.context;
++    const auto &t = c.tex0;
++    for (uint64_t v : {uint64_t(t.tbp0),
++                       uint64_t(t.tbw),
++                       uint64_t(t.psm),
++                       uint64_t(t.tw),
++                       uint64_t(t.th),
++                       uint64_t(t.cbp),
++                       uint64_t(t.cpsm),
++                       uint64_t(t.csa),
++                       uint64_t(t.tcc),
++                       uint64_t(t.tfx),
++                       c.tex1,
++                       c.clamp,
++                       c.alpha,
++                       c.test,
++                       c.fba,
++                       uint64_t(c.frame.psm),
++                       uint64_t(c.frame.fbw),
++                       uint64_t(c.frame.fbmsk),
++                       uint64_t(c.zbuf.psm),
++                       uint64_t(c.zbuf.zmask),
++                       uint64_t(s.prim.abe),
++                       uint64_t(s.prim.iip),
++                       uint64_t(s.prim.fge),
++                       s.scanmsk})
++        add(v);
++    for (const auto &v : b.vertices)
++    {
++        if (!std::isfinite(v.q) || v.q <= 0 || !std::isfinite(v.s) || !std::isfinite(v.t))
++            return 0;
++        const double u = double(v.s) / v.q, tcoord = double(v.t) / v.q;
++        if (std::abs(u) > 10000 || std::abs(tcoord) > 10000)
++            return 0;
++        add(uint64_t(int64_t(std::llround(u * 4096))));
++        add(uint64_t(int64_t(std::llround(tcoord * 4096))));
++    }
++    return key ? key : 1;
++}
++double distance(const GSPrimitiveBatch &a, const GSPrimitiveBatch &b)
++{
++    double total = 0;
++    for (unsigned i = 0; i < 3; ++i)
++    {
++        const auto &x = a.vertices[i];
++        const auto &y = b.vertices[i];
++        if (!std::isfinite(x.x) || !std::isfinite(x.y) || !std::isfinite(y.x) || !std::isfinite(y.y) ||
++            std::abs(x.x - y.x) > 48 || std::abs(x.y - y.y) > 48 || x.q / y.q < 0.8f || x.q / y.q > 1.25f)
++            return 1e30;
++        total += (x.x - y.x) * (x.x - y.x) + (x.y - y.y) * (x.y - y.y);
++    }
++    return total;
++}
++GSPrimitiveBatch interpolate(const GSPrimitiveBatch &previous, const GSPrimitiveBatch &current, float alpha)
++{
++    auto out = current;
++    for (unsigned i = 0; i < 3; ++i)
++    {
++        const auto &a = previous.vertices[i];
++        const auto &b = current.vertices[i];
++        auto &v = out.vertices[i];
++        v.x = std::lerp(a.x, b.x, alpha);
++        v.y = std::lerp(a.y, b.y, alpha);
++        v.z = std::lerp(a.z, b.z, double(alpha));
++        v.s = std::lerp(a.s, b.s, alpha);
++        v.t = std::lerp(a.t, b.t, alpha);
++        v.q = std::lerp(a.q, b.q, alpha);
++        auto color = [&](uint8_t x, uint8_t y) {
++            return uint8_t(std::clamp(std::lround(std::lerp(float(x), float(y), alpha)), 0l, 255l));
++        };
++        v.r = color(a.r, b.r);
++        v.g = color(a.g, b.g);
++        v.b = color(a.b, b.b);
++        v.a = color(a.a, b.a);
++        v.fog = color(a.fog, b.fog);
++    }
++    return out;
++}
++
++struct Controller
++{
++    std::unique_ptr<GSRasterBackend> actual, canonicalRenderer, shadow;
++    std::mutex captureMutex, renderMutex;
++    std::shared_ptr<Frame> current, previous;
++    std::deque<std::shared_ptr<Frame>> completed;
++    size_t queuedBytes = 0;
++    std::vector<uint8_t> canonicalVram;
++    bool canonicalInitialized = false, stopped = false, verify = false, stats = false;
++    std::vector<std::shared_ptr<Frame>> framePool;
++    std::vector<Command> pending;
++    bool valid = false;
++    size_t pendingBytes = 0;
++    uint64_t sequence = 0, checked = 0, exact = 0, mismatches = 0, rendered = 0;
++    std::vector<const GSPrimitiveBatch *> matches;
++    std::shared_ptr<Frame> matchingPrevious;
++    PresentationFrame lastEndpoint;
++    std::vector<uint8_t> replayVram;
++    bool endpointExact = false;
++    Clock::time_point lastBoundary{};
++    explicit Controller(std::unique_ptr<GSRasterBackend> inner) : actual(std::move(inner))
++    {
++        auto makeRenderer = [&]() -> std::unique_ptr<GSRasterBackend> {
++#ifdef PS2X_HAS_VULKAN_GS
++            if (dynamic_cast<GSVulkanBackend *>(actual.get()))
++                return std::make_unique<GSVulkanBackend>();
++#endif
++            return std::make_unique<GSCpuBackend>();
++        };
++        canonicalRenderer = makeRenderer();
++        shadow = makeRenderer();
++        const char *setting = std::getenv("PS2X_INTERPOLATION_VERIFY");
++        verify = setting && std::strcmp(setting, "1") == 0;
++        const char *statistics = std::getenv("PS2X_STATS");
++        stats = statistics && *statistics && *statistics != '0';
++    }
++    void stopCapture()
++    {
++        stopped = true;
++        pending.clear();
++        completed.clear();
++        queuedBytes = 0;
++        std::fprintf(stderr, "[gs:interpolation] capture limit reached; using "
++                             "original presentation\n");
++    }
++    template <class T, class... Args> void record(Args &&...args)
++    {
++        if (stopped || !valid)
++            return;
++        pendingBytes += sizeof(Command);
++        if (pendingBytes > 64u * 1024u * 1024u)
++        {
++            stopCapture();
++            return;
++        }
++        pending.emplace_back(std::in_place_type<T>, std::forward<Args>(args)...);
++    }
++    void seal(const GSPresentationRequest &request)
++    {
++        std::lock_guard lock(captureMutex);
++        if (stopped)
++            return;
++        lastBoundary = Clock::now();
++        if (!valid)
++        {
++            // The first game boundary is the checkpoint. Startup movies can run
++            // for minutes without filling a capture buffer before gameplay starts.
++            actual->SnapshotVram(canonicalVram);
++            valid = canonicalVram.size() == (4u << 20);
++            return;
++        }
++        if (completed.size() >= 6 || queuedBytes + pendingBytes > 128u * 1024u * 1024u)
++        {
++            stopCapture();
++            return;
++        }
++        std::shared_ptr<Frame> frame;
++        for (const auto &candidate : framePool)
++            if (candidate.use_count() == 1)
++            {
++                frame = candidate;
++                break;
++            }
++        if (!frame)
++        {
++            frame = std::make_shared<Frame>();
++            framePool.push_back(frame);
++        }
++        frame->commands.swap(pending);
++        frame->request = request;
++        frame->bytes = pendingBytes;
++        frame->verifiedCanonical = {};
++        frame->verifiedVram.clear();
++        frame->canonical = {};
++        frame->valid = true;
++        // Optional validation pays for a synchronous readback. Ordinary play
++        // only hands off owned commands, never waits for extra GPU frames.
++        if (verify)
++        {
++            actual->Flush();
++            actual->Sync(GSSyncReason::Presentation);
++            frame->verifiedCanonical = actual->Present(request);
++            actual->SnapshotVram(frame->verifiedVram);
++        }
++        frame->completed = Clock::now();
++        frame->number = ++sequence;
++        completed.push_back(frame);
++        queuedBytes += frame->bytes;
++        pending.clear();
++        pending.reserve(frame->commands.size());
++        pendingBytes = 0;
++    }
++    void match(const Frame &frame, const Frame *prior)
++    {
++        matches.assign(frame.commands.size(), nullptr);
++        if (!prior || !prior->valid)
++            return;
++        std::unordered_map<uint64_t, std::vector<const GSPrimitiveBatch *>> candidates;
++        for (const auto &command : prior->commands)
++            if (const auto *d = std::get_if<Draw>(&command))
++                if (const auto key = triangleKey(d->batch))
++                    candidates[key].push_back(&d->batch);
++        for (size_t i = 0; i < frame.commands.size(); ++i)
++            if (const auto *draw = std::get_if<Draw>(&frame.commands[i]))
++            {
++                auto found = candidates.find(triangleKey(draw->batch));
++                if (found == candidates.end())
++                    continue;
++                const GSPrimitiveBatch *best = nullptr;
++                double first = 1e30, second = 1e30;
++                for (const auto *candidate : found->second)
++                    if (candidate)
++                    {
++                        const double delta = distance(*candidate, draw->batch);
++                        if (delta < first)
++                        {
++                            second = first;
++                            first = delta;
++                            best = candidate;
++                        }
++                        else
++                            second = std::min(second, delta);
++                    }
++                // Reject duplicate or similarly plausible correspondences.
++                if (best && (second > first * 4 + 1))
++                {
++                    matches[i] = best;
++                    for (auto &candidate : found->second)
++                        if (candidate == best)
++                        {
++                            candidate = nullptr;
++                            break;
++                        }
++                }
++            }
++    }
++    void submitCommands(GSRasterBackend &renderer, const Frame &frame, float alpha)
++    {
++        const int callerRounding = std::fegetround();
++        int activeRounding = callerRounding;
++        struct Restore
++        {
++            int mode;
++            ~Restore()
++            {
++                if (mode != -1)
++                    std::fesetround(mode);
++            }
++        } restore{callerRounding};
++        for (size_t i = 0; i < frame.commands.size(); ++i)
++        {
++            std::visit(
++                [&](const auto &value) {
++                    using T = std::decay_t<decltype(value)>;
++                    if constexpr (std::is_same_v<T, Draw>)
++                    {
++                        if (activeRounding != value.rounding)
++                        {
++                            std::fesetround(value.rounding);
++                            activeRounding = value.rounding;
++                        }
++                        renderer.Submit(alpha < 1 && i < matches.size() && matches[i]
++                                            ? interpolate(*matches[i], value.batch, alpha)
++                                            : value.batch);
++                    }
++                    else if constexpr (std::is_same_v<T, Palette>)
++                        renderer.LoadClut(value.tex, value.clut);
++                    else if constexpr (std::is_same_v<T, GSTransferCommand>)
++                        renderer.BeginTransfer(value);
++                    else if constexpr (std::is_same_v<T, Image>)
++                        renderer.UploadImage(value.bytes.data(), uint32_t(value.bytes.size()));
++                    else if constexpr (std::is_same_v<T, Clear>)
++                        renderer.ClearFramebuffer(value.context, value.rgba);
++                    else if constexpr (std::is_same_v<T, Write>)
++                        renderer.WriteVram(value.psm, value.base, value.bw, value.x, value.y, value.value);
++                    else if constexpr (std::is_same_v<T, TextureFlush>)
++                        renderer.TextureFlush();
++                },
++                frame.commands[i]);
++        }
++        renderer.Flush();
++    }
++    PresentationFrame replay(const Frame &frame, float alpha)
++    {
++        // CPU Initialize borrows its pointer. Keep immutable captured bytes
++        // separate from both renderers' writable video memory.
++        replayVram = frame.startVram;
++        shadow->Initialize(replayVram.data(), uint32_t(replayVram.size()));
++        submitCommands(*shadow, frame, alpha);
++        return shadow->Present(frame.request);
++    }
++    PresentationFrame present(float phase)
++    {
++        std::lock_guard renderLock(renderMutex);
++        {
++            std::lock_guard lock(captureMutex);
++            if (stopped || !valid)
++                return {};
++            // Menus, movies and loading can enter another original loop that
++            // never calls the gameplay boundary. Show that live backend, not
++            // an indefinitely stale game frame; resume from a fresh checkpoint.
++            if (phase < 0 && Clock::now() - lastBoundary > std::chrono::milliseconds(100))
++            {
++                resetCapture();
++                return {};
++            }
++        }
++        try
++        {
++            if (!canonicalInitialized)
++            {
++                canonicalRenderer->Initialize(canonicalVram.data(), uint32_t(canonicalVram.size()));
++                canonicalInitialized = true;
++            }
++            // Drain a bounded queue. Every original draw/transfer is executed
++            // in order, even if the display cannot show every completed frame.
++            for (unsigned n = 0; n < 6; ++n)
++            {
++                std::shared_ptr<Frame> next;
++                {
++                    std::lock_guard lock(captureMutex);
++                    if (completed.empty())
++                        break;
++                    next = std::move(completed.front());
++                    completed.pop_front();
++                    queuedBytes -= next->bytes;
++                }
++                canonicalRenderer->SnapshotVram(next->startVram);
++                submitCommands(*canonicalRenderer, *next, 1);
++                next->canonical = canonicalRenderer->Present(next->request);
++                if (verify)
++                {
++                    std::vector<uint8_t> after;
++                    canonicalRenderer->SnapshotVram(after);
++                    if (next->canonical.width != next->verifiedCanonical.width ||
++                        next->canonical.height != next->verifiedCanonical.height ||
++                        next->canonical.pixels != next->verifiedCanonical.pixels || after != next->verifiedVram)
++                    {
++                        std::fprintf(stderr,
++                                     "[gs:interpolation] original renderer verification "
++                                     "failed at frame %llu\n",
++                                     static_cast<unsigned long long>(next->number));
++                        std::lock_guard lock(captureMutex);
++                        stopCapture();
++                        return {};
++                    }
++                }
++                previous = std::move(current);
++                current = std::move(next);
++            }
++            if (!current)
++                return {};
++            const auto &frame = *current;
++            if (checked != frame.number)
++            {
++                matchingPrevious = previous;
++                match(frame, previous.get());
++                lastEndpoint = replay(frame, 1);
++                endpointExact = lastEndpoint.width == frame.canonical.width &&
++                                lastEndpoint.height == frame.canonical.height &&
++                                lastEndpoint.pixels == frame.canonical.pixels;
++                checked = frame.number;
++                if (endpointExact)
++                    ++exact;
++                else
++                    ++mismatches;
++                if (stats && checked % 120 == 0)
++                    std::fprintf(
++                        stderr,
++                        "[gs:interpolation] frames=%llu exact=%llu fallback=%llu "
++                        "matched=%zu/%zu rendered=%llu verify=%d\n",
++                        static_cast<unsigned long long>(checked), static_cast<unsigned long long>(exact),
++                        static_cast<unsigned long long>(mismatches),
++                        size_t(std::count_if(matches.begin(), matches.end(), [](auto *p) { return p != nullptr; })),
++                        matches.size(), static_cast<unsigned long long>(rendered), int(verify));
++            }
++            if (!endpointExact)
++                return frame.canonical;
++            const float alpha = std::isfinite(phase) && phase >= 0.0f
++                                    ? std::clamp(phase, 0.0f, 1.0f)
++                                    : std::clamp(std::chrono::duration<float>(Clock::now() - frame.completed).count() *
++                                                     (30000.0f / 1001.0f),
++                                                 0.0f, 1.0f);
++            if (alpha >= 1)
++                return frame.canonical;
++            ++rendered;
++            return replay(frame, alpha);
++        }
++        catch (const std::exception &error)
++        {
++            std::fprintf(stderr, "[gs:interpolation] using original presentation: %s\n", error.what());
++            std::lock_guard lock(captureMutex);
++            stopCapture();
++            return {};
++        }
++    }
++    void resetCapture()
++    {
++        pending.clear();
++        completed.clear();
++        current.reset();
++        previous.reset();
++        matchingPrevious.reset();
++        matches.clear();
++        framePool.clear();
++        canonicalVram.clear();
++        valid = false;
++        pendingBytes = queuedBytes = 0;
++        canonicalInitialized = false;
++        stopped = false;
++    }
++};
++std::mutex registryMutex;
++std::unordered_map<GS *, std::weak_ptr<Controller>> registry;
++std::shared_ptr<Controller> get(GS &owner)
++{
++    std::lock_guard lock(registryMutex);
++    auto it = registry.find(&owner);
++    return it == registry.end() ? nullptr : it->second.lock();
++}
++class Backend final : public GSRasterBackend
++{
++    std::shared_ptr<Controller> c;
++    GS *owner;
++
++  public:
++    Backend(std::shared_ptr<Controller> controller, GS *o) : c(std::move(controller)), owner(o)
++    {
++        std::lock_guard lock(registryMutex);
++        registry[owner] = c;
++    }
++    ~Backend() override
++    {
++        std::lock_guard lock(registryMutex);
++        auto it = registry.find(owner);
++        if (it != registry.end() && it->second.lock() == c)
++            registry.erase(it);
++    }
++    void Initialize(uint8_t *v, uint32_t n) override
++    {
++        std::scoped_lock lock(c->renderMutex, c->captureMutex);
++        c->actual->Initialize(v, n);
++        c->resetCapture();
++    }
++    void Reset() override
++    {
++        std::scoped_lock lock(c->renderMutex, c->captureMutex);
++        c->actual->Reset();
++        c->resetCapture();
++    }
++    void Submit(const GSPrimitiveBatch &b) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<Draw>(b, currentRounding());
++        c->actual->Submit(b);
++    }
++    void LoadClut(const GSTex0Reg &t, const GSTexClutReg &cl) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<Palette>(t, cl);
++        c->actual->LoadClut(t, cl);
++    }
++    void BeginTransfer(const GSTransferCommand &t) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<GSTransferCommand>(t);
++        c->actual->BeginTransfer(t);
++    }
++    void UploadImage(const uint8_t *data, uint32_t n) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        if (c->valid && !c->stopped && data && n)
++        {
++            c->pendingBytes += n;
++            if (c->pendingBytes > 64u * 1024u * 1024u)
++                c->stopCapture();
++            else
++                c->record<Image>(std::vector<uint8_t>(data, data + n));
++        }
++        c->actual->UploadImage(data, n);
++    }
++    void Flush() override
++    {
++        c->actual->Flush();
++    }
++    void TextureFlush() override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<::TextureFlush>();
++        c->actual->TextureFlush();
++    }
++    void Sync(GSSyncReason r) override
++    {
++        c->actual->Sync(r);
++    }
++    PresentationFrame Present(const GSPresentationRequest &r) override
++    {
++        return c->actual->Present(r);
++    }
++    bool ClearFramebuffer(const GSContext &ctx, uint32_t rgba) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<Clear>(ctx, rgba);
++        return c->actual->ClearFramebuffer(ctx, rgba);
++    }
++    uint32_t ConsumeLocalToHostBytes(uint8_t *p, uint32_t n) override
++    {
++        return c->actual->ConsumeLocalToHostBytes(p, n);
++    }
++    uint32_t ReadVram(uint32_t p, uint32_t b, uint32_t w, uint32_t x, uint32_t y) const override
++    {
++        return c->actual->ReadVram(p, b, w, x, y);
++    }
++    void WriteVram(uint32_t p, uint32_t b, uint32_t w, uint32_t x, uint32_t y, uint32_t v) override
++    {
++        std::lock_guard lock(c->captureMutex);
++        c->record<Write>(p, b, w, x, y, v);
++        c->actual->WriteVram(p, b, w, x, y, v);
++    }
++    void SnapshotVram(std::vector<uint8_t> &out) const override
++    {
++        c->actual->SnapshotVram(out);
++    }
++    GSTransferSnapshot GetTransferSnapshot() const override
++    {
++        return c->actual->GetTransferSnapshot();
++    }
++};
++} // namespace
++namespace ps2_gs_interpolation
++{
++std::unique_ptr<GSRasterBackend> wrap(std::unique_ptr<GSRasterBackend> backend, GS *owner)
++{
++    const char *setting = std::getenv("PS2X_FRAME_INTERPOLATION");
++    if (!owner || !setting || std::strcmp(setting, "1") != 0)
++        return backend;
++    auto controller = std::make_shared<Controller>(std::move(backend));
++    std::fprintf(stderr, "[gs:interpolation] independent presentation renderer enabled\n");
++    return std::make_unique<Backend>(std::move(controller), owner);
++}
++void sealFrame(GS &owner, const GSPresentationRequest &request)
++{
++    if (auto c = get(owner))
++        c->seal(request);
++}
++void suspend(GS &owner)
++{
++    if (auto c = get(owner))
++    {
++        std::scoped_lock lock(c->renderMutex, c->captureMutex);
++        if (c->valid)
++            c->resetCapture();
++    }
++}
++PresentationFrame present(GS &owner, float phase)
++{
++    if (auto c = get(owner))
++        return c->present(phase);
++    return {};
++}
++} // namespace ps2_gs_interpolation
+diff --git a/ps2xRuntime/src/lib/gs/gs_record.cpp b/ps2xRuntime/src/lib/gs/gs_record.cpp
+index ca29d58..a1d393a 100644
+--- a/ps2xRuntime/src/lib/gs/gs_record.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_record.cpp
+@@ -1,4 +1,5 @@
+ #include "gs_record.h"
++#include "runtime/gs/gs_interpolation.h"
+ 
+ #include "runtime/gs/gs_cpu_backend.h"
+ #ifdef PS2X_HAS_VULKAN_GS
+@@ -173,7 +174,7 @@ namespace
+     };
+ }
+ 
+-std::unique_ptr<GSRasterBackend> makeGsRasterBackend()
++std::unique_ptr<GSRasterBackend> makeGsRasterBackend(GS *owner)
+ {
+     std::unique_ptr<GSRasterBackend> backend;
+     const char *choice = std::getenv("PS2X_GS_BACKEND");
+@@ -195,6 +196,7 @@ std::unique_ptr<GSRasterBackend> makeGsRasterBackend()
+     if (vulkan) throw std::runtime_error("This build does not include the Vulkan GS renderer");
+ #endif
+     if (!backend) backend = std::make_unique<GSCpuBackend>();
++    backend = ps2_gs_interpolation::wrap(std::move(backend), owner);
+     static std::atomic<bool> s_recorded{false};
+     const char *path = std::getenv("PS2X_GS_RECORD");
+     if (path && *path && !s_recorded.exchange(true))
+diff --git a/ps2xRuntime/src/lib/gs/gs_record.h b/ps2xRuntime/src/lib/gs/gs_record.h
+index b79b297..f7569fe 100644
+--- a/ps2xRuntime/src/lib/gs/gs_record.h
++++ b/ps2xRuntime/src/lib/gs/gs_record.h
+@@ -35,6 +35,7 @@ namespace GSRecord
+     };
+ }
+ 
+-std::unique_ptr<GSRasterBackend> makeGsRasterBackend();
++class GS;
++std::unique_ptr<GSRasterBackend> makeGsRasterBackend(GS *owner = nullptr);
+ 
+ #endif
+diff --git a/ps2xRuntime/src/lib/kfiv_frame.cpp b/ps2xRuntime/src/lib/kfiv_frame.cpp
+new file mode 100644
+index 0000000..5a22398
+--- /dev/null
++++ b/ps2xRuntime/src/lib/kfiv_frame.cpp
+@@ -0,0 +1,133 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "runtime/kfiv_frame.h"
++#include "game_overrides.h"
++#include "ps2_runtime.h"
++#include "ps2_runtime_macros.h"
++#include "ps2_syscalls.h"
++#include "runtime/ee_scheduler.h"
++#include "runtime/fixed_frame_pacer.h"
++#include "runtime/gs/gs_interpolation.h"
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <stdexcept>
++#include <unordered_map>
++namespace
++{
++struct State
++{
++    FixedFramePacer pacer;
++    PS2Runtime::RecompiledFunction timerReset = nullptr;
++};
++std::mutex stateMutex;
++std::unordered_map<PS2Runtime *, std::shared_ptr<State>> states;
++std::shared_ptr<State> state(PS2Runtime *runtime)
++{
++    std::lock_guard lock(stateMutex);
++    return states.at(runtime);
++}
++
++void completedGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++{
++    const uint32_t returnPc = getRegU32(ctx, 31);
++    // Execute the original timer reset unchanged, including its MMIO write.
++    state(runtime)->timerReset(rdram, ctx, runtime);
++    if (returnPc != 0x001002E8u)
++    {
++        ps2_gs_interpolation::suspend(runtime->gs());
++        return;
++    }
++    const auto &regs = runtime->memory().gs();
++    auto &gs = runtime->gs();
++    GSPresentationRequest request{};
++    request.pmode = regs.pmode;
++    request.smode2 = regs.smode2;
++    request.dispfb1 = regs.dispfb1;
++    request.display1 = regs.display1;
++    request.dispfb2 = regs.dispfb2;
++    request.display2 = regs.display2;
++    request.bgcolor = regs.bgcolor;
++    request.vsyncTick = regs.vsyncTick.load(std::memory_order_acquire);
++    request.contextFrames[0] = gs.getContextFrame(0);
++    request.contextFrames[1] = gs.getContextFrame(1);
++    request.hasPreferredSource = gs.getPreferredDisplaySource(request.preferredSource, request.preferredDestFbp);
++    ps2_gs_interpolation::sealFrame(gs, request);
++}
++
++void nativeFrameBoundary(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++{
++    // Reconstruct only the caller-preserving prologue. The original buffer
++    // swaps and epilogue still execute through their generated continuation.
++    // This replaces the timer/FIELD polling limiter, not a gameplay update.
++    const uint32_t stack = getRegU32(ctx, 29) - 0x40u;
++    auto &memory = runtime->memory();
++    memory.write64(stack, GPR_U64(ctx, 16));
++    memory.write64(stack + 0x10u, GPR_U64(ctx, 17));
++    memory.write64(stack + 0x20u, GPR_U64(ctx, 18));
++    memory.write64(stack + 0x30u, GPR_U64(ctx, 31));
++    SET_GPR_U32(ctx, 29, stack);
++    SET_GPR_U32(ctx, 17, 0x00430000u);
++    SET_GPR_U32(ctx, 18, 0x00430000u);
++    SET_GPR_U32(ctx, 4, 0u);
++    ctx->pc = 0x0020B7ECu;
++    ps2_syscalls::FlushCache(rdram, ctx, runtime);
++    auto &scheduler = runtime->eeScheduler();
++    scheduler.bindMainContextForSyscall(*ctx, rdram);
++    const auto deadline = state(runtime)->pacer.next(FixedFramePacer::Clock::now());
++    scheduler.waitHostDeadline(deadline, 0x0020B7ECu);
++}
++
++void applyNativeFrameBoundary(PS2Runtime &runtime)
++{
++    const char *enabled = std::getenv("PS2X_KFIV_FIXED_FRAME");
++    if (!enabled || std::strcmp(enabled, "1") != 0)
++        return;
++    // Whole-ELF identity is checked by the override registry; validate the
++    // limiter and original continuation again before touching function lookup.
++    if (runtime.memory().read32(0x20B780u) != 0x27BDFFC0u || runtime.memory().read32(0x20B7A8u) != 0x3442B0C7u ||
++        runtime.memory().read32(0x20B7ECu) != 0x8F85A408u || !runtime.hasFunction(0x20B7ECu))
++        throw std::runtime_error("KFIV frame boundary signature mismatch");
++    auto frameState = std::make_shared<State>();
++    {
++        std::lock_guard lock(stateMutex);
++        const auto old = states.find(&runtime);
++        if (old != states.end())
++            frameState->timerReset = old->second->timerReset;
++        states[&runtime] = frameState;
++    }
++    if (!runtime.replaceFunction(0x20B780u, &nativeFrameBoundary))
++        throw std::runtime_error("KFIV frame boundary entry missing");
++    std::fprintf(stderr, "[kfiv-frame] native 30000/1001 Hz frame pacing enabled\n");
++    const char *interpolation = std::getenv("PS2X_FRAME_INTERPOLATION");
++    if (interpolation && std::strcmp(interpolation, "1") == 0)
++    {
++        if (runtime.memory().read32(0x20D078u) != 0x3C021000u || runtime.memory().read32(0x20D07Cu) != 0xAF80A414u ||
++            runtime.memory().read32(0x20D080u) != 0x03E00008u || runtime.memory().read32(0x20D084u) != 0xAC400000u)
++            throw std::runtime_error("KFIV completed frame signature mismatch");
++        const auto original = runtime.lookupFunction(0x20D078u);
++        // Reapplying metadata on one runtime must never wrap our own hook.
++        if (original != &completedGameFrame)
++            frameState->timerReset = original;
++        if (!frameState->timerReset || !runtime.replaceFunction(0x20D078u, &completedGameFrame))
++            throw std::runtime_error("KFIV completed frame function missing");
++    }
++}
++
++} // namespace
++namespace ps2_kfiv_frame
++{
++void forgetRuntime(PS2Runtime &runtime)
++{
++    std::lock_guard lock(stateMutex);
++    states.erase(&runtime);
++}
++void registerOverrides()
++{
++    static std::once_flag once;
++    std::call_once(once, [] {
++        ps2_game_overrides::registerDescriptor(
++            {"KFIV native fixed frame boundary", "SLUS_203.18", 0x00100008u, 0xBDA82D37u, &applyNativeFrameBoundary});
++    });
++}
++} // namespace ps2_kfiv_frame
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ea32437..65a1a41 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -3,6 +3,8 @@
+ #include "ps2_stubs.h"
+ #include "ps2_syscalls.h"
+ #include "game_overrides.h"
++#include "runtime/kfiv_frame.h"
++#include "runtime/gs/gs_interpolation.h"
+ #include "runtime/host_input.h"
+ #include "ps2_runtime_macros.h"
+ #include "runtime/gs/gs_frontend.h"
+@@ -639,6 +641,8 @@ namespace ps2x_dev
+         {
+             if (!stats || !runtime)
+                 return;
++            static uint64_t hostFrames = 0;
++            ++hostFrames;
+             const uint64_t dispfb = runtime->memory().gs().dispfb1 ^ (runtime->memory().gs().dispfb2 << 1);
+             if (dispfb != lastDispfb)
+             {
+@@ -651,20 +655,23 @@ namespace ps2x_dev
+                 statsStart = now;
+                 statsTick = tick;
+                 statsFlips = 0u;
++                hostFrames = 0;
+                 return;
+             }
+             const double secs = std::chrono::duration<double>(now - statsStart).count();
+             if (secs < 1.0)
+                 return;
+             static const auto s_statsEpoch = now;
+-            std::fprintf(stderr, "[stats] t=%.2f tick=%llu vsync/s=%.1f flips/s=%.1f\n",
++            std::fprintf(stderr, "[stats] t=%.2f tick=%llu vsync/s=%.1f flips/s=%.1f render/s=%.1f\n",
+                          std::chrono::duration<double>(now - s_statsEpoch).count(),
+                          static_cast<unsigned long long>(tick),
+                          static_cast<double>(tick - statsTick) / secs,
+-                         static_cast<double>(statsFlips) / secs);
++                         static_cast<double>(statsFlips) / secs,
++                         static_cast<double>(hostFrames) / secs);
+             statsStart = now;
+             statsTick = tick;
+             statsFlips = 0u;
++            hostFrames = 0;
+         }
+ 
+         void step(uint64_t tick)
+@@ -719,6 +726,20 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     static std::vector<uint8_t> s_scratch;
+     static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
+ 
++    if (auto frame = ps2_gs_interpolation::present(rt->gs()); frame && frame.pixels.size() == DEFAULT_FB_SIZE)
++    {
++        s_uploadBuffer = std::move(frame.pixels);
++        UpdateTexture(tex, s_uploadBuffer.data());
++        outWidth = s_lastWidth = frame.width;
++        outHeight = s_lastHeight = frame.height;
++        s_hasUploadedFrame = true;
++        ps2x_dev::s_lastFrame = s_uploadBuffer;
++        ps2x_dev::s_lastFrameW = std::min<uint32_t>(frame.width, FB_WIDTH);
++        ps2x_dev::s_lastFrameH = std::min<uint32_t>(frame.height, FB_HEIGHT);
++        ps2x_dev::s_lastFrameRows = FB_HEIGHT;
++        return;
++    }
++
+     const uint64_t reset = rt->gs().hostPresentationResetEpoch();
+     if (reset != s_lastPresentationReset)
+     {
+@@ -838,6 +859,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+ 
+ PS2Runtime::PS2Runtime()
+ {
++    ps2_kfiv_frame::registerOverrides();
+     m_iopHost = std::make_unique<PS2IopHostAdapter>(*this);
+     m_iopSubsystem = std::make_unique<ps2x::iop::IopSubsystem>(*m_iopHost);
+ 
+@@ -922,6 +944,7 @@ PS2Runtime::~PS2Runtime()
+     {
+         std::cerr << "[~PS2Runtime] cleanup exception: unknown" << std::endl;
+     }
++    ps2_kfiv_frame::forgetRuntime(*this);
+ }
+ 
+ ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModule(std::string_view path, const void *arguments, uint32_t argumentSize)
+@@ -1107,7 +1130,15 @@ bool PS2Runtime::initialize(const char *title)
+         m_audioBackend.setAudioReady(IsAudioDeviceReady());
+         m_audioBackend.startPcmStream();
+ #endif
+-        SetTargetFPS(60);
++        int presentationFps = 60;
++        if (const char *setting = std::getenv("PS2X_PRESENT_FPS"))
++        {
++            char *end = nullptr;
++            const long value = std::strtol(setting, &end, 10);
++            if (end != setting && *end == '\0' && value >= 0 && value <= 1000)
++                presentationFps = static_cast<int>(value);
++        }
++        SetTargetFPS(presentationFps);
+         if (m_debugUiInitCallback)
+         {
+             m_debugUiInitCallback(*this, m_debugUiUserData);
+-- 
+2.55.0.windows.3
+

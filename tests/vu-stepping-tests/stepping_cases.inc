@@ -6,7 +6,7 @@ void steppingCases()
     using Reason = VU1Interpreter::JobReason;
     Pair p;
     hostJobMode = true;
-    constexpr uint32_t quanta[] = {1u,2u,3u,4u,7u,13u,16u,31u,256u,65536u};
+    constexpr uint32_t quanta[] = {1u,2u,3u,4u,7u,13u,16u,31u,256u,2048u,65536u};
     for (uint32_t quantum : quanta) {
         hostJobQuantum = quantum;
         for (uint32_t salt = 0; salt < 64; ++salt) for (uint32_t mask = 0; mask < 16; ++mask) {

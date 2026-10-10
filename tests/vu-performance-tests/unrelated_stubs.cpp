@@ -9,6 +9,8 @@ void PS2Memory::processVIF0Data(uint32_t, uint32_t) {}
 void PS2Memory::processVIF0Data(const uint8_t *, uint32_t) {}
 void PS2Memory::processVIF1Data(uint32_t, uint32_t) {}
 void PS2Memory::processVIF1Data(const uint8_t *, uint32_t) {}
+bool PS2Memory::vif1WorkPending() const noexcept { return false; }
+void PS2Memory::cancelVif1Work() {}
 void GifArbiter::submit(GifPathId, const uint8_t *, uint32_t, bool) {}
 void GifArbiter::drain() {}
 bool GS::processNativePackedGIFPacket(const uint8_t *, uint32_t) { return false; }

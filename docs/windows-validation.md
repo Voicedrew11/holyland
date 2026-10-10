@@ -1,5 +1,10 @@
 # Native Windows validation (2026-10-09)
 
+The later [fixed-frame performance report](fixed-frame-performance.md) records
+patches 0057–0058, measured 29.97 Hz game updates with independent interpolated
+rendering, and the separate Ubuntu build, tests and WSL graphics limitation.
+The measurements below remain historical evidence for their stated builds.
+
 The USA boot ELF `SLUS_203.18` was statically recompiled and run as a native
 x64 executable on Windows 11 with MSVC 19.44. The IOP and VU1 remain
 interpreters in the supporting runtime. The earlier validation below uses

@@ -1,5 +1,14 @@
 # Source-only regressions
 
+The new [fixed-frame package](fixed-frame-tests/README.md) checks the rational
+game clock, actual scheduler integration and isolated graphics interpolation.
+Its three tests and the two seven-test native VU packages pass on native
+Windows/MSVC and Ubuntu/GCC. Native VU fixtures now explicitly narrow random
+32-bit bit patterns on platforms with a 64-bit `uint_fast32_t`, and include
+the source directory needed by GCC's generated-catalog lookup. These fixes
+apply to the bounded catalog, not the owner's separate static-lift experiment.
+See [current measurements and Linux execution limits](../docs/fixed-frame-performance.md).
+
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are

@@ -153,7 +153,7 @@ void synthetic() {
     std::mt19937 bits(0x39aabbcc);
     for (uint32_t sample = 0; sample < 250000; ++sample) {
         float input[4], candidate[4], reference[4];
-        for (auto &lane : input) lane = std::bit_cast<float>(bits());
+        for (auto &lane : input) lane = std::bit_cast<float>(static_cast<uint32_t>(bits()));
         vu_verify_normalize_candidate(input, candidate);
         vu_verify_normalize_reference(input, reference);
         p.check(std::memcmp(candidate, reference, sizeof(candidate)) == 0, "normalization-random-bits");
@@ -217,10 +217,10 @@ void synthetic() {
     for (uint32_t sample = 0; sample < 50000; ++sample) {
         p.reset(); p.seed(sample + 12345);
         auto &state = p.c->state();
-        for (float &lane : state.vf[2]) lane = std::bit_cast<float>(arithmeticBits());
-        for (float &lane : state.vf[3]) lane = std::bit_cast<float>(arithmeticBits());
-        for (float &lane : state.acc) lane = std::bit_cast<float>(arithmeticBits());
-        state.q = std::bit_cast<float>(arithmeticBits()); state.i = std::bit_cast<float>(arithmeticBits());
+        for (float &lane : state.vf[2]) lane = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
+        for (float &lane : state.vf[3]) lane = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
+        for (float &lane : state.acc) lane = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
+        state.q = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits())); state.i = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
         std::memcpy(&p.r->state(), &state, sizeof(state));
         const uint32_t op = sums[arithmeticBits() % std::size(sums)];
         const uint32_t mask = arithmeticBits() & 15u;
@@ -233,9 +233,9 @@ void synthetic() {
     for (uint32_t sample = 0; sample < 10000; ++sample) {
         p.reset(); p.seed(sample + 67890);
         auto &state = p.c->state();
-        for (float &lane : state.vf[2]) lane = std::bit_cast<float>(arithmeticBits());
-        for (float &lane : state.vf[3]) lane = std::bit_cast<float>(arithmeticBits());
-        state.q = std::bit_cast<float>(arithmeticBits()); state.i = std::bit_cast<float>(arithmeticBits());
+        for (float &lane : state.vf[2]) lane = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
+        for (float &lane : state.vf[3]) lane = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
+        state.q = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits())); state.i = std::bit_cast<float>(static_cast<uint32_t>(arithmeticBits()));
         std::memcpy(&p.r->state(), &state, sizeof(state));
         const uint32_t op = singles[arithmeticBits() % std::size(singles)];
         const uint32_t mask = arithmeticBits() & 15u;

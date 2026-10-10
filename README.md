@@ -37,9 +37,12 @@ code or disc assets. The build checks the boot ELF's hash.
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
 - Gameplay timing is independent of host presentation. Interlaced NTSC uses
   roughly 59.94 fields and 29.97 ordinary gameplay updates per second.
-  The performance follow-up adds independent EE hardware time, bounded
-  field handoff and native VU compilation. See [Windows validation](docs/windows-validation.md)
-  for measured gameplay and attack timing, and [optional MSVC PGO](docs/windows-pgo.md).
+  An opt-in fixed-frame mode measured 29.73–29.97 game updates/s with roughly
+  80–90 graphics frames/s in the opening area on native Windows. It uses
+  isolated, conservative geometry interpolation; combat and physics remain
+  on the original update loop. See [fixed-frame performance](docs/fixed-frame-performance.md)
+  for launchers, timing, visual latency and Linux limits, and
+  [optional MSVC PGO](docs/windows-pgo.md).
 - Broader rendering accuracy remains unverified.
   Vulkan field presentation uses GPU bob to avoid temporal text combing.
   Audio hardware behaviour is
@@ -71,9 +74,10 @@ The existing Linux workflow remains available:
 ```
 
 Read [the Linux build guide](docs/building.md) first. Generated files default
-to `~/.local/share/kfiv-pc`, outside this repository. The new runtime and
-generator changes were validated on native Windows; their Linux build has
-not yet been retested.
+to `~/.local/share/kfiv-pc`, outside this repository. The complete runner now
+builds and the focused runtime/VU tests pass on Ubuntu under WSL2. WSL's
+Dozen Vulkan driver failed before gameplay; see the separate
+[Linux execution results](docs/fixed-frame-performance.md#ubuntu-and-the-owners-merged-work).
 
 The tools build applies generator-affecting patches **before** generation.
 Rebuild the recompiler and regenerate the complete output after updating
@@ -82,11 +86,12 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 52 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
-are retained. Eleven further patches address GPU/SPU/VU overhead, hardware
-clock accounting, NTSC field handoff and SDK synchronization, with optional
-bounded native VU compilation. Diagnostics and the separate experimental
-static-lift path remain off by default.
+of 58 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
+are retained, including the owner's merged VU census/static-lift work.
+The performance additions address GPU/SPU/VU overhead, hardware time,
+cooperative VIF service, bounded native VU compilation and optional fixed
+game updates with independent interpolated rendering. Diagnostics and the
+separate experimental static-lift path remain off by default.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

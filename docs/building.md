@@ -1,8 +1,12 @@
 # Building and running (Linux)
 
-For native Windows, use [`windows.md`](windows.md). The input, audio and performance
-changes were verified on Windows; the Linux workflow below has not been
-retested with these additions.
+For native Windows, use [`windows.md`](windows.md). A native Ubuntu/WSL2 runner
+and focused runtime/VU tests now build successfully, and the CPU renderer has
+completed gameplay. WSL's Dozen Vulkan driver failed before gameplay; native
+Linux GPU performance remains unverified. See [current Linux results and the
+comparison with owner PR #11](fixed-frame-performance.md#ubuntu-and-the-owners-merged-work).
+The validation reused privately generated EE sources; it was not a fresh
+end-to-end extraction/recompilation run of every script below.
 
 You need a legally owned disc image of the US release (`SLUS-20318`) and the
 tools below. You do **not** need Ghidra: the function map is committed in
@@ -74,8 +78,9 @@ Set `KFIV_VU_NATIVE=0` to use the interpreter throughout. Switching this
 setting reconfigures the incremental build and clears both native input
 cache values. Python 3.8+ is required when native VU1 compilation is enabled.
 The canonical VU sources use strict floating point flags; the native backend
-has been compiled and tested on Windows, while Linux execution and
-performance remain unverified.
+has been compiled and differentially tested on both Windows and Ubuntu.
+The available WSL CPU-renderer fallback did not reach the fixed-frame target;
+that result does not establish performance on a native Linux Vulkan driver.
 
 The upstream census (`PS2X_VU1_CENSUS`) and static lift (`PS2X_VU1_LIFT`)
 remain optional. The static lift is experimental and disabled by default;

@@ -244,9 +244,9 @@ void authoredNativeSynthetic()
             }
             else
             {
-                for (auto &reg : state.vf) for (float &lane : reg) lane = std::bit_cast<float>(bits());
-                for (float &lane : state.acc) lane = std::bit_cast<float>(bits());
-                state.q = std::bit_cast<float>(bits()); state.i = std::bit_cast<float>(bits());
+                for (auto &reg : state.vf) for (float &lane : reg) lane = std::bit_cast<float>(static_cast<uint32_t>(bits()));
+                for (float &lane : state.acc) lane = std::bit_cast<float>(static_cast<uint32_t>(bits()));
+                state.q = std::bit_cast<float>(static_cast<uint32_t>(bits())); state.i = std::bit_cast<float>(static_cast<uint32_t>(bits()));
             }
             state.status = (sample & 1u) ? 0xdeadffffu : 0x80000fc0u;
             std::memcpy(&p.r->state(), &state, sizeof(VU1State));

@@ -1,0 +1,353 @@
+From 3faf45c85cae02c7d99b17cd63b51847a664e53b Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 14:49:47 -0400
+Subject: [PATCH 57/58] Reduce bounded VU overhead with exact native FMAC
+ guards
+
+Reuse admitted native descriptors, directly transpose ordinary FMAC flags, and preserve complete MXCSR state on MSVC x64. Keep boundary arithmetic on the existing exact path. Make generated catalogs build on GCC and retain portable fenv handling.
+---
+ ps2xRuntime/cmake/NativeVu.cmake        |   4 +
+ ps2xRuntime/include/runtime/ps2_vu1.h   |   3 +
+ ps2xRuntime/src/lib/ps2_memory.cpp      |   6 +
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp | 173 +++++++++++++++++++++++-
+ ps2xRuntime/tools/generate_vu_native.py |  28 ++++
+ 5 files changed, 207 insertions(+), 7 deletions(-)
+
+diff --git a/ps2xRuntime/cmake/NativeVu.cmake b/ps2xRuntime/cmake/NativeVu.cmake
+index 5ae88e2..c3f1e96 100644
+--- a/ps2xRuntime/cmake/NativeVu.cmake
++++ b/ps2xRuntime/cmake/NativeVu.cmake
+@@ -55,6 +55,10 @@ target_sources(ps2_runtime PRIVATE "${_ps2x_vu_catalog}")
+ # The shared class definition remains identical in every translation unit.
+ set_property(SOURCE "${_ps2x_vu_core}" APPEND PROPERTY COMPILE_DEFINITIONS
+     "PS2X_VU1_NATIVE_CATALOG=\"${_ps2x_vu_catalog}\"")
++# GCC resolves quoted includes in the generated catalog relative to the build
++# directory, not the parent .cpp. MSVC's enclosing-include search hid this.
++set_property(SOURCE "${_ps2x_vu_core}" APPEND PROPERTY INCLUDE_DIRECTORIES
++    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu")
+ set_property(SOURCE "${_ps2x_vu_core}" APPEND PROPERTY OBJECT_DEPENDS
+     "${_ps2x_vu_catalog}")
+ set_source_files_properties("${_ps2x_vu_core}" PROPERTIES
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
+index f2dbad4..add2f9b 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1.h
+@@ -320,6 +320,9 @@ private:
+     template <typename Real>
+     uint8_t normalizeFmacExactResult(float &value, Real exactResult) const;
+     void updateFmacFlags(const uint8_t laneFlags[4], uint8_t dest, uint32_t extraSticky);
++    void queueFmacFlags(uint32_t mac, uint32_t status, uint32_t extraSticky);
++    bool tryApplyNormalFmacDest(float *dst, float *result, uint8_t dest);
++    bool tryApplyProductSumFmacDest(float *dst, float *result, uint8_t dest, uint8_t source, uint8_t broadcast);
+     void queueFsset(uint16_t immediate);
+     void queueClip(uint32_t clip);
+     void queueFcset(uint32_t clip);
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index ab0f197..fe71375 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1399,6 +1399,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                     uint32_t asp = (chcr >> 4) & 0x3u;
+                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
+                     std::vector<uint8_t> chainBuf;
++                    // An exhausted cooperative parser retains only spare
++                    // capacity. Reuse it for the next owned VIF1 snapshot;
++                    // never borrow storage from a live or nonempty parser.
++                    if (channelBase == 0x10009000u && cooperativeVif1Enabled() &&
++                        !m_vif1Servicing && m_vif1Input.empty() && m_vif1Cursor == 0u)
++                        chainBuf.swap(m_vif1Input);
+ 
+                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
+                     {
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 10d0357..fea19e8 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -24,6 +24,15 @@
+ #endif
+ #include <ps2_log.h>
+ 
++// The generated bodies know the destination mask and operand source. Keep
++// these small admission/commit helpers inline so MSVC can fold those constants
++// instead of re-decoding them at every issued native instruction.
++#ifdef _MSC_VER
++#define VU_NATIVE_INLINE __forceinline
++#else
++#define VU_NATIVE_INLINE
++#endif
++
+ namespace
+ {
+     constexpr uint8_t laneForComponent(uint32_t component)
+@@ -201,23 +210,24 @@ namespace
+         return static_cast<uint32_t>(_mm_cvtsi128_si32(flags)) & kFmacLaneByteMask[dest & 15u];
+     }
+ 
+-    bool classifyProductSumFmacFast(__m128 a, __m128 b, const float *result, uint8_t dest,
+-                                    uint8_t laneFlags[4], uint32_t &productSticky)
++    bool classifyProductSumFmacFastBits(__m128 a, __m128 b, const float *result, uint8_t dest,
++                                        __m128i &productBits, __m128i &exactProductZero,
++                                        __m128i &resultBits, __m128i &resultMagnitude)
+     {
+         const __m128i absoluteMask = _mm_set1_epi32(0x7FFFFFFF);
+         const __m128i exponentMask = _mm_set1_epi32(0x7F800000);
+-        const __m128i productBits = _mm_castps_si128(_mm_mul_ps(a, b));
++        productBits = _mm_castps_si128(_mm_mul_ps(a, b));
+         const __m128i productMagnitude = _mm_and_si128(productBits, absoluteMask);
+         const __m128i productExponent = _mm_and_si128(productBits, exponentMask);
+-        const __m128i exactProductZero = _mm_or_si128(
++        exactProductZero = _mm_or_si128(
+             _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(a), absoluteMask), _mm_setzero_si128()),
+             _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(b), absoluteMask), _mm_setzero_si128()));
+         const __m128i unusualProduct = _mm_or_si128(_mm_cmpeq_epi32(productExponent, _mm_setzero_si128()),
+             _mm_or_si128(_mm_cmpeq_epi32(productExponent, exponentMask),
+                          _mm_cmpeq_epi32(productMagnitude, _mm_set1_epi32(0x7F7FFFFF))));
+         const __m128i ordinaryProduct = _mm_andnot_si128(unusualProduct, _mm_set1_epi32(-1));
+-        const __m128i resultBits = _mm_loadu_si128(reinterpret_cast<const __m128i *>(result));
+-        const __m128i resultMagnitude = _mm_and_si128(resultBits, absoluteMask);
++        resultBits = _mm_loadu_si128(reinterpret_cast<const __m128i *>(result));
++        resultMagnitude = _mm_and_si128(resultBits, absoluteMask);
+         const __m128i resultExponent = _mm_and_si128(resultBits, exponentMask);
+         // Normal result binades 2..253 keep a margin from FLT_MIN and FLT_MAX.
+         const __m128i resultRange = _mm_and_si128(
+@@ -235,6 +245,15 @@ namespace
+                                   ((dest & 2u) << 1u) | ((dest & 1u) << 3u);
+         if ((static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(qualifying))) & required) != required)
+             return false;
++        return true;
++    }
++
++    bool classifyProductSumFmacFast(__m128 a, __m128 b, const float *result, uint8_t dest,
++                                    uint8_t laneFlags[4], uint32_t &productSticky)
++    {
++        __m128i productBits, exactProductZero, resultBits, resultMagnitude;
++        if (!classifyProductSumFmacFastBits(a, b, result, dest, productBits, exactProductZero, resultBits, resultMagnitude))
++            return false;
+         const __m128i signFlag = _mm_set1_epi32(2);
+         const __m128i zeroFlag = _mm_set1_epi32(1);
+         const __m128i productFlags = _mm_or_si128(_mm_and_si128(_mm_srli_epi32(productBits, 30), signFlag),
+@@ -878,7 +897,11 @@ void VU1Interpreter::updateFmacFlags(const uint8_t laneFlags[4], uint8_t dest,
+         (uint32_t(kFmacFlagScatter[y & 15u]) << 2) |
+         (uint32_t(kFmacFlagScatter[z & 15u]) << 1) | kFmacFlagScatter[w & 15u];
+     const uint32_t status = x | y | z | w;
++    queueFmacFlags(mac, status, extraSticky);
++}
+ 
++VU_NATIVE_INLINE void VU1Interpreter::queueFmacFlags(uint32_t mac, uint32_t status, uint32_t extraSticky)
++{
+     const int slot = claimSlot<kMaxFlagEntries>(m_flagMask);
+     if (slot < 0)
+     {
+@@ -898,6 +921,98 @@ void VU1Interpreter::updateFmacFlags(const uint8_t laneFlags[4], uint8_t dest,
+     entry->writesStatus = true;
+ }
+ 
++
++// This helper is called only by native ADD/SUB/MUL bodies. Arithmetic
++// has already run with the existing strict FP contract. For a selected normal
++// result below FLT_MAX, the exact old normalizer preserves its bits and reports
++// only S. All zero, subnormal, max, and nonfinite boundaries retain that helper.
++VU_NATIVE_INLINE bool VU1Interpreter::tryApplyNormalFmacDest(float *dst, float *result, uint8_t dest)
++{
++#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
++    const __m128 values = _mm_loadu_ps(result);
++    const __m128i magnitude = _mm_and_si128(_mm_castps_si128(values), _mm_set1_epi32(0x7FFFFFFF));
++    const __m128i exponent = _mm_and_si128(magnitude, _mm_set1_epi32(0x7F800000));
++    const __m128i invalid = _mm_or_si128(
++        _mm_or_si128(_mm_cmpeq_epi32(exponent, _mm_setzero_si128()),
++                     _mm_cmpeq_epi32(exponent, _mm_set1_epi32(0x7F800000))),
++        _mm_cmpeq_epi32(magnitude, _mm_set1_epi32(0x7F7FFFFF)));
++    const uint32_t invalidLanes = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(invalid)));
++    const auto reversed = [](uint32_t bits)
++    {
++        return ((bits & 1u) << 3u) | ((bits & 2u) << 1u) |
++               ((bits & 4u) >> 1u) | ((bits & 8u) >> 3u);
++    };
++    if ((reversed(invalidLanes) & dest) != 0u)
++    {
++        return false;
++    }
++
++    if (dest != 0u)
++    {
++        const uint32_t signLanes = static_cast<uint32_t>(_mm_movemask_ps(values));
++        const uint32_t selectedSigns = reversed(signLanes) & dest;
++        // Keep the exact same eager +4-cycle entry/slot and STATUS transform.
++        // This is a direct sign transpose, not deferred/lazy flag state.
++        queueFmacFlags(selectedSigns << 4u, selectedSigns != 0u ? 2u : 0u, 0u);
++    }
++    applyDest(dst, result, dest);
++    return true;
++#else
++    (void)dst; (void)result; (void)dest;
++    return false;
++#endif
++}
++
++// Native MADD/MSUB only: reuse the unchanged bounded product/sum guard.
++// Qualifying lanes have only S/Z for current flags and product sticky flags.
++// Transpose them directly into the same eager +4-cycle MAC/STATUS entry;
++// all unusual/cancellation/outer-product cases retain the exact normalizer.
++VU_NATIVE_INLINE bool VU1Interpreter::tryApplyProductSumFmacDest(float *dst, float *result, uint8_t dest,
++                                               uint8_t source, uint8_t broadcast)
++{
++#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && FLT_EVAL_METHOD == 0
++    // This bounded shortcut classifies only sign/zero well inside the normal
++    // float range. Its error margin does not depend on long-double precision.
++    // Boundary/cancellation cases still return false to the platform's exact
++    // normalizer; the binary64-only all-range SIMD fallback remains guarded.
++    {
++        const __m128 a = _mm_loadu_ps(m_fmacVs);
++        __m128 b;
++        switch (static_cast<FmacSource>(source))
++        {
++        case FmacSource::Broadcast: b = _mm_set1_ps(m_fmacVt[broadcast]); break;
++        case FmacSource::Q: b = _mm_set1_ps(m_fmacQ); break;
++        case FmacSource::I: b = _mm_set1_ps(m_fmacI); break;
++        case FmacSource::Full: b = _mm_loadu_ps(m_fmacVt); break;
++        default: return false;
++        }
++        __m128i productBits, exactProductZero, resultBits, resultMagnitude;
++        if (!classifyProductSumFmacFastBits(a, b, result, dest, productBits, exactProductZero, resultBits, resultMagnitude))
++            return false;
++        const auto reversed = [](uint32_t bits)
++        {
++            return ((bits & 1u) << 3u) | ((bits & 2u) << 1u) |
++                   ((bits & 4u) >> 1u) | ((bits & 8u) >> 3u);
++        };
++        if (dest != 0u)
++        {
++            const uint32_t resultSigns = reversed(static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(resultBits)))) & dest;
++            const uint32_t resultZero = reversed(static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(
++                _mm_cmpeq_epi32(resultMagnitude, _mm_setzero_si128()))))) & dest;
++            const uint32_t productSigns = reversed(static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(productBits)))) & dest;
++            const uint32_t productZero = reversed(static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(exactProductZero)))) & dest;
++            const uint32_t status = (resultZero != 0u ? 1u : 0u) | (resultSigns != 0u ? 2u : 0u);
++            const uint32_t sticky = (productZero != 0u ? 1u : 0u) | (productSigns != 0u ? 2u : 0u);
++            queueFmacFlags(resultZero | (resultSigns << 4u), status, sticky);
++        }
++        applyDest(dst, result, dest);
++        return true;
++    }
++#endif
++    (void)dst; (void)result; (void)dest; (void)source; (void)broadcast;
++    return false;
++}
++
+ void VU1Interpreter::applyFmacDest(float *dst, float *result, uint8_t dest)
+ {
+     uint8_t laneFlags[4]{};
+@@ -2073,6 +2188,26 @@ namespace
+ {
+     class VuFpEnvironment
+     {
++#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
++    FLT_EVAL_METHOD == 0 && LDBL_MANT_DIG == 53 && LDBL_MAX_EXP == 1024
++        // The Microsoft x64 CRT fenv API stores/restores MXCSR only. Keep its
++        // complete control/status contract, without translating through fenv_t
++        // for each tiny host quantum. This leaves x87 untouched in both paths.
++        static_assert(sizeof(long double) == sizeof(double));
++        unsigned m_previousMxcsr = 0;
++        bool m_active = false;
++    public:
++        explicit VuFpEnvironment(bool active = true) noexcept : m_active(active)
++        {
++            if (!active) return;
++            m_previousMxcsr = _mm_getcsr();
++            _mm_setcsr((m_previousMxcsr & ~0x6000u) | 0x6000u);
++        }
++        ~VuFpEnvironment() noexcept
++        {
++            if (m_active) _mm_setcsr(m_previousMxcsr);
++        }
++#else
+         std::fenv_t m_previous{};
+         bool m_saved = false;
+         int m_previousRounding = -1;
+@@ -2089,6 +2224,7 @@ namespace
+             if (m_saved) std::fesetenv(&m_previous);
+             else if (m_previousRounding != -1) std::fesetround(m_previousRounding);
+         }
++#endif
+     };
+ }
+ 
+@@ -2250,12 +2386,35 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+     {
+         commitReadyPipelines();
+         if (hostJob && (!m_jobActive || m_jobEpoch != jobEpoch)) break;
+-        if (vuCode == nullptr || m_state.pc + 8u > codeSize)
++        if (vuCode == nullptr || codeSize < 8u || m_state.pc > codeSize - 8u)
+         {
+             if (hostJob) { m_jobActive = false; m_jobStatus = JobReason::InvalidPc; }
+             break;
+         }
+ 
++#ifdef PS2X_VU1_NATIVE_CATALOG
++        // A previously admitted cache already identifies every baked pair.
++        // Keep its owner/key and generation contract, including stale cached
++        // words after unmarked raw writes. A tracked change uses the original
++        // decoder below, which rebuilds and revalidates catalog admission.
++        if (!m_jobPendingPairValid && m_nativeCatalogMatched && m_decodedCodeCacheValid &&
++            m_unit == Unit::VU1 && memory != nullptr && vuCode == memory->getVU1Code() &&
++            m_cachedVuCode == vuCode && m_cachedMemory == memory &&
++            m_cachedCodeSize == codeSize && codeSize == 16384u && m_state.pc < codeSize &&
++            (m_state.pc & 7u) == 0u &&
++            m_cachedCodeGeneration == memory->getVU1CodeGeneration())
++        {
++            // Pass the same cached descriptor without its dynamic flags/read
++            // slots lookup. Reserved entry PCs return zero from the catalog
++            // and take the unchanged decoder/reserved-instruction path below.
++            const int native = trySpecializedBlock(m_decodedCodeCache[m_state.pc / 8u],
++                vuCode, codeSize, vuData, dataSize, gs, memory, budgetEnd, m_cachedCodeGeneration);
++            if (native == 2) { programEnded = true; break; }
++            if (native == 3) break;
++            if (native == 1) continue;
++        }
++#endif
++
+         const DecodedInstructionPair &decoded = hostJob && m_jobPendingPairValid
+             ? m_jobPendingPair : getDecodedInstructionPairForPc(vuCode, codeSize, memory, m_state.pc);
+         if (decoded.has(DecodedUpperReserved) || decoded.has(DecodedLowerReserved))
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+index df44f03..ca1162e 100644
+--- a/ps2xRuntime/tools/generate_vu_native.py
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -200,6 +200,34 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+             apply = apply.replace('normalizeFmacResult(', 'normalizeFmacResultSpecialized<instr>(')
+             parts.append(apply)
+             upper_function = upper_function.replace(helper + '(', helper + 'Specialized<instr>(')
++    # X: constexpr ADD/SUB/MUL admission; keep the full exact helper cold.
++    upper_function = upper_function.replace('applyFmacDest(', 'nativeApplyFmacDest(')
++    upper_function = upper_function.replace('applyFmacDestAcc(', 'nativeApplyFmacDestAcc(')
++    native_fast = """
++    constexpr uint32_t normalOpcode = instr & 0x3fu;
++    constexpr uint32_t nativeIndex = normalOpcode >= 0x3cu ? 64u + ((instr & 3u) | ((instr >> 4u) & 0x7cu)) : normalOpcode;
++    constexpr FmacDecode nativeFmac = kFmacDecode[nativeIndex];
++    constexpr bool nativeNormalOp = nativeFmac.op == FmacOp::Add || nativeFmac.op == FmacOp::Sub || nativeFmac.op == FmacOp::Mul;
++    constexpr bool nativeProductSum = nativeFmac.op == FmacOp::MAdd || nativeFmac.op == FmacOp::MSub;
++    const auto nativeApplyFmacDest = [this, nativeFmac](float *dst, float *result, uint8_t dest)
++    {
++        if constexpr (nativeNormalOp)
++            if (tryApplyNormalFmacDest(dst, result, dest)) return;
++        if constexpr (nativeProductSum)
++            if (tryApplyProductSumFmacDest(dst, result, dest, static_cast<uint8_t>(nativeFmac.source), nativeFmac.broadcast)) return;
++        applyFmacDest(dst, result, dest);
++    };
++    const auto nativeApplyFmacDestAcc = [this, nativeFmac](float *result, uint8_t dest)
++    {
++        if constexpr (nativeNormalOp)
++            if (tryApplyNormalFmacDest(m_state.acc, result, dest)) return;
++        if constexpr (nativeProductSum)
++            if (tryApplyProductSumFmacDest(m_state.acc, result, dest, static_cast<uint8_t>(nativeFmac.source), nativeFmac.broadcast)) return;
++        applyFmacDestAcc(result, dest);
++    };
++"""
++    brace = upper_function.index('{') + 1
++    upper_function = upper_function[:brace] + native_fast + upper_function[brace:]
+     lower_function = function(lower, 'void VU1Interpreter::execLower(')
+     lower_function = replace_once(lower_function,
+         'void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)',
+-- 
+2.55.0.windows.3
+

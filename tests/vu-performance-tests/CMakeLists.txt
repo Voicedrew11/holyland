@@ -51,6 +51,7 @@ add_executable(kfiv_vu_performance_verify verifier.cpp unrelated_stubs.cpp
 target_compile_features(kfiv_vu_performance_verify PRIVATE cxx_std_20)
 set_property(TARGET kfiv_vu_performance_verify PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 target_include_directories(kfiv_vu_performance_verify PRIVATE
+    "${generated}/candidate/src/lib/vu"
     "${generated}/candidate/include" "${generated}/reference/include" "${VU_CANDIDATE_RUNTIME_DIR}/include")
 if(MSVC)
     target_compile_options(kfiv_vu_performance_verify PRIVATE /W4 /permissive- /bigobj /fp:strict)
