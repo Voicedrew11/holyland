@@ -3,10 +3,16 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-17 standalone fixture packages plus the separate audio-loopback diagnostic.
+20 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
+The new alignment fixture passed 853,552 checks with one and eight workers;
+the bounded-trace fixture passed 59 assertions across nine fixed cases, with
+six additional controlled old-behaviour cases. The new source-height fixture
+passed 6,129,642 checks across nine fixed cases and six additional controls.
+All three new packages were rebuilt after relocation. The original packages
+were not rerun solely to add these fixtures.
 They are not a full gameplay or PS2 hardware-equivalence
 test; retail evidence is recorded in [Windows validation](../docs/windows-validation.md).
 
@@ -80,6 +86,9 @@ sources; expected failure behaviour is itself asserted.
 | `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |
 | `gs-depth-tests` | 143,397 | Actual CPU GS backend and local memory with synthetic colors/texture; disabled and enabled depth tests, depth-write masking, movie-style DECAL sprite and CRT2 scanout. A scratch control removes only the ZTE fix. No decoder or retail assets. |
+| `gs-alignment-tests` | 853,552 per worker count | Actual CPU GS backend and local memory; scalar fixed-UV oracle, reversed axes, fractional offsets, bounds/scissor, flat Q and serial 64-pixel framebuffer feedback through the real texture cache. One/eight workers; optional prior-sprite control. No retail assets or presentation changes. |
+| `gs-trace-tests` | 59 fixed | Actual opt-in GS trace implementation with synthetic register, transfer, draw and privileged CRT state; inclusive tick bounds, CRT2 fields and fractional XYOFFSET diagnostics. Nine fixed cases and six controlled prior-behaviour cases. |
+| `gs-scanout-height-tests` | 6,129,642 fixed | Real backend framebuffer upload and public presentation through its VRAM snapshot. Independently encoded gradients/HUD marker check full source rows, CRT1/CRT2/dual, magnification, odd rounding, clamp order, progressive/FIELD and initial small FRAME bob. Nine fixed cases, six prior-height controls; no cross-frame history or window scaling claim. |
 
 MPEG's 412 checks comprise 54 SDK lifecycle, 75 demux, 84 video, 93
 cancellation and 106 snapshot checks. They cover committed B9 completion
@@ -102,9 +111,30 @@ and control generators; it is outside this fix. KFIV uses separate files.
 
 The GS depth package's two CTest entries include an expected-failure
 control, which reproduces 143,369 failed checks with the previous ZTE
-behaviour. Focused upstream GS checks passed 51/51. The full legacy GS
-suite passed 41/72 in both fixed and prior controls, with the same 31
+behaviour. Focused upstream GS checks passed 51/51. At the depth-fix stage,
+the full legacy GS suite passed 41/72 in both fixed and prior controls, with the same 31
 failures; the complete legacy suite is not green.
+
+The alignment package's two default CTest entries run with one and eight
+GS workers. Supplying `GS_ALIGNMENT_PRIOR_SOURCE` adds an expected-failure
+control; the verified control replaces only `DrawSprite` in otherwise
+identical scratch source. It reproduces 46,839 failed checks, 7,812 changed
+feedback pixels and 217 extra strip/page boundary steps. The fixed identity
+feedback pass has zero changed pixels and zero extra steps. This does not
+assert a new cache policy for all possible feedback effects.
+
+The trace package passed all 15 CTest entries: nine fixed cases total 59
+assertions, and six expected-failure controls total 43 checks with 14
+failures under the old behaviour. Diagnostics are off by default and these
+tests do not assess gameplay rendering.
+
+The scanout-height package has nine default CTest cases. Supplying
+`GS_SCANOUT_PRIOR_SOURCE` adds six expected-failure controls, which reproduce
+4,072,731 failures in 4,081,608 checks. All 15 CTest entries passed. The
+default-environment CRT2 case also passed 1,146,904 checks, with normal weave
+and worker defaults. The fixture checks all pixels and alpha, including a
+synthetic marker on source rows 416–447; it covers the source-height ordering
+without asserting full cross-frame weave accuracy.
 
 ## Script safety tests and audio diagnostic
 
@@ -112,15 +142,16 @@ failures; the complete legacy suite is not green.
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The series now contains 23 patches. Before adding the GS depth
+failure. The series now contains 26 patches. Before adding the GS depth
 fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
 
-The current 23-patch series was also replayed with tools application twice,
+The complete 26-patch series was also replayed with tools application twice,
 full after tools, and full application twice. Staging new files and applying
 Git line-ending normalization reproduced the tested source-export tree
-`c06feee6032f665469ffbb6b245a5399160c5b0b` exactly.
+`6c3edbccc9e71f1477863bd707e5758658e9b28b` exactly, with all 57 managed
+source files verified after normalization.
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately
 with CMake and no PS2Recomp path settings. It requires Windows build 20348+

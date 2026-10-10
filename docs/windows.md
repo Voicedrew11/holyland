@@ -29,8 +29,12 @@ $cmake = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7
 
 Create a **new** private checkout. The helper rejects an existing checkout
 at another commit without resetting edits. Applying the full series also
-applies the generator fix needed by the tools. The series contains 23
-patches; patch 0023 fixes disabled GS depth testing for movie presentation.
+applies the generator fix needed by the tools. The series contains 26
+patches: 0023 fixes disabled GS depth testing for movie presentation,
+0024 corrects gameplay feedback-strip alignment, and 0025 bounds opt-in
+GS diagnostics and reports the active CRT2 state. Patch 0026 decodes
+interlaced source height before limiting the host image size, preserving
+all 448 gameplay rows.
 
 ```powershell
 git clone --recurse-submodules https://github.com/ran-j/PS2Recomp.git $checkout
