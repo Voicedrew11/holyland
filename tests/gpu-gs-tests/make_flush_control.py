@@ -60,7 +60,8 @@ def main() -> None:
         source = source.replace("GSVulkanBackend", "GSVulkanBackendRef")
         source = source.replace("presentVulkanGs", "presentVulkanGsRef")
         source = source.replace("VulkanGsScanoutUnsupported", "VulkanGsScanoutUnsupportedRef")
-        (args.output_dir / name).write_text(source, encoding="utf-8", newline="\n")
+        with (args.output_dir / name).open("w", encoding="utf-8", newline="\n") as target:
+            target.write(source)
     print("Generated scratch prior-flush control; production sources unchanged")
 
 
