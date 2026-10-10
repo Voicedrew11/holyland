@@ -22,6 +22,13 @@ set -eu
 . "$(dirname "$0")/common.sh"
 GAMEDIR="${1:-$GAMEDIR_DEFAULT}"
 [ -d "$GAMEDIR/output" ] || { echo "no $GAMEDIR/output — run 02-recompile.sh first" >&2; exit 1; }
+python3 "$KFIV_ROOT/scripts/check-generated-sources.py" --output "$GAMEDIR/output"
+NATIVE_ELF=""; NATIVE_METADATA=""
+case "${KFIV_VU_NATIVE:-1}" in
+  1) NATIVE_ELF="$(cd "$GAMEDIR" && pwd)/SLUS_203.18"; NATIVE_METADATA="$KFIV_ROOT/kfiv/vu1-native.json" ;;
+  0) ;;
+  *) echo "KFIV_VU_NATIVE must be 0 or 1" >&2; exit 1 ;;
+esac
 # _build is disposable, but refuse to delete commits that exist nowhere else
 # (an old dev checkout at _build/repo). Develop in maintainer/dev-setup.sh's
 # checkout instead; KFIV_FORCE_CLEAN=1 deletes anyway.
@@ -44,7 +51,8 @@ find "$GAMEDIR/output/" -maxdepth 1 -name '*.cpp' -exec cp -t "$GAMEDIR/_build/r
 cmake -S "$GAMEDIR/_build/repo" -B "$GAMEDIR/_build/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF \
-  -DPS2X_ENABLE_DEBUG_UI=OFF
+  -DPS2X_ENABLE_DEBUG_UI=OFF \
+  "-DPS2X_VU1_NATIVE_ELF=$NATIVE_ELF" "-DPS2X_VU1_NATIVE_METADATA=$NATIVE_METADATA"
 # Link of 28k unity objects spills temp files; /tmp is a small tmpfs here,
 # so redirect to the game dir (same filesystem, plenty of space).
 mkdir -p "$GAMEDIR/_build/tmp"

@@ -1,0 +1,167 @@
+From fc83bf8a4adf129baef0bfb75a3b0c9cc5f49456 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 04:31:20 -0400
+Subject: [PATCH 49/52] Cache idle IOP thread selection until scheduling
+ changes
+
+Frequent host-clock reconciliation repeatedly scanned every IOP thread while all were asleep or delayed. Cache the absence of Ready threads and the earliest delayed wake, invalidate that result before every kernel scheduling mutation, and rescan at the exact wake cycle. Combine delayed-thread promotion and priority selection in one pass while preserving priority and thread-ID ordering.
+
+Native Windows validation passes 48,299 exact kernel, CPU, RAM and allocator checks against the unchanged implementation, the four IOP suites and the authored audio-clock regression. Mechanical controls detect missing mutation invalidation and an incorrect wake-boundary comparison.
+---
+ ps2xIOP/src/emulator/core/iop_kernel.cpp | 30 ++++++++++++++++++++----
+ ps2xIOP/src/emulator/core/iop_kernel.h   |  5 ++++
+ 2 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/iop_kernel.cpp b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+index 4832d8f..6e9c68d 100644
+--- a/ps2xIOP/src/emulator/core/iop_kernel.cpp
++++ b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+@@ -25,6 +25,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::reset()
+     {
++        m_idleSelectionValid = false;
+         m_threads.clear();
+         m_semaphores.clear();
+         m_eventFlags.clear();
+@@ -36,6 +37,7 @@ namespace ps2x::iop::detail
+ 
+     bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
+     {
++        m_idleSelectionValid = false;
+         const auto setV0 = [&](int32_t value)
+         {
+             cpu.gpr[2] = static_cast<uint32_t>(value);
+@@ -352,6 +354,7 @@ namespace ps2x::iop::detail
+ 
+     bool IopKernel::dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu)
+     {
++        m_idleSelectionValid = false;
+         const auto setV0 = [&](int32_t value)
+         {
+             cpu.gpr[2] = static_cast<uint32_t>(value);
+@@ -504,6 +507,7 @@ namespace ps2x::iop::detail
+ 
+     int IopKernel::createInternalEventFlag(uint32_t attr, uint32_t option, uint32_t bits)
+     {
++        m_idleSelectionValid = false;
+         EventFlag event;
+         event.id = static_cast<int>(m_nextEventFlagId++);
+         event.attr = attr;
+@@ -516,6 +520,7 @@ namespace ps2x::iop::detail
+ 
+     bool IopKernel::setInternalEventFlag(int id, uint32_t bits)
+     {
++        m_idleSelectionValid = false;
+         const auto event = m_eventFlags.find(id);
+         if (event == m_eventFlags.end())
+             return false;
+@@ -526,6 +531,7 @@ namespace ps2x::iop::detail
+ 
+     bool IopKernel::dispatchEventImport(uint16_t ordinal, IopCpuState &cpu)
+     {
++        m_idleSelectionValid = false;
+         const auto setV0 = [&](int32_t value)
+         {
+             cpu.gpr[2] = static_cast<uint32_t>(value);
+@@ -654,6 +660,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::sleepCurrent(IopCpuState &cpu)
+     {
++        m_idleSelectionValid = false;
+         if (m_currentThread == nullptr)
+             return;
+         m_currentThread->state = IopThreadState::Sleep;
+@@ -662,6 +669,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu)
+     {
++        m_idleSelectionValid = false;
+         if (m_currentThread == nullptr)
+             return;
+         m_currentThread->wakeCycle = wakeCycle;
+@@ -671,21 +679,28 @@ namespace ps2x::iop::detail
+ 
+     IopThread *IopKernel::beginNextReady(uint64_t currentCycle)
+     {
+-        for (auto &[id, thread] : m_threads)
+-        {
+-            if (thread.state == IopThreadState::Delay && thread.wakeCycle <= currentCycle)
+-                thread.state = IopThreadState::Ready;
+-        }
++        if (m_idleSelectionValid && currentCycle < m_idleNextWakeCycle)
++            return nullptr;
+ 
+         IopThread *next = nullptr;
++        uint64_t nextWake = UINT64_MAX;
+         for (auto &[id, thread] : m_threads)
+         {
++            if (thread.state == IopThreadState::Delay)
++            {
++                if (thread.wakeCycle <= currentCycle)
++                    thread.state = IopThreadState::Ready;
++                else
++                    nextWake = std::min(nextWake, thread.wakeCycle);
++            }
+             if (thread.state != IopThreadState::Ready)
+                 continue;
+             if (next == nullptr || thread.priority < next->priority ||
+                 (thread.priority == next->priority && thread.id < next->id))
+                 next = &thread;
+         }
++        m_idleSelectionValid = next == nullptr;
++        m_idleNextWakeCycle = nextWake;
+         if (next == nullptr)
+             return nullptr;
+ 
+@@ -698,6 +713,8 @@ namespace ps2x::iop::detail
+ 
+     uint64_t IopKernel::nextWakeCycle(uint64_t fallback) const
+     {
++        if (m_idleSelectionValid)
++            return std::min(fallback, m_idleNextWakeCycle);
+         uint64_t nextWake = fallback;
+         for (const auto &[id, thread] : m_threads)
+         {
+@@ -709,6 +726,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::endTimeslice(IopThread &thread, uint32_t returnSentinel)
+     {
++        m_idleSelectionValid = false;
+         if (thread.cpu.pc == returnSentinel || thread.cpu.stopped)
+             thread.state = IopThreadState::Dormant;
+         else if (thread.state == IopThreadState::Running)
+@@ -719,6 +737,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::cleanupDeadThreads()
+     {
++        m_idleSelectionValid = false;
+         for (auto thread = m_threads.begin(); thread != m_threads.end();)
+         {
+             if (thread->second.state != IopThreadState::Dead)
+@@ -734,6 +753,7 @@ namespace ps2x::iop::detail
+ 
+     void IopKernel::terminateThreadsInRange(uint32_t base, uint32_t size)
+     {
++        m_idleSelectionValid = false;
+         for (auto &[id, thread] : m_threads)
+         {
+             const uint32_t pc = IopMemory::physicalAddress(thread.cpu.pc);
+diff --git a/ps2xIOP/src/emulator/core/iop_kernel.h b/ps2xIOP/src/emulator/core/iop_kernel.h
+index 4977102..6eb5a1d 100644
+--- a/ps2xIOP/src/emulator/core/iop_kernel.h
++++ b/ps2xIOP/src/emulator/core/iop_kernel.h
+@@ -99,5 +99,10 @@ namespace ps2x::iop::detail
+         uint32_t m_nextSemaphoreId = 1;
+         uint32_t m_nextEventFlagId = 1;
+         IopThread *m_currentThread = nullptr;
++        // An idle scan proves no Ready thread exists until the earliest Delay
++        // matures. Every kernel operation that can alter scheduling invalidates
++        // this result before touching thread state.
++        bool m_idleSelectionValid = false;
++        uint64_t m_idleNextWakeCycle = UINT64_MAX;
+     };
+ }
+-- 
+2.55.0.windows.3
+

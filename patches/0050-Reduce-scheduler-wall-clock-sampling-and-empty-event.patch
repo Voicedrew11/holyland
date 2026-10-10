@@ -1,0 +1,167 @@
+From 81177d4074774c6d06dde6e435154a59c0643f9b Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 04:56:37 -0400
+Subject: [PATCH 50/52] Reduce scheduler wall-clock sampling and empty event
+ allocations
+
+---
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 80 +++++++++++++++++-----
+ 1 file changed, 62 insertions(+), 18 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index be6db43..43ef8c5 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -20,6 +20,11 @@
+ 
+ namespace
+ {
++    // The executor already sampled time before its pre-entry checkpoint.
++    // Reuse only that same executor's observation; active guest checkpoints
++    // and timer MMIO still sample actual current wall time.
++    thread_local const EeScheduler *wallClockSampleOwner = nullptr;
++    thread_local std::chrono::steady_clock::time_point wallClockSample{};
+     constexpr int KE_OK = 0;
+     constexpr int KE_ERROR = -1;
+     constexpr int KE_ILLEGAL_PRIORITY = -403;
+@@ -187,6 +192,8 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_threads.emplace(main.id, std::move(main));
+     m_readyQueues[0].push_back(kMainThreadId);
+     const auto hostEpoch = std::chrono::steady_clock::now();
++    wallClockSampleOwner = this;
++    wallClockSample = hostEpoch;
+     m_hostClockEpoch = hostEpoch;
+     m_nextWallClockCheck = hostEpoch;
+     m_guestEntryTime = hostEpoch;
+@@ -456,24 +463,36 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+         }
+     }
+ 
+-    const auto wallNow = std::chrono::steady_clock::now();
+-    if (wallNow >= m_nextWallClockCheck &&
+-        !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads))
+-    {
+-        m_nextWallClockCheck = wallNow + std::chrono::microseconds(64);
+-        if (wallClockTarget(wallNow) > m_eeCycle)
+-        {
+-            m_checkpointPending.store(true, std::memory_order_release);
+-            return true;
+-        }
+-    }
++    const auto wallNow = !m_guestExecuting.load(std::memory_order_acquire) && wallClockSampleOwner == this
++        ? wallClockSample : std::chrono::steady_clock::now();
+     const auto nextHost = m_nextHostDeadlineTicks.load(std::memory_order_acquire);
+     if (nextHost != std::numeric_limits<int64_t>::max() &&
+-        std::chrono::steady_clock::now().time_since_epoch().count() >= nextHost)
++        wallNow.time_since_epoch().count() >= nextHost)
+     {
+         std::lock_guard lock(m_eventMutex);
+         updateNextDeadline();
+     }
++    if (wallNow >= m_nextWallClockCheck &&
++        !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads))
++    {
++        uint64_t target = wallClockTarget(wallNow);
++        const uint64_t eventBoundary = m_nextEligibleDeadlineCycle.load(std::memory_order_acquire);
++        if (eventBoundary != 0u)
++            target = std::min(target, std::max(m_eeCycle, eventBoundary));
++        if (target > m_eeCycle)
++        {
++            // Reconciling clock time alone does not require a dispatcher
++            // transfer when no timer or physical event boundary is reached.
++            const uint64_t timerBoundary = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
++            const uint32_t step = static_cast<uint32_t>(std::min({target - m_eeCycle,
++                timerBoundary, static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())}));
++            accountCycles(step);
++            if (m_pendingEeTimerInterrupts != 0u || m_eeCycle < target)
++                return true;
++        }
++        if (wallClockTarget(wallNow) <= m_eeCycle)
++            m_nextWallClockCheck = wallNow + std::chrono::microseconds(64);
++    }
+     const uint64_t nextEventCycle = m_nextEligibleDeadlineCycle.load(std::memory_order_acquire);
+     if (m_wallDueField.load(std::memory_order_acquire) ||
+         (nextEventCycle != 0u && m_eeCycle >= nextEventCycle))
+@@ -1898,12 +1917,14 @@ void EeScheduler::processPendingEvents()
+             dispatchIrq(false, 9u + timer);
+         }
+     }
+-    std::deque<EeEvent> pending;
++    std::vector<EeEvent> pending;
+     {
+         std::lock_guard lock(m_eventMutex);
+-        pending.swap(m_events);
++        pending.assign(std::make_move_iterator(m_events.begin()),
++                       std::make_move_iterator(m_events.end()));
++        m_events.clear();
+     }
+-    std::deque<EeEvent> held;
++    std::vector<EeEvent> held;
+     for (const EeEvent &event : pending)
+     {
+         if (event.type == EeEventType::VBlankStart && vblankStartHeld())
+@@ -1927,11 +1948,24 @@ void EeScheduler::processPendingEvents()
+         m_checkpointPending.store(pendingWork, std::memory_order_release);
+     }
+     applyPendingPreemption();
++    // Idle pacing and IOP accounting may consume host time in this pass.
++    // Refresh only after all of it, before a pre-entry checkpoint reuses time.
++    wallClockSampleOwner = this;
++    wallClockSample = std::chrono::steady_clock::now();
+ }
+ 
+ void EeScheduler::processDueDeadlines()
+ {
+     const auto creditNow = std::chrono::steady_clock::now();
++    wallClockSampleOwner = this;
++    wallClockSample = creditNow;
++    expireVBlankHandoffs();
++    const auto nextHost = m_nextHostDeadlineTicks.load(std::memory_order_acquire);
++    const bool elapsedQuantum = creditNow >= m_nextWallClockCheck;
++    if (!elapsedQuantum && m_nextEligibleDeadlineCycle.load(std::memory_order_acquire) == 0u &&
++        (nextHost == std::numeric_limits<int64_t>::max() ||
++         creditNow.time_since_epoch().count() < nextHost))
++        return;
+     for (;;)
+     {
+         expireVBlankHandoffs();
+@@ -1943,7 +1977,14 @@ void EeScheduler::processDueDeadlines()
+             // The hardware clock has a reset-anchored wall-time floor. Native
+             // SDK work advances that floor independently of field publication;
+             // already accounted guest cycles are never added a second time.
+-            uint64_t creditTarget = wallClockTarget(creditNow);
++            // Outside the quantum, reconcile only for a wall-due event
++            // whose original cycle boundary has not yet been reached.
++            bool physicalBoundaryNeedsCredit = false;
++            for (const ScheduledEvent &item : m_deadlines)
++                physicalBoundaryNeedsCredit |= item.hostDeadline <= now && item.deadlineCycle > m_eeCycle &&
++                    !(item.event.type == EeEventType::VBlankStart && vblankStartHeld());
++            uint64_t creditTarget = elapsedQuantum || physicalBoundaryNeedsCredit
++                ? wallClockTarget(creditNow) : m_eeCycle;
+             for (const ScheduledEvent &item : m_deadlines)
+             {
+                 if (item.hostDeadline <= now &&
+@@ -1963,7 +2004,8 @@ void EeScheduler::processDueDeadlines()
+                     return;
+                 continue;
+             }
+-            m_nextWallClockCheck = now + std::chrono::microseconds(64);
++            if (wallClockTarget(creditNow) <= m_eeCycle)
++                m_nextWallClockCheck = now + std::chrono::microseconds(64);
+             for (const ScheduledEvent &item : m_deadlines)
+             {
+                 if (item.event.type == EeEventType::VBlankStart && vblankStartHeld())
+@@ -2307,7 +2349,9 @@ void EeScheduler::retireVBlankHandoff(int threadId)
+ 
+ void EeScheduler::expireVBlankHandoffs()
+ {
+-    if (!m_vblankHandoffs.empty() && std::chrono::steady_clock::now() >= m_vblankHandoffExpiry)
++    const auto now = !m_guestExecuting.load(std::memory_order_acquire) && wallClockSampleOwner == this
++        ? wallClockSample : std::chrono::steady_clock::now();
++    if (!m_vblankHandoffs.empty() && now >= m_vblankHandoffExpiry)
+     {
+         // Physical priority scheduling permits a starved waiter to miss later
+         // fields. Never let its hold indefinitely stop the display clock or
+-- 
+2.55.0.windows.3
+

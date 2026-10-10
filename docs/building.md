@@ -1,8 +1,12 @@
 # Building and running (Linux)
 
-For native Windows, use [`windows.md`](windows.md). The new input/audio
-series was verified on Windows; the Linux workflow below has not been
-retested with these additions.
+For native Windows, use [`windows.md`](windows.md). A native Ubuntu/WSL2 runner
+and focused runtime/VU tests now build successfully, and the CPU renderer has
+completed gameplay. WSL's Dozen Vulkan driver failed before gameplay; native
+Linux GPU performance remains unverified. See [current Linux results and the
+comparison with owner PR #11](fixed-frame-performance.md#ubuntu-and-the-owners-merged-work).
+The validation reused privately generated EE sources; it was not a fresh
+end-to-end extraction/recompilation run of every script below.
 
 You need a legally owned disc image of the US release (`SLUS-20318`) and the
 tools below. You do **not** need Ghidra: the function map is committed in
@@ -43,6 +47,13 @@ outside this repo.
 ./scripts/04-run.sh
 ```
 
+Both `03-build-runner.sh` and `maintainer/dev-build.sh` check generated sources
+before changing a build or staging files. They reject the old SQRT/RSQRT
+translation that caused a local cave-door floor regression. If rejected,
+rebuild the patched tools and regenerate the complete output. Updating the
+runtime alone cannot repair stale generated game C++. This is a targeted
+guard, not a proof of complete or correct generation.
+
 ## What each step does
 
 - **Build tools**: requires a checkout at the pinned commit and applies the
@@ -66,6 +77,24 @@ outside this repo.
 - **Run**: the runner takes the ELF as `argv[1]` and reads the unpacked disc
   files from its working directory, so the script runs from the game dir.
   Memory cards (`mc0/`, `mc1/`) are created there too.
+
+The runner and maintainer build scripts enable the optional bounded native
+VU1 catalog from your own ELF using `kfiv/vu1-native.json`. Generated C++ and
+provenance stay in the build tree, outside generated EE unity batches.
+Set `KFIV_VU_NATIVE=0` to use the interpreter throughout. Switching this
+setting reconfigures the incremental build and clears both native input
+cache values. Python 3.8+ is required when native VU1 compilation is enabled.
+The canonical VU sources use strict floating point flags; the native backend
+has been compiled and differentially tested on both Windows and Ubuntu.
+The available WSL CPU-renderer fallback did not reach the fixed-frame target;
+that result does not establish performance on a native Linux Vulkan driver.
+
+The upstream census (`PS2X_VU1_CENSUS`) and static lift (`PS2X_VU1_LIFT`)
+remain optional. The static lift is experimental and disabled by default;
+its timing, callback and admission behavior is outside the bounded native
+catalog's exact verification. Keep `PS2X_VU1_LIFT=0` when using or validating
+the accepted native catalog. Maintainer builds still synchronize optional
+`<game-dir>/vu1lift/*.cpp` sources for that separate experiment.
 
 ## Controls
 

@@ -3,7 +3,8 @@
 A native PC port of **King's Field: The Ancient City** (FromSoftware, USA
 `SLUS-20318`) built with [PS2Recomp](https://github.com/ran-j/PS2Recomp).
 The recompiler translates the game's MIPS R5900 executable into C++ compiled
-for the host CPU. The supporting runtime still interprets IOP and VU1 code.
+for the host CPU. The supporting runtime interprets IOP code and executes VU1
+through an interpreter or an optional bounded native catalog built from your ELF.
 An optional Vulkan GS backend renders on the GPU; the software GS remains
 available as a reference and compatibility fallback.
 
@@ -34,7 +35,16 @@ code or disc assets. The build checks the boot ELF's hash.
   opening through the game's original Start input.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
-- Broader rendering accuracy remains unverified and performance is below full speed.
+- Gameplay timing is independent of host presentation. Interlaced NTSC uses
+  roughly 59.94 fields and 29.97 ordinary gameplay updates per second.
+  An opt-in fixed-frame mode separates game updates from graphics. The corrected
+  build measured 29.997 game updates/s and roughly 75–90 graphics frames/s
+  in the opening area on native Windows, and passed the cave-door route. It uses
+  isolated, conservative geometry interpolation; combat and physics remain
+  on the original update loop. See [fixed-frame performance](docs/fixed-frame-performance.md)
+  for launchers, timing, visual latency and Linux limits, and
+  [optional MSVC PGO](docs/windows-pgo.md).
+- Broader rendering accuracy remains unverified.
   Vulkan field presentation uses GPU bob to avoid temporal text combing.
   Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
@@ -65,9 +75,10 @@ The existing Linux workflow remains available:
 ```
 
 Read [the Linux build guide](docs/building.md) first. Generated files default
-to `~/.local/share/kfiv-pc`, outside this repository. The new runtime and
-generator changes were validated on native Windows; their Linux build has
-not yet been retested.
+to `~/.local/share/kfiv-pc`, outside this repository. The complete runner now
+builds and the focused runtime/VU tests pass on Ubuntu under WSL2. WSL's
+Dozen Vulkan driver failed before gameplay; see the separate
+[Linux execution results](docs/fixed-frame-performance.md#ubuntu-and-the-owners-merged-work).
 
 The tools build applies generator-affecting patches **before** generation.
 Rebuild the recompiler and regenerate the complete output after updating
@@ -76,10 +87,13 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 39 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twenty-five additions cover Windows input, audio, movie,
-gameplay rendering, EE conversion/square-root translation and complete DMA chains,
-with opt-in diagnostics.
+of 60 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
+are retained, including the owner's merged VU census/static-lift work.
+The performance additions address GPU/SPU/VU overhead, hardware time,
+cooperative VIF service, bounded native VU compilation and optional fixed
+game updates with independent interpolated rendering. Follow-up fixes stabilize
+stationary interlaced menus and honor IOP sound-transfer waits. Diagnostics and the
+separate experimental static-lift path remain off by default.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

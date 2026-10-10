@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import shutil
+import runpy
 from pathlib import Path
 
 
@@ -37,6 +38,10 @@ def stage(game, checkout):
     sources = sorted(output.glob('*.cpp'))
     if not headers or not sources or not (output / 'register_functions.cpp').is_file():
         raise ValueError('Generate the complete game output with the patched recompiler first')
+    # Check the entire source set before copying even one file. Runtime patches
+    # cannot repair stale game C++ produced before a translator fix.
+    checker = Path(__file__).resolve().parents[1] / 'check-generated-sources.py'
+    runpy.run_path(str(checker))['validate'](output)
     destinations = [(headers, checkout / 'ps2xRuntime/include'),
                     (sources, checkout / 'ps2xRuntime/src/runner')]
     copied = 0

@@ -1,0 +1,396 @@
+From 99d32fdfd2afc0637806647da279e6737b520c82 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 08:10:08 -0400
+Subject: [PATCH 53/56] Separate physical GS field phase from deferred guest
+ interrupt delivery
+
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |   1 +
+ .../include/runtime/vblank_field_pacer.h      |  32 ++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 160 +++++++++++++-----
+ ps2xRuntime/src/lib/ps2_memory.cpp            |  12 ++
+ 4 files changed, 164 insertions(+), 41 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 0d1c4ea..791a114 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -399,6 +399,7 @@ private:
+     void scheduleEvent(uint64_t deadlineCycle, std::chrono::steady_clock::time_point hostDeadline, EeEvent event);
+     void updateNextDeadline();
+     [[nodiscard]] uint64_t wallClockTarget(std::chrono::steady_clock::time_point now) const noexcept;
++    void synchronizePhysicalClock() noexcept;
+     void synchronizeTimerClock() noexcept;
+     [[nodiscard]] bool vblankStartHeld() const noexcept;
+     void addVBlankHandoff(const GuestThread &thread);
+diff --git a/ps2xRuntime/include/runtime/vblank_field_pacer.h b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+index 72b6f85..c6f8b3b 100644
+--- a/ps2xRuntime/include/runtime/vblank_field_pacer.h
++++ b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+@@ -3,6 +3,7 @@
+ #include <array>
+ #include <cassert>
+ #include <chrono>
++#include <cstdint>
+ 
+ // Host pacing only. It neither advances guest cycles nor invents missed fields.
+ class VBlankFieldPacer
+@@ -34,6 +35,37 @@ public:
+ 
+     TimePoint firstStart() const { return m_epoch + m_period; }
+ 
++    // This alternative clock records nominal physical boundaries. A late
++    // observation samples one latest slot; it never emits a backlog of slots.
++    TimePoint physicalBoundary() const
++    {
++        TimePoint latest = m_epoch;
++        for (unsigned parity = 0; parity < 2u; ++parity)
++            if (m_hasLastStart[parity] && m_lastStart[parity] > latest)
++                latest = m_lastStart[parity];
++        return latest;
++    }
++
++    TimePoint nextPhysicalBoundary() const { return physicalBoundary() + m_period; }
++    TimePoint physicalBlankEnd() const { return physicalBoundary() + m_blankDuration; }
++
++    uint64_t advancePhysicalPhase(TimePoint now, uint64_t currentSlot)
++    {
++        const TimePoint anchor = physicalBoundary();
++        if (now <= anchor)
++            return currentSlot;
++        const auto skipped = (now - anchor) / m_period;
++        if (skipped <= 0)
++            return currentSlot;
++        const uint64_t slots = static_cast<uint64_t>(skipped);
++        const TimePoint latest = anchor + m_period * skipped;
++        const uint64_t nextSlot = currentSlot + slots;
++        recordStart(latest, static_cast<unsigned>(nextSlot & 1u));
++        if (slots > 1u)
++            recordStart(latest - m_period, static_cast<unsigned>((nextSlot - 1u) & 1u));
++        return nextSlot;
++    }
++
+     void recordStart(TimePoint emittedStart, unsigned parity)
+     {
+         assert(parity < 2u && emittedStart >= m_epoch);
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index cd56bec..63f59c4 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -74,6 +74,9 @@ namespace
+         return false;
+     }
+ 
++    // Scheduled physical Starts carry a registration edge in their low bits.
++    // Explicit posted Starts retain their existing fixture/API semantics.
++    constexpr uint64_t kPhysicalFieldEvent = 0x8000000000000000ull;
+     constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
+     constexpr auto kInterlacedNtscPeriod = std::chrono::nanoseconds(16683333);
+     constexpr auto kVBlankDuration = std::chrono::microseconds(500);
+@@ -208,9 +211,12 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_timerClockSynchronizing = false;
+     m_runtime.memory().setTimerClockCallback([this] { synchronizeTimerClock(); });
+     m_fieldPacer.reset(hostEpoch, kVBlankPeriod, kVBlankDuration);
+-    scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
++    scheduleEvent(wallClockTarget(m_fieldPacer.firstStart()),
+                   m_fieldPacer.firstStart(),
+-                  EeEvent{EeEventType::VBlankStart, 0, 0});
++                  EeEvent{EeEventType::VBlankStart, 0, kPhysicalFieldEvent});
++    scheduleEvent(wallClockTarget(m_fieldPacer.firstStart() + kVBlankDuration),
++                  m_fieldPacer.firstStart() + kVBlankDuration,
++                  EeEvent{EeEventType::VBlankEnd, 0, 1u});
+     publishSnapshot();
+ }
+ 
+@@ -1462,26 +1468,29 @@ void EeScheduler::setGsVideoMode(uint32_t interlaced, uint32_t videoMode)
+     const auto oldPeriod = m_fieldPacer.period();
+     if (period == oldPeriod)
+         return;
+-    const uint64_t oldCycles = fieldPeriodCycles(oldPeriod);
+-    const uint64_t newCycles = fieldPeriodCycles(period);
++    // Reconcile the old mode before changing the future phase segment.
++    synchronizePhysicalClock();
+     m_fieldPacer.setPeriod(period);
+     {
+         std::lock_guard lock(m_eventMutex);
++        const auto now = std::chrono::steady_clock::now();
+         for (ScheduledEvent &item : m_deadlines)
+         {
+-            if (item.event.type != EeEventType::VBlankStart)
++            if (item.hostDeadline <= now)
+                 continue;
+-            // Only the upcoming field changes mode. Prior Ends, alarm/IRQ
+-            // deadlines and emitted guest ticks remain on their original path.
+-            assert(item.deadlineCycle >= oldCycles);
+-            item.deadlineCycle = item.deadlineCycle - oldCycles + newCycles;
+-            item.hostDeadline = m_vsyncTick == 0u ? m_fieldPacer.firstStart()
+-                : m_fieldPacer.nextStartAfter(
+-                    m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)),
+-                    static_cast<unsigned>((m_vsyncTick + 1u) & 1u));
++            // A pending edge keeps its original cause time. Only a future
++            // edge is retimed; previously queued Ends and alarms stay intact.
++            if (item.event.type == EeEventType::VBlankStart)
++                item.hostDeadline = m_fieldPacer.nextPhysicalBoundary();
++            else if (item.event.type == EeEventType::VBlankEnd &&
++                     item.event.value > m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire))
++                item.hostDeadline = m_fieldPacer.nextPhysicalBoundary() + kVBlankDuration;
++            else
++                continue;
++            item.deadlineCycle = wallClockTarget(item.hostDeadline);
+         }
+         if (!m_vblankHandoffs.empty())
+-            m_vblankHandoffExpiry = m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)) + period * 2;
++            m_vblankHandoffExpiry += (period - oldPeriod) * 2;
+         updateNextDeadline();
+     }
+     m_checkpointPending.store(true, std::memory_order_release);
+@@ -1491,6 +1500,14 @@ void EeScheduler::setGsVideoMode(uint32_t interlaced, uint32_t videoMode)
+ void EeScheduler::setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress)
+ {
+     assertExecutor();
++    synchronizePhysicalClock();
++    const uint64_t registrationSlot = m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire);
++    {
++        std::lock_guard lock(m_eventMutex);
++        for (ScheduledEvent &item : m_deadlines)
++            if (item.event.type == EeEventType::VBlankStart && (item.event.value & kPhysicalFieldEvent) != 0u)
++                item.event.value = kPhysicalFieldEvent | registrationSlot;
++    }
+     m_vsyncFlagAddress = flagAddress;
+     m_vsyncTickAddress = tickAddress;
+     writeGuestU32(flagAddress, 0u);
+@@ -1523,6 +1540,11 @@ uint32_t EeScheduler::setGsVSyncCallback(uint32_t callback, uint32_t gp, uint32_
+ 
+ [[noreturn]] void EeScheduler::waitVSync(uint64_t afterTick, int fixedResult, std::function<void(R5900Context &)> completion)
+ {
++    // A notification held from an old edge cannot satisfy a newly registered
++    // physical wait, even when MMIO already observed several newer slots.
++    synchronizePhysicalClock();
++    afterTick = std::max(afterTick,
++        m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire));
+     blockCurrent(EeWaitState{
+         EeWaitReason::VSync,
+         EeVSyncWait{afterTick, fixedResult},
+@@ -2000,6 +2022,7 @@ void EeScheduler::processPendingEvents()
+ 
+ void EeScheduler::processDueDeadlines()
+ {
++    synchronizePhysicalClock();
+     const auto creditNow = std::chrono::steady_clock::now();
+     wallClockSampleOwner = this;
+     wallClockSample = creditNow;
+@@ -2137,18 +2160,31 @@ void EeScheduler::processDueDeadlines()
+             processEvent(scheduled.event);
+             if (scheduled.event.type == EeEventType::VBlankStart)
+             {
+-                // Continuous bounded host recovery, with waiter handoff before another Start.
+-                // Each parity remains at least two periods apart, and the next
+-                // Start cannot overtake this field's End. Guest deadlines and
+-                // their timer/IOP accounting still advance by exact offsets.
+-                const unsigned parity = static_cast<unsigned>(m_vsyncTick & 1u);
+-                const auto hostFieldStart = m_fieldPacer.lastStart(parity);
+-                scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
+-                              hostFieldStart + kVBlankDuration,
+-                              EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick});
+-                scheduleEvent(scheduled.deadlineCycle + fieldPeriodCycles(m_fieldPacer.period()),
+-                              m_fieldPacer.nextStartAfter(hostFieldStart, parity ^ 1u),
+-                              EeEvent{EeEventType::VBlankStart, 0, 0});
++                // Keep one pending edge of each kind. Slot reconciliation may
++                // jump over late physical fields, but it never accounts cycles
++                // or queues a callback for every missed field. Ends are tied to
++                // the physical boundary, not the software notification time.
++                const auto nextBoundary = m_fieldPacer.nextPhysicalBoundary();
++                scheduleEvent(wallClockTarget(nextBoundary), nextBoundary,
++                              EeEvent{EeEventType::VBlankStart, 0,
++                                  kPhysicalFieldEvent | (scheduled.event.value & ~kPhysicalFieldEvent)});
++            }
++            else if (scheduled.event.type == EeEventType::VBlankEnd)
++            {
++                // End recurs independently while Start delivery is held.
++                // Coalesce missed causes once and keep only the next future
++                // physical End, never a new blank beginning at late delivery.
++                synchronizePhysicalClock();
++                const auto now = std::chrono::steady_clock::now();
++                auto nextEnd = m_fieldPacer.physicalBlankEnd();
++                uint64_t slot = m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire);
++                if (nextEnd <= now)
++                {
++                    nextEnd += m_fieldPacer.period();
++                    ++slot;
++                }
++                scheduleEvent(wallClockTarget(nextEnd), nextEnd,
++                              EeEvent{EeEventType::VBlankEnd, 0, slot});
+             }
+         }
+     }
+@@ -2162,22 +2198,31 @@ void EeScheduler::processEvent(const EeEvent &event)
+         requestStop();
+         break;
+     case EeEventType::VBlankStart:
+-        ++m_vsyncTick;
+-        m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+-        // Timestamp after publishing the actual field. The next same-parity
+-        // deadline is therefore no earlier than this emission plus two fields.
+-        m_fieldPacer.recordStart(std::chrono::steady_clock::now(),
+-                                static_cast<unsigned>(m_vsyncTick & 1u));
+-        if ((m_vsyncTick & 1u) != 0u)
++    {
++        const bool physical = (event.value & kPhysicalFieldEvent) != 0u;
++        if (physical)
+         {
+-            m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
++            synchronizePhysicalClock();
++            const uint64_t sampledSlot = m_runtime.memory().gs().vsyncTick.load(std::memory_order_acquire);
++            if (sampledSlot <= m_vsyncTick)
++                break;
++            m_vsyncTick = sampledSlot;
+         }
+         else
+         {
+-            m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
++            ++m_vsyncTick;
++            m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
++            m_fieldPacer.recordStart(std::chrono::steady_clock::now(),
++                                    static_cast<unsigned>(m_vsyncTick & 1u));
++            if ((m_vsyncTick & 1u) != 0u)
++                m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
++            else
++                m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
+         }
+-        writeGuestU32(m_vsyncFlagAddress, 1u);
+-        if (m_vsyncTickAddress != 0u)
++        const bool completeFlag = !physical || m_vsyncTick > (event.value & ~kPhysicalFieldEvent);
++        if (completeFlag)
++            writeGuestU32(m_vsyncFlagAddress, 1u);
++        if (completeFlag && m_vsyncTickAddress != 0u)
+         {
+             const uint32_t physical = m_vsyncTickAddress & 0x1FFFFFFFu;
+             if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
+@@ -2186,8 +2231,11 @@ void EeScheduler::processEvent(const EeEvent &event)
+                 std::memcpy(m_rdram + physical, &sampledCsr, sizeof(sampledCsr));
+             }
+         }
+-        m_vsyncFlagAddress = 0u;
+-        m_vsyncTickAddress = 0u;
++        if (completeFlag)
++        {
++            m_vsyncFlagAddress = 0u;
++            m_vsyncTickAddress = 0u;
++        }
+         completeVSync(m_vsyncTick);
+         if (m_gsVSyncCallback != 0u && m_runtime.hasFunction(m_gsVSyncCallback))
+         {
+@@ -2202,6 +2250,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+         }
+         dispatchIrq(false, 2u);
+         break;
++    }
+     case EeEventType::ExternalWake:
+         completeExternalWait(event.id, event.value, KE_OK);
+         break;
+@@ -2452,13 +2501,42 @@ uint64_t EeScheduler::wallClockTarget(std::chrono::steady_clock::time_point now)
+         ((ns % 1000000000ull) * kEeClockHz) / 1000000000ull;
+ }
+ 
++void EeScheduler::synchronizePhysicalClock() noexcept
++{
++    if (std::this_thread::get_id() != m_executorThread)
++        return;
++    const auto now = std::chrono::steady_clock::now();
++    auto &gs = m_runtime.memory().gs();
++    const uint64_t oldSlot = gs.vsyncTick.load(std::memory_order_acquire);
++    const uint64_t physicalSlot = m_fieldPacer.advancePhysicalPhase(now, oldSlot);
++    if (physicalSlot != oldSlot)
++    {
++        gs.vsyncTick.store(physicalSlot, std::memory_order_release);
++        if ((physicalSlot & 1u) != 0u)
++            gs.csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
++        else
++            gs.csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
++    }
++
++    // Sampling only publishes physical phase. Independent recurring Start/End
++    // deadlines latch their old cause once at the outer dispatch safepoint.
++    // This MMIO hook neither allocates events nor enters guest callbacks.
++}
++
+ void EeScheduler::synchronizeTimerClock() noexcept
+ {
+-    if (m_timerClockSynchronizing || std::this_thread::get_id() != m_executorThread ||
+-        !m_guestExecuting.load(std::memory_order_acquire))
++    if (m_timerClockSynchronizing || std::this_thread::get_id() != m_executorThread)
+         return;
+     m_timerClockSynchronizing = true;
+     const auto now = std::chrono::steady_clock::now();
++    synchronizePhysicalClock();
++    // Hardware phase can be observed inside indivisible native work. This
++    // hook only samples phase/latches clocks; it never dispatches guest code.
++    if (!m_guestExecuting.load(std::memory_order_acquire))
++    {
++        m_timerClockSynchronizing = false;
++        return;
++    }
+     const uint64_t ns = static_cast<uint64_t>(std::max<int64_t>(0,
+         std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_guestEntryTime).count()));
+     const uint64_t elapsed = (ns / 1000000000ull) * kEeClockHz +
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 4b457bf..c5cb77a 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -749,6 +749,8 @@ uint32_t PS2Memory::read32(uint32_t address)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             uint64_t val = gs_regs.csr.load();
+             return (uint32_t)(val >> (off * 8));
+         }
+@@ -796,6 +798,8 @@ uint64_t PS2Memory::read64(uint32_t address)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             return gs_regs.csr.load();
+         }
+         uint64_t *reg = gsRegPtr(gs_regs, address);
+@@ -958,6 +962,8 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             // CSR: bits 0..1 of the low dword are write-one-to-clear status bits.
+             // Done as a single atomic RMW -- see writeCsrHalf's comment.
+             writeCsrHalf(gs_regs.csr, off, value);
+@@ -1017,6 +1023,8 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             // CSR: bits 0..1 are write-one-to-clear status bits. Done as a single
+             // atomic RMW -- see writeCsrFull's comment.
+             writeCsrFull(gs_regs.csr, value);
+@@ -1171,6 +1179,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             writeCsrHalf(gs_regs.csr, off, value);
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+@@ -2524,6 +2534,8 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
++            if (m_timerClockCallback)
++                m_timerClockCallback();
+             return static_cast<uint32_t>((gs_regs.csr.load() >> (off * 8u)) & 0xFFFFFFFFull);
+         }
+         if (uint64_t *reg = gsRegPtr(gs_regs, address))
+-- 
+2.55.0.windows.3
+

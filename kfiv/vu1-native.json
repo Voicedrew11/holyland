@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "unit": "VU1",
+  "initialization": "zero",
+  "elf_sha256": "3f826468322ada9fda0db8529213e97801a1c71b4e801078bdb7a0b58dab7c18",
+  "code_size": 16384,
+  "expected_image_sha256": "ec658c1b7ebcc4f41471968c77498713341c1d60a7511ce8521e01362be8c097",
+  "uploads": [
+    {"header_offset": "0x33c1fc"}, {"header_offset": "0x33ca04"},
+    {"header_offset": "0x33cb4c"}, {"header_offset": "0x33cbbc"},
+    {"header_offset": "0x33d3c4"}, {"header_offset": "0x33dbcc"},
+    {"header_offset": "0x33dd6c"}, {"header_offset": "0x33e2bc"}
+  ]
+}

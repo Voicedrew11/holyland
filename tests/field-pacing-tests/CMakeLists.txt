@@ -1,0 +1,42 @@
+cmake_minimum_required(VERSION 3.21)
+project(kfiv_field_pacing_tests LANGUAGES CXX)
+
+set(PS2RECOMP_DIR "" CACHE PATH "PS2Recomp checkout containing the bounded field-pacing patch")
+if(NOT EXISTS "${PS2RECOMP_DIR}/ps2xRuntime/include/runtime/vblank_field_pacer.h")
+    message(FATAL_ERROR "Set -DPS2RECOMP_DIR to the checkout containing runtime/vblank_field_pacer.h")
+endif()
+
+# Build scratch and compiled files must stay outside the source package.
+file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" package_source)
+file(REAL_PATH "${CMAKE_CURRENT_BINARY_DIR}" package_build)
+cmake_path(IS_PREFIX package_source "${package_build}" NORMALIZE build_inside_source)
+if(build_inside_source)
+    message(FATAL_ERROR "Use an external -B directory; source-only packages must not contain build output")
+endif()
+
+add_executable(kfiv_field_pacing_tests field_pacing_tests.cpp)
+target_compile_features(kfiv_field_pacing_tests PRIVATE cxx_std_20)
+target_include_directories(kfiv_field_pacing_tests PRIVATE "${PS2RECOMP_DIR}/ps2xRuntime/include")
+if(MSVC)
+    target_compile_options(kfiv_field_pacing_tests PRIVATE /W4 /permissive- /fp:strict)
+else()
+    target_compile_options(kfiv_field_pacing_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+enable_testing()
+add_test(NAME kfiv_field_pacing_fake_clock COMMAND kfiv_field_pacing_tests)
+add_test(NAME kfiv_field_pacing_legacy_rebase_control COMMAND kfiv_field_pacing_tests --legacy-control)
+add_test(NAME kfiv_field_pacing_previous_grid_control COMMAND kfiv_field_pacing_tests --grid-control)
+set_tests_properties(kfiv_field_pacing_fake_clock kfiv_field_pacing_legacy_rebase_control
+    kfiv_field_pacing_previous_grid_control PROPERTIES TIMEOUT 30)
+
+add_executable(kfiv_ntsc_field_pacing_tests ntsc_pacer_tests.cpp)
+target_compile_features(kfiv_ntsc_field_pacing_tests PRIVATE cxx_std_20)
+target_include_directories(kfiv_ntsc_field_pacing_tests PRIVATE "${PS2RECOMP_DIR}/ps2xRuntime/include")
+if(MSVC)
+    target_compile_options(kfiv_ntsc_field_pacing_tests PRIVATE /W4 /permissive- /fp:strict)
+else()
+    target_compile_options(kfiv_ntsc_field_pacing_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME kfiv_field_pacing_ntsc_bounds COMMAND kfiv_ntsc_field_pacing_tests)
+set_tests_properties(kfiv_field_pacing_ntsc_bounds PROPERTIES TIMEOUT 30)

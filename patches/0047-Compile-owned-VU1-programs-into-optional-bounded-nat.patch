@@ -1,0 +1,652 @@
+From 6627b174bd65d36b1f468776602bd0b2d963977a Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 02:57:38 -0400
+Subject: [PATCH 47/52] Compile owned VU1 programs into optional bounded native
+ blocks
+
+Add an opt-in build-time catalog generated from an explicitly pinned owned ELF and ordered MPG metadata. Sixteen-pair native groups specialize the existing strict VU semantics and retain interpreter fallback for other programs and unsupported execution boundaries. Bind admission to the actual decoded-cache rebuild and check tracked generations at original pair boundaries, preserving callback stalls and stale-cache behavior. Generated catalogs remain in the private build directory and inputs default to empty.
+---
+ ps2xRuntime/CMakeLists.txt              |   2 +
+ ps2xRuntime/cmake/NativeVu.cmake        |  62 +++++
+ ps2xRuntime/include/runtime/ps2_vu1.h   |  25 ++
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |  26 ++
+ ps2xRuntime/tools/generate_vu_native.py | 351 ++++++++++++++++++++++++
+ ps2xRuntime/tools/vu_native_input.py    |  95 +++++++
+ 6 files changed, 561 insertions(+)
+ create mode 100644 ps2xRuntime/cmake/NativeVu.cmake
+ create mode 100644 ps2xRuntime/tools/generate_vu_native.py
+ create mode 100644 ps2xRuntime/tools/vu_native_input.py
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 2b08d95..797d3b0 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -422,6 +422,8 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+         "-fno-fast-math" "-frounding-math" "-ffp-contract=off")
+ endif()
+ 
++include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/NativeVu.cmake")
++
+ if(PS2X_ENABLE_RUNTIME_LOGS)
+     target_compile_definitions(ps2_runtime PUBLIC
+         PS2_RUNTIME_LOGS=1
+diff --git a/ps2xRuntime/cmake/NativeVu.cmake b/ps2xRuntime/cmake/NativeVu.cmake
+new file mode 100644
+index 0000000..5ae88e2
+--- /dev/null
++++ b/ps2xRuntime/cmake/NativeVu.cmake
+@@ -0,0 +1,62 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++# Optional, private build-time VU1 catalog. No program bytes enter the source tree.
++set(PS2X_VU1_NATIVE_ELF "" CACHE FILEPATH "Owned ELF containing the VU1 MPG uploads")
++set(PS2X_VU1_NATIVE_METADATA "" CACHE FILEPATH "Pinned ordered VU1 upload metadata")
++
++if(NOT PS2X_VU1_NATIVE_ELF AND NOT PS2X_VU1_NATIVE_METADATA)
++    return()
++endif()
++if(NOT PS2X_VU1_NATIVE_ELF OR NOT PS2X_VU1_NATIVE_METADATA)
++    message(FATAL_ERROR "Native VU1 compilation requires both PS2X_VU1_NATIVE_ELF and PS2X_VU1_NATIVE_METADATA")
++endif()
++foreach(input IN ITEMS PS2X_VU1_NATIVE_ELF PS2X_VU1_NATIVE_METADATA)
++    get_filename_component(${input} "${${input}}" ABSOLUTE)
++    if(NOT EXISTS "${${input}}" OR IS_DIRECTORY "${${input}}")
++        message(FATAL_ERROR "Native VU1 input is not a file: ${input}=${${input}}")
++    endif()
++endforeach()
++
++find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
++set(_ps2x_vu_catalog_dir "${CMAKE_CURRENT_BINARY_DIR}/vu-native")
++set(_ps2x_vu_catalog "${_ps2x_vu_catalog_dir}/vu1_catalog.inc")
++set(_ps2x_vu_manifest "${_ps2x_vu_catalog_dir}/vu1_catalog.json")
++set(_ps2x_vu_generator "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_vu_native.py")
++set(_ps2x_vu_parser "${CMAKE_CURRENT_SOURCE_DIR}/tools/vu_native_input.py")
++set(_ps2x_vu_core "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_core.cpp")
++
++add_custom_command(
++    OUTPUT "${_ps2x_vu_catalog}"
++    BYPRODUCTS "${_ps2x_vu_manifest}"
++    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_ps2x_vu_catalog_dir}"
++    COMMAND "${Python3_EXECUTABLE}" "${_ps2x_vu_generator}"
++        --runtime "${CMAKE_CURRENT_SOURCE_DIR}"
++        --elf "${PS2X_VU1_NATIVE_ELF}"
++        --metadata "${PS2X_VU1_NATIVE_METADATA}"
++        --output "${_ps2x_vu_catalog}"
++        --manifest "${_ps2x_vu_manifest}"
++    DEPENDS
++        "${_ps2x_vu_generator}" "${_ps2x_vu_parser}"
++        "${PS2X_VU1_NATIVE_ELF}" "${PS2X_VU1_NATIVE_METADATA}"
++        "${CMAKE_CURRENT_SOURCE_DIR}/include/runtime/ps2_vu1.h"
++        "${_ps2x_vu_core}"
++        "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_upper.cpp"
++        "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_lower.cpp"
++        "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_detail.h"
++    COMMENT "Compiling the owned VU1 program to private native C++"
++    VERBATIM
++)
++add_custom_target(ps2_vu1_native_catalog DEPENDS "${_ps2x_vu_catalog}")
++add_dependencies(ps2_runtime ps2_vu1_native_catalog)
++set_source_files_properties("${_ps2x_vu_catalog}" PROPERTIES
++    GENERATED TRUE HEADER_FILE_ONLY TRUE)
++target_sources(ps2_runtime PRIVATE "${_ps2x_vu_catalog}")
++
++# Compile only inside the VU core so its strict floating-point flags apply.
++# The shared class definition remains identical in every translation unit.
++set_property(SOURCE "${_ps2x_vu_core}" APPEND PROPERTY COMPILE_DEFINITIONS
++    "PS2X_VU1_NATIVE_CATALOG=\"${_ps2x_vu_catalog}\"")
++set_property(SOURCE "${_ps2x_vu_core}" APPEND PROPERTY OBJECT_DEPENDS
++    "${_ps2x_vu_catalog}")
++set_source_files_properties("${_ps2x_vu_core}" PROPERTIES
++    SKIP_UNITY_BUILD_INCLUSION TRUE)
++message(STATUS "Native VU1 catalog: ${_ps2x_vu_catalog}")
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
+index fd43b8a..ed13eb5 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1.h
+@@ -200,6 +200,9 @@ private:
+     uint32_t m_cachedCodeSize = 0;
+     uint64_t m_cachedCodeGeneration = 0;
+     bool m_decodedCodeCacheValid = false;
++    // Native admission describes these cached words, including stale-cache
++    // behavior after unmarked raw writes. Revalidated only on rebuild.
++    bool m_nativeCatalogMatched = false;
+ 
+     std::array<FlagPipelineEntry, kMaxFlagEntries> m_flagPipeline{};
+     ScalarPipelineEntry m_fdiv{};
+@@ -282,6 +285,28 @@ private:
+     void queueStore(uint32_t address, const uint32_t words[4], uint8_t laneMask);
+     void startXgkick(uint32_t qwordAddress);
+ 
++
++    template<uint32_t instr> void execUpperSpecialized();
++    template<uint32_t instr, uint32_t upperInstr>
++    void execLowerSpecialized(uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory);
++    static constexpr void addVfReadSpecialized(InstructionUsage &, uint8_t, uint8_t);
++    static constexpr void addVfWriteSpecialized(InstructionUsage &, uint8_t, uint8_t);
++    static constexpr uint8_t vfReadLanesSpecialized(const InstructionUsage &, uint8_t);
++    static constexpr InstructionUsage decodeUpperUsageSpecialized(uint32_t);
++    static constexpr InstructionUsage decodeLowerUsageSpecialized(uint32_t);
++    static constexpr DecodedInstructionPair decodePairSpecialized(uint32_t lower, uint32_t upper);
++    template<uint32_t lower, uint32_t upper>
++    int issueSpecializedPair(uint8_t *vuData, uint32_t dataSize, GS &gs,
++                             PS2Memory *memory, uint32_t codeSize, uint64_t budgetEnd);
++    template<uint32_t base>
++    int trySpecializedGroup(uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData,
++                            uint32_t dataSize, GS &gs, PS2Memory *memory,
++                            uint64_t budgetEnd, uint64_t generation);
++    int trySpecializedBlock(const DecodedInstructionPair &decoded, uint8_t *vuCode,
++                            uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
++                            GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation);
++    bool matchesNativeCatalogCache() const;
++
+     void resetScheduler();
+     void commitReadyPipelines();
+     void commitDuePipelines();
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 1d6d45e..5ee9f44 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -1863,6 +1863,11 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
+     m_cachedCodeSize = codeSize;
+     m_cachedCodeGeneration = generation;
+     m_decodedCodeCacheValid = true;
++#ifdef PS2X_VU1_NATIVE_CATALOG
++    m_nativeCatalogMatched = matchesNativeCatalogCache();
++#else
++    m_nativeCatalogMatched = false;
++#endif
+ }
+ 
+ const VU1Interpreter::DecodedInstructionPair &VU1Interpreter::getDecodedInstructionPairForPc(
+@@ -2087,6 +2092,23 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+             break;
+         }
+ 
++#ifdef PS2X_VU1_NATIVE_CATALOG
++        if (m_nativeCatalogMatched && m_decodedCodeCacheValid && m_unit == Unit::VU1 &&
++            memory != nullptr && vuCode == memory->getVU1Code() &&
++            m_cachedVuCode == vuCode && m_cachedMemory == memory &&
++            m_cachedCodeSize == codeSize && (m_state.pc & 7u) == 0u)
++        {
++            // This generation belongs to the exact descriptor just decoded.
++            // A callback may mutate the code while its pair is stalled; retain
++            // that captured pair and check again only at the next boundary.
++            const int native = trySpecializedBlock(decoded, vuCode, codeSize,
++                vuData, dataSize, gs, memory, budgetEnd, m_cachedCodeGeneration);
++            if (native == 2) { programEnded = true; break; }
++            if (native == 3) break;
++            if (native == 1) continue;
++        }
++#endif
++
+         uint64_t readyCycle = calculatePairReadyCycle(decoded);
+         while (readyCycle > m_cycle)
+         {
+@@ -2219,3 +2241,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+     if (useVuRounding && previousRoundingMode != -1)
+         std::fesetround(previousRoundingMode);
+ }
++
++#ifdef PS2X_VU1_NATIVE_CATALOG
++#include PS2X_VU1_NATIVE_CATALOG
++#endif
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+new file mode 100644
+index 0000000..11fc91b
+--- /dev/null
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -0,0 +1,351 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++"""Generate a private native VU1 catalog from an explicitly owned ELF.
++
++The emitted code specializes canonical compact-descriptor runtime semantics in
++bounded 16-pair groups. The runtime retains the interpreter for other programs,
++code changes, unsupported units and execution boundaries. Owned ELF bytes and
++generated catalogs belong in private build directories, outside source trees.
++
++Python 3.8 or later is required. This tool does not invoke a system compiler or
++modify canonical runtime sources.
++"""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import re
++import os
++import tempfile
++import struct
++from vu_native_input import read_elf
++
++
++def function(text, signature):
++    if text.count(signature) != 1:
++        raise ValueError(f'Expected one canonical function anchor: {signature!r}')
++    begin = text.index(signature)
++    end = text.index('\n}\n', begin) + 3
++    return text[begin:end]
++
++
++def prefix(text, signature):
++    if text.count(signature) != 1:
++        raise ValueError(f'Expected one canonical prefix anchor: {signature!r}')
++    return text[:text.index(signature)]
++
++
++def replace_once(text, old, new):
++    if text.count(old) != 1:
++        raise ValueError(f'Expected one occurrence of {old[:100]!r}')
++    return text.replace(old, new, 1)
++
++
++DECLARATIONS = '''
++    template<uint32_t instr> void execUpperSpecialized();
++    template<uint32_t instr, uint32_t upperInstr>
++    void execLowerSpecialized(uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory);
++    static constexpr void addVfReadSpecialized(InstructionUsage &, uint8_t, uint8_t);
++    static constexpr void addVfWriteSpecialized(InstructionUsage &, uint8_t, uint8_t);
++    static constexpr uint8_t vfReadLanesSpecialized(const InstructionUsage &, uint8_t);
++    static constexpr InstructionUsage decodeUpperUsageSpecialized(uint32_t);
++    static constexpr InstructionUsage decodeLowerUsageSpecialized(uint32_t);
++    static constexpr DecodedInstructionPair decodePairSpecialized(uint32_t lower, uint32_t upper);
++    template<uint32_t lower, uint32_t upper>
++    int issueSpecializedPair(uint8_t *vuData, uint32_t dataSize, GS &gs,
++                             PS2Memory *memory, uint32_t codeSize, uint64_t budgetEnd);
++    template<uint32_t base>
++    int trySpecializedGroup(uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData,
++                            uint32_t dataSize, GS &gs, PS2Memory *memory,
++                            uint64_t budgetEnd, uint64_t generation);
++    int trySpecializedBlock(const DecodedInstructionPair &decoded, uint8_t *vuCode,
++                            uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
++                            GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation);
++    bool matchesNativeCatalogCache() const;
++'''
++
++
++def generate_catalog(runtime, code):
++    if len(code) != 16384:
++        raise ValueError('Catalog requires an exact 16 KiB VU1 image')
++    pairs = list(struct.iter_unpack('<II', code))
++    paths = ('src/lib/vu/ps2_vu1_core.cpp', 'src/lib/vu/ps2_vu1_upper.cpp',
++             'src/lib/vu/ps2_vu1_lower.cpp', 'include/runtime/ps2_vu1.h',
++             'src/lib/vu/ps2_vu1_detail.h')
++    raw = {relative: (runtime / relative).read_bytes() for relative in paths}
++    core, upper, lower, header, detail = (raw[path].decode('utf-8').replace('\r\n', '\n') for path in paths)
++    if 'DecodedIBit' not in header or 'statusAndMask' not in header or 'DecodedInstructionPair' not in header:
++        raise ValueError('Expected compact descriptor / STATUS-transform canonical runtime')
++    specialize_fmac = False
++    generation_only = True
++    parts = [prefix(upper, 'void VU1Interpreter::execUpper('),
++             prefix(lower, 'void VU1Interpreter::execLower(')]
++    # Prefixes retain the exact D lane arithmetic/normalization and EFU helpers.
++    parts.append('#include <utility>\n#include <stdexcept>\n#include <cstdio>\n')
++    parts.append('namespace { constexpr uint8_t laneForComponentSpecialized(uint32_t c) { return static_cast<uint8_t>(8u >> c); } }\n')
++    image_pairs = ','.join(f'{{0x{lo:08x}u,0x{hi:08x}u}}' for lo, hi in pairs)
++    parts.append('namespace { constexpr uint32_t nativeCatalogPairs[][2] = {' + image_pairs + '}; }\n')
++    parts.append('''\x20
++bool VU1Interpreter::matchesNativeCatalogCache() const
++{
++    if (!m_decodedCodeCacheValid || m_unit != Unit::VU1 || m_cachedMemory == nullptr ||
++        m_cachedCodeSize != sizeof(nativeCatalogPairs) || m_cachedVuCode != m_cachedMemory->getVU1Code())
++        return false;
++    for (uint32_t index = 0; index < kMaxDecodedPairs; ++index)
++        if (m_decodedCodeCache[index].lower != nativeCatalogPairs[index][0] ||
++            m_decodedCodeCache[index].upper != nativeCatalogPairs[index][1])
++            return false;
++    return true;
++}
++''')
++    upper_function = function(upper, 'void VU1Interpreter::execUpper(')
++    upper_function = replace_once(upper_function, 'void VU1Interpreter::execUpper(uint32_t instr)',
++        'template<uint32_t instr>\nvoid VU1Interpreter::execUpperSpecialized()')
++    if specialize_fmac:
++        normalize = function(core, 'void VU1Interpreter::normalizeFmacResult(')
++        normalize = replace_once(normalize, 'void VU1Interpreter::normalizeFmacResult(',
++            'template<uint32_t instr>\nvoid VU1Interpreter::normalizeFmacResultSpecialized(')
++        normalize = replace_once(normalize, '    const FmacDecode fmac = decodeFmac(m_currentUpperInstruction);',
++            '    constexpr uint32_t opcode = instr & 0x3fu;\n'
++            '    constexpr uint32_t index = opcode >= 0x3cu ? 64u + ((instr & 3u) | ((instr >> 4u) & 0x7cu)) : opcode;\n'
++            '    constexpr FmacDecode fmac = kFmacDecode[index];')
++        normalize = normalize.replace('    const bool single =', '    constexpr bool single =', 1)
++        normalize = replace_once(normalize, '    const bool productSum = isProductSum(fmac.op);',
++            '    constexpr bool productSum = fmac.op == FmacOp::MAdd || fmac.op == FmacOp::MSub || fmac.op == FmacOp::OuterMSub;')
++        parts.append(normalize)
++        for helper in ('applyFmacDest', 'applyFmacDestAcc'):
++            apply = function(core, 'void VU1Interpreter::' + helper + '(')
++            apply = replace_once(apply, 'void VU1Interpreter::' + helper + '(',
++                'template<uint32_t instr>\nvoid VU1Interpreter::' + helper + 'Specialized(')
++            apply = apply.replace('normalizeFmacResult(', 'normalizeFmacResultSpecialized<instr>(')
++            parts.append(apply)
++            upper_function = upper_function.replace(helper + '(', helper + 'Specialized<instr>(')
++    lower_function = function(lower, 'void VU1Interpreter::execLower(')
++    lower_function = replace_once(lower_function,
++        'void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)',
++        'template<uint32_t instr, uint32_t upperInstr>\nvoid VU1Interpreter::execLowerSpecialized(uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory)')
++    parts.extend((upper_function, lower_function))
++    for name in ('addVfRead', 'addVfWrite', 'vfReadLanes', 'decodeUpperUsage', 'decodeLowerUsage'):
++        definition = function(core, ('uint8_t ' if name == 'vfReadLanes' else
++            'VU1Interpreter::InstructionUsage ' if name.startswith('decode') else 'void ') +
++            'VU1Interpreter::' + name + '(')
++        definition = re.sub(r'\b' + name + r'\b', name + 'Specialized', definition)
++        definition = 'constexpr ' + definition
++        definition = definition.replace(') const\n', ')\n')
++        definition = definition.replace('m_unit', 'Unit::VU1')
++        for helper in ('addVfRead', 'addVfWrite', 'vfReadLanes'):
++            definition = re.sub(r'\b' + helper + r'\b', helper + 'Specialized', definition)
++        definition = definition.replace('laneForComponent(', 'laneForComponentSpecialized(')
++        parts.append(definition)
++    decode = function(core, 'VU1Interpreter::DecodedInstructionPair VU1Interpreter::decodeInstructionPair(')
++    decode = replace_once(decode,
++        'VU1Interpreter::DecodedInstructionPair VU1Interpreter::decodeInstructionPair(const uint8_t *vuCode, uint32_t pc) const',
++        'constexpr VU1Interpreter::DecodedInstructionPair VU1Interpreter::decodePairSpecialized(uint32_t lower, uint32_t upper)')
++    decode = replace_once(decode, '    std::memcpy(&decoded.lower, vuCode + pc, sizeof(decoded.lower));', '    decoded.lower = lower;')
++    decode = replace_once(decode, '    std::memcpy(&decoded.upper, vuCode + pc + sizeof(decoded.lower), sizeof(decoded.upper));', '    decoded.upper = upper;')
++    for helper in ('decodeUpperUsage', 'decodeLowerUsage', 'vfReadLanes'):
++        decode = re.sub(r'\b' + helper + r'\b', helper + 'Specialized', decode)
++    decode = decode.replace('laneForComponent(', 'laneForComponentSpecialized(')
++    # Avoid an MSVC 19.44 LTCG ICE involving the constexpr initializer-list
++    # of pointers to subobjects. This is the same upper-then-lower traversal.
++    decode = replace_once(decode,
++        '    for (const InstructionUsage *usage : {&upperUsage, &lowerUsage})\n    {',
++        '    for (uint32_t usageIndex = 0; usageIndex < 2u; ++usageIndex)\n    {\n'
++        '        const InstructionUsage *usage = usageIndex == 0u ? &upperUsage : &lowerUsage;')
++    parts.append(decode)
++    parts.append('''
++#ifdef VU_SPECIALIZATION_VERIFY_COUNTER
++namespace {
++uint64_t privateSpecializedIssued = 0;
++struct SpecializationReport { ~SpecializationReport() {
++    std::printf("PRIVATE-SPECIALIZATION issued=%llu\\n", static_cast<unsigned long long>(privateSpecializedIssued));
++} } privateSpecializationReport;
++}
++uint64_t vuNativeIssuedForTests() { return privateSpecializedIssued; }
++#endif
++''')
++    run_function = function(core, 'void VU1Interpreter::run(')
++    begin = run_function.index('        uint64_t readyCycle = calculatePairReadyCycle(decoded);')
++    end = run_function.index('        advanceOneCycle();', begin) + len('        advanceOneCycle();')
++    issue = run_function[begin:end]
++    issue = replace_once(issue, '        uint64_t readyCycle = calculatePairReadyCycle(decoded);', '''
++        uint64_t readyCycle = m_cycle;
++        [&]<size_t... Index>(std::index_sequence<Index...>) {
++            ((readyCycle = std::max(readyCycle, m_ready[decoded.readSlots[Index]])), ...);
++        }(std::make_index_sequence<decoded.readSlotCount>{});
++        if constexpr (decoded.lowerPipeline == PipelineFdiv)
++            if (m_fdiv.valid) readyCycle = std::max(readyCycle, m_fdiv.readyCycle);
++        if constexpr (decoded.lowerPipeline == PipelineEfu)
++            readyCycle = std::max(readyCycle, m_efuResourceReady);
++        if constexpr (decoded.has(DecodedWaitQ))
++            if (m_fdiv.valid) readyCycle = std::max(readyCycle, m_fdiv.readyCycle);
++        if constexpr (decoded.has(DecodedWaitP))
++            for (const ScalarPipelineEntry &entry : m_efu)
++                if (entry.valid) readyCycle = std::max(readyCycle, entry.readyCycle);
++        if constexpr (decoded.lowerPipeline == PipelineXgkick)
++            if (m_xgkick.active) readyCycle = std::max(readyCycle, m_cycle + 1u);
++''')
++    issue = replace_once(issue, '        if (m_cycle >= budgetEnd)\n            break;', '        if (m_cycle >= budgetEnd)\n            return 3;')
++    issue = issue.replace('execUpper(decoded.upper);', 'execUpperSpecialized<upper>();')
++    issue = issue.replace('execLower(decoded.lower, vuData, dataSize, gs, memory, decoded.upper);',
++                          'execLowerSpecialized<lower, upper>(vuData, dataSize, gs, memory);')
++    issue = issue.replace('if (decoded.has(DecodedIBit))', 'if constexpr (decoded.has(DecodedIBit))')
++    issue = issue.replace('else if (decoded.upperVfShadowReg != 0u)', 'else if constexpr (decoded.upperVfShadowReg != 0u)')
++    issue = replace_once(issue, '        markPairWrites(decoded);', '''
++        [&]<size_t... Index>(std::index_sequence<Index...>) {
++            ((m_ready[decoded.writeSlots[Index]] = m_cycle + decoded.writeLatencies[Index]), ...);
++        }(std::make_index_sequence<decoded.writeSlotCount>{});
++        if constexpr (decoded.writeSlotCount != 0u)
++            m_writebackHorizon = std::max(m_writebackHorizon, m_cycle + decoded.maxWriteLatency);
++''')
++    parts.append('''
++template<uint32_t lower, uint32_t upper>
++int VU1Interpreter::issueSpecializedPair(uint8_t *vuData, uint32_t dataSize, GS &gs,
++                                        PS2Memory *memory, uint32_t codeSize, uint64_t budgetEnd)
++{
++    constexpr DecodedInstructionPair decoded = decodePairSpecialized(lower, upper);
++    bool programEnded = false;
++''' + issue + '''
++#ifdef VU_SPECIALIZATION_VERIFY_COUNTER
++    ++privateSpecializedIssued;
++#endif
++    return programEnded ? 2 : 1;
++}
++''')
++
++    # PRIVATE bounded compiler-layout experiment. Only whole-image admitted
++    # programs use direct generation checks. Every original per-pair commit,
++    # issue, callback and budget boundary is preserved.
++    if not generation_only:
++        raise ValueError('Bounded layout requires whole-image generation-only admission')
++    width = 16
++    parts.append('''
++#if defined(_MSC_VER)
++#define PRIVATE_VU_BLOCK_NOINLINE __declspec(noinline)
++#elif defined(__GNUC__) || defined(__clang__)
++#define PRIVATE_VU_BLOCK_NOINLINE __attribute__((noinline))
++#else
++#define PRIVATE_VU_BLOCK_NOINLINE
++#endif
++''')
++    for base in range(0, len(pairs), width):
++        stop = min(base + width, len(pairs))
++        body = [f'''
++template<>
++PRIVATE_VU_BLOCK_NOINLINE int VU1Interpreter::trySpecializedGroup<{base}u>(
++    uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
++    GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation)
++{{
++    bool issuedAny = false;
++    switch ((m_state.pc >> 3u) - {base}u) {{
++''']
++        for index in range(base, stop):
++            body.append(f'    case {index-base}u: goto pair_{index};\n')
++        body.append('    default: return 0;\n    }\n')
++        for index in range(base, stop):
++            lo, hi = pairs[index]
++            next_index = (index + 1) % len(pairs)
++            body.append(f'''pair_{index}:
++    {{
++        constexpr auto baked = decodePairSpecialized(0x{lo:08x}u, 0x{hi:08x}u);
++        if constexpr (baked.has(DecodedUpperReserved) || baked.has(DecodedLowerReserved))
++            return issuedAny ? 1 : 0;
++        const int outcome = issueSpecializedPair<0x{lo:08x}u, 0x{hi:08x}u>(vuData, dataSize, gs, memory, codeSize, budgetEnd);
++        if (outcome != 1) return outcome;
++        issuedAny = true;
++        if (m_cycle >= budgetEnd || m_stopRequested || m_state.pc != {next_index*8}u)
++            return 1;
++''')
++            if index + 1 == stop:
++                # The outer original loop performs the next commit/cache/gen
++                # boundary. Do not pre-decode or issue a pair across the group.
++                body.append('        return 1;\n')
++            else:
++                body.append(f'''        commitReadyPipelines();
++        if (memory->getVU1CodeGeneration() != generation) return 1;
++        goto pair_{next_index};
++''')
++            body.append('    }\n')
++        body.append('}\n')
++        parts.extend(body)
++    parts.append('''
++int VU1Interpreter::trySpecializedBlock(const DecodedInstructionPair &initialDecoded,
++    uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
++    GS &gs, PS2Memory *memory, uint64_t budgetEnd, uint64_t generation)
++{
++    (void)initialDecoded;
++    if (m_unit != Unit::VU1 || (m_state.pc & 7u) != 0u || codeSize != 16384u)
++        return 0;
++    switch (m_state.pc >> 7u) {
++''')
++    for base in range(0, len(pairs), width):
++        parts.append(f'    case {base//width}u: return trySpecializedGroup<{base}u>(vuCode, codeSize, vuData, dataSize, gs, memory, budgetEnd, generation);\n')
++    parts.append('    default: return 0;\n    }\n}\n#undef PRIVATE_VU_BLOCK_NOINLINE\n')
++    detail_body = detail[detail.index('// Instruction field extraction helpers'):detail.rindex('#endif')]
++    detail_body = detail_body.replace('static inline ', 'static constexpr ')
++    generated = detail_body + '\n' + '\n'.join(parts)
++    for helper in ('DEST', 'FT', 'FS', 'FD', 'BC', 'LIT', 'LIS', 'LID', 'VIT', 'VIS', 'VID', 'IMM11', 'IMM15'):
++        generated = re.sub(r'\b' + helper + r'(?=\()', 'native' + helper, generated)
++    # No experiment-only counter is enabled by the production build.
++    manifest = {
++        'schema': 1, 'unit': 'VU1', 'code_size': len(code), 'block_pairs': width,
++        'input_code_sha256': hashlib.sha256(code).hexdigest(),
++        'sources': {relative: hashlib.sha256(data.replace(b'\r\n', b'\n')).hexdigest()
++                    for relative, data in raw.items()},
++        'generated_sha256': hashlib.sha256(generated.encode('utf-8')).hexdigest(),
++        'generated_bytes': len(generated.encode('utf-8')),
++        'cache_rebuild_admission': True,
++        'generator_sources': {path.name: hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
++                              for path in (Path(__file__), Path(__file__).with_name('vu_native_input.py'))},
++    }
++    return generated, manifest
++
++
++def stage(path, data):
++    path.parent.mkdir(parents=True, exist_ok=True)
++    descriptor, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
++    temporary = Path(name)
++    try:
++        with os.fdopen(descriptor, 'wb') as output:
++            output.write(data)
++            output.flush()
++            os.fsync(output.fileno())
++    except BaseException:
++        temporary.unlink(missing_ok=True)
++        raise
++    return temporary
++
++
++def main():
++    parser = argparse.ArgumentParser(description='Generate a private bounded native VU1 catalog from a pinned owned ELF')
++    parser.add_argument('--runtime', type=Path, required=True)
++    parser.add_argument('--elf', type=Path, required=True)
++    parser.add_argument('--metadata', type=Path, required=True)
++    parser.add_argument('--output', type=Path, required=True)
++    parser.add_argument('--manifest', type=Path, required=True)
++    args = parser.parse_args()
++    output, manifest_path = args.output.resolve(), args.manifest.resolve()
++    if output == manifest_path or output in (args.elf.resolve(), args.metadata.resolve()) or manifest_path in (args.elf.resolve(), args.metadata.resolve()):
++        raise ValueError('Output paths must be distinct from each other and private inputs')
++    runtime = args.runtime.resolve()
++    if runtime == output or runtime in output.parents or runtime == manifest_path or runtime in manifest_path.parents:
++        raise ValueError('Catalog output belongs outside the canonical runtime source tree')
++    # All pins, payloads and canonical source anchors are validated before any
++    # output is staged or published. No paths or wall time affect source bytes.
++    code, input_manifest = read_elf(args.elf, None, [], args.metadata)
++    generated, manifest = generate_catalog(runtime, code)
++    manifest['input'] = {key: value for key, value in input_manifest.items() if key not in ('path', 'metadata_path')}
++    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + '\n').encode('utf-8')
++    staged = []
++    try:
++        staged.append((stage(output, generated.encode('utf-8')), output))
++        staged.append((stage(manifest_path, manifest_bytes), manifest_path))
++        for temporary, destination in staged:
++            os.replace(temporary, destination)
++    finally:
++        for temporary, _ in staged:
++            temporary.unlink(missing_ok=True)
++    print(f'Generated native VU1 catalog: {len(code)//8} pairs, 16-pair blocks, SHA256 {manifest["generated_sha256"]}')
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/ps2xRuntime/tools/vu_native_input.py b/ps2xRuntime/tools/vu_native_input.py
+new file mode 100644
+index 0000000..963611f
+--- /dev/null
++++ b/ps2xRuntime/tools/vu_native_input.py
+@@ -0,0 +1,95 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++"""Validate explicit owned VU1 input images without writing any outputs (Python 3.8+)."""
++import hashlib
++import json
++import struct
++import re
++
++CODE_SIZE = 16 * 1024
++
++
++def sha256(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def validate_digest(value, label):
++    if not isinstance(value, str) or re.fullmatch(r'[0-9a-fA-F]{64}', value) is None:
++        raise ValueError(f'A full 64-hex SHA256 pin is required for {label}')
++    return value.lower()
++
++
++def offset_value(value):
++    if isinstance(value, bool):
++        raise ValueError('MPG file offsets must be integer byte offsets')
++    if isinstance(value, str):
++        try:
++            value = int(value, 0)
++        except ValueError as error:
++            raise ValueError('Invalid MPG file offset') from error
++    if not isinstance(value, int) or value < 0 or value % 4:
++        raise ValueError('MPG file offsets must be nonnegative four-byte-aligned integers')
++    return value
++
++
++def reconstruct_elf(data, expected_sha256, offsets):
++    # Validate ownership/version pin before interpreting any untrusted metadata.
++    expected_sha256 = validate_digest(expected_sha256, 'the owned ELF')
++    if sha256(data) != expected_sha256:
++        raise ValueError('Owned ELF SHA256 does not match the supplied pin')
++    if len(data) < 52 or data[:7] != b'\x7fELF\x01\x01\x01' or struct.unpack_from('<H', data, 18)[0] != 8:
++        raise ValueError('Expected a little-endian 32-bit MIPS ELF')
++    offsets = [offset_value(value) for value in offsets]
++    if not offsets or len(set(offsets)) != len(offsets):
++        raise ValueError('Supply a nonempty ordered list of distinct MPG file offsets')
++    # The game starts from cleared VU1 code memory. Ordered uploads overwrite
++    # bytes and wrap exactly as the VIF1 MPG implementation does.
++    code = bytearray(CODE_SIZE)
++    uploads = []
++    for offset in offsets:
++        if offset + 4 > len(data):
++            raise ValueError(f'MPG command exceeds ELF bounds at {offset:#x}')
++        command = struct.unpack_from('<I', data, offset)[0]
++        if ((command >> 24) & 0x7f) != 0x4a:
++            raise ValueError(f'Expected an MPG command at {offset:#x}')
++        destination = (command & 0x7ff) * 8
++        count = (command >> 16) & 255
++        size = (count or 256) * 8
++        payload_end = offset + 4 + size
++        if payload_end > len(data):
++            raise ValueError(f'MPG payload exceeds ELF bounds at {offset:#x}')
++        payload = data[offset + 4:payload_end]
++        first_size = min(size, CODE_SIZE - destination)
++        code[destination:destination + first_size] = payload[:first_size]
++        if first_size < size:
++            code[:size - first_size] = payload[first_size:]
++        uploads.append({'file_offset': offset, 'command': command,
++                        'destination': destination, 'bytes': size})
++    return bytes(code), uploads
++
++
++def read_elf(path, expected_sha256, offsets, metadata_path=None):
++    expected_code_sha256 = None
++    if metadata_path is not None:
++        if expected_sha256 is not None or offsets:
++            raise ValueError('Use metadata or explicit ELF SHA/offsets, not both')
++        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
++        if not isinstance(metadata, dict):
++            raise ValueError('MPG metadata must be a JSON object')
++        if (type(metadata.get('version')) is not int or metadata.get('version') != 1 or
++                metadata.get('unit') != 'VU1' or metadata.get('initialization') != 'zero' or
++                type(metadata.get('code_size')) is not int or metadata.get('code_size') != CODE_SIZE):
++            raise ValueError('Expected version 1 VU1 metadata with code_size 16384 and zero initialization')
++        expected_sha256 = metadata.get('elf_sha256')
++        uploads = metadata.get('uploads')
++        if not isinstance(uploads, list) or any(not isinstance(upload, dict) or set(upload) != {'header_offset'} for upload in uploads):
++            raise ValueError('MPG uploads must be an ordered list of header_offset objects')
++        offsets = [upload['header_offset'] for upload in uploads]
++        expected_code_sha256 = validate_digest(metadata.get('expected_image_sha256'), 'the reconstructed image')
++    data = path.read_bytes()
++    code, uploads = reconstruct_elf(data, expected_sha256, offsets)
++    if expected_code_sha256 is not None and sha256(code) != expected_code_sha256:
++        raise ValueError('Reconstructed code image SHA256 does not match metadata')
++    return code, {'kind': 'owned-elf-mpg', 'path': str(path.resolve()),
++                  'elf_sha256': sha256(data), 'initialization': 'zero',
++                  'ordered_uploads': uploads,
++                  'metadata_path': str(metadata_path.resolve()) if metadata_path else None}
+-- 
+2.55.0.windows.3
+

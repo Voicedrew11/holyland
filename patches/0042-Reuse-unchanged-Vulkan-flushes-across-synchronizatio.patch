@@ -1,0 +1,187 @@
+From 573a24c48720b784166b7c9d18a1c3bd8223d28a Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 01:39:41 -0400
+Subject: [PATCH 42/52] Reuse unchanged Vulkan flushes across synchronization
+ and presentation
+
+---
+ ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp | 45 ++++++++++++++++----
+ ps2xRuntime/src/lib/gs/gs_vulkan_scanout.cpp |  8 +++-
+ ps2xRuntime/src/lib/gs/gs_vulkan_scanout.h   |  4 ++
+ 3 files changed, 48 insertions(+), 9 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp b/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
+index 8cf8281..bef57ec 100644
+--- a/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
+@@ -56,6 +56,8 @@ struct GSVulkanBackend::Impl
+     bool initialized = false;
+     uint64_t draws = 0;
+     uint64_t gpuPresentations = 0, convertedPresentations = 0;
++    bool submissionFlushed = false;
++    uint64_t submissionFlushes = 0, reusedSubmissionFlushes = 0;
+ 
+     Impl()
+     {
+@@ -84,9 +86,10 @@ struct GSVulkanBackend::Impl
+         gs.flush(); device.wait_idle();
+         const char *stats = std::getenv("PS2X_STATS");
+         if (stats && *stats && *stats != '0')
+-            std::fprintf(stderr, "[gs:vulkan] draws=%llu GPU scanouts=%llu CPU display conversions=%llu\n",
++            std::fprintf(stderr, "[gs:vulkan] draws=%llu GPU scanouts=%llu CPU display conversions=%llu explicit flushes=%llu reused flushes=%llu\n",
+                 static_cast<unsigned long long>(draws), static_cast<unsigned long long>(gpuPresentations),
+-                static_cast<unsigned long long>(convertedPresentations));
++                static_cast<unsigned long long>(convertedPresentations),
++                static_cast<unsigned long long>(submissionFlushes), static_cast<unsigned long long>(reusedSubmissionFlushes));
+     }
+ 
+     std::unique_lock<std::mutex> access()
+@@ -103,13 +106,30 @@ struct GSVulkanBackend::Impl
+         const auto index = static_cast<unsigned>(id);
+         if (force || !valid[index] || state[index] != bits)
+         {
++            submissionFlushed = false;
+             gs.write_register(id, bits);
+             state[index] = bits;
+             valid[index] = true;
+         }
+     }
++    void flushSubmission()
++    {
++        // Frontend Flush -> Sync -> Present may arrive without another GS
++        // write. Reuse only that completed submission, while retaining the
++        // flush when callers use Sync or Present directly after new work.
++        if (submissionFlushed)
++        {
++            ++reusedSubmissionFlushes;
++            return;
++        }
++        gs.flush();
++        ++submissionFlushes;
++        submissionFlushed = true;
++    }
+     void readSnapshot()
+     {
++        // Host mappings have their own library timeline/writeback work.
++        submissionFlushed = false;
+         const void *mapped = gs.map_vram_read(0, vramBytes);
+         if (!mapped) throw std::runtime_error("Vulkan GS VRAM readback failed");
+         std::memcpy(snapshot.data(), mapped, vramBytes);
+@@ -174,6 +194,7 @@ struct GSVulkanBackend::Impl
+             const uint64_t tag = qwords | (1ull << 15) | (2ull << 58);
+             std::memcpy(packet.data(), &tag, 8);
+             std::memcpy(packet.data() + 16, data, bytes);
++            submissionFlushed = false;
+             gs.gif_transfer(2, packet.data(), packet.size());
+             count -= bytes; data += bytes;
+         }
+@@ -186,6 +207,7 @@ void GSVulkanBackend::Initialize(uint8_t *vram, uint32_t size)
+ {
+     if (!vram || size < vramBytes) throw std::invalid_argument("Vulkan GS needs 4 MiB VRAM");
+     auto lock = m_impl->access();
++    m_impl->submissionFlushed = false;
+     auto *dst = m_impl->gs.map_vram_write(0, vramBytes);
+     if (!dst) throw std::runtime_error("Vulkan GS initial VRAM mapping failed");
+     std::memcpy(dst, vram, vramBytes);
+@@ -199,7 +221,8 @@ void GSVulkanBackend::Initialize(uint8_t *vram, uint32_t size)
+ void GSVulkanBackend::Reset()
+ {
+     auto lock = m_impl->access();
+-    m_impl->gs.flush(); m_impl->gs.reset_context_state(); m_impl->valid.fill(false);
++    m_impl->flushSubmission(); m_impl->gs.reset_context_state(); m_impl->valid.fill(false);
++    m_impl->submissionFlushed = false;
+     m_impl->transferState = {}; m_impl->transferState.direction = 3;
+     m_impl->fifo.clear(); m_impl->fifoRead = 0; m_impl->uploadTail.clear();
+ }
+@@ -252,11 +275,11 @@ void GSVulkanBackend::UploadImage(const uint8_t *data, uint32_t bytes)
+     p.transferState.y = p.transfer.trxpos.dsay + position / p.transfer.trxreg.rrw;
+     if (complete) { p.transferState.direction = 3; p.transferState.totalPixels = 0; }
+ }
+-void GSVulkanBackend::Flush() { auto lock = m_impl->access(); m_impl->gs.flush(); }
++void GSVulkanBackend::Flush() { auto lock = m_impl->access(); m_impl->flushSubmission(); }
+ void GSVulkanBackend::TextureFlush() { auto lock = m_impl->access(); m_impl->reg(Reg::TEXFLUSH, 0, true); }
+ void GSVulkanBackend::Sync(GSSyncReason reason)
+ {
+-    auto lock = m_impl->access(); m_impl->gs.flush();
++    auto lock = m_impl->access(); m_impl->flushSubmission();
+     if (reason == GSSyncReason::Reset) m_impl->device.wait_idle();
+ }
+ void GSVulkanBackend::SnapshotVram(std::vector<uint8_t> &out) const
+@@ -271,6 +294,7 @@ void GSVulkanBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32
+ {
+     auto lock = m_impl->access(); auto &p = *m_impl; p.readSnapshot();
+     p.scanout.WriteVram(psm, base, bw, x, y, value);
++    p.submissionFlushed = false;
+     auto *mapped = p.gs.map_vram_write(0, vramBytes); std::memcpy(mapped, p.snapshot.data(), vramBytes);
+     p.gs.end_vram_write(0, vramBytes);
+ }
+@@ -305,7 +329,11 @@ PresentationFrame GSVulkanBackend::Present(const GSPresentationRequest &request)
+ {
+     auto lock = m_impl->access(); auto &p = *m_impl;
+     PresentationFrame result;
+-    try { result = presentVulkanGs(p.gs, p.device, request); ++p.gpuPresentations; }
++    p.flushSubmission();
++    // Scanout and readback create library work too; do not reuse this marker
++    // across another presentation, host mapping, or a new GS mutation.
++    p.submissionFlushed = false;
++    try { result = presentVulkanGs(p.gs, p.device, request, true); ++p.gpuPresentations; }
+     catch (const VulkanGsScanoutUnsupported &error)
+     {
+         // Preserve the fixed host viewport contract for display modes outside
+@@ -317,8 +345,9 @@ PresentationFrame GSVulkanBackend::Present(const GSPresentationRequest &request)
+     p.device.next_frame_context();
+     const char *stats = std::getenv("PS2X_STATS");
+     if (stats && *stats && *stats != '0' && (p.gpuPresentations + p.convertedPresentations) % 300u == 0)
+-        std::fprintf(stderr, "[gs:vulkan] draws=%llu GPU scanouts=%llu CPU display conversions=%llu\n",
++        std::fprintf(stderr, "[gs:vulkan] draws=%llu GPU scanouts=%llu CPU display conversions=%llu explicit flushes=%llu reused flushes=%llu\n",
+             static_cast<unsigned long long>(p.draws), static_cast<unsigned long long>(p.gpuPresentations),
+-            static_cast<unsigned long long>(p.convertedPresentations));
++            static_cast<unsigned long long>(p.convertedPresentations),
++            static_cast<unsigned long long>(p.submissionFlushes), static_cast<unsigned long long>(p.reusedSubmissionFlushes));
+     return result;
+ }
+diff --git a/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.cpp b/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.cpp
+index b42193a..1db522e 100644
+--- a/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.cpp
+@@ -70,6 +70,12 @@ bool noWeave()
+ 
+ PresentationFrame presentVulkanGs(ParallelGS::GSInterface &gs, Vulkan::Device &device,
+                                   const GSPresentationRequest &request)
++{
++    return presentVulkanGs(gs, device, request, false);
++}
++
++PresentationFrame presentVulkanGs(ParallelGS::GSInterface &gs, Vulkan::Device &device,
++                                  const GSPresentationRequest &request, bool alreadyFlushed)
+ {
+     using namespace ParallelGS;
+     using namespace Vulkan;
+@@ -131,7 +137,7 @@ PresentationFrame presentVulkanGs(ParallelGS::GSInterface &gs, Vulkan::Device &d
+     // displaced scanlines in text. Request the current field and bob it on GPU.
+     // PS2X_NO_WEAVE keeps the unscaled field for diagnostics.
+     info.skip_deinterlace = movieFields;
+-    gs.flush();
++    if (!alreadyFlushed) gs.flush();
+     auto output = gs.vsync(info);
+     if (!output.image) throw std::runtime_error("ParallelGS GPU scanout returned no image");
+     const auto width = output.image->get_width();
+diff --git a/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.h b/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.h
+index 1c4b471..d773c6c 100644
+--- a/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.h
++++ b/ps2xRuntime/src/lib/gs/gs_vulkan_scanout.h
+@@ -16,7 +16,11 @@ public:
+ };
+ 
+ // Caller serializes GS/device access and advances the device frame context.
++// alreadyFlushed is only valid after an unchanged explicit GS submission flush.
++// Standalone callers retain their own flush with the default false argument.
+ // Rasterization, VRAM sampling, circuit merge and field deinterlacing stay on
+ // the GPU. The RGBA readback bridges the existing fixed 640-stride host UI.
+ PresentationFrame presentVulkanGs(ParallelGS::GSInterface &gs, Vulkan::Device &device,
+                                   const GSPresentationRequest &request);
++PresentationFrame presentVulkanGs(ParallelGS::GSInterface &gs, Vulkan::Device &device,
++                                  const GSPresentationRequest &request, bool alreadyFlushed);
+-- 
+2.55.0.windows.3
+

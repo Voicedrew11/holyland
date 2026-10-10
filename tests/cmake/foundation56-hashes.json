@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "foundation_tree": "63634a67e02f064d62662202e807d3a86d5995cc",
+  "line_endings": "LF-normalized; Git CRLF conversion is accepted",
+  "files": {
+    "ps2xRuntime/include/ps2_runtime.h": "07279db7411b291b9ef1dd002f75c004ca216da7445c65bd6be73a9fcd6abaf2",
+    "ps2xRuntime/include/runtime/ee_scheduler.h": "2035ad321ce856d4d969146063eb2494b57dbb518d9903dcdb1ca7136746d995",
+    "ps2xRuntime/include/runtime/gs/gs_frontend.h": "96d1adaab5c39c60aeca7016e5904219ed59ccb0fa6c2a0430d7bbc2f969b582",
+    "ps2xRuntime/include/runtime/gs/gs_host_presentation_admission.h": "89cee110852dbfbdd22a19ee60dd74c01bb0df5bb84a2131b0f3984aa35ffd13",
+    "ps2xRuntime/include/runtime/ps2_memory.h": "3adbca0d6bce441439e6a4059197de3464707c540d4d6ff70c0716b330285a17",
+    "ps2xRuntime/include/runtime/ps2_vu1.h": "9b51627a230c1dd990cd7f2ad452e39f4a6fb8d5bff8a79d3cecdfc91af7d231",
+    "ps2xRuntime/include/runtime/vblank_field_pacer.h": "1b73b632c1b05d31a72c9fb2cd4153db3667573f1af83d2ccd58a232ff852bdc",
+    "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "b713ed83eb205400953ec3ca4e741dd8d64873450310aed63ec2452f957340d9",
+    "ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp": "eeda9ec3b707fc7ccf2907b2404512ec972cf1128ae56beecd95319847641252",
+    "ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h": "bb4581358a95c0aa401726ae8404c7ab5cec7d8409fc8b2c27c8417926b9a863",
+    "ps2xRuntime/src/lib/gs/gs_frontend.cpp": "8c32e9c70838c861ede53cfb201e0cd19565206e86fd5cdaac5b5c56d2bdd308",
+    "ps2xRuntime/src/lib/ps2_memory.cpp": "7199f2794bcb8ac0e8664bf453b30044f26ca7d22ee411a431d81d06d911e262",
+    "ps2xRuntime/src/lib/ps2_runtime.cpp": "fa8cc4897eb77ec5495ce22b8d6902ae9256239ab1582f409876ca37cfe0ebbd",
+    "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "f377137840dec76caed7aecdb5629490e25fa70c56e8f8dde54b9162957acb23",
+    "ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp": "2f377c08f048fac7cfb6dde59d30f2dde6178ff9a13210534fc2248328ee0840",
+    "ps2xRuntime/tools/generate_vu_native.py": "e26b8ef3a84c0be335a5a42ac2fee931d1e982e57a11aaa3f1ba98a51779a50b"
+  }
+}
