@@ -163,11 +163,36 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   programs run in E-bit-terminated segments (each ends with a pipeline
   flush), so every segment starts with quiescent pipelines. That makes an
   ahead-of-time VU1 recompiler tractable: one image, two hot entries, known
-  entry state. Instrumentation: `PS2X_VU1_CENSUS=<file>` (uncommitted).
-- **VU1 is the remaining bottleneck.** Options, in rising cost: flag
-  liveness (skip MAC/status computation for microprograms that never read
-  them, ~25% of VU1 time), a leaner per-instruction loop, a VU1
-  recompiler.
+  entry state. Instrumentation: `PS2X_VU1_CENSUS=<file>` (patch 0027).
+- **VU1 lift (2026-10-10, patch 0028, opt-in `PS2X_VU1_LIFT=1`):**
+  `scripts/maintainer/vu1lift.py` translates the MSCNT segment of entry
+  0x0000 (resume pc 0x08f8: the 391k resumes, most of that entry's 85%
+  of VU1 cycles) to C++ with a static
+  cycle schedule; `VU1Interpreter::run` calls it when the pipelines are
+  idle. Bit-exact: 1.94M microprogram runs into gameplay on the 28-patch
+  series (780k on the earlier 15-patch one), 0 `[vu1verify]` mismatches
+  (registers, flags, cycles, VU1 memory, XGKICK output).
+  **It is not a speedup yet; keep it off.** Same build, gameplay ticks
+  4000-4599 (input script under "Dev loop"):
+
+  | GS mode | lift off | lift on |
+  |---|---|---|
+  | asynchronous (default) | 11.5 flips/s | 5.1 |
+  | `PS2X_GS_LOCKSTEP=1` | 7.8 | 9.2 (+18%) |
+
+  (The 15-patch series, ticks 3000-3599: 11.6 / 5.1 and 8.6 / 11.0.)
+
+  Lockstep shows the lift removes work (one flip per two VSyncs either
+  way). With the asynchronous GS the EE thread now outruns the raster
+  workers: ~40% of its samples block in `GSCpuBackend::KickIfIdle ->
+  WaitForCompleted` (queue full, called from `finishXgkick`), the workers
+  spend more time in their barrier, and the game presents one frame per ~6
+  VSyncs instead of 2 (profiled on the 15-patch series). Cause not found
+  yet. Not the VBlank catch-up bursts: patch 0020 on its own changed
+  nothing (5.3 vs 11.1). Next: find why the
+  asynchronous GS stretches frames once VU1 is cheap, then lift 0x1400.
+  A GPU GS backend (PR #10, Vulkan) would remove the raster cost the lift
+  exposes.
 - **GS self-feedback draws** (~45 per frame here: 64-pixel-wide vertical
   strips that sample the frame buffer they render to, at half-pixel
   offsets, a blur/glow pass) run on one worker, row by row, because the
@@ -218,6 +243,15 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   runs on a frozen copy of the original interpreter, and registers, flags,
   cycles, VU1 memory and XGKICK output are compared (`[vu1verify]` on
   stderr; 720k runs into gameplay, 0 mismatches for patch 0012).
+- VU1 lift: `vu1lift.py <image.bin> --segment 0x08f8 -o
+  <game-dir>/vu1lift/<name>.cpp` (the image comes from the census), then
+  `dev-build.sh` compiles it into the runner and `PS2X_VU1_LIFT=1` enables
+  it. The generated file embeds game logic: never commit it. Verify every
+  generator change with the VU1 verifier. Status and open work:
+  [`handoff-vu1-lift.md`](handoff-vu1-lift.md).
+- Reaching gameplay with the 26+ patch series (the title and new-game
+  movies now play; START skips them; gameplay from about tick 3300):
+  `PS2X_INPUT="400:START:10,700:START:10,1000:START:10,1300:START:10,1700:CROSS:10,2000:START:10,2300:START:10,2600:START:10,2900:CROSS:10,3300:START:10,3700:CROSS:10"`.
 
 ## Findings
 

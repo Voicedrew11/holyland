@@ -35,6 +35,8 @@ commit); don't edit them by hand. Workflow:
 | `0024-Preserve-sprite-coordinate-pairs-…` | Preserve matched XY/UV endpoints when reversing sprite axes, fractional XYOFFSET/UV, ceil-exclusive coverage, integer GS sampling and flat second-vertex Q. Corrects the original 64-pixel gameplay feedback strips without changing the texture-cache policy. |
 | `0025-Bound-GS-diagnostics-…` | Opt-in traces respect the selected tick interval for every event; privileged state includes CRT2, and primitive coordinates retain fractional XYOFFSET. Does not change rendering. |
 | `0026-Decode-interlaced-source-height-…` | Decode interlaced FRAME-mode source rows before the host-size cap. Gameplay's encoded 896 display lines retain all 448 source rows, rather than cropping to 256 and falsely doubling them. |
+| `0027-vu1-opt-in-microcode-census-…` | `PS2X_VU1_CENSUS=1` records which VU1 microprograms run, from which entry, and their cycle share. Off by default; does not change behaviour. |
+| `0028-vu1-run-lifted-microprogram-segments-…` | `PS2X_VU1_LIFT=1` runs VU1 microprogram segments that were lifted to C++ (`scripts/maintainer/vu1lift.py`), bit-exact with the interpreter including cycles, flags and XGKICK output. Off by default; with no lifted sources built in it does nothing. |
 
 The recompiler hunks in patch 0022 must also be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -45,7 +47,8 @@ function tables alone does not add the missing continuation entries.
 
 The 26-patch series retains patches 0001–0014 unchanged. Twelve additions,
 0015–0026, were exported from source commits on top of that series and
-change 43 source/license/build files. The
+change 43 source/license/build files. 0027–0028 (VU1 census and lift) are
+exported on top of 0026. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in
@@ -57,5 +60,6 @@ The sprite-coordinate fix is proposed separately in
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
 license, as are the maintainer tools built from its sources
-(`scripts/maintainer/gsreplay`, `scripts/maintainer/dev/vu1-verify.patch`).
+(`scripts/maintainer/gsreplay`, `scripts/maintainer/dev/vu1-verify.patch`,
+`scripts/maintainer/vu1lift.py`).
 The rest of this repository is MIT (see `../LICENSE`).

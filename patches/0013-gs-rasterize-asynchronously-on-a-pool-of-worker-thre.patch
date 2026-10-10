@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 18:41:18 -0400
-Subject: [PATCH 13/15] gs: rasterize asynchronously on a pool of worker
+Subject: [PATCH 13/14] gs: rasterize asynchronously on a pool of worker
  threads, bit-exact
 
 The CPU backend drew every primitive synchronously on the EE thread, from

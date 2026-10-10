@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <Voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 12:09:55 -0400
-Subject: [PATCH 07/15] Audit and fix VIF1/VU1 emulation against hardware specs
+Subject: [PATCH 07/14] Audit and fix VIF1/VU1 emulation against hardware specs
 
 Fixed VIF1 UNPACK:
 - V2 now writes v1v0v1v0 pattern; V3/V4 components properly ordered

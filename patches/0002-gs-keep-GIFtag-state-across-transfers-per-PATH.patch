@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 12:14:20 -0400
-Subject: [PATCH 02/15] gs: keep GIFtag state across transfers, per PATH
+Subject: [PATCH 02/14] gs: keep GIFtag state across transfers, per PATH
 
 A GIFtag's data may arrive in a later DMA than the tag (libgraph's
 sceGsExecLoadImage sends the header and the pixels as two DMAs). The

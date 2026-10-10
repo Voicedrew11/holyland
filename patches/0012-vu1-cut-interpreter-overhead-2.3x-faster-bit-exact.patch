@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 18:38:55 -0400
-Subject: [PATCH 12/15] vu1: cut interpreter overhead (~2.3x faster), bit-exact
+Subject: [PATCH 12/14] vu1: cut interpreter overhead (~2.3x faster), bit-exact
 
 The VU1 interpreter was ~90% of the frame in KFIV's 3D areas. Same
 cycle and flag model, cheaper bookkeeping:

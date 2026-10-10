@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 14:12:11 -0400
-Subject: [PATCH 10/15] Run interrupt/callback handlers on stacks in EE kernel
+Subject: [PATCH 10/14] Run interrupt/callback handlers on stacks in EE kernel
  RAM
 
 reserveAsyncCallbackStack carved handler stacks from the top of RAM,

@@ -1,6 +1,6 @@
 # Handoff: lift the hot VU1 programs to C++ (issue #1, Stage A of #9)
 
-Written 2026-10-09. Branch `vu1-census` (pushed, no PR yet). Read `AGENTS.md`,
+Written 2026-10-09, updated 2026-10-10. Branch `vu1-census`. Read `AGENTS.md`,
 `docs/contributing.md` and the "Performance" and "VU1 census" notes in
 `docs/NOTES.md` first.
 
@@ -45,7 +45,30 @@ readable, not as generated soup.
 
 ## Progress (2026-10-10)
 
-Steps 1 and 2 below are done; step 3 has not started. Nothing is committed.
+Steps 1-4 are done for one segment, and step 5 found a problem:
+
+- **Lifted:** the MSCNT segment of entry `0x0000` (resume pc `0x08f8`, the
+  per-packet path, 391k of its 432k runs). `scripts/maintainer/vu1lift.py`
+  generates it; runtime support is patch 0028 (`runtime/ps2_vu1_lift.h`,
+  `ps2_vu1_lift.cpp`, the `runLifted` hook in `VU1Interpreter::run`,
+  `PS2X_VU1_LIFT=1`). The generator simulates the interpreter's timing
+  model once per block and per pipeline state at block entry, so each
+  emitted block instance has constant cycle offsets (15 instances for this
+  segment); flags are computed at each FMAC with exact classification, Q/P/
+  clip commits are placed at their cycle, and PATH1 copies advance lazily
+  in step with the stores. The MSCAL path (setup `0x0000`-`0x02f8`) still
+  runs on the interpreter.
+- **Verified:** 1.94M microprogram runs into gameplay on the 28-patch
+  series (780k on the earlier one), 0 `[vu1verify]` mismatches.
+- **Measured: slower with the default asynchronous GS** (11.5 -> 5.1
+  flips/s), faster in lockstep (7.8 -> 9.2). See `docs/NOTES.md`,
+  "Performance", for the profile. This is the open problem; solve it
+  before lifting more.
+- The lifted program runs to its end; the interpreter's 65536-cycle budget
+  per call only bounds its time slice, and no run in the test exceeded it
+  in a way the verifier noticed. Revisit if a segment can run longer.
+
+Steps 1 and 2 (analysis):
 
 - `scripts/maintainer/vu1dis.py` (untracked) disassembles the image and
   builds the CFG: `vu1dis.py <image.bin>` for a full listing,
@@ -53,8 +76,11 @@ Steps 1 and 2 below are done; step 3 has not started. Nothing is committed.
   points (the pair after an E bit's delay slot) and splits blocks at branch
   targets. A pair that is both a branch's delay slot and another branch's
   target stays in both blocks, so the lift has to emit it once per path
-  (`0x2298` in `0x1400`, `0x08d0` in `0x0000`). No unknown opcodes in the
-  image.
+  (`0x2298` in `0x1400`, `0x08d0` in `0x0000`). Reached as a branch
+  target, such a pair falls through to the next pair: `0x08d0` continues to
+  the XGKICK at `0x08d8`, `0x2298` to the one at `0x22a0`. (The Haiku
+  annotations below miss this and call those paths infinite loops.) No
+  unknown opcodes in the image.
 - Listings and Haiku-written annotations are in `runs/vu1-lift/`
   (`entry_*.txt`, `annotated_0x0000.md`, `annotated_0x1400.md`). The
   annotations are a static reading; the "purpose" parts are guesses, not spec.
@@ -62,8 +88,9 @@ Steps 1 and 2 below are done; step 3 has not started. Nothing is committed.
   MSCAL (matrix products, light setup, an XGKICK at `0x00b8`). MSCNT resumes at
   `0x08f8`, which is `B 0x0300`: the per-packet prologue. `0x0400`-`0x04e8` is
   the per-vertex loop, software-pipelined one vertex ahead. `0x04f0` is the
-  loop exit, with an XGKICK at `0x0650`. `0x06f8`-`0x08d0` is a light loop. The
-  E bit is at `0x08e8`.
+  loop exit, with an XGKICK at `0x0650`. `0x06f8`-`0x08d0` is a light loop
+  (ESADD/MFP), followed by a second XGKICK at `0x08d8`. The E bit is at
+  `0x08e8`.
 - Entry `0x0000` items to check against the interpreter before relying on
   them:
   - The `DIV Q, vf00w, vf31w` at `0x0358` reads `vf31.w` one pair before the
@@ -72,11 +99,12 @@ Steps 1 and 2 below are done; step 3 has not started. Nothing is committed.
   - The XGKICK packet at `vi05+160` overlaps output record 0.
 - Entry `0x1400`, 45 blocks, resumes at `0x2550`. Its only flag readers are
   `FCAND vi01,0x3e0` after `FCSET`/`CLIP` (no FMAND/FSAND/FCGET). XGKICK
-  points are at `0x1518`, `0x1f98`, `0x22f0` and `0x2530`. It has no RSQRT or
-  EFU ops. `DIV` is at `0x1b78`, `0x1cd0`, `0x1e40` and `0x1f20`.
-- Entry `0x0000`'s flag reads also appear to be only `FCAND` on clip flags. If
-  that holds, lazy flags reduce to "MAC/status exact at exit, clip exact at
-  each FCAND".
+  points are at `0x1518`, `0x1f98`, `0x22a0`, `0x22f0` and `0x2530`. It has
+  no RSQRT; its EFU use is ESADD at `0x20d0`/`0x2170` and MFP at `0x2168`,
+  the same light-loop shape as `0x0000`. `DIV` is at `0x1b78`, `0x1cd0`,
+  `0x1e40` and `0x1f20`.
+- Entry `0x0000`'s flag reads are also only `FCAND` on clip flags (confirmed
+  by the generator, which rejects MAC/status readers).
 - Still open: verify that pipeline state is quiescent at every *block* entry
   (it is only established at segment entry). Stalls inside a segment carry
   across branches, so per-block static counts may need per-edge counts, or a

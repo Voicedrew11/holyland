@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <Voicedrew11@gmail.com>
 Date: Fri, 9 Oct 2026 23:43:27 -0400
-Subject: [PATCH 15/15] vu1: opt-in microcode census (PS2X_VU1_CENSUS)
+Subject: [PATCH 27/28] vu1: opt-in microcode census (PS2X_VU1_CENSUS)
 
 Per (microcode hash, entry PC) run/resume counts and VU1 cycles, plus the
 microcode images, written to a file. Off unless the variable is set.
