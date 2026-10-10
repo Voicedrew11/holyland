@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-21 standalone fixture packages plus the separate audio-loopback diagnostic.
+23 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -63,7 +63,7 @@ $build = 'C:\KFIV-dev\test-builds\mpeg-tests'
 ```
 
 Repeat for the packages below. Use `Release` for
-`recompiler-resume-tests`, matching its tools libraries; use
+`recompiler-resume-tests` and `recompiler-sqrt-tests`, matching their tools libraries; use
 `RelWithDebInfo` for the other packages in the verified setup. Missing path
 settings fail at configuration. FFmpeg-dependent test executables stage
 their matching DLLs automatically. Keep test build directories external.
@@ -92,6 +92,8 @@ sources; expected failure behaviour is itself asserted.
 | `ee-callback-tests` | 244 | Actual scheduler/guest heap and synthetic guest callbacks; stale-entry cancellation, started continuations and tuple lifetime. Predicate-disabled scheduler is the control. |
 | `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |
+| `recompiler-sqrt-tests` | 49 fixed / 9 control | Actual decoder and FPU translator emit synthetic instructions that are compiled against runtime headers. Register operands, aliases, exception flags, signed zero and finite ground-edge normals; old operand bodies are restored only in the control. No retail game or runtime execution. |
+| `dma-chain-tests` | 245 fixed / 59 control failures | Actual PS2Memory, VIF0/VIF1, GIF arbiter, GS frontend and CPU backend; finite chains through 10000 tags, real CSR FINISH, CALL-stack reuse, IRQ/TIE and cycle guards. Synthetic input; an MSCAL callback counter substitutes VU execution. |
 | `gs-depth-tests` | 143,397 | Actual CPU GS backend and local memory with synthetic colors/texture; disabled and enabled depth tests, depth-write masking, movie-style DECAL sprite and CRT2 scanout. A scratch control removes only the ZTE fix. No decoder or retail assets. |
 | `gs-alignment-tests` | 853,552 per worker count | Actual CPU GS backend and local memory; scalar fixed-UV oracle, reversed axes, fractional offsets, bounds/scissor, flat Q and serial 64-pixel framebuffer feedback through the real texture cache. One/eight workers; optional prior-sprite control. No retail assets or presentation changes. |
 | `gs-trace-tests` | 59 fixed | Actual opt-in GS trace implementation with synthetic register, transfer, draw and privileged CRT state; inclusive tick bounds, CRT2 fields and fractional XYOFFSET diagnostics. Nine fixed cases and six controlled prior-behaviour cases. |
@@ -149,7 +151,7 @@ without asserting full cross-frame weave accuracy.
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The series now contains 28 patches. Before adding the GS depth
+failure. The series now contains 32 patches. Before adding the GS depth
 fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
@@ -170,6 +172,18 @@ the optional prior-source controls enabled; the old adaptive field path
 produced 1,290,243 failed pixel comparisons.
 GPU package relocation builds against fresh patched source,
 rather than requiring generated game code or a private runtime library.
+
+The relocated square-root package passed both native Windows CTests: 49
+production checks and nine old-operand controls. The complete 31-patch
+series passed tools twice, full after tools, full twice and tools after full
+from a fresh pinned checkout. Its normalized tree is
+`0b63a16cab6d60929661c1f0658c6f7fd4802ab8`; all 64 managed source files match
+the native build checkout. The seven patch-helper safety tests also passed.
+
+After the DMA-chain fix, a fresh 32-patch checkout passed the same repeated
+tools/full phases. Its normalized tree is
+`b035f6f9d78fa9259c414ad997d4bb84224913b2`; all 64 managed source files match
+the native build checkout. The unchanged helper safety tests were not repeated.
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately
 with CMake and no PS2Recomp path settings. It requires Windows build 20348+

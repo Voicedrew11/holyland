@@ -89,6 +89,8 @@ All are off by default. `dev-run.sh` sets the first four for you.
 | `PS2X_INPUT="t:BTN[+BTN]:dur,..."` | scripted pad presses at tick t for dur ticks. Buttons: `UP DOWN LEFT RIGHT START SELECT CROSS CIRCLE SQUARE TRIANGLE L1 R1 L2 R2 L3 R3` |
 | `PS2X_STATS=1` | print VSync ticks/s and display flips/s (game fps; full speed is 30) |
 | `PS2X_THREADS_AT_EXIT=1` | dump EE threads, semaphores and event flags at exit (what a stuck game waits on) |
+| `PS2X_WORLD_TRACE=1` | trace the guarded USA game's player state and collision-bank readiness on state changes and every 30 state entries |
+| `PS2X_IO_TRACE=1` | report actual CD reads and IOMAN open/read/write/seek results; `PS2X_IO_TRACE_LIMIT` defaults to 4096 events per source and is capped at 1,000,000 |
 | `PS2X_GS_TRACE=<file>` (+ `PS2X_GS_TRACE_FROM`/`_TO`) | GS register/transfer/primitive trace to a file, optionally limited to a range |
 | `PS2X_VRAM_DUMP=<file>` | raw 4 MB GS memory at exit |
 | `PS2X_NO_WEAVE=1` | present the raw interlaced field instead of the woven frame |

@@ -5,6 +5,19 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-09)
 
+- **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
+  prevent the initial floor fall. The next map was already loaded before
+  the fall. Corrected movement then exposed a separate FINISH wait: the
+  completed first-area VIF1 frame contained 4487 valid DMA tags, but the
+  runtime stopped at 4096 before FINISH in tag 4486. Patch 0032 replaces that
+  cutoff with traversal-state cycle detection, preserving CALL return-stack
+  context. The user crossed the door, walked through the next area, opened
+  inventory and reached the first NPC in the native Vulkan build.
+- **Newly reached limits:** the first NPC has a distorted skeletal pose,
+  confirmed against a normal seated pose. Returning to title and starting
+  again can stall the intro when audio backpressure prevents further movie
+  output; both issues are being traced. No full playthrough is established.
+
 - **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
   field to 448 rows on GPU. Earlier adaptive weave mixed previous
   presentation images into title/menu lettering. Native title and inventory

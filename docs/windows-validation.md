@@ -255,6 +255,40 @@ constitute a Linux build or execution test of the new changes.
 
 ## Remaining limits
 
+### Cave-door progression follow-up
+
+The interactive native Windows Vulkan run reproduced a long floor fall
+after the opening path's cave door. Both collision banks and all requested
+map reads were complete before the fall. Patch 0029 corrects SQRT.S to read
+Ft and RSQRT.S to divide Fs by sqrt(abs(Ft)); the actual generator fixture
+passed 49 checks and nine old-code controls. The complete game was
+regenerated with the same 28429/28161/268 function counts, 1352 fallback
+warnings and zero errors; 124 generated files changed when staged by content.
+
+With corrected collision calculations, the player crossed the map boundary
+and then waited indefinitely for GS FINISH. The completed VIF1 frame had
+4487 acyclic tags; its FINISH packet was in tag 4486, beyond the runtime's
+4096-tag cutoff. Patch 0032 removes that cutoff using constant-space cycle
+detection over the tag address and CALL return stack. Its synthetic fixture
+passed 245 checks through actual memory, VIF, GIF and CPU GS CSR handling;
+the old-limit control reproduced 59 failures. Both CTest entries passed.
+VU execution is replaced by an MSCAL counter in this fixture.
+
+The corrected native executable was tested interactively on the same route.
+The user confirmed movement, camera control and inventory beyond the door,
+then continued to the first NPC. The map selector changed from 0 to 1,
+subsequent positions remained on successive floor heights, and the next
+loader completed while gameplay continued. That exact tested executable
+was installed for the existing desktop shortcut. Fresh tools/full repeat
+application of all 32 patches reproduced source tree
+`b035f6f9d78fa9259c414ad997d4bb84224913b2`, with all 64 managed source files
+matching the native checkout. No Linux build was performed for these fixes.
+
+This establishes progression past the reported doorway, not later-area or
+full-playthrough stability. The newly reached first NPC has an incorrect
+skeletal pose; returning to title and starting again can hang the intro.
+Those issues remain under investigation.
+
 The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
 nearest bob of the current 224-row field. Title and inventory captures no
 longer show displaced alternating text rows. Its native keyboard-input run

@@ -199,6 +199,13 @@ copies existing cards into the test; originals are never used. Managed
 environment variables are restored afterwards. The default directory is
 under `%TEMP%\KFIV-tests`; run directories must be new or empty.
 
+For an interactive diagnostic session, add `-Visible` and leave `-InputScript`
+empty so the player controls the test copy. Use `-SkipFinalFrameCheck` when
+closing it manually instead of reaching its automatic exit tick. The same
+private cards and retained logs apply, and `result.json` records visibility.
+`-Environment @{PS2X_WORLD_TRACE='1';PS2X_IO_TRACE='1'}` enables player/map
+state and bounded read diagnostics. All diagnostics are off by default.
+
 `-Environment` accepts optional runtime variables, including
 `PS2X_HOST_INPUT`, `PS2X_INPUT_TRACE`, `PS2X_AUDIO_DUMP`,
 `PS2X_AUDIO_SOURCE_DUMP` and `PS2X_AUDIO_TRACE`. Use different paths for

@@ -37,16 +37,20 @@ commit); don't edit them by hand. Workflow:
 | `0026-Decode-interlaced-source-height-…` | Decode interlaced FRAME-mode source rows before the host-size cap. Gameplay's encoded 896 display lines retain all 448 source rows, rather than cropping to 256 and falsely doubling them. |
 | `0027-Add-Vulkan-GS-rasterization-…` | Optional paraLLEl-GS Vulkan compute rendering, transfers and logical scanout. Hardware Vulkan is preferred when compiled in; an explicit CPU reference remains available. Includes serialized cross-thread device access and GPU image readback for the existing host window. |
 | `0028-Bob-current-Vulkan-fields-…` | Expand the current 224-row field to 448 rows on GPU without weaving older presentations into title/menu text. Preserve raw-field diagnostics and explicitly transition the skipped-deinterlace image for transfer. |
+| `0029-Correct-EE-SQRT-and-RSQRT-source-operands` | SQRT.S reads Ft on the EE; RSQRT.S computes Fs / sqrt(abs(Ft)). Corrects ground-edge length calculations and handles source/destination aliases, signed zero and live/sticky exception flags. Rebuild tools and regenerate the game. |
+| `0030-Add-bounded-opt-in-disc-and-IOMAN-read-diagnostics` | `PS2X_IO_TRACE` reports actual CD/IOMAN reads and completion, capped by `PS2X_IO_TRACE_LIMIT`; normal I/O behaviour is unchanged. |
+| `0031-Trace-guarded-KFIV-world-and-collision-bank-state-on` | `PS2X_WORLD_TRACE` observes the USA game's player position and collision-bank readiness through the existing metadata/opcode-guarded input hook. Guest memory is read only. |
+| `0032-Walk-complete-finite-DMA-chains-without-a-tag-count-` | Complete finite VIF/GIF source chains beyond 4096 tags, preserving tail FINISH packets. A constant-space traversal-state cycle detector protects against invalid loops and includes the CALL return stack. |
 
-The recompiler hunks in patch 0022 must also be applied **before generating
+The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
 patch helper before building `ps2_recomp`; `03-build-runner.sh` applies the
 complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 28-patch series retains patches 0001–0014 unchanged. Fourteen additions,
-0015–0028, were exported from source commits on top of that series. The
+The 32-patch series retains patches 0001–0014 unchanged. Eighteen additions,
+0015–0032, were exported from source commits on top of that series. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in
