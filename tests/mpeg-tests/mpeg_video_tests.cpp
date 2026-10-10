@@ -117,8 +117,8 @@ void end(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
     R5900Context query{}; reg(query, 4, mpeg);
     ps2_stubs::sceMpegIsEnd(ram, &query, runtime);
     check(getRegU32(&query, 2) == 1u, "actual decode and final presentation finish at EOF");
-    check(pictureCalls == 3u && noDataCalls == 1u && videoCalls == 2u,
-          "rejected retry neither duplicates video decode nor picture/input callbacks");
+    check(pictureCalls == 3u && noDataCalls == 4u && videoCalls == 2u,
+          "rejected retry preserves one accepted payload and input service at each real picture");
     R5900Context reset{}; reg(reset, 4, mpeg);
     ps2_stubs::sceMpegReset(ram, &reset, runtime);
     check((runtime->memory().read32(d4) & 0x100u) == 0u && runtime->memory().read32(d4 + 0x20u) == 0u,
@@ -157,10 +157,21 @@ void noData(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
           "decoder input service invokes ordinary NODATA type1 ABI");
     check(getRegU32(ctx, 6) == 0x55667788u && videoCalls == 2u,
           "ordinary input service follows stream acceptance and preserves userdata");
-    runtime->memory().write32(0x1000E000u, 1u);
-    runtime->memory().write32(d4 + 0x10u, dmaSource);
-    runtime->memory().write32(d4 + 0x20u, 68u);
-    runtime->memory().write32(d4, 0x101u);
+    if (noDataCalls == 1u)
+    {
+        runtime->memory().write32(0x1000E000u, 1u);
+        runtime->memory().write32(d4 + 0x10u, dmaSource);
+        runtime->memory().write32(d4 + 0x20u, 68u);
+        runtime->memory().write32(d4, 0x101u);
+    }
+    else
+    {
+        const uint32_t retired = static_cast<uint32_t>(elementary.size() / 16u * 16u);
+        check(noDataCalls == pictureCalls + 1u &&
+              runtime->memory().read32(d4 + 0x10u) == dmaSource + retired &&
+              runtime->memory().read32(d4 + 0x20u) == 68u - retired / 16u,
+              "picture handoff input service neither credits nor replays compressed DMA bytes");
+    }
     reg(*ctx, 2, 1u);
     ctx->pc = 0u;
 }

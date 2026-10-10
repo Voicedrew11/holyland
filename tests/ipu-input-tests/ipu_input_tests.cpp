@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -133,6 +134,143 @@ void stopResumeAndRejectedBytes(PS2Memory &memory)
     require(memory.read32(madr) == 0x40040u && (memory.read32(channel) & 0x100u) == 0u, "final accepted quadword completes resumed REFE");
     expectIrq(memory, 1u);
 }
+void retagPartialTerminal(PS2Memory &memory)
+{
+    // SDK movie rings extend a suspended tail by changing REFE to REF and
+    // publishing that same tag ID in CHCR. MADR/QWC/TADR need no rewrite.
+    constexpr uint32_t tags = 0x27000u, input = 0x70000u;
+    for (const bool delayedEnable : {false, true})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 0u, 2u, input);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "extension starts with a partially consumed terminal tag");
+        require(memory.read32(tadr) == tags + 16u, "partial tail retains its successor TADR");
+        expectIrq(memory, 0u);
+        memory.write32(channel, memory.read32(channel) & ~0x100u);
+        tag(memory, tags, 3u, 2u, input);
+        if (delayedEnable) memory.write32(0x1000E000u, 0u);
+        memory.write32(channel, 0x30000105u);
+        for (unsigned poll = 0u; poll < 8u; ++poll)
+            require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+                (memory.read32(channel) & 0x100u) != 0u,
+                "CHCR retagging never consumes uncredited input");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(48u);
+        if (delayedEnable)
+        {
+            require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+                "disabled DMAC holds accepted credit across a CHCR retag");
+            expectIrq(memory, 0u);
+            memory.write32(0x1000E000u, 1u);
+        }
+        require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u,
+            "resumed REF follows its successor instead of the cached terminal state");
+        require(memory.read32(tadr) == tags + 32u && (memory.read32(channel) & 0x100u) == 0u,
+            "extended ring retires exactly the new terminal tag");
+        expectIrq(memory, 1u);
+
+        // All 48 accepted bytes went to the tail and successor. A later
+        // transfer cannot inherit fabricated or double-counted input credit.
+        startNormal(memory, input + 128u, 1u);
+        require(memory.read32(madr) == input + 128u && memory.read32(qwc) == 1u,
+            "ring extension leaves no fabricated credit for another transfer");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(15u);
+        require(memory.read32(qwc) == 1u, "fractional credit remains fractional after a ring extension");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(1u);
+        require(memory.read32(madr) == input + 144u && memory.read32(qwc) == 0u,
+            "only the final real byte retires the later quadword");
+        expectIrq(memory, 1u);
+    }
+}
+void retagPartialNonterminal(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x28000u, input = 0x71000u;
+    for (const uint32_t terminalId : {0u, 7u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags);
+        memory.creditIpuInputBytes(16u);
+        memory.write32(channel, memory.read32(channel) & ~0x100u);
+        memory.write32(channel, (terminalId << 28u) | 0x105u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "restored terminal CHCR preserves unread payload");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+            (memory.read32(channel) & 0x100u) == 0u,
+            "REF resumed as REFE or END completes after its current payload");
+        require(memory.read32(tadr) == tags + 16u, "new terminal CHCR does not fetch its queued successor");
+        expectIrq(memory, 1u);
+    }
+}
+void resumeUsesCurrentTieAndIrq(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x29000u, input = 0x72000u;
+    for (const bool enableTieOnResume : {false, true})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input, true);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags, enableTieOnResume ? 0x105u : 0x185u);
+        memory.creditIpuInputBytes(16u);
+        const uint32_t fetched = memory.read32(channel);
+        require((fetched & 0xF0000000u) == 0xB0000000u, "fetched CHCR exposes the REF tag IRQ bit");
+        memory.write32(channel, fetched & ~0x100u);
+        const uint32_t resumed = enableTieOnResume ? fetched | 0x80u : fetched & ~0x80u;
+        memory.write32(channel, resumed);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "changing TIE cannot itself earn input credit");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        if (enableTieOnResume)
+        {
+            require(memory.read32(qwc) == 0u && memory.read32(madr) == input + 32u &&
+                (memory.read32(channel) & 0x100u) == 0u,
+                "enabling TIE on resume honors the current CHCR IRQ bit");
+            require(memory.read32(tadr) == tags + 16u, "resumed tag IRQ prevents successor fetch");
+            expectIrq(memory, 1u);
+        }
+        else
+        {
+            require(memory.read32(qwc) == 2u && memory.read32(madr) == input + 32u &&
+                (memory.read32(channel) & 0x100u) != 0u,
+                "disabling TIE on resume continues past the old IRQ terminal state");
+            expectIrq(memory, 0u);
+            memory.creditIpuInputBytes(32u);
+            require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u,
+                "noninterrupting resumed REF consumes its real terminal successor");
+            expectIrq(memory, 1u);
+        }
+    }
+}
+void zeroQwcStartsAtTadr(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2A000u, input = 0x73000u;
+    for (const uint32_t staleTag : {0u, 0x70000000u, 0xB0000080u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 0u, 1u, input);
+        startChain(memory, tags, staleTag | 0x105u);
+        require(memory.read32(madr) == input && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u,
+            "zero-QWC resume fetches TADR despite an old terminal or IRQ CHCR tag");
+        require((memory.read32(channel) & 0xF0000000u) == 0u,
+            "fresh TADR tag replaces stale CHCR terminal and IRQ bits");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 0u,
+            "fresh zero-QWC chain consumes only its accepted payload");
+        expectIrq(memory, 1u);
+    }
+}
 void tagInterruptsAndMalformedChain(PS2Memory &memory)
 {
     memory.resetIpuInputConsumption();
@@ -211,14 +349,30 @@ int main()
         creditBeforeSubmitAndReset(memory);
         retailBlocksAndWrap(memory);
         stopResumeAndRejectedBytes(memory);
+        retagPartialTerminal(memory);
+        retagPartialNonterminal(memory);
+        resumeUsesCurrentTieAndIrq(memory);
+        zeroQwcStartsAtTadr(memory);
         tagInterruptsAndMalformedChain(memory);
         inlineTagsAndScratchpad(memory);
         disabledControllerAndHardwareReset(memory);
+#ifdef IPU_RESUME_OLD_CONTROL
+        throw std::runtime_error("old IPU resume control did not reproduce stale terminal classification");
+#endif
         std::cout << "kfiv_ipu_input_regression: " << checks << " checks, 0 failures\n";
         return 0;
     }
     catch (const std::exception &error)
     {
+#ifdef IPU_RESUME_OLD_CONTROL
+        if (std::string(error.what()) ==
+            "resumed REF follows its successor instead of the cached terminal state")
+        {
+            std::cout << "kfiv_ipu_input_old_control: expected stale terminal classification after "
+                << checks << " checks\n";
+            return 0;
+        }
+#endif
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n';
         return 1;
     }

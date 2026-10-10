@@ -25,7 +25,10 @@ place as state changes; link session logs at the point they support.
   intro when audio backpressure prevents further video, starving the
   registered UPDATE callback which pumps its audio consumer. Patch 0033
   adds bounded output service on that rejection path. The native MPEG
-  package passed all seven CTests and 623 checks; retail replay confirmation
+  package passed all nine CTests and 789 checks. Patches 0035/0036 add the
+  original SDK's picture input-service boundary and reclassify resumed IPU
+  chains using the current CHCR tag. The actual-memory fixture passed 225
+  checks and an exact stale-terminal control; retail replay confirmation
   remains in progress. No full playthrough is established.
 
 - **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
@@ -80,11 +83,15 @@ place as state changes; link session logs at the point they support.
   rows and triggered false field doubling. Patch 0026 converts the height
   before capping it, retaining all 448 gameplay rows. The movie's existing
   224-row field path and the general weave implementation are unchanged.
-- **Installed gameplay verification:** the final build reached tick 4,800
+- **Earlier gameplay verification:** the source-height build reached tick 4,800
   normally in 137.034 seconds, with 81 captures at 640×448 showing the full
   scene and HUD. W movement, camera turning, inventory entry/back and
   pause/resume were verified; opening movie pictures remained visible.
-  The installed executable, 28 matching DLLs and shortcut use that build.
+  The current installed executable includes the subsequent Vulkan, text,
+  cave-door and shared skeletal fixes, with 28 matching DLLs. The existing
+  shortcut targets that executable. The user verified the cave route and
+  seated guard interactively; that diagnostic copy was then closed at the
+  user's request, rather than exiting normally at a fixed tick.
   This is visible integration evidence, not full PS2 pixel equivalence.
 - **Remaining problems:** interlace combing appears in some movie frames,
   broader 3D rendering accuracy remains unverified, and gameplay is below
@@ -97,13 +104,16 @@ place as state changes; link session logs at the point they support.
   loader still run. Earlier black-picture builds could look like a hang
   with PC audio muted. PR publication did not itself change the executable.
 - **Source delivery:** existing patches 0001–0014 are unchanged. New
-  source-exported patches 0015–0026 include Windows build/input, loader
+  source-exported patches 0015–0036 include Windows build/input, loader
   completion, capture UI, timing, native audio/MPEG, GS depth and sprite fixes,
-  source-height decoding and bounded diagnostics. The 26-patch series has
-  twelve additions affecting 43 source/license/build files. Generator hunks must be applied to tools
+  source-height decoding, Vulkan, text presentation, collision arithmetic,
+  complete DMA chains, shared skeletal conversion and bounded diagnostics.
+  The 36-patch series has twenty-two additions and 65 managed source paths.
+  Generator hunks must be applied to tools
   before generating the game; rebuilding only the runtime leaves stale
   continuation registration.
-- **Verification:** the repository now holds 20 standalone fixture packages.
+- **Verification:** the repository holds 24 standalone fixture packages,
+  plus the separate audio-loopback diagnostic.
   The original 16 passed 26 CTest entries on Windows, along with seven
   patch-helper tests and earlier full-series application/reruns. The new
   GS depth fixture passed 143,397 checks and 2/2 CTest entries; focused

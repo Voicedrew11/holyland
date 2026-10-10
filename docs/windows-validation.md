@@ -191,7 +191,7 @@ sound or A/V synchronization.
 
 ## Relocated repository checks
 
-The repository contains 20 [standalone source-only fixture packages](../tests/README.md),
+The repository contains 24 [standalone source-only fixture packages](../tests/README.md),
 plus the separate audio-loopback diagnostic. The original 16 were independently
 configured, built and run from their new repository paths on native Windows:
 **26/26 CTest entries passed**, with `/fp:strict`. The process audio-loopback
@@ -319,6 +319,41 @@ screenshot. That exact tested executable was installed for the existing
 desktop shortcut. Conversation and later characters were not independently
 verified. These checks do not establish accuracy of every EE operation or
 a full playthrough.
+
+### Movie replay input follow-up
+
+The audio-service correction in patch 0033 releases the first replay
+deadlock, but the second intro then stalled after ten decoded pictures.
+The SDK also services NODATA after picture output. Patch 0035 restores that
+registered callback after UPDATE at each real handoff, with the existing
+generation and cancellation guards. A native callback-only comparison
+still stalled at ten pictures; handoff service alone is insufficient.
+
+The game promotes a suspended ring tail from REFE to REF and updates CHCR
+without changing MADR/QWC/TADR. The runtime retained its old terminal
+classification and completed before the successor payload. Patch 0036
+invalidates that cache on STR starts. This follows the current-tag resume
+handling in [pinned PCSX2 dmaIPU1](https://github.com/PCSX2/pcsx2/blob/355608952714678b3c57832fb82dc6a42956ed25/pcsx2/IPU/IPUdma.cpp#L232-L266).
+Accepted decoder-byte credits remain the sole basis for payload retirement.
+
+The actual-memory package passed 225 native checks and both CTests,
+including a scratch source control reproducing stale terminal completion
+at check 103. It covers both retagging directions, unchanged resume,
+controller suspension, IRQ/TIE changes and zero-QWC TADR fetch. MPEG's
+production-source fixtures passed 789 checks and all nine CTests after
+rebuilding against the combined runtime, covering real FFmpeg handoff,
+callback ABI/order, cancellation and unchanged byte/picture accounting.
+Retail replay of the combined callback/retag build also stalled at ten
+pictures. The retag correction is independently verified, but does not
+clear this replay blockage. The SDK's input service during empty-decoder
+waits is the next investigation; these candidates have not replaced the
+installed, interactively verified cave/NPC build.
+
+All 36 patches passed fresh and repeated tools/full application. The
+normalized tree is `ddbf17571c717e22afb0a6890030a35f8e86ce0a`, and all 65
+managed source files match the native checkout and clean source export.
+No new generator change was made in these two patches; the native runner
+uses the previously regenerated game output.
 
 The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
 nearest bob of the current 224-row field. Title and inventory captures no
