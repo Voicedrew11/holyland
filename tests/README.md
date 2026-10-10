@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-30 standalone fixture packages plus the separate audio-loopback diagnostic.
+30 runtime/generator fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -22,6 +22,11 @@ and a private recording replay. It contains synthetic inputs only and
 requires a compatible hardware GPU for its Vulkan cases. See
 [Vulkan rendering](../docs/vulkan.md) for native integration evidence and
 the limited whole-game speed improvement.
+
+The separate [PGO helper guard suite](pgo-helper-tests/README.md) has six
+source-only Python tests for merge/link provenance and safe retries. It uses
+authored inputs and mocked tools, needs no compiler or game data, and does
+not establish actual MSVC optimization or gameplay speed.
 
 All files in `tests/` are provided under GPL-3.0, consistent with the
 PS2Recomp code they exercise or derive from. See [LICENSE](LICENSE).

@@ -67,20 +67,31 @@ python $helper optimize --output $pgo
 if ($LASTEXITCODE) { throw 'Profile merge or optimized relink failed.' }
 ```
 
-Optimization records the instrumented EXE, individual PGC hashes and PGD
-hashes before/after the merge in `profile-inputs.json`. Runtime DLLs,
+Optimization leaves the original `training.pgd` unchanged and merges into
+a disposable copy under `merge-attempts/<number>/`. It records the
+instrumented EXE, individual PGC hashes and PGD hashes before/after the
+merge in `profile-inputs.json`. Runtime DLLs,
 profiling runtime, link inputs/tools/responses and training identity are
 checked again before and after linking. `/USEPROFILE` receives an exclusive
 writable `profile-work.pgd` copy because LINK can update PGD bookkeeping.
-The merged training PGD and `profile-input.pgd` remain pinned. The final
+The unmerged training PGD, merged attempt and `profile-input.pgd` remain
+pinned. The final
 `optimized-result.json` records the input/output PGD, response, log,
 EXE/PDB and preserved-file hashes. Only that recorded executable is the
 completed optimized result.
 
 A helper stage holds an exclusive `.pgo-stage.lock`; if its process crashes,
-inspect that stage before removing the stale marker. Never rerun a recorded
-PGC merge: doing so can double-count the training runs. For a snapshot made
-with an older helper that completed `/USEPROFILE` but rejected LINK's PGD
+inspect that stage before removing the stale marker. A failed merge keeps
+its partial PGD and log in that attempt directory. After quitting training
+and resolving the reported failure, retrying `optimize` starts from the
+unchanged training PGD in a new attempt, preserving the failed output.
+Once `profile-inputs.json` records a completed merge, the helper refuses
+another merge. If linking subsequently fails, retain the evidence and use
+a fresh snapshot. Older unrecorded merge attempts are also rejected because
+their training PGD may already have been modified.
+
+For a snapshot made with an older helper that completed `/USEPROFILE` but
+rejected LINK's PGD
 bookkeeping update, preserve its outputs and use the explicit recovery stage:
 
 ```powershell
@@ -110,6 +121,10 @@ inputs and run an independent optimized differential fixture as well.
 Keep generated game code, profiles, frozen objects/libraries, catalogs,
 logs and binaries outside Git. This repository supplies only the workflow
 source. No Linux PGO or full-playthrough validation is implied.
+
+The [helper guard tests](../tests/pgo-helper-tests/README.md) use mocked
+merge/link operations and authored inputs to check failure and retry
+semantics without MSVC or game data.
 
 MSVC's [PGO overview](https://learn.microsoft.com/en-us/cpp/build/profile-guided-optimizations?view=msvc-170)
 describes the `/GL`, `/GENPROFILE` and `/USEPROFILE` stages. The helper

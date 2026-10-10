@@ -226,6 +226,47 @@ def copy_checked(source, destination, expected):
         raise ValueError('The profile changed while making an isolated copy')
 
 
+def merge_profiles(root, manifest, profiles, trained):
+    # pgomgr can update a PGD before failing or before a post-merge guard fails.
+    # Never pass the training PGD itself: every retry starts from the same input
+    # in a new attempt directory, retaining partial outputs for inspection.
+    pgd = root / 'training.pgd'
+    preserved = [file_record(pgd), file_record(root / 'train/ps2EntryRunner.exe'),
+                 file_record(root / 'train-result.json'), file_record(root / 'link-inputs.json')]
+    if preserved[1]['sha256'] != trained['sha256']:
+        raise ValueError('The instrumented training executable changed before merging')
+    before = preserved[0]['sha256']
+    profile_inputs = {'schema': 2, 'training_executable_sha256': trained['sha256'],
+                      'pgd_before_merge_sha256': before,
+                      'profiles': [file_record(path) for path in profiles]}
+    attempts = root / 'merge-attempts'
+    attempts.mkdir(exist_ok=True)
+    number = 1
+    while (attempts / f'{number:04d}').exists():
+        number += 1
+    attempt = attempts / f'{number:04d}'
+    attempt.mkdir()
+    base, work = attempt / 'profile-base.pgd', attempt / 'profile-merge.pgd'
+    copy_checked(pgd, base, before)
+    copy_checked(base, work, before)
+    attempt_inputs = attempt / 'inputs.json'
+    attempt_inputs.write_text(json.dumps(profile_inputs, indent=2) + '\n', encoding='utf-8')
+    preserved.extend((file_record(base), file_record(attempt_inputs)))
+    log = attempt / 'merge.log'
+    run([manifest['tools']['pgomgr']['path'], '/merge', *profiles, work],
+        root, manifest, str(log.relative_to(root)))
+    if 'PG1052' in log.read_text(encoding='utf-8'):
+        raise ValueError('A PGC belongs to a different PGD; do not optimize with mixed training identities')
+    checked_manifest(root)
+    checked_profiles(root, profile_inputs['profiles'])
+    verify_records(preserved)
+    profile_inputs['pgd_after_merge_sha256'] = digest(work)
+    profile_inputs['merge_attempt'] = {
+        'input': file_record(base), 'output': file_record(work),
+        'inputs': file_record(attempt_inputs), 'log': file_record(log)}
+    return profile_inputs, work, log, preserved
+
+
 def finish_profile_link(root, manifest, destination, response, profile_inputs,
                         preserved, stage):
     # LINK /USEPROFILE can update PGD bookkeeping. Only this exclusive
@@ -336,31 +377,26 @@ def relink_unlocked(args):
     if args.stage == 'optimize':
         if (root / 'profile-inputs.json').exists():
             raise ValueError('A merge record already exists; do not merge the same PGC files twice')
+        if (root / 'merge-profile.log').exists():
+            raise ValueError('An older merge attempt has no completed record; preserve it and create a fresh snapshot')
         profiles = sorted((root / 'train').glob('*.pgc'))
         if not profiles or not (root / 'training.pgd').is_file():
             raise ValueError('Run the private training EXE and quit normally before optimization')
         trained = json.loads((root / 'train-result.json').read_text(encoding='utf-8'))
         if digest(root / 'train/ps2EntryRunner.exe') != trained['sha256']:
             raise ValueError('The instrumented training executable changed')
-        profile_inputs = {'schema': 1, 'training_executable_sha256': trained['sha256'],
-                          'pgd_before_merge_sha256': digest(root / 'training.pgd'),
-                          'profiles': [{'path': str(path), 'sha256': digest(path),
-                                        'bytes': path.stat().st_size} for path in profiles]}
-        run([manifest['tools']['pgomgr']['path'], '/merge', *profiles, root / 'training.pgd'],
-            root, manifest, 'merge-profile.log')
-        if 'PG1052' in (root / 'merge-profile.log').read_text(encoding='utf-8'):
-            raise ValueError('A PGC belongs to a different PGD; do not optimize with mixed training identities')
-        for item in profile_inputs['profiles']:
-            if digest(Path(item['path'])) != item['sha256']:
-                raise ValueError('A training PGC changed during merge; quit the game before optimizing')
-        profile_inputs['pgd_after_merge_sha256'] = digest(root / 'training.pgd')
+        profile_inputs, merged, merge_log, preserved = merge_profiles(root, manifest, profiles, trained)
         (root / 'profile-inputs.json').write_text(json.dumps(profile_inputs, indent=2) + '\n', encoding='utf-8')
+        # Publish the summary only after guards succeed. Failed attempts remain
+        # under merge-attempts, and never appear to be a completed merge.
+        shutil.copyfile(merge_log, root / 'merge-profile.log')
         destination = root / 'optimized'
-        copy_checked(root / 'training.pgd', destination / 'profile-input.pgd', profile_inputs['pgd_after_merge_sha256'])
+        copy_checked(merged, destination / 'profile-input.pgd', profile_inputs['pgd_after_merge_sha256'])
         (destination / 'profile-inputs.json').write_text(json.dumps(profile_inputs, indent=2) + '\n', encoding='utf-8')
+        preserved.extend((file_record(merged), file_record(merge_log),
+                          file_record(root / 'profile-inputs.json'), file_record(root / 'merge-profile.log')))
         finish_profile_link(root, manifest, destination, root / 'optimized.rsp', profile_inputs,
-                            [file_record(root / 'training.pgd'), file_record(root / 'profile-inputs.json'),
-                             file_record(root / 'train/ps2EntryRunner.exe')], args.stage)
+                            preserved, args.stage)
         return
     run([link, '@' + str(root / (mode + '.rsp'))], root, manifest, mode + '-link.log')
     exe = root / mode / 'ps2EntryRunner.exe'
