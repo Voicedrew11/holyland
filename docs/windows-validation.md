@@ -285,9 +285,40 @@ application of all 32 patches reproduced source tree
 matching the native checkout. No Linux build was performed for these fixes.
 
 This establishes progression past the reported doorway, not later-area or
-full-playthrough stability. The newly reached first NPC has an incorrect
-skeletal pose; returning to title and starting again can hang the intro.
-Those issues remain under investigation.
+full-playthrough stability. The newly reached first NPC initially had an
+incorrect skeletal pose; the shared conversion follow-up below resolves it.
+Returning to title and starting again could hang the intro; native replay
+verification is ongoing.
+
+### Shared skeletal conversion follow-up
+
+The first NPC's character resource and animation payload matched the owned
+disc; its world placement matrix was upright. The shared bone builder used
+CVT.W.S for angle range reduction, but the runtime's host `nearbyintf`
+rounded instead of performing the EE's truncation. Positive angles could
+leave the principal interval and reverse the resulting polynomial rotations.
+Two independent reconstructions reproduced all 21 corrupted local joint
+matrices using the former conversion.
+
+Patch 0034 corrects the shared runtime instruction with integer bit decoding,
+truncation toward zero and sign saturation. It preserves FCR31 and does not
+depend on the host rounding mode or perform undefined overflowing casts.
+The actual decoder/translator compile-and-execute fixture passed 199,956
+checks; restoring only the old macro produced 920 failures in 133,316 checks.
+Both native Windows CTests passed. No character model, animation or physics
+override was added; existing generated game code calls the corrected macro.
+
+The full native runner was rebuilt with this header. Read-only RAM captured
+beyond the door contains 21 joint matrices matching the independently
+reconstructed truncating pose to 1.19e-7 maximum rotation error and 1.53e-5
+maximum overall matrix error. Fresh application and repeat of all 34 patches
+reproduce normalized tree `1ed68a278461aefe519657d06a8b51178b7f8c26`;
+all 65 managed files match the native checkout and clean source export.
+The user confirmed the first NPC is seated upright, with a matching
+screenshot. That exact tested executable was installed for the existing
+desktop shortcut. Conversation and later characters were not independently
+verified. These checks do not establish accuracy of every EE operation or
+a full playthrough.
 
 The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
 nearest bob of the current 224-row field. Title and inventory captures no

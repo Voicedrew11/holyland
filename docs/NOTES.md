@@ -13,10 +13,20 @@ place as state changes; link session logs at the point they support.
   cutoff with traversal-state cycle detection, preserving CALL return-stack
   context. The user crossed the door, walked through the next area, opened
   inventory and reached the first NPC in the native Vulkan build.
-- **Newly reached limits:** the first NPC has a distorted skeletal pose,
-  confirmed against a normal seated pose. Returning to title and starting
-  again can stall the intro when audio backpressure prevents further movie
-  output; both issues are being traced. No full playthrough is established.
+- **Shared skeletal math:** patch 0034 corrects EE CVT.W.S from host
+  rounding to truncation with sign saturation. The old conversion sent
+  positive joint angles outside the original trig polynomial's interval.
+  Two independent reconstructions reproduced all 21 corrupted NPC matrices;
+  the corrected native capture matches the truncating pose, and the user
+  confirmed the NPC is seated upright. No model or animation override is used.
+  The actual generated-instruction fixture passed 199,956 checks; the old
+  macro produced 920 failures. This shared fix applies to all callers.
+- **Movie restart:** returning to title and starting again can stall the
+  intro when audio backpressure prevents further video, starving the
+  registered UPDATE callback which pumps its audio consumer. Patch 0033
+  adds bounded output service on that rejection path. The native MPEG
+  package passed all seven CTests and 623 checks; retail replay confirmation
+  remains in progress. No full playthrough is established.
 
 - **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
   field to 448 rows on GPU. Earlier adaptive weave mixed previous

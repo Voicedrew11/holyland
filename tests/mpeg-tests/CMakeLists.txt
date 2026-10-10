@@ -27,6 +27,14 @@ target_link_libraries(kfiv_mpeg_tests PRIVATE
     "${FFMPEG_DIR}/bin/avutil.lib" "${FFMPEG_DIR}/bin/swresample.lib"
     "${FFMPEG_DIR}/bin/swscale.lib"
     opengl32 glu32 winmm bcrypt secur32 ws2_32 user32 advapi32 ole32 shell32 gdi32)
+if(EXISTS "${RUNTIME_BUILD_DIR}/parallel-gs/gs")
+    target_link_libraries(kfiv_mpeg_tests PRIVATE
+        "${RUNTIME_BUILD_DIR}/parallel-gs/gs/$<CONFIG>/parallel-gs.lib"
+        "${RUNTIME_BUILD_DIR}/parallel-gs/Granite/vulkan/$<CONFIG>/granite-vulkan.lib"
+        "${RUNTIME_BUILD_DIR}/parallel-gs/Granite/third_party/$<CONFIG>/granite-volk.lib"
+        "${RUNTIME_BUILD_DIR}/parallel-gs/Granite/util/$<CONFIG>/granite-util.lib"
+        "${RUNTIME_BUILD_DIR}/parallel-gs/Granite/math/$<CONFIG>/granite-math.lib")
+endif()
 if(MSVC)
     target_compile_options(kfiv_mpeg_tests PRIVATE /W4 /permissive- /bigobj)
     target_link_options(kfiv_mpeg_tests PRIVATE /STACK:16777216)
@@ -102,3 +110,46 @@ add_custom_command(TARGET kfiv_mpeg_snapshot_tests POST_BUILD COMMAND "${CMAKE_C
     -P "${PS2RECOMP_DIR}/ps2xRuntime/cmake/CopyFfmpegDlls.cmake")
 add_test(NAME kfiv_mpeg_retry_snapshot_regression COMMAND kfiv_mpeg_snapshot_tests)
 set_tests_properties(kfiv_mpeg_retry_snapshot_regression PROPERTIES TIMEOUT 10)
+
+add_executable(kfiv_mpeg_audio_service_tests mpeg_audio_service_tests.cpp "${MPEG_SOURCE}"
+    "${PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
+target_include_directories(kfiv_mpeg_audio_service_tests PRIVATE ${MPEG_TEST_INCLUDES})
+target_link_libraries(kfiv_mpeg_audio_service_tests PRIVATE ${MPEG_TEST_LIBRARIES})
+target_compile_features(kfiv_mpeg_audio_service_tests PRIVATE cxx_std_20)
+target_compile_definitions(kfiv_mpeg_audio_service_tests PRIVATE PS2X_HAS_FFMPEG=1 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(kfiv_mpeg_audio_service_tests PRIVATE /W4 /permissive- /bigobj)
+    target_link_options(kfiv_mpeg_audio_service_tests PRIVATE /STACK:16777216)
+endif()
+add_custom_command(TARGET kfiv_mpeg_audio_service_tests POST_BUILD COMMAND "${CMAKE_COMMAND}"
+    "-Dsource_dir=${FFMPEG_DIR}/bin" "-Ddest_dir=$<TARGET_FILE_DIR:kfiv_mpeg_audio_service_tests>"
+    -P "${PS2RECOMP_DIR}/ps2xRuntime/cmake/CopyFfmpegDlls.cmake")
+add_test(NAME kfiv_mpeg_audio_output_service_regression COMMAND kfiv_mpeg_audio_service_tests)
+set_tests_properties(kfiv_mpeg_audio_output_service_regression PROPERTIES TIMEOUT 10)
+
+option(MPEG_AUDIO_SERVICE_OLD_CONTROL "Build a scratch source comparison without audio output service" OFF)
+if(MPEG_AUDIO_SERVICE_OLD_CONTROL)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(MPEG_AUDIO_CONTROL_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/audio-service-control/MPEG.cpp")
+    add_custom_command(OUTPUT "${MPEG_AUDIO_CONTROL_SOURCE}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/make_audio_service_control.py"
+            "${MPEG_SOURCE}" "${MPEG_AUDIO_CONTROL_SOURCE}"
+        DEPENDS "${MPEG_SOURCE}" "${CMAKE_CURRENT_SOURCE_DIR}/make_audio_service_control.py"
+        VERBATIM)
+    add_executable(kfiv_mpeg_audio_service_old_control mpeg_audio_service_tests.cpp
+        "${MPEG_AUDIO_CONTROL_SOURCE}" "${PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
+    target_include_directories(kfiv_mpeg_audio_service_old_control PRIVATE ${MPEG_TEST_INCLUDES})
+    target_link_libraries(kfiv_mpeg_audio_service_old_control PRIVATE ${MPEG_TEST_LIBRARIES})
+    target_compile_features(kfiv_mpeg_audio_service_old_control PRIVATE cxx_std_20)
+    target_compile_definitions(kfiv_mpeg_audio_service_old_control PRIVATE
+        PS2X_HAS_FFMPEG=1 _CRT_SECURE_NO_WARNINGS MPEG_AUDIO_SERVICE_OLD_CONTROL=1)
+    if(MSVC)
+        target_compile_options(kfiv_mpeg_audio_service_old_control PRIVATE /W4 /permissive- /bigobj)
+        target_link_options(kfiv_mpeg_audio_service_old_control PRIVATE /STACK:16777216)
+    endif()
+    add_custom_command(TARGET kfiv_mpeg_audio_service_old_control POST_BUILD COMMAND "${CMAKE_COMMAND}"
+        "-Dsource_dir=${FFMPEG_DIR}/bin" "-Ddest_dir=$<TARGET_FILE_DIR:kfiv_mpeg_audio_service_old_control>"
+        -P "${PS2RECOMP_DIR}/ps2xRuntime/cmake/CopyFfmpegDlls.cmake")
+    add_test(NAME kfiv_mpeg_audio_output_service_old_control COMMAND kfiv_mpeg_audio_service_old_control)
+    set_tests_properties(kfiv_mpeg_audio_output_service_old_control PROPERTIES TIMEOUT 10)
+endif()

@@ -41,6 +41,8 @@ commit); don't edit them by hand. Workflow:
 | `0030-Add-bounded-opt-in-disc-and-IOMAN-read-diagnostics` | `PS2X_IO_TRACE` reports actual CD/IOMAN reads and completion, capped by `PS2X_IO_TRACE_LIMIT`; normal I/O behaviour is unchanged. |
 | `0031-Trace-guarded-KFIV-world-and-collision-bank-state-on` | `PS2X_WORLD_TRACE` observes the USA game's player position and collision-bank readiness through the existing metadata/opcode-guarded input hook. Guest memory is read only. |
 | `0032-Walk-complete-finite-DMA-chains-without-a-tag-count-` | Complete finite VIF/GIF source chains beyond 4096 tags, preserving tail FINISH packets. A constant-space traversal-state cycle detector protects against invalid loops and includes the CALL return stack. |
+| `0033-Service-MPEG-output-callbacks-when-audio-backpressur` | Service the registered SDK UPDATE callback when a rejected audio packet blocks further video and the decoded queue is empty. Retain the packet for retry; rate-limit additional service by VSync and preserve cancellation guards. |
+| `0034-Truncate-and-saturate-EE-CVT.W.S-independently-of-ho` | EE CVT.W.S truncates toward zero and saturates by sign regardless of host rounding mode. Corrects shared angle range reduction used by skeletal matrices; no character-specific pose override. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -49,8 +51,8 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 32-patch series retains patches 0001–0014 unchanged. Eighteen additions,
-0015–0032, were exported from source commits on top of that series. The
+The 34-patch series retains patches 0001–0014 unchanged. Twenty additions,
+0015–0034, were exported from source commits on top of that series. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

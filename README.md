@@ -19,6 +19,8 @@ code or disc assets. The build checks the boot ELF's hash.
   EE square-root operands prevent the floor fall; complete DMA chains retain
   the FINISH packet needed to render the next area. Movement, camera and
   inventory work past the original failure point.
+- The first NPC's seated pose is restored. Shared EE CVT.W.S truncation
+  corrects angle range reduction used by the original skeletal routines.
 - Gameplay's vertical strip corruption is fixed: walls and sky now align
   across the original framebuffer feedback passes, and scanout preserves
   all 448 gameplay rows.
@@ -37,8 +39,9 @@ code or disc assets. The build checks the boot ELF's hash.
   Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
   at a real save point remain unverified.
-- Returning to the menu and starting another game can stall the intro,
-  and the first NPC's skeletal pose is distorted. Both remain under investigation.
+- Returning to the menu and starting another game could stall the intro.
+  The callback-service fix is covered by source-only regressions; native
+  replay confirmation remains in progress.
 
 See [Windows validation](docs/windows-validation.md) for the tested compiler,
 source-only regressions, capture evidence and practical limits. Earlier
@@ -72,9 +75,9 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 32 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; eighteen additions cover Windows input, audio, movie,
-gameplay rendering, EE square-root translation and complete DMA chains,
+of 34 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; twenty additions cover Windows input, audio, movie,
+gameplay rendering, EE conversion/square-root translation and complete DMA chains,
 with opt-in diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
