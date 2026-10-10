@@ -28,10 +28,10 @@ compared after each microprogram ([vu1verify] lines on stderr).
  create mode 100644 ps2xRuntime/src/lib/vu/ref/ps2_vu1_upper_ref.cpp
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 0f13a5b..cda0a59 100644
+index 0ee2727..fef9602 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -385,6 +385,9 @@ add_library(ps2_runtime STATIC
+@@ -387,6 +387,9 @@ add_library(ps2_runtime STATIC
      src/lib/gs/gs_cpu_backend.cpp
      src/lib/gs/gs_trace.cpp
      src/lib/gs/gs_record.cpp
@@ -42,7 +42,7 @@ index 0f13a5b..cda0a59 100644
      src/lib/ps2_memory.cpp
      src/lib/ps2_pad.cpp
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
-index 4b9242c..147290c 100644
+index 86cbadc..91246d8 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
 +++ b/ps2xRuntime/include/ps2_runtime.h
 @@ -435,6 +435,7 @@ public:
@@ -54,7 +54,7 @@ index 4b9242c..147290c 100644
      inline const PS2Memory &memory() const { return m_memory; }
  
 diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
-index c19926a..150cb32 100644
+index 8cdd3bc..062f9b9 100644
 --- a/ps2xRuntime/include/runtime/ps2_vu1.h
 +++ b/ps2xRuntime/include/runtime/ps2_vu1.h
 @@ -5,6 +5,7 @@
@@ -77,18 +77,18 @@ index c19926a..150cb32 100644
      const VU1State &state() const { return m_state; }
  
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index c67a1b3..706d83d 100644
+index a9168d1..3753520 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
-@@ -13,6 +13,7 @@
- #include "Kernel/Stubs/MPEG.h"
+@@ -15,6 +15,7 @@
  #include "ps2_host_backend.h"
+ #include "rlgl.h"
  #include "ps2_iop_host.h"
 +#include "vu/ref/ps2_vu1_ref.h"
  #include "ps2x/iop/iop_subsystem.h"
  
  #include <iostream>
-@@ -986,9 +987,7 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -1021,9 +1022,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                           (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                       m_vu1.state().tBitEnabled =
                                           (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
@@ -99,7 +99,7 @@ index c67a1b3..706d83d 100644
                                       cpuContext->vu0_vpu_stat =
                                           (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                           (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-@@ -1004,9 +1003,7 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -1039,9 +1038,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                           (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                       m_vu1.state().tBitEnabled =
                                           (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
@@ -110,7 +110,7 @@ index c67a1b3..706d83d 100644
                                       cpuContext->vu0_vpu_stat =
                                           (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                           (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-@@ -1020,6 +1017,92 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -1055,6 +1052,92 @@ bool PS2Runtime::syncCoreSubsystems()
      return true;
  }
  
@@ -204,10 +204,10 @@ index c67a1b3..706d83d 100644
  {
      try
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index b87015a..f77b98e 100644
+index 9f58963..c82ce29 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-@@ -976,6 +976,8 @@ void VU1Interpreter::finishXgkick()
+@@ -980,6 +980,8 @@ void VU1Interpreter::finishXgkick()
      if (!m_xgkick.active)
          return;
  

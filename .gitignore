@@ -67,3 +67,6 @@ ps2_log.txt
 
 # Dev-loop run output (frame dumps, logs, dumped microcode)
 runs/
+
+# Python bytecode
+__pycache__/
