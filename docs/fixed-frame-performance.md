@@ -248,3 +248,62 @@ the Linux CPU renderer.
 The final 58-patch series was applied to a fresh pinned checkout, first in
 tools-only mode and then in full. Repeated application verified all 58 patches
 and 83 managed files without changing them.
+
+## Menu vibration and character loading follow-up (0059–0060)
+
+The vibrating title/menu image was alternating between two half-height
+fields. Patch 0059 reconstructs stationary complementary rows using the
+field offset of the actual draw, rather than the host presentation tick.
+Changed pixels keep the current field; repeated presentations cannot make
+stale opposite-field pixels valid again. Mode/offset changes and overlapping
+VRAM transfers invalidate history. Texture uploads outside the framebuffer
+do not discard an otherwise valid field. This only changes host scanout;
+guest VRAM, original draw commands and simulation are untouched.
+
+An isolated native Windows title/menu run exercised Start and selection
+changes. The static logo region had **zero changed pixels** across four
+settled intervals containing 131, 67, 59 and 184 captures. The previous build
+visibly alternated that region. The ten hardware Vulkan CTests passed,
+including scanout/viewport controls, and the new source-only reconstruction
+fixture passed on both Windows and Ubuntu. That fixture covers moving
+pixels, repeated/skipped fields and stale-history resets.
+
+A separate new-game investigation reproduced character loading stuck
+alternating between sound-bank transfer stages 3 and 4, leaving the NPC model
+uninitialized. A synchronous IOP RPC had no kernel thread to suspend, so
+WaitEventFlag returned the polling error before DMA completion. The original
+sound driver ignored that error and reported the transfer ready. Patch 0060
+services IOP hardware and workers during these synchronous waits. It also
+allows DMA hardware to finish while interrupts are masked, defers interrupt
+callbacks until delivery is allowed, and reports interrupt context correctly.
+The synchronous bridge retains a one-second emulated-time timeout with an
+explicit diagnostic; this is not a complete asynchronous IOP RPC scheduler.
+
+The 118-check synthetic IOP suite passes on native Windows and Ubuntu; the
+pre-change runtime fails nine assertions. Sound-DMA cancellation (including
+its guard-disabled negative control), CD audio and the 607-check SPU2 suite
+also pass on both platforms. The private Windows new-game run loaded the
+previously failing character banks, traversed the cave door without falling
+through the floor, and rendered the first NPC seated on his rock. This is
+targeted regression coverage, not a full playthrough or proof that every
+character-loading path is correct.
+
+Ubuntu's rebuilt CPU-renderer runner completed another 30-second,
+6001-sample gameplay capture at **18.699 updates/s**, with contiguous animation
+and cooldown values and matching loop alignment. This run overlapped native
+validation on the same machine and is a functional check, not a controlled
+performance comparison. The WSL Dozen Vulkan limitation described above
+remains; Linux hardware presentation and the NPC route were not verified.
+An isolated Windows capture beside the now-visible NPC measured **13.733
+game updates/s** over 15 seconds / 3001 samples (206 original loop updates),
+with 120 FPS requested and interpolation verification disabled. Thus the
+opening-area result does not extend to this scene. These fixes do **not**
+establish the requested locked-30-Hz result throughout the game.
+
+The owner's merged PR #11 remains the latest merged upstream PR at this
+check. Patches 0040–0041 are byte-for-byte unchanged. The earlier Linux build
+additions retain that work and add native-VU configuration and stale-source
+validation; 0059–0060 introduce no Linux-only overrides. Both follow-ups were
+exported from persistent runtime commits, and tools/full/repeat application
+of the **60-patch series** succeeded on a fresh pinned checkout, verifying
+**87 managed files**.

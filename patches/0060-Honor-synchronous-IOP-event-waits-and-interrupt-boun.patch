@@ -1,0 +1,264 @@
+From db1a2052e05b85adc5b87676be1b2eece7661abe Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 17:54:08 -0400
+Subject: [PATCH 60/60] Honor synchronous IOP event waits and interrupt
+ boundaries
+
+---
+ ps2xIOP/src/emulator/core/iop_kernel.h       |  1 +
+ ps2xIOP/src/emulator/imports/iop_intrman.cpp |  9 +--
+ ps2xIOP/src/emulator/imports/iop_timrman.cpp |  5 +-
+ ps2xIOP/src/emulator/iop_emulator.cpp        | 79 +++++++++++++++-----
+ ps2xIOP/src/emulator/services/iop_rpc.h      |  4 +
+ 5 files changed, 71 insertions(+), 27 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/iop_kernel.h b/ps2xIOP/src/emulator/core/iop_kernel.h
+index 6eb5a1d..31c3f9f 100644
+--- a/ps2xIOP/src/emulator/core/iop_kernel.h
++++ b/ps2xIOP/src/emulator/core/iop_kernel.h
+@@ -67,6 +67,7 @@ namespace ps2x::iop::detail
+         void terminateThreadsInRange(uint32_t base, uint32_t size);
+ 
+         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
++        [[nodiscard]] bool hasCurrentThread() const noexcept { return m_currentThread != nullptr; }
+ 
+     private:
+         struct Semaphore
+diff --git a/ps2xIOP/src/emulator/imports/iop_intrman.cpp b/ps2xIOP/src/emulator/imports/iop_intrman.cpp
+index da3be3b..cfcde82 100644
+--- a/ps2xIOP/src/emulator/imports/iop_intrman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_intrman.cpp
+@@ -70,13 +70,15 @@ namespace ps2x::iop::detail
+             return true;
+         case 15:
+         case 16:
+-        case 23:
+         case 24:
+         case 25:
+         case 28:
+         case 30:
+             setV0(0u);
+             return true;
++        case 23: // QueryIntrContext
++            setV0(executor.isInInterruptContext() ? 1u : 0u);
++            return true;
+         case 17:
+             if (a0 != 0u)
+                 m_memory.write32(a0, m_memory.interruptControl());
+@@ -101,11 +103,8 @@ namespace ps2x::iop::detail
+         if (handler == m_handlers.end() || handler->second.function == 0u)
+             return false;
+ 
+-        (void)executor.executeGuestFunctionWithBudget(handler->second.function,
++        (void)executor.executeInterruptFunction(handler->second.function,
+                                                       handler->second.argument,
+-                                                      0u,
+-                                                      0u,
+-                                                      0u,
+                                                       handler->second.gp,
+                                                       100000u);
+         return true;
+diff --git a/ps2xIOP/src/emulator/imports/iop_timrman.cpp b/ps2xIOP/src/emulator/imports/iop_timrman.cpp
+index 3d80897..14cd30c 100644
+--- a/ps2xIOP/src/emulator/imports/iop_timrman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_timrman.cpp
+@@ -439,11 +439,8 @@ namespace ps2x::iop::detail
+             timer.compareCycle = UINT64_MAX;
+             timer.overflowCycle = UINT64_MAX;
+             const uint32_t result = callback.function != 0u
+-                                        ? executor.executeGuestFunctionWithBudget(callback.function,
++                                        ? executor.executeInterruptFunction(callback.function,
+                                                                                   callback.common,
+-                                                                                  0u,
+-                                                                                  0u,
+-                                                                                  0u,
+                                                                                   callback.gp,
+                                                                                   100000u)
+                                         : 0u;
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 64bbcd3..2e38fa2 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -135,6 +135,8 @@ namespace ps2x::iop::detail
+             timrman.reset();
+             ioman.reset();
+             pendingDmaInterrupts.clear();
++            completedDmaInterrupts.clear();
++            interruptDepth = 0;
+             pendingGuestCallbacks.clear();
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
+@@ -211,7 +213,7 @@ namespace ps2x::iop::detail
+ 
+         void serviceSoundInterrupt()
+         {
+-            if (memory.interruptControl() != 0u && pendingSoundInterrupt && !servicingSoundInterrupt)
++            if (!interruptDepth && memory.interruptControl() != 0u && pendingSoundInterrupt && !servicingSoundInterrupt)
+             {
+                 pendingSoundInterrupt = false;
+                 servicingSoundInterrupt = true;
+@@ -324,6 +326,25 @@ namespace ps2x::iop::detail
+             }
+             if (iequals(call.library, "thevent"))
+             {
++                // Synchronous host-dispatched RPCs have a call frame but no
++                // kernel thread to suspend. A blocking event wait must still
++                // let DMA, interrupts and worker threads reach the event.
++                // Returning PollEventFlag's -418 here lets callers proceed
++                // before their transfer has completed.
++                if (call.ordinal == 10 && !kernel.hasCurrentThread() && !interruptDepth)
++                {
++                    const uint64_t deadline = totalCycles + kIopClockHz;
++                    while (kernel.dispatchEventImport(call.ordinal, cpu) && int32_t(cpu.gpr[2]) == -418)
++                    {
++                        if (totalCycles >= deadline)
++                        {
++                            log(LogLevel::Error, "[IOP] synchronous WaitEventFlag timed out");
++                            break;
++                        }
++                        runCycles(std::min<uint64_t>(kDefaultSlice, deadline - totalCycles));
++                    }
++                    return ImportDisposition::Handled;
++                }
+                 return kernel.dispatchEventImport(call.ordinal, cpu)
+                            ? ImportDisposition::Handled
+                            : ImportDisposition::Missing;
+@@ -453,13 +474,13 @@ namespace ps2x::iop::detail
+                 if (!step(cpu))
+                     break;
+                 serviceSoundInterrupt();
+-                if (!servicingDmaInterrupts && !pendingDmaInterrupts.empty())
++                if (!pendingDmaInterrupts.empty() || !completedDmaInterrupts.empty())
+                     servicePendingDmaInterrupts();
+                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
+                     servicePendingGuestCallbacks();
+                 if (totalCycles >= nextTimerCheck)
+                 {
+-                    if (memory.interruptControl() != 0u)
++                    if (!interruptDepth && memory.interruptControl() != 0u)
+                         timrman.serviceDue(totalCycles, *this);
+                     nextTimerCheck = totalCycles + kDefaultSlice;
+                 }
+@@ -533,15 +554,29 @@ namespace ps2x::iop::detail
+             return callFunction(address, a0, a1, a2, a3, gp, instructionBudget);
+         }
+ 
++        bool isInInterruptContext() const override { return interruptDepth != 0; }
++
++        uint32_t executeInterruptFunction(uint32_t address, uint32_t argument,
++                                          uint32_t gp, uint32_t budget) override
++        {
++            // intrman runs handlers on its interrupt stack with CPU interrupts
++            // masked. I_CTRL remains separate: CpuSuspendIntr/ResumeIntr may
++            // be used inside a handler without permitting nested interrupts.
++            struct InterruptGuard
++            {
++                unsigned &depth;
++                ~InterruptGuard() { --depth; }
++            } guard{interruptDepth};
++            ++interruptDepth;
++            return callFunction(address, argument, 0, 0, 0, gp, budget);
++        }
++
+         // Not that good to use exception handling for control flow but will do for now
+         void servicePendingDmaInterrupts()
+         {
+-            if (memory.interruptControl() == 0u || servicingDmaInterrupts || pendingDmaInterrupts.empty())
++            if (pendingDmaInterrupts.empty() && completedDmaInterrupts.empty())
+                 return;
+ 
+-            servicingDmaInterrupts = true;
+-
+-            std::vector<int> completed;
+             for (auto it = pendingDmaInterrupts.begin(); it != pendingDmaInterrupts.end();)
+             {
+                 if (it->second > totalCycles)
+@@ -549,16 +584,25 @@ namespace ps2x::iop::detail
+                     ++it;
+                     continue;
+                 }
+-                completed.push_back(it->first);
++                // DMA hardware finishes even while software masks interrupts.
++                // Keep delivery pending separately, so polling CHCR/STATX from
++                // a critical section cannot wait on the interrupt handler.
++                if (memory.soundDmaActive(it->first))
++                {
++                    memory.completeSoundDma(it->first);
++                    completedDmaInterrupts.push_back(it->first);
++                }
+                 it = pendingDmaInterrupts.erase(it);
+             }
++            if (servicingDmaInterrupts || interruptDepth || memory.interruptControl() == 0u)
++                return;
++            servicingDmaInterrupts = true;
+             try
+             {
+-                for (const int irq : completed)
++                while (!completedDmaInterrupts.empty() && memory.interruptControl() != 0u)
+                 {
+-                    if (!memory.soundDmaActive(irq))
+-                        continue;
+-                    memory.completeSoundDma(irq);
++                    const int irq = completedDmaInterrupts.front();
++                    completedDmaInterrupts.erase(completedDmaInterrupts.begin());
+                     (void)intrman.dispatchInterrupt(irq, *this);
+                 }
+             }
+@@ -572,7 +616,7 @@ namespace ps2x::iop::detail
+ 
+         void servicePendingGuestCallbacks()
+         {
+-            if (servicingGuestCallbacks || pendingGuestCallbacks.empty())
++            if (interruptDepth || memory.interruptControl() == 0u || servicingGuestCallbacks || pendingGuestCallbacks.empty())
+                 return;
+ 
+             std::vector<ScheduledGuestCallback> callbacks;
+@@ -593,11 +637,8 @@ namespace ps2x::iop::detail
+                 {
+                     if (callback.function != 0u)
+                     {
+-                        (void)callFunction(callback.function,
++                        (void)executeInterruptFunction(callback.function,
+                                            callback.argument,
+-                                           0u,
+-                                           0u,
+-                                           0u,
+                                            callback.gp,
+                                            100000u);
+                     }
+@@ -622,7 +663,7 @@ namespace ps2x::iop::detail
+                     serviceSoundInterrupt();
+                     servicePendingDmaInterrupts();
+                     servicePendingGuestCallbacks();
+-                    if (memory.interruptControl() != 0u)
++                    if (!interruptDepth && memory.interruptControl() != 0u)
+                         timrman.serviceDue(totalCycles, *this);
+                     IopThread *next = kernel.beginNextReady(totalCycles);
+                     if (!next)
+@@ -794,6 +835,8 @@ namespace ps2x::iop::detail
+         IopLoadcore loadcore;
+         std::map<int, Module> modules;
+         std::map<int, uint64_t> pendingDmaInterrupts;
++        std::vector<int> completedDmaInterrupts;
++        unsigned interruptDepth = 0;
+         std::multimap<uint64_t, ScheduledGuestCallback> pendingGuestCallbacks;
+         uint32_t nextModuleId = 1;
+         uint32_t moduleCursor = kModuleLoadBase;
+diff --git a/ps2xIOP/src/emulator/services/iop_rpc.h b/ps2xIOP/src/emulator/services/iop_rpc.h
+index a4286ba..28a584d 100644
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -21,6 +21,10 @@ namespace ps2x::iop::detail
+     {
+     public:
+         virtual ~IopGuestExecutor() = default;
++        [[nodiscard]] virtual bool isInInterruptContext() const { return false; }
++        [[nodiscard]] virtual uint32_t executeInterruptFunction(uint32_t address, uint32_t argument,
++                                                                 uint32_t gp, uint32_t budget)
++        { return executeGuestFunctionWithBudget(address, argument, 0, 0, 0, gp, budget); }
+ 
+         [[nodiscard]] virtual uint32_t executeGuestFunction(uint32_t address,
+                                                             uint32_t a0,
+-- 
+2.55.0.windows.3
+

@@ -67,6 +67,8 @@ commit); don't edit them by hand. Workflow:
 | `0056-Defer-host-GS-snapshots-…` | Defer host readback while cooperative producers are runnable, cache unchanged scanout requests by content epoch, and retry deferred presentation without advancing guest time. |
 | `0057-Reduce-bounded-VU-overhead-…` | Reuse admitted native descriptors, specialize exact normal FMAC flags, preserve MXCSR directly on MSVC x64, and fix GCC catalog includes/captures. Boundary arithmetic retains its original path. |
 | `0058-Decouple-KFIV-fixed-updates-…` | Opt-in metadata/signature-guarded NTSC game deadlines, independent host render limit, and bounded command replay on isolated GS renderers for conservative triangle interpolation. The original game backend and simulation remain authoritative. |
+| `0059-Reconstruct-stationary-interlaced-menus-…` | Reconstruct stationary complementary rows using the drawn field phase, with motion rejection, duplicate-frame handling and transfer-overlap invalidation. Guest VRAM is unchanged. |
+| `0060-Honor-synchronous-IOP-event-waits-…` | Let synchronous RPC event waits service DMA and worker threads; separate hardware DMA completion from interrupt delivery and report interrupt context correctly. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -75,10 +77,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 58-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 60-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
 0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
-0042–0058 are exported as separate source commits on top of them. The
+0042–0060 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The new fixed-update/interpolation mode and its separate Windows/Ubuntu

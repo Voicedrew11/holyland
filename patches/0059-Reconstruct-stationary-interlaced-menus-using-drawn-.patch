@@ -1,0 +1,202 @@
+From 13ab585fcd436f6c28a043a90c1627b5e2ed46dc Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 17:54:08 -0400
+Subject: [PATCH 59/60] Reconstruct stationary interlaced menus using drawn
+ field phase
+
+---
+ .../src/lib/gs/gs_field_reconstruction.h      | 75 +++++++++++++++++++
+ ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp  | 53 +++++++++++++
+ 2 files changed, 128 insertions(+)
+ create mode 100644 ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h b/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
+new file mode 100644
+index 0000000..e7d6061
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gs_field_reconstruction.h
+@@ -0,0 +1,75 @@
++// SPDX-License-Identifier: GPL-3.0-only
++#pragma once
++
++#include <algorithm>
++#include <array>
++#include <cstdint>
++#include <cstring>
++#include <vector>
++
++// Reconstruct stationary detail from explicitly identified complementary
++// fields. Presentation cadence is not a field identifier: a host may present
++// one field several times, or skip fields altogether.
++class GSFieldReconstruction
++{
++public:
++    void reset() { *this = {}; }
++
++    void reconstruct(std::vector<uint8_t> &pixels, unsigned width, unsigned height,
++                     unsigned stride, unsigned phase, uint64_t generation,
++                     unsigned offsetBase)
++    {
++        if (!width || height < 2 || height % 2 || stride < width || phase > 1 ||
++            pixels.size() < size_t(stride) * height * 4)
++        { reset(); return; }
++        if (m_width != width || m_height != height || m_stride != stride || m_offset != offsetBase)
++        {
++            reset();
++            m_width = width; m_height = height; m_stride = stride; m_offset = offsetBase;
++        }
++        const auto current = pixels;
++        if (m_generation == generation && m_phase == phase && current == m_fields[phase] && !m_result.empty())
++        { pixels = m_result; return; }
++
++        const auto &same = m_fields[phase];
++        const auto &other = m_fields[phase ^ 1];
++        const size_t rowBytes = size_t(stride) * 4;
++        if (same.size() == current.size() && other.size() == current.size())
++        {
++            const unsigned rows = height / 2;
++            for (unsigned y = 0; y < rows; ++y)
++                for (unsigned x = 0; x < width; ++x)
++                {
++                    // A changed pixel or its vertical neighbours must not
++                    // borrow an older field (cursor movement, fades, cuts).
++                    bool stationary = true;
++                    for (unsigned yy = y ? y - 1 : y; yy <= std::min(y + 1, rows - 1); ++yy)
++                    {
++                        const size_t at = size_t(2 * yy) * rowBytes + x * 4;
++                        if (std::memcmp(current.data() + at, same.data() + at, 3) != 0)
++                        { stationary = false; break; }
++                    }
++                    const size_t pixel = size_t(y) * width + x;
++                    if (!stationary) m_reliable[phase ^ 1][pixel] = 0;
++                    if (stationary && m_reliable[phase ^ 1][pixel])
++                    {
++                        const size_t source = size_t(2 * y) * rowBytes + x * 4;
++                        const size_t dest = size_t(2 * y + (phase ^ 1)) * rowBytes + x * 4;
++                        std::memcpy(pixels.data() + dest, other.data() + source, 4);
++                    }
++                }
++        }
++        m_fields[phase] = current;
++        m_reliable[phase].assign(size_t(width) * height / 2, 1);
++        m_result = pixels;
++        m_generation = generation;
++        m_phase = phase;
++    }
++
++private:
++    std::array<std::vector<uint8_t>, 2> m_fields;
++    std::array<std::vector<uint8_t>, 2> m_reliable;
++    std::vector<uint8_t> m_result;
++    unsigned m_width = 0, m_height = 0, m_stride = 0, m_offset = 0, m_phase = 0;
++    uint64_t m_generation = 0;
++};
+diff --git a/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp b/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
+index bef57ec..eb1dacb 100644
+--- a/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_vulkan_backend.cpp
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-3.0-only
+ #include "runtime/gs/gs_vulkan_backend.h"
+ #include "gs_vulkan_scanout.h"
++#include "gs_field_reconstruction.h"
+ #include "runtime/gs/gs_cpu_backend.h"
+ #include "runtime/gs/ps2_gs_memory.h"
+ #include "gs_interface.hpp"
+@@ -58,6 +59,9 @@ struct GSVulkanBackend::Impl
+     uint64_t gpuPresentations = 0, convertedPresentations = 0;
+     bool submissionFlushed = false;
+     uint64_t submissionFlushes = 0, reusedSubmissionFlushes = 0;
++    struct DrawField { uint64_t generation = 0; unsigned offset = 0; bool valid = false; unsigned pages = 0; };
++    std::array<DrawField, 512> drawFields{};
++    GSFieldReconstruction fieldReconstruction;
+ 
+     Impl()
+     {
+@@ -182,6 +186,12 @@ struct GSVulkanBackend::Impl
+             reg(Reg::XYZ2, x | (uint64_t(y) << 16) | (uint64_t(uint32_t(v.z)) << 32), true);
+         }
+         ++draws;
++        if (c.frame.fbp < drawFields.size())
++            drawFields[c.frame.fbp] = {draws, c.xyoffset.ofy,
++                c.scissor.y1 == 223 && (c.xyoffset.ofy & 7u) == 0,
++                unsigned(c.frame.fbw) * (unsigned(c.scissor.y1) /
++                    (GSMem::UnpackedBitWidth(GSMem::PixelStorageMode(c.frame.psm)) == 16 ? 64u : 32u)) +
++                    unsigned(c.scissor.x1) / 64u + 1u};
+     }
+ 
+     void imagePacket(const uint8_t *data, size_t count)
+@@ -217,6 +227,8 @@ void GSVulkanBackend::Initialize(uint8_t *vram, uint32_t size)
+     m_impl->uploadTail.clear(); m_impl->fifo.clear(); m_impl->fifoRead = 0;
+     m_impl->transferState = {}; m_impl->transferState.direction = 3;
+     m_impl->initialized = true;
++    m_impl->drawFields = {};
++    m_impl->fieldReconstruction.reset();
+ }
+ void GSVulkanBackend::Reset()
+ {
+@@ -225,6 +237,8 @@ void GSVulkanBackend::Reset()
+     m_impl->submissionFlushed = false;
+     m_impl->transferState = {}; m_impl->transferState.direction = 3;
+     m_impl->fifo.clear(); m_impl->fifoRead = 0; m_impl->uploadTail.clear();
++    m_impl->drawFields = {};
++    m_impl->fieldReconstruction.reset();
+ }
+ void GSVulkanBackend::Submit(const GSPrimitiveBatch &b) { auto lock = m_impl->access(); m_impl->submit(b); }
+ void GSVulkanBackend::LoadClut(const GSTex0Reg &t, const GSTexClutReg &c)
+@@ -237,6 +251,31 @@ void GSVulkanBackend::BeginTransfer(const GSTransferCommand &c)
+     auto lock = m_impl->access();
+     auto &p = *m_impl;
+     p.transfer = c; p.transferState = {}; p.transferState.direction = c.direction;
++    // Uploads and local copies do not carry a raster field phase. Require a
++    // subsequent draw before interpreting any affected display as a field.
++    if ((c.direction == 0 || c.direction == 2) && c.trxreg.rrw && c.trxreg.rrh)
++    {
++        const auto &b = c.bitbltbuf;
++        const unsigned bits = unsigned(GSMem::UnpackedBitWidth(GSMem::PixelStorageMode(b.dpsm)));
++        const unsigned pageWidth = bits <= 8 ? 128 : 64;
++        const unsigned pageHeight = 65536 / (bits * pageWidth);
++        const unsigned pitch = unsigned(b.dbw) * 64 / pageWidth;
++        std::array<bool, 512> written{};
++        for (unsigned y = c.trxpos.dsay / pageHeight; y <= (unsigned(c.trxpos.dsay) + c.trxreg.rrh - 1) / pageHeight; ++y)
++            for (unsigned x = c.trxpos.dsax / pageWidth; x <= (unsigned(c.trxpos.dsax) + c.trxreg.rrw - 1) / pageWidth; ++x)
++            {
++                const unsigned page = b.dbp / 32 + y * pitch + x;
++                written[page % 512] = true;
++                if (b.dbp % 32) written[(page + 1) % 512] = true;
++            }
++        for (unsigned base = 0; base < p.drawFields.size(); ++base)
++        {
++            auto &field = p.drawFields[base];
++            if (field.valid)
++                for (unsigned page = 0; page < field.pages; ++page)
++                    if (written[(base + page) % 512]) { field.valid = false; break; }
++        }
++    }
+     p.transferState.totalPixels = uint32_t(c.trxreg.rrw) * c.trxreg.rrh;
+     p.transferState.x = c.trxpos.dsax; p.transferState.y = c.trxpos.dsay;
+     p.uploadedBytes = 0; p.uploadTail.clear(); p.fifo.clear(); p.fifoRead = 0;
+@@ -343,6 +382,20 @@ PresentationFrame GSVulkanBackend::Present(const GSPresentationRequest &request)
+         ++p.convertedPresentations;
+     }
+     p.device.next_frame_context();
++    const char *rawField = std::getenv("PS2X_NO_WEAVE");
++    const uint64_t display = (request.pmode & 1u) ? request.display1 : request.display2;
++    const unsigned displayHeight = unsigned(((display >> 44u) & 0xfffu) + 1u) /
++                                   unsigned(((display >> 27u) & 3u) + 1u);
++    if ((request.smode2 & 3u) == 3u && result.height == 448 &&
++        displayHeight == 448 &&
++        result.sourceFbp < p.drawFields.size() && p.drawFields[result.sourceFbp].valid &&
++        !(rawField && *rawField && *rawField != '0'))
++    {
++        const auto &field = p.drawFields[result.sourceFbp];
++        p.fieldReconstruction.reconstruct(result.pixels, result.width, result.height, 640,
++                                          (field.offset >> 3u) & 1u, field.generation, field.offset & ~8u);
++    }
++    else p.fieldReconstruction.reset();
+     const char *stats = std::getenv("PS2X_STATS");
+     if (stats && *stats && *stats != '0' && (p.gpuPresentations + p.convertedPresentations) % 300u == 0)
+         std::fprintf(stderr, "[gs:vulkan] draws=%llu GPU scanouts=%llu CPU display conversions=%llu explicit flushes=%llu reused flushes=%llu\n",
+-- 
+2.55.0.windows.3
+

@@ -1,8 +1,10 @@
 # Native Windows validation (2026-10-09)
 
 The later [fixed-frame performance report](fixed-frame-performance.md) records
-patches 0057–0058, measured 29.97 Hz game updates with independent interpolated
-rendering, and the separate Ubuntu build, tests and WSL graphics limitation.
+patches 0057–0060, fixed game updates with independent interpolated rendering,
+menu/character-loading fixes, and separate Ubuntu tests and WSL graphics limits.
+It distinguishes stale-source results from corrected opening-area measurements;
+the current build has not established sustained 30 Hz throughout gameplay.
 The measurements below remain historical evidence for their stated builds.
 
 The USA boot ELF `SLUS_203.18` was statically recompiled and run as a native

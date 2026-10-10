@@ -91,7 +91,7 @@ namespace
     constexpr uint32_t Sid = 0xC10CFADE;
     constexpr uint32_t PeriodCycles = 153612; // FSIOPSND's approximately 4167 us tick.
 
-    void syntheticTimerIrx(TestHost &host, bool criticalHandler = false, bool resumeInterrupts = true)
+    void syntheticTimerIrx(TestHost &host, bool criticalHandler = false, bool resumeInterrupts = true, bool blockingEvent = false)
     {
         // Retail-free executable MIPS fixture: register a repeating hard timer
         // and an RPC handler containing a controlled-length real instruction loop.
@@ -106,6 +106,12 @@ namespace
             emit(0x34000000 | (reg << 21) | (reg << 16) | (value & 0xffff));
         };
         auto call = [&](uint32_t address) { emit(0x0c000000 | (address >> 2)); emit(0); };
+        constexpr uint32_t EventImports = Base + 0x240;
+        if (blockingEvent)
+        {
+            li(4, Base + 0x680); call(EventImports + 20); // Create an initially clear event.
+            li(8, Base + 0x690); emit(0xad020000);
+        }
         constexpr uint32_t TimerImports = Base + 0x300, RpcImports = Base + 0x380;
         constexpr uint32_t Alloc = TimerImports + 20, Setup = Alloc + 8, Handler = Setup + 8, Start = Handler + 8;
         li(4, 1); li(5, 32); li(6, 1); call(Alloc);
@@ -141,6 +147,30 @@ namespace
             0x1d00fffe, // bgtz t0, decrement
             0, 0x00a01021, 0x03e00008, 0}; // return RPC buffer
         words(0x500, rpcHandler);
+        if (blockingEvent)
+        {
+            const std::array<uint32_t, 15> imports{
+                0x41e00000, 0, 0x101, 0x76656874, 0x00746e65, // thevent
+                0x03e00008, 0x24000004, 0x03e00008, 0x24000007,
+                0x03e00008, 0x2400000a, 0x03e00008, 0x2400000b, 0, 0};
+            words(0x240, imports);
+            const std::vector<uint32_t> signal{
+                0x27bdffe0, 0xafbf001c,
+                0x8c880000, 0, 0x25080001, 0xac880000,
+                0x3c080001, 0x35080690, 0x8d040000, 0, 0x34050001,
+                0x0c000000 | ((EventImports + 28) >> 2), 0,
+                0x3c020000 | (PeriodCycles >> 16), 0x34420000 | (PeriodCycles & 0xffff),
+                0x8fbf001c, 0, 0x27bd0020, 0x03e00008, 0};
+            words(0x400, signal);
+            const std::vector<uint32_t> wait{
+                0x27bdffe0, 0xafbf001c,
+                0x3c080001, 0x35080690, 0x8d040000, 0,
+                0x34050001, 0x34060010, 0x34070000, // AND, clear after success.
+                0x0c000000 | ((EventImports + 36) >> 2), 0,
+                0x3c080001, 0x35080800, 0xad020000, // Return the actual wait result.
+                0x01001021, 0x8fbf001c, 0, 0x27bd0020, 0x03e00008, 0};
+            words(0x500, wait);
+        }
         if (criticalHandler)
         {
             constexpr uint32_t Suspend = Base + 0x3c0 + 20, Resume = Suspend + 8;
@@ -364,6 +394,8 @@ namespace
         constexpr uint32_t Imports = Base + 0x300;
         li(4, 0x24); li(5, 1); li(6, Base + 0x400); li(7, TimerCounter); call(Imports + 20);
         li(4, 0x24); call(Imports + 28); // Enable DMA IRQ handler.
+        li(4, 0x28); li(5, 1); li(6, Base + 0x500); li(7, TimerCounter + 32); call(Imports + 20);
+        li(4, 0x28); call(Imports + 28);
         li(4, TimerCounter + 16); call(Imports + 36); // CpuSuspendIntr.
         li(24, 0x1f900000);
         li(8, 0xc000); emit(0xa708019a); // SPU core attribute.
@@ -374,6 +406,7 @@ namespace
         li(8, 0x01000001); emit(0xaf2800c8); // START.
         li(8, 1024); emit(0x2508ffff); emit(0x1d00fffe); emit(0);
         li(8, TimerCounter); emit(0x8d090000); emit(0); emit(0xad090004); // Observe IRQ count inside critical section.
+        li(8, 0x1f801000); emit(0x8d0900c8); emit(0); li(8, TimerCounter); emit(0xad09000c);
         emit(0x8d040010); emit(0); call(Imports + 44); // CpuResumeIntr(original).
         li(8, 1024); emit(0x2508ffff); emit(0x1d00fffe); emit(0);
         li(8, 0x1f801000); emit(0x8d0900c8); emit(0); li(8, TimerCounter); emit(0xad090008); // Observe completed CHCR.
@@ -381,13 +414,29 @@ namespace
         CHECK(entry.size() * 4 < 0x300);
         std::vector<uint8_t> segment(0x800, 0);
         std::memcpy(segment.data(), entry.data(), entry.size() * 4);
-        const std::array<uint32_t, 15> imports{
+        const std::array<uint32_t, 17> imports{
             0x41e00000, 0, 0x101, 0x72746e69, 0x006e616d,
             0x03e00008, 0x24000004, 0x03e00008, 0x24000006,
-            0x03e00008, 0x24000011, 0x03e00008, 0x24000012, 0, 0};
+            0x03e00008, 0x24000011, 0x03e00008, 0x24000012,
+            0x03e00008, 0x24000017, 0, 0};
         std::memcpy(segment.data() + 0x300, imports.data(), imports.size() * 4);
-        const std::array<uint32_t, 6> callback{0x8c880000, 0, 0x25080001, 0xac880000, 0x03e00008, 0};
+        const std::vector<uint32_t> callback{
+            0x27bdffe0, 0xafbf001c, 0xafa40018,
+            0x0c000000 | ((Imports + 52) >> 2), 0, // QueryIntrContext inside DMA handler.
+            0x8fa40018, 0, 0xac820014,
+            0x8c880000, 0, 0x25080001, 0xac880000,
+            // Start another hardware DMA inside the first interrupt handler.
+            // Its hardware completes, but its handler cannot preempt this one.
+            0x3c181f90, 0x3408c000, 0xa708059a, 0xa70005a8, 0xa70005aa, 0xa70005b0,
+            0x3c191f80, 0x37391500, 0x3c080004, 0xaf280000,
+            0x34080004, 0xaf280004, 0x3c080100, 0x35080001, 0xaf280008,
+            0x34080400, 0x2508ffff, 0x1d00fffe, 0,
+            0x8f290008, 0, 0xac89001c, // CHCR after transfer completes inside interrupt.
+            0x8c880020, 0, 0xac880018, // Other IRQ count while this handler is running.
+            0x8fbf001c, 0, 0x27bd0020, 0x03e00008, 0};
         std::memcpy(segment.data() + 0x400, callback.data(), callback.size() * 4);
+        const std::array<uint32_t, 6> secondCallback{0x8c880000, 0, 0x25080001, 0xac880000, 0x03e00008, 0};
+        std::memcpy(segment.data() + 0x500, secondCallback.data(), secondCallback.size() * 4);
         ElfHeader header{};
         std::memcpy(header.ident, "\x7f" "ELF\x01\x01\x01", 7);
         header.type = 2; header.machine = 8; header.version = 1; header.entry = Base;
@@ -405,8 +454,41 @@ namespace
         CHECK(iop.readMemory(TimerCounter + 8, &chcr, 4));
         CHECK(during == 0 && control == 1);
         CHECK((chcr & 0x01000000) == 0);
+        uint32_t maskedChcr = UINT32_MAX, interruptContext = 0;
+        CHECK(iop.readMemory(TimerCounter + 12, &maskedChcr, 4));
+        CHECK(iop.readMemory(TimerCounter + 20, &interruptContext, 4));
+        CHECK((maskedChcr & 0x01000000) == 0); // Hardware finishes before CPU interrupts resume.
+        CHECK(interruptContext == 1);
+        uint32_t nestedCount = UINT32_MAX, secondChcr = UINT32_MAX, secondCount = 0;
+        CHECK(iop.readMemory(TimerCounter + 24, &nestedCount, 4));
+        CHECK(iop.readMemory(TimerCounter + 28, &secondChcr, 4));
+        CHECK(iop.readMemory(TimerCounter + 32, &secondCount, 4));
+        CHECK(nestedCount == 0 && secondCount == 1);
+        CHECK((secondChcr & 0x01000000) == 0);
         iop.runEeCycles(8000);
         CHECK(timerCount(iop) == 1); // No duplicate callback after normal completion.
+        CHECK(host.errors.empty());
+    }
+    void synchronousRpcEventWait()
+    {
+        TestHost host;
+        IopSubsystem iop(host);
+        syntheticTimerIrx(host, false, true, true);
+        const auto loaded = iop.loadModuleBuffer(0x100);
+        CHECK(loaded.handled && loaded.moduleId > 0 && loaded.startResult == 0);
+        RpcRequest request{};
+        request.sid = Sid;
+        request.receive = {0x2000, 4};
+        for (unsigned expected = 1; expected <= 2; ++expected)
+        {
+            const auto before = iop.debugSnapshot().emulatorCycles;
+            CHECK(iop.handleRpc(request).signalCompletion);
+            uint32_t result = UINT32_MAX;
+            std::memcpy(&result, host.guest.data() + 0x2000, 4);
+            CHECK(result == 0);
+            CHECK(timerCount(iop) == expected);
+            CHECK(iop.debugSnapshot().emulatorCycles - before > PeriodCycles - 1000);
+        }
         CHECK(host.errors.empty());
     }
 }
@@ -420,6 +502,7 @@ int main()
     directCallTimers();
     interruptCriticalSections();
     dmaCriticalSection();
+    synchronousRpcEventWait();
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

@@ -87,11 +87,12 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 58 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
+of 60 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
 are retained, including the owner's merged VU census/static-lift work.
 The performance additions address GPU/SPU/VU overhead, hardware time,
 cooperative VIF service, bounded native VU compilation and optional fixed
-game updates with independent interpolated rendering. Diagnostics and the
+game updates with independent interpolated rendering. Follow-up fixes stabilize
+stationary interlaced menus and honor IOP sound-transfer waits. Diagnostics and the
 separate experimental static-lift path remain off by default.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and

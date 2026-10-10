@@ -100,6 +100,15 @@ The default 224-row field path uses a nearest GPU bob to 448 rows; raw
 diagnostics retain 224 rows. Every output pixel must come from the current
 field. This prevents earlier field images from doubling title/menu text.
 
+Patch 0059 adds a separate motion-aware reconstruction stage in the Vulkan
+backend after that scanout helper. It uses the drawn field offset, with
+same-phase pixel comparisons and explicit history invalidation. The
+`gs_field_reconstruction` CTest exercises stationary detail, moving pixels,
+repeated/skipped presentations and resets without a GPU. The helper-level
+bob tests above remain unchanged; they do not exercise this later backend
+stage. Actual title/menu integration is recorded in the
+[fixed-frame validation report](../../docs/fixed-frame-performance.md).
+
 Optionally configure `GPU_GS_SCANOUT_PRIOR_SOURCE` with the pre-0028
 `gs_vulkan_scanout.cpp` to build two old-source controls (eleven total CTests).
 The prior field-history code produces 1,290,243 failed pixel checks; its
