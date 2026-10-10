@@ -62,9 +62,15 @@ outside this repo.
   pinned commit, applies [`patches/`](../patches), and builds
   `ps2EntryRunner` with the generated code. `-msse4.1` is forced (upstream
   sets no x86 flags) and `TMPDIR` is redirected into the game dir because the
-  link step needs more space than a typical tmpfs `/tmp`.
+  link step needs more space than a typical tmpfs `/tmp`. The Release build
+  uses LTO, so the link step generates all the code (~6 min). With GCC 15+
+  it caches that work in `<game-dir>/lto-cache` (up to ~3 GB; delete it
+  freely), so a rebuild without changes links in ~30 s.
 - **Run**: the runner takes the ELF as `argv[1]` and reads the unpacked disc
   files from its working directory, so the script runs from the game dir.
+  It runs whichever runner was built last, this Release one or the dev
+  build from [`contributing.md`](contributing.md), and prints which;
+  `PS2X_RUNNER=<path>` picks one.
   Memory cards (`mc0/`, `mc1/`) are created there too.
 
 ## Controls
@@ -89,7 +95,7 @@ shows its state. Menu/pause return restores capture if it was engaged.
 - Missing `X11/extensions/Xinerama.h` or similar: install the X11 dev
   packages listed above.
 - Low frame rate in 3D areas: expected for now (the VU1 interpreter is the
-  bottleneck; see `docs/NOTES.md`). Use the Release runner `04-run.sh`
-  picks, not a debug build. Graphics are rasterized on worker threads:
+  bottleneck; see `docs/NOTES.md`). Use the Release runner from step 3
+  (or the -O2 dev build), not a debug build. Graphics are rasterized on worker threads:
   `PS2X_GS_THREADS=<n>` overrides their number (default: half the CPU
   threads, at most 8).

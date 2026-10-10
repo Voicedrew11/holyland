@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Priestley <Voicedrew11@gmail.com>
+Date: Sat, 10 Oct 2026 15:02:25 -0400
+Subject: [PATCH 42/42] Speed up runner links: unoptimized function table,
+ incremental LTO
+
+The generated register_functions.cpp is a single constructor of ~90k
+stores into the function table. It runs once at startup, but GCC spends
+~50 s on it at -O2 (alias walking and dead-store elimination over one
+huge function), and in a Release LTO link it becomes one LTRANS
+partition that runs alone for ~110 s after the other partitions finish.
+Build it outside the unity batches and the PCH, at -O0 and without LTO
+(~4 s). MSVC builds are unchanged.
+
+Release LTO links redo all code generation for the whole runner (~6 min,
+~58 CPU-minutes on 16 threads). With GCC 15+ Release links now use
+-flto-incremental with -flto-partition=cache, so unchanged partitions are
+reused from PS2X_LTO_CACHE_DIR (default <build>/lto-cache; empty turns it
+off). Measured on the 41-patch series: an unchanged relink takes 33 s
+instead of 375 s and produces an identical executable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt          | 16 ++++++++++++++++
+ ps2xRuntime/cmake/ReleaseMode.cmake | 16 ++++++++++++++++
+ 2 files changed, 32 insertions(+)
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index ff2dca1..293b0ca 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -495,6 +495,22 @@ if(PS2X_VU1_LIFT_SRC_FILES)
+     endif()
+ endif()
+ 
++# The generated function table (register_functions.cpp) is one constructor
++# of ~90k stores that runs once at startup. Optimizing it gains nothing but
++# costs GCC ~50 s at -O2 (alias walking and dead-store elimination over the
++# single huge function); under LTO it lands in one LTRANS partition that
++# runs alone for ~110 s after the rest of the link. Build it on its own,
++# unoptimized and outside LTO (~4 s).
++set(PS2X_RUNNER_FUNCTION_TABLE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/register_functions.cpp")
++if(NOT MSVC AND EXISTS "${PS2X_RUNNER_FUNCTION_TABLE_SRC}")
++    set_source_files_properties("${PS2X_RUNNER_FUNCTION_TABLE_SRC}" PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION TRUE
++        SKIP_PRECOMPILE_HEADERS TRUE
++    )
++    set_property(SOURCE "${PS2X_RUNNER_FUNCTION_TABLE_SRC}" APPEND PROPERTY
++        COMPILE_OPTIONS -O0 -fno-lto)
++endif()
++
+ if(PS2X_ENABLE_RUNNER_PCH)
+     set(PS2X_RUNNER_PCH_HEADERS
+         "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_runtime_macros.h"
+diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
+index 92ef0d5..1c138ec 100644
+--- a/ps2xRuntime/cmake/ReleaseMode.cmake
++++ b/ps2xRuntime/cmake/ReleaseMode.cmake
+@@ -2,6 +2,14 @@ include(CheckIPOSupported)
+ 
+ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+ 
++# GCC 15+ can cache LTRANS results between LTO links (-flto-incremental):
++# relinking unchanged code takes the ~30 s whole-program analysis instead of
++# the full ~6 min code generation. The cache keeps up to 2048 partitions
++# (~3 GB for the runner). Put it outside a build tree that gets deleted
++# between builds; empty disables it.
++set(PS2X_LTO_CACHE_DIR "${CMAKE_BINARY_DIR}/lto-cache" CACHE PATH
++    "GCC incremental LTO cache for Release links (empty: off)")
++
+ function(EnableFastReleaseMode TargetName)
+     message("> Enabling optimization for: ${TargetName}")
+     if(MSVC)
+@@ -36,6 +44,14 @@ function(EnableFastReleaseMode TargetName)
+ 
+     if(IPO_SUPPORTED)
+         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
++        if(PS2X_LTO_CACHE_DIR AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
++           CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
++            file(MAKE_DIRECTORY "${PS2X_LTO_CACHE_DIR}")
++            # The cache partitioning keeps partitions stable across small
++            # changes, so more of them are reused.
++            target_link_options(${TargetName} PRIVATE
++                "$<$<CONFIG:Release>:-flto-incremental=${PS2X_LTO_CACHE_DIR};-flto-partition=cache>")
++        endif()
+     else()
+         message(WARNING "Interprocedural optimization not supported: ${ipo_error}")
+     endif()

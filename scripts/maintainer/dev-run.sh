@@ -25,7 +25,7 @@ for f in "$GAMEDIR"/*; do
   b="$(basename "$f")"
   case "$b" in
     mc0|mc1) cp -r "$f" "$RG/" ;;                 # don't touch your saves
-    _build|"$PS2X_DEV_BUILD_NAME"|output|*.log|*_log.txt) ;;
+    _build|"$PS2X_DEV_BUILD_NAME"|output|lto-cache|*.log|*_log.txt) ;;
     *) ln -s "$f" "$RG/$b" ;;
   esac
 done

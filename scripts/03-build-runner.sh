@@ -41,8 +41,12 @@ python3 "$KFIV_ROOT/scripts/apply-patches.py" "$GAMEDIR/_build/repo" \
 cp "$GAMEDIR"/output/*.h "$GAMEDIR/_build/repo/ps2xRuntime/include/"
 # find+cp: 28k files exceed the shell's max argument list for a plain glob
 find "$GAMEDIR/output/" -maxdepth 1 -name '*.cpp' -exec cp -t "$GAMEDIR/_build/repo/ps2xRuntime/src/runner/" {} +
+# The LTO link is most of the build (~6 min). GCC 15+ caches its code
+# generation (patch 0042): keep the cache outside _build, which is deleted
+# above, so a rebuild reuses everything that did not change (~3 GB at most).
 cmake -S "$GAMEDIR/_build/repo" -B "$GAMEDIR/_build/build" \
   -DCMAKE_BUILD_TYPE=Release \
+  -DPS2X_LTO_CACHE_DIR="$GAMEDIR/lto-cache" \
   -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF \
   -DPS2X_ENABLE_DEBUG_UI=OFF
 # Link of 28k unity objects spills temp files; /tmp is a small tmpfs here,
