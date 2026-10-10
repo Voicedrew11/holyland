@@ -18,6 +18,11 @@ place as state changes; link session logs at the point they support.
   partly wrong, and gameplay remains below full speed. Audio hardware
   details are approximate; later areas, a full playthrough, Windows
   controller integration and a real save/load roundtrip are unverified.
+- **Opening-screen clarification:** the black opening picture can look
+  like a hang when PC audio is muted. The movie has about 92 seconds of
+  audio. Enter sends the original Start input to skip it; the original
+  movie cleanup and area loader still run. The installed executable and
+  desktop shortcut were unchanged by PR publication.
 - **Source delivery:** existing patches 0001–0014 are unchanged. New
   source-exported patches 0015–0022 include Windows build/input, loader
   completion, capture UI, timing and native audio/MPEG fixes. Generator

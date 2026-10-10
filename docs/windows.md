@@ -134,8 +134,11 @@ $shortcut.Save()
 ```
 
 The game reads loose disc files from its working directory and stores cards
-in `mc0` and `mc1`. Opening-movie audio plays; its image remains black in
-this development build. Let the movie finish naturally.
+in `mc0` and `mc1`. After accepting brightness with F, the opening movie
+plays audio for about 92 seconds while its picture remains black in this
+development build. Press Enter after the movie starts to skip it through
+the game's original Start input, or let it finish naturally. Loading and
+the first-area fade can take additional time.
 
 | Input | Action |
 |---|---|

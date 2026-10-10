@@ -16,7 +16,8 @@ code or disc assets. The build checks the boot ELF's hash.
   menus, movement, attack, inventory and pause/resume have been checked.
 - Music, sound effects and opening-movie audio play through the game's
   sound driver and SPU2 implementation. The opening picture remains black;
-  the movie ends naturally and returns to gameplay.
+  the movie ends naturally and returns to gameplay. After brightness,
+  press Enter to skip the opening through the game's original Start input.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
 - 3D rendering remains partly wrong and performance is below full speed.

@@ -47,10 +47,27 @@ the program: a later accepted B9 or physical producer EOF is still needed.
 The decoded reference count is published at the original SDK work-arena
 word `work + 4`, allowing its original reference-empty getter to finish.
 
-Movement at tick 8,000, attack at 8,300, inventory entry/back at 8,500/9,100,
-pause at 9,300 and resume at 9,603 were accepted through the host input
-path. A further attack at 9,800 worked. Frame inspection confirmed the
-first-area HUD and a genuine PAUSE overlay.
+The host input path supplied W at tick 8,000, Space at 8,300, inventory
+entry/back at 8,500/9,100, pause at 9,300 and resume at 9,603, followed by
+Space at 9,800. The first two inputs were during the original first-area
+intro before the gameplay/capture gate became active. Frame inspection
+confirmed the first-area HUD, inventory and a genuine PAUSE overlay.
+
+A follow-up run used the exact installed executable and only host keyboard
+input for title/New Game/brightness: Enter at 1,100, F at 1,500 and F at
+1,900. It reached natural movie completion, the first area and inventory,
+then exited normally at tick 8,800 in 178.336 seconds with private cards.
+The movie itself contains about 92 seconds of audio; loading and the
+original first-area intro add time before free movement. The black opening
+picture can therefore look like a hang, especially with PC audio muted.
+Enter sends the game's original Start input to skip the movie after it
+begins; normal movie/audio cleanup and area loading still run.
+
+An additional installed-build run pressed only Enter at tick 2,600 during
+the movie. It took the original abort/cleanup path and reached active
+gameplay. W at tick 4,000 changed the player's coordinates after that
+transition, verifying keyboard movement after a skip. Space was first
+supplied at tick 4,100, after the movie had already been skipped.
 
 Music, sound effects and movie audio ran through the game's actual
 SDRDRV/LIBSD/SPU2 path. Optional PCM captures provided:
