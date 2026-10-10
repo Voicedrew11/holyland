@@ -35,17 +35,29 @@ commit); don't edit them by hand. Workflow:
 | `0024-Preserve-sprite-coordinate-pairs-…` | Preserve matched XY/UV endpoints when reversing sprite axes, fractional XYOFFSET/UV, ceil-exclusive coverage, integer GS sampling and flat second-vertex Q. Corrects the original 64-pixel gameplay feedback strips without changing the texture-cache policy. |
 | `0025-Bound-GS-diagnostics-…` | Opt-in traces respect the selected tick interval for every event; privileged state includes CRT2, and primitive coordinates retain fractional XYOFFSET. Does not change rendering. |
 | `0026-Decode-interlaced-source-height-…` | Decode interlaced FRAME-mode source rows before the host-size cap. Gameplay's encoded 896 display lines retain all 448 source rows, rather than cropping to 256 and falsely doubling them. |
+| `0027-Add-Vulkan-GS-rasterization-…` | Optional paraLLEl-GS Vulkan compute rendering, transfers and logical scanout. Hardware Vulkan is preferred when compiled in; an explicit CPU reference remains available. Includes serialized cross-thread device access and GPU image readback for the existing host window. |
+| `0028-Bob-current-Vulkan-fields-…` | Expand the current 224-row field to 448 rows on GPU without weaving older presentations into title/menu text. Preserve raw-field diagnostics and explicitly transition the skipped-deinterlace image for transfer. |
+| `0029-Correct-EE-SQRT-and-RSQRT-source-operands` | SQRT.S reads Ft on the EE; RSQRT.S computes Fs / sqrt(abs(Ft)). Corrects ground-edge length calculations and handles source/destination aliases, signed zero and live/sticky exception flags. Rebuild tools and regenerate the game. |
+| `0030-Add-bounded-opt-in-disc-and-IOMAN-read-diagnostics` | `PS2X_IO_TRACE` reports actual CD/IOMAN reads and completion, capped by `PS2X_IO_TRACE_LIMIT`; normal I/O behaviour is unchanged. |
+| `0031-Trace-guarded-KFIV-world-and-collision-bank-state-on` | `PS2X_WORLD_TRACE` observes the USA game's player position and collision-bank readiness through the existing metadata/opcode-guarded input hook. Guest memory is read only. |
+| `0032-Walk-complete-finite-DMA-chains-without-a-tag-count-` | Complete finite VIF/GIF source chains beyond 4096 tags, preserving tail FINISH packets. A constant-space traversal-state cycle detector protects against invalid loops and includes the CALL return stack. |
+| `0033-Service-MPEG-output-callbacks-when-audio-backpressur` | Service the registered SDK UPDATE callback when a rejected audio packet blocks further video and the decoded queue is empty. Retain the packet for retry; rate-limit additional service by VSync and preserve cancellation guards. |
+| `0034-Truncate-and-saturate-EE-CVT.W.S-independently-of-ho` | EE CVT.W.S truncates toward zero and saturates by sign regardless of host rounding mode. Corrects shared angle range reduction used by skeletal matrices; no character-specific pose override. |
+| `0035-Service-registered-MPEG-input-callbacks-after-real-p` | Dispatch registered NODATA input service after UPDATE at each genuine decoded-picture handoff, preserving callback order and generation cancellation. |
+| `0036-Reclassify-resumed-IPU-input-chains-from-the-current` | On IPU-input STR starts, classify unread payload from the current CHCR tag instead of the previous cached terminal state; zero QWC fetches TADR. Promoted ring tails continue using only accepted-byte credit. |
+| `0037-Service-starved-MPEG-input-consumers-without-accepti.patch` | Service registered NODATA callbacks when a rejected video PES blocks an active decoder with no picture queued. Retain the packet for explicit retry and preserve cancellation, picture counts and accepted-byte accounting. Once-per-VSync service approximates the original SDK's empty-IPU wait loop, which services after every 5,001 polls. |
+| `0038-Preserve-active-IPU-input-channel-fields-when-suspen.patch` | Ignore STR-one CHCR writes while IPU input is active; a STR-zero write clears only STR and preserves the fetched tag and channel fields. STOP creates no credit, restart or completion; subsequent starts use the resumed-tag classification from patch 0036. |
+| `0039-Clear-MPEG-callback-registrations-when-recreating-a-.patch` | Successful Create clears only that MPEG handle's stream and ordinary callback registrations, preventing duplicate compressed-payload copies after recreation. Reset retains registrations; unrelated handles and cancellation guards remain intact. |
 
-The recompiler hunks in patch 0022 must also be applied **before generating
+The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
 patch helper before building `ps2_recomp`; `03-build-runner.sh` applies the
 complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 26-patch series retains patches 0001–0014 unchanged. Twelve additions,
-0015–0026, were exported from source commits on top of that series and
-change 43 source/license/build files. The
+The 39-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+0015–0039, were exported from source commits on top of that series. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in
@@ -54,6 +66,10 @@ disabled-depth fix separately in
 [PS2Recomp #280](https://github.com/ran-j/PS2Recomp/pull/280).
 The sprite-coordinate fix is proposed separately in
 [PS2Recomp #281](https://github.com/ran-j/PS2Recomp/pull/281).
+
+Patch 0027 does not vendor the Vulkan dependency. Prepare its pinned source
+and separate LGPL small-transfer patch with
+`tests/gpu-gs-tests/Prepare-ParallelGS.ps1`; see [Vulkan rendering](../docs/vulkan.md).
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
 license, as are the maintainer tools built from its sources

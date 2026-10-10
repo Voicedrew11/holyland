@@ -3,8 +3,9 @@
 A native PC port of **King's Field: The Ancient City** (FromSoftware, USA
 `SLUS-20318`) built with [PS2Recomp](https://github.com/ran-j/PS2Recomp).
 The recompiler translates the game's MIPS R5900 executable into C++ compiled
-for the host CPU. The supporting runtime still interprets IOP and VU1 code
-and renders through a software GS.
+for the host CPU. The supporting runtime still interprets IOP and VU1 code.
+An optional Vulkan GS backend renders on the GPU; the software GS remains
+available as a reference and compatibility fallback.
 
 **Supply your own US disc image.** This repository contains tooling,
 function boundaries and patches, with no game executable, generated game
@@ -14,9 +15,19 @@ code or disc assets. The build checks the boot ELF's hash.
 
 - Native Windows x64 boots into the first gameplay area. Title screens,
   menus, movement, attack input, inventory and pause/resume have been checked.
+- Progression through the cave door into the next map is verified. Correct
+  EE square-root operands prevent the floor fall; complete DMA chains retain
+  the FINISH packet needed to render the next area. Movement, camera and
+  inventory work past the original failure point.
+- The first NPC's seated pose is restored. Shared EE CVT.W.S truncation
+  corrects angle range reduction used by the original skeletal routines.
 - Gameplay's vertical strip corruption is fixed: walls and sky now align
   across the original framebuffer feedback passes, and scanout preserves
   all 448 gameplay rows.
+- Vulkan GS rendering was verified on native Windows with an RTX 4090.
+  It handles rasterization, textures, transfers and scanout on the GPU;
+  the existing window still receives a read-back RGBA image. See
+  [Vulkan rendering](docs/vulkan.md) for setup, timing and limitations.
 - Music, sound effects and opening-movie audio play through the game's
   sound driver and SPU2 implementation. The opening movie now displays its
   pictures and ends naturally in gameplay. Enter optionally skips the
@@ -24,9 +35,14 @@ code or disc assets. The build checks the boot ELF's hash.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
 - Broader rendering accuracy remains unverified and performance is below full speed.
-  The movie can show interlace combing. Audio hardware behaviour is
+  Vulkan field presentation uses GPU bob to avoid temporal text combing.
+  Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
   at a real save point remain unverified.
+- Returning to the menu and starting another game could stall the intro.
+  Movie recreation now clears stale callback registrations, and suspended
+  input DMA preserves its active tag. Native Windows replay completed the
+  second intro without skipping, then verified movement and inventory.
 
 See [Windows validation](docs/windows-validation.md) for the tested compiler,
 source-only regressions, capture evidence and practical limits. Earlier
@@ -60,9 +76,10 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 26 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twelve additions cover Windows input, audio, movie and
-gameplay-rendering fixes, with bounded opt-in GS diagnostics.
+of 39 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; twenty-five additions cover Windows input, audio, movie,
+gameplay rendering, EE conversion/square-root translation and complete DMA chains,
+with opt-in diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

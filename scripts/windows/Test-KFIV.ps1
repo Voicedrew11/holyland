@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Runs the native KFIV runner in an isolated, hidden Windows test session.
+Runs the native KFIV runner in an isolated Windows test session (hidden by default).
 .DESCRIPTION
 The supplied game directory is read only. DATA is linked with a junction;
 SLUS_203.18, SYSTEM.CNF, IOPRP224.IMG and IOP are copied. The test has its
@@ -24,6 +24,7 @@ param(
     [switch]$ThreadsAtExit,
     [switch]$Lockstep,
     [switch]$CopyMemoryCards,
+    [switch]$Visible,
     [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800,
     [ValidateRange(0, 60)][int]$GracefulExitSeconds = 10,
     [hashtable]$Environment = @{},
@@ -82,7 +83,7 @@ $stderrPath = Join-Path $runPath 'stderr.log'
 $finalFramePath = Join-Path $runPath 'final.png'
 $resultPath = Join-Path $runPath 'result.json'
 $managedEnvironment = @{
-    PS2X_HIDDEN = '1'
+    PS2X_HIDDEN = $(if ($Visible) { '0' } else { '1' })
     PS2X_DUMP_DIR = $runPath
     PS2X_EXIT_TICK = [string]$ExitTick
     PS2X_CTRL = $controlPath
@@ -139,7 +140,7 @@ try {
         FilePath = $runnerPath
         ArgumentList = (ConvertTo-WindowsArgument (Join-Path $testGamePath 'SLUS_203.18'))
         WorkingDirectory = $testGamePath
-        WindowStyle = 'Hidden'
+        WindowStyle = $(if ($Visible) { 'Normal' } else { 'Hidden' })
         RedirectStandardOutput = $stdoutPath
         RedirectStandardError = $stderrPath
         PassThru = $true
@@ -208,6 +209,7 @@ $result = [pscustomobject][ordered]@{
     Stats = [bool]$Stats
     Lockstep = [bool]$Lockstep
     CopiedMemoryCards = [bool]$CopyMemoryCards
+    Visible = [bool]$Visible
     TimedOut = $timedOut
     ForcedStop = $forcedStop
     ExitCode = $runnerExitCode

@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-20 standalone fixture packages plus the separate audio-loopback diagnostic.
+24 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -15,6 +15,13 @@ All three new packages were rebuilt after relocation. The original packages
 were not rerun solely to add these fixtures.
 They are not a full gameplay or PS2 hardware-equivalence
 test; retail evidence is recorded in [Windows validation](../docs/windows-validation.md).
+
+The optional [GPU GS package](gpu-gs-tests/README.md) adds hardware Vulkan
+raster/transfer, cross-thread and scanout fixtures, pinned dependency setup,
+and a private recording replay. It contains synthetic inputs only and
+requires a compatible hardware GPU for its Vulkan cases. See
+[Vulkan rendering](../docs/vulkan.md) for native integration evidence and
+the limited whole-game speed improvement.
 
 All files in `tests/` are provided under GPL-3.0, consistent with the
 PS2Recomp code they exercise or derive from. See [LICENSE](LICENSE).
@@ -56,7 +63,7 @@ $build = 'C:\KFIV-dev\test-builds\mpeg-tests'
 ```
 
 Repeat for the packages below. Use `Release` for
-`recompiler-resume-tests`, matching its tools libraries; use
+`recompiler-resume-tests` and `recompiler-sqrt-tests`, matching their tools libraries; use
 `RelWithDebInfo` for the other packages in the verified setup. Missing path
 settings fail at configuration. FFmpeg-dependent test executables stage
 their matching DLLs automatically. Keep test build directories external.
@@ -79,22 +86,95 @@ sources; expected failure behaviour is itself asserted.
 | `audio-dma-tests` | 52 | Actual IOP interpreter, intrman and SPU2; synthetic guest IRQ restarts AutoDMA. Guard-disabled control reproduces post-STOP callbacks and unrelated RAM corruption. |
 | `remote-audio-tests` | 3,269 | Actual metadata-guarded KFIV bridge/registry against a controlled SIF boundary; physical-server requirement, blocking transport, packet shape, stack and scratch lifetime. Real audio requires integration. |
 | `cd-audio-tests` | 31 | Actual CDVD imports/kernel/SPU with synthetic host sector mapping; file-backed versus physical-sector selection, offsets and failure propagation. |
-| `ipu-input-tests` | 115 | Actual PS2Memory with synthetic RAM/DMA tags; unrelated GS/VIF link stubs are inert. Accepted-byte credits retire the real channel-4 chains; not a full hardware IPU parser. |
-| `mpeg-tests` | 412 | Actual MPEG source, real EE scheduler/runtime and FFmpeg. Synthetic PES/rings, decoded-picture hook for lifecycle cases, and genuine three-frame decode for video/cancellation. Windows protected pages check bounded retry reads. |
+| `ipu-input-tests` | 272 | Actual PS2Memory with synthetic RAM/DMA tags; unrelated GS/VIF link stubs are inert. Accepted-byte credits retire the real channel-4 chains, including suspended CHCR retagging and active STR write semantics. Two optional scratch controls reproduce stale terminal classification and active CHCR corruption; not a full hardware IPU parser. |
+| `mpeg-tests` | 1,133 | Actual MPEG source, real EE scheduler/runtime and FFmpeg. Synthetic PES/rings, decoded-picture hook for lifecycle cases, and genuine three-frame decode for video/cancellation/audio/input service and recreation. Windows protected pages check bounded retry reads. Four optional scratch controls reproduce the specific service and callback-lifetime defects. |
+| `recompiler-cvt-tests` | 199,956 fixed | Actual decoder and COP1 translator emit and execute synthetic conversions against production macros. Every FPR alias, ignored Ft, all four host rounding modes, sign saturation, FCR31/source preservation and angle range reduction. Old rounding control produces 920 failures; no retail pose input. |
 | `ee-priority-tests` | 63 | Actual kernel thread syscalls and scheduler, synthetic guest bootstrap and empty function table; original priority-zero rejection is the control. |
 | `ee-callback-tests` | 244 | Actual scheduler/guest heap and synthetic guest callbacks; stale-entry cancellation, started continuations and tuple lifetime. Predicate-disabled scheduler is the control. |
 | `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |
+| `recompiler-sqrt-tests` | 49 fixed / 9 control | Actual decoder and FPU translator emit synthetic instructions that are compiled against runtime headers. Register operands, aliases, exception flags, signed zero and finite ground-edge normals; old operand bodies are restored only in the control. No retail game or runtime execution. |
+| `dma-chain-tests` | 245 fixed / 59 control failures | Actual PS2Memory, VIF0/VIF1, GIF arbiter, GS frontend and CPU backend; finite chains through 10000 tags, real CSR FINISH, CALL-stack reuse, IRQ/TIE and cycle guards. Synthetic input; an MSCAL callback counter substitutes VU execution. |
 | `gs-depth-tests` | 143,397 | Actual CPU GS backend and local memory with synthetic colors/texture; disabled and enabled depth tests, depth-write masking, movie-style DECAL sprite and CRT2 scanout. A scratch control removes only the ZTE fix. No decoder or retail assets. |
 | `gs-alignment-tests` | 853,552 per worker count | Actual CPU GS backend and local memory; scalar fixed-UV oracle, reversed axes, fractional offsets, bounds/scissor, flat Q and serial 64-pixel framebuffer feedback through the real texture cache. One/eight workers; optional prior-sprite control. No retail assets or presentation changes. |
 | `gs-trace-tests` | 59 fixed | Actual opt-in GS trace implementation with synthetic register, transfer, draw and privileged CRT state; inclusive tick bounds, CRT2 fields and fractional XYOFFSET diagnostics. Nine fixed cases and six controlled prior-behaviour cases. |
 | `gs-scanout-height-tests` | 6,129,642 fixed | Real backend framebuffer upload and public presentation through its VRAM snapshot. Independently encoded gradients/HUD marker check full source rows, CRT1/CRT2/dual, magnification, odd rounding, clamp order, progressive/FIELD and initial small FRAME bob. Nine fixed cases, six prior-height controls; no cross-frame history or window scaling claim. |
 
-MPEG's 412 checks comprise 54 SDK lifecycle, 75 demux, 84 video, 93
-cancellation and 106 snapshot checks. They cover committed B9 completion
+MPEG's 1,133 production checks comprise 54 SDK lifecycle, 75 demux, 102 video,
+93 cancellation, 106 snapshot, 211 audio output-service, 148 picture input-service,
+287 video starvation-service and 57 recreation checks. They cover committed B9 completion
 despite unread sector padding, no callbacks after B9, original SDK
 `work + 4` reference count, final picture timing and reset/recreate lifetime.
 B7 alone must remain incomplete until accepted B9 or physical producer EOF.
+
+The audio service fixture drains three genuine decoded pictures, then rejects
+audio until the existing registered UPDATE callback can service its consumer.
+Eight retries in one VSync receive one service; another VSync permits another.
+Only an explicit accepted retry commits the original PES bytes. Reset, delete,
+and a new CD generation cancel later service callbacks and release the producer.
+Picture and reference counts remain intact. Audio-only clients and clients with
+genuine pictures still queued receive no additional service. The SDK emits
+UPDATE during IPU output DMA batches before an entire picture is returned;
+the whole-frame decoder supplies this bounded service only on the starvation path.
+
+The picture input-service fixture checks the actual SDK UPDATE→NODATA order
+for three genuine FFmpeg pictures, callback tuples and multiple registrations.
+Reset, delete, a new CD generation and recreation cancel queued successors.
+No compressed bytes or picture counts are fabricated; an empty completed
+decoder emits no picture callbacks. The video/DMA fixture also verifies that
+these handoffs neither replay accepted input nor earn new DMA credit.
+
+The video starvation-service fixture drains three genuine FFmpeg pictures and
+rejects a video PES while its active decoder has no picture queued. Registered
+NODATA callbacks run in order with their original tuples, at most once per VSync:
+eight retries in one VSync receive one service, and a later VSync permits another.
+Service cannot accept the pending PES, create DMA credit or fabricate a picture;
+only an explicit accepted retry commits its bytes. Reset, delete, a new CD
+generation and recreation cancel queued successors. Never-started decoders,
+clients with genuine pictures queued and audio clients receive no extra input
+service. The original SDK services NODATA after every 5,001 polls in its empty-IPU
+wait loop. Once-per-VSync service is a bounded HLE approximation of that wait,
+not a claim of matching its busy-poll timing.
+
+The recreation fixture checks that successful Create clears stream and ordinary
+callback registrations for only that MPEG handle. Reset retains registrations;
+Create, Reset and Delete preserve unrelated handles. A recreated consumer uses
+its new userdata and copies each accepted compressed payload exactly once. One
+genuine PES produces three FFmpeg pictures, with the current callback tuple and
+unchanged picture accounting. Existing cancellation guards remain in effect.
+
+Each optional MPEG control validates its source replacement and writes only a
+scratch copy in the build tree. Production source stays intact, and a control
+passes only when its fixture reaches the named assertion at the specified check:
+
+| CMake option | Restored defect and required failure |
+|---|---|
+| `-DMPEG_AUDIO_SERVICE_OLD_CONTROL=ON` | Removes only audio UPDATE service; requires `audio starvation services the existing UPDATE boundary` at check 16. |
+| `-DMPEG_PICTURE_INPUT_OLD_CONTROL=ON` | Removes only picture NODATA service; requires `each genuine picture receives both input callbacks` at check 9, after a genuine picture and UPDATE. |
+| `-DMPEG_VIDEO_SERVICE_OLD_CONTROL=ON` | Removes only rejected-video NODATA service; requires `video starvation services the existing NODATA boundary` at check 16. |
+| `-DMPEG_RECREATE_OLD_CONTROL=ON` | Removes only Create's per-handle callback-table erase; requires `Create must clear prior stream registrations before re-registering one consumer` at check 9, reproducing a duplicate payload copy. |
+
+The nine production fixtures must still pass all 1,133 checks. Enabling all four
+options gives 13 CTest targets: nine production fixtures and four exact controls.
+No game input is used.
+
+The 272 IPU production checks include REFE→REF extension, REF→REFE/END,
+unchanged resume, controller suspension, IRQ/TIE changes and zero-QWC TADR fetch.
+While channel 4 STR is active, a STR-one CHCR write is ignored; a STR-zero write
+clears only STR, preserving TAG/IRQ/MOD/TIE/TTE/ASP, transfer registers and
+accepted-byte credit. Neither write starts another DMA or fabricates completion.
+Retagging after STOP remains legal, and the next start classifies unread payload
+from the retained or explicitly rewritten tag. Changing CHCR creates no input
+credit and cannot retire uncredited payload.
+
+`-DIPU_RESUME_OLD_CONTROL=ON` adds a scratch control that removes only CHCR-start
+cache invalidation. It requires `resumed REF follows its successor instead of the
+cached terminal state` at check 103. `-DIPU_ACTIVE_CHCR_OLD_CONTROL=ON` adds a
+separate scratch control that removes only the active-channel write guard. It
+requires `active STR-one CHCR writes cannot replace the fetched tag or channel
+fields` at check 228. Both controls preserve production source and reject other
+failures. Enabling both gives three CTest targets: one production fixture and
+two controls.
 
 The synthetic 1,065-byte clip is encoded in
 `mpeg-tests/fixtures/video_three_frames.h` as source text. It was generated
@@ -142,7 +222,7 @@ without asserting full cross-frame weave accuracy.
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The series now contains 26 patches. Before adding the GS depth
+failure. The series now contains 39 patches. Before adding the GS depth
 fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
@@ -152,6 +232,55 @@ full after tools, and full application twice. Staging new files and applying
 Git line-ending normalization reproduced the tested source-export tree
 `6c3edbccc9e71f1477863bd707e5758658e9b28b` exactly, with all 57 managed
 source files verified after normalization.
+
+The 27-patch Vulkan series was applied from a fresh pinned checkout and
+repeated idempotently; all 62 managed normalized files match the source
+export. The 28-patch series was freshly applied and repeated idempotently,
+matching source-export tree `767a83428b5340012b47717f446391e248ef76cd`.
+The text fix is checked with generated field-history and raw-field patterns,
+including repeated parity and skipped ticks. All 11 GPU CTests passed with
+the optional prior-source controls enabled; the old adaptive field path
+produced 1,290,243 failed pixel comparisons.
+GPU package relocation builds against fresh patched source,
+rather than requiring generated game code or a private runtime library.
+
+The relocated square-root package passed both native Windows CTests: 49
+production checks and nine old-operand controls. The complete 31-patch
+series passed tools twice, full after tools, full twice and tools after full
+from a fresh pinned checkout. Its normalized tree is
+`0b63a16cab6d60929661c1f0658c6f7fd4802ab8`; all 64 managed source files match
+the native build checkout. The seven patch-helper safety tests also passed.
+
+After the DMA-chain fix, a fresh 32-patch checkout passed the same repeated
+tools/full phases. Its normalized tree is
+`b035f6f9d78fa9259c414ad997d4bb84224913b2`; all 64 managed source files match
+the native build checkout. The unchanged helper safety tests were not repeated.
+
+The 34-patch series adds MPEG audio output service and shared EE CVT.W.S
+truncation. Fresh repeated tools/full phases reproduce normalized tree
+`1ed68a278461aefe519657d06a8b51178b7f8c26`; all 65 managed files match the
+native checkout and clean source export. The new CVT package passed both
+native CTests, including the original-rounding control. The MPEG package
+was rebuilt at its public path and passed all seven CTests, including the
+optional audio-starvation control. No Linux execution was performed.
+
+The 36-patch series adds genuine-picture input service and resumed IPU tag
+classification. A fresh checkout passed tools, tools-repeat, full-after-tools,
+full-repeat and tools-after-full. Its normalized tree is
+`ddbf17571c717e22afb0a6890030a35f8e86ce0a`; all 65 managed files match the
+native checkout and clean source export. The unchanged patch-helper safety
+tests were not repeated. MPEG passed all nine native CTests after rebuilding
+against the combined runtime; IPU passed both native CTests. These source
+checks do not establish retail movie replay.
+
+The 39-patch series additionally supplies bounded video input-wait service,
+active IPU CHCR write semantics and per-handle Create callback lifetime. The
+final native Windows source fixtures passed all 13 MPEG CTests (1,133 production
+checks) and all three IPU CTests (272 production checks), including their exact
+old-behaviour controls. A separate native Windows return-to-title integration
+completed the second intro naturally and verified movement and inventory
+afterward; details and practical limits are in
+[Windows validation](../docs/windows-validation.md).
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately
 with CMake and no PS2Recomp path settings. It requires Windows build 20348+

@@ -1,0 +1,46 @@
+diff --git a/gs/gs_interface.cpp b/gs/gs_interface.cpp
+index ea00016..e52d6c2 100644
+--- a/gs/gs_interface.cpp
++++ b/gs/gs_interface.cpp
+@@ -3211,10 +3211,12 @@ void GSInterface::init_transfer()
+ 	}
+ 	else if (XDIR == HOST_TO_LOCAL)
+ 	{
+-		transfer_state.required_qwords =
+-				(transfer_state.copy.trxreg.desc.RRW *
+-				transfer_state.copy.trxreg.desc.RRH *
+-				get_bits_per_pixel(transfer_state.copy.bitbltbuf.desc.DPSM)) / 64;
++		const uint64_t required_bits = uint64_t(transfer_state.copy.trxreg.desc.RRW) *
++		                              transfer_state.copy.trxreg.desc.RRH *
++		                              get_bits_per_pixel(transfer_state.copy.bitbltbuf.desc.DPSM);
++		// IMAGE payloads are padded to words, but the transfer rectangle may
++		// contain fewer pixels than a word or end partway through one.
++		transfer_state.required_qwords = uint32_t((required_bits + 63u) / 64u);
+ 
+ 		transfer_state.host_to_local_active = transfer_state.required_qwords != 0;
+ 		transfer_state.copy.needs_shadow_vram = false;
+@@ -3222,13 +3224,19 @@ void GSInterface::init_transfer()
+ 	}
+ 	else if (XDIR == LOCAL_TO_HOST)
+ 	{
+-		uint32_t required_bytes = (transfer_state.copy.trxreg.desc.RRW *
+-		                           transfer_state.copy.trxreg.desc.RRH *
+-		                           get_bits_per_pixel(transfer_state.copy.bitbltbuf.desc.SPSM)) / 8;
++		const uint64_t required_bits = uint64_t(transfer_state.copy.trxreg.desc.RRW) *
++		                              transfer_state.copy.trxreg.desc.RRH *
++		                              get_bits_per_pixel(transfer_state.copy.bitbltbuf.desc.SPSM);
++		const uint32_t required_bytes = uint32_t((required_bits + 7u) / 8u);
+ 
+-		transfer_state.fifo_readback.reserve(required_bytes);
+ 		transfer_state.fifo_readback_128b_offset = 0;
+-		transfer_state.fifo_readback_128b_size = required_bytes / 16;
++		transfer_state.fifo_readback_128b_size = (required_bytes + 15u) / 16u;
++		// read_transfer_fifo copies complete 128-bit words. Allocate the tail
++		// word as live storage and zero its unused bytes before de-swizzling.
++		const size_t fifo_bytes = size_t(transfer_state.fifo_readback_128b_size) * 16u;
++		transfer_state.fifo_readback.reserve(fifo_bytes);
++		if (fifo_bytes != 0)
++			memset(transfer_state.fifo_readback.data(), 0, fifo_bytes);
+ 
+ 		auto src_rect = compute_page_rect(transfer_state.copy.bitbltbuf.desc.SBP,
+ 										  transfer_state.copy.trxpos.desc.SSAX,
