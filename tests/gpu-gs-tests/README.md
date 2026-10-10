@@ -78,7 +78,7 @@ recordings. Synthetic tests supply controlled expected values rather than
 assuming that every GPU triangle is byte-identical to the CPU implementation.
 
 Native Windows 11, MSVC 19.44 x64 Release `/MD`, Intel i9-13900KF and NVIDIA
-RTX 4090 (Vulkan 1.4.351) validation passed all seven CTest cases. The raster
+RTX 4090 (Vulkan 1.4.351) validation passed all nine default CTest cases. The raster
 fixture passed 70 cases and 857 checks with zero failures, including creation on
 one thread, uploads/draws from other threads, main-thread presentation and
 concurrent serialized callers. CTest also rejects the thread-manager error
@@ -93,12 +93,25 @@ The separate `gs_gpu_scanout` target exercises CRT1, CRT2, dual-circuit merging,
 viewports. These tests use generated gradients to check every output row and
 column, including the bottom HUD rows. They call the actual GPU scanout helper
 and require a hardware Vulkan device; a software Vulkan device is rejected.
-All six cases passed 3,584,052 generated-pixel/state checks with zero failures.
+Those six cases passed 3,584,052 generated-pixel/state checks with zero failures.
+The field-history and raw-field cases add 4,300,880 checks across repeated
+framebuffers, overwritten fields, repeated parity/ticks and skipped ticks.
+The default 224-row field path uses a nearest GPU bob to 448 rows; raw
+diagnostics retain 224 rows. Every output pixel must come from the current
+field. This prevents earlier field images from doubling title/menu text.
+
+Optionally configure `GPU_GS_SCANOUT_PRIOR_SOURCE` with the pre-0028
+`gs_vulkan_scanout.cpp` to build two old-source controls (eleven total CTests).
+The prior field-history code produces 1,290,243 failed pixel checks; its
+negative control accepts completed comparison failures and rejects Vulkan
+initialization/runtime errors. The old raw-field pixel control still passes.
+The new implementation explicitly corrects the raw field's transfer layout.
 
 The final private gameplay replay used a 717,976,328-byte cached window after
 tick 3300 through the first presentation at or beyond tick 3600 (tick 3601).
-Each isolated run executed the same 1,180,521 submissions and 290 timed
-presentations, followed by synchronized VRAM readback. The 1024 MiB cache limit
+Each isolated run executed the same 1,180,521 submissions; GPU and CPU1
+reported 290 timed presentations, and CPU8 reported 291, followed by
+synchronized VRAM readback. The 1024 MiB cache limit
 was sufficient. Statistics logging was disabled; the fixture uses `/fp:strict`,
 and the separate ParallelGS/Granite libraries use their upstream `/fp:precise`.
 

@@ -76,6 +76,32 @@ void verify(const PresentationFrame &frame, unsigned width = 640, unsigned heigh
         expect(pixel(frame, width - 1u, 447) == (pattern(width - 1u, 447, tag) | 0xff000000u),
                "last HUD row447 is visible at its original scale");
 }
+
+void fieldHistory(GSInterface &gs, Device &device, bool raw)
+{
+    struct Step { unsigned page, tag; uint64_t tick; };
+    // Tags differ in blue, so an adaptive filter can regard fields as static
+    // while still reusing visibly different previous-field pixels. Its edge
+    // rule always reuses the previous field on an unmatched first/last row.
+    // Include same-page uploads, changed pages, repeated parity, skipped
+    // ticks, and a repeated tick: no history/parity assumption may blend text.
+    constexpr Step steps[] = {
+        {0, 0, 0}, {0, 1, 1}, {70, 2, 1}, {70, 3, 3}, {140, 0, 4},
+        {0, 1, 8}, {140, 2, 9}, {140, 3, 9}, {70, 1, 10}, {0, 2, 13}
+    };
+    for (const auto &step : steps)
+    {
+        upload(gs, step.page, 224, step.tag);
+        auto r = request(2, step.page, 448);
+        r.vsyncTick = step.tick;
+        const auto frame = presentVulkanGs(gs, device, r);
+        const unsigned outputHeight = raw ? 224u : 448u;
+        verify(frame, 640, outputHeight, !raw, step.tag);
+        expect(pixel(frame, 639, outputHeight - 1u) == (pattern(639, 223, step.tag) | 0xff000000u),
+               "bottom row always comes from the current field after page/timing changes");
+        device.next_frame_context();
+    }
+}
 }
 int main(int argc, char **argv)
 {
@@ -120,6 +146,10 @@ int main(int argc, char **argv)
             verify(presentVulkanGs(gs, device, request(2, 140, 448)), 640, 448, true);
             device.next_frame_context();
         }
+        else if (name == "field_history" || name == "field_history_prior" || name == "raw_field")
+        {
+            fieldHistory(gs, device, name == "raw_field");
+        }
         else if (name == "viewport")
         {
             upload(gs, 140);
@@ -138,6 +168,11 @@ int main(int argc, char **argv)
         else throw std::runtime_error("Unknown test case");
         gs.flush(); device.wait_idle();
         std::printf("scanout %s: %u checks, %u failures\n", name.c_str(), checks, failures);
+        // This mode is used only by the optional prior-source target. A
+        // Vulkan initialization error still takes the exception path and
+        // fails; only completed pixel comparisons can satisfy the control.
+        if (name == "field_history_prior")
+            return failures != 0u ? 0 : 1;
         return failures ? 1 : 0;
     }
     catch (const std::exception &error) { std::fprintf(stderr, "FAIL: %s\n", error.what()); return 2; }

@@ -255,8 +255,17 @@ constitute a Linux build or execution test of the new changes.
 
 ## Remaining limits
 
-- Opening pictures and audio work, but interlace combing remains visible
-  in some frames. Other video paths remain unverified.
+The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
+nearest bob of the current 224-row field. Title and inventory captures no
+longer show displaced alternating text rows. Its native keyboard-input run
+reached tick 4500 normally in 118.064 seconds, including inventory and
+pause/resume. The relocated fixture passed 11/11 CTests, including two
+old-source controls; the prior adaptive path failed 1,290,243 pixel checks.
+Fresh 28-patch application and repeat reproduce the exported source tree.
+
+- Opening pictures and audio work. The CPU reference retains its older
+  weave path; the Vulkan field fix was checked on the title, opening and
+  inventory. Other video paths remain unverified.
 - The repeated 64-pixel gameplay strip corruption is fixed. Broader 3D
   rendering accuracy remains unverified and gameplay runs below full speed.
   The old Linux first-area measurements in `NOTES.md` are historical measurements,

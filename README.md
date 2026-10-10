@@ -29,7 +29,8 @@ code or disc assets. The build checks the boot ELF's hash.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
 - Broader rendering accuracy remains unverified and performance is below full speed.
-  The movie can show interlace combing. Audio hardware behaviour is
+  Vulkan field presentation uses GPU bob to avoid temporal text combing.
+  Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
   at a real save point remain unverified.
 
@@ -65,8 +66,8 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 27 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; thirteen additions cover Windows input, audio, movie and
+of 28 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; fourteen additions cover Windows input, audio, movie and
 gameplay-rendering fixes, with bounded opt-in GS diagnostics.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and

@@ -5,6 +5,13 @@ place as state changes; link session logs at the point they support.
 
 ## Current state (2026-10-09)
 
+- **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
+  field to 448 rows on GPU. Earlier adaptive weave mixed previous
+  presentation images into title/menu lettering. Native title and inventory
+  captures are clean, gameplay/pause/resume passed through tick 4500, and
+  generated field-history controls reproduce the old defect. No font
+  replacement or game-specific glyph override is used.
+
 - **Vulkan GS:** patch 0027 adds optional paraLLEl-GS hardware rendering and
   logical scanout. Native RTX 4090 verification reached tick 6000 normally,
   preserving gameplay alignment, 448 rows, inventory and pause/resume.

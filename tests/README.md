@@ -149,7 +149,7 @@ without asserting full cross-frame weave accuracy.
 using private temporary repositories. They cover tools twice, full after
 tools, full twice, tools after full, unchanged real index, unrelated edits,
 wrong HEAD, changed patches/phase record/managed files, and incomplete-phase
-failure. The series now contains 27 patches. Before adding the GS depth
+failure. The series now contains 28 patches. Before adding the GS depth
 fix, the 22-patch series was also tested on native Windows with
 `core.autocrlf=true`: tools twice, full after tools and full twice reproduced
 the verified complete source tree after Git normalization.
@@ -162,7 +162,13 @@ source files verified after normalization.
 
 The 27-patch Vulkan series was applied from a fresh pinned checkout and
 repeated idempotently; all 62 managed normalized files match the source
-export. GPU package relocation builds against this fresh patched source,
+export. The 28-patch series was freshly applied and repeated idempotently,
+matching source-export tree `767a83428b5340012b47717f446391e248ef76cd`.
+The text fix is checked with generated field-history and raw-field patterns,
+including repeated parity and skipped ticks. All 11 GPU CTests passed with
+the optional prior-source controls enabled; the old adaptive field path
+produced 1,290,243 failed pixel comparisons.
+GPU package relocation builds against fresh patched source,
 rather than requiring generated game code or a private runtime library.
 
 `audio-loopback` is an optional Windows-only diagnostic, built separately

@@ -7,6 +7,7 @@ project(ps2recomp_gpu_gs_tests LANGUAGES CXX C)
 
 set(PS2RECOMP_DIR "" CACHE PATH "Patched PS2Recomp checkout with the Vulkan backend")
 set(PARALLEL_GS_DIR "" CACHE PATH "Pinned ParallelGS checkout with its minimal submodules initialized")
+set(GPU_GS_SCANOUT_PRIOR_SOURCE "" CACHE FILEPATH "Optional unpatched gs_vulkan_scanout.cpp for field-history controls")
 option(GPU_GS_CPU_CONTROL_ONLY "Build synthetic two-CPU control without a Vulkan dependency" OFF)
 option(GPU_GS_BUILD_SYNTHETIC "Build controlled synthetic tests as well as the replay tool" ON)
 if(NOT PS2RECOMP_DIR OR NOT EXISTS "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp")
@@ -64,11 +65,28 @@ else()
         add_executable(gs_gpu_scanout scanout_tests.cpp "${GS_DIR}/gs_vulkan_scanout.cpp")
         configure_fixture(gs_gpu_scanout)
         target_link_libraries(gs_gpu_scanout PRIVATE parallel-gs)
-        foreach(case crt1 crt2 dual movie viewport unsupported)
+        foreach(case crt1 crt2 dual movie field_history raw_field viewport unsupported)
             add_test(NAME gs_gpu_scanout_${case} COMMAND gs_gpu_scanout ${case})
             set_tests_properties(gs_gpu_scanout_${case} PROPERTIES TIMEOUT 60 ENVIRONMENT "PS2X_NO_WEAVE=0"
                 FAIL_REGULAR_EXPRESSION "Thread does not exist in thread manager")
         endforeach()
+        set_tests_properties(gs_gpu_scanout_raw_field PROPERTIES ENVIRONMENT "PS2X_NO_WEAVE=1")
+        if(GPU_GS_SCANOUT_PRIOR_SOURCE)
+            if(NOT EXISTS "${GPU_GS_SCANOUT_PRIOR_SOURCE}")
+                message(FATAL_ERROR "GPU_GS_SCANOUT_PRIOR_SOURCE must name an existing unpatched gs_vulkan_scanout.cpp")
+            endif()
+            add_executable(gs_gpu_scanout_prior scanout_tests.cpp "${GPU_GS_SCANOUT_PRIOR_SOURCE}")
+            configure_fixture(gs_gpu_scanout_prior)
+            target_link_libraries(gs_gpu_scanout_prior PRIVATE parallel-gs)
+            add_test(NAME gs_gpu_scanout_prior_field_history COMMAND gs_gpu_scanout_prior field_history_prior)
+            set_tests_properties(gs_gpu_scanout_prior_field_history PROPERTIES TIMEOUT 60
+                ENVIRONMENT "PS2X_NO_WEAVE=0"
+                FAIL_REGULAR_EXPRESSION "Thread does not exist in thread manager")
+            add_test(NAME gs_gpu_scanout_prior_raw_field COMMAND gs_gpu_scanout_prior raw_field)
+            set_tests_properties(gs_gpu_scanout_prior_raw_field PROPERTIES TIMEOUT 60
+                ENVIRONMENT "PS2X_NO_WEAVE=1"
+                FAIL_REGULAR_EXPRESSION "Thread does not exist in thread manager")
+        endif()
     endif()
     target_sources(gs_gpu_replay PRIVATE "${GS_DIR}/gs_vulkan_backend.cpp"
         "${GS_DIR}/gs_vulkan_scanout.cpp")

@@ -39,7 +39,7 @@ current frontend has no explicit MIPTBP1 value. All GS/device calls share
 one mutex and register their Granite thread index, allowing EE/VU and host
 presentation callers to use one serialized command-pool slot.
 
-Scanout sampling, circuit merging and movie-field deinterlacing also run
+Scanout sampling, circuit merging and field deinterlacing also run
 on Vulkan. The current presentation request has logical display geometry
 but lacks SMODE1 clock state. The bridge therefore normalizes this logical
 viewport rather than claiming analog PS2 timing equivalence. It supports
@@ -47,6 +47,17 @@ the tested 640 × 448 gameplay viewport and 224-row movie fields. Unsupported
 viewports use an explicitly logged CPU display conversion of GPU VRAM;
 their primitive rendering remains Vulkan. The retail verification observed
 one oversized startup scanout using this conversion, before the title.
+
+Patch 0028 presents packed 224-row fields with a nearest-neighbor GPU bob
+to 448 rows. The previous adaptive weave reused earlier presentation images,
+which visibly displaced alternating rows in the title and inventory text.
+Runtime presentations can repeat field parity or skip ticks, so that history
+does not guarantee an opposite field. Bob keeps every output row from the
+current field, preserving its original pixel detail without temporal ghosts.
+Normal 448-row progressive scanout and GS rasterization are unchanged.
+`PS2X_NO_WEAVE=1` retains the raw 224-row field for diagnostics. The bridge
+explicitly transitions skipped-deinterlace images from read-only to transfer
+layout before the GPU blit or raw readback.
 
 The final image is fenced and read back as RGBA for the existing Raylib
 OpenGL window. This retains a CPU row-copy/alpha-normalization step and
@@ -71,6 +82,15 @@ startup CPU display conversion. Menu and pause captures returned to
 gameplay. A separate explicit `cpu` launch reached tick 600 normally in
 10.962 seconds without constructing Vulkan. Existing shortcut target,
 arguments, working directory and the 28 shared runtime DLLs were retained.
+
+After patch 0028, a native keyboard-input run reached tick 4500 in 118.064
+seconds with normal exit and 46 captures. Title and inventory text no longer
+show the earlier alternating-line overlay; opening pictures, gameplay,
+inventory back, pause and resume remain available. Eight scanout cases plus
+the raster fixture pass, as do two optional old-source controls (11/11
+CTests). The old field-history path fails 1,290,243 generated pixel checks,
+while the new history/raw cases pass all 4,300,880 checks. A fresh 28-patch
+application and idempotent repeat reproduce all 62 managed source files.
 
 A separate cached gameplay-command replay measured CPU1 at 22.703 seconds,
 CPU8 at 8.780 seconds and Vulkan at 1.247 seconds for the same 1,180,521
