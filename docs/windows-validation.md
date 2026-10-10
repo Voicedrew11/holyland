@@ -2,7 +2,9 @@
 
 The USA boot ELF `SLUS_203.18` was statically recompiled and run as a native
 x64 executable on Windows 11 with MSVC 19.44. The IOP and VU1 remain
-interpreters in the supporting runtime; GS rendering is software based.
+interpreters in the supporting runtime. The earlier validation below uses
+the CPU GS; optional Vulkan GS is now verified separately in
+[Vulkan rendering](vulkan.md), including native timing and remaining limits.
 The verified build was `RelWithDebInfo`, `/O2 /Ob1 /DNDEBUG /fp:strict`,
 with FFmpeg enabled and matching shared runtime DLLs.
 
@@ -15,8 +17,9 @@ instructions. The diagnostics counted 119,442 registered fallback entries.
 The older 999-warning report was a historical
 baseline, before the final residual-entry regeneration.
 
-The series now contains 26 patches: the existing 0001–0014 plus twelve
-source-exported additions, 0015–0026. The additions change 43
+The earlier CPU verification covered 26 patches: the existing 0001–0014 plus twelve
+source-exported additions, 0015–0026. Patch 0027 now adds the optional Vulkan
+backend separately. The earlier additions change 43
 source/license/build files across Windows, controls, IOP file completion,
 audio, clocks, EE scheduling/callbacks,
 MPEG/IPU, the generator, GS depth testing, sprite alignment, source-height
@@ -188,7 +191,7 @@ sound or A/V synchronization.
 
 ## Relocated repository checks
 
-The repository contains 20 [standalone source-only fixture packages](../tests/README.md),
+The repository contains 24 [standalone source-only fixture packages](../tests/README.md),
 plus the separate audio-loopback diagnostic. The original 16 were independently
 configured, built and run from their new repository paths on native Windows:
 **26/26 CTest entries passed**, with `/fp:strict`. The process audio-loopback
@@ -252,8 +255,160 @@ constitute a Linux build or execution test of the new changes.
 
 ## Remaining limits
 
-- Opening pictures and audio work, but interlace combing remains visible
-  in some frames. Other video paths remain unverified.
+### Cave-door progression follow-up
+
+The interactive native Windows Vulkan run reproduced a long floor fall
+after the opening path's cave door. Both collision banks and all requested
+map reads were complete before the fall. Patch 0029 corrects SQRT.S to read
+Ft and RSQRT.S to divide Fs by sqrt(abs(Ft)); the actual generator fixture
+passed 49 checks and nine old-code controls. The complete game was
+regenerated with the same 28429/28161/268 function counts, 1352 fallback
+warnings and zero errors; 124 generated files changed when staged by content.
+
+With corrected collision calculations, the player crossed the map boundary
+and then waited indefinitely for GS FINISH. The completed VIF1 frame had
+4487 acyclic tags; its FINISH packet was in tag 4486, beyond the runtime's
+4096-tag cutoff. Patch 0032 removes that cutoff using constant-space cycle
+detection over the tag address and CALL return stack. Its synthetic fixture
+passed 245 checks through actual memory, VIF, GIF and CPU GS CSR handling;
+the old-limit control reproduced 59 failures. Both CTest entries passed.
+VU execution is replaced by an MSCAL counter in this fixture.
+
+The corrected native executable was tested interactively on the same route.
+The user confirmed movement, camera control and inventory beyond the door,
+then continued to the first NPC. The map selector changed from 0 to 1,
+subsequent positions remained on successive floor heights, and the next
+loader completed while gameplay continued. That exact tested executable
+was installed for the existing desktop shortcut. Fresh tools/full repeat
+application of all 32 patches reproduced source tree
+`b035f6f9d78fa9259c414ad997d4bb84224913b2`, with all 64 managed source files
+matching the native checkout. No Linux build was performed for these fixes.
+
+This establishes progression past the reported doorway, not later-area or
+full-playthrough stability. The newly reached first NPC initially had an
+incorrect skeletal pose; the shared conversion follow-up below resolves it.
+Returning to title and starting again exposed a separate movie-lifecycle
+defect, covered by the replay follow-up below.
+
+### Shared skeletal conversion follow-up
+
+The first NPC's character resource and animation payload matched the owned
+disc; its world placement matrix was upright. The shared bone builder used
+CVT.W.S for angle range reduction, but the runtime's host `nearbyintf`
+rounded instead of performing the EE's truncation. Positive angles could
+leave the principal interval and reverse the resulting polynomial rotations.
+Two independent reconstructions reproduced all 21 corrupted local joint
+matrices using the former conversion.
+
+Patch 0034 corrects the shared runtime instruction with integer bit decoding,
+truncation toward zero and sign saturation. It preserves FCR31 and does not
+depend on the host rounding mode or perform undefined overflowing casts.
+The actual decoder/translator compile-and-execute fixture passed 199,956
+checks; restoring only the old macro produced 920 failures in 133,316 checks.
+Both native Windows CTests passed. No character model, animation or physics
+override was added; existing generated game code calls the corrected macro.
+
+The full native runner was rebuilt with this header. Read-only RAM captured
+beyond the door contains 21 joint matrices matching the independently
+reconstructed truncating pose to 1.19e-7 maximum rotation error and 1.53e-5
+maximum overall matrix error. Fresh application and repeat of all 34 patches
+reproduce normalized tree `1ed68a278461aefe519657d06a8b51178b7f8c26`;
+all 65 managed files match the native checkout and clean source export.
+The user confirmed the first NPC is seated upright, with a matching
+screenshot. That exact tested executable was installed for the existing
+desktop shortcut. Conversation and later characters were not independently
+verified. These checks do not establish accuracy of every EE operation or
+a full playthrough.
+
+### Movie replay input follow-up
+
+The audio-service correction in patch 0033 releases the first replay
+deadlock, but the second intro then stalled after ten decoded pictures.
+The SDK also services NODATA after picture output. Patch 0035 restores that
+registered callback after UPDATE at each real handoff, with the existing
+generation and cancellation guards. A native callback-only comparison
+still stalled at ten pictures; handoff service alone is insufficient.
+
+The game promotes a suspended ring tail from REFE to REF and updates CHCR
+without changing MADR/QWC/TADR. The runtime retained its old terminal
+classification and completed before the successor payload. Patch 0036
+invalidates that cache on STR starts. This follows the current-tag resume
+handling in [pinned PCSX2 dmaIPU1](https://github.com/PCSX2/pcsx2/blob/355608952714678b3c57832fb82dc6a42956ed25/pcsx2/IPU/IPUdma.cpp#L232-L266).
+Accepted decoder-byte credits remain the sole basis for payload retirement.
+
+Retail callback-only and combined callback/retag comparisons still stalled
+at ten pictures. The decisive live capture showed 252,532 bytes retired or
+credited to the decoder, but 509,141 cumulative bytes copied into ViBuf:
+`509141 = 2 * 252532 + 4077`. Each committed packet had been copied twice,
+and the first callback had also copied the pending rejected 4,077-byte PES.
+The second callback correctly rejected that packet when the ring filled.
+
+The native Create path retained registrations from the previous instance,
+then appended the game's new consumers. Original SDK Create clears those
+tables; the retail cleanup routine returns without calling native Delete.
+Patch 0039 clears registrations only for the successfully recreated handle.
+Reset retains registrations, unrelated handles remain intact, and existing
+cancellation guards release queued callbacks. Ring state and input credits
+are not reset to conceal the mismatch.
+
+Patch 0038 corrects another shared input-DMA defect: an active CHCR STOP
+write may clear only STR, preserving the fetched tag and channel fields;
+an active STR-one write is ignored. Previously the SDK's literal STOP value
+5 erased the fetched REF tag, changing the apparent chain termination.
+This follows [pinned PCSX2 active CHCR handling](https://github.com/PCSX2/pcsx2/blob/355608952714678b3c57832fb82dc6a42956ed25/pcsx2/Dmac.cpp#L213-L249).
+Stopped channels still permit explicit retagging. Patch 0037 also supplies
+registered NODATA on rejected video when the decoder is empty. The SDK
+services these IPU waits every 5,001 busy polls; the whole-frame HLE uses a
+bounded once-per-VSync approximation, retaining the rejected PES for an
+explicit accepted retry.
+
+The final actual-memory package passed 272 native checks and three CTests.
+Precise scratch controls reproduce stale resume classification and active
+CHCR overwrite. It covers both retagging directions, unchanged resume,
+active STOP/START fields, controller suspension, IRQ/TIE changes, fractional
+credit and zero-QWC TADR fetch. MPEG's production-source fixtures passed
+1,133 checks and all 13 CTests against the rebuilt final runtime: nine
+production fixtures and four precise controls. Recreation, Reset, Delete,
+unrelated handles, genuine FFmpeg pictures, callback cancellation and
+accepted-byte/picture accounting are exercised with synthetic inputs.
+
+The frozen combined build passed native Windows Vulkan replay. The scripted
+route skipped the first intro after genuine pictures, entered gameplay,
+selected Quit to title, and started another game. No input was sent after
+the second brightness confirmation until the intro ended naturally.
+Bounded traces show at least 1,856 genuine pictures, advancing audio-consumer
+transfers, producer EOF at 87,558,144 bytes and committed demux EOF at
+87,556,100 bytes. The native picture trace is sampled, so these observations
+do not supply an exact final picture count.
+
+World loading followed EOF normally, then active gameplay resumed. A
+40-tick forward press moved the player from `(-5656, 0, -10718)` to
+`(-5706.030, 0, -10483.273)`. Inventory opened with normal rendered text,
+and Back returned to gameplay. The hidden run quit normally with exit code
+0 after 378.707 seconds, without timeout or forced termination. The exact
+tested executable and 28 matching DLLs were installed for the existing
+desktop shortcut; its target, arguments and working directory were verified.
+Private cards were used throughout. This verifies the tested return-to-title
+route and subsequent controls, not every death/restart path or later area.
+
+All 39 patches passed fresh and repeated tools/full application. The
+normalized tree is `dc4e2ac51f72ace01706569091c99abceca3710a`; all 65
+managed source files match the native checkout and clean source export.
+The frozen candidate's executable and source manifest also match. These
+movie follow-ups change no generator code and use the previously regenerated
+game output. No native Linux build or execution was performed.
+
+The Vulkan text follow-up (patch 0028) replaces history weaving with a GPU
+nearest bob of the current 224-row field. Title and inventory captures no
+longer show displaced alternating text rows. Its native keyboard-input run
+reached tick 4500 normally in 118.064 seconds, including inventory and
+pause/resume. The relocated fixture passed 11/11 CTests, including two
+old-source controls; the prior adaptive path failed 1,290,243 pixel checks.
+Fresh 28-patch application and repeat reproduce the exported source tree.
+
+- Opening pictures and audio work. The CPU reference retains its older
+  weave path; the Vulkan field fix was checked on the title, opening and
+  inventory. Other video paths remain unverified.
 - The repeated 64-pixel gameplay strip corruption is fixed. Broader 3D
   rendering accuracy remains unverified and gameplay runs below full speed.
   The old Linux first-area measurements in `NOTES.md` are historical measurements,

@@ -30,7 +30,7 @@ readable, not as generated soup.
   work breaks the verifier's flag comparison unless a cross-program analysis
   proves otherwise. A lifted program may compute flags lazily but must leave
   identical MAC/status/clip at exit.
-- **Census** (`PS2X_VU1_CENSUS=<file>`, patch 0015): run to tick 3300 used
+- **Census** (`PS2X_VU1_CENSUS=<file>`, patch 0040): run to tick 3300 used
   one 16 KB microcode image (hash `4522ee03bb2e88f9`) and four entry PCs:
   `0x0000` 85% of VU1 cycles (41k MSCAL + 391k MSCNT resumes), `0x1400` 13%,
   `0x3800` 0.8%, `0x13b0` 0.3%. The image is at
@@ -49,7 +49,7 @@ Steps 1-4 are done for one segment, and step 5 found a problem:
 
 - **Lifted:** the MSCNT segment of entry `0x0000` (resume pc `0x08f8`, the
   per-packet path, 391k of its 432k runs). `scripts/maintainer/vu1lift.py`
-  generates it; runtime support is patch 0028 (`runtime/ps2_vu1_lift.h`,
+  generates it; runtime support is patch 0041 (`runtime/ps2_vu1_lift.h`,
   `ps2_vu1_lift.cpp`, the `runLifted` hook in `VU1Interpreter::run`,
   `PS2X_VU1_LIFT=1`). The generator simulates the interpreter's timing
   model once per block and per pipeline state at block entry, so each
@@ -59,7 +59,8 @@ Steps 1-4 are done for one segment, and step 5 found a problem:
   in step with the stores. The MSCAL path (setup `0x0000`-`0x02f8`) still
   runs on the interpreter.
 - **Verified:** 1.94M microprogram runs into gameplay on the 28-patch
-  series (780k on the earlier one), 0 `[vu1verify]` mismatches.
+  series, before the Vulkan patches 0027-0039 (780k on the earlier one),
+  0 `[vu1verify]` mismatches.
 - **Measured: slower with the default asynchronous GS** (11.5 -> 5.1
   flips/s), faster in lockstep (7.8 -> 9.2). See `docs/NOTES.md`,
   "Performance", for the profile. This is the open problem; solve it

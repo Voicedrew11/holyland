@@ -3,8 +3,52 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-10-09)
+## Current state (2026-10-10)
 
+- **Cave-door progression:** corrected EE SQRT/RSQRT operands (patch 0029)
+  prevent the initial floor fall. The next map was already loaded before
+  the fall. Corrected movement then exposed a separate FINISH wait: the
+  completed first-area VIF1 frame contained 4487 valid DMA tags, but the
+  runtime stopped at 4096 before FINISH in tag 4486. Patch 0032 replaces that
+  cutoff with traversal-state cycle detection, preserving CALL return-stack
+  context. The user crossed the door, walked through the next area, opened
+  inventory and reached the first NPC in the native Vulkan build.
+- **Shared skeletal math:** patch 0034 corrects EE CVT.W.S from host
+  rounding to truncation with sign saturation. The old conversion sent
+  positive joint angles outside the original trig polynomial's interval.
+  Two independent reconstructions reproduced all 21 corrupted NPC matrices;
+  the corrected native capture matches the truncating pose, and the user
+  confirmed the NPC is seated upright. No model or animation override is used.
+  The actual generated-instruction fixture passed 199,956 checks; the old
+  macro produced 920 failures. This shared fix applies to all callers.
+- **Movie restart:** recreating the same MPEG handle retained old callback
+  registrations. Each video packet was copied twice, while decoder credit
+  was earned once; live counters reproduce that mismatch exactly. Patch
+  0039 clears the recreated handle's registrations, as the original SDK
+  does, while Reset retains them. Patch 0038 preserves active CHCR tag and
+  channel fields when stopping input DMA. Patches 0033/0035/0037 restore
+  bounded registered audio/input service, and 0036 reclassifies resumed
+  chains from the current tag. Native Windows MPEG fixtures passed 1,133
+  checks and 13 CTests; actual-memory IPU fixtures passed 272 checks and
+  three CTests, including precise old-source controls. Native Windows replay
+  returned to title, started another game, and completed its second intro
+  without skipping. Movement and inventory worked afterward. No full
+  playthrough is established.
+
+- **Text field presentation:** patch 0028 bobs the current 224-row Vulkan
+  field to 448 rows on GPU. Earlier adaptive weave mixed previous
+  presentation images into title/menu lettering. Native title and inventory
+  captures are clean, gameplay/pause/resume passed through tick 4500, and
+  generated field-history controls reproduce the old defect. No font
+  replacement or game-specific glyph override is used.
+
+- **Vulkan GS:** patch 0027 adds optional paraLLEl-GS hardware rendering and
+  logical scanout. Native RTX 4090 verification reached tick 6000 normally,
+  preserving gameplay alignment, 448 rows, inventory and pause/resume.
+  A matched CPU/Vulkan pair took 196.591/187.781 seconds; overall gameplay
+  remains CPU limited despite moving rasterization to the GPU. RGBA image
+  readback feeds the existing Raylib window. One unsupported startup
+  scanout used CPU display conversion. See [Vulkan details](vulkan.md).
 - **Native Windows:** the USA build reaches the first gameplay area with
   Verdite keyboard/mouse controls, repeatable inventory entry/back,
   pause/resume and the capture-state glyph. Windows x64 MSVC 19.44,
@@ -43,11 +87,15 @@ place as state changes; link session logs at the point they support.
   rows and triggered false field doubling. Patch 0026 converts the height
   before capping it, retaining all 448 gameplay rows. The movie's existing
   224-row field path and the general weave implementation are unchanged.
-- **Installed gameplay verification:** the final build reached tick 4,800
+- **Earlier gameplay verification:** the source-height build reached tick 4,800
   normally in 137.034 seconds, with 81 captures at 640×448 showing the full
   scene and HUD. W movement, camera turning, inventory entry/back and
   pause/resume were verified; opening movie pictures remained visible.
-  The installed executable, 28 matching DLLs and shortcut use that build.
+  The current installed executable includes the subsequent Vulkan, text,
+  cave-door, shared skeletal and movie-replay fixes, with 28 matching DLLs. The existing
+  shortcut targets that executable. The user verified the cave route and
+  seated guard interactively; that diagnostic copy was then closed at the
+  user's request, rather than exiting normally at a fixed tick.
   This is visible integration evidence, not full PS2 pixel equivalence.
 - **Remaining problems:** interlace combing appears in some movie frames,
   broader 3D rendering accuracy remains unverified, and gameplay is below
@@ -60,13 +108,17 @@ place as state changes; link session logs at the point they support.
   loader still run. Earlier black-picture builds could look like a hang
   with PC audio muted. PR publication did not itself change the executable.
 - **Source delivery:** existing patches 0001–0014 are unchanged. New
-  source-exported patches 0015–0026 include Windows build/input, loader
+  source-exported patches 0015–0039 include Windows build/input, loader
   completion, capture UI, timing, native audio/MPEG, GS depth and sprite fixes,
-  source-height decoding and bounded diagnostics. The 26-patch series has
-  twelve additions affecting 43 source/license/build files. Generator hunks must be applied to tools
+  source-height decoding, Vulkan, text presentation, collision arithmetic,
+  complete DMA chains, shared skeletal conversion, movie callback/input
+  lifetimes and bounded diagnostics. The 39-patch series has twenty-five
+  additions and 65 managed source paths.
+  Generator hunks must be applied to tools
   before generating the game; rebuilding only the runtime leaves stale
   continuation registration.
-- **Verification:** the repository now holds 20 standalone fixture packages.
+- **Verification:** the repository holds 24 standalone fixture packages,
+  plus the separate audio-loopback diagnostic.
   The original 16 passed 26 CTest entries on Windows, along with seven
   patch-helper tests and earlier full-series application/reruns. The new
   GS depth fixture passed 143,397 checks and 2/2 CTest entries; focused
@@ -163,14 +215,15 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   programs run in E-bit-terminated segments (each ends with a pipeline
   flush), so every segment starts with quiescent pipelines. That makes an
   ahead-of-time VU1 recompiler tractable: one image, two hot entries, known
-  entry state. Instrumentation: `PS2X_VU1_CENSUS=<file>` (patch 0027).
-- **VU1 lift (2026-10-10, patch 0028, opt-in `PS2X_VU1_LIFT=1`):**
+  entry state. Instrumentation: `PS2X_VU1_CENSUS=<file>` (patch 0040).
+- **VU1 lift (2026-10-10, patch 0041, opt-in `PS2X_VU1_LIFT=1`):**
   `scripts/maintainer/vu1lift.py` translates the MSCNT segment of entry
   0x0000 (resume pc 0x08f8: the 391k resumes, most of that entry's 85%
   of VU1 cycles) to C++ with a static
   cycle schedule; `VU1Interpreter::run` calls it when the pipelines are
   idle. Bit-exact: 1.94M microprogram runs into gameplay on the 28-patch
-  series (780k on the earlier 15-patch one), 0 `[vu1verify]` mismatches
+  series, before the Vulkan patches 0027-0039 (780k on the earlier
+  15-patch one), 0 `[vu1verify]` mismatches
   (registers, flags, cycles, VU1 memory, XGKICK output).
   **It is not a speedup yet; keep it off.** Same build, gameplay ticks
   4000-4599 (input script under "Dev loop"):
@@ -191,8 +244,8 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
   yet. Not the VBlank catch-up bursts: patch 0020 on its own changed
   nothing (5.3 vs 11.1). Next: find why the
   asynchronous GS stretches frames once VU1 is cheap, then lift 0x1400.
-  A GPU GS backend (PR #10, Vulkan) would remove the raster cost the lift
-  exposes.
+  The Vulkan GS backend (patch 0027) may remove the raster cost the lift
+  exposes; the lift has not been measured with it yet.
 - **GS self-feedback draws** (~45 per frame here: 64-pixel-wide vertical
   strips that sample the frame buffer they render to, at half-pixel
   offsets, a blur/glow pass) run on one worker, row by row, because the

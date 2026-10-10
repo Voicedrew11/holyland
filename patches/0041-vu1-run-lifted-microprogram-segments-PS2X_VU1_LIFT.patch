@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <Voicedrew11@gmail.com>
 Date: Sat, 10 Oct 2026 00:28:03 -0400
-Subject: [PATCH 28/28] vu1: run lifted microprogram segments (PS2X_VU1_LIFT)
+Subject: [PATCH 41/41] vu1: run lifted microprogram segments (PS2X_VU1_LIFT)
 
 A lifted segment is a C++ translation of one VU1 microcode segment with
 a static, cycle-exact schedule, registered by (FNV-1a hash of the micro
@@ -42,7 +42,7 @@ index f91d3ae..4f885d7 100644
 +.idea/
 +ps2xRuntime/src/vu1lift/
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 8a34a27..0ee2727 100644
+index 1a1e92b..ff2dca1 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -397,6 +397,7 @@ add_library(ps2_runtime STATIC

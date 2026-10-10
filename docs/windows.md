@@ -8,7 +8,7 @@ stage; they do not install compilers or obtain game data.
 ## Prerequisites and paths
 
 Use Windows 11 x64, Visual Studio 2022 or Build Tools with Desktop development
-with C++ and a Windows SDK, Git, Python 3.8+, CMake 3.21+, and several GB of
+with C++ and a Windows SDK, Git, GitHub CLI, Python 3.8+, CMake 3.21+, and several GB of
 free space. Validation used MSVC 19.44. Network access is needed for the
 build dependencies, including the pinned shared FFmpeg SDK.
 
@@ -29,12 +29,18 @@ $cmake = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7
 
 Create a **new** private checkout. The helper rejects an existing checkout
 at another commit without resetting edits. Applying the full series also
-applies the generator fix needed by the tools. The series contains 26
+applies the generator fixes needed by the tools. The series contains 39
 patches: 0023 fixes disabled GS depth testing for movie presentation,
 0024 corrects gameplay feedback-strip alignment, and 0025 bounds opt-in
 GS diagnostics and reports the active CRT2 state. Patch 0026 decodes
 interlaced source height before limiting the host image size, preserving
-all 448 gameplay rows.
+all 448 gameplay rows. Patch 0027 adds an optional Vulkan GS backend; its
+separately pinned dependency is prepared before configuring the runtime.
+Patch 0028 uses GPU bob presentation for 224-row fields to prevent stale
+field history from producing doubled title/menu lettering.
+Later patches correct shared EE square-root and conversion instructions,
+complete finite DMA chains, and fix movie callback and suspended-input
+lifetimes. See [the patch list](../patches/README.md) for the complete series.
 
 ```powershell
 git clone --recurse-submodules https://github.com/ran-j/PS2Recomp.git $checkout
@@ -92,12 +98,24 @@ The tested native x64 configuration is `RelWithDebInfo`, `/O2 /Ob1 /DNDEBUG
 16 MiB runner stack. Strict floating point preserves the runtime's VU/GS
 rounding-mode changes.
 
+For Vulkan rendering, prepare the pinned paraLLEl-GS source and its minimal
+dependencies. The helper applies a small-transfer correctness patch and
+preserves existing edits. It needs working GitHub CLI access, but no Vulkan
+SDK or shader compiler. See [Vulkan rendering](vulkan.md) for the GPU and
+presentation boundaries and the retained CPU reference backend.
+
+```powershell
+$parallelGs = 'C:\KFIV-dev\parallel-gs'
+& "$holyland\tests\gpu-gs-tests\Prepare-ParallelGS.ps1" -SourceDirectory $parallelGs
+```
+
 ```powershell
 & $cmake -S $checkout -B $runtime -G 'Visual Studio 17 2022' -A x64 `
   '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/O2 /Ob1 /DNDEBUG /fp:strict' `
   -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_RECOMP=OFF `
   -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_IOP_BUILD_TESTS=OFF `
   -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_FFMPEG=ON `
+  -DPS2X_ENABLE_VULKAN_GS=ON "-DPS2X_PARALLEL_GS_SOURCE_DIR=$parallelGs" `
   -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF -DPS2X_ENABLE_RUNTIME_LOGS=ON
 & "$holyland\scripts\windows\Rebuild-KFIV.ps1" `
   -BuildDirectory $runtime -GameDirectory $game -CMakePath $cmake
@@ -183,6 +201,13 @@ cards and retains stdout/stderr, PNGs and `result.json`. `-CopyMemoryCards`
 copies existing cards into the test; originals are never used. Managed
 environment variables are restored afterwards. The default directory is
 under `%TEMP%\KFIV-tests`; run directories must be new or empty.
+
+For an interactive diagnostic session, add `-Visible` and leave `-InputScript`
+empty so the player controls the test copy. Use `-SkipFinalFrameCheck` when
+closing it manually instead of reaching its automatic exit tick. The same
+private cards and retained logs apply, and `result.json` records visibility.
+`-Environment @{PS2X_WORLD_TRACE='1';PS2X_IO_TRACE='1'}` enables player/map
+state and bounded read diagnostics. All diagnostics are off by default.
 
 `-Environment` accepts optional runtime variables, including
 `PS2X_HOST_INPUT`, `PS2X_INPUT_TRACE`, `PS2X_AUDIO_DUMP`,

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -133,6 +134,234 @@ void stopResumeAndRejectedBytes(PS2Memory &memory)
     require(memory.read32(madr) == 0x40040u && (memory.read32(channel) & 0x100u) == 0u, "final accepted quadword completes resumed REFE");
     expectIrq(memory, 1u);
 }
+void retagPartialTerminal(PS2Memory &memory)
+{
+    // SDK movie rings extend a suspended tail by changing REFE to REF and
+    // publishing that same tag ID in CHCR. MADR/QWC/TADR need no rewrite.
+    constexpr uint32_t tags = 0x27000u, input = 0x70000u;
+    for (const bool delayedEnable : {false, true})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 0u, 2u, input);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "extension starts with a partially consumed terminal tag");
+        require(memory.read32(tadr) == tags + 16u, "partial tail retains its successor TADR");
+        expectIrq(memory, 0u);
+        memory.write32(channel, memory.read32(channel) & ~0x100u);
+        tag(memory, tags, 3u, 2u, input);
+        if (delayedEnable) memory.write32(0x1000E000u, 0u);
+        memory.write32(channel, 0x30000105u);
+        for (unsigned poll = 0u; poll < 8u; ++poll)
+            require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+                (memory.read32(channel) & 0x100u) != 0u,
+                "CHCR retagging never consumes uncredited input");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(48u);
+        if (delayedEnable)
+        {
+            require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+                "disabled DMAC holds accepted credit across a CHCR retag");
+            expectIrq(memory, 0u);
+            memory.write32(0x1000E000u, 1u);
+        }
+        require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u,
+            "resumed REF follows its successor instead of the cached terminal state");
+        require(memory.read32(tadr) == tags + 32u && (memory.read32(channel) & 0x100u) == 0u,
+            "extended ring retires exactly the new terminal tag");
+        expectIrq(memory, 1u);
+
+        // All 48 accepted bytes went to the tail and successor. A later
+        // transfer cannot inherit fabricated or double-counted input credit.
+        startNormal(memory, input + 128u, 1u);
+        require(memory.read32(madr) == input + 128u && memory.read32(qwc) == 1u,
+            "ring extension leaves no fabricated credit for another transfer");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(15u);
+        require(memory.read32(qwc) == 1u, "fractional credit remains fractional after a ring extension");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(1u);
+        require(memory.read32(madr) == input + 144u && memory.read32(qwc) == 0u,
+            "only the final real byte retires the later quadword");
+        expectIrq(memory, 1u);
+    }
+}
+void retagPartialNonterminal(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x28000u, input = 0x71000u;
+    for (const uint32_t terminalId : {0u, 7u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags);
+        memory.creditIpuInputBytes(16u);
+        memory.write32(channel, memory.read32(channel) & ~0x100u);
+        memory.write32(channel, (terminalId << 28u) | 0x105u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "restored terminal CHCR preserves unread payload");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+            (memory.read32(channel) & 0x100u) == 0u,
+            "REF resumed as REFE or END completes after its current payload");
+        require(memory.read32(tadr) == tags + 16u, "new terminal CHCR does not fetch its queued successor");
+        expectIrq(memory, 1u);
+    }
+}
+void resumeUsesCurrentTieAndIrq(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x29000u, input = 0x72000u;
+    for (const bool enableTieOnResume : {false, true})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input, true);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags, enableTieOnResume ? 0x105u : 0x185u);
+        memory.creditIpuInputBytes(16u);
+        const uint32_t fetched = memory.read32(channel);
+        require((fetched & 0xF0000000u) == 0xB0000000u, "fetched CHCR exposes the REF tag IRQ bit");
+        memory.write32(channel, fetched & ~0x100u);
+        const uint32_t resumed = enableTieOnResume ? fetched | 0x80u : fetched & ~0x80u;
+        memory.write32(channel, resumed);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u,
+            "changing TIE cannot itself earn input credit");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        if (enableTieOnResume)
+        {
+            require(memory.read32(qwc) == 0u && memory.read32(madr) == input + 32u &&
+                (memory.read32(channel) & 0x100u) == 0u,
+                "enabling TIE on resume honors the current CHCR IRQ bit");
+            require(memory.read32(tadr) == tags + 16u, "resumed tag IRQ prevents successor fetch");
+            expectIrq(memory, 1u);
+        }
+        else
+        {
+            require(memory.read32(qwc) == 2u && memory.read32(madr) == input + 32u &&
+                (memory.read32(channel) & 0x100u) != 0u,
+                "disabling TIE on resume continues past the old IRQ terminal state");
+            expectIrq(memory, 0u);
+            memory.creditIpuInputBytes(32u);
+            require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u,
+                "noninterrupting resumed REF consumes its real terminal successor");
+            expectIrq(memory, 1u);
+        }
+    }
+}
+void zeroQwcStartsAtTadr(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2A000u, input = 0x73000u;
+    for (const uint32_t staleTag : {0u, 0x70000000u, 0xB0000080u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 0u, 1u, input);
+        startChain(memory, tags, staleTag | 0x105u);
+        require(memory.read32(madr) == input && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u,
+            "zero-QWC resume fetches TADR despite an old terminal or IRQ CHCR tag");
+        require((memory.read32(channel) & 0xF0000000u) == 0u,
+            "fresh TADR tag replaces stale CHCR terminal and IRQ bits");
+        expectIrq(memory, 0u);
+        memory.creditIpuInputBytes(16u);
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 0u,
+            "fresh zero-QWC chain consumes only its accepted payload");
+        expectIrq(memory, 1u);
+    }
+}
+void activeChcrWriteSemantics(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2B000u, input = 0x74000u;
+    for (const uint32_t stopValue : {0u, 5u})
+    {
+        memory.resetIpuInputConsumption();
+        tag(memory, tags, 3u, 2u, input, true);
+        tag(memory, tags + 16u, 0u, 2u, input + 32u);
+        startChain(memory, tags, 0x1D5u); // REF with IRQ, TIE/TTE and ASP one.
+        memory.creditIpuInputBytes(16u);
+        memory.creditIpuInputBytes(3u);
+        const uint32_t fetched = memory.read32(channel);
+        const uint64_t starts = memory.m_dmaStartCount.load();
+        require((fetched & 0xF00000D5u) == 0xB00000D5u,
+            "active CHCR exposes fetched TAG/IRQ and configured MOD/TIE/TTE/ASP");
+        require(memory.m_ipuInputCredit == 3u && memory.m_ipuInputTagLoaded &&
+            memory.m_ipuInputEndAfterPayload,
+            "active IRQ-tag payload retains its fractional credit and classification");
+        // STR remains one: the active channel must ignore all requested changes.
+        memory.write32(channel, 0x70000101u);
+        require(memory.read32(channel) == fetched,
+            "active STR-one CHCR writes cannot replace the fetched tag or channel fields");
+        require(memory.m_dmaStartCount.load() == starts && memory.m_ipuInputCredit == 3u &&
+            memory.m_ipuInputTagLoaded && memory.m_ipuInputEndAfterPayload,
+            "ignored active CHCR writes neither restart DMA nor reclassify or earn credit");
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u,
+            "ignored active CHCR writes preserve all unread payload registers");
+        expectIrq(memory, 0u);
+        // The SDK writes literal five to STOP, then reads the retained TAG.
+        // Even a zero write may clear STR only while the channel is active.
+        memory.write32(channel, stopValue);
+        const uint32_t stopped = memory.read32(channel);
+        require(stopped == (fetched & ~0x100u),
+            "active STR-zero writes clear only STR and preserve TAG/IRQ/MOD/TIE/TTE/ASP");
+        require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+            memory.read32(tadr) == tags + 16u && memory.m_dmaStartCount.load() == starts &&
+            memory.m_ipuInputCredit == 3u && memory.m_ipuInputEndAfterPayload,
+            "active STOP neither consumes bytes nor fabricates an interrupt or classification");
+        expectIrq(memory, 0u);
+        memory.write32(channel, stopped | 0x100u);
+        require(memory.read32(qwc) == 1u && memory.m_ipuInputCredit == 3u,
+            "resume preserves the three real fractional bytes");
+        memory.creditIpuInputBytes(13u);
+        require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+            memory.read32(tadr) == tags + 16u && (memory.read32(channel) & 0x100u) == 0u,
+            "resumed IRQ/TIE stops after exactly the current real payload");
+        require(memory.m_ipuInputCredit == 0u, "resumed terminal payload consumes each accepted byte once");
+        expectIrq(memory, 1u);
+    }
+}
+void sdkLiteralStopAndRetag(PS2Memory &memory)
+{
+    constexpr uint32_t tags = 0x2C000u, input = 0x75000u;
+    memory.resetIpuInputConsumption();
+    tag(memory, tags, 3u, 2u, input);
+    tag(memory, tags + 16u, 0u, 2u, input + 32u);
+    startChain(memory, tags);
+    memory.creditIpuInputBytes(16u);
+    memory.write32(channel, 5u);
+    const uint32_t stopped = memory.read32(channel);
+    require(stopped == 0x30000005u, "SDK STOP(5) preserves a partially consumed REF tag");
+    memory.creditIpuInputBytes(15u);
+    require(memory.read32(madr) == input + 16u && memory.read32(qwc) == 1u &&
+        memory.m_ipuInputCredit == 15u, "real credits accumulate while SDK input DMA is stopped");
+    expectIrq(memory, 0u);
+    memory.write32(channel, stopped | 0x100u);
+    require(memory.read32(qwc) == 1u, "SDK REF resume cannot round fractional input credit up");
+    memory.creditIpuInputBytes(1u);
+    require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 2u &&
+        (memory.read32(channel) & 0x100u) != 0u,
+        "SDK STOP and snapshot resume retain the unread REF chain successor");
+    expectIrq(memory, 0u);
+    memory.creditIpuInputBytes(32u);
+    require(memory.read32(madr) == input + 64u && memory.read32(qwc) == 0u &&
+        memory.m_ipuInputCredit == 0u, "SDK resume consumes real tail and successor credit exactly once");
+    expectIrq(memory, 1u);
+
+    memory.resetIpuInputConsumption();
+    startChain(memory, tags);
+    memory.creditIpuInputBytes(16u);
+    memory.write32(channel, 5u);
+    memory.write32(channel, 0x70000105u);
+    require(memory.read32(channel) == 0x70000105u,
+        "a stopped channel permits an explicit restored END tag on resume");
+    memory.creditIpuInputBytes(16u);
+    require(memory.read32(madr) == input + 32u && memory.read32(qwc) == 0u &&
+        memory.read32(tadr) == tags + 16u && (memory.read32(channel) & 0x100u) == 0u,
+        "legal post-STOP retag completes without touching its queued successor");
+    expectIrq(memory, 1u);
+}
 void tagInterruptsAndMalformedChain(PS2Memory &memory)
 {
     memory.resetIpuInputConsumption();
@@ -211,14 +440,44 @@ int main()
         creditBeforeSubmitAndReset(memory);
         retailBlocksAndWrap(memory);
         stopResumeAndRejectedBytes(memory);
+        retagPartialTerminal(memory);
+        retagPartialNonterminal(memory);
+        resumeUsesCurrentTieAndIrq(memory);
+        zeroQwcStartsAtTadr(memory);
         tagInterruptsAndMalformedChain(memory);
         inlineTagsAndScratchpad(memory);
         disabledControllerAndHardwareReset(memory);
+        activeChcrWriteSemantics(memory);
+        sdkLiteralStopAndRetag(memory);
+#ifdef IPU_RESUME_OLD_CONTROL
+        throw std::runtime_error("old IPU resume control did not reproduce stale terminal classification");
+#endif
+#ifdef IPU_ACTIVE_CHCR_OLD_CONTROL
+        throw std::runtime_error("old active CHCR control did not reproduce an ignored active write");
+#endif
         std::cout << "kfiv_ipu_input_regression: " << checks << " checks, 0 failures\n";
         return 0;
     }
     catch (const std::exception &error)
     {
+#ifdef IPU_RESUME_OLD_CONTROL
+        if (std::string(error.what()) ==
+            "resumed REF follows its successor instead of the cached terminal state")
+        {
+            std::cout << "kfiv_ipu_input_old_control: expected stale terminal classification after "
+                << checks << " checks\n";
+            return 0;
+        }
+#endif
+#ifdef IPU_ACTIVE_CHCR_OLD_CONTROL
+        if (std::string(error.what()) ==
+            "active STR-one CHCR writes cannot replace the fetched tag or channel fields")
+        {
+            std::cout << "kfiv_ipu_active_chcr_old_control: expected active-write corruption after "
+                << checks << " checks\n";
+            return 0;
+        }
+#endif
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n';
         return 1;
     }
