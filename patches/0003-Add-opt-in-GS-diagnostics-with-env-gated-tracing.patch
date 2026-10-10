@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <Voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 11:42:22 -0400
-Subject: [PATCH 03/14] Add opt-in GS diagnostics with env-gated tracing
+Subject: [PATCH 03/15] Add opt-in GS diagnostics with env-gated tracing
 
 - PS2X_GS_TRACE: text trace of GS activity (register writes, image transfers, draw primitives)
 - PS2X_GS_TRACE_FROM/TO: vsync tick range for filtering trace output

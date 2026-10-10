@@ -61,6 +61,14 @@ VSyncs, so full speed is 30). Ryzen 7 5700X (8 cores / 16 threads), dev
 - Now: the EE thread is ~85% VU1 interpreter (flat profile, no dominant
   line). The GS workers are idle or at barriers more than half the time,
   so the GS has headroom; it will matter again once VU1 is faster.
+- **VU1 census (2026-10-09, dev build, run to tick 3300):** the whole run
+  uses **one** VU1 microcode image (16 KB, a single content hash) with four
+  entry PCs: 0x0000 (85% of VU1 cycles, 41k MSCALs + 391k MSCNT resumes),
+  0x1400 (13%, 4.8k + 167k resumes), 0x3800 (0.8%) and 0x13b0 (0.3%). The
+  programs run in E-bit-terminated segments (each ends with a pipeline
+  flush), so every segment starts with quiescent pipelines. That makes an
+  ahead-of-time VU1 recompiler tractable: one image, two hot entries, known
+  entry state. Instrumentation: `PS2X_VU1_CENSUS=<file>` (uncommitted).
 - **VU1 is the remaining bottleneck.** Options, in rising cost: flag
   liveness (skip MAC/status computation for microprograms that never read
   them, ~25% of VU1 time), a leaner per-instruction loop, a VU1

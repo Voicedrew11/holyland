@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Priestley <voicedrew11@gmail.com>
 Date: Sat, 3 Oct 2026 18:33:32 -0400
-Subject: [PATCH 11/14] dev harness: PS2X_STATS prints guest vsync and display
+Subject: [PATCH 11/15] dev harness: PS2X_STATS prints guest vsync and display
  flip rates
 
 Once per wall-clock second: elapsed time, VSync tick, VSync ticks/s and
