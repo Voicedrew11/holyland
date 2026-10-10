@@ -1,0 +1,173 @@
+From 5abd1e9438bbd09d595b3ad83b7f7f6ee157f1e8 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 04:56:37 -0400
+Subject: [PATCH 51/52] Select interlaced NTSC field timing from the GS video
+ mode
+
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |  1 +
+ .../include/runtime/vblank_field_pacer.h      |  9 ++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 48 ++++++++++++++++++-
+ ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp       |  6 +++
+ .../src/lib/Kernel/Syscalls/System.cpp        |  5 +-
+ 5 files changed, 66 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index ac5f659..0d1c4ea 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -337,6 +337,7 @@ public:
+     int setIrqHandlerEnabled(bool dmac, int id, bool enabled);
+     int setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled);
+     void dispatchIrq(bool dmac, uint32_t cause);
++    void setGsVideoMode(uint32_t interlaced, uint32_t videoMode);
+     void setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress);
+     [[nodiscard]] uint64_t currentVSyncTick() const noexcept;
+     uint32_t setGsVSyncCallback(uint32_t callback, uint32_t gp, uint32_t sp);
+diff --git a/ps2xRuntime/include/runtime/vblank_field_pacer.h b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+index b94f025..72b6f85 100644
+--- a/ps2xRuntime/include/runtime/vblank_field_pacer.h
++++ b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+@@ -23,6 +23,15 @@ public:
+         m_hasLastStart = {};
+     }
+ 
++    Duration period() const { return m_period; }
++
++    void setPeriod(Duration period)
++    {
++        assert(period > m_blankDuration);
++        // A video-mode change preserves every field already published.
++        m_period = period;
++    }
++
+     TimePoint firstStart() const { return m_epoch + m_period; }
+ 
+     void recordStart(TimePoint emittedStart, unsigned parity)
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 43ef8c5..ca26556 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -75,6 +75,7 @@ namespace
+     }
+ 
+     constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
++    constexpr auto kInterlacedNtscPeriod = std::chrono::nanoseconds(16683333);
+     constexpr auto kVBlankDuration = std::chrono::microseconds(500);
+     constexpr uint64_t kAlarmTickMicroseconds = 64u;
+     constexpr uint32_t kDebugPublishDispatchInterval = 4096u;
+@@ -93,6 +94,12 @@ namespace
+         return std::chrono::seconds(wholeSeconds) + std::chrono::nanoseconds(remainingNanoseconds);
+     }
+ 
++    uint64_t fieldPeriodCycles(VBlankFieldPacer::Duration period)
++    {
++        const uint64_t ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(period).count());
++        return (ns * EeScheduler::kEeClockHz + 999999999ull) / 1000000000ull;
++    }
++
+     constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
+     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
+     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+@@ -1444,6 +1451,43 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
+     }
+ }
+ 
++void EeScheduler::setGsVideoMode(uint32_t interlaced, uint32_t videoMode)
++{
++    assertExecutor();
++    // Scope this correction to the confirmed interlaced NTSC mode. Other
++    // modes retain their existing pacing until their own timing is supported.
++    const VBlankFieldPacer::Duration period = (interlaced & 1u) != 0u && videoMode == 0x02u
++        ? VBlankFieldPacer::Duration{kInterlacedNtscPeriod}
++        : VBlankFieldPacer::Duration{kVBlankPeriod};
++    const auto oldPeriod = m_fieldPacer.period();
++    if (period == oldPeriod)
++        return;
++    const uint64_t oldCycles = fieldPeriodCycles(oldPeriod);
++    const uint64_t newCycles = fieldPeriodCycles(period);
++    m_fieldPacer.setPeriod(period);
++    {
++        std::lock_guard lock(m_eventMutex);
++        for (ScheduledEvent &item : m_deadlines)
++        {
++            if (item.event.type != EeEventType::VBlankStart)
++                continue;
++            // Only the upcoming field changes mode. Prior Ends, alarm/IRQ
++            // deadlines and emitted guest ticks remain on their original path.
++            assert(item.deadlineCycle >= oldCycles);
++            item.deadlineCycle = item.deadlineCycle - oldCycles + newCycles;
++            item.hostDeadline = m_vsyncTick == 0u ? m_fieldPacer.firstStart()
++                : m_fieldPacer.nextStartAfter(
++                    m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)),
++                    static_cast<unsigned>((m_vsyncTick + 1u) & 1u));
++        }
++        if (!m_vblankHandoffs.empty())
++            m_vblankHandoffExpiry = m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)) + period * 2;
++        updateNextDeadline();
++    }
++    m_checkpointPending.store(true, std::memory_order_release);
++    m_eventCv.notify_one();
++}
++
+ void EeScheduler::setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress)
+ {
+     assertExecutor();
+@@ -2102,7 +2146,7 @@ void EeScheduler::processDueDeadlines()
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
+                               hostFieldStart + kVBlankDuration,
+                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick});
+-                scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
++                scheduleEvent(scheduled.deadlineCycle + fieldPeriodCycles(m_fieldPacer.period()),
+                               m_fieldPacer.nextStartAfter(hostFieldStart, parity ^ 1u),
+                               EeEvent{EeEventType::VBlankStart, 0, 0});
+             }
+@@ -2312,7 +2356,7 @@ void EeScheduler::addVBlankHandoff(const GuestThread &item)
+ #if PS2X_VBLANK_HANDOFF
+     const uint64_t sequence = item.invocations.empty() ? 0u : item.invocations.back().sequence;
+     if (m_vblankHandoffs.empty())
+-        m_vblankHandoffExpiry = m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)) + kVBlankPeriod * 2;
++        m_vblankHandoffExpiry = m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)) + m_fieldPacer.period() * 2;
+     std::erase_if(m_vblankHandoffs, [&item](const VBlankHandoff &handoff)
+         { return handoff.threadId == item.id; });
+     m_vblankHandoffs.push_back({item.id, sequence});
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index be50953..6340adb 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -802,6 +802,12 @@ namespace ps2_stubs
+             g_gparam.omode = static_cast<uint8_t>(omode & 0xFF);
+             g_gparam.ffmode = static_cast<uint8_t>(ffmode & 0x1);
+             writeGsGParamToScratch(runtime);
++            if (runtime)
++            {
++                EeScheduler &ee = runtime->eeScheduler();
++                ee.bindMainContextForSyscall(*ctx, rdram);
++                ee.setGsVideoMode(interlace, omode);
++            }
+             uint64_t pmode = makePmode(1, 0, 0, 0, 0, 0x80);
+             uint64_t smode2 = (interlace & 0x1) | ((ffmode & 0x1) << 1);
+             uint64_t dispfb = makeDispFb(0, 10, 0, 0, 0);
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+index 9614016..f8dcf6b 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -6,11 +6,14 @@ namespace ps2_syscalls
+     void GsSetCrt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         int interlaced = getRegU32(ctx, 4); // $a0 - 0=non-interlaced, 1=interlaced
+-        int videoMode = getRegU32(ctx, 5);  // $a1 - 0=NTSC, 1=PAL, 2=VESA, 3=HiVision
++        int videoMode = getRegU32(ctx, 5);  // $a1 - BIOS CRT mode: 0x02=NTSC, 0x03=PAL
+         int frameMode = getRegU32(ctx, 6);  // $a2 - 0=field, 1=frame
+ 
+         if (runtime)
+         {
++            EeScheduler &ee = runtime->eeScheduler();
++            ee.bindMainContextForSyscall(*ctx, rdram);
++            ee.setGsVideoMode(static_cast<uint32_t>(interlaced), static_cast<uint32_t>(videoMode));
+             auto &gs = runtime->memory().gs();
+             const uint64_t smode2 =
+                 (static_cast<uint64_t>(interlaced) & 0x1ull) |
+-- 
+2.55.0.windows.3
+

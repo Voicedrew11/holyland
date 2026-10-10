@@ -1,0 +1,168 @@
+From 8a90830f44810f505686885580d793bbc0de824c Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 01:45:18 -0400
+Subject: [PATCH 44/52] Recover late fields without exceeding original
+ same-parity game timing
+
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |  2 +
+ .../include/runtime/vblank_field_pacer.h      | 67 +++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 26 ++++---
+ 3 files changed, 85 insertions(+), 10 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/vblank_field_pacer.h
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index b2f4c02..bde8309 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ps2_runtime.h"
++#include "runtime/vblank_field_pacer.h"
+ 
+ #include <array>
+ #include <atomic>
+@@ -445,6 +446,7 @@ private:
+     uint64_t m_eventSequence = 0;
+     uint64_t m_invocationSequence = 0;
+     uint64_t m_vsyncTick = 0;
++    VBlankFieldPacer m_fieldPacer;
+     uint32_t m_vsyncFlagAddress = 0;
+     uint32_t m_vsyncTickAddress = 0;
+     uint32_t m_gsVSyncCallback = 0;
+diff --git a/ps2xRuntime/include/runtime/vblank_field_pacer.h b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+new file mode 100644
+index 0000000..f1bdee0
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+@@ -0,0 +1,67 @@
++#pragma once
++
++#include <array>
++#include <cassert>
++#include <chrono>
++
++// Host pacing only. It neither advances guest cycles nor invents missed fields.
++class VBlankFieldPacer
++{
++public:
++    using Clock = std::chrono::steady_clock;
++    using TimePoint = Clock::time_point;
++    using Duration = Clock::duration;
++
++    void reset(TimePoint epoch, Duration period, Duration blankDuration)
++    {
++        assert(period > Duration::zero());
++        assert(blankDuration >= Duration::zero() && blankDuration < period);
++        m_epoch = epoch;
++        m_period = period;
++        m_blankDuration = blankDuration;
++        m_lastStart = {};
++        m_hasLastStart = {};
++    }
++
++    TimePoint firstStart() const { return m_epoch + m_period; }
++
++    void recordStart(TimePoint emittedStart, unsigned parity)
++    {
++        assert(parity < 2u && emittedStart >= m_epoch);
++        m_lastStart[parity] = emittedStart;
++        m_hasLastStart[parity] = true;
++    }
++
++    TimePoint lastStart(unsigned parity) const
++    {
++        assert(parity < 2u && m_hasLastStart[parity]);
++        return m_lastStart[parity];
++    }
++
++    TimePoint nextStartAfter(TimePoint emittedStart, unsigned nextParity) const
++    {
++        assert(nextParity < 2u && emittedStart >= m_epoch);
++        // Keep a persistent nominal phase. Drop already missed host slots;
++        // never queue them as extra guest events. Strictly pass this field's
++        // End so a new Start cannot overtake its End in the host deadline gate.
++        const TimePoint afterEnd = emittedStart + m_blankDuration;
++        const auto nextSlot = (afterEnd - m_epoch) / m_period + 1;
++        TimePoint next = m_epoch + m_period * nextSlot;
++        if (m_hasLastStart[nextParity])
++        {
++            const TimePoint parityLimit = m_lastStart[nextParity] + m_period * 2;
++            if (next < parityLimit)
++                next = parityLimit;
++        }
++        // Do not round the parity limit up to another nominal phase slot:
++        // that would reintroduce a whole unnecessary field of waiting.
++        return next;
++    }
++
++private:
++    TimePoint m_epoch{};
++    Duration m_period{};
++    Duration m_blankDuration{};
++    std::array<TimePoint, 2> m_lastStart{};
++    std::array<bool, 2> m_hasLastStart{};
++};
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 41607b9..19fdd53 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -148,8 +148,10 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     main.status = EeThreadStatus::Ready;
+     m_threads.emplace(main.id, std::move(main));
+     m_readyQueues[0].push_back(kMainThreadId);
++    const auto hostEpoch = std::chrono::steady_clock::now();
++    m_fieldPacer.reset(hostEpoch, kVBlankPeriod, kVBlankDuration);
+     scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
+-                  std::chrono::steady_clock::now() + kVBlankPeriod,
++                  m_fieldPacer.firstStart(),
+                   EeEvent{EeEventType::VBlankStart, 0, 0});
+     publishSnapshot();
+ }
+@@ -1915,22 +1917,22 @@ void EeScheduler::processDueDeadlines()
+ 
+         for (ScheduledEvent &scheduled : due)
+         {
++            processEvent(scheduled.event);
+             if (scheduled.event.type == EeEventType::VBlankStart)
+             {
+-                // A slow guest can reach this field after its host deadline.
+-                // Start the next host field from the field we actually emit,
+-                // so later VSync waits do not repay that delay in a burst.
+-                // Guest-cycle deadlines still advance by their exact offsets.
+-                const auto hostFieldStart = std::max(scheduled.hostDeadline,
+-                                                     std::chrono::steady_clock::now());
++                // Preserve nominal host phase without replaying missed fields.
++                // Each parity remains at least two periods apart, and the next
++                // Start cannot overtake this field's End. Guest deadlines and
++                // their timer/IOP accounting still advance by exact offsets.
++                const unsigned parity = static_cast<unsigned>(m_vsyncTick & 1u);
++                const auto hostFieldStart = m_fieldPacer.lastStart(parity);
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
+                               hostFieldStart + kVBlankDuration,
+-                              EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
++                              EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick});
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
+-                              hostFieldStart + kVBlankPeriod,
++                              m_fieldPacer.nextStartAfter(hostFieldStart, parity ^ 1u),
+                               EeEvent{EeEventType::VBlankStart, 0, 0});
+             }
+-            processEvent(scheduled.event);
+         }
+     }
+ }
+@@ -1945,6 +1947,10 @@ void EeScheduler::processEvent(const EeEvent &event)
+     case EeEventType::VBlankStart:
+         ++m_vsyncTick;
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
++        // Timestamp after publishing the actual field. The next same-parity
++        // deadline is therefore no earlier than this emission plus two fields.
++        m_fieldPacer.recordStart(std::chrono::steady_clock::now(),
++                                static_cast<unsigned>(m_vsyncTick & 1u));
+         if ((m_vsyncTick & 1u) != 0u)
+         {
+             m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
+-- 
+2.55.0.windows.3
+

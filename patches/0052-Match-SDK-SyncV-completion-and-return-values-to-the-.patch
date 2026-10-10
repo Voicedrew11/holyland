@@ -1,0 +1,60 @@
+From 8e037f5248cb6fc5da38ab178bf23bbe033c2dd6 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 04:57:02 -0400
+Subject: [PATCH 52/52] Match SDK SyncV completion and return values to the
+ current GS CSR
+
+---
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp        |  5 +++--
+ ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp | 12 ++++++++++++
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index ca26556..cd56bec 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1550,7 +1550,7 @@ void EeScheduler::completeVSync(uint64_t tick)
+         const EeVSyncWait wait = std::get<EeVSyncWait>(waiter->wait.payload);
+         const int result = wait.fixedResult >= 0
+                                ? wait.fixedResult
+-                               : static_cast<int>((tick - 1u) & 1u);
++                               : static_cast<int>((m_runtime.memory().gs().csr.load(std::memory_order_acquire) >> 13u) & 1u);
+         makeReady(*waiter, result, false);
+         if (waiter->status == EeThreadStatus::Ready)
+             addVBlankHandoff(*waiter);
+@@ -2182,7 +2182,8 @@ void EeScheduler::processEvent(const EeEvent &event)
+             const uint32_t physical = m_vsyncTickAddress & 0x1FFFFFFFu;
+             if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
+             {
+-                std::memcpy(m_rdram + physical, &m_vsyncTick, sizeof(m_vsyncTick));
++                const uint64_t sampledCsr = m_runtime.memory().gs().csr.load(std::memory_order_acquire);
++                std::memcpy(m_rdram + physical, &sampledCsr, sizeof(sampledCsr));
+             }
+         }
+         m_vsyncFlagAddress = 0u;
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+index 2c98016..cf2f752 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+@@ -78,6 +78,18 @@ namespace ps2_syscalls
+     void WaitVSyncTick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int fixedResult)
+     {
+         EeScheduler &ee = scheduler(rdram, ctx, runtime);
++        if (fixedResult < 0)
++        {
++            // The ordinary SDK loads CSR after its blocking wait returns.
++            // Sample on actual continuation resumption, not while it may still
++            // be waiting behind a higher-priority or suspended guest context.
++            ee.waitVSync(ee.currentVSyncTick(), fixedResult,
++                [runtime](R5900Context &resumed)
++                {
++                    const uint64_t csr = runtime->memory().gs().csr.load(std::memory_order_acquire);
++                    setReturnS32(&resumed, static_cast<int>((csr >> 13u) & 1u));
++                });
++        }
+         ee.waitVSync(ee.currentVSyncTick(), fixedResult);
+     }
+ 
+-- 
+2.55.0.windows.3
+

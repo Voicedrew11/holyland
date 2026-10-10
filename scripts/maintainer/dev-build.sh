@@ -52,7 +52,13 @@ if [ "${KFIV_CCACHE:-0}" = 1 ]; then
   PCH=OFF
 fi
 LINK=""; command -v mold >/dev/null && LINK="-fuse-ld=mold"
-KEY="$GEN|$LAUNCHER|$PCH|$LINK"
+NATIVE_ELF=""; NATIVE_METADATA=""
+case "${KFIV_VU_NATIVE:-1}" in
+  1) NATIVE_ELF="$(cd "$GAMEDIR" && pwd)/SLUS_203.18"; NATIVE_METADATA="$KFIV_ROOT/kfiv/vu1-native.json" ;;
+  0) ;;
+  *) echo "KFIV_VU_NATIVE must be 0 or 1" >&2; exit 1 ;;
+esac
+KEY="$GEN|$LAUNCHER|$PCH|$LINK|$NATIVE_ELF|$NATIVE_METADATA"
 # A build tree can't switch generators; it is build output only, so start over.
 if [ -f "$BUILD/CMakeCache.txt" ] &&
    ! grep -qx "CMAKE_GENERATOR:INTERNAL=$GEN" "$BUILD/CMakeCache.txt"; then
@@ -68,7 +74,8 @@ if [ ! -f "$BUILD/CMakeCache.txt" ] || [ "$(cat "$BUILD/kfiv-config" 2>/dev/null
     "-DPS2X_ENABLE_SCCACHE=$([ -n "$LAUNCHER" ] && echo OFF || echo ON)" \
     "-DPS2X_ENABLE_RUNNER_PCH=$PCH" "-DCMAKE_EXE_LINKER_FLAGS=$LINK" \
     -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF \
-    -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF
+    -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF \
+    "-DPS2X_VU1_NATIVE_ELF=$NATIVE_ELF" "-DPS2X_VU1_NATIVE_METADATA=$NATIVE_METADATA"
   echo "$KEY" > "$BUILD/kfiv-config"
 fi
 mkdir -p "$BUILD/tmp"

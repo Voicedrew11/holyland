@@ -32,7 +32,7 @@ struct Field
 };
 struct Resume
 {
-    uint64_t tick, published;
+    uint64_t tick, published, csr;
     uint32_t flag;
     int32_t parity;
 };
@@ -57,11 +57,12 @@ void reg(R5900Context *ctx, unsigned index, uint32_t value)
 Field sample(PS2Runtime *runtime)
 {
     auto &ee = runtime->eeScheduler();
+    const uint32_t timerCount = runtime->memory().readIORegister(timerBase);
     ee.publishSnapshot();
     const auto snapshot = ee.snapshot();
     return {Clock::now(), ee.currentVSyncTick(), snapshot.eeCycle, snapshot.nextEventCycle,
         static_cast<uint32_t>(runtime->memory().gs().csr.load(std::memory_order_acquire) & 0x2000u),
-        runtime->memory().readIORegister(timerBase)};
+        timerCount};
 }
 void startIrq(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
 {
@@ -91,7 +92,8 @@ void resume(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
     uint64_t published = 0u;
     std::memcpy(&flag, ram + flagAddr, sizeof(flag));
     std::memcpy(&published, ram + tickAddr, sizeof(published));
-    resumes.push_back({runtime->eeScheduler().currentVSyncTick(), published, flag,
+    resumes.push_back({runtime->eeScheduler().currentVSyncTick(), published,
+        runtime->memory().gs().csr.load(std::memory_order_acquire), flag,
         static_cast<int32_t>(getRegU32(ctx, 2))});
     if (resumes.size() == wantedFields)
     {
@@ -103,8 +105,8 @@ void resume(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
 void poll(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime, bool peer)
 {
     if (peer) ++peerPolls; else ++mainPolls;
-    // Deliberately expensive native HLE: real wall time elapses while just the
-    // dispatcher eight-cycle charge advances the artificial instruction clock.
+    // Deliberately expensive native HLE: real wall time elapses while the
+    // dispatcher itself accounts only eight artificial instruction cycles.
     // Two priority-one threads remain Ready and rotate; no idle waiter shortcut.
     const auto *consumer = runtime->eeScheduler().thread(waiterId);
     if (lateNativeCall && !lateCallDone && resumes.size() == 1u && consumer &&
@@ -191,20 +193,32 @@ void runCase(bool late)
     check(ee.snapshot().eeCycle < fieldCycles, "low native dispatcher credits cannot reach one old virtual field");
     check(timerIrqs == 0u, "old missing elapsed credit also starves EE timer compare");
 #else
-    check(!watchdog && starts.size() == wantedFields && resumes.size() == wantedFields,
+    check(!watchdog && (late ? starts.size() >= wantedFields : starts.size() == wantedFields) && resumes.size() == wantedFields,
         "all six hardware fields and genuine VSync waits finish while peers remain Ready");
-    check(ends.size() >= wantedFields - 1u && ends.size() <= wantedFields,
+    check(ends.size() >= starts.size() - 1u && ends.size() <= starts.size(),
         "every completed field has one VBlankEnd before its successor");
-    check(timerIrqs == 1u, "elapsed field credit propagates through accountCycles to real timer compare IRQ");
+    check(timerIrqs == 1u, "elapsed hardware clock propagates through accountCycles to real timer compare IRQ");
     check(totalMs >= (late ? 275.0 : 90.0) && totalMs < (late ? 500.0 : 300.0),
-        "hardware fields follow approximately 60Hz under slow HLE accounting");
+        "physical fields remain paced while elapsed native work advances the independent hardware clock");
+    if (late)
+    {
+        // Busy equal-priority scheduling can legitimately miss the short
+        // opposite field after consuming the previous publication. Preserve
+        // exact observed parity/tick and accounting checks, not a 1:1 count.
+        for (const auto &result : resumes)
+        {
+            check(result.published == result.csr && result.flag == 1u, "late sampled CSR publication remains consistent");
+            check(result.parity == static_cast<int32_t>(result.tick & 1u), "late wait samples its resumed CSR FIELD parity");
+        }
+        std::printf("  late diagnostic: %zu physical fields, %zu wait returns\n", starts.size(), resumes.size());
+    }
     if (starts.size() == wantedFields && resumes.size() == wantedFields)
     for (size_t i = 0u; i < wantedFields; ++i)
     {
         const auto &field = starts[i]; const auto &result = resumes[i];
         check(field.tick == i + 1u && result.tick == field.tick, "fields and waiter resumes stay consecutive");
-        check(result.published == field.tick && result.flag == 1u, "tick and flag publish before waiter continuation");
-        check(result.parity == static_cast<int32_t>(i & 1u), "native WaitVSyncTick parity alternates");
+        check(result.published == result.csr && result.flag == 1u, "full sampled CSR and one-shot flag publish before waiter continuation");
+        check(result.parity == static_cast<int32_t>((field.field >> 13u) & 1u), "native WaitVSyncTick returns the resumed CSR FIELD");
         check(field.field == ((field.tick & 1u) ? 0x2000u : 0u), "CSR FIELD follows emitted tick parity");
         // Hardware emits before the queued guest IRQ dispatch. With real host
         // scheduling delay, the 500 us End can already have emitted by the time
@@ -226,7 +240,9 @@ void runCase(bool late)
                 check(lateCallDone && gap >= 190.0 && gap < 260.0,
                     "real native call holds an armed consumer across a 200ms overdue field");
             else
-                check(gap >= 15.0 && gap < 60.0, "no overdue field burst or slow virtual-credit field starvation");
+                check(gap >= 0.3 && gap < 60.0, "opposite field follows End without slow virtual-credit starvation");
+            if(i>=2u)check(std::chrono::duration<double,std::milli>(field.time-starts[i-2u].time).count()>=32.0,
+                "same-parity callbacks retain the original gameplay rate bound");
             const auto nextStart = [](const Field &sample) {
                 return sample.nextDeadline == sample.tick * fieldCycles + blankCycles
                     ? sample.nextDeadline - blankCycles + fieldCycles : sample.nextDeadline;

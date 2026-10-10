@@ -1,7 +1,7 @@
 # Building and running (Linux)
 
-For native Windows, use [`windows.md`](windows.md). The new input/audio
-series was verified on Windows; the Linux workflow below has not been
+For native Windows, use [`windows.md`](windows.md). The input, audio and performance
+changes were verified on Windows; the Linux workflow below has not been
 retested with these additions.
 
 You need a legally owned disc image of the US release (`SLUS-20318`) and the
@@ -66,6 +66,23 @@ outside this repo.
 - **Run**: the runner takes the ELF as `argv[1]` and reads the unpacked disc
   files from its working directory, so the script runs from the game dir.
   Memory cards (`mc0/`, `mc1/`) are created there too.
+
+The runner and maintainer build scripts enable the optional bounded native
+VU1 catalog from your own ELF using `kfiv/vu1-native.json`. Generated C++ and
+provenance stay in the build tree, outside generated EE unity batches.
+Set `KFIV_VU_NATIVE=0` to use the interpreter throughout. Switching this
+setting reconfigures the incremental build and clears both native input
+cache values. Python 3.8+ is required when native VU1 compilation is enabled.
+The canonical VU sources use strict floating point flags; the native backend
+has been compiled and tested on Windows, while Linux execution and
+performance remain unverified.
+
+The upstream census (`PS2X_VU1_CENSUS`) and static lift (`PS2X_VU1_LIFT`)
+remain optional. The static lift is experimental and disabled by default;
+its timing, callback and admission behavior is outside the bounded native
+catalog's exact verification. Keep `PS2X_VU1_LIFT=0` when using or validating
+the accepted native catalog. Maintainer builds still synchronize optional
+`<game-dir>/vu1lift/*.cpp` sources for that separate experiment.
 
 ## Controls
 

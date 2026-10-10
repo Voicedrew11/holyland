@@ -5,6 +5,9 @@
 #ifndef PS2X_REPLAY_CPU_ONLY
 #include "runtime/gs/gs_vulkan_backend.h"
 #endif
+#ifdef PS2X_REPLAY_VULKAN_REF
+#include "gs_vulkan_backend_ref.h"
+#endif
 #include "gs_record.h"
 #include "gs_trace.h"
 
@@ -124,6 +127,7 @@ struct Run {
     std::vector<uint8_t> vram;
     double allSeconds = 0, measuredSeconds = 0, initializeSeconds = 0;
     PresentationFrame frame;
+    std::vector<uint8_t> finalVram;
     template<class F> void call(bool measured, F &&fn) {
         const auto start = Clock::now();
         fn(*backend);
@@ -194,7 +198,7 @@ uint64_t number(const char *s) {
 
 int main(int argc, char **argv) try {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: gs_gpu_replay PRIVATE_RECORD [--backend cpu|vulkan|both] [--from-tick N] [--until-tick N] [--max-ops N] [--dump-dir PRIVATE_DIR] [--dump-every N] [--cache-window-mib N] [--require-exact]\n");
+        std::fprintf(stderr, "usage: gs_gpu_replay PRIVATE_RECORD [--backend cpu|vulkan|both|vulkan-compare|vulkan-prior] [--from-tick N] [--until-tick N] [--max-ops N] [--dump-dir PRIVATE_DIR] [--dump-every N] [--cache-window-mib N] [--require-exact]\n");
         return 2;
     }
 #ifdef PS2X_REPLAY_CPU_ONLY
@@ -222,9 +226,15 @@ int main(int argc, char **argv) try {
         else if (option == "--require-exact") requireExact = true;
         else throw std::runtime_error("Unknown option: " + option);
     }
-    if (backend != "cpu" && backend != "vulkan" && backend != "both")
-        throw std::runtime_error("Backend must be cpu, vulkan or both");
-    if (cacheMiB && (cacheMiB > 2048 || !fromTick || untilTick == ~uint64_t(0) || untilTick <= fromTick || backend == "both"))
+    const bool vulkanCompare = backend == "vulkan-compare";
+    const bool vulkanPrior = backend == "vulkan-prior";
+    if (backend != "cpu" && backend != "vulkan" && backend != "both" && !vulkanCompare && !vulkanPrior)
+        throw std::runtime_error("Backend must be cpu, vulkan, both, vulkan-compare or vulkan-prior");
+#ifndef PS2X_REPLAY_VULKAN_REF
+    if (vulkanCompare || vulkanPrior)
+        throw std::runtime_error("Build GPU_GS_FLUSH_COMPARE for the prior Vulkan control");
+#endif
+    if (cacheMiB && (cacheMiB > 2048 || !fromTick || untilTick == ~uint64_t(0) || untilTick <= fromTick || backend == "both" || vulkanCompare))
         throw std::runtime_error("Cached timing needs one backend, a nonzero bounded tick range, and at most 2048 MiB");
     const char *threads = std::getenv("PS2X_GS_THREADS");
     std::printf("configuration backend %s PS2X_GS_THREADS %s cache_limit_mib %llu\n", backend.c_str(), threads ? threads : "runtime_default", (unsigned long long)cacheMiB);
@@ -236,17 +246,23 @@ int main(int argc, char **argv) try {
         run.initializeSeconds = std::chrono::duration<double>(Clock::now()-start).count();
         runs.push_back(std::move(run));
     };
-    if (backend != "vulkan") addRun("cpu", [] { return std::make_unique<GSCpuBackend>(); });
+    if (backend == "cpu" || backend == "both") addRun("cpu", [] { return std::make_unique<GSCpuBackend>(); });
 #ifdef PS2X_REPLAY_CPU_ONLY
     if (backend != "cpu") throw std::runtime_error("This control build includes only the CPU backend");
 #else
-    if (backend != "cpu") addRun("vulkan", [] { return std::make_unique<GSVulkanBackend>(); });
+    if (backend == "vulkan" || backend == "both" || vulkanCompare)
+        addRun("vulkan", [] { return std::make_unique<GSVulkanBackend>(); });
+#ifdef PS2X_REPLAY_VULKAN_REF
+    if (vulkanPrior || vulkanCompare)
+        addRun("vulkan-prior", [] { return std::make_unique<GSVulkanBackendRef>(); });
+#endif
 #endif
     if (requireExact && runs.size() != 2)
-        throw std::runtime_error("Exact comparison requires --backend both");
+        throw std::runtime_error("Exact comparison requires --backend both or vulkan-compare");
     Reader input(argv[1]);
     uint64_t ops = 0, submits = 0, presents = 0, measuredSubmits = 0, measuredPresents = 0, lastTick = 0;
     uint64_t readbackDifferences = 0, transferDifferences = 0;
+    uint64_t fullFrameComparisons = 0, fullFrameDifferences = 0, finalVramDifferences = 0;
     bool initialized = false, measured = fromTick == 0, cleanEof = false;
     Difference difference;
     Clock::time_point windowStart;
@@ -313,6 +329,17 @@ int main(int argc, char **argv) try {
             const auto request = input.read<GSPresentationRequest>();
             ++presents; lastTick = request.vsyncTick;
             for (auto &run : runs) run.call(measured, [&](auto &b) { run.frame = b.Present(request); });
+            if (vulkanCompare) {
+                const auto &a = runs[0].frame, &b = runs[1].frame;
+                ++fullFrameComparisons;
+                if (a.width != b.width || a.height != b.height || a.displayFbp != b.displayFbp ||
+                    a.sourceFbp != b.sourceFbp || a.usedPreferred != b.usedPreferred || a.pixels != b.pixels) {
+                    ++fullFrameDifferences;
+                    if (fullFrameDifferences <= 8)
+                        std::fprintf(stderr, "Full RGBA/metadata mismatch at op %llu tick %llu\n",
+                                     (unsigned long long)ops, (unsigned long long)lastTick);
+                }
+            }
             if (lastTick % 600 == 0 && !windowStarted) {
                 std::printf("progress tick %llu ops %llu submits %llu\n", (unsigned long long)lastTick, (unsigned long long)ops, (unsigned long long)submits);
                 std::fflush(stdout);
@@ -381,8 +408,14 @@ finish:
     // A synchronized readback fences all queued GPU work. Include it in the
     // timing, rather than reporting asynchronous CPU enqueue time as GPU speed.
     for (auto &run : runs) {
-        std::vector<uint8_t> snapshot;
-        run.call(measured, [&](auto &b) { b.Sync(GSSyncReason::DebugReadback); b.SnapshotVram(snapshot); });
+        run.call(measured, [&](auto &b) { b.Sync(GSSyncReason::DebugReadback); b.SnapshotVram(run.finalVram); });
+    }
+    if (vulkanCompare) {
+        if (runs[0].finalVram.size() != (4u << 20) || runs[1].finalVram.size() != (4u << 20))
+            throw std::runtime_error("Final Vulkan VRAM snapshots must contain exactly 4 MiB");
+        for (size_t i = 0; i < runs[0].finalVram.size(); ++i)
+            finalVramDifferences += runs[0].finalVram[i] != runs[1].finalVram[i];
+        transferCompare();
     }
     if (windowStarted) windowSeconds = std::chrono::duration<double>(Clock::now() - windowStart).count();
     for (auto &run : runs) {
@@ -392,8 +425,11 @@ finish:
     if (windowStarted) std::printf("cached_window_wall_s %.6f measured_submits_per_wall_s %.2f\n", windowSeconds, windowSeconds ? measuredSubmits / windowSeconds : 0);
     std::printf("ops %llu submits %llu presents %llu last_tick %llu measured_submits %llu measured_presents %llu clean_eof %u ABI_batch %zu ABI_request %zu transfer_state_differences %llu readback_differences %llu\n", (unsigned long long)ops,(unsigned long long)submits,(unsigned long long)presents,(unsigned long long)lastTick,(unsigned long long)measuredSubmits,(unsigned long long)measuredPresents,unsigned(cleanEof),sizeof(GSPrimitiveBatch),sizeof(GSPresentationRequest),(unsigned long long)transferDifferences,(unsigned long long)readbackDifferences);
     if (runs.size() == 2) std::printf("image_comparison frames %llu dimensions_differ %u pixels %llu exact_rgb_percent %.6f above8_percent %.6f mae_rgb %.6f rmse_rgb %.6f max_rgb %u\n",(unsigned long long)difference.frames,unsigned(difference.dimensionsDiffer),(unsigned long long)difference.pixels,difference.pixels ? 100.0*difference.exact/difference.pixels : 0,difference.pixels ? 100.0*difference.aboveEight/difference.pixels : 0,difference.pixels ? double(difference.absolute)/(3.0*difference.pixels) : 0,difference.pixels ? std::sqrt(double(difference.squared)/(3.0*difference.pixels)) : 0,unsigned(difference.maximum));
+    if (vulkanCompare) std::printf("exact_vulkan_comparison full_rgba_frames %llu frame_or_metadata_differences %llu final_vram_bytes %zu differing_vram_bytes %llu\n",
+        (unsigned long long)fullFrameComparisons, (unsigned long long)fullFrameDifferences,
+        runs[0].finalVram.size(), (unsigned long long)finalVramDifferences);
     if (!initialized) throw std::runtime_error("Recording is empty");
-    return requireExact && (difference.dimensionsDiffer || difference.absolute || transferDifferences || readbackDifferences) ? 1 : 0;
+    return requireExact && (difference.dimensionsDiffer || difference.absolute || transferDifferences || readbackDifferences || fullFrameDifferences || finalVramDifferences) ? 1 : 0;
 } catch (const std::exception &error) {
     std::fprintf(stderr,"replay failed: %s\n",error.what());
     return 2;

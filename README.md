@@ -3,7 +3,8 @@
 A native PC port of **King's Field: The Ancient City** (FromSoftware, USA
 `SLUS-20318`) built with [PS2Recomp](https://github.com/ran-j/PS2Recomp).
 The recompiler translates the game's MIPS R5900 executable into C++ compiled
-for the host CPU. The supporting runtime still interprets IOP and VU1 code.
+for the host CPU. The supporting runtime interprets IOP code and executes VU1
+through an interpreter or an optional bounded native catalog built from your ELF.
 An optional Vulkan GS backend renders on the GPU; the software GS remains
 available as a reference and compatibility fallback.
 
@@ -34,7 +35,12 @@ code or disc assets. The build checks the boot ELF's hash.
   opening through the game's original Start input.
 - Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
   stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
-- Broader rendering accuracy remains unverified and performance is below full speed.
+- Gameplay timing is independent of host presentation. Interlaced NTSC uses
+  roughly 59.94 fields and 29.97 ordinary gameplay updates per second.
+  The performance follow-up adds independent EE hardware time, bounded
+  field handoff and native VU compilation. See [Windows validation](docs/windows-validation.md)
+  for measured gameplay and attack timing, and [optional MSVC PGO](docs/windows-pgo.md).
+- Broader rendering accuracy remains unverified.
   Vulkan field presentation uses GPU bob to avoid temporal text combing.
   Audio hardware behaviour is
   approximate in places. Later areas, a full playthrough and saving/loading
@@ -76,10 +82,11 @@ those patches, including `register_functions.cpp`.
 ## Contributing
 
 Runtime and generator fixes are an ordered [patch series](patches/README.md)
-of 39 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
-are retained; twenty-five additions cover Windows input, audio, movie,
-gameplay rendering, EE conversion/square-root translation and complete DMA chains,
-with opt-in diagnostics.
+of 52 patches on top of PS2Recomp commit `c5a9d02`. The existing 41 patches
+are retained. Eleven further patches address GPU/SPU/VU overhead, hardware
+clock accounting, NTSC field handoff and SDK synchronization, with optional
+bounded native VU compilation. Diagnostics and the separate experimental
+static-lift path remain off by default.
 Read [the development
 workflow](docs/contributing.md), [source-only tests](tests/README.md) and
 [agent instructions](AGENTS.md). All game-derived output stays private.

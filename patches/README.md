@@ -49,7 +49,18 @@ commit); don't edit them by hand. Workflow:
 | `0038-Preserve-active-IPU-input-channel-fields-when-suspen.patch` | Ignore STR-one CHCR writes while IPU input is active; a STR-zero write clears only STR and preserves the fetched tag and channel fields. STOP creates no credit, restart or completion; subsequent starts use the resumed-tag classification from patch 0036. |
 | `0039-Clear-MPEG-callback-registrations-when-recreating-a-.patch` | Successful Create clears only that MPEG handle's stream and ordinary callback registrations, preventing duplicate compressed-payload copies after recreation. Reset retains registrations; unrelated handles and cancellation guards remain intact. |
 | `0040-vu1-opt-in-microcode-census-…` | `PS2X_VU1_CENSUS=1` records which VU1 microprograms run, from which entry, and their cycle share. Off by default; does not change behaviour. |
-| `0041-vu1-run-lifted-microprogram-segments-…` | `PS2X_VU1_LIFT=1` runs VU1 microprogram segments that were lifted to C++ (`scripts/maintainer/vu1lift.py`), bit-exact with the interpreter including cycles, flags and XGKICK output. Off by default; with no lifted sources built in it does nothing. |
+| `0041-vu1-run-lifted-microprogram-segments-…` | Experimental upstream static lifts via `PS2X_VU1_LIFT=1` and `scripts/maintainer/vu1lift.py`. Retained unchanged and off by default; keep disabled for the bounded-catalog/PGO validation below. Its enabled execution is not covered by these proofs. |
+| `0042-Reuse-unchanged-Vulkan-flushes-…` | Reuse an already synchronized Vulkan flush until real renderer work changes its serial; preserve feedback, readback and register ordering. |
+| `0043-Inline-SPU-mixing-helpers-…` | MSVC release `/Ob2` for SPU mixing helpers with strict arithmetic and unchanged PCM/IRQ/RAM behavior. |
+| `0044-Recover-late-fields-…` | Recover late fields using continuous parity history, without exceeding the original same-parity rate. |
+| `0045-Optimize-VU-arithmetic-and-pipeline-…` | Exact SSE2 FMAC classification, compact decoded hazards and queued STATUS bookkeeping; strict compiler settings. |
+| `0046-Accrue-EE-hardware-time-…` | Independent wall-time floor during native work, chronological timer service, timer-MMIO synchronization and exact awakened-continuation field handoff. |
+| `0047-Compile-owned-VU1-programs-…` | Optional build-time native VU catalog from hash-pinned ELF/MPG metadata, bounded 16-pair groups, exact budgets/callbacks/flags and decoded-cache-aware admission. Unsupported states fall back to the interpreter. |
+| `0048-Specialize-native-VU-operand-…` | Snapshot only the operands consumed by each opcode, preserving aliases and arithmetic. |
+| `0049-Cache-idle-IOP-thread-selection-…` | Cache proven idle selection until a scheduling mutation or earliest wake, with exact invalidation. |
+| `0050-Reduce-scheduler-wall-clock-…` | Avoid empty event scans and redundant clock sampling at inactive checkpoints while keeping active native/MMIO samples current. |
+| `0051-Select-interlaced-NTSC-field-timing-…` | Select 16,683,333 ns / 4,920,116-cycle fields through actual GS/BIOS interlaced NTSC mode calls, retaining parity history and pending End/alarm ordering. Other modes keep their prior fallback. |
+| `0052-Match-SDK-SyncV-completion-…` | Ordinary SDK waits return actual FIELD on continuation resumption; SetVSyncFlag publishes full captured CSR rather than a software tick. Fixed/progressive behavior is retained. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -58,9 +69,10 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 41-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+The 52-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
 0015–0039, were exported from source commits on top of that series;
-0040–0041 (VU1 census and lift) are exported on top of 0039. The
+0040–0041 (VU1 census and lift) are retained unchanged. Performance patches
+0042–0052 are exported as separate source commits on top of them. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in

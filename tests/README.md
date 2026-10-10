@@ -3,7 +3,7 @@
 These packages exercise the actual patched PS2Recomp source and libraries
 using synthetic inputs. They contain no game executable, disc assets,
 generated retail C++, compiled binaries or local result logs. There are
-24 standalone fixture packages plus the separate audio-loopback diagnostic.
+30 standalone fixture packages plus the separate audio-loopback diagnostic.
 Native Windows MSVC 19.44 x64 validation passed the original 16 packages
 and 26 CTest entries after relocation here. The added GS depth regression
 passed 143,397 checks and two CTest entries with a prior-behaviour control.
@@ -79,7 +79,7 @@ sources; expected failure behaviour is itself asserted.
 | `input-tests` | 453 | Real pad mapper with simulated Raylib keyboard/mouse/gamepad devices; bindings, capture, menu transitions, glyph and snapshots. Physical GLFW delivery needs integration testing. |
 | `menu-tests` | 1,735 | Real KFIV binding, override registry and IOP allocator; controlled EE/SDK boundary supplies Free's SIF contract. Metadata/opcode guards and 300 allocation cycles; resource loading is not bypassed. |
 | `ioman-tests` | 79 | Actual IOMAN and IOP memory, using a real temporary file; read/seek/short read and async completion status 0, invalid descriptors and RAM bounds. |
-| `vblank-tests` | 105 | Real runtime scheduler and WaitVSyncTick; a 200 ms native call exercises overdue deadlines. Pinned upstream scheduler is the burst-reproduction control. |
+| `vblank-tests` | 22 CTests | Real scheduler/SDK wait handoff, long callbacks, invocation lifecycles and FIELD/CSR publication. Actual GS/BIOS mode selection adds 200,782 checks across 100,000 transitions; pinned upstream and narrowly disabled current-source controls reproduce timing defects. |
 | `audio-tests` | 607 | Actual SPU2/MMIO/DMA and IOP RAM with synthetic ADPCM/PCM; voices, ADSR, pitch, mixing, reverb, AutoDMA reserve, STOP and restart. Hardware approximations remain. |
 | `audio-host-tests` | 125 | Actual host audio backend/VAG decoder with a simulated Raylib audio device; prebuffer, concurrency, bounded queues, underrun silence and WAV shutdown. |
 | `audio-clock-tests` | 97 | Actual IOP subsystem/interpreter with executable synthetic MIPS IRX timer/RPC fixtures; deterministic/monotonic clocks, timer callbacks and interrupt suspend/resume. |
@@ -91,7 +91,7 @@ sources; expected failure behaviour is itself asserted.
 | `recompiler-cvt-tests` | 199,956 fixed | Actual decoder and COP1 translator emit and execute synthetic conversions against production macros. Every FPR alias, ignored Ft, all four host rounding modes, sign saturation, FCR31/source preservation and angle range reduction. Old rounding control produces 920 failures; no retail pose input. |
 | `ee-priority-tests` | 63 | Actual kernel thread syscalls and scheduler, synthetic guest bootstrap and empty function table; original priority-zero rejection is the control. |
 | `ee-callback-tests` | 244 | Actual scheduler/guest heap and synthetic guest callbacks; stale-entry cancellation, started continuations and tuple lifetime. Predicate-disabled scheduler is the control. |
-| `ee-clock-tests` | 150 | Actual scheduler/timers and synthetic busy-poll guest threads; host-deadline field credit while ready threads run. Credit-disabled control reproduces starvation. |
+| `ee-clock-tests` | 23 CTests | Actual scheduler/timers, native busy work and timer-MMIO; reset-anchored wall floor, chronological IRQ service and legitimate EQUF coalescing. Narrow controls disable the floor or timer-boundary service. |
 | `recompiler-resume-tests` | 341 | Real ELF/config/decoder/emitter pipeline with synthetic MIPS ELF; synthesized entry aliases, explicit handler precedence and deterministic ownership. Precise old generator behaviour is restored in the control. |
 | `recompiler-sqrt-tests` | 49 fixed / 9 control | Actual decoder and FPU translator emit synthetic instructions that are compiled against runtime headers. Register operands, aliases, exception flags, signed zero and finite ground-edge normals; old operand bodies are restored only in the control. No retail game or runtime execution. |
 | `dma-chain-tests` | 245 fixed / 59 control failures | Actual PS2Memory, VIF0/VIF1, GIF arbiter, GS frontend and CPU backend; finite chains through 10000 tags, real CSR FINISH, CALL-stack reuse, IRQ/TIE and cycle guards. Synthetic input; an MSCAL callback counter substitutes VU execution. |
@@ -99,6 +99,12 @@ sources; expected failure behaviour is itself asserted.
 | `gs-alignment-tests` | 853,552 per worker count | Actual CPU GS backend and local memory; scalar fixed-UV oracle, reversed axes, fractional offsets, bounds/scissor, flat Q and serial 64-pixel framebuffer feedback through the real texture cache. One/eight workers; optional prior-sprite control. No retail assets or presentation changes. |
 | `gs-trace-tests` | 59 fixed | Actual opt-in GS trace implementation with synthetic register, transfer, draw and privileged CRT state; inclusive tick bounds, CRT2 fields and fractional XYOFFSET diagnostics. Nine fixed cases and six controlled prior-behaviour cases. |
 | `gs-scanout-height-tests` | 6,129,642 fixed | Real backend framebuffer upload and public presentation through its VRAM snapshot. Independently encoded gradients/HUD marker check full source rows, CRT1/CRT2/dual, magnification, odd rounding, clamp order, progressive/FIELD and initial small FRAME bob. Nine fixed cases, six prior-height controls; no cross-frame history or window scaling claim. |
+| `field-pacing-tests` | 36,171,189 fixed | Actual pacer header with synthetic time: fallback and interlaced NTSC, 200,000 randomized fields each, 60/300/uncapped presentation reads and two mathematical controls. |
+| `spu-inlining-tests` | 221,664 exact | Actual SPU source compiled with baseline/candidate inlining; PCM, chunks, IRQs, statistics, registers and RAM, plus a category-specific PCM corruption control. |
+| `vu-performance-tests` | 9 CTests with private replay | Real VU core/upper/lower and memory versus pinned patch-39 sources; full register/flag/cycle/data/PATH1 differential, decoded metadata and precise corruption controls. Private replay is optional and never committed. |
+| `vu-native-tests` | 672,585 exact | Actual native generator and bounded backend with authored ELF/MPG; 104,536 calls and 158,250 native issues across opcode/mask/alias coverage, budgets, resumes, mutation and fallback. Five category-specific controls plus parser/build-graph checks. |
+| `iop-idle-tests` | 48,299 kernel + 97 audio-clock | Actual IOP kernel/cache versus pinned pre-cache source, full thread/register/RAM/allocator state, lifecycle/wake invalidation, four existing IOP suites and two corruption controls. |
+| `gs-sync-contract-tests` | 180 fixed | Actual scheduler and SDK/BIOS units; full CSR publication, ordinary FIELD return at actual delayed continuation resumption, fixed/progressive paths and controls that detect the former contracts. |
 
 MPEG's 1,133 production checks comprise 54 SDK lifecycle, 75 demux, 102 video,
 93 cancellation, 106 snapshot, 211 audio output-service, 148 picture input-service,

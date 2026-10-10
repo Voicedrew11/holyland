@@ -1,0 +1,31 @@
+From 83dcb6c169d0beaee18abeccea8a7ba2764a45c4 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 01:39:49 -0400
+Subject: [PATCH 43/52] Inline SPU mixing helpers in strict Windows release
+ builds
+
+---
+ ps2xIOP/CMakeLists.txt | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
+index cb06155..c488ce6 100644
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -31,6 +31,13 @@ add_library(ps2_iop STATIC
+     src/modules/mcserv.cpp
+ )
+ 
++# The sample mixer calls small integer helpers for every voice and output frame.
++# RelWithDebInfo otherwise uses /Ob1, which leaves those helpers out of line.
++if(MSVC)
++    set_property(SOURCE src/emulator/core/iop_spu2.cpp
++        APPEND PROPERTY COMPILE_OPTIONS "$<$<CONFIG:RelWithDebInfo>:/Ob2>")
++endif()
++
+ target_compile_features(ps2_iop PUBLIC cxx_std_20)
+ 
+ target_include_directories(ps2_iop
+-- 
+2.55.0.windows.3
+

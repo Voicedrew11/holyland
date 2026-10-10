@@ -1,0 +1,115 @@
+From cf1ddf86e3a151a18bf8dc42113ecf626de39559 Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 04:15:47 -0400
+Subject: [PATCH 48/52] Specialize native VU operand snapshots by opcode
+
+Generated upper handlers normalized both vector sources, ACC, Q and I for every instruction. Select the required sources at compile time, normalize only the selected broadcast lane when applicable, and preserve snapshots before aliased destination writes. Keep unused arrays initialized for conservative exact helper fallbacks; canonical interpreter arithmetic remains unchanged.
+---
+ ps2xRuntime/tools/generate_vu_native.py | 81 +++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/ps2xRuntime/tools/generate_vu_native.py b/ps2xRuntime/tools/generate_vu_native.py
+index 11fc91b..ed5bd0c 100644
+--- a/ps2xRuntime/tools/generate_vu_native.py
++++ b/ps2xRuntime/tools/generate_vu_native.py
+@@ -40,6 +40,84 @@ def replace_once(text, old, new):
+     return text.replace(old, new, 1)
+ 
+ 
++# Source selection is fixed by each template instruction. The emitted native
++# snapshot keeps unused arrays defined for the conservative exact fallback;
++# the canonical interpreter and all arithmetic helpers remain unchanged.
++NATIVE_OPERAND_DECLARATIONS = '''
++namespace {
++enum NativeUpperOperand : uint8_t
++{
++    NativeOperandVs = 1u, NativeOperandVt = 2u, NativeOperandAcc = 4u,
++    NativeOperandQ = 8u, NativeOperandI = 16u, NativeOperandBroadcast = 32u,
++};
++constexpr uint8_t nativeUpperOperands(uint32_t code, bool special)
++{
++    if (code <= 0x0Fu)
++        return NativeOperandVs | NativeOperandVt | NativeOperandBroadcast |
++               (code >= 0x08u ? NativeOperandAcc : 0u);
++    if (code <= 0x17u)
++        return special ? (code >= 0x14u ? NativeOperandVs : 0u)
++                       : NativeOperandVs | NativeOperandVt | NativeOperandBroadcast;
++    if (code <= 0x1Bu)
++        return NativeOperandVs | NativeOperandVt | NativeOperandBroadcast;
++    switch (code)
++    {
++    case 0x1Cu: return NativeOperandVs | NativeOperandQ;
++    case 0x1Du: return NativeOperandVs | (special ? 0u : NativeOperandI);
++    case 0x1Eu: return NativeOperandVs | NativeOperandI;
++    case 0x1Fu: return special ? 0u : NativeOperandVs | NativeOperandI;
++    case 0x20u: case 0x24u: return NativeOperandVs | NativeOperandQ;
++    case 0x21u: case 0x25u: return NativeOperandVs | NativeOperandQ | NativeOperandAcc;
++    case 0x22u: case 0x26u: return NativeOperandVs | NativeOperandI;
++    case 0x23u: case 0x27u: return NativeOperandVs | NativeOperandI | NativeOperandAcc;
++    case 0x28u: case 0x2Au: case 0x2Cu: return NativeOperandVs | NativeOperandVt;
++    case 0x29u: case 0x2Du: return NativeOperandVs | NativeOperandVt | NativeOperandAcc;
++    case 0x2Bu: case 0x2Fu: return special ? 0u : NativeOperandVs | NativeOperandVt;
++    case 0x2Eu: return NativeOperandVs | NativeOperandVt | (special ? 0u : NativeOperandAcc);
++    default: return 0u;
++    }
++}
++}
++'''
++
++ORIGINAL_OPERAND_SNAPSHOT = '''    float normalizedVs[4];
++    float normalizedVt[4];
++    float normalizedAcc[4];
++    normalizeOperands(m_state.vf[fs], normalizedVs);
++    normalizeOperands(m_state.vf[ft], normalizedVt);
++    normalizeOperands(m_state.acc, normalizedAcc);
++    const float *vs = normalizedVs;
++    const float *vt = normalizedVt;
++    const float *acc = normalizedAcc;
++    const float q = normalizeOperand(m_state.q);
++    const float i = normalizeOperand(m_state.i);'''
++
++NATIVE_OPERAND_SNAPSHOT = '''    constexpr uint32_t nativeOpcode = instr & 0x3Fu;
++    constexpr uint32_t nativeCode = nativeOpcode >= 0x3Cu
++        ? ((instr & 3u) | ((instr >> 4u) & 0x7Cu)) : nativeOpcode;
++    constexpr uint8_t nativeOperands = nativeUpperOperands(nativeCode, nativeOpcode >= 0x3Cu);
++    // Snapshot all actual sources before any aliased destination is written.
++    // Unused arrays remain defined for conservative exact fallback gathering.
++    float normalizedVs[4]{};
++    float normalizedVt[4]{};
++    float normalizedAcc[4]{};
++    if constexpr ((nativeOperands & NativeOperandVs) != 0u)
++        normalizeOperands(m_state.vf[fs], normalizedVs);
++    if constexpr ((nativeOperands & NativeOperandVt) != 0u)
++    {
++        if constexpr ((nativeOperands & NativeOperandBroadcast) != 0u)
++            normalizedVt[instr & 3u] = normalizeOperand(m_state.vf[ft][instr & 3u]);
++        else
++            normalizeOperands(m_state.vf[ft], normalizedVt);
++    }
++    if constexpr ((nativeOperands & NativeOperandAcc) != 0u)
++        normalizeOperands(m_state.acc, normalizedAcc);
++    const float *vs = normalizedVs;
++    const float *vt = normalizedVt;
++    const float *acc = normalizedAcc;
++    const float q = (nativeOperands & NativeOperandQ) != 0u ? normalizeOperand(m_state.q) : 0.0f;
++    const float i = (nativeOperands & NativeOperandI) != 0u ? normalizeOperand(m_state.i) : 0.0f;'''
++
+ DECLARATIONS = '''
+     template<uint32_t instr> void execUpperSpecialized();
+     template<uint32_t instr, uint32_t upperInstr>
+@@ -97,9 +175,12 @@ bool VU1Interpreter::matchesNativeCatalogCache() const
+     return true;
+ }
+ ''')
++    parts.append(NATIVE_OPERAND_DECLARATIONS)
+     upper_function = function(upper, 'void VU1Interpreter::execUpper(')
+     upper_function = replace_once(upper_function, 'void VU1Interpreter::execUpper(uint32_t instr)',
+         'template<uint32_t instr>\nvoid VU1Interpreter::execUpperSpecialized()')
++    upper_function = replace_once(upper_function, ORIGINAL_OPERAND_SNAPSHOT,
++                                  NATIVE_OPERAND_SNAPSHOT)
+     if specialize_fmac:
+         normalize = function(core, 'void VU1Interpreter::normalizeFmacResult(')
+         normalize = replace_once(normalize, 'void VU1Interpreter::normalizeFmacResult(',
+-- 
+2.55.0.windows.3
+

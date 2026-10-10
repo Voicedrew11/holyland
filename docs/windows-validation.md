@@ -410,7 +410,8 @@ Fresh 28-patch application and repeat reproduce the exported source tree.
   weave path; the Vulkan field fix was checked on the title, opening and
   inventory. Other video paths remain unverified.
 - The repeated 64-pixel gameplay strip corruption is fixed. Broader 3D
-  rendering accuracy remains unverified and gameplay runs below full speed.
+  rendering accuracy remains unverified. Current gameplay timing is measured
+  separately in the performance follow-up below.
   The old Linux first-area measurements in `NOTES.md` are historical measurements,
   not a benchmark of this Windows build.
 - SPU2 reverb uses an approximate average/hold path rather than the
@@ -424,3 +425,71 @@ The [Windows guide](windows.md) describes how to reproduce the build from
 an owned disc. The integration helpers were smoke checked and the fixtures
 were rebuilt at their repository paths; a separate full clean retail
 generation/build was not repeated solely to validate the documentation.
+
+## Native performance follow-up
+
+The ordinary USA gameplay path is approximately 30 updates per second. The
+confirmed interlaced NTSC mode uses 16,683,333 ns fields (about 59.94 Hz), so
+two fields correspond to approximately 29.97 gameplay updates per second.
+The game's own limiter, animation frames, cooldown and power counters remain
+unchanged. Host presentation still uses its existing 60 Hz cap. This change
+does not add interpolated frames or an unlocked presentation option.
+
+The hardware clock now has a reset-anchored wall-time floor independent of
+delivered display fields. Historical native work is reconciled at real timer
+and scheduled-event boundaries, allowing registered timer handlers to run.
+Already credited instruction cycles are not added twice. Timer MMIO accounts
+time spent in an indivisible native call; delayed acknowledgements retain
+the real EQUF latch/coalescing behavior rather than replaying old interrupts.
+
+Field recovery retains continuous parity history and a minimum two-period
+same-parity interval. A hold follows the exact awakened thread/invocation
+until it blocks, suspends, disappears or expires; Ends, alarms and IRQs retain
+normal order. Confirmed NTSC mode changes retime the future Start without
+resetting the clock, parity history or pending End/alarm. Other modes retain
+the previous fallback; complete PAL/progressive timing is not claimed.
+Ordinary SDK waits sample FIELD when their continuation actually resumes;
+SetVSyncFlag publishes the full captured CSR.
+
+The optional native VU catalog reconstructs the hash-pinned program from an
+owned ELF's ordered MPG uploads during the build. Sixteen-pair groups retain
+execution budgets, pipelines, callbacks, flags, RAM and ordered PATH1 output.
+Admission follows the actual decoded cache image, tracked code generation
+and memory owner, including the original unmarked stale-cache semantics.
+Unsupported programs/states use the interpreter. Operand snapshots consume
+only the opcode's required sources, with aliases preserved. The separate
+upstream static lift remains disabled for all these checks.
+
+Native MSVC 19.44 x64 validation passed 49 public clock/field CTests: four
+pure pacing, 22 linked VBlank/mode and 23 EE-clock cases, including seven
+specific controls. Pure pacing checks include 19,359,261 fallback and
+16,811,928 NTSC assertions under simulated 60/300/uncapped presentation reads.
+Actual GS/BIOS mode calls passed 200,782 checks across 100,000 transitions.
+A separate private adaptation passed 40 linked/pure positive cases with
+every reset selecting actual interlaced NTSC timing. Presentation reads
+created no guest ticks. These proofs do not alone establish retail speed.
+
+IOP idle-cache equivalence passed eight native CTests, 48,299 full-state
+kernel checks and 97 audio-clock checks, including invalidation/wake controls
+and the four existing IOP suites. SPU inlining passed four CTests and 221,664
+exact checks with identical PCM, chunks, IRQs, RAM and register state.
+GPU flush reuse passed the exact replay/ordering fixtures described in the
+[GPU package](../tests/gpu-gs-tests/README.md).
+
+The expanded authored native catalog passed 672,585 exact checks across
+104,536 calls and 158,250 native-issued pairs, plus five category-specific
+corruption controls and parser/build checks. A separate private verifier
+linked the actual frozen production VU `/GL` objects and retail catalog;
+all 15 metadata/full-state/replay/control tests passed both before and after
+applying the actual game profile. The genuine replay covered 4,000 contiguous
+calls and 39,999 exact checks. Its different verifier call graph can produce
+different LTCG machine code, so this proves the same production bitcode and
+profile against those inputs, rather than byte-identical runner code or
+universal PS2 hardware equivalence.
+
+Optional MSVC PGO preserves strict arithmetic and relinks frozen inputs;
+the [helper](windows-pgo.md) records object/library/tool/profile hashes and
+lets LINK modify a separate working PGD. Six isolated alternating genuine
+replays reduced the actual VU-body median from 76.4821 to 65.5545 ms (14.29%);
+every replay remained exact. This is a VU-body benchmark. Whole-game update
+and attack measurements are required before accepting the optimized runner.

@@ -54,7 +54,24 @@ place as state changes; link session logs at the point they support.
   pause/resume and the capture-state glyph. Windows x64 MSVC 19.44,
   `RelWithDebInfo`, `/O2 /fp:strict`, with FFmpeg enabled, was verified.
   W changed player coordinates; Space reached raw and guest Square edge
-  state. Attack animation/damage was not independently measured.
+  state. Read-only sampling now measures the original gameplay loop and
+  contiguous attack animation/cooldown values. Damage against an enemy
+  remains unverified.
+- **Performance follow-up:** the target is the original approximately
+  30-update gameplay simulation, independent of host presentation FPS.
+  The installed 39-patch build measured 11.63 gameplay updates/s; the
+  ordinary 52-patch candidate measured 27.70 in the same starting scene.
+  The original 15-update attack windup took 1.350/0.565 seconds respectively.
+  These are native Windows retail measurements, rather than window FPS or
+  synthetic VU throughput. Full speed and installation of this candidate
+  are still pending. Bounded native VU execution, strict arithmetic and
+  flag/pipeline behavior, cached IOP idle scheduling, chronological timer
+  credit, actual NTSC mode selection and SDK FIELD observations are covered
+  by source-only fixtures. Optional PGO improved the isolated actual VU
+  body, but its preliminary whole-game trial was slower; a private trace
+  reproduced occasional four-field gameplay waits. It is not accepted on
+  the strength of the isolated benchmark. See
+  [performance validation](windows-validation.md#native-performance-follow-up).
 - **Audio:** music, effects and opening audio run through the original
   SDRDRV/LIBSD modules and the new SPU2/host output. The earlier 248.218-second
   isolated run reached tick 10,600 and exited normally after natural movie
@@ -107,17 +124,19 @@ place as state changes; link session logs at the point they support.
   the original Start input to skip it; the original movie cleanup and area
   loader still run. Earlier black-picture builds could look like a hang
   with PC audio muted. PR publication did not itself change the executable.
-- **Source delivery:** existing patches 0001–0014 are unchanged. New
-  source-exported patches 0015–0039 include Windows build/input, loader
+- **Source delivery:** existing patches 0001–0041 are unchanged. The
+  52-patch candidate adds source-exported performance patches 0042–0052.
+  The earlier source-exported patches 0015–0039 include Windows build/input, loader
   completion, capture UI, timing, native audio/MPEG, GS depth and sprite fixes,
   source-height decoding, Vulkan, text presentation, collision arithmetic,
   complete DMA chains, shared skeletal conversion, movie callback/input
-  lifetimes and bounded diagnostics. The 39-patch series has twenty-five
-  additions and 65 managed source paths.
+  lifetimes and bounded diagnostics. Upstream patches 0040/0041 retain the
+  VU census and experimental static lift; static lift remains off by default.
+  The 52-patch series covers 76 managed paths.
   Generator hunks must be applied to tools
   before generating the game; rebuilding only the runtime leaves stale
   continuation registration.
-- **Verification:** the repository holds 24 standalone fixture packages,
+- **Verification:** the repository holds 30 standalone fixture packages,
   plus the separate audio-loopback diagnostic.
   The original 16 passed 26 CTest entries on Windows, along with seven
   patch-helper tests and earlier full-series application/reruns. The new

@@ -10,6 +10,11 @@ set(PARALLEL_GS_DIR "" CACHE PATH "Pinned ParallelGS checkout with its minimal s
 set(GPU_GS_SCANOUT_PRIOR_SOURCE "" CACHE FILEPATH "Optional unpatched gs_vulkan_scanout.cpp for field-history controls")
 option(GPU_GS_CPU_CONTROL_ONLY "Build synthetic two-CPU control without a Vulkan dependency" OFF)
 option(GPU_GS_BUILD_SYNTHETIC "Build controlled synthetic tests as well as the replay tool" ON)
+option(GPU_GS_FLUSH_COMPARE "Compare current Vulkan with a scratch prior-flush Vulkan backend" OFF)
+set(GPU_GS_FLUSH_PRIOR_DIR "" CACHE PATH "Optional frozen prior Vulkan backend/scanout source directory")
+if(GPU_GS_CPU_CONTROL_ONLY AND GPU_GS_FLUSH_COMPARE)
+    message(FATAL_ERROR "GPU_GS_FLUSH_COMPARE requires the actual hardware Vulkan backend")
+endif()
 if(NOT PS2RECOMP_DIR OR NOT EXISTS "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp")
     message(FATAL_ERROR "Set PS2RECOMP_DIR to the patched PS2Recomp checkout")
 endif()
@@ -91,6 +96,45 @@ else()
     target_sources(gs_gpu_replay PRIVATE "${GS_DIR}/gs_vulkan_backend.cpp"
         "${GS_DIR}/gs_vulkan_scanout.cpp")
     target_link_libraries(gs_gpu_replay PRIVATE parallel-gs)
+    if(GPU_GS_FLUSH_COMPARE)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        set(FLUSH_REFERENCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/flush-reference")
+        set(FLUSH_CONTROL_ARGS --runtime-dir "${PS2RECOMP_DIR}" --output-dir "${FLUSH_REFERENCE_DIR}")
+        if(GPU_GS_FLUSH_PRIOR_DIR)
+            list(APPEND FLUSH_CONTROL_ARGS --prior-dir "${GPU_GS_FLUSH_PRIOR_DIR}")
+        endif()
+        execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/make_flush_control.py"
+            ${FLUSH_CONTROL_ARGS} COMMAND_ERROR_IS_FATAL ANY)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/make_flush_control.py" "${GS_DIR}/gs_vulkan_backend.cpp"
+            "${GS_DIR}/gs_vulkan_scanout.cpp" "${GS_DIR}/gs_vulkan_scanout.h"
+            "${PS2RECOMP_DIR}/ps2xRuntime/include/runtime/gs/gs_vulkan_backend.h")
+        if(GPU_GS_FLUSH_PRIOR_DIR)
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${GPU_GS_FLUSH_PRIOR_DIR}/gs_vulkan_backend.cpp" "${GPU_GS_FLUSH_PRIOR_DIR}/gs_vulkan_backend.h"
+                "${GPU_GS_FLUSH_PRIOR_DIR}/gs_vulkan_scanout.cpp" "${GPU_GS_FLUSH_PRIOR_DIR}/gs_vulkan_scanout.h")
+        endif()
+        add_library(gs_vulkan_flush_reference OBJECT
+            "${FLUSH_REFERENCE_DIR}/gs_vulkan_backend_ref.cpp"
+            "${FLUSH_REFERENCE_DIR}/gs_vulkan_scanout_ref.cpp")
+        configure_fixture(gs_vulkan_flush_reference)
+        target_include_directories(gs_vulkan_flush_reference PRIVATE "${FLUSH_REFERENCE_DIR}")
+        target_link_libraries(gs_vulkan_flush_reference PRIVATE parallel-gs)
+        target_sources(gs_gpu_replay PRIVATE $<TARGET_OBJECTS:gs_vulkan_flush_reference>)
+        target_include_directories(gs_gpu_replay PRIVATE "${FLUSH_REFERENCE_DIR}")
+        target_compile_definitions(gs_gpu_replay PRIVATE PS2X_REPLAY_VULKAN_REF)
+        add_executable(gs_gpu_flush_equivalence flush_equivalence_tests.cpp
+            "${GS_DIR}/gs_vulkan_backend.cpp" "${GS_DIR}/gs_vulkan_scanout.cpp"
+            "${GS_DIR}/gs_cpu_backend.cpp" "${GS_DIR}/ps2_gs_memory.cpp"
+            $<TARGET_OBJECTS:gs_vulkan_flush_reference>)
+        configure_fixture(gs_gpu_flush_equivalence)
+        target_include_directories(gs_gpu_flush_equivalence PRIVATE "${FLUSH_REFERENCE_DIR}")
+        target_link_libraries(gs_gpu_flush_equivalence PRIVATE parallel-gs)
+        add_test(NAME gs_gpu_flush_equivalence COMMAND gs_gpu_flush_equivalence)
+        set_tests_properties(gs_gpu_flush_equivalence PROPERTIES TIMEOUT 120
+            ENVIRONMENT "PS2X_NO_WEAVE=0;PS2X_STATS=0"
+            FAIL_REGULAR_EXPRESSION "Thread does not exist in thread manager")
+    endif()
 endif()
 if(GPU_GS_BUILD_SYNTHETIC)
     add_test(NAME gs_gpu_synthetic COMMAND gs_gpu_synthetic)

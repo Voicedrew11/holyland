@@ -1,0 +1,751 @@
+From 34e2cc545bff42af0e08189f61d966196773bc2a Mon Sep 17 00:00:00 2001
+From: Fizban <35464167+Fiztba@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 02:55:32 -0400
+Subject: [PATCH 46/52] Accrue EE hardware time during native work and preserve
+ VBlank continuations
+
+Native guest calls could consume milliseconds while timer progress depended on field publication, leaving timer-based frame limiters behind elapsed time. Use a reset-anchored monotonic wall-time floor, drain credits through the next timer or scheduled-event boundary, and give deliverable timer handlers a service opportunity before crediting the next interval. Synchronize timer MMIO with elapsed time inside the active guest call so COUNT resets and MODE acknowledgments do not charge earlier work afterward.
+
+Keep each awakened VBlank continuation protected until it blocks again or leaves its invocation, with lifecycle cleanup and a two-field expiry for priority starvation. Joint host/cycle eligibility lets runnable guest work reach its next wait before future fields, retaining End/IRQ ordering, guest cycle offsets and the same-parity rate bound.
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |  26 ++
+ ps2xRuntime/include/runtime/ps2_memory.h      |   6 +
+ .../include/runtime/vblank_field_pacer.h      |  26 +-
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 405 ++++++++++++++----
+ ps2xRuntime/src/lib/ps2_memory.cpp            |   4 +
+ 5 files changed, 361 insertions(+), 106 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index bde8309..ac5f659 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -10,6 +10,7 @@
+ #include <cstdint>
+ #include <deque>
+ #include <functional>
++#include <limits>
+ #include <mutex>
+ #include <optional>
+ #include <thread>
+@@ -396,6 +397,13 @@ private:
+     void waitForEvent();
+     void scheduleEvent(uint64_t deadlineCycle, std::chrono::steady_clock::time_point hostDeadline, EeEvent event);
+     void updateNextDeadline();
++    [[nodiscard]] uint64_t wallClockTarget(std::chrono::steady_clock::time_point now) const noexcept;
++    void synchronizeTimerClock() noexcept;
++    [[nodiscard]] bool vblankStartHeld() const noexcept;
++    void addVBlankHandoff(const GuestThread &thread);
++    void completeVBlankHandoff(int threadId, uint64_t continuationSequence);
++    void retireVBlankHandoff(int threadId);
++    void expireVBlankHandoffs();
+     [[nodiscard]] bool hasReadyAtOrAbovePriority(int priority) const;
+     void renewTimeSlice();
+     void copyMainContextToRuntime();
+@@ -458,4 +466,22 @@ private:
+     mutable std::mutex m_snapshotMutex;
+     EeKernelSnapshot m_snapshot;
+     uint64_t m_snapshotSequence = 0;
++
++    struct VBlankHandoff
++    {
++        int threadId;
++        uint64_t continuationSequence;
++    };
++    // Executor-owned continuation holds are independent of the scheduled
++    // guest cycle timeline.
++    std::vector<VBlankHandoff> m_vblankHandoffs;
++    std::chrono::steady_clock::time_point m_vblankHandoffExpiry{};
++    std::atomic<int64_t> m_nextHostDeadlineTicks{std::numeric_limits<int64_t>::max()};
++    std::atomic<bool> m_wallDueField{false};
++    std::chrono::steady_clock::time_point m_hostClockEpoch{};
++    std::chrono::steady_clock::time_point m_nextWallClockCheck{};
++    std::chrono::steady_clock::time_point m_guestEntryTime{};
++    uint64_t m_guestEntryCycle = 0;
++    bool m_timerClockSynchronizing = false;
++    std::atomic<uint64_t> m_nextEligibleDeadlineCycle{0};
+ };
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 7f6170f..cdeabc2 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -320,6 +320,11 @@ public:
+     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
+     void resetEeTimers() noexcept;
+ 
++    // Optional executor-owned clock synchronization before timer MMIO.
++    // Standalone memory users retain the cycle-only hardware model.
++    using TimerClockCallback = std::function<void()>;
++    void setTimerClockCallback(TimerClockCallback cb) { m_timerClockCallback = std::move(cb); }
++
+     using GifPacketCallback = std::function<void(const uint8_t *, uint32_t)>;
+     void setGifPacketCallback(GifPacketCallback cb) { m_gifPacketCallback = std::move(cb); }
+     void setGifArbiter(GifArbiter *arbiter) { m_gifArbiter = arbiter; }
+@@ -456,6 +461,7 @@ public:
+     };
+ 
+     std::array<EeTimer, 4> m_eeTimers{};
++    TimerClockCallback m_timerClockCallback;
+     uint64_t m_ipuInputCredit = 0u;
+     bool m_ipuInputTagLoaded = false;
+     bool m_ipuInputEndAfterPayload = false;
+diff --git a/ps2xRuntime/include/runtime/vblank_field_pacer.h b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+index f1bdee0..b94f025 100644
+--- a/ps2xRuntime/include/runtime/vblank_field_pacer.h
++++ b/ps2xRuntime/include/runtime/vblank_field_pacer.h
+@@ -41,21 +41,17 @@ public:
+     TimePoint nextStartAfter(TimePoint emittedStart, unsigned nextParity) const
+     {
+         assert(nextParity < 2u && emittedStart >= m_epoch);
+-        // Keep a persistent nominal phase. Drop already missed host slots;
+-        // never queue them as extra guest events. Strictly pass this field's
+-        // End so a new Start cannot overtake its End in the host deadline gate.
+-        const TimePoint afterEnd = emittedStart + m_blankDuration;
+-        const auto nextSlot = (afterEnd - m_epoch) / m_period + 1;
+-        TimePoint next = m_epoch + m_period * nextSlot;
+-        if (m_hasLastStart[nextParity])
+-        {
+-            const TimePoint parityLimit = m_lastStart[nextParity] + m_period * 2;
+-            if (next < parityLimit)
+-                next = parityLimit;
+-        }
+-        // Do not round the parity limit up to another nominal phase slot:
+-        // that would reintroduce a whole unnecessary field of waiting.
+-        return next;
++        // The first unseen parity keeps the original full field spacing.
++        if (!m_hasLastStart[nextParity])
++            return emittedStart + m_period;
++
++        // Once both parities have emitted, retain their independent cadence
++        // without rounding late work to a host phase grid. No skipped host
++        // interval creates another guest event. Pass this field's End by one
++        // clock-duration tick so a new Start cannot overtake its End.
++        const TimePoint afterEnd = emittedStart + m_blankDuration + Duration{1};
++        const TimePoint parityLimit = m_lastStart[nextParity] + m_period * 2;
++        return afterEnd < parityLimit ? parityLimit : afterEnd;
+     }
+ 
+ private:
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 19fdd53..be6db43 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -11,6 +11,13 @@
+ #include <limits>
+ #include <stdexcept>
+ 
++#ifndef PS2X_VBLANK_HANDOFF
++#define PS2X_VBLANK_HANDOFF 1
++#endif
++#ifndef PS2X_VBLANK_HOST_ELIGIBILITY
++#define PS2X_VBLANK_HOST_ELIGIBILITY 1
++#endif
++
+ namespace
+ {
+     constexpr int KE_OK = 0;
+@@ -33,6 +40,35 @@ namespace
+     constexpr uint32_t WEF_OR = 0x01u;
+     constexpr uint32_t WEF_CLEAR = 0x10u;
+     constexpr uint32_t WEF_CLEAR_ALL = 0x20u;
++    // Normal timer IRQ invocations use a private tag namespace to retain a
++    // chronological service opportunity before more synthetic clock credit.
++    constexpr uint64_t kTimerClockCreditTag = 0x54494D4500000000ull;
++    bool wallClockCreditBlocked(uint32_t pendingTimers,
++            const std::deque<GuestInvocation> &pendingInvocations,
++            const std::unordered_map<int, GuestThread> &threads) noexcept
++    {
++        if (pendingTimers != 0u)
++            return true;
++        const auto timerInterrupt = [](const GuestInvocation &invocation)
++        {
++            return invocation.kind == GuestInvocationKind::Interrupt &&
++                (invocation.tag & 0xFFFFFFFFFFFFFFFCull) == kTimerClockCreditTag;
++        };
++        if (std::any_of(pendingInvocations.begin(), pendingInvocations.end(), timerInterrupt))
++            return true;
++        for (const auto &[id, owner] : threads)
++        {
++            (void)id;
++            // A handler which explicitly blocks cannot retain a synthetic-clock
++            // hold: its wait needs physical events. Normal instruction accounting
++            // is always active, including inside interrupt and nested functions.
++            if ((owner.status == EeThreadStatus::Running || owner.status == EeThreadStatus::Ready) &&
++                std::any_of(owner.invocations.begin(), owner.invocations.end(), timerInterrupt))
++                return true;
++        }
++        return false;
++    }
++
+     constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
+     constexpr auto kVBlankDuration = std::chrono::microseconds(500);
+     constexpr uint64_t kAlarmTickMicroseconds = 64u;
+@@ -81,6 +117,7 @@ EeScheduler::EeScheduler(PS2Runtime &runtime)
+ 
+ EeScheduler::~EeScheduler()
+ {
++    m_runtime.memory().setTimerClockCallback({});
+     requestStop();
+ }
+ 
+@@ -127,6 +164,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_eventSequence = 0;
+     m_invocationSequence = 0;
+     m_vsyncTick = 0;
++    m_vblankHandoffs.clear();
+     m_vsyncFlagAddress = 0;
+     m_vsyncTickAddress = 0;
+     m_gsVSyncCallback = 0;
+@@ -149,6 +187,12 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_threads.emplace(main.id, std::move(main));
+     m_readyQueues[0].push_back(kMainThreadId);
+     const auto hostEpoch = std::chrono::steady_clock::now();
++    m_hostClockEpoch = hostEpoch;
++    m_nextWallClockCheck = hostEpoch;
++    m_guestEntryTime = hostEpoch;
++    m_guestEntryCycle = m_eeCycle;
++    m_timerClockSynchronizing = false;
++    m_runtime.memory().setTimerClockCallback([this] { synchronizeTimerClock(); });
+     m_fieldPacer.reset(hostEpoch, kVBlankPeriod, kVBlankDuration);
+     scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
+                   m_fieldPacer.firstStart(),
+@@ -236,6 +280,10 @@ void EeScheduler::run()
+         {
+             if (!running->invocations.empty())
+             {
++                // A completion/cancellation/missing function may remove an
++                // awakened invocation without entering any guest function.
++                // Retire only that vanished identity; it cannot progress.
++                completeVBlankHandoff(running->id, running->invocations.back().sequence);
+                 GuestInvocation completed = std::move(running->invocations.back());
+                 running->invocations.pop_back();
+                 if (completed.onComplete)
+@@ -313,6 +361,8 @@ void EeScheduler::run()
+                 }
+             }
+             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
++            m_guestEntryTime = std::chrono::steady_clock::now();
++            m_guestEntryCycle = m_eeCycle;
+             m_guestExecuting.store(true, std::memory_order_release);
+             function(m_rdram, &context, &m_runtime);
+             m_guestExecuting.store(false, std::memory_order_release);
+@@ -331,6 +381,8 @@ void EeScheduler::run()
+             throw;
+         }
+ 
++        // Ordinary returns and call safe points keep the awakened identity
++        // alive. Its next blocking wait or terminal state retires the hold.
+         processPendingEvents();
+         if (m_rescheduleRequested && m_currentThreadId != 0)
+         {
+@@ -375,6 +427,7 @@ void EeScheduler::postEvent(EeEvent event)
+ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ {
+     accountCycles(cycles);
++    expireVBlankHandoffs();
+ 
+     if (m_checkpointPending.load(std::memory_order_acquire) ||
+         m_stopRequested.load(std::memory_order_acquire))
+@@ -382,8 +435,48 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+         return true;
+     }
+ 
+-    const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
+-    if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
++    // A generated continuation may poll for another field in this same
++    // function. Give its existing checkpoint a cooperative transfer once the
++    // held field is wall due. Never trigger the dispatcher's pre-entry check.
++    if (vblankStartHeld() && m_guestExecuting.load(std::memory_order_acquire))
++    {
++        const GuestThread *item = currentThread();
++        const uint64_t sequence = item && !item->invocations.empty()
++            ? item->invocations.back().sequence : 0u;
++        const bool waitingContinuation = item && std::any_of(m_vblankHandoffs.begin(), m_vblankHandoffs.end(),
++            [item, sequence](const VBlankHandoff &handoff)
++            { return handoff.threadId == item->id && handoff.continuationSequence == sequence; });
++        if (waitingContinuation)
++        {
++            const auto now = std::chrono::steady_clock::now();
++            std::lock_guard lock(m_eventMutex);
++            if (std::any_of(m_deadlines.begin(), m_deadlines.end(), [now](const ScheduledEvent &event)
++                { return event.event.type == EeEventType::VBlankStart && event.hostDeadline <= now; }))
++                return true;
++        }
++    }
++
++    const auto wallNow = std::chrono::steady_clock::now();
++    if (wallNow >= m_nextWallClockCheck &&
++        !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads))
++    {
++        m_nextWallClockCheck = wallNow + std::chrono::microseconds(64);
++        if (wallClockTarget(wallNow) > m_eeCycle)
++        {
++            m_checkpointPending.store(true, std::memory_order_release);
++            return true;
++        }
++    }
++    const auto nextHost = m_nextHostDeadlineTicks.load(std::memory_order_acquire);
++    if (nextHost != std::numeric_limits<int64_t>::max() &&
++        std::chrono::steady_clock::now().time_since_epoch().count() >= nextHost)
++    {
++        std::lock_guard lock(m_eventMutex);
++        updateNextDeadline();
++    }
++    const uint64_t nextEventCycle = m_nextEligibleDeadlineCycle.load(std::memory_order_acquire);
++    if (m_wallDueField.load(std::memory_order_acquire) ||
++        (nextEventCycle != 0u && m_eeCycle >= nextEventCycle))
+     {
+         m_checkpointPending.store(true, std::memory_order_release);
+         return true;
+@@ -595,6 +688,7 @@ int EeScheduler::suspendThread(int id, bool interruptSafe)
+         return KE_DORMANT;
+     }
+ 
++    retireVBlankHandoff(target->id);
+     ++target->suspendCount;
+     switch (target->status)
+     {
+@@ -1313,6 +1407,8 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
+                       << " handler=0x" << std::hex << handler.handler << std::dec << std::endl;
+         GuestInvocation invocation{};
+         invocation.kind = GuestInvocationKind::Interrupt;
++        if (!dmac && cause >= 9u && cause < 13u)
++            invocation.tag = kTimerClockCreditTag | (cause - 9u);
+         invocation.context.pc = handler.handler;
+         SET_GPR_U32(&invocation.context, 4, cause);
+         SET_GPR_U32(&invocation.context, 5, handler.argument);
+@@ -1393,6 +1489,8 @@ void EeScheduler::completeVSync(uint64_t tick)
+                                ? wait.fixedResult
+                                : static_cast<int>((tick - 1u) & 1u);
+         makeReady(*waiter, result, false);
++        if (waiter->status == EeThreadStatus::Ready)
++            addVBlankHandoff(*waiter);
+     }
+     publishSnapshot();
+ }
+@@ -1682,6 +1780,7 @@ void EeScheduler::makeRunning(GuestThread &item)
+ 
+ void EeScheduler::makeDormant(GuestThread &item)
+ {
++    retireVBlankHandoff(item.id);
+     removeReady(item);
+     removeFromWaitObject(item);
+     item.status = EeThreadStatus::Dormant;
+@@ -1726,6 +1825,10 @@ void EeScheduler::blockCurrent(EeWaitState wait)
+ {
+     GuestThread *self = currentThread();
+     assert(self != nullptr);
++    // A nested callback can explicitly wait before the awakened parent
++    // continuation runs. Retire that hold rather than stopping its new wait's
++    // clock. Merely running an unrelated callback is never an acknowledgment.
++    retireVBlankHandoff(self->id);
+     self->wait = std::move(wait);
+     self->status = self->suspendCount == 0 ? EeThreadStatus::Waiting : EeThreadStatus::WaitingSuspended;
+     m_currentThreadId = 0;
+@@ -1800,16 +1903,27 @@ void EeScheduler::processPendingEvents()
+         std::lock_guard lock(m_eventMutex);
+         pending.swap(m_events);
+     }
++    std::deque<EeEvent> held;
+     for (const EeEvent &event : pending)
+     {
+-        processEvent(event);
++        if (event.type == EeEventType::VBlankStart && vblankStartHeld())
++            held.push_back(event);
++        else
++            processEvent(event);
++    }
++    if (!held.empty())
++    {
++        std::lock_guard lock(m_eventMutex);
++        m_events.insert(m_events.begin(), held.begin(), held.end());
+     }
+ 
+     {
+         std::lock_guard lock(m_eventMutex);
+-        const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
++        const uint64_t nextEventCycle = m_nextEligibleDeadlineCycle.load(std::memory_order_acquire);
+         const bool cycleEventDue = nextEventCycle != 0u && m_eeCycle >= nextEventCycle;
+-        const bool pendingWork = !m_events.empty() || cycleEventDue || m_stopRequested.load(std::memory_order_acquire);
++        const bool pendingWork = std::any_of(m_events.begin(), m_events.end(), [this](const EeEvent &event)
++            { return event.type != EeEventType::VBlankStart || !vblankStartHeld(); }) ||
++            cycleEventDue || m_stopRequested.load(std::memory_order_acquire);
+         m_checkpointPending.store(pendingWork, std::memory_order_release);
+     }
+     applyPendingPreemption();
+@@ -1817,45 +1931,43 @@ void EeScheduler::processPendingEvents()
+ 
+ void EeScheduler::processDueDeadlines()
+ {
++    const auto creditNow = std::chrono::steady_clock::now();
+     for (;;)
+     {
++        expireVBlankHandoffs();
+         std::vector<ScheduledEvent> due;
+         std::chrono::steady_clock::time_point pacingDeadline{};
+         {
+             std::unique_lock lock(m_eventMutex);
+             const auto now = std::chrono::steady_clock::now();
+-            uint64_t pacedHardwareCycle = std::numeric_limits<uint64_t>::max();
++            // The hardware clock has a reset-anchored wall-time floor. Native
++            // SDK work advances that floor independently of field publication;
++            // already accounted guest cycles are never added a second time.
++            uint64_t creditTarget = wallClockTarget(creditNow);
+             for (const ScheduledEvent &item : m_deadlines)
+             {
+-                if ((item.event.type == EeEventType::VBlankStart ||
+-                     item.event.type == EeEventType::VBlankEnd) &&
+-                    item.hostDeadline <= now)
+-                {
+-                    pacedHardwareCycle = std::min(pacedHardwareCycle, item.deadlineCycle);
+-                }
++                if (item.hostDeadline <= now &&
++                    !(item.event.type == EeEventType::VBlankStart && vblankStartHeld()))
++                    creditTarget = std::min(creditTarget,
++                        std::max(m_eeCycle, item.deadlineCycle));
+             }
+-            if (pacedHardwareCycle != std::numeric_limits<uint64_t>::max() &&
+-                pacedHardwareCycle > m_eeCycle)
++            if (creditTarget > m_eeCycle &&
++                !wallClockCreditBlocked(m_pendingEeTimerInterrupts, m_pendingInvocations, m_threads))
+             {
+-                // Native SDK replacements omit the instruction loops which
+-                // consumed time on the EE. Ready polling threads must not keep
+-                // the independent display clock waiting for those instructions.
+-                // Advance only to the earliest wall-due field event, through
+-                // the same timer/IOP accounting used by idle deadline waits.
+-                // Retain the existing emission gates and exact field offsets.
+-                uint64_t remaining = pacedHardwareCycle - m_eeCycle;
++                const uint64_t timerBoundary = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
++                const uint32_t step = static_cast<uint32_t>(std::min({creditTarget - m_eeCycle,
++                    timerBoundary, static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())}));
+                 lock.unlock();
+-                while (remaining > 0u)
+-                {
+-                    const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(
+-                        remaining, std::numeric_limits<uint32_t>::max()));
+-                    accountCycles(step);
+-                    remaining -= step;
+-                }
++                accountCycles(step);
++                if (m_pendingEeTimerInterrupts != 0u)
++                    return;
+                 continue;
+             }
++            m_nextWallClockCheck = now + std::chrono::microseconds(64);
+             for (const ScheduledEvent &item : m_deadlines)
+             {
++                if (item.event.type == EeEventType::VBlankStart && vblankStartHeld())
++                    continue;
+                 if (item.deadlineCycle <= m_eeCycle &&
+                     (pacingDeadline == std::chrono::steady_clock::time_point{} ||
+                      item.hostDeadline < pacingDeadline))
+@@ -1872,6 +1984,15 @@ void EeScheduler::processDueDeadlines()
+ 
+             if (now < pacingDeadline)
+             {
++                // Cycle debt must not make a runnable continuation wait for
++                // a future wall field. It may need to register its next wait.
++                const bool ready = std::any_of(m_readyQueues.begin(), m_readyQueues.end(),
++                    [](const auto &queue) { return !queue.empty(); });
++                if (PS2X_VBLANK_HOST_ELIGIBILITY && (m_currentThreadId != 0 || ready || !m_pendingInvocations.empty()))
++                {
++                    updateNextDeadline();
++                    return;
++                }
+                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
+                                      { return !m_events.empty() ||
+                                               m_stopRequested.load(std::memory_order_acquire); });
+@@ -1885,7 +2006,8 @@ void EeScheduler::processDueDeadlines()
+             const auto pacedNow = std::chrono::steady_clock::now();
+             auto firstFuture = std::partition(m_deadlines.begin(), m_deadlines.end(),
+                                               [this, pacedNow](const ScheduledEvent &item)
+-                                              { return item.deadlineCycle <= m_eeCycle &&
++                                              { return !(item.event.type == EeEventType::VBlankStart && vblankStartHeld()) &&
++                                                       item.deadlineCycle <= m_eeCycle &&
+                                                        item.hostDeadline <= pacedNow; });
+             due.insert(due.end(),
+                        std::make_move_iterator(m_deadlines.begin()),
+@@ -1917,10 +2039,19 @@ void EeScheduler::processDueDeadlines()
+ 
+         for (ScheduledEvent &scheduled : due)
+         {
++            if (scheduled.event.type == EeEventType::VBlankStart && vblankStartHeld())
++            {
++                // Preserve the original sequence of an already extracted
++                // field, while allowing End and unrelated due events through.
++                std::lock_guard lock(m_eventMutex);
++                m_deadlines.push_back(std::move(scheduled));
++                updateNextDeadline();
++                continue;
++            }
+             processEvent(scheduled.event);
+             if (scheduled.event.type == EeEventType::VBlankStart)
+             {
+-                // Preserve nominal host phase without replaying missed fields.
++                // Continuous bounded host recovery, with waiter handoff before another Start.
+                 // Each parity remains at least two periods apart, and the next
+                 // Start cannot overtake this field's End. Guest deadlines and
+                 // their timer/IOP accounting still advance by exact offsets.
+@@ -2080,60 +2211,37 @@ void EeScheduler::waitForEvent()
+ {
+     std::unique_lock lock(m_eventMutex);
+     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+-    {
+         return;
+-    }
++    const auto now = std::chrono::steady_clock::now();
+     const uint64_t timerCycles = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
+-    const bool hasTimerDeadline = timerCycles != std::numeric_limits<uint64_t>::max();
+-    if (m_deadlines.empty() && !hasTimerDeadline)
++    auto hostDeadline = std::chrono::steady_clock::time_point::max();
++    for (const ScheduledEvent &item : m_deadlines)
++    {
++        if (item.event.type == EeEventType::VBlankStart && vblankStartHeld())
++            continue;
++        auto eligibleAt = item.hostDeadline;
++        if (item.deadlineCycle > m_eeCycle)
++            eligibleAt = std::max(eligibleAt,
++                m_hostClockEpoch + eeCyclesToHostDuration(item.deadlineCycle));
++        hostDeadline = std::min(hostDeadline, eligibleAt);
++    }
++    if (timerCycles != std::numeric_limits<uint64_t>::max())
++        hostDeadline = std::min(hostDeadline,
++            m_hostClockEpoch + eeCyclesToHostDuration(m_eeCycle + timerCycles));
++    if (vblankStartHeld())
++        hostDeadline = std::min(hostDeadline, m_vblankHandoffExpiry);
++    // Waiting never invents future cycle credit. The next dispatcher pass
++    // drains only elapsed wall time through normal timer/event boundaries.
++    if (hostDeadline <= now)
+     {
+-        m_eventCv.wait(lock, [this]()
+-                       { return !m_events.empty() || m_stopRequested.load(std::memory_order_acquire); });
++        m_checkpointPending.store(true, std::memory_order_release);
+         return;
+     }
+-
+-    uint64_t deadlineCycle = 0u;
+-    auto hostDeadline = std::chrono::steady_clock::time_point::max();
+-    if (!m_deadlines.empty())
+-    {
+-        const auto next = std::min_element(m_deadlines.begin(), m_deadlines.end(),
+-                                           [](const ScheduledEvent &left, const ScheduledEvent &right)
+-                                           {
+-                                               if (left.deadlineCycle != right.deadlineCycle)
+-                                               {
+-                                                   return left.deadlineCycle < right.deadlineCycle;
+-                                               }
+-                                               return left.sequence < right.sequence;
+-                                           });
+-        deadlineCycle = next->deadlineCycle;
+-        hostDeadline = next->hostDeadline;
+-    }
+-    if (hasTimerDeadline)
+-    {
+-        const auto timerHostDeadline = std::chrono::steady_clock::now() + eeCyclesToHostDuration(timerCycles);
+-        if (timerHostDeadline < hostDeadline)
+-        {
+-            deadlineCycle = m_eeCycle + timerCycles;
+-            hostDeadline = timerHostDeadline;
+-        }
+-    }
+-
+-    const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
+-                                               { return !m_events.empty() ||
+-                                                        m_stopRequested.load(std::memory_order_acquire); });
++    const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this] {
++        return !m_events.empty() || m_stopRequested.load(std::memory_order_acquire);
++    });
+     if (!signaled)
+-    {
+-        const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
+-        lock.unlock();
+-        uint64_t remaining = elapsed;
+-        while (remaining > 0u)
+-        {
+-            const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+-            accountCycles(step);
+-            remaining -= step;
+-        }
+         m_checkpointPending.store(true, std::memory_order_release);
+-    }
+ }
+ 
+ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2148,23 +2256,138 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+     m_eventCv.notify_one();
+ }
+ 
+-void EeScheduler::updateNextDeadline()
++bool EeScheduler::vblankStartHeld() const noexcept
++{
++#if PS2X_VBLANK_HANDOFF
++    return !m_vblankHandoffs.empty();
++#else
++    return false;
++#endif
++}
++
++void EeScheduler::addVBlankHandoff(const GuestThread &item)
+ {
+-    if (m_deadlines.empty())
++#if PS2X_VBLANK_HANDOFF
++    const uint64_t sequence = item.invocations.empty() ? 0u : item.invocations.back().sequence;
++    if (m_vblankHandoffs.empty())
++        m_vblankHandoffExpiry = m_fieldPacer.lastStart(static_cast<unsigned>(m_vsyncTick & 1u)) + kVBlankPeriod * 2;
++    std::erase_if(m_vblankHandoffs, [&item](const VBlankHandoff &handoff)
++        { return handoff.threadId == item.id; });
++    m_vblankHandoffs.push_back({item.id, sequence});
++    std::lock_guard lock(m_eventMutex);
++    updateNextDeadline();
++#else
++    (void)item;
++#endif
++}
++
++void EeScheduler::completeVBlankHandoff(int threadId, uint64_t continuationSequence)
++{
++    const size_t before = m_vblankHandoffs.size();
++    std::erase_if(m_vblankHandoffs, [threadId, continuationSequence](const VBlankHandoff &handoff)
++        { return handoff.threadId == threadId && handoff.continuationSequence == continuationSequence; });
++    if (before != m_vblankHandoffs.size())
+     {
+-        m_nextDeadlineCycle.store(0u, std::memory_order_release);
+-        return;
++        std::lock_guard lock(m_eventMutex);
++        updateNextDeadline();
+     }
+-    const auto it = std::min_element(m_deadlines.begin(), m_deadlines.end(),
+-                                     [](const ScheduledEvent &left, const ScheduledEvent &right)
+-                                     {
+-                                         if (left.deadlineCycle != right.deadlineCycle)
+-                                         {
+-                                             return left.deadlineCycle < right.deadlineCycle;
+-                                         }
+-                                         return left.sequence < right.sequence;
+-                                     });
+-    m_nextDeadlineCycle.store(it->deadlineCycle, std::memory_order_release);
++}
++
++void EeScheduler::retireVBlankHandoff(int threadId)
++{
++    const size_t before = m_vblankHandoffs.size();
++    std::erase_if(m_vblankHandoffs, [threadId](const VBlankHandoff &handoff)
++        { return handoff.threadId == threadId; });
++    if (before != m_vblankHandoffs.size())
++    {
++        std::lock_guard lock(m_eventMutex);
++        updateNextDeadline();
++    }
++}
++
++void EeScheduler::expireVBlankHandoffs()
++{
++    if (!m_vblankHandoffs.empty() && std::chrono::steady_clock::now() >= m_vblankHandoffExpiry)
++    {
++        // Physical priority scheduling permits a starved waiter to miss later
++        // fields. Never let its hold indefinitely stop the display clock or
++        // force a lower-priority guest thread to run.
++        m_vblankHandoffs.clear();
++        std::lock_guard lock(m_eventMutex);
++        updateNextDeadline();
++    }
++}
++
++void EeScheduler::updateNextDeadline()
++{
++    const ScheduledEvent *next = nullptr;
++    const ScheduledEvent *scheduledNext = nullptr;
++    const auto now = std::chrono::steady_clock::now();
++    int64_t nextHost = std::numeric_limits<int64_t>::max();
++    // Clock debt is checked at a bounded quantum in checkpointDue, rather
++    // than keeping the pre-entry dispatch checkpoint permanently asserted.
++    bool wallDueField = false;
++    for (const ScheduledEvent &item : m_deadlines)
++    {
++        // Keep public diagnostics on the unmodified scheduled cycle timeline;
++        // runnable checkpoint eligibility is a separate private cache.
++        if (!scheduledNext || item.deadlineCycle < scheduledNext->deadlineCycle ||
++            (item.deadlineCycle == scheduledNext->deadlineCycle && item.sequence < scheduledNext->sequence))
++            scheduledNext = &item;
++        if (item.event.type == EeEventType::VBlankStart && vblankStartHeld())
++            continue;
++        if (item.hostDeadline > now)
++        {
++            nextHost = std::min<int64_t>(nextHost, item.hostDeadline.time_since_epoch().count());
++            if (PS2X_VBLANK_HOST_ELIGIBILITY)
++                continue;
++        }
++        if (!next || item.deadlineCycle < next->deadlineCycle ||
++            (item.deadlineCycle == next->deadlineCycle && item.sequence < next->sequence))
++            next = &item;
++    }
++    m_nextDeadlineCycle.store(scheduledNext ? scheduledNext->deadlineCycle : 0u, std::memory_order_release);
++    m_nextEligibleDeadlineCycle.store(next ? next->deadlineCycle : 0u, std::memory_order_release);
++    m_nextHostDeadlineTicks.store(nextHost, std::memory_order_release);
++    m_wallDueField.store(wallDueField, std::memory_order_release);
++}
++
++uint64_t EeScheduler::wallClockTarget(std::chrono::steady_clock::time_point now) const noexcept
++{
++    if (m_hostClockEpoch == std::chrono::steady_clock::time_point{} || now <= m_hostClockEpoch)
++        return 0u;
++    const uint64_t ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++        now - m_hostClockEpoch).count());
++    // Split seconds before multiplication so a long-running game cannot wrap.
++    return (ns / 1000000000ull) * kEeClockHz +
++        ((ns % 1000000000ull) * kEeClockHz) / 1000000000ull;
++}
++
++void EeScheduler::synchronizeTimerClock() noexcept
++{
++    if (m_timerClockSynchronizing || std::this_thread::get_id() != m_executorThread ||
++        !m_guestExecuting.load(std::memory_order_acquire))
++        return;
++    m_timerClockSynchronizing = true;
++    const auto now = std::chrono::steady_clock::now();
++    const uint64_t ns = static_cast<uint64_t>(std::max<int64_t>(0,
++        std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_guestEntryTime).count()));
++    const uint64_t elapsed = (ns / 1000000000ull) * kEeClockHz +
++        ((ns % 1000000000ull) * kEeClockHz) / 1000000000ull;
++    const uint64_t target = std::min(wallClockTarget(now), m_guestEntryCycle + elapsed);
++    // Only time actually spent inside this guest/native call is consumed here.
++    // Historical dispatch debt retains its chronological ISR opportunities.
++    // Within a long native ISR, advance while EQUF remains latched before MODE
++    // clears it, preserving real hardware coalescing without replayed old IRQs.
++    uint64_t remaining = target > m_eeCycle ? target - m_eeCycle : 0u;
++    while (remaining != 0u)
++    {
++        const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(remaining,
++            std::numeric_limits<uint32_t>::max()));
++        accountCycles(step);
++        remaining -= step;
++    }
++    m_timerClockSynchronizing = false;
+ }
+ 
+ bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index f9a30a0..4b457bf 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1129,6 +1129,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+     {
++        if (m_timerClockCallback)
++            m_timerClockCallback();
+         EeTimer &timer = m_eeTimers[timerIndex];
+         switch (timerOffset)
+         {
+@@ -2496,6 +2498,8 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+     {
++        if (m_timerClockCallback)
++            m_timerClockCallback();
+         const EeTimer &timer = m_eeTimers[timerIndex];
+         switch (timerOffset)
+         {
+-- 
+2.55.0.windows.3
+
