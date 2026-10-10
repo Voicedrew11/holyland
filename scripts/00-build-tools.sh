@@ -12,6 +12,11 @@ if [ ! -d "$PS2X_REPO/.git" ]; then
 else
   echo "using existing $PS2X_REPO ($(git -C "$PS2X_REPO" rev-parse --short HEAD); pinned: $PS2X_REF)"
 fi
+# The generator changes in the patch series must reach the tool used by 02,
+# before any game C++ is generated. Runtime-only paths are excluded here.
+# Existing checkouts at another commit are rejected without a reset.
+python3 "$KFIV_ROOT/scripts/apply-patches.py" "$PS2X_REPO" \
+  --patch-dir "$KFIV_ROOT/patches" --base "$PS2X_REF" --tools-only
 cmake -S "$PS2X_REPO" -B "$PS2X_BUILD" \
   -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_RUNTIME=OFF \
   -DCMAKE_BUILD_TYPE=Release

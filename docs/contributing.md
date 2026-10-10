@@ -23,6 +23,17 @@ uncommitted edits there are lost).
 
 ## 2. Build and test
 
+The commands below are the existing Linux dev loop. Native Windows has a
+separate [build guide](windows.md), isolated `scripts/windows/Test-KFIV.ps1`
+and incremental `Rebuild-KFIV.ps1`. The [source-only fixtures](../tests/README.md)
+need no disc assets; their documented substituted boundaries are deliberate.
+Report Windows and Linux validation separately.
+
+When a patch changes the generator, rerun step 00 to build the patched
+tools, then regenerate the complete output in step 02 before staging it
+into the runtime checkout. Merely relinking a runner with an old
+`register_functions.cpp` cannot install the missing continuation entries.
+
 ```sh
 ./scripts/maintainer/dev-build.sh                       # incremental, -O2, no LTO
 ./scripts/maintainer/dev-run.sh runs/smoke 900          # headless, exits at tick 900

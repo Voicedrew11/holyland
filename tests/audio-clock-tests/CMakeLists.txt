@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.21)
+project(kfiv_audio_clock_tests LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/PackagePaths.cmake")
+
+set(PS2X_IOP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory("${PS2RECOMP_DIR}/ps2xIOP" ps2xIOP)
+add_executable(kfiv_audio_clock_tests audio_clock_tests.cpp)
+target_link_libraries(kfiv_audio_clock_tests PRIVATE ps2_iop)
+if(MSVC)
+    target_compile_options(kfiv_audio_clock_tests PRIVATE /W4 /permissive-)
+    target_compile_definitions(ps2_iop PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+enable_testing()
+add_test(NAME kfiv_audio_clock_regression COMMAND kfiv_audio_clock_tests)
+set_tests_properties(kfiv_audio_clock_regression PROPERTIES
+    ENVIRONMENT "PS2X_IOP_CLOCK_TRACE=;PS2X_SPU2_TRACE=" TIMEOUT 30)

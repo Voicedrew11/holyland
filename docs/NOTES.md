@@ -3,7 +3,63 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-10-03)
+## Current state (2026-10-09)
+
+- **Native Windows:** the USA build reaches the first gameplay area with
+  Verdite keyboard/mouse controls, repeatable inventory entry/back,
+  pause/resume and the capture-state glyph. Windows x64 MSVC 19.44,
+  `RelWithDebInfo`, `/O2 /fp:strict`, with FFmpeg enabled, was verified.
+  W changed player coordinates; Space reached raw and guest Square edge
+  state. Attack animation/damage was not independently measured.
+- **Audio:** music, effects and opening audio run through the original
+  SDRDRV/LIBSD modules and the new SPU2/host output. The current 248.218-second
+  isolated run reached tick 10,600 and exited normally after natural movie
+  completion and entry into gameplay. Its opening had no audio underruns;
+  final sampled counters showed 256 underrun frames after entering 3D,
+  with zero dropped frames. An installed 44.338-second keyboard smoke run
+  displayed the opening forest with zero sampled underruns/drops and no
+  clipping in its 43.84-second PCM capture. Earlier source/device/process
+  captures also showed no clipping.
+- **Movie presentation fixed:** decoded RGB already reached the correct
+  GS texture, but disabled depth testing still applied `ZTST=NEVER` and
+  rejected the original movie sprite. Patch 0023 honours `TEST.ZTE=0`
+  and suppresses depth writes, so opening pictures and audio now play.
+- **Remaining problems:** interlace combing appears in some movie frames,
+  3D rendering is partly wrong, and gameplay remains below full speed.
+  Audio hardware details are approximate; later areas, a full playthrough,
+  Windows controller integration and a real save/load roundtrip are unverified.
+- **Opening-screen controls:** after accepting brightness with F, the
+  movie has about 92 seconds of pictures and audio. Enter optionally sends
+  the original Start input to skip it; the original movie cleanup and area
+  loader still run. Earlier black-picture builds could look like a hang
+  with PC audio muted. PR publication did not itself change the executable.
+- **Source delivery:** existing patches 0001–0014 are unchanged. New
+  source-exported patches 0015–0023 include Windows build/input, loader
+  completion, capture UI, timing, native audio/MPEG and GS depth fixes.
+  The 23-patch series has nine additions affecting 42 source/license/build
+  files. Generator hunks must be applied to tools before generating the game;
+  rebuilding only the runtime leaves stale continuation registration.
+- **Verification:** the repository now holds 17 standalone fixture packages.
+  The original 16 passed 26 CTest entries on Windows, along with seven
+  patch-helper tests and earlier full-series application/reruns. The new
+  GS depth fixture passed 143,397 checks and 2/2 CTest entries; focused
+  upstream GS checks passed 51/51. The legacy GS suite remains 41/72 with
+  the same 31 failures in fixed and prior controls. Details and limits are in
+  [`windows-validation.md`](windows-validation.md); reproduction steps
+  are in [`windows.md`](windows.md).
+- **Upstream:** the reusable continuation-ownership fix is submitted as
+  [PS2Recomp #279](https://github.com/ran-j/PS2Recomp/pull/279). It extends
+  the merged standalone-entry fix #271 to overlapping wrappers, protects
+  explicit handlers and makes alias ownership deterministic. The pinned
+  Holyland series still needs its generator hunks until the pin moves.
+- **GS upstream:** the generic disabled-depth fix is submitted separately as
+  [PS2Recomp #280](https://github.com/ran-j/PS2Recomp/pull/280).
+- **Next work:** interlace presentation, 3D rendering correctness/performance
+  and broader game-path validation. The earlier Linux measurements and
+  findings below remain historical; the new series has not been retested
+  on Linux.
+
+## Earlier Linux state (2026-10-03)
 
 - **Stage:** reaches gameplay. Logos, title screen, menus and Brightness
   render correctly; New Game goes through the opening-movie code path and

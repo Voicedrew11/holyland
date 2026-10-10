@@ -23,6 +23,32 @@ commit); don't edit them by hand. Workflow:
 | `0012-vu1-cut-interpreter-overhead-…` | VU1 interpreter ~2.3x faster with the same cycle and flag model: precomputed hazard slots, immediate write-back for interlocked VF/VI/ACC registers, bitmask pipelines, cheaper exact FMAC flag checks. Verified identical to the previous interpreter on every microprogram of a KFIV session. |
 | `0013-gs-rasterize-asynchronously-on-a-pool-of-worker-thre…` | The GS CPU backend rasterizes on worker threads (`PS2X_GS_THREADS`, default min(8, cores/2)) while the EE keeps running, each worker owning interleaved screen stripes. Page-level hazard tracking, per-draw FP rounding mode. Verified pixel-identical to the previous backend on a recorded session. |
 | `0014-gs-opt-in-recorder-of-raster-backend-calls-…` | `PS2X_GS_RECORD=<file>` records every GS backend call, for replaying through two backends with `scripts/maintainer/gsreplay`. |
+| `0015-Allow-large-generated-runner-objects-…` | MSVC `/bigobj /MP` for the generated sources and a 16 MiB runner stack; the default Windows stack overflowed during initialization. |
+| `0016-Add-Verdite-style-keyboard-and-native-mouse-look-…` | Verdite keyboard mappings, menu input, focus-aware mouse capture, and a USA-ELF-guarded native look override. |
+| `0017-Bind-KFIV-IOP-heap-frees-…` | Bind the USA game's SDK heap-free entry to the existing IOP allocator so opening and closing inventory can reuse its buffers. |
+| `0018-Report-synchronous-IOP-file-completion-…` | Report successful completion through ioman's ioctl status word; the original loader otherwise waits for already completed host I/O. |
+| `0019-Add-optional-native-menu-loader-…` | Environment-gated loader/RPC diagnostics and bounded host-input injection for the native Windows test harness. |
+| `0020-Prevent-VBlank-catch-up-bursts-…` | Bound overdue host field catch-up after slow guest frames; the later audio patch also advances guest clocks to the earliest due field. |
+| `0021-Show-Verdite-mouse-capture-status-…` | The Verdite mouse glyph appears over the game picture when capture changes, with its MIT attribution. |
+| `0022-Restore-native-audio-…` | Native SPU2 mixing and host PCM output, original IOP driver timing/refills, shared CD sectors, guarded USA SDRDRV RPC, MPEG callback/lifecycle and IPU accounting, EE scheduling, and generated continuation registration. Includes the RecompOne SPU notice. |
+| `0023-Honor-disabled-GS-depth-testing-…` | Honour `TEST.ZTE=0`: bypass its stored depth comparison and suppress depth writes. The original opening-movie sprite now draws decoded texture pixels; inherited depth state cannot overwrite its texture. |
+
+The recompiler hunks in patch 0022 must also be applied **before generating
+the game**. `00-build-tools.sh` applies the tool portions through the shared
+patch helper before building `ps2_recomp`; `03-build-runner.sh` applies the
+complete series to the runner checkout. Windows setup uses the same series.
+Regenerate `output/` when adopting these patches; relinking old generated
+function tables alone does not add the missing continuation entries.
+
+The 23-patch series retains patches 0001–0014 unchanged. Nine additions,
+0015–0023, were exported from source commits on top of that series and
+change 42 source/license/build files. The
+native Windows validation and remaining movie/rendering limitations are
+recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
+The generator fix is proposed in
+[PS2Recomp #279](https://github.com/ran-j/PS2Recomp/pull/279), and the
+disabled-depth fix separately in
+[PS2Recomp #280](https://github.com/ran-j/PS2Recomp/pull/280).
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
 license, as are the maintainer tools built from its sources
