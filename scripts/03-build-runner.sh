@@ -36,10 +36,8 @@ rm -rf "$GAMEDIR/_build"
 git clone "$PS2X_REPO" "$GAMEDIR/_build/repo"
 git -C "$GAMEDIR/_build/repo" checkout "$PS2X_REF"
 git -C "$GAMEDIR/_build/repo" submodule update --init --recursive
-for p in "$KFIV_ROOT"/patches/*.patch; do
-  git -C "$GAMEDIR/_build/repo" apply "$p"
-  echo "applied $(basename "$p")"
-done
+python3 "$KFIV_ROOT/scripts/apply-patches.py" "$GAMEDIR/_build/repo" \
+  --patch-dir "$KFIV_ROOT/patches" --base "$PS2X_REF"
 cp "$GAMEDIR"/output/*.h "$GAMEDIR/_build/repo/ps2xRuntime/include/"
 # find+cp: 28k files exceed the shell's max argument list for a plain glob
 find "$GAMEDIR/output/" -maxdepth 1 -name '*.cpp' -exec cp -t "$GAMEDIR/_build/repo/ps2xRuntime/src/runner/" {} +

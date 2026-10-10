@@ -1,101 +1,91 @@
-# KFIV-PC — King's Field: The Ancient City (PC port via static recompilation)
+# KFIV-PC — King's Field: The Ancient City
 
-Native PC port of **King's Field: The Ancient City** (FromSoftware, 2002,
-US release `SLUS-20318`) built with
-[PS2Recomp](https://github.com/ran-j/PS2Recomp), a PlayStation 2 static
-recompiler that translates the game's MIPS R5900 ELF into C++ and runs it
-against a portable runtime: no emulation loop, a real native binary.
+A native PC port of **King's Field: The Ancient City** (FromSoftware, USA
+`SLUS-20318`) built with [PS2Recomp](https://github.com/ran-j/PS2Recomp).
+The recompiler translates the game's MIPS R5900 executable into C++ compiled
+for the host CPU. The supporting runtime still interprets IOP and VU1 code
+and renders through a software GS.
 
-> **You must supply your own disc image.** This repo contains no game data.
-> You recompile from your legally owned copy of the US release; the build
-> checks the boot ELF's hash and refuses anything else.
+**Supply your own US disc image.** This repository contains tooling,
+function boundaries and patches, with no game executable, generated game
+code or disc assets. The build checks the boot ELF's hash.
 
-## Status: early, reaches gameplay but not playable yet
+## Current status
 
-- Recompiles cleanly: 28,008 functions, 27,719 recompiled, 289 SDK stubs,
-  **0 errors**.
-- Boots through EE/IOP init, loads the real IOP modules, and runs the game's
-  main loop. Keyboard and gamepad input reach the game.
-- Title screen, menus and the first 3D area render; 3D graphics are partly
-  wrong and the opening movie is black.
-- Below full speed in 3D areas (~13 of 30 fps on an 8-core desktop CPU):
-  the software GS rasterizes on worker threads; the VU1 interpreter is now
-  the bottleneck. Menus run at full speed.
-- No audio yet (not implemented in the PS2Recomp runtime). Not a complete
-  game yet.
+- Native Windows x64 boots into the first gameplay area. Title screens,
+  menus, movement, attack input, inventory and pause/resume have been checked.
+- Gameplay's vertical strip corruption is fixed: walls and sky now align
+  across the original framebuffer feedback passes, and scanout preserves
+  all 448 gameplay rows.
+- Music, sound effects and opening-movie audio play through the game's
+  sound driver and SPU2 implementation. The opening movie now displays its
+  pictures and ends naturally in gameplay. Enter optionally skips the
+  opening through the game's original Start input.
+- Final generation processed 28,429 functions: 28,161 recompiled, 268 SDK
+  stubs, 1,352 JR/JALR fallback warnings and **zero errors**.
+- Broader rendering accuracy remains unverified and performance is below full speed.
+  The movie can show interlace combing. Audio hardware behaviour is
+  approximate in places. Later areas, a full playthrough and saving/loading
+  at a real save point remain unverified.
 
-Details and open questions: [`docs/NOTES.md`](docs/NOTES.md).
+See [Windows validation](docs/windows-validation.md) for the tested compiler,
+source-only regressions, capture evidence and practical limits. Earlier
+Linux findings remain in [the work log](docs/NOTES.md).
 
-## How it works (N64Recomp model)
+## Build from your disc
 
-This repo ships the tooling and the per-game data; you recompile from your own
-disc. The generated C++ is the game's own code translated, so it is never
-distributed. The per-game data in [`kfiv/`](kfiv) is small:
+For native Windows, follow [the Windows guide](docs/windows.md). It uses
+Visual Studio 2022, a pinned PS2Recomp checkout and separate directories for
+the tools, runtime build and private game files.
 
-- `config.toml`: recompiler config with the SDK stub list;
-- `SLUS_203.18.functions.csv`: function boundaries (from a Ghidra analysis), so
-  **you don't need Ghidra**;
-- `SLUS_203.18.sha256`: the exact boot ELF this data matches.
-
-## Quick start (Linux)
-
-1. Put your disc image in [`disc/`](disc) (it is git-ignored), or anywhere.
-2. Install the prerequisites in [`docs/building.md`](docs/building.md).
-3. Run:
+The existing Linux workflow remains available:
 
 ```sh
-./scripts/00-build-tools.sh                          # once: build PS2Recomp tools
+./scripts/00-build-tools.sh
 ./scripts/01-extract.sh "disc/King's Field The Ancient City.iso"
-./scripts/02-recompile.sh                            # expect errors: 0
-./scripts/03-build-runner.sh                         # long link step
+./scripts/02-recompile.sh
+./scripts/03-build-runner.sh
 ./scripts/04-run.sh
 ```
 
-Everything generated (unpacked disc, C++ output, runner build) goes to
-`~/.local/share/kfiv-pc` by default, outside this repo. Pass a game dir as the
-last argument to any script to change it. Full walkthrough, controls and
-troubleshooting: [`docs/building.md`](docs/building.md).
+Read [the Linux build guide](docs/building.md) first. Generated files default
+to `~/.local/share/kfiv-pc`, outside this repository. The new runtime and
+generator changes were validated on native Windows; their Linux build has
+not yet been retested.
+
+The tools build applies generator-affecting patches **before** generation.
+Rebuild the recompiler and regenerate the complete output after updating
+those patches, including `register_functions.cpp`.
 
 ## Contributing
 
-Runtime fixes are kept as `patches/` on top of a pinned PS2Recomp commit. The
-dev loop (persistent checkout, incremental build, headless test runs,
-exporting patches) is in [`docs/contributing.md`](docs/contributing.md);
-open problems are in [`docs/NOTES.md`](docs/NOTES.md). Using an AI coding
-agent? Point it at [`AGENTS.md`](AGENTS.md).
+Runtime and generator fixes are an ordered [patch series](patches/README.md)
+of 26 patches on top of PS2Recomp commit `c5a9d02`. The existing 14 patches
+are retained; twelve additions cover Windows input, audio, movie and
+gameplay-rendering fixes, with bounded opt-in GS diagnostics.
+Read [the development
+workflow](docs/contributing.md), [source-only tests](tests/README.md) and
+[agent instructions](AGENTS.md). All game-derived output stays private.
 
 ## Layout
 
-```
-KFIV-PC/
-├── kfiv/             per-game data: config, function map, ELF hash
-├── patches/          patches applied to PS2Recomp at runner build time
-├── scripts/          00-build-tools .. 04-run (end users), maintainer/ (dev loop, Ghidra-side)
-├── disc/             put your disc image here (contents git-ignored)
-├── docs/
-│   ├── building.md     step-by-step build and run guide
-│   ├── contributing.md changing the runtime: dev checkout, build, test, patches
-│   ├── maintainers.md  regenerating the function map (Ghidra)
-│   └── NOTES.md        work log: findings, ruled-out avenues
-├── AGENTS.md         orientation and rules for AI coding agents (CLAUDE.md imports it)
-├── .recomp.json      project descriptor (PS2Recomp game-project format)
-└── LICENSE           MIT (patches/ are GPL-3.0, derived from PS2Recomp)
-```
+| Path | Contents |
+|---|---|
+| `kfiv/` | Recompiler configuration, Ghidra function map and exact boot ELF hash |
+| `patches/` | Runtime, Windows build and generator fixes for the pinned base |
+| `scripts/` | Linux workflow and shared safe patch application helper |
+| `scripts/windows/` | Native Windows configuration, staging, rebuild, launch and test helpers |
+| `tests/` | Synthetic source-only regressions and Windows audio capture diagnostic |
+| `docs/` | Build guides, development workflow, validation and historical findings |
 
-## Next steps
-
-1. Confirm textures and text render after the GIF fix; triage what the first
-   in-game screens expose.
-2. Per-game overrides via PS2Recomp's `PS2_REGISTER_GAME_OVERRIDE`, keyed by
-   ELF metadata, never global hacks.
-3. Upstream the runtime fixes in `patches/` to PS2Recomp.
-4. Packaging, once it is playable.
+The repository tooling is MIT. PS2Recomp-derived patches and the tests are
+GPL-3.0; the adapted RecompOne SPU implementation retains its MIT notice.
 
 ## Acknowledgments
 
-- [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j (GPL-3.0),
-  inspired by N64Recomp; ELF parsing via ELFIO, TOML via toml11, formatting
-  via fmt; runtime reference PCSX2.
-- Methodology informed by
-  [ps2recomp-workbench](https://github.com/phmdacosta/ps2recomp-workbench)
-  (Windows-focused; this repo adapts it to Linux).
+- [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j, inspired by
+  N64Recomp, with PCSX2 as a runtime reference.
+- [Verdite](https://github.com/Voicedrew11/verdite3) by Voicedrew, whose
+  RecompOne SPU implementation informed the working sound path.
+- [ps2recomp-workbench](https://github.com/phmdacosta/ps2recomp-workbench)
+  for the original Windows setup methodology.

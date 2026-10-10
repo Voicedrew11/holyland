@@ -1,0 +1,45 @@
+cmake_minimum_required(VERSION 3.21)
+project(kfiv_gs_depth_tests LANGUAGES CXX)
+
+set(PS2RECOMP_DIR "" CACHE PATH "Patched PS2Recomp checkout")
+if(NOT PS2RECOMP_DIR OR NOT EXISTS "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp")
+    message(FATAL_ERROR "Set PS2RECOMP_DIR to a patched PS2Recomp source checkout")
+endif()
+set(GS_SOURCE_DIR "${PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
+find_package(Threads REQUIRED)
+
+function(add_gs_depth_test target backend_source)
+    add_executable(${target} gs_depth_tests.cpp "${backend_source}"
+        "${GS_SOURCE_DIR}/ps2_gs_memory.cpp" "${GS_SOURCE_DIR}/gs_trace.cpp")
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    target_include_directories(${target} PRIVATE "${PS2RECOMP_DIR}/ps2xRuntime/include" "${GS_SOURCE_DIR}")
+    target_link_libraries(${target} PRIVATE Threads::Threads)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /bigobj /fp:strict)
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endfunction()
+
+add_gs_depth_test(kfiv_gs_depth_tests "${GS_SOURCE_DIR}/gs_cpu_backend.cpp")
+
+# Remove only the ZTE fix in a scratch source copy. This executable must fail
+# the same real-backend tests, proving that the disabled-depth cases catch it.
+file(READ "${GS_SOURCE_DIR}/gs_cpu_backend.cpp" BACKEND_TEXT)
+string(REPLACE "\r\n" "\n" BACKEND_TEXT "${BACKEND_TEXT}")
+set(FIXED_TEST "    // Disabling TEST.ZTE bypasses depth testing and also prevents depth writes.\n    // The stored ZTST value does not apply while the test is disabled.\n    const bool ztestEnabled = ((ctx.test >> 16) & 1u) != 0u;\n    const uint32_t ztestMethod = ztestEnabled ? static_cast<uint32_t>((ctx.test >> 17) & 3u) : 1u;")
+set(FIXED_WRITE "    if (ztestEnabled && writeMask.writeDepth && !ctx.zbuf.zmask)")
+string(FIND "${BACKEND_TEXT}" "${FIXED_TEST}" TEST_OFFSET)
+string(FIND "${BACKEND_TEXT}" "${FIXED_WRITE}" WRITE_OFFSET)
+if(TEST_OFFSET LESS 0 OR WRITE_OFFSET LESS 0)
+    message(FATAL_ERROR "Review the controlled removal against the current GS depth implementation")
+endif()
+string(REPLACE "${FIXED_TEST}" "    const uint32_t ztestMethod = static_cast<uint32_t>((ctx.test >> 17) & 3u);" CONTROL_TEXT "${BACKEND_TEXT}")
+string(REPLACE "${FIXED_WRITE}" "    if (writeMask.writeDepth && !ctx.zbuf.zmask)" CONTROL_TEXT "${CONTROL_TEXT}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gs_cpu_backend_prior.cpp" "${CONTROL_TEXT}")
+add_gs_depth_test(kfiv_gs_depth_prior_control "${CMAKE_CURRENT_BINARY_DIR}/gs_cpu_backend_prior.cpp")
+
+enable_testing()
+add_test(NAME kfiv_gs_disabled_depth_regression COMMAND kfiv_gs_depth_tests)
+add_test(NAME kfiv_gs_prior_disabled_depth_control COMMAND kfiv_gs_depth_prior_control)
+set_tests_properties(kfiv_gs_disabled_depth_regression kfiv_gs_prior_disabled_depth_control PROPERTIES TIMEOUT 30)
+set_tests_properties(kfiv_gs_prior_disabled_depth_control PROPERTIES WILL_FAIL TRUE)

@@ -1,5 +1,9 @@
 # Building and running (Linux)
 
+For native Windows, use [`windows.md`](windows.md). The new input/audio
+series was verified on Windows; the Linux workflow below has not been
+retested with these additions.
+
 You need a legally owned disc image of the US release (`SLUS-20318`) and the
 tools below. You do **not** need Ghidra: the function map is committed in
 `kfiv/`. (Regenerating it is a maintainer task, see
@@ -41,6 +45,11 @@ outside this repo.
 
 ## What each step does
 
+- **Build tools**: requires a checkout at the pinned commit and applies the
+  generator portions of the patch series before compiling `ps2_recomp`.
+  The helper verifies completed phases on reruns and refuses a different
+  HEAD or changed managed files rather than resetting them. Use a separate
+  pinned checkout if your existing tools checkout holds other work.
 - **Extract**: unpacks the disc with a stdlib-only ISO9660 reader and checks
   `SLUS_203.18` against `kfiv/SLUS_203.18.sha256`. A different release fails
   here, because the function map only matches that exact build. `DUMMY*.OUT`
@@ -58,11 +67,18 @@ outside this repo.
   files from its working directory, so the script runs from the game dir.
   Memory cards (`mc0/`, `mc1/`) are created there too.
 
-## Controls (keyboard)
+## Controls
 
-WASD/arrows = d-pad + stick, X/Space = cross, C/Esc = circle, Z = square,
-V = triangle, Q/E = L1/R1, Shifts = L2/R2, Enter = Start, Tab = Select.
-Gamepads work if connected.
+The new series uses the Verdite bindings, verified on native Windows:
+W/S move forward/back, A/D strafe, arrows move/turn and select menu entries,
+Space attacks, F uses/confirms (hold to run), Q casts magic, Tab/Escape opens
+the menu or goes back, Enter pauses, and Right Shift sends Select.
+
+Click in gameplay to engage mouse look; that first click is consumed.
+Left/right/middle mouse attack/cast/use. In menus, left mouse confirms the
+current selection, right mouse goes back, and the wheel selects entries.
+Escape/menu, pause and focus loss release capture; the small Verdite glyph
+shows its state. Menu/pause return restores capture if it was engaged.
 
 ## Troubleshooting
 
