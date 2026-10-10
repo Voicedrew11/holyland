@@ -38,6 +38,8 @@ output/
 _build/
 out/
 build/
+test-builds/
+scripts/windows/runs/
 
 # Emulated memory cards + local game data dirs
 mc0/
@@ -53,6 +55,8 @@ ghidra_project/
 # Local notes / hashes that may reference personal paths
 game.properties
 *.log
+__pycache__/
+*.pyc
 
 # OS / editor noise
 .DS_Store

@@ -3,7 +3,42 @@
 Per-game memory: current blocker, findings, and ruled-out avenues. Rewrite in
 place as state changes; link session logs at the point they support.
 
-## Current state (2026-10-03)
+## Current state (2026-10-09)
+
+- **Native Windows:** the USA build reaches the first gameplay area with
+  Verdite keyboard/mouse controls, repeatable inventory entry/back,
+  pause/resume and the capture-state glyph. Windows x64 MSVC 19.44,
+  `RelWithDebInfo`, `/O2 /fp:strict`, with FFmpeg enabled, was verified.
+- **Audio:** music, effects and opening audio run through the original
+  SDRDRV/LIBSD modules and the new SPU2/host output. A 233-second isolated
+  run reached natural MPEG program end and returned to gameplay before
+  later scripted pause input. Sampled counters showed no underruns/drops;
+  source/device/process captures showed no clipping.
+- **Remaining problems:** the movie picture is black, 3D rendering is
+  partly wrong, and gameplay remains below full speed. Audio hardware
+  details are approximate; later areas, a full playthrough, Windows
+  controller integration and a real save/load roundtrip are unverified.
+- **Source delivery:** existing patches 0001–0014 are unchanged. New
+  source-exported patches 0015–0022 include Windows build/input, loader
+  completion, capture UI, timing and native audio/MPEG fixes. Generator
+  hunks must be applied to tools before generating the game; rebuilding
+  only the runtime leaves stale continuation registration.
+- **Verification:** all 16 relocated fixture packages passed 26 CTest
+  entries on Windows, along with seven patch-helper tests and actual
+  full-series application/reruns. Details and limits are in
+  [`windows-validation.md`](windows-validation.md); reproduction steps
+  are in [`windows.md`](windows.md).
+- **Upstream:** the reusable continuation-ownership fix is submitted as
+  [PS2Recomp #279](https://github.com/ran-j/PS2Recomp/pull/279). It extends
+  the merged standalone-entry fix #271 to overlapping wrappers, protects
+  explicit handlers and makes alias ownership deterministic. The pinned
+  Holyland series still needs its generator hunks until the pin moves.
+- **Next work:** movie presentation, 3D rendering correctness/performance
+  and broader game-path validation. The earlier Linux measurements and
+  findings below remain historical; the new series has not been retested
+  on Linux.
+
+## Earlier Linux state (2026-10-03)
 
 - **Stage:** reaches gameplay. Logos, title screen, menus and Brightness
   render correctly; New Game goes through the opening-movie code path and

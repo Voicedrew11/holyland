@@ -26,7 +26,7 @@ commit); don't edit them by hand. Workflow:
 | `0015-Allow-large-generated-runner-objects-…` | MSVC `/bigobj /MP` for the generated sources and a 16 MiB runner stack; the default Windows stack overflowed during initialization. |
 | `0016-Add-Verdite-style-keyboard-and-native-mouse-look-…` | Verdite keyboard mappings, menu input, focus-aware mouse capture, and a USA-ELF-guarded native look override. |
 | `0017-Bind-KFIV-IOP-heap-frees-…` | Bind the USA game's SDK heap-free entry to the existing IOP allocator so opening and closing inventory can reuse its buffers. |
-| `0018-Report-synchronous-IOP-file-completion-…` | Report the completed byte count and status through ioman's ioctl path; the original loader otherwise waits for already completed host I/O. |
+| `0018-Report-synchronous-IOP-file-completion-…` | Report successful completion through ioman's ioctl status word; the original loader otherwise waits for already completed host I/O. |
 | `0019-Add-optional-native-menu-loader-…` | Environment-gated loader/RPC diagnostics and bounded host-input injection for the native Windows test harness. |
 | `0020-Prevent-VBlank-catch-up-bursts-…` | Bound overdue host field catch-up after slow guest frames; the later audio patch also advances guest clocks to the earliest due field. |
 | `0021-Show-Verdite-mouse-capture-status-…` | The Verdite mouse glyph appears over the game picture when capture changes, with its MIT attribution. |
