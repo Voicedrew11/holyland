@@ -29,6 +29,14 @@ done
 # (new mtime, same content), so a timestamp test would rebuild everything.
 rsync -c -d --exclude=register_functions.cpp --include='*.cpp' --exclude='*' \
   "$GAMEDIR/output/" "$REPO/ps2xRuntime/src/runner/"
+# Lifted VU1 programs (vu1lift.py output in <game-dir>/vu1lift), same way.
+mkdir -p "$REPO/ps2xRuntime/src/vu1lift"
+if [ -d "$GAMEDIR/vu1lift" ]; then
+  rsync -c -d --delete --include='*.cpp' --exclude='*' \
+    "$GAMEDIR/vu1lift/" "$REPO/ps2xRuntime/src/vu1lift/"
+else
+  rm -f "$REPO/ps2xRuntime/src/vu1lift/"*.cpp
+fi
 # Ninja and mold are used when installed (mold: 0.1 s link instead of 0.8 s).
 # KFIV_CCACHE=1 builds through ccache: a fresh tree, a reverted header edit
 # or a switch back to an earlier branch then rebuilds in ~1 min instead of

@@ -68,3 +68,9 @@ Thumbs.db
 # Runtime traces
 ps2_log.txt
 *_log.txt
+
+# Dev-loop run output (frame dumps, logs, dumped microcode)
+runs/
+
+# Python bytecode
+__pycache__/

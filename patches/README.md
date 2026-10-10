@@ -48,6 +48,8 @@ commit); don't edit them by hand. Workflow:
 | `0037-Service-starved-MPEG-input-consumers-without-accepti.patch` | Service registered NODATA callbacks when a rejected video PES blocks an active decoder with no picture queued. Retain the packet for explicit retry and preserve cancellation, picture counts and accepted-byte accounting. Once-per-VSync service approximates the original SDK's empty-IPU wait loop, which services after every 5,001 polls. |
 | `0038-Preserve-active-IPU-input-channel-fields-when-suspen.patch` | Ignore STR-one CHCR writes while IPU input is active; a STR-zero write clears only STR and preserves the fetched tag and channel fields. STOP creates no credit, restart or completion; subsequent starts use the resumed-tag classification from patch 0036. |
 | `0039-Clear-MPEG-callback-registrations-when-recreating-a-.patch` | Successful Create clears only that MPEG handle's stream and ordinary callback registrations, preventing duplicate compressed-payload copies after recreation. Reset retains registrations; unrelated handles and cancellation guards remain intact. |
+| `0040-vu1-opt-in-microcode-census-…` | `PS2X_VU1_CENSUS=1` records which VU1 microprograms run, from which entry, and their cycle share. Off by default; does not change behaviour. |
+| `0041-vu1-run-lifted-microprogram-segments-…` | `PS2X_VU1_LIFT=1` runs VU1 microprogram segments that were lifted to C++ (`scripts/maintainer/vu1lift.py`), bit-exact with the interpreter including cycles, flags and XGKICK output. Off by default; with no lifted sources built in it does nothing. |
 
 The recompiler hunks in patches 0022 and 0029 must be applied **before generating
 the game**. `00-build-tools.sh` applies the tool portions through the shared
@@ -56,8 +58,9 @@ complete series to the runner checkout. Windows setup uses the same series.
 Regenerate `output/` when adopting these patches; relinking old generated
 function tables alone does not add the missing continuation entries.
 
-The 39-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
-0015–0039, were exported from source commits on top of that series. The
+The 41-patch series retains patches 0001–0014 unchanged. Twenty-five additions,
+0015–0039, were exported from source commits on top of that series;
+0040–0041 (VU1 census and lift) are exported on top of 0039. The
 native Windows validation and remaining movie/rendering limitations are
 recorded in [`docs/windows-validation.md`](../docs/windows-validation.md).
 The generator fix is proposed in
@@ -73,5 +76,6 @@ and separate LGPL small-transfer patch with
 
 PS2Recomp is GPL-3.0, so these patches are derivative works under the same
 license, as are the maintainer tools built from its sources
-(`scripts/maintainer/gsreplay`, `scripts/maintainer/dev/vu1-verify.patch`).
+(`scripts/maintainer/gsreplay`, `scripts/maintainer/dev/vu1-verify.patch`,
+`scripts/maintainer/vu1lift.py`).
 The rest of this repository is MIT (see `../LICENSE`).
