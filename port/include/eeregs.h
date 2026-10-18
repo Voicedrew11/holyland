@@ -27,6 +27,7 @@
 /* GIF. */
 #define GIF_CTRL EE_HW(volatile int *, 0x10003000) /* derived name */
 #define GIF_STAT EE_HW(volatile int *, 0x10003020)
+#define GIF_STAT_APATH 0xC00 /* derived name; bits 10-11, the path in use (0 = idle) */
 
 /* VIF0. */ /* derived name */
 #define VIF0_FBRST EE_HW(volatile int *, 0x10003810)
@@ -82,6 +83,12 @@
 #define D9_QWC EE_HW(volatile int *, 0x1000D420)
 #define D9_TADR EE_HW(volatile int *, 0x1000D430)
 #define D9_SADR EE_HW(volatile int *, 0x1000D480)
+
+/* Dn_CHCR fields, shared by every channel's control register. */ /* derived name */
+#define D_CHCR_DIR_FROM_MEMORY 0x1 /* bit0: DIR, the transfer reads memory */
+#define D_CHCR_MOD_CHAIN 0x4       /* bits2-3: MOD, DMAtag chain */
+#define D_CHCR_TTE 0x40            /* bit6: TTE, transfer the DMAtag too */
+#define D_CHCR_STR 0x100           /* bit8: STR, start; set while the transfer runs */
 
 /* DMA controller. */
 #define D_CTRL EE_HW(volatile int *, 0x1000E000)

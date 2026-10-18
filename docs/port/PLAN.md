@@ -40,7 +40,7 @@ Still open:
 - Model work areas are sized for the PS2's worst case, not for the real part counts.
 - PS2 float rounding is not modelled beyond the division and square-root edge cases.
 
-## Step 1: boot to a new game, headless
+## Step 1: boot to a new game, headless (done, branch `port/step1`)
 
 Get from boot to the first map of a new game with nothing drawn, by making the stand-ins in
 `port/sdk` real enough:
@@ -61,6 +61,28 @@ New Game → first map. The same run then checks every later change.
 
 Also to verify here: map scripts read and write the player, game-state and view-ray blocks by PS2
 byte offsets. These are now translated to the PC fields (`Script_GameVarAt`).
+
+Result:
+- `tools/boot_test.py` runs the boot twice with `tests/newgame.pad` and checks it: the title loads at
+  vblank 122, New Game's opening movie ends at 714, `099.map` loads at 716, and from frame 1 the
+  player stands in map 0x63 with 50 HP. The opening walk runs, and the player has control at frame
+  370. The two runs give the same log, and so do gcc and clang. 6000 vblanks take about 0.4 s.
+- Every map's script was scanned for game-variable operands. The game-state block is used only
+  below 0x40 and the player block only below 0x200, which are the same offsets on both. The
+  view-ray block is never used. So no retail script reaches a translated field, and the translation
+  is a safeguard only.
+- Three game bugs the PC exposed, fixed in `patches/`:
+  - `File_Read` reads whole sectors, so a file read into a static table runs past its end. Retail
+    lays the tables out so that is harmless. The save icon buffer is enlarged to whole sectors.
+    GCC builds with `-fno-toplevel-reorder` so globals keep the order they are defined in.
+  - An effect with no magic reads `fx_table[0xFFFF]`, 17 MB past the table: that is game RAM on
+    the PS2, and is read there (`EE_RAM_AT`).
+  - `ModelInstance.found_record` takes an aligned 128-bit store, so it is 16-byte aligned.
+
+Still open:
+- Movies are not played: each one ends at once (`sceMpeg*`).
+- The memory card is always empty, so saving and loading are untested.
+- The sound driver's RPC answers every command with "done" and plays nothing.
 
 ## Step 2: graphics, stage 1 (the first picture)
 

@@ -154,7 +154,7 @@ index 776b6fcf38c121adb61b5bd7f71f66cf3e2e5f53..0fc207406cb0572d27c8b6336329bc88
 -
  #endif
 diff --git a/src/game/core/game.c b/src/game/core/game.c
-index 450bcaa4c8868738fe0cbac3bd5b4f350496ef98..11ec387c35c4b180b43012d11bb3dea2a41b1411 100644
+index d4e2e54d6aa8e85e295a7f7cd6ad2dc89aa8bb46..95d1ea09789b6312c1dceb1fba29cd9206b281cc 100644
 --- a/src/game/core/game.c
 +++ b/src/game/core/game.c
 @@ -1,6 +1,7 @@
@@ -564,7 +564,7 @@ index 450bcaa4c8868738fe0cbac3bd5b4f350496ef98..11ec387c35c4b180b43012d11bb3dea2
              for (k = 0; k < 2; k++) {
                  for (corner_col = 0; corner_col < 2; corner_col++) {
 diff --git a/src/game/core/game.h b/src/game/core/game.h
-index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e75a51ff2 100644
+index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e5502fb8a53c 100644
 --- a/src/game/core/game.h
 +++ b/src/game/core/game.h
 @@ -39,6 +39,7 @@ typedef struct {
@@ -588,8 +588,8 @@ index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e
  /* the viewers MapViewer_Run runs, indexed by picked_viewer (ui/map_viewer.c), 0xC bytes each */
  typedef struct {
      void (*run)(void);              /* 0x00 loops until the viewer is left */
--    int unk04;                      /* 0x04 */
-+    int (*unk04)(int *x, int *y);   /* 0x04 finds where the player's marker goes on the picture; 0 for the King's Map */
+-    int locate_player_fn;           /* 0x04 the function that finds the player's marker on the picture */
++    int (*locate_player_fn)(int *x, int *y);   /* 0x04 finds where the player's marker goes on the picture; 0 for the King's Map */
      int count;                      /* 0x08 the number of pictures; viewer_picture stays below it */
  } ViewerEntry;
  
@@ -621,7 +621,7 @@ index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e
      u64 unk08;                      /* 0x08 */
  } PoolSlotRegisters;
  
--/* a PoolSlot with unk58 and unk60 as the one member they are copied as */
+-/* a PoolSlot with tex0 and unk60 as the one member they are copied as */
 -typedef struct {
 -    char pad00[0x58];
 -    PoolSlotRegisters registers;    /* 0x58 */
@@ -650,21 +650,21 @@ index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e
      u16 layer_count;                /* 0x02 */
      u16 slot;                       /* 0x04 the PoolSlot the node poses (PoolNode_Pose) */
      char pad06[0x2A];
--    void *unk30;                    /* 0x30 a file offset until PoolNodeFile_Relocate has run, like the next three */
+-    void *keys;                     /* 0x30 the animation keys, 0x80 bytes each */
 -    RelocLayer *layers;             /* 0x34 */
--    void *unk38;                    /* 0x38 */
--    void *unk3C;                    /* 0x3C */
-+    EEWord unk30;                   /* 0x30 (PoolNodeKey *) a file offset until PoolNodeFile_Relocate has run, like the next three */
+-    void *child;                    /* 0x38 the child node, posed by this node's slot */
+-    void *sibling;                  /* 0x3C the next sibling node, posed by the parent matrix */
++    EEWord keys;                    /* 0x30 (PoolNodeKey *) the animation keys, 0x80 bytes each; a file offset until PoolNodeFile_Relocate has run */
 +    EEWord layers;                  /* 0x34 (RelocLayer *) */
-+    EEWord unk38;                   /* 0x38 (RelocEntry *) the first child */
-+    EEWord unk3C;                   /* 0x3C (RelocEntry *) the next sibling */
++    EEWord child;                   /* 0x38 (RelocEntry *) the child node, posed by this node's slot */
++    EEWord sibling;                 /* 0x3C (RelocEntry *) the next sibling node, posed by the parent matrix */
  } RelocEntry;
 +LAYOUT_SIZE(RelocEntry, 0x40);
 +LAYOUT_OFFSET(RelocEntry, slot, 0x04);
-+LAYOUT_OFFSET(RelocEntry, unk30, 0x30);
++LAYOUT_OFFSET(RelocEntry, keys, 0x30);
 +LAYOUT_OFFSET(RelocEntry, layers, 0x34);
-+LAYOUT_OFFSET(RelocEntry, unk38, 0x38);
-+LAYOUT_OFFSET(RelocEntry, unk3C, 0x3C);
++LAYOUT_OFFSET(RelocEntry, child, 0x38);
++LAYOUT_OFFSET(RelocEntry, sibling, 0x3C);
  
  /* a file whose offsets PoolNodeFile_Relocate turns into pointers: a 0x10-byte header, then the entries */
 +/* overlay: a node file */
@@ -760,10 +760,10 @@ index 34f898920068d12d61fa1aa9b674bfa060d1f18c..feb2ef0e97b90f39939033dca99bf73e
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f03a11332 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..6d7d9f8641236eec81f4050452f0deaf50af8d02 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
-@@ -19,6 +19,12 @@
+@@ -20,6 +20,12 @@
  #include "player/magic_ladder.h"
  #include "ui/menu_screens.h"
  #include "gfx/packet.h"
@@ -776,7 +776,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  
  void Game_ResetProgress(void);
  void Player_ResetForNewGame(void);
-@@ -63,7 +69,7 @@ void Game_StepFade(void);
+@@ -64,7 +70,7 @@ void Game_StepFade(void);
  void GameLoop_UpdateCamera(void);
  void GameLoop_SetCameraMatrices(int, int);
  void GsDraw_QueueVu1Matrix(void *);
@@ -785,7 +785,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  void Packet_WaitForSend(void);
  void MapItem_UpdatePickup(void);
  void Map_RunFreeCamera(void);
-@@ -73,7 +79,6 @@ void GameLoop_UpdatePause(void);
+@@ -74,7 +80,6 @@ void GameLoop_UpdatePause(void);
  void Input_StopRumble(void);
  void Sound_SetBgmVolume(int);
  void Sound_SetBankVolumes(int);
@@ -793,7 +793,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  int Sound_BgmLoadCanYield(void);
  void File_CloseAll(void);
  void Wobble_AdvanceSines(void);
-@@ -101,33 +106,21 @@ void Game_BlendScreenOffsetDown(void);
+@@ -102,33 +107,21 @@ void Game_BlendScreenOffsetDown(void);
  void Game_BlendScreenOffsetUpDown(void);
  void Game_BlendPreviousFrame(int);
  void Game_ShiftScreenByViewTurn(void);
@@ -830,7 +830,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  int Sound_LoadBgm(int, int);
  void MapLoad_RequestHold(void);
  int MapLoad_IsHeld(void);
-@@ -144,7 +137,6 @@ void MapViewer_Run(void);
+@@ -145,7 +138,6 @@ void MapViewer_Run(void);
  void File_Lock(void);
  void MapLoad_Release(void);
  void GameLoop_ClearBothBuffers(void);
@@ -838,7 +838,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -155,17 +147,21 @@ void Input_ResumeRumble(void);
+@@ -156,17 +148,21 @@ void Input_ResumeRumble(void);
  extern PlayerState player_state;
  extern int save_loaded;          /* nonzero: a saved game was loaded */
  extern u8 game_options[0x10];
@@ -864,7 +864,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -302,10 +298,10 @@ void GameLoop_Run(int arg) {
+@@ -303,10 +299,10 @@ void GameLoop_Run(int arg) {
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
      }
@@ -879,7 +879,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -331,7 +327,7 @@ void GameLoop_Run(int arg) {
+@@ -332,7 +328,7 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -888,7 +888,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
      int tinted = FALSE;
      f32 tint;
      int red;
-@@ -508,9 +504,8 @@ int GameLoop_DrawFrame(int arg) {
+@@ -509,9 +505,8 @@ int GameLoop_DrawFrame(int arg) {
      }
      Hud_Draw();
      if (map_draw_state.screen_fill_alpha > 0) {
@@ -900,7 +900,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -728,7 +723,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +724,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:
@@ -910,7 +910,7 @@ index 6ef36eb365c759aa3f8c32b653f997121d5a1861..52483bc12abc7202c0813e7d14bdfd3f
              sound_load_queue.pending_map_slot = NULL;
              sound_load_queue.step = 0;
 diff --git a/src/game/core/game_state.c b/src/game/core/game_state.c
-index e409c7abd420f686699848e8ebbd48c4384e6716..9c5794eff93c252684c776941329159b36a58ca1 100644
+index 407b2126da923cd66fbbe6defac43ca9fcfe89d1..0091216ce5212fe97525241e9e46cf9e5d37d122 100644
 --- a/src/game/core/game_state.c
 +++ b/src/game/core/game_state.c
 @@ -3,15 +3,10 @@
@@ -932,8 +932,8 @@ index e409c7abd420f686699848e8ebbd48c4384e6716..9c5794eff93c252684c776941329159b
 +   sway, 0x10 falling items, ...), save_area_name_id save_area. */
  
  /* 0x38CCA0 default light block for map objects: one light (125, 110, 83) */
- MapSlotUnk10Lights map_object_default_lights __attribute__((aligned(16))) = {
-@@ -20,7 +15,6 @@ MapSlotUnk10Lights map_object_default_lights __attribute__((aligned(16))) = {
+ MapLightBlockLights map_object_default_lights __attribute__((aligned(16))) = {
+@@ -20,7 +15,6 @@ MapLightBlockLights map_object_default_lights __attribute__((aligned(16))) = {
  };
  
  MapSlot map_slots[2] = { 0 }; /* 0x38CD20 the two loaded maps */
@@ -942,7 +942,7 @@ index e409c7abd420f686699848e8ebbd48c4384e6716..9c5794eff93c252684c776941329159b
  /* 0x38CDE0 the prop of each prop id, per map slot */
  MapProp *map_slot_props[2][0x100] = { 0 };
 diff --git a/src/game/core/ini.c b/src/game/core/ini.c
-index 6278d5bb761c0fc6120341fc985ab5e4d56dce69..caec40b9de95e16f3c162888498f2b5e6320370e 100644
+index 3199611a138e9e19f0d3ed94e30ff231afcda6fc..ae4771b0058be189e29726bcad4f40f6b79236ee 100644
 --- a/src/game/core/ini.c
 +++ b/src/game/core/ini.c
 @@ -2,6 +2,9 @@
@@ -999,7 +999,7 @@ index 6278d5bb761c0fc6120341fc985ab5e4d56dce69..caec40b9de95e16f3c162888498f2b5e
          for (i = 0; ini_keys[i].handler != NULL; i++) {
              if (strncmp(line, ini_keys[i].key, strlen(ini_keys[i].key)) == 0) {
 diff --git a/src/game/core/load.h b/src/game/core/load.h
-index b0ea2074174287612ca3ebb5270848af2b22a68f..5926e7b502d0c33bb96de291650dff0f9ff142aa 100644
+index b2eb16e2ec86377ea0df1ae412d01092e8c1facb..a4c733caa329f90ce87f26c68c50b9914f227e63 100644
 --- a/src/game/core/load.h
 +++ b/src/game/core/load.h
 @@ -17,15 +17,20 @@ typedef struct {
@@ -1013,26 +1013,26 @@ index b0ea2074174287612ca3ebb5270848af2b22a68f..5926e7b502d0c33bb96de291650dff0f
 -    int *ctl;                       /* 0x00 */
 -    char pad04[0x0C];
 -    s32 result;                     /* 0x10 handle, negative until loaded */
--    s32 unk14;                      /* 0x14 */
--    s32 unk18;                      /* 0x18 */
--    s32 unk1C;                      /* 0x1C */
+-    s32 sequence_index;             /* 0x14 the sequence bank the load started */
+-    s32 load_index;                 /* 0x18 the voice or sequence bank the load fills */
+-    s32 spu_dest;                   /* 0x1C where the samples go in sound memory */
 +    int *ctl;                       /* 0x00 LoadJob.buffers */
-+    char pad04[offsetof(LoadJob, unk10) - sizeof(int *)];
++    char pad04[offsetof(LoadJob, voice_index) - sizeof(int *)];
 +    s32 result;                     /* 0x10 LoadJob.unk10: the voice, negative until loaded */
-+    s32 unk14;                      /* 0x14 LoadJob.unk14: the sequence */
-+    s32 unk18;                      /* 0x18 the first word of LoadJob.pad18 */
-+    s32 unk1C;                      /* 0x1C its second word (0xBB810 in bgm_load_job) */
++    s32 sequence_index;             /* 0x14 LoadJob.unk14: the sequence bank the load started */
++    s32 load_index;                 /* 0x18 the first word of LoadJob.pad18: the voice or sequence bank the load fills */
++    s32 spu_dest;                   /* 0x1C its second word (0xBB810 in bgm_load_job): where the samples go in sound memory */
  } IopLoadJob;
-+_Static_assert(offsetof(IopLoadJob, result) == offsetof(LoadJob, unk10), "IopLoadJob is not LoadJob");
-+_Static_assert(offsetof(IopLoadJob, unk14) == offsetof(LoadJob, unk14), "IopLoadJob is not LoadJob");
-+_Static_assert(offsetof(IopLoadJob, unk18) == offsetof(LoadJob, pad18), "IopLoadJob is not LoadJob");
-+_Static_assert(offsetof(IopLoadJob, unk1C) == offsetof(LoadJob, pad18) + 4, "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, result) == offsetof(LoadJob, voice_index), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, sequence_index) == offsetof(LoadJob, sequence_index), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, load_index) == offsetof(LoadJob, pad18), "IopLoadJob is not LoadJob");
++_Static_assert(offsetof(IopLoadJob, spu_dest) == offsetof(LoadJob, pad18) + 4, "IopLoadJob is not LoadJob");
  
  /* LoadRequest.target (Sound_ReadRequestFile) */
  typedef struct {
 @@ -51,7 +56,8 @@ typedef struct ChunkUpload {
      char pad00[0x08];
-     int unk08;                      /* 0x08 set to -1 when done */
+     int file_handle;                /* 0x08 the file being read; -1 when done */
      ChunkPoolNode *pool_node;       /* 0x0C the node whose buffer holds the chunk list */
 -    char pad10[0x08];
 +    void *pad10[2];                 /* 0x10 LinkNode.unk10 and next (ui/link.h): the same nodes are viewed as both, so
@@ -1154,7 +1154,7 @@ index 608506cc622493703936bd88ef11da2034bd713b..a609b448fd8abef996a5fc7af38eea53
      time->min = BCD2DEC(time->min);
      time->hour = BCD2DEC(time->hour);
 diff --git a/src/game/core/system.c b/src/game/core/system.c
-index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334cb9d46fb 100644
+index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d99315223987599682 100644
 --- a/src/game/core/system.c
 +++ b/src/game/core/system.c
 @@ -6,6 +6,13 @@
@@ -1169,9 +1169,9 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
 +#include <libvu0.h>
 +#include <sifdev.h>
  
- #define PAD_BUTTON_START 0x0008
- 
-@@ -15,9 +22,10 @@ extern int map_file_area_size;          /* the size it is given for that heap */
+ extern int opening_movie_skipped; /* set once START was pressed during the opening movie */
+ extern char *map_file_area;        /* the memory area the movie player is given as its heap */
+@@ -13,9 +20,10 @@ extern int map_file_area_size;          /* the size it is given for that heap */
  extern int context1_buffer_half;          /* the half of the first double buffer in use; each swap flips it */
  extern int context2_buffer_half;          /* the same for the second */
  extern int D_00446F80;
@@ -1185,7 +1185,7 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
  extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
  extern char ending_movie_path[];        /* "cdrom0:\DATA\KF4ED.PSS;1" */
  extern char staff_roll_movie_path[];    /* "cdrom0:\DATA\KF4STAFF.PSS;1" */
-@@ -30,31 +38,20 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
+@@ -28,31 +36,20 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
  extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
  extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
  
@@ -1219,7 +1219,7 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
  
  /* The opening movie's per-frame callback (given to Movie_Play by Movie_PlayOpening): polls the controller
     and returns TRUE, ending the movie, when START is pressed. */
-@@ -74,7 +71,7 @@ void Movie_PlayOpening(void) {
+@@ -72,7 +69,7 @@ void Movie_PlayOpening(void) {
      char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
  
      opening_movie_skipped = 0;
@@ -1228,7 +1228,7 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
      temp = (s64)0xC000 << 17;
      game_dbuff_clear_color[0] = temp;
      game_dbuff_clear_color[30] = temp;
-@@ -87,7 +84,7 @@ void Movie_PlayOpening(void) {
+@@ -85,7 +82,7 @@ void Movie_PlayOpening(void) {
      context1_buffer_half = 0;
      context2_buffer_half = 0;
      GsDraw_ResetDrawTarget();
@@ -1237,7 +1237,7 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
      func_001095D8();
      context1_buffer_half = 1;
      context2_buffer_half = 1;
-@@ -105,9 +102,9 @@ void Movie_PlayEnding(void) {
+@@ -103,9 +100,9 @@ void Movie_PlayEnding(void) {
  
      opening_movie_skipped = 0;
      if ((game_status_flags[0] >> 11) & 1) {
@@ -1249,7 +1249,7 @@ index 2fc12c81e9568fcd1ba6013f75dd9e4aad00fa87..da79ed3f8cc21e157b524319875b2334
      }
      sceGsSyncV(0);
      sceGsSyncV(0);
-@@ -159,7 +156,7 @@ void Display_Init(void) {
+@@ -157,7 +154,7 @@ void Display_Init(void) {
      Display_BuildProjection(projection_matrix, 512.0f, 1.0f, 65536.0f);
      context1_buffer_half = 0;
      D_00446F80 = 0;

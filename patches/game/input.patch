@@ -1,5 +1,5 @@
 diff --git a/src/game/input/input.c b/src/game/input/input.c
-index 9daa750b3ae7e380317c30a768f6f8c044b8ff7e..00d7f3c2fecfbe19595c69d93faa21718ddd55ba 100644
+index 6f7a0421686a1c99053455fbe2c9fccedbf49a55..12fb0d5bfee20658b57deaa6c4f98b3d3454bb07 100644
 --- a/src/game/input/input.c
 +++ b/src/game/input/input.c
 @@ -1,7 +1,7 @@

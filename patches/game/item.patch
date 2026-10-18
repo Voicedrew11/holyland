@@ -1,5 +1,5 @@
 diff --git a/src/game/item/gold.c b/src/game/item/gold.c
-index dad960c8a82b9fd059fc5b03817ea976b23e0313..b660fa4a3fadd2dde13eab14297b84c15ea8ba7e 100644
+index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..bde2cf771f23595d319b9bdd95a6e54487bb74ea 100644
 --- a/src/game/item/gold.c
 +++ b/src/game/item/gold.c
 @@ -7,12 +7,12 @@
@@ -61,9 +61,9 @@ index dad960c8a82b9fd059fc5b03817ea976b23e0313..b660fa4a3fadd2dde13eab14297b84c1
 +        source = map_gold_model;
          Model_SetUpSkinned(model, &source, &work);
          copy_matrix((ModelMatrixQwords *)matrix, (ModelMatrixQwords *)identity_matrix);
--        model->light_block = (s32)&map_draw_state.unkC0;
-+        model->light_block = (sptr)&map_draw_state.unkC0;
-         model->fog_block = &map_draw_state.unkA0;
+-        model->light_block = (s32)&map_draw_state.current_light_block;
++        model->light_block = (sptr)&map_draw_state.current_light_block;
+         model->fog_block = &map_draw_state.current_fog_block;
 -        model->texture_data = (int)map_gold_texture;
 +        model->texture_data = (sptr)map_gold_texture;
          model->texture_slot = 2;
@@ -103,18 +103,18 @@ index 0594b38176e84720f45364fd6332ff2ec1cbb15c..269c10ab4d7dbd97a10bd25fe11ee901
 +GameDefinition *const weapon_name_defs = item_name_defs + 150;
 +GameDefinition *const worn_name_defs = item_name_defs + 220;
 diff --git a/src/game/item/map_item.c b/src/game/item/map_item.c
-index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b2e3fb2b1 100644
+index 2ee95737a736c28f019ae010355d1f3e29f4f7df..05f2b15e1d906effcf3eb7a7b8eadf4a5bbd80ae 100644
 --- a/src/game/item/map_item.c
 +++ b/src/game/item/map_item.c
-@@ -7,6 +7,7 @@
- #include "model/linked_point.h"
+@@ -8,6 +8,7 @@
  #include "ui/message.h"
+ #include "input/pad.h"
  #include "map_object/map_object.h"
 +#include <string.h>
  
  void MapItem_ClearMap(int);
  s32 MapItem_Drop(s32, s32, s32, f32 *, f32, f32 *, f32 *, f32 *, u32);
-@@ -31,7 +32,7 @@ ItemNode *MapItem_Unlink(ItemNode *);
+@@ -32,7 +33,7 @@ ItemNode *MapItem_Unlink(ItemNode *);
  void Vector_Add(void *, void *, void *);
  int MapItem_GetFixedIndex(int, int);
  void Vector_Copy(void *, void *);
@@ -123,7 +123,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  int Collision_FindFloorBelow(f32, void *);
  float Angle_Wrap(float);
  int MapItem_UniqueNotCarried(int);
-@@ -62,7 +63,7 @@ void Vector_Subtract(void *, void *, void *);
+@@ -63,7 +64,7 @@ void Vector_Subtract(void *, void *, void *);
  int Angle_EaseToward(float, float *, int);
  int Player_CannotCarryItem(int);
  void Player_AddItem(int);
@@ -132,7 +132,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  
  extern GameDefinition item_name_defs[380];
  extern s32 item_drop_counter;
-@@ -81,7 +82,7 @@ extern int current_map_slot;
+@@ -82,7 +83,7 @@ extern int current_map_slot;
  extern u8 map_item_pickup_counts[0x80][0x40];
  extern const Vector4Arg enemy_drop_scale;
  extern MapLoadState map_load_state;
@@ -141,7 +141,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  extern MapDrawState map_draw_state;
  extern f32 identity_matrix[16];
  extern GameStatus game_status;
-@@ -90,8 +91,9 @@ extern EventRunner view_ray_status;
+@@ -91,8 +92,9 @@ extern EventRunner view_ray_status;
  extern f32 pickup_view_pitch;
  extern int pickup_move_frames;
  extern int pickup_frames_left;
@@ -153,7 +153,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  extern u8 item_counts[];
  extern u8 trade_stock_1[];
  extern u8 trade_stock_2[];
-@@ -108,9 +110,12 @@ static ItemNode object_items[2][32];          /* 0x5807C0 the items the player m
+@@ -109,9 +111,12 @@ static ItemNode object_items[2][32];          /* 0x5807C0 the items the player m
  static ModelInstance fixed_item_models[2][64];     /* 0x5816C0 the models of the fixed items */
  static ModelInstance dropped_item_models[2][16];     /* 0x58F6C0 the models of the dropped items */
  static ModelInstance object_item_models[2][32];     /* 0x592EC0 the models of the pickup items */
@@ -169,7 +169,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  static s8 fixed_item_by_id[2][0x100];             /* 0x5B5EC0 the node of each item slot, -1 for none */
  static f32 pickup_start_position[4];                   /* 0x5B60C0 where the item being picked up is */
  static f32 pickup_start_rotation[4];                   /* 0x5B60D0 its rotation */
-@@ -191,7 +196,7 @@ void MapItem_InitMap(int map) {
+@@ -192,7 +197,7 @@ void MapItem_InitMap(int map) {
              Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
              Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
              node->model->draw = (void (*)(ModelInstance *))MapItem_PrepareDraw;
@@ -178,7 +178,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
              node->model->texture_slot = 2;
              TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
          }
-@@ -312,7 +317,8 @@ int MapItem_PlaceFixed(int map, int index) {
+@@ -313,7 +318,8 @@ int MapItem_PlaceFixed(int map, int index) {
      Vector_Copy(&node->model->position, &node->def->position);
      Vector_Copy(&node->model->rotation, &node->def->rotation);
      Vector_Copy(&node->model->scale_x, &node->def->scale);
@@ -188,7 +188,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  }
  
  /* Puts the fixed item with this id of a map in place (MapItem_PlaceFixed). */
-@@ -336,7 +342,7 @@ s32 MapItem_DropFromEnemy(Entity *entity) {
+@@ -337,7 +343,7 @@ s32 MapItem_DropFromEnemy(Entity *entity) {
      memset(rotation, 0, sizeof(rotation));
      rotation[3] = 1.0f;
      scale = enemy_drop_scale;
@@ -197,7 +197,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
          // match: the low 16 bits of the 64-bit field, copied before the test
          item = value = *(u16 *)&entity->spawn_info->spawn_flags;
          if (value == 0xFFFF) {
-@@ -451,7 +457,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
+@@ -452,7 +458,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
      Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
      Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
      node->model->texture_slot = 2;
@@ -206,7 +206,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
      TextureTable_SetBasePointers(source->texture, 0x3B40, 0x3EC0);
      if (order == 0xFFFFFFFF) {
          order = item_drop_counter++;
-@@ -469,7 +475,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
+@@ -470,7 +476,7 @@ s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f3
      node->record->priority = priority;
      node->record->used = TRUE;
      node->record->order = order;
@@ -215,16 +215,16 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
      return TRUE;
  }
  
-@@ -511,7 +517,7 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
+@@ -512,7 +518,7 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
      model = &object_item_models[map][i];
      ITEM_NODE_MAP_BIT(node)->map = map;
      node->item = item;
--    node->unk08 = (s32)object;
-+    node->unk08 = object;
+-    node->map_object = (s32)object;
++    node->map_object = object;
      node->model = model;
      Vector_Copy(&model->position, position);
      Vector_Copy(&node->model->rotation, rotation);
-@@ -522,18 +528,18 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
+@@ -523,18 +529,18 @@ ItemNode *MapItem_PutOutForObject(int map, int item, void *position, void *rotat
      Model_SetTextureBase((char *)node->model, 0x3B40, 0x3EC0);
      Model_SetVertexColour(node->model, 0xFF, 0xFF, 0xFF, -1);
      node->model->texture_slot = 2;
@@ -242,57 +242,57 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
      ItemNode *node;
  
      for (node = lying_items; node != NULL; node = node->next) {
--        if (node->unk08 == object) {
-+        if ((void *)node->unk08 == object) {
+-        if (node->map_object == object) {
++        if ((void *)node->map_object == object) {
              return node;
          }
      }
-@@ -600,7 +606,7 @@ void MapItem_DrawAll(int with_picked) {
+@@ -601,7 +607,7 @@ void MapItem_DrawAll(int with_picked) {
          for (i = 0; i < count; i++, part++) {
              ModelMatrix_BuildPartLocal(node->model, part, part);
          }
--        node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
-+        node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
+-        node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->light_block];
++        node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->light_block];
          node->model->fog_block = &map_draw_state.fog_blocks[node->flags & 1][((MapRecordInfo *)node->map_record)->draw_block_index];
          LinkedPoint_FindHitsForModel(node->model);
          ModelTexture_SendForModel(node->model);
-@@ -653,7 +659,7 @@ void MapItem_DrawPicked(int hidden) {
+@@ -654,7 +660,7 @@ void MapItem_DrawPicked(int hidden) {
          sceVu0RotMatrixY((f32 *)part, (f32 *)part, wrap_angle(turn[1]));
          sceVu0TransMatrix((f32 *)part, (f32 *)part, offset);
      }
--    node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
-+    node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->unk71];
+-    node->model->light_block = (s32)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->light_block];
++    node->model->light_block = (sptr)&map_draw_state.light_blocks[node->flags & 1][map_slots[node->flags & 1].header->light_block];
      node->model->fog_block = &map_draw_state.fog_blocks[node->flags & 1][((MapRecordInfo *)node->map_record)->draw_block_index];
      LinkedPoint_FindHitsForModel(node->model);
      ModelTexture_SendForModel(node->model);
-@@ -689,7 +695,7 @@ int MapItem_IsPickable(ItemNode *node) {
+@@ -690,7 +696,7 @@ int MapItem_IsPickable(ItemNode *node) {
      if ((head != node) && (node->prev == 0) && (node->next == 0)) {
          return 0;
      }
--    object = (MapObject *)node->unk08;
-+    object = node->unk08;
+-    object = (MapObject *)node->map_object;
++    object = node->map_object;
      result = 1;
      if (object != 0) {
          result = MAP_OBJECT_DEF_KIND(object->definition) != 4;
-@@ -818,7 +824,7 @@ void MapItem_PickupTake(void) {
+@@ -819,7 +825,7 @@ void MapItem_PickupTake(void) {
      if (node->def != NULL && node->def->required_flag != 0) {
          map_item_pickup_counts[map_slots[node->flags & 1].tag][node->index]++;
-     } else if (node->unk08 != 0) {
--        MapObject_MarkEmptied((MapObject *)node->unk08);
-+        MapObject_MarkEmptied(node->unk08);
+     } else if (node->map_object != 0) {
+-        MapObject_MarkEmptied((MapObject *)node->map_object);
++        MapObject_MarkEmptied(node->map_object);
      } else if (node->record != NULL) {
          memset(node->record, 0, sizeof(DroppedItemRecord));
      }
-@@ -844,7 +850,7 @@ void MapItem_PickupPutBack(void) {
+@@ -845,7 +851,7 @@ void MapItem_PickupPutBack(void) {
      }
      Vector_Copy(&pickup_item->model->position, pickup_start_position);
      Vector_Copy(&pickup_item->model->rotation, pickup_start_rotation);
--    object = (MapObject *)pickup_item->unk08;
-+    object = pickup_item->unk08;
-     if (object != NULL && (object->state_flags & 0x10000) && object->definition->kind == 3) {
+-    object = (MapObject *)pickup_item->map_object;
++    object = pickup_item->map_object;
+     if (object != NULL && (object->state_flags & MAP_OBJECT_IN_USE) && object->definition->kind == 3) {
          MapItem_Unlink(pickup_item);
      }
-@@ -893,16 +899,17 @@ void *MapItem_FindModelSource(int slot, int key) {
+@@ -894,16 +900,17 @@ void *MapItem_FindModelSource(int slot, int key) {
      return NULL;
  }
  
@@ -314,7 +314,7 @@ index 473fc318ac00186753084828f5f3f61b1cb26e43..b17a155f50dc9df37c7415535bb2984b
  }
  
  /* Takes an item off the list of items lying about, frees its object and drop record links, and returns
-@@ -982,7 +989,7 @@ int MapItem_UniqueNotDropped(int item) {
+@@ -983,7 +990,7 @@ int MapItem_UniqueNotDropped(int item) {
  
      common = item_common_defs + item;
      for (i = 0; i < 0x80; i++) {

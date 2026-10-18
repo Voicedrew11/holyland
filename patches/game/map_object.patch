@@ -1,5 +1,5 @@
 diff --git a/src/game/map_object/chest.c b/src/game/map_object/chest.c
-index 930f00687e1ac305367af673e509390d1473c295..5260f63104b97a163d94d04e7d4b230db6c494b9 100644
+index 22c57f5f873812a6442640267f8592f88c9d1da3..2abd2ff5a45b1a599021b655fc66ce73e95bea78 100644
 --- a/src/game/map_object/chest.c
 +++ b/src/game/map_object/chest.c
 @@ -3,22 +3,22 @@
@@ -32,11 +32,11 @@ index 930f00687e1ac305367af673e509390d1473c295..5260f63104b97a163d94d04e7d4b230d
  extern EventRunner view_ray_status;
 @@ -36,7 +36,7 @@ void MapObject_UpdateItemHolder(MapObject *object) {
      if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
-         if (object->source->kind_param_0 != 0 && !(object->state_flags & 0x40000)) {
+         if (object->source->kind_param_0 != 0 && !(object->state_flags & MAP_OBJECT_EMPTIED)) {
              object->model->update_bone_points(object->model);
 -            MapItem_StartPickup((ModelNode *)MapItem_PutOutForObject(
 +            MapItem_StartPickup(MapItem_PutOutForObject(
-                 MAP_OBJECT_BYTES(object)->unk00 & 1, object->source->kind_param_0, (void *)object->model->get_point(object->model, 0),
+                 MAP_OBJECT_BYTES(object)->map_slot & 1, object->source->kind_param_0, (void *)object->model->get_point(object->model, 0),
                  &object->model->rotation, &unk_value, object));
          } else if (work[0] <= 0) {
 @@ -186,7 +186,7 @@ void MapObject_UpdateOpeningChest(MapObject *object) {
@@ -50,7 +50,7 @@ index 930f00687e1ac305367af673e509390d1473c295..5260f63104b97a163d94d04e7d4b230d
          work[1]--;
 @@ -194,7 +194,7 @@ void MapObject_UpdateOpenChest(MapObject *object) {
      if (((game_status_flags[0] >> 1) & 1) && faced_object[0] == object) {
-         if (!(object->state_flags & 0x40000) &&
+         if (!(object->state_flags & MAP_OBJECT_EMPTIED) &&
              ((source = MAP_OBJECT_WORDS(object))->kind_param_0 != 0 || source->kind_param_2 != 0)) {
 -            pickup = MapItem_FindForObject((int)object);
 +            pickup = MapItem_FindForObject(object);
@@ -67,13 +67,13 @@ index 930f00687e1ac305367af673e509390d1473c295..5260f63104b97a163d94d04e7d4b230d
      void *saved;
      int bit;
  
--    if ((event->flags & 0x2FF00) == 0x100 && mode != 0) {
-+    if ((event->state_flags & 0x2FF00) == 0x100 && mode != 0) {
+-    if ((event->flags & MAP_OBJECT_STEP_AND_ON_MASK) == 0x100 && mode != 0) {
++    if ((event->state_flags & MAP_OBJECT_STEP_AND_ON_MASK) == 0x100 && mode != 0) {
          saved = view_ray_status.current;
          bit = game_status.bit1;
          game_status.bit1 = 1;
 diff --git a/src/game/map_object/door.c b/src/game/map_object/door.c
-index 1e85b210fca8ac942cb10e092a0bc45a357f7d3e..85c8d585f698a99ae59eaa255a7eeee2f5a99140 100644
+index ca11e10ff92986756121d2db0239f82cd2f37acd..b3e4539659747ca1d43410cdeab2d1950a4def03 100644
 --- a/src/game/map_object/door.c
 +++ b/src/game/map_object/door.c
 @@ -1,6 +1,7 @@
@@ -132,7 +132,7 @@ index b05ea38ab06a70cba70cd70a8d9079ef2c902800..8c7a16a37718d992e72f114cb25b030b
          yaw = atan2f(-delta.x, -delta.z);
          part->position[0] = world.x;
 diff --git a/src/game/map_object/light.c b/src/game/map_object/light.c
-index be50307a738177dcf808089b98180ac3bc25d06c..bfff1f815106452ab4333297479967286b2276d5 100644
+index 9a588f29bf8faf3a2c193f5c5fa8ebf9c4ad7203..7c9aa87feec6b946fb176acd99967e9fa013add2 100644
 --- a/src/game/map_object/light.c
 +++ b/src/game/map_object/light.c
 @@ -1,6 +1,7 @@
@@ -144,7 +144,7 @@ index be50307a738177dcf808089b98180ac3bc25d06c..bfff1f815106452ab433329747996728
  
  /* Start handler of the light kind: makes a light of the colour in its source at
 diff --git a/src/game/map_object/map_object.c b/src/game/map_object/map_object.c
-index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227142755a7 100644
+index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..2dd0fca7e6d692a2c60464a070c9b1fd46b20fa5 100644
 --- a/src/game/map_object/map_object.c
 +++ b/src/game/map_object/map_object.c
 @@ -9,8 +9,8 @@
@@ -189,8 +189,8 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
          if (Game_GetTriggerItem(tag, object->source->spawn_flags.bytes[2])) {
              flag = 1;
          }
--        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
-+        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->unk00 & 1);
+-        object->map_record = (s32)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->map_slot & 1);
++        object->map_record = (sptr)Map_FindRecordAtInSlot((CameraState *)&object->model->position, 0.0f, MAP_OBJECT_BYTES(object)->map_slot & 1);
          if (in_use) {
              MapObject_Activate(object);
          } else {
@@ -198,8 +198,8 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
--                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
-+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
                  } else if (RECORD_FLAGS(object) & 0x10) {
 -                    object->model->light_block = (s32)&glow_lights_shared;
 +                    object->model->light_block = (sptr)&glow_lights_shared;
@@ -209,11 +209,11 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
                  }
              } else {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
--                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
-+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
                  } else if (RECORD_FLAGS(object) & 0x10) {
--                    object->model->light_block = (s32)&map_draw_state.unkC0;
-+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
+-                    object->model->light_block = (s32)&map_draw_state.current_light_block;
++                    object->model->light_block = (sptr)&map_draw_state.current_light_block;
                  } else {
 -                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
 +                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
@@ -233,8 +233,8 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
--                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
-+                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+-                    object->model->light_block = (s32)&glow_lights[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&glow_lights[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
                  } else if (RECORD_FLAGS(object) & 0x10) {
 -                    object->model->light_block = (s32)&glow_lights_shared;
 +                    object->model->light_block = (sptr)&glow_lights_shared;
@@ -244,11 +244,11 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
                  }
              } else {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
--                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
-+                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->unk00 & 1][(s8)object->source->spawn_flags.bytes[5]];
+-                    object->model->light_block = (s32)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
++                    object->model->light_block = (sptr)&map_draw_state.light_blocks[MAP_OBJECT_BYTES(object)->map_slot & 1][(s8)object->source->spawn_flags.bytes[5]];
                  } else if (RECORD_FLAGS(object) & 0x10) {
--                    object->model->light_block = (s32)&map_draw_state.unkC0;
-+                    object->model->light_block = (sptr)&map_draw_state.unkC0;
+-                    object->model->light_block = (s32)&map_draw_state.current_light_block;
++                    object->model->light_block = (sptr)&map_draw_state.current_light_block;
                  } else {
 -                    object->model->light_block = (s32)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
 +                    object->model->light_block = (sptr)&map_draw_state.light_blocks[RECORD_MAP(object)][((MapDrawRecord *)object->map_record)->light_block_index];
@@ -265,8 +265,8 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
              } else {
                  ModelTexture_SendForModel(object->model);
 @@ -719,6 +720,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
-     channel->param = 0;
-     channel->param_shifted = 0;
+     channel->frame = 0;
+     channel->frame_fixed = 0;
      MapObject_StepAnim(object);
 +    return 0; /* retail returns whatever $2 held; no caller reads it */
  }
@@ -288,18 +288,18 @@ index acee7b8d8a173a5e9c2c5b6cc8d2256b98465b17..27a5607b5efce411bef1453e827ac227
      u8 kind = object->definition->kind;
  
      if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
--        ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
-+        ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
-         object->state_flags |= 0x40000;
+-        ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->map_slot & 1]) >> 7) >> 7) < 0x200) {
++        ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->map_slot & 1]) >> 7) >> 7) < 0x200) {
+         object->state_flags |= MAP_OBJECT_EMPTIED;
      }
  }
 @@ -800,7 +803,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
      if (object != NULL) {
          kind = object->definition->kind;
          if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
--            ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
-+            ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->unk00 & 1]) >> 7) >> 7) < 0x200) {
-             object->state_flags |= 0x40000;
+-            ((u32)(((int)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->map_slot & 1]) >> 7) >> 7) < 0x200) {
++            ((u32)((s32)((sptr)object->source - map_object_placements[MAP_OBJECT_BYTES(object)->map_slot & 1]) >> 7) >> 7) < 0x200) {
+             object->state_flags |= MAP_OBJECT_EMPTIED;
          }
      }
 @@ -862,11 +865,11 @@ void MapObject_DrawModel(int *model) {
@@ -332,7 +332,7 @@ index 873b079802537adf9d3e31bf712f41171c33faa8..2d99d1ead089e568535875f00c9f1c74
  
  void MapObject_InitMap(int map);
 diff --git a/src/game/map_object/map_object_common.c b/src/game/map_object/map_object_common.c
-index 73e8261e1c1540fb8d1f2d5b6f6c6a00d01504ca..d5b83b886a42706d085fe4f16afeb608e4dc407e 100644
+index 73cba8d9ff10855042a2d30b360fc1d21c83cafb..3660bf8df25e53fee52aad40322e6b51cb2e33ec 100644
 --- a/src/game/map_object/map_object_common.c
 +++ b/src/game/map_object/map_object_common.c
 @@ -1,6 +1,7 @@
@@ -353,11 +353,11 @@ index 73e8261e1c1540fb8d1f2d5b6f6c6a00d01504ca..d5b83b886a42706d085fe4f16afeb608
  /* Offset hook of every kind: moves the model and the object's source position by offset. */
  void MapObject_MoveByOffset(MapObject *object, void *offset) {
 @@ -45,7 +46,7 @@ void MapObject_UpdateScenery(MapObject *object) {
-                 if ((MAP_OBJECT_BYTES(object)->unk00 & 1) != current_map_slot) {
+                 if ((MAP_OBJECT_BYTES(object)->map_slot & 1) != current_map_slot) {
                      object->work[0] = 0;
                  }
--            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue[4] == 0 && sound_load_queue[5] == 0) {
-+            } else if ((MAP_OBJECT_BYTES(object)->unk00 & 1) == current_map_slot && sound_load_queue.pending_map_slot == NULL && sound_load_queue.next_map_slot == NULL) {
+-            } else if ((MAP_OBJECT_BYTES(object)->map_slot & 1) == current_map_slot && sound_load_queue[4] == 0 && sound_load_queue[5] == 0) {
++            } else if ((MAP_OBJECT_BYTES(object)->map_slot & 1) == current_map_slot && sound_load_queue.pending_map_slot == NULL && sound_load_queue.next_map_slot == NULL) {
                  Sound_StartTaggedAt(source->kind_param_0, source->kind_param_2, source->kind_param_1, source->kind_param_3, (Vector4Arg *)&object->model->position);
                  object->work[0] = 1;
              }
@@ -396,7 +396,7 @@ index 69f416903456d037993d03a5cf47383ebfeb5376..714ec9a286bb33a4d3798d677a250f5c
  void (*map_object_step_handlers[0x20][16])(MapObject *) = { /* 0x3BDA30 the step handler of each object kind */
      MapObject_StartScenery, MapObject_UpdateScenery, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, MapObject_UpdateBreaking,
 diff --git a/src/game/map_object/map_trigger.c b/src/game/map_object/map_trigger.c
-index 490389f889c18499c10d8c89e364f07606519790..e6ea2ff56aecd9ca35668ddadebb9b6d1ab7a014 100644
+index 53545751ccb2fff7dc3ec3720f5943d1ae7b01a9..5ab15bb2a9440dce64e51fd2a01720cc41acc90e 100644
 --- a/src/game/map_object/map_trigger.c
 +++ b/src/game/map_object/map_trigger.c
 @@ -4,6 +4,7 @@
@@ -425,25 +425,25 @@ index 490389f889c18499c10d8c89e364f07606519790..e6ea2ff56aecd9ca35668ddadebb9b6d
  
  /* Start handler of the save point: step 1. */
 @@ -239,7 +240,7 @@ void MapObject_FadeInObject(MapTrigger *trigger) {
-     if (shot->unk10 < 100000.0f) {
-         shot->unk10 += 6.6666f;
+     if (shot->fade_progress < 100000.0f) {
+         shot->fade_progress += 6.6666f;
      }
--    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
-+    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
+-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->fade_progress) == 0) {
++    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->fade_progress) == 0) {
          trigger->type = 3;
-         shot->unk10 = 0.0f;
+         shot->fade_progress = 0.0f;
      }
 @@ -264,7 +265,7 @@ void MapObject_FadeOutObject(MapTrigger *trigger) {
-     if (shot->unk10 < 2000.0f) {
-         shot->unk10 += 4.0f;
+     if (shot->fade_progress < 2000.0f) {
+         shot->fade_progress += 4.0f;
      }
--    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->unk10) == 0) {
-+    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->unk10) == 0) {
+-    if (Model_FadeVertexColoursNear((int)trigger->model, shot, steps, targets, shot->fade_progress) == 0) {
++    if (Model_FadeVertexColoursNear(trigger->model, shot, steps, targets, shot->fade_progress) == 0) {
          trigger->type = 1;
-         shot->unk10 = 0.0f;
+         shot->fade_progress = 0.0f;
      }
 diff --git a/src/game/map_object/mechanism.c b/src/game/map_object/mechanism.c
-index d7d76f2aef4bcffe6796154b3639f49c5cfb6744..3ce10a74865b94e4167235628ab2ff218192b4f4 100644
+index 89cd2a5c30d294effb39bfd9050bd3baca32ce45..b5979108ccd58125af8794dc8a20948443d443b2 100644
 --- a/src/game/map_object/mechanism.c
 +++ b/src/game/map_object/mechanism.c
 @@ -5,14 +5,16 @@
@@ -466,7 +466,7 @@ index d7d76f2aef4bcffe6796154b3639f49c5cfb6744..3ce10a74865b94e4167235628ab2ff21
  extern u32 frame_counter;
  
 diff --git a/src/game/map_object/pedestal.c b/src/game/map_object/pedestal.c
-index 34abccd4d4ce19fb8333128b5a4453ffeacc4084..126a52c12bab554cbf70ca3e29bf5f3cf1123bd6 100644
+index 5810215d91f80b27586914ab5bcbc14c2c2c86b5..85ee79a2d891f88ee1d921e934e5327bf9a685cc 100644
 --- a/src/game/map_object/pedestal.c
 +++ b/src/game/map_object/pedestal.c
 @@ -23,7 +23,7 @@ void sceVu0RotMatrixY(float *, float *, float);
@@ -498,7 +498,7 @@ index a893434f21df17435f4f6a42f7dc3b527a373b4b..8e01b4f8a6de8e48b946716264d06058
  /* Step 0 of the things that are only examined (kind 0xB): takes the message (the definition's name when the
     source gives none) and, from the source, whether a sign picture goes with it; step 1. */
 diff --git a/src/game/map_object/socket.c b/src/game/map_object/socket.c
-index 992e2e51d131f93d32ae9edcfb15fa8db5cc1b3d..915a691f7e86bc8ff1fb4b7a797321a7d89cdb35 100644
+index 332361ed7773a7f18078a870c81217554314c530..a617bafccf2aedd54857a1570ac1edfe53deab6c 100644
 --- a/src/game/map_object/socket.c
 +++ b/src/game/map_object/socket.c
 @@ -15,7 +15,8 @@ void Vector_Scale(float *, float *, float);
@@ -512,7 +512,7 @@ index 992e2e51d131f93d32ae9edcfb15fa8db5cc1b3d..915a691f7e86bc8ff1fb4b7a797321a7
  extern f32 identity_matrix[16];
  extern ItemCommonDef item_common_defs[];
 diff --git a/src/game/map_object/switch.c b/src/game/map_object/switch.c
-index 9e2ee906da9f9e7146f4ddf5cb2c93616305d3cd..1f725d5824f5c02fb3943e42dea95812d82e2aed 100644
+index dc4d6c684d966eec0a56f5d8d022fac88f69b0b9..5e0ae4ca53903b13177300b22804741825576d14 100644
 --- a/src/game/map_object/switch.c
 +++ b/src/game/map_object/switch.c
 @@ -4,8 +4,8 @@

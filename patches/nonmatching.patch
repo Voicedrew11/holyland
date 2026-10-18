@@ -1,5 +1,5 @@
 diff --git a/src/nonmatching/func_00112BD0.c b/src/nonmatching/func_00112BD0.c
-index c5329dc8615d1f5b33de160f05d966c8d8febfa2..3c2b438696d4ebebd32c8cf9e3475d75695a0f4d 100644
+index c5329dc8615d1f5b33de160f05d966c8d8febfa2..aa270e4a4cb89d3a39ff8eb7da196150cbf153e7 100644
 --- a/src/nonmatching/func_00112BD0.c
 +++ b/src/nonmatching/func_00112BD0.c
 @@ -1,4 +1,5 @@
@@ -9,17 +9,19 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..3c2b438696d4ebebd32c8cf9e3475d75
   *
   * The per-frame map draw-state update, called once per frame from the main loop: fades the fog block and the light
   * block towards those of the map record the player stands on (30 frames), culls the map records and builds the
-@@ -48,7 +49,9 @@
+@@ -48,8 +49,10 @@
   *    pinned ones (&&label) split the block for CSE too. A whole-block static inline helper gives 60 or more, and
   *    ee-gcc 2.96 already differs at the start of the function.
   *
 - * The struct views below are local because the file is not part of the build; when the function matches they belong
+- * in map/map.h (MapLightBlock = MapSlotUnk10Words as two 4x4 float matrices, 8-aligned so that copies use ld/sd;
 + * The C below computes what the retail block computes (the dead store into blue_to kept for the instruction count is gone on
 + * the PC). The struct views below are local because the PS2 build does not compile this file; when the function
 + * matches they belong
-  * in map/map.h (MapLightBlock = MapSlotUnk10Words as two 4x4 float matrices, 8-aligned so that copies use ld/sd;
++ * in map/map.h (MapLightMatrices = MapLightBlock as two 4x4 float matrices, 8-aligned so that copies use ld/sd;
   * MapDrawStateBlend = D_0038A1B0 as this function sees it; MapHeader gains fog_colors[4][4] at 0x50 and the f32 draw
   * distance at 0x7C; MapRecordBits gains bit 26, "in view").
+  */
 @@ -57,24 +60,33 @@
  #include "entity/entity.h"
  #include "player/player.h"
@@ -27,16 +29,18 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..3c2b438696d4ebebd32c8cf9e3475d75
 +#include "core/memory.h"
  #include "collision/collision.h"
  
-+/* overlay: a light block in a map file, as MapSlotUnk10Words (copied into map_draw_state) */
++/* overlay: a light block in a map file, as MapLightBlock (copied into map_draw_state) */
  typedef struct {
      f32 unk00[4][4];
      f32 unk40[4][4];
- } __attribute__((aligned(8))) MapLightBlock;
-+LAYOUT_SIZE(MapLightBlock, 0x80);
+-} __attribute__((aligned(8))) MapLightBlock;
++} __attribute__((aligned(8))) MapLightMatrices;
++LAYOUT_SIZE(MapLightMatrices, 0x80);
  
 +/* overlay: a map file's 32 light blocks (MapSlot.light_blocks) */
  typedef struct {
-     MapLightBlock blocks[0x20];
+-    MapLightBlock blocks[0x20];
++    MapLightMatrices blocks[0x20];
  } MapLightRow;
 +LAYOUT_SIZE(MapLightRow, 0x1000);
  
@@ -63,7 +67,31 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..3c2b438696d4ebebd32c8cf9e3475d75
  typedef struct {
      char pad00[0x60];
      f32 mirror_height;
-@@ -110,10 +124,23 @@ typedef struct {
+@@ -93,27 +107,40 @@ typedef struct {
+     u8 unk9B;
+     u8 unk9C;
+     char pad9D[0x03];
+-    MapSlotUnk0CValues unkA0;
+-    MapLightBlock unkC0;
+-    MapSlotUnk0CValues unk140;
+-    MapSlotUnk0CValues unk160;
+-    MapLightBlock unk180;
+-    MapLightBlock unk200;
++    MapFogBlockValues unkA0;
++    MapLightMatrices unkC0;
++    MapFogBlockValues unk140;
++    MapFogBlockValues unk160;
++    MapLightMatrices unk180;
++    MapLightMatrices unk200;
+     u8 fog[4];
+     u8 fog_from[4];
+     u8 fog_to[4];
+     char pad28C[0x04];
+-    MapSlotUnk0CValues unk290[2][0x20];
++    MapFogBlockValues unk290[2][0x20];
+     MapLightRow unkA90[2];
+     f32 unk2A90;
+     f32 unk2A94;
      f32 unk2A98;
      char pad2A9C[0x04];
  } MapDrawStateBlend;
@@ -155,14 +183,20 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..3c2b438696d4ebebd32c8cf9e3475d75
  
  typedef struct {
      u8 red;
-@@ -182,7 +229,6 @@ typedef struct {
+@@ -182,11 +229,10 @@ typedef struct {
  
  void func_00112BD0(void) {
      f32 unused_vector[4];
 -    f32 unused_matrix[32];
      MapSlot *slot;
      MapDrawRecord *record;
-     MapLightBlock *lights;
+-    MapLightBlock *lights;
+-    MapSlotUnk0CValues *fog_block;
++    MapLightMatrices *lights;
++    MapFogBlockValues *fog_block;
+     u8 *fog;
+     f32 cos_heading;
+     f32 sin_heading;
 @@ -213,45 +259,45 @@ void func_00112BD0(void) {
  
      memset(unused_vector, 0, sizeof(unused_vector));

@@ -29,7 +29,7 @@ void port_memory_init(void) {
 }
 
 void *ee_hw_ptr(uint32_t ee_address) {
-    uint32_t offset = ee_address & 0x0FFFFFFF;
+    uint32_t offset = ee_address & 0x00FFFFFF;
 
     switch (ee_address & 0xFF000000) {
     case 0x10000000:

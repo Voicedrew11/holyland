@@ -237,7 +237,7 @@ index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..3709bacd447fef6c0e297ef5d02c945a
      sprite.prim = 0x156;
      sprite.rgba[3] = sprite.rgba[2] = sprite.rgba[1] = sprite.rgba[0] = 0x80;
 diff --git a/src/game/gfx/movie.c b/src/game/gfx/movie.c
-index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9605236f6 100644
+index 21ca77cb44b94d7856167204f85a294b52c8d4ab..e4ad3c12c2c3308bc176f22f4dfaa5b440bb2857 100644
 --- a/src/game/gfx/movie.c
 +++ b/src/game/gfx/movie.c
 @@ -5,36 +5,25 @@
@@ -598,7 +598,7 @@ index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9
 -    *D4_TADR = (u32)stream->tags & 0x0FFFFFFF;
 +    *D4_MADR = EE_WORD(stream->data) & 0x0FFFFFFF;
 +    *D4_TADR = EE_WORD(stream->tags) & 0x0FFFFFFF;
-     Movie_SetD4Chcr(5);
+     Movie_SetD4Chcr(D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN);
      return TRUE;
  }
 @@ -932,12 +915,12 @@ static int MovieStream_Reset(MovieStreamBuffer *stream) {
@@ -615,7 +615,7 @@ index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9
 -    *D4_TADR = (u32)stream->tags & 0x0FFFFFFF;
 +    *D4_MADR = EE_WORD(stream->data) & 0x0FFFFFFF;
 +    *D4_TADR = EE_WORD(stream->tags) & 0x0FFFFFFF;
-     Movie_SetD4Chcr(5);
+     Movie_SetD4Chcr(D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN);
      return TRUE;
  }
 @@ -1007,13 +990,13 @@ static int MovieStream_AddDma(MovieStreamBuffer *stream) {
@@ -651,7 +651,7 @@ index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9
 +                  stream->saved.d4_madr == EE_WORD(stream->data) + (stream->block_count << 11))
                       ? 0
                       : 3;
-         d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | 0x100;
+         d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | D_CHCR_STR;
 @@ -1082,10 +1065,10 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
          index = MovieStream_GetBlockIndex(stream, stream->saved.d4_madr);
          index_next = MovieStream_GetBlockIndex(stream, d4_madr_next);
@@ -666,7 +666,7 @@ index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9
 +                      EE_WORD(stream->data) + (((stream->dma_start + stream->dma_count) % stream->block_count) << 11))
                           ? 0
                           : 3;
-             d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | 0x100;
+             d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | D_CHCR_STR;
 @@ -1234,7 +1217,7 @@ static int MovieStream_PutStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
      if (stream->stamp_count < stream->stamp_capacity) {
          MovieStream_TrimStamps(stream, stamp);
@@ -976,7 +976,7 @@ index 57c7f41d2a163b886f4d6a5c47b00d9b8da447ad..1d16987f0a09aa9730c528e9245e02a9
 +static void Movie_SendGifChain(void *chain) {
 +    *D2_TADR = MOVIE_DMA_ADDRESS(chain);
      *D2_QWC = 0;
-     *D2_CHCR = 0x105;
+     *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
 @@ -1919,24 +1903,20 @@ static int Movie_VblankHandler(int cause) {
              tag = MovieOut_GetOldestTag(&movie_out_buffer);
@@ -1142,7 +1142,7 @@ index 0a6ab82bd1a7e883f95b6c4b8a99f1fb42c3cdf8..674db8cab8d1031fae67842203944c26
  
  #endif
 diff --git a/src/game/gfx/packet.h b/src/game/gfx/packet.h
-index e091e37d8fd623a828026544ade84bf5c4834017..88b9aff944d306bd987d40ef68f1b4c4500b8795 100644
+index 7e713c82bf342d08c684c940eee9f846d35a9fce..c273360f77d9fd746c04ece28dbc0f6388735ae5 100644
 --- a/src/game/gfx/packet.h
 +++ b/src/game/gfx/packet.h
 @@ -62,12 +62,14 @@ typedef struct {
@@ -1174,7 +1174,7 @@ index e091e37d8fd623a828026544ade84bf5c4834017..88b9aff944d306bd987d40ef68f1b4c4
  
  #endif
 diff --git a/src/game/gfx/packet_buffer.c b/src/game/gfx/packet_buffer.c
-index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f1299e277a1 100644
+index dcf2a52beaaf10c4a77004b85984e517627efa29..f5234e42c6055e4e33e6f905c48e414ef9d76090 100644
 --- a/src/game/gfx/packet_buffer.c
 +++ b/src/game/gfx/packet_buffer.c
 @@ -3,26 +3,27 @@
@@ -1189,11 +1189,11 @@ index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f12
  /* sends a packet to VIF1 and waits for the transfer to end */
  #define SEND_TO_VIF1(packet)                    \
      channel = sceDmaGetChan(1);                 \
-     channel->chcr |= 0x40;                      \
+     channel->chcr |= D_CHCR_TTE;                \
 -    sceDmaSend(channel, (u32)(packet));         \
 +    sceDmaSend(channel, (packet));              \
 +    PORT_TODO("waits for D1_CHCR STR (bit 8)"); \
-     while (*D1_CHCR & 0x100) {                  \
+     while (*D1_CHCR & D_CHCR_STR) {             \
      }
  
 -void *memset(void *, int, u32);
@@ -1251,14 +1251,14 @@ index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f12
              FlushCache(0);
 +            PORT_TODO("waits for D1_CHCR STR (bit 8)");
              do {
-             } while (*D1_CHCR & 0x100);
+             } while (*D1_CHCR & D_CHCR_STR);
              *GS_CSR |= 2;
              FlushCache(0);
              *D1_QWC = 0;
              *D1_MADR = 0;
 -            *D1_TADR = (u32)*chain_head;
 +            *D1_TADR = (int)EE_WORD(*chain_head);
-             *D1_CHCR = 0x105;
+             *D1_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
          }
      }
 @@ -146,6 +148,7 @@ void Packet_SendChain(void) {
@@ -1267,7 +1267,7 @@ index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f12
          gs_send_pending[0] = 0;
 +        PORT_TODO("waits for D1_CHCR STR (bit 8)");
          do {
-         } while (*D1_CHCR & 0x100);
+         } while (*D1_CHCR & D_CHCR_STR);
          sceGsSyncPath(0, 0);
 @@ -157,7 +160,7 @@ void Packet_WaitForSend(void) {
  /* Lays out the packet buffers in the packet area for the given size (0 = largest). */
@@ -1290,7 +1290,7 @@ index 25a41bdd90f766755bcf2373e5057f621daa8e12..4cd431e159b22492b69d53e994948f12
      *addr = spare_addr;
      *size = spare_size;
 diff --git a/src/game/gfx/screen.h b/src/game/gfx/screen.h
-index a407dc5e36ce6360b1e463a9cbffad38bb851bf2..a023932b5b6ab2f1b47c0a14319094a039931edb 100644
+index 7241eba057919c081cd5c79d40a6377023741a6e..40f51733e64fe367bfb751be9ee84f328453738e 100644
 --- a/src/game/gfx/screen.h
 +++ b/src/game/gfx/screen.h
 @@ -8,12 +8,10 @@
@@ -1321,7 +1321,7 @@ index a407dc5e36ce6360b1e463a9cbffad38bb851bf2..a023932b5b6ab2f1b47c0a14319094a0
  typedef struct {
 -    char pad00[0x82];
 -    u16 unk82;                      /* 0x82 */
-+    char pad00[offsetof(ModelChannel, param)];
++    char pad00[offsetof(ModelChannel, frame)];
 +    u16 unk82;                      /* 0x82 ModelChannel.param */
  } DisplaySettings;
  
@@ -1332,7 +1332,7 @@ index a407dc5e36ce6360b1e463a9cbffad38bb851bf2..a023932b5b6ab2f1b47c0a14319094a0
 +    DisplaySettings *settings;      /* 0xFC ModelInstance.level_tables */
  } DisplayContext;
  
-+_Static_assert(offsetof(DisplaySettings, unk82) == offsetof(ModelChannel, param), "DisplaySettings is not ModelChannel");
++_Static_assert(offsetof(DisplaySettings, unk82) == offsetof(ModelChannel, frame), "DisplaySettings is not ModelChannel");
 +_Static_assert(offsetof(DisplayContext, settings) == offsetof(ModelInstance, level_tables), "DisplayContext is not ModelInstance");
 +
  /* the nodes Map_InsertRecordBySize sorts into the lists record_boxes and backdrop_record_boxes by box area */
@@ -1342,7 +1342,7 @@ index a407dc5e36ce6360b1e463a9cbffad38bb851bf2..a023932b5b6ab2f1b47c0a14319094a0
      s32 flags;                      /* 0x3C bit 25 skips insertion, bit 31 picks the second list */
 @@ -64,8 +68,11 @@ typedef struct AreaNode {
      f32 right;                      /* 0x50 */
-     f32 unk54;                      /* 0x54 the box's highest y */
+     f32 highest_y;                  /* 0x54 the box's highest y */
      f32 bottom;                     /* 0x58 */
 -    struct AreaNode *next;          /* 0x5C */
 +    EEWord next;                    /* 0x5C (AreaNode *) the next box of its list: MapRecordBox.next (map/map.h) */
@@ -1368,7 +1368,7 @@ index 16789bc413ac35a3e547da88c20cfa1eb65577eb..1fedc5812663b24cc10de00ed8326e2d
  void GsDraw_ResetDrawTarget(void);
  void GsDraw_QueueTexFlush(void);
 diff --git a/src/game/gfx/texture.h b/src/game/gfx/texture.h
-index 1039e2718b9c36aa08f0cdf8298d6d01420911bb..8846e0d7fb0c45d64839a1224336f77800bb0cff 100644
+index 52502d8e13f5b096552f9269c18f9d85d5edeea9..e680827e513023e764f50657bd2d21698d2dd2b2 100644
 --- a/src/game/gfx/texture.h
 +++ b/src/game/gfx/texture.h
 @@ -5,6 +5,7 @@
@@ -1393,7 +1393,7 @@ index 1039e2718b9c36aa08f0cdf8298d6d01420911bb..8846e0d7fb0c45d64839a1224336f778
  /* a chunk table: this header, then entry_count TextureTableEntry */
 +/* overlay: a texture chunk table file */
  typedef struct {
-     int unk00;                      /* 0x00 */
+     int packet_size;                /* 0x00 the bytes of the built packets */
      u32 entry_count;                /* 0x04 */
      int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
      int unk0C;                      /* 0x0C Texture_BuildPacketTable clears it */
@@ -1411,14 +1411,14 @@ index 1039e2718b9c36aa08f0cdf8298d6d01420911bb..8846e0d7fb0c45d64839a1224336f778
      int offset;                     /* 0x00 from the table base, to a chunk: its size in quadwords, 12 bytes, the data */
      int unk04;                      /* 0x04 Texture_BuildPacketTable clears it */
      int unk08;                      /* 0x08 Texture_BuildPacketTable clears it */
-     int unk0C;                      /* 0x0C not 0: TextureTable_QueueEnabled skips it (set by TextureTable_SetChunkEnabled) */
+     int disabled;                   /* 0x0C nonzero: TextureTable_QueueEnabled skips the chunk */
  } TextureTableEntry;
 +LAYOUT_SIZE(TextureTableEntry, 0x10);
  
  /* Sends the GS a TEXFLUSH through DMA channel 2 (gfx/texture_upload.c). */
  void Texture_SendTexFlush(void);
 diff --git a/src/game/gfx/texture_table.c b/src/game/gfx/texture_table.c
-index 1ab36856868f0ff18db114b65c0eb97a1dfc6deb..52bba061f732bb9b578b6b8645e8e672889ec81c 100644
+index 8e5ea08fee4640c973fefc3c3f848c4a5dd20558..f488456f6221b87c07dfa67baacd75a3e70a9e69 100644
 --- a/src/game/gfx/texture_table.c
 +++ b/src/game/gfx/texture_table.c
 @@ -27,7 +27,7 @@ void TextureTable_QueueAll(TextureTableHeader *table) {
@@ -1449,7 +1449,7 @@ index 1ab36856868f0ff18db114b65c0eb97a1dfc6deb..52bba061f732bb9b578b6b8645e8e672
          *packet++ = 0;
          Packet_AppendToChain(packet_start, packet);
 diff --git a/src/game/gfx/texture_upload.c b/src/game/gfx/texture_upload.c
-index 2c8774abe2528088c95ac3425c6fee1a309885ee..a339b168637fc1e1e238cb8bdb784b303e1dd42a 100644
+index d8869c0a8b27e662dcaee7efda81a6440c416385..44ab440741b867883cc0493d9033bfc297adf68b 100644
 --- a/src/game/gfx/texture_upload.c
 +++ b/src/game/gfx/texture_upload.c
 @@ -3,7 +3,9 @@
@@ -1476,40 +1476,37 @@ index 2c8774abe2528088c95ac3425c6fee1a309885ee..a339b168637fc1e1e238cb8bdb784b30
      FlushCache(0);
      sceGsExecLoadImage(&load_image, (char *)header + sizeof(TextureHeader));
 +    PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-     while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+     while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
      }
      pixel_format = (header->tex0 >> 20) & 0x3F;
-@@ -71,13 +72,15 @@ static void Texture_LoadTm2(TextureHeader *header) {
+@@ -71,12 +72,14 @@ static void Texture_LoadTm2(TextureHeader *header) {
          sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 16, 16);
          FlushCache(0);
          sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
--        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
 +        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-+    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+         while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
          }
      } else if (pixel_format == 0x14 || pixel_format == 0x24 || pixel_format == 0x2C) {
          sceGsSetDefLoadImage(&load_image, (u16)((header->tex0 >> 37) & 0x3FFF), 1, (u16)((header->tex0 >> 51) & 0xF), 0, 0, 8, 2);
          FlushCache(0);
          sceGsExecLoadImage(&load_image, (char *)header + (header->image_size + sizeof(TextureHeader)));
--        while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
 +        PORT_TODO("waits for D2_CHCR STR (bit 8) and GIF_STAT");
-+    while ((*D2_CHCR & 0x100) || (*GIF_STAT & 0xC00)) {
+         while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH)) {
          }
      }
- }
 @@ -110,13 +113,13 @@ static void Texture_BuildPacketTable(char **textures, char **packets) {
      target_cursor += target->entry_count * sizeof(TextureTableEntry);
      for (i = 0; i < source->entry_count; i++) {
          source_cursor = *textures + source_entry[i].offset;
 -        target_entry[i].offset = target_cursor - *packets;
 +        target_entry[i].offset = (int)(target_cursor - *packets);
-         target_entry[i].unk0C = 0;
+         target_entry[i].disabled = 0;
          target_entry[i].unk08 = 0;
          target_entry[i].unk04 = 0;
          Texture_BuildPacket(&source_cursor, &target_cursor);
      }
--    target->unk00 = target_cursor - *packets;
-+    target->unk00 = (int)(target_cursor - *packets);
+-    target->packet_size = target_cursor - *packets;
++    target->packet_size = (int)(target_cursor - *packets);
      *packets = target_cursor;
  }
  
@@ -1613,12 +1610,12 @@ index 2c8774abe2528088c95ac3425c6fee1a309885ee..a339b168637fc1e1e238cb8bdb784b30
      *cursor = 0;
      FlushCache(0);
 +    PORT_TODO("waits for D2_CHCR STR (bit 8)");
-     while (*D2_CHCR & 0x100) {
+     while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_MADR = 0;
 -    *D2_TADR = (int)texflush_packet;
 +    *D2_TADR = (int)EE_WORD(texflush_packet);
-     *D2_CHCR = 0x105;
+     *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
  
 @@ -325,7 +349,7 @@ char *Texture_UploadTable(char *base, int upload) {
@@ -1653,7 +1650,7 @@ index 2c8774abe2528088c95ac3425c6fee1a309885ee..a339b168637fc1e1e238cb8bdb784b30
      return cursor;
  }
 diff --git a/src/game/gfx/wobble.c b/src/game/gfx/wobble.c
-index fd193aa6e7b8b47428e8038a87938f515f7e4871..af287ac25bb20d7d8289de10fabb53afc1b77c20 100644
+index f12d034da33cf480f1ec3c8c6b5b8e1b26142609..a675b9a169e86cd247c8abba1aaf0e5be05a5280 100644
 --- a/src/game/gfx/wobble.c
 +++ b/src/game/gfx/wobble.c
 @@ -2,16 +2,11 @@

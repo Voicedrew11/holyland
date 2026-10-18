@@ -2,7 +2,7 @@
 # (port/) under it. See docs/port/README.md.
 #
 # Layout:
-#   decomp/          git submodule of kfiv-decomp, pinned at 90dad42. Never edited here.
+#   decomp/          git submodule of kfiv-decomp, pinned to one commit. Never edited here.
 #   patches/         the PC edits to the decomp, as git diffs with paths relative to the decomp root
 #                    (patches/game/<folder>.patch, patches/game/_top.patch, patches/nonmatching.patch).
 #   port/            the PS2 side: libraries, SDK stubs and the host's main.
@@ -27,12 +27,14 @@ endif()
 # ee-gcc 2.9's behaviour where the game depends on it: no type-based alias analysis, wrapping signed
 # overflow, no fused multiply-add, signed char, GCC's bit-field layout (also on Windows). Retail reads
 # past the ends of some arrays on purpose and tests some pointers after using them: keep the compiler
-# from optimising on either.
+# from optimising on either. A file's globals keep the order they are defined in, as ee-gcc laid them
+# out: the game reads files in whole sectors, so a read into a table runs on into the next one
+# (item_nam.prm into item_common_defs), which retail then loads. clang keeps that order by itself.
 set(KF4_GAME_FLAGS
     -fno-strict-aliasing -fwrapv -ffp-contract=off -fno-fast-math -fsigned-char -fno-common
     -fgnu89-inline -fno-delete-null-pointer-checks)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    list(APPEND KF4_GAME_FLAGS -fno-aggressive-loop-optimizations)
+    list(APPEND KF4_GAME_FLAGS -fno-aggressive-loop-optimizations -fno-toplevel-reorder)
 endif()
 if(WIN32)
     list(APPEND KF4_GAME_FLAGS -mno-ms-bitfields)
@@ -53,14 +55,45 @@ endif()
 add_library(kf4_port STATIC
     port/platform/memory.c
     port/platform/ee_address.c
+    port/platform/fiber.c
+    port/platform/kernel.c
+    port/platform/dmac.c
+    port/platform/disc.c
+    port/platform/host_time.c
     port/math/libvu0.c
+    port/sdk/libcdvd.c
+    port/sdk/libdma.c
+    port/sdk/libmc.c
+    port/sdk/libpad.c
+    port/sdk/sif.c
+    port/sdk/fssnd.c
     port/sdk/stubs.c
     port/sdk/game_stubs.c
     port/sdk/libc_ps2.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_compile_options(kf4_port PRIVATE ${KF4_GAME_FLAGS})
-if(NOT WIN32)
+find_package(Threads REQUIRED)
+target_link_libraries(kf4_port PUBLIC Threads::Threads)
+if(WIN32)
+    target_link_libraries(kf4_port PUBLIC winmm)
+else()
     target_link_libraries(kf4_port PUBLIC m)
+endif()
+# SDL2 for the pad (and, from step 2, the window); without it the pad takes only a pad script
+option(KF4_USE_SDL "Use SDL2 for the pad" ON)
+if(KF4_USE_SDL)
+    find_package(SDL2 CONFIG)
+endif()
+if(KF4_USE_SDL AND SDL2_FOUND)
+    target_compile_definitions(kf4_port PRIVATE KF4_HAVE_SDL)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(kf4_port PRIVATE SDL2::SDL2)
+    else()
+        target_include_directories(kf4_port PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(kf4_port PRIVATE ${SDL2_LIBRARIES})
+    endif()
+else()
+    message(STATUS "SDL2 not used: the pad takes only a pad script (--input)")
 endif()
 
 # ---- The decomp's game code, patched --------------------------------------------------------------
@@ -168,7 +201,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources})
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES

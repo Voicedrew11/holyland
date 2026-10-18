@@ -923,7 +923,7 @@ index 8db4d3b35f0afca78ec4cc0751972bd62faf39d9..4dc3d94dc2778a938d755890cfc8a06c
 +
  #endif
 diff --git a/src/game/math/vu0_macro.c b/src/game/math/vu0_macro.c
-index af28afa1a6a376fc681c3949793aa8ee6f236b7d..b76716e6a33f95a5c14914b7b1e797ef91d4f163 100644
+index 13e1d348efd476f6eefc4a14098ef531bb7f72b9..8a4fd75352bb84fb40d9838a650eb79b7dcd0b33 100644
 --- a/src/game/math/vu0_macro.c
 +++ b/src/game/math/vu0_macro.c
 @@ -2,206 +2,159 @@

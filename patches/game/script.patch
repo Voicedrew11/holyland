@@ -1,5 +1,5 @@
 diff --git a/src/game/script/script.c b/src/game/script/script.c
-index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..0a45458f85f8f9c2505b96430c133284bfacf389 100644
+index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78c7fb084b 100644
 --- a/src/game/script/script.c
 +++ b/src/game/script/script.c
 @@ -15,8 +15,9 @@
@@ -147,7 +147,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..0a45458f85f8f9c2505b96430c133284
 +    SCRIPT_VAR_FIELD(PlayerState, view_tilt_frames, 0x234),
 +    SCRIPT_VAR_FIELD(PlayerState, view_tilt_pitch, 0x238),
 +    SCRIPT_VAR_FIELD(PlayerState, view_tilt_roll, 0x23C),
-+    SCRIPT_VAR_FIELD(PlayerState, unk240, 0x240),
++    SCRIPT_VAR_FIELD(PlayerState, floor_push, 0x240),
 +    SCRIPT_VAR_FIELD(PlayerState, record_flag_block, 0x250),
 +    SCRIPT_VAR_FIELD(PlayerState, pad251, 0x251),
 +    SCRIPT_VAR_FIELD(PlayerState, map_index, 0x252),
@@ -165,23 +165,23 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..0a45458f85f8f9c2505b96430c133284
 +    SCRIPT_VAR_FIELD(PlayerState, swing_ended, 0x263),
 +    SCRIPT_VAR_FIELD(PlayerState, charging_magic, 0x264),
 +    SCRIPT_VAR_FIELD(PlayerState, pad265, 0x265),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268, 0x268),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.strength_gauge, 0x26A),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.attack_request, 0x26C),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.unk08, 0x270),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.pad1A, 0x282),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.player_power, 0x288),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.player_magic, 0x28A),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.weapon_index, 0x28C),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.magic_id, 0x28E),
-+    SCRIPT_VAR_FIELD(PlayerState, unk268.pad28, 0x290),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot, 0x268),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.strength_gauge, 0x26A),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.attack_request, 0x26C),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.worn_item_stats, 0x270),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.pad1A, 0x282),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.player_power, 0x288),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.player_magic, 0x28A),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.weapon_index, 0x28C),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.magic_id, 0x28E),
++    SCRIPT_VAR_FIELD(PlayerState, swing_shot.pad28, 0x290),
 +    SCRIPT_VAR_FIELD(PlayerState, draw_motion_complete, 0x298),
 +    SCRIPT_VAR_FIELD(PlayerState, pad299, 0x299),
 +    SCRIPT_VAR_FIELD(PlayerState, mp_drain_tint, 0x29C),
 +    SCRIPT_VAR_FIELD(PlayerState, pending_mp_drain, 0x2A0),
-+    SCRIPT_VAR_FIELD(PlayerState, pad2A4, 0x2A4),
++    SCRIPT_VAR_FIELD(PlayerState, fade_area, 0x2A4),
 +    SCRIPT_VAR_FIELD(PlayerState, screen_fade, 0x2A8),
-+    SCRIPT_VAR_FIELD(PlayerState, pad2AC, 0x2AC),
++    SCRIPT_VAR_FIELD(PlayerState, screen_fade_step, 0x2AC),
 +    SCRIPT_VAR_FIELD(PlayerState, hp_step_remaining, 0x2B0),
 +    SCRIPT_VAR_FIELD(PlayerState, hp_step_period, 0x2B4),
 +    SCRIPT_VAR_FIELD(PlayerState, flag_timers, 0x2B8),
@@ -325,7 +325,7 @@ index 8e01e7fb35a0a30bb234e4915cf2f4392274d672..96d78d2cf6fdc0f4a651e5855001617f
  int Script_Start(int script_id, int argument);
  /* TRUE if a thread is running the script. */
 diff --git a/src/game/script/script_entity.c b/src/game/script/script_entity.c
-index a84a2cc971b2d8bf086a4747dfffd2ff948a30b4..93c3010dd53078bbfac734731a4066cf8894acb8 100644
+index abcc6eafddb32a44163faaa6051d0ab8b62876af..609906553af2e8902b1e891b586466c5d2ffe26a 100644
 --- a/src/game/script/script_entity.c
 +++ b/src/game/script/script_entity.c
 @@ -9,7 +9,7 @@
@@ -347,9 +347,9 @@ index a84a2cc971b2d8bf086a4747dfffd2ff948a30b4..93c3010dd53078bbfac734731a4066cf
  float EntityMath_AngleDifference(float angle, float heading);
  void EntityAi_SetState(char *, u8);
 @@ -276,10 +276,11 @@ int ScriptCmd_BlendEntityMotion(ScriptMotionBlendCommand *command) {
-     if (entity != NULL && (entity->flags & 0xF) == 3 && entity->hit_points != 0) {
+     if (entity != NULL && (entity->flags & (ENTITY_FLAG_ACTIVE_LIST | ENTITY_FLAG_LIVE | ENTITY_FLAG_DYING_MASK)) == 3 && entity->hit_points != 0) {
          entity_model = entity->model;
-         if (entity_model->level_tables->unk88 != 0) {
+         if (entity_model->level_tables->blend_left != 0) {
 -            return Motion_BlendToPose(command->weight.value, entity_model);
 +            return Motion_BlendToPose(entity_model, command->weight.value);
          }
@@ -359,24 +359,6 @@ index a84a2cc971b2d8bf086a4747dfffd2ff948a30b4..93c3010dd53078bbfac734731a4066cf
  }
  
  /* Command 238: turns the entity `target_id` to face the player (state 4, EntityAi_SetState: on the spot for
-@@ -828,7 +829,7 @@ void ScriptCmd_TrySetEntityFlag18(ScriptQueryCommand *command) {
-     entity = Entity_GetBySpawnId(command->input.value);
-     if (entity != NULL) {
-         flags = entity->flags;
--        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
-+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
-             entity->flags = flags | 0x40000;
-             Script_StoreResult(&command->result, TRUE);
-             command->active = 0;
-@@ -848,7 +849,7 @@ void ScriptCmd_ClearEntityFlag18(ScriptObjectCommand *command) {
-     entity = Entity_GetBySpawnId(command->object_id.value);
-     if (entity != NULL) {
-         flags = entity->flags;
--        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30L << 32) | 0xC)) == 0)) {
-+        if (((flags & 3) == 3) && (entity->stun_frames == 0) && ((flags & ((0x30LL << 32) | 0xC)) == 0)) {
-             entity->flags = flags & ~0x40000;
-         }
-     }
 diff --git a/src/game/script/script_tables.c b/src/game/script/script_tables.c
 index 1d6ebfbbeabe340b2485e2b989f5f579b956e6f4..d20bcfb6b1a058045f00476c74afd5924bf807aa 100644
 --- a/src/game/script/script_tables.c
@@ -393,7 +375,7 @@ index 1d6ebfbbeabe340b2485e2b989f5f579b956e6f4..d20bcfb6b1a058045f00476c74afd592
      game_status, camera_state, player_state, view_ray_status,
      item_counts, trade_stock_1, trade_stock_2, trade_stock_3,
 diff --git a/src/game/script/script_world.c b/src/game/script/script_world.c
-index eb762076720ab8d7da80c3288bd70f4c39ecedd1..4686089d714386e3356aef5a37e10f46262a3166 100644
+index 73a59f5a4475c4976708eec0b8bbb67ab690f0f1..3f681e63fc34efccd118a885278ef35883997ede 100644
 --- a/src/game/script/script_world.c
 +++ b/src/game/script/script_world.c
 @@ -13,9 +13,9 @@
@@ -534,18 +516,18 @@ index eb762076720ab8d7da80c3288bd70f4c39ecedd1..4686089d714386e3356aef5a37e10f46
      if (block_index < 0x20) {
          span = far - near;
 -        // match: the block's offset is added to the address as a number
--        block = (MapSlotUnk0CValues *)((block_index << 5) + (u32)slot->fog_blocks);
-+        block = (MapSlotUnk0CValues *)((char *)slot->fog_blocks + (block_index << 5));
+-        block = (MapFogBlockValues *)((block_index << 5) + (u32)slot->fog_blocks);
++        block = (MapFogBlockValues *)((char *)slot->fog_blocks + (block_index << 5));
          block->unk10 = (s64)((blue << 16) + (green << 8) + red);
          block->unk00 = block->unk04 = 0.0f;
          block->unk0C = far * near * (far_value - near_value) / span;
 @@ -1057,8 +1056,7 @@ void ScriptCmd_SetMapLight(ScriptLightCommand *command) {
-     MapSlotUnk10Lights *lights;
+     MapLightBlockLights *lights;
  
      if ((u32)command->block.value < 0x20 && command->light.value >= 0 && command->light.value < 3) {
 -        // match: the block's offset is added to the address as a number; indexing the blocks swaps two registers
--        lights = (MapSlotUnk10Lights *)(command->block.value * sizeof(MapSlotUnk10Lights) + (u32)slot->light_blocks);
-+        lights = (MapSlotUnk10Lights *)((char *)slot->light_blocks + command->block.value * sizeof(MapSlotUnk10Lights));
+-        lights = (MapLightBlockLights *)(command->block.value * sizeof(MapLightBlockLights) + (u32)slot->light_blocks);
++        lights = (MapLightBlockLights *)((char *)slot->light_blocks + command->block.value * sizeof(MapLightBlockLights));
          lights->directions[0][command->light.value] = command->dir_x.value;
          lights->directions[1][command->light.value] = command->dir_y.value;
          lights->directions[2][command->light.value] = command->dir_z.value;
@@ -554,8 +536,8 @@ index eb762076720ab8d7da80c3288bd70f4c39ecedd1..4686089d714386e3356aef5a37e10f46
      block_index = command->block.value;
      if (block_index < 0x20) {
 -        // match: the block's offset is added to the address as a number
--        lights = (MapSlotUnk10Lights *)((block_index << 7) + (u32)slot->light_blocks);
-+        lights = (MapSlotUnk10Lights *)((char *)slot->light_blocks + (block_index << 7));
+-        lights = (MapLightBlockLights *)((block_index << 7) + (u32)slot->light_blocks);
++        lights = (MapLightBlockLights *)((char *)slot->light_blocks + (block_index << 7));
          lights->colors[3].x = (f32)command->red.value / 255.0f;
          lights->colors[3].y = (f32)command->green.value / 255.0f;
          lights->colors[3].z = (f32)command->blue.value / 255.0f;

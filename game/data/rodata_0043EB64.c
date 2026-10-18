@@ -12,7 +12,7 @@ EntityRangeWeights near_point_range_weights = { .weights = {
 } };
 
 /* 0x0043EB90 */
-GsDataBlock offscreen_square_corners __attribute__((aligned(16))) = { .unk00 = 0x780000007800LL, .unk08 = 0xFFFFFFLL, .unk10 = 0x880000008800LL, .unk18 = 0xFFFFFFLL };
+GsDataBlock offscreen_square_corners __attribute__((aligned(16))) = { .corner0_xy = 0x780000007800LL, .corner0_z = 0xFFFFFFLL, .corner1_xy = 0x880000008800LL, .corner1_z = 0xFFFFFFLL };
 
 /* 0x0043EBB0 */
 char clut_dump_path[32] = "host0:/cs0-2/take/temp/clut.raw";

@@ -16,7 +16,7 @@ decomp's, pinned in `decomp/` and never edited here; the PC edits to it are kept
 ## The decomp and the patches
 
 `decomp/` is a git submodule of [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp.git), pinned
-to one commit (currently `90dad42`).
+to one commit (currently `88b0978`).
 
 > **The decomp is read-only here.** Never edit `decomp/` or the compiled copy in
 > `out/<preset>/decomp_src/`; this goes for people and agents alike. Configure fails if `decomp/` has
@@ -93,7 +93,36 @@ cmake --preset linux-gcc        # or linux-clang
 cmake --build out/linux-gcc
 ```
 
-The program is `out/<preset>/kf4`.
+The program is `out/<preset>/kf4`. SDL2 is used for the pad if CMake finds it (`-DKF4_USE_SDL=OFF`
+turns it off).
+
+## Running
+
+```sh
+out/linux-gcc/kf4 --disc kfiv_us.iso
+```
+
+| Option | What |
+|---|---|
+| `--disc PATH` | the game's disc image (or set `KF4_DISC`) |
+| `--fast` | run as fast as possible instead of at 60 vblanks a second |
+| `--headless` | no window, no SDL |
+| `--frames N` | stop after N vblanks |
+| `--input FILE` | play the pad from a script instead of SDL |
+| `--log FILE` | the per-frame log (`-` for stdout) |
+| `--clock YYYY-MM-DDTHH:MM:SS` | the disc drive's clock at boot, in Japan's time, instead of the host's; for repeatable runs |
+| `--host-dir DIR` | the folder `host0:` paths are read from |
+
+A pad script has one press per line: `<vblank> <buttons> [vblanks held, default 6]`. The buttons are
+names such as `CROSS`, `START`, `UP`, joined with `+`, or `-` for none. A line `<vblank> lx=N ...` (or `ly`, `rx`,
+`ry`) sets a stick (0x80 is the middle). Text from `#` on is a comment. `tests/newgame.pad` boots to
+a new game.
+
+The log has one line per vblank event (`<vblank> event: ...`: files read, movies, the memory card),
+and one per game frame with the game's status, the map and the player's position.
+
+`tools/boot_test.py --disc kfiv_us.iso` is step 1's check: it boots to a new game twice and checks
+the two logs match and reach the first map.
 
 Each folder of the game code is its own target, so `cmake --build out/windows-clang --target game_ui`
 compiles just the `ui` folder (`src/game/ui`, with the patches applied).
@@ -110,13 +139,14 @@ and `main` runs until it needs something the stand-ins do not do yet.
 - `tools/port_census.py --show ui/menu_draw.c` prints one file's errors.
 - `tools/port_census.py --show ui` prints a folder's.
 
+**Step 1** (done): the stand-ins (thread scheduler, files, DMA, IOP, memory card, pad) get the game
+from boot to a new game with nothing drawn, deterministically (`tools/boot_test.py`).
+
 Next:
-1. **Step 1:** the stand-ins (thread scheduler, files, pad) get the game from boot to a new game with
-   nothing drawn.
-2. **Graphics:**
+1. **Graphics:**
    - first the game's packets go to paraLLEl-GS;
    - then the VU1 programs become native renderers.
-3. **Sound.**
+2. **Sound.**
 
 ## Layout
 
@@ -124,13 +154,14 @@ Next:
 |---|---|
 | `decomp/` | submodule: kfiv-decomp at the pinned commit. Never edited here |
 | `patches/` | the PC edits to `decomp/`, as diffs (`game/<folder>.patch`, `game/_top.patch`, `nonmatching.patch`) |
-| `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C) |
+| `game/` | PC-only game code, compiled with the patched decomp (`game/data/`: the data sections in C; `state_log.c`: the per-frame log) |
 | `work/` | git-ignored: the decomp with the patches applied, for editing (`tools/patches.py apply`) |
 | `port/include/` | the SDK headers the game includes (`libgraph.h`, `eekernel.h` …) for the PC, and `port/host.h` |
-| `port/platform/` | the program's entry, game RAM, EE addresses, the register pages |
-| `port/sdk/` | the Sony libraries' PC versions (step 0: stand-ins) |
+| `port/platform/` | the program's entry and options, game RAM, EE addresses, the register pages, the EE kernel (fibers, virtual time), the DMAC, the disc |
+| `port/sdk/` | the Sony libraries' PC versions: files and the IOP over SIF, the sound driver's RPC, libcdvd, libdma, libpad, libmc; stand-ins for libgraph, libmpeg and libsdr |
 | `port/math/` | libvu0 in C |
-| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py` |
+| `tools/` | `patches.py`, `port_census.py`, `port_abi_check.py`, `boot_test.py` |
+| `tests/` | pad scripts for headless runs (`newgame.pad`) |
 | `.github/workflows/ci.yml` | CI: configure (the patches apply), build, `port_census.py` reports 0 errors |
 | `CMakeLists.txt`, `CMakePresets.json` | the build; it compiles the patched game code from `out/<preset>/decomp_src/`, with `game/` |
 | `docs/port/` | these notes |

@@ -43,7 +43,7 @@ index 509d00ec2a5943d4f418292543b48c3d69df8ea8..8413ede676e7ea1bb07063004e4c993c
  /* progress of the file being written in 0x400-byte blocks */
  typedef struct {
 diff --git a/src/game/save/save_card.c b/src/game/save/save_card.c
-index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8d1a8c9e1 100644
+index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..182e3b918f4f437e9e26d254d57eccb9d37f55ca 100644
 --- a/src/game/save/save_card.c
 +++ b/src/game/save/save_card.c
 @@ -5,19 +5,16 @@
@@ -70,7 +70,18 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
  extern s32 player_state[];
  extern PlayTime current_play_time;
  
-@@ -69,8 +66,8 @@ s32 SaveCard_Init(void) {
+@@ -28,7 +25,9 @@ static s8 list_must_exist;              /* 0x447340 SaveCard_StartReadList's sec
+ 
+ static CardTask card_check;             /* 0x5CF3F0 */
+ static CardTask card_task;              /* 0x5CF410 */
+-static char icon_file[0xDBF0];          /* 0x5CF430 menu/kf4_icon.ico */
++/* PORT: 0xDBF0 on the PS2. File_Read reads whole sectors, 0xE000 bytes of the icon file: retail ran
++   0x410 bytes over into icon_sys_buffer, which SaveCard_Open clears straight after. */
++static char icon_file[0xE000];          /* 0x5CF430 menu/kf4_icon.ico */
+ static McIconSys icon_sys_buffer;       /* 0x5DD020 */
+ 
+ static char read_list_path[0x40] = { 0 }; /* 0x428A80 */
+@@ -69,8 +68,8 @@ s32 SaveCard_Init(void) {
  s32 SaveCard_Open(void) {
      CardRecord *card;
      s32 file_handle;
@@ -81,7 +92,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
  
      if (Mc_Update() > 0) {
          return -1;
-@@ -80,7 +77,7 @@ s32 SaveCard_Open(void) {
+@@ -80,7 +79,7 @@ s32 SaveCard_Open(void) {
      card_check.retries = 0;
      card_check.kind = CARD_TASK_CHECK;
      card_check.keep_open = 1;
@@ -90,7 +101,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
      addr = (base & 0x3F) == 0 ? base : base + (base & 0x3F);
      save_infos = (SaveInfo *)addr;
      addr += 0x480;
-@@ -105,7 +102,7 @@ s32 SaveCard_Open(void) {
+@@ -105,7 +104,7 @@ s32 SaveCard_Open(void) {
      do {
          SaveCard_ResetRecord(card);
          card++;
@@ -99,7 +110,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
      SaveCard_ClearSaveInfos();
      return 0;
  }
-@@ -634,7 +631,7 @@ static s32 SaveCard_StepSave(void) {
+@@ -634,7 +633,7 @@ static s32 SaveCard_StepSave(void) {
          }
          break;
      case 10:
@@ -108,7 +119,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
          sprintf(save_path, "%s%s%s%s", "/BASLUS-20318", "S", "/BASLUS-20318", "S");
          task->step++;
      case 11:
-@@ -1337,7 +1334,7 @@ static void SaveCard_FillSaveInfo(void *unused_arg0, s32 index) {
+@@ -1337,7 +1336,7 @@ static void SaveCard_FillSaveInfo(void *unused_arg0, s32 index) {
      info = save_infos + index;
      info->exists = 1;
      info->damaged = 0;
@@ -117,7 +128,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
      info->numbers[1] = player_state[20];
      info->numbers[2] = player_state[21];
      info->numbers[3] = player_state[45];
-@@ -1529,7 +1526,7 @@ s32 SaveCard_GetSavesState(void) {
+@@ -1529,7 +1528,7 @@ s32 SaveCard_GetSavesState(void) {
              return -1;
          }
          info++;
@@ -126,7 +137,7 @@ index 0ea99f1a3f8de8c9a3a138dfc031d677c59c578f..a19dbd7dfe97096af8a1efdd92f701e8
      return 0;
  }
  
-@@ -1545,6 +1542,6 @@ s32 SaveCard_HasAnySave(void) {
+@@ -1545,6 +1544,6 @@ s32 SaveCard_HasAnySave(void) {
              return 1;
          }
          info++;

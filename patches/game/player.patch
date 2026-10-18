@@ -1,5 +1,5 @@
 diff --git a/src/game/player/attack.c b/src/game/player/attack.c
-index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201fd95da9f 100644
+index 257bd32b17c472ff2ec16cb2ee9d0c90dc998b6e..36d0a3942741c9cbe83fb49789965ac710f1e799 100644
 --- a/src/game/player/attack.c
 +++ b/src/game/player/attack.c
 @@ -6,6 +6,10 @@
@@ -77,7 +77,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
 -                    point = (void *)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
 +                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                      if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
-                         Collision_SphereCylinder(point, request, body->unk04 * scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
+                         Collision_SphereCylinder(point, request, body->radius * scale, body->height * ENTITY_MODEL(entity)->scale_y,
                                        request->radius);
 @@ -235,7 +233,7 @@ s32 Attack_RunSphere(Unk1B1470Request *request, Unk1B1470Extra *extra) {
              }
@@ -109,7 +109,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
 +                    point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                      if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
                          if (IS_PLAYER(request->owner)) {
-                             Collision_CylinderArcPitch(point, request, body->unk04 * width_scale, body->unk06 * ENTITY_MODEL(entity)->scale_y,
+                             Collision_CylinderArcPitch(point, request, body->radius * width_scale, body->height * ENTITY_MODEL(entity)->scale_y,
 @@ -456,6 +453,26 @@ s32 Attack_RunSwept(Unk1B1470Request *request, Unk1B1470Extra *extra) {
      return 0;
  }
@@ -214,7 +214,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
 -                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
 +                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                  if (COLLISION_RESULT->hit != 0) {
-                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return lists.lists[list];
 @@ -547,6 +530,7 @@ int Attack_TestMapModel(ModelInstance *model, void *request, f32 reach) {
              strip = (CollisionStrip *)&strip_point[2];
@@ -301,7 +301,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
 -                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
 +                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                  if (COLLISION_RESULT->hit != 0) {
-                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return 1;
 @@ -662,69 +612,35 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
      mesh = (CollisionMeshLists *)model->strips;
@@ -380,7 +380,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
 -                Collision_PointTriangle(strip_point[0].position, strip_point[1].position, strip_point[2].position, (int)request, reach);
 +                Collision_PointTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position), EE_PTR(f32 *, strip_point[2].position), (f32 *)request, reach);
                  if (COLLISION_RESULT->hit != 0) {
-                     COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(strip_point->unk04, strip_point->unk08, strip_point->unk0C);
+                     COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(strip_point->material_first, strip_point->material_second, strip_point->material_third);
                      return 0;
 @@ -734,6 +650,7 @@ int Attack_TestMapModelWalls(ModelInstance *model, void *request, f32 reach) {
              strip = (CollisionStrip *)&strip_point[2];
@@ -390,41 +390,24 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
  }
  
  /* A hit lands on the player: marks the attacking entity, works out the damage from the
-@@ -746,11 +663,11 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
+@@ -746,7 +663,7 @@ void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra) {
      s32 percent;
      s32 damage;
  
 -    if (owner >= entity_pool[0] && owner < (Entity *)entity_pool_slots) {
 +    if (owner >= entity_pool[0] && owner <= &entity_pool[1][0x7F]) {
          if (extra->is_magic_shot == 0) {
--            owner->flags |= 0x8000L << 26;
-+            owner->flags |= 0x8000LL << 26;
+             owner->flags |= ENTITY_FLAG_RAISE_ATTACK_WEIGHT;
          } else {
--            owner->flags |= 0x8000L << 27;
-+            owner->flags |= 0x8000LL << 27;
-         }
-     }
-     if (player_state.hp_now == 0) {
-@@ -881,7 +798,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
-         if (entity->hit_cooldown_frames != 0) {
-             return;
-         }
--        entity->flags |= 0x8000L << 28;
-+        entity->flags |= 0x8000LL << 28;
-         entity->hit_cooldown_frames = 15;
-         printf(last_boss_hits_format, dark_one_hits_left);
-         if (!by_weapon) {
-@@ -913,8 +830,8 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
+@@ -913,7 +830,7 @@ void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *
      }
  
      // match: the range test (not one of the entities) is always true for the player
 -    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool_last)) {
--        entity->flags |= 0x8000L << 28;
 +    if (IS_PLAYER(owner) && (owner < entity_pool[0] || owner > &entity_pool[1][0x7F])) {
-+        entity->flags |= 0x8000LL << 28;
+         entity->flags |= ENTITY_FLAG_HIT_BY_PLAYER;
      }
      if (extra->is_magic_shot == 1) {
-         entity->stun_frames = request->stun_frames;
 @@ -1210,12 +1127,12 @@ void Attack_HitMapObject(Unk1B1470Request *request, Unk1B1470Extra *extra, MapOb
  }
  
@@ -450,7 +433,7 @@ index e1cc8cde8d30165dc27fa23ff4ec8e7298749e60..babdb27bd5edcc2ab344a0b9f9b47201
              *out = request->unk50;
          } else {
 diff --git a/src/game/player/held_weapon.c b/src/game/player/held_weapon.c
-index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab32df5923 100644
+index 8bd1a9253937cf843f00ebfcaa6f78c2ed7306ce..e9abebd7ae1b1bc95a5c289e59aad42887f58406 100644
 --- a/src/game/player/held_weapon.c
 +++ b/src/game/player/held_weapon.c
 @@ -6,14 +6,14 @@
@@ -490,13 +473,13 @@ index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab
 -extern GameDefinition weapon_name_defs[70];
 +extern GameDefinition *const weapon_name_defs;
  extern PlayerItemDef weapon_defs[];
--extern MapSlotUnk0C current_fog_block;
+-extern MapFogBlock current_fog_block;
  extern char file_load_buffer[0x80000];
  extern char arm_phong_texture_path[];
  extern char item_arm_path_format[];
  extern char default_held_item_path[];
  extern char default_arm_path[];
--extern MapSlotUnk10Half current_light_block;
+-extern MapLightBlockHalf current_light_block;
 +extern MapDrawState map_draw_state;
  extern CameraState camera_state;
  extern f32 identity_matrix[16];
@@ -611,8 +594,8 @@ index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab
 -        held_item_model.light_block = (s32)held_item_light_blocks;
 -        held_item_model.fog_block = &current_fog_block;
 +        held_item_model.light_block = (sptr)held_item_light_blocks;
-+        held_item_model.fog_block = &map_draw_state.unkA0;
-         MODEL_CHANNEL(&held_item_model)->unk8F = 0x80;
++        held_item_model.fog_block = &map_draw_state.current_fog_block;
+         MODEL_CHANNEL(&held_item_model)->blend_speed = 0x80;
          Sound_LoadSwBank(player_state.weapon);
          WeaponTrail_Reset();
 @@ -195,9 +192,9 @@ void Player_LoadArmModels(void) {
@@ -644,7 +627,7 @@ index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab
 -        arm_model.light_block = (s32)held_item_light_blocks;
 -        arm_model.fog_block = &current_fog_block;
 +        arm_model.light_block = (sptr)held_item_light_blocks;
-+        arm_model.fog_block = &map_draw_state.unkA0;
++        arm_model.fog_block = &map_draw_state.current_fog_block;
      }
  }
  
@@ -658,7 +641,7 @@ index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab
 +        Vector_Copy(&held_item_arm_points.points[1], (void *)(sptr)held_item_model.get_point(&held_item_model, 31));
      }
 -    held_item_light_blocks[0] = current_light_block;
-+    held_item_light_blocks[0] = *(MapSlotUnk10Half *)&map_draw_state.unkC0; /* its first half */
++    held_item_light_blocks[0] = *(MapLightBlockHalf *)&map_draw_state.current_light_block; /* its first half */
  }
  
  /* each frame: ages the weapon trail and queues the two ends of the held weapon, in screen space */
@@ -694,7 +677,7 @@ index dffc4d319f9d60b030d597ec691376bbfd8a3ccb..791ea9f33c8b601c4baf1b7d49694bab
          packet += 2;
          *(u64 *)packet = 0x51; /* the registers: RGBAQ, XYZ2 */
 diff --git a/src/game/player/interact.c b/src/game/player/interact.c
-index c9500141aa91693cf1e548120dde25ff22bc26b6..02a1ae261ea526b4638f6f37cdba05b0d4ef401d 100644
+index 2dd7e3a28c7dcd32e01114557118f2cce488dc67..910c81f35bad67f25a81194ad372a199c74ef9ed 100644
 --- a/src/game/player/interact.c
 +++ b/src/game/player/interact.c
 @@ -5,21 +5,17 @@
@@ -723,7 +706,7 @@ index c9500141aa91693cf1e548120dde25ff22bc26b6..02a1ae261ea526b4638f6f37cdba05b0
  int Script_IsRunning(int);
  int MapItem_StartPickup(ItemNode *);
 diff --git a/src/game/player/magic_ladder.c b/src/game/player/magic_ladder.c
-index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1591c458e 100644
+index 4de22ce7a94b1152afc14ce49dd13566f006b1d8..c066aebaf88d9b35c44ed52faa7708c0df934864 100644
 --- a/src/game/player/magic_ladder.c
 +++ b/src/game/player/magic_ladder.c
 @@ -3,10 +3,9 @@
@@ -772,7 +755,7 @@ index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1
 @@ -501,13 +501,13 @@ void Ladder_WalkToFoot(void) {
  /* Waits on a rung; up/down input starts climbing or leaves the ladder. */
  void Ladder_WaitOnRung(u16 buttons) {
-     if (!(ladder_object->unk10 & 0x10000)) {
+     if (!(ladder_object->flags & 0x10000)) {
 -        player_state.status_bits &= ~(1L << 36);
 +        player_state.status_bits &= ~(1LL << 36);
      }
@@ -798,7 +781,7 @@ index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1
 @@ -537,13 +537,13 @@ void Ladder_ClimbRungUp(u16 buttons) {
      f32 fraction;
  
-     if (!(ladder_object->unk10 & 0x10000)) {
+     if (!(ladder_object->flags & 0x10000)) {
 -        player_state.status_bits &= ~(1L << 36);
 +        player_state.status_bits &= ~(1LL << 36);
      }
@@ -815,7 +798,7 @@ index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1
 @@ -567,13 +567,13 @@ void Ladder_ClimbRungDown(u16 buttons) {
      f32 fraction;
  
-     if (!(ladder_object->unk10 & 0x10000)) {
+     if (!(ladder_object->flags & 0x10000)) {
 -        player_state.status_bits &= ~(1L << 36);
 +        player_state.status_bits &= ~(1LL << 36);
      }
@@ -836,7 +819,7 @@ index 91d3c311409eeb9f83d0cd41ea76e60c129896ce..4f41106176f1fafdf0c54014a334d8d1
 +    return 0; /* retail leaves v0 as it was; the callers do not read it */
  }
 diff --git a/src/game/player/player.h b/src/game/player/player.h
-index 17a77d9fdc8e3141ae5bab898c515b144c68561c..53a8d4f99cf8a59af2bb60cf5658b9a58395c619 100644
+index 5fed52f43a02121c69e6429e409a764a4d7d3b37..e687429b4534d3bc41747b303286fcd8e24bcf39 100644
 --- a/src/game/player/player.h
 +++ b/src/game/player/player.h
 @@ -144,9 +144,9 @@ typedef struct {
@@ -891,7 +874,7 @@ index 17a77d9fdc8e3141ae5bab898c515b144c68561c..53a8d4f99cf8a59af2bb60cf5658b9a5
  /* item_name_defs[ITEM_COUNT]: param/item_nam.prm, 0x40 bytes per item, starting with its name. worn_name_defs is
     the run of them from ITEM_WORN_FIRST on (the items Attack_WearWornItem reads). */
 diff --git a/src/game/player/player_collision.c b/src/game/player/player_collision.c
-index 6e0792379deddc2909c9227f3192a5a9ec39e140..ee8ddac5e2b497978f25cc783e2032ecd9ee5c21 100644
+index 25f57b15fba1eb09103782657f9cb4dfe1f870a1..e90f4ebda9b25b0569c71812a50062107b8adae6 100644
 --- a/src/game/player/player_collision.c
 +++ b/src/game/player/player_collision.c
 @@ -4,6 +4,7 @@
@@ -945,11 +928,11 @@ index 6e0792379deddc2909c9227f3192a5a9ec39e140..ee8ddac5e2b497978f25cc783e2032ec
                      points_left = strip->point_count - 2;
                      do {
 -                        Collision_CapsuleTriangle((f32 *)strip_point[0].position, (f32 *)strip_point[1].position,
--                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
+-                                      (f32 *)strip_point[2].position, (f32 *)&COLLISION_SCRATCH->wall_point, 100.0f, 230.0f);
 +                        Collision_CapsuleTriangle(EE_PTR(f32 *, strip_point[0].position), EE_PTR(f32 *, strip_point[1].position),
-+                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->unk90, 100.0f, 230.0f);
++                                      EE_PTR(f32 *, strip_point[2].position), (f32 *)&COLLISION_SCRATCH->wall_point, 100.0f, 230.0f);
                          if (COLLISION_RESULT->hit != 0) {
-                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->unk90.x - COLLISION_RESULT->point[0];
+                             COLLISION_SCRATCH->push.x = COLLISION_SCRATCH->wall_point.x - COLLISION_RESULT->point[0];
                              COLLISION_SCRATCH->push.y = 0.0f;
 @@ -165,22 +165,22 @@ int Player_CollideWithMap(void) {
                  }
@@ -1094,7 +1077,7 @@ index 6e0792379deddc2909c9227f3192a5a9ec39e140..ee8ddac5e2b497978f25cc783e2032ec
 +                point = (void *)(sptr)ENTITY_MODEL(entity)->get_point(ENTITY_MODEL(entity), body->unk00.point);
                  Vector_Copy(position, point);
                  if (!(body->unk00.flags & ENTITY_BODY_ROUND)) {
-                     radius = body->unk04 * ENTITY_MODEL(entity)->scale_x;
+                     radius = body->radius * ENTITY_MODEL(entity)->scale_x;
 @@ -563,10 +563,10 @@ void Player_CollideWithMapObjects(s32 climb) {
                  player_state.position.y = old_position[1] - step;
                  player_state.step_remainder = rise - step + 5.0f;
@@ -1109,7 +1092,7 @@ index 6e0792379deddc2909c9227f3192a5a9ec39e140..ee8ddac5e2b497978f25cc783e2032ec
              Vector_Copy(&player_state, old_position);
          }
 diff --git a/src/game/player/player_items.c b/src/game/player/player_items.c
-index bd6d790aa86d44459f040915079f450bc2915a43..148a941719ed8c13e4cbd36a1ffe5c9234ae23bc 100644
+index de8c2b9e63010c554f3b2b4087ebff2d25334ada..24b2a9eaea93c79dc08d51ceb1b8f1c61984ee9a 100644
 --- a/src/game/player/player_items.c
 +++ b/src/game/player/player_items.c
 @@ -22,7 +22,6 @@ extern ItemCommonDef item_common_defs[];
@@ -1130,7 +1113,7 @@ index bd6d790aa86d44459f040915079f450bc2915a43..148a941719ed8c13e4cbd36a1ffe5c92
                      Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
                      return;
 diff --git a/src/game/player/player_state.c b/src/game/player/player_state.c
-index 5d7b592236ec782dfff1b3375821df250562c110..5891f8d9a776cd0b4b6885acea7595a7beedf86c 100644
+index 96836aaddc6a6e0c72785357643b2c0d1c2851c3..5891f8d9a776cd0b4b6885acea7595a7beedf86c 100644
 --- a/src/game/player/player_state.c
 +++ b/src/game/player/player_state.c
 @@ -4,14 +4,3 @@
@@ -1147,9 +1130,9 @@ index 5d7b592236ec782dfff1b3375821df250562c110..5891f8d9a776cd0b4b6885acea7595a7
 -asm(".globl player_floor_block\nplayer_floor_block = player_state + 0x250\n");  /* unk250 the flag block of the floor record under the player */
 -asm(".globl player_weapon_step\nplayer_weapon_step = player_state + 0x258\n");  /* unk258 the step of the weapon's action, 0 while idle */
 -asm(".globl player_status_bits\nplayer_status_bits = player_previous + 0x1C8\n");  /* unk1C8 status bits */
--asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* pad2A4: the map record byte 0x4C under the player, the frame before */
+-asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* fade_area: the map record byte 0x4C under the player, the frame before */
 diff --git a/src/game/player/player_status.c b/src/game/player/player_status.c
-index 732ad7613c8305f653e5272256b87e147cb6e258..0f72445cfc0dfa53d3d032179477951665665ee7 100644
+index bf8c6b33fb9766311b354add70cb34a9460d0813..2bca478d2b6644346517dba3294f610e6087d7d8 100644
 --- a/src/game/player/player_status.c
 +++ b/src/game/player/player_status.c
 @@ -21,13 +21,12 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
@@ -1205,12 +1188,12 @@ index 732ad7613c8305f653e5272256b87e147cb6e258..0f72445cfc0dfa53d3d0321794779516
      player = &player_state;
 -    area = *(char *)((player->map_index << 7) + (int)slot->records + 0x4C); // match: summed as integers, index first
 +    area = *(char *)(slot->records + (player->map_index << 7) + 0x4C);
-     *(s32 *)player->pad2A4 = area;
+     player->fade_area = area;
 -    if (area - player_previous_fade_level[0] < 0) {
-+    if (area - *(s32 *)player_previous.pad2A4 < 0) {
-         *(s32 *)player->pad2AC = -0x30;
++    if (area - player_previous.fade_area < 0) {
+         player->screen_fade_step = -0x30;
      }
-     step = *(s32 *)player->pad2AC;
+     step = player->screen_fade_step;
 @@ -401,7 +403,7 @@ void Player_DrawScreenFade(void) {
      if (player_state.screen_fade != 0.0f) {
          Packet_BeginGsRegisters();
@@ -1230,7 +1213,7 @@ index 732ad7613c8305f653e5272256b87e147cb6e258..0f72445cfc0dfa53d3d0321794779516
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
-index b7fced28da5c3a3f71fda51ec46a7fb0b2e335b5..ad454cc3165c8f72bb5a6c56ccc5ae30e0c58301 100644
+index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f13f5c92b90ecab062a341986b2f61ed81b52fd9 100644
 --- a/src/game/player/player_update.c
 +++ b/src/game/player/player_update.c
 @@ -11,6 +11,10 @@
@@ -1307,7 +1290,7 @@ index b7fced28da5c3a3f71fda51ec46a7fb0b2e335b5..ad454cc3165c8f72bb5a6c56ccc5ae30
  
 @@ -1019,11 +1019,12 @@ void Player_HolsterWeapon(void) {
      ModelMotion_Step(WEAPON_MODEL);
-     if (MODEL_CHANNEL(WEAPON_MODEL)->value == 0) {
+     if (MODEL_CHANNEL(WEAPON_MODEL)->blend_left == 0) {
          Effect_FreePlayerWeaponKinds();
 -        player_weapon_step[0] = 0;
 +        player_state.item_action_step = 0;

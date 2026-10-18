@@ -1,5 +1,5 @@
 diff --git a/src/game/entity/entity.h b/src/game/entity/entity.h
-index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e75946c0da 100644
+index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9c47507fb 100644
 --- a/src/game/entity/entity.h
 +++ b/src/game/entity/entity.h
 @@ -4,11 +4,13 @@
@@ -31,20 +31,20 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  struct Entity;
  
--/* what EntityModel.level_tables points at */
+-/* what EntityModel.level_tables points at: the ModelChannel (model/model.h) seen from Entity code */
 +/* what EntityModel.level_tables points at: a view of ModelChannel (model/model.h), which starts with
 +   0x20 pointers, so the padding follows that struct's layout */
  typedef struct {
 -    char pad00[0x81];
-+    char pad00[offsetof(ModelChannel, index)];
-     u8 unk81;                       /* 0x81 */
-     s16 unk82;                      /* 0x82 */
-     s32 unk84;                      /* 0x84 */
-     s32 unk88;                      /* 0x88 */
-     u16 unk8C;                      /* 0x8C set from EntityParams.motion_speeds[] */
- } EntityModelUnkFC;
-+_Static_assert(offsetof(EntityModelUnkFC, unk82) == offsetof(ModelChannel, param), "EntityModelUnkFC is not ModelChannel");
-+_Static_assert(offsetof(EntityModelUnkFC, unk8C) == offsetof(ModelChannel, word), "EntityModelUnkFC is not ModelChannel");
++    char pad00[offsetof(ModelChannel, motion_index)];
+     u8 motion_index;                /* 0x81 the motion playing (ModelChannel.index) */
+     s16 frame;                      /* 0x82 the motion's current frame */
+     s32 frame_fixed;                /* 0x84 the frame times 256 */
+     s32 blend_left;                 /* 0x88 blend still to run; 0 once the motion plays on its own */
+     u16 frame_step;                 /* 0x8C set from EntityParams.motion_speeds[] */
+ } EntityModelChannel;
++_Static_assert(offsetof(EntityModelChannel, frame) == offsetof(ModelChannel, frame), "EntityModelChannel is not ModelChannel");
++_Static_assert(offsetof(EntityModelChannel, frame_step) == offsetof(ModelChannel, frame_step), "EntityModelChannel is not ModelChannel");
  
 -/* one 0x100-byte element of what EntityModel.parts points at */
 +/* one 0x100-byte element of what EntityModel.parts points at: two ModelParts (model/model.h), whose
@@ -97,7 +97,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 -    char padF0[0x08];
 +    char padF0[offsetof(ModelInstance, parts) - 0xF0];
      EntityModelUnkF8 *parts;        /* 0xF8 the model's part array (0x80 or 0x100 bytes per part) */
-     EntityModelUnkFC *level_tables; /* 0xFC the model's animation channel (ModelInstance.level_tables) */
+     EntityModelChannel *level_tables; /* 0xFC the model's animation channel (ModelInstance.level_tables) */
 -    char pad100[0x02];
 +    char pad100[offsetof(ModelInstance, draw_flags) - offsetof(ModelInstance, level_tables) - sizeof(void *)];
      u16 draw_flags;                 /* 0x102 0x800: drawn with its own texture (same word as ModelInstance) */
@@ -133,8 +133,8 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      EntityParamsUnk240PartUnk00 unk00; /* 0x00 */
      EntityParamsUnk240PartUnk12 unk12; /* 0x12 */
 @@ -142,6 +167,9 @@ typedef struct {
-     u16 unk24;                      /* 0x24 first animation frame it is active on, 0: unused */
-     u16 unk26;                      /* 0x26 last animation frame it is active on */
+     u16 first_frame;                /* 0x24 first animation frame it is active on, 0: unused */
+     u16 last_frame;                 /* 0x26 last animation frame it is active on */
  } EntityParamsUnk240Part;
 +LAYOUT_SIZE(EntityParamsUnk240Part, 0x28);
 +LAYOUT_OFFSET(EntityParamsUnk240Part, unk12, 0x12);
@@ -243,7 +243,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 +
  /* one launch of a record at EntityParams+0x3D8 */
  typedef struct {
-     u8 unk00;                       /* 0x00 passed to Attack_LaunchMagicEffect */
+     u8 magic_effect;                /* 0x00 passed to Attack_LaunchMagicEffect */
 @@ -265,6 +319,7 @@ typedef struct {
  } EntityParamsUnk3D8Launch;
  
@@ -251,13 +251,13 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 +/* overlay: part of a record of param/chr.prm (EntityParams) */
  typedef struct {
      u8 unk00;                       /* 0x00 */
-     u8 unk01;                       /* 0x01 */
+     u8 turn_frames;                 /* 0x01 the entity turns to the player until the motion reaches this frame */
 @@ -275,6 +330,8 @@ typedef struct {
      char pad0D[0x03];
-     EntityParamsUnk3D8Launch unk10[3]; /* 0x10 */
+     EntityParamsUnk3D8Launch launches[3]; /* 0x10 the three launches of the record */
  } EntityParamsUnk3D8Full;
 +LAYOUT_SIZE(EntityParamsUnk3D8Full, 0x1C);
-+LAYOUT_OFFSET(EntityParamsUnk3D8Full, unk10, 0x10);
++LAYOUT_OFFSET(EntityParamsUnk3D8Full, launches, 0x10);
  
  /* sub-struct at EntityParams+0x3D8 */
  typedef struct {
@@ -274,7 +274,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      char pad12[0x0A];
  } EntityParamsUnk3D8Array;
 +LAYOUT_SIZE(EntityParamsUnk3D8Array, 0x1C);
-+LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk08, 0x08);
++LAYOUT_OFFSET(EntityParamsUnk3D8Array, widest_angle, 0x08);
 +LAYOUT_OFFSET(EntityParamsUnk3D8Array, unk10, 0x10);
  
  /* one of the four bodies of an entity kind the player collides with piece by piece (EntityParams.body_points) */
@@ -288,11 +288,11 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      union {
          u32 flags;                  /* 0x00 ENTITY_BODY_ bits */
 @@ -321,9 +383,12 @@ typedef struct {
-     u16 unk06;                      /* 0x06 its height, before the model's y scale */
-     f32 unk08;                      /* 0x08 a hit on this body counts this many times over (Attack_RunSphere) */
+     u16 height;                     /* 0x06 its height, before the model's y scale */
+     f32 hit_multiplier;             /* 0x08 a hit on this body counts this many times over (Attack_RunSphere) */
  } EntityBodyPoint;
 +LAYOUT_SIZE(EntityBodyPoint, 0x0C);
-+LAYOUT_OFFSET(EntityBodyPoint, unk08, 0x08);
++LAYOUT_OFFSET(EntityBodyPoint, hit_multiplier, 0x08);
  
  /* what Entity.params points at: per-kind tuning values. EntityController below is a second
     view of the same block; the two are to be unified. */
@@ -300,15 +300,15 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  typedef struct {
      u32 model_number : 16;          /* 0x00 the chr/cNNNN.chr model file number, 0xFFFF: none */
      u32 entity_type : 8;            /* 0x02 index into entity_type_handlers */
-@@ -404,20 +469,39 @@ typedef struct {
-     s16 unk43E;                     /* 0x43E */
+@@ -405,6 +470,21 @@ typedef struct {
+     s16 type_param_2;               /* 0x43E a third per-type value */
      u16 variant_effect_ids[8];      /* 0x440 indexed by flag bits 60-62; passed to Effect_StartSpawner */
  } EntityParams;
 +LAYOUT_SIZE(EntityParams, 0x450);
 +LAYOUT_OFFSET(EntityParams, flags, 0x10);
 +LAYOUT_OFFSET(EntityParams, body_points, 0x20);
 +LAYOUT_OFFSET(EntityParams, motion_speeds, 0x80);
-+LAYOUT_OFFSET(EntityParams, body_radius, 0xCC);
++LAYOUT_OFFSET(EntityParams, radius, 0xCC);
 +LAYOUT_OFFSET(EntityParams, anim_effect_offsets, 0x130);
 +LAYOUT_OFFSET(EntityParams, anim_sound_offsets, 0x1B0);
 +LAYOUT_OFFSET(EntityParams, gold, 0x230);
@@ -320,36 +320,37 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 +LAYOUT_OFFSET(EntityParams, pitch_limit_deg, 0x430);
 +LAYOUT_OFFSET(EntityParams, variant_effect_ids, 0x440);
  
- /* record index of the 0x88-byte records at +0x240, reached by stepping the whole params pointer
-    (the match keeps the index scaling apart from the +0x240) */
+ /* EntityParams.flags; the low six are copied, inverted, into Entity flag bits 22-27 */
+ #define ENTITY_PARAMS_FLAG_1                              0x0001 /* clears Entity flag bit 22, which only ScriptCmd_GetEntityFlags reads */
+@@ -428,14 +508,18 @@ typedef struct {
  #define ENTITY_PARAMS_UNK240_RECORD(params, index) (((EntityParams *)((char *)(params) + (index) * sizeof(EntityParamsUnk240)))->melee_attacks[0])
  
  /* what EntityParams.anim_effect_offsets[n] leads to: something Effect_StartSpawner starts at a bone on an animation frame */
 +/* overlay: a record of param/chr.prm, after the EntityParams records */
  typedef struct {
-     u16 unk00;                      /* 0x00 passed to Effect_StartSpawner */
-     u16 unk02;                      /* 0x02 the animation frame */
-     u8 unk04;                       /* 0x04 passed to Model_GetSkinnedBonePoint (and the one after it) */
-     s8 unk05;                       /* 0x05 not 0: EntityParams.variant_effect_ids picks what to start */
+     u16 effect_id;                  /* 0x00 passed to Effect_StartSpawner */
+     u16 frame;                      /* 0x02 the animation frame */
+     u8 bone;                        /* 0x04 passed to Model_GetSkinnedBonePoint (and the one after it) */
+     s8 use_variant;                 /* 0x05 not 0: EntityParams.variant_effect_ids picks what to start */
  } EntityParamsUnk130;
 +LAYOUT_SIZE(EntityParamsUnk130, 0x06);
-+LAYOUT_OFFSET(EntityParamsUnk130, unk04, 0x04);
++LAYOUT_OFFSET(EntityParamsUnk130, bone, 0x04);
  
  /* what EntityParams.anim_sound_offsets[n] leads to: something Sound_PlayFalloff starts on an animation frame */
 +/* overlay: a record of param/chr.prm, after the EntityParams records */
  typedef struct {
-     u8 unk00;                       /* 0x00 passed to Sound_PlayFalloff */
-     u8 unk01;                       /* 0x01 passed to Sound_PlayFalloff */
-@@ -425,6 +509,8 @@ typedef struct {
-     u8 unk04;                       /* 0x04 not 0: left out while Entity.ailment_4_frames is set */
+     u8 sound;                       /* 0x00 the sound Sound_PlayFalloff plays */
+     u8 kind;                        /* 0x01 the kind passed to Sound_PlayFalloff */
+@@ -443,6 +527,8 @@ typedef struct {
+     u8 skip_while_ailing;           /* 0x04 not 0: left out while Entity.ailment_4_frames is set */
      char pad05[0x03];
  } EntityParamsUnk1B0;
 +LAYOUT_SIZE(EntityParamsUnk1B0, 0x08);
-+LAYOUT_OFFSET(EntityParamsUnk1B0, unk04, 0x04);
++LAYOUT_OFFSET(EntityParamsUnk1B0, skip_while_ailing, 0x04);
  
  /* the first word of an EntityParams.ranged_attacks record, as the AI functions take it */
  #define ENTITY_PARAMS_UNK3D8(params, index) (&(params)->ranged_attacks[index].record)
-@@ -434,18 +520,22 @@ typedef struct {
+@@ -452,18 +538,22 @@ typedef struct {
  
  /* EntityParams with the three ranged-attack records as a real array member: indexed this way the
     compiler adds the scaled index to the params pointer, base first (DarkKnight_PickAttack needs that) */
@@ -372,7 +373,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  #define ENTITY_PARAMS_MOTION_SCALE(params) (((EntityParamsMotionScale *)(params))->motion_scale)
  
-@@ -525,7 +615,7 @@ typedef struct {
+@@ -555,7 +645,7 @@ typedef struct {
  /* Entity+0xE0 as the kinds handled at 0x1740A8..0x180000 use it */
  typedef struct {
      void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
@@ -381,7 +382,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*move)(void);             /* 0x18 */
      s32 turn_rate;                  /* 0x1C turn speed built towards EntityParams.turn_limit */
      char pad20[0x10];
-@@ -548,7 +638,7 @@ typedef struct {
+@@ -578,7 +668,7 @@ typedef struct {
  /* Entity+0xE0 as the flying kind set up by DarkBird_Init lays it out */
  typedef struct {
      void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
@@ -390,7 +391,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*move)(void);             /* 0x18 */
      f32 turn_rate;                  /* 0x1C turn speed */
      char pad20[0x24];
-@@ -567,7 +657,7 @@ typedef struct {
+@@ -597,7 +687,7 @@ typedef struct {
  /* Entity+0xE0 as the kind set up by ExpeditionSoldier_Init lays it out */
  typedef struct {
      void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
@@ -399,16 +400,16 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*move)(void);             /* 0x18 */
      s32 turn_rate;                  /* 0x1C turn rate of the move command, cleared when one starts */
      f32 unk20[4];                   /* 0x20 */
-@@ -581,7 +671,7 @@ typedef struct {
+@@ -611,7 +701,7 @@ typedef struct {
  
  /* Entity+0xE0 as the kind set up by func_00150588 lays it out */
  typedef struct {
 -    char pad00[0x1C];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
      s32 unk1C;                      /* 0x1C */
- } EntityUnkE0Kind150588;
+ } EntityAiStateKind150588;
  
-@@ -591,7 +681,7 @@ typedef struct {
+@@ -621,7 +711,7 @@ typedef struct {
      void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
      void (*animate)(void);          /* 0x04 */
      void (*on_hit)(void);           /* 0x08 */
@@ -417,9 +418,9 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*dormant)(void);          /* 0x10 */
      void (*death)(void);            /* 0x14 */
      void (*move)(void);             /* 0x18 */
-@@ -613,27 +703,31 @@ typedef struct {
+@@ -643,27 +733,31 @@ typedef struct {
      char pad7D[0x23];
- } __attribute__((aligned(8))) EntityUnkE0Kind168160;
+ } __attribute__((aligned(8))) EntityAiStateKind168160;
  
 -/* an 8-byte slot of the work area as the bit-fields the init functions set */
 +/* an 8-byte slot of the work area as the bit-fields the init functions set. The bits are u8 (u64 on the PS2,
@@ -433,59 +434,59 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 +    u8 bit5 : 1;
 +    u8 bit6 : 1;
 +    u8 pad7 : 1;
-     u8 unk01;                       /* 0x01 */
-     s16 unk02;                      /* 0x02 */
-     s32 unk04;                      /* 0x04 */
- } EntityUnkE0SlotBits;
-+LAYOUT_SIZE(EntityUnkE0SlotBits, 8);
+     u8 frames_left;                 /* 0x01 frames left */
+     s16 frame;                      /* 0x02 current frame */
+     s32 frame_fixed;                /* 0x04 the frame times 256 */
+ } EntityAiMotionSlotBits;
++LAYOUT_SIZE(EntityAiMotionSlotBits, 8);
  
  /* Entity+0xE0 as the kinds set up by func_00151D30 and its neighbours use it */
  typedef struct {
 -    char pad00[0x80];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
 +    char pad1C[0x64];
-     EntityUnkE0SlotBits unk80;      /* 0x80 */
-     EntityUnkE0SlotBits unk88;      /* 0x88 */
- } EntityUnkE0Kind151D30;
+     EntityAiMotionSlotBits motion_slot_0; /* 0x80 */
+     EntityAiMotionSlotBits motion_slot_1; /* 0x88 */
+ } EntityAiStateKind151D30;
  
  /* Entity+0xE0 as the kind set up by DarkSorcerer_Init lays it out */
  typedef struct {
 -    char pad00[0x1C];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
-     f32 unk1C;                      /* 0x1C turn speed */
+     f32 turn_rate;                  /* 0x1C turn speed built towards EntityParams.turn_limit */
      char pad20[0x24];
-     f32 unk44;                      /* 0x44 speed along x, y and z */
-@@ -645,7 +739,8 @@ typedef struct {
+     f32 move_speed;                 /* 0x44 speed the movement builds up with EntityAi_Accelerate */
+@@ -675,7 +769,8 @@ typedef struct {
  /* Entity+0xE0 as the kind set up by func_0015F8C0 lays it out. The area is
     8-byte aligned: only then is "unk68 == 0 && unk6A == 0" one lwu. */
  typedef struct {
 -    char pad00[0x68];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
 +    char pad1C[0x4C];
-     s16 unk68;                      /* 0x68 counts down */
-     s16 unk6A;                      /* 0x6A counts down */
-     s16 unk6C;                      /* 0x6C counts down */
-@@ -662,7 +757,8 @@ typedef struct {
+     s16 vanish_frames;              /* 0x68 frames left while it is vanished (draw flag 0x800, params.action_frames to start) */
+     s16 vanish_cooldown;            /* 0x6A frames before it may vanish again (params.far_distance to start) */
+     s16 think_timer;                /* 0x6C countdown reloaded from params.type_param_0 */
+@@ -692,7 +787,8 @@ typedef struct {
  
  /* Entity+0xE0 as the kind set up by func_00162BC8 lays it out */
  typedef struct {
 -    char pad00[0x30];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
 +    char pad1C[0x14];
-     f32 unk30[4];                   /* 0x30 pitch and yaw passed to EntityEvent_StartEffectAtPoint */
+     f32 effect_angles[4];           /* 0x30 pitch and yaw passed to EntityEvent_StartEffectAtPoint */
      char pad40[0x2E];
      s16 unk6E;                      /* 0x6E */
-@@ -673,7 +769,8 @@ typedef struct {
+@@ -703,7 +799,8 @@ typedef struct {
  
  /* Entity+0xE0 as the kind set up by Onyx_Init lays it out */
  typedef struct {
 -    char pad00[0x68];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
 +    char pad1C[0x4C];
-     s16 unk68[3];                   /* 0x68 weights of the first three actions (see Onyx_PickAttack) */
+     s16 action_weights[3];          /* 0x68 weights of the first three actions (see Onyx_PickAttack) */
      char pad6E[0x32];
- } EntityUnkE0Kind17FC60;
-@@ -681,7 +778,7 @@ typedef struct {
+ } EntityAiStateKind17FC60;
+@@ -711,7 +808,7 @@ typedef struct {
  /* Entity+0xE0 as the kind set up by func_00131390 lays it out */
  typedef struct {
      void (*think)(struct Entity *entity, s32 run_now); /* 0x00 */
@@ -494,24 +495,24 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*move)(void);             /* 0x18 */
      f32 turn_rate;                  /* 0x1C turn speed used by EntityAi_TurnToHeading */
      char pad20[0x4A];
-@@ -697,7 +794,7 @@ typedef struct {
+@@ -727,7 +824,7 @@ typedef struct {
  
  /* Entity+0xE0 as the kind set up by func_0012ACA0 lays it out */
  typedef struct {
 -    char pad00[0x1C];
 +    void *pad00[7];                 /* 0x00 the seven handlers */
-     f32 unk1C;                      /* 0x1C turn speed */
+     f32 turn_rate;                  /* 0x1C turn speed built towards EntityParams.turn_limit */
      char pad20[0x20];
-     f32 unk40[7];                   /* 0x40 [2] to [6]: how far each of the five neck joints (model parts 30 to 34) is bent */
-@@ -706,6 +803,7 @@ typedef struct {
+     f32 neck_bend[7];               /* 0x40 how far each of the five neck joints (model parts 30 to 34) is bent, [2] to [6] */
+@@ -736,6 +833,7 @@ typedef struct {
  
  /* what Entity.params points at (the entity's controller / type data), see ENTITY_CONTROLLER.
     EntityParams above is a second view of the same block; the two are to be unified. */
 +/* overlay: a 0x450-byte record of param/chr.prm (EntityParams) */
  typedef struct {
      char pad00[0x10];
-     u16 flags;                      /* 0x10 */
-@@ -728,6 +826,12 @@ typedef struct {
+     u16 flags;                      /* 0x10 ENTITY_PARAMS_FLAG_ bits */
+@@ -758,6 +856,12 @@ typedef struct {
      s16 far_distance;               /* 0x438 the farther of the two distances it keeps from the player */
      s16 entity_group_index;         /* 0x43A index of its group entry (entity_group_state, origins) */
  } EntityController;
@@ -524,7 +525,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  /* EntityController.flags: the type needs two pool blocks (0x100000 bytes) */
  #define CONTROLLER_FLAG_TWO_BLOCKS  0x8000
-@@ -756,7 +860,7 @@ typedef struct Entity {
+@@ -809,7 +913,7 @@ typedef struct Entity {
      f32 body_radius;                /* 0x44 EntityParams.unk04 scaled */
      f32 floor_lift;                 /* 0x48 how far above the floor it is kept (see EntityCollision_SphereAgainstMap) */
      f32 knockback_speed;            /* 0x4C speed the knockback pushes the entity along at */
@@ -533,19 +534,19 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      void (*handler)(struct Entity *entity); /* 0x54 the current action; EntityAi_Update calls it every frame while flag bit 6 is set and no reaction is */
      void (*prev_handler)(struct Entity *entity); /* 0x58 the action before the last EntityAi_StartAction */
      void *target;                   /* 0x5C */
-@@ -812,16 +916,123 @@ typedef struct Entity {
- } Entity;
+@@ -932,16 +1036,123 @@ typedef struct Entity {
+ #define ENTITY_FLAG_SIGHT_BLOCKED            0x8000000000000000ULL /* something stands between the entity and the player (EntityAi_SensePlayer) */
  
  /* Entity with the work area at 0xE0 as plain bytes: the init functions clear it
 -   one byte at a time, and only an array member gives their code */
 -#define ENTITY_WORK_AREA_SIZE 0xA0
 +   one byte at a time, and only an array member gives their code. The area is 0xA0 bytes on the PS2,
 +   the rest of the record from unkE0 on (its handlers are pointers, so it is longer on the PC). */
-+#define ENTITY_WORK_AREA_SIZE ((s32)(sizeof(Entity) - offsetof(Entity, unkE0)))
++#define ENTITY_WORK_AREA_SIZE ((s32)(sizeof(Entity) - offsetof(Entity, ai_state)))
  
  typedef struct {
 -    char pad00[0xE0];
-+    char pad00[offsetof(Entity, unkE0)];
++    char pad00[offsetof(Entity, ai_state)];
      u8 work_bytes[ENTITY_WORK_AREA_SIZE]; /* 0xE0 */
  } EntityWorkBytes;
  
@@ -553,114 +554,114 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
 +/* The EntityUnkE0Kind* views lie over Entity.unkE0. Their offset comments are the PS2's; on the PC the seven
 +   handlers are 8 bytes each, so a PS2 offset below 0x1C is a handler (index * pointer size) and one from 0x1C on
-+   lies (offsetof(EntityUnkE0, turn_rate) - 0x1C) further on. Every named field of a view sits where
-+   EntityUnkE0 has that PS2 offset. */
-+#define ENTITY_UNKE0_PC_OFFSET(ps2_offset)     ((ps2_offset) < 0x1C ? (ps2_offset) / 4 * sizeof(void *) : (ps2_offset) - 0x1C + offsetof(EntityUnkE0, turn_rate))
-+#define ENTITY_UNKE0_VIEW_OFFSET(T, field, ps2_offset)     _Static_assert(offsetof(T, field) == ENTITY_UNKE0_PC_OFFSET(ps2_offset), #T "." #field " is not at EntityUnkE0's " #ps2_offset)
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, pause_timer, 0x68);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, move_choice, 0x78);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_0, 0x80);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0, motion_slot_1, 0x88);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think, 0x00);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, turn_rate, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, target_point, 0x30);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_x, 0x48);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_y, 0x4C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, point_z, 0x50);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, action_frames, 0x68);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, steer_to_target, 0x78);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, climb_command, 0x79);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, think_flag, 0x7A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk80, 0x80);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1740A8, unk88, 0x88);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, think, 0x00);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, turn_rate, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, side_speed, 0x44);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, forward_speed, 0x48);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, pitch_speed, 0x4C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk78, 0x78);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, climb_command, 0x79);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk80, 0x80);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind1719F8, unk88, 0x88);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, think, 0x00);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, turn_rate, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, unk20, 0x20);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, target_point, 0x30);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_42_state, 0x7A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_43_state, 0x7B);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind178358, map_object_to_operate_id, 0x7C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind150588, unk1C, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, think, 0x00);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, animate, 0x04);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, on_hit, 0x08);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, dormant, 0x10);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, death, 0x14);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk1C, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk20, 0x20);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk40, 0x40);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk44, 0x44);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6A, 0x6A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6C, 0x6C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk6E, 0x6E);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk78, 0x78);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk79, 0x79);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7A, 0x7A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7B, 0x7B);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind168160, unk7C, 0x7C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk80, 0x80);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind151D30, unk88, 0x88);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk1C, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk44, 0x44);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk48, 0x48);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind16BF98, unk4C, 0x4C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk68, 0x68);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6A, 0x6A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk6C, 0x6C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk78, 0x78);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk79, 0x79);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7A, 0x7A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7B, 0x7B);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7C, 0x7C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7D, 0x7D);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind15F8C0, unk7E, 0x7E);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk30, 0x30);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk6E, 0x6E);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk80, 0x80);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind162BC8, unk90, 0x90);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind17FC60, unk68, 0x68);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, think, 0x00);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, move, 0x18);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, turn_rate, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, player_cast_timer, 0x6A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, unk7A, 0x7A);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, alternate_anim_flag, 0x7B);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band, 0x7C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, distance_band_timer, 0x7D);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind131390, afterimage_active, 0x7E);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk1C, 0x1C);
-+ENTITY_UNKE0_VIEW_OFFSET(EntityUnkE0Kind12ACA0, unk40, 0x40);
-+_Static_assert(sizeof(EntityUnkE0Kind12ACA0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind12ACA0 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind131390) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind131390 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind150588) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind150588 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind151D30) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind151D30 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind15F8C0) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind15F8C0 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind162BC8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind162BC8 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind168160) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind168160 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind16BF98) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind16BF98 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind1719F8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1719F8 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind1740A8) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind1740A8 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind178358) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind178358 is larger than the work area");
-+_Static_assert(sizeof(EntityUnkE0Kind17FC60) <= ENTITY_WORK_AREA_SIZE, "EntityUnkE0Kind17FC60 is larger than the work area");
++   lies (offsetof(EntityAiState, turn_rate) - 0x1C) further on. Every named field of a view sits where
++   EntityAiState has that PS2 offset. */
++#define ENTITY_UNKE0_PC_OFFSET(ps2_offset)     ((ps2_offset) < 0x1C ? (ps2_offset) / 4 * sizeof(void *) : (ps2_offset) - 0x1C + offsetof(EntityAiState, turn_rate))
++#define ENTITY_UNKE0_VIEW_OFFSET(T, field, ps2_offset)     _Static_assert(offsetof(T, field) == ENTITY_UNKE0_PC_OFFSET(ps2_offset), #T "." #field " is not at EntityAiState's " #ps2_offset)
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiState, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiState, pause_timer, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiState, move_choice, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiState, motion_slot_0, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiState, motion_slot_1, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, target_point, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, point_x, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, point_y, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, point_z, 0x50);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, action_frames, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, steer_to_target, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, climb_command, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, think_flag, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, motion_slot_0, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1740A8, motion_slot_1, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, side_speed, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, forward_speed, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, pitch_speed, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, unk78, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, climb_command, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, motion_slot_0, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind1719F8, motion_slot_1, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, unk20, 0x20);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, target_point, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, map_object_42_state, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, map_object_43_state, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind178358, map_object_to_operate_id, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind150588, unk1C, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, animate, 0x04);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, on_hit, 0x08);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, dormant, 0x10);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, death, 0x14);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, unk20, 0x20);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, unk40, 0x40);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, unk44, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, climb_point_index, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, unk6C, 0x6C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, reload_timer, 0x6E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, move_choice, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, turn_in_place, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, player_far, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, sliding, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind168160, magic_alert_timer, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind151D30, motion_slot_0, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind151D30, motion_slot_1, 0x88);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind16BF98, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind16BF98, move_speed, 0x44);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind16BF98, vertical_speed, 0x48);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind16BF98, forward_speed, 0x4C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, vanish_frames, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, vanish_cooldown, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, think_timer, 0x6C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, unk78, 0x78);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, unk79, 0x79);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, rising, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, dipped_low, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, combat_mode, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, fading_out, 0x7D);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind15F8C0, fade_frames, 0x7E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind162BC8, effect_angles, 0x30);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind162BC8, unk6E, 0x6E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind162BC8, first_aim, 0x80);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind162BC8, second_aim, 0x90);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind17FC60, action_weights, 0x68);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, think, 0x00);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, move, 0x18);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, player_cast_timer, 0x6A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, unk7A, 0x7A);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, alternate_anim_flag, 0x7B);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, distance_band, 0x7C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, distance_band_timer, 0x7D);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind131390, afterimage_active, 0x7E);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind12ACA0, turn_rate, 0x1C);
++ENTITY_UNKE0_VIEW_OFFSET(EntityAiStateKind12ACA0, neck_bend, 0x40);
++_Static_assert(sizeof(EntityAiStateKind12ACA0) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind12ACA0 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind131390) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind131390 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind150588) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind150588 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind151D30) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind151D30 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind15F8C0) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind15F8C0 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind162BC8) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind162BC8 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind168160) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind168160 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind16BF98) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind16BF98 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind1719F8) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind1719F8 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind1740A8) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind1740A8 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind178358) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind178358 is larger than the work area");
++_Static_assert(sizeof(EntityAiStateKind17FC60) <= ENTITY_WORK_AREA_SIZE, "EntityAiStateKind17FC60 is larger than the work area");
 +
  /* Entity.flags as bit-fields. The game sets the flags through bit-fields:
     several changed in a row only match when written this way. */
  typedef struct {
-@@ -897,9 +1108,10 @@ typedef struct {
+@@ -1017,9 +1228,10 @@ typedef struct {
  #define ENTITY_FLAG_HIT_BITS(entity) ((EntityFlagHitBits *)&(entity)->flags)
  
  /* Entity.target is a union member in the game: where a store to it has to stay
@@ -673,7 +674,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      f32 as_f32;
  } EntityUnk5C;
  
-@@ -924,20 +1136,33 @@ typedef union {
+@@ -1044,20 +1256,33 @@ typedef union {
  
  #define ENTITY_FLAG_WORD(flags) (((EntityFlagWord *)&(flags))->word)
  
@@ -713,7 +714,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  /* four animation frame numbers: a local table that a function copies whole
     from read-only data (in the game: `s32 frames[4] = { ... };`) */
  typedef struct {
-@@ -977,6 +1202,7 @@ typedef struct {
+@@ -1097,6 +1322,7 @@ typedef struct {
  } KfVector;
  
  /* one of the 0x80-byte records MapSlot.records (map/map.h) points at */
@@ -721,7 +722,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  typedef struct {
      char pad00[0x1C];
      f32 push_heading;               /* 0x1C the heading its floor pushes the player along (Player_Move) */
-@@ -995,9 +1221,14 @@ typedef struct {
+@@ -1115,9 +1341,14 @@ typedef struct {
      f32 lowest[4];                  /* 0x60 lowest x, y, z it covers */
      f32 highest[4];                 /* 0x70 highest x, y, z it covers */
  } MapRecord;
@@ -736,7 +737,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  typedef struct {
      char pad00[0x04];
      f32 light1_direction_x;         /* 0x04 x of light 1's direction in this light block */
-@@ -1015,6 +1246,9 @@ typedef struct {
+@@ -1135,6 +1366,9 @@ typedef struct {
      f32 ambient_blue;               /* 0x78 blue of the block's ambient colour */
      char pad7C[0x04];
  } MapSlotUnk10;
@@ -746,7 +747,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  /* Entity.flags as retail reads it where a store through another pointer (the work area, say) sits
     between two uses: a union member can alias anything, so the compiler loads the flags again
-@@ -1043,6 +1277,12 @@ typedef struct {
+@@ -1163,6 +1397,12 @@ typedef struct {
  
  #define ENTITY_POOL_SLOT_COUNT  5
  
@@ -759,9 +760,9 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  /* EntityPoolSlot.head.fields.kind */
  #define ENTITY_POOL_FREE        0
  #define ENTITY_POOL_QUEUED      1   /* type assigned, not loaded */
-@@ -1077,30 +1317,35 @@ typedef struct {
-     u8 unk6;                        /* 0x06 */
-     u8 unk7;                        /* 0x07 copied to Entity.sound_bank */
+@@ -1197,30 +1437,35 @@ typedef struct {
+     u8 reuse_delay;                 /* 0x06 frames before the slot can be reused, 2 once its last entity leaves */
+     u8 sound_bank;                  /* 0x07 copied to Entity.sound_bank */
      int age;                        /* 0x08 frame_counter when last released; the oldest is reused first */
 -    int base_address;               /* 0x0C */
 +    char *base_address;             /* 0x0C where the block starts in entity_pool_area */
@@ -793,7 +794,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
 -    char *motion_offset;            /* 0x08 handed to ModelMotion_LoadFile */
 +    s32 model_offset;               /* 0x04 handed to Model_SetUpSkinned with the entity's model */
 +    s32 motion_offset;              /* 0x08 handed to ModelMotion_LoadFile */
-     s32 unk0C;                      /* 0x0C becomes ModelInstance.texture_data */
+     s32 texture_data;               /* 0x0C becomes ModelInstance.texture_data */
      s32 pool_model_offset;          /* 0x10 the slot's own model (EntityPool_BuildBlockModel), 0: none */
  } EntityPoolData;
 +LAYOUT_SIZE(EntityPoolData, 0x14);
@@ -801,7 +802,7 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  /* a node of the linked_point_pool pool (0x200 of them, chained through prev/next): a point
     that eases toward a target over a duration or follows another vector. The two
-@@ -1128,8 +1373,8 @@ extern LinkedPoint linked_point_pool[LINKED_POINT_COUNT];
+@@ -1248,8 +1493,8 @@ extern LinkedPoint linked_point_pool[LINKED_POINT_COUNT];
  
  /* the scratchpad as the movement handlers of entity types 65 and 71 use it: a velocity and the
     matrix that turns it to the model's heading */
@@ -812,8 +813,8 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
  
  /* upstream's typed views of the two blocks an Entity points at */
  #define ENTITY_MODEL(entity) ((ModelInstance *)(entity)->model)
-@@ -1155,14 +1400,17 @@ typedef struct {
-     s16 unk52;                      /* 0x52 frames one step takes */
+@@ -1275,14 +1520,17 @@ typedef struct {
+     s16 frames_per_step;            /* 0x52 frames one step takes */
  } ReferencedObject;
  
 -/* ladder_object: the map object the player is climbing */
@@ -823,18 +824,18 @@ index f07453d46c2554f80066f9374f3e099d8cdaf9a8..1449a30add6ffda57a5bf2da6e2287e7
      ModelInstance *model;           /* 0x00 its get_point gives the two end points (Ladder_Start) */
 -    char pad04[0x04];
 +    char pad04[offsetof(MapObject, source) - sizeof(ModelInstance *)];
-     ReferencedObject *unk08;        /* 0x08 */
+     ReferencedObject *definition;   /* 0x08 the object's definition */
 -    char pad0C[0x04];
 +    char pad0C[offsetof(MapObject, state_flags) - offsetof(MapObject, source) - sizeof(ReferencedObject *)];
-     s32 unk10;                      /* 0x10 flags; 0x10000 is tested by Ladder_WaitOnRung */
+     s32 flags;                      /* 0x10 flags; 0x10000 is tested by Ladder_WaitOnRung */
  } ObjectReference;
-+_Static_assert(offsetof(ObjectReference, unk08) == offsetof(MapObject, source), "ObjectReference is not MapObject");
-+_Static_assert(offsetof(ObjectReference, unk10) == offsetof(MapObject, state_flags), "ObjectReference is not MapObject");
++_Static_assert(offsetof(ObjectReference, definition) == offsetof(MapObject, source), "ObjectReference is not MapObject");
++_Static_assert(offsetof(ObjectReference, flags) == offsetof(MapObject, state_flags), "ObjectReference is not MapObject");
  
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d691bbf3e 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..49010f8743f4515fad4eedc2ff55c1e4f69b292d 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,17 @@
@@ -907,8 +908,8 @@ index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d
 -    int part = (int)model->look_at_part;
 +    ModelPart *part = model->look_at_part;
  
--    if (part == 0 || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
-+    if (part == NULL || !(ENTITY_CONTROLLER(entity)->flags & 0x2000)) {
+-    if (part == 0 || !(ENTITY_CONTROLLER(entity)->flags & ENTITY_PARAMS_FLAG_LOOK_AT_PART_TURNS)) {
++    if (part == NULL || !(ENTITY_CONTROLLER(entity)->flags & ENTITY_PARAMS_FLAG_LOOK_AT_PART_TURNS)) {
          return 0;
      }
 -    return Bone_TurnPartToLook(model, part, angles, mode, (void *)target, limits, rate);
@@ -917,7 +918,7 @@ index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d
  
  /* As EntityAi_LookAtPoint, at the player's position 220 above his feet. */
 @@ -335,7 +337,7 @@ int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32
-     if (entity->model->look_at_part == NULL || !(entity->params->flags & 0x2000)) {
+     if (entity->model->look_at_part == NULL || !(entity->params->flags & ENTITY_PARAMS_FLAG_LOOK_AT_PART_TURNS)) {
          result = 0;
      } else {
 -        result = Bone_TurnPartToLook(entity->model, (int)entity->model->look_at_part, (int)target, mode, position, (int)out, range);
@@ -1013,32 +1014,6 @@ index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d
              return TRUE;
          }
          if (ENTITY_FLAG_BITS(entity)->pad8) {
-@@ -605,10 +598,10 @@ void EntityAi_CheckFarFromSpawn3D(Entity *entity) {
-     limit = spawn_info->wander_radius;
-     delta_z = model->position[2] - spawn_info->spawn_z;
-     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)) {
--        entity->flags |= (0x8000UL << 38);
-+        entity->flags |= (0x8000ULL << 38);
-         return;
-     }
--    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
-+    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
- }
- 
- /* Sets flag 53 while the model is farther from its spawn point than EntitySpawnInfo.wander_radius (in x and z),
-@@ -626,10 +619,10 @@ void EntityAi_CheckFarFromSpawn(Entity *entity) {
-     limit = spawn_info->wander_radius;
-     delta_z = model->position[2] - spawn_info->spawn_z;
-     if ((float)(limit * limit) < (delta_x * delta_x) + (delta_z * delta_z)) {
--        entity->flags |= (0x8000UL << 38);
-+        entity->flags |= (0x8000ULL << 38);
-         return;
-     }
--    entity->flags &= 0xFFDFFFFFFFFFFFFFUL;
-+    entity->flags &= 0xFFDFFFFFFFFFFFFFULL;
- }
- 
- /* Clears flag bit 31. The think functions call it when closing in and test the bit right after: set, they
 @@ -647,18 +640,8 @@ s32 EntityAi_IsPointInView(Entity *entity, f32 *target, f32 yaw_range, f32 pitch
      f32 magnitude;
  
@@ -1100,7 +1075,7 @@ index a48378b612de14eedff322f8eb735525449a2271..b08b29043573d868e53a55966845bf9d
  }
  
 diff --git a/src/game/entity/entity_ai.h b/src/game/entity/entity_ai.h
-index 9e5ef3d40b85bf28c56d35837deee276ef1a90e9..d369800f3bcf695d93d2157f81d2200961ffcd4f 100644
+index 94806291e6060684310b2af73d4896051d5a8563..e681dedc472aa684c42325c2647422826d5bfccd 100644
 --- a/src/game/entity/entity_ai.h
 +++ b/src/game/entity/entity_ai.h
 @@ -26,7 +26,7 @@ void EntityAi_ShakeCamera(int float_value, int int_value);
@@ -1122,7 +1097,7 @@ index 9e5ef3d40b85bf28c56d35837deee276ef1a90e9..d369800f3bcf695d93d2157f81d22009
  int EntityAi_LookAtPlayer(Entity *entity, void *target, s32 mode, void *out, f32 range);
  /* Once the model is below y 10000 (fallen out of the map): frees its effects, clears flag bit 1 and returns
 diff --git a/src/game/entity/entity_ai_choice.c b/src/game/entity/entity_ai_choice.c
-index 05d6640033564df8be4148f8fc25de884631263a..8d8fd226cf78c4496149831be74e1f470d015c3c 100644
+index d76332a9d43b6ada15c9e45887fa745db51bea90..1bd81606b16a30dc85ef42af1b49d5b89d1014ad 100644
 --- a/src/game/entity/entity_ai_choice.c
 +++ b/src/game/entity/entity_ai_choice.c
 @@ -3,6 +3,7 @@
@@ -1142,42 +1117,6 @@ index 05d6640033564df8be4148f8fc25de884631263a..8d8fd226cf78c4496149831be74e1f47
  extern EntityModel *held_item_model_ptr;
  int rand(void);
  extern PlayerState player_state;
-@@ -211,7 +212,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
-     f32 angle;
- 
-     *(f32 *)heading_out = 0.0f;
--    if (!(entity->flags & (0xB000L << 33))) {
-+    if (!(entity->flags & (0xB000LL << 33))) {
-         return 0;
-     }
-     angle = entity->model->rotation[1];
-@@ -220,7 +221,7 @@ int EntityAi_TurnFromPush(void *entity_arg, void *heading_out) {
-     facing[2] = -cosf(angle);
-     facing[3] = 1.0f;
-     push[0] = push[1] = push[2] = push[3] = 0.0f;
--    if (entity->flags & (0xC000L << 31)) {
-+    if (entity->flags & (0xC000LL << 31)) {
-         push[0] += entity->wall_push[0];
-         push[2] += entity->wall_push[2];
-     }
-@@ -252,7 +253,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
- 
-     // match: the early return and the second `return FALSE` below leave a label in front of the body
-     // until jump2 merges the two, which keeps `heading` copied back into $f12 for sinf
--    if (!(entity->flags & (0xB000L << 33))) {
-+    if (!(entity->flags & (0xB000LL << 33))) {
-         return FALSE;
-     }
-     facing[0] = -sinf(heading);
-@@ -260,7 +261,7 @@ s32 EntityAi_IsPushedFromFront(Entity *entity, f32 heading) {
-     facing[2] = -cosf(heading);
-     facing[3] = 1.0f;
-     push[0] = push[1] = push[2] = push[3] = 0.0f;
--    if (entity->flags & (0xC000L << 31)) {
-+    if (entity->flags & (0xC000LL << 31)) {
-         push[0] += entity->wall_push[0];
-         push[2] += entity->wall_push[2];
-     }
 @@ -829,18 +830,8 @@ s32 EntityAi_MoveCommand3D(Entity *entity, s32 mark_far, f32 range) {
      if (entity->params->max_speed < (0.0f <= diff ? diff : -diff)) {
          result |= 0.0f <= diff ? 0x20 : 0x10;
@@ -1239,17 +1178,8 @@ index 05d6640033564df8be4148f8fc25de884631263a..8d8fd226cf78c4496149831be74e1f47
          distance = vec[0];
          if (reach < distance) {
              result |= 1;
-@@ -967,7 +940,7 @@ int EntityAi_PushTurnCommand3D(Entity *entity, int turn) {
-     int code = 0;
- 
-     push[0] = push[1] = push[2] = push[3] = 0.0f;
--    if (entity->flags & (0xC000L << 31)) {
-+    if (entity->flags & (0xC000LL << 31)) {
-         push[0] += entity->wall_push[0];
-         push[1] += entity->wall_push[1];
-         push[2] += entity->wall_push[2];
 diff --git a/src/game/entity/entity_ai_handlers.c b/src/game/entity/entity_ai_handlers.c
-index a7a7c7301286ea0284b06aabb4b3a9cac86b113a..fc37ca04961646e2952b934a3b0ce7552fcfc6f6 100644
+index b1b6a3db1a94c8880a544816ecc88c8cc004f875..02ba6aa74791a20e6281ebc351c50664fd0ea825 100644
 --- a/src/game/entity/entity_ai_handlers.c
 +++ b/src/game/entity/entity_ai_handlers.c
 @@ -7,6 +7,7 @@
@@ -1294,18 +1224,9 @@ index a7a7c7301286ea0284b06aabb4b3a9cac86b113a..fc37ca04961646e2952b934a3b0ce755
      }
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -689,7 +686,7 @@ void EntityAi_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -764,7 +761,7 @@ void EntityAi_Think(Entity *entity, s32 unknown) {
  
  /* The think function while flag bit 53 is set (too far from the spawn point): walks back to the spawn point,
@@ -1313,17 +1234,8 @@ index a7a7c7301286ea0284b06aabb4b3a9cac86b113a..fc37ca04961646e2952b934a3b0ce755
 -int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
 +void EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
      Entity *entity = entity_ptr;
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 to_spawn[4];
-@@ -786,7 +783,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
-         entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
-     } else {
-         push[0] = push[1] = push[2] = push[3] = 0.0f;
--        if (entity->flags & (0xC000L << 31)) {
-+        if (entity->flags & (0xC000LL << 31)) {
-             push[0] += entity->wall_push[0];
-             push[2] += entity->wall_push[2];
-         }
 @@ -819,7 +816,7 @@ int EntityAi_ThinkReturn(void *entity_ptr, int unknown) {
  
  /* The think function of state 0: every 120-180 frames picks a point near the spawn point to walk to
@@ -1331,10 +1243,10 @@ index a7a7c7301286ea0284b06aabb4b3a9cac86b113a..fc37ca04961646e2952b934a3b0ce755
 -int EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
 +void EntityAi_ThinkIdle(void *entity_ptr, int unknown) {
      Entity *entity = entity_ptr;
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 direction[4];
 diff --git a/src/game/entity/entity_ai_handlers.h b/src/game/entity/entity_ai_handlers.h
-index 65fa451f82564555bb67c5daec72ce71429f6614..7b30d6f6c478b73d1a1f1db0f7092e870e30a78a 100644
+index b22aa66f2ed9edc85f193a3b86644bd5918d8771..406fcc3d95f51cfa8f3e898d0baf44a035215beb 100644
 --- a/src/game/entity/entity_ai_handlers.h
 +++ b/src/game/entity/entity_ai_handlers.h
 @@ -56,10 +56,10 @@ void EntityAi_OnHit(Entity *entity);
@@ -1351,7 +1263,7 @@ index 65fa451f82564555bb67c5daec72ce71429f6614..7b30d6f6c478b73d1a1f1db0f7092e87
  /* The think function of state 1 (the player was noticed and is no longer): keeps walking to the player. */
  void EntityAi_ThinkPursue(Entity *entity, int extra);
 diff --git a/src/game/entity/entity_aim.c b/src/game/entity/entity_aim.c
-index 3a09608d76025517532444c5fc2fde189ce057bb..872f961ad9c09e54dff80f203c992c3afd3394d9 100644
+index b9b00213c82ca0a5d4136fba07f8d6f2c7d2f594..3db1f73b91fd8e4a2cbee19729d51be2e611eca2 100644
 --- a/src/game/entity/entity_aim.c
 +++ b/src/game/entity/entity_aim.c
 @@ -2,9 +2,11 @@
@@ -1486,7 +1398,7 @@ index 3a09608d76025517532444c5fc2fde189ce057bb..872f961ad9c09e54dff80f203c992c3a
          return FALSE;
      }
 diff --git a/src/game/entity/entity_collision.c b/src/game/entity/entity_collision.c
-index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edccdb95d184 100644
+index 844612f8499f68ec1f052a2e71d11b62e655762c..862cbf00a47b8792f865a7729c3249b3d6a8ec73 100644
 --- a/src/game/entity/entity_collision.c
 +++ b/src/game/entity/entity_collision.c
 @@ -5,12 +5,13 @@
@@ -1643,24 +1555,6 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
  static void EntityCollision_CylinderCylinder(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius, f32 other_height);
  static void EntityCollision_CylinderSphere(f32 *position, f32 *other, f32 radius, f32 height, f32 other_radius);
  static void EntityCollision_SphereCylinder(f32 *position, f32 *other, f32 radius, f32 other_radius, f32 other_height);
-@@ -462,7 +536,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
-                 amount = chance;
-             }
-             entity->hit_points -= amount;
--            entity->flags &= ~0xC000000000L;
-+            entity->flags &= ~0xC000000000LL;
-             entity->hit_flash_frames = 3;
-         }
-         break;
-@@ -470,7 +544,7 @@ void EntityCollision_ApplySurfaceEffect(Entity *entity, s32 unknown_a, s32 unkno
-         if (entity->hit_points != 0) {
-             entity->hit_points = (entity->hit_points > 30) ? entity->hit_points - 30 : 0;
-             entity->hit_flash_frames = 3;
--            entity->flags &= ~0xC000000000L;
-+            entity->flags &= ~0xC000000000LL;
-         }
-         break;
-     }
 @@ -494,13 +568,13 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
      period = 30;
      mesh = (CollisionMesh *)model->strips;
@@ -1676,7 +1570,7 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
 +                Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
                  if (COLLISION_RESULT->hit != 0 && COLLISION_RESULT->point[1] <= entity->model->position[1]
                      && entity->model->position[1] - entity->collision_height <= COLLISION_RESULT->point[1]) {
-                     EntityCollision_ApplySurfaceEffect(entity, point->unk04, point->unk08, point->unk0C);
+                     EntityCollision_ApplySurfaceEffect(entity, point->material_first, point->material_second, point->material_third);
 @@ -513,7 +587,7 @@ s32 EntityCollision_WalkAgainstMesh(Entity *entity, ModelInstance *model, f32 *p
      }
  walls:
@@ -1705,21 +1599,19 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
          while (--i != -1) {
              point = strip->points;
 @@ -547,7 +621,7 @@ walls:
-             if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
-                 if (Collision_IsBarrierFloor(point->unk04, point->unk08, point->unk0C)) {
+             if (Collision_GetBarrierLevel(point->material_first, point->material_second, point->material_third) >= entity->spawn_info->barrier_level) {
+                 if (Collision_IsBarrierFloor(point->material_first, point->material_second, point->material_third)) {
                      do {
 -                        Collision_DropOnTriangle(point[0].position, point[1].position, point[2].position, entity->model->position);
 +                        Collision_DropOnTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), entity->model->position);
                          if (COLLISION_RESULT->hit != 0
                              && entity->model->position[1] - entity->params->floor_probe_depth <= COLLISION_RESULT->point[1]
                              && COLLISION_RESULT->point[1] <= *floor_y) {
-@@ -568,14 +642,14 @@ walls:
-             }
+@@ -569,13 +643,13 @@ walls:
          }
      }
--    if (!(entity->flags & 0x4000000400000L)) {
+     if (!(entity->flags & ENTITY_FLAG_SKIP_FLOOR_MASK)) {
 -        strip = mesh->floor_strips;
-+    if (!(entity->flags & 0x4000000400000LL)) {
 +        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
          i = mesh->floor_strip_count;
          while (--i != -1) {
@@ -1819,7 +1711,7 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
  
      nearest_sq = radius * radius;
      ratio = -normal[1];
-@@ -958,15 +1023,15 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+@@ -958,13 +1023,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
      Collision_TransformMeshPoints(model);
      mesh = (CollisionMesh *)model->strips;
      if (!((s32)(entity->flags >> 23) & 1)) {
@@ -1833,12 +1725,9 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
 -                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
 +                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                  if (COLLISION_RESULT->hit != 0) {
--                    entity->flags |= 0x8000L << 30;
-+                    entity->flags |= 0x8000LL << 30;
+                     entity->flags |= ENTITY_FLAG_WALL_PUSH;
                      Vector_Subtract(offset, position, COLLISION_RESULT);
-                     sceVu0Normalize(offset, offset);
-                     Vector_Add(normal_sum, normal_sum, offset);
-@@ -979,15 +1044,15 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+@@ -979,13 +1044,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
          }
      }
      if (!((s32)(entity->flags >> 24) & 1)) {
@@ -1852,12 +1741,9 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
 -                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
 +                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                  if (COLLISION_RESULT->hit != 0) {
--                    entity->flags |= 0x8000L << 30;
-+                    entity->flags |= 0x8000LL << 30;
+                     entity->flags |= ENTITY_FLAG_WALL_PUSH;
                      Vector_Subtract(offset, position, COLLISION_RESULT);
-                     sceVu0Normalize(offset, offset);
-                     Vector_Add(normal_sum, normal_sum, offset);
-@@ -999,16 +1064,16 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
+@@ -999,14 +1064,14 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
              strip = (CollisionStrip *)(point + 2);
          }
      }
@@ -1867,23 +1753,18 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
      while (--i != -1) {
          point = strip->points;
          j = strip->point_count - 2;
-         if (Collision_GetBarrierLevel(point->unk04, point->unk08, point->unk0C) >= entity->spawn_info->barrier_level) {
+         if (Collision_GetBarrierLevel(point->material_first, point->material_second, point->material_third) >= entity->spawn_info->barrier_level) {
              do {
 -                EntityCollision_SphereTriangle(point[0].position, point[1].position, point[2].position, position, entity->collision_radius);
 +                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                  if (COLLISION_RESULT->hit != 0) {
--                    entity->flags |= 0x8000L << 30;
-+                    entity->flags |= 0x8000LL << 30;
+                     entity->flags |= ENTITY_FLAG_WALL_PUSH;
                      Vector_Subtract(offset, position, COLLISION_RESULT);
-                     sceVu0Normalize(offset, offset);
-                     Vector_Add(normal_sum, normal_sum, offset);
-@@ -1022,17 +1087,17 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
-             strip = (CollisionStrip *)(point + strip->point_count);
+@@ -1023,13 +1088,13 @@ s32 EntityCollision_SphereAgainstMesh(Entity *entity, ModelInstance *model, f32
          }
      }
--    if (!(entity->flags & 0x4000000400000L)) {
+     if (!(entity->flags & ENTITY_FLAG_SKIP_FLOOR_MASK)) {
 -        strip = mesh->floor_strips;
-+    if (!(entity->flags & 0x4000000400000LL)) {
 +        strip = EE_PTR(CollisionStrip *, mesh->floor_strips);
          i = mesh->floor_strip_count;
          while (--i != -1) {
@@ -1894,20 +1775,7 @@ index e261f41fd449a112bcb48bb47a3e2d9fd314441c..ad54c8a0c0f4fdebe96065ce7a19edcc
 +                EntityCollision_SphereTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), position, entity->collision_radius);
                  if (COLLISION_RESULT->hit != 0) {
                      hit_floor = TRUE;
--                    entity->flags |= 0x8000L << 29;
-+                    entity->flags |= 0x8000LL << 29;
-                     Vector_Subtract(offset, position, COLLISION_RESULT);
-                     sceVu0Normalize(offset, offset);
-                     Vector_Scale(offset, offset, entity->collision_radius);
-@@ -1063,7 +1128,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
-     Vector_Copy(position, entity->model->position);
-     normal_sum[0] = normal_sum[1] = normal_sum[2] = normal_sum[3] = 0.0f;
-     if (!((s32)(entity->flags >> 28) & 1)) {
--        entity->flags &= ~(1L << 51);
-+        entity->flags &= ~(1LL << 51);
-         position[1] += 0.1f;
-         lift = entity->floor_lift;
-     }
+                     entity->flags |= ENTITY_FLAG_ON_FLOOR;
 @@ -1079,7 +1144,7 @@ void EntityCollision_SphereAgainstMap(Entity *entity) {
                  if (record->collision_mesh_index == 0xFFFF) {
                      continue;
@@ -2571,7 +2439,7 @@ index ec4439c89563faa6065889b01343678e84d49ae4..e405525f86bc4871cf9a281e83145e84
  /* The height of the ground of the loaded maps at `point` less the point's own. */
  f32 EntityCollision_DistanceToGround(f32 *point);
 diff --git a/src/game/entity/entity_events.c b/src/game/entity/entity_events.c
-index d24bd12c052875ec1955dc33ea528580ee41cd24..fb5aca0a2178d187452356913b5aff307e3951bc 100644
+index 488715a1070f0be1c6606005b37e62ae59d64374..a45a9fb9bf88c54debd8adfc922d7533cfd028b3 100644
 --- a/src/game/entity/entity_events.c
 +++ b/src/game/entity/entity_events.c
 @@ -17,8 +17,9 @@ void Vector_Copy(void *, void *);
@@ -2631,11 +2499,11 @@ index d24bd12c052875ec1955dc33ea528580ee41cd24..fb5aca0a2178d187452356913b5aff30
  }
  
 @@ -286,7 +282,7 @@ void EntityEvent_StartFrameCues(Entity *entity, s32 animation, s32 frame_from, s
-             if (entity->ailment_4_frames != 0 && record->unk04 != 0) {
+             if (entity->ailment_4_frames != 0 && record->skip_while_ailing != 0) {
                  continue;
              }
--            Sound_PlayFalloff(entity->params->sound_id, record->unk00, record->unk01, entity->sound_bank, entity->distance_to_player_3d, angle);
-+            Sound_PlayFalloff(record->unk00, record->unk01, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
+-            Sound_PlayFalloff(entity->params->sound_id, record->sound, record->kind, entity->sound_bank, entity->distance_to_player_3d, angle);
++            Sound_PlayFalloff(record->sound, record->kind, entity->sound_bank, entity->params->sound_id, entity->distance_to_player_3d, angle);
          }
      }
  }
@@ -2816,7 +2684,7 @@ index 3f851ecb58af1f09bc639884ed2b7699938a1ef7..65e750d81957439a436d31bf77ef9220
  }
  
 diff --git a/src/game/entity/entity_pool.c b/src/game/entity/entity_pool.c
-index e192b77f86ff1b2b2b8c000fb67b4ff7fd19b62e..7a88551e3f5c2dd5dcc4caa8b686d38117864516 100644
+index 8c6974599c0c75327af9d17de26e6b132c7a4a8a..be9a0019ebd4e5d99593137ff5044f18b28fc201 100644
 --- a/src/game/entity/entity_pool.c
 +++ b/src/game/entity/entity_pool.c
 @@ -5,9 +5,9 @@
@@ -2944,7 +2812,7 @@ index e192b77f86ff1b2b2b8c000fb67b4ff7fd19b62e..7a88551e3f5c2dd5dcc4caa8b686d381
 -    ModelMotion_LoadFile(data_address, &work_address, ENTITY_MODEL(entity), 1);
 +    data_address = slot->base_address + data->motion_offset;
 +    ModelMotion_LoadFile((MotionFile *)data_address, (ModelChannel **)&work_address, ENTITY_MODEL(entity), 1);
-     data_address = slot->base_address + data->unk0C;
+     data_address = slot->base_address + data->texture_data;
 -    ENTITY_MODEL(entity)->texture_data = data_address;
 +    ENTITY_MODEL(entity)->texture_data = (sptr)data_address;
      ENTITY_MODEL(entity)->texture_slot = 0;
@@ -2952,7 +2820,7 @@ index e192b77f86ff1b2b2b8c000fb67b4ff7fd19b62e..7a88551e3f5c2dd5dcc4caa8b686d381
 -    ENTITY_MODEL(entity)->texture_packet_5 = (int)Map_GetSlotPacket(entity->group_id, 5);
 +    ENTITY_MODEL(entity)->texture_packet_3 = (sptr)Map_GetSlotPacket(entity->group_id, 3);
 +    ENTITY_MODEL(entity)->texture_packet_5 = (sptr)Map_GetSlotPacket(entity->group_id, 5);
-     entity->sound_bank = slot->unk7;
+     entity->sound_bank = slot->sound_bank;
      EntityPool_AddUser(entity->pool_slot_index);
      ((void (*)(Entity *))Entity_ResetToSpawn)(entity); // match: declared without its argument elsewhere
 @@ -838,7 +839,7 @@ static void EntityPool_CopyLoadedFile(EntityPoolSlot *slot) {
@@ -3091,7 +2959,7 @@ index 454fb7207c5e7983e7ddf1caef166a470ff9f00a..32007936320363c30a9946cb948e45a0
 +   ModelChannel after the saved GS words, Entity_TryActivate) */
  s64 entity_work_area[0x2000] = { 0 }; /* 0x3D6E40 the work area Model_SaveGsWordsAndUvs builds a model in */
 diff --git a/src/game/entity/entity_type72.c b/src/game/entity/entity_type72.c
-index 527611342119bf31fc82b0c7b77c312cf46e479e..299f4308ab9f35cc200ebdc78361e250ec944928 100644
+index 838be074fded678c7c2a14e01c1c2588147802f4..eddffbdbd5fe8df9942dd2a5d0d388631d09e015 100644
 --- a/src/game/entity/entity_type72.c
 +++ b/src/game/entity/entity_type72.c
 @@ -2,12 +2,11 @@
@@ -3227,7 +3095,7 @@ index d96bdada0a9d06660caa93fd252c407bf4594e93..22da47a2b800816f86ac52a0ba24273f
  /* 0x3E74C0 the Fire Lord's model matrix (second row zero in retail) */
  ModelMatrix fire_lord_model_matrix = {
 diff --git a/src/game/entity/entity_world.c b/src/game/entity/entity_world.c
-index 4923feac2235adb0c3093f4155ec2ca12115ad18..1a6623b4401b496b2561ee9580417a2bb7af98a7 100644
+index fb60460a3876d71caa23331e952e6898f39cb22d..915dc5c5449e8b1c2200ae7920eacc880f7dcf45 100644
 --- a/src/game/entity/entity_world.c
 +++ b/src/game/entity/entity_world.c
 @@ -4,8 +4,11 @@
@@ -3319,15 +3187,6 @@ index 4923feac2235adb0c3093f4155ec2ca12115ad18..1a6623b4401b496b2561ee9580417a2b
      Entity_RebuildModelMatrices(entity);
  }
  
-@@ -340,7 +342,7 @@ void Entity_UpdateAll(void) {
-         if (entity->ailment_1_frames != 0) {
-             if (entity->ailment_1_frames % 30 == 0) {
-                 entity->hit_points = (entity->hit_points < 3) ? 0 : entity->hit_points - 3;
--                entity->flags &= ~(3L << 38);
-+                entity->flags &= ~(3LL << 38);
-             }
-             entity->ailment_1_frames--;
-         }
 @@ -372,10 +374,10 @@ void Entity_UpdateAll(void) {
              Vector_Scale(SCRATCH_VECTOR, SCRATCH_VECTOR, entity->knockback_speed);
              Vector_Add(entity->model->position, entity->model->position, SCRATCH_VECTOR);
@@ -3363,7 +3222,7 @@ index 4923feac2235adb0c3093f4155ec2ca12115ad18..1a6623b4401b496b2561ee9580417a2b
                  }
                  if (entity->model->position[0] < record->lowest[0] - reach) {
 diff --git a/src/game/entity/npc.c b/src/game/entity/npc.c
-index d2b943e0ff921b1231884db407502a7063b224aa..046e5d8b6f52d7976c81c66a642a69f2684982ba 100644
+index 8039de148481441bff8078edb5159c71bd3e53ec..dd713c9621eec3a0e1c1f2f4c0ee06c7eb4e9be6 100644
 --- a/src/game/entity/npc.c
 +++ b/src/game/entity/npc.c
 @@ -7,11 +7,12 @@
@@ -3409,25 +3268,25 @@ index d2b943e0ff921b1231884db407502a7063b224aa..046e5d8b6f52d7976c81c66a642a69f2
 +static void Npc_ThinkType81Stand(void *entity_ptr, int unknown);
  
  /* The set-up function of entity type 15, the talking characters (chr.prm): as EntityAi_InitDefaults, with the
-    Npc_ handlers, its look part from EntityParams.unk43C, and flag bit 16 set. */
+    Npc_ handlers, its look part from EntityParams.type_param_1, and flag bit 16 set. */
 @@ -88,7 +85,7 @@ void Npc_Init(Entity *entity) {
      if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
          ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
      }
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -620,7 +617,7 @@ void Npc_InitType81(Entity *entity) {
      if (ENTITY_PARAMS_BITS(entity)->bit25 || ENTITY_PARAMS_BITS(entity)->bit26) {
          ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
      }
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -672,7 +669,7 @@ static void Npc_ThinkType81(Entity *entity, s32 run_now) {
  }
  

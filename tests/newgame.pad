@@ -1,0 +1,15 @@
+# Boot to a new game: tools/boot_test.py plays this with --input.
+# <vblank> <buttons> [vblanks held, default 6]
+100 CROSS 4     # the memory card notice ("no card")
+300 START 4     # skip the logos
+400 START 4     # Press Start
+500 CROSS 4     # New Game (the cursor starts on it)
+# the opening's messages
+700 CROSS 4
+800 CROSS 4
+900 CROSS 4
+1000 CROSS 4
+1100 CROSS 4
+1200 CROSS 4
+1300 CROSS 4
+1400 CROSS 4

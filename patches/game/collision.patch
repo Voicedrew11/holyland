@@ -245,7 +245,7 @@ index 3ff37e8f458c785217c37780db3d99d329cda113..24e9ccf6c77e717d41affc24b04a2144
      if (denominator < D_00446FC4[0]) {
          return;
 diff --git a/src/game/collision/collision.h b/src/game/collision/collision.h
-index fa656d9305d808fea8458042224a5c509d3983b5..49d5234b67df8f778f1efde11ddc79405be3e9e6 100644
+index 44c06a84fefb615410f42dccd55917452a577331..ad590b3dd0c4f495fd7cb5e43f90c195e2545118 100644
 --- a/src/game/collision/collision.h
 +++ b/src/game/collision/collision.h
 @@ -15,11 +15,11 @@ typedef struct {
@@ -263,7 +263,7 @@ index fa656d9305d808fea8458042224a5c509d3983b5..49d5234b67df8f778f1efde11ddc7940
  /* the scratchpad as Player_PushOutOfWalls uses it. Reached as fields of one block at 0x70000000, retail forms each
     address anew (`lui $1`); a pointer constant such as (Vector4 *)0x70000080 is kept in a register instead. */
 @@ -31,7 +31,7 @@ typedef struct {
-     Vector4 unk90;                  /* 0x90 the point Player_CollideWithMap keeps away from the walls */
+     Vector4 wall_point;             /* 0x90 the point Player_CollideWithMap keeps away from the walls */
  } CollisionScratch;
  
 -#define COLLISION_SCRATCH ((CollisionScratch *)0x70000000)
@@ -293,9 +293,9 @@ index fa656d9305d808fea8458042224a5c509d3983b5..49d5234b67df8f778f1efde11ddc7940
 -    void *position;                 /* 0x00 */
 +    EEWord position;                /* 0x00 (Vector4 *) a point number in the file; Collision_RelocateMesh makes it
 +                                       the address of that point in COLLISION_WORLD_POINTS */
-     s32 unk04;                      /* 0x04 */
-     s32 unk08;                      /* 0x08 */
-     s32 unk0C;                      /* 0x0C */
+     s32 material_first;             /* 0x04 the first word of the floor material (Collision_GetFloorMaterial) */
+     s32 material_second;            /* 0x08 the second word of the floor material */
+     s32 material_third;             /* 0x0C the third word of the floor material */
  } CollisionStripPoint;
 +LAYOUT_SIZE(CollisionStripPoint, 0x10);
  
@@ -454,7 +454,7 @@ index 2875894e804e3ea12ae8d956556ca2ba805f2973..1c7d547d28a629f13c59ea61d52c30b7
  }
  
 diff --git a/src/game/collision/world_collision.c b/src/game/collision/world_collision.c
-index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369506faf4a 100644
+index 5c3c401795223d6a610b1a7adff740c9194d6889..92eecbb9defc732823d64bff496d41ae46a175ac 100644
 --- a/src/game/collision/world_collision.c
 +++ b/src/game/collision/world_collision.c
 @@ -12,7 +12,7 @@ typedef void (*MapObjectCircleTest)(MapObject *, f32 *, f32, f32);
@@ -1196,7 +1196,7 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 @@ -1391,22 +1346,22 @@ void Collision_HitRayPitfallObj(void *target, int from, int direction, float dis
          return;
      }
-     if (!(object->state_flags & 0x20000)) {
+     if (!(object->state_flags & MAP_OBJECT_ON)) {
 -        list = object->model->strips;
 -        if (list != NULL && list->unk0C >= 4U) {
 +        list = (CollisionMesh *)object->model->strips;
@@ -1240,7 +1240,7 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 @@ -1442,37 +1397,38 @@ void Collision_HitRayPitfallObj(void *target, int from, int direction, float dis
  /* Tests a point (with a reach) against every triangle of the strips of a map object's collision mesh, if the
     object is in use and the mesh has 4 points or more. At the first hit it stops and notes the floor material
-    in COLLISION_RESULT->unk18. */
+    in COLLISION_RESULT->floor_material. */
 -void Collision_HitSphereMeshObj(CollisionOwner *owner, int mode, float factor) {
 -    ModelStripList *list;
 -    Strip *strip;
@@ -1270,7 +1270,8 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 -                    Collision_PointTriangle(vertex[0].unk00, vertex[1].unk00, vertex[2].unk00, mode, factor);
 +                    Collision_PointTriangle(EE_PTR(f32 *, vertex[0].position), EE_PTR(f32 *, vertex[1].position), EE_PTR(f32 *, vertex[2].position), mode, factor);
                      if (COLLISION_RESULT->hit != 0) {
-                         COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(vertex->unk04, vertex->unk08, vertex->unk0C);
+-                        COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(vertex->x, vertex->y, vertex->z);
++                        COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(vertex->material_first, vertex->material_second, vertex->material_third);
                          return;
                      }
                      vertex++;
@@ -1292,7 +1293,7 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 @@ -1483,30 +1439,30 @@ int Collision_HitSphereBoxObj(MapObject *object, f32 *point, f32 reach) {
      int hit;
  
-     if (!(object->state_flags & 0x10000)) {
+     if (!(object->state_flags & MAP_OBJECT_IN_USE)) {
 -        return;
 +        return 0;
      }
@@ -1330,11 +1331,11 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 @@ -1545,28 +1501,28 @@ int Collision_HitSphereDoubleDoorObj(MapObject *object, f32 *point, f32 reach) {
      int hit;
  
-     if (!(object->state_flags & 0x10000)) {
+     if (!(object->state_flags & MAP_OBJECT_IN_USE)) {
 -        return;
 +        return 0;
      }
-     if (MODEL_CHANNEL(object->model)->index == object->definition->anims[4].anim && MODEL_CHANNEL(object->model)->param < 2) {
+     if (MODEL_CHANNEL(object->model)->motion_index == object->definition->anims[4].anim && MODEL_CHANNEL(object->model)->frame < 2) {
          corner0 = (f32 *)object->model->get_point(object->model, 0);
          if (corner0 == NULL) {
 -            return;
@@ -1427,7 +1428,7 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 @@ -1702,23 +1658,23 @@ void Collision_HitSpherePitfallObj(MapObject *object, f32 *point, f32 reach) {
          return;
      }
-     if (!(object->state_flags & 0x20000)) {
+     if (!(object->state_flags & MAP_OBJECT_ON)) {
 -        list = object->model->strips;
 -        if (list != NULL && list->unk0C >= 4U) {
 +        list = (CollisionMesh *)object->model->strips;
@@ -1445,7 +1446,8 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 -                    Collision_PointTriangle(vertex[0].unk00, vertex[1].unk00, vertex[2].unk00, (int)point, reach);
 +                    Collision_PointTriangle(EE_PTR(f32 *, vertex[0].position), EE_PTR(f32 *, vertex[1].position), EE_PTR(f32 *, vertex[2].position), point, reach);
                      if (COLLISION_RESULT->hit != 0) {
-                         COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(vertex->unk04, vertex->unk08, vertex->unk0C);
+-                        COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(vertex->x, vertex->y, vertex->z);
++                        COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(vertex->material_first, vertex->material_second, vertex->material_third);
                          return;
                      }
                      vertex++;
@@ -1485,11 +1487,11 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 +                    Collision_CapsuleTriangle(EE_PTR(f32 *, point[0].position), EE_PTR(f32 *, point[1].position), EE_PTR(f32 *, point[2].position), centre, radius,
                                                height);
                      if (COLLISION_RESULT->hit != 0) {
-                         COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(point->unk04, point->unk08, point->unk0C);
+                         COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(point->material_first, point->material_second, point->material_third);
 @@ -1800,27 +1756,27 @@ int Collision_HitCapsuleBoxObj(MapObject *object, f32 *point, f32 radius, f32 pu
      int hit;
  
-     if (!(object->state_flags & 0x10000)) {
+     if (!(object->state_flags & MAP_OBJECT_IN_USE)) {
 -        return;
 +        return 0;
      }
@@ -1594,7 +1596,7 @@ index 05e5798eb5de9e537f186f31210374efa56808dd..8cb20d06e04e9eb642e36b64eecfb369
 +                        Collision_CapsuleTriangle(EE_PTR(f32 *, point[-2].position), EE_PTR(f32 *, point[-1].position), EE_PTR(f32 *, point->position),
 +                                      &origin->x, push, radius);
                          if (COLLISION_RESULT->hit != 0) {
-                             COLLISION_RESULT->unk18 = Collision_GetFloorMaterial(point->unk04, point->unk08, point->unk0C);
+                             COLLISION_RESULT->floor_material = Collision_GetFloorMaterial(point->material_first, point->material_second, point->material_third);
                              return;
 @@ -2299,7 +2255,7 @@ void Collision_HitFanQuadObj(MapObject *object, Vector4 *origin, f32 radius, f32
              // match: the notes are not moved up a bit here (Collision_HitFanMeshObj does), so on the second triangle bit 0 is point 0 or point 3

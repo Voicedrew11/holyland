@@ -1,16 +1,16 @@
 diff --git a/src/game/map/map.c b/src/game/map/map.c
-index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9d344e1c5 100644
+index 965bb47ba25a27f088dbea3d51766e4139b20161..f38159965323e1ce8285df821009f095c66877ef 100644
 --- a/src/game/map/map.c
 +++ b/src/game/map/map.c
-@@ -16,6 +16,7 @@
- #include "ui/message.h"
+@@ -17,6 +17,7 @@
  #include "gfx/packet.h"
  #include "gfx/texture.h"
+ #include "input/pad.h"
 +#include <string.h>
  
  #define FOG_COLOR() \
-     ((u64)map_draw_state.unk280.red | ((u64)map_draw_state.unk280.green << 8) | ((u64)map_draw_state.unk280.blue << 16) | \
-@@ -36,6 +37,8 @@
+     ((u64)map_draw_state.current_fog_color.red | ((u64)map_draw_state.current_fog_color.green << 8) | ((u64)map_draw_state.current_fog_color.blue << 16) | \
+@@ -37,6 +38,8 @@
          best = node;                                                                               \
      }
  #define USABLE_IN_MAP(node) (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map && USABLE(node))
@@ -19,7 +19,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -47,16 +50,15 @@ void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
+@@ -48,16 +51,15 @@ void Wobble_DrawRippledModel(ModelInstance *, int, int, int, int);
  void Map_SetOffscreenTarget(void);
  void Map_QueueSlotPacket(int, int);
  int Map_ClassifyRecordOnScreen(MapDrawRecord *, ModelInstance *);
@@ -38,7 +38,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  void Vector_Copy(void *, void *);
  char *Collision_RelocateMesh(char *, ModelInstance *, int);
  void Player_MoveByOffset(f32 *);
-@@ -65,7 +67,7 @@ void Map_OffsetRecords(int, f32 *);
+@@ -66,7 +68,7 @@ void Map_OffsetRecords(int, f32 *);
  void Map_OffsetRecord(MapRecordBounds *, f32 *);
  void Map_PlaceRecordModels(int);
  void MapItem_MoveMap(int, f32 *);
@@ -47,7 +47,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  int Script_Start(int, int);
  void Player_StopFootstepSound(void);
  void Sound_StopAll(int);
-@@ -99,7 +101,7 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -100,7 +102,7 @@ void GsDraw_QueueTexturedSprite(void *);
  void TextureTable_QueueAll(TextureTableHeader *);
  void Model_DrawPosed(ModelInstance *);
  void GsDraw_SetDrawTarget(s64, s64, s64);
@@ -56,7 +56,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  u32 *Packet_Alloc(int);
  void Packet_AppendToChain(u32 *, u32 *);
  void Vu0_LoadMatrix(void *);
-@@ -108,15 +110,17 @@ int Map_TestFlagBlockBit(int, int, int, int);
+@@ -109,15 +111,17 @@ int Map_TestFlagBlockBit(int, int, int, int);
  void Vu0_ProjectToScreen3(int *, int *, int *, f32 *, f32 *, f32 *);
  extern MapSlot map_slots[];
  extern MapDrawState map_draw_state;
@@ -77,16 +77,16 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  extern EntitySpawnInfo *map_spawn_infos[2];
  extern MapItemDef *map_item_defs[2];
  extern s16 *map_item_model_kinds[2];
-@@ -137,7 +141,7 @@ extern u16 pad_state[];
+@@ -138,7 +142,7 @@ extern u16 pad_state[];
  extern PlayerState player_state;
- extern MapSlotUnk10Words map_object_default_lights;
+ extern MapLightBlock map_object_default_lights;
  extern TextureTableHeader *D_00446790;
 -extern u8 player_floor_block[];
 +#define player_floor_block (&player_state.record_flag_block)
  
  /* Draws the map records of both map slots whose flag bit 0 is clear (the list func_00112BD0 builds each
     frame), then each slot's map objects. mode 0 draws every record, the others only some; below 2 the
-@@ -183,7 +187,7 @@ void Map_DrawRecords(int mode) {
+@@ -184,7 +188,7 @@ void Map_DrawRecords(int mode) {
              Packet_AddGsRegister(8, 0);
              Packet_EndGsRegisters();
              GsDraw_QueueFlush();
@@ -95,14 +95,14 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
                  flags = record->flags;
                  if ((flags & 2) && mode != 0) {
                      continue;
-@@ -198,20 +202,20 @@ void Map_DrawRecords(int mode) {
+@@ -199,20 +203,20 @@ void Map_DrawRecords(int mode) {
                      continue;
                  }
                  if (flags & 0x10) {
--                    record->model->light_block = (s32)&map_draw_state.unkC0;
--                    record->model->fog_block = &map_draw_state.unkA0;
-+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
-+                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
+-                    record->model->light_block = (s32)&map_draw_state.current_light_block;
+-                    record->model->fog_block = &map_draw_state.current_fog_block;
++                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.current_light_block;
++                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.current_fog_block;
                  } else {
 -                    record->model->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
 -                    record->model->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
@@ -126,7 +126,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
                  }
                  GsDraw_QueueFlush();
              }
-@@ -258,9 +262,9 @@ void Map_DrawLateRecords(int mode) {
+@@ -259,9 +263,9 @@ void Map_DrawLateRecords(int mode) {
              Packet_BeginGsRegisters();
              z_mask = 1;
              Packet_AddGsRegister(GS_REG_TEST_1, 0x5000D);
@@ -138,14 +138,14 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
                  flags = record->flags;
                  if ((flags & 2) && mode != 0) {
                      continue;
-@@ -282,20 +286,20 @@ void Map_DrawLateRecords(int mode) {
+@@ -283,20 +287,20 @@ void Map_DrawLateRecords(int mode) {
                      Packet_EndGsRegisters();
                  }
                  if (record->flags & 0x10) {
--                    record->model->light_block = (s32)&map_draw_state.unkC0;
--                    record->model->fog_block = &map_draw_state.unkA0;
-+                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
-+                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
+-                    record->model->light_block = (s32)&map_draw_state.current_light_block;
+-                    record->model->fog_block = &map_draw_state.current_fog_block;
++                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.current_light_block;
++                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.current_fog_block;
                  } else {
 -                    record->model->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
 -                    record->model->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
@@ -169,7 +169,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
                  }
                  GsDraw_QueueFlush();
              }
-@@ -307,9 +311,9 @@ void Map_DrawLateRecords(int mode) {
+@@ -308,9 +312,9 @@ void Map_DrawLateRecords(int mode) {
  }
  
  /* the address rounded up to a multiple of 16 */
@@ -182,7 +182,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  
      if (remainder != 0) {
          aligned = remainder - 0x10;
-@@ -332,7 +336,7 @@ void Map_ParseFile(int map) {
+@@ -333,7 +337,7 @@ void Map_ParseFile(int map) {
      int i;
      int offset;
      int size;
@@ -191,7 +191,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  
      slot = &map_slots[map];
      memset(map_slot_objects[map], 0, sizeof(map_slot_objects[map]));
-@@ -343,15 +347,17 @@ void Map_ParseFile(int map) {
+@@ -344,15 +348,17 @@ void Map_ParseFile(int map) {
      /* the working memory: the models, then the two tables of the slot */
      // match: stored as a model pointer (it is room for models); as a char * it is scheduled earlier
      *(ModelInstance **)&memory->record_models = (ModelInstance *)work;
@@ -214,7 +214,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      slot->record_model_spare_bytes = work;
      work += header->record_model_count;
      // match: stored as a u8 *; as a char * the read of header->unk4C below comes one instruction late
-@@ -375,7 +381,7 @@ void Map_ParseFile(int map) {
+@@ -376,7 +382,7 @@ void Map_ParseFile(int map) {
      cursor += header->flag_block_count * 0x40;
      slot->origins = (Vector4 *)cursor;
      cursor += 0x200;
@@ -223,7 +223,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      cursor += header->object_count * 0x80;
      map_spawn_infos[map] = (EntitySpawnInfo *)cursor;
      cursor += header->spawn_count * 0x60;
-@@ -388,7 +394,7 @@ void Map_ParseFile(int map) {
+@@ -389,7 +395,7 @@ void Map_ParseFile(int map) {
      /* the parts the header gives offsets for */
      cursor = (char *)header;
      cursor += header->script_offset;
@@ -232,7 +232,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      offset = header->sound_bank_offset;
      cursor = (char *)header;
      cursor += header->packet_table_offset;
-@@ -402,19 +408,19 @@ void Map_ParseFile(int map) {
+@@ -403,19 +409,19 @@ void Map_ParseFile(int map) {
      }
      cursor = (char *)header;
      cursor += offset;
@@ -259,7 +259,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  
      if (remainder != 0) {
          remainder -= 0x10;
-@@ -426,9 +432,9 @@ static inline u32 round_up_16(u32 address) {
+@@ -427,9 +433,9 @@ static inline u32 round_up_16(u32 address) {
  /* Builds the models of a map that was just read: one per record, then one per map object, with
     their collision meshes and motions. */
  void Map_BuildModels(int map) {
@@ -271,7 +271,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      MapSlotMemory *memory = &map_slot_memory[map];
      MapSlot *slot = &map_slots[map];
      MapSlotUnk08 *header = (MapSlotUnk08 *)memory->file_base;
-@@ -448,13 +454,13 @@ void Map_BuildModels(int map) {
+@@ -449,13 +455,13 @@ void Map_BuildModels(int map) {
      record = (MapRecordBounds *)slot->records;
      model = (ModelInstance *)memory->record_models;
      work = memory->work_cursor;
@@ -288,7 +288,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
              k = record->model_index;
              while (k-- > 0) {
                  cursor += *(int *)cursor;
-@@ -463,7 +469,7 @@ void Map_BuildModels(int map) {
+@@ -464,7 +470,7 @@ void Map_BuildModels(int map) {
              if (record->record_flags & 0x100) {
                  Vector_Copy(&model->position, record);
                  model->position.w = 1.0f;
@@ -297,7 +297,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
              }
              if (((ModelInstance **)slot->record_model_table)[record->model_index] == NULL) {
                  ((ModelInstance **)slot->record_model_table)[record->model_index] = model;
-@@ -482,12 +488,12 @@ void Map_BuildModels(int map) {
+@@ -483,12 +489,12 @@ void Map_BuildModels(int map) {
                  }
              }
              if (j >= i) {
@@ -313,7 +313,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
              } else {
                  model->strips = ((ModelInstance *)memory->record_models)[j].strips;
              }
-@@ -516,10 +522,10 @@ void Map_BuildModels(int map) {
+@@ -517,10 +523,10 @@ void Map_BuildModels(int map) {
          object->model = model;
          object->source = info;
          object->definition = (MapObjectUnk04 *)&map_object_defs[info->def_index * 0x80];
@@ -326,7 +326,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      for (i = 0; i < header->plain_object_model_count; i++) {
          object = map_slot_objects[map];
          for (j = 0; j < header->object_count; j++, object++) {
-@@ -535,23 +541,23 @@ void Map_BuildModels(int map) {
+@@ -536,23 +542,23 @@ void Map_BuildModels(int map) {
          }
          cursor = next; // match: retail bug, next is stale (or never set) when no object uses this model
      }
@@ -355,7 +355,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      for (i = 0; i < header->object_collision_count; i++) {
          next = cursor;
          object = map_slot_objects[map];
-@@ -559,7 +565,7 @@ void Map_BuildModels(int map) {
+@@ -560,7 +566,7 @@ void Map_BuildModels(int map) {
          for (j = 0; j < header->object_count; j++, object++) {
              if (object->definition->collision_mesh_index != 0xFFFF && object->source->collision_mesh_index == i) {
                  if (first == NULL) {
@@ -364,7 +364,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
                      first = object->model;
                  } else {
                      object->model->strips = first->strips;
-@@ -567,12 +573,12 @@ void Map_BuildModels(int map) {
+@@ -568,12 +574,12 @@ void Map_BuildModels(int map) {
              }
          }
      }
@@ -379,7 +379,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
              }
          }
          cursor = next; // match: retail bug, as above: next is only set when an object uses this motion
-@@ -653,7 +659,7 @@ void Map_OffsetRecords(int map, f32 *offset) {
+@@ -654,7 +660,7 @@ void Map_OffsetRecords(int map, f32 *offset) {
  /* Moves a map record and its model by an offset. */
  void Map_OffsetRecord(MapRecordBounds *record, f32 *offset) {
      if (record != NULL) {
@@ -388,7 +388,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          Vector_Add(record, record, offset);
          Vector_Add(record->box_lowest, record->box_lowest, offset);
          Vector_Add(record->box_highest, record->box_highest, offset);
-@@ -675,7 +681,7 @@ void Map_PlaceRecordModels(int map) {
+@@ -676,7 +682,7 @@ void Map_PlaceRecordModels(int map) {
      record = (MapRecordBounds *)slot->records;
      if (record != NULL) {
          count = ((MapSlotUnk08 *)slot->header)->record_count;
@@ -397,7 +397,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          for (i = 0; i < count; i++, record++, model++) {
              Vector_Copy(&model->position, record->position);
              model->position.w = 1.0f;
-@@ -718,14 +724,14 @@ void Map_InsertRecordBySize(AreaNode *node) {
+@@ -719,14 +725,14 @@ void Map_InsertRecordBySize(AreaNode *node) {
          cur = *head;
          while (cur != NULL && !(area < (cur->right - cur->left) * (cur->bottom - cur->top))) {
              prev = cur;
@@ -415,7 +415,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      }
  }
  
-@@ -739,14 +745,14 @@ void Map_UnlinkSlotRecords(int map) {
+@@ -740,14 +746,14 @@ void Map_UnlinkSlotRecords(int map) {
      while (node != NULL) {
          if (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map) {
              if (prev != NULL) {
@@ -433,7 +433,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      }
      if (prev == NULL) {
          record_boxes = NULL;
-@@ -757,14 +763,14 @@ void Map_UnlinkSlotRecords(int map) {
+@@ -758,14 +764,14 @@ void Map_UnlinkSlotRecords(int map) {
      while (node != NULL) {
          if (((u8)(AREA_NODE_WORD(node) >> 27) & 1) == map) {
              if (prev != NULL) {
@@ -451,7 +451,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      }
      if (prev == NULL) {
          backdrop_record_boxes = NULL;
-@@ -781,14 +787,14 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -782,14 +788,14 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      f32 best_distance;
      f32 distance;
  
@@ -466,9 +466,9 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
 -    for (node = head; node != NULL; node = node->next) {
 +    for (node = head; node != NULL; node = NEXT_BOX(node)) {
          if (USABLE(node) && IN_X(node) && IN_Z(node)) {
-             DISTANCE(node->unk44, node->unk54, point[1]);
+             DISTANCE(node->lowest_y, node->highest_y, point[1]);
          }
-@@ -796,7 +802,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -797,7 +803,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      if (best != NULL) {
          return best;
      }
@@ -477,7 +477,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          if (USABLE(node) && IN_X(node) && IN_Y(node)) {
              DISTANCE(node->top, node->bottom, point[2]);
          }
-@@ -804,7 +810,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
+@@ -805,7 +811,7 @@ AreaNode *Map_FindRecordAt(f32 *point, f32 margin) {
      if (best != NULL) {
          return best;
      }
@@ -486,7 +486,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          if (USABLE(node) && IN_Y(node) && IN_Z(node)) {
              DISTANCE(node->left, node->right, point[0]);
          }
-@@ -821,14 +827,14 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -822,14 +828,14 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      f32 best_distance;
      f32 distance;
  
@@ -501,9 +501,9 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
 -    for (node = head; node != NULL; node = node->next) {
 +    for (node = head; node != NULL; node = NEXT_BOX(node)) {
          if (USABLE_IN_MAP(node) && IN_X(node) && IN_Z(node)) {
-             DISTANCE(node->unk44, node->unk54, point[1]);
+             DISTANCE(node->lowest_y, node->highest_y, point[1]);
          }
-@@ -836,7 +842,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -837,7 +843,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      if (best != NULL) {
          return (MapRecordInfo *)best;
      }
@@ -512,7 +512,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          if (USABLE_IN_MAP(node) && IN_X(node) && IN_Y(node)) {
              DISTANCE(node->top, node->bottom, point[2]);
          }
-@@ -844,7 +850,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
+@@ -845,7 +851,7 @@ MapRecordInfo *Map_FindRecordAtInSlot(CameraState *position, f32 margin, int map
      if (best != NULL) {
          return (MapRecordInfo *)best;
      }
@@ -521,7 +521,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          if (USABLE_IN_MAP(node) && IN_Y(node) && IN_Z(node)) {
              DISTANCE(node->left, node->right, point[0]);
          }
-@@ -1000,9 +1006,9 @@ void Map_DrawFreeCameraView(void) {
+@@ -1001,9 +1007,9 @@ void Map_DrawFreeCameraView(void) {
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(0x1A, 0);
      Packet_AddGsRegister(0x1B, 0x248);
@@ -533,14 +533,14 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      for (map = 0; map < 2; map++) {
-@@ -1012,17 +1018,17 @@ void Map_DrawFreeCameraView(void) {
+@@ -1013,17 +1019,17 @@ void Map_DrawFreeCameraView(void) {
              for (i = 0; i < ((MapSlotUnk08 *)slot->header)->record_count; i++, record++) {
                  if (!(record->flags & 0x80000000)) {
                      if (record->flags & 0x10) {
--                        record->model->light_block = (s32)&map_draw_state.unkC0;
--                        record->model->fog_block = &map_draw_state.unkA0;
-+                        MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.unkC0;
-+                        MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
+-                        record->model->light_block = (s32)&map_draw_state.current_light_block;
+-                        record->model->fog_block = &map_draw_state.current_fog_block;
++                        MAP_RECORD_MODEL(record)->light_block = (sptr)&map_draw_state.current_light_block;
++                        MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.current_fog_block;
                      } else {
 -                        record->model->light_block = (s32)&map_draw_state.light_blocks[map][record->light_block_index];
 -                        record->model->fog_block = &map_draw_state.fog_blocks[map][record->fog_block_index];
@@ -551,24 +551,24 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
 +                    MAP_RECORD_MODEL(record)->hit_count = 0;
                      // match: both blocks chosen above are replaced at once by the viewer's own
 -                    record->model->light_block = (s32)&map_object_default_lights;
--                    record->model->fog_block = &map_draw_state.unkA0;
+-                    record->model->fog_block = &map_draw_state.current_fog_block;
 -                    Model_DrawPosed(record->model);
 +                    MAP_RECORD_MODEL(record)->light_block = (sptr)&map_object_default_lights;
-+                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.unkA0;
++                    MAP_RECORD_MODEL(record)->fog_block = &map_draw_state.current_fog_block;
 +                    Model_DrawPosed(MAP_RECORD_MODEL(record));
                  }
              }
          }
-@@ -1037,7 +1043,7 @@ void Map_DrawFreeCameraView(void) {
+@@ -1038,7 +1044,7 @@ void Map_DrawFreeCameraView(void) {
      Packet_EndGsRegisters();
      GsDraw_QueueFlush();
      memset(&quad, 0, sizeof(quad));
 -    quad.tag = 0x4007A80621312E40L;
 +    quad.tag = 0x4007A80621312E40LL;
      quad.unk08 = 0x60;
-     quad.unk10 = 0x156;
+     quad.prim = 0x156;
      quad.red = 0x80;
-@@ -1079,7 +1085,7 @@ void Map_DrawFreeCameraView(void) {
+@@ -1080,7 +1086,7 @@ void Map_DrawFreeCameraView(void) {
  /* Points both drawing contexts at the 256-pixel-wide 16-bit buffer at GS block 0x2BC0 with a 256x256
     scissor: draw mode 2 draws its second view there (GameLoop_DrawFrame). */
  void Map_SetOffscreenTarget(void) {
@@ -577,7 +577,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  }
  
  /* Stretches 320x224 texels of the 16-bit buffer at GS block 0x2BC0 over the whole 640x448 screen, z
-@@ -1089,10 +1095,10 @@ void Map_StretchOffscreenToScreen(void) {
+@@ -1090,10 +1096,10 @@ void Map_StretchOffscreenToScreen(void) {
  
      Packet_BeginGsRegisters();
      Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -588,18 +588,18 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
 -    quad.tag = 0x624A16BC0L;
 +    quad.tag = 0x624A16BC0LL;
      quad.unk08 = 0x60;
-     quad.unk10 = 0x116;
+     quad.prim = 0x116;
      quad.red = 0x80;
-@@ -1135,7 +1141,7 @@ void Map_QueueSlotPacket(int slot, int index) {
+@@ -1136,7 +1142,7 @@ void Map_QueueSlotPacket(int slot, int index) {
  
      packet_start = packet = Packet_Alloc(3);
-     *packet++ = *map_slot->unk40.items[index] | 0x30000000;
--    *packet++ = (u32)map_slot->unk40.items[index] + 0x10;
-+    *packet++ = EE_WORD(map_slot->unk40.items[index]) + 0x10;
+     *packet++ = *map_slot->packets.items[index] | 0x30000000;
+-    *packet++ = (u32)map_slot->packets.items[index] + 0x10;
++    *packet++ = EE_WORD(map_slot->packets.items[index]) + 0x10;
      *packet++ = 0;
      *packet++ = 0;
      Packet_AppendToChain(packet_start, packet);
-@@ -1149,7 +1155,7 @@ void Map_QueuePacket(int *packet) {
+@@ -1150,7 +1156,7 @@ void Map_QueuePacket(int *packet) {
      if (packet != 0) {
          packet_start = cursor = Packet_Alloc(2);
          *cursor++ = *packet | 0x30000000;
@@ -608,7 +608,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
          *cursor++ = 0;
          *cursor++ = 0;
          Packet_AppendToChain(packet_start, cursor);
-@@ -1171,7 +1177,7 @@ u32 *Map_GetSlotPacket(int slot, int index) {
+@@ -1172,7 +1178,7 @@ u32 *Map_GetSlotPacket(int slot, int index) {
     it among the block's 16 pairs of that map's tag and flag instead. Returns 1 when set. */
  int Map_TestFlagBlockBit(int slot, int index, int other_slot, int bit) {
      MapFlagBlock *block = map_slots[slot].flag_blocks + index;
@@ -618,7 +618,7 @@ index afb4b6299e3a063d0f15f247bbdbdeba59858230..76cf4bde2fbecdefc8b5cd3922938ee9
  
      if (slot == other_slot) {
 diff --git a/src/game/map/map.h b/src/game/map/map.h
-index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc7c4096e1 100644
+index 5bc33ce9f6b8fa8702f4c9cc3c116f59a6292cc8..639c542615ef1645615b70503130ecbcbcc7f297 100644
 --- a/src/game/map/map.h
 +++ b/src/game/map/map.h
 @@ -6,13 +6,16 @@
@@ -656,43 +656,43 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
 +/* overlay: a fog block in a map file (copied into map_draw_state) */
  typedef struct {
      u64 unk00[4];                   /* 0x00 */
- } MapSlotUnk0C;
-+LAYOUT_SIZE(MapSlotUnk0C, 0x20);
+ } MapFogBlock;
++LAYOUT_SIZE(MapFogBlock, 0x20);
  
- /* a MapSlotUnk0C block as the per-map set-up functions (MapSetup_RunForMap) fill it */
-+/* overlay: a fog block, as MapSlotUnk0C */
+ /* a MapFogBlock block as the per-map set-up functions (MapSetup_RunForMap) fill it */
++/* overlay: a fog block, as MapFogBlock */
  typedef struct {
      f32 unk00;                      /* 0x00 */
      f32 unk04;                      /* 0x04 */
 @@ -45,12 +53,15 @@ typedef struct {
      s64 unk10;                      /* 0x10 */
      char pad18[0x08];
- } MapSlotUnk0CValues;
-+LAYOUT_SIZE(MapSlotUnk0CValues, 0x20);
+ } MapFogBlockValues;
++LAYOUT_SIZE(MapFogBlockValues, 0x20);
  
  /* one of the 32 0x80-byte blocks MapSlot.light_blocks points at, as whole doublewords (see MapSlotUnk10
     in entity/entity.h); a model's unk148 points at one */
 +/* overlay: a light block in a map file (copied into map_draw_state) */
  typedef struct {
      u64 unk00[16];                  /* 0x00 */
- } MapSlotUnk10Words;
-+LAYOUT_SIZE(MapSlotUnk10Words, 0x80);
+ } MapLightBlock;
++LAYOUT_SIZE(MapLightBlock, 0x80);
  
  /* the first half of such a block: what the held item's models are lit by (held_item_light_blocks, Player_UpdateArmModels) */
  typedef struct {
 @@ -59,6 +70,7 @@ typedef struct {
  
- /* a MapSlotUnk10Words block as the eight vectors it holds; MapObject_DrawAll blends the last four
+ /* a MapLightBlock block as the eight vectors it holds; MapObject_DrawAll blends the last four
     towards map_object_glow_colors */
-+/* overlay: a light block, as MapSlotUnk10Words */
++/* overlay: a light block, as MapLightBlock */
  typedef struct {
-     Vector4 unk00[4];               /* 0x00 */
-     Vector4 unk40[4];               /* 0x40 */
+     Vector4 directions[4];          /* 0x00 the light directions (MapLightBlockLights) */
+     Vector4 colors[4];              /* 0x40 the light colours (MapLightBlockLights) */
 @@ -66,6 +78,7 @@ typedef struct {
  
- /* a MapSlotUnk10Words block as three lights: their directions are the columns of a matrix, their
+ /* a MapLightBlock block as three lights: their directions are the columns of a matrix, their
     colours (0 to 1) the vectors after it (ScriptCmd_SetMapLight) */
-+/* overlay: a light block, as MapSlotUnk10Words */
++/* overlay: a light block, as MapLightBlock */
  typedef struct {
      f32 directions[4][4];           /* 0x00 [axis][light] */
      Vector4 colors[4];              /* 0x40 */
@@ -708,7 +708,7 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
 +/* overlay: a map record in a map file */
  typedef struct MapDrawRecord {
      char pad00[0x34];
-     u8 fog_block_index;             /* 0x34 which MapSlotUnk0C block it is drawn with */
+     u8 fog_block_index;             /* 0x34 which MapFogBlock block it is drawn with */
 @@ -150,10 +167,31 @@ typedef struct MapDrawRecord {
      f32 box_min[4];                 /* 0x40 lowest x, y, z of the box linked points are tested against (LinkedPoint_FindHitsForMapDraw) */
      f32 box_max[4];                 /* 0x50 highest x, y, z of that box */
@@ -780,20 +780,20 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
      char pad00[0x20];
      s32 item_models_offset;         /* 0x20 from the header to the item models: sized blocks, a model then its texture per kind */
 @@ -229,6 +272,10 @@ typedef struct {
-     s8 unk70;                       /* 0x70 passed to sprintf as the file-name index */
-     u8 unk71;                       /* 0x71 which block of MapDrawState.light_blocks the items lying in the map are drawn with */
+     s8 file_index;                  /* 0x70 passed to sprintf as the file-name index */
+     u8 light_block;                 /* 0x71 which block of MapDrawState.light_blocks the items lying in the map are drawn with */
  } MapHeader;
 +LAYOUT_OFFSET(MapHeader, item_models_offset, 0x20);
 +LAYOUT_OFFSET(MapHeader, record_count, 0x3C);
 +LAYOUT_OFFSET(MapHeader, item_count, 0x44);
-+LAYOUT_OFFSET(MapHeader, unk71, 0x71);
++LAYOUT_OFFSET(MapHeader, light_block, 0x71);
  
  /* one 0x60-byte entry of map_slots, indexed by the current map/slot current_map_slot */
  typedef struct MapSlot {
 @@ -252,10 +299,12 @@ typedef struct MapSlot {
      char *scroll_copy_textures;     /* 0x38 the file at 0x1480 */
      char *scroll_draw_textures;     /* 0x3C the file at 0x1540 */
-     MapSlotPackets unk40;           /* 0x40 */
+     MapSlotPackets packets;         /* 0x40 the map slot's packets */
 -    s32 script;                     /* 0x5C passed to Script_Init when the map becomes current */
 +    sptr script;                    /* 0x5C the address of the map's script, passed to Script_Init when the map
 +                                       becomes current */
@@ -848,16 +848,16 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
  /* map_load_state: the background load of a neighbouring map into the slot that is not current */
  typedef struct {
 @@ -374,16 +439,24 @@ typedef struct {
-     u16 unk44;                      /* 0x44 */
+     u16 sound_tag;                  /* 0x44 the sound tag, Sound_StopTagged stops it */
  } TriggerSource;
  
 -/* a map event trigger (MapObject_PlaceStoneOnMarker) */
 -typedef struct {
 -    ModelInstance *model;           /* 0x00 */
 -    u8 *unk04;                      /* 0x04 */
--    char *unk08;                    /* 0x08 TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
+-    char *source;                   /* 0x08 TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
 -    char pad0C[0x04];
--    u8 unk10;                       /* 0x10 bit 0 picks the MapSlot */
+-    u8 flags;                       /* 0x10 bit 0 picks the MapSlot */
 -    u8 type;                        /* 0x11 */
 -    char pad12[0x2E];
 -    MapTriggerShot shot;            /* 0x40 */
@@ -868,11 +868,11 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
 +    struct {
 +        ModelInstance *model;       /* 0x00 MapObject.model */
 +        u8 *unk04;                  /* 0x04 MapObject.definition */
-+        char *unk08;                /* 0x08 MapObject.source: TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
++        char *source;               /* 0x08 MapObject.source: TriggerSource; byte 0x3A is passed to Game_AddTriggerItem */
 +    };
 +    struct {
 +        char pad_flags[offsetof(MapObject, state_flags)];
-+        u8 unk10;                   /* 0x10 bit 0 picks the MapSlot */
++        u8 flags;                   /* 0x10 bit 0 picks the MapSlot */
 +        u8 type;                    /* 0x11 */
 +    };
 +    struct {
@@ -881,7 +881,7 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
 +    };
  } MapTrigger;
  
- #define MAP_TRIGGER_SOURCE(trigger) ((TriggerSource *)(trigger)->unk08)
+ #define MAP_TRIGGER_SOURCE(trigger) ((TriggerSource *)(trigger)->source)
 @@ -468,13 +541,13 @@ typedef struct MapActor {
      char pad25[0x07];
  } MapActor;
@@ -900,7 +900,7 @@ index ebe60e6ef6fd0f4945e4ba20fd07e1840e25a058..73fa53297a3a00315000551a74b4adbc
  
  #define MAP_ACTOR_WORDS(actor) ((MapActorWords *)(actor))
 diff --git a/src/game/map/map_change.c b/src/game/map/map_change.c
-index 4f69ff16a656064fe79dfb090f88d67aa9f40d1f..bce94fedb4c62e9b745ae8cd8719c712b4ea6bb6 100644
+index 1e84745301488bdd3fa60b86ef096ae644dc8e78..d939798ec86c39cfc0862da672158901e0ebcf5c 100644
 --- a/src/game/map/map_change.c
 +++ b/src/game/map/map_change.c
 @@ -27,13 +27,13 @@ void DrawList_Clear(void);
@@ -947,7 +947,7 @@ index 4f69ff16a656064fe79dfb090f88d67aa9f40d1f..bce94fedb4c62e9b745ae8cd8719c712
      total = 30;
 -    quad.tag = 0x26802ABC0L;
 +    quad.tag = 0x26802ABC0LL;
-     quad.unk10 = 0x156;
+     quad.prim = 0x156;
      quad.first_x = 0x6BF8;
      quad.first_y = 0x71F8;
 @@ -226,7 +225,7 @@ void MapChange_FadeOutCapture(void) {
@@ -978,7 +978,7 @@ index 4f69ff16a656064fe79dfb090f88d67aa9f40d1f..bce94fedb4c62e9b745ae8cd8719c712
          player_state.position.y = header->player_start_y;
          player_state.position.z = header->player_start_z;
 diff --git a/src/game/map/map_draw_state.c b/src/game/map/map_draw_state.c
-index d42178938da6bb50e0af92326ee9003ee63826ac..d337cab8be153922802e7e994485315f0e51627f 100644
+index 0e9e92d0f43fcb9f44ea24a40de00347538d419b..805a79942f153a9b7aea957c10de53594389d376 100644
 --- a/src/game/map/map_draw_state.c
 +++ b/src/game/map/map_draw_state.c
 @@ -10,30 +10,25 @@ int haze_layer_depths[8] = { 0 };
@@ -991,34 +991,34 @@ index d42178938da6bb50e0af92326ee9003ee63826ac..d337cab8be153922802e7e994485315f
 -/* 0x38A218 MapDrawState.hud_shown on: the HUD is drawn (ui/hud.c) */
 -s32 hud_visible[0xE] = { 0 };
 -
--/* 0x38A250 MapDrawState.unkA0: the current map's first block (player/held_weapon.c) */
--MapSlotUnk0C current_fog_block = { { 0 } };
+-/* 0x38A250 MapDrawState.current_fog_block: the current map's first block (player/held_weapon.c) */
+-MapFogBlock current_fog_block = { { 0 } };
 -
--/* 0x38A270 MapDrawState.unkC0: the block as the eight vectors it holds, in two halves */
--MapSlotUnk10Half current_light_block = { { 0 } };
--MapSlotUnk10Half current_map_light_colors = { { 0 } };     /* its second half: the colours of the lights */
+-/* 0x38A270 MapDrawState.current_light_block: the block as the eight vectors it holds, in two halves */
+-MapLightBlockHalf current_light_block = { { 0 } };
+-MapLightBlockHalf current_map_light_colors = { { 0 } };     /* its second half: the colours of the lights */
 -
 -/* 0x38A2F0 MapDrawState.pad140 */
 -u8 D_0038A2F0[0x140] = { 0 };
 -
--/* 0x38A430 MapDrawState.unk280: the current map's fog colour */
+-/* 0x38A430 MapDrawState.current_fog_color: the current map's fog colour */
 -MapFogColor current_map_fog_color = { 0 };
 -
 -/* 0x38A440 MapDrawState.fog_blocks: each map slot's 0x20 blocks (a model's unk14C points at one) */
--MapSlotUnk0C map_draw_slot_blocks[2][0x20] = { 0 };
+-MapFogBlock map_draw_slot_blocks[2][0x20] = { 0 };
 -
 -/* 0x38AC40 MapDrawState.light_blocks: each map slot's 0x20 0x80-byte blocks (a model's unk148) */
--MapSlotUnk10Words map_draw_slot_draw_blocks[2][0x20] = { 0 };
+-MapLightBlock map_draw_slot_draw_blocks[2][0x20] = { 0 };
 -
 -/* 0x38CC40 MapDrawState.screen_tint_amount to unk2A98: the screen tint, 0 to 0.25, and its padding */
 -f32 map_draw_screen_tint[4] = { 0 };
 +/* 0x38A1B0 the map draw state (MapDrawState). On the PS2 it was a run of separate globals that the code also
 +   reads as one struct; the PC defines the struct, and the old names are its fields:
 +     0x38A218 hud_visible                   MapDrawState.hud_shown (and the words after it)
-+     0x38A250 current_fog_block             MapDrawState.unkA0: the current map's first block
-+     0x38A270 current_light_block           MapDrawState.unkC0, first half; current_map_light_colors its second
++     0x38A250 current_fog_block             MapDrawState.current_fog_block: the current map's first block
++     0x38A270 current_light_block           MapDrawState.current_light_block, first half; current_map_light_colors its second
 +     0x38A2F0 D_0038A2F0                    MapDrawState.pad140
-+     0x38A430 current_map_fog_color         MapDrawState.unk280
++     0x38A430 current_map_fog_color         MapDrawState.current_fog_color
 +     0x38A440 map_draw_slot_blocks          MapDrawState.fog_blocks
 +     0x38AC40 map_draw_slot_draw_blocks     MapDrawState.light_blocks
 +     0x38CC40 map_draw_screen_tint          MapDrawState.screen_tint_amount to pad2A9C */
@@ -1027,15 +1027,15 @@ index d42178938da6bb50e0af92326ee9003ee63826ac..d337cab8be153922802e7e994485315f
 +LAYOUT_OFFSET(MapDrawState, draw_flags, 0x60);
 +LAYOUT_OFFSET(MapDrawState, hud_shown, 0x68);
 +LAYOUT_OFFSET(MapDrawState, screen_fill_blend, 0x80);
-+LAYOUT_OFFSET(MapDrawState, unkA0, 0xA0);
-+LAYOUT_OFFSET(MapDrawState, unkC0, 0xC0);
-+LAYOUT_OFFSET(MapDrawState, unk280, 0x280);
++LAYOUT_OFFSET(MapDrawState, current_fog_block, 0xA0);
++LAYOUT_OFFSET(MapDrawState, current_light_block, 0xC0);
++LAYOUT_OFFSET(MapDrawState, current_fog_color, 0x280);
 +LAYOUT_OFFSET(MapDrawState, fog_blocks, 0x290);
 +LAYOUT_OFFSET(MapDrawState, light_blocks, 0xA90);
 +LAYOUT_OFFSET(MapDrawState, screen_tint_amount, 0x2A90);
 +_Static_assert(offsetof(MapDrawStateMirror, mirror_height) == offsetof(MapDrawState, draw_flags), "MapDrawStateMirror is not MapDrawState");
 diff --git a/src/game/map/map_init.c b/src/game/map/map_init.c
-index d9e3c6cab1cb3375070d5189458f769c1aecc0da..ae02d0a4755128e586228689cb9c29c8bfdb0335 100644
+index b6d9f0e111e1c029c9fd11e439004f80a0b651ca..e8025700ef145909115ebaa1de53cbe5911da40a 100644
 --- a/src/game/map/map_init.c
 +++ b/src/game/map/map_init.c
 @@ -10,7 +10,6 @@
@@ -1095,7 +1095,7 @@ index 75d13e205ec0fe6ed66f482f61f10d55071b0946..f741e489255ed0b0e0b46329efcae5f2
  void Map_BuildModels(int);
  void Map_OffsetRecords(int, f32 *);
 diff --git a/src/game/map/map_scroll.c b/src/game/map/map_scroll.c
-index ba3c140e38ad0cd411afa17aeb42ef32f7a51b15..8f5655896c9d69e3ff6c14f134dd69b6e08ad2f5 100644
+index eb723d385b7af778ae5ea3ccbe0c9da67d9c59fa..3e28e36d32e42c2e4aa21b308502166df89a8017 100644
 --- a/src/game/map/map_scroll.c
 +++ b/src/game/map/map_scroll.c
 @@ -155,22 +155,29 @@ void MapScroll_UpdateCopy(int map, int mode) {
@@ -1144,10 +1144,10 @@ index ba3c140e38ad0cd411afa17aeb42ef32f7a51b15..8f5655896c9d69e3ff6c14f134dd69b6
 +                           ((s64)width_log << 26) | ((s64)height_log << 30) | (1LL << 34) |
 +                           ((s64)texture->clut_base << 37) | ((s64)texture->clut_format << 51) | (4LL << 61);
                  quad.unk08 = 0x60;
-                 quad.unk10 = 0x156;
+                 quad.prim = 0x156;
                  half = texture->target_width >> 1;
 diff --git a/src/game/map/map_setup.c b/src/game/map/map_setup.c
-index 55a833e6fa514cfa3347b98728fa7d747ac41db4..37d3f235463be32f3e97b7606b21e5076eefea8c 100644
+index f30749e5611f3477eaa009b0150758456ac9236f..ba12ca6a390dac3ddfa187b3d46c8f6e0d162e54 100644
 --- a/src/game/map/map_setup.c
 +++ b/src/game/map/map_setup.c
 @@ -33,14 +33,16 @@ void *MapItem_GetFixedById(int);

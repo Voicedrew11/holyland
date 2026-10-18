@@ -1,5 +1,5 @@
 diff --git a/src/game/enemy/acid_crawler.c b/src/game/enemy/acid_crawler.c
-index 2eb82808ab1e7c555d137052d1d7fd08290c648f..30d8bf46ef77d8da9489eb312f1269b342e3777a 100644
+index bc2d75443b9f80b56f408610624b1994cbfb5da7..d413911dcb84b0f7876073fc58c3a222c14f8d6b 100644
 --- a/src/game/enemy/acid_crawler.c
 +++ b/src/game/enemy/acid_crawler.c
 @@ -6,8 +6,7 @@
@@ -38,11 +38,11 @@ index 2eb82808ab1e7c555d137052d1d7fd08290c648f..30d8bf46ef77d8da9489eb312f1269b3
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/ancient_king.c b/src/game/enemy/ancient_king.c
-index 8bceb43648e971d47686292791b5a5dc1d80b16b..2f11a5a65942545544a6cd6fe96379083e2e1575 100644
+index 20c1addbcc03d8944a656543ae3262c7d1c05cf4..98cc172bf95a9b0cb63ac8248d2fbb36f3c8c44b 100644
 --- a/src/game/enemy/ancient_king.c
 +++ b/src/game/enemy/ancient_king.c
 @@ -8,13 +8,13 @@
@@ -59,7 +59,7 @@ index 8bceb43648e971d47686292791b5a5dc1d80b16b..2f11a5a65942545544a6cd6fe9637908
 -extern s32 entity_type_handlers[][2];
 +extern void (*entity_type_handlers[][2])(Entity *);
  int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
- s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
+ s32 Motion_StepSlot(Entity *, EntityAiMotionSlotBits *, s32, s32);
  void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
 @@ -32,15 +32,15 @@ void EntityEvent_OnDeath(Entity *);
  extern EntityFrameTable5 ancient_king_near_shot_frames;
@@ -83,31 +83,31 @@ index 8bceb43648e971d47686292791b5a5dc1d80b16b..2f11a5a65942545544a6cd6fe9637908
 @@ -372,10 +372,10 @@ static void AncientKing_RespawnOthers(Entity *entity) {
          break;
      case 2:
-         if (((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02 == entity->params->far_distance) {
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, entity->model->rotation);
+         if (((EntityAiMotionSlot *)ai_state->motion_slot_1)->frame == entity->params->far_distance) {
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->type_param_2, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->type_param_2, entity->model->rotation);
          }
-         if (entity->params->unk43C < ((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02) {
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, entity->model->rotation);
+         if (entity->params->type_param_1 < ((EntityAiMotionSlot *)ai_state->motion_slot_1)->frame) {
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, entity->params->type_param_2, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, entity->params->type_param_2, entity->model->rotation);
              AncientKing_RespawnTwoOthers(entity);
              entity->action_step++;
          }
 @@ -750,10 +750,10 @@ static void AncientKing_RespawnOthersAfterSwitch(Entity *entity) {
          break;
      case 2:
-         if (((EntityUnkE0Slot *)unkE0->motion_slot_1)->unk02 == entity->params->far_distance) {
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->unk43E, entity->model->rotation);
+         if (((EntityAiMotionSlot *)ai_state->motion_slot_1)->frame == entity->params->far_distance) {
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->type_param_2, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->near_distance, entity->params->type_param_2, entity->model->rotation);
          }
-         if (entity->params->unk43C < entity->model->level_tables->unk82) {
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, entity->params->unk43E, entity->model->rotation);
+         if (entity->params->type_param_1 < entity->model->level_tables->frame) {
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, entity->params->type_param_2, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, entity->params->type_param_2, entity->model->rotation);
              AncientKing_RespawnTwoOthers(entity);
              entity->action_step++;
          }
 diff --git a/src/game/enemy/ancient_mummy.c b/src/game/enemy/ancient_mummy.c
-index dabdf9df170544db8dcd4a85091fc64e5c703c2b..05d419fa8d6df648fe9311a3ca65e93960f01cea 100644
+index 46257f2db1d322d468698298d6f302cfaa152b27..c49f7213568b881bafe4b1372ef031f6fee8a77d 100644
 --- a/src/game/enemy/ancient_mummy.c
 +++ b/src/game/enemy/ancient_mummy.c
 @@ -4,7 +4,7 @@
@@ -142,11 +142,11 @@ index dabdf9df170544db8dcd4a85091fc64e5c703c2b..05d419fa8d6df648fe9311a3ca65e939
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/aqualizard.c b/src/game/enemy/aqualizard.c
-index 4f2df9a474141d15a1bc025c3fab3368e1663c00..1523440775c32e1a1b90bf696c357a31d5052a77 100644
+index 3948cbf7f89c588663f108ee2254a6014de4c23e..e9e37696b786c031a96818f2235b20ecc4140706 100644
 --- a/src/game/enemy/aqualizard.c
 +++ b/src/game/enemy/aqualizard.c
 @@ -3,9 +3,9 @@
@@ -194,11 +194,11 @@ index 4f2df9a474141d15a1bc025c3fab3368e1663c00..1523440775c32e1a1b90bf696c357a31
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/beetle.c b/src/game/enemy/beetle.c
-index ed3c9639a9fba13c516e5b339427c1c258ffbc04..91b145b4035440368347cdd33b2fe9aae00fd4c8 100644
+index 00ea55aabce1bf038fc94186bd12f0540e2867f5..ba820c742eeb973dea929b11ac3b3206bbdeee60 100644
 --- a/src/game/enemy/beetle.c
 +++ b/src/game/enemy/beetle.c
 @@ -6,8 +6,7 @@
@@ -241,21 +241,21 @@ index ed3c9639a9fba13c516e5b339427c1c258ffbc04..91b145b4035440368347cdd33b2fe9aa
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -176,7 +175,7 @@ static void Beetle_ThinkWander(Entity *entity, s32 unknown) {
      } else if (turn < 0) {
-         entity->move_command = 0x101;
+         entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
      } else {
 -        entity->move_command = EntityAi_MoveCommand(50.0f, entity, 0);
 +        entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
      }
-     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);
+     EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, unknown);
  }
 @@ -251,7 +250,7 @@ static void Beetle_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
-                 entity->move_command = 0x141;
+                 entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_RUN | MOVE_COMMAND_TURN_LEFT);
              } else {
 -                entity->move_command = EntityAi_MoveCommand(0.0f, entity, 1);
 +                entity->move_command = EntityAi_MoveCommand(entity, 1, 0.0f);
@@ -263,7 +263,7 @@ index ed3c9639a9fba13c516e5b339427c1c258ffbc04..91b145b4035440368347cdd33b2fe9aa
          }
      }
 diff --git a/src/game/enemy/bell.c b/src/game/enemy/bell.c
-index 8db6330f1f1ba80bf1368208ec7d70fbc3e7fc9a..20d19ae402d99ff2a6f643d3450b864940290f91 100644
+index 1407de48d37237e4bd9310f2c6fb4ba2784ef660..59ba1310c565c554a6c534f47ec5a3026e43e06f 100644
 --- a/src/game/enemy/bell.c
 +++ b/src/game/enemy/bell.c
 @@ -6,18 +6,17 @@
@@ -294,11 +294,11 @@ index 8db6330f1f1ba80bf1368208ec7d70fbc3e7fc9a..20d19ae402d99ff2a6f643d3450b8649
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/blood_bat.c b/src/game/enemy/blood_bat.c
-index 753e35e4616f557d6d35bd8915b441a5eb716ca7..83fb598f64c36d97a250ced0b00ccaccd1d58c16 100644
+index 3688b404067a00303a47a7f9b59019f83d72fc59..13b4cc0d27dd397a17f1d73c0ec0c986707c2d53 100644
 --- a/src/game/enemy/blood_bat.c
 +++ b/src/game/enemy/blood_bat.c
 @@ -4,15 +4,15 @@
@@ -348,18 +348,9 @@ index 753e35e4616f557d6d35bd8915b441a5eb716ca7..83fb598f64c36d97a250ced0b00ccacc
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -107,7 +104,7 @@ static void BloodBat_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -152,7 +149,7 @@ static void BloodBat_Think(Entity *entity, s32 unknown) {
     whatever is pushing the entity, as EntityAi_ThinkReturn; with flag bits 11 to 13 at 0, the
     command of EntityAi_MoveCommand3D, and, while it is pushed, command bit 0x20 or 0x10 by the y of the push.
@@ -367,17 +358,8 @@ index 753e35e4616f557d6d35bd8915b441a5eb716ca7..83fb598f64c36d97a250ced0b00ccacc
 -static int BloodBat_ThinkReturn(void *entity_arg, int unknown) {
 +static void BloodBat_ThinkReturn(void *entity_arg, int unknown) {
      Entity *entity = entity_arg;
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 to_spawn[4];
-@@ -168,7 +165,7 @@ static int BloodBat_ThinkReturn(void *entity_arg, int unknown) {
-         entity->move_command = EntityAi_MoveCommand3D(entity, 0, 50.0f);
-     } else {
-         push[0] = push[1] = push[2] = push[3] = 0.0f;
--        if (entity->flags & (0xC000L << 31)) {
-+        if (entity->flags & (0xC000LL << 31)) {
-             push[0] += entity->wall_push[0];
-             push[1] += entity->wall_push[1];
-             push[2] += entity->wall_push[2];
 @@ -244,7 +241,7 @@ static void BloodBat_ThinkWander(Entity *entity, s32 unknown) {
     Closing in, it goes forward turning to Entity.heading_to_player, with command bit 0x20 or 0x10 to bring its y
     to the player's less work float unk4C (EntityParams.yaw_limit_deg give or take unk434), and it chooses
@@ -385,10 +367,10 @@ index 753e35e4616f557d6d35bd8915b441a5eb716ca7..83fb598f64c36d97a250ced0b00ccacc
 -static int BloodBat_ThinkCombat(void *entity_arg, int unknown) {
 +static void BloodBat_ThinkCombat(void *entity_arg, int unknown) {
      Entity *entity = entity_arg;
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 direction[4];
 diff --git a/src/game/enemy/critter.c b/src/game/enemy/critter.c
-index ba0dcc16cdd8052a19e54abf177be34431b7bc21..0c768c4518b206b6ce6cea54a90dfc682161797a 100644
+index 9e36175f63e292ba775f4009b57a0ef21d8c91c4..576724b27c5ea8d2aeae45530140b1a9847b7736 100644
 --- a/src/game/enemy/critter.c
 +++ b/src/game/enemy/critter.c
 @@ -4,8 +4,7 @@
@@ -434,12 +416,12 @@ index ba0dcc16cdd8052a19e54abf177be34431b7bc21..0c768c4518b206b6ce6cea54a90dfc68
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -286,7 +285,7 @@ static void Critter_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
-                 entity->move_command = 0x101;
+                 entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
              } else {
 -                entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
 +                entity->move_command = EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
@@ -447,7 +429,7 @@ index ba0dcc16cdd8052a19e54abf177be34431b7bc21..0c768c4518b206b6ce6cea54a90dfc68
          }
      }
 diff --git a/src/game/enemy/crow.c b/src/game/enemy/crow.c
-index 70d320fa7ee242f1ea3774d746eff773cfa24d09..0b0fee4a0c65efb9b15be06a1ae539165f2da032 100644
+index 3f4626f1729dcaa4fb13bd9401de6a9fe10c541e..e31ff3002fa3c5ba781066838363e1b84ba52c41 100644
 --- a/src/game/enemy/crow.c
 +++ b/src/game/enemy/crow.c
 @@ -5,19 +5,18 @@
@@ -479,20 +461,20 @@ index 70d320fa7ee242f1ea3774d746eff773cfa24d09..0b0fee4a0c65efb9b15be06a1ae53916
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -153,7 +152,7 @@ static void Crow_MoveOffAndRemove(Entity *entity, s32 unknown) {
      ENTITY_FLAG_BITS(entity)->bits11 = 0;
-     entity->move_command |= 1;
-     if (unkE0->pause_timer < entity->params->unk43A) {
+     entity->move_command |= MOVE_COMMAND_FORWARD;
+     if (ai_state->pause_timer < entity->params->type_param_0) {
 -        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, (int)entity->model->rotation);
 +        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->far_distance, 0xFF, entity->model->rotation);
-         unkE0->pause_timer++;
+         ai_state->pause_timer++;
      }
      // match: the whole step is written out in both arms (only the call is shared in retail)
 diff --git a/src/game/enemy/dark_archer.c b/src/game/enemy/dark_archer.c
-index 1cf3e5dbef3fd6ced6392ff1a358f246886743fd..c96ece1eb7e856f0a0e27d406cd39aede19d3e1c 100644
+index 2a241edcf83ebc163b9f5e6f42032f303a1e856d..7676b948120b451ffc88794c7ec09d5e3646f8c4 100644
 --- a/src/game/enemy/dark_archer.c
 +++ b/src/game/enemy/dark_archer.c
 @@ -6,9 +6,9 @@
@@ -540,22 +522,22 @@ index 1cf3e5dbef3fd6ced6392ff1a358f246886743fd..c96ece1eb7e856f0a0e27d406cd39aed
  s32 EntityAi_ShouldGuard(Entity *, f32, f32);
 @@ -115,7 +111,7 @@ void DarkArcher_Init(Entity *entity) {
      }
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
      *(s32 *)&entity->target = 0; // match: stored as an int, so it can move ahead of the params load
 -    EntityAi_SetUpdate((char *)entity, (s32)entity_type_handlers[entity->params->entity_type][1]);
 +    EntityAi_SetUpdate((char *)entity, entity_type_handlers[entity->params->entity_type][1]);
      if (entity->spawn_info->spawn_mode != 0) {
-         unkE0->think = DarkArcher_ThinkShootOrTurn;
-         unkE0->animate = (void (*)(void))DarkArcher_Animate;
+         ai_state->think = DarkArcher_ThinkShootOrTurn;
+         ai_state->animate = (void (*)(void))DarkArcher_Animate;
 @@ -132,7 +128,7 @@ void DarkArcher_Init(Entity *entity) {
-         unkE0->death = (void (*)(void))EntityAi_Death;
-         unkE0->dormant = (void (*)(void))EntityAi_Dormant;
-         unkE0->move = (void (*)(void))EntityAi_Move;
+         ai_state->death = (void (*)(void))EntityAi_Death;
+         ai_state->dormant = (void (*)(void))EntityAi_Dormant;
+         ai_state->move = (void (*)(void))EntityAi_Move;
 -        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +        if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+             EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
          } else {
-             EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+             EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -392,7 +388,7 @@ static void DarkArcher_DeathWithoutReward(Entity *entity) {
              ENTITY_FLAG_BITS(entity)->bit27 = 1;
              ENTITY_FLAG_BITS(entity)->bit26 = 1;
@@ -565,26 +547,17 @@ index 1cf3e5dbef3fd6ced6392ff1a358f246886743fd..c96ece1eb7e856f0a0e27d406cd39aed
              Effect_FreeForOwner(entity);
              entity->action_step++;
          }
-@@ -438,7 +434,7 @@ static void DarkArcher_Think(Entity *entity, s32 unknown) {
-             }
-         }
-     }
--    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200L << 35))) {
-+    if ((s16)entity->params->action_frames != 0 && (entity->flags & (0x8200LL << 35))) {
-         unkE0->step_index = 1;
-     } else {
-         unkE0->step_index = 0;
 @@ -650,7 +646,7 @@ static void DarkArcher_MoveAlongArc(Entity *entity) {
      case 4:
-         unkE0->keep_min_distance = EntityMath_Approach(unkE0->keep_min_distance, entity->params->max_speed, entity->params->speed_step_per_frame);
-         unkE0->heading_speed = EntityMath_Approach(unkE0->heading_speed, entity->params->unk43C, entity->params->unk43A);
+         ai_state->keep_min_distance = EntityMath_Approach(ai_state->keep_min_distance, entity->params->max_speed, entity->params->speed_step_per_frame);
+         ai_state->heading_speed = EntityMath_Approach(ai_state->heading_speed, entity->params->type_param_1, entity->params->type_param_0);
 -        if (ENTITY_FLAGS(entity) & (0x8200L << 35)) {
 +        if (ENTITY_FLAGS(entity) & (0x8200LL << 35)) {
              Motion_Start(entity, 9, 0, 0, 1);
-             unkE0->heading_speed = 0.0f;
-             unkE0->keep_min_distance = 0.0f;
+             ai_state->heading_speed = 0.0f;
+             ai_state->keep_min_distance = 0.0f;
 diff --git a/src/game/enemy/dark_bird.c b/src/game/enemy/dark_bird.c
-index f480842f3592f45b06ea645919e1f012f757c971..2a8e4387caaae58f10050c7dc92f17a7714fdeaa 100644
+index 6754378fea51d9b42bf5d5b10caa29cd4b5e6615..7c665d553ef931c619538122b6bf7561effc7f3d 100644
 --- a/src/game/enemy/dark_bird.c
 +++ b/src/game/enemy/dark_bird.c
 @@ -5,10 +5,10 @@
@@ -622,7 +595,7 @@ index f480842f3592f45b06ea645919e1f012f757c971..2a8e4387caaae58f10050c7dc92f17a7
  float EntityMath_HeadingTo(float *, float *);
 @@ -61,7 +58,7 @@ void EntityEvent_OnDeath(Entity *);
  int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
- s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
+ s32 Motion_StepSlot(Entity *, EntityAiMotionSlotBits *, s32, s32);
  void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
 -int EntityAi_LookAtPoint(void *, int, int, int, int, float);
 +int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
@@ -631,33 +604,24 @@ index f480842f3592f45b06ea645919e1f012f757c971..2a8e4387caaae58f10050c7dc92f17a7
  static void DarkBird_Think(Entity *entity, s32 unknown);
 @@ -117,7 +114,7 @@ void DarkBird_Init(Entity *entity) {
      }
-     entity->flags |= 0x10000000;
+     entity->flags |= ENTITY_FLAG_NO_FLOOR_LIFT;
      entity->target = NULL;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -405,7 +402,7 @@ static void DarkBird_ThinkIdle(Entity *entity, s32 unknown) {
- /* The move handler: keeps animation 3 on both motion slots, flag bits 11 to 13 at 0. DarkBird_ApplyMoveCommand
-    does the turning and the moving. */
- static void DarkBird_Move(Entity *entity) {
--    entity->flags &= ~0x3800UL;
-+    entity->flags &= ~0x3800ULL;
-     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_0, 0, 3, 0, entity->params->motion_blend_frames, 0);
-     EntityAi_StartSlotMotion(entity, entity->unkE0.motion_slot_1, 1, 3, 0, entity->params->motion_blend_frames, 0);
- }
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -1109,7 +1106,7 @@ static void DarkBird_Animate(Entity *entity) {
      limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
      limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
      if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
--        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
-+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
+-        EntityAi_LookAtPoint(entity, (int)ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
++        EntityAi_LookAtPoint(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
      } else {
-         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
+         EntityAi_LookAtPlayer(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
      }
 diff --git a/src/game/enemy/dark_flower.c b/src/game/enemy/dark_flower.c
-index ef3ac99f2385c832ba13021b9d5cdd644bf65919..c5d1019dc54bafb47407b78b4622b99ebd2fa303 100644
+index b800e236af919fd0a82a49ca0097c27b4b4c132d..a539d86e7d54f516a924ab97b8c8f31986279590 100644
 --- a/src/game/enemy/dark_flower.c
 +++ b/src/game/enemy/dark_flower.c
 @@ -4,8 +4,9 @@
@@ -697,11 +661,11 @@ index ef3ac99f2385c832ba13021b9d5cdd644bf65919..c5d1019dc54bafb47407b78b4622b99e
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/dark_knight.c b/src/game/enemy/dark_knight.c
-index 353c78f428cf73bdbafa9289b5f9cac315429fad..9558594fa5a22b5170f67e4a2fb3fcdee227cd25 100644
+index 32206d4385fc4cd5e30280eaa75cb36c1bc10596..a78d68a268fe1683a05e40ef213bc73d84c773da 100644
 --- a/src/game/enemy/dark_knight.c
 +++ b/src/game/enemy/dark_knight.c
 @@ -5,8 +5,7 @@
@@ -742,12 +706,12 @@ index 353c78f428cf73bdbafa9289b5f9cac315429fad..9558594fa5a22b5170f67e4a2fb3fcde
 @@ -104,7 +103,7 @@ void DarkKnight_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -172,8 +171,8 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
      second_aim[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
      second_aim[1] = atan2f(delta[0], delta[2]);
@@ -756,28 +720,28 @@ index 353c78f428cf73bdbafa9289b5f9cac315429fad..9558594fa5a22b5170f67e4a2fb3fcde
 -    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, (int)second_aim);
 +    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1E, first_aim);
 +    EntityEvent_StartEffectAtPoint((char **)entity, 0x3D7, 0x1F, second_aim);
-     if (unkE0->pause_timer > 0) {
-         if (unkE0->pause_timer > (s16)entity->params->action_frames - entity->params->near_distance) {
+     if (ai_state->pause_timer > 0) {
+         if (ai_state->pause_timer > (s16)entity->params->action_frames - entity->params->near_distance) {
              from = (f32 *)Model_GetSkinnedBonePoint((char *)entity->model, 4);
 @@ -184,7 +183,7 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
-             aims->unk30[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
-             aims->unk30[1] = atan2f(delta[0], delta[2]);
-             aims->unk30[2] = 0.0f;
--            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, (int)aims->unk30);
-+            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, aims->unk30);
+             aims->effect_angles[0] = atan2f(-delta[1], sqrtf(delta[0] * delta[0] + delta[2] * delta[2]));
+             aims->effect_angles[1] = atan2f(delta[0], delta[2]);
+             aims->effect_angles[2] = 0.0f;
+-            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, (int)aims->effect_angles);
++            EntityEvent_StartEffectAtPoint((char **)entity, rand() % 3 + 0x21F, 4, aims->effect_angles);
              frames = entity->params->far_distance;
              entity->params->melee_attacks[0].hit_parts[0].unk00.unk00[8] = frames;
              entity->params->melee_attacks[0].hit_parts[1].unk00.unk00[8] = frames;
 @@ -216,12 +215,12 @@ static void DarkKnight_Think(Entity *entity, s32 unknown) {
      }
-     if (unkE0->sub_timer > 0) {
+     if (ai_state->sub_timer > 0) {
          if (frame_counter % 3U == 0) {
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, (int)entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, 0x25C, 0, entity->model->rotation);
          }
 -        ENTITY_FLAGS(entity) |= 0x8000L << 20;
 +        ENTITY_FLAGS(entity) |= 0x8000LL << 20;
-         unkE0->sub_timer--;
+         ai_state->sub_timer--;
      } else {
 -        ENTITY_FLAGS(entity) &= ~(0x8000L << 20);
 +        ENTITY_FLAGS(entity) &= ~(0x8000LL << 20);
@@ -785,7 +749,7 @@ index 353c78f428cf73bdbafa9289b5f9cac315429fad..9558594fa5a22b5170f67e4a2fb3fcde
      if (entity->busy_flags == 0) {
          EntityAi_CheckFarFromSpawn(entity);
 diff --git a/src/game/enemy/dark_one.c b/src/game/enemy/dark_one.c
-index 7c0ff02450b2d9282f3457e9fa3d6199ad0fb3d1..dad16a94463149a73f5ba6a365ead73458504331 100644
+index 839deba13a2b39b9036820af3500a22f1383b686..ed972688fef0338245015165192d271c8f02a53b 100644
 --- a/src/game/enemy/dark_one.c
 +++ b/src/game/enemy/dark_one.c
 @@ -5,9 +5,9 @@
@@ -829,9 +793,9 @@ index 7c0ff02450b2d9282f3457e9fa3d6199ad0fb3d1..dad16a94463149a73f5ba6a365ead734
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -96,18 +97,18 @@ static void DarkOne_Think(Entity *entity, s32 unknown) {
      if (frame_counter % 3U == 0) {
          switch (dark_one_hits_left) {
@@ -856,7 +820,7 @@ index 7c0ff02450b2d9282f3457e9fa3d6199ad0fb3d1..dad16a94463149a73f5ba6a365ead734
          if (dark_one_hits_left <= 0) {
              entity->hit_flash_frames = 6;
 diff --git a/src/game/enemy/dark_puppet.c b/src/game/enemy/dark_puppet.c
-index ddfd75ff0b9dbe85721d6593213eeeda256819ce..a09b544a6442416a6084ce728afa18f2d4abf425 100644
+index 3880ac88609db37d92ac59f5dcf56e7300d13bd6..7dc19b4758e64b4a4f19d5b746919ce7220075a4 100644
 --- a/src/game/enemy/dark_puppet.c
 +++ b/src/game/enemy/dark_puppet.c
 @@ -4,9 +4,9 @@
@@ -912,15 +876,15 @@ index ddfd75ff0b9dbe85721d6593213eeeda256819ce..a09b544a6442416a6084ce728afa18f2
 @@ -104,7 +100,7 @@ void DarkPuppet_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -284,7 +280,7 @@ static void DarkPuppet_ThinkCombat(Entity *entity, s32 unknown) {
                  } else if (turn < 0) {
-                     entity->move_command |= 0x101;
+                     entity->move_command |= (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
                  } else {
 -                    entity->move_command |= EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
 +                    entity->move_command |= EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
@@ -933,11 +897,11 @@ index ddfd75ff0b9dbe85721d6593213eeeda256819ce..a09b544a6442416a6084ce728afa18f2
  static void DarkPuppet_Move(Entity *entity) {
 -    if (entity == (Entity *)entity_under_player[0]) {
 +    if (entity == player_state.stood_on_entity) {
-         if (entity->params->flags & 0x800) {
+         if (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON) {
              entity->move_command = 0;
          }
 diff --git a/src/game/enemy/dark_soldier.c b/src/game/enemy/dark_soldier.c
-index 0afee35b364e56a7610986cf6133cd0767e65160..035c9b9b0c2a8039236594662a50a294232cbafb 100644
+index d878839042014eefcdb021c82b6565a708992eaf..2c2d2778a35085e15ba086359d036ce3cba715cd 100644
 --- a/src/game/enemy/dark_soldier.c
 +++ b/src/game/enemy/dark_soldier.c
 @@ -5,8 +5,7 @@
@@ -983,32 +947,32 @@ index 0afee35b364e56a7610986cf6133cd0767e65160..035c9b9b0c2a8039236594662a50a294
 @@ -109,7 +107,7 @@ void DarkSoldier_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -277,7 +275,7 @@ static void DarkSoldier_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
-                 entity->move_command = 0x141;
+                 entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_RUN | MOVE_COMMAND_TURN_LEFT);
              } else {
 -                entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 1);
 +                entity->move_command = EntityAi_MoveCommand(entity, 1, entity->radius + 100.0f + 30.0f);
              }
-             entity->move_command |= 0x400;
+             entity->move_command |= MOVE_COMMAND_TURN_FAST;
          }
 @@ -292,7 +290,7 @@ static void DarkSoldier_Move(Entity *entity) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 turn;
  
--    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
-+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
+-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
++    if (entity == player_state.stood_on_entity && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
          entity->move_command = 0;
      }
-     if (entity->move_command & 0x100) {
+     if (entity->move_command & MOVE_COMMAND_TURN_LEFT) {
 diff --git a/src/game/enemy/dark_sorcerer.c b/src/game/enemy/dark_sorcerer.c
-index 55068283eccf5400dd046b9f1ed313f28d3153ec..74a6bc631bc2480776366989fd4790e57de67392 100644
+index 7311a7cec226d9df506e735233edec1baa55b91d..745ad2b4f8276c7a73d9dc4a9aa8e099788f2546 100644
 --- a/src/game/enemy/dark_sorcerer.c
 +++ b/src/game/enemy/dark_sorcerer.c
 @@ -5,16 +5,16 @@
@@ -1057,7 +1021,7 @@ index 55068283eccf5400dd046b9f1ed313f28d3153ec..74a6bc631bc2480776366989fd4790e5
  void EntityAi_SetAttackDelay(Entity *, s32);
  int EntityShot_LaunchAimed(Entity *, EntityParamsUnk3D8 *, s32, s32, f32 *, f32, f32);
 diff --git a/src/game/enemy/dark_succubus.c b/src/game/enemy/dark_succubus.c
-index 84769093fbca92301d2369354ddc4d372e072986..44ef64a8db4d9d9cdbe06c9b7dbfda4b7f14880c 100644
+index b476942e8cc1c330f0d043fbf8b1aff8cdd7d4dd..c6d1e171d4cdd6dc930c7cc908e370ad3ef666f7 100644
 --- a/src/game/enemy/dark_succubus.c
 +++ b/src/game/enemy/dark_succubus.c
 @@ -5,15 +5,15 @@
@@ -1113,41 +1077,14 @@ index 84769093fbca92301d2369354ddc4d372e072986..44ef64a8db4d9d9cdbe06c9b7dbfda4b
 @@ -118,7 +116,7 @@ void DarkSuccubus_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags |= 0x10000000;
+     entity->flags |= ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -821,7 +819,7 @@ static void DarkSuccubus_ReactionLight(Entity *entity) {
-         entity->flags &= ~0x3800;
-         entity->flags |= 0x4000;
-         entity->flags &= ~0x80000;
--        entity->flags &= ~0x800000000L;
-+        entity->flags &= ~0x800000000LL;
-         entity->flags &= ~0x200;
-         entity->reaction_step++;
-         break;
-@@ -857,7 +855,7 @@ static void DarkSuccubus_ReactionHeavy(Entity *entity) {
-         entity->flags &= ~0x3800;
-         entity->flags |= 0x4000;
-         entity->flags &= ~0x80000;
--        entity->flags &= ~0x800000000L;
-+        entity->flags &= ~0x800000000LL;
-         entity->flags &= ~0x200;
-         entity->reaction_step++;
-         break;
-@@ -1092,7 +1090,7 @@ static void DarkSuccubus_MoveAlongArc(Entity *entity) {
-             entity->move_command |= ((u16 (*)(Entity *))EntityAi_TurnCommand)(entity); // match: read as unsigned here
-             entity->move_command |= 0x400;
-         }
--        if (entity->flags & (0x8200L << 35)) {
-+        if (entity->flags & (0x8200LL << 35)) {
-             Motion_Start(entity, 9, 0, 0, 1);
-             unkE0->heading_speed = unkE0->pitch_speed = 0.0f;
-             entity->action_step++;
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/dragon_fly.c b/src/game/enemy/dragon_fly.c
-index 1e04f2bbfef060daf7fdad51a26041c023ff09bf..0bd1f3af551ab5e54e7920eab24cf8e39f2d45dc 100644
+index 14418ea459b69728b1764ea7347bcec4354c065b..5f74ccba0c52a86b3ebc265cdd9ffcd3a6bfcf50 100644
 --- a/src/game/enemy/dragon_fly.c
 +++ b/src/game/enemy/dragon_fly.c
 @@ -4,16 +4,16 @@
@@ -1186,20 +1123,11 @@ index 1e04f2bbfef060daf7fdad51a26041c023ff09bf..0bd1f3af551ab5e54e7920eab24cf8e3
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -169,7 +166,7 @@ static void DragonFly_ThinkReturn(Entity *entity, s32 unknown) {
-         entity->move_command = EntityAi_MoveCommand3D(entity, 1, 50.0f);
-     } else {
-         push[0] = push[1] = push[2] = push[3] = 0.0f;
--        if (entity->flags & (0xC000L << 31)) {
-+        if (entity->flags & (0xC000LL << 31)) {
-             push[0] += entity->wall_push[0];
-             push[1] += entity->wall_push[1];
-             push[2] += entity->wall_push[2];
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/earth_elemental.c b/src/game/enemy/earth_elemental.c
-index fa7964e39221a3512ecf0bcb195319e1d61eced5..5948c9a3545a8360f8d45a57591b1582a1090fe9 100644
+index 8506f5919f7445f8e90dd8d86e76494e52122b47..c78a6b0adf3004ff76156672b79f22c864403e38 100644
 --- a/src/game/enemy/earth_elemental.c
 +++ b/src/game/enemy/earth_elemental.c
 @@ -4,8 +4,9 @@
@@ -1247,9 +1175,9 @@ index fa7964e39221a3512ecf0bcb195319e1d61eced5..5948c9a3545a8360f8d45a57591b1582
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -206,8 +207,7 @@ static void EarthElemental_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -1259,9 +1187,9 @@ index fa7964e39221a3512ecf0bcb195319e1d61eced5..5948c9a3545a8360f8d45a57591b1582
 +        EntityAi_LowerChoiceWeight(entity, mode); /* the choice: retail left it in $a1 from the store above */
          switch (entity->combat_choice) {
          case 0:
-             unkE0->reload_timer = entity->params->near_distance;
+             ai_state->reload_timer = entity->params->near_distance;
 diff --git a/src/game/enemy/earth_king.c b/src/game/enemy/earth_king.c
-index 06086ddf9e9f6fa853ca7854c258c85ed5e3f917..e13b1c17c32b6b52a6c35c106cf67e3953470297 100644
+index 7e78e1292e64545852215bc03f7ea51e69e11e9a..dd3f041376007d463111e2ae9ea1545226e692e9 100644
 --- a/src/game/enemy/earth_king.c
 +++ b/src/game/enemy/earth_king.c
 @@ -5,8 +5,7 @@
@@ -1294,11 +1222,11 @@ index 06086ddf9e9f6fa853ca7854c258c85ed5e3f917..e13b1c17c32b6b52a6c35c106cf67e39
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/expedition_archer.c b/src/game/enemy/expedition_archer.c
-index 43c9cd7b107f304bf4cb4424cce18661a1cc9eea..c3accfe87bfa3d13e69d36cb7900e1cfeebdb39e 100644
+index b8c1baa1eabc09dbab0c62851e9962310a74da14..5089126e2a4933d63791ffc59c4ee6ce870881f7 100644
 --- a/src/game/enemy/expedition_archer.c
 +++ b/src/game/enemy/expedition_archer.c
 @@ -6,8 +6,7 @@
@@ -1337,13 +1265,13 @@ index 43c9cd7b107f304bf4cb4424cce18661a1cc9eea..c3accfe87bfa3d13e69d36cb7900e1cf
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -174,9 +173,9 @@ static void ExpeditionArcher_PitchPartToPlayer(Entity *actor) {
  static void ExpeditionArcher_Think(Entity *entity, s32 unknown) {
-     if (((u8)entity->animation_index == 0x17 || (u8)entity->animation_index == 0x18) && entity->model->level_tables->unk88 == 0 &&
-         entity->model->level_tables->unk82 >= 9 && entity->model->level_tables->unk82 < 0x2F) {
+     if (((u8)entity->animation_index == 0x17 || (u8)entity->animation_index == 0x18) && entity->model->level_tables->blend_left == 0 &&
+         entity->model->level_tables->frame >= 9 && entity->model->level_tables->frame < 0x2F) {
 -        entity->model->parts[5].unk68 &= ~(0x8000L << 25);
 +        entity->model->parts[5].unk68 &= ~(0x8000LL << 25);
      } else {
@@ -1353,7 +1281,7 @@ index 43c9cd7b107f304bf4cb4424cce18661a1cc9eea..c3accfe87bfa3d13e69d36cb7900e1cf
      if (frame_counter % 10U == entity->spawn_index % 10U) {
          EntityAi_SensePlayer(entity, 1);
 diff --git a/src/game/enemy/expedition_soldier.c b/src/game/enemy/expedition_soldier.c
-index 14f5521c95f2db5f7f13af986eb13bdefb5ed989..097f523b3aac5aff868645b9f1a53de39c122320 100644
+index c17f26b125cc1d4ee623f120e848dca0adb9084b..42728e3498612158ec36786901b80a531d010ad8 100644
 --- a/src/game/enemy/expedition_soldier.c
 +++ b/src/game/enemy/expedition_soldier.c
 @@ -7,8 +7,7 @@
@@ -1390,11 +1318,11 @@ index 14f5521c95f2db5f7f13af986eb13bdefb5ed989..097f523b3aac5aff868645b9f1a53de3
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/eye_pedestal.c b/src/game/enemy/eye_pedestal.c
-index c9ac1f5f59bf49466538c9ab800c733c8bd824ee..bdc6df20a5392d1bad7e9f87ea1d9692f5ffa9b9 100644
+index b7a6e2eba8854c19e371d2fa3c6d00990ff3f03e..9a947033ae4ca683e14f87855bd6cd8e1e614fb8 100644
 --- a/src/game/enemy/eye_pedestal.c
 +++ b/src/game/enemy/eye_pedestal.c
 @@ -8,16 +8,15 @@
@@ -1418,16 +1346,16 @@ index c9ac1f5f59bf49466538c9ab800c733c8bd824ee..bdc6df20a5392d1bad7e9f87ea1d9692
  int Motion_Start(void *, int, int, u32, int);
  extern PlayerData player_state;
 @@ -96,7 +95,7 @@ static void EyePedestal_Animate(Entity *entity) {
-         point[2] = unkE0->part_angle_z;
+         point[2] = ai_state->part_angle_z;
          look_at_target = (s32)(entity->flags >> 9) & 1;
          if (look_at_target) {
--            EntityAi_LookAtPoint(entity, (s32)unkE0->look_part_angles, look_at_target, (s32)point, (s32)limits, (f32)(s16)params->action_frames);
-+            EntityAi_LookAtPoint(entity, unkE0->look_part_angles, look_at_target, point, limits, (f32)(s16)params->action_frames);
+-            EntityAi_LookAtPoint(entity, (s32)ai_state->look_part_angles, look_at_target, (s32)point, (s32)limits, (f32)(s16)params->action_frames);
++            EntityAi_LookAtPoint(entity, ai_state->look_part_angles, look_at_target, point, limits, (f32)(s16)params->action_frames);
          } else {
-             EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, 0, NULL, 8.0f);
+             EntityAi_LookAtPlayer(entity, ai_state->look_part_angles, 0, NULL, 8.0f);
          }
 diff --git a/src/game/enemy/fadin.c b/src/game/enemy/fadin.c
-index ee1134f42bab3df09484c51e9a585a2fb734651d..4c140ed728576849a47e3bef4ee40083fde877de 100644
+index f1cd5d67f0b5b682f0abd583ae2e05aabe122bed..b3808dfb224855b020aeb9cda699a0f94d0bff87 100644
 --- a/src/game/enemy/fadin.c
 +++ b/src/game/enemy/fadin.c
 @@ -4,7 +4,7 @@
@@ -1458,11 +1386,11 @@ index ee1134f42bab3df09484c51e9a585a2fb734651d..4c140ed728576849a47e3bef4ee40083
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/fire_elemental.c b/src/game/enemy/fire_elemental.c
-index cfe8546aaf51b17ee2f3cecb90fd3ed357be26ea..9e792f1f90a83dabd6b1d0d48e1bfa105399206a 100644
+index 87876148692ee3dfac2bdd7230ef0bdd4953557f..9948dcc2189ccff7289c8a2315103d816201807e 100644
 --- a/src/game/enemy/fire_elemental.c
 +++ b/src/game/enemy/fire_elemental.c
 @@ -4,8 +4,9 @@
@@ -1507,11 +1435,11 @@ index cfe8546aaf51b17ee2f3cecb90fd3ed357be26ea..9e792f1f90a83dabd6b1d0d48e1bfa10
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -249,7 +250,7 @@ static void FireElemental_ThinkCombat(Entity *entity, s32 unknown) {
-                 entity->move_command = 0x102;
+                 entity->move_command = (MOVE_COMMAND_BACK | MOVE_COMMAND_TURN_LEFT);
              } else {
                  // match: called like EntityAi_MoveCommand, with a mode the callee ignores
 -                entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
@@ -1527,17 +1455,17 @@ index cfe8546aaf51b17ee2f3cecb90fd3ed357be26ea..9e792f1f90a83dabd6b1d0d48e1bfa10
 +                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3LL << 58)) | (1LL << 58);
                  EntityAi_StartAction(entity, FireElemental_RangedAttack1, 1);
              } else if ((s32)(ENTITY_FLAGS(entity) >> 5) & 1) {
-                 unkE0->think(entity, 1);
+                 ai_state->think(entity, 1);
 @@ -676,7 +677,7 @@ static void FireElemental_BackAwayFromPlayer(Entity *entity) {
-             entity->move_command = 0x102;
+             entity->move_command = (MOVE_COMMAND_BACK | MOVE_COMMAND_TURN_LEFT);
          } else {
              // match: called like EntityAi_MoveCommand, with a mode the callee ignores
 -            entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
 +            entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
          }
-         ((void (*)(Entity *))unkE0->move)(entity);
+         ((void (*)(Entity *))ai_state->move)(entity);
          break;
-@@ -780,10 +781,10 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
+@@ -780,7 +781,7 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
      if (turn == 0) {
          entity->target = entity->spawn_info;
          // match: called like EntityAi_MoveCommand, with a mode the callee ignores
@@ -1545,22 +1473,18 @@ index cfe8546aaf51b17ee2f3cecb90fd3ed357be26ea..9e792f1f90a83dabd6b1d0d48e1bfa10
 +        entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
      } else {
          push[0] = push[1] = push[2] = push[3] = 0.0f;
--        if (entity->flags & (0xC000L << 31)) {
-+        if (entity->flags & (0xC000LL << 31)) {
-             push[0] += entity->wall_push[0];
-             push[2] += entity->wall_push[2];
-         }
+         if (entity->flags & (ENTITY_FLAG_WALL_PUSH | ENTITY_FLAG_400000000000)) {
 @@ -809,7 +810,7 @@ static void FireElemental_ThinkReturn(Entity *entity, s32 unknown) {
-             entity->move_command = 0x102;
+             entity->move_command = (MOVE_COMMAND_BACK | MOVE_COMMAND_TURN_LEFT);
          } else {
              // match: called like EntityAi_MoveCommand, with a mode the callee ignores
 -            entity->move_command = ((s16 (*)(float, void *, int))FireElemental_BackwardsCommand)(entity->radius + 100.0f + 30.0f, entity, 1);
 +            entity->move_command = (s16)FireElemental_BackwardsCommand(entity, 1, entity->radius + 100.0f + 30.0f);
          }
      }
-     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);
+     EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, unknown);
 diff --git a/src/game/enemy/fire_genie.c b/src/game/enemy/fire_genie.c
-index 1d39fe82f903d73ea164a6c65fc09cd8b5b3706e..fdd6711245596ae8b82c3c94552e7622df7656a7 100644
+index 8e7f22238ac2e1e95a588ff5a5580bc78a28ebba..880df92d6a4d8eb493101bed427dcee0ce90f834 100644
 --- a/src/game/enemy/fire_genie.c
 +++ b/src/game/enemy/fire_genie.c
 @@ -5,26 +5,21 @@
@@ -1608,15 +1532,15 @@ index 1d39fe82f903d73ea164a6c65fc09cd8b5b3706e..fdd6711245596ae8b82c3c94552e7622
 @@ -97,7 +91,7 @@ void FireGenie_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags |= 0x10000000;
+     entity->flags |= ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -432,22 +426,22 @@ static void FireGenie_Move(Entity *entity) {
  static s32 FireGenie_CanAttack(Entity *entity) {
-     f32 angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
+     f32 angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->ai_state.part_angle_x);
  
 -    if (EntityAi_CanUseMeleeFacing(entity, angle, 0)) {
 +    if (EntityAi_CanUseMeleeFacing(entity, 0, angle)) {
@@ -1646,7 +1570,7 @@ index 1d39fe82f903d73ea164a6c65fc09cd8b5b3706e..fdd6711245596ae8b82c3c94552e7622
 @@ -464,22 +458,22 @@ static s32 FireGenie_PickAttack(Entity *entity) {
      f32 angle;
  
-     angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
+     angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->ai_state.part_angle_x);
 -    chance = EntityAi_CanUseMeleeFacing(entity, angle, 0) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
 +    chance = EntityAi_CanUseMeleeFacing(entity, 0, angle) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
      chances[0] = chance;
@@ -1673,7 +1597,7 @@ index 1d39fe82f903d73ea164a6c65fc09cd8b5b3706e..fdd6711245596ae8b82c3c94552e7622
      total += chance;
      if (total == 0) {
 diff --git a/src/game/enemy/fire_lord.c b/src/game/enemy/fire_lord.c
-index aaf236c2b3b9d8d0afc3a4f2b7469ad1cbb3f3ac..de58f2d5848651b38f2bb33c46707501f7ae4342 100644
+index 7b8d52125b89fab55769c0a8c175ef27186956c4..8c854b9353750b85d9ee8829c9a5e7cff167975e 100644
 --- a/src/game/enemy/fire_lord.c
 +++ b/src/game/enemy/fire_lord.c
 @@ -5,8 +5,9 @@
@@ -1722,9 +1646,9 @@ index aaf236c2b3b9d8d0afc3a4f2b7469ad1cbb3f3ac..de58f2d5848651b38f2bb33c46707501
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -114,7 +113,7 @@ void FireLord_Init(Entity *entity) {
      entity->model->alpha = entity->model_alpha;
      Motion_ClearPartSlots(entity->model);
@@ -1735,7 +1659,7 @@ index aaf236c2b3b9d8d0afc3a4f2b7469ad1cbb3f3ac..de58f2d5848651b38f2bb33c46707501
  }
  
 diff --git a/src/game/enemy/forest_golem.c b/src/game/enemy/forest_golem.c
-index a9a5420adfbe7bcd0842b6851163469be112b295..ccc478fca488f35161e02e2166d71b374ef77275 100644
+index d97dfe0fc75e08cf7648f97d35eee9b2c110019c..898a39c8f7fef151dc1b060b916bf7aef1b77838 100644
 --- a/src/game/enemy/forest_golem.c
 +++ b/src/game/enemy/forest_golem.c
 @@ -6,15 +6,14 @@
@@ -1778,7 +1702,7 @@ index a9a5420adfbe7bcd0842b6851163469be112b295..ccc478fca488f35161e02e2166d71b37
          case 0:
              if (EntityAi_PickAttack((char *)entity)) {
 diff --git a/src/game/enemy/giant.c b/src/game/enemy/giant.c
-index 5e15e727cbd071ad0cf46c84759441ba79bada8c..b97f9b72f9af3caafd4dc99aaf0b4dbe484be140 100644
+index 5661bf5dd62327dcc3e0b3f4ca78157c2ed02b7e..e254477cd6cd4ec4bd5b41c4786b7fb6a71bea66 100644
 --- a/src/game/enemy/giant.c
 +++ b/src/game/enemy/giant.c
 @@ -4,8 +4,7 @@
@@ -1814,11 +1738,11 @@ index 5e15e727cbd071ad0cf46c84759441ba79bada8c..b97f9b72f9af3caafd4dc99aaf0b4dbe
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/giant_beetle.c b/src/game/enemy/giant_beetle.c
-index 637cd7f55e5b95bc18ce5f200103dfac66fa21f9..dc06ae99a8ef780194ee888a65e062047fb46983 100644
+index 8cec63ecd1793a85e4cbb9a59c61e9ba76cedaca..abdd2846fe201d6395550cd601ff42d6d1477746 100644
 --- a/src/game/enemy/giant_beetle.c
 +++ b/src/game/enemy/giant_beetle.c
 @@ -5,13 +5,13 @@
@@ -1852,20 +1776,11 @@ index 637cd7f55e5b95bc18ce5f200103dfac66fa21f9..dc06ae99a8ef780194ee888a65e06204
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -381,7 +381,7 @@ static void GiantBeetle_MeleeAttack0(Entity *entity) {
-         } else {
-             entity->flags &= ~0x80000;
-         }
--        if (entity->flags & (0x8800L << 34)) {
-+        if (entity->flags & (0x8800LL << 34)) {
-             entity->busy_flags = 0;
-             entity->move_command = 0;
-             entity->action_timer = 0;
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/giant_leader.c b/src/game/enemy/giant_leader.c
-index 419c2dfae02fce8206b4d57c05122dc28009c76b..d71115c739b78e82d48bcfb79dc43ab33271d8f7 100644
+index fc0506c627210e0a0561d0abd266eae2717bc137..eb09b7d89dda992bc48806347080dbd1705907f4 100644
 --- a/src/game/enemy/giant_leader.c
 +++ b/src/game/enemy/giant_leader.c
 @@ -7,7 +7,7 @@
@@ -1903,11 +1818,11 @@ index 419c2dfae02fce8206b4d57c05122dc28009c76b..d71115c739b78e82d48bcfb79dc43ab3
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/giant_spider.c b/src/game/enemy/giant_spider.c
-index 24d5a858c84181ec71988482364b55a5264cb4d1..7336d6911e6fd77d78664f1c4245f30a109d513d 100644
+index 09b39b787de8199076987c014f485f3b01615437..917983969ca05e43ac2c5257bfc31cc608d32a27 100644
 --- a/src/game/enemy/giant_spider.c
 +++ b/src/game/enemy/giant_spider.c
 @@ -5,14 +5,14 @@
@@ -1933,11 +1848,11 @@ index 24d5a858c84181ec71988482364b55a5264cb4d1..7336d6911e6fd77d78664f1c4245f30a
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/golden_statue.c b/src/game/enemy/golden_statue.c
-index 980150b6ed35707f366902b7fc76f9072039fd09..58a2196fe23799bd16353960e9bbb4ed245a1c1e 100644
+index 69d98ab0bc58d770384c2e9c8569d56c7bd1e3ce..919af476dffb5dde4c501b663573653c1ccd7780 100644
 --- a/src/game/enemy/golden_statue.c
 +++ b/src/game/enemy/golden_statue.c
 @@ -6,7 +6,7 @@
@@ -1981,29 +1896,20 @@ index 980150b6ed35707f366902b7fc76f9072039fd09..58a2196fe23799bd16353960e9bbb4ed
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -418,7 +417,7 @@ static void GoldenStatue_Move(Entity *entity) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 turn;
  
--    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
-+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
+-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
++    if (entity == player_state.stood_on_entity && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
          entity->move_command = 0;
      }
-     if (entity->move_command & 0x100) {
-@@ -495,7 +494,7 @@ static void GoldenStatue_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
+     if (entity->move_command & MOVE_COMMAND_TURN_LEFT) {
 diff --git a/src/game/enemy/greater_demon.c b/src/game/enemy/greater_demon.c
-index f387a835dadb30b409653339ed8f2e7e59d18175..85a97e252247df8459699f61cb9663ada3be9a87 100644
+index bc4c19b31665636e8aa2504ac729d4a8e89bb587..cd016a76f0c8fd2dce5c4dd854b6237cc086a3ad 100644
 --- a/src/game/enemy/greater_demon.c
 +++ b/src/game/enemy/greater_demon.c
 @@ -16,7 +16,7 @@ extern f32 D_00446828[];
@@ -2056,15 +1962,15 @@ index f387a835dadb30b409653339ed8f2e7e59d18175..85a97e252247df8459699f61cb9663ad
 @@ -108,7 +108,7 @@ void GreaterDemon_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -294,7 +294,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
-                 entity->move_command = 0x141;
+                 entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_RUN | MOVE_COMMAND_TURN_LEFT);
              } else {
 -                entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 1);
 +                entity->move_command = EntityAi_MoveCommand(entity, 1, entity->radius + 100.0f + 30.0f);
@@ -2073,27 +1979,15 @@ index f387a835dadb30b409653339ed8f2e7e59d18175..85a97e252247df8459699f61cb9663ad
              if (turn > 0) {
 @@ -302,7 +302,7 @@ static void GreaterDemon_ThinkCombat(Entity *entity, s32 unknown) {
              } else if (turn < 0) {
-                 entity->move_command = 0x101;
+                 entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
              } else {
 -                entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
 +                entity->move_command = EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
              }
          }
      }
-@@ -724,17 +724,17 @@ static void GreaterDemon_Guard(Entity *entity) {
-     case 1:
-         if (entity->model->level_tables->unk88 == 0) {
-             entity->action_timer = entity->params->guard_frames;
--            entity->flags |= 0x8000L << 20;
-+            entity->flags |= 0x8000LL << 20;
-             entity->flags &= ~0x4000;
-             entity->action_step++;
-         }
-         break;
-     case 2:
-         if (ENTITY_FLAG_BITS(entity)->bit43 && ENTITY_FLAG_BITS(entity)->bit39 && !ENTITY_FLAG_BITS(entity)->bit38) {
--            entity->flags &= ~(0x8000L << 28);
-+            entity->flags &= ~(0x8000LL << 28);
+@@ -734,7 +734,7 @@ static void GreaterDemon_Guard(Entity *entity) {
+             entity->flags &= ~ENTITY_FLAG_HIT_BY_PLAYER;
              entity->action_timer = entity->params->guard_frames;
          }
 -        EntityEvent_StartEffectAtPoint((char **)entity, 0x32F, 0, (int)entity->model->rotation);
@@ -2102,7 +1996,7 @@ index f387a835dadb30b409653339ed8f2e7e59d18175..85a97e252247df8459699f61cb9663ad
              ENTITY_FLAG_BITS(entity)->bit35 = 0;
              ENTITY_FLAG_BITS(entity)->bit14 = 1;
 diff --git a/src/game/enemy/hammer_skeleton.c b/src/game/enemy/hammer_skeleton.c
-index 69ab72377d2f66ba3c9fe95d66c2a5c362a9e9e8..e22bc0112b9f054155bcabd532466472671084b4 100644
+index 19e28df296dd6fdf6c344808e048cfb1ccdebe26..fb31b6ab432eca38651042c4e06371bc71db1d1d 100644
 --- a/src/game/enemy/hammer_skeleton.c
 +++ b/src/game/enemy/hammer_skeleton.c
 @@ -7,8 +7,7 @@
@@ -2130,9 +2024,9 @@ index 69ab72377d2f66ba3c9fe95d66c2a5c362a9e9e8..e22bc0112b9f054155bcabd532466472
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -116,7 +115,7 @@ static void HammerSkeleton_Death(Entity *entity) {
              ENTITY_FLAG_BITS(entity)->bits2 = 2;
              ENTITY_FLAG_BITS(entity)->bit4 = TRUE;
@@ -2143,7 +2037,7 @@ index 69ab72377d2f66ba3c9fe95d66c2a5c362a9e9e8..e22bc0112b9f054155bcabd532466472
                  Script_Start(entity->spawn_info->death_script_id, 0);
              }
 diff --git a/src/game/enemy/high_skeleton.c b/src/game/enemy/high_skeleton.c
-index 7e493eb396c6db057eedd063f7f8e3bb13bebb19..b39125539da370283f9e8fc47562db0dd911c66e 100644
+index 3befd7afd311d0728941cc1fb186452f20e75051..55386ab1b32cc09253f898069f9780528737f323 100644
 --- a/src/game/enemy/high_skeleton.c
 +++ b/src/game/enemy/high_skeleton.c
 @@ -7,7 +7,7 @@
@@ -2184,9 +2078,9 @@ index 7e493eb396c6db057eedd063f7f8e3bb13bebb19..b39125539da370283f9e8fc47562db0d
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -216,7 +216,7 @@ static void HighSkeleton_DormantScaleUp(Entity *entity) {
          entity->action_step++;
          break;
@@ -2197,7 +2091,7 @@ index 7e493eb396c6db057eedd063f7f8e3bb13bebb19..b39125539da370283f9e8fc47562db0d
          break;
      case 2:
 diff --git a/src/game/enemy/ice_golem.c b/src/game/enemy/ice_golem.c
-index 25ba3cd8e27bf698968ce7cc1359df443fd9a1ea..a35c8a554693e006481e91a49696352da555a4b6 100644
+index 3bdf0d3d7da6b8da96d4586596c0e1c5cf92c2df..191ba80b59eb28443567350a714a001b12250b59 100644
 --- a/src/game/enemy/ice_golem.c
 +++ b/src/game/enemy/ice_golem.c
 @@ -4,8 +4,7 @@
@@ -2233,12 +2127,12 @@ index 25ba3cd8e27bf698968ce7cc1359df443fd9a1ea..a35c8a554693e006481e91a49696352d
 @@ -83,7 +82,7 @@ void IceGolem_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -127,7 +126,7 @@ static void IceGolem_Think(Entity *entity, s32 unknown) {
          }
      }
@@ -2249,7 +2143,7 @@ index 25ba3cd8e27bf698968ce7cc1359df443fd9a1ea..a35c8a554693e006481e91a49696352d
  }
  
 diff --git a/src/game/enemy/larva.c b/src/game/enemy/larva.c
-index 285599149367bee4fda1e5d1fae12308de4363b4..14704b6ca26e197c8a301571b59144c7587641b4 100644
+index 5406cbe2baa3ef5249646c70fd63e8979f1e8be1..9adc47b3b8e408c79719178ed7f8ebacd733af1d 100644
 --- a/src/game/enemy/larva.c
 +++ b/src/game/enemy/larva.c
 @@ -7,10 +7,9 @@
@@ -2279,42 +2173,42 @@ index 285599149367bee4fda1e5d1fae12308de4363b4..14704b6ca26e197c8a301571b59144c7
  void EntityEvent_OnDeath(Entity *);
 @@ -80,7 +79,7 @@ void Larva_Init(Entity *entity) {
      }
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
      entity->target = NULL;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -126,7 +125,7 @@ static void Larva_Think(Entity *entity, s32 unknown) {
          }
      }
      if (frame_counter % 20U == 0) {
--        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, 0xFF, (int)entity->model->rotation);
-+        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43A, 0xFF, entity->model->rotation);
+-        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, 0xFF, (int)entity->model->rotation);
++        EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_0, 0xFF, entity->model->rotation);
      }
-     if (unkE0->sub_timer != 0) {
-         unkE0->sub_timer--;
+     if (ai_state->sub_timer != 0) {
+         ai_state->sub_timer--;
 @@ -367,7 +366,7 @@ static void Larva_DormantMoveAlongArc(Entity *entity) {
-             unkE0->part_angle_x = (f32)entity->params->yaw_limit_deg;
+             ai_state->part_angle_x = (f32)entity->params->yaw_limit_deg;
          }
          if (frame_counter % 3U == 0) {
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43C, 0xFF, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43C, 0xFF, entity->model->rotation);
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_1, 0xFF, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_1, 0xFF, entity->model->rotation);
          }
-         if (unkE0->action_counter == 0) {
-             unkE0->action_counter = EntityAi_CheckMeleeHit(entity, entity->params->melee_attacks, 0, 1, 2);
+         if (ai_state->action_counter == 0) {
+             ai_state->action_counter = EntityAi_CheckMeleeHit(entity, entity->params->melee_attacks, 0, 1, 2);
 @@ -380,7 +379,7 @@ static void Larva_DormantMoveAlongArc(Entity *entity) {
-             entity->model->scale[1] = unkE0->heading_speed;
-             entity->model->scale[2] = unkE0->keep_min_distance;
-             unkE0->action_flags = 1;
--            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43E, 0xFF, (int)entity->model->rotation);
-+            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->unk43E, 0xFF, entity->model->rotation);
+             entity->model->scale[1] = ai_state->heading_speed;
+             entity->model->scale[2] = ai_state->keep_min_distance;
+             ai_state->action_flags = 1;
+-            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_2, 0xFF, (int)entity->model->rotation);
++            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->type_param_2, 0xFF, entity->model->rotation);
              EntityAi_SetState((char *)entity, 2);
-             entity->flags &= ~0x200000;
-             entity->flags &= ~0x100000;
+             entity->flags &= ~ENTITY_FLAG_200000;
+             entity->flags &= ~ENTITY_FLAG_100000;
 diff --git a/src/game/enemy/lava_bird.c b/src/game/enemy/lava_bird.c
-index 5f344842b2c90f52ba33e22aa2d71d9a5fe3366d..41162b2c157e552c1bc81d61279d71e43e17bdcc 100644
+index 348584ace06f9fb00c7b85f201f07b3751b7472e..c3f8d0e92c4144f8bf7d3883daa651ef9b7743c2 100644
 --- a/src/game/enemy/lava_bird.c
 +++ b/src/game/enemy/lava_bird.c
 @@ -5,22 +5,22 @@
@@ -2361,7 +2255,7 @@ index 5f344842b2c90f52ba33e22aa2d71d9a5fe3366d..41162b2c157e552c1bc81d61279d71e4
  void EntityAi_SetAttackDelay(Entity *entity, s32 base);
 @@ -55,7 +52,7 @@ void EntityEvent_OnDeath(Entity *);
  int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
- s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
+ s32 Motion_StepSlot(Entity *, EntityAiMotionSlotBits *, s32, s32);
  void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
 -int EntityAi_LookAtPoint(void *, int, int, int, int, float);
 +int EntityAi_LookAtPoint(void *, f32 *, int, void *, f32 *, float);
@@ -2374,9 +2268,9 @@ index 5f344842b2c90f52ba33e22aa2d71d9a5fe3366d..41162b2c157e552c1bc81d61279d71e4
      ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -241,8 +238,7 @@ static void LavaBird_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -2390,7 +2284,7 @@ index 5f344842b2c90f52ba33e22aa2d71d9a5fe3366d..41162b2c157e552c1bc81d61279d71e4
 @@ -536,7 +532,7 @@ static void LavaBird_Dormant(Entity *entity) {
      case 1:
          if (entity->distance_to_player < entity->spawn_info->wake_distance || ENTITY_FLAG_BITS(entity)->bit43) {
-             unkE0->part_angle_z = entity->params->unk43A;
+             ai_state->part_angle_z = entity->params->type_param_0;
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x166, 0xFF, (int)entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, 0x166, 0xFF, entity->model->rotation);
              entity->action_step++;
@@ -2400,13 +2294,13 @@ index 5f344842b2c90f52ba33e22aa2d71d9a5fe3366d..41162b2c157e552c1bc81d61279d71e4
      limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
      limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
      if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
--        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
-+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
+-        EntityAi_LookAtPoint(entity, (int)ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
++        EntityAi_LookAtPoint(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
      } else {
-         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
+         EntityAi_LookAtPlayer(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
      }
 diff --git a/src/game/enemy/lava_face.c b/src/game/enemy/lava_face.c
-index 197711a14d03df9741f8ded344c526f9c17e2007..df0861122b25d0c273581bfc73edf97918fcaf06 100644
+index e166281b0ade10c2d12490529bbb63e9f4988c67..1d69d0106e7657ff3df776d06e7841acdaa8f738 100644
 --- a/src/game/enemy/lava_face.c
 +++ b/src/game/enemy/lava_face.c
 @@ -4,8 +4,7 @@
@@ -2434,11 +2328,11 @@ index 197711a14d03df9741f8ded344c526f9c17e2007..df0861122b25d0c273581bfc73edf979
      ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/lava_lizard.c b/src/game/enemy/lava_lizard.c
-index 436c2a37a8e1b0740b7b0660f69377e6ad13f093..f6147f41190d8583a03a728de37e922d62d926ad 100644
+index 994a5b5abb606a224da7c7ada226f84d5823c881..06c621b711b35e08f3c3d0fed10357460935311e 100644
 --- a/src/game/enemy/lava_lizard.c
 +++ b/src/game/enemy/lava_lizard.c
 @@ -5,7 +5,7 @@
@@ -2473,20 +2367,11 @@ index 436c2a37a8e1b0740b7b0660f69377e6ad13f093..f6147f41190d8583a03a728de37e922d
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -103,7 +103,7 @@ void LavaLizard_Init(Entity *entity) {
- static void LavaLizard_Think(Entity *entity, s32 unknown) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
- 
--    if (entity->flags & (0xD000L << 33)) {
-+    if (entity->flags & (0xD000LL << 33)) {
-         unkE0->step_index = entity->params->far_distance;
-     }
-     if (frame_counter % 10U == entity->spawn_index % 10U) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/living_armor.c b/src/game/enemy/living_armor.c
-index 72a694dd8236cb66bf1f045e84afba662afa33c3..578dff19bb0c9ba45ecd9f118d390b7bc0b639f6 100644
+index f90b009c3f897e3849b6f861927355ea18b68573..bb2b120c60dab3200c8a1c27380539a2d8f1bb4d 100644
 --- a/src/game/enemy/living_armor.c
 +++ b/src/game/enemy/living_armor.c
 @@ -6,8 +6,7 @@
@@ -2531,29 +2416,20 @@ index 72a694dd8236cb66bf1f045e84afba662afa33c3..578dff19bb0c9ba45ecd9f118d390b7b
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -240,7 +239,7 @@ static void LivingArmor_AimPart3AtPlayer(Entity *actor) {
      model = ENTITY_MODEL(actor);
      joint = &model->parts[3];
      if (joint != NULL && actor->animation_index == 0x11) {
--        Bone_TurnPartToLook(model, (int)joint, (int)actor->unkE0.target_point, 1, player_state.position, 0, 10.0f);
-+        Bone_TurnPartToLook(model, joint, actor->unkE0.target_point, 1, player_state.position, 0, 10.0f);
+-        Bone_TurnPartToLook(model, (int)joint, (int)actor->ai_state.target_point, 1, player_state.position, 0, 10.0f);
++        Bone_TurnPartToLook(model, joint, actor->ai_state.target_point, 1, player_state.position, 0, 10.0f);
          angle = joint->rotation_x - 2.0943952f;
          joint->rotation_x = angle;
          joint->rotation_x = EntityMath_WrapAngle(angle);
-@@ -260,7 +259,7 @@ static void LivingArmor_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
 diff --git a/src/game/enemy/living_dead.c b/src/game/enemy/living_dead.c
-index 89786b9c97b9341955a631dd3e06d6dae6fa2fd2..586b43c23f2dae9664154c8e0332b0dddcf90923 100644
+index 92a35bd825ccbd3a62564271c5aecd2cd2502ed3..20ef674cd79082f641fd184d39aa85472d549d9f 100644
 --- a/src/game/enemy/living_dead.c
 +++ b/src/game/enemy/living_dead.c
 @@ -5,7 +5,7 @@
@@ -2591,11 +2467,11 @@ index 89786b9c97b9341955a631dd3e06d6dae6fa2fd2..586b43c23f2dae9664154c8e0332b0dd
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/living_statue.c b/src/game/enemy/living_statue.c
-index 8e7bf3e57c14a68fb18a9c60369ee4ad68bf2d3c..a12828181206aef73dec922a5df61e6a77ae2720 100644
+index 6098e83f957a02c79c5d47b0f7a8d938587db0e2..156e6804f9743c23c775c150f9db41fe35d394bc 100644
 --- a/src/game/enemy/living_statue.c
 +++ b/src/game/enemy/living_statue.c
 @@ -4,7 +4,7 @@
@@ -2622,11 +2498,11 @@ index 8e7bf3e57c14a68fb18a9c60369ee4ad68bf2d3c..a12828181206aef73dec922a5df61e6a
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/makara.c b/src/game/enemy/makara.c
-index 12e860fbbc3d4148244f2a53b3b4b7a8e420e904..5d30dc7f4891402aee13f853c9dfe392c8de8a7e 100644
+index 6f1ebce2cd7a9041ad103ce40716c897e7998b58..971ca7a4698b0480f18b4fd846009f18f4a657c7 100644
 --- a/src/game/enemy/makara.c
 +++ b/src/game/enemy/makara.c
 @@ -4,8 +4,7 @@
@@ -2662,11 +2538,11 @@ index 12e860fbbc3d4148244f2a53b3b4b7a8e420e904..5d30dc7f4891402aee13f853c9dfe392
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/malformed_giant.c b/src/game/enemy/malformed_giant.c
-index 7c01f5a8f3656a5957079f52c95f7ef3589f8644..5633e6a3c9adf08867b5f581e987746e077056a3 100644
+index 340acb0ff4176f0559d8afdad42d0cf1dcf9ceea..1c35880965c9c319ab25005ba63c110577685511 100644
 --- a/src/game/enemy/malformed_giant.c
 +++ b/src/game/enemy/malformed_giant.c
 @@ -5,8 +5,7 @@
@@ -2697,11 +2573,11 @@ index 7c01f5a8f3656a5957079f52c95f7ef3589f8644..5633e6a3c9adf08867b5f581e987746e
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/malice.c b/src/game/enemy/malice.c
-index 59e58f61b14ef5f0f4d2d5768e8bf587474b314f..45bf4d13d94b2658e5fc853d645f27416a01430c 100644
+index 2515be6ed750d7b70539f69bc5d1b58c9ffc1c71..3a398732eadc65a7c2e2b5e854a6067e12c3f903 100644
 --- a/src/game/enemy/malice.c
 +++ b/src/game/enemy/malice.c
 @@ -5,22 +5,23 @@
@@ -2753,20 +2629,20 @@ index 59e58f61b14ef5f0f4d2d5768e8bf587474b314f..45bf4d13d94b2658e5fc853d645f2741
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -502,7 +500,7 @@ static void Malice_FadeOutAndRelocate(Entity *entity) {
              ENTITY_FLAG_BITS(entity)->bit27 = 1;
-             unkE0->action_counter = 0;
-             unkE0->reload_timer = 0;
+             ai_state->action_counter = 0;
+             ai_state->reload_timer = 0;
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, (int)entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, 0x234, 0, entity->model->rotation);
              entity->action_step++;
          }
          break;
 @@ -554,7 +552,7 @@ static void Malice_FadeBackIn(Entity *entity) {
-         if ((s16)entity->params->action_frames < unkE0->mode_timer++) {
+         if ((s16)entity->params->action_frames < ai_state->mode_timer++) {
              Motion_Start(entity, 1, 0, 0, 0);
              entity->model->rotation[1] = EntityMath_HeadingTo(entity->model->position, (f32 *)&player_state);
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x235, 0, (int)entity->model->rotation);
@@ -2775,7 +2651,7 @@ index 59e58f61b14ef5f0f4d2d5768e8bf587474b314f..45bf4d13d94b2658e5fc853d645f2741
          }
          break;
 diff --git a/src/game/enemy/master_fadin.c b/src/game/enemy/master_fadin.c
-index 959d0eb6e2f4477216ce20e268b143269f4e02c0..4fc10a885a0689bb1e4d99a909b3a915efb392d4 100644
+index da29072e4789af36d6610487d236575b710df0bc..27f5bc4e26ba13d1f20eba21f53c719842b1503e 100644
 --- a/src/game/enemy/master_fadin.c
 +++ b/src/game/enemy/master_fadin.c
 @@ -5,13 +5,13 @@
@@ -2800,11 +2676,11 @@ index 959d0eb6e2f4477216ce20e268b143269f4e02c0..4fc10a885a0689bb1e4d99a909b3a915
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/minion.c b/src/game/enemy/minion.c
-index e6fb5e898847d0f51982e39df21f291b317cc2ec..2d896a3abd284ee2c12056ab9aa77bc11429bb3a 100644
+index 259a981bab33ad831993991866db68e657859e50..aeb51ad6dd9fd9471539639a0675155cb9299438 100644
 --- a/src/game/enemy/minion.c
 +++ b/src/game/enemy/minion.c
 @@ -5,23 +5,25 @@
@@ -2838,7 +2714,7 @@ index e6fb5e898847d0f51982e39df21f291b317cc2ec..2d896a3abd284ee2c12056ab9aa77bc1
  extern PlayerData player_state;
  s32 EntityAi_ShouldGuard(Entity *, f32, f32);
 @@ -35,7 +37,7 @@ int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
- s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
+ s32 Motion_StepSlot(Entity *, EntityAiMotionSlotBits *, s32, s32);
  void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
  void EntityEvent_StartFrameCues(Entity *, s32, s32, s32);
 -int EntityAi_LookAtPoint(void *, int, int, int, int, float);
@@ -2865,20 +2741,20 @@ index e6fb5e898847d0f51982e39df21f291b317cc2ec..2d896a3abd284ee2c12056ab9aa77bc1
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -291,7 +287,7 @@ static void Minion_Animate(Entity *entity) {
      limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
      limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
      if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
--        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
-+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
+-        EntityAi_LookAtPoint(entity, (int)ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
++        EntityAi_LookAtPoint(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
      } else {
-         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
+         EntityAi_LookAtPlayer(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
      }
 diff --git a/src/game/enemy/mummy.c b/src/game/enemy/mummy.c
-index 8ee804b94e7afd57410aea88713f69f76db1b04f..b7e8dcb545e5517d0628ff1619b8423f7b0b32f1 100644
+index 52b9e2c538ec0a1895ff48f000130cf940f49203..3b8aac14b615baabb486f43903a3943681afa4b8 100644
 --- a/src/game/enemy/mummy.c
 +++ b/src/game/enemy/mummy.c
 @@ -4,7 +4,7 @@
@@ -2913,11 +2789,11 @@ index 8ee804b94e7afd57410aea88713f69f76db1b04f..b7e8dcb545e5517d0628ff1619b8423f
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/mutant_ceiling.c b/src/game/enemy/mutant_ceiling.c
-index 30f4e9d7490302b6ad37da00ed037a21b1f88d3d..48dcd9c0f1ab89cba5ca6878127152566d427fd1 100644
+index 3cb46a18893e55f54ce0d58a931edfd4953783e6..106712731e527282a1ee811296b78b12ae289036 100644
 --- a/src/game/enemy/mutant_ceiling.c
 +++ b/src/game/enemy/mutant_ceiling.c
 @@ -5,8 +5,7 @@
@@ -2953,9 +2829,9 @@ index 30f4e9d7490302b6ad37da00ed037a21b1f88d3d..48dcd9c0f1ab89cba5ca687812715256
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -157,8 +156,7 @@ static void MutantCeiling_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -2966,17 +2842,8 @@ index 30f4e9d7490302b6ad37da00ed037a21b1f88d3d..48dcd9c0f1ab89cba5ca687812715256
          switch (entity->combat_choice) {
          case 0:
              if (EntityAi_PickAttack((char *)entity)) {
-@@ -344,7 +342,7 @@ static void MutantCeiling_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
 diff --git a/src/game/enemy/mutant_wall.c b/src/game/enemy/mutant_wall.c
-index 9f8e0ec533cb10cb362273bc4ab75c94090f347b..36bcba5b53acb4617b5fc150e8a4c12c32abe446 100644
+index 121e2be739501ef40b7bd8ccb91cd4d8b09b03e7..61d9ca342757e6f76247b4506c9c70aefe049a64 100644
 --- a/src/game/enemy/mutant_wall.c
 +++ b/src/game/enemy/mutant_wall.c
 @@ -5,8 +5,7 @@
@@ -3012,9 +2879,9 @@ index 9f8e0ec533cb10cb362273bc4ab75c94090f347b..36bcba5b53acb4617b5fc150e8a4c12c
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -161,8 +160,7 @@ static void MutantWall_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -3025,17 +2892,8 @@ index 9f8e0ec533cb10cb362273bc4ab75c94090f347b..36bcba5b53acb4617b5fc150e8a4c12c
          switch (entity->combat_choice) {
          case 0:
              if (EntityAi_PickAttack((char *)entity)) {
-@@ -347,7 +345,7 @@ static void MutantWall_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
 diff --git a/src/game/enemy/onyx.c b/src/game/enemy/onyx.c
-index 5a391eeda48904ace5225f26e5c461efa2484812..bd76f858654449a4baa3bebb9170293c58a39a4b 100644
+index d0835ebcd068358c866c5911f1730fb756f5b922..926271432c4a415de381ce5b072207066f2c5db8 100644
 --- a/src/game/enemy/onyx.c
 +++ b/src/game/enemy/onyx.c
 @@ -4,8 +4,7 @@
@@ -3071,11 +2929,11 @@ index 5a391eeda48904ace5225f26e5c461efa2484812..bd76f858654449a4baa3bebb9170293c
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/para_stool.c b/src/game/enemy/para_stool.c
-index f7c6a28e96b5137a10f6d7dd7d0b77b434294f4f..3804da12c8c14ca400548975da76c91f948f6ba9 100644
+index 570a6ede5f062066472bcc96d60c5c6267cb11bc..ece08f98a69a698c53064e8320cb2d7e688fe549 100644
 --- a/src/game/enemy/para_stool.c
 +++ b/src/game/enemy/para_stool.c
 @@ -3,9 +3,9 @@
@@ -3121,9 +2979,9 @@ index f7c6a28e96b5137a10f6d7dd7d0b77b434294f4f..3804da12c8c14ca400548975da76c91f
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -162,8 +161,7 @@ static void ParaStool_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -3133,9 +2991,9 @@ index f7c6a28e96b5137a10f6d7dd7d0b77b434294f4f..3804da12c8c14ca400548975da76c91f
 +        EntityAi_LowerChoiceWeight(entity, next_action); /* the choice: retail left it in $a1 from the store above */
          switch (entity->combat_choice) {
          case 0:
-             if (unkE0->pause_timer == 0) {
+             if (ai_state->pause_timer == 0) {
 diff --git a/src/game/enemy/phagos.c b/src/game/enemy/phagos.c
-index 653eaf2f2f43ed87d904185876b78bf2a5e7315a..304d50467d1a3813db5f6dd440f3c61160d0285c 100644
+index 5dcd792b40edddf12d7583307560ff76c2669d55..3c1f840e6d7802c8ba3a1fb3f35cd280ec6c0695 100644
 --- a/src/game/enemy/phagos.c
 +++ b/src/game/enemy/phagos.c
 @@ -5,14 +5,14 @@
@@ -3170,9 +3028,9 @@ index 653eaf2f2f43ed87d904185876b78bf2a5e7315a..304d50467d1a3813db5f6dd440f3c611
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -154,12 +154,12 @@ static void Phagos_RunAwayAndRemove(Entity *entity) {
              ENTITY_FLAG_BITS(entity)->bit14 = FALSE;
              ENTITY_FLAG_BITS(entity)->bit18 = TRUE;
@@ -3181,7 +3039,7 @@ index 653eaf2f2f43ed87d904185876b78bf2a5e7315a..304d50467d1a3813db5f6dd440f3c611
 +            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
              entity->action_step = 3;
          } else if (EntityCollision_RayHitsPropWall(entity->model->position, direction, entity->radius, bounds)) {
-             Vector_Copy(unkE0->target_point, entity->model->position);
+             Vector_Copy(ai_state->target_point, entity->model->position);
              ENTITY_FLAG_BITS(entity)->bit28 = TRUE;
 -            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, (int)entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, entity->params->pitch_limit_deg, 0xFF, entity->model->rotation);
@@ -3189,7 +3047,7 @@ index 653eaf2f2f43ed87d904185876b78bf2a5e7315a..304d50467d1a3813db5f6dd440f3c611
          }
          break;
 diff --git a/src/game/enemy/reaper.c b/src/game/enemy/reaper.c
-index c0c2a2a81eff41879d9bce98eb795a1f20f66057..a94a4835a5ed7c9f0cfdf70d6fa9a9b81e6de1c8 100644
+index 4e0fac02ad7fc977c41e9d0083d965966a1f26d9..c1eca649dbbd1ae24b7d4639208bb74edd6ae281 100644
 --- a/src/game/enemy/reaper.c
 +++ b/src/game/enemy/reaper.c
 @@ -5,8 +5,7 @@
@@ -3217,11 +3075,11 @@ index c0c2a2a81eff41879d9bce98eb795a1f20f66057..a94a4835a5ed7c9f0cfdf70d6fa9a9b8
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/salamander.c b/src/game/enemy/salamander.c
-index f28fc6563754ee6b85d4a769669650616bf140c6..dbf8296f7a26049b09c1f392d6860bb125356a13 100644
+index 64436a9f36b506569312838ecfd6c4a4022e0085..8767132ed1ba2412ccc6afdf11827c30af3c2ce2 100644
 --- a/src/game/enemy/salamander.c
 +++ b/src/game/enemy/salamander.c
 @@ -5,18 +5,18 @@
@@ -3238,7 +3096,7 @@ index f28fc6563754ee6b85d4a769669650616bf140c6..dbf8296f7a26049b09c1f392d6860bb1
 -extern s32 entity_type_handlers[][2];
 +extern void (*entity_type_handlers[][2])(Entity *);
  int EntityAi_StepSlotMotion(Entity *, EntityMotionSlot *, int, f32);
- s32 Motion_StepSlot(Entity *, EntityUnkE0SlotBits *, s32, s32);
+ s32 Motion_StepSlot(Entity *, EntityAiMotionSlotBits *, s32, s32);
  void EntityEvent_StartFrameEffects(Entity *, s32, s32, s32);
  void EntityEvent_StartFrameCues(Entity *, s32, s32, s32);
 -int EntityAi_LookAtPoint(void *, int, int, int, int, float);
@@ -3252,29 +3110,20 @@ index f28fc6563754ee6b85d4a769669650616bf140c6..dbf8296f7a26049b09c1f392d6860bb1
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -162,7 +162,7 @@ static void Salamander_Animate(Entity *entity) {
      limits[3] = entity->params->yaw_limit_deg * 0.017453292f;
      limits[2] = -entity->params->yaw_limit_deg * 0.017453292f;
      if (ENTITY_FLAG_BITS(entity)->bit9 && entity->target != NULL) {
--        EntityAi_LookAtPoint(entity, (int)unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
-+        EntityAi_LookAtPoint(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
+-        EntityAi_LookAtPoint(entity, (int)ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, (int)entity->target, (int)limits, 12.0f);
++        EntityAi_LookAtPoint(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, entity->target, limits, 12.0f);
      } else {
-         EntityAi_LookAtPlayer(entity, unkE0->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
+         EntityAi_LookAtPlayer(entity, ai_state->look_part_angles, ENTITY_FLAG_BITS(entity)->bit9, NULL, 8.0f);
      }
-@@ -527,7 +527,7 @@ static void Salamander_ThinkReturn(Entity *entity, s32 unknown) {
-         entity->move_command = EntityAi_MoveCommand3D(entity, 0, 50.0f);
-     } else {
-         push[0] = push[1] = push[2] = push[3] = 0.0f;
--        if (entity->flags & (0xC000L << 31)) {
-+        if (entity->flags & (0xC000LL << 31)) {
-             push[0] += entity->wall_push[0];
-             push[1] += entity->wall_push[1];
-             push[2] += entity->wall_push[2];
 diff --git a/src/game/enemy/scorpion.c b/src/game/enemy/scorpion.c
-index 6b04ead642d2d9ed544cdb769d8cf155a811610c..0994d9624777bcf39a7113ea85c9e641c00c0ff2 100644
+index c9a79442108413e13a89312c1baedb3b5a92bd15..a98c80d27892489d4e9baa89a2d1e07b83eca0b7 100644
 --- a/src/game/enemy/scorpion.c
 +++ b/src/game/enemy/scorpion.c
 @@ -4,27 +4,28 @@
@@ -3337,26 +3186,26 @@ index 6b04ead642d2d9ed544cdb769d8cf155a811610c..0994d9624777bcf39a7113ea85c9e641
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -148,7 +146,7 @@ static void Scorpion_Think(Entity *entity, s32 unknown) {
     timer runs out it picks a point near the spawn point (EntityPoint_PickNear; 21 times in 100, for 60 to
     89 frames) or no target (120 to 179 frames), takes the command of EntityAi_MoveCommand towards it (or
     the turn away from a push, EntityAi_TurnFromPush) and starts the move action. */
 -static int Scorpion_ThinkWander(Entity *entity, s32 unknown) {
 +static void Scorpion_ThinkWander(Entity *entity, s32 unknown) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 direction[4];
      s32 turn;
 @@ -174,7 +172,7 @@ static int Scorpion_ThinkWander(Entity *entity, s32 unknown) {
      } else if (turn < 0) {
-         entity->move_command = 0x101;
+         entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
      } else {
 -        entity->move_command = EntityAi_MoveCommand(50.0f, entity, 0);
 +        entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
      }
-     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);
+     EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, unknown);
  }
 @@ -185,7 +183,7 @@ static int Scorpion_ThinkWander(Entity *entity, s32 unknown) {
     bits 11 to 13 at 3); 1 goes for the player; 2 moves sideways (command bit 4 or 8, by the side of
@@ -3364,29 +3213,20 @@ index 6b04ead642d2d9ed544cdb769d8cf155a811610c..0994d9624777bcf39a7113ea85c9e641
     puts it on way 1. */
 -static int Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
 +static void Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 heading;
      f32 angle;
 @@ -293,7 +291,7 @@ static int Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
                  } else if (turn < 0) {
-                     entity->move_command = 0x101;
+                     entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
                  } else {
 -                    entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
 +                    entity->move_command = EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
                  }
                  break;
              case 2:
-@@ -305,7 +303,7 @@ static int Scorpion_ThinkCombat(Entity *entity, s32 unknown) {
-                         entity->move_command |= 0x100;
-                     }
-                 }
--                if (entity->flags & (0xD000L << 33)) {
-+                if (entity->flags & (0xD000LL << 33)) {
-                     unkE0->move_choice = 1;
-                 } else if (unkE0->step_index != 0) {
-                     entity->move_command |= 8;
 diff --git a/src/game/enemy/seafang.c b/src/game/enemy/seafang.c
-index 6674ac6411813a20baae4f7a8809f0af4ef030a9..5be9145d85ce7184af89771d0f0ad4b733e453bc 100644
+index 68329e32ab723109ae4bb247faffc857f9e75f00..20031f5d851ca348278867fd95fea6c2dd3da6fd 100644
 --- a/src/game/enemy/seafang.c
 +++ b/src/game/enemy/seafang.c
 @@ -4,7 +4,7 @@
@@ -3422,11 +3262,11 @@ index 6674ac6411813a20baae4f7a8809f0af4ef030a9..5be9145d85ce7184af89771d0f0ad4b7
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/sentinel.c b/src/game/enemy/sentinel.c
-index d5e4997aa88d80069aab5b21d00ad2540f656c50..30d3c8d3c3e4864d0e282e66028269f69747b73a 100644
+index d50e0fab6f74e45d53ec4511b92d64afab6dd18f..ba9d555b00d66337d91ff956efd49ec5c8838ab6 100644
 --- a/src/game/enemy/sentinel.c
 +++ b/src/game/enemy/sentinel.c
 @@ -5,8 +5,7 @@
@@ -3462,20 +3302,11 @@ index d5e4997aa88d80069aab5b21d00ad2540f656c50..30d3c8d3c3e4864d0e282e66028269f6
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -329,7 +328,7 @@ static void Sentinel_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/skeleton_archer.c b/src/game/enemy/skeleton_archer.c
-index d4ee4bec36e50b24bee63eefadd345eaf7ddf8d2..4443e65ee9c3da141f4b861860541f255270e228 100644
+index 5c842188f113477317e0ee915a937962726421d6..361b07da325198e84ee99a779692f792b59c0055 100644
 --- a/src/game/enemy/skeleton_archer.c
 +++ b/src/game/enemy/skeleton_archer.c
 @@ -6,7 +6,7 @@
@@ -3513,11 +3344,11 @@ index d4ee4bec36e50b24bee63eefadd345eaf7ddf8d2..4443e65ee9c3da141f4b861860541f25
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/skeleton_soldier.c b/src/game/enemy/skeleton_soldier.c
-index 12499d4a5e73211adb1743c4b07abb91f44fa0ff..02f6eaf039b22cde65a45ad399c942c1e5e2ec74 100644
+index a6af0e94646039c8b3a5886c3adf584d27e37673..0b0b1a903c9fbe913d31ed8d331cc87e92bbac78 100644
 --- a/src/game/enemy/skeleton_soldier.c
 +++ b/src/game/enemy/skeleton_soldier.c
 @@ -6,7 +6,7 @@
@@ -3552,11 +3383,11 @@ index 12499d4a5e73211adb1743c4b07abb91f44fa0ff..02f6eaf039b22cde65a45ad399c942c1
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/skull.c b/src/game/enemy/skull.c
-index fd849715f7a3cde1f5162580b17d2aa589b967d9..df1139585c5d66f901a8ae1efcd969bb11911e6c 100644
+index 3572208bae23e0705579881bfed73031588661ba..ad74e2dfd8dfcc94c5fb1a6f69cc42f869e2dde7 100644
 --- a/src/game/enemy/skull.c
 +++ b/src/game/enemy/skull.c
 @@ -5,8 +5,9 @@
@@ -3612,18 +3443,9 @@ index fd849715f7a3cde1f5162580b17d2aa589b967d9..df1139585c5d66f901a8ae1efcd969bb
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -511,7 +509,7 @@ static void Skull_Animate(Entity *entity) {
-     unkE0 = &entity->unkE0;
-     if (ENTITY_FLAG_BITS(entity)->bit14) {
-         if ((((EntityParamsWord *)entity->params)->unk00 & 0x6000000) == 0x6000000) {
--            entity->flags = flags & ~0x3800L;
-+            entity->flags = flags & ~0x3800LL;
-         }
-         blend_frames = entity->model->level_tables->unk88;
-         if (blend_frames != 0) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -532,7 +530,7 @@ static void Skull_Animate(Entity *entity) {
              shot->unk28 = entity->params->unk238;
              Attack_LaunchMagicEffect(0xD0, shot, Model_GetSkinnedBonePoint((char *)entity->model, 0xFF), entity->model->rotation, entity);
@@ -3634,7 +3456,7 @@ index fd849715f7a3cde1f5162580b17d2aa589b967d9..df1139585c5d66f901a8ae1efcd969bb
      }
  }
 diff --git a/src/game/enemy/slasher.c b/src/game/enemy/slasher.c
-index 2dac38e9812d4af36f15d4f8ddd4db7177696064..b106aefbff38ac90c8ee5179087e279a8232497c 100644
+index 6aa2ee267c076a9aca1280616b8afc57805a0f08..79523c56476661196485f05bb9145534049d6e6e 100644
 --- a/src/game/enemy/slasher.c
 +++ b/src/game/enemy/slasher.c
 @@ -6,8 +6,7 @@
@@ -3671,11 +3493,11 @@ index 2dac38e9812d4af36f15d4f8ddd4db7177696064..b106aefbff38ac90c8ee5179087e279a
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
          EntityAi_StartAction(entity, Slasher_WaitForPlayerNear, 1);
 diff --git a/src/game/enemy/slime.c b/src/game/enemy/slime.c
-index bb9df137cfdbfc213b050320c1aa6f7deb771c70..88a0cf092363848718870073c9e84adcda366a35 100644
+index 22d975491c5ca5d5a60533cd35a61b42a85c557f..ee40e0ecc14a5bb4b683f057ff7893ab32066a65 100644
 --- a/src/game/enemy/slime.c
 +++ b/src/game/enemy/slime.c
 @@ -5,14 +5,15 @@
@@ -3710,11 +3532,11 @@ index bb9df137cfdbfc213b050320c1aa6f7deb771c70..88a0cf092363848718870073c9e84adc
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/snake.c b/src/game/enemy/snake.c
-index d284eb732ab3436ce1b08ee80647c31a965a3fb1..f3c112361d1f721c67b3db6b9829c86307b25a92 100644
+index 697bcc4b3cc9be44e3fcfe373a6821d922107e1a..2b5ad812afa85cf8bb58477a8b6c348cc64ab623 100644
 --- a/src/game/enemy/snake.c
 +++ b/src/game/enemy/snake.c
 @@ -7,7 +7,7 @@
@@ -3753,7 +3575,7 @@ index d284eb732ab3436ce1b08ee80647c31a965a3fb1..f3c112361d1f721c67b3db6b9829c863
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
          if (entity->spawn_info->spawn_mode == 0) {
-             unkE0->dormant = (void (*)(void))Snake_DormantHoldAnim2;
+             ai_state->dormant = (void (*)(void))Snake_DormantHoldAnim2;
          } else if (entity->spawn_info->spawn_mode == 1) {
 @@ -357,7 +357,7 @@ static void Snake_Death(Entity *entity) {
              ENTITY_FLAG_BITS(entity)->bits2 = 2;
@@ -3765,7 +3587,7 @@ index d284eb732ab3436ce1b08ee80647c31a965a3fb1..f3c112361d1f721c67b3db6b9829c863
              if (entity->spawn_info->death_script_id != 0 && entity->group_id == current_map_slot) {
                  Script_Start(entity->spawn_info->death_script_id, 0);
 diff --git a/src/game/enemy/spider.c b/src/game/enemy/spider.c
-index 46521887ce4167f19c0aca6d4b1d429cc5e18fb4..7df4bdcd8b69752c2a2c93c6a343bb163548edfc 100644
+index c8efcc3dd739bad7cfa80eaa2f368ab38b9d0334..f144d5e0cabe41156f6e37ecd8e622a31d1e2e66 100644
 --- a/src/game/enemy/spider.c
 +++ b/src/game/enemy/spider.c
 @@ -4,15 +4,16 @@
@@ -3818,21 +3640,21 @@ index 46521887ce4167f19c0aca6d4b1d429cc5e18fb4..7df4bdcd8b69752c2a2c93c6a343bb16
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         unkE0->think = Spider_Think;
-         unkE0->animate = (void (*)(void))Spider_Animate;
-         unkE0->on_hit = (void (*)(void))EntityAi_OnHit;
+         ai_state->think = Spider_Think;
+         ai_state->animate = (void (*)(void))Spider_Animate;
+         ai_state->on_hit = (void (*)(void))EntityAi_OnHit;
 @@ -198,7 +195,7 @@ static void Spider_ThinkWander(Entity *entity, s32 unknown) {
      } else if (turn < 0) {
-         entity->move_command = 0x101;
+         entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
      } else {
 -        entity->move_command = EntityAi_MoveCommand(50.0f, entity, 0);
 +        entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
      }
-     EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, unknown);
+     EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, unknown);
  }
 @@ -287,7 +284,7 @@ static void Spider_ThinkCombat(Entity *entity, s32 unknown) {
                  } else if (turn < 0) {
-                     entity->move_command = 0x101;
+                     entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
                  } else {
 -                    entity->move_command = EntityAi_MoveCommand(entity->radius + 100.0f + 30.0f, entity, 0);
 +                    entity->move_command = EntityAi_MoveCommand(entity, 0, entity->radius + 100.0f + 30.0f);
@@ -3841,24 +3663,15 @@ index 46521887ce4167f19c0aca6d4b1d429cc5e18fb4..7df4bdcd8b69752c2a2c93c6a343bb16
                  if (turn > 0) {
 @@ -295,7 +292,7 @@ static void Spider_ThinkCombat(Entity *entity, s32 unknown) {
                  } else if (turn < 0) {
-                     entity->move_command = 0x101;
+                     entity->move_command = (MOVE_COMMAND_FORWARD | MOVE_COMMAND_TURN_LEFT);
                  } else {
 -                    entity->move_command = EntityAi_MoveCommand(50.0f, entity, 0);
 +                    entity->move_command = EntityAi_MoveCommand(entity, 0, 50.0f);
                  }
                  break;
              }
-@@ -552,7 +549,7 @@ static void Spider_LevelOut(Entity *entity) {
-     entity->busy_flags = 0x2000;
-     pitch_left = EntityMath_EaseAngleToward(&entity->model->rotation[0], 0.0f, 6.0f);
-     roll_left = EntityMath_EaseAngleToward(&entity->model->rotation[2], 0.0f, 6.0f);
--    if (entity->flags & (0x8200L << 35)) {
-+    if (entity->flags & (0x8200LL << 35)) {
-         pitch_left = ABS(pitch_left);
-         roll_left = ABS(roll_left);
-         if (ABS(pitch_left) < 0.01f && ABS(roll_left) < 0.01f) {
 diff --git a/src/game/enemy/stone_guardian.c b/src/game/enemy/stone_guardian.c
-index 0391f1b843c54f9714fc32fe1a1f1831551c11d4..ef68f6d22567709c8629bc24774d87f7f302f354 100644
+index a704c3c0c801aa43c85163ad086ea8e23711aa5b..b75e4b8ff532a9308a4b0fe9caf1490f7e8461a7 100644
 --- a/src/game/enemy/stone_guardian.c
 +++ b/src/game/enemy/stone_guardian.c
 @@ -7,14 +7,14 @@
@@ -3881,41 +3694,41 @@ index 0391f1b843c54f9714fc32fe1a1f1831551c11d4..ef68f6d22567709c8629bc24774d87f7
 @@ -561,7 +561,7 @@ static void StoneGuardian_Mode2ReturnToSpawn(Entity *entity) {
      f32 angle;
  
-     if (unkE0->sub_timer > 0) {
--        unkE0->move();
-+        ((void (*)(Entity *))unkE0->move)(entity);
+     if (ai_state->sub_timer > 0) {
+-        ai_state->move();
++        ((void (*)(Entity *))ai_state->move)(entity);
          return;
      }
      ENTITY_FLAG_BITS(entity)->bits11 = 1;
 @@ -778,7 +778,7 @@ static void StoneGuardian_Mode3ReturnToSpawn(Entity *entity) {
      f32 angle;
  
-     if (unkE0->sub_timer > 0) {
--        unkE0->move();
-+        ((void (*)(Entity *))unkE0->move)(entity);
+     if (ai_state->sub_timer > 0) {
+-        ai_state->move();
++        ((void (*)(Entity *))ai_state->move)(entity);
          return;
      }
      ENTITY_FLAG_BITS(entity)->bits11 = 1;
 @@ -991,7 +991,7 @@ static void StoneGuardian_Mode4ReturnToSpawn(Entity *entity) {
      f32 angle;
  
-     if (unkE0->sub_timer > 0) {
--        unkE0->move();
-+        ((void (*)(Entity *))unkE0->move)(entity);
+     if (ai_state->sub_timer > 0) {
+-        ai_state->move();
++        ((void (*)(Entity *))ai_state->move)(entity);
          return;
      }
      ENTITY_FLAG_BITS(entity)->bits11 = 1;
 @@ -1205,7 +1205,7 @@ static void StoneGuardian_Mode5ReturnToSpawn(Entity *entity) {
      f32 angle;
  
-     if (unkE0->sub_timer > 0) {
--        unkE0->move();
-+        ((void (*)(Entity *))unkE0->move)(entity);
+     if (ai_state->sub_timer > 0) {
+-        ai_state->move();
++        ((void (*)(Entity *))ai_state->move)(entity);
          return;
      }
      ENTITY_FLAG_BITS(entity)->bits11 = 1;
 diff --git a/src/game/enemy/stool.c b/src/game/enemy/stool.c
-index 514da32f6db9cac2c96d23a4933e09011621cecd..caf00ef394deda3a86b228c49f82fd9051378db1 100644
+index a8322e251e1bd30dafa3a519d74510c2a128af22..aae0acb73470f13727768aba579f7ebe979c1f85 100644
 --- a/src/game/enemy/stool.c
 +++ b/src/game/enemy/stool.c
 @@ -5,8 +5,7 @@
@@ -3943,20 +3756,11 @@ index 514da32f6db9cac2c96d23a4933e09011621cecd..caf00ef394deda3a86b228c49f82fd90
      ENTITY_UNK5C(entity)->as_s32 = 0;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -78,7 +77,7 @@ static void Stool_OnHit(Entity *entity) {
-     EntityAi_LowerWeightsAfterHit((char *)entity);
-     flags = entity->flags;
-     if ((s32)(flags >> 38) & 3) {
--        entity->flags = (flags & ~(3UL << 58)) | (1UL << 57);
-+        entity->flags = (flags & ~(3ULL << 58)) | (1ULL << 57);
-         EntityAi_StartAction(entity, EntityAi_RangedAttack, 1);
-         return;
-     }
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/watcher.c b/src/game/enemy/watcher.c
-index d27f2fb3c812580c7d79b06291952b6ef4850f04..573d563365ba5f7c972305a9a03728d8d5fb60ad 100644
+index c76d5a739071eeeb3c8cd2f4001dffa5dcbda972..66118b50fb57f147eac67d79285ccf0222bd40c1 100644
 --- a/src/game/enemy/watcher.c
 +++ b/src/game/enemy/watcher.c
 @@ -4,15 +4,14 @@
@@ -3978,7 +3782,7 @@ index d27f2fb3c812580c7d79b06291952b6ef4850f04..573d563365ba5f7c972305a9a03728d8
  void EntityAi_SensePlayer(void *, int);
  s32 EntityAi_CanUseRanged(Entity *, s32);
 diff --git a/src/game/enemy/water_elemental.c b/src/game/enemy/water_elemental.c
-index 2f89357eccfa74c9eae7825d93f2bdcec0763ae4..19d43356037600ced47914ea54926fc7733e4687 100644
+index 9899c65c354d6363226fbe4f54a78f5224639f1e..56ee069af8f0ffbc8e27cab165d5378d603e0db1 100644
 --- a/src/game/enemy/water_elemental.c
 +++ b/src/game/enemy/water_elemental.c
 @@ -5,8 +5,7 @@
@@ -4013,12 +3817,12 @@ index 2f89357eccfa74c9eae7825d93f2bdcec0763ae4..19d43356037600ced47914ea54926fc7
 @@ -90,7 +89,7 @@ void WaterElemental_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -204,8 +203,7 @@ static void WaterElemental_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -4030,7 +3834,7 @@ index 2f89357eccfa74c9eae7825d93f2bdcec0763ae4..19d43356037600ced47914ea54926fc7
          case 0:
              if (EntityAi_PickAttack((char *)entity)) {
 diff --git a/src/game/enemy/widda.c b/src/game/enemy/widda.c
-index e7eed22fdf938761dce7d68d08c25fc264921d85..ca910cfcec064058badec3ef307591e9f3662470 100644
+index 96ad5a8ae833a0405475ff0a5ae7b80f494bf3af..144da11599dc79a10c9317f916c6c60888260e81 100644
 --- a/src/game/enemy/widda.c
 +++ b/src/game/enemy/widda.c
 @@ -5,8 +5,7 @@
@@ -4077,29 +3881,20 @@ index e7eed22fdf938761dce7d68d08c25fc264921d85..ca910cfcec064058badec3ef307591e9
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
-@@ -181,7 +179,7 @@ static void Widda_AimPartsAtTarget(Entity *entity) {
- static void Widda_Think(Entity *entity, s32 unknown) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
- 
--    if ((entity->busy_flags & 8) && (entity->flags & (0xD000L << 33))) {
-+    if ((entity->busy_flags & 8) && (entity->flags & (0xD000LL << 33))) {
-         unkE0->step_index = 1;
-     }
-     if (frame_counter % 10U == entity->spawn_index % 10U) {
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -342,7 +340,7 @@ static void Widda_Move(Entity *entity) {
-     EntityUnkE0 *unkE0 = &entity->unkE0;
+     EntityAiState *ai_state = &entity->ai_state;
      f32 turn;
  
--    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & 0x800)) {
-+    if (entity == player_state.stood_on_entity && (entity->params->flags & 0x800)) {
+-    if (entity == (Entity *)entity_under_player[0] && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
++    if (entity == player_state.stood_on_entity && (entity->params->flags & ENTITY_PARAMS_FLAG_STOPS_WHEN_STOOD_ON)) {
          entity->move_command = 0;
      }
-     if (entity->move_command & 0x100) {
+     if (entity->move_command & MOVE_COMMAND_TURN_LEFT) {
 diff --git a/src/game/enemy/widda_archer.c b/src/game/enemy/widda_archer.c
-index dd3031cb22164d9468c67343b55dbfc928e398ac..5886f346a58ba10f07085df5af7d5064a220a0f3 100644
+index 31b096e043cfeb2460d50d49a8f110df5d7df155..d0d03b2259ae5626dc0836a2ff458d7a81c08eff 100644
 --- a/src/game/enemy/widda_archer.c
 +++ b/src/game/enemy/widda_archer.c
 @@ -7,7 +7,7 @@
@@ -4137,13 +3932,13 @@ index dd3031cb22164d9468c67343b55dbfc928e398ac..5886f346a58ba10f07085df5af7d5064
      entity->target = NULL;
 -    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000L << 43)) {
 +    if (ENTITY_SPAWN_FLAGS(entity) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -223,9 +223,9 @@ static void WiddaArcher_Think(Entity *entity, s32 unknown) {
-     if (entity->model->level_tables->unk88 == 0 &&
-         ((entity->animation_index == 0x17 && entity->model->level_tables->unk82 >= 7 && entity->model->level_tables->unk82 < 0x24) ||
-          (entity->animation_index == 0x18 && entity->model->level_tables->unk82 >= 0x19 && entity->model->level_tables->unk82 < 0x32))) {
+     if (entity->model->level_tables->blend_left == 0 &&
+         ((entity->animation_index == 0x17 && entity->model->level_tables->frame >= 7 && entity->model->level_tables->frame < 0x24) ||
+          (entity->animation_index == 0x18 && entity->model->level_tables->frame >= 0x19 && entity->model->level_tables->frame < 0x32))) {
 -        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000L << 25;
 +        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000LL << 25;
      } else {
@@ -4153,9 +3948,9 @@ index dd3031cb22164d9468c67343b55dbfc928e398ac..5886f346a58ba10f07085df5af7d5064
      if (frame_counter % 10U == entity->spawn_index % 10U) {
          EntityAi_SensePlayer(entity, 1);
 @@ -395,9 +395,9 @@ static void WiddaArcher_ThinkUseMapObject(Entity *entity, s32 unknown) {
-     if (entity->model->level_tables->unk88 == 0 &&
-         ((entity->animation_index == 0x17 && entity->model->level_tables->unk82 >= 7 && entity->model->level_tables->unk82 < 0x24) ||
-          (entity->animation_index == 0x18 && entity->model->level_tables->unk82 >= 0x19 && entity->model->level_tables->unk82 < 0x32))) {
+     if (entity->model->level_tables->blend_left == 0 &&
+         ((entity->animation_index == 0x17 && entity->model->level_tables->frame >= 7 && entity->model->level_tables->frame < 0x24) ||
+          (entity->animation_index == 0x18 && entity->model->level_tables->frame >= 0x19 && entity->model->level_tables->frame < 0x32))) {
 -        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000L << 25;
 +        ((EntityModelPart80 *)entity->model->parts)[29].unk68 |= 0x8000LL << 25;
      } else {
@@ -4165,7 +3960,7 @@ index dd3031cb22164d9468c67343b55dbfc928e398ac..5886f346a58ba10f07085df5af7d5064
      if (frame_counter % 10U == entity->spawn_index % 10U) {
          EntityAi_SensePlayer(entity, 1);
 diff --git a/src/game/enemy/widda_queen.c b/src/game/enemy/widda_queen.c
-index 78f1293b66c4f414faaef2c74fc7a4440d8d6916..c5e562acf2c3dabf726160e049a4d8a7e72db7e8 100644
+index 49617edf0d18c0580d6a186fe7db97da940c848a..132816359e24856e1b63a99eb49e921c4c0ea593 100644
 --- a/src/game/enemy/widda_queen.c
 +++ b/src/game/enemy/widda_queen.c
 @@ -5,15 +5,14 @@
@@ -4209,23 +4004,23 @@ index 78f1293b66c4f414faaef2c74fc7a4440d8d6916..c5e562acf2c3dabf726160e049a4d8a7
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -351,8 +349,8 @@ static void WiddaQueen_RangedAttack0(Entity *entity) {
-             unkE0->step_index = 2;
+             ai_state->step_index = 2;
          }
-         if (entity->model->level_tables->unk82 == 0x16 && (entity->ailment_4_frames == 0 || unk3D8->unk0C != 0)) {
+         if (entity->model->level_tables->frame == 0x16 && (entity->ailment_4_frames == 0 || unk3D8->unk0C != 0)) {
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, (int)entity->model->rotation);
 -            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, (int)entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 4, entity->model->rotation);
 +            EntityEvent_StartEffectAtPoint((char **)entity, 0x373, 8, entity->model->rotation);
          }
-         elapsed = (entity->model->level_tables->unk84 - entity->params->motion_speeds[entity->animation_index]) >> 8;
+         elapsed = (entity->model->level_tables->frame_fixed - entity->params->motion_speeds[entity->animation_index]) >> 8;
          Vector_Copy(target, player_state.position);
 @@ -440,22 +438,22 @@ static void WiddaQueen_Move(Entity *entity) {
  static s32 WiddaQueen_CanAttack(Entity *entity) {
-     f32 heading = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
+     f32 heading = EntityMath_WrapAngle(entity->model->rotation[1] + entity->ai_state.part_angle_x);
  
 -    if (EntityAi_CanUseMeleeFacing(entity, heading, 0)) {
 +    if (EntityAi_CanUseMeleeFacing(entity, 0, heading)) {
@@ -4255,7 +4050,7 @@ index 78f1293b66c4f414faaef2c74fc7a4440d8d6916..c5e562acf2c3dabf726160e049a4d8a7
 @@ -472,22 +470,22 @@ static s32 WiddaQueen_PickAttack(Entity *entity) {
      f32 angle;
  
-     angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->unkE0.part_angle_x);
+     angle = EntityMath_WrapAngle(entity->model->rotation[1] + entity->ai_state.part_angle_x);
 -    chance = EntityAi_CanUseMeleeFacing(entity, angle, 0) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
 +    chance = EntityAi_CanUseMeleeFacing(entity, 0, angle) ? (entity->attack_weights[0] * entity->params->melee_attacks[0].attack_weight) >> 6 : 0;
      chances[0] = chance;
@@ -4282,7 +4077,7 @@ index 78f1293b66c4f414faaef2c74fc7a4440d8d6916..c5e562acf2c3dabf726160e049a4d8a7
      total += chance;
      if (total == 0) {
 diff --git a/src/game/enemy/widdacona.c b/src/game/enemy/widdacona.c
-index 0d6deb0761f168a2aec20a93eb8e9ef9446810f0..67f32afa94855f303af226be625018657f5f5b28 100644
+index a81bf6378ed3e0023c8a5f01faf2c6a4ff21920f..b29604eb37ae7326efc9605392722179700f86f6 100644
 --- a/src/game/enemy/widdacona.c
 +++ b/src/game/enemy/widdacona.c
 @@ -7,15 +7,14 @@
@@ -4306,14 +4101,14 @@ index 0d6deb0761f168a2aec20a93eb8e9ef9446810f0..67f32afa94855f303af226be62501865
 @@ -84,7 +83,7 @@ void Widdacona_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags |= 0x10000000;
+     entity->flags |= ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 diff --git a/src/game/enemy/wind_elemental.c b/src/game/enemy/wind_elemental.c
-index 7c544a185b98c0fea5414890418e3cda26cfb19c..6f6230b953d86eb26dbadf6f3c64989457c8dc04 100644
+index f9078e5aa3e884168cab5314e072bcec57834de5..6153465754343f0de9f6512e2357f1ccd906c207 100644
 --- a/src/game/enemy/wind_elemental.c
 +++ b/src/game/enemy/wind_elemental.c
 @@ -5,8 +5,7 @@
@@ -4347,12 +4142,12 @@ index 7c544a185b98c0fea5414890418e3cda26cfb19c..6f6230b953d86eb26dbadf6f3c649894
 @@ -91,7 +90,7 @@ void WindElemental_Init(Entity *entity) {
      }
      entity->target = NULL;
-     entity->flags &= ~0x10000000;
+     entity->flags &= ~ENTITY_FLAG_NO_FLOOR_LIFT;
 -    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000L << 43)) {
 +    if (ENTITY_FLAG_WORD(entity->spawn_info->spawn_flags) & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
 @@ -192,8 +191,7 @@ static void WindElemental_ThinkCombat(Entity *entity, s32 unknown) {
          if (entity->combat_choice != entity->prev_combat_choice) {
              entity->choice_change_frame = frame_counter;
@@ -4371,9 +4166,9 @@ index 7c544a185b98c0fea5414890418e3cda26cfb19c..6f6230b953d86eb26dbadf6f3c649894
 +                ENTITY_FLAGS(entity) = (ENTITY_FLAGS(entity) & ~(3LL << 58)) | (1LL << 58);
                  EntityAi_StartAction(entity, EntityAi_RangedAttack, 1);
              } else if ((s32)(ENTITY_FLAGS(entity) >> 5) & 1) {
-                 unkE0->think(entity, 1);
+                 ai_state->think(entity, 1);
 diff --git a/src/game/enemy/zombie.c b/src/game/enemy/zombie.c
-index b401c2d06204e75084ac13f9bcf7fb7f4de7b927..44ae06cd083fb07788db2caf8720b3d9ce10f124 100644
+index 5d2f127ea0cff93f29b83ee95b3c8dc46e7f29a4..af7396784d54ca167f78f860232f82f7ff7ced4f 100644
 --- a/src/game/enemy/zombie.c
 +++ b/src/game/enemy/zombie.c
 @@ -4,7 +4,7 @@
@@ -4411,6 +4206,6 @@ index b401c2d06204e75084ac13f9bcf7fb7f4de7b927..44ae06cd083fb07788db2caf8720b3d9
      ENTITY_FLAG_BITS(entity)->bit28 = FALSE;
 -    if (entity->spawn_info->spawn_flags & (0x8000L << 43)) {
 +    if (entity->spawn_info->spawn_flags & (0x8000LL << 43)) {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->dormant, 1);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->dormant, 1);
      } else {
-         EntityAi_StartAction(entity, (void (*)(Entity *))unkE0->move, 0);
+         EntityAi_StartAction(entity, (void (*)(Entity *))ai_state->move, 0);
