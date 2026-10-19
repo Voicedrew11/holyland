@@ -47,7 +47,7 @@ const ImVec4 colour_good(0.55f, 0.85f, 0.55f, 1.0f);
 SDL_Window *window;
 SDL_Renderer *renderer;
 bool ready;
-bool open;
+bool overlay_open;
 bool show_settings = true;
 bool show_about;
 int page;
@@ -117,11 +117,11 @@ void tooltip(const char *text) {
 
 // ---- Opening and closing -------------------------------------------------------------------------
 void set_open(bool value) {
-    if (open == value)
+    if (overlay_open == value)
         return;
-    open = value;
-    port_controls_block(open);
-    if (!open) {
+    overlay_open = value;
+    port_controls_block(overlay_open);
+    if (!overlay_open) {
         port_controls_listen_cancel();
         port_settings_save();
     }
@@ -738,9 +738,9 @@ void shot_open() {
     if (port_vblank_count() < shot.vblank)
         return;
     if (shot.page == PAGE_COUNT) {
-        open = false;
+        overlay_open = false;
     } else {
-        open = true;
+        overlay_open = true;
         show_settings = true;
         page = shot.page;
     }
@@ -829,8 +829,8 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         return 0;
     if (event->type == SDL_KEYDOWN && !event->key.repeat) {
         SDL_Scancode key = event->key.keysym.scancode;
-        if (key == SDL_SCANCODE_F1 || (open && key == SDL_SCANCODE_ESCAPE && !ImGui::GetIO().WantTextInput)) {
-            set_open(!open);
+        if (key == SDL_SCANCODE_F1 || (overlay_open && key == SDL_SCANCODE_ESCAPE && !ImGui::GetIO().WantTextInput)) {
+            set_open(!overlay_open);
             return 1;
         }
         if (key == SDL_SCANCODE_F11) {
@@ -844,23 +844,23 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         (event->key.keysym.scancode == SDL_SCANCODE_F1 || event->key.keysym.scancode == SDL_SCANCODE_F11))
         return 1;
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
-    if (!open)
+    if (!overlay_open)
         return 0;
     ImGui_ImplSDL2_ProcessEvent(event);
     return is_input_event(event->type);
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (open || port_settings.show_fps || shot_pending() ||
+    return ready && (overlay_open || port_settings.show_fps || shot_pending() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0));
 }
 
 extern "C" int port_overlay_open(void) {
-    return ready && open;
+    return ready && overlay_open;
 }
 
 extern "C" int port_overlay_paused(void) {
-    return ready && open && port_settings.pause_when_open && !shot_mode;
+    return ready && overlay_open && port_settings.pause_when_open && !shot_mode;
 }
 
 extern "C" void port_overlay_notify_state(void) {
@@ -908,7 +908,7 @@ extern "C" void port_overlay_draw(void) {
                                                 IM_COL32(255, 255, 120, 255), text);
     }
     draw_toast();
-    if (open) {
+    if (overlay_open) {
         menu_bar();
         if (show_settings)
             settings_window();
