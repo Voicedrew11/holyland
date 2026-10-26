@@ -381,6 +381,37 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   at those places the copy-back would not move play; a map whose frames read a buffer before drawing it would
   show its own count above 571. What limits a slower CPU is the GS's thread: 19-22 ms a game frame on a P-core
   of an i9-13900KF, 28-30 ms on an E-core, where the game then falls to 35-40 vblanks a second.
+  **Map 063 is one** (main bc2f9d9c): in play every frame restores (1,519 against the opening's 571), for one
+  buffer. That buffer is the sky's scrolling texture, four sprites (PRIM 0x156) into FBP 0x1D2 (0x3A40), which each
+  frame reads as the sky's texture before it draws the next scroll step there. The restore is cheap. Measured at 240
+  with the restores skipped (wrong pictures, for measuring only; two rounds alternating), the GPU's time in all was
+  the same (51.0-51.7 s a run, both ways), because the restore draws nothing into the frame and only the four
+  sprites into the buffer. The GS's thread a game frame was the same too (17.3 and 16.2 ms with restores, 17.0 and
+  16.4 without): the restore's own 2 ms of GIF time comes back as about 1.3 ms more a recording and 0.5 ms more of
+  the other pictures between. So a copy-back would win at most those 2 ms of the GS's thread on 063, and nothing on
+  the GPU, where 063 is bound.
+- **Where 240 stands** (main bc2f9d9c, `pace_test.py --hz 240`, the owner's settings at 4x, RTX 4090 and
+  i9-13900KF, one run each with desktop programs open). GPU busy is pictures a second times the GPU's time a
+  picture. The GS's thread is its time a game frame (`--mode cost`), against a budget of 33 ms.
+
+  | map | pictures a second | GPU busy | GS's thread | bound by |
+  |---|---|---|---|---|
+  | 000 | 230 (lowest second 202) | 88% (3.84 ms) | 20.9 ms | the GPU |
+  | 009, the pond | 164 (lowest 58) | 58% (3.53 ms) | 22.9 ms | the GS's thread, in bursts |
+  | 063, the canyon | 229 (lowest 185) | 90% (3.92 ms) | 15.9 ms | the GPU |
+  | 022, the Queen's Palace | 239 | 66% (2.75 ms) | 13.2 ms | neither |
+  | 008 | 238 | 60% (2.53 ms) | 16.8 ms | neither |
+
+  - **009's limit is bursts, not the average.** Its GS's thread averages 69% of the budget, but a game frame's
+    packets (about 13 ms) and the recording of its first picture between (about 10 ms) come within one vblank. The
+    thread falls a vblank behind and the cut takes pictures between away: 14 times in the run, 54 vblanks with
+    none. The GPU stays 42% idle. A smaller recording, or one spread over the vblank, is what would move it.
+  - **At 3x, 063 keeps 240** (239.75 pictures a second, the lowest second 239), at 2.69 ms of GPU a picture,
+    about 65% busy. `--native-scale auto` takes 3x for a 1440-line picture. At 4x, reaching 240 on 063 needs the
+    scene's own draws cheaper on the GPU, not fewer restores.
+  - Since PR #68 a replay costs the GS's thread about 1 us. So a higher frame rate costs the GPU a picture's time
+    more for each picture, and the GS's thread nearly nothing; the GS's thread's time a game frame is the same at
+    60 and 240.
 - **Upscaling (FSR, DLSS):** the scene drawn below the window's size, jittered, with depth and motion vectors, and
   brought up before the composite so the HUD stays the GS's. The plan, its inputs and the steps are in
   [UPSCALING.md](UPSCALING.md). Modern renderer only, and mostly a picture-quality feature: the GPU's time a
