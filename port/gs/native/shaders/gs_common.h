@@ -82,5 +82,5 @@ float sa_slack(float zf, float q, float cz, float sx, uint a) {
 #define GSN_M_HIGH 0x20000u
 #define GSN_M_SMOOTH_2D 0x80000u // --native-2d smooth: the 2D's magnified textures read with a cubic at a larger scale
 #define GSN_M_RECT_2D 0x100000u  // ... the cubic's taps kept inside each triangle's texels (gs_frag.h's Clut; gs.vert: the triangle's number in v_fog)
-#define GSN_M_JITTER 0x200000u  // the scene's frame: the picture's sub-pixel jitter added (Picture.jitter: upscaling)
+#define GSN_M_JITTER 0x200000u  // the scene's frame: the picture's sub-pixel jitter added (Picture's counts.zw, sa_*_jitter.vert: upscaling)
 #define GSN_M_ZFINE 0x40000u    // --native-layer-z tolerant: the pixel's Z keeps its fraction (and zbias is added)     // --native-colour high: colours in floats, the target 16-bit (alpha as the GS's)
