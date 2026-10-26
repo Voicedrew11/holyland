@@ -489,6 +489,13 @@ A quick save is the game's own save, taken where the player stands, without a sa
 the memory card. F2 takes one into the slot chosen on the overlay's Save states page (0 at first) and F4
 loads it; F4 also works on the title screen. Both only act in play: in a menu, a message, an event, a
 map change or a fade, a key's request is refused with a message (the overlay shows it a moment).
+F2 is also refused while a script the game set off in play is still running (a door's, a lever's, a
+death's: "an event is still under way (map script N)"): the save image holds what the script has done
+so far but not the script, so the rest of it would never happen after a load. The Dark Knight's door on
+map 036 is one: it closes behind the player and shows the text that sets the knight on, and a save taken
+while it stood open loaded with the door open, no text, and the knight standing still for good
+(`Script_EventRunning`, script/script.c). Such scripts end soon: a door's once the player has walked on.
+`--quick-save-at` waits for them.
 
 How it works (`game/quicksave.c`, `port/platform/quicksave.c`):
 - **Saving** calls the game's own writer, `Game_WriteSaveImage` (`core/game.c`), as the save screen

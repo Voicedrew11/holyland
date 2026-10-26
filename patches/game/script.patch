@@ -1,5 +1,5 @@
 diff --git a/src/game/script/script.c b/src/game/script/script.c
-index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78c7fb084b 100644
+index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..00424f5b5d2c70d2d0b61e7f0d89592eb5fa4058 100644
 --- a/src/game/script/script.c
 +++ b/src/game/script/script.c
 @@ -15,8 +15,9 @@
@@ -29,7 +29,46 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
  extern u8 recollection_pages[50];
  extern u8 game_options[];
  extern SoundLoadQueue sound_load_queue;
-@@ -76,7 +78,7 @@ void Script_FillWords(void *dest, int count, int value) {
+@@ -43,6 +45,38 @@ static u32 *script_top;                     /* 0x4473E8 the current map's script
+ static u8 shared_vars[0x400];               /* 0x1DFAFB0 the variables all threads share */
+ static ScriptThread threads[24];            /* 0x1DFB3B0 */
+ 
++/* PC: which threads run an event, for quick saves (Script_EventRunning, game/quicksave.c). A save image holds
++   the world's flags but no script thread, so a save taken while a script the game set off in play is still
++   running keeps what the script has done so far and loses the rest of it. The Dark Knight's door on map 036
++   (use script 4107) opens, waits for the player to walk 390 away, then closes and, if he went in, shows the
++   text and sets the knight on (map script flag 36:11); a save taken while it was open came back with the door
++   open and nothing left to close it, and the knight held by the map's start script (9005) for good.
++   An event's thread is one the game starts from outside the interpreter (an object's use, item-use or break
++   script, a person's talk or item script, a death script, an item's pickup script), not the map's start
++   script (0x7FFF). Threads a script starts (command 2) are not counted: the map's start script starts its own
++   loops, which it starts again from the flags when the map is entered, and events start some of the same
++   (map 027's item-use 5001 starts 9003, a light loop that never ends; map 102's 4201-4203 start timers that
++   run for minutes), so counting them would hold quick saves for good. In all 64 maps every event script that
++   waits does so for something the player does soon: a door's for him to walk away, map 002's eighth death
++   (3004 and the like) for him to walk off and open door 104. */
++static u8 thread_is_event[24];
++static int stepping_threads; /* Script_UpdateAll is stepping the threads */
++
++static void Script_MarkStarted(int index, int script_id) {
++    thread_is_event[index] = !stepping_threads && script_id != 0x7FFF;
++}
++
++int Script_EventRunning(void) {
++    int i;
++
++    for (i = 0; i < 24; i++) {
++        if (threads[i].script_id != 0 && thread_is_event[i]) {
++            return threads[i].script_id;
++        }
++    }
++    return 0;
++}
++
+ static int Script_StartAlways(int script_id, int argument);
+ static int Script_IsThreadBusy(int index);
+ static int Script_FindFreeCommand(ScriptThread *thread);
+@@ -76,7 +110,7 @@ void Script_FillWords(void *dest, int count, int value) {
  
  /* Gets the interpreter ready for a map's script (MapSlot.script, its address as a word): every thread is
     freed and set at the top of it, and the shared variables are cleared. */
@@ -38,7 +77,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
      ScriptThread *thread;
      u8 *first_command;
      u8 *end;
-@@ -93,7 +95,7 @@ void Script_Init(s32 script_data) {
+@@ -93,7 +127,7 @@ void Script_Init(s32 script_data) {
          thread->script_id = 0;
          thread++;
          first_command += sizeof(ScriptThread);
@@ -47,25 +86,29 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
  }
  
  /* Starts the script `script_id` in a free thread unless it is running already: looks its label (word
-@@ -120,7 +122,7 @@ int Script_Start(int script_id, int argument) {
+@@ -120,8 +154,9 @@ int Script_Start(int script_id, int argument) {
          script_error_flags[SCRIPT_ERROR_NO_FREE_THREAD] = 1;
          return 0;
      }
 -    *(void **)&thread->argument = (void *)argument; // match: stored as a pointer, so the word read below does not wait for it
 +    thread->argument = argument;
      thread->script_id = script_id;
++    Script_MarkStarted(slot_index, script_id);
      thread->cursor = script_top;
      while (TRUE) {
-@@ -164,7 +166,7 @@ static int Script_StartAlways(int script_id, int argument) {
+         word = *thread->cursor;
+@@ -164,8 +199,9 @@ static int Script_StartAlways(int script_id, int argument) {
          script_error_flags[SCRIPT_ERROR_NO_FREE_THREAD] = 1;
          return 0;
      }
 -    *(void **)&thread->argument = (void *)argument; // match: stored as a pointer, so the word read below does not wait for it
 +    thread->argument = argument;
      thread->script_id = script_id;
++    Script_MarkStarted(slot_index, script_id);
      thread->cursor = script_top;
      while (TRUE) { // match: no end-label test here; an unknown id reads past the script
-@@ -199,7 +201,7 @@ int Script_IsRunning(int script_id) {
+         word = *thread->cursor;
+@@ -199,7 +235,7 @@ int Script_IsRunning(int script_id) {
              return TRUE;
          }
          thread++;
@@ -74,7 +117,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
      return FALSE;
  }
  
-@@ -216,7 +218,7 @@ static int Script_FindFreeCommand(ScriptThread *thread) {
+@@ -216,7 +252,7 @@ static int Script_FindFreeCommand(ScriptThread *thread) {
          script_error_flags[SCRIPT_ERROR_NO_FREE_COMMAND] = 1;
          return 0;
      }
@@ -83,7 +126,23 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
  }
  
  /* Steps over one word of a script and its operands; returns where the next word is. */
-@@ -398,8 +400,8 @@ static int Script_Advance(ScriptThread *thread) {
+@@ -259,6 +295,7 @@ int Script_UpdateAll(void) {
+     char unused[0x30]; // match: retail reserves 0x30 bytes it never uses
+ 
+     command_count = 0;
++    stepping_threads = 1; /* PC: Script_MarkStarted */
+     for (i = 0; i < 24; i++) {
+         thread = &threads[i];
+         if (thread->script_id != 0) {
+@@ -270,6 +307,7 @@ int Script_UpdateAll(void) {
+             }
+         }
+     }
++    stepping_threads = 0;
+     return command_count;
+ }
+ 
+@@ -398,8 +436,8 @@ static int Script_Advance(ScriptThread *thread) {
              cursor = Script_EvalSet(thread, cursor);
              break;
          case SCRIPT_WORD_HALT:
@@ -94,7 +153,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
              running = no_wait;
              started = TRUE;
              thread->commands[Script_FindFreeCommand(thread)].active = 4;
-@@ -667,14 +669,168 @@ static void Script_ReadArg(ScriptThread *thread, u32 *source, ScriptArg *result)
+@@ -667,14 +705,168 @@ static void Script_ReadArg(ScriptThread *thread, u32 *source, ScriptArg *result)
      }
  }
  
@@ -264,7 +323,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
      switch (type) {
      case 0:
          result->value = *(s8 *)source;
-@@ -765,10 +921,12 @@ static void Script_ReadLocalVar(ScriptArg *result, ScriptThread *thread, u32 cod
+@@ -765,10 +957,12 @@ static void Script_ReadLocalVar(ScriptArg *result, ScriptThread *thread, u32 cod
  /* Writes a game variable: the low byte of `code` picks the block in script_game_var_blocks, the byte above it the
     value's type. */
  static void Script_WriteGameVar(ScriptArg *source, u32 code, int offset) {
@@ -278,7 +337,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
      type = code >> 8;
      switch (type) {
      case 0:
-@@ -784,6 +942,11 @@ static void Script_WriteGameVar(ScriptArg *source, u32 code, int offset) {
+@@ -784,6 +978,11 @@ static void Script_WriteGameVar(ScriptArg *source, u32 code, int offset) {
      case SCRIPT_TYPE_FLOAT:
          *(s32 *)dest = source->value;
          break;
@@ -290,7 +349,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
      }
  }
  
-@@ -919,6 +1082,7 @@ int Script_StoreResult(ScriptArg *target, int value) {
+@@ -919,6 +1118,7 @@ int Script_StoreResult(ScriptArg *target, int value) {
      default:
          script_error_flags[SCRIPT_ERROR_BAD_INT_TARGET] = 1;
      }
@@ -298,7 +357,7 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
  }
  
  /* The float form of Script_StoreResult: writes the bits of `value` to the variable `target` names. */
-@@ -1060,10 +1224,10 @@ void ScriptCmd_WaitForever19(void) {
+@@ -1060,10 +1260,10 @@ void ScriptCmd_WaitForever19(void) {
  void ScriptCmd_WaitForever20(void) {
  }
  
@@ -312,10 +371,10 @@ index 30e7a09cf8de4b240ae97b62c7100042383f4d5a..2869446adfad50dcbb3047d12fbd4f78
  }
  
 diff --git a/src/game/script/script.h b/src/game/script/script.h
-index 8e01e7fb35a0a30bb234e4915cf2f4392274d672..96d78d2cf6fdc0f4a651e5855001617f363936b0 100644
+index 8e01e7fb35a0a30bb234e4915cf2f4392274d672..3599107f126bcb0aae8d717e2596780f4b2c1c3c 100644
 --- a/src/game/script/script.h
 +++ b/src/game/script/script.h
-@@ -526,7 +526,7 @@ typedef struct {
+@@ -526,13 +526,15 @@ typedef struct {
  } ScriptSetFlagsCommand;
  
  /* Gets the interpreter ready for a map's script (the address as a word). */
@@ -324,6 +383,14 @@ index 8e01e7fb35a0a30bb234e4915cf2f4392274d672..96d78d2cf6fdc0f4a651e5855001617f
  /* Starts a script in a free thread unless it is running already; returns the thread's index. */
  int Script_Start(int script_id, int argument);
  /* TRUE if a thread is running the script. */
+ int Script_IsRunning(int script_id);
+ /* Runs the script threads for a frame. */
+ int Script_UpdateAll(void);
++/* PC: the id of a script the game set off in play that is still running (0: none), for quick saves. */
++int Script_EventRunning(void);
+ /* Writes a command's answer to the variable the argument `target` names. The float form,
+    Script_StoreFloatResult, is declared by its callers: they pass a double (see script/script_world.c). */
+ int Script_StoreResult(ScriptArg *target, int value);
 diff --git a/src/game/script/script_entity.c b/src/game/script/script_entity.c
 index abcc6eafddb32a44163faaa6051d0ab8b62876af..98168b1c372f86826be58aa3edee1982c8acdc15 100644
 --- a/src/game/script/script_entity.c

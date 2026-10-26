@@ -15,6 +15,7 @@
 
    The patched game calls Quick_PollGame once a frame at the end of the main loop, and Quick_PollTitle
    once a frame on the title screens; both return at once when nothing is asked for. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +27,7 @@
 #include "gfx/screen.h"
 #include "ui/message.h"
 #include "collision/collision.h"
+#include "script/script.h"
 #include "port/platform.h"
 #include "port/automap.h"
 #include "port/weapon_sets.h"
@@ -330,11 +332,32 @@ const char *Quick_WhyNotInPlay(void) {
     return NULL;
 }
 
+/* Why the world cannot be saved now (NULL: it can): as Quick_WhyNotInPlay, and not while a script the game set
+   off in play is still running (Script_EventRunning, script/script.c). The image holds what such a script has
+   done so far but not the script, so it would load with the rest of it never done: a door it opened that it was
+   to close (the Dark Knight's on map 036, which then never shows his text nor sets him on), a lever half thrown.
+   A memory card save is taken at a save point, where no such script runs. */
+static const char *why_not_now(void) {
+    static char text[96];
+    const char *why = Quick_WhyNotInPlay();
+    int script;
+
+    if (why != NULL) {
+        return why;
+    }
+    script = Script_EventRunning();
+    if (script != 0) {
+        snprintf(text, sizeof(text), "an event is still under way (map script %d: a door, a lever, a trap)", script);
+        return text;
+    }
+    return NULL;
+}
+
 static void quick_save(void) {
     PortQuickInfo info;
     u8 *kept = malloc(SAVE_IMAGE_SIZE);
     u32 size;
-    const char *why = Quick_WhyNotInPlay();
+    const char *why = why_not_now();
 
     if (why != NULL || kept == NULL) {
         free(kept);
