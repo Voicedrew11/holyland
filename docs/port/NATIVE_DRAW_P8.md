@@ -1821,6 +1821,75 @@ loads took the GPU too. `frame_test.py --renderer native`, `boot_test.py`, gsn_d
 
 The GPU's time a picture is the same (3.2-3.4 ms on 009). The pond now keeps up at 240, its GPU about 78% busy.
 
+### The Dark Succubus' body (branch `perf/succubus`, from `main` 503aa1b2)
+
+The owner, at 240 (3x, MSAA 2, aniso 2, cut-out AA ssaa, modern sky, widescreen, the automap's minimap): right as they
+enter the Dark Succubus' room (map 038) the F3 counter read `57 FPS / 15 GAME`, "so it seems like a CPU bottleneck?".
+The spot: `bugs1026/quick_succubus_hotspot`, standing still (the camera on her; `quick_succubus` is outside the room,
+on map 037). Their `settings.json` says `"renderer": "native"` with `"native_draw": "on"`, which is hosted; modern
+needs `--renderer modern` on the command line. Both were slow, hosted more.
+
+**What it was.** Her body is drawn with the screen (SCREEN_EFFECTS.md, 9): `Entity_PrepareScreenTexturedDraw` copies
+the frame to 0x3540 (`GsDraw_CopyFrameToTexture`, one 256 x 256 draw a frame) and draws her parts (24-26 triangles
+each, folded over each other) twice, in both GS contexts. The copy itself costs nothing much (no
+write-back, no decode: the GS reads its own target). The parts do, in the native GS (the body reads a render target,
+so modern's scene leaves it to the GS, as hosted and the PS2 path draw it anyway):
+- **The first pass blended by the shader, in runs.** ALPHA 0x44, `(Cs - Cd) As + Cd`, with As 0x80 from the vertices
+  (TCC off). A draw whose texture is a render target is blended by the shader, since Vulkan's blending rounds a
+  fraction of As differently from the GS; but with As 0x80 there is none, the GS's `((Cs - Cd) 0x80 >> 7) + Cd` being
+  Cs. Blended by the shader the part is runs of triangles that do not overlap, and with MSAA each run is a render
+  pass whose resolve makes the next run's copy (`COPY_BY_PASS`): 110 resolves a picture. The same rule as map 009's
+  16-bit reflections (`blend_is_cs`, "Hot spots at 240") now covers a 32-bit target whose texture is a render target
+  (`cs_target`; not 24-bit, whose alpha the shader keeps; not `--native-colour high`): drawn unblended, Cs.
+  `KF4_GSN_CS_TARGET=0` blends them by the shader as before.
+- **The second pass writes nothing, but ended the render pass twice.** `TEST_2` 0x30001: the alpha test NEVER, its
+  fail KEEP, ZTST ALWAYS. Needing no Z buffer, it began a render pass into the frame without one, between two parts'
+  first passes with it: two render passes a part, each loading and storing the whole multisampled frame and Z buffer
+  (2560 x 1344 x 2 samples): 160 a picture. A draw whose alpha test never passes and keeps both buffers is now left
+  out, as ZTST NEVER is (`flush_batch`); `KF4_GSN_DRAW_NEVER=1` draws it as before.
+
+Nothing else on the map: no write-backs, 11-16 textures decoded in 700 vblanks (as anywhere), the fog and lights
+ordinary. The GPU was the limit: the game's thread was 60-90% busy in the sampler's counts, but spinning in
+`port_dmac_wait` (`cpu_relax` 80% of it), waiting for the GS's thread, which waited for the GPU; so the owner's
+"CPU bottleneck" is the wait's spin.
+
+**Numbers** (the owner's settings, `quick_succubus_hotspot` standing still; main 503aa1b2 -> perf/succubus). `--fast`
+with every picture between drawn (`KF4_INTERP_DRAW_ALL=1`, `KF4_GSN_GPU_TIME=2`, 700 vblanks; the owner's game
+shared the GPU, so the GPU's times are high and noisy, the counts exact):
+
+| | GS's thread (GIF) | back end | a picture between (packets) | render passes a picture | MB loaded a picture | GPU a picture | wall |
+|---|---|---|---|---|---|---|---|
+| modern 240 | 13.2 -> 6.1 s | 6.6 -> 3.3 s | 15.1 -> 7.9 ms | 176 -> 5.4 | 2,582 -> 76 | 12.7 -> 4.7 ms | 33.0 -> 12.8 s |
+| hosted 240 (`on,passes`) | 37.9 -> 7.2 s | 15.2 -> 7.1 s | 45.5 -> 12.9 ms | 336 -> 4.6 | 8,929 -> 107 | 37.6 -> 5.7 ms | 99.5 -> 20.6 s |
+| PS2 path 240 (`off`) | 11.3 -> 4.0 s | 10.3 -> 1.7 s | 12.8 -> 7.5 ms | 336 -> 4.6 | 8,927 -> 105 | 10.8 -> 2.2 ms | 28.2 -> 7.0 s |
+| modern 30 | 2.7 -> 2.4 s | 0.9 -> 0.4 s | | 276 -> 8.7 | 4,033 -> 127 | 3.1 -> 1.1 ms | 3.3 -> 3.0 s |
+| hosted 30 | 5.9 -> 2.4 s | 5.6 -> 4.4 s | | 525 -> 7.5 | 13,932 -> 174 | 7.2 -> 0.9 ms | 10.6 -> 7.1 s |
+| PS2 path 30 | 3.4 -> 1.5 s | 1.1 -> 0.2 s | | 525 -> 7.5 | 13,932 -> 174 | 4.2 -> 0.7 ms | 4.0 -> 2.6 s |
+
+The DMA thread's VU1 time is unchanged (0.16 s modern, 1.3 s the PS2 path). Real time (`KF4_PRESENT_SIM=240`, sampled
+10 s with `tools/sampler`, the owner's game on the GPU): modern 58 -> 184 pictures a second, the game 26.5 -> 30.0,
+GPU 12.1 -> 3.7 ms a picture; busy shares game thread 60% -> 20%, GS's thread 38% -> 57%, back end 15% -> 37%, DMA
+17% -> 22%. Hosted (`--native-draw on`) 53 -> 148 pictures a second, the game 26.5 -> 30.0, GPU 14.1 -> 5.5 ms.
+`screen_fx_test.py --cost`: `succubus` the GS's thread 42.1 -> 23.8 ms a game frame, a picture between 15.4 -> 9.9 ms;
+`succubus near` 8.4 -> 6.5 ms. On main, MSAA off (`--native-msaa 1`: the runs are copies inside one render pass)
+reached 108 pictures a second and the game's 30 there: the workaround until this is in.
+
+Pipelines: main made one pipeline not on the shipped list at this spot (the runs' blend); perf/succubus none (a fresh
+data folder, modern at 240 and 30: "0 not on a list"). No shader changed.
+
+**Pictures:** byte for byte main's (`--fast`, the owner's settings unless said): this spot (every picture of vblanks
+200-207, 301, 399, 400-407, 600: 76) in modern, hosted (`on,passes`) and the PS2 path (40 each), modern at 30 and
+with MSAA 1; up close (`KF4_FX=succubus --invincible`, vblanks 160-250: 52 in modern, 24 each hosted, the PS2 path and
+modern at 30); the four spots (pond, fortress, canyon, under water: 156) and the icy spot (76); the forced water,
+drain, copytex, prev and haze at the pond (every picture of 600-611: 240); the herb run in modern (the same `--log`,
+PATH1 hash 561c91020b2908ee with `--frames 1841`, pictures 1800, 1820, 1840 with every phase). `screen_fx_test.py
+--pictures`: `succubus` and `succubus near` 0 of 48 flagged. The off check passes: boot_test; frame_test `--renderer
+native`, and `gs` (on a second run: the first differed at vblank 740, the opening movie's skip, on paraLLEl-GS, which
+this does not touch); gsn_draw_test 0 of 300 (seeds 1, 7, 1234); vu1_test 0 of 90; herb with `--native-draw off`
+against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820, 1840
+byte for byte. (At this spot the PATH1 hash of a run with `--stats` and many pictures dumped differs from run to run on
+main too; the pictures do not.)
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

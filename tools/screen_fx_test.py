@@ -15,7 +15,9 @@ Each case is a run of the game (always --no-audio, --headless, a fresh data fold
   quick_deathwater.kf4quick (falling into deadly water), quick_palace.kf4quick (the Queen's Palace, the MP
   drain), quick_wand.kf4quick (standing on a Symbol of Passage: the Item screen, Up x4 to the Green Wand, used:
   the map change's fade of its last frame, 0x2BC0), quick_icy.kf4quick (the icy corridor and its creatures: their
-  shine drawn whole, and with --native-shine exact). Cases whose save is missing are left out.
+  shine drawn whole, and with --native-shine exact), quick_succubus_hotspot.kf4quick (map 038 at the Dark
+  Succubus' room: her body drawn with a copy of the screen; and up close, KF4_FX=succubus). Cases whose save is
+  missing are left out.
 
 --perf (real time, KF4_PRESENT_SIM=240, KF4_GSN_GPU_TIME=2, KF4_HITCH_MS=50, --stats): over the case's window of
 vblanks, the pictures handed over a second and the game's frames a second (KF4_PRESENT_LOG), and from --stats
@@ -90,6 +92,13 @@ def cases():
     # Their shine drawn whole (the default), and exact, in runs (--native-shine exact: the PS2's fold edges, slower)
     add("icy", spot="quick_icy", base=None, window=(300, 980), dump=(400, 411))
     add("icy exact", spot="quick_icy", args=["--native-shine", "exact"], base=None, window=(300, 980), dump=(400, 411))
+    # the Dark Succubus' room (map 038), standing still at its entrance where the owner's game fell to 15 frames a
+    # second: her body is drawn with the screen copied to 0x3540 (Entity_PrepareScreenTexturedDraw), and its parts
+    # each made render passes over the whole frame (NATIVE_DRAW_P8.md, "The Dark Succubus' body"). Up close
+    # (KF4_FX=succubus puts the player before her, --invincible as she fights) her body covers much of the screen
+    add("succubus", spot="quick_succubus_hotspot", base=None, window=(300, 980), dump=(400, 411))
+    add("succubus near", "succubus", spot="quick_succubus_hotspot", args=["--invincible"], base=None,
+        window=(160, 400), dump=(190, 201))
     return c
 
 

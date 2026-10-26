@@ -3471,6 +3471,28 @@ bool blend_copy_forced() {
     return forced != 0;
 }
 
+// KF4_GSN_CS_TARGET=0: a draw into a 32-bit target whose texture is a render target, blended
+// (Cs - Cd) As + Cd with As 0x80 everywhere, blended by the shader as before (flush_batch, blend_is_cs)
+bool cs_over_target() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_CS_TARGET");
+        on = !v || atoi(v) != 0;
+    }
+    return on != 0;
+}
+
+// KF4_GSN_DRAW_NEVER=1: a draw whose alpha test never passes and keeps both buffers is drawn (it writes
+// nothing) as before, not left out (flush_batch)
+bool draw_never() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_DRAW_NEVER");
+        on = v && atoi(v) > 0;
+    }
+    return on != 0;
+}
+
 // KF4_GSN_SILHOUETTE_RUNS=1: the silhouettes drawn in runs as before (flush_batch, "A silhouette"):
 // with MSAA a pixel half covered by one run's triangle and half by the next's came out a little darker
 // where the next read the first's resolve; drawn whole, it is darkened once, as the GS's pixel is.
@@ -4174,6 +4196,17 @@ void flush_batch() {
         gs->verts.clear();
         return;
     }
+    // Nor does an alpha test that never passes and keeps both buffers where it fails (ATST NEVER, AFAIL
+    // KEEP): the Dark Succubus' body (map 038, Entity_PrepareScreenTexturedDraw) sets TEST_2 0x30001, so
+    // the second pass of each of its parts writes nothing. Drawn, each was a render pass of its own:
+    // into the frame without the Z buffer (ZTST ALWAYS, nothing written), between two of its parts'
+    // first passes with it, and each such pass loads and stores the whole multisampled frame and Z
+    // buffer (NATIVE_DRAW_P8.md, "The Dark Succubus' body").
+    // KF4_GSN_DRAW_NEVER=1 draws them as before.
+    if (ate && atst == 0 && afail == 0 && !draw_never()) {
+        gs->verts.clear();
+        return;
+    }
     // A draw whose Z test always passes and that writes no Z needs no Z buffer: ZTST ALWAYS, or GEQUAL
     // with every vertex at the format's largest Z (the scrolling textures each frame, drawn with the
     // main Z buffer at their own width, which would otherwise make it a target of another shape)
@@ -4545,7 +4578,14 @@ void flush_batch() {
     // its own render pass and MSAA resolve: the reflections' walls and models (map 009's poison pond,
     // 1,600 render passes a picture). The colour, its alpha (FBA, the alpha bit) and the masks come
     // out the same either way (gs_frag.h). (--native-colour high blends in floats: as before.)
-    bool blend_is_cs = false;
+    // The same into a 32-bit target (not 24-bit, whose alpha the shader keeps) for a draw whose texture
+    // is a render target, which is blended by the shader otherwise (Vulkan's blending rounds a fraction
+    // of As as the GS does not; with As 0x80 there is none): the Dark Succubus' body, map 038, reads the
+    // screen copied to 0x3540 with As 0x80 and ALPHA 0x44, parts of 24-26 triangles folded over each
+    // other; drawn by the shader each part was runs, with MSAA each a render pass and a resolve of the
+    // whole frame (NATIVE_DRAW_P8.md, "The Dark Succubus' body"). (Other 32-bit draws with As 0x80 keep
+    // Vulkan's blending, as before.)
+    bool blend_is_cs = false, cs_target = false;
     if (abe && ba == 0 && bb == 1 && bd == 1 && (bc == 0 || bc == 2) && !blend.premul) {
         uint32_t c_lo = as_min, c_hi = as_max;
         if (bc == 2) {
@@ -4555,9 +4595,11 @@ void flush_batch() {
             c_lo = tfx == 0 ? (as_min * tex_lo) >> 7 : tfx == 2 ? std::min(255u, as_min + tex_lo) : tex_lo;
             c_hi = tfx == 0 ? std::min(255u, (as_max * tex_hi) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_hi) : tex_hi;
         }
-        blend_is_cs = c_lo == 0x80 && c_hi == 0x80 && dst16 && !wide(*color->image);
+        cs_target = c_lo == 0x80 && c_hi == 0x80 && !wide(*color->image) && reads_target && !reads_own_target &&
+                    fpsm == GSN_PSMCT32 && cs_over_target();
+        blend_is_cs = (c_lo == 0x80 && c_hi == 0x80 && dst16 && !wide(*color->image)) || cs_target;
     }
-    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact) || (dst16 && !blend_is_cs) ||
+    if (date || partial_mask || (abe && (reads_own_target || ((reads_target || sprite) && !exact && !cs_target) || (dst16 && !blend_is_cs) ||
                                          (push.misc & (M_PABE)) || !(push.misc & M_COLCLAMP) ||
                                          (bc == 0 && (push.misc & M_FBA)) || as_over || !fixed))) {
         shader_blend = true;
