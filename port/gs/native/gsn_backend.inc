@@ -337,7 +337,8 @@ void make_call(CommandBuffer &c, const Recording &r, const Recording::Op &op, Re
         break;
     case OP_BLIT: {
         const ArgBlit &a = r.args<ArgBlit>(op);
-        c.blit_image(*a.dst, *a.src, a.dst_offset, a.dst_extent, a.src_offset, a.src_extent, 0, 0, 0, 0, 1, a.filter);
+        c.blit_image(image(a.dst), image(a.src), a.dst_offset, a.dst_extent, a.src_offset, a.src_extent, 0, 0, 0, 0, 1,
+                     a.filter);
         break;
     }
     case OP_COPY_TO_BUFFER: {

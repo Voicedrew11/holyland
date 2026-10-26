@@ -1088,7 +1088,8 @@ void port_gs_print_stats(void) {
         fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
                 s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
         fprintf(stderr, "[stats] native GS back end: %.3f s playing the calls into Vulkan; %llu targets loaded before "
-                "the render pass under way (not ending it)\n", s->ns_backend / 1e9, (unsigned long long)s->loads_before_pass);
+                "the render pass under way (not ending it); %llu target loads scaled on the GPU\n", s->ns_backend / 1e9,
+                (unsigned long long)s->loads_before_pass, (unsigned long long)s->loads_scaled);
         if (interp_behind || interp_vblanks_fewer) {
             fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
                     "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,

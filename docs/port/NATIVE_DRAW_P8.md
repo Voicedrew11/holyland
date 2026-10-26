@@ -1776,6 +1776,51 @@ as main, PATH1 hash 204e443a9fc49731, VU1 cycles 460424273, pictures 1800, 1820,
   stale; with the groups the back end no longer limits.
 - Exact (`--native-shine exact`) is main's runs, untouched (fewer runs by levels: 18% fewer).
 
+### Target loads scaled on the GPU (branch `p8/target-load-gpu`, from `main` bc2f9d9c)
+
+At 240 the pond (map 009) was the one place measured that was bound by the GS's thread: 164 pictures a second, the
+GPU 42% idle. It came in bursts. A game frame's packets (about 13 ms) and the recording of its first picture between
+(about 10 ms) came within one vblank, and the cut took pictures between away. Sampled
+(`tools/sampler/profile.py --map 9 --hz 240`, nothing cut), `load_target_rect` was 15% of the thread: 11 points from
+the uploads the recording asks for again (`replay_upload`, `sync_targets`) and 4 from the frame's own. The recording
+also kept those bytes, copied them into a buffer (`finish_recording`, 24%, much of it a byte-at-a-time vector
+copy) and copied them again each picture.
+
+**Why so much:** `load_target_rect` made the target's pixels at its scale on the CPU, each GS pixel sx x sy times
+(24 at 4x with native widescreen), and sent all of them.
+
+**What changed:**
+- A scaled target's rectangle is sent at the PS2's size into a staging image. A blit (nearest) then scales it into
+  the target. Destination pixel x reads source (x + 0.5) / sx, which is never a whole number, so each pixel lands on
+  its own GS pixel: the same pixels as before, with 24 times fewer bytes made, kept and copied.
+- In the frame, one staging image is used again load after load. The barriers around each load order them.
+- In a recording, each rectangle has a place of its own in the recording's staging images (`Recording::stages`),
+  written once as a decoded texture is. The recording makes the blit again (`Cmd::blit_image_recorded`), and the
+  back end's `OP_BLIT` now names the targets' images as they are at the replay (`image()`), as the copies do.
+- Only formats that can be blitted both ways (`load_scaled_on_gpu`). `KF4_GSN_LOAD_SCALE=0` makes the rows on the
+  CPU as before. `--stats` counts the loads scaled on the GPU.
+
+**Pictures:** byte for byte the CPU's. Each map was run with `--fast` and every picture between drawn
+(`KF4_INTERP_DRAW_ALL`), at the owner's settings (4x, native widescreen), from the teleport to 000, 008, 009, 022 and
+063. Every picture of vblanks 2300-2303, 2450-2451 and 2600-2601 was dumped (160 pictures, 31,000-79,000 loads on
+the GPU a run). The same on 009 and 063 with MSAA 2 and `--native-colour high` (64 pictures), on 009 hosted
+(`--renderer native`) and on the PS2 path (`--native-draw off`; 64 pictures, about 79,000 loads each), and after a state
+saved on 009 and loaded (12 pictures). On this GPU both formats in use blit both ways (RGBA8 and D32), and the depth
+loads took the GPU too. `frame_test.py --renderer native`, `boot_test.py`, gsn_draw, gsn_vram and vu1_test pass.
+- **Not run:** the map tour (no captures here), a Linux build, a live `--renderer both`. The blit's exactness was
+  checked on NVIDIA only. The argument above holds for any driver that follows the spec's nearest rule.
+
+**Numbers** (`pace_test.py --hz 240`, RTX 4090 and i9-13900KF, CPU rows -> GPU scaling, two rounds alternating on
+009):
+
+| map | pictures a second | lowest second | vblanks with none between | GS's thread a game frame | a recording |
+|---|---|---|---|---|---|
+| 009 | 161, 210 -> 235, 236 | 60, 159 -> 222, 220 | 120, 0 -> 0, 0 | 25.4, 22.8 -> 15.9, 15.7 ms | 11.0, 9.8 -> 5.3, 5.3 ms |
+| 000 | | | | 20.0 -> 17.7 ms | 7.0 -> 4.7 ms |
+| 063 | | | | 15.2 -> 14.5 ms | 4.9 -> 3.5 ms |
+
+The GPU's time a picture is the same (3.2-3.4 ms on 009). The pond now keeps up at 240, its GPU about 78% busy.
+
 ## The numbers (first round)
 
 Every run headless, `--no-audio`, a fresh data folder, at most 2 games of mine at a time. Other agents'

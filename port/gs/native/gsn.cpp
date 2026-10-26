@@ -300,6 +300,7 @@ struct Gs {
     CommandBufferHandle cmd;
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     ImageHandle resolved[2]; // a multisampled target's copies for shader blending, resolved by the passes (resolved_copy)
+    ImageHandle load_stage[3]; // load_target_rect's rectangles at the PS2's size in the frame (8-bit, 16-bit, depth)
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
     std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
@@ -611,6 +612,13 @@ struct Recording {
         bool ms;
     };
     std::vector<TargetImage> target_images;
+    // (load_target_rect) Rectangles of VRAM at the PS2's size, each in a place of its own in these images, that
+    // the recording's blits scale into targets: written once, as a decoded texture is, and kept with the recording
+    struct Stage {
+        ImageHandle image;
+        uint32_t x = 0, y = 0, row = 0; // the next place: along the row, the row's height so far
+    };
+    std::vector<Stage> stages;
     const Buffer *held_chunk[2] = {}; // (the data chunks held last: hold_chunk)
     std::vector<ReplayJob> replays;   // (a stream's OP_REPLAY: its index here)
 
@@ -621,6 +629,7 @@ struct Recording {
         buffers.clear();
         later.clear();
         target_images.clear();
+        stages.clear();
         replays.clear();
         held_chunk[0] = held_chunk[1] = nullptr;
         kept_last = nullptr;
@@ -1336,6 +1345,21 @@ public:
         s.keep(dst);
         s.keep(src);
         s.add(OP_BLIT, ArgBlit{&dst, &src, dst_offset, dst_extent, src_offset, src_extent, filter});
+    }
+    // The same, recorded too (load_target_rect's scaling: a picture between's recording makes it again, into the
+    // target's image as it is then, as it does its updates of targets)
+    void blit_image_recorded(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &dst_extent,
+                             const VkOffset3D &src_offset, const VkOffset3D &src_extent, VkFilter filter) {
+        ArgBlit a = {&dst, &src, dst_offset, dst_extent, src_offset, src_extent, filter};
+        if (on()) {
+            rec().hold(dst);
+            rec().hold(src);
+            rec().add(OP_BLIT, a);
+        }
+        Recording &s = out();
+        s.keep(dst);
+        s.keep(src);
+        s.add(OP_BLIT, a);
     }
     // (and each picture's kicks moved to its time: gs_replay.comp, before its draws)
     void interp_kicks() {
@@ -2226,6 +2250,28 @@ void write_back(Target &t) {
     clear_dirty(t);
 }
 
+// (load_target_rect) A scaled target's loads are scaled on the GPU where its format can be blitted both ways, and
+// not with KF4_GSN_LOAD_SCALE=0 (the rows made at the scale on the CPU, as before: to compare)
+bool load_scaled_on_gpu(VkFormat format) {
+    static int off = -1;
+    static std::vector<std::pair<VkFormat, bool>> formats;
+    if (off < 0) {
+        const char *v = getenv("KF4_GSN_LOAD_SCALE");
+        off = v && *v == '0';
+    }
+    if (off) {
+        return false;
+    }
+    for (const auto &f : formats) {
+        if (f.first == format) {
+            return f.second;
+        }
+    }
+    bool ok = gs->device->image_format_is_supported(format, VK_FORMAT_FEATURE_2_BLIT_SRC_BIT | VK_FORMAT_FEATURE_2_BLIT_DST_BIT);
+    formats.push_back({format, ok});
+    return ok;
+}
+
 // The CPU's VRAM into a rectangle of the target
 void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t h) {
     if (x0 >= t.width || y0 >= t.height) {
@@ -2257,11 +2303,83 @@ void load_target_rect(Target &t, uint32_t x0, uint32_t y0, uint32_t w, uint32_t 
     transfer_barrier();
     VkImageAspectFlags aspect = t.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     uint32_t sx = t.sx, sy = t.sy, pw = w * sx, ph = h * sy;
-    void *out = cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0}, {pw, ph, 1}, pw, ph,
-                                   {aspect, 0, 0, 1});
+    uint32_t rows = h; // (made here at the target's scale, below)
+    if ((sx > 1 || sy > 1) && load_scaled_on_gpu(t.image->get_format())) {
+        // A scaled target: the rectangle sent at the PS2's size into a staging image, and a blit (nearest) makes each
+        // GS pixel its sx x sy pixels in the target. Destination pixel x reads source (x + 0.5) / sx, which is never a
+        // whole number, so each lands on its own GS pixel: the target's pixels as the rows repeated below made them,
+        // with sx sy times fewer bytes made, copied and sent (at --native-scale 4 and native widescreen, 24: on map
+        // 009 at 240 most of them the recording's, which also kept them, copied them to a buffer and copied them
+        // again each picture). In a picture between's recording each rectangle has a place of its own in the
+        // recording's staging images, written once as a decoded texture is; the recording makes the blit again.
+        const Image *stage = nullptr;
+        uint32_t at_x = 0, at_y = 0;
+        if (recording_ops->on) {
+            Recording &r = *recording_ops;
+            for (Recording::Stage &s : r.stages) {
+                if (s.image->get_format() != t.image->get_format()) {
+                    continue;
+                }
+                if (s.x + w > s.image->get_width()) {
+                    s.x = 0;
+                    s.y += s.row;
+                    s.row = 0;
+                }
+                if (s.x + w <= s.image->get_width() && s.y + h <= s.image->get_height()) {
+                    stage = s.image.get();
+                    at_x = s.x;
+                    at_y = s.y;
+                    s.x += w;
+                    s.row = std::max(s.row, h);
+                    break;
+                }
+            }
+            if (!stage) {
+                Recording::Stage s;
+                s.image = make_image(std::max(w, 1024u), std::max(h, 512u), t.image->get_format(), 1, false);
+                s.x = w;
+                s.row = h;
+                stage = s.image.get();
+                r.stages.push_back(std::move(s));
+            }
+        } else {
+            // (the frame's: one image, used again load after load; the barriers around each load order them)
+            ImageHandle &s = gs->load_stage[t.depth ? 2 : wide(*t.image) ? 1 : 0];
+            if (!s || s->get_format() != t.image->get_format() || s->get_width() < w || s->get_height() < h) {
+                s = make_image(std::max(w, s ? s->get_width() : 256u), std::max(h, s ? s->get_height() : 256u),
+                               t.image->get_format(), 1, false);
+            }
+            stage = s.get();
+        }
+        void *out = cmd().update_image(*stage, {int32_t(at_x), int32_t(at_y), 0}, {w, h, 1}, w, h, {aspect, 0, 0, 1});
+        std::vector<uint32_t> row(w);
+        size_t row_bytes = size_t(w) * (wide(*t.image) ? 8 : 4);
+        for (uint32_t y = 0; y < h; y++) {
+            gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t v = row[x];
+                if (t.depth) {
+                    float f = float(double(v) * depth_scale(t.psm));
+                    memcpy(&v, &f, 4);
+                } else {
+                    v = vram_to_target_pixel(v, t.psm);
+                }
+                row[x] = v;
+            }
+            put_pixels(static_cast<uint8_t *>(out) + size_t(y) * row_bytes, *t.image, 0, row.data(), w);
+        }
+        transfer_barrier();
+        cmd().blit_image_recorded(*t.image, *stage, {int32_t(x0 * sx), int32_t(y0 * sy), 0}, {int32_t(pw), int32_t(ph), 1},
+                                  {int32_t(at_x), int32_t(at_y), 0}, {int32_t(w), int32_t(h), 1}, VK_FILTER_NEAREST);
+        gsn_stats.loads_scaled++;
+        rows = 0;
+    }
+    void *out = rows ? cmd().update_image(*t.image, {int32_t(x0 * sx), int32_t(y0 * sy), 0}, {pw, ph, 1}, pw, ph,
+                                          {aspect, 0, 0, 1})
+                     : nullptr;
     std::vector<uint32_t> row(w), line(pw);
     std::vector<uint8_t> converted;
-    for (uint32_t y = 0; y < h; y++) {
+    for (uint32_t y = 0; y < rows; y++) {
         // (a CT24 target holds VRAM's alpha too: write_back writes the whole word)
         gsn_vram_read_row(gs->vram.data(), t.depth ? t.psm : psm_layout(t.psm), t.bp, t.bw, x0, y0 + y, w, row.data());
         for (uint32_t x = 0; x < w; x++) {
