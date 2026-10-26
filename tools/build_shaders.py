@@ -30,6 +30,11 @@ VARIANTS = [
     ("nd_280.vert", "sa_280.vert", ["-DND_STANDALONE"]),  # ... program 0x280's in the scene
     ("nd_700.vert", "sa_700.vert", ["-DND_STANDALONE"]),  # ... program 0x700's in the scene
     ("nd_water.vert", "sa_water.vert", ["-DND_STANDALONE"]),  # ... the reflection's water in the scene (T3)
+    # ... with an upscaler's sub-pixel jitter (sa_jitter_on): their own, so that without one the scene's are as before
+    ("nd_000.vert", "sa_000_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
+    ("nd_280.vert", "sa_280_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
+    ("nd_700.vert", "sa_700_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
+    ("nd_water.vert", "sa_water_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
     ("sa_depth.frag", "sa_depth_ms.frag", ["-DSA_MS"]),  # ... the scene's depth into a multisampled Z buffer
     ("sa_resample.frag", "sa_resample_ms.frag", ["-DSA_MS"]),
     ("sa_copy_run.frag", "sa_copy_run_ms.frag", ["-DSA_MS"]),  # ... a run's copy by its own triangles, multisampled  # ... T2: from a multisampled image at another scale

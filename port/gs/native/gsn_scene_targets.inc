@@ -842,7 +842,9 @@ Program *sat_water_program(bool sample) {
         vert.sets[2].storage_buffer_mask = 3u;
         vert.sets[2].meta[0].array_size = 1;
         vert.sets[2].meta[1].array_size = 1;
-        Shader *vs = gs->device->request_shader(gsn_spv_sa_water_vert, sizeof(gsn_spv_sa_water_vert), &vert);
+        Shader *vs = sa_jitter_on() // (upscaling: the jitter's own, as sa_programs)
+                         ? gs->device->request_shader(gsn_spv_sa_water_jitter_vert, sizeof(gsn_spv_sa_water_jitter_vert), &vert)
+                         : gs->device->request_shader(gsn_spv_sa_water_vert, sizeof(gsn_spv_sa_water_vert), &vert);
         programs[0] = gs->device->request_program(vs, gs->program->get_shader(ShaderStage::Fragment));
         programs[1] = sa.programs[SA_VS_000][1] ? gs->device->request_program(vs, sa.programs[SA_VS_000][1]->get_shader(ShaderStage::Fragment))
                                                 : programs[0];

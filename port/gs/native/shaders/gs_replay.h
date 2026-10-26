@@ -8,8 +8,7 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 mid[3];    // the world to the picture's view: rows of the rotation (and the translation)
     vec4 screen[2]; // sx sy cx cy: the world's projection, the reflection's
     vec4 zt;        // cz (the world's, the reflection's), t, 1 - t
-    vec4 jitter;    // (upscaling) the picture's sub-pixel jitter in NDC (xy): the scene's vertex shaders add it
-    uvec4 counts;   // the kicks, the runs
+    uvec4 counts;   // the kicks, the runs; zw (floats) the picture's sub-pixel jitter in NDC (upscaling: sa_*_jitter.vert)
     uint run_bits[];
 } pic;
 // the frame's kicks as the GS queued them (gsn.cpp, InterpKick), 16 words each

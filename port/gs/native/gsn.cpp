@@ -7107,10 +7107,10 @@ struct InterpPictureHeader {
     float move[12], mid[12];
     float screen[2][4]; // sx sy cx cy: the world's, the reflection's
     float zt[4];        // cz (the world's, the reflection's), t, 1 - t
-    float jitter[4];    // (upscaling) the picture's sub-pixel jitter: in NDC, and in the scene's pixels (sa_jitter_picture)
-    uint32_t kicks, runs, pad[2];
+    uint32_t kicks, runs;
+    float jitter[2];    // (upscaling) the picture's sub-pixel jitter in NDC (sa_jitter_picture; sa_*_jitter.vert): 0 without
 };
-static_assert(sizeof(InterpPictureHeader) == 176, "InterpPictureHeader is gs_replay.vert's Picture");
+static_assert(sizeof(InterpPictureHeader) == 160, "InterpPictureHeader is gs_replay.vert's Picture");
 
 // A picture as it comes through the ring: the frame's serial, the header, then the bits
 struct InterpPictureMessage {
@@ -7490,8 +7490,11 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
-    sa_jitter_picture(h->jitter); // (upscaling: this picture's own sub-pixel jitter, gsn_standalone.inc)
-    sa_camera_picture(h->move, h->jitter + 2); // (upscaling: its camera, for the composite's motion)
+    float jitter[4]; // (upscaling: this picture's own sub-pixel jitter, gsn_standalone.inc: in NDC, in the scene's pixels)
+    sa_jitter_picture(jitter);
+    h->jitter[0] = jitter[0];
+    h->jitter[1] = jitter[1];
+    sa_camera_picture(h->move, jitter + 2); // (upscaling: its camera, for the composite's motion)
     interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();

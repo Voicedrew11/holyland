@@ -48,8 +48,8 @@ volatile int sa_upscaler = 0;
 
 // (upscaling, docs/port/UPSCALING.md) The scene's sub-pixel jitter for a temporal upscaler. Each picture shown, the
 // frame's own and each picture between, takes the next step of the Halton (2, 3) sequence: within half a scene pixel
-// each way, added to the positions of the scene's draws into its frame (the sa_* vertex shaders add Picture.jitter, in
-// NDC, where GSN_M_JITTER is set: not into a named target, the reflection). On with a temporal upscaler, or with
+// each way, added to the positions of the scene's draws into its frame (the sa_*_jitter vertex shaders add the Picture's
+// counts.zw, in NDC, where GSN_M_JITTER is set: not into a named target, the reflection). On with a temporal upscaler, or with
 // KF4_UPSCALE_JITTER=1 to look at it; off, no draw's position changes.
 struct SaJitter {
     uint32_t index = 0;
@@ -100,11 +100,9 @@ void sa_jitter_frame(uint32_t w, uint32_t h, uint32_t sx, uint32_t gsx) {
     float ratio = sx < gsx ? float(gsx) / float(sx) : 1.0f;
     sa_jit.phases = std::max(8u, uint32_t(8.0f * ratio * ratio));
     sa_jitter_step();
-    float data[64] = {}; // (256 bytes, as nd.dummy: the jitter after move, mid, screen and zt, gs_replay.h's order)
-    data[36] = sa_jit.ndc[0];
-    data[37] = sa_jit.ndc[1];
-    data[38] = sa_jit.px[0];
-    data[39] = sa_jit.px[1];
+    float data[64] = {}; // (256 bytes, as nd.dummy: the jitter in counts.zw, after move, mid, screen and zt, gs_replay.h's order)
+    data[38] = sa_jit.ndc[0];
+    data[39] = sa_jit.ndc[1];
     sa_jit.frame_picture = interp_buffer(sizeof(data), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data);
 }
 
@@ -1702,9 +1700,17 @@ void sa_programs() {
     vert.sets[2].storage_buffer_mask = 3u;
     vert.sets[2].meta[0].array_size = 1;
     vert.sets[2].meta[1].array_size = 1;
-    sa.vs = gs->device->request_shader(gsn_spv_sa_000_vert, sizeof(gsn_spv_sa_000_vert), &vert);
-    sa.vs_280 = gs->device->request_shader(gsn_spv_sa_280_vert, sizeof(gsn_spv_sa_280_vert), &vert);
-    sa.vs_700 = gs->device->request_shader(gsn_spv_sa_700_vert, sizeof(gsn_spv_sa_700_vert), &vert);
+    // (upscaling) With the picture's jitter, the shaders that add it (sa_*_jitter.vert); without, those that have no
+    // code for it, so that their pipelines are those of the shipped list (gsn_pipeline_list.h) and of the caches
+    if (sa_jitter_on()) {
+        sa.vs = gs->device->request_shader(gsn_spv_sa_000_jitter_vert, sizeof(gsn_spv_sa_000_jitter_vert), &vert);
+        sa.vs_280 = gs->device->request_shader(gsn_spv_sa_280_jitter_vert, sizeof(gsn_spv_sa_280_jitter_vert), &vert);
+        sa.vs_700 = gs->device->request_shader(gsn_spv_sa_700_jitter_vert, sizeof(gsn_spv_sa_700_jitter_vert), &vert);
+    } else {
+        sa.vs = gs->device->request_shader(gsn_spv_sa_000_vert, sizeof(gsn_spv_sa_000_vert), &vert);
+        sa.vs_280 = gs->device->request_shader(gsn_spv_sa_280_vert, sizeof(gsn_spv_sa_280_vert), &vert);
+        sa.vs_700 = gs->device->request_shader(gsn_spv_sa_700_vert, sizeof(gsn_spv_sa_700_vert), &vert);
+    }
     Shader *vss[3] = {sa.vs, sa.vs_280, sa.vs_700};
     for (int k = 0; k < 3; k++) {
         sa.programs[k][0] = gs->device->request_program(vss[k], gs->program->get_shader(ShaderStage::Fragment));

@@ -88,22 +88,27 @@ back.
 
 Each picture shown takes the next step of the Halton (2, 3) sequence: an offset within half a scene
 pixel each way, added in NDC to the positions of the scene's draws into its frame (`sa_000`, `sa_280`, `sa_700`,
-`sa_water`: `Picture.jitter`, where `GSN_M_JITTER` is set). A picture between has its own in its Picture
-(`InterpPictureHeader::jitter`, `sa_jitter_picture`), so the recording's replays each draw at their own. The frame's
+`sa_water`, built a second time with `ND_JITTER` as `sa_*_jitter.vert`: the Picture's `counts.zw`, where
+`GSN_M_JITTER` is set). A picture between has its own in its Picture (`InterpPictureHeader::jitter`, the two words
+after the kicks and runs that were padding, `sa_jitter_picture`), so the recording's replays each draw at their own. The frame's
 own picture binds a Picture of its own (`sa_jitter_frame`, at the scene's clear) instead of the buffer of zeros. On
 with a temporal upscaler, or `KF4_UPSCALE_JITTER=1` to look at it. The sequence begins again after FSR's count of
 steps: 8 times the square of the scale's ratio across, 8 at least (32 for the scene at 2x under a 4x GS).
 - Not jittered: draws into a named target (the reflection, the scrolling textures: textures the frame reads), the
   trail strip, and the GS's own 3D the scene draws (`gs.vert`, a few in a hundred of the scene's batches). They stay
   still under the upscaler's jitter.
-- The shaders were compiled with glslang 16.6.0. It builds 47 of the 49 committed shaders word for word; for
-  `nd_water`/`sa_water` it differs by 8 words. Only the shaders this change touches take the new SPIR-V (the
-  scene's and hosted nd_* vertex shaders, their oracles, `gs_replay*.comp`). With jitter off, every picture of 6
+- With jitter off nothing compiles differently: the jitter's code and the Picture's member are only in the
+  `sa_*_jitter.vert` builds (`ND_JITTER`, `tools/build_shaders.py`), chosen by `sa_programs` and
+  `sat_water_program` when `sa_jitter_on()`, and the Picture keeps its layout (the jitter in `counts.zw`), so every
+  other shader is the SPIR-V it was word for word and the shipped pipeline list (`gsn_pipeline_list.h`) and the
+  pipeline caches stay valid. (A first version added a `vec4 jitter` to the Picture and the code to every scene
+  shader: their SPIR-V changed with the upscaler off, the shipped list's lines for them went stale and 11-14
+  pipelines a spot were compiled by draws again at a fresh data folder.) With jitter off, every picture of 6
   vblanks on 000 and 009 (the pond's water too), and on 000 at `--scene-scale 2`, is byte for byte the build before.
 - With it on, standing still at `--scene-scale 2 --upscaler bilinear`, each picture differs from the one before by
   0.65-1.07 levels on average where it was 0.06-0.19, and the HUD not.
-- The pipelines' shaders changed, so the shipped list (`gsn_pipeline_list.h`) has stale lines for them until it is
-  made again from a map tour. The data folder's list fills in meanwhile, with "Building shaders" at the first start.
+- With jitter on (FSR, DLSS), the `sa_*_jitter` pipelines are not on the shipped list (no shipped tag has an
+  upscaler): the data folder's list has them after the first run.
 
 ## Motion vectors (done, branch `upscale/scene-size`)
 
