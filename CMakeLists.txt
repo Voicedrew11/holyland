@@ -209,8 +209,22 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # and the native GS (port/gs/native/), on the same Vulkan layer
-    add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c)
-    target_include_directories(kf4_gs PRIVATE port/include PUBLIC port/gs/native)
+    add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c
+                port/gs/native/upscale_ffx.cpp port/gs/native/upscale_dlss.cpp)
+    target_include_directories(kf4_gs PRIVATE port/include third_party/ffx-api/include PUBLIC port/gs/native)
+    # --upscaler fsr3 (docs/port/UPSCALING.md): AMD's signed amd_fidelityfx_vk.dll, loaded at run time from beside
+    # kf4.exe. Not kept here: KF4_FFX_DLL names one (the FidelityFX SDK's PrebuiltSignedDLL) to copy there
+    set(KF4_FFX_DLL "" CACHE FILEPATH "amd_fidelityfx_vk.dll to copy beside kf4.exe (--upscaler fsr3)")
+    # --upscaler dlss: NGX's headers from NVIDIA's DLSS SDK, whose licence keeps it out of this repository.
+    # KF4_DLSS_SDK names the SDK (github.com/NVIDIA/DLSS); without it the build has no DLSS
+    set(KF4_DLSS_SDK "" CACHE PATH "NVIDIA's DLSS SDK, for --upscaler dlss (Windows)")
+    if(KF4_DLSS_SDK AND WIN32)
+        if(NOT EXISTS ${KF4_DLSS_SDK}/include/nvsdk_ngx_defs.h)
+            message(FATAL_ERROR "KF4_DLSS_SDK: ${KF4_DLSS_SDK}/include/nvsdk_ngx_defs.h is not there")
+        endif()
+        set_source_files_properties(port/gs/native/upscale_dlss.cpp PROPERTIES
+            COMPILE_DEFINITIONS KF4_HAVE_DLSS INCLUDE_DIRECTORIES ${KF4_DLSS_SDK}/include)
+    endif()
     target_link_libraries(kf4_gs PRIVATE parallel-gs)
     target_link_libraries(kf4_gs PUBLIC kf4_render)
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
@@ -486,4 +500,13 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:kf4> ${KF4_RUNTIME_DLLS}
             $<TARGET_FILE_DIR:kf4>
         COMMAND_EXPAND_LISTS)
+    if(KF4_FFX_DLL) # (--upscaler fsr3: the FidelityFX DLL beside kf4.exe)
+        add_custom_command(TARGET kf4 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KF4_FFX_DLL} $<TARGET_FILE_DIR:kf4>/amd_fidelityfx_vk.dll)
+    endif()
+    if(KF4_DLSS_SDK) # (--upscaler dlss: the SDK's release build of DLSS beside kf4.exe)
+        add_custom_command(TARGET kf4 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KF4_DLSS_SDK}/lib/Windows_x86_64/rel/nvngx_dlss.dll
+                $<TARGET_FILE_DIR:kf4>/nvngx_dlss.dll)
+    endif()
 endif()

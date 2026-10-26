@@ -70,6 +70,12 @@ bool sat_format(uint32_t psm) {
 
 // A buffer drawn into that is a named target: narrower than the frame (sa_draw_batch's rule for the frame:
 // 512 pixels or more across), in a colour format
+// (sa_draw_batch, upscaling) The picture's jitter goes to the scene's frame only, not to a named target bound as it
+// (the reflection, a scrolling texture): those are textures the frame reads, not the picture an upscaler takes
+bool sa_jitter_draw() {
+    return sa_jitter_on() && !snt.bound;
+}
+
 bool sat_narrow(uint32_t bw, uint32_t psm) {
     return !snt.off && sat_format(psm) && bw > 0 && bw * 64 < 512;
 }

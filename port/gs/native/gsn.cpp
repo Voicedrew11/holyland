@@ -68,6 +68,8 @@ extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile
 extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
 }
 #include "gsn_shaders.h"
+#include "upscale_dlss.h" // (--upscaler dlss: gsn_upscale.inc, and the context's extensions)
+#include "upscale_ffx.h"  // (--upscaler fsr3: gsn_upscale.inc)
 #include "../../render/render_internal.hpp" // (native draw: gsn_native_draw.inc)
 
 using namespace Vulkan;
@@ -202,7 +204,7 @@ enum : uint32_t {
 enum : uint32_t {
     M_FBA = 0x1, M_COLCLAMP = 0x2, M_DST16 = 0x4, M_DST24 = 0x8, M_PABE = 0x10, M_SCANMSK_SHIFT = 5, M_SCALE_SHIFT = 7,
     M_ZCLAMP = 0x400, M_SCALE_X_SHIFT = 11, M_ANISO_SHIFT = 14, M_HIGH = 0x20000, M_ZFINE = 0x40000,
-    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000,
+    M_SMOOTH_2D = 0x80000, M_RECT_2D = 0x100000, M_JITTER = 0x200000,
 };
 
 // ---- Render targets and textures ----------------------------------------------------------------
@@ -567,7 +569,7 @@ enum OpKind : uint32_t {
     OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
     // (the back end's only, gsn_backend.inc: a stream's calls that are not a recording's)
     OP_NEW_CMD, OP_SUBMIT, OP_NEXT_FRAME, OP_PUBLISH, OP_PRESENT, OP_BLIT, OP_COPY_TO_BUFFER, OP_TIMESTAMP, OP_KICKS,
-    OP_REPLAY, OP_RECORDING_BINDS,
+    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE,
 };
 
 struct Recording;
@@ -794,6 +796,15 @@ struct ArgBlit {
     const Image *dst, *src;
     VkOffset3D dst_offset, dst_extent, src_offset, src_extent;
     VkFilter filter;
+};
+// (--upscaler fsr3, dlss: gsn_upscale.inc) A picture upscaled, by which (sa_upscaler's 2 or 3), its inputs and output,
+// with what upscale.h says of each
+struct ArgUpscale {
+    uint32_t mode;
+    const Image *color, *depth, *motion, *out;
+    float jitter[2];
+    float frame_ms, near_plane, fov_y;
+    uint32_t reset;
 };
 struct ArgCopyToBuffer {
     const Buffer *dst;
@@ -1345,6 +1356,15 @@ public:
         s.keep(dst);
         s.keep(src);
         s.add(OP_BLIT, ArgBlit{&dst, &src, dst_offset, dst_extent, src_offset, src_extent, filter});
+    }
+    // (--upscaler fsr3, at the composite: never in a recording) A picture upscaled on the back end's thread
+    void upscale(const ArgUpscale &a) {
+        Recording &s = out();
+        s.keep(*a.color);
+        s.keep(*a.depth);
+        s.keep(*a.motion);
+        s.keep(*a.out);
+        s.add(OP_UPSCALE, a);
     }
     // The same, recorded too (load_target_rect's scaling: a picture between's recording makes it again, into the
     // target's image as it is then, as it does its updates of targets)
@@ -7087,9 +7107,10 @@ struct InterpPictureHeader {
     float move[12], mid[12];
     float screen[2][4]; // sx sy cx cy: the world's, the reflection's
     float zt[4];        // cz (the world's, the reflection's), t, 1 - t
+    float jitter[4];    // (upscaling) the picture's sub-pixel jitter: in NDC, and in the scene's pixels (sa_jitter_picture)
     uint32_t kicks, runs, pad[2];
 };
-static_assert(sizeof(InterpPictureHeader) == 160, "InterpPictureHeader is gs_replay.vert's Picture");
+static_assert(sizeof(InterpPictureHeader) == 176, "InterpPictureHeader is gs_replay.vert's Picture");
 
 // A picture as it comes through the ring: the frame's serial, the header, then the bits
 struct InterpPictureMessage {
@@ -7447,6 +7468,9 @@ int interp_cannot_replay() {
     return 0;
 }
 
+void sa_jitter_picture(float *jitter);
+void sa_camera_picture(const float *move, const float *jitter_px);
+
 void interp_picture_now(const uint8_t *data, size_t size) {
     InterpPictureMessage m;
     if (size < sizeof(m)) {
@@ -7466,6 +7490,8 @@ void interp_picture_now(const uint8_t *data, size_t size) {
         h->zt[i] = interp.frame->screen[i][4];
     }
     h->kicks = interp.frame->kicks;
+    sa_jitter_picture(h->jitter); // (upscaling: this picture's own sub-pixel jitter, gsn_standalone.inc)
+    sa_camera_picture(h->move, h->jitter + 2); // (upscaling: its camera, for the composite's motion)
     interp.still = interp.frame->still != 0; // (the camera of the frame shown is the frame's, bit for bit)
     interp.picture = interp_buffer(buffer.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.data());
     flush_batch();
@@ -7810,6 +7836,96 @@ void save_pipeline_cache() {
 #include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
 #include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
 
+// (gsn_open, --upscaler dlss) A context with DLSS's Vulkan extensions besides the presenter's: the instance with those
+// NGX names (that the loader has), then the GPU Granite would choose (GRANITE_VULKAN_DEVICE_INDEX, or the first of the
+// most able kind, Granite's device_score), the device with those NGX names for it. Null where any of it cannot be had,
+// and FSR instead (sa_upscaler 2). (The names are kept: Granite holds the pointers.)
+Context *dlss_context(const std::vector<const char *> &instance_ext, const std::vector<const char *> &device_ext) {
+    static std::vector<std::string> want_instance, want_device;
+    auto fail = [](Context *c, const char *why) -> Context * {
+        if (why) {
+            fprintf(stderr, "[gsn] --upscaler dlss: %s: FSR instead\n", why);
+        }
+        delete c;
+        sa_upscaler = 2;
+        return nullptr;
+    };
+    if (!dlss_instance_extensions(want_instance)) {
+        return fail(nullptr, nullptr); // (said why)
+    }
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> have(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, have.data());
+    std::vector<const char *> ie = instance_ext;
+    for (const std::string &w : want_instance) {
+        bool there = false;
+        for (const auto &e : have) {
+            there = there || w == e.extensionName;
+        }
+        if (!there) {
+            return fail(nullptr, "the Vulkan loader has not the instance extensions NGX wants");
+        }
+        ie.push_back(w.c_str());
+    }
+    Context *c = new Context;
+    c->set_num_thread_indices(2); // (the GS's thread's and the back end's)
+    if (!c->init_instance(ie.data(), uint32_t(ie.size()), 0)) {
+        return fail(c, "no Vulkan instance with NGX's extensions");
+    }
+    VkInstance instance = c->get_instance();
+    uint32_t gpus_count = 0;
+    vkEnumeratePhysicalDevices(instance, &gpus_count, nullptr);
+    std::vector<VkPhysicalDevice> gpus(gpus_count);
+    vkEnumeratePhysicalDevices(instance, &gpus_count, gpus.data());
+    VkPhysicalDevice gpu = VK_NULL_HANDLE;
+    const char *index = getenv("GRANITE_VULKAN_DEVICE_INDEX");
+    if (index && atoi(index) >= 0 && atoi(index) < int(gpus_count)) {
+        gpu = gpus[size_t(atoi(index))];
+    }
+    unsigned best = 0;
+    bool chosen = gpu != VK_NULL_HANDLE;
+    for (size_t i = gpus_count; i && !chosen; i--) {
+        VkPhysicalDeviceProperties props = {};
+        vkGetPhysicalDeviceProperties(gpus[i - 1], &props);
+        unsigned score = props.apiVersion < VK_API_VERSION_1_1                              ? 0
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   ? 3
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2
+                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU            ? 1
+                                                                                      : 0;
+        if (score >= best) {
+            best = score;
+            gpu = gpus[i - 1];
+        }
+    }
+    if (gpu == VK_NULL_HANDLE || !dlss_device_extensions(instance, gpu, want_device)) {
+        return fail(c, gpu == VK_NULL_HANDLE ? "no GPU" : nullptr);
+    }
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, nullptr);
+    have.resize(count);
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &count, have.data());
+    std::vector<const char *> de = device_ext;
+    for (const std::string &w : want_device) {
+        bool there = false, asked = false;
+        for (const auto &e : have) {
+            there = there || w == e.extensionName;
+        }
+        for (const char *d : de) {
+            asked = asked || w == d;
+        }
+        if (!there) {
+            return fail(c, "the GPU has not the device extensions NGX wants");
+        }
+        if (!asked) {
+            de.push_back(w.c_str());
+        }
+    }
+    if (!c->init_device(gpu, VK_NULL_HANDLE, de.data(), uint32_t(de.size()), 0)) {
+        return fail(c, "no Vulkan device with NGX's extensions");
+    }
+    return c;
+}
+
 } // namespace
 
 // ---- The C interface ----------------------------------------------------------------------------
@@ -7836,10 +7952,16 @@ extern "C" int gsn_open(void *shared_context) {
         if (present_wanted) {
             present_extensions(instance_ext, device_ext);
         }
-        gs->context = new Context;
-        gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
-        if (!gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()), device_ext.data(),
-                                                   uint32_t(device_ext.size()), 0)) {
+        // (--upscaler dlss: with NGX's extensions too, where they can be had)
+        gs->context = sa_upscaler == 3 ? dlss_context(instance_ext, device_ext) : nullptr;
+        bool made = gs->context != nullptr;
+        if (!made) {
+            gs->context = new Context;
+            gs->context->set_num_thread_indices(2); // (the GS's thread's and the back end's)
+            made = gs->context->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
+                                                         device_ext.data(), uint32_t(device_ext.size()), 0);
+        }
+        if (!made) {
             delete gs->context;
             gs->context = nullptr;
             if (!instance_ext.empty()) {
@@ -8271,6 +8393,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     return ok;
 }
 
+#include "gsn_upscale.inc" // (--upscaler fsr3: the temporal upscaler's calls, on the back end's thread)
 #include "gsn_backend.inc" // (the calls into Vulkan, made on a thread of their own)
 } // namespace
 
@@ -8368,6 +8491,10 @@ extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
     // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
     sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;
     sa_wanted_samples = uint32_t(std::min(std::max(samples, 0), 8));
+}
+
+extern "C" void gsn_set_upscaler(int mode) {
+    sa_upscaler = mode;
 }
 
 extern "C" void gsn_set_scene_map(int map) {

@@ -24,6 +24,13 @@
                          (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
                          menus and the title; the picture shown made from both (gsn_composite.inc). By
                          default the GS's
+       --upscaler off|bilinear|fsr3|dlss
+                         with --renderer modern and a --scene-scale below the GS's (single-sampled, both),
+                         the scene brought up to the GS's scale at the composite, the 2D the GS's at its
+                         own scale (docs/port/UPSCALING.md): bilinear, AMD's FSR 3.1 or NVIDIA's DLSS
+                         (temporal: the scene jittered, with its motion; amd_fidelityfx_vk.dll, or
+                         nvngx_dlss.dll and an NVIDIA GPU, beside kf4.exe; DLSS falls back to FSR, FSR to
+                         bilinear). Off by default
        --native-shine whole|exact
                          with --renderer modern, a skinned model's sphere-mapped shine that is blended
                          in the shader (the ice creatures on map 017): drawn whole (the default, much
@@ -242,6 +249,7 @@ static void usage(const char *program) {
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
+            "          [--upscaler off|bilinear|fsr3|dlss]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
@@ -516,6 +524,19 @@ static void parse_options(int argc, char **argv) {
             port_options.scene_scale = atoi(value);
             if (port_options.scene_scale < 1 || port_options.scene_scale > 4) {
                 fprintf(stderr, "--scene-scale wants 1 to 4, not %s\n", value);
+                exit(2);
+            }
+        } else if (strcmp(option, "--upscaler") == 0) {
+            if (strcmp(value, "off") == 0) {
+                port_options.upscaler = 0;
+            } else if (strcmp(value, "bilinear") == 0) {
+                port_options.upscaler = 1;
+            } else if (strcmp(value, "fsr3") == 0) {
+                port_options.upscaler = 2;
+            } else if (strcmp(value, "dlss") == 0) {
+                port_options.upscaler = 3;
+            } else {
+                fprintf(stderr, "--upscaler wants off, bilinear, fsr3 or dlss, not %s\n", value);
                 exit(2);
             }
         } else if (strcmp(option, "--scene-msaa") == 0) {

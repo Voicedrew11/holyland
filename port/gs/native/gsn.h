@@ -144,6 +144,10 @@ void gsn_print_standalone_stats(void);
 /* --scene-scale and --scene-msaa (P8 T2, gsn_composite.inc): the scene's own scale, across and down, and samples,
    apart from the GS's; 0: the GS's. From when the scene next takes a frame. */
 void gsn_set_scene(int x_scale, int y_scale, int samples);
+/* --upscaler (docs/port/UPSCALING.md, gsn_composite.inc's sa_upscale_held): a scene below the GS's scale (both
+   single-sampled) brought up to it at the composite. 0 off, 1 bilinear, 2 FSR 3.1, 3 DLSS (before gsn_open: its
+   Vulkan extensions) */
+void gsn_set_upscaler(int mode);
 /* (modern) The map the game is in (MapSlot.tag; -1 none), for --stats' counts a map: at each vblank */
 void gsn_set_scene_map(int map);
 

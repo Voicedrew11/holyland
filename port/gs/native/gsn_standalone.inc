@@ -43,6 +43,209 @@ volatile int sa_mode = 0; // (gsn_set_standalone)
 // --scene-scale and --scene-msaa (gsn_set_scene, T2): the scene's own scale (across | down << 8) and samples; 0 the
 // GS's (--native-scale, --native-msaa). Taken when the scene next takes a frame.
 volatile uint32_t sa_wanted_scale = 0, sa_wanted_samples = 0;
+// --upscaler (gsn_set_upscaler, docs/port/UPSCALING.md): 0 off, 1 bilinear (sa_upscale)
+volatile int sa_upscaler = 0;
+
+// (upscaling, docs/port/UPSCALING.md) The scene's sub-pixel jitter for a temporal upscaler. Each picture shown, the
+// frame's own and each picture between, takes the next step of the Halton (2, 3) sequence: within half a scene pixel
+// each way, added to the positions of the scene's draws into its frame (the sa_* vertex shaders add Picture.jitter, in
+// NDC, where GSN_M_JITTER is set: not into a named target, the reflection). On with a temporal upscaler, or with
+// KF4_UPSCALE_JITTER=1 to look at it; off, no draw's position changes.
+struct SaJitter {
+    uint32_t index = 0;
+    uint32_t phases = 8;        // the steps before the sequence begins again
+    uint32_t w = 0, h = 0;      // the scene's frame, in pixels
+    float px[2] = {0, 0};       // this picture's jitter, in the scene's pixels
+    float ndc[2] = {0, 0};      // ... in NDC
+    BufferHandle frame_picture; // the frame's own picture's Picture (zeros but the jitter: as nd.dummy otherwise)
+} sa_jit;
+
+bool sa_jitter_on() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char *v = getenv("KF4_UPSCALE_JITTER");
+        forced = v && *v == '1';
+    }
+    return forced || sa_upscaler >= 2;
+}
+
+float sa_halton(uint32_t i, uint32_t base) {
+    float f = 1.0f, r = 0.0f;
+    while (i) {
+        f /= float(base);
+        r += f * float(i % base);
+        i /= base;
+    }
+    return r;
+}
+
+// The next picture's jitter: Halton's (2, 3) sequence, its first `phases` steps, then again
+void sa_jitter_step() {
+    sa_jit.index = sa_jit.index % sa_jit.phases + 1;
+    sa_jit.px[0] = sa_halton(sa_jit.index, 2) - 0.5f;
+    sa_jit.px[1] = sa_halton(sa_jit.index, 3) - 0.5f;
+    sa_jit.ndc[0] = sa_jit.w ? 2.0f * sa_jit.px[0] / float(sa_jit.w) : 0.0f;
+    sa_jit.ndc[1] = sa_jit.h ? 2.0f * sa_jit.px[1] / float(sa_jit.h) : 0.0f;
+}
+
+// (sa_acquire, the scene cleared for a game frame's own picture: not in a picture between) A new picture: its jitter,
+// and the Picture its draws bind (nd_bind)
+void sa_jitter_frame(uint32_t w, uint32_t h, uint32_t sx, uint32_t gsx) {
+    if (!sa_jitter_on()) {
+        return;
+    }
+    sa_jit.w = w;
+    sa_jit.h = h;
+    // (FSR's count: 8 for each output pixel's share of a scene pixel, 8 x the scale's ratio squared; 8 at least)
+    float ratio = sx < gsx ? float(gsx) / float(sx) : 1.0f;
+    sa_jit.phases = std::max(8u, uint32_t(8.0f * ratio * ratio));
+    sa_jitter_step();
+    float data[64] = {}; // (256 bytes, as nd.dummy: the jitter after move, mid, screen and zt, gs_replay.h's order)
+    data[36] = sa_jit.ndc[0];
+    data[37] = sa_jit.ndc[1];
+    data[38] = sa_jit.px[0];
+    data[39] = sa_jit.px[1];
+    sa_jit.frame_picture = interp_buffer(sizeof(data), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data);
+}
+
+// (interp_picture_now) A picture between: its own jitter, into its Picture (in NDC, then in the scene's pixels)
+void sa_jitter_picture(float *jitter) {
+    if (!sa_jitter_on() || !sa_jit.w) {
+        jitter[0] = jitter[1] = jitter[2] = jitter[3] = 0.0f;
+        return;
+    }
+    sa_jitter_step();
+    jitter[0] = sa_jit.ndc[0];
+    jitter[1] = sa_jit.ndc[1];
+    jitter[2] = sa_jit.px[0];
+    jitter[3] = sa_jit.px[1];
+}
+
+// (nd_bind, the frame's own draws) The Picture to bind: the frame's, with its jitter, or nothing (nd.dummy)
+const Buffer *sa_jitter_frame_picture() {
+    return sa_jitter_on() && sa_jit.frame_picture ? sa_jit.frame_picture.get() : nullptr;
+}
+
+// (sa_draw_batch) Whether this batch takes the picture's jitter: the scene's frame's, not a named target's
+bool sa_jitter_draw();
+
+// (upscaling) The world's camera, for the composite's motion (docs/port/UPSCALING.md): as a game frame's own draws
+// have it (sa_camera_seen: native draw's records, the camera of mode 0, projection 0), and each picture between's,
+// made of it by the picture's move (sa_camera_picture). Matrices row-major, [row * 4 + col]; the game's are VU layout
+// (m[i] the i-th column). world_screen takes a world place to the GS's X, Y and Z times w (X = c.x / c.w ...).
+struct SaCamera {
+    bool valid = false;
+    double world_screen[16] = {}, view[16] = {}, screen[16] = {};
+    float origin[2] = {0, 0};                 // XYOFFSET, in GS pixels
+    double picture[16] = {};                  // the last picture between's world_screen
+    float picture_jitter[2] = {0, 0};         // ... and its jitter, in the scene's pixels
+} sa_cam;
+
+void sa_mat_mul(double *r, const double *a, const double *b) {
+    double t[16];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            double s = 0;
+            for (int k = 0; k < 4; k++) {
+                s += a[i * 4 + k] * b[k * 4 + j];
+            }
+            t[i * 4 + j] = s;
+        }
+    }
+    memcpy(r, t, sizeof(t));
+}
+
+// The inverse of a 4 x 4 (false: none)
+bool sa_mat_inverse(double *r, const double *m) {
+    double a[4][8];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            a[i][j] = m[i * 4 + j];
+            a[i][j + 4] = i == j;
+        }
+    }
+    for (int c = 0; c < 4; c++) {
+        int p = c;
+        for (int i = c + 1; i < 4; i++) {
+            if (fabs(a[i][c]) > fabs(a[p][c])) {
+                p = i;
+            }
+        }
+        if (fabs(a[p][c]) < 1e-300) {
+            return false;
+        }
+        for (int j = 0; j < 8; j++) {
+            std::swap(a[c][j], a[p][j]);
+        }
+        double d = a[c][c];
+        for (int j = 0; j < 8; j++) {
+            a[c][j] /= d;
+        }
+        for (int i = 0; i < 4; i++) {
+            if (i != c) {
+                double f = a[i][c];
+                for (int j = 0; j < 8; j++) {
+                    a[i][j] -= f * a[c][j];
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            r[i * 4 + j] = a[i][j + 4];
+        }
+    }
+    return true;
+}
+
+// (nd_draw, a game frame's own draws) The world's camera, as its draws have it
+void sa_camera_seen(const RdCamera &cam, int32_t ofx, int32_t ofy) {
+    if (!sa_mode || cam.mode != 0 || cam.projection != 0) {
+        return;
+    }
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            sa_cam.world_screen[r * 4 + c] = cam.world_screen[c][r];
+            sa_cam.view[r * 4 + c] = cam.view[c][r];
+            sa_cam.screen[r * 4 + c] = cam.screen[c][r];
+        }
+    }
+    sa_cam.origin[0] = float(ofx) / 16.0f;
+    sa_cam.origin[1] = float(ofy) / 16.0f;
+    sa_cam.valid = true;
+}
+
+// (interp_picture_now) A picture between's camera: the frame's view moved by the picture's move (rows of the rotation
+// less the identity, each with its translation: the frame's view to the picture's), then the frame's view to screen
+void sa_camera_picture(const float *move, const float *jitter_px) {
+    double m[16] = {};
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) {
+            m[r * 4 + c] = double(move[r * 4 + c]) + (r == c ? 1.0 : 0.0);
+        }
+        m[r * 4 + 3] = move[r * 4 + 3];
+    }
+    m[15] = 1.0;
+    double mv[16];
+    sa_mat_mul(mv, m, sa_cam.view);
+    sa_mat_mul(sa_cam.picture, sa_cam.screen, mv);
+    sa_cam.picture_jitter[0] = jitter_px[0];
+    sa_cam.picture_jitter[1] = jitter_px[1];
+}
+
+// Whether the composite works out the scene's motion: with a temporal upscaler, or to look at it
+// (KF4_UPSCALE_SHOW=motion)
+int sa_motion_show() {
+    static int show = -1;
+    if (show < 0) {
+        const char *v = getenv("KF4_UPSCALE_SHOW");
+        show = v && strcmp(v, "motion") == 0;
+    }
+    return show;
+}
+bool sa_motion_wanted() {
+    return sa_upscaler >= 2 || sa_motion_show();
+}
 
 enum {
     SA_WHY_FRAME,    // another target than a frame of 512 pixels or more across, 32 or 24-bit
@@ -71,7 +274,7 @@ struct SaStats {
     uint64_t depth_clears, alpha_sets, shadow_batches, own_layers; // (the scene's ops, and the shadows by the stencil)
     // (T2) frames taken from the GS's clear (no copy), the GS's batches drawn into the scene (its 3D, the screen
     // passes, fills), its frame given to the GS and kept (a copy that reads it), pictures made by the composite
-    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops;
+    uint64_t cleared, gs_3d, gs_passes, gs_fills, gs_water, published, resampled, composites, composite_ops, upscales, upscales_temporal, motions;
     uint64_t frame_copies, frame_copy_reads; // (the scene's copies of its frame elsewhere, and textures read from them)
     uint64_t declined[SA_WHY_COUNT];
     uint64_t textures[SA_TEX_COUNT];
@@ -1475,11 +1678,11 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
 }
 
 // ---- The scene's targets, and its turns with the GS's ------------------------------------------------
-ImageHandle sa_image(uint32_t width, uint32_t height, VkFormat format, uint32_t samples) {
+ImageHandle sa_image(uint32_t width, uint32_t height, VkFormat format, uint32_t samples, VkImageUsageFlags more = 0) {
     bool depth = format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
     info.samples = VkSampleCountFlagBits(samples);
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+    info.usage = more | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                  (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                         : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT); // (T8: blending in the pass)
     info.layout = ImageLayout::General;
@@ -1759,6 +1962,9 @@ bool sa_acquire(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_
         gpu_mark(GPU_COPY);
         sa.clear.valid = false;
         sa_stats.cleared++;
+        if (!interp.active) {
+            sa_jitter_frame(w, h, sx, color->sx); // (a game frame's own picture begins: its jitter, with an upscaler)
+        }
     } else if (same) {
         {
             Why why(GSN_WHY_COPY);
@@ -2398,7 +2604,9 @@ void sa_group_draw() {
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vtx, fog));
         // (nd_bind's, for the arena the parts were made with)
         c.set_storage_buffer(2, 0, *k1.arena);
-        if (!interp.active) {
+        if (!interp.active && sa_jitter_frame_picture()) {
+            c.set_storage_buffer(1, 0, *sa_jitter_frame_picture()); // (the frame's jitter: sa_jitter_frame)
+        } else if (!interp.active) {
             if (!nd.dummy) {
                 BufferCreateInfo info = {};
                 info.domain = BufferDomain::Device;
@@ -3021,6 +3229,9 @@ bool sa_draw_batch(int *why) {
         }
     }
     push.misc |= scale_y << M_SCALE_SHIFT | scale_x << M_SCALE_X_SHIFT;
+    if (sa_jitter_draw()) {
+        push.misc |= M_JITTER; // (upscaling: the scene's frame, not a named target, takes the picture's jitter)
+    }
     uint32_t write_mask = 0;
     for (int i = 0; i < 4; i++) {
         if (shader_blend || ((fbmsk >> (i * 8)) & 0xFF) != 0xFF) {
@@ -4452,12 +4663,13 @@ void sa_print_stats() {
     fprintf(stderr,
             " (T2: %llu taken from the GS's clear, %llu resampled copies; the GS's drawn by the scene: %llu 3D, %llu screen "
             "passes, %llu fills, %llu water; %llu times given while kept; %llu copies of the frame kept, %llu textures read from them; "
-            "%llu pictures composited, %llu ops over the screen in them)",
+            "%llu pictures composited, %llu ops over the screen in them; %llu upscaled (%llu by FSR or DLSS), %llu motions)",
             (unsigned long long)s.cleared, (unsigned long long)s.resampled, (unsigned long long)s.gs_3d,
             (unsigned long long)s.gs_passes, (unsigned long long)s.gs_fills, (unsigned long long)s.gs_water,
             (unsigned long long)s.published,
             (unsigned long long)s.frame_copies, (unsigned long long)s.frame_copy_reads, (unsigned long long)s.composites,
-            (unsigned long long)s.composite_ops);
+            (unsigned long long)s.composite_ops, (unsigned long long)s.upscales, (unsigned long long)s.upscales_temporal,
+            (unsigned long long)s.motions);
     fprintf(stderr, "; %llu decoded, %llu found again; uploads %llu (%.1f MB, %llu new), %llu asked for again; declined: ",
             (unsigned long long)s.decodes, (unsigned long long)s.decode_hits, (unsigned long long)s.uploads,
             s.upload_bytes / 1048576.0, (unsigned long long)s.chunks_new, (unsigned long long)s.replayed_uploads);

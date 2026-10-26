@@ -42,6 +42,10 @@ draws instead when the native GS cannot start.
   `end-other` (the buffer being drawn), not `end` (the one on screen).
 - **Don't judge interlace from shrunken pictures.** Halving a picture by nearest-neighbour drops
   every other row: exactly the rows a comb is in.
+- **Pictures are drawn in another order than they are shown.** With pictures between, a game frame's own
+  picture is drawn before the pictures between that are shown before it. Anything temporal (an upscaler's
+  history, motion from the last picture) belongs at the scanout (the composite), not where the scene is drawn or
+  given to the GS (UPSCALING.md).
 
 ## The checks before a renderer change goes in
 

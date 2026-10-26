@@ -39,6 +39,7 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 mid[3];    // the world to the picture's view: rows of the rotation (and the translation)
     vec4 screen[2]; // (the frame's projections: the draw has its own)
     vec4 zt;        // cz (the world's, the reflection's), t, 1 - t
+    vec4 jitter;    // (upscaling) the picture's sub-pixel jitter in NDC (xy); 0 without one
 } pic;
 // the meshes (the arena): four qwords a vertex (position, normal, ST, colour), as VU1 memory had them
 layout(set = 2, binding = 0, std430) readonly buffer Mesh {
@@ -332,6 +333,11 @@ void main() {
     float depth = clamp((zf + sa_slack(zf, p.q * max(float(mesh.q[at * 4u].w), 1.0), d.screen[2].z, d.screen[0].x, a_corner.a)) * pc.zscale, 0.0, 1.0);
 #else
     float depth = (pc.misc & GSN_M_ZCLAMP) != 0u ? 0.0 : float(min(z, pc.zmax)) * pc.zscale;
+#endif
+#ifdef ND_STANDALONE
+    if ((pc.misc & GSN_M_JITTER) != 0u) {
+        ndc += pic.jitter.xy; // (an upscaler's sub-pixel jitter: the scene's frame only, gsn_standalone.inc's sa_jitter)
+    }
 #endif
     gl_Position = vec4(ndc, depth, 1.0);
     v_z = float(z);

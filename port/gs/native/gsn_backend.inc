@@ -346,6 +346,9 @@ void make_call(CommandBuffer &c, const Recording &r, const Recording::Op &op, Re
         c.copy_image_to_buffer(*a.dst, *a.src, a.buffer_offset, a.offset, a.extent, a.row_length, a.slice_height, a.sub);
         break;
     }
+    case OP_UPSCALE:
+        upscale_call(c, r.args<ArgUpscale>(op));
+        break;
     default:
         // (the stream's own calls: backend_make)
         break;
@@ -393,6 +396,7 @@ void backend_make(Recording &s) {
             auto wait = std::chrono::steady_clock::now();
             gs->device->next_frame_context();
             start += std::chrono::steady_clock::now() - wait;
+            upscale_next_frame();
             break;
         }
         case OP_PUBLISH: {

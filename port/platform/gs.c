@@ -125,6 +125,7 @@ static void open_backend(void *unused) {
         if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
             gsn_enable_present();
         }
+        gsn_set_upscaler(port_options.upscaler); /* (before: --upscaler dlss's Vulkan extensions) */
         have_native = gsn_open(NULL);
         if (have_native) {
             char path[1100];
