@@ -126,12 +126,24 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
   lands on the screen), `GsDraw_CopyFrameToTexture(0x3540, 0, 256, 256)`: a draw into a 256 x 256 PSMCT32 target
   at 0x3540 of one sprite reading the frame drawn (TEX0 TBP = the frame, 1024 x 512, TCC 1, ALPHA
   0x80000000A8, TEST 0x51001, CLAMP 5), then `GsDraw_ResetDrawTarget` and TEXFLUSH; the model then reads 0x3540
-  (TEX0 0x220013540). The screen as it is up to that model, refracted through its body.
+  (TEX0 0x220013540). The screen as it is up to that model, refracted through its body. Its parts are drawn in
+  both contexts: context 1 with ALPHA 0x44 (As 0x80 from the vertices, TCC off: the copy's colour as it is) and
+  Z tested, context 2 with TEST_2 0x30001 (alpha test NEVER, fail KEEP: it writes nothing).
 - **frame_interp:** a draw into another buffer from the frame (`Uploads.copies`, "the screen's picture on a
   model"), made again in a picture between under the same rule as the copy. **Modern:** a draw into a target
   other than the scene's reading the frame: the scene gives the GS the frame there.
-- Not reachable headless without a late save: `KF4_FX=copytex` draws the same copy and a 256 x 256 sprite from
-  it after the world instead (the same GS work, not in the world).
+- **The real fight** (October 2026, the owner's `bugs1026/quick_succubus_hotspot`: map 038 at the room's
+  entrance, the camera on her): the F3 counter read `57 FPS / 15 GAME`. Not the copy (one a frame: no write-back,
+  no decode) but her body's two passes in the native GS (it reads a render target, so modern's scene leaves it
+  to the GS): the first blended by the shader (a draw whose texture is a target, `(Cs - Cd) As + Cd`), in runs
+  of triangles that do not overlap, with MSAA each a render pass and a resolve of the whole frame; the second,
+  which writes nothing, a render pass without the Z buffer between each two parts. 176 render passes and 2.6 GB
+  loaded a picture in modern, 336 and 8.9 GB hosted: bound by the GPU, the game's thread spinning in
+  `port_dmac_wait` for the GS's. Fixed on `perf/succubus` (NATIVE_DRAW_P8.md, "The Dark Succubus' body"): 5
+  render passes a picture, the game at 30.
+- `KF4_FX=copytex` draws the same copy and a 256 x 256 sprite from it after the world (the same GS work, not in
+  the world); `KF4_FX=succubus` puts the player before her (with `--invincible`, her body over much of the screen).
+- **Test:** the `succubus` case (standing still from `quick_succubus_hotspot`) and `succubus near` (`KF4_FX=succubus`).
 
 ### 10. The reflecting pools (the reflection's view, draw mode 2)
 
@@ -211,7 +223,7 @@ All `GsDraw_FillScreen` (an untextured sprite over the screen, ALPHA 0x44 or 0x4
 put back after, so the game goes on as without it), some after a `--teleport` (035 for the poisoned water, 029 for
 the King's Map) or with pad presses (START: the pause; CIRCLE: the menu; TRIANGLE every 120 vblanks with
 `KF4_FX=spell=N` and `--cheats spells,magic`), and the real scenes from quick saves in `--spots`
-(`quick_underwater`, `quick_deathwater`, `quick_palace`, `quick_wand`, `quick_icy`). Each at the owner's settings (240, 3x, native
+(`quick_underwater`, `quick_deathwater`, `quick_palace`, `quick_wand`, `quick_icy`, `quick_succubus_hotspot`). Each at the owner's settings (240, 3x, native
 widescreen, MSAA 2, aniso 2, cut-out AA ssaa, `--renderer modern`), always `--no-audio` and headless:
 
 - `--perf`: real time (`KF4_PRESENT_SIM=240`, `KF4_GSN_GPU_TIME=2`, `KF4_HITCH_MS=50`): pictures and game frames a
@@ -297,6 +309,5 @@ passes: boot_test; frame_test `--renderer gs` and `native`; gsn_draw_test 0 of 3
 of 90; herb with `--native-draw off` against play-932801f: the same `--log`, PATH1 hash 204e443a9fc49731, VU1
 cycles 460424273, pictures 1800, 1820 and 1840 byte for byte.
 
-**Left:** a door's map change (the wand's passage is the same capture and fade, tested: `wand`); the haze's cost (unreachable); the Dark Succubus
-in its real fight (no save that far: `copytex` stands in); real-time numbers after the fixes on an idle PC
+**Left:** a door's map change (the wand's passage is the same capture and fade, tested: `wand`); the haze's cost (unreachable); real-time numbers after the fixes on an idle PC
 (`python tools/screen_fx_test.py --perf --save .../quick_pond.kf4quick --spots ...`).
