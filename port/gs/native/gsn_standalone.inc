@@ -2650,7 +2650,8 @@ void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t co
 }
 
 void pc_world_flush(); // (gsn_pc_world.inc)
-bool pc_world_kind(uint32_t kind);
+bool pc_world_takes(uint32_t kind, uint32_t program);
+void pc_world_flush_for(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm);
 extern volatile int pc_world_mode;
 
 // The highest As that Vulkan's blending takes for (Cs - Cd) As + Cd: 0x80 (1.0), above which the shader blends from a
@@ -2963,6 +2964,7 @@ bool sa_draw_batch(int *why) {
                                sa_group.fbw != fbw || sa_group.fpsm != fpsm || sa_group.zbp != zbp || sa_group.zpsm != zpsm)) {
         sa_group_draw(); // (pf/skin: not a part of the model's to keep)
     }
+    pc_world_flush_for(fbp, fbw, fpsm, zbp, zpsm); // (pc world: what is kept for another target, before this one is bound)
     bool zmsk = bits(zbuf, 32, 1);
     uint32_t sx0 = bits(scissor, 0, 11), sx1 = bits(scissor, 16, 11), sy0 = bits(scissor, 32, 11), sy1 = bits(scissor, 48, 11);
     bool ate = bits(test, 0, 1);
@@ -3721,12 +3723,12 @@ bool sa_draw_batch(int *why) {
     // A blend that leaves the source (Cs - Cd) As + Cd with As 0x80 at every pixel, as a_lo and a_hi have it: the GS writes
     // Cs, so the PC renderer draws it without blending (the map's records set ABE on their opaque surfaces too)
     bool blend_is_source = abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && a_lo == 0x80 && a_hi == 0x80;
+    int pc_vs = pc_world_mode && sa.batch_pc ? pc_corners_vs(corners) : -1;
     bool pc_keep = pc_world_mode && sa.batch_pc && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only &&
                    !gpu_corners && !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && !sat_bound() &&
                    !shader_blend && !shadow && npasses == 1 && all_native && (!tme || sa.rgba_on) &&
-                   (!sa.rgba_on || sa.programs_hw[SA_VS_000][per_sample ? 1 : 0]) && ztst == 2 &&
-                   nd.batch_draws == nd.draws.buffer.get() && nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena &&
-                   !corners.empty() && pc_map_corners(corners);
+                   pc_vs >= 0 && (!sa.rgba_on || sa.programs_hw[pc_vs][per_sample ? 1 : 0]) && ztst == 2 &&
+                   nd.batch_draws == nd.draws.buffer.get() && nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena;
     // (a blend Vulkan's blending does as the GS, the batch drawn whole in one draw: its triangles blended and Z tested in
     // their order, as on the GS, without the scene's Z-first draw and runs)
     bool pc_blend = abe && !blend_is_source;
@@ -3753,6 +3755,7 @@ bool sa_draw_batch(int *why) {
         }
         k.z_written = zwrite;
         k.per_sample = per_sample;
+        k.vs = pc_vs;
         if (pc_blend) {
             k.blend_on = 1;
             k.alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
@@ -4342,7 +4345,7 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
-    sa.pc_take = pc_world_mode && scene && pc_world_kind(d.kind) && d.program == 0 && !(d.flags & RD_DRAW_FAR_Z);
+    sa.pc_take = pc_world_mode && scene && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
     if (sa.pc_take) {
         sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
     } else if (!scene || d.program != 0x280) {

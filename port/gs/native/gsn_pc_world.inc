@@ -21,6 +21,7 @@ struct PcKey {
     uint32_t per_sample;
     int32_t scissor[4];
     uint32_t viewport[2];
+    int32_t vs;            // its corners' vertex program (SA_VS_000, SA_VS_700: pc_corners_vs)
     const ImageView *rgba; // the batch's RGBA8 texture (gsn_rgba.inc), or none
     StockSampler sampler;
     const Buffer *records, *arena;
@@ -48,7 +49,7 @@ struct PcWorld {
     PcFrame frame = {};
     BufferHandle arena; // the key's arena (every material of a flush shares it)
     int order = -1, ties = -1; // (KF4_PC_ORDER, KF4_PC_TIES: read once)
-    uint64_t batches_kept = 0, materials_drawn = 0, flushes = 0, draws = 0;
+    uint64_t batches_kept = 0, materials_drawn = 0, flushes = 0, draws = 0, flushes_for_target = 0;
 } pc_world;
 
 void pc_world_settings() {
@@ -60,26 +61,33 @@ void pc_world_settings() {
     pc_world.ties = t && *t ? atoi(t) : 0;
 }
 
-// The kinds of draw the PC renderer takes (program 0x000's): KF4_PC_KINDS, a mask of RD_KIND_* bits (tests; default
-// the map's records, the map's objects, the items and the gold)
-bool pc_world_kind(uint32_t kind) {
+// The draws the PC renderer takes: program 0x000's of the map's records, the map's objects, the items and the gold
+// (KF4_PC_KINDS, a mask of RD_KIND_* bits, for tests). Program 0x700's effects can be taken too (KF4_PC_KINDS=0x9E, the
+// effect's bit 7 with the others): measured at maps 000-017 they saved nothing (an effect has no Z-first draw to leave
+// out, and is a material of its own), so they are not by default (PC_RENDERER.md, P6)
+bool pc_world_takes(uint32_t kind, uint32_t program) {
     static int mask = -1;
     if (mask < 0) {
         const char *v = getenv("KF4_PC_KINDS");
         mask = v && *v ? int(strtol(v, nullptr, 0)) :
                          (1 << RD_KIND_MAP_RECORD) | (1 << RD_KIND_MAP_OBJECT) | (1 << RD_KIND_ITEM) | (1 << RD_KIND_GOLD);
     }
-    return kind < 31 && ((mask >> kind) & 1);
+    return kind < 31 && ((mask >> kind) & 1) && (program == 0 || (program == 0x700 && kind == RD_KIND_EFFECT));
 }
 
-// Whether every corner is the map's record kind (program 0x000's, not 0x700's effect): the batch is the map's alone
-bool pc_map_corners(const std::vector<Vtx> &corners) {
+// The vertex program of a batch's corners when they are all of one the PC renderer draws: program 0x000's (SA_VS_000) or
+// 0x700's effects (SA_VS_700); else -1 (a skinned model's, the PS2 path's, or a mix)
+int pc_corners_vs(const std::vector<Vtx> &corners) {
+    if (corners.empty() || nd_corner_kind(corners[0]) != ND_KIND_000) {
+        return -1;
+    }
+    bool effect = nd700_corner(corners[0]);
     for (const Vtx &v : corners) {
-        if (nd_corner_kind(v) != ND_KIND_000 || nd700_corner(v)) {
-            return false;
+        if (nd_corner_kind(v) != ND_KIND_000 || nd700_corner(v) != effect) {
+            return -1;
         }
     }
-    return true;
+    return effect ? SA_VS_700 : SA_VS_000;
 }
 
 bool pc_frame_equal(const PcFrame &a, const PcFrame &b) {
@@ -149,7 +157,7 @@ void pc_material_draw(Cmd &c, const PcMaterial &m, uint32_t first) {
     c.set_cull_mode(VK_CULL_MODE_NONE);
     c.set_viewport({0.0f, 0.0f, float(k.viewport[0]), float(k.viewport[1]), 0.0f, 1.0f});
     c.set_scissor({{k.scissor[0], k.scissor[1]}, {uint32_t(k.scissor[2]), uint32_t(k.scissor[3])}});
-    c.set_program(k.rgba ? sa.programs_hw[SA_VS_000][k.per_sample ? 1 : 0] : sa.programs[SA_VS_000][k.per_sample ? 1 : 0]);
+    c.set_program(k.rgba ? sa.programs_hw[k.vs][k.per_sample ? 1 : 0] : sa.programs[k.vs][k.per_sample ? 1 : 0]);
     c.set_storage_buffer(2, 1, *m.records.get());
     if (k.blend_on) {
         float constants[4] = {float(k.fix) / 128.0f, float(k.fix) / 128.0f, float(k.fix) / 128.0f, 128.0f / 255.0f};
@@ -253,9 +261,21 @@ void pc_world_flush() {
     w.arena.reset();
 }
 
+// (sa_draw_batch's, before it binds its frame) What is kept drawn first when the batch is for another frame target: the
+// kept materials draw into the target bound when they are flushed, which must be theirs
+void pc_world_flush_for(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm) {
+    PcWorld &w = pc_world;
+    PcFrame f = {fbp, fbw, fpsm, zbp, zpsm};
+    if (!w.materials.empty() && !pc_frame_equal(w.frame, f)) {
+        w.flushes_for_target++;
+        pc_world_flush();
+    }
+}
+
 void pc_world_print_stats() {
     const PcWorld &w = pc_world;
-    fprintf(stderr, "[stats] pc world: batches kept %llu, materials %llu, flushes %llu, draws %llu (order %d, ties %d)\n",
+    fprintf(stderr, "[stats] pc world: batches kept %llu, materials %llu, flushes %llu (%llu for another target's batch), "
+            "draws %llu (order %d, ties %d)\n",
             (unsigned long long)w.batches_kept, (unsigned long long)w.materials_drawn, (unsigned long long)w.flushes,
-            (unsigned long long)w.draws, w.order < 0 ? 0 : w.order, w.ties < 0 ? 0 : w.ties);
+            (unsigned long long)w.flushes_for_target, (unsigned long long)w.draws, w.order < 0 ? 0 : w.order, w.ties < 0 ? 0 : w.ties);
 }

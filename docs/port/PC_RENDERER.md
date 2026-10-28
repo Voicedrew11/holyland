@@ -275,6 +275,21 @@ PS2 path and their checks (RENDERER.md) are not touched.
   The back end's thread (the Vulkan calls, `gsn_backend.inc`) does much less: 10.5 -> 3.4 s of a 3,800-vblank run at
   map 000, 4.7 -> 2.6 s at map 009; the native GS's thread's time a picture between (drawn from the packets) is as
   before (5.8 ms at map 009, `--fast`), which is P5's.
+  **Measured and left: the effects, and the skinned plans** (October 2026, overnight). Two things tried after the
+  second step, neither kept on:
+  - the effects (program 0x700) taken by the PC world (`pc_world_takes`; a key now carries its corners' vertex program,
+    `pc_corners_vs`): the pictures the same, the GPU time the same within the runs' noise (map 009 3.76-3.78 against
+    3.59-3.85 without; 000 4.50, 013 2.94): an effect has no Z-first draw to leave out and is a material of its own. Off by
+    default; `KF4_PC_KINDS=0x9E` takes them, for P6.
+  - the skinned plans' cache four plans a batch instead of two (the world's and the reflection's, two models of a mesh):
+    at 009:2 the plans found 7.37 million vertices against 7.36 million, so the plans planned again are new ones, not
+    two models taking each other's. Dropped.
+
+  **And one guard:** what the PC world keeps is drawn before a batch for another frame target binds that target
+  (`pc_world_flush_for`, at `sa_draw_batch`'s start, as the skinned groups have it): the kept materials draw into the
+  target bound when they are flushed. It never fired at the spots (`--stats`: `pc world: ... flushes (N for another
+  target's batch)`), so no picture changed, but nothing kept it from coming. And the sweep: `--renderer fast` at every
+  map 000-063 (`--teleport 1900:N:0 --invincible`, 400 vblanks after, the owner's settings): no crash, no error.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the
   rippled water (`RD_PROGRAM_RIPPLE`), the scrolling textures.
 - **P5: pictures between from snapshots.** The world's pictures between by interpolation; the recording keeps
