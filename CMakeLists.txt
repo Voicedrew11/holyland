@@ -89,6 +89,8 @@ add_library(kf4_port STATIC
     port/platform/frame_interp.c
     port/platform/field_frames.c
     port/platform/video.c
+    port/platform/refresh_clock.c
+    port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/ipu.c
     port/platform/host_time.c
@@ -156,6 +158,22 @@ if(WIN32)
     target_link_libraries(kf4_port PUBLIC winmm)
 else()
     target_link_libraries(kf4_port PUBLIC m)
+endif()
+# The screen's vblanks for the refresh clock (port/platform/screen_vblank.c): the desktop compositor's on
+# Windows, the kernel's (libdrm, where it is) on Linux
+if(WIN32)
+    target_link_libraries(kf4_port PRIVATE dwmapi)
+elseif(NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBDRM QUIET IMPORTED_TARGET libdrm)
+    endif()
+    if(LIBDRM_FOUND)
+        target_compile_definitions(kf4_port PRIVATE KF4_HAVE_LIBDRM)
+        target_link_libraries(kf4_port PRIVATE PkgConfig::LIBDRM)
+    else()
+        message(STATUS "libdrm not found: the screen's vblanks are not known, and --frame-rate monitor times the pictures by the rate alone")
+    endif()
 endif()
 # SDL2 for the pad (and, from step 2, the window); without it the pad takes only a pad script
 option(KF4_USE_SDL "Use SDL2 for the pad" ON)
@@ -434,7 +452,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
     add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c tools/gsreplay/nd_oracle_700.c port/platform/vif1.c port/platform/vu1.c
-        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/lz4_block.c)
+        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
     target_link_libraries(kf4-gsreplay PRIVATE kf4_gs Threads::Threads)
@@ -479,6 +497,16 @@ add_executable(profile_test tests/profile_test.c)
 target_link_libraries(profile_test PRIVATE kf4_profile)
 if(KF4_TESTS)
     add_test(NAME profile COMMAND profile_test)
+endif()
+
+# The screen's refresh clock: its period and phase from the times pictures were seen (port/platform/refresh_clock.c)
+add_executable(refresh_clock_test tests/refresh_clock_test.c port/platform/refresh_clock.c)
+target_include_directories(refresh_clock_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(refresh_clock_test PRIVATE m)
+endif()
+if(KF4_TESTS)
+    add_test(NAME refresh_clock COMMAND refresh_clock_test)
 endif()
 
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)

@@ -536,6 +536,16 @@ void port_gs_present_scale(int width, int height, float sharpen);
 float port_video_sharpen(void);
 /* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
 int port_video_refresh_rate(void);
+/* (any thread) the window's screen refreshed at seen_s (port_wall_seconds): its vblank as the system knows it
+   (port/include/port/screen_vblank.h), or the KF4_PRESENT_SIM screen's. The screen's refresh clock learns from
+   them (port/include/port/refresh_clock.h). */
+void port_video_refresh_seen(double seen_s);
+/* (the controller's thread) --frame-rate monitor: the times in the vblank (0 to 1) of its pictures, one a
+   refresh of the screen, each the world a little before the refresh it is shown at, by as much as the
+   renderer's pictures need (port/platform/video.c, "Pictures timed by the screen's refreshes";
+   port_interp_schedule). Up to max, their count returned; -1 while the refresh clock is not sure of the
+   screen's refreshes. */
+int port_video_refresh_schedule(uint64_t vblank, double *phases, int max);
 /* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
 int port_video_simulated(void);
 /* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */

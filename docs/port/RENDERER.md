@@ -247,9 +247,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   the pass's, nor read by its draws so far, is made before the pass (`Cmd::before_pass`) instead of ending it.
   The same pictures; it saves little GPU time. `--stats` counts them on the back end's line.
 - **Measuring the pace:** `tools/pace_test.py` plays `tests/newgame.pad` to a map at the owner's settings
-  headless and prints the pictures a second a window would show (`KF4_PRESENT_SIM`), the vblanks cut to fewer
-  pictures between, the GPU's time a picture, and (`--mode cost`) the GS's and the back end's threads' time a game
-  frame. `KF4_INTERP_CUT=0` turns the cut of pictures between off (what a place keeps up; the game slows where it
+  headless and prints the pictures a second a window would show (`KF4_PRESENT_SIM`), the screen's refreshes a
+  second whose picture is not one refresh on from the last one's (`--screen-hz 169.83 --frame-rate monitor`: a
+  screen that keeps its own time, as real ones do), the vblanks cut to fewer pictures between, the GPU's time a
+  picture, and (`--mode cost`) the GS's and the back end's threads' time a game frame. `KF4_INTERP_CUT=0` turns the cut of pictures between off (what a place keeps up; the game slows where it
   does not). A headless run draws only when it dumps a frame (`--dump-frames`): the script does.
 - **In play:** Shift+P's profiler (README.md, "The profiler") says, live, which thread or the GPU bounds the
   pictures a second, with the GPU's time a picture from the same marks as `KF4_GSN_GPU_TIME=1`.

@@ -98,7 +98,12 @@ int port_frame_interp(void) {
    are F / 59.94 a vblank: when that is a whole number n (to 1%: 60, 120, 240, 360 Hz), the vblank's own
    picture and n - 1 more between it and the next, evenly; otherwise (144, 165 Hz) a picture every
    1 / (F / 59.94) of a vblank from vblank 0 on, wherever it falls. Each is the time the window shows it
-   at (port/platform/video.c), and what the picture shows is the game's world at that time. */
+   at (port/platform/video.c), and what the picture shows is the game's world at that time.
+   With the screen's rate (PORT_FRAME_RATE_MONITOR), once the screen's refresh clock is sure of its
+   refreshes (port_video_refresh_schedule), one picture each refresh instead, timed for it: the screen
+   keeps its own time (169.83 Hz where the system names 170), and pictures on any other clock beat
+   against it, a refresh with two steps of the world or none every few seconds, which vsync hides
+   (each refresh takes one picture) and nothing else does. */
 int port_frame_rate_hz(void) {
     int hz = port_options.frame_rate;
 
@@ -124,6 +129,10 @@ int port_interp_schedule(uint64_t vblank, double *phases, int max) {
         phases[0] = 0;
         return 1;
     }
+    if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR && (n = port_video_refresh_schedule(vblank, phases, max)) >= 0) {
+        return n;
+    }
+    n = 0;
     if (p == floor(p)) {
         for (n = 0; n < (int)p && n < max; n++) {
             phases[n] = n / p;
