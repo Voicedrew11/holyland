@@ -126,16 +126,16 @@ uint32_t rgba_texel(uint32_t raw, const SaTexture &st, uint32_t texa) {
     }
 }
 
-// The RGBA8 view of st's texture with the CLUT and TEXA of this batch: made (and uploaded into the stream, as a
-// decoded texture is) the first time this triple is drawn
-const ImageView &rgba_view(const SaTexture &st, uint32_t texa) {
+// The RGBA8 texture of st's texture with the CLUT and TEXA of this batch (its entry: the image, and its view): made (and
+// uploaded into the stream, as a decoded texture is) the first time this triple is drawn
+Rgba::Entry &rgba_entry(const SaTexture &st, uint32_t texa) {
     const Sa::Decoded &d = *st.decoded;
     uint64_t key = rgba_key(d, st, texa);
     auto found = rgba.made.find(key);
     if (found != rgba.made.end()) {
         rgba.hits++;
         found->second.used = sa.frame;
-        return found->second.image->get_view();
+        return found->second;
     }
     Timer timer(gsn_stats.ns_decode);
     Rgba::Entry e;
@@ -171,7 +171,7 @@ const ImageView &rgba_view(const SaTexture &st, uint32_t texa) {
         }
         rgba.order.pop_front();
     }
-    return slot.image->get_view();
+    return slot;
 }
 
 // A batch that kept the GS's sampling, and why (--stats)

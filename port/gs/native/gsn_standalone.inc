@@ -402,6 +402,9 @@ struct Sa {
     bool on = false;
     // the batch's corners, and the draw being met (nd_register): to the scene or not
     bool pending = false, in_draw = false, draw_on = false;
+    // (pc world, gsn_pc_world.inc) the draw being met is the PC renderer's (its map records); the corners pending after
+    // a draw are a taken draw's; the batch being drawn is (sa_flush: a batch's corners are drawn after their draws)
+    bool pc_take = false, pending_pc = false, batch_pc = false;
     // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
     // weapon (and its trail), effects, shadows, the picked item, and (T3) the reflection's water, reading the
     // reflection the scene drew (gsn_scene_targets.inc). Not the screen passes (the GS's 2D). (KF4_SA_KINDS: a
@@ -479,6 +482,7 @@ struct Sa {
     Program *programs_in_hw[3][2] = {};
     bool rgba_on = false;
     const ImageView *rgba_view = nullptr;
+    ImageHandle rgba_image;  // (the image rgba_view is of: held for the PC world's material)
     StockSampler rgba_sampler = StockSampler::NearestClamp;
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
@@ -2645,8 +2649,9 @@ void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t co
     sa_group.draws++;
 }
 
+void pc_world_flush(); // (gsn_pc_world.inc)
 // What is kept drawn: the first passes, then the second passes, last part first (above)
-void sa_group_draw() {
+void sa_group_draw_parts() {
     SaGroup &g = sa_group;
     if (!g.pass[0].on) {
         return;
@@ -2783,6 +2788,16 @@ void sa_group_draw() {
     g.arena.reset();
     g.expect_second = false;
 }
+
+// What is kept drawn, the PC renderer's world first (it comes before the skinned parts in the chain: gsn_pc_world.inc
+// keeps the two apart, one pending at a time)
+void sa_group_draw() {
+    pc_world_flush();
+    sa_group_draw_parts();
+}
+
+// ---- The PC renderer's world (--renderer fast, P2): the map records kept and drawn by material (gsn_pc_world.inc) ---
+#include "gsn_pc_world.inc"
 
 // ---- The frame's batches' work kept for its first picture between (rc/own) ------------------------------
 // A frame's first picture between draws the frame's packets again (gsn.cpp, "Pictures between on the GPU"), and so
@@ -3083,7 +3098,9 @@ bool sa_draw_batch(int *why) {
         RgbaSampling hw = rgba_sampling(st, tex1, clamp);
         if (hw.usable) {
             rgba_configure();
-            sa.rgba_view = &rgba_view(st, push.texa);
+            Rgba::Entry &re = rgba_entry(st, push.texa);
+            sa.rgba_view = &re.image->get_view();
+            sa.rgba_image = re.image;
             sa.rgba_sampler = hw.sampler;
             sa.rgba_on = true;
             rgba.batches++;
@@ -3659,6 +3676,69 @@ bool sa_draw_batch(int *why) {
     bool shine_kept = shine_whole && (shine_group == 2 || (shine_group == 1 && !ms_in)) && !blend_copy && run_copy_on && !per_sample && !sa.gs3d && !sa.gs_water && !ndw_batch() &&
                       sa.programs_in[SA_VS_000][ms_in] && sa.programs_in[SA_VS_280][ms_in] &&
                       sa.programs_copy[SA_VS_000][ms_in] && sa.programs_copy[SA_VS_280][ms_in] && !wide(*sa.color) && all_native;
+    // (pc world) The map's records the PC renderer takes (gsn_pc_world.inc): kept, and drawn by material when something
+    // else comes. runs.size() == 2 is own's test too (own needs a run of its own: more than one run). The texture is the
+    // GPU's sampler's, with a program that reads it (never the GS's raw texture bound in its place).
+    // A blend that leaves the source (Cs - Cd) As + Cd with As 0x80 at every pixel, as a_lo and a_hi have it: the GS writes
+    // Cs, so the PC renderer draws it without blending (the map's records set ABE on their opaque surfaces too)
+    bool blend_is_source = abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && a_lo == 0x80 && a_hi == 0x80;
+    bool pc_keep = pc_world_mode && sa.batch_pc && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only &&
+                   !gpu_corners && !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && !sat_bound() && (!abe || blend_is_source) &&
+                   !shader_blend && !shadow && runs.size() == 2 && npasses == 1 && all_native && (!tme || sa.rgba_on) &&
+                   (!sa.rgba_on || sa.programs_hw[SA_VS_000][per_sample ? 1 : 0]) && ztst == 2 &&
+                   nd.batch_draws == nd.draws.buffer.get() && nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena &&
+                   !corners.empty() && pc_map_corners(corners);
+    if (pc_keep) {
+        // (the key is made before a skinned group draws: its state changes sa.rgba_on, sa_group_state)
+        PcKey k;
+        memset(&k, 0, sizeof(k));
+        k.ndraws = ndraws;
+        for (int i = 0; i < ndraws; i++) {
+            Push p = push;
+            p.flags |= draws[i].select << F_PASS_SHIFT;
+            p.flags &= ~F_ALPHA_FACTOR; // (no blending: the alpha written is As, as the GS writes it)
+            p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
+            p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
+            if ((world || (skinned && ties)) && draws[i].zbias > 0.0f) {
+                p.zbias = 0.0f;
+                p.zslope = -layer_eps;
+            }
+            k.pushes[i] = p;
+            k.masks[i] = draws[i].mask;
+            k.zwrites[i] = draws[i].zwrite;
+        }
+        k.z_written = zwrite;
+        k.per_sample = per_sample;
+        k.scissor[0] = int32_t(sx0 * scale_x);
+        k.scissor[1] = int32_t(sy0 * scale_y);
+        k.scissor[2] = int32_t((x1 - sx0) * scale_x);
+        k.scissor[3] = int32_t((y1 - sy0) * scale_y);
+        k.viewport[0] = color->width * scale_x;
+        k.viewport[1] = color->height * scale_y;
+        k.rgba = sa.rgba_on ? sa.rgba_view : nullptr;
+        k.sampler = sa.rgba_on ? sa.rgba_sampler : StockSampler::NearestClamp;
+        k.records = nd.batch_draws;
+        k.arena = nd.batch_arena;
+        ImageHandle texture = sa.rgba_on ? sa.rgba_image : ImageHandle();
+        sa_group_draw_parts(); // (pf/skin: none is pending with the PC world's kept: sa_group_draw's invariant)
+        PcFrame frame = {fbp, fbw, fpsm, zbp, zpsm};
+        pc_world_keep(k, frame, texture, nd.draws.buffer, nd.arena.buffer, corners);
+        sa.last_shadow = false;
+        sa.z_written |= zwrite;
+        uint32_t d0 = interp.active ? sy0 : uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
+        uint32_t d1 = interp.active ? y1 : uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+        sa.rows0 = std::min(sa.rows0, d0);
+        sa.rows1 = std::max(sa.rows1, d1);
+        sa.drew = true;
+        sa.scissor_rows = std::max(sa.scissor_rows, y1);
+        sa_note_first_z(false);
+        sa_stats.batches++;
+        sa_stats.triangles += gs->verts.size() / 3;
+        gsn_stats.primitives += gs->verts.size() / 3;
+        gs->verts.clear();
+        gs->batch_sprites = false;
+        return true;
+    }
     int role = 0; // 1: a first pass kept, 2: a second pass kept
     if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
         !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && (!shader_blend || shine_kept) &&
@@ -3753,6 +3833,7 @@ bool sa_draw_batch(int *why) {
             sa_group.arena = nd.arena.buffer;
         }
         if (role) {
+            pc_world_flush(); // (pc world: what it kept is drawn before this part is kept)
             if (!g.on) {
                 g.key = k;
                 g.on = true;
@@ -3798,6 +3879,7 @@ bool sa_draw_batch(int *why) {
     } else {
         sa_group_draw();
     }
+    pc_world_flush(); // (pc world: a batch the scene draws comes after what it kept)
     // a run of shadow batches: a number of its own in the stencil (cleared when the scene took the frame; after
     // 255 runs the frame taken again, to clear it)
     if (shadow && !sa.last_shadow && sa.stencil_gen >= 255) {
@@ -4103,8 +4185,11 @@ bool sa_flush() {
     // (the batch of a draw of the scene's: its corners, or the trail's, the PS2 path's made by the draw; not a
     // screen pass's)
     bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
+    sa.batch_pc = scene && (sa.in_draw ? sa.pc_take : sa.pending_pc);
     sa.pending = false;
-    if (!scene || !sa.in_draw) {
+    if ((!scene || !sa.in_draw) && sa.batch_pc) {
+        sa_group_draw_parts(); // (pc world: a taken draw's corners: what the PC renderer keeps goes on being kept)
+    } else if (!scene || !sa.in_draw) {
         sa_group_draw(); // (pf/skin: kept only from draw to draw)
     }
     int op = scene ? SA_OP_NONE : sa_scene_op();
@@ -4121,7 +4206,9 @@ bool sa_flush() {
     }
     if (scene || op != SA_OP_NONE) {
         int why = SA_WHY_FRAME;
-        if (sa_draw_batch(&why)) {
+        bool drawn = sa_draw_batch(&why);
+        sa.batch_pc = false;
+        if (drawn) {
             return true;
         }
         sa_stats.declined[why]++;
@@ -4193,6 +4280,7 @@ bool sa_kind(const RdDraw &d) {
 // Before a draw is met: whether it goes to the scene; a batch holds the scene's corners or none
 void sa_draw_begin(uint64_t value) {
     sa.in_draw = false;
+    sa.pc_take = false;
     if (!sa.on) {
         return;
     }
@@ -4202,10 +4290,13 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
-    if (!scene || d.program != 0x280) {
+    sa.pc_take = pc_world_mode && scene && d.kind == RD_KIND_MAP_RECORD && d.program == 0 && !(d.flags & RD_DRAW_FAR_Z);
+    if (sa.pc_take) {
+        sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
+    } else if (!scene || d.program != 0x280) {
         sa_group_draw(); // (pf/skin: a model's parts are kept from one of its draws to the next)
     }
-    if (!gs->verts.empty() && scene != sa.pending) {
+    if (!gs->verts.empty() && (scene != sa.pending || (sa.pending && sa.pc_take != sa.pending_pc))) {
         flush_batch();
     }
     sa.in_draw = true;
@@ -4217,6 +4308,7 @@ void sa_draw_end() {
     }
     sa.in_draw = false;
     sa.pending = !gs->verts.empty() && sa.draw_on;
+    sa.pending_pc = sa.pending && sa.pc_take;
 }
 
 // (nd_kick) A PS2-path kick while the scene's corners wait: they are drawn first
@@ -4782,6 +4874,9 @@ void sa_print_stats() {
     sa_memo_print_stats(); // (rc/own)
     sat_print_stats(); // (T3)
     sa_print_table_stats();
+    if (pc_world_mode) {
+        pc_world_print_stats(); // (gsn_pc_world.inc)
+    }
 }
 
 #include "gsn_scene_targets.inc"

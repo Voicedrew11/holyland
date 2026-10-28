@@ -8600,6 +8600,10 @@ extern "C" void gsn_set_hardware_sampler(int on) {
     hw_sampler = on != 0;
 }
 
+extern "C" void gsn_set_pc_world(int on) {
+    pc_world_mode = on != 0; // (gsn_pc_world.inc: taken as each draw is met)
+}
+
 extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
     // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
     sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;

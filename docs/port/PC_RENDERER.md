@@ -7,7 +7,7 @@ text, the fades and the screen passes) and, until they are ported, the effects. 
 reference (the PS2's pictures, checked byte for byte); `fast` is checked against it by how much it differs, not
 whether, and is free to differ where that is the point (filtering, depth, anti-aliasing, frame rate).
 
-Status: the plan, agreed with the owner (October 2026); P1 built (below). The owner's choices:
+Status: the plan, agreed with the owner (October 2026); P1 built, P2's first step built (below). The owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -134,6 +134,43 @@ PS2 path and their checks (RENDERER.md) are not touched.
   records (program 0x000, opaque and alpha-tested) into its own colour and depth, composited at the mark; every
   other world draw still goes to the GS that frame (the turns as now) so the game stays whole while the renderer
   grows.
+
+  **Built, first step** (`port/gs/native/gsn_pc_world.inc`; the snapshot made on the native GS's thread, below, "P2,
+  revised"). With `--renderer fast` a scene batch whose corners are all a map record's (`RD_KIND_MAP_RECORD`, program
+  0x000, not the far sky) is kept by `sa_draw_batch` once its state is worked out, when it is opaque or alpha-tested (no
+  ABE, or ABE that leaves the source: (Cs - Cd) As + Cd with As 0x80 at every pixel, which the map's records set on
+  their opaque surfaces), one pass, one run, no shader blending, read by P1's sampler, into the scene's frame (not a
+  named target). Kept with its state (`PcKey`: the pushes, masks, scissor, the RGBA8 view and sampler, the records;
+  the image and buffers held), and drawn when anything else comes: the same places that draw a skinned model's kept
+  parts (`sa_group_draw` now draws both; one of the two is pending at a time), and before any batch the scene draws
+  itself. A kept material is one draw: its colour, Z written, GEQUAL, exact (no Z-first draw, no tie slack).
+  The corners of a batch are drawn after the draw that made them ends (`sa_flush`): what decides is whether the
+  pending corners came from a taken draw (`Sa::pending_pc`, `batch_pc`), not the draw being met. Switches for
+  measuring: `KF4_PC_ORDER=1` merges a batch into the first material of the same state, not only the last;
+  `KF4_PC_TIES=1` keeps the batch's own draws (its Z first, its colour within the slack). `--stats`: `pc world`.
+
+  **Measured** (October 2026; the owner's settings as "Why", headless at 240, the teleport spots `--teleport
+  1900:N:0` after `tests/newgame.pad`, picture 3799, `KF4_GSN_GPU_TIME=2`; GPU ms a picture, two runs each; the
+  pictures against P1's, which is `modern` with `--native-sampler hardware`):
+
+  | map | P1 | fast | kept a flush | pixels differing from P1 (worst) |
+  |---|---|---|---|---|
+  | 000 | 6.43, 6.93 | 6.76, 6.83 | 2.4 | 98 (26) |
+  | 003 | 5.23, 5.39 | 5.01, 5.03 | 4.1 | 272 (81: the brazier's glow on the wall behind it) |
+  | 009 | 5.96, 6.00 | 5.45, 5.85 | 1.9 | 186 (10) |
+  | 013 | 3.71, 3.99 | 3.50, 3.67 | 2.9 | 0 |
+
+  So: about 0.2-0.4 ms a picture where the map is much of the scene, nothing at map 000, and the pictures as P1's but
+  for a few hundred pixels where a layer meets a surface. The saving is the kept batches' Z-first draws, not fewer
+  draws: a flush keeps 2-4 batches, each its own material (`KF4_PC_ORDER=1` merged 11% more at map 009, measured before the
+  ABE rule above). The map's records alternate with what must stay in order between them: their blended layers (58% of
+  the taken batches at map 009, ABE with As not 0x80) and the objects of each map slot. What still costs at these
+  spots is the rest of the world (the skinned groups, the objects', items' and entities' Z-first draws, the blend
+  copies), which P3 takes; and the layers, which need the depth-bias rule below in place of the scene's ties before
+  they can be kept. Not yet measured at the owner's quick-save spots (the pond, the fortress, the canyon, under water).
+  `modern`'s pictures byte for byte as before (maps 000 and 003; a first run of map 000 before the change differed from
+  a second by 64 pixels on its own); ctest 6 of 6, vu1_test 0 of 90 failed; ASan + UBSan (clang) on `fast` at map 003:
+  nothing in the changed code. No unit test: the keeping is the scene's state on the GS's thread, checked by the pictures.
 - **P3: the whole world.** Blended and layered records, map objects, items, gold, entities (0x280, skinned), the
   sky, the shadows, the arm and what is held (the eye's view), the picked item. The GS then draws no world.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the
