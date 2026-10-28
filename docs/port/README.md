@@ -470,6 +470,20 @@ it is at that picture's time, t of the way from the frame shown to the one drawn
   there before it is due); with SDL_Renderer the game's thread shows them while it waits for the next
   vblank and from its kernel calls. With vsync, choose the screen's rate (or `monitor`). If the renderer
   cannot keep up, pictures between are left out rather than the game held up (`--stats` counts them).
+- **`monitor` keeps to the screen's own refreshes**, with vsync or without. A screen keeps its own time
+  (169.83 Hz where the system names 170), and pictures timed by any other clock beat against it: every few
+  seconds a refresh shows two steps of the world or none, a jump that vsync's queue hides and nothing else
+  does. So the window learns where the screen's refreshes are from the system's record of its vblanks (Linux:
+  the kernel's, through libdrm, on the CRTC showing the window's screen; Windows: the desktop compositor's,
+  `DwmGetCompositionTimingInfo`; port/platform/screen_vblank.c) and fits their period and phase
+  (port/platform/refresh_clock.c, `refresh_clock_test`). Once it is sure of them (`--stats`: "the screen's
+  refresh clock locked"), there is one picture each refresh, the world as it is a little before that refresh,
+  handed to the screen just after the refresh before it: so a picture may come as late as the screen's last
+  moment and still be on its refresh. How far before its refresh (the latency) is measured as it plays: how
+  late after their time the renderer's pictures come (the first after a new game frame waits for the frame),
+  the 98th percentile of the last 256, and half a refresh more (`--stats`: "pictures timed by it, N ms before
+  their refresh"). Fixed rates (120, 144, 240) are timed as before. Where the vblanks are not known (macOS,
+  Linux without libdrm, a screen whose mode no CRTC matches), `monitor` is the screen's named rate, as before.
 - **The menus, the title and the movies** are as they were: they draw no world. paraLLEl-GS
   (`--renderer gs`) and `--no-whole-frame` stay at one picture a vblank (60).
 - **The cost** is the GS's: each picture between draws the frame again (VU1 is not run again, and
@@ -484,7 +498,9 @@ it is at that picture's time, t of the way from the frame shown to the one drawn
   `frame_V_PPP.png` (PPP: thousandths of the vblank), the same every run. `KF4_INTERP_STILL=1`
   draws the pictures between with the frame's own camera (a check of the replay);
   `KF4_INTERP_DRAW_ALL=1` draws every picture between headless (for speed tests); `KF4_PRESENT_SIM=HZ`
-  runs the window's pacing headless with nothing drawn (`KF4_PRESENT_LOG=FILE` writes each present).
+  runs the window's pacing headless with nothing drawn, to a screen refreshing HZ times a second (169.83:
+  named 170), whose refreshes the refresh clock learns as a real screen's; `--stats` counts its uneven
+  refreshes (a step of none or two) and `KF4_PRESENT_LOG=FILE` writes each present.
   `KF4_INTERP_OUTSIDE=1` logs each run of the PS2 path's world (frame_interp.c's runs; not native
   draws) whose place on the screen in a picture between leaves the union of its places at t 0 and t 1
   (the vblank, phase, run, pair and the three boxes; `=2` also every shadow run, program 0x5A0;
