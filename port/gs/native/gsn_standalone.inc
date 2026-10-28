@@ -2653,6 +2653,21 @@ void pc_world_flush(); // (gsn_pc_world.inc)
 bool pc_world_kind(uint32_t kind);
 extern volatile int pc_world_mode;
 
+// The highest As that Vulkan's blending takes for (Cs - Cd) As + Cd: 0x80 (1.0), above which the shader blends from a
+// copy of the scene (sa_draw_batch's as_over). With --renderer fast a little more: Vulkan's blending clamps the factor
+// to 1.0, so a pixel with As up to 0x90 is drawn as Cs, not Cs + (Cs - Cd) (As - 1.0), at most an eighth of (Cs - Cd)
+// off. The skinned creatures' textures at the pond have alphas up to 0x88 (their CLUTs' 0x84 and 0x88): blended in the
+// shader, each run of their parts a copy and two barriers, in every picture between. KF4_PC_ALPHA_OVER=N (tests: 128,
+// the GS's rule; default 144).
+uint32_t pc_world_alpha_over() {
+    static int limit = -1;
+    if (limit < 0) {
+        const char *v = getenv("KF4_PC_ALPHA_OVER");
+        limit = v && *v ? std::max(atoi(v), 0x80) : 0x90;
+    }
+    return pc_world_mode ? uint32_t(limit) : 0x80u;
+}
+
 // (--renderer fast) The first passes' first draw left out where it leaves nothing the second does not: its colour with no
 // Z written, then the same draw exactly with Z (a part's slack is 0: skin_eps), over every pixel of their triangles (every
 // pixel passes the alpha test: role 1's covers). Each pixel the first draw writes, the second writes again, last: a
@@ -3160,7 +3175,7 @@ bool sa_draw_batch(int *why) {
         as_hi = tfx == 0 ? std::min(255u, (as_max * tex_alpha_max) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_alpha_max)
                                                                                    : tex_alpha_max;
     }
-    bool as_over = bc == 0 && !blend.premul && as_hi > 0x80;
+    bool as_over = bc == 0 && !blend.premul && as_hi > pc_world_alpha_over();
     // what Vulkan's blending cannot do (DATE, a partial mask, PABE, no COLCLAMP, FBA with As, As above 1.0,
     // Ad or a FIX above 1.0) is blended in the shader, as flush_batch does: from a copy of the scene's colour
     // taken before each run of triangles that do not overlap (gs_frag.h's GSN_F_SHADER_BLEND)

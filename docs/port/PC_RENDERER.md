@@ -237,6 +237,30 @@ PS2 path and their checks (RENDERER.md) are not touched.
   (the owner's call whether it should have it). `modern` byte for byte as before (map 009); vu1_test 0 of 90 failed;
   ASan + UBSan (clang) on `fast` at map 009: the known reports, and one in native draw's water (a signed overflow
   in the texture coordinates, `gsn_nd_water.inc`), fixed in its own commit.
+  **Built, second step: alphas a little above 1.0 blended by Vulkan** (October 2026, decided overnight, for the
+  owner's review). What the scene still drew with a Z-first draw at map 009 after the first step was nearly all in the
+  pictures between (the skinned models are drawn only there at 240: the frame's own picture keeps them for the
+  pictures between): the creatures' parts whose textures have alphas up to 0x88 (their CLUTs' 0x84 and 0x88), so As
+  above 0x80 and (Cs - Cd) As + Cd blended in the shader (`as_over`), each run of a part a copy of the scene and two
+  barriers: "scene blend copies between" 0.65 ms, and their runs' Z-first draws. `modern` pays the same (0.49 ms).
+  With `--renderer fast` `pc_world_alpha_over` lets Vulkan's blending take As up to 0x90: it clamps the factor to 1.0,
+  so such a pixel comes out Cs, not Cs + (Cs - Cd)(As - 1.0), at most an eighth of (Cs - Cd) off (`KF4_PC_ALPHA_OVER`,
+  128 for the GS's rule). At the creatures (009:2, `--teleport 1900:9:2 --invincible`, two of them close): 3% of the
+  pixels differ, by 3 levels at most (their shirts and hair), and
+
+  | spot | P1 | fast, before | fast |
+  |---|---|---|---|
+  | 009:2, the creatures | 5.46 | 4.54 | **3.15** |
+  | 000 | 6.68 | 4.53 | **4.52** |
+  | 003 | 4.95 | 3.59 | **3.58** |
+  | 009 | 5.64 | 4.66 | **3.64** (copies between 0.65 -> 0.04, Z-first atest 0.77 -> 0.20) |
+  | 013 | 3.84 | 2.92 | **3.00** |
+  | 017 | 3.41 | 2.63 | **2.53** |
+
+  (GPU ms a picture, the owner's settings, as P2's table; map 009's place 0 draws the creatures in the pictures
+  between though none is in view.) The pictures against P1's at places 0 as P2's second step's, 017 660 pixels
+  (worst 37). `modern` byte for byte as before (009:2, its frame and a picture between); ASan + UBSan (clang) on
+  `fast` at 009:2: the known reports only.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the
   rippled water (`RD_PROGRAM_RIPPLE`), the scrolling textures.
 - **P5: pictures between from snapshots.** The world's pictures between by interpolation; the recording keeps
