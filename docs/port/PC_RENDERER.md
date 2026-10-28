@@ -11,8 +11,12 @@ Status: the plan, agreed with the owner (October 2026); P1 built, P2 built (the 
 opaque, alpha-tested and blended), P3's first two steps built (the skinned parts' first pass drawn once, alphas a
 little above 1.0 by Vulkan's blending): at 170 Hz `fast` keeps the owner's settings at 168-170 pictures a second at
 maps 000 and 009, where P1 kept 84 and 118 (below, "In real time"). The steps since P2's first were decided overnight
-for the owner's review. P4-P6: "Where P4-P6 stand" below; P5's first step built (the owner suspended the rule of agreeing
-the interface first while the plan is finished): at 240 Hz map 000 keeps 231 pictures a second where it kept 197. The
+for the owner's review. P4-P6: "Where P4-P6 stand" below; P5's first step and P3's third built (the owner suspended
+the rule of agreeing the interface first while the plan is finished). **Where the plan ends** (October 2026): at 170 Hz
+every spot keeps 168-170 pictures a second; at 240 maps 003, 004, 009, 013, 017 and 030 keep 239-240, map 000 236 (GPU
+bound: 239 at 2x with aniso 1). What is left is not a phase's: the scene's own draws, the Z-first draws of As up to
+2.0 (below, "What still has a Z-first draw"), the GS's 2D and screen passes; and on the GS's thread the uploads a
+picture between asks for again (P5, "What a recording still costs"), which limit no spot measured. The
 owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
