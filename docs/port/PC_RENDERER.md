@@ -11,7 +11,9 @@ Status: the plan, agreed with the owner (October 2026); P1 built, P2 built (the 
 opaque, alpha-tested and blended), P3's first two steps built (the skinned parts' first pass drawn once, alphas a
 little above 1.0 by Vulkan's blending): at 170 Hz `fast` keeps the owner's settings at 168-170 pictures a second at
 maps 000 and 009, where P1 kept 84 and 118 (below, "In real time"). The steps since P2's first were decided overnight
-for the owner's review. P4-P6: "Where P4-P6 stand" below (P5 is waiting on a design to agree). The owner's choices:
+for the owner's review. P4-P6: "Where P4-P6 stand" below; P5's first step built (the owner suspended the rule of agreeing
+the interface first while the plan is finished): at 240 Hz map 000 keeps 231 pictures a second where it kept 197. The
+owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -313,14 +315,8 @@ phases were for is mostly here already: at 170 Hz every spot measured keeps 168-
   009, the GS's thread 54% of the program's samples) is flat: memmove 6% (most of it the uploads' data copied, 1.8%),
   the skinned plans 5.4%, VRAM reads 3.9%, `sa_draw_batch` 2.4%, the native plans 2.3%, then many under 2%: the GIF
   front end, the uploads (9.3 GB a run, 168,000 asked for again by the pictures between), the batches' work. No one
-  change takes much of it; drawing the pictures between without walking their packets does, and that is the
-  recording's problem NATIVE_DRAW_P8.md ("The recording and the replays") found: a picture's decisions (the boxes at t
-  0, the copies' cover, the alpha range of both frames) differ from the frame's. In the revised design the PC world's
-  kept materials (`PcMaterial`: the key and the corners) are a frame's world at the chain's points, so they could be
-  kept for the frame's pictures between and drawn again with the corners moved on the GPU as now, the packets walked
-  only for the rest; but which of the frame's decisions a picture may reuse is the same question, and it changes how
-  every picture between is made. **Blocked: a design for the owner to agree before it is built** (the rule: the
-  interface first, for a module this size). Not needed for 170 Hz at the spots; it would be for 240 and above.
+  change takes much of it. **First step built**: the draws the PC world takes are drawn again from the frame's kept
+  batches (below, "P5, built"), 11-23% of a picture between.
 - **P6, effects.** Taken by the PC world, the effects (program 0x700) changed no picture and saved nothing on the GPU
   (P3's "Measured and left", above; `KF4_PC_KINDS=0x9E`). Instanced particles would save the GS thread's work on them
   (part of P5's cost), not the GPU's: with P5.
@@ -333,39 +329,69 @@ and the output to 1.0, and one blend equation cannot add Cd (1 - As) below 1.0 a
 these stay the shader's, as in P1. (Taken first for the semi-transparent creatures: the blended 0x280 batches counted
 there were the skinned groups' shines, whose Z draws the groups leave out already; tried and dropped.)
 
-### P5, proposed (for agreement)
+### P5, built: a taken draw's kept batches drawn again in its pictures between (first step)
 
-The frame's world, as the PC world keeps it, drawn again for the frame's pictures between, instead of its draws made
-again from the packets:
+(October 2026; the owner suspended the rule of agreeing the interface first while the plan is finished.) The frame's
+first picture between walks its packets again (rc/own, `nd_prep_*`), and a draw the PC world takes was worked out
+again there: its corners copied, its scene batch's state, texture, alphas and blending, to come to the frame's key. Now
+(`gsn_pc_world.inc`, after the P2 code):
 
-```cpp
-// gsn_pc_world.inc, the native GS's thread
-// The frame's flushes, kept for its pictures between: each flush's materials (PcMaterial: the key, the corners, the
-// image and buffers held) in the order the frame drew them, numbered by the scene batch they came before
-struct PcFrameWorld {
-    std::vector<std::vector<PcMaterial>> flushes;
-    std::vector<uint32_t> at; // (each flush: the scene's batches the frame had drawn before it)
-    uint32_t serial;          // the frame (nd_prep's), so a picture between takes only its own frame's
-};
-void pc_frame_begin(uint32_t serial); // RD_ND_FRAME: a frame's flushes from here on are kept
-// In a picture between of that frame: a taken draw met makes no corners (its nd_draw and sa_draw_batch left out),
-// and at each point the frame flushed its flush is drawn again, its corners moved to the picture's time on the GPU
-// (the records' two ends, as nd_between.h moves native draw's corners now)
-bool pc_between_takes(uint64_t value); // (sa_draw_begin's, in a picture between)
-void pc_between_flush(uint32_t scene_batches); // (sa_draw_batch's, before a batch the scene draws itself)
-```
+- **The frame keeps**, for each draw the PC world took (by its place among the frame's native draws, as `nd_prep` keeps
+  its records) what `pc_world_keep` was given for each of its batches (`PcKept`): the key, the texture, the context of
+  its FRAME and ZBUF, the rows, and every triangle of the batch in order, its slope in its alpha as `sa_draw_batch` worked
+  it out (`sa_slope`, now a function), those left out at the scissor marked. A batch it drew nothing of (every
+  triangle outside the scissor, ZTST NEVER, an empty scissor) is kept as that, without a key. A draw is whole when every
+  batch `sa_draw_batch` met ended in one of these.
+- **A picture's draw** at that place, with the same value and its record taken (`nd_prep_take_const`), whole and in
+  the same arena (`pc_between_takes`): `nd_draw` makes its record (the picture's moves) and writes the batches'
+  registers as before, but plans no corners; `pc_between_draw` gives each kept batch to `pc_world_keep` with the
+  picture's record in its corners, into the picture's own FRAME and ZBUF (the buffer shown, not the frame's), with
+  `sa_flush`'s and `sa_draw_batch`'s work around a kept batch (the reflection kept, the group's parts, the target's
+  flush, `sa_acquire`, the rows). The triangles the frame left out at the scissor are drawn too: the GPU clips them
+  (a picture's `sa_draw_batch` keeps one in view at t 0; testing them cost a quarter of the picture's time, drawing
+  them nothing measurable on the GPU). A batch with no key and a triangle in view at t 0 (`nd_box_at_0`, its work now
+  `nd_box_at_0_of` for any corners) makes the draw worked out as before.
+- **A draw's batches end with it** while frames are kept for their pictures between (`pc_between_cuts`, frame and
+  picture alike), so that each kept batch is one draw's. That changes the frame's batches (a batch is one draw's
+  alphas, so opaque where a longer one was blended): at map 000 70,800 pixels differ from before, 95 by more than 16
+  levels (a brazier's rim, up to 219), at map 003 416 (the braziers' rims), none at 009:2, 013 or 017; at 30 nothing is
+  kept and nothing changes. `KF4_PC_BETWEEN=0`: neither, `fast` as before byte for byte.
+- `--stats`: `pc world, pictures between`: the draws drawn from the frame's kept batches, and those worked out again
+  (not every batch kept: a batch the PC world did not keep; a triangle of a batch with no key in view at t 0).
 
-- **What it saves:** the taken draws' work in each picture between: `nd_draw` and its plans, `sa_draw_batch` for those
-  batches (by the profile above, a fifth to a third of the GS's thread there); the GPU's work is the same.
-- **What it must decide** (NATIVE_DRAW_P8.md, "The recording and the replays"): a picture's decisions that differ from
-  the frame's. For the kept materials: the triangles left out by the scissor at t 1 alone (a kept material must keep
-  every triangle, or those inside it at t 0: `nd_box_at_0`); the textures as the frame read them (the kept images are
-  held, so a picture reads what the frame did, which is the picture's too: the pictures between upload nothing new
-  to the world's textures); the alpha range (native corners' As comes from their lights, not the kicks:
-  `interp_alpha_range` is the GS's own). The rest of the chain (the skinned groups, the effects, the GS's 2D) walked
-  as now.
-- **The checks:** the pictures between byte for byte as `fast`'s now at the spots, frames and `_250/_500/_750`;
-  `--fast` GS ms a picture between before and after.
+**Measured** (the owner's settings, `--fast` at 240, `--teleport 1900:N:P` after `tests/newgame.pad`, picture 3799; a
+picture between drawn from the packets, from `--stats`):
+
+| spot | before | P5's first step | GPU a picture |
+|---|---|---|---|
+| 000 | 5.67 ms | **4.46** | 3.64 -> 3.42 |
+| 003 | 2.85 | **2.19** | 2.08 -> 2.07 |
+| 009 | 5.61 | **5.00** | 2.96 -> 2.95 |
+| 009:2, the creatures | 3.07 | **2.68** | 2.25 -> 2.23 |
+| 013 | 2.81 | **2.36** | 2.11 -> 2.08 |
+| 017 | 1.87 | **1.63** | 1.50 -> 1.50 |
+
+Real time at 240 (`tools/pace_test.py --maps 0,9 --hz 240 --mode pace,cost -- --renderer fast`, one run each):
+
+| map | pictures a second (lowest second) | a recording | the GS's thread a game frame |
+|---|---|---|---|
+| 000 | 197 (187) -> **231 (224)** | 6.35 -> 4.81 ms | 22.2 -> 20.1 ms |
+| 009 | 240 (237) -> 240 (237) | 5.87 -> 5.22 ms | 22.1 -> 21.7 ms |
+
+At maps 009, 013, 017 and 009:2 every picture (the frame's and `_250`, `_500`, `_750`) is byte for byte the step's
+without the replay (`KF4_PC_BETWEEN=0` at the same commit: map 009, 000), and byte for byte before at 013, 017, 009:2.
+`modern` byte for byte as before at map 009 (frames and pictures between); at map 000 one picture between differed by 64
+pixels, as two runs of map 000 already did. ctest 6 of 6, vu1_test 0 of 90 failed, boot_test PASS, frame_test
+`--renderer native` and `fast` PASS. ASan + UBSan (clang) on `fast` at map 003 with the pictures between (50,052 draws
+drawn from the frame's): the sound driver's, the decomp's and the port's known reports only, nothing in the changed
+code. No unit test: what is kept is the scene's state on the GS's thread, checked by the pictures. No clang-tidy: the
+project has no configuration for it.
+
+**What a recording still costs** (perf, map 009, after the step): the uploads asked for again about 27% (each written
+to VRAM again and its blocks given back to the table: the GS's part, which every draw that is not the PC world's
+reads), the test at t 0 of the batches the frame drew nothing of about 15% (as before: the old path did the same), the
+skinned models' draws (0x280) and their groups, the PC world's flushes. The draws' registers are still written as the
+frame wrote them (the GS's state after the world is the frame's).
 
 The checks on the branch as it stands: `tools/boot_test.py` PASS; `tools/frame_test.py --renderer native` PASS, and
 `--renderer fast` (added to the tool with `modern`) PASS: `fast`'s pictures the same every run, and the last one
