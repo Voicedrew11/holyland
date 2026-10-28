@@ -2650,6 +2650,7 @@ void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t co
 }
 
 void pc_world_flush(); // (gsn_pc_world.inc)
+bool pc_world_kind(uint32_t kind);
 // What is kept drawn: the first passes, then the second passes, last part first (above)
 void sa_group_draw_parts() {
     SaGroup &g = sa_group;
@@ -3683,11 +3684,14 @@ bool sa_draw_batch(int *why) {
     // Cs, so the PC renderer draws it without blending (the map's records set ABE on their opaque surfaces too)
     bool blend_is_source = abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && a_lo == 0x80 && a_hi == 0x80;
     bool pc_keep = pc_world_mode && sa.batch_pc && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only &&
-                   !gpu_corners && !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && !sat_bound() && (!abe || blend_is_source) &&
-                   !shader_blend && !shadow && runs.size() == 2 && npasses == 1 && all_native && (!tme || sa.rgba_on) &&
+                   !gpu_corners && !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && !sat_bound() &&
+                   !shader_blend && !shadow && npasses == 1 && all_native && (!tme || sa.rgba_on) &&
                    (!sa.rgba_on || sa.programs_hw[SA_VS_000][per_sample ? 1 : 0]) && ztst == 2 &&
                    nd.batch_draws == nd.draws.buffer.get() && nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena &&
                    !corners.empty() && pc_map_corners(corners);
+    // (a blend Vulkan's blending does as the GS, the batch drawn whole in one draw: its triangles blended and Z tested in
+    // their order, as on the GS, without the scene's Z-first draw and runs)
+    bool pc_blend = abe && !blend_is_source;
     if (pc_keep) {
         // (the key is made before a skinned group draws: its state changes sa.rgba_on, sa_group_state)
         PcKey k;
@@ -3696,7 +3700,9 @@ bool sa_draw_batch(int *why) {
         for (int i = 0; i < ndraws; i++) {
             Push p = push;
             p.flags |= draws[i].select << F_PASS_SHIFT;
-            p.flags &= ~F_ALPHA_FACTOR; // (no blending: the alpha written is As, as the GS writes it)
+            if (!pc_blend) {
+                p.flags &= ~F_ALPHA_FACTOR; // (no blending: the alpha written is As, as the GS writes it)
+            }
             p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
             p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
             if ((world || (skinned && ties)) && draws[i].zbias > 0.0f) {
@@ -3709,6 +3715,14 @@ bool sa_draw_batch(int *why) {
         }
         k.z_written = zwrite;
         k.per_sample = per_sample;
+        if (pc_blend) {
+            k.blend_on = 1;
+            k.alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
+            k.fix = fix;
+            k.src = blend.src;
+            k.dst = blend.dst;
+            k.op = blend.op;
+        }
         k.scissor[0] = int32_t(sx0 * scale_x);
         k.scissor[1] = int32_t(sy0 * scale_y);
         k.scissor[2] = int32_t((x1 - sx0) * scale_x);
@@ -3722,7 +3736,7 @@ bool sa_draw_batch(int *why) {
         ImageHandle texture = sa.rgba_on ? sa.rgba_image : ImageHandle();
         sa_group_draw_parts(); // (pf/skin: none is pending with the PC world's kept: sa_group_draw's invariant)
         PcFrame frame = {fbp, fbw, fpsm, zbp, zpsm};
-        pc_world_keep(k, frame, texture, nd.draws.buffer, nd.arena.buffer, corners);
+        pc_world_keep(k, frame, texture, nd.draws.buffer, nd.arena.buffer, corners, runs);
         sa.last_shadow = false;
         sa.z_written |= zwrite;
         uint32_t d0 = interp.active ? sy0 : uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
@@ -4290,7 +4304,7 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
-    sa.pc_take = pc_world_mode && scene && d.kind == RD_KIND_MAP_RECORD && d.program == 0 && !(d.flags & RD_DRAW_FAR_Z);
+    sa.pc_take = pc_world_mode && scene && pc_world_kind(d.kind) && d.program == 0 && !(d.flags & RD_DRAW_FAR_Z);
     if (sa.pc_take) {
         sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
     } else if (!scene || d.program != 0x280) {

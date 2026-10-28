@@ -7,7 +7,8 @@ text, the fades and the screen passes) and, until they are ported, the effects. 
 reference (the PS2's pictures, checked byte for byte); `fast` is checked against it by how much it differs, not
 whether, and is free to differ where that is the point (filtering, depth, anti-aliasing, frame rate).
 
-Status: the plan, agreed with the owner (October 2026); P1 built, P2's first step built (below). The owner's choices:
+Status: the plan, agreed with the owner (October 2026); P1 built, P2's first two steps built (below): the map's records,
+objects, items and gold, opaque, alpha-tested and blended. The owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -171,6 +172,45 @@ PS2 path and their checks (RENDERER.md) are not touched.
   `modern`'s pictures byte for byte as before (maps 000 and 003; a first run of map 000 before the change differed from
   a second by 64 pixels on its own); ctest 6 of 6, vu1_test 0 of 90 failed; ASan + UBSan (clang) on `fast` at map 003:
   nothing in the changed code. No unit test: the keeping is the scene's state on the GS's thread, checked by the pictures.
+  **Built, second step: the blended batches, and the objects, items and gold** (October 2026, decided overnight, for
+  the owner's review). Measuring why the taken batches were not kept (map 009) found one case only: a blend that does
+  not leave the source, nearly all of it the cut-outs' (alpha test As > 0, (Cs - Cd) As + Cd, Z written: the branches,
+  the braziers, the fences; the scene's "Z-first atest", 1.2 ms of the pond-style spot). They are kept now when Vulkan's
+  blending does the GS's (no shader blending), drawn whole in one draw: GPU blending and the Z test follow the
+  triangles' order, as the GS does, so the scene's Z-first draw and its runs are not needed. The key carries the blend
+  (`PcKey`'s `blend_on`, the factors, FIX). And the take is every program-0x000 kind of the world block, not only the
+  records: `pc_world_kind`, the map's records, its objects, the items and the gold (`KF4_PC_KINDS`, a mask of
+  `RD_KIND_*` bits, for tests); the entities, the arm and the shadows are other programs.
+
+  **The layers' depth.** A blended batch keeps its tie slack (the scene's colour pass's, the two world units of
+  `sa_slack` for a layer) and writes Z biased by it. Three other ways were measured and dropped:
+  - its Z exact (no bias): map 000's rock over the tower's top (a layer a unit off the bricks, the case `sa_slack`'s
+    world units were made for) lost a triangle of itself, 5,700 pixels;
+  - the tie's one Z only, not the world units: 4.6% of map 000 differed (the layers far off);
+  - the scene's own draws (its Z exact first, then its colour within the slack), whole or run by run: no closer to
+    P1, and run by run a draw a triangle (5.2 million at map 000), slower than P1.
+  What the bias written costs: a line a pixel wide at the edges of a cut-out in front of what is drawn after it and
+  tested against its Z (the braziers' legs against their fire's glow on maps 000 and 003, the edges of map 013's
+  roof beams): the line where the slack's Z, not the GS's, decides.
+
+  **Measured** (as the first step's table: the owner's settings, headless at 240, `--teleport 1900:N:0` after
+  `tests/newgame.pad`, picture 3799, `KF4_GSN_GPU_TIME=2`; one run each, against P1, `modern --native-sampler
+  hardware`):
+
+  | map | P1 | fast, first step | fast | pixels differing from P1 (worst) |
+  |---|---|---|---|---|
+  | 000 | 6.68 | 6.76, 6.83 | **4.86** | 1,916 (219: the brazier's legs, above) |
+  | 003 | 4.95 | 5.01, 5.03 | **3.79** | 8,419 (215: the braziers' legs and rims) |
+  | 009 | 5.64 | 5.45, 5.85 | **4.88** | 2,129 (17: specks in the fire) |
+  | 013 | 3.84 | 3.50, 3.67 | **3.19** | 1,468 (45: the roof beams' edges) |
+
+  So 0.65-1.8 ms a picture under P1: the alpha-tested Z-first draws 1.23 -> 0.77 ms at map 009, the scene's colour
+  draws 1.09 -> 0.90. A flush still keeps few materials (batches kept 62,041 and materials 59,070 at map 009: merging is
+  rare while the chain's order is kept; `KF4_PC_ORDER=1` is the switch for trying more), so what saves is the Z-first
+  draws and runs left out, not fewer draws. `modern`'s pictures byte for byte as before (maps 000 and 003, against the
+  commit before); ctest 6 of 6, vu1_test 0 of 90 failed; ASan + UBSan (clang) on `fast` at map 003: the sound driver's
+  and the decomp's known reports only, nothing in the changed code. No unit test (the keeping is the scene's state on
+  the GS's thread, checked by the pictures). No clang-tidy: the project has no configuration for it.
 - **P3: the whole world.** Blended and layered records, map objects, items, gold, entities (0x280, skinned), the
   sky, the shadows, the arm and what is held (the eye's view), the picked item. The GS then draws no world.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the

@@ -1,7 +1,7 @@
 // ---- The PC renderer's world (--renderer fast, docs/port/PC_RENDERER.md, P2) -------------------------------------------
 // (included by gsn_standalone.inc after the skinned group, in gsn.cpp's namespace; the GS's thread)
-// The scene's map records (program 0x000, opaque and alpha-tested, in the scene's frame, read by the GPU's sampler where
-// gsn_rgba.inc made one) are kept as sa_draw_batch meets them and drawn by material when something else comes, as a
+// The scene's map records, objects, items and gold (program 0x000: opaque, alpha-tested, and blended where Vulkan's
+// blending does the GS's; in the scene's frame, read by the GPU's sampler where gsn_rgba.inc made one) are kept as sa_draw_batch meets them and drawn by material when something else comes, as a
 // skinned model's parts are (sa_group_draw). A material is one state (its texture, its corners' pushes, masks and
 // scissor, its records): one draw for each material instead of one for each batch. KF4_PC_ORDER=0 (default): a batch
 // joins the last material when its state is the same, the chain's order kept; 1: the first material of the same state.
@@ -24,6 +24,10 @@ struct PcKey {
     const ImageView *rgba; // the batch's RGBA8 texture (gsn_rgba.inc), or none
     StockSampler sampler;
     const Buffer *records, *arena;
+    // Vulkan's blending as the scene's (sa_draw_batch: blend_on with fixed_blend's factors), or none
+    uint32_t blend_on, alpha_factor, fix;
+    VkBlendFactor src, dst;
+    VkBlendOp op;
 };
 
 // The frame target the kept batches draw into (sa_group's)
@@ -34,6 +38,7 @@ struct PcFrame {
 struct PcMaterial {
     PcKey key;
     std::vector<Vtx> corners;
+    std::vector<uint32_t> runs; // where each of the scene's runs starts in corners, and corners' end (sa_draw_batch's runs)
     ImageHandle texture; // the RGBA8 image the key's view is of (held: nothing is freed before the flush)
     BufferHandle records; // the key's records, held likewise
 };
@@ -55,6 +60,18 @@ void pc_world_settings() {
     pc_world.ties = t && *t ? atoi(t) : 0;
 }
 
+// The kinds of draw the PC renderer takes (program 0x000's): KF4_PC_KINDS, a mask of RD_KIND_* bits (tests; default
+// the map's records, the map's objects, the items and the gold)
+bool pc_world_kind(uint32_t kind) {
+    static int mask = -1;
+    if (mask < 0) {
+        const char *v = getenv("KF4_PC_KINDS");
+        mask = v && *v ? int(strtol(v, nullptr, 0)) :
+                         (1 << RD_KIND_MAP_RECORD) | (1 << RD_KIND_MAP_OBJECT) | (1 << RD_KIND_ITEM) | (1 << RD_KIND_GOLD);
+    }
+    return kind < 31 && ((mask >> kind) & 1);
+}
+
 // Whether every corner is the map's record kind (program 0x000's, not 0x700's effect): the batch is the map's alone
 bool pc_map_corners(const std::vector<Vtx> &corners) {
     for (const Vtx &v : corners) {
@@ -72,7 +89,7 @@ bool pc_frame_equal(const PcFrame &a, const PcFrame &b) {
 // (sa_draw_batch's) A batch the PC renderer takes: its key, its corners and the buffers its records are in. A batch for
 // another frame target or arena flushes what is kept first.
 void pc_world_keep(const PcKey &k, const PcFrame &frame, const ImageHandle &texture, const BufferHandle &records,
-                   const BufferHandle &arena, const std::vector<Vtx> &corners) {
+                   const BufferHandle &arena, const std::vector<Vtx> &corners, const std::vector<uint32_t> &runs) {
     PcWorld &w = pc_world;
     pc_world_settings();
     bool same = pc_frame_equal(w.frame, frame) && w.arena.get() == arena.get();
@@ -101,11 +118,20 @@ void pc_world_keep(const PcKey &k, const PcFrame &frame, const ImageHandle &text
         m->texture = texture;
         m->records = records;
     }
+    // (runs: 0, the cuts, the batch's end; the material's own begin at 0 and end at its corners' end)
+    uint32_t at = uint32_t(m->corners.size());
+    if (m->runs.empty()) {
+        m->runs.push_back(0);
+    }
+    for (size_t r = 1; r < runs.size(); r++) {
+        m->runs.push_back(at + runs[r]);
+    }
     m->corners.insert(m->corners.end(), corners.begin(), corners.end());
     w.batches_kept++;
 }
 
-// One material's draws: the batch's own draws (KF4_PC_TIES=1), or one draw with the last colour mask (0)
+// One material's draws: the batch's own draws run by run, as sa_draw_batch has them (KF4_PC_TIES=1), or one draw with the
+// last colour mask
 void pc_material_draw(Cmd &c, const PcMaterial &m, uint32_t first) {
     const PcKey &k = m.key;
     PcWorld &w = pc_world;
@@ -125,19 +151,36 @@ void pc_material_draw(Cmd &c, const PcMaterial &m, uint32_t first) {
     c.set_scissor({{k.scissor[0], k.scissor[1]}, {uint32_t(k.scissor[2]), uint32_t(k.scissor[3])}});
     c.set_program(k.rgba ? sa.programs_hw[SA_VS_000][k.per_sample ? 1 : 0] : sa.programs[SA_VS_000][k.per_sample ? 1 : 0]);
     c.set_storage_buffer(2, 1, *m.records.get());
+    if (k.blend_on) {
+        float constants[4] = {float(k.fix) / 128.0f, float(k.fix) / 128.0f, float(k.fix) / 128.0f, 128.0f / 255.0f};
+        c.set_blend_enable(true);
+        c.set_blend_constants(constants);
+        c.set_blend_factors(k.src, k.alpha_factor ? VK_BLEND_FACTOR_CONSTANT_ALPHA : VK_BLEND_FACTOR_ONE, k.dst, VK_BLEND_FACTOR_ZERO);
+        c.set_blend_op(k.op, VK_BLEND_OP_ADD);
+    } else {
+        c.set_blend_enable(false);
+    }
     if (pc_world.ties == 1) {
-        for (int i = 0; i < k.ndraws; i++) {
-            c.set_color_write_mask(k.masks[i]);
-            c.set_depth_test(true, k.zwrites[i] != 0);
-            c.push_constants(&k.pushes[i], 0, sizeof(Push));
-            c.draw(count, first);
-            sa_stats.draws++;
-            gsn_stats.draws++;
-            w.draws++;
+        // run by run, each run's draws (its Z first, then its colour within the slack), as sa_draw_batch draws them
+        for (size_t r = 0; r + 1 < m.runs.size(); r++) {
+            for (int i = 0; i < k.ndraws; i++) {
+                c.set_color_write_mask(k.masks[i]);
+                c.set_depth_test(true, k.zwrites[i] != 0);
+                c.push_constants(&k.pushes[i], 0, sizeof(Push));
+                c.draw(m.runs[r + 1] - m.runs[r], first + m.runs[r]);
+                sa_stats.draws++;
+                gsn_stats.draws++;
+                w.draws++;
+            }
         }
         return;
     }
-    // the last draw with a colour mask (or the last draw): its push, without its layer's bias; Z written by the batch
+    // the last draw with a colour mask (or the last draw): its push; Z written by the batch. An opaque batch exact, without
+    // its layer's bias. A blended one keeps the bias: a layer passes over the surface it lies on, and writes its Z biased
+    // so (the GS writes its own). Measured (PC_RENDERER.md, P2's layers): the bias written costs a line a pixel wide at
+    // the edges of cut-outs in front of what is drawn after them (the braziers' legs against the fire's glow); its Z
+    // exact instead lost a layer that lies a unit off its surface (map 000's rock over the tower's top), and the scene's
+    // way (its Z first, then its colour within the slack, run by run) was a draw a triangle, slower than P1
     int pick = k.ndraws - 1;
     for (int i = 0; i < k.ndraws; i++) {
         if (k.masks[i]) {
@@ -145,8 +188,10 @@ void pc_material_draw(Cmd &c, const PcMaterial &m, uint32_t first) {
         }
     }
     Push p = k.pushes[pick];
-    p.zbias = 0.0f;
-    p.zslope = 0.0f;
+    if (!k.blend_on) {
+        p.zbias = 0.0f;
+        p.zslope = 0.0f;
+    }
     c.set_color_write_mask(k.masks[pick]);
     c.set_depth_test(true, k.z_written != 0);
     c.push_constants(&p, 0, sizeof(Push));
