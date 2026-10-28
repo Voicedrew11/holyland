@@ -142,46 +142,66 @@ PS2 path and their checks (RENDERER.md) are not touched.
   only the GS's part.
 - **P6: effects.** Program 0x700's draws as instanced particles; then the GS keeps only the 2D and the passes.
 
-## The first interface: the frame's snapshot (P2, for agreement)
+## The first interface: P2, revised (for agreement)
 
-On the game's side (`port/include/port/render.h`, beside `rd_draw`), so that the adapters change in one place:
+**What the survey found** (October 2026): the snapshot cannot be made on the game's side as first planned. A draw's
+material is not in its `RdDraw`: its texture is the GS's TEX0 (in the batch's A+D packet) read against VRAM *as it
+is at that point of the chain*, and its TEST and ALPHA are the chain's registers. `Map_DrawRecords` uploads map 0's
+textures, draws map 0's records and objects, then uploads map 1's (packets 0, 1, 5 of each slot) and draws map 1's:
+a world drawn whole at the block's end would read map 1's pages for map 0's records. The page-ownership table is
+the only place that knows which texture a draw sees, and it lives on the native GS's thread, in chain order.
 
-```c
-/* ---- The PC renderer's frame (--renderer fast, docs/port/PC_RENDERER.md) ----------------------------------------
-   The world's draws go to the PC renderer as the frame's snapshot instead of the GS's chain: rd_draw still makes
-   each one (its meshes, camera, constants, identity), and rd_world_end hands the frame's to the renderer at the
-   world block's end, with the chain's mark of where the world goes (RD_ND_WORLD). The game's thread only. */
+So the snapshot is made **on the native GS's thread, as the draws are met**: the adapters keep queuing `RD_ND_DRAW`
+as now; the native GS, meeting a draw the PC renderer takes, resolves its batches' materials then (the texture from
+the table, expanded by P1's cache, kept by a strong handle so a later eviction cannot drop it; TEST, ALPHA, FBA, FOG,
+the scene target) and keeps the draw instead of drawing it. What it keeps is drawn, by material, into the scene's
+colour and D32F depth (the standalone scene's own targets, `gsn_scene_targets.inc`) when anything else is about to
+touch the scene: the first draw it does not take, a PS2-path batch, a scene op, a turn back to the GS, a vblank. This
+is how `sa_group_draw` already keeps a skinned model's parts. In P2 that keeps the chain's order exactly (map 0's
+objects draw after map 0's records), with no change on the game's side; from P3, when the PC renderer takes the
+whole world, the one flush a frame is at the world block's end, and the `RD_ND_WORLD` mark is added then (the game's
+`FrameInterp_EndWorld` hook is where it goes). The game-side `rd_world_begin` / `rd_world_end` are dropped.
 
-/* The views the world is drawn in, in the game's order (GameLoop_DrawFrame): RdDraw.camera's view */
-typedef enum {
-    RD_VIEW_WORLD,     /* the camera's mode 0 */
-    RD_VIEW_MIRROR,    /* mode 1: the world mirrored, under the map's tint (map_draw_state.mode 1) */
-    RD_VIEW_OFFSCREEN, /* the reflection drawn into the offscreen target (map_draw_state.mode 2) */
-    RD_VIEW_EYE        /* mode 2: before the eye (the arm, what is held) */
-} RdView;
-
-/* 1 when the frame's world goes to the PC renderer (--renderer fast): the adapters then call rd_draw and leave the
-   chain alone (no RD_ND_DRAW queued) */
-int rd_world_to_renderer(void);
-/* The world block begins: draws until rd_world_end are its own */
-void rd_world_begin(void);
-/* The world block ends: the frame's world draws to the renderer, and the mark to queue in the chain where its
-   picture goes (PORT_GS_REG_NATIVE_DRAW's value, RD_ND_WORLD) */
-uint64_t rd_world_end(void);
-```
-
-and on the renderer's side (`port/render/pc_renderer.h`, the native GS's thread):
+On the native GS's side (`port/gs/native/gsn_pc_world.inc`, included by `gsn.cpp` after `gsn_standalone.inc`, in its
+namespace, like the scene's; the native GS's thread only):
 
 ```cpp
-// The PC renderer: the world of a frame's snapshot drawn into its colour and depth, at a picture's time
-class PcWorld;  // (the meshes on the GPU, the materials, the views' targets: private)
-// the frame's snapshot, met at its RD_ND_WORLD mark: kept, with the one before it
-void pc_world_frame(PcWorld &w, uint32_t frame_serial);
-// the world at time t (0: the frame before, 1: this frame) into the scene's colour and depth, for the GS's frame
-void pc_world_draw(PcWorld &w, float t, const PcTargets &into);
-void pc_world_forget(PcWorld &w); // a map change, a save state loaded
-void pc_world_print_stats(const PcWorld &w);
+// ---- The PC renderer's world (--renderer fast, docs/port/PC_RENDERER.md) -----------------------------------------
+// The world's draws the PC renderer takes are kept as they are met in the chain, their materials resolved then from
+// the GS's state and the page-ownership table, and drawn by material into the scene's colour and depth at the next
+// flush. P2 takes the map's records (RD_KIND_MAP_RECORD, program 0x000) whose every batch is opaque or alpha-tested
+// (no ABE, no FBA trick, no shader blending, TME from the table, into the scene's frame); every other draw is
+// drawn by the scene as now, after the flush.
+
+// A batch's material: what the draws are sorted and bound by
+struct PcMaterial {
+    ImageHandle texture;   // P1's RGBA8 with its levels (rgba_view's image, held: eviction cannot drop it), or none
+    const Sampler *sampler;
+    uint32_t test;         // TEST's alpha test and Z test (ATE, ATST, AREF, AFAIL, ZTST)
+    uint32_t tfx_fog;      // TEX0's TFX and TCC, PRIM's FGE
+    bool zwrite;           // ZBUF's mask
+};
+
+// Meeting RD_ND_DRAW (sa_draw_begin's place): true if the PC renderer took it (kept, nothing drawn now); false and
+// the scene or the GS draws it, after pc_world_flush
+bool pc_world_take(uint64_t value);
+// What was taken drawn into the scene's colour and depth, opaque by material, then alpha-tested by material, the
+// draws' order kept within a record (coplanar layers by order and a depth bias, not the scene's Z-first ties)
+void pc_world_flush();
+// a map change, a save state loaded, the renderer switched: what is kept dropped, the meshes on the GPU forgotten
+void pc_world_forget();
+void pc_world_print_stats(); // --stats: draws taken, batches, materials, flushes a frame, the GPU's meshes
 ```
+
+- **Meshes on the GPU** stay in native draw's arena (`nd_place`, cached by `RdMesh`): already persistent. A batch is
+  one `vkCmdDraw` with its first instance naming its draw's `NdConst` record, so a material's batches share their
+  bindings and pipeline; `nd_000.vert` (built as `sa_000.vert`) is the vertex stage, `invariant gl_Position` so
+  that a layer and its surface give the same depths.
+- **Checks for P2**: `modern`'s pictures byte for byte as before; `fast` at the five spots against `modern`
+  (mean and worst difference, per spot, each explained); the pond's GPU time at the owner's settings against P1's
+  3.45 ms; ctest, vu1_test, ASan + UBSan.
+- **Later phases**: P5's pictures between interpolate the kept draws (their `RdDraw` identity and matrices are in
+  the snapshot as before); only where the snapshot is made has changed.
 
 ## Open question
 
