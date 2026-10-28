@@ -1946,18 +1946,23 @@ void sa_resample_pass(const Image &dst, const Image &src, bool depth, uint32_t y
     sa_stats.resampled++;
 }
 
+// The scene's samples beside GS targets of target (--scene-msaa, else the targets'; those the device has)
+uint32_t sa_samples_for(uint32_t target) {
+    uint32_t want = sa_wanted_samples ? sa_wanted_samples : target;
+    uint32_t n = 1;
+    while (n * 2 <= want && n < 8 && (msaa_samples_have & (n * 2))) {
+        n *= 2;
+    }
+    return sample_shading || n == target ? n : 1;
+}
+
 // (T2) The scene's scale and samples for a frame target: --scene-scale and --scene-msaa, or the GS's (the most
 // samples the GPU has up to those wanted; more than one only with sample-rate shading, which the copies need)
 void sa_shape(const Target &color, uint32_t *sx, uint32_t *sy, uint32_t *samples) {
     uint32_t w = sa_wanted_scale;
     *sx = (w & 0xFF) ? std::min(w & 0xFF, uint32_t(GSN_MAX_SCALE_X)) : color.sx;
     *sy = (w >> 8) ? std::min(w >> 8, 4u) : color.sy;
-    uint32_t want = sa_wanted_samples ? sa_wanted_samples : target_samples;
-    uint32_t n = 1;
-    while (n * 2 <= want && n < 8 && (msaa_samples_have & (n * 2))) {
-        n *= 2;
-    }
-    *samples = sample_shading || n == target_samples ? n : 1;
+    *samples = sa_samples_for(target_samples);
 }
 
 // (T2) Whether the scene has the GS frame target's shape (its scale and samples): its pictures are copied as they are
@@ -4534,6 +4539,16 @@ void sa_sync() {
     }
 }
 
+// The scene's depth format: with a stencil, for the shadows (KF4_SA_NO_STENCIL=1, tests: without, DATE as the GS)
+VkFormat sa_depth_format_wanted() {
+    const char *no_stencil = getenv("KF4_SA_NO_STENCIL");
+    bool stencil = !(no_stencil && atoi(no_stencil) > 0) &&
+                   gs->device->image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                                         VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                                             VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT);
+    return stencil ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+}
+
 void sa_held_forget(); // (gsn_composite.inc)
 // (gsn_set_standalone, at a vblank) on or off
 void sa_switch(bool on) {
@@ -4553,13 +4568,8 @@ void sa_switch(bool on) {
         if (kinds && *kinds) {
             sa.kinds = uint32_t(strtoul(kinds, nullptr, 0));
         }
-        // the scene's depth with a stencil, for the shadows (KF4_SA_NO_STENCIL=1, tests: without, DATE as the GS)
-        const char *no_stencil = getenv("KF4_SA_NO_STENCIL");
-        sa.stencil = !(no_stencil && atoi(no_stencil) > 0) &&
-                     gs->device->image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT,
-                                                           VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
-                                                               VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT);
-        VkFormat format = sa.stencil ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+        VkFormat format = sa_depth_format_wanted();
+        sa.stencil = format == VK_FORMAT_D32_SFLOAT_S8_UINT;
         if (format != sa.depth_format) {
             sa.depth_format = format;
             sa.color.reset(); // (the targets made again at the next acquire)
