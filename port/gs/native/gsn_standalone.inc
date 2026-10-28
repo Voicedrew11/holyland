@@ -2577,6 +2577,8 @@ struct SaGroupKey {
     int32_t scissor[4];
     uint32_t viewport[2];
     const ImageView *raw, *target;
+    const ImageView *rgba; // (--renderer fast) the GPU's sampler's texture (gsn_rgba.inc), or none: the GS's (raw, clut)
+    StockSampler sampler;
     const Buffer *records, *arena;
     uint32_t want_clut;
     uint32_t clut[256];
@@ -2586,6 +2588,7 @@ struct SaGroupPass {
     std::vector<Vtx> corners;
     bool on = false;
     ImageHandle texture;
+    ImageHandle rgba; // (the key's rgba view's image, held)
 };
 struct SaGroupPart {
     uint32_t first[2], count[2]; // its passes' corners (count[1] 0: no second pass)
@@ -2621,7 +2624,10 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
     c.set_texture(0, 0, *k.raw, StockSampler::NearestClamp);
     c.set_texture(0, 1, *k.target, StockSampler::NearestClamp);
     c.set_texture(0, 3, gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
-    sa.rgba_on = false; // (a group's parts read their textures as the GS does: gsn_rgba.inc is for sa_draw_batch's)
+    if (k.rgba) {
+        c.set_texture(0, 6, *k.rgba, k.sampler); // (gsn_rgba.inc: the GSN_HW_SAMPLER programs)
+    }
+    sa.rgba_on = false; // (sa_draw_batch's own, worked out for each batch)
     static const uint32_t no_clut[256] = {};
     c.set_storage_data(0, 2, k.want_clut ? k.clut : no_clut, 1024);
     c.set_depth_compare(k.ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : k.ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
@@ -2635,7 +2641,9 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
         c.set_blend_enable(false);
     }
     // (sa_draw_range's for a stretch of 0x280's corners)
-    c.set_program(k.shader_blend ? sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0] : sa.programs[SA_VS_280][k.per_sample ? 1 : 0]);
+    int ms = sa.samples > 1 ? 1 : 0, ps = k.per_sample ? 1 : 0;
+    c.set_program(k.shader_blend ? (k.rgba ? sa.programs_in_hw : sa.programs_in)[SA_VS_280][ms]
+                                 : (k.rgba ? sa.programs_hw : sa.programs)[SA_VS_280][ps]);
     c.set_storage_buffer(2, 1, *k.records);
 }
 
@@ -2757,7 +2765,7 @@ void sa_group_draw_parts() {
                 in_pass_barrier();
                 gsn_stats.blend_copies_in_pass++;
                 c.set_conservative(false);
-                c.set_program(sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0]);
+                c.set_program((k2.rgba ? sa.programs_in_hw : sa.programs_in)[SA_VS_280][sa.samples > 1 ? 1 : 0]);
                 gpu_enter(GPU_SA_GROUP + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
             }
             // the mark: a first pass's triangles, untextured and no colour, where its Z is at the front
@@ -2822,6 +2830,7 @@ void sa_group_draw_parts() {
         p.on = false;
         p.corners.clear();
         p.texture.reset();
+        p.rgba.reset();
     }
     g.parts.clear();
     g.records.reset();
@@ -3861,6 +3870,19 @@ bool sa_draw_batch(int *why) {
         k.viewport[1] = color->height * scale_y;
         k.raw = st.raw_view ? st.raw_view : &gs->dummy_raw->get_view();
         k.target = st.target_view ? st.target_view : &gs->dummy_rgba->get_view();
+        // (--renderer fast) the parts read the GPU's sampler's texture where sa_draw_batch made one (P1's, here for the
+        // skinned models too: KF4_PC_GROUP_HW=0, the GS's)
+        static int group_hw = -1;
+        if (group_hw < 0) {
+            const char *v = getenv("KF4_PC_GROUP_HW");
+            group_hw = v && *v ? atoi(v) : 1;
+        }
+        Program *hw_program = shader_blend ? sa.programs_in_hw[SA_VS_280][sa.samples > 1 ? 1 : 0]
+                                           : sa.programs_hw[SA_VS_280][per_sample ? 1 : 0];
+        bool rgba = pc_world_mode && group_hw && sa.rgba_on && hw_program;
+        k.rgba = rgba ? sa.rgba_view : nullptr;
+        k.sampler = rgba ? sa.rgba_sampler : StockSampler::NearestClamp;
+        ImageHandle rgba_image = rgba ? sa.rgba_image : ImageHandle();
         k.records = nd280_batch_draws();
         k.arena = nd.batch_arena;
         k.want_clut = st.want_clut;
@@ -3908,6 +3930,7 @@ bool sa_draw_batch(int *why) {
                 g.key = k;
                 g.on = true;
                 g.texture = st.table;
+                g.rgba = rgba_image;
             }
             if (role == 1) {
                 SaGroupPart part = {{uint32_t(g.corners.size()), 0}, {uint32_t(corners.size()), 0}, {}};

@@ -277,6 +277,17 @@ PS2 path and their checks (RENDERER.md) are not touched.
   The back end's thread (the Vulkan calls, `gsn_backend.inc`) does much less: 10.5 -> 3.4 s of a 3,800-vblank run at
   map 000, 4.7 -> 2.6 s at map 009; the native GS's thread's time a picture between (drawn from the packets) is as
   before (5.8 ms at map 009, `--fast`), which is P5's.
+  **Built, third step: the skinned groups read P1's textures** (October 2026). P1 left the skinned groups
+  (`sa_group_state`, pf/skin) on the GS's sampling: their key bound the raw texture and the CLUT. At map 000 at 240 the
+  GPU was the limit (2x and aniso 1 kept 239 pictures a second where the owner's settings kept 233), and the groups were
+  the second largest kind. With `--renderer fast` a group's key carries the RGBA8 view and sampler `sa_draw_batch` made
+  for the batch (`SaGroupKey::rgba`, the image held by the pass), drawn with `programs_hw` (the shines blended in the
+  shader with `programs_in_hw`); `KF4_PC_GROUP_HW=0`: the GS's sampling. The groups' GPU time (headless at 240,
+  `KF4_GSN_GPU_TIME=2`): map 000 0.78 -> 0.53 ms, 009:2 0.56 -> 0.29; a picture 4.20 -> 3.96 and 3.10 -> 2.82. The
+  pictures differ in filtering only, as P1's: 0.7% of map 000's pixels by 3 levels at most, 4.5% of 009:2's (the creatures)
+  by 9 at most. `modern` byte for byte as before (009:2, frame and pictures between); ASan + UBSan (clang) on `fast` at
+  009:2: the known reports only. At 240 in real time map 000 233 -> 236.5 pictures a second, 009 239.
+
   **Measured and left: the effects, and the skinned plans** (October 2026, overnight). Two things tried after the
   second step, neither kept on:
   - the effects (program 0x700) taken by the PC world (`pc_world_takes`; a key now carries its corners' vertex program,
