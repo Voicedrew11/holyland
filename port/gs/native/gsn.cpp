@@ -304,6 +304,9 @@ struct Gs {
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     ImageHandle resolved[2]; // a multisampled target's copies for shader blending, resolved by the passes (resolved_copy)
     ImageHandle load_stage[3]; // load_target_rect's rectangles at the PS2's size in the frame (8-bit, 16-bit, depth)
+    // load_scaled_on_gpu's answers: each format, whether it blits both ways (here, not a static of the function: its
+    // destructor would run at exit before ring_stop, with this thread still loading targets)
+    std::vector<std::pair<VkFormat, bool>> blit_formats;
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
     std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
@@ -2287,7 +2290,7 @@ void write_back(Target &t) {
 // not with KF4_GSN_LOAD_SCALE=0 (the rows made at the scale on the CPU, as before: to compare)
 bool load_scaled_on_gpu(VkFormat format) {
     static int off = -1;
-    static std::vector<std::pair<VkFormat, bool>> formats;
+    std::vector<std::pair<VkFormat, bool>> &formats = gs->blit_formats;
     if (off < 0) {
         const char *v = getenv("KF4_GSN_LOAD_SCALE");
         off = v && *v == '0';
