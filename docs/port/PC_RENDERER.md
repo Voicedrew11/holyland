@@ -212,7 +212,31 @@ PS2 path and their checks (RENDERER.md) are not touched.
   and the decomp's known reports only, nothing in the changed code. No unit test (the keeping is the scene's state on
   the GS's thread, checked by the pictures). No clang-tidy: the project has no configuration for it.
 - **P3: the whole world.** Blended and layered records, map objects, items, gold, entities (0x280, skinned), the
-  sky, the shadows, the arm and what is held (the eye's view), the picked item. The GS then draws no world.
+  sky, the shadows, the arm and what is held (the eye's view), the picked item. The GS then draws no world. (The
+  blended and layered records, the objects, the items and the gold: P2's second step, above.)
+  **Built, first step: a skinned part's first pass drawn once** (October 2026, decided overnight, for the owner's
+  review). What the scene still draws itself at map 009, counted by triangle: the skinned models' (program 0x280: the
+  entities, the arm) 8.6 million with a Z-first draw, far more than the rest (the shadows 3.8 million, by the stencil;
+  the reflection's water 0.6 million; the 0x000 batches blended in the shader 0.2 million). The skinned groups (pf/skin)
+  draw a group's first passes twice, their colour with no Z written and then the same draw exactly with Z. A part's
+  slack is 0 (`skin_eps`), and every pixel passes the alpha test (role 1's `covers`), so the second draw writes, last,
+  every pixel the first did: the second alone leaves the same colour and Z. With `--renderer fast`
+  `sa_group_first_draw` leaves the first out when the two draws are the same but for the Z write
+  (`KF4_PC_GROUP_ONE=0`: both). The pictures byte for byte as with both, at maps 000, 003, 009, 013 and 017; GPU ms
+  a picture (the owner's settings, as P2's table):
+
+  | map | both | one |
+  |---|---|---|
+  | 000 | 4.84 | **4.53** |
+  | 003 | 3.80 | **3.59** |
+  | 009 | 4.89 | **4.66** (the skinned groups 0.63 -> 0.40) |
+  | 013 | 3.17 | **2.92** |
+  | 017 | 2.74 | **2.63** |
+
+  It would give `modern` the same pictures for the same saving; it is left to `fast`, as `modern` is not touched
+  (the owner's call whether it should have it). `modern` byte for byte as before (map 009); vu1_test 0 of 90 failed;
+  ASan + UBSan (clang) on `fast` at map 009: the known reports, and one in native draw's water (a signed overflow
+  in the texture coordinates, `gsn_nd_water.inc`), fixed in its own commit.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the
   rippled water (`RD_PROGRAM_RIPPLE`), the scrolling textures.
 - **P5: pictures between from snapshots.** The world's pictures between by interpolation; the recording keeps

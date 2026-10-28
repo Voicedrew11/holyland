@@ -2651,6 +2651,29 @@ void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t co
 
 void pc_world_flush(); // (gsn_pc_world.inc)
 bool pc_world_kind(uint32_t kind);
+extern volatile int pc_world_mode;
+
+// (--renderer fast) The first passes' first draw left out where it leaves nothing the second does not: its colour with no
+// Z written, then the same draw exactly with Z (a part's slack is 0: skin_eps), over every pixel of their triangles (every
+// pixel passes the alpha test: role 1's covers). Each pixel the first draw writes, the second writes again, last: a
+// triangle that passed the first draw passes the second unless a nearer one wrote Z there first, which wrote its colour.
+// So the second alone leaves the same colour and Z, for half the first passes' pixel work. (KF4_PC_GROUP_ONE=0: both.)
+int sa_group_first_draw(const SaGroupKey &k) {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_PC_GROUP_ONE");
+        on = v && *v ? atoi(v) : 1;
+    }
+    if (!pc_world_mode || !on || k.ndraws != 2 || k.shader_blend || k.zwrites[0] || !k.zwrites[1] || k.masks[0] != k.masks[1]) {
+        return 0;
+    }
+    Push a = k.pushes[0], b = k.pushes[1];
+    if (a.zbias != 0.0f || a.zslope != 0.0f || b.zbias != 0.0f || b.zslope != 0.0f) {
+        return 0; // (a slack: the first draw passes where the second does not)
+    }
+    a.zbias = a.zslope = b.zbias = b.zslope = 0.0f; // (-0 and 0 alike)
+    return memcmp(&a, &b, sizeof(a)) == 0 ? 1 : 0;
+}
 // What is kept drawn: the first passes, then the second passes, last part first (above)
 void sa_group_draw_parts() {
     SaGroup &g = sa_group;
@@ -2692,7 +2715,7 @@ void sa_group_draw_parts() {
             c.set_storage_buffer(1, 0, *nd.dummy);
         }
         sa_group_state(c, k1);
-        for (int i = 0; i < k1.ndraws; i++) {
+        for (int i = sa_group_first_draw(k1); i < k1.ndraws; i++) {
             sa_group_one(c, k1.pushes[i], k1.masks[i], k1.zwrites[i] != 0, uint32_t(n1), 0);
         }
         if (n2) {
