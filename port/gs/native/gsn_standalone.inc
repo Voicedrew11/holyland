@@ -2950,6 +2950,25 @@ void sa_note_first_z(bool first) {
     }
 }
 
+// A triangle's Z slope, as its corners' alpha carries it (sa_000.vert, pc.zslope): the larger of its Z's changes across
+// a GS pixel in X and Y, halved, 255 one Z; or (world: by its real depth) the Z's change across a GS pixel, g, as
+// 32 log2(1 + g): up to 250 Z a pixel
+uint32_t sa_slope(const Vtx *v, bool world) {
+    float ax = v[1].x - v[0].x, ay = v[1].y - v[0].y, bx = v[2].x - v[0].x, by = v[2].y - v[0].y;
+    float az = float(v[1].z) - float(v[0].z), bz = float(v[2].z) - float(v[0].z);
+    float det = ax * by - ay * bx;
+    if (det == 0.0f) {
+        return 0;
+    }
+    float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
+    if (world) {
+        float g = sqrtf(dzdx * dzdx + dzdy * dzdy);
+        return uint32_t(std::min(32.0f * log2f(1.0f + g) + 0.5f, 255.0f));
+    }
+    float e = std::min(0.5f * std::max(fabsf(dzdx), fabsf(dzdy)), 1.0f);
+    return uint32_t(e * 255.0f + 0.5f);
+}
+
 bool sa_draw_batch(int *why) {
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
@@ -2965,6 +2984,9 @@ bool sa_draw_batch(int *why) {
         sa_group_draw(); // (pf/skin: not a part of the model's to keep)
     }
     pc_world_flush_for(fbp, fbw, fpsm, zbp, zpsm); // (pc world: what is kept for another target, before this one is bound)
+    if (sa.batch_pc && !interp.active) {
+        pc_kept_met(); // (pc world, P5: a taken draw's batch, all its corners, for the frame's pictures between)
+    }
     bool zmsk = bits(zbuf, 32, 1);
     uint32_t sx0 = bits(scissor, 0, 11), sx1 = bits(scissor, 16, 11), sy0 = bits(scissor, 32, 11), sy1 = bits(scissor, 48, 11);
     bool ate = bits(test, 0, 1);
@@ -2990,6 +3012,7 @@ bool sa_draw_batch(int *why) {
         fbmsk |= 0xFF000000u;
     }
     if (ztst == 0) {
+        pc_kept_nothing(ctxt, 0, nullptr); // (P5)
         gs->verts.clear(); // (ZTST NEVER: nothing)
         return true;
     }
@@ -3277,6 +3300,7 @@ bool sa_draw_batch(int *why) {
     uint32_t scale_x = sa.sx, scale_y = sa.sy; // (the scene's: T2)
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
+        pc_kept_nothing(ctxt, sy1 + 1, nullptr); // (P5)
         gs->verts.clear();
         return true;
     }
@@ -3368,6 +3392,8 @@ bool sa_draw_batch(int *why) {
         }
         gs->verts.resize(kept);
         if (!kept) {
+            float cull[4] = {cx0, cy0, cx1, cy1};
+            pc_kept_nothing(ctxt, sy1 + 1, cull); // (P5: the picture's camera can bring them in)
             return true;
         }
     }
@@ -3631,20 +3657,7 @@ bool sa_draw_batch(int *why) {
         if (memo_slopes) {
             extra = memo_slopes[t / 3];
         } else if (sloped) {
-            const Vtx *v = &corners[t];
-            float ax = v[1].x - v[0].x, ay = v[1].y - v[0].y, bx = v[2].x - v[0].x, by = v[2].y - v[0].y;
-            float az = float(v[1].z) - float(v[0].z), bz = float(v[2].z) - float(v[0].z);
-            float det = ax * by - ay * bx;
-            if (det != 0.0f) {
-                float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
-                float e = std::min(0.5f * std::max(fabsf(dzdx), fabsf(dzdy)), 1.0f);
-                extra = uint32_t(e * 255.0f + 0.5f);
-                if (world) {
-                    // (by its real depth: the Z's change across a GS pixel, g, as 32 log2(1 + g): up to 250 Z a pixel)
-                    float g = sqrtf(dzdx * dzdx + dzdy * dzdy);
-                    extra = uint32_t(std::min(32.0f * log2f(1.0f + g) + 0.5f, 255.0f));
-                }
-            }
+            extra = sa_slope(&corners[t], world);
         }
         for (int k = 0; k < 3; k++) {
             corners[t + k].rgba = (corners[t + k].rgba & 0xFFFFFFu) | extra << 24;
@@ -3778,6 +3791,8 @@ bool sa_draw_batch(int *why) {
         sa_group_draw_parts(); // (pf/skin: none is pending with the PC world's kept: sa_group_draw's invariant)
         PcFrame frame = {fbp, fbw, fpsm, zbp, zpsm};
         pc_world_keep(k, frame, texture, nd.draws.buffer, nd.arena.buffer, corners, runs);
+        float cull[4] = {float(sx0) - 1.0f, float(sy0) - 1.0f, float(x1) + 1.0f, float(y1) + 1.0f};
+        pc_kept_batch(k, ctxt, texture, nd.arena.buffer, corners, slopes, cull, sy1 + 1, sy0, y1, zwrite); // (P5: its pictures')
         sa.last_shadow = false;
         sa.z_written |= zwrite;
         uint32_t d0 = interp.active ? sy0 : uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
@@ -4357,9 +4372,20 @@ void sa_draw_begin(uint64_t value) {
     sa.in_draw = true;
     sa.draw_on = scene;
 }
+void pc_kept_draw_end();
+bool pc_between_cuts();
 void sa_draw_end() {
     if (!sa.on) {
         return;
+    }
+    if (sa.pc_take && pc_between_cuts()) {
+        // (pc world, P5) a taken draw's batches drawn (kept) at its end, so that each kept batch is one draw's
+        // (pc_kept_batch: the frame's kept for its pictures between). A batch is then one draw's alphas: at map 000
+        // 95 pixels of the brazier's rim differ by more than 16 levels (its batch opaque where it was blended)
+        if (!gs->verts.empty()) {
+            flush_batch();
+        }
+        pc_kept_draw_end();
     }
     sa.in_draw = false;
     sa.pending = !gs->verts.empty() && sa.draw_on;
@@ -4931,6 +4957,7 @@ void sa_print_stats() {
     sa_print_table_stats();
     if (pc_world_mode) {
         pc_world_print_stats(); // (gsn_pc_world.inc)
+        pc_between_print_stats();
     }
 }
 

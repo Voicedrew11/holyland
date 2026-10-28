@@ -279,3 +279,358 @@ void pc_world_print_stats() {
             (unsigned long long)w.batches_kept, (unsigned long long)w.materials_drawn, (unsigned long long)w.flushes,
             (unsigned long long)w.flushes_for_target, (unsigned long long)w.draws, w.order < 0 ? 0 : w.order, w.ties < 0 ? 0 : w.ties);
 }
+
+// ---- P5: a taken draw's kept batches drawn again in its frame's pictures between ------------------------------------
+// A picture between walks the frame's packets again (rc/own: nd_prep_*), and a draw the PC world took was worked out
+// again there: its corners copied (nd_prep_corners), its batch's state, texture and blending (sa_draw_batch), to come
+// to the frame's key. So the frame keeps, for each draw the PC world took whose every batch it kept (by the draw's place
+// among the frame's native draws, nd_prep's), what pc_world_keep was given: the key, the texture, the corners as drawn
+// (the triangles' slopes in their alpha), and the triangles it left out, outside the scissor. A picture's draw at that
+// place with the same value makes its record (nd_draw: the picture's moves) and gives the frame's batches to
+// pc_world_keep with that record in their corners, into the picture's own FRAME and ZBUF (the buffer shown); its plans
+// and batches are not worked out. A triangle the frame left out is drawn where sa_draw_batch would keep it in a
+// picture (in view at t 0), in its place among the batch's: the frame keeps every triangle of a kept batch, in order,
+// its slope worked out (sa_slope). A batch the frame drew nothing of has no key: when one of its triangles is in view
+// at t 0, the draw is worked out as before.
+// A draw's batches are flushed at its end with --renderer fast (sa_draw_end), so that each kept batch is one draw's.
+// KF4_PC_BETWEEN=0 (tests): worked out as before.
+
+void sa_note_first_z(bool first);                              // (gsn_standalone.inc)
+uint32_t sa_slope(const Vtx *v, bool world);
+void nd_box_at_0_of(const Vtx *v, uint32_t count, int32_t *box); // (gsn_native_draw.inc)
+
+// One batch of a taken draw, as the frame's sa_draw_batch ended it: kept (pc_world_keep's), or nothing drawn
+struct PcKept {
+    PcKey key;
+    uint32_t ctxt;          // (the context of its FRAME and ZBUF: a picture draws into its own)
+    uint32_t acquire_rows;  // sa_acquire's rows (the scissor's last row and one); 0: the batch ended before it
+    uint32_t row0, row1;    // the scissor's rows within the target (a picture's rows: sa_draw_batch's d0, d1)
+    uint32_t z_written;
+    ImageHandle texture;
+    BufferHandle arena;
+    bool drawn;             // kept (a key); else nothing drawn (every triangle outside the scissor, or none at all)
+    uint32_t at, n;         // its corners, every triangle in order (as drawn: slopes in their alpha), in PcFrameKept::corners
+    uint32_t out_at, out_n; // the triangles left out (outside the scissor), in PcFrameKept::outs
+    float cull[4];          // the scissor a pixel wider each way, as the triangles were tested
+};
+struct PcDrawKept {
+    uint32_t first = 0, count = 0; // its batches in PcFrameKept::kept
+    uint32_t met = 0;               // the batches sa_draw_batch met (a draw whose every one ended in kept is whole)
+    uint32_t record = 0;            // the draw's record (the corners' record field)
+    bool whole = false;
+};
+struct PcFrameKept {
+    uint32_t serial = 0xFFFFFFFFu;
+    std::vector<PcDrawKept> draws;
+    std::vector<PcKept> kept;
+    std::vector<Vtx> corners;
+    std::vector<uint32_t> outs;
+    void clear() {
+        serial = 0xFFFFFFFFu;
+        draws.clear();
+        kept.clear();
+        corners.clear();
+        outs.clear();
+    }
+};
+struct PcBetween {
+    int enabled = -1;
+    PcFrameKept frames[2];           // (as nd_prep.frames: the same index)
+    std::vector<Vtx> batch;          // (the frame's) the batch's corners as sa_draw_batch met them
+    bool batch_on = false;           // and the batch is a taken draw's, to be kept
+    const PcDrawKept *taking = nullptr; // (a picture's) the draw being drawn from the frame's kept batches
+    const PcFrameKept *taking_frame = nullptr;
+    std::vector<Vtx> corners;        // (a picture's) a batch's corners with the picture's record
+    uint64_t draws_taken = 0, batches_taken = 0, corners_taken = 0, batches_out = 0, left_out = 0;
+    uint64_t not_whole = 0, left_out_in_view = 0, no_frame = 0, not_acquired = 0;
+} pc_between;
+
+bool pc_between_on() {
+    if (pc_between.enabled < 0) {
+        const char *v = getenv("KF4_PC_BETWEEN");
+        pc_between.enabled = v && *v ? atoi(v) != 0 : 1;
+    }
+    return pc_between.enabled != 0 && pc_world_mode;
+}
+
+// (sa_draw_end) Whether a taken draw's batches end with it: while frames are kept for their pictures between (nd_prep's),
+// in the frame and in its pictures alike
+bool pc_between_cuts() {
+    return pc_between_on() && (interp.active ? nd_prep.taking != nullptr : nd_prep.filling != nullptr);
+}
+
+// (the frame's) The frame being kept, or null (nd_prep's: none at 30)
+PcFrameKept *pc_kept_frame() {
+    if (!pc_between_on() || interp.active || !nd_prep.filling || nd_prep.draw < 0) {
+        return nullptr;
+    }
+    PcFrameKept &f = pc_between.frames[nd_prep.filling - nd_prep.frames];
+    if (f.serial != nd_prep.filling->serial) {
+        f.clear();
+        f.serial = nd_prep.filling->serial;
+    }
+    if (f.draws.size() <= size_t(nd_prep.draw)) {
+        f.draws.resize(size_t(nd_prep.draw) + 1);
+    }
+    return &f;
+}
+
+// (nd_draw, the frame's) a 0x000 draw's record
+void pc_kept_record(uint32_t record) {
+    if (PcFrameKept *f = pc_kept_frame()) {
+        f->draws[size_t(nd_prep.draw)].record = record;
+    }
+}
+
+// (sa_draw_batch's start, a taken draw's batch in the frame) its corners, all of them
+void pc_kept_met() {
+    pc_between.batch_on = false;
+    PcFrameKept *f = pc_kept_frame();
+    if (!f) {
+        return;
+    }
+    f->draws[size_t(nd_prep.draw)].met++;
+    pc_between.batch = gs->verts;
+    pc_between.batch_on = true;
+}
+
+// The batch met (pc_kept_met), ended in sa_draw_batch: its entry, with every triangle of the batch met in order and
+// those left out (outside cull, as sa_draw_batch tests them). drawn: the triangles kept as drawn (their slopes in their
+// alpha), the others' worked out likewise (slopes: sa_draw_batch's, 0 none, 1, 2 by the world); null: nothing drawn
+PcKept *pc_kept_end(const std::vector<Vtx> *drawn, int slopes, const float *cull) {
+    PcFrameKept *f = pc_between.batch_on ? pc_kept_frame() : nullptr;
+    pc_between.batch_on = false;
+    if (!f) {
+        return nullptr;
+    }
+    PcDrawKept &d = f->draws[size_t(nd_prep.draw)];
+    const std::vector<Vtx> &v = pc_between.batch;
+    size_t outs = 0;
+    for (size_t i = 0; cull && i + 2 < v.size(); i += 3) {
+        float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x)), tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
+        float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y)), ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
+        outs += tx1 < cull[0] || tx0 > cull[2] || ty1 < cull[1] || ty0 > cull[3];
+    }
+    if ((d.count != 0 && d.first + d.count != f->kept.size()) || (drawn && drawn->size() + outs * 3 != v.size())) {
+        return nullptr; // (never: a draw's batches end one after another, its corners the batch met's less those left out)
+    }
+    if (d.count == 0) {
+        d.first = uint32_t(f->kept.size());
+    }
+    f->kept.emplace_back();
+    d.count++;
+    PcKept &kp = f->kept.back();
+    memset(&kp.key, 0, sizeof(kp.key));
+    kp.ctxt = kp.acquire_rows = kp.row0 = kp.row1 = kp.z_written = 0;
+    kp.drawn = drawn != nullptr;
+    kp.at = uint32_t(f->corners.size());
+    kp.n = drawn || cull ? uint32_t(v.size()) / 3 * 3 : 0; // (none drawn at all: no corners)
+    kp.out_at = uint32_t(f->outs.size());
+    memset(kp.cull, 0, sizeof(kp.cull));
+    if (cull) {
+        memcpy(kp.cull, cull, sizeof(kp.cull));
+    }
+    size_t next = 0; // (drawn's next triangle)
+    for (size_t i = 0; i + 2 < kp.n; i += 3) {
+        bool out = false;
+        if (cull) {
+            float tx0 = std::min(v[i].x, std::min(v[i + 1].x, v[i + 2].x)), tx1 = std::max(v[i].x, std::max(v[i + 1].x, v[i + 2].x));
+            float ty0 = std::min(v[i].y, std::min(v[i + 1].y, v[i + 2].y)), ty1 = std::max(v[i].y, std::max(v[i + 1].y, v[i + 2].y));
+            out = tx1 < cull[0] || tx0 > cull[2] || ty1 < cull[1] || ty0 > cull[3];
+        }
+        if (!drawn || out) {
+            uint32_t extra = slopes ? sa_slope(&v[i], slopes == 2) : 0;
+            for (int k = 0; k < 3; k++) {
+                Vtx c = v[i + k];
+                c.rgba = (c.rgba & 0xFFFFFFu) | extra << 24;
+                f->corners.push_back(c);
+            }
+            if (out) {
+                f->outs.push_back(uint32_t(i / 3));
+            }
+            continue;
+        }
+        f->corners.insert(f->corners.end(), drawn->begin() + ptrdiff_t(next), drawn->begin() + ptrdiff_t(next) + 3);
+        next += 3;
+    }
+    kp.out_n = uint32_t(f->outs.size()) - kp.out_at;
+    return &kp;
+}
+
+// (sa_draw_batch, the frame's batch kept: pc_world_keep's) the batch kept for the pictures between
+void pc_kept_batch(const PcKey &k, uint32_t ctxt, const ImageHandle &texture, const BufferHandle &arena,
+                   const std::vector<Vtx> &corners, int slopes, const float *cull, uint32_t acquire_rows, uint32_t row0,
+                   uint32_t row1, uint32_t z_written) {
+    PcKept *kp = pc_kept_end(&corners, slopes, cull);
+    if (!kp) {
+        return;
+    }
+    kp->key = k;
+    kp->ctxt = ctxt;
+    kp->acquire_rows = acquire_rows;
+    kp->row0 = row0;
+    kp->row1 = row1;
+    kp->z_written = z_written;
+    kp->texture = texture;
+    kp->arena = arena;
+}
+
+// (sa_draw_batch, a taken draw's batch in the frame of which nothing is drawn: every triangle outside the scissor (cull),
+// which a picture's camera can bring in, or none at all: cull null) kept as such
+void pc_kept_nothing(uint32_t ctxt, uint32_t acquire_rows, const float *cull) {
+    if (PcKept *kp = pc_kept_end(nullptr, 0, cull)) {
+        kp->ctxt = ctxt;
+        kp->acquire_rows = acquire_rows;
+    }
+}
+
+// (sa_draw_end, the frame's taken draw ended) whether every batch ended in pc_kept_end
+void pc_kept_draw_end() {
+    if (PcFrameKept *f = pc_kept_frame()) {
+        PcDrawKept &d = f->draws[size_t(nd_prep.draw)];
+        d.whole = d.met == d.count;
+    }
+}
+
+// Whether triangle t of a batch the frame left out (outside the scissor) is in view at t 0, as sa_draw_batch tests them
+// in a picture between: its box at t 1 widened by where its corners are at t 0 (nd_box_at_0)
+bool pc_left_out_in_view(const PcFrameKept &f, const PcKept &kp, uint32_t t, uint32_t change) {
+    const Vtx *in = f.corners.data() + kp.at + size_t(t) * 3;
+    Vtx v[3] = {in[0], in[1], in[2]};
+    for (Vtx &c : v) {
+        c.rgba ^= change;
+    }
+    float tx0 = std::min(v[0].x, std::min(v[1].x, v[2].x)), tx1 = std::max(v[0].x, std::max(v[1].x, v[2].x));
+    float ty0 = std::min(v[0].y, std::min(v[1].y, v[2].y)), ty1 = std::max(v[0].y, std::max(v[1].y, v[2].y));
+    int32_t box[4] = {int32_t(floorf(tx0)) - 1, int32_t(floorf(ty0)) - 1, int32_t(ceilf(tx1)) + 2, int32_t(ceilf(ty1)) + 2};
+    nd_box_at_0_of(v, 3, box);
+    return !(float(box[2]) < kp.cull[0] || float(box[0]) > kp.cull[2] || float(box[3]) < kp.cull[1] ||
+             float(box[1]) > kp.cull[3]);
+}
+
+// (nd_draw, a picture's 0x000 draw the PC world takes, its record made: nd.boxes has it) whether its batches are the
+// frame's kept ones: then nd_draw makes none, and pc_between_draw gives them to the PC world
+bool pc_between_takes(uint32_t record) {
+    pc_between.taking = nullptr;
+    if (!pc_between_on() || !interp.active || !sa.pc_take || !nd_prep.taking || nd_prep.draw < 0) {
+        return false;
+    }
+    const PcFrameKept &f = pc_between.frames[nd_prep.taking - nd_prep.frames];
+    if (f.serial != nd_prep.taking->serial || size_t(nd_prep.draw) >= f.draws.size()) {
+        pc_between.no_frame++;
+        return false;
+    }
+    const PcDrawKept &d = f.draws[size_t(nd_prep.draw)];
+    if (!d.whole) {
+        pc_between.not_whole++;
+        return false;
+    }
+    uint32_t change = (d.record ^ record) << ND_CORNER_DRAW_SHIFT;
+    for (uint32_t i = 0; i < d.count; i++) {
+        const PcKept &kp = f.kept[d.first + i];
+        if (kp.drawn && kp.arena.get() != nd.arena.buffer.get()) {
+            pc_between.not_whole++;
+            return false;
+        }
+        for (uint32_t j = 0; !kp.drawn && j < kp.out_n; j++) {
+            if (pc_left_out_in_view(f, kp, f.outs[kp.out_at + j], change)) {
+                pc_between.left_out_in_view++;
+                return false;
+            }
+        }
+    }
+    pc_between.taking = &d;
+    pc_between.taking_frame = &f;
+    return true;
+}
+
+// (nd_draw, after the draw's registers: a picture's draw pc_between_takes took) the frame's kept batches given to the
+// PC world with the picture's record, and sa_flush's and sa_draw_batch's work around a kept batch done for each
+void pc_between_draw(uint32_t record) {
+    const PcDrawKept *d = pc_between.taking;
+    const PcFrameKept *f = pc_between.taking_frame;
+    pc_between.taking = nullptr;
+    if (!d) {
+        return;
+    }
+    pc_between.draws_taken++;
+    uint32_t change = (d->record ^ record) << ND_CORNER_DRAW_SHIFT;
+    for (uint32_t i = 0; i < d->count; i++) {
+        const PcKept &kp = f->kept[d->first + i];
+        uint64_t frame = gs->reg[R_FRAME_1 + kp.ctxt], zbuf = gs->reg[R_ZBUF_1 + kp.ctxt];
+        const PcFrame fr = {bits(frame, 0, 9) * 32, bits(frame, 16, 6), bits(frame, 24, 6), bits(zbuf, 0, 9) * 32,
+                            bits(zbuf, 24, 4) | 0x30};
+        // (sa_flush's) a batch into the reflection the picture keeps as the frame drew it
+        if (sat_kept(fr.fbp, fr.fbw, fr.fpsm)) {
+            sa_group_draw();
+            sa_stats.kept_reflection++;
+            continue;
+        }
+        sa.fcopy.fresh = false;
+        sa.first_z_before.swap(sa.first_z);
+        sa.first_z_before_on = sa.first_z_on;
+        sa.first_z_on = false;
+        // (sa_draw_batch's)
+        if (sa_group_pending() && (sa_group.fbp != fr.fbp || sa_group.fbw != fr.fbw || sa_group.fpsm != fr.fpsm ||
+                                   sa_group.zbp != fr.zbp || sa_group.zpsm != fr.zpsm)) {
+            sa_group_draw();
+        }
+        pc_world_flush_for(fr.fbp, fr.fbw, fr.fpsm, fr.zbp, fr.zpsm);
+        if (kp.acquire_rows && !sa_acquire(fr.fbp, fr.fbw, fr.fpsm, fr.zbp, fr.zpsm, kp.acquire_rows)) {
+            pc_between.not_acquired++; // (never: the frame's batch had it)
+            continue;
+        }
+        if (!kp.drawn) {
+            pc_between.batches_out++; // (nothing drawn: none of it in view at t 0 or 1, or none at all)
+            continue;
+        }
+        // (every triangle, those the frame left out too: the GPU clips them; a picture's sa_draw_batch tests them at t 0,
+        // which cost more than drawing them)
+        uint32_t n = kp.n;
+        pc_between.corners.resize(n);
+        const Vtx *in = f->corners.data() + kp.at;
+        for (uint32_t j = 0; j < n; j++) {
+            pc_between.corners[j] = in[j];
+            pc_between.corners[j].rgba ^= change;
+        }
+        pc_between.left_out += kp.out_n;
+        PcKey k = kp.key;
+        k.records = nd.draws.buffer.get();
+        k.arena = nd.arena.buffer.get();
+        std::vector<uint32_t> &runs = sa.runs;
+        runs.assign({0u, n});
+        sa_group_draw_parts();
+        pc_world_keep(k, fr, kp.texture, nd.draws.buffer, nd.arena.buffer, pc_between.corners, runs);
+        sa.last_shadow = false;
+        sa.z_written |= kp.z_written != 0;
+        sa.rows0 = std::min(sa.rows0, kp.row0);
+        sa.rows1 = std::max(sa.rows1, kp.row1);
+        sa.drew = true;
+        sa.scissor_rows = std::max(sa.scissor_rows, kp.row1);
+        sa_note_first_z(false);
+        sa_stats.batches++;
+        sa_stats.triangles += n / 3;
+        gsn_stats.primitives += n / 3;
+        pc_between.batches_taken++;
+        pc_between.corners_taken += n;
+    }
+}
+
+// (nd_prep_forget's) the frames' kept batches let go
+void pc_between_forget() {
+    for (PcFrameKept &f : pc_between.frames) {
+        f.clear();
+    }
+    pc_between.taking = nullptr;
+}
+
+void pc_between_print_stats() {
+    const PcBetween &b = pc_between;
+    fprintf(stderr, "[stats] pc world, pictures between: %llu draws (%llu batches, %llu corners with %llu triangles the frame "
+            "left out at the scissor; %llu batches drawn nothing of) drawn from the frame's kept batches; worked out again: "
+            "%llu not every batch kept, %llu a triangle of a batch the frame drew nothing of in view, %llu no frame kept; "
+            "%llu not acquired\n",
+            (unsigned long long)b.draws_taken, (unsigned long long)b.batches_taken, (unsigned long long)b.corners_taken,
+            (unsigned long long)b.left_out, (unsigned long long)b.batches_out, (unsigned long long)b.not_whole, (unsigned long long)b.left_out_in_view,
+            (unsigned long long)b.no_frame, (unsigned long long)b.not_acquired);
+}

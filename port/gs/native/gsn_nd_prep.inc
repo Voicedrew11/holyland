@@ -144,7 +144,9 @@ void nd_prep_frame(uint32_t serial) {
 }
 
 // A frame's draws kept no longer (a state loaded, the GS's VRAM replaced, the arena gone)
+void pc_between_forget(); // (gsn_pc_world.inc: the frames' kept batches)
 void nd_prep_forget() {
+    pc_between_forget();
     for (NdPrepFrame &f : nd_prep.frames) {
         f.clear();
     }
