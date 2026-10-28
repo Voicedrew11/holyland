@@ -436,7 +436,11 @@ struct Sa {
     struct Decoded {
         ImageHandle image;
         std::array<uint32_t, 256> texels;
+        uint64_t serial = 0;               // (one for each decode, never again: gsn_rgba.inc's key)
+        uint32_t width = 0, height = 0, levels = 0;
+        std::vector<uint32_t> raw;         // (--native-sampler hardware) the raw texels, every level's back to back
     };
+    uint64_t decode_serial = 0;
     std::unordered_map<uint64_t, Decoded> decoded;
     std::deque<uint64_t> decoded_order;
     size_t decoded_bytes = 0;
@@ -469,6 +473,13 @@ struct Sa {
     Program *programs_in[3][2] = {}; // (T8) [SA_VS_*][multisampled]: blending from the pass's scratch (gs_in*.frag)
     Program *programs_copy[3][2] = {}; // [SA_VS_*][multisampled]: a run's copy into the scratch by its own triangles
     Program *programs_z[3] = {};       // [SA_VS_*]: a tie's Z-first draw that no pixel can fail (sa_zfirst.frag)
+    // (--native-sampler hardware, gsn_rgba.inc) programs and programs_in reading the batch's RGBA8 texture (the
+    // GSN_HW_SAMPLER builds), and the batch's: whether it reads one, which, and with what sampler
+    Program *programs_hw[3][2] = {};
+    Program *programs_in_hw[3][2] = {};
+    bool rgba_on = false;
+    const ImageView *rgba_view = nullptr;
+    StockSampler rgba_sampler = StockSampler::NearestClamp;
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
     // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
@@ -1280,6 +1291,7 @@ struct SaTexture {
     bool reads_target = false, reads_own = false;
     bool own_named = false; // (reads_own: the named target bound, T3)
     ImageHandle table;      // (decoded from the table: its image, kept by a skinned group until it is drawn)
+    const Sa::Decoded *decoded = nullptr; // (from the table: what gsn_rgba.inc makes its RGBA8 copy from)
 };
 
 // A texture (TEX0's, its mipmap levels', the part of level 0 the draws read) decoded from the uploads that
@@ -1325,6 +1337,10 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
     Sa::Decoded d;
     d.image = make_image(1u << tw, 1u << th, format, levels, false);
     d.texels.fill(0);
+    d.serial = ++sa.decode_serial;
+    d.width = 1u << tw;
+    d.height = 1u << th;
+    d.levels = levels;
     {
         Why why_(GSN_WHY_DECODE);
         end_pass();
@@ -1338,6 +1354,9 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
         for (uint32_t y = 0; y < h; y++) {
             size_t at = size_t(y) * w;
             gsn_vram_read_row(vram, psm, mip_tbp[l], mip_tbw[l], 0, y, w, row.data());
+            if (hw_sampler) {
+                d.raw.insert(d.raw.end(), row.begin(), row.end()); // (gsn_rgba.inc)
+            }
             for (uint32_t x = 0; x < w; x++) {
                 if (format == VK_FORMAT_R32_UINT) {
                     static_cast<uint32_t *>(out)[at + x] = row[x];
@@ -1567,6 +1586,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     if (dec) {
         st.raw_view = &dec->image->get_view();
         st.table = dec->image;
+        st.decoded = dec;
         texels = dec->texels.data();
     } else {
         // the GS's: a render target (flush_batch's search), else VRAM
@@ -1728,6 +1748,36 @@ void sa_programs() {
         if (gs->program_in && gs->program_in_ms) {
             sa.programs_in[k][0] = gs->device->request_program(vss[k], gs->program_in->get_shader(ShaderStage::Fragment));
             sa.programs_in[k][1] = gs->device->request_program(vss[k], gs->program_in_ms->get_shader(ShaderStage::Fragment));
+        }
+    }
+    // (--native-sampler hardware, gsn_rgba.inc) the same reading the batch's RGBA8 texture at binding 6; in the render
+    // pass, the destination an input attachment as gsn.cpp's gs_in*.frag layouts have it (binding 5, a multisampled
+    // target's 4, in place of binding 3)
+    if (hw_sampler) {
+        ResourceLayout hw = frag;
+        hw.sets[0].sampled_image_mask |= 1u << 6;
+        hw.sets[0].fp_mask |= 1u << 6;
+        hw.sets[0].meta[6].array_size = 1;
+        Shader *fs = gs->device->request_shader(gsn_spv_gs_hw_frag, sizeof(gsn_spv_gs_hw_frag), &hw);
+        Shader *fs_sample = sample_shading ? gs->device->request_shader(gsn_spv_sa_sample_hw_frag, sizeof(gsn_spv_sa_sample_hw_frag), &hw) : nullptr;
+        Shader *fs_in[2] = {};
+        for (int ms = 0; ms < 2; ms++) {
+            ResourceLayout in = hw;
+            in.sets[0].sampled_image_mask &= ~(1u << 3);
+            in.sets[0].fp_mask &= ~(1u << 3);
+            uint32_t b = ms ? 4 : 5;
+            in.sets[0].input_attachment_mask = 1u << b;
+            in.sets[0].fp_mask |= 1u << b;
+            in.sets[0].meta[b].array_size = 1;
+            fs_in[ms] = ms ? gs->device->request_shader(gsn_spv_gs_in_ms_hw_frag, sizeof(gsn_spv_gs_in_ms_hw_frag), &in)
+                           : gs->device->request_shader(gsn_spv_gs_in_hw_frag, sizeof(gsn_spv_gs_in_hw_frag), &in);
+        }
+        for (int k = 0; k < 3; k++) {
+            sa.programs_hw[k][0] = gs->device->request_program(vss[k], fs);
+            sa.programs_hw[k][1] = fs_sample ? gs->device->request_program(vss[k], fs_sample) : nullptr;
+            for (int ms = 0; ms < 2; ms++) {
+                sa.programs_in_hw[k][ms] = gs->device->request_program(vss[k], fs_in[ms]);
+            }
         }
     }
     {
@@ -2354,6 +2404,17 @@ bool sa_shadow_batch() {
 // batch's corners are one vertex buffer).
 void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 // (in_pass, T8: the scene's own corners blend from the render pass's scratch, gs_in.frag / gs_in_ms.frag)
+#include "gsn_rgba.inc" // (--native-sampler hardware: the scene's textures for the GPU's sampler)
+
+// The scene's fragment program for a stretch of corners of vertex shader vs: the batch's RGBA8 texture read by the
+// GPU's sampler where gsn_rgba.inc made one (the GSN_HW_SAMPLER builds), else gs_frag.h's own sampling
+Program *sa_program(int vs, bool sample) {
+    return sa.rgba_on && sa.programs_hw[vs][sample ? 1 : 0] ? sa.programs_hw[vs][sample ? 1 : 0] : sa.programs[vs][sample ? 1 : 0];
+}
+Program *sa_program_in(int vs, bool ms) {
+    return sa.rgba_on && sa.programs_in_hw[vs][ms ? 1 : 0] ? sa.programs_in_hw[vs][ms ? 1 : 0] : sa.programs_in[vs][ms ? 1 : 0];
+}
+
 void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false, bool copy = false, bool zonly = false) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
@@ -2383,8 +2444,8 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass
                 c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
                               : zonly     ? sa.programs_z[vs] // (a tie's Z-first draw by depth alone)
                               : copy      ? sa.programs_copy[vs][sa.samples > 1 ? 1 : 0]
-                              : in_pass   ? sa.programs_in[vs][sa.samples > 1 ? 1 : 0]
-                                          : sa.programs[vs][sample ? 1 : 0]);
+                              : in_pass   ? sa_program_in(vs, sa.samples > 1)
+                                          : sa_program(vs, sample));
             }
             if (want && want != bound) {
                 c.set_storage_buffer(2, 1, *want);
@@ -2556,6 +2617,7 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
     c.set_texture(0, 0, *k.raw, StockSampler::NearestClamp);
     c.set_texture(0, 1, *k.target, StockSampler::NearestClamp);
     c.set_texture(0, 3, gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+    sa.rgba_on = false; // (a group's parts read their textures as the GS does: gsn_rgba.inc is for sa_draw_batch's)
     static const uint32_t no_clut[256] = {};
     c.set_storage_data(0, 2, k.want_clut ? k.clut : no_clut, 1024);
     c.set_depth_compare(k.ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : k.ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
@@ -3011,6 +3073,23 @@ bool sa_draw_batch(int *why) {
             }
             gsn_stats.copy_bytes += uint64_t(W) * H * 4;
             st.target_view = &sa.own->get_view();
+        }
+    }
+    // (--native-sampler hardware) the texture for the GPU's sampler, where it can stand in for the GS's (gsn_rgba.inc);
+    // the level then from the pixel's footprint, so the GS's level's bias for the scale is not added (--native-lod full
+    // still reads level 0)
+    sa.rgba_on = false;
+    if (tme && hw_sampler) {
+        RgbaSampling hw = rgba_sampling(st, tex1, clamp);
+        if (hw.usable) {
+            rgba_configure();
+            sa.rgba_view = &rgba_view(st, push.texa);
+            sa.rgba_sampler = hw.sampler;
+            sa.rgba_on = true;
+            rgba.batches++;
+            push.lod_bias = lod_mode == GSN_LOD_FULL ? -64.0f : 0.0f;
+        } else {
+            rgba_kept_gs(hw);
         }
     }
 
@@ -3794,6 +3873,9 @@ bool sa_draw_batch(int *why) {
     auto bind_run = [&](Cmd &c) {
         c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
         c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        if (sa.rgba_on) {
+            c.set_texture(0, 6, *sa.rgba_view, sa.rgba_sampler); // (gsn_rgba.inc: the GSN_HW_SAMPLER programs)
+        }
         if (in_pass) {
             c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
         } else {
@@ -4318,6 +4400,7 @@ void sa_forget() {
     sa.fcopy.valid = false;
     sa_table_reset();
     sa_held_forget();
+    rgba_forget(); // (--native-sampler hardware)
 }
 
 // --stats: the table's line, and a line a map of what is still the GS's

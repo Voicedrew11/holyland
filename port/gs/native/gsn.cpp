@@ -527,6 +527,7 @@ struct Timer {
     }
 };
 int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every batch too, 3 each vblank's display registers
+bool hw_sampler; // --native-sampler hardware (gsn_set_hardware_sampler; P1: gsn_rgba.inc)
 
 #define GSN_LOG(level, ...)                                                                                \
     do {                                                                                                   \
@@ -8595,6 +8596,10 @@ extern "C" void gsn_set_standalone(int on) {
     sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
 }
 
+extern "C" void gsn_set_hardware_sampler(int on) {
+    hw_sampler = on != 0;
+}
+
 extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
     // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
     sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;
@@ -8612,6 +8617,7 @@ extern "C" void gsn_set_scene_map(int map) {
 extern "C" void gsn_print_standalone_stats(void) {
     nd_prep_print_stats(); // (rc/own: native draw's work kept for the pictures between, hosted or modern)
     sa_print_stats();
+    rgba_print_stats(); // (--native-sampler hardware)
 }
 
 extern "C" void gsn_set_colour(int mode) {

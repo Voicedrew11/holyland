@@ -144,6 +144,7 @@ static void open_backend(void *unused) {
             gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
                                                                                         : GSN_NATIVE_DRAW_NATIVE);
             gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
+            gsn_set_hardware_sampler(port_options.native_sampler == PORT_SAMPLER_HARDWARE); /* --native-sampler (P1) */
             if (port_options.scene_scale || port_options.scene_msaa) {
                 /* --scene-scale, --scene-msaa (P8 T2): across as port_gs_native_scale_x has it */
                 int s = port_options.scene_scale;

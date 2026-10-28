@@ -7,7 +7,7 @@ text, the fades and the screen passes) and, until they are ported, the effects. 
 reference (the PS2's pictures, checked byte for byte); `fast` is checked against it by how much it differs, not
 whether, and is free to differ where that is the point (filtering, depth, anti-aliasing, frame rate).
 
-Status: the plan, agreed with the owner (October 2026); P1 under way. The owner's choices:
+Status: the plan, agreed with the owner (October 2026); P1 built (below). The owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -114,6 +114,22 @@ PS2 path and their checks (RENDERER.md) are not touched.
   RGBA8 with its mips, kept by (texture, CLUT), sampled with Vulkan's filtering and anisotropy. Built first and
   usable alone: under `modern` as a switch (`--native-sampler hardware`, the pictures differ in filtering only)
   it takes the per-pixel cost out of today's scene at once, and the PC renderer needs it anyway.
+  **Built** (`port/gs/native/gsn_rgba.inc`; `gs_frag.h`'s `GSN_HW_SAMPLER`, built as `gs_hw.frag`, `sa_sample_hw.frag`,
+  `gs_in_hw.frag`, `gs_in_ms_hw.frag`; `--native-sampler hardware`, which `--renderer fast` takes). A table texture
+  (`sa_table_texture`) keeps its raw texels on the CPU; the first batch that draws it with a given CLUT (or TEXA, for
+  CT24 and CT16) expands them as `texel_f` decodes them into an RGBA8 image with its levels, uploaded in the stream as
+  the raw image was, and kept by (the decode's serial, the CLUT or TEXA). The scene's program-0x000 batches drawn by
+  `sa_draw_batch` read it at binding 6 with a stock sampler: TEX1's MMAG nearest, nearest; linear between levels (MMIN 3
+  or 5), the geometry filter with `--native-aniso`'s anisotropy; else bilinear; CLAMP's REPEAT or CLAMP. The level
+  comes from the pixel's footprint (no scale's bias; `--native-lod full` still level 0). The GS's sampling is kept for
+  a render target or VRAM's texture, a region clamp or repeat, S and T wrapped differently, and the skinned groups
+  (`sa_group_state`: their own bindings; not yet measured to be worth it). `--stats`: `native sampler hardware`.
+
+  **Measured** (the pond at the owner's settings, as "Why"): 5.58 -> **3.45 ms** a picture; the scene's colour draws
+  2.57 -> 0.73, the alpha-tested Z-first draws 1.29 -> 0.66. 534,274 batches read RGBA8 textures, 134 made (15 MB),
+  4,498 kept the GS's sampling (not from the table). The pictures against `modern`'s: a third of the pixels differ, by
+  0.43 levels on average and none by more than 16 (the GPU's bilinear has 8 bits of fraction to the GS's 4; the level by
+  the footprint); side by side they cannot be told apart.
 - **P2: the snapshot and the map.** The `RD_ND_WORLD` mark and the frame's snapshot; the PC renderer draws the map
   records (program 0x000, opaque and alpha-tested) into its own colour and depth, composited at the mark; every
   other world draw still goes to the GS that frame (the turns as now) so the game stays whole while the renderer
