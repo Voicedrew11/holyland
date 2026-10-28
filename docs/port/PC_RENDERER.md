@@ -7,8 +7,11 @@ text, the fades and the screen passes) and, until they are ported, the effects. 
 reference (the PS2's pictures, checked byte for byte); `fast` is checked against it by how much it differs, not
 whether, and is free to differ where that is the point (filtering, depth, anti-aliasing, frame rate).
 
-Status: the plan, agreed with the owner (October 2026); P1 built, P2's first two steps built (below): the map's records,
-objects, items and gold, opaque, alpha-tested and blended. The owner's choices:
+Status: the plan, agreed with the owner (October 2026); P1 built, P2 built (the map's records, objects, items and gold,
+opaque, alpha-tested and blended), P3's first two steps built (the skinned parts' first pass drawn once, alphas a
+little above 1.0 by Vulkan's blending): at 170 Hz `fast` keeps the owner's settings at 168-170 pictures a second at
+maps 000 and 009, where P1 kept 84 and 118 (below, "In real time"). The steps since P2's first were decided overnight
+for the owner's review. The owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -261,6 +264,17 @@ PS2 path and their checks (RENDERER.md) are not touched.
   between though none is in view.) The pictures against P1's at places 0 as P2's second step's, 017 660 pixels
   (worst 37). `modern` byte for byte as before (009:2, its frame and a picture between); ASan + UBSan (clang) on
   `fast` at 009:2: the known reports only.
+  **In real time** (`tools/pace_test.py --maps 0,9 --hz 170 --mode pace`, the owner's settings at 170 Hz, one run
+  each, October 2026, after P3's second step):
+
+  | map | P1 (`-- --native-sampler hardware`) | fast (`-- --renderer fast`) |
+  |---|---|---|
+  | 000 | 84 pictures a second (lowest second 58), the game slowed to 41 vblanks a second | **168** (lowest 161), 60 |
+  | 009 | 118 (lowest 98), 42 vblanks a second | **170** (lowest 168), 60 |
+
+  The back end's thread (the Vulkan calls, `gsn_backend.inc`) does much less: 10.5 -> 3.4 s of a 3,800-vblank run at
+  map 000, 4.7 -> 2.6 s at map 009; the native GS's thread's time a picture between (drawn from the packets) is as
+  before (5.8 ms at map 009, `--fast`), which is P5's.
 - **P4: reflections.** The mirror (mode 1) and the offscreen reflection (mode 2) as views of the same scene; the
   rippled water (`RD_PROGRAM_RIPPLE`), the scrolling textures.
 - **P5: pictures between from snapshots.** The world's pictures between by interpolation; the recording keeps
