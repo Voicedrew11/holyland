@@ -141,10 +141,31 @@ static void test_hitches(void) {
     check("a long one cut", strlen(texts[0]) == PROFILE_HITCH_TEXT - 1);
 }
 
+static void test_compiles(void) {
+    ProfileCompiles c = port_profile_compiles();
+    uint64_t stage0;
+
+    check("no compiles at the start", c.count == 0 && c.ns == 0 && c.longest_ns == 0);
+    port_profile_set_on(0);
+    stage0 = port_profile_read().ns[PROFILE_COMPILE];
+    port_profile_compile(3000000);
+    port_profile_compile(9000000);
+    port_profile_compile(1000000);
+    c = port_profile_compiles();
+    check("counted with the panel closed", c.count == 3 && c.ns == 13000000);
+    check("the longest", c.longest_ns == 9000000);
+    check("no stage time with the panel closed", port_profile_read().ns[PROFILE_COMPILE] == stage0);
+    port_profile_set_on(1);
+    port_profile_compile(2000000);
+    check("stage time with it open", port_profile_read().ns[PROFILE_COMPILE] == stage0 + 2000000);
+    port_profile_set_on(0);
+}
+
 int main(void) {
     test_report();
     test_counters();
     test_hitches();
+    test_compiles();
     printf("%d of %d checks failed\n", failed, checked);
     return failed != 0;
 }

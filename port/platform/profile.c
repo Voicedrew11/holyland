@@ -62,6 +62,30 @@ void port_profile_vblank(void) {
     __atomic_fetch_add(&vblanks, 1, __ATOMIC_RELAXED);
 }
 
+static uint64_t compile_count, compile_ns, compile_longest_ns;
+
+void port_profile_compile(uint64_t ns) {
+    uint64_t longest = __atomic_load_n(&compile_longest_ns, __ATOMIC_RELAXED);
+
+    __atomic_fetch_add(&compile_count, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&compile_ns, ns, __ATOMIC_RELAXED);
+    while (ns > longest &&
+           !__atomic_compare_exchange_n(&compile_longest_ns, &longest, ns, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+    }
+    if (port_profile_on()) {
+        port_profile_add(PROFILE_COMPILE, ns);
+    }
+}
+
+ProfileCompiles port_profile_compiles(void) {
+    ProfileCompiles c;
+
+    c.count = __atomic_load_n(&compile_count, __ATOMIC_RELAXED);
+    c.ns = __atomic_load_n(&compile_ns, __ATOMIC_RELAXED);
+    c.longest_ns = __atomic_load_n(&compile_longest_ns, __ATOMIC_RELAXED);
+    return c;
+}
+
 ProfileCounters port_profile_read(void) {
     ProfileCounters c;
     int i;

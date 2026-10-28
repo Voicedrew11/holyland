@@ -7914,41 +7914,121 @@ void ring_start() {
 // Vulkan pipelines are made as draws first need them (a second or two of them in the first minutes of
 // play, when the driver has not kept them itself: a new build, or its own cache full). The pipeline
 // cache is kept in the data folder (gsn_pipeline_cache), and written again a while after it grows.
+//
+// The files (the cache, 3 MB, and the data folder's pipeline list) are taken and written on a thread of their own,
+// the cache writer's: taking the cache's bytes from Granite is about 3 ms and writing them 1-2 ms more, which the
+// GS's thread once spent two seconds after any pipeline was made. Granite's cache may be read while pipelines are
+// made on other threads (the driver's own cache is made for it; Granite's pipeline binaries hold their maps' read
+// locks while they are walked: cmake/granite_pipeline_warm.cmake).
 std::string cache_path;
-size_t cache_saved_size;
+size_t cache_saved_size; // (the cache writer's thread; at exit, the exiting one once that has stopped)
 uint32_t cache_vsyncs;
 
-void save_pipeline_cache() {
+// (gsn_pipeline_warm.inc) the data folder's list as text when it has more than was last taken; empty otherwise
+std::string pw_list_text();
+
+// the pipeline cache's bytes when it has grown since they were last taken; empty otherwise
+std::vector<uint8_t> pipeline_cache_bytes() {
     size_t size = gs->device->get_pipeline_cache_size();
     if (size == 0 || size == cache_saved_size) {
-        return;
+        return {};
     }
     std::vector<uint8_t> data(size);
     if (!gs->device->get_pipeline_cache_data(data.data(), size)) {
-        return;
+        return {}; // (it grew meanwhile: the next look)
     }
-    // (into a file beside it, then in its place: never half written)
-    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\"));
+    cache_saved_size = size;
+    return data;
+}
+
+// a whole file written: into a file beside it, then in its place, so never half written
+bool write_whole_file(const std::string &path, const void *data, size_t size) {
+    std::string folder = path.substr(0, path.find_last_of("/\\"));
 #ifdef _WIN32
     _mkdir(folder.c_str());
 #else
     mkdir(folder.c_str(), 0755);
 #endif
-    std::string temp = cache_path + ".new";
+    std::string temp = path + ".new";
     FILE *f = fopen(temp.c_str(), "wb");
     if (!f) {
-        return;
+        return false;
     }
-    bool written = fwrite(data.data(), 1, size, f) == size;
+    bool written = fwrite(data, 1, size, f) == size;
     written = fclose(f) == 0 && written;
     if (written) {
-        remove(cache_path.c_str());
-        written = rename(temp.c_str(), cache_path.c_str()) == 0;
+        remove(path.c_str());
+        written = rename(temp.c_str(), path.c_str()) == 0;
     }
-    if (written) {
-        cache_saved_size = size;
-        GSN_LOG(1, "pipeline cache written: %zu bytes\n", size);
+    return written;
+}
+
+struct PipelineFiles {
+    std::string list_path; // the data folder's list
+    std::mutex lock;
+    std::condition_variable wake;
+    bool wanted = false; // pipelines were made: the files are to be written again (those that changed)
+    bool stop = false;
+    std::thread thread;
+} pipeline_files;
+
+// the cache and the list written, those that changed since they were last
+void write_pipeline_files() {
+    std::vector<uint8_t> cache = pipeline_cache_bytes();
+    if (!cache.empty()) {
+        if (write_whole_file(cache_path, cache.data(), cache.size())) {
+            GSN_LOG(1, "pipeline cache written: %zu bytes\n", cache.size());
+        } else {
+            fprintf(stderr, "[gsn] the pipeline cache could not be written to %s\n", cache_path.c_str());
+        }
     }
+    std::string list = pw_list_text();
+    if (!list.empty() && !write_whole_file(pipeline_files.list_path, list.data(), list.size())) {
+        fprintf(stderr, "[gsn] the pipeline list could not be written to %s\n", pipeline_files.list_path.c_str());
+    }
+}
+
+// (the cache writer's thread) writes the files each time they are wanted, until stopped
+void pipeline_files_thread() {
+    name_thread("kf4-gs-files");
+    PipelineFiles &pf = pipeline_files;
+    std::unique_lock<std::mutex> hold(pf.lock);
+    for (;;) {
+        pf.wake.wait(hold, [&] { return pf.stop || pf.wanted; });
+        if (pf.stop) {
+            return;
+        }
+        pf.wanted = false;
+        hold.unlock();
+        write_pipeline_files();
+        hold.lock();
+    }
+}
+
+// (the GS's thread) pipelines were made: the cache writer's thread writes the files again
+void pipeline_files_want() {
+    std::lock_guard<std::mutex> hold(pipeline_files.lock);
+    pipeline_files.wanted = true;
+    pipeline_files.wake.notify_one();
+}
+
+void pipeline_files_start(const std::string &list_path) {
+    pipeline_files.list_path = list_path;
+    pipeline_files.thread = std::thread(pipeline_files_thread);
+}
+
+// (at exit) the cache writer's thread stopped once it has written what it was writing, then the files written a
+// last time here (what the last seconds made is kept)
+void pipeline_files_stop() {
+    if (pipeline_files.thread.joinable()) {
+        {
+            std::lock_guard<std::mutex> hold(pipeline_files.lock);
+            pipeline_files.stop = true;
+            pipeline_files.wake.notify_one();
+        }
+        pipeline_files.thread.join();
+    }
+    write_pipeline_files();
 }
 
 #include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
@@ -8208,10 +8288,10 @@ extern "C" void gsn_pipeline_cache(const char *path) {
     // and the cache written at the end too (not only while it runs: what the last seconds made is kept)
     std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\") + 1);
     pw_start(folder + "native_gs_pipeline_list.txt");
+    pipeline_files_start(folder + "native_gs_pipeline_list.txt");
     atexit([] {
         pw.stop = true;
-        save_pipeline_cache();
-        pw_save();
+        pipeline_files_stop();
     });
 }
 
@@ -8226,11 +8306,12 @@ extern "C" int gsn_pipelines_running(void) {
 }
 
 extern "C" void gsn_print_pipeline_stats(void) {
+    ProfileCompiles play = port_profile_compiles();
     fprintf(stderr,
             "[stats] pipelines made ahead: %zu on the lists (%zu not shipped), %d ready from the cache in %.2f s, %d built in "
-            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms), %llu not on a list\n",
+            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms, the longest %.1f ms), %llu not on a list\n",
             pw.entries.size(), pw.unshipped, pw.ready.load(), pw.seconds_check, pw.done.load(), pw.seconds_build,
-            pw.stale.load(), (unsigned long long)pw.play_made.load(), double(pw.play_ns.load()) / 1e6,
+            pw.stale.load(), (unsigned long long)play.count, double(play.ns) / 1e6, double(play.longest_ns) / 1e6,
             (unsigned long long)pw.play_new.load());
     fprintf(stderr,
             "[stats] pipeline set: %zu from the code (%s; %zu on the lists too%s); made by draws that waited: %llu "
@@ -8472,11 +8553,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         return ok;
     }
     // the pipeline cache and the data folder's pipeline list, written when pipelines have been made (looked at
-    // every two seconds)
+    // every two seconds, by the cache writer's thread)
     if (!cache_path.empty() && ++cache_vsyncs % 120 == 0 && pw.made.load() != pw.made_saved) {
         pw.made_saved = pw.made.load();
-        save_pipeline_cache();
-        pw_save();
+        pipeline_files_want();
     }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();

@@ -6,8 +6,9 @@ rate. This plan takes each cause measured below to its fix, in order of what the
 `--frame-rate unlocked`.
 
 Status: agreed in general by the owner (2026-10-28); step 1.4 and the targets are still to be decided. Built: the
-pipeline set (step 1.2, below). The refresh clock (port/platform/
-refresh_clock.c, screen_vblank.c, uncommitted on main when this was written) is step 0.
+pipeline set (step 1.2, below), the files written on a thread of their own (1.3) and one count, not a line a
+pipeline (1.5). The refresh clock (port/platform/refresh_clock.c, screen_vblank.c) is step 0, on its own branch
+(`smooth/refresh-clock`).
 
 ## What was measured (main 74149928 + the refresh clock, 2026-10-28)
 
@@ -98,13 +99,23 @@ In order; each is useful alone.
    (attachments' formats and samples rewritten, then checked by Granite's hash as now). One tour then covers every
    combination, and the data folder's lines made at other settings count too.
    **Then the whole set worked out, not found by playing: the pipeline set** (agreed 2026-10-28; built, below).
-3. **The pipeline cache and the data folder's list written on a thread of their own**, not the GS's.
+3. **The pipeline cache and the data folder's list written on a thread of their own**, not the GS's. **Built**:
+   the GS's thread only says the files are wanted; `kf4-gs-files` takes the cache's bytes from Granite (about 3 ms
+   at 3 MB, 1.2 ms more of it allocating) and writes them (1.3-1.5 ms). Taking the bytes was the larger part, and
+   was not safe on any thread: on RADV Granite keeps pipeline binaries (`VK_KHR_pipeline_binary`) and walked their
+   maps without their locks, while the back end's thread and the warm-up's could be adding to them. A Granite edit
+   made at configure (`cmake/granite_pipeline_warm.cmake`) holds the maps' read locks for the walk. The cache is now
+   written while a cold warm-up runs too (every two seconds, as it grows), so a start cut short keeps what was
+   built. Checked: TSan over a cold start with the files written seven times while two warm-up threads compiled,
+   nothing from this code or Granite's cache; the next start took all 184 pipelines from the file.
 4. **A draw in `fast` never waits for a compile.** A pipeline not made is handed to the warm-up's threads, and the
    batch is not drawn until it is (a few pictures with RADV's cache warm; up to a second cold). `modern` and
    `native` are the references and still wait (their pictures are checked byte for byte). **Owner's choice**: an
    object missing for a few pictures, or a stall; this plan proposes the first for `fast` only.
 5. **One line, not one a pipeline**: `--stats` and Shift+P's profiler count the compiles made in play and their
-   time; the log keeps a line only for those over 5 ms.
+   time; the log keeps a line only for those over 5 ms. **Built**: `port_profile_compile` counts them whether the
+   panel is open or not (`profile_test`); the profiler's line and `--stats`' `pipelines made ahead` give the count,
+   the time in all and the longest.
 
 Check: `pace_test.py --cold` at 000, 009, 063 and 022: no picture gap over two refreshes.
 

@@ -272,7 +272,8 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   compatible render pass by the attachments' formats and samples, its state words), into a list shipped in the
   program (`gsn_pipeline_list.h`, made by `tools/pipeline_list.py` from map tours: `map_tour.py --renderer modern
   --turn --extra "..."`) and, for pipelines that list lacks, the data folder's `native_gs_pipeline_list.txt` (the
-  log says `a pipeline not on the list was made in play`). At the start (`gsn_pipeline_cache`) the lines tagged with
+  log says `a pipeline not on the list was made in play` for one that took over 5 ms; the rest are counted in
+  `--stats` and the profiler). At the start (`gsn_pipeline_cache`) the lines tagged with
   the settings in use (`pw_tag`: MSAA, cut-out AA, colour, the scene and its samples) are made again on threads of
   their own, each checked against the hash Granite would look it up by (a line from another build that no longer
   makes the same pipeline is skipped, `stale`): first with `FAIL_ON_PIPELINE_COMPILE_REQUIRED` (those in the
@@ -280,7 +281,9 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   into Granite's own table, so a draw finds them made. Play waits for the rest when it starts (the first native draw,
   `kernel.c`), with the note shown; a draw that needs one not made yet still makes it then (as before). The
   pipeline cache file and the list are written two seconds after pipelines are made, and at exit (before, the cache
-  only every ten seconds, never at exit). `KF4_GSN_WARM=0` makes nothing ahead, `KF4_GSN_WARM_THREADS=N`; `--stats`
+  only every ten seconds, never at exit), on a thread of their own (`kf4-gs-files`: taking the cache's bytes from
+  Granite is about 3 ms and writing them 1-2 ms; Granite's pipeline binaries are walked under their maps' read
+  locks for it, `cmake/granite_pipeline_warm.cmake`). `KF4_GSN_WARM=0` makes nothing ahead, `KF4_GSN_WARM_THREADS=N`; `--stats`
   prints `pipelines made ahead`. Make the shipped list again after a shader or Granite change (its lines then come
   out stale, and the data folder's list fills in).
 - **The pipeline set** (`gsn_pipeline_set.inc`; SMOOTH.md, "The pipeline set"): besides the lists, every pipeline the

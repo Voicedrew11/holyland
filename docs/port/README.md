@@ -251,6 +251,8 @@ rate down. Twice a second it reads counters every thread adds to while it is ope
   ring), the native GS's (the pictures between; its waits for the back end and the GPU), the back
   end's (its waits for the GPU at a frame context), the pipelines made while a draw waited, and the
   Vulkan presenter's waits for its fence and a swapchain image (vsync, or the GPU);
+- the pipelines made in play since the start (by a draw that waited): how many, their time in all and the
+  longest, counted whether the panel is open or not (`--stats` prints the same in `pipelines made ahead`);
 - the pictures shown a second over the last half minute;
 - the last eight stalls, a game vblank or a GS thread's vblank over two vblanks' time, with what it did
   (disc reads; pipelines made, waits for the GPU, pictures between, texture decodes and uploads).
