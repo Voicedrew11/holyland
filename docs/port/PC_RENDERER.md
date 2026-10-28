@@ -11,7 +11,7 @@ Status: the plan, agreed with the owner (October 2026); P1 built, P2 built (the 
 opaque, alpha-tested and blended), P3's first two steps built (the skinned parts' first pass drawn once, alphas a
 little above 1.0 by Vulkan's blending): at 170 Hz `fast` keeps the owner's settings at 168-170 pictures a second at
 maps 000 and 009, where P1 kept 84 and 118 (below, "In real time"). The steps since P2's first were decided overnight
-for the owner's review. The owner's choices:
+for the owner's review. P4-P6: "Where P4-P6 stand" below (P5 is waiting on a design to agree). The owner's choices:
 - **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
 - **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
   draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
@@ -295,6 +295,39 @@ PS2 path and their checks (RENDERER.md) are not touched.
 - **P5: pictures between from snapshots.** The world's pictures between by interpolation; the recording keeps
   only the GS's part.
 - **P6: effects.** Program 0x700's draws as instanced particles; then the GS keeps only the 2D and the passes.
+
+## Where P4-P6 stand (October 2026, overnight, for the owner)
+
+P2 and P3's steps grew the PC renderer inside the native GS's scene (the materials kept and drawn as the chain meets
+them, P2 revised), not as the separate snapshot renderer the phases above were written for. With that, the speed the
+phases were for is mostly here already: at 170 Hz every spot measured keeps 168-170 pictures a second (maps 000, 003,
+004, 009, 013, 017, 030; map 021 draws no pictures between with P1 either). What is left of each phase, measured:
+
+- **P4, reflections.** At every place measured (009:0-6 and the spots) the reflection costs nothing on the GPU ("refl"
+  kinds 0.000-0.003 ms): the scene draws it into its named target (T3) and the pictures between keep the frame's
+  (`sat_kept`: about 500,000 batches a run left out). What remains is the water's surface (`RD_KIND_WATER`, the ripple
+  program, its own bindings: `ndw_batch`), part of 0.2 ms of Z-first draws at map 009. Not taken by the PC world: little
+  to win at the spots.
+- **P5, pictures between from snapshots.** The one large cost left is the native GS's thread: about 5.8 ms of CPU a
+  picture between at map 009 (`--fast`, drawn from the packets), the same with P1 and `fast`. Its profile (perf, map
+  009, the GS's thread 54% of the program's samples) is flat: memmove 6% (most of it the uploads' data copied, 1.8%),
+  the skinned plans 5.4%, VRAM reads 3.9%, `sa_draw_batch` 2.4%, the native plans 2.3%, then many under 2%: the GIF
+  front end, the uploads (9.3 GB a run, 168,000 asked for again by the pictures between), the batches' work. No one
+  change takes much of it; drawing the pictures between without walking their packets does, and that is the
+  recording's problem NATIVE_DRAW_P8.md ("The recording and the replays") found: a picture's decisions (the boxes at t
+  0, the copies' cover, the alpha range of both frames) differ from the frame's. In the revised design the PC world's
+  kept materials (`PcMaterial`: the key and the corners) are a frame's world at the chain's points, so they could be
+  kept for the frame's pictures between and drawn again with the corners moved on the GPU as now, the packets walked
+  only for the rest; but which of the frame's decisions a picture may reuse is the same question, and it changes how
+  every picture between is made. **Blocked: a design for the owner to agree before it is built** (the rule: the
+  interface first, for a module this size). Not needed for 170 Hz at the spots; it would be for 240 and above.
+- **P6, effects.** Taken by the PC world, the effects (program 0x700) changed no picture and saved nothing on the GPU
+  (P3's "Measured and left", above; `KF4_PC_KINDS=0x9E`). Instanced particles would save the GS thread's work on them
+  (part of P5's cost), not the GPU's: with P5.
+
+The checks on the branch as it stands: `tools/boot_test.py` PASS; `tools/frame_test.py --renderer native` PASS, and
+`--renderer fast` (added to the tool with `modern`) PASS: `fast`'s pictures the same every run, and the last one
+dumped alone the same.
 
 ## The first interface: P2, revised (for agreement)
 

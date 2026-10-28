@@ -2,7 +2,7 @@
 """Step 2's check: the game's pictures, drawn by paraLLEl-GS, the same every run.
 
     tools/frame_test.py [--disc ISO] [--exe PATH] [--keep DIR] [--frames N,N,...] [--dense A-B] [--runs N]
-                        [--renderer gs|native]
+                        [--renderer gs|native|modern|fast]
 
 Plays tests/newgame.pad as tools/boot_test.py does, headless with a fixed clock, and writes the picture
 shown at a few vblanks (--dump-frames): the Agetec logo, the title menu, the brightness screen, the
@@ -16,7 +16,8 @@ a Vulkan GPU that paraLLEl-GS runs on. The pictures are kept with --keep, for lo
 from --disc or KF4_DISC.
 
 The runs ask for --renderer gs: the program's default is the native GS since stage 4, and this test is
-paraLLEl-GS's (the reference's) determinism. --renderer native runs the same checks on the native GS.
+paraLLEl-GS's (the reference's) determinism. --renderer native runs the same checks on the native GS; modern and
+fast on its scene and on the PC renderer (docs/port/PC_RENDERER.md).
 """
 import argparse
 import hashlib
@@ -44,7 +45,9 @@ def find_exe():
     sys.exit("frame_test: no built program under out/; build one or pass --exe")
 
 
-STARTED = {"gs": ("[gs] paraLLEl-GS on", "paraLLEl-GS"), "native": ("[gsn] the native GS on", "the native GS")}
+STARTED = {"gs": ("[gs] paraLLEl-GS on", "paraLLEl-GS"), "native": ("[gsn] the native GS on", "the native GS"),
+           "modern": ("[gsn] the native GS on", "the native GS's scene (modern)"),
+           "fast": ("[gsn] the native GS on", "the PC renderer (fast)")}
 
 
 def run(exe, disc, frames, folder, renderer):
