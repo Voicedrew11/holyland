@@ -251,6 +251,8 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   pictures between, the GPU's time a picture, and (`--mode cost`) the GS's and the back end's threads' time a game
   frame. `KF4_INTERP_CUT=0` turns the cut of pictures between off (what a place keeps up; the game slows where it
   does not). A headless run draws only when it dumps a frame (`--dump-frames`): the script does.
+- **In play:** Shift+P's profiler (README.md, "The profiler") says, live, which thread or the GPU bounds the
+  pictures a second, with the GPU's time a picture from the same marks as `KF4_GSN_GPU_TIME=1`.
 - **Measuring the GPU:** `KF4_GSN_GPU_TIME=1` with `--stats` prints the GPU's time a picture by kind
   of work, and `--stats` says why render passes ended and what resolves were for. Another program on
   the GPU (a second run of the game) shows up in those times: run alone. `KF4_GSN_GPU_TIME=2` also

@@ -195,8 +195,8 @@ it off. It follows the bindings (the keys of L1 / R1 and of d-pad left / right) 
 controller alone. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
 loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F8, F9, F10
-and F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
-rebound.
+and F12 are the debugging tools (see "Debugging"), F11 switches full screen, and Shift+P shows or hides the profiler (see "The
+profiler"; it is not rebindable). Every key, mouse button and controller button can be rebound.
 
 ### The settings overlay (F1)
 
@@ -232,6 +232,33 @@ between's own, so it reads true at 144 and 240. The presenters draw it themselve
 leaves the pictures between on their own thread and their pacing as it was. It is kept in
 `settings.json`'s `overlay.show_fps`; the mouse indicator moves below it while it is shown.
 
+### The profiler (Shift+P)
+
+Shift+P shows or hides a panel, over the game with the overlay closed, that says what holds the frame
+rate down. Twice a second it reads counters every thread adds to while it is open
+(`port/include/port/profile.h`, `port/platform/profile.c`; the panel `port/overlay/profiler.cpp`):
+
+- the pictures the window shows a second against those it could (the frame rate, at least 60), the
+  pictures the native GS draws and the game's vblanks a second;
+- **Bound by**: the GPU (its share of the time at 80% or more: its times leave out the gaps between
+  command buffers), or a thread busy 85% of the time or more (the game's, the DMA controller's, the
+  native GS's or the back end's, its waits left out), the one furthest over; "stalls now and then"
+  when it does not keep up and nothing is that busy; nothing when it keeps up;
+- the GPU's time a picture against its budget (a second over the frame rate);
+- each thread's busy share of a core, with what it waited for: the game's (its disc reads; not its
+  wait for the vblank), the DMA controller's (VIF1, VU1 and the GIF; its waits for room in the GS's
+  ring), the native GS's (the pictures between; its waits for the back end and the GPU), the back
+  end's (its waits for the GPU at a frame context), the pipelines made while a draw waited, and the
+  Vulkan presenter's waits for its fence and a swapchain image (vsync, or the GPU);
+- the pictures shown a second over the last half minute;
+- the last eight stalls, a game vblank or a GS thread's vblank over two vblanks' time, with what it did
+  (disc reads; pipelines made, waits for the GPU, pictures between, texture decodes and uploads).
+
+"Copy report", with the settings open (F1: the mouse is the overlay's), puts the same as text on the
+clipboard. Open, it costs the GPU its timestamps (`KF4_GSN_GPU_TIME=1`'s, around each render pass and
+copy) and each thread a clock read around its work; closed, nothing but a check. The SDL_Renderer
+presenter's waits are not measured.
+
 **settings.json** keeps the settings, in the user's data folder: `%APPDATA%\holyland` on Windows,
 `$XDG_CONFIG_HOME/holyland` (or `~/.config/holyland`) elsewhere; `KF4_DATA_DIR` names another folder.
 The overlay's window places go beside it in `overlay.ini`. It is written a second after a change, when
@@ -264,8 +291,9 @@ without SDL there is no overlay at all.
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
 window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
 `display`, `audio`, `controls`, `savestates`, `mods`, `debug` and `interface`, and `closed` is the game alone;
-`map@V` and `mini@V` (the automap mod) and `menu@V` (the game alone, for the extended stats mod's lines in
-its menus) are named by their vblank, `overlay_menu_V.png`, so several can be taken in one run. List them
+`map@V` and `mini@V` (the automap mod), `menu@V` (the game alone, for the extended stats mod's lines in
+its menus) and `profiler@V` (the profiler's panel, Shift+P, shown from the first) are named by their vblank,
+`overlay_menu_V.png`, so several can be taken in one run. List them
 in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
 writes back settings.json:
 

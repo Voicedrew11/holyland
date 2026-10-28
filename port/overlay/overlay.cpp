@@ -31,6 +31,7 @@
 #include "imgui.h"
 
 #include "automap_view.h" // the automap mod
+#include "profiler.h"     // Shift+P
 
 extern "C" {
 #include "port/audio.h"
@@ -1478,9 +1479,11 @@ void parse_shots(const char *text) {
             shot.page = PAGE_COUNT + 2;
         if (name == "menu") // the game's menu with the extended stats mod's lines: the overlay closed, one a vblank
             shot.page = PAGE_COUNT + 3;
+        if (name == "profiler") // the profiler's panel (Shift+P), the overlay closed: one a vblank
+            shot.page = PAGE_COUNT + 4;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, audio, controls, "
-                                 "savestates, mods, debug, interface, closed, map, mini)\n",
+                                 "savestates, mods, debug, interface, closed, map, mini, menu, profiler)\n",
                          name.c_str());
             continue;
         }
@@ -1499,6 +1502,7 @@ void shot_open() {
     if (port_vblank_count() < shot.vblank)
         return;
     automap_view_open_for_shot(shot.page == PAGE_COUNT + 1);
+    profiler_show_for_shot(shot.page == PAGE_COUNT + 4);
     if (shot.page >= PAGE_COUNT) {
         overlay_open = false;
     } else {
@@ -1517,14 +1521,16 @@ void shot_write(const uint32_t *pixels, int width, int height) {
     const Shot &shot = shots[shot_next];
     if (pixels != nullptr) {
         char path[4096];
-        std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
-                      shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
-        if (shot.page > PAGE_COUNT) // the automap's and the menu's: one a vblank
+        if (shot.page > PAGE_COUNT) // the automap's, the menu's and the profiler's: one a vblank
             std::snprintf(path, sizeof(path), "%s/overlay_%s_%llu.png", port_options.dump_dir ? port_options.dump_dir : ".",
                           shot.page == PAGE_COUNT + 1   ? "map"
                           : shot.page == PAGE_COUNT + 2 ? "mini"
-                                                        : "menu",
+                          : shot.page == PAGE_COUNT + 3 ? "menu"
+                                                        : "profiler",
                           (unsigned long long)shot.vblank);
+        else // (page_ids has the settings' pages only)
+            std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
+                          shot.page == PAGE_COUNT ? "closed" : page_ids[shot.page]);
         if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
@@ -1638,6 +1644,8 @@ extern "C" int port_overlay_event(const void *sdl_event) {
             changed();
             return 1;
         }
+        if (!ImGui::GetIO().WantTextInput && profiler_key(*event))
+            return 1;
     }
     if (event->type == SDL_KEYUP &&
         (event->key.keysym.scancode == SDL_SCANCODE_F1 || event->key.keysym.scancode == SDL_SCANCODE_F11))
@@ -1660,7 +1668,7 @@ extern "C" int port_overlay_visible(void) {
     return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
                      (renderer == nullptr && port_controls_indicator_shown()) || automap_view_visible() ||
-                     weapon_sets_view_visible());
+                     weapon_sets_view_visible() || profiler_visible());
 }
 
 extern "C" void *port_overlay_draw_data(void) {
@@ -1703,6 +1711,7 @@ extern "C" void port_overlay_vblank(void) {
     if (!ready)
         return;
     port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
+    profiler_step();             // Shift+P (port/overlay/profiler.cpp)
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
@@ -1749,6 +1758,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     draw_toast();
     draw_building();
     port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
+    profiler_draw(overlay_open);                                // Shift+P (port/overlay/profiler.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)

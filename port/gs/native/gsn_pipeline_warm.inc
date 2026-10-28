@@ -278,6 +278,9 @@ void pw_on_compile(Device *device, const DeferredPipelineCompile &c, bool comput
     }
     pw.play_made++;
     pw.play_ns += uint64_t(ns);
+    if (port_profile_on()) {
+        port_profile_add(PROFILE_COMPILE, uint64_t(ns));
+    }
     hitch_compiles++;
     hitch_compile_ns += uint64_t(ns);
     PwEntry e;

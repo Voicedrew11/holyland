@@ -36,6 +36,7 @@
 #include "port/audio.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/profile.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
@@ -333,11 +334,43 @@ static void hitch_vblank(void) {
     hash0 = (double)rd_stats.hash_bytes;
 }
 
+/* The profiler (Shift+P, port/include/port/profile.h): the game's work since the last vblank was done
+   with, that is not its wait for this one; a vblank's work over two vblanks' time is a hitch */
+static uint64_t profile_resumed_ns, profile_disc_ns;
+
+static void profile_vblank(void) {
+    uint64_t now, work, disc;
+    char text[PROFILE_HITCH_TEXT];
+
+    port_profile_vblank();
+    if (!port_profile_on()) {
+        profile_resumed_ns = 0;
+        return;
+    }
+    now = port_profile_now_ns();
+    disc = port_profile_read().ns[PROFILE_DISC];
+    if (profile_resumed_ns != 0) {
+        work = now - profile_resumed_ns;
+        port_profile_add(PROFILE_GAME, work);
+        if (work > 2 * 16683000u) {
+            snprintf(text, sizeof(text), "vblank %llu: the game's thread %.1f ms (disc reads %.1f ms)",
+                     (unsigned long long)vblank_count, (double)work / 1e6, (double)(disc - profile_disc_ns) / 1e6);
+            port_profile_hitch(text);
+        }
+    }
+    profile_disc_ns = disc;
+}
+
+static void profile_resume(void) {
+    profile_resumed_ns = port_profile_on() ? port_profile_now_ns() : 0;
+}
+
 static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
     uint32_t mode;
 
     hitch_vblank();
+    profile_vblank();
     vblank_count++;
     /* the GS scans out the field the display registers say, alongside the game. It is the field
        CSR's FIELD names until now: the GS turns FIELD over a few lines into the vblank, after the
@@ -417,6 +450,7 @@ static void vblank_start(void) {
         port_host_float_end(mode);
         pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
     }
+    profile_resume();
     /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
        thread takes it while this one waits (port_kernel_run), and a state loaded later goes on from
        this point. */
