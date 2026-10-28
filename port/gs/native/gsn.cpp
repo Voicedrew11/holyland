@@ -57,6 +57,7 @@ extern "C" {
 #include "port/gs_capture_format.h"
 #include "port/vu_float.h" // (native draw: gsn_native_draw.inc)
 #include "port/platform.h"
+#include "port/profile.h" // (Shift+P: the threads' and the GPU's times)
 #include "port/host.h" // (native draw: the frame-rate marks, gsn_native_draw.inc)
 #include "gsn.h"
 #include "gsn_vram.h"
@@ -303,6 +304,9 @@ struct Gs {
     ImageHandle dummy_raw, dummy_rgba, snapshot, scanout;
     ImageHandle resolved[2]; // a multisampled target's copies for shader blending, resolved by the passes (resolved_copy)
     ImageHandle load_stage[3]; // load_target_rect's rectangles at the PS2's size in the frame (8-bit, 16-bit, depth)
+    // load_scaled_on_gpu's answers: each format, whether it blits both ways (here, not a static of the function: its
+    // destructor would run at exit before ring_stop, with this thread still loading targets)
+    std::vector<std::pair<VkFormat, bool>> blit_formats;
     BufferHandle readback_buffer;
     VkDeviceSize readback_size = 0;
     std::vector<uint8_t> narrowed; // read_image's pixels of a 16-bit image, rounded to 8 bits
@@ -502,6 +506,17 @@ void put_pixels(void *out, const Image &image, size_t at, const uint32_t *rgba, 
     }
 }
 
+// (Shift+P's profiler, while open) the time in scope added to a stage
+struct ProfileTimer {
+    ProfileStage stage;
+    uint64_t start;
+    explicit ProfileTimer(ProfileStage s) : stage(s), start(port_profile_on() ? port_profile_now_ns() : 0) {}
+    ~ProfileTimer() {
+        if (start != 0) {
+            port_profile_add(stage, port_profile_now_ns() - start);
+        }
+    }
+};
 // Time spent in a function, added to a counter of gsn_stats
 struct Timer {
     uint64_t &total;
@@ -512,6 +527,7 @@ struct Timer {
     }
 };
 int log_level; // KF4_GSN_LOG: 1 says when targets are made and dropped, 2 every batch too, 3 each vblank's display registers
+bool hw_sampler; // --native-sampler hardware (gsn_set_hardware_sampler; P1: gsn_rgba.inc)
 
 #define GSN_LOG(level, ...)                                                                                \
     do {                                                                                                   \
@@ -1563,7 +1579,8 @@ void gpu_mark(int kind) {
     if (gpu_time < 0) {
         gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
-    if (!gpu_time || !cmd().begun()) {
+    // (the profiler, Shift+P, while open: the same marks, for the GPU's time in all)
+    if ((!gpu_time && !port_profile_on()) || !cmd().begun()) {
         return;
     }
     if (gpu_time >= 2 && recording_ops->on) {
@@ -1573,7 +1590,7 @@ void gpu_mark(int kind) {
         kind = gpu_cur;
         gpu_cur = -1;
     }
-    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(kind)}, {}});
+    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(kind), uint32_t(gpu_time > 0)}, {}});
 }
 
 // (KF4_GSN_GPU_TIME=2) the GPU's time from here to the next mark is `kind`'s; the time before it, what was entered last
@@ -1585,7 +1602,7 @@ void gpu_enter(int kind) {
         recording_ops->add(OP_GPU_MARK, ArgValues{{uint32_t(kind), 1}, {}});
     }
     int before = gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED;
-    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(before)}, {}});
+    backend_stream().add(OP_TIMESTAMP, ArgValues{{uint32_t(before), 1}, {}});
     gpu_cur = kind;
 }
 
@@ -2274,7 +2291,7 @@ void write_back(Target &t) {
 // not with KF4_GSN_LOAD_SCALE=0 (the rows made at the scale on the CPU, as before: to compare)
 bool load_scaled_on_gpu(VkFormat format) {
     static int off = -1;
-    static std::vector<std::pair<VkFormat, bool>> formats;
+    std::vector<std::pair<VkFormat, bool>> &formats = gs->blit_formats;
     if (off < 0) {
         const char *v = getenv("KF4_GSN_LOAD_SCALE");
         off = v && *v == '0';
@@ -7693,6 +7710,49 @@ void hitch_end(uint32_t type, bool vblank) {
     hitch.s0 = gsn_stats;
 }
 
+// ---- The profiler (Shift+P, port/include/port/profile.h): this thread's work by record, and a vblank's work over two
+// vblanks' time named as a hitch, with what it did ----
+struct ProfileVblank {
+    uint64_t t0 = 0, work_ns = 0;
+    bool begun = false; // (a vblank's counts below taken: the next vblank's work can be told apart)
+    uint64_t compile0 = 0, wait0 = 0, decode0 = 0, upload0 = 0, interp0 = 0;
+} profile_gs;
+void profile_begin() {
+    profile_gs.t0 = port_profile_on() ? port_profile_now_ns() : 0;
+}
+void profile_end(uint32_t type, bool vblank) {
+    ProfileVblank &p = profile_gs;
+    if (p.t0 == 0) {
+        return;
+    }
+    uint64_t ns = port_profile_now_ns() - p.t0;
+    port_profile_add(PROFILE_GS, ns);
+    if (type == RING_INTERP_FRAME || type == RING_INTERP_PICTURE) {
+        port_profile_add(PROFILE_GS_INTERP, ns);
+    }
+    p.work_ns += ns;
+    if (!vblank) {
+        return;
+    }
+    ProfileCounters c = port_profile_read();
+    if (p.work_ns > 2 * 16683000u && p.begun) {
+        char text[PROFILE_HITCH_TEXT];
+        snprintf(text, sizeof(text),
+                 "GS vblank: %.1f ms (pipelines made %.1f, waits for GPU %.1f, between %.1f, decodes %.1f, uploads %.1f)",
+                 double(p.work_ns) / 1e6, double(c.ns[PROFILE_COMPILE] - p.compile0) / 1e6,
+                 double(c.ns[PROFILE_GS_WAIT] - p.wait0) / 1e6, double(c.ns[PROFILE_GS_INTERP] - p.interp0) / 1e6,
+                 double(gsn_stats.ns_decode - p.decode0) / 1e6, double(gsn_stats.ns_upload - p.upload0) / 1e6);
+        port_profile_hitch(text);
+    }
+    p.work_ns = 0;
+    p.begun = true;
+    p.compile0 = c.ns[PROFILE_COMPILE];
+    p.wait0 = c.ns[PROFILE_GS_WAIT];
+    p.interp0 = c.ns[PROFILE_GS_INTERP];
+    p.decode0 = gsn_stats.ns_decode;
+    p.upload0 = gsn_stats.ns_upload;
+}
+
 void ring_thread() {
     Util::register_thread_index(0); // (Granite's command pools: the sender's when it does the work)
     name_thread("kf4-gs");
@@ -7730,7 +7790,9 @@ void ring_thread() {
         RingRecord r;
         memcpy(&r, at, sizeof(r));
         hitch_begin();
+        profile_begin();
         ring_work(r, at + sizeof(r));
+        profile_end(r.type, r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA));
         hitch_end(r.type, r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA));
         if (r.type == RING_VSYNC && !(r.want_pixels & GSN_EXTRA)) {
             q.vsyncs_done.fetch_add(1);
@@ -7749,6 +7811,7 @@ template <class Done> void sender_wait(Done done) {
     if (done()) {
         return;
     }
+    ProfileTimer waiting(PROFILE_RING_WAIT);
     // a short wait spinning, a long one asleep
     auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
     while (!done() && std::chrono::steady_clock::now() < until) {
@@ -8250,6 +8313,7 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
     sa_switch(sa_mode != 0);
     sa_vblank(extra);
     gsn_stats.pictures++;
+    port_profile_picture();
     gsn_stats.pipeline_binds = pipeline_binds();
     Why why_scanout(GSN_WHY_SCANOUT);
     end_pass();
@@ -8532,6 +8596,14 @@ extern "C" void gsn_set_standalone(int on) {
     sa_mode = on; // (taken at the next vblank: gsn_standalone.inc)
 }
 
+extern "C" void gsn_set_hardware_sampler(int on) {
+    hw_sampler = on != 0;
+}
+
+extern "C" void gsn_set_pc_world(int on) {
+    pc_world_mode = on != 0; // (gsn_pc_world.inc: taken as each draw is met)
+}
+
 extern "C" void gsn_set_scene(int x_scale, int y_scale, int samples) {
     // (taken when the scene next takes a frame: gsn_standalone.inc, sa_shape)
     sa_wanted_scale = uint32_t(std::min(std::max(x_scale, 0), GSN_MAX_SCALE_X)) | uint32_t(std::min(std::max(y_scale, 0), 4)) << 8;
@@ -8549,6 +8621,7 @@ extern "C" void gsn_set_scene_map(int map) {
 extern "C" void gsn_print_standalone_stats(void) {
     nd_prep_print_stats(); // (rc/own: native draw's work kept for the pictures between, hosted or modern)
     sa_print_stats();
+    rgba_print_stats(); // (--native-sampler hardware)
 }
 
 extern "C" void gsn_set_colour(int mode) {

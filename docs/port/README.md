@@ -120,12 +120,13 @@ out/linux-gcc/kf4 --disc kfiv_us.iso
 | `--fast` | run as fast as possible instead of at 60 vblanks a second (59.94: each vblank waits for the host's clock, on Windows a high-resolution waitable timer; the window shows each vblank's picture, waiting up to half a vblank for it; one later than that is shown at the next vblank, and a window still a vblank behind at the next present catches up by leaving one out) |
 | `--headless` | no window, no SDL; the GS draws only for `--dump-frames` and GS captures (`--gs-capture-at`, `KF4_DEBUG_AT`) |
 | `--no-gs` | draw nothing (VIF1 and VU1 still run) |
-| `--renderer native\|gs\|both` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`) |
+| `--renderer native\|gs\|both\|modern\|fast` | who draws: the native GS (the default; step 3, [STEP3.md](STEP3.md)), paraLLEl-GS (the reference, kept for comparison; it draws instead if the native GS cannot start), or both side by side with their pictures compared each vblank (`--renderer-shown native` shows the native one, `--renderer-shown heatmap` where the two differ; `--stats` prints the comparison). The Debug page sets it for the next start (`settings.json`, `display.renderer`). `fast` is `modern` with the PC renderer's parts built so far (PC_RENDERER.md; P1: `--native-sampler hardware`) |
 | `--native-scale auto\|N` | the native GS draws at N times the PS2's resolution, 1 to 4, or `auto` (the default): the multiple of 448 lines nearest the height the window shows the picture at (1080: 2, 1440: 3, 2160: 4; at most 2 on an integrated GPU; 1 headless) (live on the Debug page; `settings.json` `display.native_scale`, a number or `"auto"`) |
 | `--native-widescreen`, `--no-native-widescreen` | with `--widescreen`, the native GS draws the 16:9 picture with square pixels: its frame buffers 4/3 of `--native-scale` across, rounded up (live on the Debug page; `settings.json` `display.native_widescreen`, on by default there; off on the command line alone) |
 | `--flicker-filter` | draw the game's flicker filter, as on the PS2: every frame of play it blends each row of the picture half with the row above, so that thin lines do not flicker between an interlaced TV's two fields. Off by default: on a PC screen it blurs the picture up and down, and above 1x shows it twice a GS row apart (the Display page's "No flicker filter"; `settings.json` `display.flicker_filter`) |
 | `--native-msaa N` | the native GS draws the 3D with N samples a pixel (1, the default: off; 2, 4 or 8), smoothing its edges (on the Debug page, live but for a change of count, which takes a restart; `settings.json` `display.native_msaa`) |
 | `--native-aniso N` | anisotropic filtering of the native GS's mipmapped textures: up to N reads along a pixel's footprint (1, the default: off; 2, 4, 8 or 16), for floors and walls at a grazing angle (live on the Debug page; `settings.json` `display.native_aniso`) |
+| `--native-sampler gs\|hardware` | how the native GS's scene reads its textures: `gs` (the default), the GS's texture unit in the shader, texel by texel; `hardware`, the GPU's sampler on RGBA8 copies of the textures with their mip levels (its filtering and anisotropy: faster, the pictures differ in filtering only). `--renderer fast` takes `hardware` unless this says otherwise (PC_RENDERER.md, P1) |
 | `--native-colour exact\|high` | how precisely the native GS keeps colours: `exact` (the default), the GS's 8 bits a channel and its roundings; `high`, 16 bits a channel and the colours' arithmetic without the roundings, the picture dithered to 8 bits, so smooth dark gradients (the sky, glows) have no bands (on the Debug page, live; `settings.json` `display.native_colour`; PLAN.md) |
 | `--native-shine whole\|exact` | with `--renderer modern`, the ice creatures' sphere-mapped shine (map 017, blended in a shader): drawn whole (the default), or exact, in runs, as the PS2 blends it where a part folds over its own edge: a few pixels a picture brighter along those edges, and much slower there (about 140 pictures a second at 240 against 220-240) (live in the Debug page's Renderer section, "Ice shine: exact PS2 folds (slower)"; `settings.json` `display.native_shine`, `"whole"` or `"exact"`; NATIVE_DRAW_P8.md, "The ice shine drawn whole") |
 | `--presenter vulkan\|sdl` | how the picture reaches the window: a Vulkan swapchain on the native GS's device, the native GS's picture never leaving the GPU (the default; `port/platform/present_vk.cpp`), or SDL_Renderer. Vulkan needs the native GS (`--renderer native` or `both`): with paraLLEl-GS alone the window is SDL_Renderer's, as it is if the swapchain cannot be made. The Debug page sets it for the next start (`settings.json`, `display.presenter`) |
@@ -195,8 +196,8 @@ it off. It follows the bindings (the keys of L1 / R1 and of d-pad left / right) 
 controller alone. In both, F1 opens the settings overlay, F2 takes a quick save and F4
 loads it (the saves to play with, which survive updates), F5 saves a save state to the quick slot and F7
 loads it (exact, for debugging, same build only), F3 shows or hides the frame-rate counter, F8, F9, F10
-and F12 are the debugging tools (see "Debugging"), and F11 switches full screen. Every key, mouse button and controller button can be
-rebound.
+and F12 are the debugging tools (see "Debugging"), F11 switches full screen, and Shift+P shows or hides the profiler (see "The
+profiler"; it is not rebindable). Every key, mouse button and controller button can be rebound.
 
 ### The settings overlay (F1)
 
@@ -232,6 +233,33 @@ between's own, so it reads true at 144 and 240. The presenters draw it themselve
 leaves the pictures between on their own thread and their pacing as it was. It is kept in
 `settings.json`'s `overlay.show_fps`; the mouse indicator moves below it while it is shown.
 
+### The profiler (Shift+P)
+
+Shift+P shows or hides a panel, over the game with the overlay closed, that says what holds the frame
+rate down. Twice a second it reads counters every thread adds to while it is open
+(`port/include/port/profile.h`, `port/platform/profile.c`; the panel `port/overlay/profiler.cpp`):
+
+- the pictures the window shows a second against those it could (the frame rate, at least 60), the
+  pictures the native GS draws and the game's vblanks a second;
+- **Bound by**: the GPU (its share of the time at 80% or more: its times leave out the gaps between
+  command buffers), or a thread busy 85% of the time or more (the game's, the DMA controller's, the
+  native GS's or the back end's, its waits left out), the one furthest over; "stalls now and then"
+  when it does not keep up and nothing is that busy; nothing when it keeps up;
+- the GPU's time a picture against its budget (a second over the frame rate);
+- each thread's busy share of a core, with what it waited for: the game's (its disc reads; not its
+  wait for the vblank), the DMA controller's (VIF1, VU1 and the GIF; its waits for room in the GS's
+  ring), the native GS's (the pictures between; its waits for the back end and the GPU), the back
+  end's (its waits for the GPU at a frame context), the pipelines made while a draw waited, and the
+  Vulkan presenter's waits for its fence and a swapchain image (vsync, or the GPU);
+- the pictures shown a second over the last half minute;
+- the last eight stalls, a game vblank or a GS thread's vblank over two vblanks' time, with what it did
+  (disc reads; pipelines made, waits for the GPU, pictures between, texture decodes and uploads).
+
+"Copy report", with the settings open (F1: the mouse is the overlay's), puts the same as text on the
+clipboard. Open, it costs the GPU its timestamps (`KF4_GSN_GPU_TIME=1`'s, around each render pass and
+copy) and each thread a clock read around its work; closed, nothing but a check. The SDL_Renderer
+presenter's waits are not measured.
+
 **settings.json** keeps the settings, in the user's data folder: `%APPDATA%\holyland` on Windows,
 `$XDG_CONFIG_HOME/holyland` (or `~/.config/holyland`) elsewhere; `KF4_DATA_DIR` names another folder.
 The overlay's window places go beside it in `overlay.ini`. It is written a second after a change, when
@@ -264,8 +292,9 @@ without SDL there is no overlay at all.
 the overlay on that page at that vblank, even with a pad script (in a hidden window), and writes the
 window's whole picture a few vblanks later as `overlay_<page>.png` in `--dump-dir`. The pages are
 `display`, `audio`, `controls`, `savestates`, `mods`, `debug` and `interface`, and `closed` is the game alone;
-`map@V` and `mini@V` (the automap mod) and `menu@V` (the game alone, for the extended stats mod's lines in
-its menus) are named by their vblank, `overlay_menu_V.png`, so several can be taken in one run. List them
+`map@V` and `mini@V` (the automap mod), `menu@V` (the game alone, for the extended stats mod's lines in
+its menus) and `profiler@V` (the profiler's panel, Shift+P, shown from the first) are named by their vblank,
+`overlay_menu_V.png`, so several can be taken in one run. List them
 in vblank order. Use it with `KF4_DATA_DIR`, as it reads and, after the last picture,
 writes back settings.json:
 

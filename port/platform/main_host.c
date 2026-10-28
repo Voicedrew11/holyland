@@ -66,6 +66,12 @@
        --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
                          default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
                          and walls at a grazing angle (gs_frag.h, sample_texture)
+       --native-sampler MODE
+                         how the native GS's scene reads its textures: gs (the default: the GS's texture
+                         unit in the shader, texel by texel), or hardware (the GPU's sampler on RGBA8
+                         copies with their mip levels; faster, filtering differs only). --renderer fast
+                         takes hardware unless this says otherwise (PC_RENDERER.md, P1)
+       --renderer fast   modern, with the PC renderer's parts built so far (PC_RENDERER.md)
        --native-colour MODE
                          how precisely the native GS keeps colours: exact (the default: the GS's 8
                          bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
@@ -246,11 +252,11 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern] [--renderer-shown gs|native|heatmap]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--upscaler off|bilinear|fsr3|dlss]\n"
-            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
+            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16] [--native-sampler gs|hardware]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
@@ -443,15 +449,17 @@ static void parse_options(int argc, char **argv) {
                         : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
+                        : both && strcmp(value, "fast") == 0 ? PORT_RENDERER_NATIVE
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both or modern" : " or heatmap", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern or fast" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
                 port_options.renderer = which;
                 port_options.renderer_forced = 1;
-                port_options.renderer_modern = strcmp(value, "modern") == 0;
+                port_options.renderer_modern = strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0;
+                port_options.renderer_fast = strcmp(value, "fast") == 0;
             } else {
                 port_options.renderer_shown = which;
                 port_options.renderer_heatmap = heatmap;
@@ -574,6 +582,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_aniso_forced = 1;
+        } else if (strcmp(option, "--native-sampler") == 0) {
+            if (strcmp(value, "gs") == 0) {
+                port_options.native_sampler = PORT_SAMPLER_GS;
+            } else if (strcmp(value, "hardware") == 0) {
+                port_options.native_sampler = PORT_SAMPLER_HARDWARE;
+            } else {
+                fprintf(stderr, "--native-sampler wants gs or hardware, not %s\n", value);
+                exit(2);
+            }
+            port_options.native_sampler_forced = 1;
         } else if (strcmp(option, "--native-cutout-aa") == 0) {
             if (strcmp(value, "off") == 0) {
                 port_options.native_cutout_aa = 0;
@@ -729,10 +747,6 @@ static void parse_options(int argc, char **argv) {
         } else {
             usage(argv[0]);
         }
-    }
-    if (port_options.renderer_modern && port_options.native_draw == 0) {
-        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1) */
-        port_options.native_draw_forced = 1; /* (settings.json's "off" must not empty the scene) */
     }
     if (port_options.disc == NULL) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
@@ -992,6 +1006,18 @@ static void print_stats(void) {
     port_host_float_end(mode);
 }
 
+/* What --renderer modern and fast (or settings.json's "renderer") bring with them, once both have been read */
+static void renderer_implies(void) {
+    if (port_options.renderer_modern && port_options.native_draw == 0) {
+        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1; settings.json's "off"
+                                                        must not empty the scene) */
+    }
+    if (port_options.renderer_fast && !port_options.native_sampler_forced) {
+        /* fast: the GPU's sampler unless --native-sampler says otherwise */
+        port_options.native_sampler = PORT_SAMPLER_HARDWARE;
+    }
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -1001,6 +1027,7 @@ int main(int argc, char **argv) {
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
+    renderer_implies();
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);

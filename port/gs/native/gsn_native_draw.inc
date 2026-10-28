@@ -882,6 +882,11 @@ int32_t nd_model_flags(const NdKey &key, const RdDraw &d, const RdCamera &cam, N
     return ND_C_MOVING | ND_C_MODEL | (eye ? ND_C_EYE : 0);
 }
 
+// (gsn_pc_world.inc, P5: a taken draw's batches as the frame kept them, in its pictures between)
+void pc_kept_record(uint32_t record);
+bool pc_between_takes(uint32_t record);
+void pc_between_draw(uint32_t record);
+
 void nd_draw(uint64_t value) {
     RdDraw d;
     RdCamera cam;
@@ -939,6 +944,9 @@ void nd_draw(uint64_t value) {
         k = again;
         nd_prep_keep_const(d.program, &k, sizeof(k));
     }
+    if (!interp.active) {
+        pc_kept_record(record);
+    }
     if (d.program == 0x5A0) {
         // (the shadows: 0x000's maths without the lights and the fog, gsn_nd_5a0.inc: nd5a0_const above)
         if (nd.of5a0.size() <= record) {
@@ -995,6 +1003,8 @@ void nd_draw(uint64_t value) {
         nd.boxes[record] = {k.info[3], k.screen[0], k.screen[5], k.screen[8], k.screen[9], float(k.info[1]) / 16.0f,
                             float(k.info[2]) / 16.0f, {k.obj[0], k.obj[1], k.obj[2]}, k.screen[10]};
     }
+    // (pc world, P5) a picture's draw whose batches the frame kept: its record only; the batches are the frame's
+    bool pc_frame_batches = d.program == 0 && pc_between_takes(record);
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
@@ -1020,6 +1030,9 @@ void nd_draw(uint64_t value) {
             if (gs->verts.empty()) {
                 gs->batch_prim = eprim;
                 gs->batch_sprites = false;
+            }
+            if (pc_frame_batches) {
+                continue; // (its registers written, as the frame's draw wrote them)
             }
             size_t before = gs->verts.size();
             {
@@ -1050,6 +1063,9 @@ void nd_draw(uint64_t value) {
             nd.batch_draws = nd.draws.buffer.get();
             gsn_stats.nd_batches++;
         }
+    }
+    if (pc_frame_batches) {
+        pc_between_draw(record);
     }
     // (the GS's vertex queue as the strip left it does not matter: the next draw writes PRIM)
     gs->queue_count = 0;
@@ -1158,22 +1174,16 @@ bool nd_corner_at_0(const Vtx &w, const NdBoxInfo &b, float *px, float *py, doub
     return true;
 }
 
-bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
-    if (!nd.active || nd.pass_active) { // (a screen pass's corners are the CPU's: interp_box_at_0)
-        return false;
-    }
+// 0x000's corners (count of them from v, with the picture's records) widened by where they are at t 0
+void nd_box_at_0_of(const Vtx *v, uint32_t count, int32_t *box) {
     auto whole = [&]() {
         box[0] = box[1] = -1;
         box[2] = box[3] = 2048 + 2;
     };
-    if (nd.strip_active || ndw_batch()) {
-        whole(); // (the strip's, and the water's: their records are not nd.boxes')
-        return true;
-    }
     float most = 0.0f;
     bool moved = false;
-    for (uint32_t i = first; i < first + count && i < gs->verts.size(); i++) {
-        const Vtx &w = gs->verts[i];
+    for (uint32_t i = 0; i < count; i++) {
+        const Vtx &w = v[i];
         int kind = nd_corner_kind(w);
         if (kind == ND_KIND_PS2) {
             continue;
@@ -1181,7 +1191,7 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         uint32_t record = (w.rgba & 0xFFFFFFu) >> ND_CORNER_DRAW_SHIFT;
         if (kind != ND_KIND_000 || record >= nd.boxes.size()) {
             whole();
-            return true;
+            return;
         }
         const NdBoxInfo &b = nd.boxes[record];
         if (!(b.flags & ND_C_MOVING)) {
@@ -1189,7 +1199,7 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         }
         if (b.flags & ND_C_MODEL) {
             whole();
-            return true;
+            return;
         }
         moved = true;
         float px, py;
@@ -1209,6 +1219,20 @@ bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
         box[1] -= margin;
         box[2] += margin;
         box[3] += margin;
+    }
+}
+
+bool nd_box_at_0(uint32_t first, uint32_t count, int32_t *box) {
+    if (!nd.active || nd.pass_active) { // (a screen pass's corners are the CPU's: interp_box_at_0)
+        return false;
+    }
+    if (nd.strip_active || ndw_batch()) {
+        box[0] = box[1] = -1; // (the strip's, and the water's: their records are not nd.boxes')
+        box[2] = box[3] = 2048 + 2;
+        return true;
+    }
+    if (first < gs->verts.size()) {
+        nd_box_at_0_of(gs->verts.data() + first, std::min(count, uint32_t(gs->verts.size() - first)), box);
     }
     return true;
 }

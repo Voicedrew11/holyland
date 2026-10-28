@@ -140,6 +140,12 @@ void gsn_set_native_draw(int mode);
    uploads that own them; the GS draws the rest over it. From the next vblank. gsn_print_standalone_stats:
    its --stats line. */
 void gsn_set_standalone(int on);
+/* --native-sampler hardware (docs/port/PC_RENDERER.md, P1): the scene's textures read by the GPU's sampler from
+   RGBA8 copies, not by the shader texel by texel */
+void gsn_set_hardware_sampler(int on);
+/* --renderer fast (docs/port/PC_RENDERER.md, P2, gsn_pc_world.inc): the map's records kept and drawn by the PC renderer
+   by material, not by the scene's batch by batch */
+void gsn_set_pc_world(int on);
 void gsn_print_standalone_stats(void);
 /* --scene-scale and --scene-msaa (P8 T2, gsn_composite.inc): the scene's own scale, across and down, and samples,
    apart from the GS's; 0: the GS's. From when the scene next takes a frame. */

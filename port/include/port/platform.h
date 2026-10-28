@@ -36,8 +36,10 @@ typedef struct {
     int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
     /* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md): the native GS, with the scene's native draws (map
        records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
-       targets (gsn_set_standalone); never saved */
+       targets (gsn_set_standalone); or settings.json's "renderer": "modern" */
     int renderer_modern;
+    /* --renderer fast: modern, with the PC renderer's parts built so far (docs/port/PC_RENDERER.md) */
+    int renderer_fast;
     /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
        --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
        (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
@@ -81,6 +83,12 @@ typedef struct {
        a pixel's footprint (1, off, the default; 2, 4, 8, 16; gsn_set_aniso) */
     int native_aniso;
     int native_aniso_forced;
+    /* --native-sampler: PORT_SAMPLER_GS, the GS's texture unit in the shader, or PORT_SAMPLER_HARDWARE, the GPU's
+       sampler on RGBA8 textures (docs/port/PC_RENDERER.md, P1) */
+    int native_sampler;
+    int native_sampler_forced; /* --native-sampler given */
+#define PORT_SAMPLER_GS 0
+#define PORT_SAMPLER_HARDWARE 1
     /* --native-cutout-aa: with MSAA, the native GS's cut-outs (netting, foliage, fences, grates: textures
        see-through in places) shaded at every sample (GSN_CUTOUT_AA_*, port/gs/native/gsn.h: 0 off, 1
        ssaa, the default). Nothing without MSAA. Live from the overlay. */
@@ -364,7 +372,9 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
-enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+/* MODERN and FAST are the settings' (port_settings.renderer, settings.json's "renderer") only: port_options.renderer is
+   then NATIVE, with renderer_modern (and renderer_fast) set */
+enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2, PORT_RENDERER_MODERN = 3, PORT_RENDERER_FAST = 4 };
 /* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
 enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
        PORT_DRAW_DISTANCE_COUNT };

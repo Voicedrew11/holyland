@@ -41,6 +41,7 @@ extern "C" {
 #include "port/debug.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/profile.h"
 #include "port/settings.h"
 }
 
@@ -1072,10 +1073,14 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
 
     Frame &f = pr.frames[pr.frame];
+    uint64_t wait0 = port_profile_on() ? port_profile_now_ns() : 0;
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
     flash_read_timer(f);
     uint32_t index = 0;
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
+    if (wait0 != 0) {
+        port_profile_add(PROFILE_PRESENT_WAIT, port_profile_now_ns() - wait0); // (Shift+P's profiler)
+    }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         pr.stale = true;
         return;

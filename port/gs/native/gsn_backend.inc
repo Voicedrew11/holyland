@@ -32,6 +32,10 @@ struct Backend {
     uint64_t cmd_serial = 0;
     QueryPoolHandle gpu_last;
     uint64_t gpu_last_serial = 0;
+    // (Shift+P's profiler) the GPU's intervals not read yet: Granite fills in their timestamps at the frame context
+    // that finds their work done (on this thread); and this thread's waits for the GPU there
+    std::deque<std::pair<QueryPoolHandle, QueryPoolHandle>> profile_intervals;
+    uint64_t profile_wait_ns = 0;
     uint64_t binds_at_record = 0;
     // (--stats, added to gsn_stats by backend_drain)
     uint64_t ns_make = 0, record_binds = 0, replay_binds = 0; // (ns_make: less the waits at frame contexts)
@@ -114,15 +118,43 @@ struct Replaying {
 };
 
 // A timestamp: the GPU's time since the one before (in the same command buffer) is `kind`'s (KF4_GSN_GPU_TIME)
-void backend_timestamp(int kind) {
+// (Shift+P's profiler) the intervals whose timestamps are in, added to the GPU's time; at most this many kept waiting
+const size_t profile_intervals_most = 4096;
+void profile_gpu_intervals() {
+    Backend &b = backend;
+    double period_ns = double(gs->device->get_gpu_properties().limits.timestampPeriod);
+    while (!b.profile_intervals.empty()) {
+        const auto &i = b.profile_intervals.front();
+        if (!i.first->is_signalled() || !i.second->is_signalled()) {
+            break;
+        }
+        uint64_t t0 = i.first->get_timestamp_ticks(), t1 = i.second->get_timestamp_ticks();
+        if (t1 > t0) {
+            port_profile_add(PROFILE_GPU, uint64_t(double(t1 - t0) * period_ns));
+        }
+        b.profile_intervals.pop_front();
+    }
+    while (b.profile_intervals.size() > profile_intervals_most) {
+        b.profile_intervals.pop_front();
+    }
+}
+
+// granite: the interval also to Granite's log of times (KF4_GSN_GPU_TIME)
+void backend_timestamp(int kind, bool granite) {
     Backend &b = backend;
     QueryPoolHandle ts = b.cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     if (b.gpu_last && b.gpu_last_serial == b.cmd_serial) {
-        gs->device->register_time_interval("gsn", b.gpu_last, ts, std::string("gsn ") + gpu_kinds[kind]);
-        gpu_marks[kind]++;
+        if (granite) {
+            gs->device->register_time_interval("gsn", b.gpu_last, ts, std::string("gsn ") + gpu_kinds[kind]);
+            gpu_marks[kind]++;
+        }
+        if (port_profile_on()) {
+            b.profile_intervals.emplace_back(b.gpu_last, ts);
+        }
     }
     b.gpu_last = ts;
     b.gpu_last_serial = b.cmd_serial;
+    profile_gpu_intervals();
 }
 
 // One call into the command buffer: a stream's (replaying null), or a recording's made again
@@ -324,14 +356,14 @@ void make_call(CommandBuffer &c, const Recording &r, const Recording::Op &op, Re
             const ArgValues &a = r.args<ArgValues>(op);
             int kind = int(a.v[0]);
             if (a.v[1]) {
-                backend_timestamp(replaying->gpu_cur >= 0 ? replaying->gpu_cur : GPU_UNTAGGED);
+                backend_timestamp(replaying->gpu_cur >= 0 ? replaying->gpu_cur : GPU_UNTAGGED, true); // (recorded: KF4_GSN_GPU_TIME=2)
                 replaying->gpu_cur = kind;
             } else {
                 if (gpu_time >= 2 && replaying->gpu_cur >= 0) {
                     kind = replaying->gpu_cur;
                     replaying->gpu_cur = -1;
                 }
-                backend_timestamp(kind);
+                backend_timestamp(kind, true);
             }
         }
         break;
@@ -395,7 +427,9 @@ void backend_make(Recording &s) {
             // (mostly a wait for the GPU's work of four vblanks before: not counted as the back end's work)
             auto wait = std::chrono::steady_clock::now();
             gs->device->next_frame_context();
-            start += std::chrono::steady_clock::now() - wait;
+            auto waited = std::chrono::steady_clock::now() - wait;
+            start += waited;
+            b.profile_wait_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(waited).count());
             upscale_next_frame();
             break;
         }
@@ -410,7 +444,7 @@ void backend_make(Recording &s) {
             }
             break;
         case OP_TIMESTAMP:
-            backend_timestamp(int(s.args<ArgValues>(op).v[0]));
+            backend_timestamp(int(s.args<ArgValues>(op).v[0]), s.args<ArgValues>(op).v[1] != 0);
             break;
         case OP_REPLAY:
             replay_ops(*b.cmd, s.replays[s.args<ArgValues>(op).v[0]]);
@@ -447,7 +481,13 @@ void backend_thread() {
             s = std::move(b.queue.front());
             b.queue.pop_front();
         }
+        uint64_t t0 = port_profile_on() ? port_profile_now_ns() : 0, wait0 = b.profile_wait_ns;
         backend_make(*s);
+        if (t0 != 0) {
+            uint64_t wait = b.profile_wait_ns - wait0;
+            port_profile_add(PROFILE_BACKEND_WAIT, wait);
+            port_profile_add(PROFILE_BACKEND, port_profile_now_ns() - t0 - wait);
+        }
         s->clear(); // (what it held let go here: Granite keeps each until the GPU is done with it)
         std::lock_guard<std::mutex> hold(b.lock);
         b.spare.push_back(std::move(s));
@@ -472,7 +512,10 @@ void backend_send() {
         b.writing->clear();
         return;
     }
-    b.idle.wait(hold, [&] { return b.sent - b.made < backend_queue_most || b.stopped; });
+    {
+        ProfileTimer waiting(PROFILE_GS_WAIT);
+        b.idle.wait(hold, [&] { return b.sent - b.made < backend_queue_most || b.stopped; });
+    }
     if (b.stopped) {
         hold.unlock();
         backend_make(*b.writing);
@@ -486,6 +529,7 @@ void backend_send() {
 
 // Until the submit is made (sent: submit), then until the GPU is done with it
 void backend_wait(SubmitWait &w) {
+    ProfileTimer waiting(PROFILE_GS_WAIT);
     {
         std::unique_lock<std::mutex> hold(w.lock);
         w.cv.wait(hold, [&] { return w.done; });
@@ -498,7 +542,10 @@ void backend_drain() {
     Backend &b = backend;
     backend_send();
     std::unique_lock<std::mutex> hold(b.lock);
-    b.idle.wait(hold, [&] { return b.made == b.sent || b.stopped; });
+    {
+        ProfileTimer waiting(PROFILE_GS_WAIT);
+        b.idle.wait(hold, [&] { return b.made == b.sent || b.stopped; });
+    }
     gsn_stats.ns_backend += b.ns_make;
     gsn_stats.interp_record_binds += b.record_binds;
     gsn_stats.interp_replay_binds += b.replay_binds;

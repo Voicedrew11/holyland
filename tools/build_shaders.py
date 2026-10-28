@@ -40,6 +40,11 @@ VARIANTS = [
     ("sa_copy_run.frag", "sa_copy_run_ms.frag", ["-DSA_MS"]),  # ... a run's copy by its own triangles, multisampled  # ... T2: from a multisampled image at another scale
     ("sa_resample.frag", "sa_resample_depth.frag", ["-DSA_DEPTH"]),  # ... a depth at another scale
     ("sa_resample.frag", "sa_resample_depth_ms.frag", ["-DSA_DEPTH", "-DSA_MS"]),  # ... from a multisampled one
+    # --native-sampler hardware (docs/port/PC_RENDERER.md, P1): the GS's fragment shaders reading the RGBA8 texture
+    ("gs.frag", "gs_hw.frag", ["-DGSN_HW_SAMPLER"]),
+    ("sa_sample.frag", "sa_sample_hw.frag", ["-DGSN_HW_SAMPLER"]),
+    ("gs_in.frag", "gs_in_hw.frag", ["-DGSN_HW_SAMPLER"]),
+    ("gs_in_ms.frag", "gs_in_ms_hw.frag", ["-DGSN_HW_SAMPLER"]),
 ]
 
 

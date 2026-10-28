@@ -136,6 +136,11 @@ target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
 target_link_libraries(kf4_port PUBLIC ico_audio)
+# the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
+# native GS (kf4_gs, built into tests without the port) adds to them as well
+add_library(kf4_profile STATIC port/platform/profile.c)
+target_include_directories(kf4_profile PUBLIC port/include)
+target_link_libraries(kf4_port PUBLIC kf4_profile)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
@@ -181,7 +186,8 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     endif()
     target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
-    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp
+                   port/overlay/profiler.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
@@ -227,6 +233,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     endif()
     target_link_libraries(kf4_gs PRIVATE parallel-gs)
     target_link_libraries(kf4_gs PUBLIC kf4_render)
+    target_link_libraries(kf4_gs PUBLIC kf4_profile)
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
@@ -464,6 +471,13 @@ endif()
 if(WIN32)
     add_executable(kf4-sampler tools/sampler/sampler.c)
     target_link_libraries(kf4-sampler PRIVATE psapi winmm)
+endif()
+
+# The profiler's counters and what its report names as bounding the frame rate (port/platform/profile.c)
+add_executable(profile_test tests/profile_test.c)
+target_link_libraries(profile_test PRIVATE kf4_profile)
+if(KF4_TESTS)
+    add_test(NAME profile COMMAND profile_test)
 endif()
 
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)

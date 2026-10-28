@@ -402,6 +402,9 @@ struct Sa {
     bool on = false;
     // the batch's corners, and the draw being met (nd_register): to the scene or not
     bool pending = false, in_draw = false, draw_on = false;
+    // (pc world, gsn_pc_world.inc) the draw being met is the PC renderer's (its map records); the corners pending after
+    // a draw are a taken draw's; the batch being drawn is (sa_flush: a batch's corners are drawn after their draws)
+    bool pc_take = false, pending_pc = false, batch_pc = false;
     // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
     // weapon (and its trail), effects, shadows, the picked item, and (T3) the reflection's water, reading the
     // reflection the scene drew (gsn_scene_targets.inc). Not the screen passes (the GS's 2D). (KF4_SA_KINDS: a
@@ -436,7 +439,11 @@ struct Sa {
     struct Decoded {
         ImageHandle image;
         std::array<uint32_t, 256> texels;
+        uint64_t serial = 0;               // (one for each decode, never again: gsn_rgba.inc's key)
+        uint32_t width = 0, height = 0, levels = 0;
+        std::vector<uint32_t> raw;         // (--native-sampler hardware) the raw texels, every level's back to back
     };
+    uint64_t decode_serial = 0;
     std::unordered_map<uint64_t, Decoded> decoded;
     std::deque<uint64_t> decoded_order;
     size_t decoded_bytes = 0;
@@ -469,6 +476,14 @@ struct Sa {
     Program *programs_in[3][2] = {}; // (T8) [SA_VS_*][multisampled]: blending from the pass's scratch (gs_in*.frag)
     Program *programs_copy[3][2] = {}; // [SA_VS_*][multisampled]: a run's copy into the scratch by its own triangles
     Program *programs_z[3] = {};       // [SA_VS_*]: a tie's Z-first draw that no pixel can fail (sa_zfirst.frag)
+    // (--native-sampler hardware, gsn_rgba.inc) programs and programs_in reading the batch's RGBA8 texture (the
+    // GSN_HW_SAMPLER builds), and the batch's: whether it reads one, which, and with what sampler
+    Program *programs_hw[3][2] = {};
+    Program *programs_in_hw[3][2] = {};
+    bool rgba_on = false;
+    const ImageView *rgba_view = nullptr;
+    ImageHandle rgba_image;  // (the image rgba_view is of: held for the PC world's material)
+    StockSampler rgba_sampler = StockSampler::NearestClamp;
     Program *program_copy_ms = nullptr;
     Program *program_depth = nullptr, *program_depth_ms = nullptr;
     // (T2) the scene's scale (its pixels a GS pixel is, across and down) and samples as its targets have them now,
@@ -1280,6 +1295,7 @@ struct SaTexture {
     bool reads_target = false, reads_own = false;
     bool own_named = false; // (reads_own: the named target bound, T3)
     ImageHandle table;      // (decoded from the table: its image, kept by a skinned group until it is drawn)
+    const Sa::Decoded *decoded = nullptr; // (from the table: what gsn_rgba.inc makes its RGBA8 copy from)
 };
 
 // A texture (TEX0's, its mipmap levels', the part of level 0 the draws read) decoded from the uploads that
@@ -1325,6 +1341,10 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
     Sa::Decoded d;
     d.image = make_image(1u << tw, 1u << th, format, levels, false);
     d.texels.fill(0);
+    d.serial = ++sa.decode_serial;
+    d.width = 1u << tw;
+    d.height = 1u << th;
+    d.levels = levels;
     {
         Why why_(GSN_WHY_DECODE);
         end_pass();
@@ -1338,6 +1358,9 @@ const Sa::Decoded *sa_table_texture(uint32_t tbw_psm_tw_th[4], uint32_t tbp, uin
         for (uint32_t y = 0; y < h; y++) {
             size_t at = size_t(y) * w;
             gsn_vram_read_row(vram, psm, mip_tbp[l], mip_tbw[l], 0, y, w, row.data());
+            if (hw_sampler) {
+                d.raw.insert(d.raw.end(), row.begin(), row.end()); // (gsn_rgba.inc)
+            }
             for (uint32_t x = 0; x < w; x++) {
                 if (format == VK_FORMAT_R32_UINT) {
                     static_cast<uint32_t *>(out)[at + x] = row[x];
@@ -1567,6 +1590,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     if (dec) {
         st.raw_view = &dec->image->get_view();
         st.table = dec->image;
+        st.decoded = dec;
         texels = dec->texels.data();
     } else {
         // the GS's: a render target (flush_batch's search), else VRAM
@@ -1728,6 +1752,36 @@ void sa_programs() {
         if (gs->program_in && gs->program_in_ms) {
             sa.programs_in[k][0] = gs->device->request_program(vss[k], gs->program_in->get_shader(ShaderStage::Fragment));
             sa.programs_in[k][1] = gs->device->request_program(vss[k], gs->program_in_ms->get_shader(ShaderStage::Fragment));
+        }
+    }
+    // (--native-sampler hardware, gsn_rgba.inc) the same reading the batch's RGBA8 texture at binding 6; in the render
+    // pass, the destination an input attachment as gsn.cpp's gs_in*.frag layouts have it (binding 5, a multisampled
+    // target's 4, in place of binding 3)
+    if (hw_sampler) {
+        ResourceLayout hw = frag;
+        hw.sets[0].sampled_image_mask |= 1u << 6;
+        hw.sets[0].fp_mask |= 1u << 6;
+        hw.sets[0].meta[6].array_size = 1;
+        Shader *fs = gs->device->request_shader(gsn_spv_gs_hw_frag, sizeof(gsn_spv_gs_hw_frag), &hw);
+        Shader *fs_sample = sample_shading ? gs->device->request_shader(gsn_spv_sa_sample_hw_frag, sizeof(gsn_spv_sa_sample_hw_frag), &hw) : nullptr;
+        Shader *fs_in[2] = {};
+        for (int ms = 0; ms < 2; ms++) {
+            ResourceLayout in = hw;
+            in.sets[0].sampled_image_mask &= ~(1u << 3);
+            in.sets[0].fp_mask &= ~(1u << 3);
+            uint32_t b = ms ? 4 : 5;
+            in.sets[0].input_attachment_mask = 1u << b;
+            in.sets[0].fp_mask |= 1u << b;
+            in.sets[0].meta[b].array_size = 1;
+            fs_in[ms] = ms ? gs->device->request_shader(gsn_spv_gs_in_ms_hw_frag, sizeof(gsn_spv_gs_in_ms_hw_frag), &in)
+                           : gs->device->request_shader(gsn_spv_gs_in_hw_frag, sizeof(gsn_spv_gs_in_hw_frag), &in);
+        }
+        for (int k = 0; k < 3; k++) {
+            sa.programs_hw[k][0] = gs->device->request_program(vss[k], fs);
+            sa.programs_hw[k][1] = fs_sample ? gs->device->request_program(vss[k], fs_sample) : nullptr;
+            for (int ms = 0; ms < 2; ms++) {
+                sa.programs_in_hw[k][ms] = gs->device->request_program(vss[k], fs_in[ms]);
+            }
         }
     }
     {
@@ -2354,6 +2408,17 @@ bool sa_shadow_batch() {
 // batch's corners are one vertex buffer).
 void nd_pass_bind_tris(Cmd &c, uint32_t run, uint32_t end); // (gsn_nd_pass.inc)
 // (in_pass, T8: the scene's own corners blend from the render pass's scratch, gs_in.frag / gs_in_ms.frag)
+#include "gsn_rgba.inc" // (--native-sampler hardware: the scene's textures for the GPU's sampler)
+
+// The scene's fragment program for a stretch of corners of vertex shader vs: the batch's RGBA8 texture read by the
+// GPU's sampler where gsn_rgba.inc made one (the GSN_HW_SAMPLER builds), else gs_frag.h's own sampling
+Program *sa_program(int vs, bool sample) {
+    return sa.rgba_on && sa.programs_hw[vs][sample ? 1 : 0] ? sa.programs_hw[vs][sample ? 1 : 0] : sa.programs[vs][sample ? 1 : 0];
+}
+Program *sa_program_in(int vs, bool ms) {
+    return sa.rgba_on && sa.programs_in_hw[vs][ms ? 1 : 0] ? sa.programs_in_hw[vs][ms ? 1 : 0] : sa.programs_in[vs][ms ? 1 : 0];
+}
+
 void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass = false, bool copy = false, bool zonly = false) {
     const Vtx *v = gs->verts.data();
     const Buffer *bound = nullptr;
@@ -2383,8 +2448,8 @@ void sa_draw_range(Cmd &c, bool sample, uint32_t n, uint32_t first, bool in_pass
                 c.set_program(ndw_batch() ? sat_water_program(sample) // (T3: the reflection's water, sa_water.vert)
                               : zonly     ? sa.programs_z[vs] // (a tie's Z-first draw by depth alone)
                               : copy      ? sa.programs_copy[vs][sa.samples > 1 ? 1 : 0]
-                              : in_pass   ? sa.programs_in[vs][sa.samples > 1 ? 1 : 0]
-                                          : sa.programs[vs][sample ? 1 : 0]);
+                              : in_pass   ? sa_program_in(vs, sa.samples > 1)
+                                          : sa_program(vs, sample));
             }
             if (want && want != bound) {
                 c.set_storage_buffer(2, 1, *want);
@@ -2512,6 +2577,8 @@ struct SaGroupKey {
     int32_t scissor[4];
     uint32_t viewport[2];
     const ImageView *raw, *target;
+    const ImageView *rgba; // (--renderer fast) the GPU's sampler's texture (gsn_rgba.inc), or none: the GS's (raw, clut)
+    StockSampler sampler;
     const Buffer *records, *arena;
     uint32_t want_clut;
     uint32_t clut[256];
@@ -2521,6 +2588,7 @@ struct SaGroupPass {
     std::vector<Vtx> corners;
     bool on = false;
     ImageHandle texture;
+    ImageHandle rgba; // (the key's rgba view's image, held)
 };
 struct SaGroupPart {
     uint32_t first[2], count[2]; // its passes' corners (count[1] 0: no second pass)
@@ -2556,6 +2624,10 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
     c.set_texture(0, 0, *k.raw, StockSampler::NearestClamp);
     c.set_texture(0, 1, *k.target, StockSampler::NearestClamp);
     c.set_texture(0, 3, gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+    if (k.rgba) {
+        c.set_texture(0, 6, *k.rgba, k.sampler); // (gsn_rgba.inc: the GSN_HW_SAMPLER programs)
+    }
+    sa.rgba_on = false; // (sa_draw_batch's own, worked out for each batch)
     static const uint32_t no_clut[256] = {};
     c.set_storage_data(0, 2, k.want_clut ? k.clut : no_clut, 1024);
     c.set_depth_compare(k.ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL : k.ztst == 3 ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS);
@@ -2569,7 +2641,9 @@ void sa_group_state(Cmd &c, const SaGroupKey &k) {
         c.set_blend_enable(false);
     }
     // (sa_draw_range's for a stretch of 0x280's corners)
-    c.set_program(k.shader_blend ? sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0] : sa.programs[SA_VS_280][k.per_sample ? 1 : 0]);
+    int ms = sa.samples > 1 ? 1 : 0, ps = k.per_sample ? 1 : 0;
+    c.set_program(k.shader_blend ? (k.rgba ? sa.programs_in_hw : sa.programs_in)[SA_VS_280][ms]
+                                 : (k.rgba ? sa.programs_hw : sa.programs)[SA_VS_280][ps]);
     c.set_storage_buffer(2, 1, *k.records);
 }
 
@@ -2583,8 +2657,49 @@ void sa_group_one(Cmd &c, const Push &p, uint32_t mask, bool zwrite, uint32_t co
     sa_group.draws++;
 }
 
+void pc_world_flush(); // (gsn_pc_world.inc)
+bool pc_world_takes(uint32_t kind, uint32_t program);
+void pc_world_flush_for(uint32_t fbp, uint32_t fbw, uint32_t fpsm, uint32_t zbp, uint32_t zpsm);
+extern volatile int pc_world_mode;
+
+// The highest As that Vulkan's blending takes for (Cs - Cd) As + Cd: 0x80 (1.0), above which the shader blends from a
+// copy of the scene (sa_draw_batch's as_over). With --renderer fast a little more: Vulkan's blending clamps the factor
+// to 1.0, so a pixel with As up to 0x90 is drawn as Cs, not Cs + (Cs - Cd) (As - 1.0), at most an eighth of (Cs - Cd)
+// off. The skinned creatures' textures at the pond have alphas up to 0x88 (their CLUTs' 0x84 and 0x88): blended in the
+// shader, each run of their parts a copy and two barriers, in every picture between. KF4_PC_ALPHA_OVER=N (tests: 128,
+// the GS's rule; default 144).
+uint32_t pc_world_alpha_over() {
+    static int limit = -1;
+    if (limit < 0) {
+        const char *v = getenv("KF4_PC_ALPHA_OVER");
+        limit = v && *v ? std::max(atoi(v), 0x80) : 0x90;
+    }
+    return pc_world_mode ? uint32_t(limit) : 0x80u;
+}
+
+// (--renderer fast) The first passes' first draw left out where it leaves nothing the second does not: its colour with no
+// Z written, then the same draw exactly with Z (a part's slack is 0: skin_eps), over every pixel of their triangles (every
+// pixel passes the alpha test: role 1's covers). Each pixel the first draw writes, the second writes again, last: a
+// triangle that passed the first draw passes the second unless a nearer one wrote Z there first, which wrote its colour.
+// So the second alone leaves the same colour and Z, for half the first passes' pixel work. (KF4_PC_GROUP_ONE=0: both.)
+int sa_group_first_draw(const SaGroupKey &k) {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_PC_GROUP_ONE");
+        on = v && *v ? atoi(v) : 1;
+    }
+    if (!pc_world_mode || !on || k.ndraws != 2 || k.shader_blend || k.zwrites[0] || !k.zwrites[1] || k.masks[0] != k.masks[1]) {
+        return 0;
+    }
+    Push a = k.pushes[0], b = k.pushes[1];
+    if (a.zbias != 0.0f || a.zslope != 0.0f || b.zbias != 0.0f || b.zslope != 0.0f) {
+        return 0; // (a slack: the first draw passes where the second does not)
+    }
+    a.zbias = a.zslope = b.zbias = b.zslope = 0.0f; // (-0 and 0 alike)
+    return memcmp(&a, &b, sizeof(a)) == 0 ? 1 : 0;
+}
 // What is kept drawn: the first passes, then the second passes, last part first (above)
-void sa_group_draw() {
+void sa_group_draw_parts() {
     SaGroup &g = sa_group;
     if (!g.pass[0].on) {
         return;
@@ -2624,7 +2739,7 @@ void sa_group_draw() {
             c.set_storage_buffer(1, 0, *nd.dummy);
         }
         sa_group_state(c, k1);
-        for (int i = 0; i < k1.ndraws; i++) {
+        for (int i = sa_group_first_draw(k1); i < k1.ndraws; i++) {
             sa_group_one(c, k1.pushes[i], k1.masks[i], k1.zwrites[i] != 0, uint32_t(n1), 0);
         }
         if (n2) {
@@ -2650,7 +2765,7 @@ void sa_group_draw() {
                 in_pass_barrier();
                 gsn_stats.blend_copies_in_pass++;
                 c.set_conservative(false);
-                c.set_program(sa.programs_in[SA_VS_280][sa.samples > 1 ? 1 : 0]);
+                c.set_program((k2.rgba ? sa.programs_in_hw : sa.programs_in)[SA_VS_280][sa.samples > 1 ? 1 : 0]);
                 gpu_enter(GPU_SA_GROUP + (sat_bound() ? GPU_SA_REFL - GPU_SA_DRAW : 0));
             }
             // the mark: a first pass's triangles, untextured and no colour, where its Z is at the front
@@ -2715,12 +2830,23 @@ void sa_group_draw() {
         p.on = false;
         p.corners.clear();
         p.texture.reset();
+        p.rgba.reset();
     }
     g.parts.clear();
     g.records.reset();
     g.arena.reset();
     g.expect_second = false;
 }
+
+// What is kept drawn, the PC renderer's world first (it comes before the skinned parts in the chain: gsn_pc_world.inc
+// keeps the two apart, one pending at a time)
+void sa_group_draw() {
+    pc_world_flush();
+    sa_group_draw_parts();
+}
+
+// ---- The PC renderer's world (--renderer fast, P2): the map records kept and drawn by material (gsn_pc_world.inc) ---
+#include "gsn_pc_world.inc"
 
 // ---- The frame's batches' work kept for its first picture between (rc/own) ------------------------------
 // A frame's first picture between draws the frame's packets again (gsn.cpp, "Pictures between on the GPU"), and so
@@ -2833,6 +2959,25 @@ void sa_note_first_z(bool first) {
     }
 }
 
+// A triangle's Z slope, as its corners' alpha carries it (sa_000.vert, pc.zslope): the larger of its Z's changes across
+// a GS pixel in X and Y, halved, 255 one Z; or (world: by its real depth) the Z's change across a GS pixel, g, as
+// 32 log2(1 + g): up to 250 Z a pixel
+uint32_t sa_slope(const Vtx *v, bool world) {
+    float ax = v[1].x - v[0].x, ay = v[1].y - v[0].y, bx = v[2].x - v[0].x, by = v[2].y - v[0].y;
+    float az = float(v[1].z) - float(v[0].z), bz = float(v[2].z) - float(v[0].z);
+    float det = ax * by - ay * bx;
+    if (det == 0.0f) {
+        return 0;
+    }
+    float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
+    if (world) {
+        float g = sqrtf(dzdx * dzdx + dzdy * dzdy);
+        return uint32_t(std::min(32.0f * log2f(1.0f + g) + 0.5f, 255.0f));
+    }
+    float e = std::min(0.5f * std::max(fabsf(dzdx), fabsf(dzdy)), 1.0f);
+    return uint32_t(e * 255.0f + 0.5f);
+}
+
 bool sa_draw_batch(int *why) {
     uint32_t prim = gs->batch_prim;
     uint32_t ctxt = (prim >> 9) & 1;
@@ -2846,6 +2991,10 @@ bool sa_draw_batch(int *why) {
     if (sa_group_pending() && (!sa.in_draw || !nd.active || nd.pass_active || sa_group.fbp != fbp ||
                                sa_group.fbw != fbw || sa_group.fpsm != fpsm || sa_group.zbp != zbp || sa_group.zpsm != zpsm)) {
         sa_group_draw(); // (pf/skin: not a part of the model's to keep)
+    }
+    pc_world_flush_for(fbp, fbw, fpsm, zbp, zpsm); // (pc world: what is kept for another target, before this one is bound)
+    if (sa.batch_pc && !interp.active) {
+        pc_kept_met(); // (pc world, P5: a taken draw's batch, all its corners, for the frame's pictures between)
     }
     bool zmsk = bits(zbuf, 32, 1);
     uint32_t sx0 = bits(scissor, 0, 11), sx1 = bits(scissor, 16, 11), sy0 = bits(scissor, 32, 11), sy1 = bits(scissor, 48, 11);
@@ -2872,6 +3021,7 @@ bool sa_draw_batch(int *why) {
         fbmsk |= 0xFF000000u;
     }
     if (ztst == 0) {
+        pc_kept_nothing(ctxt, 0, nullptr); // (P5)
         gs->verts.clear(); // (ZTST NEVER: nothing)
         return true;
     }
@@ -3013,6 +3163,25 @@ bool sa_draw_batch(int *why) {
             st.target_view = &sa.own->get_view();
         }
     }
+    // (--native-sampler hardware) the texture for the GPU's sampler, where it can stand in for the GS's (gsn_rgba.inc);
+    // the level then from the pixel's footprint, so the GS's level's bias for the scale is not added (--native-lod full
+    // still reads level 0)
+    sa.rgba_on = false;
+    if (tme && hw_sampler) {
+        RgbaSampling hw = rgba_sampling(st, tex1, clamp);
+        if (hw.usable) {
+            rgba_configure();
+            Rgba::Entry &re = rgba_entry(st, push.texa);
+            sa.rgba_view = &re.image->get_view();
+            sa.rgba_image = re.image;
+            sa.rgba_sampler = hw.sampler;
+            sa.rgba_on = true;
+            rgba.batches++;
+            push.lod_bias = lod_mode == GSN_LOD_FULL ? -64.0f : 0.0f;
+        } else {
+            rgba_kept_gs(hw);
+        }
+    }
 
     // blending: Vulkan's, as flush_batch has it; the GS's shader blending is the GS's (declined). (Not for a
     // texture that is a target, which flush_batch blends in the shader to the GS's rounding: that is for the
@@ -3040,7 +3209,7 @@ bool sa_draw_batch(int *why) {
         as_hi = tfx == 0 ? std::min(255u, (as_max * tex_alpha_max) >> 7) : tfx == 2 ? std::min(255u, as_max + tex_alpha_max)
                                                                                    : tex_alpha_max;
     }
-    bool as_over = bc == 0 && !blend.premul && as_hi > 0x80;
+    bool as_over = bc == 0 && !blend.premul && as_hi > pc_world_alpha_over();
     // what Vulkan's blending cannot do (DATE, a partial mask, PABE, no COLCLAMP, FBA with As, As above 1.0,
     // Ad or a FIX above 1.0) is blended in the shader, as flush_batch does: from a copy of the scene's colour
     // taken before each run of triangles that do not overlap (gs_frag.h's GSN_F_SHADER_BLEND)
@@ -3140,6 +3309,7 @@ bool sa_draw_batch(int *why) {
     uint32_t scale_x = sa.sx, scale_y = sa.sy; // (the scene's: T2)
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
+        pc_kept_nothing(ctxt, sy1 + 1, nullptr); // (P5)
         gs->verts.clear();
         return true;
     }
@@ -3231,6 +3401,8 @@ bool sa_draw_batch(int *why) {
         }
         gs->verts.resize(kept);
         if (!kept) {
+            float cull[4] = {cx0, cy0, cx1, cy1};
+            pc_kept_nothing(ctxt, sy1 + 1, cull); // (P5: the picture's camera can bring them in)
             return true;
         }
     }
@@ -3494,20 +3666,7 @@ bool sa_draw_batch(int *why) {
         if (memo_slopes) {
             extra = memo_slopes[t / 3];
         } else if (sloped) {
-            const Vtx *v = &corners[t];
-            float ax = v[1].x - v[0].x, ay = v[1].y - v[0].y, bx = v[2].x - v[0].x, by = v[2].y - v[0].y;
-            float az = float(v[1].z) - float(v[0].z), bz = float(v[2].z) - float(v[0].z);
-            float det = ax * by - ay * bx;
-            if (det != 0.0f) {
-                float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
-                float e = std::min(0.5f * std::max(fabsf(dzdx), fabsf(dzdy)), 1.0f);
-                extra = uint32_t(e * 255.0f + 0.5f);
-                if (world) {
-                    // (by its real depth: the Z's change across a GS pixel, g, as 32 log2(1 + g): up to 250 Z a pixel)
-                    float g = sqrtf(dzdx * dzdx + dzdy * dzdy);
-                    extra = uint32_t(std::min(32.0f * log2f(1.0f + g) + 0.5f, 255.0f));
-                }
-            }
+            extra = sa_slope(&corners[t], world);
         }
         for (int k = 0; k < 3; k++) {
             corners[t + k].rgba = (corners[t + k].rgba & 0xFFFFFFu) | extra << 24;
@@ -3580,6 +3739,85 @@ bool sa_draw_batch(int *why) {
     bool shine_kept = shine_whole && (shine_group == 2 || (shine_group == 1 && !ms_in)) && !blend_copy && run_copy_on && !per_sample && !sa.gs3d && !sa.gs_water && !ndw_batch() &&
                       sa.programs_in[SA_VS_000][ms_in] && sa.programs_in[SA_VS_280][ms_in] &&
                       sa.programs_copy[SA_VS_000][ms_in] && sa.programs_copy[SA_VS_280][ms_in] && !wide(*sa.color) && all_native;
+    // (pc world) The map's records the PC renderer takes (gsn_pc_world.inc): kept, and drawn by material when something
+    // else comes. runs.size() == 2 is own's test too (own needs a run of its own: more than one run). The texture is the
+    // GPU's sampler's, with a program that reads it (never the GS's raw texture bound in its place).
+    // A blend that leaves the source (Cs - Cd) As + Cd with As 0x80 at every pixel, as a_lo and a_hi have it: the GS writes
+    // Cs, so the PC renderer draws it without blending (the map's records set ABE on their opaque surfaces too)
+    bool blend_is_source = abe && ba == 0 && bb == 1 && bc == 0 && bd == 1 && a_lo == 0x80 && a_hi == 0x80;
+    int pc_vs = pc_world_mode && sa.batch_pc ? pc_corners_vs(corners) : -1;
+    bool pc_keep = pc_world_mode && sa.batch_pc && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only &&
+                   !gpu_corners && !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && !sat_bound() &&
+                   !shader_blend && !shadow && npasses == 1 && all_native && (!tme || sa.rgba_on) &&
+                   pc_vs >= 0 && (!sa.rgba_on || sa.programs_hw[pc_vs][per_sample ? 1 : 0]) && ztst == 2 &&
+                   nd.batch_draws == nd.draws.buffer.get() && nd.batch_arena == nd.arena.buffer.get() && nd.batch_arena;
+    // (a blend Vulkan's blending does as the GS, the batch drawn whole in one draw: its triangles blended and Z tested in
+    // their order, as on the GS, without the scene's Z-first draw and runs)
+    bool pc_blend = abe && !blend_is_source;
+    if (pc_keep) {
+        // (the key is made before a skinned group draws: its state changes sa.rgba_on, sa_group_state)
+        PcKey k;
+        memset(&k, 0, sizeof(k));
+        k.ndraws = ndraws;
+        for (int i = 0; i < ndraws; i++) {
+            Push p = push;
+            p.flags |= draws[i].select << F_PASS_SHIFT;
+            if (!pc_blend) {
+                p.flags &= ~F_ALPHA_FACTOR; // (no blending: the alpha written is As, as the GS writes it)
+            }
+            p.zbias = draws[i].zbias + (draws[i].zbias > 0.0f || (ties && !draws[i].zwrite) ? ps2_bias : 0.0f);
+            p.zslope = sloped && draws[i].zbias > 0.0f ? 1.0f : 0.0f;
+            if ((world || (skinned && ties)) && draws[i].zbias > 0.0f) {
+                p.zbias = 0.0f;
+                p.zslope = -layer_eps;
+            }
+            k.pushes[i] = p;
+            k.masks[i] = draws[i].mask;
+            k.zwrites[i] = draws[i].zwrite;
+        }
+        k.z_written = zwrite;
+        k.per_sample = per_sample;
+        k.vs = pc_vs;
+        if (pc_blend) {
+            k.blend_on = 1;
+            k.alpha_factor = (push.flags & F_ALPHA_FACTOR) != 0;
+            k.fix = fix;
+            k.src = blend.src;
+            k.dst = blend.dst;
+            k.op = blend.op;
+        }
+        k.scissor[0] = int32_t(sx0 * scale_x);
+        k.scissor[1] = int32_t(sy0 * scale_y);
+        k.scissor[2] = int32_t((x1 - sx0) * scale_x);
+        k.scissor[3] = int32_t((y1 - sy0) * scale_y);
+        k.viewport[0] = color->width * scale_x;
+        k.viewport[1] = color->height * scale_y;
+        k.rgba = sa.rgba_on ? sa.rgba_view : nullptr;
+        k.sampler = sa.rgba_on ? sa.rgba_sampler : StockSampler::NearestClamp;
+        k.records = nd.batch_draws;
+        k.arena = nd.batch_arena;
+        ImageHandle texture = sa.rgba_on ? sa.rgba_image : ImageHandle();
+        sa_group_draw_parts(); // (pf/skin: none is pending with the PC world's kept: sa_group_draw's invariant)
+        PcFrame frame = {fbp, fbw, fpsm, zbp, zpsm};
+        pc_world_keep(k, frame, texture, nd.draws.buffer, nd.arena.buffer, corners, runs);
+        float cull[4] = {float(sx0) - 1.0f, float(sy0) - 1.0f, float(x1) + 1.0f, float(y1) + 1.0f};
+        pc_kept_batch(k, ctxt, texture, nd.arena.buffer, corners, slopes, cull, sy1 + 1, sy0, y1, zwrite); // (P5: its pictures')
+        sa.last_shadow = false;
+        sa.z_written |= zwrite;
+        uint32_t d0 = interp.active ? sy0 : uint32_t(std::max(float(sy0), std::max(0.0f, floorf(vy0) - 1.0f)));
+        uint32_t d1 = interp.active ? y1 : uint32_t(std::min(float(y1), std::max(0.0f, ceilf(vy1) + 2.0f)));
+        sa.rows0 = std::min(sa.rows0, d0);
+        sa.rows1 = std::max(sa.rows1, d1);
+        sa.drew = true;
+        sa.scissor_rows = std::max(sa.scissor_rows, y1);
+        sa_note_first_z(false);
+        sa_stats.batches++;
+        sa_stats.triangles += gs->verts.size() / 3;
+        gsn_stats.primitives += gs->verts.size() / 3;
+        gs->verts.clear();
+        gs->batch_sprites = false;
+        return true;
+    }
     int role = 0; // 1: a first pass kept, 2: a second pass kept
     if (sa_group.enabled && sa.in_draw && nd.active && !nd.pass_active && !nd.strip_active && !ps2_only && !gpu_corners &&
         !sa.gs3d && !sa.gs_fill && !sa.gs_water && !ndw_batch() && runs.size() == 2 && (!shader_blend || shine_kept) &&
@@ -3632,6 +3870,19 @@ bool sa_draw_batch(int *why) {
         k.viewport[1] = color->height * scale_y;
         k.raw = st.raw_view ? st.raw_view : &gs->dummy_raw->get_view();
         k.target = st.target_view ? st.target_view : &gs->dummy_rgba->get_view();
+        // (--renderer fast) the parts read the GPU's sampler's texture where sa_draw_batch made one (P1's, here for the
+        // skinned models too: KF4_PC_GROUP_HW=0, the GS's)
+        static int group_hw = -1;
+        if (group_hw < 0) {
+            const char *v = getenv("KF4_PC_GROUP_HW");
+            group_hw = v && *v ? atoi(v) : 1;
+        }
+        Program *hw_program = shader_blend ? sa.programs_in_hw[SA_VS_280][sa.samples > 1 ? 1 : 0]
+                                           : sa.programs_hw[SA_VS_280][per_sample ? 1 : 0];
+        bool rgba = pc_world_mode && group_hw && sa.rgba_on && hw_program;
+        k.rgba = rgba ? sa.rgba_view : nullptr;
+        k.sampler = rgba ? sa.rgba_sampler : StockSampler::NearestClamp;
+        ImageHandle rgba_image = rgba ? sa.rgba_image : ImageHandle();
         k.records = nd280_batch_draws();
         k.arena = nd.batch_arena;
         k.want_clut = st.want_clut;
@@ -3674,10 +3925,12 @@ bool sa_draw_batch(int *why) {
             sa_group.arena = nd.arena.buffer;
         }
         if (role) {
+            pc_world_flush(); // (pc world: what it kept is drawn before this part is kept)
             if (!g.on) {
                 g.key = k;
                 g.on = true;
                 g.texture = st.table;
+                g.rgba = rgba_image;
             }
             if (role == 1) {
                 SaGroupPart part = {{uint32_t(g.corners.size()), 0}, {uint32_t(corners.size()), 0}, {}};
@@ -3719,6 +3972,7 @@ bool sa_draw_batch(int *why) {
     } else {
         sa_group_draw();
     }
+    pc_world_flush(); // (pc world: a batch the scene draws comes after what it kept)
     // a run of shadow batches: a number of its own in the stencil (cleared when the scene took the frame; after
     // 255 runs the frame taken again, to clear it)
     if (shadow && !sa.last_shadow && sa.stencil_gen >= 255) {
@@ -3794,6 +4048,9 @@ bool sa_draw_batch(int *why) {
     auto bind_run = [&](Cmd &c) {
         c.set_texture(0, 0, st.raw_view ? *st.raw_view : gs->dummy_raw->get_view(), StockSampler::NearestClamp);
         c.set_texture(0, 1, st.target_view ? *st.target_view : gs->dummy_rgba->get_view(), StockSampler::NearestClamp);
+        if (sa.rgba_on) {
+            c.set_texture(0, 6, *sa.rgba_view, sa.rgba_sampler); // (gsn_rgba.inc: the GSN_HW_SAMPLER programs)
+        }
         if (in_pass) {
             c.set_input_attachments(0, 4); // (the destination: the pass's scratch, gs_in.frag / gs_in_ms.frag)
         } else {
@@ -4021,8 +4278,11 @@ bool sa_flush() {
     // (the batch of a draw of the scene's: its corners, or the trail's, the PS2 path's made by the draw; not a
     // screen pass's)
     bool scene = !nd.pass_active && (sa.in_draw ? sa.draw_on : sa.pending);
+    sa.batch_pc = scene && (sa.in_draw ? sa.pc_take : sa.pending_pc);
     sa.pending = false;
-    if (!scene || !sa.in_draw) {
+    if ((!scene || !sa.in_draw) && sa.batch_pc) {
+        sa_group_draw_parts(); // (pc world: a taken draw's corners: what the PC renderer keeps goes on being kept)
+    } else if (!scene || !sa.in_draw) {
         sa_group_draw(); // (pf/skin: kept only from draw to draw)
     }
     int op = scene ? SA_OP_NONE : sa_scene_op();
@@ -4039,7 +4299,9 @@ bool sa_flush() {
     }
     if (scene || op != SA_OP_NONE) {
         int why = SA_WHY_FRAME;
-        if (sa_draw_batch(&why)) {
+        bool drawn = sa_draw_batch(&why);
+        sa.batch_pc = false;
+        if (drawn) {
             return true;
         }
         sa_stats.declined[why]++;
@@ -4111,6 +4373,7 @@ bool sa_kind(const RdDraw &d) {
 // Before a draw is met: whether it goes to the scene; a batch holds the scene's corners or none
 void sa_draw_begin(uint64_t value) {
     sa.in_draw = false;
+    sa.pc_take = false;
     if (!sa.on) {
         return;
     }
@@ -4120,21 +4383,36 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
-    if (!scene || d.program != 0x280) {
+    sa.pc_take = pc_world_mode && scene && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
+    if (sa.pc_take) {
+        sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
+    } else if (!scene || d.program != 0x280) {
         sa_group_draw(); // (pf/skin: a model's parts are kept from one of its draws to the next)
     }
-    if (!gs->verts.empty() && scene != sa.pending) {
+    if (!gs->verts.empty() && (scene != sa.pending || (sa.pending && sa.pc_take != sa.pending_pc))) {
         flush_batch();
     }
     sa.in_draw = true;
     sa.draw_on = scene;
 }
+void pc_kept_draw_end();
+bool pc_between_cuts();
 void sa_draw_end() {
     if (!sa.on) {
         return;
     }
+    if (sa.pc_take && pc_between_cuts()) {
+        // (pc world, P5) a taken draw's batches drawn (kept) at its end, so that each kept batch is one draw's
+        // (pc_kept_batch: the frame's kept for its pictures between). A batch is then one draw's alphas: at map 000
+        // 95 pixels of the brazier's rim differ by more than 16 levels (its batch opaque where it was blended)
+        if (!gs->verts.empty()) {
+            flush_batch();
+        }
+        pc_kept_draw_end();
+    }
     sa.in_draw = false;
     sa.pending = !gs->verts.empty() && sa.draw_on;
+    sa.pending_pc = sa.pending && sa.pc_take;
 }
 
 // (nd_kick) A PS2-path kick while the scene's corners wait: they are drawn first
@@ -4318,6 +4596,7 @@ void sa_forget() {
     sa.fcopy.valid = false;
     sa_table_reset();
     sa_held_forget();
+    rgba_forget(); // (--native-sampler hardware)
 }
 
 // --stats: the table's line, and a line a map of what is still the GS's
@@ -4699,6 +4978,10 @@ void sa_print_stats() {
     sa_memo_print_stats(); // (rc/own)
     sat_print_stats(); // (T3)
     sa_print_table_stats();
+    if (pc_world_mode) {
+        pc_world_print_stats(); // (gsn_pc_world.inc)
+        pc_between_print_stats();
+    }
 }
 
 #include "gsn_scene_targets.inc"

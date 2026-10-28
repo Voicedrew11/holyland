@@ -41,6 +41,12 @@ layout(set = 0, binding = 2, std430) readonly buffer Clut {
     // v_fog (gs.vert); only as many as the draw has are bound (the 64 KiB of a uniform buffer at most)
     uvec4 rects[];
 } u_clut;
+#ifdef GSN_HW_SAMPLER
+// --native-sampler hardware (docs/port/PC_RENDERER.md, P1): the texture expanded to RGBA8 with its mip levels
+// (gsn_rgba.inc: each texel as texel_f decodes it), the GS's byte values in each channel, read by the GPU's sampler:
+// its filtering, mipmaps and anisotropy instead of sample_texture's own
+layout(set = 0, binding = 6) uniform sampler2D u_rgba;
+#endif
 // The destination, for the draws that blend here: a copy of the target taken before the draw (binding
 // 3), or (GSN_DEST_INPUT, the gs_*_in*.frag shaders) the copy kept in the render pass, an input
 // attachment: the pass's second colour attachment, which holds the target's pixels (a multisampled
@@ -307,6 +313,14 @@ vec4 sample_mip(vec2 tc, float lod, int mxl, uint mmin, bool linear) {
     return vec4(round_shift(ivec4(sample_level(tc, l0, linear)) * (16 - w) + ivec4(sample_level(tc, l1, linear)) * w, 4));
 }
 
+#ifdef GSN_HW_SAMPLER
+vec4 sample_texture() {
+    vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
+    vec2 uv = (pc.flags & GSN_F_FST) != 0u ? v_stq.xy / size : v_stq.xy / v_stq.z;
+    vec4 t = texture(u_rgba, uv, pc.lod_bias) * 255.0;
+    return high ? t : floor(t + 0.5);
+}
+#else
 vec4 sample_texture() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
     vec2 tc = (pc.flags & GSN_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
@@ -360,6 +374,7 @@ vec4 sample_texture() {
     }
     return sample_mip(tc, lod, mxl, mmin, linear);
 }
+#endif
 
 bool alpha_test(int a) {
     int ref = int(field(pc.test, 4u, 8u));

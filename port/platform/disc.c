@@ -29,6 +29,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/profile.h"
 
 typedef struct {
     char *path;       /* ISO 9660 path without the version: "\DATA\KF4.DAT" (or KF4.DAT's "\DATA\KF4.DAT:name") */
@@ -422,6 +423,9 @@ int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     READ_UNLOCK();
     port_hitch_disc_ms += (port_wall_seconds() - t0) * 1e3;
     port_hitch_disc_bytes += (uint64_t)sectors * 2048;
+    if (port_profile_on()) {
+        port_profile_add(PROFILE_DISC, (uint64_t)((port_wall_seconds() - t0) * 1e9));
+    }
     return result;
 }
 

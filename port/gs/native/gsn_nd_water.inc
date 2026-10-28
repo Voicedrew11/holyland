@@ -224,8 +224,10 @@ void ndw_draw(const RdDraw &d, const RdCamera &cam) {
             float y = ndw_round(double(q[1]) + double(lift), nearest);
             int32_t w[3];
             ndw_place(k.vertex, float(q[0]), y, float(q[2]), w);
-            st[size_t(v) * 2] = ndw_round(double(ndw_round(double(w[0] - 0x6C00), nearest)) / 10240.0, nearest);
-            st[size_t(v) * 2 + 1] = ndw_round(double(ndw_round(double(w[1] - 0x7200), nearest)) / 7168.0, nearest);
+            // (the EE's subtraction wraps: a place far off the screen is 0x80000000, ndw_place's saturation)
+            int32_t sx = int32_t(uint32_t(w[0]) - 0x6C00u), sy = int32_t(uint32_t(w[1]) - 0x7200u);
+            st[size_t(v) * 2] = ndw_round(double(ndw_round(double(sx), nearest)) / 10240.0, nearest);
+            st[size_t(v) * 2 + 1] = ndw_round(double(ndw_round(double(sy), nearest)) / 7168.0, nearest);
         }
         // the strip's triangles join the batch (a batch of other corners or buffers is drawn first)
         if (!gs->verts.empty() && ((interp.active && !nd.pending) ||
