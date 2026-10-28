@@ -176,6 +176,12 @@ static double read_number(const cJSON *object, const char *key, double fallback,
     return value < low ? low : value > high ? high : value;
 }
 
+/* settings.json's "renderer" for PORT_RENDERER_ */
+static const char *renderer_name(int renderer) {
+    static const char *const names[] = {"gs", "native", "both", "modern", "fast"};
+    return renderer >= 0 && renderer <= PORT_RENDERER_FAST ? names[renderer] : "gs";
+}
+
 static const char *read_string(const cJSON *object, const char *key) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
 
@@ -354,9 +360,11 @@ void port_settings_load(void) {
         if (renderer != NULL && version < 2 && strcmp(renderer, "gs") == 0) {
             migrated = 1; /* the old default, written out: the new default (port_settings above) */
         } else if (renderer != NULL) {
-            s->renderer = strcmp(renderer, "native") == 0 ? PORT_RENDERER_NATIVE
-                          : strcmp(renderer, "both") == 0 ? PORT_RENDERER_BOTH
-                                                          : PORT_RENDERER_GS;
+            s->renderer = strcmp(renderer, "native") == 0   ? PORT_RENDERER_NATIVE
+                          : strcmp(renderer, "both") == 0   ? PORT_RENDERER_BOTH
+                          : strcmp(renderer, "modern") == 0 ? PORT_RENDERER_MODERN
+                          : strcmp(renderer, "fast") == 0   ? PORT_RENDERER_FAST
+                                                            : PORT_RENDERER_GS;
         }
     }
     {
@@ -506,7 +514,10 @@ void port_settings_load(void) {
         port_options.draw_distance_sky = s->draw_distance_sky;
     }
     if (!port_options.renderer_forced) {
-        port_options.renderer = s->renderer;
+        /* (modern and fast: the native GS drawing the scene; main_host.c's renderer_implies does the rest) */
+        port_options.renderer = s->renderer >= PORT_RENDERER_MODERN ? PORT_RENDERER_NATIVE : s->renderer;
+        port_options.renderer_modern = s->renderer >= PORT_RENDERER_MODERN;
+        port_options.renderer_fast = s->renderer == PORT_RENDERER_FAST;
     }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
@@ -558,7 +569,7 @@ void port_settings_load(void) {
         dirty = 1;
         fprintf(stderr, "[settings] from before the native GS was the default: renderer \"%s\", presenter \"%s\" "
                         "(the overlay's Debug page, or --renderer gs / --presenter sdl, go back)\n",
-                s->renderer == PORT_RENDERER_NATIVE ? "native" : s->renderer == PORT_RENDERER_BOTH ? "both" : "gs",
+                renderer_name(s->renderer),
                 s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl");
     }
     fprintf(stderr, "[settings] %s%s\n", port_settings_path(), file == NULL ? " (new)" : "");
@@ -683,9 +694,7 @@ void port_settings_save(void) {
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
     put(display, "native_shine", cJSON_CreateString(s->native_shine_exact ? "exact" : "whole"));
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
-    put(display, "renderer", cJSON_CreateString(s->renderer == PORT_RENDERER_NATIVE ? "native"
-                                                : s->renderer == PORT_RENDERER_BOTH  ? "both"
-                                                                                     : "gs"));
+    put(display, "renderer", cJSON_CreateString(renderer_name(s->renderer)));
     put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));

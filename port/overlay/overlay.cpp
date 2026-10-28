@@ -784,11 +784,14 @@ std::string bug_report() {
 // their pictures compare
 void renderer_section() {
     static const char *const names[] = {"paraLLEl-GS (gs, the reference)", "Native GS (native, the default)",
-                                        "Both, compared (both)"};
+                                        "Both, compared (both)", "Modern (modern)", "Fast, the PC renderer (fast)"};
     ImGui::SeparatorText("Renderer");
-    ImGui::Text("This run: %s", names[port_options.renderer]);
+    int now = port_options.renderer_fast     ? PORT_RENDERER_FAST
+              : port_options.renderer_modern ? PORT_RENDERER_MODERN
+                                             : port_options.renderer;
+    ImGui::Text("This run: %s", names[now]);
     int next = port_settings.renderer;
-    if (ImGui::Combo("From the next start", &next, names, 3)) {
+    if (ImGui::Combo("From the next start", &next, names, IM_ARRAYSIZE(names))) {
         port_settings.renderer = next;
         port_settings_changed();
     }
@@ -796,6 +799,9 @@ void renderer_section() {
             "base for the higher resolutions, true widescreen and anti-aliasing. paraLLEl-GS emulates the\n"
             "PS2's GS and is the reference to compare with (and what draws if the native GS cannot start).\n"
             "Both runs the two side by side and compares the pictures every vblank (slower; for testing).\n"
+            "Modern draws the scene (the map, the sky, the items) itself into its own targets, at the\n"
+            "game's level; fast is modern with the PC renderer's parts built so far (textures read by the\n"
+            "GPU's sampler: much less GPU time at high scales and anisotropy).\n"
             "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;

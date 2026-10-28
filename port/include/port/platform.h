@@ -36,7 +36,7 @@ typedef struct {
     int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
     /* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md): the native GS, with the scene's native draws (map
        records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
-       targets (gsn_set_standalone); never saved */
+       targets (gsn_set_standalone); or settings.json's "renderer": "modern" */
     int renderer_modern;
     /* --renderer fast: modern, with the PC renderer's parts built so far (docs/port/PC_RENDERER.md) */
     int renderer_fast;
@@ -372,7 +372,9 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
-enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2 };
+/* MODERN and FAST are the settings' (port_settings.renderer, settings.json's "renderer") only: port_options.renderer is
+   then NATIVE, with renderer_modern (and renderer_fast) set */
+enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2, PORT_RENDERER_MODERN = 3, PORT_RENDERER_FAST = 4 };
 /* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
 enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
        PORT_DRAW_DISTANCE_COUNT };

@@ -748,14 +748,6 @@ static void parse_options(int argc, char **argv) {
             usage(argv[0]);
         }
     }
-    if (port_options.renderer_modern && port_options.native_draw == 0) {
-        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1) */
-        port_options.native_draw_forced = 1; /* (settings.json's "off" must not empty the scene) */
-    }
-    if (port_options.renderer_fast && !port_options.native_sampler_forced) {
-        /* --renderer fast: the GPU's sampler unless --native-sampler says otherwise */
-        port_options.native_sampler = PORT_SAMPLER_HARDWARE;
-    }
     if (port_options.disc == NULL) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
         usage(argv[0]);
@@ -1014,6 +1006,18 @@ static void print_stats(void) {
     port_host_float_end(mode);
 }
 
+/* What --renderer modern and fast (or settings.json's "renderer") bring with them, once both have been read */
+static void renderer_implies(void) {
+    if (port_options.renderer_modern && port_options.native_draw == 0) {
+        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1; settings.json's "off"
+                                                        must not empty the scene) */
+    }
+    if (port_options.renderer_fast && !port_options.native_sampler_forced) {
+        /* fast: the GPU's sampler unless --native-sampler says otherwise */
+        port_options.native_sampler = PORT_SAMPLER_HARDWARE;
+    }
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -1023,6 +1027,7 @@ int main(int argc, char **argv) {
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
+    renderer_implies();
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);
