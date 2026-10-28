@@ -90,10 +90,10 @@ def main():
             lines.append("")
             idents.append(ident)
     # every shader in one table, for the pipeline list (port/gs/native/gsn_pipeline_warm.inc)
-    lines.append("/* every shader above (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */")
-    lines.append("static const struct { const uint32_t *code; size_t size; } gsn_spv_all[] = {")
+    lines.append("/* every shader above, with its name (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */")
+    lines.append("static const struct { const uint32_t *code; size_t size; const char *name; } gsn_spv_all[] = {")
     for ident in idents:
-        lines.append("    {%s, sizeof(%s)}," % (ident, ident))
+        lines.append("    {%s, sizeof(%s), \"%s\"}," % (ident, ident, ident[len("gsn_spv_"):]))
     lines.append("};")
     lines.append("")
     with open(OUT, "w", newline="\n") as f:

@@ -17,6 +17,12 @@
 
 #include "gsn_pipeline_list.h" // (the shipped list: gsn_pipeline_list[])
 
+// (gsn_pipeline_set.inc: every pipeline the draws can ask for, worked out from the code)
+struct PwJob;
+void ps_jobs(std::vector<PwJob> &jobs, std::set<uint64_t> &taken, std::vector<ImageHandle> &images);
+void ps_on_play_compile(const DeferredPipelineCompile &c, bool compute, int64_t ns);
+bool ps_only();
+
 // a compatible render pass: what Device::request_render_pass hashes, and the samples it makes the pass with
 struct PwPass {
     uint32_t colours;
@@ -283,6 +289,7 @@ void pw_on_compile(Device *device, const DeferredPipelineCompile &c, bool comput
     }
     hitch_compiles++;
     hitch_compile_ns += uint64_t(ns);
+    ps_on_play_compile(c, compute, ns);
     PwEntry e;
     e.tag = pw_tag();
     e.hash = c.hash;
@@ -320,7 +327,7 @@ void pw_on_compile(Device *device, const DeferredPipelineCompile &c, bool comput
     pw.entries.push_back(e);
     pw.unshipped++;
     pw.play_new++;
-    if (!pw.path.empty()) {
+    if (!pw.path.empty() && !ps_only()) {
         fprintf(stderr, "[gsn] a pipeline not on the list was made in play (%.1f ms): kept in the data folder's list\n",
                 double(ns) / 1e6);
     }
@@ -501,8 +508,8 @@ void pw_start(const std::string &list_path) {
             }
         }
         pw.saved = pw.unshipped;
-        const char *env = getenv("KF4_GSN_WARM"); // (0: nothing made ahead; the lists are still kept)
-        if (env && atoi(env) == 0) {
+        const char *env = getenv("KF4_GSN_WARM"); // (0: nothing made ahead; the lists are still kept. set: the set alone)
+        if (env && strcmp(env, "0") == 0) {
             return;
         }
         // this settings' pipelines, made again from their lines and checked by their hashes
@@ -511,7 +518,7 @@ void pw_start(const std::string &list_path) {
         std::vector<ImageHandle> images;
         VkPipelineCache cache = CommandBuffer::holyland_pipeline_cache(gs->device);
         for (const PwEntry &e : pw.entries) {
-            if (e.tag != tag || !taken.insert(e.hash).second) {
+            if (ps_only() || e.tag != tag || !taken.insert(e.hash).second) {
                 continue;
             }
             PwJob j;
@@ -550,6 +557,7 @@ void pw_start(const std::string &list_path) {
             }
             jobs.push_back(j);
         }
+        ps_jobs(jobs, taken, images); // (the set's not on the lists)
     }
     if (jobs.empty()) {
         return;

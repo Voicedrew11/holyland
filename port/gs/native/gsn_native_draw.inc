@@ -266,10 +266,17 @@ bool nd_batch_3d() {
 }
 
 // The program p (one of the GS's, its fragment shader) with nd_000.vert, while a native batch is drawn
+Program *nd_program_of(Program *p);
 Program *nd_program(Program *p) {
     if (!nd.active || !p) {
         return p;
     }
+    return nd_program_of(p);
+}
+
+// The program p (one of the GS's, its fragment shader) with nd_000.vert, whether native draw is on now or not (the
+// pipeline set makes its pipelines at the start)
+Program *nd_program_of(Program *p) {
     auto it = nd.programs.find(p);
     if (it != nd.programs.end()) {
         return it->second;

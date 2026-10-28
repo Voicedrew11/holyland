@@ -283,6 +283,11 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   only every ten seconds, never at exit). `KF4_GSN_WARM=0` makes nothing ahead, `KF4_GSN_WARM_THREADS=N`; `--stats`
   prints `pipelines made ahead`. Make the shipped list again after a shader or Granite change (its lines then come
   out stale, and the data folder's list fills in).
+- **The pipeline set** (`gsn_pipeline_set.inc`; SMOOTH.md, "The pipeline set"): besides the lists, every pipeline the
+  draws can ask for at the settings in use, worked out from the code (`ps_sites[]`: each place that draws names its
+  programs and the passes it draws in) and made ahead with them. A new kind of draw, program or render pass needs
+  its entry there, or its pipeline is made in play: `KF4_GSN_WARM=set` makes the set alone ahead and logs each
+  pipeline a draw makes outside it (its shaders and pass); `--stats` prints `pipeline set`.
 - **Finding hitches:** `KF4_HITCH_MS=N` prints each vblank whose work on the GS's thread took over N ms (`[hitch] gs
   vblank`: by record kind, with the pipelines made by draws that waited, texture decodes, uploads, native draw's
   meshes put on the GPU), and each vblank the game's thread reached over N ms after the one before (`[hitch] game

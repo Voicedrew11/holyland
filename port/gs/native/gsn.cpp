@@ -466,10 +466,15 @@ volatile int shine_exact = 0;
 uint32_t target_colour = GSN_COLOUR_EXACT;
 volatile uint32_t wanted_colour = GSN_COLOUR_EXACT;
 
-// The colour targets' format: 16-bit UNORM holds every 8-bit value exactly (v * 257), so what the GS's
-// arithmetic writes there reads back as it is
+// The colour targets' format at a precision (GSN_COLOUR_*): 16-bit UNORM holds every 8-bit value exactly (v * 257),
+// so what the GS's arithmetic writes there reads back as it is. colour_format(): the targets' now; the pipeline set
+// takes the one wanted (the targets take it at a vblank, after the start)
+VkFormat colour_format_of(uint32_t colour) {
+    return colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+}
+
 VkFormat colour_format() {
-    return target_colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+    return colour_format_of(target_colour);
 }
 
 bool wide(const Image &image) {
@@ -3590,6 +3595,19 @@ const Image &blend_scratch(const Image &like) {
     return *gs->scratch.back();
 }
 
+// The render pass's subpass that resolves as it ends: colour attachment 0 (the multisampled target) resolved into 1
+// (a copy of one sample)
+void resolve_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
+    subpass = {};
+    subpass.num_color_attachments = 1;
+    subpass.color_attachments[0] = 0;
+    subpass.num_resolve_attachments = 1;
+    subpass.resolve_attachments[0] = 1;
+    subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+    rp.subpasses = &subpass;
+    rp.num_subpasses = 1;
+}
+
 // The render pass's subpass with the scratch: colour attachments 0 (the target) and 1 (the scratch),
 // both input attachments too. A multisampled pass lists its inputs the other way round, the scratch
 // first: Granite's cache of render passes does not tell passes apart by their sample counts (msaa_subpass)
@@ -3663,14 +3681,7 @@ void begin_pass(Target *color, Target *depth, bool ms = false, bool scratch = fa
         rp.num_color_attachments = 2;
         rp.color_attachments[1] = &resolve_to->get_view();
         rp.store_attachments = 3;
-        subpass = {};
-        subpass.num_color_attachments = 1;
-        subpass.color_attachments[0] = 0;
-        subpass.num_resolve_attachments = 1;
-        subpass.resolve_attachments[0] = 1;
-        subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
-        rp.subpasses = &subpass;
-        rp.num_subpasses = 1;
+        resolve_subpass(rp, subpass);
     } else if (scratch) {
         // (the scratch's contents are not wanted before the pass nor after it)
         rp.num_color_attachments = 2;
@@ -7943,6 +7954,7 @@ void save_pipeline_cache() {
 #include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
 #include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
 #include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
+#include "gsn_pipeline_set.inc"  // (pipelines made ahead: every one the draws can ask for, from the code)
 
 // (gsn_open, --upscaler dlss) A context with DLSS's Vulkan extensions besides the presenter's: the instance with those
 // NGX names (that the loader has), then the GPU Granite would choose (GRANITE_VULKAN_DEVICE_INDEX, or the first of the
@@ -8220,6 +8232,11 @@ extern "C" void gsn_print_pipeline_stats(void) {
             pw.entries.size(), pw.unshipped, pw.ready.load(), pw.seconds_check, pw.done.load(), pw.seconds_build,
             pw.stale.load(), (unsigned long long)pw.play_made.load(), double(pw.play_ns.load()) / 1e6,
             (unsigned long long)pw.play_new.load());
+    fprintf(stderr,
+            "[stats] pipeline set: %zu from the code (%s; %zu on the lists too%s); made by draws that waited: %llu "
+            "outside it, %llu in it not built yet\n",
+            ps.hashes.size(), ps.by_site.c_str(), ps.on_lists, ps_only() ? "; the set alone made ahead" : "",
+            (unsigned long long)ps.outside.load(), (unsigned long long)ps.inside_late.load());
 }
 
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
