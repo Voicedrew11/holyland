@@ -325,6 +325,48 @@ phases were for is mostly here already: at 170 Hz every spot measured keeps 168-
   (P3's "Measured and left", above; `KF4_PC_KINDS=0x9E`). Instanced particles would save the GS thread's work on them
   (part of P5's cost), not the GPU's: with P5.
 
+**What still has a Z-first draw** (map 000, the GPU's 0.76 ms of "scene Z-first atest", counted where the scene draws a
+batch itself, after the PC world and the skinned groups took theirs): 2.4 million triangles of a run are 0x000 batches
+blended in the shader because their As goes up to 2.0 (textures' alphas to 0xFF, (Cs - Cd) As + Cd), and 0.3 million
+the PS2 path's in pictures between. Vulkan's blending cannot do As above 1.0 exactly (a UNORM target clamps the factors
+and the output to 1.0, and one blend equation cannot add Cd (1 - As) below 1.0 and take Cd (As - 1) away above it), so
+these stay the shader's, as in P1. (Taken first for the semi-transparent creatures: the blended 0x280 batches counted
+there were the skinned groups' shines, whose Z draws the groups leave out already; tried and dropped.)
+
+### P5, proposed (for agreement)
+
+The frame's world, as the PC world keeps it, drawn again for the frame's pictures between, instead of its draws made
+again from the packets:
+
+```cpp
+// gsn_pc_world.inc, the native GS's thread
+// The frame's flushes, kept for its pictures between: each flush's materials (PcMaterial: the key, the corners, the
+// image and buffers held) in the order the frame drew them, numbered by the scene batch they came before
+struct PcFrameWorld {
+    std::vector<std::vector<PcMaterial>> flushes;
+    std::vector<uint32_t> at; // (each flush: the scene's batches the frame had drawn before it)
+    uint32_t serial;          // the frame (nd_prep's), so a picture between takes only its own frame's
+};
+void pc_frame_begin(uint32_t serial); // RD_ND_FRAME: a frame's flushes from here on are kept
+// In a picture between of that frame: a taken draw met makes no corners (its nd_draw and sa_draw_batch left out),
+// and at each point the frame flushed its flush is drawn again, its corners moved to the picture's time on the GPU
+// (the records' two ends, as nd_between.h moves native draw's corners now)
+bool pc_between_takes(uint64_t value); // (sa_draw_begin's, in a picture between)
+void pc_between_flush(uint32_t scene_batches); // (sa_draw_batch's, before a batch the scene draws itself)
+```
+
+- **What it saves:** the taken draws' work in each picture between: `nd_draw` and its plans, `sa_draw_batch` for those
+  batches (by the profile above, a fifth to a third of the GS's thread there); the GPU's work is the same.
+- **What it must decide** (NATIVE_DRAW_P8.md, "The recording and the replays"): a picture's decisions that differ from
+  the frame's. For the kept materials: the triangles left out by the scissor at t 1 alone (a kept material must keep
+  every triangle, or those inside it at t 0: `nd_box_at_0`); the textures as the frame read them (the kept images are
+  held, so a picture reads what the frame did, which is the picture's too: the pictures between upload nothing new
+  to the world's textures); the alpha range (native corners' As comes from their lights, not the kicks:
+  `interp_alpha_range` is the GS's own). The rest of the chain (the skinned groups, the effects, the GS's 2D) walked
+  as now.
+- **The checks:** the pictures between byte for byte as `fast`'s now at the spots, frames and `_250/_500/_750`;
+  `--fast` GS ms a picture between before and after.
+
 The checks on the branch as it stands: `tools/boot_test.py` PASS; `tools/frame_test.py --renderer native` PASS, and
 `--renderer fast` (added to the tool with `modern`) PASS: `fast`'s pictures the same every run, and the last one
 dumped alone the same.
