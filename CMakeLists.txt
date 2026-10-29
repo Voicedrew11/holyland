@@ -259,12 +259,14 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     target_link_libraries(kf4_port PUBLIC kf4_gs)
     # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md: --renderer pc), on Granite as well, with none of the
     # native GS's code: of port/gs/native it takes gsn.h's plain types only
+    # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
     file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
+    list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
     target_include_directories(kf4_pc PRIVATE port/include port/gs/native PUBLIC port/gs/pc)
-    target_link_libraries(kf4_pc PRIVATE parallel-gs)
+    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures)
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
-    set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 17)
+    set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
     # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the native GS's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
@@ -524,6 +526,41 @@ add_executable(unlocked_rate_test tests/unlocked_rate_test.c port/platform/unloc
 target_include_directories(unlocked_rate_test PRIVATE port/include)
 if(KF4_TESTS)
     add_test(NAME unlocked_rate COMMAND unlocked_rate_test)
+endif()
+
+# The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
+add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
+target_include_directories(kf4_pc_gif PUBLIC port/gs/pc)
+set_target_properties(kf4_pc_gif PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_executable(pcr_gif_test tests/pcr_gif_test.cpp)
+target_link_libraries(pcr_gif_test PRIVATE kf4_pc_gif)
+set_target_properties(pcr_gif_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_pc_gif PRIVATE -Wall -Wextra -Wshadow -Wconversion -Wsign-conversion)
+    target_compile_options(pcr_gif_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_gif COMMAND pcr_gif_test)
+endif()
+
+# The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
+# (port/gs/native/gsn_vram.c) as its format library and nothing else of the native GS
+add_library(kf4_gsn_vram STATIC port/gs/native/gsn_vram.c)
+target_include_directories(kf4_gsn_vram PUBLIC port/gs/native)
+add_library(kf4_pc_textures STATIC port/gs/pc/pcr_textures.cpp)
+target_include_directories(kf4_pc_textures PUBLIC port/gs/pc)
+target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
+set_target_properties(kf4_pc_textures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+# against the same uploads written into a 4 MB VRAM with gsn_vram.c in order
+add_executable(pcr_textures_test tests/pcr_textures_test.cpp)
+target_link_libraries(pcr_textures_test PRIVATE kf4_pc_textures)
+set_target_properties(pcr_textures_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_pc_textures PRIVATE -Wall -Wextra)
+    target_compile_options(pcr_textures_test PRIVATE -Wall -Wextra)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_textures COMMAND pcr_textures_test)
 endif()
 
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)
