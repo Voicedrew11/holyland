@@ -108,8 +108,9 @@ def pace(args, map_index, n):
             if p[0] == "R":
                 screen = (float(p[1]), float(p[2]))
                 continue
-            # (pictures shown after the teleport's load: 400 vblanks on)
-            if p[0] == "S" or int(p[1]) < TELEPORT + 400:
+            # (pictures shown after the teleport's load: 400 vblanks on; not the last vblank's, whose pictures are
+            # written out as the run's --dump-frames, 0.4 s of this thread: it was every run's lowest second)
+            if p[0] == "S" or int(p[1]) < TELEPORT + 400 or int(p[1]) >= frames - 1:
                 continue
             s = int(float(p[0]))
             seconds[s] = seconds.get(s, 0) + 1

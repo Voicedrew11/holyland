@@ -296,6 +296,42 @@ So what is left to cut is in native draw's draws as a picture between makes them
 batches: a picture's corners already come from the frame's (`nd_prep`: "taken from the frame's draws"), but each
 batch's state is still written and flushed through the GS one batch at a time.
 
+**What the pictures wait for** (2026-10-29; map 000, the owner's settings, 169.83 Hz, real time; a diagnostic build
+timing each picture from when the controller sends it to when the GS's thread takes it):
+
+| | pictures | wait: median, p90, p99 |
+|---|---|---|
+| replays in the vblank of the recording | 3,064 | 10.75, 12.5, 14.2 ms |
+| replays in the vblank after | 4,715 | 0.6, 4.8, 7.3 ms (none behind the next frame's packets) |
+| the recordings themselves | 1,666 | 4.7, 5.9, 7.3 ms, then 5.8 ms to record |
+| the exact restore (571 of 1,666 frames) | | 0.76, 4.3, 4.6 ms of the GS's thread |
+
+So a picture between waits for its recording, not for the GS's thread's next packets: the pump (2b) would make the
+same pictures at the same times. In the present log this is the steady part of the uneven refreshes: a gap of 4
+refreshes (23.6 ms) at the start of a recording's vblank, 1-3 a second.
+
+Sampled in real time (`eu-stack`, both threads): the GS's thread 12% waiting at the vblank for the back end
+(`backend_send`), the back end 28% waiting for the GPU (`next_frame_context`: Granite's frame contexts are taken a
+picture each, pictures between too, so 4 is 4 pictures in flight), 18% making calls, 51% idle. 8 frame contexts
+instead of 4: no difference (10 runs of 25-40 s, within the runs' spread). What is left of a recording is flat:
+native draw's batches drawn through `sa_draw_batch`, no line over 2% of the thread.
+
+Also: runs where the game itself falls behind for a second or so (55-58 game vblanks a second, gaps of 77-117 ms),
+in about a third of the runs, before this change as after it, with no hitch on the GS's or the game's thread; the
+desktop was busy (kwin, plasmashell, a browser playing video). Not found yet. And pace_test.py counted the last
+vblank's pictures, which the run writes out as PNGs (0.4 s): that was every run's lowest second (about 114); fixed.
+
+| map 000, 25 s, 169.83 Hz | uneven refreshes a second | pictures a second (lowest second) |
+|---|---|---|
+| before (d4919d86), three runs | 4.16, 8.76, 1.80 | 168.3 (142), 162.6 (110), 168.7 (150) |
+| after (a frame recorded once), three runs | 1.64, 1.12, 1.00 | 169.0 (159), 169.2 (165), 169.3 (164) |
+
+(Alternating runs; the spread between runs is as large as the difference.)
+
+**So, next:** the pump is not built (it buys nothing while the recording is what pictures wait for). What would move
+the pictures are less of the GS's thread before and in the recording, and the GPU's time a picture (step 4), which
+is what the back end, and through it the GS's thread, waits for at the vblank.
+
 ### 2b: what it needs (checked 2026-10-28)
 
 A replay needs more of the GS's than the recording and the phase: it draws into the GS's own targets (the buffer
