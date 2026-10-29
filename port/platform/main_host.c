@@ -132,12 +132,19 @@
        --dump-present WxH
                          --dump-frames writes the picture as a WxH window shows it with the best
                          scaling (and --present-sharpen)
-       --frame-rate 30|60|120|144|240|N|monitor
+       --frame-rate 30|60|120|144|240|N|monitor|unlocked
                          the opt-in higher frame rates: pictures between the game's 30 a second
                          in play, each drawn from the game's frame with the camera, the moving
                          models, the HUD, fades and scrolling textures moved to where they are at
                          that time (port/platform/frame_interp.c); monitor: the window's screen's
-                         refresh rate; 30, the PS2's, by default
+                         refresh rate; unlocked: as many as the renderer keeps up with (the
+                         swapchain mailbox with VSync, immediate without); 30, the PS2's, by default
+       --frame-rate-cap N
+                         unlocked no faster than N pictures a second (a few under a VRR screen's
+                         rate keeps it in its range); 0, no cap, by default
+       --tearing         unlocked's pictures shown at once, tearing (the swapchain immediate:
+                         the least latency, and a VRR screen's), not the newest at each
+                         refresh (mailbox, by default)
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -260,7 +267,7 @@ static void usage(const char *program) {
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor|unlocked]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
@@ -431,6 +438,10 @@ static void parse_options(int argc, char **argv) {
             port_options.show_fps = port_options.show_fps_forced = 1;
             continue;
         }
+        if (strcmp(option, "--tearing") == 0) {
+            port_options.tearing = port_options.tearing_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--stats") == 0) {
             port_options.stats = 1;
             continue;
@@ -504,13 +515,23 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
         } else if (strcmp(option, "--frame-rate") == 0) {
-            port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
-            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&
+            port_options.frame_rate = strcmp(value, "monitor") == 0    ? PORT_FRAME_RATE_MONITOR
+                                      : strcmp(value, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
+                                                                       : atoi(value);
+            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED &&
                 (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
-                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...) or monitor, not %s\n", value);
+                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...), monitor or unlocked, not %s\n",
+                        value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--frame-rate-cap") == 0) {
+            port_options.frame_rate_cap = atoi(value);
+            if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap > 1000)) {
+                fprintf(stderr, "--frame-rate-cap wants 60 to 1000, or 0 for none, not %s\n", value);
+                exit(2);
+            }
+            port_options.frame_rate_cap_forced = 1;
         } else if (strcmp(option, "--draw-distance") == 0) {
             port_options.draw_distance = port_draw_distance_parse(value);
             if (port_options.draw_distance < 0) {

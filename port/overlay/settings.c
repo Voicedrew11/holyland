@@ -5,7 +5,8 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
-                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "renderer": "native",
+                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "frame_rate_cap": 0, "tearing": false,
+                    "renderer": "native",
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
@@ -334,14 +335,19 @@ void port_settings_load(void) {
         }
     }
     {
-        /* 30 (the PS2's), a number of pictures a second, or "monitor" (PORT_FRAME_RATE_MONITOR) */
+        /* 30 (the PS2's), a number of pictures a second, "monitor" or "unlocked" (PORT_FRAME_RATE_) */
         const char *rate = read_string(display, "frame_rate");
 
         if (rate != NULL) {
-            s->frame_rate = strcmp(rate, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : s->frame_rate;
+            s->frame_rate = strcmp(rate, "monitor") == 0    ? PORT_FRAME_RATE_MONITOR
+                            : strcmp(rate, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
+                                                            : s->frame_rate;
         } else {
             s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, 500);
         }
+        s->frame_rate_cap = (int)read_number(display, "frame_rate_cap", s->frame_rate_cap, 0, 1000);
+        s->frame_rate_cap = s->frame_rate_cap > 0 && s->frame_rate_cap < 60 ? 60 : s->frame_rate_cap;
+        s->tearing = read_bool(display, "tearing", s->tearing);
     }
     {
         const char *draw_distance = read_string(display, "draw_distance");
@@ -506,6 +512,12 @@ void port_settings_load(void) {
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
+    }
+    if (!port_options.frame_rate_cap_forced) {
+        port_options.frame_rate_cap = s->frame_rate_cap;
+    }
+    if (!port_options.tearing_forced) {
+        port_options.tearing = s->tearing;
     }
     if (!port_options.draw_distance_forced) {
         port_options.draw_distance = s->draw_distance;
@@ -678,8 +690,11 @@ void port_settings_save(void) {
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
-    put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR ? cJSON_CreateString("monitor")
-                                                                        : cJSON_CreateNumber(s->frame_rate));
+    put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR    ? cJSON_CreateString("monitor")
+                               : s->frame_rate == PORT_FRAME_RATE_UNLOCKED ? cJSON_CreateString("unlocked")
+                                                                           : cJSON_CreateNumber(s->frame_rate));
+    put(display, "frame_rate_cap", cJSON_CreateNumber(s->frame_rate_cap));
+    put(display, "tearing", cJSON_CreateBool(s->tearing));
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));

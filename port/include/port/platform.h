@@ -139,9 +139,17 @@ typedef struct {
     /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
        PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
        or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
-       live from the overlay. */
+       live from the overlay. PORT_FRAME_RATE_UNLOCKED: as many as the renderer keeps up with
+       (port/include/port/unlocked_rate.h), no more than frame_rate_cap a second (0: no cap). */
 #define PORT_FRAME_RATE_MONITOR 1000
+#define PORT_FRAME_RATE_UNLOCKED 1001
     int frame_rate;
+    int frame_rate_cap;
+    int frame_rate_cap_forced; /* --frame-rate-cap: this run's, whatever settings.json says */
+    /* --tearing or settings.json: unlocked's swapchain immediate (tearing, the least latency; a VRR screen's), not
+       mailbox (port/platform/present_vk.cpp) */
+    int tearing;
+    int tearing_forced;
     /* --present-scaling, --present-sharpen: how the picture is scaled to the window (port_video_scaling,
        port/platform/video.c), this run's whatever settings.json says (-1: the settings'); --dump-present
        WxH: dumps write the picture as a window of that size shows it */
@@ -487,6 +495,11 @@ int port_interp_active(void);
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
+/* (the controller's thread) --frame-rate unlocked: a game vblank judged, behind 1 when the native GS was behind
+   as it began (port/include/port/unlocked_rate.h); port_interp_unlocked_at_floor: 1 when the rate is as low as it
+   goes (gs.c's cut of the pictures between then judges); port_interp_print_unlocked: its --stats line */
+void port_interp_unlocked_vblank(uint64_t vblank, int behind);
+int port_interp_unlocked_at_floor(void);
 /* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
    (0: none; the F3 counter's "CUT") */
 int port_interp_cut(void);

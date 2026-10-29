@@ -3570,13 +3570,17 @@ bool blend_copy_16_by_pass() {
 // mean rounded here (pass_resolve.frag), which is not always the resolve's: a few pixels at edges come
 // out 1 or 2 apart from the default's (about a hundred a picture on map 000). A third less GPU time a
 // picture again at --native-scale 4 with MSAA 2 (STEP3.md, "Render passes").
+// --renderer fast has it by default, and for --native-colour high's 16-bit targets too, whose copies were
+// resolved between passes (the scene's and the GS's runs alike: a render pass ended and a resolve a run, about
+// ten a picture on map 000; PC_RENDERER.md, smooth play step 4). KF4_GSN_MSAA_BLEND=exact: the resolves, in fast too.
+extern volatile int pc_world_mode; // (gsn_pc_world.inc: --renderer fast)
 bool msaa_blend_in_pass() {
-    static int fast = -1;
-    if (fast < 0) {
+    static int mode = -1; // 0 by the renderer, 1 fast, 2 exact
+    if (mode < 0) {
         const char *v = getenv("KF4_GSN_MSAA_BLEND");
-        fast = v && strcmp(v, "fast") == 0;
+        mode = v && strcmp(v, "fast") == 0 ? 1 : v && strcmp(v, "exact") == 0 ? 2 : 0;
     }
-    return fast != 0 && !blend_copy_forced();
+    return (mode == 1 || (mode == 0 && pc_world_mode)) && !blend_copy_forced();
 }
 
 const Image &blend_scratch(const Image &like) {

@@ -4019,7 +4019,7 @@ bool sa_draw_batch(int *why) {
     // where the two samples differ by an odd amount). KF4_SA_BLEND_COPY=1 (tests): the copies between passes.
     bool in_pass = shader_blend && !blend_copy && !per_sample && nd.active && !nd.pass_active && !nd.strip_active &&
                    !sa.gs3d && !sa.gs_water && !ndw_batch() && sa.programs_in[0][sa.samples > 1 ? 1 : 0] &&
-                   !wide(*sa.color);
+                   (!wide(*sa.color) || msaa_blend_in_pass()); // (16-bit: fast's, gsn.cpp's msaa_blend_in_pass)
     in_pass = in_pass && all_native;
     bool copied_in_pass = false;
     uint64_t bound_pass = UINT64_MAX; // (the render pass the run's bindings were made in)
@@ -4101,7 +4101,7 @@ bool sa_draw_batch(int *why) {
             Push p = push;
             p.flags |= draws[0].select << F_PASS_SHIFT;
             p.src_offset[0] = int32_t(sa.samples);
-            p.lod_k = 255.0f;
+            p.lod_k = wide(*sa.color) ? 65535.0f : 255.0f;
             c.push_constants(&p, 0, sizeof(p));
             sa_draw_range(c, false, count, first, in_pass, true);
             in_pass_barrier();
@@ -4140,7 +4140,7 @@ bool sa_draw_batch(int *why) {
                     struct {
                         int32_t samples;
                         float scale;
-                    } pp = {int32_t(sa.samples), 255.0f};
+                    } pp = {int32_t(sa.samples), wide(*sa.color) ? 65535.0f : 255.0f};
                     c.push_constants(&pp, 0, sizeof(pp));
                 }
                 c.draw(3);

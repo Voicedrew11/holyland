@@ -1357,8 +1357,17 @@ void port_gs_run_vsync(void) {
             if (interp_behind_run == 0) {
                 interp_settle_until = 0; /* (caught up since the last cut: the next fall behind is judged at once) */
             }
+            /* --frame-rate unlocked: the rate follows the renderer (frame_interp.c), judged as the cut is, and behind
+               too when pictures between of the vblank before were left out for it (below); the cut only once the
+               rate is as low as it goes */
+            static uint64_t unlocked_left_seen;
+            int unlocked = port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED;
+            if (unlocked && interp_live && !dump && request->vblank >= interp_judge_from) {
+                port_interp_unlocked_vblank(request->vblank, interp_behind_run > 0 || interp_behind != unlocked_left_seen);
+            }
+            unlocked_left_seen = interp_behind;
             if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && request->vblank >= interp_judge_from &&
-                interp_allow > 0) {
+                interp_allow > 0 && (!unlocked || port_interp_unlocked_at_floor())) {
                 interp_allow = (interp_allow < between ? interp_allow : between) - 1;
                 if (interp_allow < 0) {
                     interp_allow = 0;

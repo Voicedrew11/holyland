@@ -90,6 +90,7 @@ add_library(kf4_port STATIC
     port/platform/field_frames.c
     port/platform/video.c
     port/platform/refresh_clock.c
+    port/platform/unlocked_rate.c
     port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/ipu.c
@@ -507,6 +508,13 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME refresh_clock COMMAND refresh_clock_test)
+endif()
+
+# --frame-rate unlocked's rate from whether the renderer keeps up (port/platform/unlocked_rate.c)
+add_executable(unlocked_rate_test tests/unlocked_rate_test.c port/platform/unlocked_rate.c)
+target_include_directories(unlocked_rate_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME unlocked_rate COMMAND unlocked_rate_test)
 endif()
 
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)

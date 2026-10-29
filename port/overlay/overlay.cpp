@@ -270,21 +270,25 @@ void display_page() {
     ImGui::EndDisabled();
     tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
     {
-        static const int rates[] = {30, 60, 120, 144, 165, 240, PORT_FRAME_RATE_MONITOR};
-        static const char *const names[] = {"30 (the PS2's)", "60", "120", "144", "165", "240", "The screen's refresh rate"};
+        static const int rates[] = {30, 60, 120, 144, 165, 240, PORT_FRAME_RATE_MONITOR, PORT_FRAME_RATE_UNLOCKED};
+        static const char *const names[] = {"30 (the PS2's)", "60", "120", "144", "165", "240", "The screen's refresh rate",
+                                            "Unlocked"};
+        const int count = int(sizeof(rates) / sizeof(rates[0]));
         char other[48];
         int at = -1, i;
 
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < count; i++) {
             at = rates[i] == port_options.frame_rate ? i : at;
         }
         if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
             snprintf(other, sizeof(other), "The screen's refresh rate (%d)", port_frame_rate_hz());
+        } else if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
+            snprintf(other, sizeof(other), "Unlocked (%d now)", port_frame_rate_hz());
         } else {
             snprintf(other, sizeof(other), "%d", port_options.frame_rate);
         }
         if (ImGui::BeginCombo("Pictures a second in play", other)) {
-            for (i = 0; i < 7; i++) {
+            for (i = 0; i < count; i++) {
                 if (ImGui::Selectable(names[i], i == at)) {
                     s.frame_rate = port_options.frame_rate = rates[i];
                     changed();
@@ -299,10 +303,31 @@ void display_page() {
             "still runs at 30: what it does is the\nsame, and the picture is no later. What changes by "
             "frames (the orb's flames, flipbook\neffects) still changes 30 times a second. Above 60 the "
             "window shows each picture at its\ntime; with VSync, choose the screen's rate. The menus are "
-            "as they were. Applies at once.\n(--frame-rate 30|60|120|144|240|monitor)");
+            "as they were. Applies at once.\nUnlocked: as many as the renderer keeps up with, found as it plays. "
+            "Without a VRR screen\nthe screen still shows one a refresh (the newest): less latency, not smoother "
+            "than\nthe screen's refresh rate. A fixed rate that is not the screen's judders.\n"
+            "(--frame-rate 30|60|120|144|240|monitor|unlocked)");
     if (port_options.frame_rate != s.frame_rate) {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
+    if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
+        int cap = port_options.frame_rate_cap;
+        if (ImGui::SliderInt("Unlocked's cap", &cap, 0, 500, cap > 0 ? "%d a second" : "none")) {
+            cap = cap > 0 && cap < 60 ? 60 : cap;
+            s.frame_rate_cap = port_options.frame_rate_cap = cap;
+            changed();
+        }
+        tooltip("Unlocked no faster than this. With a VRR screen (FreeSync, G-Sync), a few under its refresh\n"
+                "rate keeps it in its range. 0: none. (--frame-rate-cap N)");
+        bool tearing = port_options.tearing != 0;
+        if (ImGui::Checkbox("Unlocked: tearing allowed", &tearing)) {
+            s.tearing = port_options.tearing = tearing;
+            changed();
+        }
+        tooltip("Each picture shown at once, part way down the screen if need be (the swapchain immediate):\n"
+                "the least latency, and what a VRR screen wants. Off: the screen shows the newest picture at\n"
+                "each refresh, no tearing (mailbox). Vulkan presenter only. (--tearing)");
     }
     static const char *const distances[PORT_DRAW_DISTANCE_COUNT] = {"1x (PS2)", "1.5x", "2x", "4x", "Max (no distance fog)"};
     int distance = port_options.draw_distance;

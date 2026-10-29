@@ -35,7 +35,9 @@ typedef struct {
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
     int frame_rate;        /* 30 (the PS2's), or the opt-in higher rates, interpolated: pictures a second, or
-                              PORT_FRAME_RATE_MONITOR (port_options.frame_rate) */
+                              PORT_FRAME_RATE_MONITOR or _UNLOCKED (port_options.frame_rate) */
+    int frame_rate_cap;    /* unlocked no faster than this many a second; 0: no cap (port_options.frame_rate_cap) */
+    int tearing;           /* unlocked's swapchain immediate, not mailbox (port_options.tearing; off) */
     int draw_distance;     /* the opt-in longer view: PORT_DRAW_DISTANCE_ (port_options.draw_distance) */
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
     int renderer;          /* who draws, from the next start: PORT_RENDERER_ (port_options.renderer) */

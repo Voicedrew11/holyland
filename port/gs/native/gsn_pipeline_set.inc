@@ -1,4 +1,4 @@
-// ---- The pipeline set (included into gsn.cpp after gsn_pipeline_warm.inc; docs/port/SMOOTH.md, step 1) -------------
+// ---- The pipeline set (included into gsn.cpp after gsn_pipeline_warm.inc; docs/port/PC_RENDERER.md, smooth play step 1)
 // Every pipeline the native GS's draws can ask for at the settings in use, worked out from the code instead of found
 // by playing (the lists of gsn_pipeline_warm.inc have only what a tour happened to draw, at the settings it ran with).
 //
