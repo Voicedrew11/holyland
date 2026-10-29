@@ -50,7 +50,29 @@ draws instead when the native GS cannot start.
 
 ## The checks before a renderer change goes in
 
-Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
+**Every item below runs before a renderer change is committed.** One that cannot run (no GPU, no disc, no captures
+yet) is named in the commit message with why, and the owner is asked before the commit goes in without it; "not run"
+in a report is not enough. With pictures between in play, also check the change's own switch: pictures byte for byte
+with it on and off ("Measuring on Linux", below).
+
+On Linux (the owner's machine) the order, with the commands:
+
+| check | command | about |
+|---|---|---|
+| build, no new warnings | `cmake --build out/linux-clang` | 1-3 min |
+| unit tests (`gsn_vram`, `gsn_draw`, ...) | `ctest --test-dir out/linux-clang` | 1-2 min |
+| `vu1_test` | `out/linux-clang/vu1_test` | under 1 min |
+| boot, frames | `tools/boot_test.py`; `tools/frame_test.py --renderer native` and `--renderer fast` (`--exe out/linux-clang/kf4`; set `KF4_DATA_DIR` and `--keep` under `~/.cache`, not `/tmp`) | 2-4 min each |
+| the change's switch | pictures byte for byte, on and off, at maps 000, 009, 009:2 and 063 | 3 min a spot and side |
+| map tour | item 4 below; the captures are made once into `~/.cache/kf4_tour` (none on this machine yet: time it the first time and write it here) | |
+| ASan + UBSan | `cmake --build out/linux-clang-asan`, a run to map 000 and 009:2 ("Measuring on Linux": the options and the known reports) | 5 min a spot |
+| speed, if it could cost | `tools/pace_test.py` ("Measuring on Linux") | 2 min a run |
+
+The gcc sanitizer builds (`out/linux-gcc-asan`, `-tsan`) do not link on this machine (Fedora's libasan, libubsan and
+libtsan are not installed): use `out/linux-clang-asan` and `out/linux-clang-tsan`. The project has no clang-tidy
+configuration (only Granite's vendored one, which is not ours).
+
+The items in full (from the Windows days; the commands are the same with `out/linux-clang`):
 
 1. **`gsn_draw_test`** (ctest `gsn_draw`): random draws on both renderers, compared in VRAM, then
    rounds of buffers sharing memory. 0 failures of 300 cases and 300 rounds; try a few seeds (its
@@ -76,6 +98,78 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
 7. **Linux builds** (gcc). On Mesa's lavapipe, `--renderer both` needs `LP_NUM_THREADS=1`, and
    gsn_draw_test runs a few cases a process (`GSN_CHUNK`, set by ctest) because lavapipe keeps
    memory until exit.
+
+## Measuring on Linux (the owner's machine)
+
+Everything here was learned by measuring; a subagent sees none of an assistant's memory, so it is written here.
+
+**The machine.** Fedora, KDE Wayland; Ryzen 7 5700X; Radeon RX 9070 XT on RADV (Mesa 26.2); 2560 x 1440 at 169.83 Hz
+(and a second screen, 1920 x 1080 at 120). The disc: `~/Desktop/Verdite-Project/kfiv-decomp/baserom/kfiv_us.iso`.
+The owner's settings (`~/.config/holyland/settings.json`): `--renderer fast --native-draw on --native-scale 4
+--widescreen --native-widescreen --native-msaa 2 --native-aniso 16 --native-cutout-aa ssaa --native-colour high`
+(pipeline tag `m2.c1.k1.s1.x0`), vsync off. Runs with `--input` do not read settings.json: pass the settings.
+
+**Speed work is for every configuration** (the owner, 2026-10-24): RADV is a target, not the target. Prefer a change
+that is less work or better threading over a driver's quirk, and say when a measure was only possible here.
+
+**Where to measure.** The owner has no saves. Play `tests/newgame.pad` and teleport: `--teleport 1900:MAP[:PLACE]
+--invincible`, any map and place (name them MAP:PLACE in the docs so they can be run again). Useful spots: 000 (the
+town: the GS's thread's worst), 009:0 (the pond, the fire and the reflection), 009:2 (two of the pond's skinned
+creatures close, their CLUT alphas 0x84 and 0x88: shader blending), 063 (the canyon: every frame restores the sky's
+scrolling texture). At `--frame-rate 240` the skinned models are drawn only in the pictures between: compare
+`frame_N_500.png` too, not only `frame_N.png`.
+
+**A headless run draws nothing unless it dumps a frame** (`--dump-frames N`; pace_test does). `--dump-frames` takes a
+comma list (`2300,2307,...`), not a range: `2300-2559` reads as 2300 alone.
+
+**Pictures byte for byte** (a switch on and off, or two builds): `KF4_INTERP_DRAW_ALL=1`, a fixed `--frame-rate 240`,
+`--frames 2700`, a dump every 7th vblank from 2300 to 2650 (sparse: in a dumped vblank the pictures between are
+scheduled differently), then `md5sum` every `frame_V*.png` and compare: 204 pictures a spot (the frames and `_250`,
+`_500`, `_750`). Keep the hashes, delete the pictures.
+
+**Disk.** `/tmp` (and the session scratchpad under it) is a small tmpfs: picture dumps fill it and come out as 0-byte
+PNGs. Put data folders and dumps under `~/.cache/<name>` and delete them after (a 4x picture is about 1 MB, even with
+`--dump-present`); the cache folder has about 5 GB to spare. `tools/frame_test.py` writes to `/tmp` unless `--keep`
+says otherwise. Every run sets `KF4_DATA_DIR` to its own folder (the project's rule).
+
+**Speed.** `tools/pace_test.py --exe out/linux-clang/kf4 --maps 0,9 --hz 240 --mode pace,cost --keep ~/.cache/<name> --
+--renderer fast --native-msaa 2 --native-colour high` (its own `OWNER` list is `modern` at MSAA 1; the extra arguments
+after `--` make it the owner's). `cost`'s "recording us" is averaged over the whole run, the opening before the
+teleport included; for a recording in play alone, a longer run (`--frames 12000`) and `--stats`' "drawn from the
+packets" line. Runs are noisy: about a third lose a second where the game falls behind (55-58 vblanks a second),
+before and after a change alike, cause not found (the desktop busy). Alternate A and B, at least two runs each, and
+run nothing else on the GPU meanwhile. A run is 1-3 minutes: start it in the background and wait for it, not for a
+fixed time.
+
+**Where the time goes.** There is no `perf` (`nix build nixpkgs#linuxPackages.perf` makes one; user-space sampling is
+allowed) and callgrind is far too slow (the game's threads serialize). Sample a thread with `eu-stack -i -1 -p TID` in
+a loop (TID from `/proc/PID/task/*/comm`: `kf4-gs` the GS's thread, `kf4-gs-back` the back end's; ptrace_scope is 0).
+eu-stack takes about a tenth of a second a sample: run 12,000 vblanks and sample from 45 s on for 150 or more samples
+inside what you measure (a recording is `interp_picture_now` on the stack: `interp_record` is inlined into it). A
+sample whose top frames are a futex is a wait: find what holds the lock.
+
+**Temporary diagnostics** go in a build tree of their own (`cmake -S . -B out/diag ...`, clang, `KF4_TESTS=OFF`), the
+source put back after, never committed. An old commit to compare with: `git worktree add ~/.cache/<wt> <sha>` (it needs
+its submodules and a build of its own). When a question is "which of these causes it", add one counter per cause and
+run once, rather than rebuilding a guess at a time.
+
+**Sanitizers.** `out/linux-clang-asan` (address and undefined), `out/linux-clang-tsan`. Into play needs
+`ASAN_OPTIONS=detect_leaks=0:halt_on_error=0 UBSAN_OPTIONS=halt_on_error=0` (otherwise the sound's false positive or
+Granite's `render_pass.cpp:52` `memcpy(null, 0)` stops it at boot); then look for reports outside `decomp_src` and
+`parallel-gs`. Known, not ours: `frame_interp.c:666` (qsort of an empty list), ASan in `SoundDriver_Remote`
+(`sound.c:168`, from `Sound_LoadSwBank`), UBSan's function-pointer types in decomp code, the menus, `kernel.c`,
+`libmpeg`; TSan in `dmac.c`, `libdma.c` and the game's packet code (fibers).
+
+**The screen's refresh times** (`refresh_clock.c`, `screen_vblank.c`, found 2026-10-28): the DRM vblank works without
+being master (`/dev/dri/card1`, `drmWaitVBlank` RELATIVE 0 gives the last vblank's CLOCK_MONOTONIC time at once;
+`drmModeGetCrtc` the exact rate, 169.8306 Hz). The Vulkan routes look right and fail here: `VK_KHR_present_wait`
+from a thread crashes Mesa's Wayland WSI beside a present (serialised with the presents, every wait times out);
+`VK_EXT_present_timing` (RADV rev 3) gives Wayland only the swapchain's own time domain and FIRST_PIXEL_OUT 0. SDL
+names the rate 170 (an integer).
+
+**The pipeline set may build more than is drawn** (the owner, 2026-10-28: "I am okay with overbuild if it's
+comprehensive"): about 184 pipelines at the owner's settings against about 35 used. Narrow an entry only where the
+code proves no draw reaches a pipeline, never by what a map tour happened not to draw.
 
 ## Things that were hard to find
 
