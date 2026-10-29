@@ -329,6 +329,7 @@ typedef struct {
        CLUT written since; replays that named a target the recording made and kept, or made and dropped (its own) */
     uint64_t interp_rerecord[8];
     uint64_t interp_kept_targets, interp_own_targets;
+    uint64_t interp_newer_settled; /* replays that first made a multisampled target's two images the same (interp_settle_newer) */
     /* graphics pipelines bound (Granite's vkCmdBindPipeline, all of the GS's thread's and the presenter's), and those of
        the pictures between drawn from the packets and from the recording; the draws of those from the recording */
     uint64_t pipeline_binds, interp_record_binds, interp_replay_binds, interp_replay_draws;

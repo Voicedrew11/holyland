@@ -8,7 +8,9 @@ rate. This plan takes each cause measured below to its fix, in order of what the
 Status: agreed in general by the owner (2026-10-28); step 1.4 and the targets are still to be decided. Built: the
 pipeline set (step 1.2, below), the files written on a thread of their own (1.3) and one count, not a line a
 pipeline (1.5). The refresh clock (port/platform/refresh_clock.c, screen_vblank.c) is step 0, on its own branch
-(`smooth/refresh-clock`).
+(`smooth/refresh-clock`). Step 2 measured again and split (2a, the recording first; agreed 2026-10-28), on
+`smooth/picture-pump`; 2a as first written checked and found not to work (below), and instead the recording made
+cheaper: a frame recorded once (built).
 
 ## What was measured (main 74149928 + the refresh clock, 2026-10-28)
 
@@ -39,9 +41,11 @@ What each says:
 3. **240 on a 169.83 Hz screen judders by design.** Pictures timed for 240 a second land on 170 refreshes: one in
    ten refreshes shows the world move by two steps or none, and the GPU draws 70 pictures a second nobody sees. The
    owner's `settings.json` has `frame_rate: 240` with vsync off.
-4. **The GS's thread works in bursts.** A game frame costs it about 20 ms of the 33 (p99 26, worst 45 ms on 000):
-   the frame's packets (gif ~13 ms) and the back end's flush within one vblank. Over 33 ms the pictures between
-   are cut (`cut to fewer a vblank`). RENDERER.md, "Where 240 stands", found the same at 009 at 240.
+4. **The GS's thread works in bursts, and is nearly full.** The frame's packets (gif ~13 ms) and the back end's
+   flush come within one vblank: about 20 ms (p99 26, worst 45 ms on 000). That is not all a game frame costs it:
+   the recording of the pictures between comes in the next vblank (step 2, measured again). Over 33 ms the
+   pictures between are cut (`cut to fewer a vblank`). RENDERER.md, "Where 240 stands", found the same at 009 at
+   240.
 5. **The refresh clock's latency is taken from the hitches.** The time before each refresh a picture is made
    for is the 98th percentile of the last 256 pictures' lateness: 6-7.5 ms after a clean run, 17 ms after the
    cold one. A compile makes every picture after it a refresh later than it needs to be.
@@ -197,7 +201,119 @@ owner's settings against 35 recorded there; a cold start pays for it once per dr
 threads, play waiting for what the intro and title have not hidden). An entry is narrowed only where the code shows
 a draw cannot reach a pipeline, never by what a tour happened not to draw.
 
-## Step 2: the pictures between, made by the back end (the picture pump)
+## Step 2: the pictures between off the GS's thread
+
+### Measured again (smooth/picture-pump: step 1 and the refresh clock, 2026-10-28)
+
+Map 000, the owner's settings, `KF4_PRESENT_SIM=169.83`, `--frame-rate monitor`, `KF4_HITCH_MS=1`, vblanks 2000 to
+3600. The machine was busy (a browser playing video, load 2-4), and the game itself was measured as before.
+
+| a game frame on the GS's thread | ms |
+|---|---|
+| the frame's packets (gif) | 15.2 |
+| the vblank (mostly the flush) | 7.6 |
+| the recording: the frame's packets drawn a second time, for the first picture between | 7.1 (4.55 ms each in `--stats`) |
+| a replay of the recording | 0.0006 a picture |
+| **in all** (median, p90, p99, worst) | **31.2**, 34.7, 36.4, 38.0 of 33 |
+
+In play: 160.4 pictures a second (lowest second 154) and 8.4% of refreshes not one step of the world, against
+169.1 and 0.9% in the table above. The difference is the load, which is the finding: the GS's thread has about 2
+ms to spare a game frame, so anything else on the machine takes pictures between. The pictures left out are
+mostly in the vblank of the burst.
+
+What this changes. The plan below (2b) has the back end make the pictures between, so that none waits behind the
+GS's thread's next packets. But a replay already costs nothing; what the late pictures wait for is the recording,
+made on the GS's thread after the frame's burst (23-27 ms, then 7 ms more). The pump cannot make a picture before
+its recording is there, so on its own it would not take this lateness away. So step 2 is now in two parts, the
+recording first (agreed by the owner, 2026-10-28).
+
+### 2a: the recording made from the frame's own drawing
+
+The frame is drawn from its packets once into the buffer not shown, and then once more, rewritten by
+frame_interp.c, as the first picture between: recorded as it is drawn (Cmd, Recording), and its kicks set up to be
+moved (InterpKick, gs_replay.vert). Instead, the frame's own drawing is recorded, and its replays made into the
+buffer shown. That takes about 7 ms of 31 off the GS's thread each game frame, and the pictures between can start
+as soon as the frame is drawn.
+
+What the second drawing does differently, and so what the replay must do instead (to be checked first, before a
+header):
+- Its draws go into the buffer shown (FRAME), and TEX0 and BITBLTBUF where they read the frame point there too:
+  at a replay, the frame's images swapped for the shown buffer's, as the replay already swaps the targets' images
+  (`ReplayJob::images`, `now_image`).
+- Local-to-local transfers into anything but the frame are not started, but for the copies of the frame it reads
+  after them and the map change's COPY_RESTORE; local-to-host ones neither; FINISH, SIGNAL and LABEL are not sent.
+  The frame's drawing has them: each kept out of the recording (marked as the GS records it), or made again as a
+  copy of the swapped images.
+- Its vertices are drawn by gs_replay.vert from kicks, the frame's by the usual programs. Either the frame's draws
+  record their kicks too (and its own picture is then drawn as now, its pixels the same), or the recording keeps
+  both programs. The game's own frames must stay the same pixels with the frame rate above 30 or not (frame_test
+  `--dump-frames` of the even vblanks, as now).
+- The recording is checked against the GS's state before it (`interp_cannot_replay`: targets, registers, VRAM):
+  for the frame's own drawing that state is the one before the frame, which the GS has again only if nothing
+  between drew differently (`port_interp_end_vblank`'s exact restore).
+
+If the frame's drawing cannot be recorded for a frame (a read-back, a cut), the picture is drawn from the packets
+and recorded as now.
+
+**Checked (2026-10-28): not as written.** Two things stop it:
+- **The moves come after the frame is drawn.** frame_interp.c makes the frame's `GsnInterpMove`s at its first
+  picture between (`port_interp_picture` → `gpu_frame`), after the vblank, from the whole frame and the one
+  before (`objects_pair` pairs both ways). The GS draws the frame's packets as they come, before that. But the
+  recording's draws are decided from the moves (`interp_moving`, `interp_place_at_0`, `interp_alpha_range`,
+  `interp_t_at_0`: the scissor, the blending's copies at t 0, the alphas, the texture rows, the Z). Recording the
+  frame's own drawing means holding its packets until the vblank (losing the overlap with the game's sending) or
+  deciding all of those as if anything could move anywhere, in the frame's own drawing too.
+- **The recording is not the frame's drawing with its draws' vertices swapped.** 89 places in the GS decide
+  otherwise while recording (`interp.active`: native draw's six paths, the scene's targets, the copies, the
+  corners made on the GPU, the PC world). Each would have to make both, for the frame and for its pictures.
+
+### 2a, instead: the recording made cheaper (the owner's choice, 2026-10-28)
+
+The same recording, the same pictures, less of the GS's thread.
+
+**Built: a frame recorded once** (`interp_settle_newer`, gsn.cpp). A frame's recording that began with the frame
+buffer's multisampled image newer and ended with its 2D drawn into the image found the GS "not as recorded" at its
+next picture (`--stats`: "drawn from the packets again ... (targets)") and was recorded again: 367 of the first 1,400
+frames of tests/newgame.pad, 4 ms each. Now the two images are made the same first (a resolve or a load, exact) and
+named newer as before the recording. In play on map 000 the frames were already recorded once (none of the 367 is
+after the teleport); at the new game's start, a quarter of the frames lose a second recording. `--stats`: "with a
+multisampled target's images made the same first". Checked: 1,017 pictures (every 7th vblank to 2,420 at 170, every
+picture of it, 299 of them right after a settle) byte for byte the old build's; ASan and UBSan over the same run,
+nothing from it.
+
+**Where a recording's 4.2-4.5 ms goes** (map 000 in play, the owner's settings, `--fast`, 170; `--stats`' timers
+over the recordings, and 400 samples of `kf4-gs`'s stack with `eu-stack`, 125 of them in a recording):
+
+| | share of a recording |
+|---|---|
+| native draw's draws (`nd_register`) | 74% |
+| of it, the skinned models (`nd280_draw`): each batch's A+D writes, which end the batch before (`gs_write` → `flush_batch`) | 28% |
+| the batches drawn (`sa_draw_batch`, `fast`'s), from native draw's and the GS's | 31% |
+| the uploads asked for again (`replay_upload`, `sa_upload_replayed`) | 13% |
+| native draw's own planning (`ns_nd_plan`) | 1% |
+
+So what is left to cut is in native draw's draws as a picture between makes them, chiefly the skinned models'
+batches: a picture's corners already come from the frame's (`nd_prep`: "taken from the frame's draws"), but each
+batch's state is still written and flushed through the GS one batch at a time.
+
+### 2b: what it needs (checked 2026-10-28)
+
+A replay needs more of the GS's than the recording and the phase: it draws into the GS's own targets (the buffer
+shown, the scrolling textures' targets, the reflection), found as the GS has them at that point of its stream
+(`interp_cannot_replay`'s `replay_images`), and the buffer shown is the one the next game frame draws into once
+the game swaps. So the back end cannot make a picture whenever one is due while the GS's thread works through the
+next frame's packets: it would draw into the targets that frame is drawing. The pump needs the pictures between
+drawn into images of their own (each target the recording writes, a copy of each it only reads, and its own
+picture for the scanout), named through `ReplayJob::images` as now.
+
+Checks: the pictures between the same as today's at each phase (frame_test with `--renderer native` and `fast`,
+the map tour's pictures between, `KF4_INTERP_STILL`); the GS's thread's time a game frame (`pace_test.py --mode
+cost`, and `KF4_HITCH_MS` in real time as above) before and after.
+
+### 2b: the pictures between, made by the back end (the picture pump)
+
+After 2a. It still matters for step 3 (unlocked), and so that no picture waits behind the GS's thread's next
+packets once its recording is made.
 
 Today the controller's thread works out each vblank's pictures between (`port_interp_schedule`, up to 16) and the
 GS's thread sends each one's replay. A burst on the GS's thread (item 4) delays or cuts them. The replay is
@@ -281,7 +397,7 @@ Checks: RENDERER.md's (gsn_draw_test, the map tour with the scanouts, frame_test
 ## Order and what the owner decides
 
 Step 0 and step 1's 1-3 first: they are small and take the stalls the owner sees now. Then step 2 (the larger
-change), step 3 on it, step 4, step 5. Each step lands with its checks, `KF4_DATA_DIR` a temporary folder in
+change: 2a, the recording from the frame's own drawing, then 2b, the pump), step 3 on it, step 4, step 5. Each step lands with its checks, `KF4_DATA_DIR` a temporary folder in
 every run, and its numbers here.
 
 For the owner:

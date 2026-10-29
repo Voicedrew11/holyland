@@ -1105,7 +1105,7 @@ void port_gs_print_stats(void) {
                     "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
                     "the GS was not as recorded: %llu (targets), %llu (registers), %llu (VRAM or the CLUT written), %llu (the "
                     "recording could not be made again); %llu submits while recording; replays with a target the recording "
-                    "made: %llu kept, %llu its own\n",
+                    "made: %llu kept, %llu its own; %llu with a multisampled target's images made the same first\n",
                     (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
                     s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
                     (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
@@ -1113,7 +1113,8 @@ void port_gs_print_stats(void) {
                     (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
                     (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_rerecord[5],
                     (unsigned long long)s->interp_rerecord[4], (unsigned long long)s->interp_mid_submits,
-                    (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets);
+                    (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets,
+                    (unsigned long long)s->interp_newer_settled);
         }
         if (s->pipeline_binds) {
             fprintf(stderr, "[stats] native GS pipelines bound: %llu for %llu draws; pictures between: %.1f a recording, "

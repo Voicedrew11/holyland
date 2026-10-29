@@ -7459,6 +7459,43 @@ void interp_record() {
             (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops->ops.size());
 }
 
+// A multisampled target that now has its newer pixels in the other of its two images than before the recording (a
+// frame's recording that begins with the frame buffer's multisampled image newer and ends with its 2D drawn into the
+// image): both made the same picture (resolved, or loaded from the image), then named newer as before the recording,
+// so that the recorded calls find what they found (the pictures the same: checked, every picture after one). Without
+// it the frame was recorded again at its next picture, 367 of the first 1,400 frames of tests/newgame.pad (4 ms of
+// this thread each). Only when nothing else differs (the calls cannot be made again otherwise).
+void interp_settle_newer(InterpState &now) {
+    std::vector<std::pair<InterpTargetState *, const InterpTargetState *>> differ;
+    InterpState as_before = now;
+    for (InterpTargetState &x : as_before.targets) {
+        for (const InterpTargetState &s : interp.start.targets) {
+            if (std::make_tuple(s.bp, s.bw, s.psm, s.depth) == std::make_tuple(x.bp, x.bw, x.psm, x.depth) && x.has_ms &&
+                s.has_ms && (s.ms_newer != x.ms_newer || s.image_newer != x.image_newer)) {
+                differ.push_back({&now.targets[size_t(&x - as_before.targets.data())], &s});
+                x.ms_newer = s.ms_newer;
+                x.image_newer = s.image_newer;
+            }
+        }
+    }
+    if (differ.empty() || !interp_same(as_before, interp.start)) {
+        return;
+    }
+    Why why(GSN_WHY_MSAA);
+    for (const auto &d : differ) {
+        Target &t = *d.first->t;
+        if (t.ms_newer) {
+            msaa_settle(t);
+        }
+        if (t.image_newer) {
+            msaa_ready(t);
+        }
+        t.ms_newer = d.first->ms_newer = d.second->ms_newer;
+        t.image_newer = d.first->image_newer = d.second->image_newer;
+    }
+    gsn_stats.interp_newer_settled++;
+}
+
 // Why the recording cannot be made again for this picture (GsnStats' interp_rerecord): 0 it can; 1 the GS's targets are
 // not as they were before it (their state, the render pass); 2 its registers differ; 3 nothing recorded yet (the frame's
 // first picture between); 4 what was recorded cannot be made again (a read-back in it, its kicks miscounted, the field
@@ -7504,6 +7541,7 @@ int interp_cannot_replay() {
         return false;
     }), now.targets.end());
     bool kept = now.targets.size() != had;
+    interp_settle_newer(now);
     if (!interp_same(now, interp.start)) {
         return 1;
     }
