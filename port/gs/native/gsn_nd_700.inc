@@ -222,8 +222,10 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
     }
     uint32_t alpha = nd700_alpha(d.colour[0]);
     if (pc_draw) {
-        pcd_draw_begin(); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
+        pcd_draw_begin(d, cam); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
     }
+    // (--renderer fast: a picture's draw made from the frame's snapshot, gsn_pc_draw.inc: no meshes fetched, no batches)
+    pcd_snapshot_draw(pc_draw, *nd.draws.buffer, record);
     Nd700Plan p;
     std::vector<uint64_t> ad;
     for (const auto &mesh : nd.fetched) {
@@ -246,11 +248,11 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
             // what the run kicks: FOGCOL at an MSCAL (the set-up), the A+D packet (TEX0 perhaps replaced),
             // then the strip unless n of the n + 1 vertices were clipped
             if (b.start != RD_PROGRAM_CONTINUE) {
-                gs_write(R_FOGCOL, d.fogcol);
+                pcd_batch_write(R_FOGCOL, d.fogcol);
             }
             nd700_ad(b, d.colour[1], d.colour[2], ad);
             for (size_t i = 0; i + 1 < ad.size(); i += 2) {
-                gs_write(uint32_t(ad[i]), ad[i + 1]);
+                pcd_batch_write(uint32_t(ad[i]), ad[i + 1]);
             }
             // (a picture's kept call of this strip, made again: whether it is kicked is the frame's, and so is its plan's
             // triangles; the plan is not made)
@@ -259,7 +261,7 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
                     gsn_stats.nd_batches++;
                     continue;
                 }
-                gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+                pcd_batch_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
                 if (pcd_between_call(*kept, *nd.draws.buffer, record)) {
                     gsn_stats.nd_batches++;
                     continue;
@@ -277,7 +279,7 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
                 }
                 continue;
             }
-            gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            pcd_batch_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
             if (pc_draw && pcd_strip_700(b, p, alpha, base, record)) {
                 continue; // (drawn by the PC renderer from the mesh: gsn_pc_draw.inc)
             }

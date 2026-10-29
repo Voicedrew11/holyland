@@ -897,10 +897,14 @@ bool pc_between_takes(uint32_t record);
 void pc_between_draw(uint32_t record);
 bool sa_pcd_draw();                                                               // (gsn_standalone.inc)
 bool pcd_batch(const RdMeshData &m, const RdBatch &b, uint32_t base, uint32_t record); // (gsn_pc_draw.inc)
-// (gsn_pc_draw.inc: the PC renderer's kept calls, made again in a picture between)
-void pcd_frame_begin();
-void pcd_draw_begin();
+// (gsn_pc_draw.inc: the PC renderer's kept calls, made again in a picture between, and its snapshot)
+void pcd_draw_begin(const RdDraw &draw, const RdCamera &camera);
 void pcd_draw_end();
+void pcd_batch_write(uint32_t address, uint64_t value);
+void pcd_snapshot_find(uint64_t value);
+void pcd_snapshot_done();
+bool pcd_snapshot_draw(bool pc_draw, const Buffer &records, uint32_t record);
+bool nd_fetch(uint64_t value, RdDraw &d, RdCamera &cam, std::vector<std::shared_ptr<const RdMeshData>> &meshes);
 void pcd_keep_fail();
 void pcd_unkicked();
 bool pcd_between_on();
@@ -910,7 +914,7 @@ bool pcd_between_call(const PcdKept &k, const Buffer &records, uint32_t record);
 void nd_draw(uint64_t value) {
     RdDraw d;
     RdCamera cam;
-    if (!rd_fetch(value, d, cam, nd.fetched)) {
+    if (!nd_fetch(value, d, cam, nd.fetched)) {
         gsn_stats.nd_lost++;
         return;
     }
@@ -1027,20 +1031,22 @@ void nd_draw(uint64_t value) {
     bool pc_frame_batches = d.program == 0 && pc_between_takes(record);
     bool pc_draw = d.program == 0 && sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
     if (pc_draw) {
-        pcd_draw_begin(); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
+        pcd_draw_begin(d, cam); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
     }
+    // (--renderer fast: a picture's draw made from the frame's snapshot, gsn_pc_draw.inc: no meshes fetched, no batches)
+    pcd_snapshot_draw(pc_draw, *nd.draws.buffer, record);
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
             // what the VU1 run kicks before its strip (each write flushes the batch as on the PS2 path, when
             // it changes something)
             if (b.start != RD_PROGRAM_CONTINUE) {
-                gs_write(R_FOGCOL, d.fogcol); // (an MSCAL: the set-up kicks FOGCOL, VU1 0x3D)
+                pcd_batch_write(R_FOGCOL, d.fogcol); // (an MSCAL: the set-up kicks FOGCOL, VU1 0x3D)
             }
             for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
-                gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
+                pcd_batch_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
-            gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            pcd_batch_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
             // (--renderer fast: a picture's kept call, made again; the PC renderer draws the batch from its mesh,
             // gsn_pc_draw.inc; or the GS's batch, below)
             if (const PcdKept *kept = pc_draw ? pcd_between_next() : nullptr) {
@@ -1117,9 +1123,11 @@ void nd_register(uint64_t value) {
     case RD_ND_DRAW:
         if (nd_mode == GSN_NATIVE_DRAW_NATIVE) {
             nd_prep_draw_begin(value); // (rc/own: the frame's draw kept for its pictures between, or a picture's taken)
+            pcd_snapshot_find(value); // (--renderer fast: a picture's draw made from the frame's snapshot)
             sa_draw_begin(value); // (standalone: a batch holds the scene's corners or none)
             nd_draw(value);
             sa_draw_end();
+            pcd_snapshot_done();
             nd_prep_draw_end();
         }
         break;
@@ -1133,7 +1141,6 @@ void nd_register(uint64_t value) {
     case RD_ND_FRAME:
         rd_consumer_frame(value);
         nd_prep_frame(uint32_t(value) & 0xFFFFFF); // (rc/own)
-        pcd_frame_begin(); // (--renderer fast: the kept calls count the table from here)
         nd.section = ND_SECTION_NONE;
         nd.seen.clear();
         // (a frame's packets drawn again, for a picture between or exact, are the same frame)

@@ -23,8 +23,10 @@
 // nd_prep keeps the draw's record and corners (PcdKept, gsn_nd_prep.inc): a picture whose draw at that place is the
 // frame's, kept whole, makes the frame's calls again, with its own record, and resolves no material and plans nothing
 // (pcd_between_takes, pcd_between_call). The materials are held by those calls; the triangles are lists the frame made,
-// never written again. A call whose registers differ from the frame's, or a draw whose table or arena changed, is
-// worked out again as above, and counted in --stats. KF4_PC_KEPT=0: none kept nor taken, fast as before.
+// never written again. A call whose registers differ from the frame's, or whose texture the table gives otherwise now
+// (pcd_table_same), or a draw whose arena changed, is worked out again as above, and counted in --stats. KF4_PC_KEPT=0:
+// none kept nor taken, fast as before. Most such draws are not walked at all in a picture: the frame's snapshot of them
+// makes them at their place in the chain ("Snapshot", below; KF4_PC_SNAPSHOT=0: walked).
 //
 // A texture the GPU's sampler cannot stand in for (a render target's, the reflection's, the scrolling textures', one decoded
 // from VRAM, a region clamp) is read as the scene reads it, with the GS's sampling (gs_frag.h: the raw texels and the
@@ -82,6 +84,10 @@ struct PcdMaterial {
     bool blended = false, zwrite = false, depth_test = true;
     FixedBlend blend = {};
     uint32_t write_mask = 0;
+    uint64_t tex_serial = 0; // (a texture from the table: its decode's serial, what a kept call checks the table's answer by)
+    // (pcd_table_same) the table's answer found the same at this sat.gen, with the frame copy and the scene's image as then
+    mutable uint64_t table_gen = 0;
+    mutable const void *table_fcopy = nullptr, *table_color = nullptr;
 };
 
 // The state the last draw made here left bound, and where the calls were then: while nothing else is added
@@ -122,15 +128,24 @@ struct PcDraws {
     uint64_t draws = 0, batches = 0, triangles = 0, nothing = 0, declined[PCD_WHY_COUNT] = {};
     uint64_t passes280 = 0, triangles280 = 0, strips700 = 0, triangles700 = 0;
     uint64_t resolved = 0, found = 0, calls = 0, grown = 0;
-    // (kept calls) sat.gen when the frame, or the picture between, began: a draw's table is counted from its frame's start,
-    // as the picture's chain counts its own (sat.gen itself goes on from one frame to the next)
-    uint64_t gen0 = 0;
     int kept = -1;                        // KF4_PC_KEPT
     bool between_on = false;              // a picture's draw whose calls are the frame's, taken in order (pcd_between_takes)
     uint32_t between_at = 0, between_end = 0;
     uint64_t kept_draws = 0, kept_calls = 0, kept_fell_back = 0;
-    uint64_t kept_again[4] = {};          // draws worked out again: 0 no frame kept, 1 not whole, 2 table or arena changed,
-                                          // 3 registers differed (or a call declined)
+    uint64_t kept_again[4] = {};          // draws worked out again: 0 no frame kept, 1 not whole, 2 the arena changed,
+                                          // 3 registers differed, a call declined or its table's answer was not the frame's
+    bool where_place = false;             // (pcd_where's 2: nothing drawn for the place: the kept reflection, an empty scissor)
+    // (the snapshot: NdPrepFrame::pcd_snaps) KF4_PC_SNAPSHOT; in the frame, the registers its kept draw writes; in a
+    // picture, the frame's snapshot of the draw met (pcd_snapshot_find) and the draw's value
+    int snapshot = -1;
+    std::bitset<256> written;
+    const PcdSnapDraw *snap = nullptr;
+    uint64_t snap_value = 0;
+    uint64_t snap_draws = 0, snap_calls = 0, snap_loads = 0;
+    uint64_t snap_unkept[2] = {}; // (the frame) draws kept whole without a snapshot: 0 a write, 1 nothing for its place
+    uint32_t snap_unkept_address = 0; // (the last write's)
+    uint64_t snap_again[6] = {}; // draws walked again: 0 not kept so, 1 the registers at its start, 2 vertices pending,
+                                 // 3 a CLUT on a target's pages, 4 a CLUT not the frame's, 5 the place or the table's answer
 } pcd;
 enum { PCD_VS_000, PCD_VS_280, PCD_VS_700 }; // (pcd.programs: pc_000.vert, pc_280.vert, pc_700.vert)
 
@@ -153,11 +168,6 @@ bool pcd_kept_on() {
         pcd.kept = v && *v ? atoi(v) != 0 : 1;
     }
     return pcd.kept != 0;
-}
-
-// (nd_register, RD_ND_FRAME) A frame's draws begin, or a picture between's: the table is counted from here
-void pcd_frame_begin() {
-    pcd.gen0 = sat.gen;
 }
 
 bool pcd_between_on() {
@@ -368,6 +378,7 @@ PcdMaterial pcd_resolve(const PcdKey &key, uint32_t ctxt) {
             r.why = PCD_WHY_TEXTURE; // (the frame it draws into: the scene's copy of it, sa_draw_batch's)
             return r;
         }
+        r.tex_serial = st.decoded && !st.reads_target ? st.decoded->serial : 0;
         RgbaSampling hw = st.reads_target ? RgbaSampling() : rgba_sampling(st, key.tex1, key.clamp);
         if (hw.usable) {
             rgba_configure();
@@ -475,14 +486,13 @@ PcdMaterial pcd_resolve(const PcdKey &key, uint32_t ctxt) {
 
 // The batch's draw, with only the state that differs from the last draw's set again (pcd.bound), or the last draw made
 // longer
-void pcd_draw(const PcdMaterial &mat, const Push &push, const VkViewport &viewport, const VkRect2D &scissor,
+void pcd_draw(const PcdMaterial &mat, const Push &push, uint32_t fix, const VkViewport &viewport, const VkRect2D &scissor,
               const Buffer &records, const Buffer &tris, uint32_t first, uint32_t n, uint32_t instance) {
     PcdBound &b = pcd.bound;
     const ImageView *view = mat.image ? &mat.image->get_view() : &gs->dummy_rgba->get_view();
     const ImageView *raw = mat.raw ? mat.raw : &gs->dummy_raw->get_view();
     const ImageView *target = mat.target ? mat.target : &gs->dummy_rgba->get_view();
     bool clut_same = b.want_clut == mat.want_clut && (!mat.want_clut || b.clut == mat.clut);
-    uint32_t fix = bits(gs->reg[R_ALPHA_1 + ((effective_prim() >> 9) & 1)], 32, 8);
     bool same = b.valid && b.adds == recording_adds && b.sends == backend_sends() && gs->in_pass &&
                 gs->pass_color == &SA_MARKER;
     Cmd &c = cmd();
@@ -706,10 +716,12 @@ int pcd_where(PcdKey &key, PcdTake &t) {
     }
     sa_group_draw();
     pc_world_flush();
+    pcd.where_place = true;
     if (interp.active && sat_kept(fbp, fbw, fpsm)) {
         sa_stats.kept_reflection++;
         return 2; // (sa_flush's: a picture between leaves the reflection as the frame drew it)
     }
+    pcd.where_place = false;
     if (ztst == 0 || pcd_passes(test, key.zbuf, key.frame, nullptr) == 0) {
         pcd.nothing++;
         return 2; // (ZTST NEVER, or an alpha test that writes nothing: nothing)
@@ -721,6 +733,7 @@ int pcd_where(PcdKey &key, PcdTake &t) {
     uint32_t x1 = std::min(sx1 + 1, color->width), y1 = std::min(sy1 + 1, color->height);
     if (sx0 >= x1 || sy0 >= y1) {
         pcd.nothing++;
+        pcd.where_place = true;
         return 2; // (an empty scissor: nothing)
     }
     key.sx = sa.sx;
@@ -851,6 +864,11 @@ void pcd_keep_call(const PcdTake &t, const BufferHandle &tris, uint32_t first, u
         pcd_keep_fail(); // (its material is resolved again each time: not kept)
         return;
     }
+    if (what == PCD_CALL_NOTHING && pcd.where_place && d->snap >= 0) {
+        PcdSnapDraw &s = nd_prep.filling->pcd_snaps[size_t(d->snap)];
+        pcd.snap_unkept[1] += s.usable;
+        s.usable = false; // (nothing for its place: a picture's may differ)
+    }
     PcdKept k;
     k.regs = t.regs;
     k.mat = t.held;
@@ -874,7 +892,7 @@ void pcd_keep_unkicked() {
 void pcd_finish(const PcdTake &t, const Buffer &records, const BufferHandle &tris, uint32_t first, uint32_t n,
                  uint32_t instance) {
     if (n) {
-        pcd_draw(*t.mat, t.push, t.viewport, t.scissor, records, *tris, first, n, instance);
+        pcd_draw(*t.mat, t.push, bits(t.regs.alpha, 32, 8), t.viewport, t.scissor, records, *tris, first, n, instance);
     }
     pcd_keep_call(t, tris, first, n, instance, PCD_CALL_DRAWN);
     gsn_stats.primitives += n;
@@ -907,7 +925,7 @@ bool pcd_between_takes() {
         pcd.kept_again[1]++;
         return false;
     }
-    if (d.sat_gen != sat.gen - pcd.gen0 || d.arena_gen != nd.arena_gen) {
+    if (d.arena_gen != nd.arena_gen) {
         pcd.kept_again[2]++;
         return false;
     }
@@ -918,9 +936,12 @@ bool pcd_between_takes() {
     return true;
 }
 
-// (nd_draw, 0x280, 0x700, for a draw the PC renderer takes: its start) In the frame, the draw is kept whole from here; a
-// picture takes its calls, when the frame kept them
-void pcd_draw_begin() {
+void pcd_snapshot_keep_begin(NdPrepFrame &f, NdPrepDraw &d, const RdDraw &draw, const RdCamera &camera);
+void pcd_snapshot_keep_end(NdPrepFrame &f, NdPrepDraw &d);
+
+// (nd_draw, 0x280, 0x700, for a draw the PC renderer takes: its start, nothing written yet) In the frame, the draw is kept
+// whole from here, and its snapshot begun; a picture takes its calls, when the frame kept them
+void pcd_draw_begin(const RdDraw &draw, const RdCamera &camera) {
     if (interp.active) {
         pcd_between_takes();
         return;
@@ -932,8 +953,8 @@ void pcd_draw_begin() {
     d.pcd_whole = true;
     d.calls_at = uint32_t(nd_prep.filling->pcd_calls.size());
     d.calls_n = 0;
-    d.sat_gen = sat.gen - pcd.gen0;
     d.arena_gen = nd.arena_gen;
+    pcd_snapshot_keep_begin(*nd_prep.filling, d, draw, camera);
 }
 
 // (the draw's end) The frame's draw is kept whole only while its arena is the one it began with (a picture's batches name
@@ -943,6 +964,9 @@ void pcd_draw_end() {
     NdPrepDraw *d = pcd_kept_draw();
     if (d && d->arena_gen != nd.arena_gen) {
         d->pcd_whole = false;
+    }
+    if (d) {
+        pcd_snapshot_keep_end(*nd_prep.filling, *d);
     }
 }
 
@@ -975,6 +999,8 @@ void pcd_between_unkicked() {
     }
 }
 
+bool pcd_table_same(const PcdKept &k);
+
 // (a picture's kept draw, one of its calls) The frame's call made again into the picture's scene, with the picture's
 // record: its registers and the place worked out as the frame's (pcd_key_regs, pcd_where), its material the frame's. False
 // (the draw worked out again from here) when the registers differ from the frame's, or the batch is declined now
@@ -992,9 +1018,10 @@ bool pcd_between_call(const PcdKept &k, const Buffer &records, uint32_t record) 
     PcdTake t;
     t.held = k.mat;
     t.mat = k.mat.get();
+    t.regs = k.regs;
     t.vs = k.vs;
     int where = pcd_where(key, t);
-    if (where == 0 || (where == 1 && (k.what != PCD_CALL_DRAWN || !pcd_place_same(k.regs, key)))) {
+    if (where == 0 || (where == 1 && (k.what != PCD_CALL_DRAWN || !pcd_place_same(k.regs, key) || !pcd_table_same(k)))) {
         pcd_between_stop();
         return false;
     }
@@ -1004,6 +1031,426 @@ bool pcd_between_call(const PcdKept &k, const Buffer &records, uint32_t record) 
     pcd_take_push(t, *k.mat);
     pcd_finish(t, records, k.tris, k.first, k.n, record | k.instance_bits);
     pcd.kept_calls++;
+    return true;
+}
+
+// (a kept call, in a picture, after pcd_where) Whether the table gives the call's texture as it gave the frame's: the same
+// decode (its serial), from the table and not a target. What the material was resolved from is otherwise the call's
+// registers, the CLUT and the place, each checked by the caller. Found once a material while the table, the frame copy
+// and the scene's image stay as they were
+bool pcd_table_same(const PcdKept &k) {
+    const PcdMaterial &m = *k.mat;
+    if (!((k.regs.prim >> 4) & 1)) {
+        return true; // (no texture)
+    }
+    if (!m.tex_serial) {
+        return false;
+    }
+    const void *fcopy = sa.fcopy.valid ? sa.fcopy.image.get() : nullptr;
+    if (m.table_gen == sat.gen && m.table_fcopy == fcopy && m.table_color == sa.color.get()) {
+        return true;
+    }
+    // (sa_texture as pcd_resolve asks it, with the mipmaps' registers as the call had them)
+    uint32_t ctxt = (k.regs.prim >> 9) & 1;
+    uint64_t mip1 = gs->reg[R_MIPTBP1_1 + ctxt], mip2 = gs->reg[R_MIPTBP2_1 + ctxt];
+    gs->reg[R_MIPTBP1_1 + ctxt] = k.regs.miptbp1;
+    gs->reg[R_MIPTBP2_1 + ctxt] = k.regs.miptbp2;
+    SaTexture st;
+    Push push = {};
+    sa_reads_whole = true;
+    sa_texture(st, push, ctxt, k.regs.tex0, k.regs.tex1, k.regs.clamp, (k.regs.prim >> 8) & 1, sa.frame_target);
+    sa_reads_whole = false;
+    gs->reg[R_MIPTBP1_1 + ctxt] = mip1;
+    gs->reg[R_MIPTBP2_1 + ctxt] = mip2;
+    if (!st.decoded || st.reads_target || st.decoded->serial != m.tex_serial) {
+        return false;
+    }
+    m.table_gen = sat.gen;
+    m.table_fcopy = fcopy;
+    m.table_color = sa.color.get();
+    return true;
+}
+
+// ---- Snapshot: a kept draw made again in a picture between without the walk (gsn_nd_prep.inc's PcdSnapDraw) ----------
+//
+// A picture's draw whose frame's draw was kept whole is made from the frame's snapshot: no rd_fetch, no batch's register
+// writes, no per-call checks of the registers. What the frame's draw did is the same in the picture when it starts from
+// the same registers (pcd_entry_regs: the writes are the meshes' and the draw's, the same data), so only what a call reads
+// besides the registers is checked: the CLUT its TEX0 writes loaded (the loads made again, they read VRAM), the place
+// (pcd_where once: every call of a snapshot's draw has the frame, Z buffer and scissor it began with) and the table's
+// answer for its texture (pcd_table_same). Then the calls are drawn and the registers set as the writes left them.
+// Anything else, or a check that fails, walks the draw as before (its loads undone first). KF4_PC_SNAPSHOT=0: never.
+
+bool pcd_snapshot_on() {
+    if (pcd.snapshot < 0) {
+        const char *v = getenv("KF4_PC_SNAPSHOT");
+        pcd.snapshot = v && *v ? atoi(v) != 0 : 1;
+    }
+    return pcd.snapshot != 0 && pcd_kept_on();
+}
+
+// The registers a snapshot's draw starts from, in this order; FRAME and ZBUF less their bases (and FRAME's width), which
+// a picture has of its own (the scissor too: not here), as pcd_regs_of
+const uint8_t pcd_entry_addresses[PCD_ENTRY_REGS] = {
+    R_PRIM,      R_TEX0_1,    R_TEX0_2,    R_CLAMP_1,  R_CLAMP_2,  R_TEX1_1,   R_TEX1_2,    R_XYOFFSET_1, R_XYOFFSET_2,
+    R_PRMODECONT, R_PRMODE,   R_TEXCLUT,   R_SCANMSK,  R_MIPTBP1_1, R_MIPTBP1_2, R_MIPTBP2_1, R_MIPTBP2_2, R_TEXA,
+    R_FOGCOL,    R_ALPHA_1,   R_ALPHA_2,   R_DIMX,     R_DTHE,     R_COLCLAMP, R_TEST_1,    R_TEST_2,     R_PABE,
+    R_FBA_1,     R_FBA_2,     R_FRAME_1,   R_FRAME_2,  R_ZBUF_1,   R_ZBUF_2};
+std::array<uint64_t, PCD_ENTRY_REGS> pcd_entry_regs() {
+    std::array<uint64_t, PCD_ENTRY_REGS> r;
+    for (int i = 0; i < PCD_ENTRY_REGS; i++) {
+        uint32_t a = pcd_entry_addresses[i];
+        uint64_t v = gs->reg[a];
+        if (a == R_FRAME_1 || a == R_FRAME_2) {
+            v &= ~(uint64_t(0x1FF) | uint64_t(0x3F) << 16);
+        } else if (a == R_ZBUF_1 || a == R_ZBUF_2) {
+            v &= ~uint64_t(0x1FF);
+        }
+        r[size_t(i)] = v;
+    }
+    return r;
+}
+
+// Whether a register a kept draw writes can be left as the writes left it (pcd_snapshot_keep_end): not a vertex's, a
+// transfer's or the port's (they do more than set the register), nor the frame, Z buffer or scissor (a picture's own)
+bool pcd_snapshot_writable(uint32_t address) {
+    switch (address) {
+    case R_RGBAQ:
+    case R_ST:
+    case R_UV:
+    case R_FOG:
+    case R_XYZF2:
+    case R_XYZ2:
+    case R_XYZF3:
+    case R_XYZ3:
+    case R_BITBLTBUF:
+    case R_TRXPOS:
+    case R_TRXREG:
+    case R_TRXDIR:
+    case R_HWREG:
+    case R_FRAME_1:
+    case R_FRAME_2:
+    case R_ZBUF_1:
+    case R_ZBUF_2:
+    case R_SCISSOR_1:
+    case R_SCISSOR_2:
+    case 0x7B:
+    case 0x7C:
+    case 0x7D:
+    case 0x7E:
+        return false;
+    }
+    return address < 0x7B;
+}
+
+// (the frame) The snapshot of the draw being kept whole, when it is still one
+PcdSnapDraw *pcd_snapshot_filling() {
+    NdPrepDraw *d = pcd_kept_draw();
+    if (!d || d->snap < 0) {
+        return nullptr;
+    }
+    PcdSnapDraw &s = nd_prep.filling->pcd_snaps[size_t(d->snap)];
+    return s.usable ? &s : nullptr;
+}
+
+// (pcd_draw_begin, the frame) The draw's snapshot begun: what it starts from
+void pcd_snapshot_keep_begin(NdPrepFrame &f, NdPrepDraw &d, const RdDraw &draw, const RdCamera &camera) {
+    d.snap = -1;
+    if (!pcd_snapshot_on()) {
+        return;
+    }
+    d.snap = int32_t(f.pcd_snaps.size());
+    f.pcd_snaps.emplace_back();
+    PcdSnapDraw &s = f.pcd_snaps.back();
+    s.draw = draw;
+    s.camera = camera;
+    s.entry = pcd_entry_regs();
+    s.loads_at = uint32_t(f.pcd_loads.size());
+    s.writes_at = uint32_t(f.pcd_writes.size());
+    s.usable = true;
+    pcd.written.reset();
+}
+
+// (nd_draw, nd280_draw, nd700_draw: a batch's register writes, as the VU1 run kicks them) The write, and in the frame's
+// kept draw, noted for its snapshot: which registers it wrote, and the CLUT loads its TEX0 writes start
+void pcd_batch_write(uint32_t address, uint64_t value) {
+    gs_write(address, value);
+    PcdSnapDraw *s = pcd_snapshot_filling();
+    if (!s) {
+        return;
+    }
+    if (!pcd_snapshot_writable(address)) {
+        s->usable = false;
+        pcd.snap_unkept[0]++;
+        pcd.snap_unkept_address = address;
+        return;
+    }
+    pcd.written.set(address);
+    if (address == R_TEX0_1 || address == R_TEX0_2 || address == R_TEX2_1 || address == R_TEX2_2) {
+        uint32_t tex0 = address == R_TEX0_1 || address == R_TEX2_1 ? R_TEX0_1 : R_TEX0_2;
+        pcd.written.set(tex0);
+        NdPrepFrame &f = *nd_prep.filling;
+        f.pcd_loads.push_back({gs->reg[tex0], gs->reg[R_TEXCLUT], f.draws[size_t(nd_prep.draw)].calls_n});
+        s->loads_n++;
+    }
+}
+
+// (pcd_draw_end, the frame) The draw's snapshot ended: the registers its writes left (those written, and those changed by
+// a write's own effects: TEX0's mipmap addresses), when the draw is still kept whole
+void pcd_snapshot_keep_end(NdPrepFrame &f, NdPrepDraw &d) {
+    if (d.snap < 0) {
+        return;
+    }
+    PcdSnapDraw &s = f.pcd_snaps[size_t(d.snap)];
+    s.usable = s.usable && d.pcd_whole;
+    if (!s.usable) {
+        d.snap = -1;
+        return;
+    }
+    std::array<uint64_t, PCD_ENTRY_REGS> now = pcd_entry_regs();
+    for (int i = 0; i < PCD_ENTRY_REGS; i++) {
+        if (now[size_t(i)] != s.entry[size_t(i)]) {
+            pcd.written.set(pcd_entry_addresses[i]);
+        }
+    }
+    for (uint32_t a = 0; a < 256; a++) {
+        if (pcd.written.test(a)) {
+            f.pcd_writes.push_back({a, gs->reg[a]});
+            s.writes_n++;
+        }
+    }
+}
+
+// (nd_register, a picture's draw, before sa_draw_begin) The frame's snapshot of the draw met, when the frame kept one and
+// the registers are as the frame's draw began with them: the draw is then made from it (pcd.snap; nd_fetch takes its
+// draw and camera, pcd_snapshot_draw its calls)
+void pcd_snapshot_find(uint64_t value) {
+    pcd.snap = nullptr;
+    if (!interp.active || !nd_prep.taking || nd_prep.draw < 0 || !pcd_snapshot_on()) {
+        return;
+    }
+    const NdPrepFrame &f = *nd_prep.taking;
+    const NdPrepDraw &d = f.draws[size_t(nd_prep.draw)];
+    if (d.snap < 0 || !d.pcd_whole || d.arena_gen != nd.arena_gen) {
+        pcd.snap_again[0] += d.pcd_whole;
+        return;
+    }
+    const PcdSnapDraw &s = f.pcd_snaps[size_t(d.snap)];
+    // (and no fill waiting for the scene's batch: sat_blend_exact, which a call's registers would decline by)
+    if (pcd_entry_regs() != s.entry || sat_fill_waiting()) {
+        pcd.snap_again[1]++;
+        return;
+    }
+    pcd.snap = &s;
+    pcd.snap_value = value;
+}
+
+// (nd_register, the draw's end)
+void pcd_snapshot_done() {
+    pcd.snap = nullptr;
+}
+
+// (nd_draw, sa_draw_begin) The draw and its meshes: the snapshot's draw (no meshes: its calls are kept), or rd_fetch's
+bool nd_fetch(uint64_t value, RdDraw &d, RdCamera &cam, std::vector<std::shared_ptr<const RdMeshData>> &meshes) {
+    if (pcd.snap) {
+        d = pcd.snap->draw;
+        cam = pcd.snap->camera;
+        meshes.clear();
+        return true;
+    }
+    return rd_fetch(value, d, cam, meshes);
+}
+
+// Whether a CLUT load's pages are any target's (clut_load's claim_pages would then write them back, an act among the draws)
+bool pcd_clut_targeted(uint64_t tex0) {
+    uint32_t lo, count;
+    buffer_pages(bits(tex0, 37, 14), 1, bits(tex0, 51, 4) == 0 ? GSN_PSMCT32 : GSN_PSMCT16, 16, 16, &lo, &count);
+    for (auto &t : gs->targets) {
+        uint32_t tlo, tcount;
+        buffer_pages(t->bp, t->bw, t->psm, t->width, t->height, &tlo, &tcount);
+        if (pages_overlap(lo, count, tlo, tcount)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The CLUT as the GS and the table have it, kept to undo a snapshot's loads (a draw walked after all)
+struct PcdClutState {
+    uint16_t gs_clut[512];
+    uint32_t gs_cbp[2];
+    uint16_t sat_clut[512];
+    uint32_t sat_cbp[2];
+    uint64_t sat_gs[8], sat_packed[8];
+    uint64_t texclut;
+};
+void pcd_clut_save(PcdClutState &c) {
+    memcpy(c.gs_clut, gs->clut, sizeof(c.gs_clut));
+    memcpy(c.gs_cbp, gs->clut_cbp, sizeof(c.gs_cbp));
+    memcpy(c.sat_clut, sat.clut, sizeof(c.sat_clut));
+    memcpy(c.sat_cbp, sat.clut_cbp, sizeof(c.sat_cbp));
+    memcpy(c.sat_gs, sat.clut_gs, sizeof(c.sat_gs));
+    memcpy(c.sat_packed, sat.clut_packed, sizeof(c.sat_packed));
+    c.texclut = gs->reg[R_TEXCLUT];
+}
+// (the counts are not put back: what was loaded is another CLUT to what keeps by them, which loads again)
+void pcd_clut_restore(const PcdClutState &c) {
+    memcpy(gs->clut, c.gs_clut, sizeof(c.gs_clut));
+    memcpy(gs->clut_cbp, c.gs_cbp, sizeof(c.gs_cbp));
+    memcpy(sat.clut, c.sat_clut, sizeof(c.sat_clut));
+    memcpy(sat.clut_cbp, c.sat_cbp, sizeof(c.sat_cbp));
+    memcpy(sat.clut_gs, c.sat_gs, sizeof(c.sat_gs));
+    memcpy(sat.clut_packed, c.sat_packed, sizeof(c.sat_packed));
+    gs->reg[R_TEXCLUT] = c.texclut;
+    gs->clut_version++;
+    sat.clut_gen++;
+}
+
+// A kept call's registers with what a picture has of its own as the registers have it now (its context's FRAME and ZBUF
+// bases, FRAME's width, the scissor): the key pcd_where works the place out from
+PcdKey pcd_key_live(const PcdKey &regs) {
+    uint32_t ctxt = (regs.prim >> 9) & 1;
+    PcdKey key = regs;
+    key.frame |= gs->reg[R_FRAME_1 + ctxt] & (uint64_t(0x1FF) | uint64_t(0x3F) << 16);
+    key.zbuf |= gs->reg[R_ZBUF_1 + ctxt] & uint64_t(0x1FF);
+    key.scissor = gs->reg[R_SCISSOR_1 + ctxt];
+    return key;
+}
+// Whether pcd_where works the same place out for two keys: the same frame, Z buffer and scissor
+bool pcd_where_same(const PcdKey &a, const PcdKey &b) {
+    const uint64_t frame = uint64_t(0x1FF) | uint64_t(0x3F) << 16 | uint64_t(0x3F) << 24;
+    const uint64_t zbuf = uint64_t(0x1FF) | uint64_t(0xF) << 24;
+    return (a.frame & frame) == (b.frame & frame) && (a.zbuf & zbuf) == (b.zbuf & zbuf) && a.scissor == b.scissor;
+}
+
+// A snapshot's draw walked after all: its meshes fetched for the walk
+bool pcd_snapshot_walk(int why) {
+    pcd.snap_again[why]++;
+    pcd.snap = nullptr;
+    RdDraw d;
+    RdCamera cam;
+    rd_fetch(pcd.snap_value, d, cam, nd.fetched);
+    return false;
+}
+
+// (nd_draw, nd280_draw, nd700_draw: a picture's draw, its record written, before its batches) The draw made from the
+// frame's snapshot (pcd_snapshot_find), its calls by records' record: true, or false and the draw is walked (its meshes
+// in nd.fetched). Nothing is drawn unless all of it is
+bool pcd_snapshot_draw(bool pc_draw, const Buffer &records, uint32_t record) {
+    if (!pcd.snap) {
+        return false;
+    }
+    if (!pc_draw) {
+        return pcd_snapshot_walk(0);
+    }
+    const PcdSnapDraw &s = *pcd.snap;
+    const NdPrepFrame &f = *nd_prep.taking;
+    const NdPrepDraw &d = f.draws[size_t(nd_prep.draw)];
+    const PcdKept *calls = f.pcd_calls.data() + d.calls_at;
+    const PcdLoad *loads = f.pcd_loads.data() + s.loads_at;
+    // (the walk draws the GS's vertices pending at its first call, pcd_where, or at a write that changes a register: with
+    // the registers and the CLUT it began with either way; with no call, only the walk knows. The scene's kept parts
+    // after the loads before the first call, as pcd_where)
+    uint32_t first = d.calls_n;
+    for (uint32_t i = 0; i < d.calls_n && first == d.calls_n; i++) {
+        first = calls[i].what != PCD_CALL_UNKICKED ? i : first;
+    }
+    if (!gs->verts.empty() && first == d.calls_n) {
+        return pcd_snapshot_walk(2);
+    }
+    for (uint32_t i = 0; i < s.loads_n; i++) {
+        if (pcd_clut_targeted(loads[i].tex0)) {
+            return pcd_snapshot_walk(3);
+        }
+    }
+    if (first < d.calls_n && !gs->verts.empty()) {
+        flush_batch();
+    }
+    // the CLUT loads, in order among the calls; each call's CLUT checked as the frame's after the loads before it
+    PcdClutState saved;
+    if (s.loads_n) {
+        pcd_clut_save(saved);
+    }
+    uint32_t next_load = 0;
+    auto load_to = [&](uint32_t call) {
+        for (; next_load < s.loads_n && loads[next_load].before_call <= call; next_load++) {
+            gs->reg[R_TEXCLUT] = loads[next_load].texclut;
+            settle_upload();
+            clut_load(loads[next_load].tex0);
+            sa_clut_load(loads[next_load].tex0);
+            pcd.snap_loads++;
+        }
+    };
+    auto undo = [&](int why) {
+        if (s.loads_n) {
+            pcd_clut_restore(saved);
+        }
+        return pcd_snapshot_walk(why);
+    };
+    for (uint32_t i = 0; i < d.calls_n; i++) {
+        load_to(i);
+        if (i == first) {
+            sa_group_draw();
+            pc_world_flush();
+        }
+        const PcdKept &k = calls[i];
+        if (k.what == PCD_CALL_DRAWN && psm_is_palette(bits(k.regs.tex0, 20, 6)) && pcd_clut_hash() != k.regs.clut) {
+            return undo(4);
+        }
+    }
+    load_to(d.calls_n);
+    // the place, once: every drawn call's frame, Z buffer and scissor (its context's, the picture's own bases) the first's
+    // (pcd_where's), then each call's place and table
+    PcdTake t;
+    int where = 2;
+    const PcdKept *drawn = nullptr;
+    PcdKey key = {};
+    for (uint32_t i = 0; i < d.calls_n; i++) {
+        const PcdKept &k = calls[i];
+        if (k.what != PCD_CALL_DRAWN) {
+            continue;
+        }
+        PcdKey now = pcd_key_live(k.regs);
+        if (!drawn) {
+            drawn = &k;
+            key = now;
+        } else if (!pcd_where_same(now, key)) {
+            return undo(5);
+        }
+    }
+    if (drawn) {
+        where = pcd_where(key, t);
+        if (where == 0) {
+            return undo(5);
+        }
+        for (uint32_t i = 0; where == 1 && i < d.calls_n; i++) {
+            const PcdKept &k = calls[i];
+            if (k.what == PCD_CALL_DRAWN && (!pcd_place_same(k.regs, key) || !pcd_table_same(k))) {
+                return undo(5);
+            }
+        }
+    }
+    // the calls
+    for (uint32_t i = 0; where == 1 && i < d.calls_n; i++) {
+        const PcdKept &k = calls[i];
+        if (k.what != PCD_CALL_DRAWN) {
+            continue;
+        }
+        t.held = k.mat;
+        t.mat = k.mat.get();
+        t.regs = k.regs;
+        t.vs = k.vs;
+        pcd_take_push(t, *k.mat);
+        pcd_finish(t, records, k.tris, k.first, k.n, record | k.instance_bits);
+        pcd.snap_calls++;
+    }
+    // the registers as the writes left them
+    for (uint32_t i = 0; i < s.writes_n; i++) {
+        const std::pair<uint32_t, uint64_t> &w = f.pcd_writes[s.writes_at + i];
+        gs->reg[w.first] = w.second;
+    }
+    gs->queue_count = 0;
+    pcd.snap_draws++;
     return true;
 }
 
@@ -1168,4 +1615,12 @@ void pcd_print_stats() {
             "call on (its registers differed, or it declined)\n",
             (unsigned long long)pcd.kept_draws, (unsigned long long)pcd.kept_calls, (unsigned long long)pcd.kept_again[0],
             (unsigned long long)pcd.kept_again[1], (unsigned long long)pcd.kept_again[2], (unsigned long long)pcd.kept_again[3]);
+    fprintf(stderr, "[stats] pc draws, snapshot (KF4_PC_SNAPSHOT): %llu draws (%llu calls, %llu CLUT loads) made from the "
+            "frame's snapshot without the walk; walked: %llu not kept so, %llu registers at its start, %llu vertices "
+            "pending, %llu a CLUT on a target, %llu a CLUT not the frame's, %llu the place or the table's answer; the frame's "
+            "draws kept whole without one: %llu a write (last 0x%x), %llu nothing for its place\n",
+            (unsigned long long)pcd.snap_draws, (unsigned long long)pcd.snap_calls, (unsigned long long)pcd.snap_loads,
+            (unsigned long long)pcd.snap_again[0], (unsigned long long)pcd.snap_again[1], (unsigned long long)pcd.snap_again[2],
+            (unsigned long long)pcd.snap_again[3], (unsigned long long)pcd.snap_again[4], (unsigned long long)pcd.snap_again[5],
+            (unsigned long long)pcd.snap_unkept[0], pcd.snap_unkept_address, (unsigned long long)pcd.snap_unkept[1]);
 }

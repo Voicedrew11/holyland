@@ -32,6 +32,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <array>
+#include <bitset>
 #include <deque>
 #include <memory>
 #include <mutex>

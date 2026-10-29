@@ -24,7 +24,7 @@ draws instead when the native GS cannot start.
 | `port/platform/vu1.c`, `vu1_hle*.c` | the VU1 interpreter and the four programs in C (bit for bit the interpreter's) |
 | `port/platform/frame_interp.c`, `game/frame_interp.c` | `--frame-rate 60` to 240: a frame's packets drawn again for each picture between two frames, the camera, the models, the 2D and the reflection moved to that time; `port/platform/video.c` shows them at their times. With the native GS alone the pictures are drawn on the GPU: the frame walked once, its draws recorded once, each picture the recorded calls again with its vertices moved by compute (`shaders/gs_replay*.comp`; STEP3.md, "On the GPU") |
 | `port/render/`, `game/native_draw/`, `port/gs/native/gsn_native_draw.inc` | native draw (`--native-draw`, in work on branch `native/draw`): the game's draws handed to a renderer core and drawn by the native GS with a vertex shader doing VU1's maths (NATIVE_DRAW.md, NATIVE_DRAW_TASKS.md) |
-| `port/gs/native/gsn_pc_world.inc`, `gsn_pc_draw.inc` | `--renderer fast`'s world (PC_RENDERER.md): the map, objects, items, creatures, arm and effects drawn from their meshes on the GPU by `pc_000/280/700.vert`, a draw's material resolved where the GS's thread meets it in the chain's order (`gsn_pc_draw.inc`, "P7"); `KF4_PC_DRAW=0` goes back to the GS's batches |
+| `port/gs/native/gsn_pc_world.inc`, `gsn_pc_draw.inc` | `--renderer fast`'s world (PC_RENDERER.md): the map, objects, items, creatures, arm and effects drawn from their meshes on the GPU by `pc_000/280/700.vert`, a draw's material resolved where the GS's thread meets it in the chain's order (`gsn_pc_draw.inc`, "P7"); `KF4_PC_DRAW=0` goes back to the GS's batches. A picture between makes the frame's world draws again from their snapshot, without the walk (`gsn_pc_draw.inc`, "Snapshot"; `KF4_PC_SNAPSHOT=0` walks them) |
 | `tools/gsreplay/` | `kf4-gsreplay`: a GS capture (F9) drawn again by either renderer, compared draw by draw and picture by picture |
 
 ## The rules
@@ -64,7 +64,7 @@ On Linux (the owner's machine) the order, with the commands:
 | `vu1_test` | `out/linux-clang/vu1_test` | under 1 min |
 | boot, frames | `tools/boot_test.py`; `tools/frame_test.py --renderer native` and `--renderer fast` (`--exe out/linux-clang/kf4`; set `KF4_DATA_DIR` and `--keep` under `~/.cache`, not `/tmp`) | 2-4 min each |
 | the change's switch | pictures byte for byte, on and off, at maps 000, 009, 009:2 and 063 | 3 min a spot and side |
-| map tour | item 4 below; the captures are made once into `~/.cache/kf4_tour` (none on this machine yet: time it the first time and write it here) | |
+| map tour | item 4 below; the captures are made once into `~/.cache/kf4_tour` (`tools/map_tour.py --out ~/.cache/kf4_tour --jobs 2`: 9 min 17 s, 64 maps, 2026-10-29), then `kf4-gsreplay` on each (8 s in all): 450,157 pixels, worst 106 (map 030), every scanout the same | 10 min first, then under 1 |
 | ASan + UBSan | `cmake --build out/linux-clang-asan`, a run to map 000 and 009:2 ("Measuring on Linux": the options and the known reports) | 5 min a spot |
 | speed, if it could cost | `tools/pace_test.py` ("Measuring on Linux") | 2 min a run |
 
@@ -116,7 +116,9 @@ that is less work or better threading over a driver's quirk, and say when a meas
 --invincible`, any map and place (name them MAP:PLACE in the docs so they can be run again). Useful spots: 000 (the
 town: the GS's thread's worst), 009:0 (the pond, the fire and the reflection), 009:2 (two of the pond's skinned
 creatures close, their CLUT alphas 0x84 and 0x88: shader blending), 063 (the canyon: every frame restores the sky's
-scrolling texture). At `--frame-rate 240` the skinned models are drawn only in the pictures between: compare
+scrolling texture; hex 0x63, `--teleport` takes 99, the map the game starts in: `--teleport 1900:63:0` does not exist,
+runs with it say "map 63 has no place 0" and stay at the start, which is 063 all the same). A spot is MAP:PLACE: `0:0`,
+not `0`, which `--teleport 1900:0` reads as map 1900. At `--frame-rate 240` the skinned models are drawn only in the pictures between: compare
 `frame_N_500.png` too, not only `frame_N.png`.
 
 **A headless run draws nothing unless it dumps a frame** (`--dump-frames N`; pace_test does). `--dump-frames` takes a

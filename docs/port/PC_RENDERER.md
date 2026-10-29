@@ -54,6 +54,24 @@ recording and the draws P7 declines ("P7" below: what still goes through the GS'
 - **P7's calls kept for the pictures between** ("P7, kept", below; `KF4_PC_KEPT`): built, about 3% of a recording at
   000, held back by its table check.
 
+**The owner's decision (2026-10-29, evening): zero native GS in `fast`.** Everything above made the native GS's thread
+cheaper; none of it took the native GS out of `fast`. The owner: "I want ZERO native gs in the fast renderer by any
+means necessary", the whole job, however long. The plan for it is "The PC renderer: `fast` without the native GS"
+(below); it replaces "Next" and "The earlier order" further down.
+
+**Since (2026-10-29, later still): the world's snapshot, steps 1-3 of the next item below** ("The world's snapshot",
+below; `KF4_PC_SNAPSHOT`). A picture between makes each world draw the frame kept whole from the frame's snapshot: its
+calls put back at its place in the chain, the registers and CLUT left as its writes left them without the writes, its
+record made from the kept draw (no fetch, no batches walked). The kept calls' table count is replaced by an exact check
+of what each call reads (the table's answer for its texture). At map 000 169,380 of 172,537 kept draws are made so, the
+pictures byte for byte as with the switch off and as the build before. **It took less than hoped**: a recording 4.37-4.47
+ms against 4.62-4.65 at 000 (-4%), 4.49-4.55 against 4.81-4.94 at 009 (-7%); the world's draws were not most of a
+recording any more. Sampled at 000 (106 samples in recordings, `eu-stack`): the snapshot's draws 29% of a recording
+(of it the CLUT mirror hashed again after each load about 6%, the table's answer `pcd_table_same` about 7%, the CLUT
+loads about 4%), the uploads asked for again (`replay_upload`) 29%, the rest the GS's own batches, the 2D and the
+walk. So next is the uploads, then the snapshot's own checks made cheaper (exact still: e.g. the CLUT compared by the
+loads' sources, the table's answer kept by its pages), then the GS's own batches, one kind at a time.
+
 **Next: the world off the native GS, done properly (the owner's decision, 2026-10-29).** Item 3 below is the next
 step, not a trim of the recording: the owner chose it over trimming, and chose that it be done the proper way, no
 shortcut or workaround (the kept calls' table check, above, is the example: replaced by a check of what is read, not
@@ -101,6 +119,49 @@ fix) and the GS's own batches, one kind at a time, toward a renderer apart from 
 - Unlocked without VRR is mailbox (no tearing; 2026-10-28); immediate is `--tearing`. Whether fixed rates leave the
   settings page's main list is still open.
 - P1 under `modern` too: open (part 1's last section).
+
+# The PC renderer: `fast` without the native GS (begun 2026-10-29)
+
+**The goal.** `--renderer fast` runs no native GS code: no `gsn.cpp`, no VRAM image, no GS render targets, no GS
+batches, no GS thread. A renderer of its own (`port/gs/pc/`, "the PC renderer") takes the same input the native GS
+takes and draws every picture with the GPU's own pipelines. The native GS stays as `--renderer native` (and `modern`),
+the reference; paraLLEl-GS stays as `gs`.
+
+**What it takes in.** The seam is the native GS's C interface (`gsn.h`), which `gs.c`, the presenter and
+`frame_interp.c` call. The PC renderer has its own (`pcr.h`) with the same calls; `gs.c` picks one at start
+(`port/platform/gs_api.h`: `gsr_*`, the native GS's or the PC renderer's). Its input is what the game sends:
+- **GIF packets** (PATH1, 2 and 3): register writes, primitives (sprites, triangles, strips), image transfers.
+- **Native draws** (register 0x7B, `RD_ND_*`): the game's 3D as draws with meshes, matrices, lights and fog
+  (`port/render`, `game/native_draw`), drawn by the PC renderer's own vertex shaders (P7's `pc_000/280/700.vert`).
+- **The vblank's display registers**, and the port's marks (0x7C uploads asked again, 0x7D pictures between).
+
+**What it keeps instead of VRAM.**
+- **Surfaces**: every buffer the game draws into (the frame and Z buffers, the reflection's 256 x 256, the frame copies,
+  the scrolling textures' targets) is a GPU image, found by its base, width and format; at the renderer's scale, its own
+  formats (D32F depth).
+- **Textures from their uploads**: every image transfer is kept as a chunk (where it went, its bytes, a hash), and an
+  ownership map says which chunk owns each block. A texture is decoded from the chunks that own it (the PS2's texel
+  formats are the game's data: decoded with the swizzle functions of `gsn_vram.c`, a format library, the only file of
+  the native GS's directory the PC renderer uses), or read from the surface drawn there since.
+- **Copies** (local to local) are image copies between surfaces; read-backs (local to host) read a surface.
+
+**How it draws.** Native draws by their records (P7's maths, the material from the registers at the draw). GIF
+primitives by one generic pipeline (the GS's colour arithmetic as the scene's shaders have it: texture function, alpha
+test, fog, blending by Vulkan's blend where it can, the shader's from a copy where not; DATE by the stencil). The
+display registers pick the surface shown; the picture goes to the presenter as the native GS's does.
+
+**The order** (each step runs, and is checked against `--renderer native`'s pictures):
+1. **The skeleton**: `--renderer pc` (development name; `fast` is switched to it at the end), the device, its thread,
+   the vblank, the presenter, a picture (cleared surfaces), `gs_api.h` in `gs.c`, the presenter and frame_interp.c.
+2. **The 2D**: register state, sprites and triangles from GIF packets, uploads and the texture store, surfaces, the
+   scanout. The title, menus, HUD, messages and movies show.
+3. **The 3D**: native draws (0x000, 0x280, 0x700) with depth, fog, alpha test, blending, layers.
+4. **The rest of the play**: shadows (0x5A0, DATE as the stencil), the PATH2 strips (the trail, the water), the
+   reflection target, the frame copies, the scrolling textures, the screen passes.
+5. **Pictures between**: each picture drawn from the frame's draws with the picture's camera and moves, on the GPU.
+6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
+7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
+   speed), the old `fast` kept as `--renderer modern`.
 
 # Part 1: the PC renderer (P1-P6)
 
@@ -680,6 +741,61 @@ the check removed (a test run at 009:2) twice the draws were taken and the pictu
 proof. The owner's rule (2026-10-29): no shortcut and no workaround; the check is replaced by one of what the call reads
 (the table's answer for its texture's pages, the same image as the frame's), not removed or loosened. That check is
 part of the next step ("Where it stands", "Next"), where the kept calls become the world's snapshot.
+
+### The world's snapshot: a picture's world draws without the walk (built 2026-10-29)
+
+"Where it stands", next item's steps 1-3, built on the kept calls ("P7, kept", above). `gsn_pc_draw.inc`, "Snapshot";
+`PcdSnapDraw` in `gsn_nd_prep.inc`.
+
+**What the frame keeps.** For each draw kept whole (every batch the PC renderer's, every call kept), besides its calls:
+the draw and camera as fetched; the 33 registers it began with (`pcd_entry_regs`: everything a call or the record reads
+but the vertex, transfer and port registers, FRAME and ZBUF less their bases and FRAME's width, and the scissor: a
+picture's own); each TEX0 write among its calls (`pcd_batch_write`: the CLUT load it starts, with TEXCLUT then, and
+before which call); and the registers its writes left (those written, and those a write changed besides: TEX0's
+mipmap addresses). A draw that writes a vertex, transfer or port register, or FRAME, ZBUF or a scissor, or one of whose
+calls drew nothing for its place (the kept reflection, an empty scissor), keeps none.
+
+**What a picture does with it** (`pcd_snapshot_find` at `RD_ND_DRAW`, `pcd_snapshot_draw` in place of the batches):
+1. **Its place in the chain.** When the 33 registers are the frame's at the draw's start (exact), the draw is the frame's
+   from there: its writes are the meshes' and the draw's, the same data, so every call's registers are the frame's
+   (the per-call check of the registers is not needed). Its record is made from the kept draw and camera (`nd_fetch`:
+   no `rd_fetch`, no meshes); the GS's vertices pending are drawn first and the scene's kept parts after the loads
+   before the first call, as the walk's first call does; then the calls, with their materials, by the picture's
+   record. One `pcd_where` for the draw: every drawn call's frame, Z buffer and scissor (its context's, the picture's
+   bases) must be the first's.
+2. **The state it leaves.** The CLUT loads are made again in order (they read VRAM: `clut_load`, `sa_clut_load`), each
+   drawn call's CLUT checked as the frame's after the loads before it (the mirror's hash); then the registers are set
+   as the writes left them, without writing them.
+3. **The records.** Each draw's record is made from the kept draw and camera, as the walk made it from the fetched ones
+   (the same code: the moves by `nd_model_flags`), with no fetch and no batch walked.
+
+**Exact checks** (none is a count): the registers at the draw's start; each drawn call's CLUT; the place (`pcd_where`'s,
+and each call's `pcd_place_same`); the table's answer for each call's texture (`pcd_table_same`: `sa_texture` asked as
+the material was resolved, the same decode by its serial, not a target; found once a material while the table, the frame
+copy and the scene's image are as then). A CLUT load from a page some target has walks the draw (its write-back would be
+an act among the draws). Anything that fails walks the draw as before, its loads undone first (the GS's and the table's
+CLUT put back). **The kept calls' table count is replaced** by `pcd_table_same` in `pcd_between_call` too: at 000 every
+kept draw is now taken (172,537; was 60,046 with 112,491 turned away by the count).
+
+`--stats`: `pc draws, snapshot (KF4_PC_SNAPSHOT)`: the draws made from the snapshot, their calls and loads, the draws
+walked by why, and the frame's draws kept whole without a snapshot by why. `KF4_PC_SNAPSHOT=0`: none kept, all walked.
+
+**Checked**: at 000, 009:0, 009:2 and 063 (the start: hex 0x63, 99 to `--teleport`, where the game starts; 204 pictures
+each: the frames and `_250`, `_500`, `_750`, every 7th vblank 2300-2650) byte for byte with `KF4_PC_SNAPSHOT=0` and with
+the build before; ctest (gsn_draw among them), vu1_test, boot_test, frame_test native and fast; the map tour (64 maps,
+its captures made the first time on this machine in 9 min 17 s: 450,157 pixels, worst 106 on map 030, every scanout
+the same; the same with the build before); ASan + UBSan (clang) at 000 and 009:2, nothing in port/gs. Made from the
+snapshot: 169,380 draws at 000 (208 walked for their registers, 2,949 for a CLUT on a target's page), 226,187 at 009
+(474, 3,739), 100,565 at 009:2 (569, 1,608, 1,337 for the place or the table).
+
+**Measured** (the owner's settings, `pace_test.py --hz 240 --mode cost`, alternating, two runs each):
+
+| | snapshot | `KF4_PC_SNAPSHOT=0` |
+|---|---|---|
+| 000: a recording | 4.37, 4.47 ms | 4.62, 4.65 ms |
+| 000: the GS's thread a game frame | 12.42, 12.32 ms | 12.65, 12.62 ms |
+| 009: a recording | 4.49, 4.55 ms | 4.94, 4.81 ms |
+| 009: the GS's thread a game frame | 14.58, 14.53 ms | 15.34, 15.03 ms |
 
 ## Open question
 

@@ -535,6 +535,7 @@ bool sat_stencil_number(uint32_t *gen);
 bool sat_flush();
 bool sat_fill();
 bool sat_blend_exact();
+bool sat_fill_waiting();
 void sat_gs_batch();
 bool sat_transfer(uint32_t dir);
 void sat_sync();
@@ -4397,7 +4398,7 @@ void sa_draw_begin(uint64_t value) {
     RdCamera cam;
     // (sa's, not a static here: one made on the GS's thread, after main's atexit(print_stats), was gone at
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
-    bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
+    bool scene = nd_fetch(value, d, cam, sa.fetched) && sa_kind(d); // (a snapshot's draw: the frame's, gsn_pc_draw.inc)
     sa.fetched.clear();
     sa.pcd = scene && pcd_takes(d);
     if (sa.pcd) {
