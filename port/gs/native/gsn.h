@@ -351,6 +351,9 @@ typedef struct {
     uint64_t ns_backend;
     uint64_t loads_before_pass; /* targets loaded from VRAM before the render pass under way, not ending it */
     uint64_t loads_scaled;      /* target loads sent at the PS2's size and scaled on the GPU (load_target_rect) */
+    /* images let go by the back end's thread (let_go: the last reference dropped there), and images made without
+       Granite's own layout change (general_image: UNDEFINED, the change in the GS's stream) */
+    uint64_t images_let_go, images_untransitioned;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

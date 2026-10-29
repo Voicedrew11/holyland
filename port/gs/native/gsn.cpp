@@ -588,9 +588,10 @@ enum OpKind : uint32_t {
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
     OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
+    OP_IMAGE_LAYOUT,
     // (the back end's only, gsn_backend.inc: a stream's calls that are not a recording's)
     OP_NEW_CMD, OP_SUBMIT, OP_NEXT_FRAME, OP_PUBLISH, OP_PRESENT, OP_BLIT, OP_COPY_TO_BUFFER, OP_TIMESTAMP, OP_KICKS,
-    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE,
+    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE, OP_RELEASE,
 };
 
 struct Recording;
@@ -799,6 +800,10 @@ struct ArgClear {
     const Image *image;
     VkClearValue value;
 };
+struct ArgImageLayout { // (an image's layout changed from and to: an image nothing has used yet)
+    const Image *image;
+    VkImageLayout from, to;
+};
 struct ArgValues {
     uint32_t v[4];
     float f[4];
@@ -999,6 +1004,27 @@ public:
         dep.dependencyFlags = flags;
         dep.memoryBarrierCount = 1;
         dep.pMemoryBarriers = &b;
+        gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
+    }
+    // The layout change of an image nothing has used yet (make_image's UNDEFINED to GENERAL): a raw barrier, as Granite's
+    // would be, but in this command buffer rather than one of Granite's of its own (Cmd::image_layout keeps it out of a
+    // render pass)
+    static void image_layout_raw(CommandBuffer &c, const Image &image, VkImageLayout from, VkImageLayout to) {
+        const ImageCreateInfo &info = image.get_create_info();
+        VkImageMemoryBarrier2 b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        b.srcAccessMask = VK_ACCESS_2_NONE;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image.get_image();
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.subresourceRange = {format_to_aspect_mask(info.format), 0, info.levels, 0, info.layers};
+        VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
         gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
     }
     // (native draw's mesh, and its pictures between's Picture: gsn_native_draw.inc)
@@ -1387,6 +1413,14 @@ public:
         s.keep(image);
         s.add(OP_CLEAR_IMAGE, ArgClear{&image, value});
     }
+    // An image's first layout change (make_image): in the stream only, not a picture between's recording, since the
+    // recording's calls come after it and an image made while one is recorded is changed before any replay uses it.
+    // The caller has ended the render pass or put this before it (image_made_general)
+    void image_layout(const Image &image, VkImageLayout from, VkImageLayout to) {
+        Recording &s = out();
+        s.keep(image);
+        s.add(OP_IMAGE_LAYOUT, ArgImageLayout{&image, from, to});
+    }
     void copy_image_to_buffer(const Buffer &dst, const Image &src, VkDeviceSize buffer_offset, const VkOffset3D &offset,
                               const VkExtent3D &extent, unsigned row_length, unsigned slice_height,
                               const VkImageSubresourceLayers &sub) {
@@ -1748,6 +1782,50 @@ void transfer_barrier() {
     full_barrier();
 }
 
+// KF4_GSN_IMAGES_OFF_THREAD=0: the images let go on the GS's thread, and made GENERAL by Granite (both as before)
+bool images_off_thread_on() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_IMAGES_OFF_THREAD");
+        on = !(v && atoi(v) == 0);
+    }
+    return on != 0;
+}
+
+// The layout change of an image nothing has used yet (general_image): in the stream, before the render pass under way if it
+// can go there (Cmd::before_pass, as load_target_rect's), else after ending the pass, which costs only its time: the image
+// is new, so no draw of the pass has read it
+void image_made_general(const Image &image) {
+    bool before = gs->in_pass && cmd().before_pass_can(&image, nullptr);
+    if (before) {
+        cmd().before_pass_begin();
+    } else {
+        end_pass();
+    }
+    cmd().image_layout(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    if (before) {
+        cmd().before_pass_end();
+    }
+}
+
+// An image made GENERAL (info's layout) without Granite's own layout change: Granite makes that change in a command buffer
+// of its own, requested under its lock, which the back end's frame contexts hold while they wait for the GPU. So the image
+// is made UNDEFINED, and its change recorded in the GS's stream before anything uses it
+ImageHandle general_image(ImageCreateInfo &info) {
+    if (!images_off_thread_on()) {
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        return gs->device->create_image(info, nullptr);
+    }
+    info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ImageHandle image = gs->device->create_image(info, nullptr);
+    if (!image) {
+        return image;
+    }
+    gsn_stats.images_untransitioned++;
+    image_made_general(*image);
+    return image;
+}
+
 ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_t levels, bool attachment) {
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
     info.levels = levels;
@@ -1758,8 +1836,7 @@ ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_
                                                      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     }
     info.layout = ImageLayout::General;
-    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-    return gs->device->create_image(info, nullptr);
+    return general_image(info);
 }
 
 // Pixels from the GPU: an image's rectangle, as RGBA8 (or D32 floats), when the GPU is done
@@ -1844,8 +1921,39 @@ ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
                  (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                         : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
     info.layout = ImageLayout::General;
-    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-    return gs->device->create_image(info, nullptr);
+    return general_image(info);
+}
+
+// An image the GS's thread lets go of (a target dropped, its multisampled image forgotten). The stream holds the handle
+// until the back end has made the calls before it and cleared the stream (backend_thread), so when this is the last
+// reference, it is dropped on the back end's thread, where the lock Granite's destroy_image takes is free, and not on the
+// GS's thread, which waited for it. Without the back end's thread the stream is cleared here, as before.
+// KF4_GSN_IMAGES_OFF_THREAD=0: dropped here at once
+void let_go(ImageHandle &image) {
+    if (!image) {
+        return;
+    }
+    if (!images_off_thread_on()) {
+        image.reset();
+        return;
+    }
+    Recording &s = backend_stream();
+    s.images.push_back(std::move(image));
+    s.add(OP_RELEASE, ArgValues{});
+    gsn_stats.images_let_go++;
+}
+
+// A target's images let go (the target is being dropped)
+void let_go_target(Target &t) {
+    let_go(t.image);
+    let_go(t.ms);
+}
+
+// Every target's images let go, ahead of targets.clear()
+void targets_let_go() {
+    for (auto &t : gs->targets) {
+        let_go_target(*t);
+    }
 }
 
 // One of the copying passes (shaders/msaa.vert): src read at each pixel of dst, written to its colour
@@ -1948,7 +2056,7 @@ void msaa_ready(Target &t) {
 
 // The multisampled image let go (the target's image was made again at another size)
 void msaa_forget(Target &t) {
-    t.ms.reset();
+    let_go(t.ms);
     t.ms_newer = t.image_newer = false;
 }
 
@@ -2212,6 +2320,12 @@ struct Shadow {
 std::vector<Shadow> shadows;
 std::vector<uint8_t> shadow_mask; // (GSN_VRAM_BYTES: the bits written since a shadow was made)
 bool shadow_busy;                  // (write_back for a shadow: no shadows looked at again)
+// Every shadow's images let go, ahead of shadows.clear()
+void shadows_let_go() {
+    for (Shadow &sh : shadows) {
+        let_go_target(*sh.t);
+    }
+}
 
 void write_back(Target &t);
 void shadow_resolve(uint32_t lo, uint32_t count);
@@ -2500,6 +2614,7 @@ void drop_target(Target *t) {
     }
     for (size_t i = 0; i < gs->targets.size(); i++) {
         if (gs->targets[i].get() == t) {
+            let_go_target(*t);
             gs->targets.erase(gs->targets.begin() + long(i));
             return;
         }
@@ -2600,6 +2715,7 @@ void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
         }
         if (!left) {
             gsn_stats.shadows_gone++;
+            let_go_target(*shadows[i].t);
             shadows.erase(shadows.begin() + long(i));
             continue;
         }
@@ -2656,6 +2772,7 @@ void shadow_resolve(uint32_t lo, uint32_t count) {
         t.dirty_pages = keep;
         t.dirty = std::find(keep.begin(), keep.end(), 1) != keep.end();
         if (!t.dirty) {
+            let_go_target(*shadows[i].t);
             shadows.erase(shadows.begin() + long(i));
             continue;
         }
@@ -8638,11 +8755,13 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         shadows_resolve_all();
+        shadows_let_go();
         shadows.clear();
         for (auto &t : gs->targets) {
             write_back(*t);
         }
         end_pass();
+        targets_let_go();
         gs->targets.clear();
         gs->scratch.clear(); // (shader blending's images, as large as the targets were)
         gs->resolved[0].reset();
@@ -8940,7 +9059,9 @@ extern "C" void gsn_state(PortStateIo *io) {
         flush_batch();
         sa_forget();
         end_pass();
+        targets_let_go();
         gs->targets.clear();
+        shadows_let_go();
         shadows.clear();
         gs->textures.clear();
         texture_index.clear();
@@ -8978,7 +9099,9 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         flush_batch();
         sa_forget();
         end_pass();
+        targets_let_go();
         gs->targets.clear();
+        shadows_let_go();
         shadows.clear();
         gs->textures.clear();
         texture_index.clear();

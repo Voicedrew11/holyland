@@ -241,6 +241,10 @@ Build with `cmake --build out/windows-clang` (or `out/linux-gcc`), then:
   published later, in order) and the fallback that cuts pictures between sees the back end's lateness.
   `KF4_GSN_BACKEND=0`, or a Vulkan context of one thread index (paraLLEl-GS's with `--renderer both`): no thread,
   each stream made at once (the same calls in the same order). `--stats`: "native GS back end: N s playing".
+  Images let go on the GS's thread are held by its stream (`let_go`) until the back end has made it, so the last
+  reference is dropped on the back end's thread; an image made GENERAL is made UNDEFINED and its change is a call of
+  the stream (`general_image`), so Granite's command buffer and its lock stay off the GS's thread (Granite's
+  `create_image` takes only the memory lock for that, not `lock.lock`). `KF4_GSN_IMAGES_OFF_THREAD=0`: both as before.
   On map 000 at the owner's settings (measured with `--renderer native`) the GS's thread went from about 56 ms a game frame to 36 (33 is the budget at
   30 frames a second), a replay from 2.6 ms of it to about 1 us; the pictures are byte for byte the old build's on
   maps 000 and 009, the thread on and off.

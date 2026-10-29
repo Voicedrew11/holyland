@@ -1093,6 +1093,12 @@ void port_gs_print_stats(void) {
         fprintf(stderr, "[stats] native GS back end: %.3f s playing the calls into Vulkan; %llu targets loaded before "
                 "the render pass under way (not ending it); %llu target loads scaled on the GPU\n", s->ns_backend / 1e9,
                 (unsigned long long)s->loads_before_pass, (unsigned long long)s->loads_scaled);
+        if (s->images_let_go || s->images_untransitioned) {
+            fprintf(stderr, "[stats] native GS images: %llu handed to the back end's stream to let go (the back end's "
+                    "thread drops their last reference); %llu made without Granite's layout change (UNDEFINED, the change "
+                    "in the stream)\n",
+                    (unsigned long long)s->images_let_go, (unsigned long long)s->images_untransitioned);
+        }
         if (interp_behind || interp_vblanks_fewer) {
             fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
                     "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
