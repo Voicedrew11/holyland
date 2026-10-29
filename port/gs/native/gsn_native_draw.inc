@@ -202,6 +202,7 @@ struct NdState {
     std::unordered_map<Program *, Program *> strip_programs; // (and the GS's programs with nd_strip.vert)
     Shader *strip_vs = nullptr;
     NdBuffer arena;        // the meshes' vertices
+    uint32_t arena_gen = 0; // (a count of the arenas made: what is placed in one is placed again in the next)
     std::unordered_map<RdMesh, uint32_t> placed; // a mesh's first vertex in the arena
     NdBuffer draws;        // the draws' records
     std::vector<NdBoxInfo> boxes; // (nd_box_at_0) what a picture between's box needs of each record in draws
@@ -377,6 +378,7 @@ uint32_t nd_place(const RdMeshData &m) {
         room = std::min(room, ND_ARENA_MAX); // (64 MB at most: a corner names a vertex in 22 bits)
         nd_new_buffer(nd.arena, room, ND_VERTEX_BYTES, nd.pending);
         nd.placed.clear();
+        nd.arena_gen++;
         gsn_stats.nd_arenas++;
     }
     uint32_t at = nd.arena.used;
@@ -893,6 +895,8 @@ int32_t nd_model_flags(const NdKey &key, const RdDraw &d, const RdCamera &cam, N
 void pc_kept_record(uint32_t record);
 bool pc_between_takes(uint32_t record);
 void pc_between_draw(uint32_t record);
+bool sa_pcd_draw();                                                               // (gsn_standalone.inc)
+bool pcd_batch(const RdMeshData &m, const RdBatch &b, uint32_t base, uint32_t record); // (gsn_pc_draw.inc)
 
 void nd_draw(uint64_t value) {
     RdDraw d;
@@ -1012,6 +1016,7 @@ void nd_draw(uint64_t value) {
     }
     // (pc world, P5) a picture's draw whose batches the frame kept: its record only; the batches are the frame's
     bool pc_frame_batches = d.program == 0 && pc_between_takes(record);
+    bool pc_draw = d.program == 0 && sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
@@ -1024,6 +1029,11 @@ void nd_draw(uint64_t value) {
                 gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            // (--renderer fast: the PC renderer draws the batch from its mesh, gsn_pc_draw.inc; or the GS's batch, below)
+            if (pc_draw && pcd_batch(*mesh, b, base, record)) {
+                gsn_stats.nd_batches++;
+                continue;
+            }
             // the strip's triangles join the batch, the PS2 path's corners in it too (a batch of other
             // buffers is drawn first; and in a picture between, a batch of the PS2 path's: nd_kick)
             // (0x280's corners pending join too: nd_draw_range draws each kind with its program and records)

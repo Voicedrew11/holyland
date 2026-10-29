@@ -13,7 +13,9 @@ whole stands.
 - The PC renderer (part 1): P1 (hardware textures), P2 (the map's records, objects, items and gold, opaque,
   alpha-tested and blended, kept and drawn by material), P3's three steps (the skinned parts' first pass once, alphas a
   little above 1.0 by Vulkan's blending, the skinned groups on P1's textures), P5's first step (a taken draw's kept
-  batches drawn again in its pictures between). P4 and P6 measured and left (nothing to win on the GPU).
+  batches drawn again in its pictures between). P4 and P6 measured and left (nothing to win on the GPU). **P7**
+  (2026-10-29, below): the world drawn from its meshes on the GPU, off the GS's batches: the map, objects, items,
+  creatures, arm and effects, the material still resolved where the GS's thread meets the draw.
 - Smooth play (part 2): the refresh clock (step 0); the pipeline set, the pipeline files off the GS's thread, one
   count of compiles (step 1); a frame recorded once (step 2a); `--frame-rate unlocked` as a rate found as it plays,
   `--frame-rate-cap`, `--tearing` (step 3); shader blending's copies in the render pass in `fast` at every colour depth
@@ -36,6 +38,11 @@ its pictures between. At the owner's settings of 2026-10-28 (4x, native widescre
 Below about 200 a second it keeps up (part 1's "every spot keeps 168-170 at 170 Hz" is still so), which is why part 1
 was closed out as done and why it did not show as the limit. Above it, it is the first limit at these settings.
 
+**Since P7** (the table above is from before it): the GS's thread a game frame is 18-19% less at maps 000 and 009
+(13.1 and 13.9 ms in `pace_test.py --mode cost` at 240); fixed 240 keeps 239.75 a second at both; unlocked map 000
+256-258 a second (was 198-203), map 009 262-264 (was 225-228). The thread is still the limit unlocked, now mostly the
+recording and the draws P7 declines ("P7" below: what still goes through the GS's batches).
+
 **Next, in order.**
 1. **P5 continued: the recording made cheaper** (part 1's P5 and part 2's step 2a are one piece of work). What a
    recording still costs, from both parts' profiles: native draw's draws as a picture between makes them (74% of a
@@ -43,7 +50,10 @@ was closed out as done and why it did not show as the limit. Above it, it is the
    the frame already has it (28%); the uploads a picture between asks for again (13% at map 000, 27% at map 009); the
    test at t 0 of the batches the frame drew nothing of (15% at map 009); the PC world's flushes. One at a time, each
    measured with `pace_test.py` at 240 and unlocked (several alternating runs: a third of runs lose a second with no
-   hitch logged, cause not found) and the recording's time in `--stats`.
+   hitch logged, cause not found) and the recording's time in `--stats`. Since P7 the world's batches are draw calls
+   made from meshes, so a recording's world is P7's calls again; at map 000 a recording went from 4.3 to 4.8 ms.
+   P7's declined kinds next: shader blending for 0x280 and 0x700 by in-pass copies over the plan's screen places,
+   the shadows, the water's ripple, the trails.
 2. **Then the GPU**, once the thread has room: first what the 0.5 ms of "pass: untagged" is (full-screen work at the
    start of passes, not identified; cheap to find); then step 4's items 2 and 3 (one scene pass a picture, about
    0.15-0.4 ms; the alpha-tested Z-first draws, about 0.1-0.25 ms).
@@ -537,6 +547,57 @@ void pc_world_print_stats(); // --stats: draws taken, batches, materials, flushe
   3.45 ms; ctest, vu1_test, ASan + UBSan.
 - **Later phases**: P5's pictures between interpolate the kept draws (their `RdDraw` identity and matrices are in
   the snapshot as before); only where the snapshot is made has changed.
+
+## P7: the world off the GS's batches (built 2026-10-29)
+
+**What stopped the last attempt, and how it is dealt with.** A PC renderer apart from the GS was stopped by "P2,
+revised": a draw's material (TEX0 read against VRAM as the chain has it at that point, TEST and ALPHA the chain's
+registers then) is only known on the GS's thread, in the chain's order. P7 keeps that: the material is still resolved
+where the GS's thread meets the draw. What it takes away is everything else the GS did with the batch: no corners
+planned on the CPU, no GS batch, no `sa_draw_batch`, no runs, no ties' Z-first draws, no texture rows from the
+vertices. The batch is drawn at once, in the chain's order, from its mesh on the GPU.
+
+`port/gs/native/gsn_pc_draw.inc` (included by `gsn_standalone.inc` after `gsn_pc_world.inc`; the GS's thread):
+
+- **Program 0x000** (the map's records and sky, objects, items, gold, the picked item): one draw a batch, its triangles
+  a list on the GPU made once per mesh (`pcd.tris`: the arena vertex of each corner and the kick bits), the draw's
+  `NdConst` record its instance; `pc_000.vert` (`nd_000.vert` built with `PC_DRAW`) does VU1's maths, the ADC that
+  leaves a triangle out and a layer's Z slope. Consecutive batches with the same material and record grow the last
+  draw (`Cmd::grow_last_draw`): at map 000 2.24 million batches in 2,500 vblanks became 602,000 draw calls.
+- **Program 0x280** (the creatures, the arm and what it holds): the CPU's plan (`nd280_plan_cached`) still says whether
+  a run draws and which triangles VU1 kicks; those go into a list each time (`pcd.kicked`), each pass one draw with
+  `pc_280.vert`. No corners, no GS batch, no skinned groups.
+- **Program 0x700** (the effects): the same, one strip a draw with `pc_700.vert`, the layer's slope from the plan.
+- **Materials** are cached by the registers they are resolved from, the vertices' alpha range and the CLUT's contents
+  (`PcdKey`); dropped when the page-ownership table changes. A material that reads a render target or VRAM (the
+  reflection, the scrolling textures, a region clamp) uses the GS's sampling (`gs_frag.h`) and is resolved again
+  each time. A draw into a named target (the reflection's 256 x 256) is drawn there.
+- **Declined** to the GS's batch as before: shader blending (As above 1, PABE, no COLCLAMP, FBA; about 3% of the
+  batches at map 000, 8-12% at 009 and 063), two alpha-test passes, DATE. `KF4_PC_DRAW=0` turns P7 off.
+- The pipelines (both samplers, `ps_scene_samples()` x the scratch formats) are in the pipeline set: `KF4_GSN_WARM=set`
+  made none outside it.
+
+**Measured** (the owner's settings: 4x, native widescreen, MSAA 2, aniso 16, cut-out SSAA, `--native-colour high`;
+headless, `pace_test.py`, P7 against `KF4_PC_DRAW=0`, runs alternated):
+
+| | map 000 | map 009 |
+|---|---|---|
+| the GS's thread a game frame (cost, 240) | 13.1 ms, was 16.2 (-19%) | 13.9 ms, was 17.0 (-18%) |
+| a recording | 4.83 ms, was 4.34 | 4.2-4.3 ms, was 4.63 |
+| fixed 240: pictures a second (lowest second) | 239.75 (239), was 236-238 (230-234) | 239.75, as before |
+| the GPU a picture at 240 | 3.40 ms, was 3.61 | 3.40, as before |
+| unlocked: pictures a second | 256-258, was 198-203 (+28%) | 262-264, was 225-228 (+16%) |
+
+**Pictures** against the GS's batches (2,500 vblanks, the frame and three pictures between): map 000 differs by one
+level over whole surfaces (the GPU's interpolation of colour and UV against the GS's corners: 270,345 pixels, worst
+18, 2 above 16); 009:0 22 pixels (worst 4); 009:2's creatures 2,374 by one; 063 6,420, of which 127 above 16: a seam
+crack the GS's batches drew and P7 does not.
+
+**What still goes through the GS's batches in `fast`**: the declined batches above; the shadows (0x5A0: DATE and the
+stencil, about 570 batches at map 000); the GS's own 3D (about 7,000 batches); the water's ripple and the weapon's trail
+strips; the 2D and the screen passes (by design, part 1's top). A picture between still walks the frame's packets
+again (the recording), and at map 000 P7's recording is about 0.5 ms dearer, its many small draws recorded as calls
+rather than replayed GS batches: "Where it stands", next item 1.
 
 ## Open question
 

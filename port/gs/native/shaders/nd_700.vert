@@ -23,10 +23,20 @@
 // its own (bits 0-5), IIP (bit 6) and its draw's record (bits 7-23).
 // Built a second time with ND_STANDALONE as sa_700.vert (P8, gsn_standalone.inc): the same, with the scene's own
 // depth (Z before any rounding, nd_000.vert's sa_000.vert) in place of the GS's integer Z.
+// Built a third time with ND_STANDALONE and PC_DRAW as pc_700.vert (--renderer fast, gsn_pc_draw.inc): a strip drawn by the
+// PC renderer with no corners: its triangles VU1 kicks (the CPU's plan) a list on the GPU (Tris: the arena's numbers of its
+// three corners; w its kick's, bits 0-23, and the triangle's Z slope, 24-31, as sa_slope has it), the draw's record and
+// IIP its instance.
 #include "gs_common.h"
 
+#ifdef PC_DRAW
+layout(set = 2, binding = 2, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+#else
 layout(location = 2) in uvec4 a_corner;
 layout(location = 4) in float a_vertex;
+#endif
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
@@ -283,9 +293,19 @@ Moved moved(uint at, Place p) {
 }
 
 void main() {
+#ifdef PC_DRAW
+    uvec4 tri = tris[gl_VertexIndex / 3];
+    uint which = uint(gl_VertexIndex) % 3u;
+    uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
+    uint kick = tri.w & 0xFFFFFFu;
+    uint instance = uint(gl_InstanceIndex);
+    uint corner = (instance & 0x3FFFFFFFu) << 7 | ((instance >> 30) & 1u) << 6;
+    uvec4 a_corner = uvec4(0u, 0u, 0u, tri.w >> 24);
+#else
     uint at = uint(-a_vertex) - 1u; // (-1 less it: nd_corner_vertex)
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = at + (corner & 0x3Fu);
+#endif
     d = draws[corner >> 7];
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
     Place p = vu_place(at);

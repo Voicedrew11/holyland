@@ -371,6 +371,7 @@ struct SaTable {
     uint64_t gen = 1;
     // the CLUT buffer as the table has it (sa_clut_load): TEX0's CLD loads mirrored, from the uploads
     uint16_t clut[512] = {};
+    uint64_t clut_gen = 1; // (bumped when clut changes: gsn_pc_draw.inc's materials are good while it stays)
     uint32_t clut_cbp[2] = {UINT32_MAX, UINT32_MAX};
     uint64_t clut_gs[8] = {};     // (bit k: halfword k is not the table's: loaded from the GS's VRAM, or not yet)
     uint64_t clut_packed[8] = {}; // (bit k: halfword k came from a texture pack's chunk)
@@ -405,6 +406,8 @@ struct Sa {
     // (pc world, gsn_pc_world.inc) the draw being met is the PC renderer's (its map records); the corners pending after
     // a draw are a taken draw's; the batch being drawn is (sa_flush: a batch's corners are drawn after their draws)
     bool pc_take = false, pending_pc = false, batch_pc = false;
+    // (--renderer fast, gsn_pc_draw.inc) the draw being met is drawn by the PC renderer from its meshes, batch by batch
+    bool pcd = false;
     // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
     // weapon (and its trail), effects, shadows, the picked item, and (T3) the reflection's water, reading the
     // reflection the scene drew (gsn_scene_targets.inc). Not the screen passes (the GS's 2D). (KF4_SA_KINDS: a
@@ -1199,6 +1202,7 @@ void sa_clut_load(uint64_t tex0) {
         if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
             flush_batch();
         }
+        sat.clut_gen += changed;
         for (uint32_t i = 0; i < 256; i++) {
             sat.clut[i] = uint16_t(values[i]);
             sat.clut[256 + i] = uint16_t(values[i] >> 16);
@@ -1231,6 +1235,7 @@ void sa_clut_load(uint64_t tex0) {
     if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
         flush_batch();
     }
+    sat.clut_gen += changed;
     for (uint32_t k = 0; k < n; k++) {
         uint64_t bit = uint64_t(1) << (at[k] % 64);
         sat.clut[at[k]] = uint16_t(value[k]);
@@ -1481,6 +1486,8 @@ void sa_verify(uint64_t tex0, uint32_t levels, const uint32_t *mip_tbp, const ui
 
 // The batch's texture (flush_batch's, "the texture"): from the table where all of it is the uploads';
 // else the GS's (a render target, or VRAM)
+// (gsn_pc_draw.inc) The batch has no corners: its texture is read whole, as a picture between's
+bool sa_reads_whole = false;
 void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_t tex1, uint64_t clamp, bool fst,
                 const Target *color) {
     uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
@@ -1503,7 +1510,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     // the rows and columns the batch reads (flush_batch's rows_read, cols_read; in a picture between all)
     auto read_extent = [&](bool across) -> uint32_t {
         uint32_t n = across ? 1u << tw : 1u << th;
-        if (interp.active) {
+        if (interp.active || sa_reads_whole) {
             return n;
         }
         float lo = 0.0f, hi = 0.0f;
@@ -2852,6 +2859,9 @@ void sa_group_draw() {
 
 // ---- The PC renderer's world (--renderer fast, P2): the map records kept and drawn by material (gsn_pc_world.inc) ---
 #include "gsn_pc_world.inc"
+
+// ---- The PC renderer's draws (--renderer fast, P7): a world draw's batches from their meshes (gsn_pc_draw.inc) -------
+#include "gsn_pc_draw.inc"
 
 // ---- The frame's batches' work kept for its first picture between (rc/own) ------------------------------
 // A frame's first picture between draws the frame's packets again (gsn.cpp, "Pictures between on the GPU"), and so
@@ -4379,6 +4389,7 @@ bool sa_kind(const RdDraw &d) {
 void sa_draw_begin(uint64_t value) {
     sa.in_draw = false;
     sa.pc_take = false;
+    sa.pcd = false;
     if (!sa.on) {
         return;
     }
@@ -4388,7 +4399,12 @@ void sa_draw_begin(uint64_t value) {
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
     bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
     sa.fetched.clear();
-    sa.pc_take = pc_world_mode && scene && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
+    sa.pcd = scene && pcd_takes(d);
+    if (sa.pcd) {
+        pcd.draws++;
+    }
+    // (a draw the PC renderer draws is not the PC world's: its batches are drawn as met, none kept for the pictures between)
+    sa.pc_take = pc_world_mode && scene && !sa.pcd && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
     if (sa.pc_take) {
         sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
     } else if (!scene || d.program != 0x280) {
@@ -4399,6 +4415,10 @@ void sa_draw_begin(uint64_t value) {
     }
     sa.in_draw = true;
     sa.draw_on = scene;
+}
+// (nd_draw) Whether the PC renderer draws the draw being met (gsn_pc_draw.inc)
+bool sa_pcd_draw() {
+    return sa.on && sa.in_draw && sa.pcd;
 }
 void pc_kept_draw_end();
 bool pc_between_cuts();
@@ -4991,6 +5011,7 @@ void sa_print_stats() {
     if (pc_world_mode) {
         pc_world_print_stats(); // (gsn_pc_world.inc)
         pc_between_print_stats();
+        pcd_print_stats(); // (gsn_pc_draw.inc)
     }
 }
 

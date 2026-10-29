@@ -134,12 +134,27 @@ void ps_add(std::vector<PsPipeline> &out, Program *program, const PsPass &pass, 
 // (sa_group_*), the PC world's materials (pc_material_draw) and the ties' Z-first draws, in the scene's pass at its
 // samples and at one (a named target's: sat_acquire), with the scratch or not (a draw keeps the pass under way); and
 // shader blending in the pass, its runs' copies (conservative, by their own triangles) and their draws reading the
-// scratch, in the pass with it
+// scratch, in the pass with it. With --renderer fast, the PC renderer's draws from their meshes (pcd_batch: no
+// vertex input), in the scene's pass at its samples, with the scratch or not
 void ps_scene_draws(std::vector<PsPipeline> &out) {
     if (!sa_mode) {
         return;
     }
     sa_programs(); // (at the start, before the GS's thread draws: gsn_pipeline_cache)
+    if (pc_world_mode) {
+        pcd_programs();
+        for (uint32_t samples : ps_scene_samples()) {
+            for (bool scratch : {false, true}) {
+                for (auto *set : {&pcd.programs, &pcd.programs_gs}) {
+                    for (auto &programs : *set) {
+                        for (Program *p : programs) {
+                            ps_add(out, p, ps_scene_pass(samples, scratch), PsVertices::none);
+                        }
+                    }
+                }
+            }
+        }
+    }
     for (uint32_t samples : ps_scene_samples()) {
         int ms = samples > 1 ? 1 : 0;
         for (bool scratch : {false, true}) {

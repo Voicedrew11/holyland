@@ -27,6 +27,12 @@ VARIANTS = [
     ("nd_280.vert", "nd_280_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x280 (gsn_nd_280.inc)
     ("nd_700.vert", "nd_700_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x700 (gsn_nd_700.inc)
     ("nd_000.vert", "sa_000.vert", ["-DND_STANDALONE"]),  # P8's scene: the same, its own depth (gsn_standalone.inc)
+    ("nd_000.vert", "pc_000.vert", ["-DND_STANDALONE", "-DPC_DRAW"]),  # --renderer fast: a batch from its mesh (gsn_pc_draw.inc)
+    ("nd_000.vert", "pc_000_jitter.vert", ["-DND_STANDALONE", "-DPC_DRAW", "-DND_JITTER"]),
+    ("nd_280.vert", "pc_280.vert", ["-DND_STANDALONE", "-DPC_DRAW"]),
+    ("nd_280.vert", "pc_280_jitter.vert", ["-DND_STANDALONE", "-DPC_DRAW", "-DND_JITTER"]),
+    ("nd_700.vert", "pc_700.vert", ["-DND_STANDALONE", "-DPC_DRAW"]),
+    ("nd_700.vert", "pc_700_jitter.vert", ["-DND_STANDALONE", "-DPC_DRAW", "-DND_JITTER"]),
     ("nd_280.vert", "sa_280.vert", ["-DND_STANDALONE"]),  # ... program 0x280's in the scene
     ("nd_700.vert", "sa_700.vert", ["-DND_STANDALONE"]),  # ... program 0x700's in the scene
     ("nd_water.vert", "sa_water.vert", ["-DND_STANDALONE"]),  # ... the reflection's water in the scene (T3)

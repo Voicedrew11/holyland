@@ -32,10 +32,24 @@
 // (bits 7-23).
 // Built a second time with ND_STANDALONE as sa_000.vert (P8, gsn_standalone.inc): the same, with the scene's own
 // depth (Z before any rounding) in place of the GS's integer Z.
+// Built a third time with ND_STANDALONE and PC_DRAW as pc_000.vert (--renderer fast, gsn_pc_draw.inc): a batch drawn from
+// its mesh by the PC renderer, with no corners planned on the CPU. Its triangles are a list on the GPU (Tris: each the
+// arena's numbers of its three corners and of its kick), a draw's record is its instance, and VU1's clipping, which
+// gives the ADC that leaves a triangle out, is worked out here for the kick and the two before it, as nd_plan does.
+// A layer's Z slope (the corner's alpha in the scene's draws, sa_slope) is worked out here too, from the triangle's
+// three corners as the frame has them.
 #include "gs_common.h"
 
+#ifdef PC_DRAW
+// the batch's triangles: x, y, z the arena's numbers of its corners; w the kick's (bits 0-27) and how many of the
+// two kicks before it are the batch's (bits 28-29: VU1's clipping looks at those)
+layout(set = 2, binding = 2, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+#else
 layout(location = 2) in uvec4 a_corner;
 layout(location = 4) in float a_vertex;
+#endif
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
@@ -300,11 +314,61 @@ Moved moved(uint at, Place p) {
     return r;
 }
 
+#ifdef PC_DRAW
+// VU1's clip judgement of a place (nd_plan_vertex_vu): past the guard band (2047 about the 2048 middle) in X or Y, or Z
+// below 0
+bool vu_clipped(uint at) {
+    vec4 c = vu_transform(d.vertex, vec4(mesh.q[at * 4u]));
+    float q = vu_recip(c.w);
+    float x = vu_mul(c.x, q), y = vu_mul(c.y, q), z = vu_mul(c.z, q);
+    float rx = vu_add(x, -2048.0), ry = vu_add(y, -2048.0);
+    return !(abs(rx) <= 2047.0 && abs(ry) <= 2047.0) || ((floatBitsToUint(z) & 0x80000000u) != 0u && (floatBitsToUint(z) & 0x7F800000u) != 0u);
+}
+
+// A triangle's Z slope as sa_slope has it (the corner's alpha of the scene's layers): from its corners' places in the
+// frame, X and Y in GS pixels, Z the GS's; world (pc.zslope below 0): 32 log2(1 + g), g the Z's change across a GS
+// pixel; else the larger of its changes in X and Y, halved, 255 a Z
+uint tri_slope(uvec4 t) {
+    Place p0 = vu_place(t.x), p1 = vu_place(t.y), p2 = vu_place(t.z);
+    float ax = float((p1.x & 0xFFFF) - (p0.x & 0xFFFF)) / 16.0, ay = float((p1.y & 0xFFFF) - (p0.y & 0xFFFF)) / 16.0;
+    float bx = float((p2.x & 0xFFFF) - (p0.x & 0xFFFF)) / 16.0, by = float((p2.y & 0xFFFF) - (p0.y & 0xFFFF)) / 16.0;
+    float az = float(gs_z(p1)) - float(gs_z(p0)), bz = float(gs_z(p2)) - float(gs_z(p0));
+    float det = ax * by - ay * bx;
+    if (det == 0.0) {
+        return 0u;
+    }
+    float dzdx = (az * by - bz * ay) / det, dzdy = (bz * ax - az * bx) / det;
+    if (pc.zslope < 0.0) {
+        float g = sqrt(dzdx * dzdx + dzdy * dzdy);
+        return uint(min(32.0 * log2(1.0 + g) + 0.5, 255.0));
+    }
+    float e = min(0.5 * max(abs(dzdx), abs(dzdy)), 1.0);
+    return uint(e * 255.0 + 0.5);
+}
+#endif
+
 void main() {
+#ifdef PC_DRAW
+    uvec4 tri = tris[gl_VertexIndex / 3];
+    uint which = uint(gl_VertexIndex) % 3u;
+    uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
+    uint kick = tri.w & 0x0FFFFFFFu;
+    uint befores = (tri.w >> 28) & 3u; // (the kicks before it in the batch, at most 2)
+    uint instance = uint(gl_InstanceIndex);
+    d = draws[instance & 0x3FFFFFFFu];
+    uint corner = (instance >> 30) != 0u ? 0x40u : 0u; // (IIP: Gouraud)
+    // VU1's ADC: the kick's clip and the two kicks' before it (nd_plan_batch), in the frame
+    bool frame_gone = false;
+    for (uint i = 0u; i <= befores && !frame_gone; i++) {
+        frame_gone = vu_clipped(kick - i);
+    }
+    uvec4 a_corner = uvec4(0u, 0u, 0u, (pc.zslope != 0.0 && !frame_gone) ? tri_slope(tri) : 0u);
+#else
     uint at = uint(-a_vertex) - 1u; // (-1 less it: nd_corner_vertex)
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = at + (corner & 0x3Fu);
     d = draws[corner >> 7];
+#endif
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
     Place p = vu_place(at);
     // the fog: ACC.w = 1 * fog.z, then + fog.w * q; clamped to 0..255
@@ -327,6 +391,9 @@ void main() {
     float zf = p.zf;
 #endif
     bool gone = false;
+#ifdef PC_DRAW
+    gone = frame_gone;
+#endif
     if ((d.info.w & ND_C_MOVING) != 0) {
         Moved m = moved(at, p);
         xi = m.x;

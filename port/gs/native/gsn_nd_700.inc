@@ -178,8 +178,13 @@ void nd700_const(NdConst &k, const RdDraw &d, const RdCamera &cam) {
 }
 
 // (nd_draw, the hook: a draw of program 0x700) as nd_draw draws 0x000's
+// (--renderer fast: a strip drawn by the PC renderer, gsn_pc_draw.inc)
+bool pcd_strip_700(const RdBatch &b, const Nd700Plan &p, uint32_t alpha, uint32_t base, uint32_t record);
+bool sa_pcd_draw();
+
 void nd700_draw(const RdDraw &d, const RdCamera &cam) {
     gsn_stats.nd_draws++;
+    bool pc_draw = sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
     if (nd_buffer_room(nd.draws, 1, nd.pending_000)) {
         nd_new_buffer(nd.draws, 4096, sizeof(NdConst), nd.pending_000);
         nd.boxes.clear();
@@ -248,6 +253,9 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
                 continue;
             }
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            if (pc_draw && pcd_strip_700(b, p, alpha, base, record)) {
+                continue; // (drawn by the PC renderer from the mesh: gsn_pc_draw.inc)
+            }
             // (as nd_draw's: the strip joins the batch, 0x000's and the PS2 path's corners in it too; a batch of
             // other buffers is drawn first, and in a picture between a batch of the PS2 path's: nd_kick)
             if (!gs->verts.empty() &&

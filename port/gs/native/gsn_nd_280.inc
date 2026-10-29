@@ -459,8 +459,12 @@ void nd280_const(Nd280Const &k, const RdDraw &d, const RdCamera &cam) {
 }
 
 // (nd_draw, the hook: a draw of program 0x280) as nd_draw draws 0x000's
+// (--renderer fast: a pass drawn by the PC renderer, gsn_pc_draw.inc)
+bool pcd_pass_280(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t base, uint32_t record, const Buffer &records);
+
 void nd280_draw(const RdDraw &d, const RdCamera &cam) {
     gsn_stats.nd_draws++;
+    bool pc_draw = sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
     if (nd_buffer_room(nd280.draws, 1, nd280.pending)) {
         nd_new_buffer(nd280.draws, ND280_RECORDS, sizeof(Nd280Const), nd280.pending);
     }
@@ -519,6 +523,9 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
             if (p ? p->all_clipped : clipped->all_clipped) {
                 continue;
             }
+            if (pc_draw && !p) {
+                p = &nd280_plan_cached(*mesh, b, k); // (the PC renderer's triangles are the plan's: pcd_pass_280)
+            }
             for (int pass = 0; pass < 1 + b.sphere; pass++) {
                 if (pass) {
                     for (size_t i = 0; i + 1 < b.ad2.size(); i += 2) {
@@ -526,6 +533,9 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                     }
                 }
                 gs_write(R_PRIM, uint32_t(((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF));
+                if (pc_draw && pcd_pass_280(b, *p, pass != 0, base, record, *nd280.draws.buffer)) {
+                    continue; // (drawn by the PC renderer from the mesh: gsn_pc_draw.inc)
+                }
                 // (as nd_draw's: the strip joins the batch, the PS2 path's corners and 0x000's in it too; a
                 // batch of other buffers is drawn first, and in a picture between a batch of the PS2
                 // path's: nd_kick)

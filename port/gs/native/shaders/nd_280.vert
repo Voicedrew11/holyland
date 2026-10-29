@@ -33,10 +33,19 @@
 // one of the two before it is dropped. With nothing moving the Picture (set 1) is not read.
 // Built a second time with ND_STANDALONE as sa_280.vert (P8, gsn_standalone.inc): the same, with the scene's own
 // depth (Z before any rounding, nd_000.vert's sa_000.vert) in place of the GS's integer Z.
+// Built a third time with ND_STANDALONE and PC_DRAW as pc_280.vert (--renderer fast, gsn_pc_draw.inc): a pass of a batch
+// drawn by the PC renderer with no corners: its triangles VU1 kicks (the CPU's plan) a list on the GPU (Tris: the arena's
+// slots of its three corners and of its kick), and the draw's record, IIP, the pass and the context its instance.
 #include "gs_common.h"
 
+#ifdef PC_DRAW
+layout(set = 2, binding = 2, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+#else
 layout(location = 2) in uvec4 a_corner;
 layout(location = 4) in float a_vertex;
+#endif
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
@@ -308,9 +317,21 @@ uvec4 lit_colour(uint slot) {
 }
 
 void main() {
+#ifdef PC_DRAW
+    uvec4 tri = tris[gl_VertexIndex / 3];
+    uint which = uint(gl_VertexIndex) % 3u;
+    uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
+    uint kick = tri.w;
+    // the instance: the record (bits 0-14), the context (28), the pass (29), IIP (30), as a corner has them
+    uint instance = uint(gl_InstanceIndex);
+    uint corner = (instance & 0x7FFFu) << 7 | ((instance >> 28) & 1u) << 22 | ((instance >> 29) & 1u) << 23 |
+                  ((instance >> 30) & 1u) << 6;
+    uvec4 a_corner = uvec4(0u); // (a skinned model's ties are exact: no slope)
+#else
     uint slot = uint(-a_vertex) - 0x400001u; // (-1 less 2^22 less it: nd280_corner_vertex)
     uint corner = a_corner.r | a_corner.g << 8 | a_corner.b << 16;
     uint kick = slot + 2u * (corner & 0x3Fu);
+#endif
     bool sphere = (corner & 0x800000u) != 0u;
     d = draws[(corner >> 7) & 0x7FFFu];
     ivec2 offset = (corner & 0x400000u) != 0u ? d.offset.zw : d.offset.xy;

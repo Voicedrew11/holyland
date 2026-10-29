@@ -603,6 +603,10 @@ struct ReplayJob {
     std::vector<std::pair<const Image *, ImageHandle>> images;
 };
 
+// Every call added to any recording or stream so far: a caller that marks it after its own calls knows, while it is
+// the same, that nothing else was added since (gsn_pc_draw.inc)
+uint64_t recording_adds = 0;
+
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
 // images and buffers they name, held so they live as long as the recording. The back end's streams
 // (gsn_backend.inc) are kept the same way: every call the native GS makes, until its thread has made it.
@@ -668,6 +672,7 @@ struct Recording {
     }
     // a call, its arguments, and room for `extra` bytes after them (returned: their place in arena)
     template <class T> uint32_t add(OpKind kind, const T &args, size_t extra = 0) {
+        recording_adds++;
         settle();
         uint32_t at = uint32_t((arena.size() + 7) & ~size_t(7));
         arena.resize(at + sizeof(T) + extra);
@@ -1287,17 +1292,40 @@ public:
         uint32_t at = s.add(OP_PUSH, a, size_t(range));
         memcpy(s.arena.data() + at, data, size_t(range));
     }
-    void draw(uint32_t count, uint32_t first = 0) {
+    void draw(uint32_t count, uint32_t first = 0, uint32_t first_instance = 0) {
         apply_program();
         if (on()) {
-            rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
+            rec().add(OP_DRAW, ArgDraw{count, 1, first, first_instance});
             rec().draws++;
         }
         if (gpu_time >= 2) {
             gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
             gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
-        out().add(OP_DRAW, ArgDraw{count, 1, first, 0});
+        out().add(OP_DRAW, ArgDraw{count, 1, first, first_instance});
+    }
+    // (gsn_pc_draw.inc) The last call, a draw, made `more` vertices longer, in the stream and in the recording under
+    // way: false if the last call of either is not a draw (the caller knows nothing was added since its draw:
+    // recording_adds)
+    bool grow_last_draw(uint32_t more) {
+        Recording *in[2] = {&backend_stream(), on() ? &rec() : nullptr};
+        for (Recording *r : in) {
+            if (r && (r->ops.empty() || r->ops.back().kind != OP_DRAW || r->insert_at != SIZE_MAX)) {
+                return false;
+            }
+        }
+        for (Recording *r : in) {
+            if (r) {
+                ArgDraw a;
+                memcpy(&a, r->arena.data() + r->ops.back().at, sizeof(a));
+                a.count += more;
+                memcpy(r->arena.data() + r->ops.back().at, &a, sizeof(a));
+            }
+        }
+        if (gpu_time >= 2) {
+            gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += more / 3;
+        }
+        return true;
     }
     void copy_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &src_offset,
                     const VkExtent3D &extent, const VkImageSubresourceLayers &dst_sub, const VkImageSubresourceLayers &src_sub) {
