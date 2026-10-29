@@ -18,8 +18,13 @@
 // page-ownership table, P1's RGBA8 image, held by the recording), and the draw made at once into the scene's colour and
 // depth, in the chain's order with everything else: nothing is kept for later, and nothing can read another map's pages.
 //
-// A picture between walks the frame's packets again as before (frame_interp.c), and its draws here are the frame's with
-// the picture's record (ND_C_MOVING and the models' moves): the same few calls, which the replays move on the GPU.
+// A picture between walks the frame's packets again (frame_interp.c), and its draws here are the frame's with the
+// picture's record (ND_C_MOVING and the models' moves). The frame keeps each call it makes here, per native draw, as
+// nd_prep keeps the draw's record and corners (PcdKept, gsn_nd_prep.inc): a picture whose draw at that place is the
+// frame's, kept whole, makes the frame's calls again, with its own record, and resolves no material and plans nothing
+// (pcd_between_takes, pcd_between_call). The materials are held by those calls; the triangles are lists the frame made,
+// never written again. A call whose registers differ from the frame's, or a draw whose table or arena changed, is
+// worked out again as above, and counted in --stats. KF4_PC_KEPT=0: none kept nor taken, fast as before.
 //
 // A texture the GPU's sampler cannot stand in for (a render target's, the reflection's, the scrolling textures', one decoded
 // from VRAM, a region clamp) is read as the scene reads it, with the GS's sampling (gs_frag.h: the raw texels and the
@@ -44,15 +49,6 @@ enum {
 const char *const pcd_why_names[PCD_WHY_COUNT] = {"not triangles", "not the scene's frame", "its tests", "its blending",
                                                   "its texture", "the scene's target", "no program"};
 
-// What a batch's material is resolved from: the GS's registers it is drawn with, its vertices' alphas, and what the
-// answer can change with (the table, the CLUT, the scene's shape; memcmp-able: memset first)
-struct PcdKey {
-    uint64_t frame, zbuf, test, alpha, scissor, tex0, tex1, clamp, miptbp1, miptbp2, texa, fogcol;
-    uint32_t vs, prim, fba, colclamp, pabe, scanmsk, as_min, as_max;
-    uint64_t clut; // (the CLUT mirror's contents, hashed: pcd_clut_hash)
-    uint32_t sx, sy, samples, wide, width, height, fcopy;
-    int32_t lod, cutout, aniso, pad;
-};
 struct PcdKeyHash {
     size_t operator()(const PcdKey &k) const {
         const uint64_t *w = reinterpret_cast<const uint64_t *>(&k);
@@ -119,13 +115,22 @@ struct PcDraws {
     Program *programs[3][2] = {};    // (reading P1's RGBA8 texture: gs_hw.frag, sa_sample_hw.frag)
     Program *programs_gs[3][2] = {}; // (the GS's sampling: gs.frag, sa_sample.frag)
     PcdMaterial unkept;              // (a material resolved again each time: the one being drawn) // [PCD_VS_*][a cut-out shaded at every sample]: pc_*.vert with gs_hw.frag, sa_sample_hw.frag
-    std::unordered_map<PcdKey, PcdMaterial, PcdKeyHash, PcdKeyEqual> materials;
+    std::unordered_map<PcdKey, std::shared_ptr<const PcdMaterial>, PcdKeyHash, PcdKeyEqual> materials; // (held by the calls kept)
     uint64_t materials_gen = 0;           // (sat.gen when they were resolved)
     uint64_t clut_gen = 0, clut_hash = 0; // (pcd_clut_hash's: sat.clut_gen when it hashed the mirror)
     PcdBound bound;
     uint64_t draws = 0, batches = 0, triangles = 0, nothing = 0, declined[PCD_WHY_COUNT] = {};
     uint64_t passes280 = 0, triangles280 = 0, strips700 = 0, triangles700 = 0;
     uint64_t resolved = 0, found = 0, calls = 0, grown = 0;
+    // (kept calls) sat.gen when the frame, or the picture between, began: a draw's table is counted from its frame's start,
+    // as the picture's chain counts its own (sat.gen itself goes on from one frame to the next)
+    uint64_t gen0 = 0;
+    int kept = -1;                        // KF4_PC_KEPT
+    bool between_on = false;              // a picture's draw whose calls are the frame's, taken in order (pcd_between_takes)
+    uint32_t between_at = 0, between_end = 0;
+    uint64_t kept_draws = 0, kept_calls = 0, kept_fell_back = 0;
+    uint64_t kept_again[4] = {};          // draws worked out again: 0 no frame kept, 1 not whole, 2 table or arena changed,
+                                          // 3 registers differed (or a call declined)
 } pcd;
 enum { PCD_VS_000, PCD_VS_280, PCD_VS_700 }; // (pcd.programs: pc_000.vert, pc_280.vert, pc_700.vert)
 
@@ -139,6 +144,24 @@ bool pcd_on() {
         pcd.enabled = v && *v ? atoi(v) != 0 : 1;
     }
     return pcd.enabled != 0 && pc_world_mode && sa.on;
+}
+
+// KF4_PC_KEPT=0 (tests): the frame keeps no calls, and a picture makes none of them again: fast as before
+bool pcd_kept_on() {
+    if (pcd.kept < 0) {
+        const char *v = getenv("KF4_PC_KEPT");
+        pcd.kept = v && *v ? atoi(v) != 0 : 1;
+    }
+    return pcd.kept != 0;
+}
+
+// (nd_register, RD_ND_FRAME) A frame's draws begin, or a picture between's: the table is counted from here
+void pcd_frame_begin() {
+    pcd.gen0 = sat.gen;
+}
+
+bool pcd_between_on() {
+    return pcd.between_on;
 }
 
 // (sa_draw_begin) Whether the PC renderer draws the draw's batches itself (those it can: pcd_batch)
@@ -284,8 +307,25 @@ int pcd_passes(uint64_t test, uint64_t zbuf, uint64_t frame, PcdPass *one) {
     return n;
 }
 
+// (kept calls) The frame's draw being kept whole, when it is one: none in a picture, and none with KF4_PC_KEPT=0
+NdPrepDraw *pcd_kept_draw() {
+    if (interp.active || !pcd_kept_on() || !nd_prep.filling || nd_prep.draw < 0) {
+        return nullptr;
+    }
+    NdPrepDraw &d = nd_prep.filling->draws[size_t(nd_prep.draw)];
+    return d.pcd_whole ? &d : nullptr;
+}
+
+// (kept calls) A batch the PC renderer did not draw, so the frame's draw is not kept whole: the GS's batch draws it
+void pcd_keep_fail() {
+    if (NdPrepDraw *d = pcd_kept_draw()) {
+        d->pcd_whole = false;
+    }
+}
+
 bool pcd_decline(int why) {
     pcd.declined[why]++;
+    pcd_keep_fail();
     return false;
 }
 
@@ -565,9 +605,14 @@ void pcd_draw(const PcdMaterial &mat, const Push &push, const VkViewport &viewpo
     b.sends = backend_sends();
 }
 
-// A batch (or pass) the PC renderer takes, prepared: its material and where it is drawn
+// A batch (or pass) the PC renderer takes, prepared: its material and where it is drawn. regs is the key the material is
+// resolved from before anything was drawn (a picture between's call is checked by it); held is the material when it is
+// kept (a call kept with it holds it), mat where it is
 struct PcdTake {
+    std::shared_ptr<const PcdMaterial> held;
     const PcdMaterial *mat = nullptr;
+    PcdKey regs = {};
+    uint8_t vs = 0;
     Push push = {};
     VkViewport viewport = {};
     VkRect2D scissor = {};
@@ -575,21 +620,19 @@ struct PcdTake {
     bool gouraud = false, context2 = false;
 };
 
-// (a taken draw's batch, its registers written as the GS gets them) The material of the batch about to be drawn with the
-// GS's registers now, its vertices' alphas as_min to as_max, by vertex program vs; what came before it drawn and the scene's
-// frame taken. 0: declined (the GS's batch takes it, as before); 1: prepared (t); 2: nothing to draw (ZTST NEVER, an
-// empty scissor)
-int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
+// (pcd_prepare's first part: the GS's registers as the batch is drawn with them, its vertices' alphas as_min to as_max)
+// The key its material is resolved from: -1 when the batch goes on, else why it is declined. Draws nothing and flushes
+// nothing (what came before it in the chain is drawn by pcd_where, after these checks)
+int pcd_key_regs(uint32_t vs, uint32_t as_min, uint32_t as_max, PcdKey &key) {
     uint32_t prim = effective_prim();
     uint32_t type = prim & 7;
     if (type < 3 || type > 5) {
-        return pcd_decline(PCD_WHY_PRIM);
+        return PCD_WHY_PRIM;
     }
     uint32_t ctxt = (prim >> 9) & 1;
     bool abe = (prim >> 6) & 1;
-    PcdKey key;
     memset(&key, 0, sizeof(key));
-    key.vs = uint32_t(vs);
+    key.vs = vs;
     key.prim = prim & 0x7FF;
     key.frame = gs->reg[R_FRAME_1 + ctxt];
     key.zbuf = gs->reg[R_ZBUF_1 + ctxt];
@@ -597,20 +640,18 @@ int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
     key.alpha = gs->reg[R_ALPHA_1 + ctxt];
     key.scissor = gs->reg[R_SCISSOR_1 + ctxt];
     uint32_t fbp = bits(key.frame, 0, 9) * 32, fbw = bits(key.frame, 16, 6), fpsm = bits(key.frame, 24, 6);
-    uint32_t zbp = bits(key.zbuf, 0, 9) * 32, zpsm = bits(key.zbuf, 24, 4) | 0x30;
     uint32_t sx0 = bits(key.scissor, 0, 11), sx1 = bits(key.scissor, 16, 11);
     uint32_t sy0 = bits(key.scissor, 32, 11), sy1 = bits(key.scissor, 48, 11);
     // (sa_draw_batch's: the scene's frame, or a named target's, T3)
     if (((fpsm != GSN_PSMCT32 && fpsm != GSN_PSMCT24) || fbw * 64 < 512 || sx1 < sx0 || sy1 < sy0) &&
         !(sat_scene_frame(fbw, fpsm) && sx1 >= sx0 && sy1 >= sy0)) {
-        return pcd_decline(PCD_WHY_FRAME);
+        return PCD_WHY_FRAME;
     }
     uint64_t test = key.test;
-    bool zte = bits(test, 16, 1), date = bits(test, 14, 1);
-    uint32_t ztst = zte ? bits(test, 17, 2) : 1;
+    bool date = bits(test, 14, 1);
     // (one pass of the alpha test, sa_draw_batch's)
     if (date || pcd_passes(test, key.zbuf, key.frame, nullptr) > 1) {
-        return pcd_decline(PCD_WHY_TEST);
+        return PCD_WHY_TEST;
     }
     uint32_t fbmsk = uint32_t(key.frame >> 32);
     bool partial_mask = false;
@@ -627,14 +668,39 @@ int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
     if (partial_mask ||
         (abe && (key.pabe || !key.colclamp || (bc == 0 && key.fba) || sat_blend_exact() ||
                  !fixed_blend(bits(key.alpha, 0, 2), bits(key.alpha, 2, 2), bc, bits(key.alpha, 6, 2), bits(key.alpha, 32, 8), &blend)))) {
-        return pcd_decline(PCD_WHY_BLEND);
+        return PCD_WHY_BLEND;
     }
     pcd_programs();
     if (!pcd.programs[vs][0]) {
-        return pcd_decline(PCD_WHY_PROGRAM);
+        return PCD_WHY_PROGRAM;
     }
+    if ((key.prim >> 4) & 1) {
+        key.tex0 = gs->reg[R_TEX0_1 + ctxt];
+        key.tex1 = gs->reg[R_TEX1_1 + ctxt];
+        key.clamp = gs->reg[R_CLAMP_1 + ctxt];
+        key.miptbp1 = gs->reg[R_MIPTBP1_1 + ctxt];
+        key.miptbp2 = gs->reg[R_MIPTBP2_1 + ctxt];
+    }
+    key.texa = gs->reg[R_TEXA];
+    key.clut = psm_is_palette(bits(key.tex0, 20, 6)) ? pcd_clut_hash() : 0;
+    key.fogcol = gs->reg[R_FOGCOL];
+    key.scanmsk = bits(gs->reg[R_SCANMSK], 0, 2);
+    key.as_min = as_min;
+    key.as_max = as_max;
+    return -1;
+}
 
-    // What came before it in the chain is drawn first: the GS's batch, a skinned model's parts, the PC world's kept
+// (pcd_prepare's second part) What came before the batch in the chain is drawn first, the scene's frame taken, and the
+// batch's place worked out (t's viewport and scissor, and key's places, which the material is resolved with): 0 declined
+// (the GS's batch takes it, as before); 1 where it is drawn; 2 nothing to draw (ZTST NEVER, an empty scissor)
+int pcd_where(PcdKey &key, PcdTake &t) {
+    uint32_t fbp = bits(key.frame, 0, 9) * 32, fbw = bits(key.frame, 16, 6), fpsm = bits(key.frame, 24, 6);
+    uint32_t zbp = bits(key.zbuf, 0, 9) * 32, zpsm = bits(key.zbuf, 24, 4) | 0x30;
+    uint32_t sx0 = bits(key.scissor, 0, 11), sx1 = bits(key.scissor, 16, 11);
+    uint32_t sy0 = bits(key.scissor, 32, 11), sy1 = bits(key.scissor, 48, 11);
+    uint64_t test = key.test;
+    bool zte = bits(test, 16, 1);
+    uint32_t ztst = zte ? bits(test, 17, 2) : 1;
     if (!gs->verts.empty()) {
         flush_batch();
     }
@@ -657,25 +723,6 @@ int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
         pcd.nothing++;
         return 2; // (an empty scissor: nothing)
     }
-
-    // the material: resolved once while the table, the CLUT and the registers stay the same
-    if (pcd.materials_gen != sat.gen || pcd.materials.size() > 4096) {
-        pcd.materials.clear();
-        pcd.materials_gen = sat.gen;
-    }
-    if ((key.prim >> 4) & 1) {
-        key.tex0 = gs->reg[R_TEX0_1 + ctxt];
-        key.tex1 = gs->reg[R_TEX1_1 + ctxt];
-        key.clamp = gs->reg[R_CLAMP_1 + ctxt];
-        key.miptbp1 = gs->reg[R_MIPTBP1_1 + ctxt];
-        key.miptbp2 = gs->reg[R_MIPTBP2_1 + ctxt];
-    }
-    key.texa = gs->reg[R_TEXA];
-    key.clut = psm_is_palette(bits(key.tex0, 20, 6)) ? pcd_clut_hash() : 0;
-    key.fogcol = gs->reg[R_FOGCOL];
-    key.scanmsk = bits(gs->reg[R_SCANMSK], 0, 2);
-    key.as_min = as_min;
-    key.as_max = as_max;
     key.sx = sa.sx;
     key.sy = sa.sy;
     key.samples = sa.samples;
@@ -686,48 +733,150 @@ int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
     key.lod = lod_mode;
     key.cutout = cutout_aa_mode;
     key.aniso = aniso_log2;
-    const PcdMaterial *found_mat = nullptr;
+    t.viewport = {0.0f, 0.0f, float(color->width * sa.sx), float(color->height * sa.sy), 0.0f, 1.0f};
+    t.scissor = {{int32_t(sx0 * sa.sx), int32_t(sy0 * sa.sy)}, {(x1 - sx0) * sa.sx, (y1 - sy0) * sa.sy}};
+    t.sy0 = sy0;
+    t.y1 = y1;
+    return 1;
+}
+
+// (the batch's push constants: its material's, with the scene's inverse size and the jitter as they are now)
+void pcd_take_push(PcdTake &t, const PcdMaterial &mat) {
+    t.push = mat.push;
+    t.push.inv_size[0] = 1.0f / float(sa.frame_target->width);
+    t.push.inv_size[1] = 1.0f / float(sa.frame_target->height);
+    if (sa_jitter_draw()) {
+        t.push.misc |= M_JITTER;
+    }
+}
+
+// (pcd_prepare's third part) The batch's material, found by its key or resolved (a declined one declines the batch): held
+// when kept, else resolved again each time
+int pcd_material(PcdKey &key, PcdTake &t) {
+    uint32_t ctxt = (key.prim >> 9) & 1;
+    // the material: resolved once while the table, the CLUT and the registers stay the same
+    if (pcd.materials_gen != sat.gen || pcd.materials.size() > 4096) {
+        pcd.materials.clear();
+        pcd.materials_gen = sat.gen;
+    }
+    // (the CLUT as it is once what came before the batch is drawn: the key's, pcd_key_regs', is the one a picture checks)
+    key.clut = psm_is_palette(bits(key.tex0, 20, 6)) ? pcd_clut_hash() : 0;
     auto found = pcd.materials.find(key);
     if (found != pcd.materials.end()) {
-        found_mat = &found->second;
+        t.held = found->second;
         pcd.found++;
     } else {
         pcd.unkept = pcd_resolve(key, ctxt);
         pcd.resolved++;
-        found_mat = &pcd.unkept;
         if (pcd.unkept.kept) {
-            found_mat = &pcd.materials.emplace(key, std::move(pcd.unkept)).first->second;
+            t.held = pcd.materials.emplace(key, std::make_shared<const PcdMaterial>(std::move(pcd.unkept))).first->second;
+        } else {
+            t.held.reset();
         }
     }
-    const PcdMaterial &mat = *found_mat;
+    t.mat = t.held ? t.held.get() : &pcd.unkept;
+    const PcdMaterial &mat = *t.mat;
     if (mat.why >= 0) {
         return pcd_decline(mat.why);
     }
     if (mat.image) {
         rgba.batches++;
     }
-    t.mat = &mat;
-    t.push = mat.push;
-    t.push.inv_size[0] = 1.0f / float(color->width);
-    t.push.inv_size[1] = 1.0f / float(color->height);
-    if (sa_jitter_draw()) {
-        t.push.misc |= M_JITTER;
-    }
-    t.viewport = {0.0f, 0.0f, float(color->width * sa.sx), float(color->height * sa.sy), 0.0f, 1.0f};
-    t.scissor = {{int32_t(sx0 * sa.sx), int32_t(sy0 * sa.sy)}, {(x1 - sx0) * sa.sx, (y1 - sy0) * sa.sy}};
-    t.sy0 = sy0;
-    t.y1 = y1;
-    t.gouraud = (prim >> 3) & 1;
-    t.context2 = ctxt != 0;
+    pcd_take_push(t, mat);
     return 1;
 }
 
-// The prepared batch's n triangles from first in tris, by records' instance, into the scene's colour and depth; and what
-// sa_draw_batch notes of a batch drawn
-void pcd_finish(const PcdTake &t, const Buffer &records, const Buffer &tris, uint32_t first, uint32_t n, uint32_t instance) {
-    if (n) {
-        pcd_draw(*t.mat, t.push, t.viewport, t.scissor, records, tris, first, n, instance);
+// The registers a picture between's call is checked by (PcdKept::regs): the key as pcd_key_regs has it, less what the
+// picture has of its own: FRAME's base and width and ZBUF's base (a picture is shown in its own buffer, sa_acquire from
+// the registers now), the scissor (pcd_where works where it is drawn out now) and the scene's places (pcd_place_keep).
+// The format of FRAME and ZBUF stays: the material is resolved with it
+PcdKey pcd_regs_of(PcdKey k) {
+    k.frame &= ~(uint64_t(0x1FF) | uint64_t(0x3F) << 16);
+    k.zbuf &= ~uint64_t(0x1FF);
+    k.scissor = 0;
+    k.sx = k.sy = k.samples = k.wide = k.width = k.height = k.fcopy = 0;
+    k.lod = k.cutout = k.aniso = 0;
+    return k;
+}
+
+// The scene's place pcd_where worked out for a drawn batch (the sizes the material is resolved with), kept with the
+// registers, and checked with them
+void pcd_place_keep(PcdKey &regs, const PcdKey &key) {
+    regs.sx = key.sx;
+    regs.sy = key.sy;
+    regs.samples = key.samples;
+    regs.wide = key.wide;
+    regs.width = key.width;
+    regs.height = key.height;
+    regs.fcopy = key.fcopy;
+    regs.lod = key.lod;
+    regs.cutout = key.cutout;
+    regs.aniso = key.aniso;
+}
+bool pcd_place_same(const PcdKey &regs, const PcdKey &key) {
+    return regs.sx == key.sx && regs.sy == key.sy && regs.samples == key.samples && regs.wide == key.wide &&
+           regs.width == key.width && regs.height == key.height && regs.fcopy == key.fcopy && regs.lod == key.lod &&
+           regs.cutout == key.cutout && regs.aniso == key.aniso;
+}
+
+// A batch (or pass) the PC renderer takes, prepared: 0 declined (the GS's batch takes it, as before); 1 prepared (t); 2
+// nothing to draw. The registers are checked first, then what came before is drawn and the place worked out, then the
+// material (pcd_key_regs, pcd_where, pcd_material); a picture between makes a kept call with the second part only
+int pcd_prepare(int vs, uint32_t as_min, uint32_t as_max, PcdTake &t) {
+    PcdKey key;
+    int why = pcd_key_regs(uint32_t(vs), as_min, as_max, key);
+    if (why >= 0) {
+        return pcd_decline(why);
     }
+    t.regs = pcd_regs_of(key);
+    t.vs = uint8_t(vs);
+    t.gouraud = (key.prim >> 3) & 1;
+    t.context2 = ((key.prim >> 9) & 1) != 0;
+    int where = pcd_where(key, t);
+    if (where != 1) {
+        return where;
+    }
+    pcd_place_keep(t.regs, key);
+    return pcd_material(key, t);
+}
+
+// (kept calls, the frame) One call made for a batch, a pass or a strip, kept in the draw being kept whole: DRAWN with t's
+// material and triangles, NOTHING and UNKICKED without them. Nothing is kept in a picture, nor with KF4_PC_KEPT=0
+void pcd_keep_call(const PcdTake &t, const BufferHandle &tris, uint32_t first, uint32_t n, uint32_t instance, uint8_t what) {
+    NdPrepDraw *d = pcd_kept_draw();
+    if (!d) {
+        return;
+    }
+    if (what == PCD_CALL_DRAWN && !t.held) {
+        pcd_keep_fail(); // (its material is resolved again each time: not kept)
+        return;
+    }
+    PcdKept k;
+    k.regs = t.regs;
+    k.mat = t.held;
+    k.tris = tris;
+    k.first = first;
+    k.n = n;
+    k.instance_bits = instance & 0xF0000000u; // (the record is below 1 << 28)
+    k.vs = t.vs;
+    k.what = what;
+    nd_prep.filling->pcd_calls.push_back(std::move(k));
+    d->calls_n++;
+}
+
+// (kept calls, the frame) A batch the frame did not kick, or drew nothing of (every vertex clipped): no call, no PRIM
+void pcd_keep_unkicked() {
+    pcd_keep_call(PcdTake(), BufferHandle(), 0, 0, 0, PCD_CALL_UNKICKED);
+}
+
+// The prepared batch's n triangles from first in tris, by records' instance, into the scene's colour and depth; and what
+// sa_draw_batch notes of a batch drawn. In the frame, the call is kept (pcd_keep_call)
+void pcd_finish(const PcdTake &t, const Buffer &records, const BufferHandle &tris, uint32_t first, uint32_t n,
+                 uint32_t instance) {
+    if (n) {
+        pcd_draw(*t.mat, t.push, t.viewport, t.scissor, records, *tris, first, n, instance);
+    }
+    pcd_keep_call(t, tris, first, n, instance, PCD_CALL_DRAWN);
     gsn_stats.primitives += n;
     sa.last_shadow = false;
     sa.z_written |= t.mat->zwrite;
@@ -740,6 +889,124 @@ void pcd_finish(const PcdTake &t, const Buffer &records, const Buffer &tris, uin
     sa_stats.triangles += n;
 }
 
+// ---- Kept calls: the frame's calls made again in a picture between (gsn_nd_prep.inc's PcdKept) -----------------------
+
+// (a picture's draw, at its start) Whether the frame's draw at this place was kept whole, with the table and the arena as
+// it had them: its calls are then taken in order (pcd_between_next)
+bool pcd_between_takes() {
+    pcd.between_on = false;
+    if (!pcd_kept_on()) {
+        return false;
+    }
+    if (!nd_prep.taking || nd_prep.draw < 0) {
+        pcd.kept_again[0]++;
+        return false;
+    }
+    const NdPrepDraw &d = nd_prep.taking->draws[size_t(nd_prep.draw)];
+    if (!d.pcd_whole) {
+        pcd.kept_again[1]++;
+        return false;
+    }
+    if (d.sat_gen != sat.gen - pcd.gen0 || d.arena_gen != nd.arena_gen) {
+        pcd.kept_again[2]++;
+        return false;
+    }
+    pcd.between_on = true;
+    pcd.between_at = d.calls_at;
+    pcd.between_end = d.calls_at + d.calls_n;
+    pcd.kept_draws++;
+    return true;
+}
+
+// (nd_draw, 0x280, 0x700, for a draw the PC renderer takes: its start) In the frame, the draw is kept whole from here; a
+// picture takes its calls, when the frame kept them
+void pcd_draw_begin() {
+    if (interp.active) {
+        pcd_between_takes();
+        return;
+    }
+    if (!pcd_kept_on() || !nd_prep.filling || nd_prep.draw < 0) {
+        return;
+    }
+    NdPrepDraw &d = nd_prep.filling->draws[size_t(nd_prep.draw)];
+    d.pcd_whole = true;
+    d.calls_at = uint32_t(nd_prep.filling->pcd_calls.size());
+    d.calls_n = 0;
+    d.sat_gen = sat.gen - pcd.gen0;
+    d.arena_gen = nd.arena_gen;
+}
+
+// (the draw's end) The frame's draw is kept whole only while its arena is the one it began with (a picture's batches name
+// the arena's vertices); and a picture's draw is no longer taken
+void pcd_draw_end() {
+    pcd.between_on = false;
+    NdPrepDraw *d = pcd_kept_draw();
+    if (d && d->arena_gen != nd.arena_gen) {
+        d->pcd_whole = false;
+    }
+}
+
+// (a picture's kept draw) The draw is worked out again from here: its calls are not taken any more
+void pcd_between_stop() {
+    if (pcd.between_on) {
+        pcd.between_on = false;
+        pcd.kept_again[3]++;
+    }
+}
+
+// (a picture's kept draw) The frame's next call, in order: null when the draw is not taken (or its calls are used up)
+const PcdKept *pcd_between_next() {
+    if (!pcd.between_on) {
+        return nullptr;
+    }
+    if (pcd.between_at >= pcd.between_end) {
+        pcd_between_stop();
+        return nullptr;
+    }
+    return &nd_prep.taking->pcd_calls[pcd.between_at++];
+}
+
+// (a picture's kept draw, a batch the frame did not draw) The frame's next call is that it was not drawn, or the draw is
+// worked out again from here
+void pcd_between_unkicked() {
+    const PcdKept *k = pcd_between_next();
+    if (k && k->what != PCD_CALL_UNKICKED) {
+        pcd_between_stop();
+    }
+}
+
+// (a picture's kept draw, one of its calls) The frame's call made again into the picture's scene, with the picture's
+// record: its registers and the place worked out as the frame's (pcd_key_regs, pcd_where), its material the frame's. False
+// (the draw worked out again from here) when the registers differ from the frame's, or the batch is declined now
+bool pcd_between_call(const PcdKept &k, const Buffer &records, uint32_t record) {
+    PcdKey key;
+    if (pcd_key_regs(k.vs, k.regs.as_min, k.regs.as_max, key) >= 0) {
+        pcd_between_stop();
+        return false;
+    }
+    PcdKey now = pcd_regs_of(key), then = pcd_regs_of(k.regs);
+    if (memcmp(&now, &then, sizeof(PcdKey)) != 0) {
+        pcd_between_stop();
+        return false;
+    }
+    PcdTake t;
+    t.held = k.mat;
+    t.mat = k.mat.get();
+    t.vs = k.vs;
+    int where = pcd_where(key, t);
+    if (where == 0 || (where == 1 && (k.what != PCD_CALL_DRAWN || !pcd_place_same(k.regs, key)))) {
+        pcd_between_stop();
+        return false;
+    }
+    if (where == 2) {
+        return true; // (nothing: as the frame's call was, or the reflection kept in this picture)
+    }
+    pcd_take_push(t, *k.mat);
+    pcd_finish(t, records, k.tris, k.first, k.n, record | k.instance_bits);
+    pcd.kept_calls++;
+    return true;
+}
+
 // (nd_draw, a taken draw's batch, its registers written as the GS gets them) Draws the batch from its mesh (base: its
 // first vertex in the arena) by its draw's record, or false: the GS's batch takes it, as before
 bool pcd_batch(const RdMeshData &m, const RdBatch &b, uint32_t base, uint32_t record) {
@@ -747,12 +1014,16 @@ bool pcd_batch(const RdMeshData &m, const RdBatch &b, uint32_t base, uint32_t re
     pcd_alpha_range(m, b, &as_min, &as_max);
     PcdTake t;
     int took = pcd_prepare(PCD_VS_000, as_min, as_max, t);
+    uint32_t instance = record | (t.gouraud ? 1u << 30 : 0u);
     if (took != 1) {
+        if (took == 2) {
+            pcd_keep_call(t, BufferHandle(), 0, 0, instance, PCD_CALL_NOTHING);
+        }
         return took == 2;
     }
     uint32_t first = pcd_place(m, b, base);
     uint32_t n = uint32_t(b.triangles.size() / 3);
-    pcd_finish(t, *nd.draws.buffer, *pcd.tris.buffer, first, n, record | (t.gouraud ? 1u << 30 : 0u));
+    pcd_finish(t, *nd.draws.buffer, pcd.tris.buffer, first, n, instance);
     pcd.batches++;
     pcd.triangles += n;
     return true;
@@ -778,7 +1049,11 @@ bool pcd_pass_280(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t ba
     }
     PcdTake t;
     int took = pcd_prepare(PCD_VS_280, as_min, as_max, t);
+    uint32_t instance = record | (t.context2 ? 1u << 28 : 0u) | (sphere ? 1u << 29 : 0u) | (t.gouraud ? 1u << 30 : 0u);
     if (took != 1) {
+        if (took == 2) {
+            pcd_keep_call(t, BufferHandle(), 0, 0, instance, PCD_CALL_NOTHING);
+        }
         return took == 2;
     }
     // the triangles VU1 kicks, each the arena's slots of its corners and of its kick
@@ -801,8 +1076,7 @@ bool pcd_pass_280(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t ba
         out += 4;
     }
     pcd.kicked.used += n;
-    uint32_t instance = record | (t.context2 ? 1u << 28 : 0u) | (sphere ? 1u << 29 : 0u) | (t.gouraud ? 1u << 30 : 0u);
-    pcd_finish(t, records, *pcd.kicked.buffer, first, n, instance);
+    pcd_finish(t, records, pcd.kicked.buffer, first, n, instance);
     pcd.passes280++;
     pcd.triangles280 += n;
     return true;
@@ -829,7 +1103,11 @@ uint32_t pcd_slope_world(const int32_t *a, const int32_t *b, const int32_t *c) {
 bool pcd_strip_700(const RdBatch &b, const Nd700Plan &p, uint32_t alpha, uint32_t base, uint32_t record) {
     PcdTake t;
     int took = pcd_prepare(PCD_VS_700, alpha, alpha, t);
+    uint32_t instance = record | (t.gouraud ? 1u << 30 : 0u);
     if (took != 1) {
+        if (took == 2) {
+            pcd_keep_call(t, BufferHandle(), 0, 0, instance, PCD_CALL_NOTHING);
+        }
         return took == 2;
     }
     uint32_t n = 0;
@@ -853,10 +1131,20 @@ bool pcd_strip_700(const RdBatch &b, const Nd700Plan &p, uint32_t alpha, uint32_
         out += 4;
     }
     pcd.kicked.used += n;
-    pcd_finish(t, *nd.draws.buffer, *pcd.kicked.buffer, first, n, record | (t.gouraud ? 1u << 30 : 0u));
+    pcd_finish(t, *nd.draws.buffer, pcd.kicked.buffer, first, n, instance);
     pcd.strips700++;
     pcd.triangles700 += n;
     return true;
+}
+
+// (nd280_draw, nd700_draw: a batch the draw does not kick, or all of whose vertices are clipped) Its call: kept in the
+// frame, or the frame's next one in a picture
+void pcd_unkicked() {
+    if (interp.active) {
+        pcd_between_unkicked();
+    } else {
+        pcd_keep_unkicked();
+    }
 }
 
 void pcd_print_stats() {
@@ -875,4 +1163,9 @@ void pcd_print_stats() {
         }
     }
     fprintf(stderr, "\n");
+    fprintf(stderr, "[stats] pc draws, pictures between (KF4_PC_KEPT): %llu draws (%llu calls) made again from the frame's "
+            "kept calls; worked out again: %llu no frame kept, %llu not whole, %llu the table or arena changed, %llu from a "
+            "call on (its registers differed, or it declined)\n",
+            (unsigned long long)pcd.kept_draws, (unsigned long long)pcd.kept_calls, (unsigned long long)pcd.kept_again[0],
+            (unsigned long long)pcd.kept_again[1], (unsigned long long)pcd.kept_again[2], (unsigned long long)pcd.kept_again[3]);
 }

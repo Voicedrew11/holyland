@@ -221,17 +221,26 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
                             float(k.info[2]) / 16.0f, {k.obj[0], k.obj[1], k.obj[2]}};
     }
     uint32_t alpha = nd700_alpha(d.colour[0]);
+    if (pc_draw) {
+        pcd_draw_begin(); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
+    }
     Nd700Plan p;
     std::vector<uint64_t> ad;
     for (const auto &mesh : nd.fetched) {
         if (mesh->format != RD_VF_PACKED16) {
             gsn_stats.nd_unsupported++;
+            if (pc_draw) {
+                pcd_keep_fail(); // (not kept whole: the GS's batches draw what the PC renderer did not)
+            }
             continue;
         }
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
             if (b.start != RD_PROGRAM_CONTINUE && b.start != 0x700) {
                 gsn_stats.nd_unsupported++; // (the adapter sends only meshes of 0x700's: rd_mesh_runs_program)
+                if (pc_draw) {
+                    pcd_keep_fail(); // (not kept whole)
+                }
                 continue;
             }
             // what the run kicks: FOGCOL at an MSCAL (the set-up), the A+D packet (TEX0 perhaps replaced),
@@ -243,6 +252,19 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
             for (size_t i = 0; i + 1 < ad.size(); i += 2) {
                 gs_write(uint32_t(ad[i]), ad[i + 1]);
             }
+            // (a picture's kept call of this strip, made again: whether it is kicked is the frame's, and so is its plan's
+            // triangles; the plan is not made)
+            if (const PcdKept *kept = pc_draw ? pcd_between_next() : nullptr) {
+                if (kept->what == PCD_CALL_UNKICKED) {
+                    gsn_stats.nd_batches++;
+                    continue;
+                }
+                gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+                if (pcd_between_call(*kept, *nd.draws.buffer, record)) {
+                    gsn_stats.nd_batches++;
+                    continue;
+                }
+            }
             {
                 Timer plan(gsn_stats.ns_nd_plan);
                 nd700_plan(*mesh, b, k.vertex, p);
@@ -250,6 +272,9 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
             gsn_stats.nd_batches++;
             gsn_stats.nd_plan_vertices += b.count;
             if (!p.kick) {
+                if (pc_draw) {
+                    pcd_unkicked(); // (gsn_pc_draw.inc: its call, kept or the frame's)
+                }
                 continue;
             }
             gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
@@ -277,6 +302,9 @@ void nd700_draw(const RdDraw &d, const RdCamera &cam) {
             nd.batch_arena = nd.arena.buffer.get();
             nd.batch_draws = nd.draws.buffer.get();
         }
+    }
+    if (pc_draw) {
+        pcd_draw_end();
     }
     gs->queue_count = 0;
 }

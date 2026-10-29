@@ -43,7 +43,33 @@ was closed out as done and why it did not show as the limit. Above it, it is the
 256-258 a second (was 198-203), map 009 262-264 (was 225-228). The thread is still the limit unlocked, now mostly the
 recording and the draws P7 declines ("P7" below: what still goes through the GS's batches).
 
-**Next, in order.**
+**Since (2026-10-29, later): two pieces of the recording.**
+- **The GS's thread no longer waits for Granite's lock** (RENDERER.md, "The back end"; `KF4_GSN_IMAGES_OFF_THREAD`).
+  Sampled with `eu-stack`, 28% of a recording at map 000 was the GS's thread waiting for Granite's device lock, which
+  the back end's `next_frame_context` holds while it waits for the GPU: a target dropped by an upload asked for again
+  (`destroy_image`), and made again by the next draw (`create_image` asking for a command buffer to make it GENERAL).
+  Now the images are let go on the back end's thread and made GENERAL by a call of the stream. A recording at map 000
+  (`--fast` at 240, 12,000 vblanks, alternating): 3.85 and 4.11 ms, against 5.42 and 6.76 with the switch off; the
+  pictures byte for byte (maps 000 and 009, 204 each, and with `KF4_GSN_BACKEND=0`).
+- **P7's calls kept for the pictures between** ("P7, kept", below; `KF4_PC_KEPT`): built, about 3% of a recording at
+  000, held back by its table check.
+
+**Next: the world off the native GS, done properly (the owner's decision, 2026-10-29).** Item 3 below is the next
+step, not a trim of the recording: the owner chose it over trimming, and chose that it be done the proper way, no
+shortcut or workaround (the kept calls' table check, above, is the example: replaced by a check of what is read, not
+removed). The kept calls ("P7, kept") are its snapshot of the world. What it has to solve, in order:
+1. **Its place in the chain.** The world's draws are among the GS's own (the shadows, the batches P7 declines, the
+   effects it does not take, the 2D), and blending and Z are right only in the chain's order. The snapshot's calls go
+   back in at their places among the GS's draws, without the walk working them out.
+2. **The GS's state they leave.** The GS's batches after a world draw expect the registers it wrote, and the CLUT loads
+   its TEX0 writes start. That state is set as each place left it, without the writes (and the CLUT as loaded then).
+3. **The picture's records.** Each draw's moves (`nd_model_flags`, the sky's and objects') are made in the walk now, one
+   draw at a time. They are made another way: all at once from the kept draws, or on the GPU.
+With those, a picture's world costs the GS's thread nearly nothing, and the walk is left with the 2D, the effects the
+GS draws and the uploads. Then item 1's rest (the uploads asked for again: 31% of a recording at 000 before the lock
+fix) and the GS's own batches, one kind at a time, toward a renderer apart from the native GS.
+
+**The earlier order** (before the owner's decision):
 1. **P5 continued: the recording made cheaper** (part 1's P5 and part 2's step 2a are one piece of work). What a
    recording still costs, from both parts' profiles: native draw's draws as a picture between makes them (74% of a
    recording at map 000), of them the skinned models' batches, each batch's state written and flushed again though
@@ -598,6 +624,62 @@ stencil, about 570 batches at map 000); the GS's own 3D (about 7,000 batches); t
 strips; the 2D and the screen passes (by design, part 1's top). A picture between still walks the frame's packets
 again (the recording), and at map 000 P7's recording is about 0.5 ms dearer, its many small draws recorded as calls
 rather than replayed GS batches: "Where it stands", next item 1.
+
+### P7, kept: the frame's calls made again in its pictures between (built 2026-10-29)
+
+A picture between walked the frame's packets again and, for each world draw, resolved every batch's material again and
+planned its triangles again, for the picture's record. Now the frame keeps what P7 did, and a picture makes it again
+(`gsn_pc_draw.inc`, "Kept calls"; `PcdKept` in `gsn_nd_prep.inc`, beside the record and corners nd_prep keeps):
+
+- **The frame keeps each call.** Every P7 call of a draw goes into `NdPrepFrame::pcd_calls`, in the draw's order: a batch
+  of program 0x000, a pass of 0x280, a strip of 0x700, and those that drew nothing (`PCD_CALL_NOTHING`) or were not
+  kicked or all clipped (`PCD_CALL_UNKICKED`, no PRIM). A drawn call holds its material (`shared_ptr`: the material cache
+  may let it go), its triangles' list (a buffer never written again), its first triangle and count, its instance bits
+  and the registers its material was resolved from. A draw is kept whole when every one of its batches went to P7 and
+  was kept; a declined batch, a material that reads a target or VRAM (`!kept`), an unsupported mesh, or an arena that
+  changed while the draw was made, makes it not whole.
+- **A picture takes the draw** when the frame's draw at that place is whole, the table has changed no more since the
+  frame began than the frame's had (`sat.gen`, counted from each frame's own start: the counter goes on from frame to
+  frame) and the arena is the frame's (`pcd_between_takes`).
+- **Each call is made again** (`pcd_between_call`). Its registers are checked against the picture's, less what the
+  picture has of its own: FRAME's base and width and ZBUF's base (a picture is shown in its own buffer), the scissor
+  and the scene's places. Then the place part of `pcd_prepare` runs as it does for any batch (`pcd_where`: what came
+  before in the chain is drawn, a reflection kept as the frame drew it, ZTST NEVER, `sa_acquire` from the picture's
+  FRAME and ZBUF, the viewport and scissor), and `pcd_finish` draws with the kept material and triangles and the
+  picture's record. Nothing is resolved or planned: `nd280_plan_cached`, `nd700_plan` and the corners are not made for a
+  taken draw, and 0x700 learns from its kept call whether a strip is kicked (PRIM is written only then).
+- **`pcd_prepare` is three parts**: `pcd_key_regs` (the registers, and the declines that draw nothing), `pcd_where` (what
+  came before, the target, the place) and `pcd_material` (the material, held when kept). A kept call uses the first for
+  its check and the second for where it goes; the third is the frame's, kept.
+- **A fallback** (a call whose registers or place differ, or that declines in the picture) turns the draw back to the
+  normal path from that call on (`pcd_between_stop`). The calls before it were checked and stand.
+- `--stats`: `pc draws, pictures between (KF4_PC_KEPT)`: the draws made again from the kept calls, and those worked out
+  again, by why (no frame kept, not whole, the table or arena changed, a call on: its registers differed or it declined).
+- `KF4_PC_KEPT=0`: nothing kept and nothing taken, `fast` as before.
+
+**Checked**: every picture (the frame's and `_250`, `_500`, `_750`, every 7th vblank from 2300 to 2650, 204 a spot) byte
+for byte the build's before at 000, 009, 009:2 and 063, and `KF4_PC_KEPT=0`'s; frame_test `--renderer native` and
+`fast` PASS; ASan + UBSan (clang) at 000 and 009:2, nothing in port/gs.
+
+**Measured** (the owner's settings, `pace_test.py --hz 240 --mode cost`, alternating runs, two each):
+
+| | kept on | `KF4_PC_KEPT=0` |
+|---|---|---|
+| 000: a recording | 4.85, 4.79 ms | 5.05, 4.93 ms |
+| 000: the GS's thread a game frame | 12.79, 12.81 ms | 12.92, 12.97 ms |
+| 009: a recording | 5.13, 5.22 ms | 5.12, 5.10 ms |
+
+About 3% of a recording at 000, nothing at 009, because the table check turns most draws away: made again / turned away
+by it, 60,046 / 112,491 at 000, 42,794 / 187,606 at 009, 45,669 / 58,410 at 009:2, 86,668 / 0 at 063.
+
+**Open: the table check is a count, and a count cannot say "unchanged".** A picture between changes the table less than
+its frame did: it asks only for the uploads it needs again (frame_interp.c's uploads left out), leaves the kept
+reflection's draws and the frame's copies out, and draws into the buffer shown. Counting only the named targets' rows,
+or only the owners' changes (the uploads and the table made again), turned away the same draws (tried, not kept). With
+the check removed (a test run at 009:2) twice the draws were taken and the pictures were the same, but that is not a
+proof. The owner's rule (2026-10-29): no shortcut and no workaround; the check is replaced by one of what the call reads
+(the table's answer for its texture's pages, the same image as the frame's), not removed or loosened. That check is
+part of the next step ("Where it stands", "Next"), where the kept calls become the world's snapshot.
 
 ## Open question
 

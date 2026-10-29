@@ -17,6 +17,34 @@
 // in the arena) is worked out as before, and counted. KF4_ND_PREP=0 (tests): never taken; KF4_ND_PREP_CHECK=1:
 // taken and worked out both, the differences counted (--stats).
 
+// What a batch's material is resolved from: the GS's registers it is drawn with, its vertices' alphas, and what the
+// answer can change with (the table, the CLUT, the scene's shape; memcmp-able: memset first). The register part is
+// what a picture between's call is checked by (PcdKept::regs, gsn_pc_draw.inc).
+struct PcdKey {
+    uint64_t frame, zbuf, test, alpha, scissor, tex0, tex1, clamp, miptbp1, miptbp2, texa, fogcol;
+    uint32_t vs, prim, fba, colclamp, pabe, scanmsk, as_min, as_max;
+    uint64_t clut; // (the CLUT mirror's contents, hashed: pcd_clut_hash)
+    uint32_t sx, sy, samples, wide, width, height, fcopy;
+    int32_t lod, cutout, aniso, pad;
+};
+struct PcdMaterial;
+
+// One call the PC renderer (P7, gsn_pc_draw.inc) made for a batch, a 0x280 pass or a 0x700 strip, kept in the frame for
+// its pictures between: what pcd_finish drew, less what is the picture's. The frame keeps each one in order as it draws
+// (NdPrepFrame::pcd_calls); a picture between whose draw at that place was kept whole makes the frame's calls again
+// with its own record instead of resolving materials and planning.
+enum { PCD_CALL_DRAWN, PCD_CALL_NOTHING, PCD_CALL_UNKICKED }; // (UNKICKED: the batch not kicked, or all clipped: no PRIM)
+struct PcdKept {
+    PcdKey regs;                            // the registers and vertex alphas the material is resolved from, as the frame had
+                                            // them: the picture's must be the same, or the call is worked out again
+    std::shared_ptr<const PcdMaterial> mat; // the frame's material, held (only materials that are kept)
+    BufferHandle tris;                      // pcd.tris, or the pcd.kicked buffer its list went into (never written again)
+    uint32_t first = 0, n = 0;              // its triangles in tris
+    uint32_t instance_bits = 0;             // the instance's bits above the record (gouraud 1<<30, context2 1<<28, sphere 1<<29)
+    uint8_t vs = 0;                         // PCD_VS_000, _280, _700
+    uint8_t what = PCD_CALL_DRAWN;          // PCD_CALL_*
+};
+
 // A batch's corners as the frame's plan made them (a pass of it: 0x280's second, sphere-mapped)
 struct NdPrepBatch {
     uint32_t mesh, batch, pass; // which: the mesh's id, the batch's number in it, the pass
@@ -30,6 +58,12 @@ struct NdPrepDraw {
     uint32_t program;
     uint32_t k_at, k_size;     // its record as the set-up made it (before the moves), in NdPrepFrame::consts
     uint32_t first, count;     // its batches
+    // (P7) every batch of it drawn by the PC renderer from its mesh, and its calls kept: pcd_calls from calls_at, calls_n
+    // of them; sat_gen (the table's count since the frame began) and arena_gen (the arena's) as the draw began
+    bool pcd_whole;
+    uint32_t calls_at, calls_n;
+    uint64_t sat_gen;
+    uint32_t arena_gen;
 };
 // What the frame's scene batch (sa_draw_batch) worked out from its corners alone, for the same batch in a picture
 // between (sa_memo_*, gsn_standalone.inc): a batch whose corners are the frame's kept ones (NdPrepFrame::corners) from
@@ -53,6 +87,7 @@ struct NdPrepFrame {
     std::vector<NdPrepBatch> batches;
     std::vector<Vtx> corners;
     std::vector<uint8_t> consts;
+    std::vector<PcdKept> pcd_calls; // (P7: the calls of the draws kept whole, in order)
     // (the scene's batches: SaMemo)
     std::vector<SaMemo> sa_memos;
     std::unordered_map<uint32_t, uint32_t> sa_index; // (by at)
@@ -65,6 +100,7 @@ struct NdPrepFrame {
         batches.clear();
         corners.clear();
         consts.clear();
+        pcd_calls.clear();
         sa_memos.clear();
         sa_index.clear();
         sa_u32.clear();
