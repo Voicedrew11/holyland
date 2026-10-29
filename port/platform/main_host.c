@@ -18,7 +18,8 @@
                          --renderer-shown native shows the other, and --renderer-shown heatmap
                          where they differ); modern: native, with the scene drawn into targets of
                          its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
-                         on unless given)
+                         on unless given); pc: the PC renderer (port/gs/pc/, in work: docs/port/
+                         PC_RENDERER.md), none of the native GS's code
        --scene-scale N, --scene-msaa N
                          with --renderer modern, the scene (the world) at a scale (1 to 4) and samples
                          (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
@@ -259,7 +260,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast] [--renderer-shown gs|native|heatmap]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast|pc] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--upscaler off|bilinear|fsr3|dlss]\n"
@@ -461,9 +462,10 @@ static void parse_options(int argc, char **argv) {
                         : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                         : both && strcmp(value, "fast") == 0 ? PORT_RENDERER_NATIVE
+                        : both && strcmp(value, "pc") == 0   ? PORT_RENDERER_NATIVE
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern or fast" : " or heatmap", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern, fast or pc" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
@@ -471,6 +473,7 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer_forced = 1;
                 port_options.renderer_modern = strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0;
                 port_options.renderer_fast = strcmp(value, "fast") == 0;
+                port_options.renderer_pc = strcmp(value, "pc") == 0;
             } else {
                 port_options.renderer_shown = which;
                 port_options.renderer_heatmap = heatmap;

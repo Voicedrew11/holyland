@@ -34,7 +34,10 @@ void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 void *port_gs_backend_context(void);
-#include "gsn.h"
+#include "gs_api.h"
+
+/* --renderer pc: the PC renderer (port/gs/pc/) opened in place of the native GS, behind the same calls (gs_api.h) */
+int gsr_pc_renderer;
 #endif
 
 #define VSYNC_QUEUE 16
@@ -119,42 +122,43 @@ static void open_backend(void *unused) {
         have_gs = port_gs_backend_open();
     }
     if (port_options.renderer != PORT_RENDERER_GS) {
+        gsr_pc_renderer = port_options.renderer_pc;
         /* a Vulkan device of its own, beside paraLLEl-GS's (whose context has features on that the
            native GS does not want, and whose threads submit to the queue unlocked by the other device);
            with the window's swapchain on it for --presenter vulkan (port/platform/present_vk.cpp) */
         if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
-            gsn_enable_present();
+            gsr_enable_present();
         }
-        gsn_set_upscaler(port_options.upscaler); /* (before: --upscaler dlss's Vulkan extensions) */
-        have_native = gsn_open(NULL);
+        gsr_set_upscaler(port_options.upscaler); /* (before: --upscaler dlss's Vulkan extensions) */
+        have_native = gsr_open(NULL);
         if (have_native) {
             char path[1100];
 
-            gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+            gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
             if (port_options.native_msaa > 1) {
-                port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
+                port_options.native_msaa = gsr_set_msaa(port_options.native_msaa);
             }
-            gsn_set_lod(port_options.native_lod);
-            port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
-            gsn_set_cutout_aa(port_options.native_cutout_aa);
-            gsn_set_2d(port_options.native_2d);
-            gsn_set_colour(port_options.native_colour);
-            gsn_set_layer_z(port_options.native_layer_z);
-            gsn_set_shine_exact(port_options.native_shine_exact);
-            gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
+            gsr_set_lod(port_options.native_lod);
+            port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
+            gsr_set_cutout_aa(port_options.native_cutout_aa);
+            gsr_set_2d(port_options.native_2d);
+            gsr_set_colour(port_options.native_colour);
+            gsr_set_layer_z(port_options.native_layer_z);
+            gsr_set_shine_exact(port_options.native_shine_exact);
+            gsr_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
                                                                                         : GSN_NATIVE_DRAW_NATIVE);
-            gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
-            gsn_set_hardware_sampler(port_options.native_sampler == PORT_SAMPLER_HARDWARE); /* --native-sampler (P1) */
-            gsn_set_pc_world(port_options.renderer_fast);                                  /* --renderer fast (P2) */
+            gsr_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
+            gsr_set_hardware_sampler(port_options.native_sampler == PORT_SAMPLER_HARDWARE); /* --native-sampler (P1) */
+            gsr_set_pc_world(port_options.renderer_fast);                                  /* --renderer fast (P2) */
             if (port_options.scene_scale || port_options.scene_msaa) {
                 /* --scene-scale, --scene-msaa (P8 T2): across as port_gs_native_scale_x has it */
                 int s = port_options.scene_scale;
                 int sx = s && port_options.native_widescreen && port_options.widescreen ? (4 * s + 2) / 3 : s;
-                gsn_set_scene(sx, s, port_options.scene_msaa);
+                gsr_set_scene(sx, s, port_options.scene_msaa);
             }
-            gsn_set_presenter(port_video_submit, port_video_submit_image);
+            gsr_set_presenter(port_video_submit, port_video_submit_image);
             snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
-            gsn_pipeline_cache(path);
+            gsr_pipeline_cache(path);
         }
     }
     if (port_options.renderer == PORT_RENDERER_NATIVE && !have_native) {
@@ -581,7 +585,7 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
         port_gs_backend_gif(path, data, bytes);
     }
     if (have_native) {
-        gsn_gif(path, data, bytes);
+        gsr_gif(path, data, bytes);
     }
 #endif
     if (port_options.stats) {
@@ -602,11 +606,11 @@ void port_gs_read_fifo(void *dst, uint32_t qwords) {
         void *scratch = malloc((size_t)qwords * 16);
 
         if (scratch != NULL) {
-            gsn_read_fifo(scratch, qwords);
+            gsr_read_fifo(scratch, qwords);
             free(scratch);
         }
     } else if (have_native) {
-        gsn_read_fifo(dst, qwords);
+        gsr_read_fifo(dst, qwords);
         return;
     }
     if (have_gs) {
@@ -625,7 +629,7 @@ static void replay_gif(int path, const void *data, size_t bytes) {
         port_gs_backend_gif(path, data, bytes);
     }
     if (have_native) {
-        gsn_gif(path, data, bytes);
+        gsr_gif(path, data, bytes);
     }
 }
 
@@ -714,7 +718,7 @@ static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
     static PortGsFrame a, b;
     GsnRect rect;
 
-    if (!gsn_display_rect(request->privileged, &rect)) {
+    if (!gsr_display_rect(request->privileged, &rect)) {
         return 0;
     }
     if (a.rgba == NULL) {
@@ -724,7 +728,7 @@ static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
     a.width = b.width = rect.w;
     a.height = b.height = rect.h;
     port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a.rgba);
-    gsn_read_rect(&rect, b.rgba);
+    gsr_read_rect(&rect, b.rgba);
     compare_frames(&a, &b, request->vblank);
     if (dump) {
         char name[64];
@@ -754,7 +758,7 @@ static int sdl_scaled(void) {
 /* The size the window shows the picture at, for the native GS's scaling (video.c's SDL_Renderer) */
 void port_gs_present_scale(int width, int height, float sharpen) {
     if (have_native) {
-        gsn_set_present_scale(width, height, sharpen);
+        gsr_set_present_scale(width, height, sharpen);
     }
 }
 
@@ -781,11 +785,11 @@ static int present_frames(VsyncRequest *request, int shown, int dump) {
         if (!have_gs && shown && !dump) {
             /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
                the new image) when it has it, and this thread goes on */
-            return gsn_picture(request->privileged, request->field,
+            return gsr_picture(request->privileged, request->field,
                                GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL,
                                tag) != 0;
         }
-        got_native = gsn_picture(request->privileged, request->field, want_native, &native_frame, tag);
+        got_native = gsr_picture(request->privileged, request->field, want_native, &native_frame, tag);
     }
     if (have_gs && have_native) {
         if (heat.rgba == NULL) {
@@ -864,7 +868,7 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
     int images = shown && (port_video_takes_images() || port_options.headless);
 
     if (dump) {
-        int got = gsn_picture(request->privileged, request->field,
+        int got = gsr_picture(request->privileged, request->field,
                               GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
                                   (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
                               &native_frame, tag);
@@ -883,7 +887,7 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
             }
         }
     } else if (shown) {
-        gsn_picture(request->privileged, request->field,
+        gsr_picture(request->privileged, request->field,
                     GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL, tag);
     }
 }
@@ -923,7 +927,7 @@ void port_gs_post_vsync(void) {
         PortGameReadout game; /* --renderer modern's --stats a map (P8) */
 
         kf4_game_readout(&game);
-        gsn_set_scene_map(game.map_loaded ? game.map_tag : -1);
+        gsr_set_scene_map(game.map_loaded ? game.map_tag : -1);
     }
 #endif
     if (port_gs_capture_armed) {
@@ -937,7 +941,7 @@ void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+        gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
 #endif
 }
@@ -955,7 +959,7 @@ int port_gs_native_scale(void) {
     }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        int kind = gsn_gpu_kind();
+        int kind = gsr_gpu_kind();
 
         most = kind == GSN_GPU_DISCRETE ? 4 : kind == GSN_GPU_INTEGRATED ? 2 : 1;
     }
@@ -972,7 +976,7 @@ void port_gs_set_native_aniso(int taps) {
     port_options.native_aniso = taps < 1 ? 1 : taps;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        port_options.native_aniso = gsn_set_aniso(taps);
+        port_options.native_aniso = gsr_set_aniso(taps);
     }
 #endif
 }
@@ -981,7 +985,7 @@ void port_gs_set_native_lod(int mode) {
     port_options.native_lod = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_lod(mode);
+        gsr_set_lod(mode);
     }
 #endif
 }
@@ -990,7 +994,7 @@ void port_gs_set_native_2d(int mode) {
     port_options.native_2d = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_2d(mode);
+        gsr_set_2d(mode);
     }
 #endif
 }
@@ -999,7 +1003,7 @@ void port_gs_set_native_cutout_aa(int mode) {
     port_options.native_cutout_aa = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_cutout_aa(mode);
+        gsr_set_cutout_aa(mode);
     }
 #endif
 }
@@ -1008,7 +1012,7 @@ void port_gs_set_native_colour(int mode) {
     port_options.native_colour = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_colour(mode);
+        gsr_set_colour(mode);
     }
 #endif
 }
@@ -1019,7 +1023,7 @@ void port_gs_set_native_draw(int kinds, int compare) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
         port_options.native_draw = kinds;
-        gsn_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
+        gsr_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
     }
 #endif
 }
@@ -1028,7 +1032,7 @@ void port_gs_set_native_layer_z(int mode) {
     port_options.native_layer_z = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_layer_z(mode);
+        gsr_set_layer_z(mode);
     }
 #endif
 }
@@ -1037,7 +1041,7 @@ void port_gs_set_native_shine_exact(int exact) {
     port_options.native_shine_exact = exact;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        gsn_set_shine_exact(exact);
+        gsr_set_shine_exact(exact);
     }
 #endif
 }
@@ -1045,7 +1049,7 @@ void port_gs_set_native_shine_exact(int exact) {
 int port_gs_set_native_msaa(int samples) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        samples = gsn_set_msaa(samples);
+        samples = gsr_set_msaa(samples);
     }
 #endif
     port_options.native_msaa = samples;
@@ -1070,6 +1074,10 @@ int port_gs_native_scale_x(void) {
 /* --stats: what the native GS did */
 void port_gs_print_stats(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
+    if (have_native && gsr_pc_renderer) {
+        pcr_print_stats(); /* (--renderer pc: its own; the lines below are the native GS's) */
+        return;
+    }
     if (have_native) {
         const GsnStats *s = &gsn_stats;
 
@@ -1218,7 +1226,7 @@ void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t 
     if (have_gs) {
         port_gs_backend_capture(emit);
     } else if (have_native) {
-        gsn_capture(emit);
+        gsr_capture(emit);
     }
 #else
     (void)emit;
@@ -1241,7 +1249,7 @@ int port_gs_interp_gpu(void) {
 
 void port_gs_interp_frame(void *frame) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    gsn_interp_frame((GsnInterpFrame *)frame);
+    gsr_interp_frame((GsnInterpFrame *)frame);
 #else
     (void)frame;
 #endif
@@ -1249,7 +1257,7 @@ void port_gs_interp_frame(void *frame) {
 
 void port_gs_interp_picture(const void *picture) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    gsn_interp_picture((const GsnInterpPicture *)picture);
+    gsr_interp_picture((const GsnInterpPicture *)picture);
 #else
     (void)picture;
 #endif
@@ -1258,7 +1266,7 @@ void port_gs_interp_picture(const void *picture) {
 int port_gs_shaders_building(int *done, int *total) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native) {
-        return gsn_pipelines_building(done, total);
+        return gsr_pipelines_building(done, total);
     }
 #endif
     *done = *total = 0;
@@ -1267,7 +1275,7 @@ int port_gs_shaders_building(int *done, int *total) {
 
 int port_gs_shaders_running(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    return have_native && gsn_pipelines_running();
+    return have_native && gsr_pipelines_running();
 #else
     return 0;
 #endif
@@ -1310,7 +1318,7 @@ void port_gs_run_vsync(void) {
         int x, y, w, h;
 
         port_video_fit(port_options.dump_present_width, port_options.dump_present_height, &x, &y, &w, &h);
-        gsn_set_present_scale(w, h, port_video_sharpen());
+        gsr_set_present_scale(w, h, port_video_sharpen());
     }
 #endif
     if (port_frame_interp()) {
@@ -1333,7 +1341,7 @@ void port_gs_run_vsync(void) {
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
         interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && interp_cut_on() &&
-                                    gsn_backlog() > 1
+                                    gsr_backlog() > 1
                                 ? interp_behind_run + 1
                                 : 0;
         {
@@ -1436,7 +1444,7 @@ void port_gs_run_vsync(void) {
                 port_gs_backend_vsync(other, request->field ^ 1, 0, &frame);
             }
             if (have_native) {
-                gsn_vsync(other, request->field ^ 1, 0, NULL);
+                gsr_vsync(other, request->field ^ 1, 0, NULL);
             }
         }
         port_field_frames_reset(idle);
@@ -1445,7 +1453,7 @@ void port_gs_run_vsync(void) {
     }
     if (have_native) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
-        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+        gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
     if (present_frames(request, shown && own_shown, dump)) {
     } else if (dump) {
@@ -1473,7 +1481,7 @@ void port_gs_run_vsync(void) {
                 }
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_backlog() > 1)) {
                 interp_behind++;
                 continue;
             }
@@ -1525,7 +1533,7 @@ static void take_other_vram(PortStateIo *io, uint64_t bytes, int into_native) {
     port_state_bytes(io, NULL, (size_t)(bytes - (4u << 20)));
 #ifdef KF4_HAVE_PARALLEL_GS
     if (into_native) {
-        gsn_restore(KF4GS_VRAM, vram, 4u << 20);
+        gsr_restore(KF4GS_VRAM, vram, 4u << 20);
     } else {
         port_gs_backend_restore(KF4GS_VRAM, vram, 4u << 20);
     }
@@ -1561,7 +1569,7 @@ void port_gs_state(PortStateIo *io) {
         backend_bytes = port_gs_backend_state_size();
     }
     if (have_native) {
-        native_bytes = gsn_state_size();
+        native_bytes = gsr_state_size();
     }
 #endif
     PORT_STATE(io, backend_bytes);
@@ -1581,8 +1589,8 @@ void port_gs_state(PortStateIo *io) {
     PORT_STATE(io, native_bytes);
     if (native_bytes != 0) {
 #ifdef KF4_HAVE_PARALLEL_GS
-        if (have_native && native_bytes == gsn_state_size()) {
-            gsn_state(io);
+        if (have_native && native_bytes == gsr_state_size()) {
+            gsr_state(io);
             native_loaded = 1;
         } else if (have_gs && io->loading && !backend_bytes) {
             take_other_vram(io, native_bytes, 0);
@@ -1596,14 +1604,14 @@ void port_gs_state(PortStateIo *io) {
        on again, so that its textures come from their uploads at once */
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native && !io->loading) {
-        table_bytes = gsn_table_state_size();
+        table_bytes = gsr_table_state_size();
     }
 #endif
     PORT_STATE(io, table_bytes);
     if (table_bytes != 0) {
 #ifdef KF4_HAVE_PARALLEL_GS
         if (have_native && (!io->loading || native_loaded)) {
-            gsn_table_state(io, (size_t)table_bytes);
+            gsr_table_state(io, (size_t)table_bytes);
         } else
 #endif
         {

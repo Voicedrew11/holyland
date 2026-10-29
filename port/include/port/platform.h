@@ -40,6 +40,9 @@ typedef struct {
     int renderer_modern;
     /* --renderer fast: modern, with the PC renderer's parts built so far (docs/port/PC_RENDERER.md) */
     int renderer_fast;
+    /* --renderer pc (its development name; docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native
+       GS"): the PC renderer (port/gs/pc/) opened in place of the native GS, renderer PORT_RENDERER_NATIVE */
+    int renderer_pc;
     /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
        --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
        (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */

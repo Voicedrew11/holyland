@@ -36,7 +36,7 @@
 #include "imgui.h"
 
 extern "C" {
-#include "gsn.h"
+#include "gs_api.h"
 #include "port/overlay.h"
 #include "port/debug.h"
 #include "port/platform.h"
@@ -310,9 +310,9 @@ void drop_swapchain_images() {
 // Waits for the queue to be done with the swapchain (its images, their semaphores)
 void wait_queue() {
     wait_frames();
-    gsn_queue_lock();
+    gsr_queue_lock();
     vk.vkQueueWaitIdle(pr.queue);
-    gsn_queue_unlock();
+    gsr_queue_unlock();
 }
 
 // The swapchain for the window's size and the vsync setting: false if there is none now (the window
@@ -699,9 +699,9 @@ int flash_writer(void *) {
         VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &cmd;
-        gsn_queue_lock();
+        gsr_queue_lock();
         ok = vk.vkQueueSubmit(pr.queue, 1, &submit, fence) == VK_SUCCESS;
-        gsn_queue_unlock();
+        gsr_queue_unlock();
         ok = ok && vk.vkWaitForFences(pr.device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
         vk.vkResetFences(pr.device, 1, &fence);
         vk.vkResetCommandPool(pr.device, pool, 0);
@@ -961,7 +961,7 @@ void read_window(Frame &f) {
 // ---- The port's side -----------------------------------------------------------------------------
 extern "C" int port_vk_open(void *sdl_window) {
     pr = Presenter();
-    if (!gsn_present_device(&pr.gsn)) {
+    if (!gsr_present_device(&pr.gsn)) {
         std::fprintf(stderr, "[present] the Vulkan presenter needs the native GS's device with a swapchain "
                              "(--renderer native or both)\n");
         return 0;
@@ -1130,7 +1130,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
     // the native GS's picture of that tag (with nothing new, the one shown last again)
     GsnScanout scanout = {};
-    bool have_scanout = pr.source == SOURCE_NATIVE && gsn_scanout_take_tag(&scanout, pr.tag);
+    bool have_scanout = pr.source == SOURCE_NATIVE && gsr_scanout_take_tag(&scanout, pr.tag);
 
     // the picture's place; the native GS scales its next pictures to it with the best scaling (or the
     // sharpening), this one when it was made at this size
@@ -1141,9 +1141,9 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         float sharpen = port_video_sharpen();
 
         if (scaling == PORT_SCALING_BEST || sharpen > 0) {
-            gsn_set_present_scale(w, h, sharpen);
+            gsr_set_present_scale(w, h, sharpen);
         } else {
-            gsn_set_present_scale(0, 0, 0);
+            gsr_set_present_scale(0, 0, 0);
         }
     }
     bool scaled = have_scanout && scanout.scaled != 0 && scanout.scaled_width == uint32_t(w) &&
@@ -1248,11 +1248,11 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         if (draw != nullptr) {
             bool textures = imgui_textures_pending(draw);
             if (textures) {
-                gsn_queue_lock();
+                gsr_queue_lock();
             }
             ImGui_ImplVulkan_RenderDrawData(draw, cmd);
             if (textures) {
-                gsn_queue_unlock();
+                gsr_queue_unlock();
             }
         }
         vk.vkCmdEndRenderPass(cmd);
@@ -1295,13 +1295,13 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     present.pSwapchains = &pr.swapchain;
     present.pImageIndices = &index;
     vk.vkResetFences(pr.device, 1, &f.done);
-    gsn_queue_lock();
+    gsr_queue_lock();
     check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done));
     if (have_scanout) {
-        gsn_scanout_release(); // (submitted: whatever the native GS writes into it next comes after)
+        gsr_scanout_release(); // (submitted: whatever the native GS writes into it next comes after)
     }
     result = vk.vkQueuePresentKHR(pr.queue, &present);
-    gsn_queue_unlock();
+    gsr_queue_unlock();
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true;
     } else {

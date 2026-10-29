@@ -257,6 +257,15 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
+    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md: --renderer pc), on Granite as well, with none of the
+    # native GS's code: of port/gs/native it takes gsn.h's plain types only
+    file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
+    add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
+    target_include_directories(kf4_pc PRIVATE port/include port/gs/native PUBLIC port/gs/pc)
+    target_link_libraries(kf4_pc PRIVATE parallel-gs)
+    target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
+    set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 17)
+    target_link_libraries(kf4_port PUBLIC kf4_pc)
     # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the native GS's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
     if(TARGET imgui)
