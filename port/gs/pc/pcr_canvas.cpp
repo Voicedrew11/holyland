@@ -4,6 +4,7 @@
 #include "pcr_canvas.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "pcr_shaders.h"
+#include "pcr_gpu_time.h"
 #include "pcr_textures.h"
 
 extern "C" {
@@ -68,7 +70,7 @@ enum : uint32_t {
     F_DATE = 0x8000,
     F_DATM = 0x10000,
 };
-enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4 };
+enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
 struct Vertex {
     float x, y;
@@ -229,6 +231,21 @@ struct GpuTexture {
     uint64_t used = 0; // (the frame last drawn with)
 };
 
+// A texture as the GPU's sampler reads it: its colours (CLUT and TEXA applied: colour_texels) in RGBA8, found again by
+// all it was made from, compared whole
+struct SampledTexture {
+    TextureKey key;
+    uint64_t texa = 0;                   // (TEXA's bits the colours read: TA0, AEM, TA1)
+    std::array<uint32_t, 256> clut{};    // (palette textures: the colours; else zeros)
+    ImageHandle image;
+    uint32_t levels = 1;
+    uint64_t used = 0; // (the frame last drawn with)
+
+    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c) const {
+        return key == k && texa == t && clut == c;
+    }
+};
+
 // What a batch draws with: the registers its primitives read, whole
 struct DrawState {
     uint64_t frame, zbuf, test, alpha, tex0, tex1, clamp, texa, fogcol, scissor, xyoffset, fba, colclamp, pabe, dthe;
@@ -243,7 +260,7 @@ struct DrawState {
 
 class Canvas::Impl {
 public:
-    explicit Impl(Device &device) : device_(device) {
+    Impl(Device &device, GpuTimes &times) : device_(device), times_(times) {
         make_programs();
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(1, 1, VK_FORMAT_R8G8B8A8_UINT);
         uint32_t zero = 0;
@@ -256,6 +273,7 @@ public:
     ~Impl() {
         end_pass();
         if (cmd_) {
+            times_.end(*cmd_);
             device_.submit(cmd_);
         }
     }
@@ -402,6 +420,7 @@ public:
         colour_.clear();
         depth_.clear();
         textures_.clear();
+        sampled_.clear();
         clut_serial_++;
     }
 
@@ -465,6 +484,7 @@ public:
         }
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
         submit();
+        times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
         Surface *s = placed.surface;
         if (!s) {
             return false;
@@ -492,6 +512,7 @@ public:
     void submit() {
         end_pass();
         if (cmd_) {
+            times_.end(*cmd_);
             device_.submit(cmd_);
             cmd_.reset();
         }
@@ -513,6 +534,26 @@ private:
             cmd_ = device_.request_command_buffer();
         }
         return *cmd_;
+    }
+
+    // The command buffer, what is recorded into it from here on timed as work's
+    CommandBuffer &cmd(GpuWork work) {
+        times_.begin(cmd(), work);
+        return *cmd_;
+    }
+
+    GpuWork batch_work() const {
+        if (!batch_.native) {
+            return GpuWork::draws_2d;
+        }
+        switch (batch_.program) {
+        case NativeProgram::vu1_280:
+            return GpuWork::native_280;
+        case NativeProgram::vu1_700:
+            return GpuWork::native_700;
+        default:
+            return GpuWork::native_000;
+        }
     }
 
     void full_barrier(CommandBuffer &c) {
@@ -618,7 +659,7 @@ private:
         }
         counts_.surfaces_made++;
         end_pass();
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::surface);
         VkClearValue zero = {};
         c.clear_image(*made->image, zero);
         full_barrier(c);
@@ -657,7 +698,7 @@ private:
         counts_.surfaces_made++;
         end_pass();
         VkClearValue zero = {};
-        cmd().clear_image(*made->image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
+        cmd(GpuWork::surface).clear_image(*made->image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
         full_barrier(cmd());
         depth_.push_back(std::move(made));
         return depth_.back().get();
@@ -685,7 +726,7 @@ private:
         if (!bigger) {
             return;
         }
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::surface);
         VkClearValue zero = {};
         if (s.depth) {
             c.clear_image(*bigger, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -751,7 +792,7 @@ private:
         if (!staged) {
             return;
         }
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::upload);
         full_barrier(c);
         int32_t dx = int32_t(x * scale_[0]), dy = int32_t(y * scale_[1]);
         int32_t dw = int32_t(std::min(w, s.width() - std::min(x, s.width())) * scale_[0]);
@@ -824,7 +865,7 @@ private:
         }
         uint32_t tx = placed.x, ty = placed.y;
         end_pass();
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         uint32_t cw = std::min({w, from->width() - std::min(fx + sx, from->width()), to->width() - std::min(tx + dx, to->width())});
@@ -860,7 +901,7 @@ private:
             return false;
         }
         end_pass();
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         int32_t x0 = int32_t(x * scale_[0]), y0 = int32_t(y * scale_[1]);
         c.blit_image(*one, *from.image, {0, 0, 0}, {int32_t(w), int32_t(h), 1}, {x0, y0, 0},
@@ -870,6 +911,7 @@ private:
         c.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
                   VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
+        times_.end(*cmd_);
         device_.submit(cmd_, &fence);
         cmd_.reset();
         fence->wait();
@@ -929,7 +971,8 @@ private:
 
     // ---- Textures ----
     struct BoundTexture {
-        const ImageView *view = nullptr; // (u_texels, or u_surface for SRC_SURFACE)
+        const ImageView *view = nullptr; // (u_texels; u_surface for SRC_SURFACE; u_sampled for SRC_SAMPLED)
+        const Sampler *sampler = nullptr; // (SRC_SAMPLED: the GS's filters and wrap modes as the sampler's)
         uint32_t src = SRC_CT32;
         uint32_t levels = 1;
         uint32_t cols = 0, rows = 0; // the part of level 0 the batch may read
@@ -998,6 +1041,21 @@ private:
         b.rows = rows;
         b.src = source_of(psm);
         if (a.source == TextureSource::FromUploads && a.texture) {
+            if (sampler_reads(s, *a.texture)) {
+                SampledTexture *t = sampled_texture(a, s);
+                if (!t) {
+                    return b;
+                }
+                b.view = &t->image->get_view();
+                b.src = SRC_SAMPLED;
+                b.levels = t->levels;
+                b.sampler = &sampler_for(s.tex1, s.clamp, t->levels);
+                b.cols = std::max(cols, a.texture->read_cols);
+                b.rows = std::max(rows, a.texture->read_rows);
+                b.ok = true;
+                counts_.textures_sampled++;
+                return b;
+            }
             GpuTexture *t = gpu_texture(a);
             if (!t) {
                 return b;
@@ -1050,6 +1108,102 @@ private:
         return &t;
     }
 
+    // ---- The GPU's sampler (PC_RENDERER.md, "How it draws": the GS's texel read only where it cannot stand in) ----
+    // Whether the sampler reads this texture as the GS would: REPEAT and CLAMP are its address modes (the region
+    // modes are not: counted), over the texture's own size (the store decodes only the part a draw reads, so a
+    // repeated texture must be whole, and a clamped one no wider than the GS's: counted)
+    bool sampler_reads(const DrawState &s, const DecodedTexture &d) {
+        if (!sampler_on_) {
+            return false;
+        }
+        uint32_t wms = bits(s.clamp, 0, 2), wmt = bits(s.clamp, 2, 2);
+        if (wms >= 2 || wmt >= 2) {
+            counts_.exact_textures_region++;
+            return false;
+        }
+        uint32_t tw = 1u << std::min(bits(s.tex0, 26, 4), 10u), th = 1u << std::min(bits(s.tex0, 30, 4), 10u);
+        bool across = wms == 0 ? d.width_px == tw : d.width_px <= tw;
+        bool down = wmt == 0 ? d.height_px == th : d.height_px <= th;
+        if (!across || !down) {
+            counts_.exact_textures_part++;
+            return false;
+        }
+        return true;
+    }
+
+    SampledTexture *sampled_texture(const TextureAnswer &a, const DrawState &s) {
+        const DecodedTexture &d = *a.texture;
+        uint32_t psm = bits(s.tex0, 20, 6);
+        uint64_t texa = s.texa & (0xFFu | 1u << 15 | uint64_t(0xFF) << 32);
+        ClutColours clut;
+        if (d.kind == TexelKind::Index8) {
+            clut = store_.clut_colours(s.tex0, s.texa);
+        }
+        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull);
+        for (uint32_t c : clut.rgba) {
+            h = (h ^ c) * 0x100000001B3ull;
+        }
+        auto found = sampled_.find(h);
+        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba)) {
+            found->second.used = frame_;
+            return &found->second;
+        }
+        std::vector<uint32_t> colours = colour_texels(d, psm, clut, texa);
+        ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(d.width_px, d.height_px, VK_FORMAT_R8G8B8A8_UNORM);
+        info.levels = d.levels;
+        info.misc = 0;
+        std::array<ImageInitialData, 7> data{};
+        for (uint32_t l = 0; l < d.levels; l++) {
+            data[l].data = colours.data() + d.level_start[l];
+            data[l].row_length = d.level_width(l);
+            data[l].image_height = d.level_height(l);
+        }
+        ImageHandle image = device_.create_image(info, data.data());
+        if (!image) {
+            return nullptr;
+        }
+        counts_.textures_uploaded++;
+        SampledTexture &t = sampled_[h]; // (a different texture of the same hash: put in its place)
+        t.key = a.key;
+        t.texa = texa;
+        t.clut = clut.rgba;
+        t.image = image;
+        t.levels = d.levels;
+        t.used = frame_;
+        return &t;
+    }
+
+    // The sampler for TEX1's filters (MMAG, MMIN) over a texture of levels (TEX1's MXL is in the decode's levels).
+    // The level is the GS's, from Q (the shader's textureLod): at 0 or below MMAG's filter, above it MMIN's. Without
+    // mipmaps (MMIN 0 or 1, or one level) the lod is held at 0.25, which reads level 0 by MMIN's filter.
+    const Sampler &sampler_for(uint64_t tex1, uint64_t clamp, uint32_t levels) {
+        uint32_t mmag = bits(tex1, 5, 1), mmin = bits(tex1, 6, 3);
+        bool mipmapped = mmin >= 2 && mmin <= 5 && levels > 1;
+        uint32_t wrap = bits(clamp, 0, 4); // (WMS, WMT: REPEAT or CLAMP here)
+        uint32_t key = mmag | mmin << 1 | (mipmapped ? levels : 0) << 4 | wrap << 8;
+        auto found = samplers_.find(key);
+        if (found != samplers_.end()) {
+            return *found->second;
+        }
+        SamplerCreateInfo info = {};
+        info.mag_filter = mmag ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        info.min_filter = mmin == 1 || mmin == 4 || mmin == 5 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        info.mipmap_mode = mipmapped && (mmin == 3 || mmin == 5) ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                                                  : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        info.address_mode_u = (wrap & 3) == 0 ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.address_mode_v = (wrap >> 2) == 0 ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.min_lod = 0.0f;
+        info.max_lod = mipmapped ? float(levels - 1) : 0.25f;
+        info.border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+        SamplerHandle made = device_.create_sampler(info);
+        if (!made) {
+            fprintf(stderr, "[pcr] a sampler could not be made: nearest and clamped instead\n");
+            return device_.get_stock_sampler(StockSampler::NearestClamp);
+        }
+        return *samplers_.emplace(key, made).first->second;
+    }
+
     // A texture where a surface was drawn: the surface's part copied (so the surface can be drawn into while read)
     BoundTexture surface_texture(uint64_t tex0, uint32_t cols, uint32_t rows) {
         BoundTexture b;
@@ -1081,7 +1235,7 @@ private:
             return b;
         }
         end_pass();
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(GpuWork::texture_copy);
         full_barrier(c);
         VkClearValue zero = {};
         c.clear_image(*b.surface_copy, zero);
@@ -1111,7 +1265,7 @@ private:
         kept_frame_.reset();
         for (auto &s : colour_) {
             if (s->base_page == base_page) {
-                kept_frame_ = copy_of(*s->image);
+                kept_frame_ = copy_of(*s->image, GpuWork::copy);
                 kept_page_ = base_page;
                 return;
             }
@@ -1119,7 +1273,7 @@ private:
     }
 
     // An image's copy, for a shader to read while the image is drawn into
-    ImageHandle copy_of(const Image &image) {
+    ImageHandle copy_of(const Image &image, GpuWork work) {
         ImageCreateInfo info = ImageCreateInfo::render_target(image.get_width(), image.get_height(), image.get_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
@@ -1129,7 +1283,7 @@ private:
             return copy;
         }
         end_pass();
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd(work);
         full_barrier(c);
         const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         c.copy_image(*copy, image, {0, 0, 0}, {0, 0, 0}, {image.get_width(), image.get_height(), 1}, colour, colour);
@@ -1138,11 +1292,15 @@ private:
     }
 
     void evict_textures() {
-        if (textures_.size() < 4096) {
-            return;
+        if (textures_.size() >= 4096) {
+            for (auto it = textures_.begin(); it != textures_.end();) {
+                it = frame_ - it->second.used > 120 ? textures_.erase(it) : std::next(it);
+            }
         }
-        for (auto it = textures_.begin(); it != textures_.end();) {
-            it = frame_ - it->second.used > 120 ? textures_.erase(it) : std::next(it);
+        if (sampled_.size() >= 4096) {
+            for (auto it = sampled_.begin(); it != sampled_.end();) {
+                it = frame_ - it->second.used > 120 ? sampled_.erase(it) : std::next(it);
+            }
         }
     }
 
@@ -1367,9 +1525,10 @@ private:
         ImageHandle dest_copy;
         bool date = bits(s.test, 14, 1) != 0;
         if (date) {
-            dest_copy = copy_of(*colour->image);
+            dest_copy = copy_of(*colour->image, GpuWork::date_copy);
             counts_.date_draws++;
         }
+        cmd(batch_work());
         begin_pass(*colour, depth);
         CommandBuffer &c = cmd();
         c.set_program(!batch_.native                              ? program_
@@ -1431,14 +1590,16 @@ private:
         push.src_scale[1] = int32_t(scale_[1]);
         push.place[0] = int32_t(placed.x);
         push.place[1] = int32_t(placed.y);
-        // textures: the texels (or the dummy), the surface's copy (or the dummy), the CLUT
-        if (batch_.texture.ok && batch_.texture.src == SRC_SURFACE) {
-            c.set_texture(0, 0, dummy_uint_->get_view(), StockSampler::NearestClamp);
-            c.set_texture(0, 1, *batch_.texture.view, StockSampler::NearestClamp);
+        // textures: the texels, the surface's copy, the sampled texture (each the dummy when not this batch's kind)
+        const BoundTexture &bt = batch_.texture;
+        bool sampled = bt.ok && bt.src == SRC_SAMPLED, from_surface = bt.ok && bt.src == SRC_SURFACE;
+        bool texels = bt.ok && !sampled && !from_surface;
+        c.set_texture(0, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
+        c.set_texture(0, 1, from_surface ? *bt.view : dummy_float_->get_view(), StockSampler::NearestClamp);
+        if (sampled) {
+            c.set_texture(0, 4, *bt.view, *bt.sampler);
         } else {
-            c.set_texture(0, 0, batch_.texture.ok ? *batch_.texture.view : dummy_uint_->get_view(),
-                          StockSampler::NearestClamp);
-            c.set_texture(0, 1, dummy_float_->get_view(), StockSampler::NearestClamp);
+            c.set_texture(0, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
         }
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
         void *clut = c.allocate_constant_data(0, 2, sizeof(batch_.clut));
@@ -1509,7 +1670,7 @@ private:
                 if (!image) {
                     continue;
                 }
-                CommandBuffer &c = cmd();
+                CommandBuffer &c = cmd(GpuWork::surface);
                 full_barrier(c);
                 if (s->depth) {
                     VkClearValue zero = {};
@@ -1534,10 +1695,10 @@ private:
         ResourceLayout frag = {};
         frag.output_mask = 1;
         frag.push_constant_size = sizeof(PrimPush);
-        frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3);
-        frag.sets[0].fp_mask = (1u << 1) | (1u << 3);
+        frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4);
+        frag.sets[0].fp_mask = (1u << 1) | (1u << 3) | (1u << 4);
         frag.sets[0].uniform_buffer_mask = 1u << 2;
-        for (int b : {0, 1, 2, 3}) {
+        for (int b : {0, 1, 2, 3, 4}) {
             frag.sets[0].meta[b].array_size = 1;
         }
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
@@ -1567,6 +1728,7 @@ private:
     }
 
     Device &device_;
+    GpuTimes &times_;
     Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
             *native_700_program_ = nullptr;
     BufferHandle picture_;
@@ -1577,6 +1739,10 @@ private:
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_;
     std::unordered_map<uint64_t, GpuTexture> textures_;
+    std::unordered_map<uint64_t, SampledTexture> sampled_;
+    std::unordered_map<uint32_t, SamplerHandle> samplers_; // (by sampler_for's key)
+    // KF4_PC_SAMPLER=0: every texture by the GS's read (to compare with)
+    const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
     Batch batch_;
     bool batch_open_ = false;
@@ -1612,6 +1778,11 @@ public:
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
                 (unsigned long long)c.copies_between_surfaces);
         fprintf(out,
+                "[stats] pc canvas textures: %llu batches read by the GPU's sampler; by the GS's read: %llu (a region "
+                "mode), %llu (decoded in part)\n",
+                (unsigned long long)c.textures_sampled, (unsigned long long)c.exact_textures_region,
+                (unsigned long long)c.exact_textures_part);
+        fprintf(out,
                 "[stats] pc canvas, not done yet: %llu blends, (%llu DATE draws done), %llu textures on a surface, %llu "
                 "copies, %llu uploads into a surface, %llu points and lines, %llu CLUT loads not from uploads\n",
                 (unsigned long long)c.unsupported_blends, (unsigned long long)c.date_draws,
@@ -1633,7 +1804,7 @@ public:
     }
 };
 
-Canvas::Canvas(Device &device) : impl_(std::make_unique<Impl>(device)) {}
+Canvas::Canvas(Device &device, GpuTimes &times) : impl_(std::make_unique<Impl>(device, times)) {}
 Canvas::~Canvas() = default;
 
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {

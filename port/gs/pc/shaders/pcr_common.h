@@ -38,3 +38,4 @@ layout(push_constant, std430) uniform Push {
 #define PCR_SRC_CT16 2u
 #define PCR_SRC_INDEX 3u
 #define PCR_SRC_SURFACE 4u
+#define PCR_SRC_SAMPLED 5u // the GPU's sampler on a texture of its colours (u_sampled)

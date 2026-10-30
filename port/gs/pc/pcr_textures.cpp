@@ -280,6 +280,33 @@ uint32_t DecodedTexture::level_height(uint32_t level) const {
     return std::max(1u, height_px >> level);
 }
 
+std::vector<uint32_t> colour_texels(const DecodedTexture &texture, uint32_t psm, const ClutColours &clut, uint64_t texa) {
+    if (texture.kind == TexelKind::Index8) {
+        std::vector<uint32_t> out(texture.indices.size());
+        for (size_t i = 0; i < out.size(); i++) {
+            out[i] = clut.rgba[texture.indices[i]];
+        }
+        return out;
+    }
+    std::vector<uint32_t> out = texture.rgba;
+    bool ct24 = psm == 0x01 || psm == 0x31;
+    bool ct16 = psm == 0x02 || psm == 0x0A || psm == 0x32 || psm == 0x3A;
+    if (!ct24 && !ct16) {
+        return out;
+    }
+    uint32_t ta0 = uint32_t(texa & 0xFF), ta1 = uint32_t((texa >> 32) & 0xFF);
+    bool aem = ((texa >> 15) & 1) != 0;
+    for (uint32_t &c : out) {
+        uint32_t rgb = c & 0xFFFFFFu;
+        if (ct16 && (c >> 24) != 0) {
+            c = rgb | ta1 << 24;
+        } else {
+            c = rgb | (aem && rgb == 0 ? 0u : ta0) << 24;
+        }
+    }
+    return out;
+}
+
 // ---- The store's state ----------------------------------------------------------------------------
 namespace {
 

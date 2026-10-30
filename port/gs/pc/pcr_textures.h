@@ -115,6 +115,12 @@ struct ClutColours {
     bool from_uploads = false; // false: an entry read was not loaded from uploads (the caller reads its own)
 };
 
+// A texture's colours as the GPU's sampler reads them (RGBA8, every level back to back at texture.level_start's
+// places): Index8 through clut, Rgba8 with TEXA applied as the GS applies it to psm (PSMCT24/Z24: A is TA0;
+// PSMCT16/16S/Z16/Z16S: TA1 where bit 15 was set, else TA0; with AEM, A 0 where the colour is black and the alpha
+// would have been TA0; PSMCT32/Z32: as they are). texa is the TEXA register.
+std::vector<uint32_t> colour_texels(const DecodedTexture &texture, uint32_t psm, const ClutColours &clut, uint64_t texa);
+
 struct TextureStoreLimits {
     size_t decoded_bytes = size_t(256) << 20; // decoded textures kept (least recently used let go)
     size_t unowned_chunk_bytes = size_t(64) << 20; // chunks that own nothing now, kept to be found again

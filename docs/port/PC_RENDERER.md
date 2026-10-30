@@ -82,11 +82,8 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
   a second GS emulator ("How it draws", below): the native GS is the exact reference, every picture is compared with
   it, and pc does not need to be exact first. So what comes next is the GPU's way, then the pictures between, then
   what is left of step 3. In order:
-  1. **GPU timestamps** in the PC renderer (pace_test's "GPU ms a picture" reads 0 for it now), and a profile of
-     where its GPU time goes at the owner's settings (4x, native widescreen, MSAA 2, aniso 16).
-  2. **Textures by the GPU's sampler**: decode once (CLUT applied) into RGBA8 textures, sampled by the hardware
-     with the GS's filter modes mapped to the sampler's; the GS's texel read in `pcr_prim.frag` kept only for what
-     cannot be (counted). `fast`'s P1 (`gsn_pc_world.inc`, the hardware sampler) is the model, and how close it came.
+  1. **GPU timestamps**: built 2026-10-30 (`pcr_gpu_time.h`; "Item 2 built", below).
+  2. **Textures by the GPU's sampler**: built 2026-10-30 ("Item 2 built", below).
   3. **DATE by the stencil** (the copy of the whole surface goes); a blend with no Vulkan form copies only the
      rectangle drawn.
   4. **Merged draws**: batches of one state into one call (GIF primitives already are; native batches by runs: grow
@@ -231,6 +228,41 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## Item 2 built (2026-10-30): GPU timestamps, and textures by the GPU's sampler
+
+**GPU timestamps** (`port/gs/pc/pcr_gpu_time.h`): a timestamp wherever the kind of work recorded changes (the 2D,
+native batches by program, DATE's copy, a texture's copy from a surface, surfaces, uploads, copies, the picture), each
+interval added to its kind; on with `KF4_GSN_GPU_TIME=1` (pace_test sets it) and the Shift+P profiler. `--stats`
+prints `[stats] pc renderer GPU time: ...`, pace_test's "GPU ms a picture". The time between submits is not counted.
+Run time the same with it on and off (map 000 at 30, 3,100 vblanks: 57.8 and 58.8 s).
+
+**Textures by the sampler.** A texture from uploads is decoded once with the CLUT and TEXA applied
+(`colour_texels` in `pcr_textures.h`, tested in `pcr_textures_test`) into an RGBA8 UNORM image, found again by its
+uploads, TEXA and CLUT colours compared whole, and read by `textureLod` with the GS's level from Q; MMAG and MMIN are the
+sampler's filters (without mipmaps the lod is held at 0.25, which reads level 0 by MMIN's filter), REPEAT and CLAMP
+its address modes. The GS's read in `pcr_prim.frag` stays for the region modes and textures decoded in part (counted:
+`[stats] pc canvas textures`), and for textures read from surfaces. `KF4_PC_SAMPLER=0` reads every texture the GS's
+way. At maps 000, 009, 009:2 and 063 every textured batch was the sampler's (0 by the GS's read).
+
+**Measured** (pace_test, 4x, native widescreen, 15 s, two runs each side alternated; MSAA, aniso and colour are not in
+pc yet):
+
+| GPU ms a picture | GS's read | sampler |
+|---|---|---|
+| 240 (all packets), maps 000 / 009 | 1.82-1.83 / 1.87-1.88 | 1.31-1.36 / 1.34-1.41 |
+| 30 (native draws), maps 000 / 009 | 1.07 / 1.21-1.22 | 0.86-1.00 / 0.95-1.08 |
+
+At 240 the 2D (GIF primitives) went from 1.60-1.66 to 1.09-1.18 ms a picture. Pictures against the native GS at vblank
+2700 (at 30, native draws on), pixels over 8 levels: 000 441,724 -> 432,166; 009 906,109 -> 868,994; 009:2 502,334 ->
+464,453; 063 505,549 -> 483,639 (closer at every spot; pc and native differ this much before the change too, not yet
+looked into). Against the GS's read: 000 and 063 within 7 levels; the fire at 009 13,325 pixels over 8 (worst 93), its
+additive layers adding up the sampler's finer filter fraction (8 bits against the GS's 4).
+
+**What limits pc is not the GPU.** Pictures a second did not move: 61 at 240 (packets: the game's VU1 runs and GIF,
+step 5), and at 30 the game itself runs at 19-21 vblanks a second under pc with native draws (2.1-2.9M native batches
+in 3,196 pictures, one at a time on pc's thread), already before this change. With about 1 ms of GPU a picture, the
+next gains in pictures a second are on the CPU: merged draws (item 4) for the native batches, and step 5.
 
 ## Step 2 built (2026-10-29): the PC renderer draws the whole game from its GIF packets
 

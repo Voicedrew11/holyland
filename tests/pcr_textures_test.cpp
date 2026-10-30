@@ -656,6 +656,57 @@ bool run_seed(uint64_t seed) {
     return check.failures == 0;
 }
 
+// colour_texels: each format's TEXA and the CLUT, against the shader's rules written out by hand
+bool colour_texels_rules() {
+    bool ok = true;
+    auto expect = [&](const char *what, uint32_t got, uint32_t want) {
+        if (got != want) {
+            printf("pcr_textures_test: colour_texels, %s: %08x, not %08x\n", what, got, want);
+            ok = false;
+        }
+    };
+    pcr::DecodedTexture t;
+    t.kind = pcr::TexelKind::Rgba8;
+    t.width_px = 4;
+    t.height_px = 1;
+    t.levels = 1;
+    t.rgba = {0x00000000u, 0x00102030u, 0xFF000000u, 0xFF102030u};
+    pcr::ClutColours none;
+    const uint64_t ta0 = 0x40, ta1 = uint64_t(0x90) << 32, aem = 1u << 15;
+    std::vector<uint32_t> c32 = pcr::colour_texels(t, 0x00, none, ta0 | ta1 | aem);
+    expect("CT32 as it is", c32[3], 0xFF102030u);
+    std::vector<uint32_t> c24 = pcr::colour_texels(t, 0x01, none, ta0 | ta1);
+    expect("CT24 black, no AEM", c24[0], 0x40000000u);
+    expect("CT24 colour", c24[3], 0x40102030u);
+    std::vector<uint32_t> c24a = pcr::colour_texels(t, 0x31, none, ta0 | ta1 | aem);
+    expect("Z24 black with AEM", c24a[0], 0x00000000u);
+    expect("Z24 colour with AEM", c24a[1], 0x40102030u);
+    std::vector<uint32_t> c16 = pcr::colour_texels(t, 0x02, none, ta0 | ta1 | aem);
+    expect("CT16 black, bit 15 clear, AEM", c16[0], 0x00000000u);
+    expect("CT16 colour, bit 15 clear", c16[1], 0x40102030u);
+    expect("CT16 black, bit 15 set, AEM", c16[2], 0x90000000u);
+    expect("CT16S colour, bit 15 set", pcr::colour_texels(t, 0x0A, none, ta0 | ta1)[3], 0x90102030u);
+    pcr::DecodedTexture p;
+    p.kind = pcr::TexelKind::Index8;
+    p.width_px = 2;
+    p.height_px = 2;
+    p.levels = 2;
+    p.level_start = {0, 4};
+    p.indices = {0, 1, 255, 7, 3};
+    pcr::ClutColours clut;
+    for (uint32_t i = 0; i < 256; i++) {
+        clut.rgba[i] = i * 0x01010101u ^ 0x80000000u;
+    }
+    std::vector<uint32_t> pal = pcr::colour_texels(p, 0x13, clut, ta0);
+    if (pal.size() != 5) {
+        printf("pcr_textures_test: colour_texels, palette: %zu texels, not 5\n", pal.size());
+        return false;
+    }
+    expect("palette 255", pal[2], clut.rgba[255]);
+    expect("palette, level 1", pal[4], clut.rgba[3]);
+    return ok;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -666,7 +717,7 @@ int main(int argc, char **argv) {
     if (seeds.empty()) {
         seeds = {1, 2, 3, 4, 5, 6};
     }
-    bool ok = true;
+    bool ok = colour_texels_rules();
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
         ok = vram_round_trip(seed) && ok;

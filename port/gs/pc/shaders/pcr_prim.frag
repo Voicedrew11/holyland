@@ -1,7 +1,9 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// The PC renderer's GS pixel (port/gs/pc/pcr_canvas.cpp): the GS's texture read (its wrap modes, filters and
-// mipmap level from Q, the CLUT, TEXA), texture function, fog and alpha test, in its integers. The blend is
+// The PC renderer's GS pixel (port/gs/pc/pcr_canvas.cpp): the texture read by the GPU's sampler where it can stand in
+// (the texture's colours decoded once, the GS's filters and wrap modes as the sampler's, the level from Q), else the
+// GS's read (its region modes, filters and mipmap level from Q, the CLUT, TEXA); texture function, fog and alpha
+// test, in its integers. The blend is
 // Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it.
 #include "pcr_common.h"
 
@@ -14,6 +16,7 @@ layout(location = 0) out vec4 o_color;
 layout(set = 0, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
 layout(set = 0, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
 layout(set = 0, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE) the destination before the draw
+layout(set = 0, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
 layout(set = 0, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
 } u_clut;
@@ -86,6 +89,12 @@ uvec4 sample_texture() {
     float lod = pc.lod_k;
     if ((pc.tex1 & 0x80u) == 0u) {
         lod += log2(1.0 / abs(v_stq.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
+    }
+    if (src_kind() == PCR_SRC_SAMPLED) {
+        // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
+        // clamp are the texture's: pcr_canvas.cpp's sampler_for)
+        vec4 t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
+        return uvec4(round(t * 255.0));
     }
     uint mmin = (pc.tex1 >> 1) & 7u;
     if (lod <= 0.0 || pc.levels <= 1u) {

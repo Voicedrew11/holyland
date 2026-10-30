@@ -25,6 +25,7 @@
 
 #include "device.hpp"
 #include "pcr_gif.h"
+#include "pcr_gpu_time.h"
 #include "pcr_textures.h"
 
 namespace pcr {
@@ -32,6 +33,7 @@ namespace pcr {
 struct CanvasCounts {
     uint64_t primitives = 0, triangles = 0, batches = 0, passes = 0;
     uint64_t textures_uploaded = 0, textures_from_surfaces = 0, textures_missing = 0;
+    uint64_t textures_sampled = 0, exact_textures_region = 0, exact_textures_part = 0;
     uint64_t surfaces_made = 0, surfaces_filled_from_uploads = 0, uploads_into_surfaces = 0, copies_between_surfaces = 0;
     uint64_t date_draws = 0, native_batches = 0, native_draw_calls = 0;
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
@@ -66,7 +68,8 @@ struct NativeBatch {
 
 class Canvas {
 public:
-    explicit Canvas(Vulkan::Device &device);
+    // times: the GPU's time of what the canvas records (outlives the canvas)
+    Canvas(Vulkan::Device &device, GpuTimes &times);
     ~Canvas();
     Canvas(const Canvas &) = delete;
     Canvas &operator=(const Canvas &) = delete;

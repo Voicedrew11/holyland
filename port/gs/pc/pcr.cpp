@@ -33,6 +33,7 @@
 
 #include "context.hpp"
 #include "pcr_canvas.h"
+#include "pcr_gpu_time.h"
 #include "pcr_native.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
@@ -405,12 +406,17 @@ class Intake final : public pcr::GifEvents {
 public:
     // (on the thread, once the device is there)
     void attach(Device &device) {
-        canvas_ = std::make_unique<pcr::Canvas>(device);
+        times_ = std::make_unique<pcr::GpuTimes>(device);
+        canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
         natives_ = std::make_unique<pcr::NativeDraws>(device);
     }
 
     pcr::Canvas *canvas() {
         return canvas_.get();
+    }
+
+    pcr::GpuTimes *gpu_times() {
+        return times_.get();
     }
 
     pcr::GifFrontEnd &front() {
@@ -432,6 +438,7 @@ public:
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->vblank();
+            times_->collect();
         }
         if (census_) {
             census_->display(privileged[0], privileged[14], privileged[18]);
@@ -520,6 +527,7 @@ private:
 
     pcr::GifFrontEnd front_;
     std::unique_ptr<pcr::Census> census_;
+    std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::NativeDraws> natives_;
 };
@@ -844,11 +852,15 @@ private:
             return 0; // (no picture shown, or none wanted)
         }
         CommandBufferHandle cmd = device_->request_command_buffer();
+        pcr::GpuTimes &times = *intake_.gpu_times();
+        times.begin(*cmd, pcr::GpuWork::picture);
         // (a picture between too: the frame's packets were sent again, moved to its time, before it)
         if (!draw_picture(*cmd, *size, v)) {
+            times.end(*cmd);
             device_->submit(cmd);
             return 0;
         }
+        times.picture();
         int ok = 0, slot = -1;
         if (want & GSN_WANT_IMAGE) {
             slot = scanout_.claim(*device_, picture_->get_width(), picture_->get_height());
@@ -862,6 +874,7 @@ private:
                 ok |= GSN_WANT_PIXELS;
             }
         } else {
+            times.end(*cmd);
             device_->submit(cmd);
         }
         if (slot >= 0) {
@@ -927,6 +940,7 @@ private:
             readback_ = device_->create_buffer(info, nullptr);
             if (!readback_) {
                 fprintf(stderr, "[pcr] no buffer to read a picture back into\n");
+                intake_.gpu_times()->end(*cmd);
                 device_->submit(cmd);
                 return false;
             }
@@ -936,6 +950,7 @@ private:
         cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
                      VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
+        intake_.gpu_times()->end(*cmd);
         device_->submit(cmd, &fence);
         fence->wait();
         if (&frame == &presented_ && presented_pixels_.size() < size_t(width) * height) {
@@ -1321,4 +1336,8 @@ extern "C" void pcr_print_stats(void) {
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
             (unsigned long long)s.interp_pictures.load());
     renderer()->print_census();
+    // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
+    if (pcr::GpuTimes *times = renderer()->intake().gpu_times()) {
+        times->print();
+    }
 }
