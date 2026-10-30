@@ -52,6 +52,8 @@ enum class NativeProgram : uint8_t {
              // before it; instance: the record (bits 0-29), Gouraud (30)
     vu1_280, // shaders/pcr_nd280.vert: a triangle the arena's slots of its corners and of its kick; instance: the record
              // (bits 0-27), the context whose XYOFFSET (28), the sphere pass (29), Gouraud (30)
+    vu1_700, // shaders/pcr_nd700.vert: a triangle the arena's numbers of its corners and of its kick; instance: the
+             // record (bits 0-29), Gouraud (30)
 };
 
 // A batch of a native draw (pcr_native.h): its triangles from first_triangle in triangles (a uvec4 each), drawn by the

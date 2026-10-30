@@ -1,10 +1,12 @@
-// A native draw's record for VU1's programs 0x000 and 0x280 on the GPU (port/include/port/render.h's draws): what VU1's set-up
+// A native draw's record for VU1's programs 0x000, 0x280, 0x5A0 and 0x700 on the GPU (port/include/port/render.h's draws): what VU1's set-up
 // leaves in its memory for the vertex program, worked out on the CPU in VU1's arithmetic, laid out as the shaders read
 // it (port/render/shaders/vu1_000_draw.h's Draw). For the renderers that draw native draws without VU1: the PC
 // renderer (port/gs/pc/pcr_native.cpp). The native GS has its own copy (gsn_native_draw.inc, nd_const), the same
 // maths. port/platform/vu1_hle.c (setup) is the specification.
 #pragma once
 #include <stdint.h>
+
+#include <vector>
 
 #include "render_internal.hpp"
 
@@ -52,6 +54,11 @@ enum : int32_t {
 // moves (obj, bt, the VU1_MOVE_* flags) are left 0: the renderer's.
 Vu1Record vu1_record_000(const RdDraw &draw, const RdCamera &camera);
 
+// The draw's record for program 0x5A0 (the shadows: port/platform/vu1_hle_5a0.c), drawn by 0x000's maths from the
+// silhouette meshes (render.cpp, take_batch's silhouette): 0x000's set-up of the vertex matrix, with no lights, no
+// point lights and no fog, so that the colour and fog come out 0 as 0x5A0 makes them
+Vu1Record vu1_record_5a0(const RdDraw &draw, const RdCamera &camera);
+
 // vu1_280_draw.h's Draw (program 0x280, the skinned models): two matrix sets, A the part's (VU1 0x04) and B its
 // parent's (0x08), each vertex taking one by its ST's w
 struct Vu1Record280 {
@@ -85,3 +92,21 @@ struct Vu1Kicks280 {
 };
 // vertices: the batch's first vertex's eight qwords in its mesh. False when the batch has more vertices than a run.
 bool vu1_kicks_280(const int32_t *vertices, const RdBatch &batch, const Vu1Record280 &record, Vu1Kicks280 &out);
+
+// The draw's record for program 0x700 (the effects: port/platform/vu1_hle_700.c): 0x000's set-up of the vertex matrix
+// and the light directions, no point lights, the model's colour (VU1 0x64) in point_col[0]
+Vu1Record vu1_record_700(const RdDraw &draw, const RdCamera &camera);
+
+// The A+D writes a run of program 0x700 kicks (register, value ...): the batch's, with its TEX0 (TOP+0xA2) replaced by
+// VU1 0x66 (RdDraw.colour[2]) when its TBP0 is 0x65.w's (colour[1]): the flipbook's frame
+std::vector<uint64_t> vu1_ad_700(const RdBatch &batch, const RdDraw &draw);
+
+// A batch of program 0x700 as VU1 runs it: which kicks get ADC (VU1's clipping of the kick and the two before it), and
+// whether the strip is kicked at all (fewer than n of its n vertices and the one past it, RdBatch::past, clipped)
+struct Vu1Kicks700 {
+    uint32_t n = 0;
+    bool adc[VU1_BATCH_MOST] = {};
+    bool kick = false;
+};
+// vertices: the batch's first vertex's four qwords in its mesh. False when the batch has more vertices than a run.
+bool vu1_kicks_700(const int32_t *vertices, const RdBatch &batch, const Vu1Record &record, Vu1Kicks700 &out);

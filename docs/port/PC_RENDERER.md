@@ -72,6 +72,39 @@ loads about 4%), the uploads asked for again (`replay_upload`) 29%, the rest the
 walk. So next is the uploads, then the snapshot's own checks made cheaper (exact still: e.g. the CLUT compared by the
 loads' sources, the table's answer kept by its pages), then the GS's own batches, one kind at a time.
 
+**Handoff (2026-10-29, late; branch `pc/renderer`).** Where the PC renderer (`--renderer pc`) stands and what is next,
+in order. Read "The PC renderer: `fast` without the native GS" below first, then its "Step 2 built" and "Step 3" sections.
+- **Done**: steps 1 and 2 (the whole game from its GIF packets), save states, the pictures between's uploads asked
+  for again (0x7C/0x7D), and step 3's native draws of programs 0x000, 0x280, 0x5A0, 0x700 and the GS strips (kinds:
+  map, sky, items, picked, objects, skinned, arm, gold, shadows, effects; `pcr_native_kinds()`), each checked against
+  the PC renderer on packets at 000, 009, 009:2 and 063.
+- **Step 3, left**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind `water`)
+  and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). Same method as the
+  others: move the shader's maths into `port/render/shaders/` (check `gsn_shaders.h` stays byte for byte:
+  `cmp` against a copy after `tools/build_shaders.py`), CPU set-up into `port/render/` with a test against the VU1 or
+  EE code it stands for, the draw in `pcr_native.cpp`, the kind added to `kinds()`, pictures against
+  `--renderer pc` without `--native-draw` at the four spots. `[stats] pc native draws not drawn yet` names what is
+  still sent to it and left out.
+- **Then step 5, the speed**: `fast` makes 239.75 pictures a second at 240 (map 000, `pace_test.py`); the PC renderer
+  makes 61, because native draws are off under it whenever there are pictures between
+  (`port_gs_native_draws_now`: frame_interp.c's CPU way cannot move a native draw), so the game sends VU1's packets
+  (2.56M VU1 runs and 9.3 GB of GIF per 3,000 vblanks, against 35,739 runs in `fast`). Step 5 is the PC renderer
+  taking `GsnInterpFrame`/`GsnInterpPicture` (`pcr_interp_frame`/`pcr_interp_picture`, now taken and freed) as the
+  native GS does: the frame's stream drawn once, each picture drawn again with the vertices moved (the GIF ones by
+  their `GsnInterpMove`s, the native draws by `VU1_MOVE_*` and the picture's move/mid: the shared `moved()` in
+  `vu1_*_maths.h` already does it given `pic` and the record's flags; the CPU parts are `nd_model_flags`,
+  `nd_between`, `nd_remember` in `gsn_native_draw.inc`, to move into `port/render/`). Then `port_gs_interp_gpu` true
+  for pc, and the gate lifted. The renderer thread was 39% idle at 240: the limit was upstream, not the canvas.
+- **Then**: the settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's), blends with
+  As above 128, copies within a surface, non-CT32 uploads into surfaces; then step 7 (`fast` switched to it, the full
+  checks incl. the map tour and pace).
+- **How to run things on this machine** (no memory to rely on): every game run under a memory cap (`systemd-run
+  --user --scope -p MemoryMax=10G -p MemorySwapMax=0`; the machine has crashed from memory at 240), one at a time;
+  `KF4_DATA_DIR` a temporary folder; spots by `--input tests/newgame.pad --teleport 1900:MAP:PLACE --invincible`;
+  headless draws nothing without `--dump-frames`; ASan with `out/linux-clang-asan`, `ASAN_OPTIONS=detect_leaks=0:
+  halt_on_error=0 UBSAN_OPTIONS=halt_on_error=0`, known reports: SoundDriver_Remote's stack underflow, the decomp's
+  and kernel.c's/libmpeg.c's function-pointer casts, Granite render_pass.cpp:52, frame_interp.c:666.
+
 **Next: the world off the native GS, done properly (the owner's decision, 2026-10-29).** Item 3 below is the next
 step, not a trim of the recording: the owner chose it over trimming, and chose that it be done the proper way, no
 shortcut or workaround (the kept calls' table check, above, is the example: replaced by a check of what is read, not
@@ -222,6 +255,12 @@ by `port/render/vu1_record.cpp`, checked bit for bit against VU1's own set-up (`
   triangles it kicks); those triangles are listed each time and drawn by `shaders/pcr_nd280.vert` (the maths shared
   with the native GS's `nd_280.vert`: `port/render/shaders/vu1_280_*.h`), the sphere-mapped second pass too. At vblank
   2700 against the PC renderer on packets: 000 111 pixels (by 2), 009 378 (by 3), 009:2 251 (by 2), 063 as before.
+- **Programs 0x5A0, 0x700 and the GS strips** (built after). The shadows are 0x000's maths on the silhouette meshes
+  with no lights and no fog (`vu1_record_5a0`). The effects (`vu1_record_700`, `vu1_ad_700`: the flipbook's TEX0,
+  `vu1_kicks_700`: VU1's clipping with the vertex past the strip) are drawn by `shaders/pcr_nd700.vert`, its maths
+  shared with `nd_700.vert` (`port/render/shaders/vu1_700_*.h`). The weapon's trail (`RD_PROGRAM_GS_STRIP`) is
+  written to the front end as its GIF packet (`write_packed_tag`, `write_packed_qword`). At vblank 2700 against
+  packets: 000 111 pixels (by 2), 009 388 (by 4), 009:2 251 (by 2).
 
 # Part 1: the PC renderer (P1-P6)
 

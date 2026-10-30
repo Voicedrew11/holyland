@@ -128,6 +128,15 @@ public:
     // during a feed's event but native_draw's.
     void write(uint32_t address, uint64_t value) { write_register(address, value); }
 
+    // A PACKED tag's PRE met (PRIM written, Q set to 1), then its data's qwords by their register descriptors: what a
+    // native draw of a GIF packet built on the CPU writes (the weapon's trail, pcr_native.h). As write(): not during a
+    // feed's event but native_draw's.
+    void write_packed_tag(uint64_t prim) {
+        write_register(gs_reg::prim, prim & 0x7FF);
+        file_.internal_q = 0x3F800000u;
+    }
+    void write_packed_qword(uint32_t descriptor, uint64_t low, uint64_t high) { write_packed(descriptor, low, high); }
+
     // PRIM's 11 bits in effect (GifPrimitive::prim's: PRMODE's attributes when PRMODECONT's AC is 0)
     uint32_t prim_in_effect() const;
 

@@ -1374,6 +1374,7 @@ private:
         CommandBuffer &c = cmd();
         c.set_program(!batch_.native                              ? program_
                       : batch_.program == NativeProgram::vu1_280 ? native_280_program_
+                      : batch_.program == NativeProgram::vu1_700 ? native_700_program_
                                                                  : native_program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -1554,6 +1555,8 @@ private:
         native_program_ = device_.request_program(nvs, fs);
         Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
         native_280_program_ = device_.request_program(nvs280, fs);
+        Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
+        native_700_program_ = device_.request_program(nvs700, fs);
         // (the pictures between's camera for native draws: none yet, zeros)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -1564,7 +1567,8 @@ private:
     }
 
     Device &device_;
-    Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr;
+    Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
+            *native_700_program_ = nullptr;
     BufferHandle picture_;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;

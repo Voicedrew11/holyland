@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <vector>
 
 extern "C" {
 #include "port/vu_float.h"
@@ -32,16 +33,20 @@ void vu_transform4(float *out, const float *m, const float *v) {
     }
 }
 
-// VU1's clip judgement of a vertex of program 0x280 (vu1_hle_ops.h's judge and clipped): its set's vertex matrix by its
-// place, divided by w; past the guard band (2047 about 2048) in X or Y, or Z below 0
-bool clipped_280(const int32_t *q, const Vu1Record280 &k) {
-    const float *m = k.vertex[(uint32_t(q[11]) & 0xFFFF) != 0 ? 1 : 0]; // (the set: ST's w, as ILW loads it)
+// VU1's clip judgement of a place (vu1_hle_ops.h's judge and clipped): the vertex matrix m by the place q (four words
+// as VU1 memory has them: integers for 0x000's and 0x700's, floats for 0x280's, by VU1's bits either way), divided by
+// w; past the guard band (2047 about 2048) in X or Y, or Z below 0
+bool clipped(const int32_t *q, const float *m, bool integers) {
+    uint32_t p[4];
+    for (int i = 0; i < 4; i++) {
+        p[i] = integers ? vu_float_bits(float(q[i])) : uint32_t(q[i]); // (ITOF0: exact for the meshes' 16 bits)
+    }
     uint32_t c[4];
     for (int r = 0; r < 4; r++) {
-        uint32_t acc = vu_float_mul(vu_float_bits(m[r]), uint32_t(q[0]));
-        acc = vu_float_add(acc, vu_float_mul(vu_float_bits(m[4 + r]), uint32_t(q[1])));
-        acc = vu_float_add(acc, vu_float_mul(vu_float_bits(m[8 + r]), uint32_t(q[2])));
-        c[r] = vu_float_add(acc, vu_float_mul(vu_float_bits(m[12 + r]), uint32_t(q[3])));
+        uint32_t acc = vu_float_mul(vu_float_bits(m[r]), p[0]);
+        acc = vu_float_add(acc, vu_float_mul(vu_float_bits(m[4 + r]), p[1]));
+        acc = vu_float_add(acc, vu_float_mul(vu_float_bits(m[8 + r]), p[2]));
+        c[r] = vu_float_add(acc, vu_float_mul(vu_float_bits(m[12 + r]), p[3]));
     }
     uint32_t qq = vu_float_div(0x3F800000u, c[3]);
     uint32_t x = vu_float_mul(c[0], qq), y = vu_float_mul(c[1], qq), z = vu_float_mul(c[2], qq);
@@ -93,6 +98,17 @@ Vu1Record vu1_record_000(const RdDraw &d, const RdCamera &cam) {
     return k;
 }
 
+Vu1Record vu1_record_5a0(const RdDraw &d, const RdCamera &cam) {
+    Vu1Record k = vu1_record_000(d, cam);
+    memset(k.light_dir, 0, sizeof(k.light_dir));
+    memset(k.light_col, 0, sizeof(k.light_col));
+    memset(k.fog, 0, sizeof(k.fog));
+    memset(k.point_pos, 0, sizeof(k.point_pos));
+    memset(k.point_col, 0, sizeof(k.point_col));
+    k.info[0] = 0;
+    return k;
+}
+
 Vu1Record280 vu1_record_280(const RdDraw &d, const RdCamera &cam) {
     Vu1Record280 k;
     memset(&k, 0, sizeof(k));
@@ -123,7 +139,8 @@ bool vu1_kicks_280(const int32_t *q, const RdBatch &b, const Vu1Record280 &k, Vu
     bool clip[VU1_BATCH_MOST];
     uint32_t count = 0;
     for (uint32_t i = 0; i < p.n; i++) {
-        clip[i] = clipped_280(q + size_t(i) * 32, k);
+        const int32_t *v = q + size_t(i) * 32;
+        clip[i] = clipped(v, k.vertex[(uint32_t(v[11]) & 0xFFFF) != 0 ? 1 : 0], false); // (the set: ST's w, as ILW loads it)
         count += clip[i];
     }
     // ("vertex -1": vertex 0's clip seen again before the loop, by the count, ADC and the tag's w)
@@ -133,5 +150,59 @@ bool vu1_kicks_280(const int32_t *q, const RdBatch &b, const Vu1Record280 &k, Vu
         p.adc[i] = clip[i] || (i >= 1 ? clip[i - 1] : clip[0]) || (i >= 2 && clip[i - 2]) || adc_tag;
     }
     p.all_clipped = int16_t(uint16_t(count - p.n)) >= 0;
+    return true;
+}
+
+Vu1Record vu1_record_700(const RdDraw &d, const RdCamera &cam) {
+    RdDraw e = d;
+    e.point_count = 0;
+    e.flags = 0; // (0x000's wave UVs and far plane: not 0x700's)
+    Vu1Record k = vu1_record_000(e, cam);
+    memset(k.point_pos, 0, sizeof(k.point_pos));
+    memset(k.point_col, 0, sizeof(k.point_col));
+    memcpy(k.point_col, d.colour[0], 16);
+    k.info[0] = 0;
+    return k;
+}
+
+std::vector<uint64_t> vu1_ad_700(const RdBatch &b, const RdDraw &d) {
+    std::vector<uint64_t> out = b.ad;
+    if (b.ad.size() < 4) {
+        return out; // (TOP+0xA2 is not in the packet: not kicked)
+    }
+    if (uint16_t(b.ad[3] & 0x3FFF) != uint16_t(vu_float_bits(d.colour[1][3]))) {
+        return out;
+    }
+    uint32_t q[4];
+    for (int i = 0; i < 4; i++) {
+        q[i] = vu_float_bits(d.colour[2][i]);
+    }
+    out[2] = q[2] & 0xFF;
+    out[3] = uint64_t(q[0]) | uint64_t(q[1]) << 32;
+    return out;
+}
+
+bool vu1_kicks_700(const int32_t *q, const RdBatch &b, const Vu1Record &k, Vu1Kicks700 &p) {
+    if (b.count == 0 || b.count > VU1_BATCH_MOST) {
+        return false;
+    }
+    p.n = b.count;
+    bool clip[VU1_BATCH_MOST];
+    uint32_t unclipped = 0;
+    for (uint32_t i = 0; i < p.n; i++) {
+        clip[i] = clipped(q + size_t(i) * 16, k.vertex, true);
+        unclipped += !clip[i];
+    }
+    // vertex n, past the strip: clipped when not known (render.h's RdBatch::past)
+    bool clip_past = true;
+    if (b.past_known) {
+        int32_t past[4] = {b.past[0], b.past[1], b.past[2], b.past[3]};
+        clip_past = clipped(past, k.vertex, true);
+    }
+    // (vi06: n less the clipped of the n + 1 vertices, kicked when above 0)
+    p.kick = int32_t(unclipped) - int32_t(clip_past) > 0;
+    for (uint32_t i = 0; i < p.n; i++) {
+        p.adc[i] = clip[i] || (i >= 1 && clip[i - 1]) || (i >= 2 && clip[i - 2]);
+    }
     return true;
 }
