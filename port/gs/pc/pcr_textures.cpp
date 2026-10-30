@@ -665,8 +665,61 @@ void TextureStore::drawn(const VramRect &rect) {
 }
 
 void TextureStore::copied(const TransferRegs &regs) {
-    drawn({field(regs.bitbltbuf, 32, 14), field(regs.bitbltbuf, 48, 6), field(regs.bitbltbuf, 56, 6),
-           field(regs.trxpos, 32, 11), field(regs.trxpos, 48, 11), field(regs.trxreg, 0, 12), field(regs.trxreg, 32, 12)});
+    State &s = *state_;
+    uint32_t width = field(regs.trxreg, 0, 12), height = field(regs.trxreg, 32, 12);
+    uint32_t spsm = field(regs.bitbltbuf, 24, 6), dpsm = field(regs.bitbltbuf, 56, 6);
+    VramRect dest = {field(regs.bitbltbuf, 32, 14), field(regs.bitbltbuf, 48, 6), dpsm, field(regs.trxpos, 32, 11),
+                     field(regs.trxpos, 48, 11), width, height};
+    if (width == 0 || height == 0 || !gsn_psm_valid(spsm) || !gsn_psm_valid(dpsm)) {
+        drawn(dest);
+        return;
+    }
+    // A copy of what uploads hold is an upload of what it writes: the source's chunks written into the scratch
+    // VRAM, the copy made there as the GS makes it, and the destination's pixels read back as its upload
+    Owners owners = s.owners_of(wrapped({field(regs.bitbltbuf, 0, 14), field(regs.bitbltbuf, 16, 6), spsm,
+                                         field(regs.trxpos, 0, 11), field(regs.trxpos, 16, 11), width, height}),
+                                0);
+    if (owners.source != TextureSource::FromUploads) {
+        drawn(dest);
+        return;
+    }
+    s.sort_by_upload(owners.chunks);
+    s.write_chunks(owners.chunks, {});
+    gsn_vram_copy(s.scratch.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
+    size_t bytes = (size_t(width) * height * uint32_t(gsn_psm_bits(dpsm)) + 7) / 8;
+    std::vector<uint8_t> pixels((bytes + 15) / 16 * 16);
+    uint64_t read_from = regs.bitbltbuf >> 32; // (the destination's DBP, DBW and DPSM, as a read's source)
+    uint64_t read_at = regs.trxpos >> 32;      // (DSAX and DSAY as SSAX and SSAY; read top down, left to right)
+    gsn_vram_read_image(s.scratch.data(), read_from, read_at & 0x07FF07FFull, regs.trxreg, pixels.data(),
+                        pixels.size() / 16);
+    pixels.resize(bytes);
+    s.counts.copies_as_uploads++;
+    upload(regs, pixels);
+}
+
+bool TextureStore::read_back(const TransferRegs &regs, std::vector<uint8_t> &out) {
+    State &s = *state_;
+    out.clear();
+    uint32_t width = field(regs.trxreg, 0, 12), height = field(regs.trxreg, 32, 12);
+    uint32_t spsm = field(regs.bitbltbuf, 24, 6);
+    if (width == 0 || height == 0 || !gsn_psm_valid(spsm)) {
+        s.counts.read_backs_refused++;
+        return false;
+    }
+    Owners owners = s.owners_of(wrapped({field(regs.bitbltbuf, 0, 14), field(regs.bitbltbuf, 16, 6), spsm,
+                                         field(regs.trxpos, 0, 11), field(regs.trxpos, 16, 11), width, height}),
+                                0);
+    if (owners.source != TextureSource::FromUploads) {
+        s.counts.read_backs_refused++;
+        return false;
+    }
+    s.sort_by_upload(owners.chunks);
+    s.write_chunks(owners.chunks, {});
+    size_t bytes = (size_t(width) * height * uint32_t(gsn_psm_bits(spsm)) + 7) / 8;
+    out.resize((bytes + 15) / 16 * 16);
+    gsn_vram_read_image(s.scratch.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg, out.data(), out.size() / 16);
+    s.counts.read_backs++;
+    return true;
 }
 
 TextureAnswer TextureStore::resolve(const TextureRegs &regs, uint32_t cols_read, uint32_t rows_read) {

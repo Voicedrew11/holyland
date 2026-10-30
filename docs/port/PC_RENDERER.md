@@ -163,6 +163,33 @@ display registers pick the surface shown; the picture goes to the presenter as t
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
 
+## Step 2 built (2026-10-29): the PC renderer draws the whole game from its GIF packets
+
+`--renderer pc` draws every picture the game sends as GIF packets, with none of the native GS's code
+(`port/gs/pc/pcr_canvas.cpp`, shaders in `port/gs/pc/shaders/`, built by `tools/build_shaders.py` into
+`pcr_shaders.h`). Native draws are turned off under it for now (the game's VU1 packets carry the 3D), so the picture is
+whole; drawing the native draws themselves is step 3.
+
+- **Surfaces**: a GPU image for each buffer drawn into (base page, width, format), as tall as what is drawn in it. A
+  frame whose base is inside a surface of its width is that surface at an offset (the game's 128-wide targets at 1d2
+  and 1d4 are one buffer a page row apart); a surface made takes in those of its width it overlaps. A new surface
+  starts as the uploads left its pages.
+- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there.
+  Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
+  host) are made from the uploads or the surface: the game reads its effect atlas back and uploads it again, so a
+  read-back of zeroes lost the torches' flames.
+- **The GS's pixel** in `pcr_prim.frag`: texture read (wrap modes, filters, the mipmap level from Q, CLUT, TEXA),
+  texture function, fog, alpha test with AFAIL's passes, DATE (from a copy of the destination), FBA; ALPHA by
+  Vulkan's blend (the colour premultiplied in the shader where it needs it; As above 128 is clamped: counted).
+- **Pictures between** at `--frame-rate` 60-240: frame_interp.c's own way (the frame's packets sent again, moved),
+  each drawn and scanned out.
+- **Measured against `--renderer native --native-draw off`** (title, menus, map 000 at vblanks 300-2700): 29 to
+  4,263 of 286,720 pixels differ by more than 8 (blend rounding, the 2D's edges); the torches, the HUD's gauge, the
+  menus and the scrolling textures as native. `KF4_PC_CENSUS=1` counts what the game sends (targets, tests, blends,
+  textures, transfers) for `--stats`.
+- **Not yet**: native draws (step 3), save states (the PC renderer saves nothing: next), MSAA, `--native-colour`,
+  anisotropic filtering, captures, the overlay's settings; performance not measured yet.
+
 # Part 1: the PC renderer (P1-P6)
 
 A real PC renderer for King's Field IV's world: the map, the map objects, the items, the characters and the arm

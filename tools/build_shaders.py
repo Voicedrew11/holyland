@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compiles the native GS's shaders (port/gs/native/shaders/) to SPIR-V and writes them into
-port/gs/native/gsn_shaders.h, which is committed: building the port needs no shader compiler, only
-changing a shader does.
+port/gs/native/gsn_shaders.h, and the PC renderer's (port/gs/pc/shaders/) into port/gs/pc/pcr_shaders.h; both
+are committed: building the port needs no shader compiler, only changing a shader does.
 
     python tools/build_shaders.py [--glslang PATH]
 
@@ -19,6 +19,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHADERS = os.path.join(ROOT, "port", "gs", "native", "shaders")
 OUT = os.path.join(ROOT, "port", "gs", "native", "gsn_shaders.h")
+PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
+PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 
 
 # Shaders built a second time with a define, under a name of their own: (source, name, defines)
@@ -66,17 +68,22 @@ def main():
     parser.add_argument("--glslang")
     args = parser.parse_args()
     glslang = find_glslang(args.glslang)
+    build(glslang, SHADERS, OUT, "gsn_spv_", VARIANTS, "The native GS's shaders", "port/gs/native/shaders/", True)
+    build(glslang, PC_SHADERS, PC_OUT, "pcr_spv_", [], "The PC renderer's shaders", "port/gs/pc/shaders/", False)
 
+
+def build(glslang, folder, target, prefix, variants, what, where, table):
+    SHADERS, OUT = folder, target
     sources = sorted(f for f in os.listdir(SHADERS) if f.endswith((".vert", ".frag", ".comp")))
     lines = [
-        "/* The native GS's shaders as SPIR-V, made by tools/build_shaders.py from port/gs/native/shaders/.",
+        "/* %s as SPIR-V, made by tools/build_shaders.py from %s." % (what, where),
         "   Generated: edit the shaders and run the script again. */",
         "#pragma once",
         "#include <stddef.h>",
         "#include <stdint.h>",
         "",
     ]
-    builds = [(name, name, []) for name in sources] + [v for v in VARIANTS if v[0] in sources]
+    builds = [(name, name, []) for name in sources] + [v for v in variants if v[0] in sources]
     idents = []
     with tempfile.TemporaryDirectory() as tmp:
         for source, name, defines in builds:
@@ -88,13 +95,18 @@ def main():
                 sys.exit("%s failed:\n%s%s" % (name, result.stdout, result.stderr))
             data = open(out, "rb").read()
             words = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
-            ident = "gsn_spv_" + name.replace(".", "_")
+            ident = prefix + name.replace(".", "_")
             lines.append("static const uint32_t %s[%d] = {" % (ident, len(words)))
             for i in range(0, len(words), 8):
                 lines.append("    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + ",")
             lines.append("};")
             lines.append("")
             idents.append(ident)
+    if not table:
+        with open(OUT, "w", newline="\n") as f:
+            f.write("\n".join(lines))
+        print("wrote %s (%d shaders)" % (os.path.relpath(OUT, ROOT), len(builds)))
+        return
     # every shader in one table, for the pipeline list (port/gs/native/gsn_pipeline_warm.inc)
     lines.append("/* every shader above, with its name (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */")
     lines.append("static const struct { const uint32_t *code; size_t size; const char *name; } gsn_spv_all[] = {")

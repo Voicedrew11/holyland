@@ -35,10 +35,10 @@ void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 void *port_gs_backend_context(void);
 #include "gs_api.h"
+#endif
 
 /* --renderer pc: the PC renderer (port/gs/pc/) opened in place of the native GS, behind the same calls (gs_api.h) */
 int gsr_pc_renderer;
-#endif
 
 #define VSYNC_QUEUE 16
 
@@ -173,6 +173,13 @@ static void open_backend(void *unused) {
         fprintf(stderr, "[gs] --native-draw needs the native GS: off\n");
         port_options.native_draw = 0;
     }
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (port_options.native_draw && gsr_pc_renderer) {
+        /* (the PC renderer does not draw native draws yet, docs/port/PC_RENDERER.md: the game's own packets) */
+        fprintf(stderr, "[gs] --native-draw is not drawn by the PC renderer yet: off\n");
+        port_options.native_draw = 0;
+    }
+#endif
     /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
     if (have_gs || have_native) {
         port_options.renderer = have_gs && have_native ? PORT_RENDERER_BOTH
@@ -1021,7 +1028,7 @@ void port_gs_set_native_draw(int kinds, int compare) {
     port_options.native_draw = 0; /* (the native draws are the native GS's) */
     port_options.native_draw_compare = compare;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
+    if (have_native && !gsr_pc_renderer) {
         port_options.native_draw = kinds;
         gsr_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
     }
@@ -1240,7 +1247,8 @@ void port_gs_finish(void) {
 }
 
 int port_gs_replay_uploads(void) {
-    return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+    /* (the PC renderer takes the frame's packets again whole: frame_interp.c's own way) */
+    return have_native && !have_gs && !gsr_pc_renderer && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
 }
 
 int port_gs_interp_gpu(void) {

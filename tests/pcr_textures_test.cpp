@@ -204,7 +204,7 @@ struct ReferenceGs {
 
 // ---- What a run met ---------------------------------------------------------------------------------
 struct Tally {
-    uint64_t uploads = 0, sent_again = 0, draws = 0, copies = 0, forgets = 0;
+    uint64_t uploads = 0, sent_again = 0, draws = 0, copies = 0, copies_checked = 0, read_backs = 0, forgets = 0;
     uint64_t answers[3] = {};
     uint64_t texels = 0, mipmapped = 0, other_format = 0, clut_compared = 0, clut_csm2 = 0, clut_16 = 0;
     uint64_t failures = 0;
@@ -330,7 +330,60 @@ struct Run {
         tally.draws++;
     }
 
+    // A placed texture's rows moved within it or to a place of their own, in its own format (as the game scrolls a
+    // texture: rows copied round), then the texture asked for, which is the copy's then
+    void scroll_copy() {
+        if (placed.empty()) {
+            return;
+        }
+        const Placed &p = placed[rng.below(uint32_t(placed.size()))];
+        uint32_t w = 1u << p.tw, h = 1u << p.th, rows = 1 + rng.below(h), from = rng.below(h - rows + 1);
+        bool elsewhere = rng.one_in(2);
+        uint32_t dbp = elsewhere ? rng.below(2048) * 8 : p.tbp[0];
+        uint32_t to = elsewhere ? 0 : rng.below(h - rows + 1);
+        pcr::TransferRegs regs{bitbltbuf_of(dbp, p.tbw[0], p.psm) | (bitbltbuf_of(p.tbp[0], p.tbw[0], p.psm) >> 32),
+                               uint64_t(from) << 16 | uint64_t(to) << 48, uint64_t(w) | uint64_t(rows) << 32};
+        gsn_vram_copy(gs.vram.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
+        store.copied(regs);
+        tally.copies++;
+        pcr::TextureRegs t;
+        t.tex0 = tex0_of(dbp, p.tbw[0], p.psm, p.tw, p.th);
+        if (check(t, w, h) == TextureSource::FromUploads) {
+            tally.copies_checked++;
+        }
+    }
+
+    // A placed texture's part read back (local to host), in its own format or as 32-bit words, against the GS's
+    void read_back_round() {
+        if (placed.empty()) {
+            return;
+        }
+        const Placed &p = placed[rng.below(uint32_t(placed.size()))];
+        uint32_t psm = rng.one_in(3) ? GSN_PSMCT32 : p.psm;
+        uint32_t w = 1 + rng.below(1u << p.tw), h = 1 + rng.below(1u << p.th);
+        pcr::TransferRegs regs{bitbltbuf_of(p.tbp[0], p.tbw[0], psm) >> 32,
+                               uint64_t(rng.below(8)) | uint64_t(rng.below(8)) << 16, uint64_t(w) | uint64_t(h) << 32};
+        std::vector<uint8_t> mine;
+        if (!store.read_back(regs, mine)) {
+            return;
+        }
+        std::vector<uint8_t> want(mine.size());
+        gsn_vram_read_image(gs.vram.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg, want.data(), want.size() / 16);
+        tally.read_backs++;
+        if (mine != want) {
+            fail(tally, "a read-back is not the GS's");
+        }
+    }
+
     void random_copy() {
+        if (rng.one_in(3)) {
+            read_back_round();
+            return;
+        }
+        if (rng.one_in(2)) {
+            scroll_copy();
+            return;
+        }
         uint32_t psm = kWordFormats[rng.below(2)];
         pcr::TransferRegs regs{uint64_t(rng.below(2048)) | uint64_t(1 + rng.below(4)) << 16 | uint64_t(psm) << 24 |
                                    bitbltbuf_of(rng.below(2048), 1 + rng.below(4), psm),
@@ -542,12 +595,12 @@ bool run_seed(uint64_t seed) {
     run.edges();
     const Tally &t = run.tally;
     pcr::TextureStoreCounts c = run.store.counts();
-    printf("seed %llu: %llu uploads (%llu sent again), %llu draws, %llu copies, %llu forgets; textures %llu from uploads, %llu drawn, "
+    printf("seed %llu: %llu uploads (%llu sent again), %llu draws, %llu copies (%llu read back as uploads), %llu read-backs, %llu forgets; textures %llu from uploads, %llu drawn, "
            "%llu not uploaded (%llu mipmapped, %llu in another format); %llu texels compared; CLUTs %llu compared (%llu "
            "CSM2, %llu of 16); store: %llu chunks kept, %llu decodes, %llu hits, %llu CLUT decodes, %llu refused\n",
            (unsigned long long)seed, (unsigned long long)t.uploads, (unsigned long long)t.sent_again,
            (unsigned long long)t.draws,
-           (unsigned long long)t.copies, (unsigned long long)t.forgets, (unsigned long long)t.answers[0],
+           (unsigned long long)t.copies, (unsigned long long)t.copies_checked, (unsigned long long)t.read_backs, (unsigned long long)t.forgets, (unsigned long long)t.answers[0],
            (unsigned long long)t.answers[1], (unsigned long long)t.answers[2], (unsigned long long)t.mipmapped,
            (unsigned long long)t.other_format, (unsigned long long)t.texels, (unsigned long long)t.clut_compared,
            (unsigned long long)t.clut_csm2, (unsigned long long)t.clut_16, (unsigned long long)c.chunks_kept,

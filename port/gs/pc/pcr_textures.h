@@ -125,6 +125,8 @@ struct TextureStoreCounts {
     uint64_t chunks_new = 0, chunks_kept = 0, chunk_bytes_kept = 0;
     uint64_t resolves = 0, decodes = 0, decode_hits = 0, decoded_bytes_kept = 0;
     uint64_t clut_loads = 0, clut_decodes = 0, clut_hits = 0;
+    uint64_t copies_as_uploads = 0; // local copies whose source was uploads': uploads of what they wrote
+    uint64_t read_backs = 0, read_backs_refused = 0;
 };
 
 class TextureStore {
@@ -141,8 +143,14 @@ public:
     bool upload(const TransferRegs &regs, std::span<const uint8_t> bytes);
     // A surface drawn into over this rectangle (in its format: a 24-bit one leaves the top byte the uploads')
     void drawn(const VramRect &rect);
-    // A local-to-local transfer: its destination drawn over
+    // A local-to-local transfer: when every pixel it reads is the uploads', an upload of what it writes (made
+    // as the GS makes the copy); else its destination drawn over
     void copied(const TransferRegs &regs);
+
+    // A local-to-host transfer (TRXDIR 1): when every pixel it reads is the uploads', its pixels as the GS sends
+    // them (packed as for host-to-local, zeroes past the last pixel) into out, which is resized to whole qwords;
+    // false (out left empty) when part of it is no upload's or was drawn over
+    bool read_back(const TransferRegs &regs, std::vector<uint8_t> &out);
 
     // The texture a draw samples. cols_read and rows_read: the texels of level 0 its draws read across and
     // down (1 << tw and 1 << th when not known); without mipmaps and not REGION_REPEAT, the texture is

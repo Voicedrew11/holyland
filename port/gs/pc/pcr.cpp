@@ -31,6 +31,9 @@
 #endif
 
 #include "context.hpp"
+#include "pcr_canvas.h"
+#include "pcr_census.h"
+#include "pcr_gif.h"
 #include "device.hpp"
 #include "thread_id.hpp"
 
@@ -386,6 +389,111 @@ struct Stats {
         interp_pictures{0};
 };
 
+// ---- What the GIF packets make ------------------------------------------------------------------------
+// (the PC renderer's thread) The front end's events, drawn by the canvas; with KF4_PC_CENSUS=1 counted for the census
+class Intake final : public pcr::GifEvents {
+public:
+    // (on the thread, once the device is there)
+    void attach(Device &device) {
+        canvas_ = std::make_unique<pcr::Canvas>(device);
+    }
+
+    pcr::Canvas *canvas() {
+        return canvas_.get();
+    }
+
+    Intake() : front_(*this) {
+        const char *census = getenv("KF4_PC_CENSUS");
+        if (census && strcmp(census, "1") == 0) {
+            census_ = std::make_unique<pcr::Census>();
+        }
+    }
+
+    void feed(int path, const std::vector<uint8_t> &bytes) {
+        front_.feed(path, bytes);
+    }
+
+    void vblank(const uint64_t *privileged, uint32_t scale) {
+        if (canvas_) {
+            canvas_->set_scale(scale & 0xFF, scale >> 8);
+            canvas_->vblank();
+        }
+        if (census_) {
+            census_->display(privileged[0], privileged[14], privileged[18]);
+        }
+    }
+
+    void print_census() const {
+        if (canvas_) {
+            canvas_->print_counts();
+        }
+        if (census_) {
+            census_->print();
+        }
+    }
+
+private:
+    void register_written(uint32_t, uint64_t, uint64_t) override {}
+    void texture_written(uint32_t, uint64_t tex0, uint64_t texclut) override {
+        if (canvas_) {
+            canvas_->texture_written(tex0, texclut);
+        }
+    }
+    void primitive(const pcr::GifPrimitive &primitive) override {
+        if (census_) {
+            census_->primitive(front_.registers(), primitive);
+        }
+        if (canvas_) {
+            canvas_->primitive(front_.registers(), primitive);
+        }
+    }
+    void image_upload(const pcr::TransferRegisters &transfer, std::span<const uint8_t> bytes, pcr::UploadEnd) override {
+        if (census_) {
+            census_->upload(transfer, bytes.size());
+        }
+        if (canvas_) {
+            canvas_->upload(transfer, bytes);
+        }
+    }
+    void local_copy(const pcr::TransferRegisters &transfer) override {
+        if (census_) {
+            census_->copy(transfer, "local");
+        }
+        if (canvas_) {
+            canvas_->local_copy(transfer);
+        }
+    }
+    void local_to_host(const pcr::TransferRegisters &transfer) override {
+        if (census_) {
+            census_->copy(transfer, "read-back");
+        }
+        if (canvas_) {
+            canvas_->local_to_host(transfer);
+        }
+    }
+    void native_draw(uint64_t) override {
+        if (census_) {
+            census_->other("native draw (0x7B)");
+        }
+    }
+    void upload_again(uint64_t) override {
+        if (census_) {
+            census_->other("upload again (0x7C)");
+        }
+    }
+    void frame_mark(uint64_t) override {
+        if (census_) {
+            census_->other("frame mark (0x7D)");
+        }
+    }
+    void widescreen(uint64_t) override {}
+    void gs_sync(uint32_t, uint64_t) override {}
+
+    pcr::GifFrontEnd front_;
+    std::unique_ptr<pcr::Census> census_;
+    std::unique_ptr<pcr::Canvas> canvas_;
+};
+
 // ---- The renderer ------------------------------------------------------------------------------------
 class Renderer {
 public:
@@ -523,6 +631,18 @@ public:
         return clear_.rgba;
     }
 
+    // The canvas, once everything sent before is done (the thread idle until more is sent: the read-back FIFO's
+    // caller, the DMA controller's thread, sends nothing meanwhile)
+    pcr::Canvas *canvas_after_wait() {
+        inbox_.wait_idle();
+        return intake_.canvas();
+    }
+
+    // (after wait: the thread is idle)
+    void print_census() const {
+        intake_.print_census();
+    }
+
 private:
     struct ClearColour {
         uint32_t rgba; // R in the low byte, alpha 255
@@ -618,6 +738,7 @@ private:
     // (the PC renderer's thread, "kf4-pc") The messages, in the order sent, until the program ends
     void run() {
         Util::register_thread_index(0); // (Granite's command pools: this thread's)
+        intake_.attach(*device_);
 #ifdef __linux__
         pthread_setname_np(pthread_self(), "kf4-pc");
 #endif
@@ -625,9 +746,13 @@ private:
             if (GifPacket *packet = std::get_if<GifPacket>(&*message)) {
                 stats.packets++;
                 stats.bytes += packet->bytes.size();
+                intake_.feed(packet->path, packet->bytes);
                 inbox_.done(packet->bytes.size(), false, nullptr, 0);
             } else if (VblankPicture *v = std::get_if<VblankPicture>(&*message)) {
                 bool extra = (v->want & GSN_EXTRA) != 0;
+                if (!extra) {
+                    intake_.vblank(v->privileged.data(), settings.scale.load());
+                }
                 int result = make_picture(*v);
                 inbox_.done(0, !extra, v->reply, result);
             } else if (std::holds_alternative<InterpFrame>(*message)) {
@@ -672,7 +797,8 @@ private:
             return 0; // (no picture shown, or none wanted)
         }
         CommandBufferHandle cmd = device_->request_command_buffer();
-        if ((!extra || !picture_) && !draw_picture(*cmd, *size)) {
+        // (a picture between too: the frame's packets were sent again, moved to its time, before it)
+        if (!draw_picture(*cmd, *size, v)) {
             device_->submit(cmd);
             return 0;
         }
@@ -701,8 +827,9 @@ private:
         return ok;
     }
 
-    // The picture: an image of that size cleared to the picture's colour. False if the image cannot be made.
-    bool draw_picture(CommandBuffer &cmd, PictureSize size) {
+    // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
+    // there is none). False if the image cannot be made.
+    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v) {
         if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
             picture_ = ScanoutRing::make_picture_image(*device_, size.width, size.height);
             if (!picture_) {
@@ -713,8 +840,17 @@ private:
         // (after whatever read or wrote it before: the copies of the last picture)
         cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                     VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        cmd.clear_image(*picture_, clear_.value);
-        cmd.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+        GsnRect rect;
+        pcr::Canvas *canvas = intake_.canvas();
+        bool shown = false;
+        if (canvas && display_rect(v.privileged.data(), rect)) {
+            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h};
+            shown = canvas->scanout(cmd, shown_rect, *picture_);
+        }
+        if (!shown) {
+            cmd.clear_image(*picture_, clear_.value);
+        }
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                     VK_ACCESS_2_TRANSFER_READ_BIT);
         return true;
     }
@@ -801,6 +937,7 @@ private:
     ClearColour clear_ = {};
     Inbox inbox_;
     ScanoutRing scanout_;
+    Intake intake_; // (the PC renderer's thread's)
     std::atomic<void (*)(const PortGsFrame *, uint64_t)> presenter_pixels_{nullptr};
     std::atomic<void (*)(uint64_t)> presenter_image_{nullptr};
     // (the PC renderer's thread's)
@@ -865,7 +1002,13 @@ extern "C" void pcr_wait(void) {
 }
 
 extern "C" void pcr_read_fifo(void *dst, uint32_t qwords) {
-    memset(dst, 0, size_t(qwords) * 16); // (no VRAM yet: the game only sends what it reads to the GS again)
+    // (the transfer's packet was sent before: once the thread has done it, the canvas has the pixels ready)
+    pcr::Canvas *canvas = renderer() ? renderer()->canvas_after_wait() : nullptr;
+    if (!canvas) {
+        memset(dst, 0, size_t(qwords) * 16);
+        return;
+    }
+    canvas->read_fifo(dst, qwords);
 }
 
 extern "C" int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
@@ -1072,4 +1215,5 @@ extern "C" void pcr_print_stats(void) {
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
             (unsigned long long)s.interp_pictures.load());
+    renderer()->print_census();
 }
