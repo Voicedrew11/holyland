@@ -16,7 +16,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 
-// a picture between's (zeros: the pictures between are not moved here yet)
+// a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
@@ -49,9 +49,27 @@ void main() {
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
     uint z = gs_z(p);
+    int xi = p.x, yi = p.y;
+    bool gone = false;
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        // a picture between's: moved, S, T and Q by the change of depth; dropped with its kick or one of the two kicks
+        // before it, the same for its three corners (the native GS's nd_700.vert)
+        Moved m = moved(at, p);
+        xi = m.x;
+        yi = m.y;
+        z = m.z;
+        stq *= m.f;
+        for (uint i = 0u; i < 3u && !gone; i++) {
+            uint k = kick - i;
+            gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
+        }
+    }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(p.x) & 0xFFFFu) - d.info.y), float(int(uint(p.y) & 0xFFFFu) - d.info.z)) / 16.0;
+    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
     xy += vec2(pc.place);
+    if (gone) {
+        xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert
     vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;

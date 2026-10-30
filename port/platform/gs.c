@@ -1033,7 +1033,8 @@ void port_gs_set_native_colour(int mode) {
 }
 
 int port_gs_native_draws_now(void) {
-    return !gsr_pc_renderer || port_frame_rate_hz() <= 30;
+    /* (the PC renderer moves them only in its own pictures between: frame_interp.c's CPU way cannot) */
+    return !gsr_pc_renderer || port_frame_rate_hz() <= 30 || port_interp_on_gpu();
 }
 
 void port_gs_set_native_draw(int kinds, int compare) {
@@ -1267,8 +1268,15 @@ int port_gs_replay_uploads(void) {
 }
 
 int port_gs_interp_gpu(void) {
-    /* (the PC renderer takes the frame's packets again, moved, frame_interp.c's own way; its uploads asked for again) */
-    return port_gs_replay_uploads() && !gsr_pc_renderer;
+    /* (the PC renderer too, unless KF4_PC_BETWEEN=0: then it takes the frame's packets again, moved, frame_interp.c's own
+       way, and the game's packets in place of its native draws) */
+    static int pc_between = -1;
+
+    if (pc_between < 0) {
+        const char *e = getenv("KF4_PC_BETWEEN");
+        pc_between = e == NULL || strcmp(e, "0") != 0;
+    }
+    return port_gs_replay_uploads() && (!gsr_pc_renderer || pc_between);
 }
 
 void port_gs_interp_frame(void *frame) {

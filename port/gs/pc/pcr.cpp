@@ -32,6 +32,7 @@
 #endif
 
 #include "context.hpp"
+#include "pcr_between.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
 #include "pcr_native.h"
@@ -78,17 +79,11 @@ struct VblankPicture {
     Reply *reply;       // (nullptr: nobody waits)
 };
 
-// A picture between's frame (frame_interp.c's, malloc'd): the receiver frees it, its moves and its stream
-struct FreeInterpFrame {
-    void operator()(GsnInterpFrame *frame) const {
-        free(frame->moves);
-        free(frame->stream);
-        free(frame);
-    }
-};
-using InterpFrame = std::unique_ptr<GsnInterpFrame, FreeInterpFrame>;
+// A picture between's frame (frame_interp.c's: pcr_between.h), and a picture asked for, its runs' bits kept
+using pcr::InterpFrame;
 struct InterpPicture {
-    uint64_t serial;
+    GsnInterpPicture picture;
+    std::vector<uint32_t> run_bits;
 };
 
 // Work that must be done on the PC renderer's thread (its device's), its sender waiting: save states
@@ -409,6 +404,42 @@ public:
         times_ = std::make_unique<pcr::GpuTimes>(device);
         canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
         natives_ = std::make_unique<pcr::NativeDraws>(device);
+        between_ = std::make_unique<pcr::Between>(device);
+    }
+
+    // (pcr_between.h) The frame for the pictures between
+    void take_frame(InterpFrame frame) {
+        if (between_) {
+            between_->take_frame(std::move(frame));
+        }
+    }
+
+    // A picture between: the frame's packets walked again, its kicks numbered, the canvas's and the native draws'
+    // corners moved by the shaders to the picture's time
+    void walk_picture(const GsnInterpPicture &picture) {
+        if (!between_ || !canvas_) {
+            return;
+        }
+        std::span<const uint8_t> stream = between_->begin_picture(picture);
+        if (stream.empty()) {
+            return;
+        }
+        canvas_->set_between(between_.get());
+        natives_->set_picture(&picture);
+        front_.number_kicks();
+        for (size_t at = 0; at + 8 <= stream.size();) {
+            uint32_t head[2];
+            memcpy(head, stream.data() + at, 8);
+            if (head[1] > stream.size() - at - 8) {
+                break; // (never: frame_interp.c wrote it whole)
+            }
+            front_.feed(int(head[0]), stream.subspan(at + 8, head[1]));
+            at += 8 + size_t(head[1]);
+        }
+        front_.stop_numbering();
+        natives_->set_picture(nullptr);
+        canvas_->set_between(nullptr); // (the walk's last batch drawn while the picture's buffers are bound)
+        between_->end_picture(front_.kicks_numbered());
     }
 
     pcr::Canvas *canvas() {
@@ -451,6 +482,9 @@ public:
         }
         if (natives_) {
             natives_->print_counts(stderr);
+        }
+        if (between_) {
+            between_->print_counts(stderr);
         }
         if (census_) {
             census_->print();
@@ -521,6 +555,14 @@ private:
         if (canvas_) {
             canvas_->frame_mark(value);
         }
+        if (natives_) {
+            natives_->frame_mark(value);
+        }
+    }
+    void kick_numbered(const pcr::GifVertex &vertex, uint32_t prim) override {
+        if (between_) {
+            between_->kicked(vertex, front_.registers().reg[pcr::gs_reg::xyoffset_1 + ((prim >> 9) & 1)]);
+        }
     }
     void widescreen(uint64_t) override {}
     void gs_sync(uint32_t, uint64_t) override {}
@@ -530,6 +572,7 @@ private:
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::NativeDraws> natives_;
+    std::unique_ptr<pcr::Between> between_;
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
@@ -618,7 +661,12 @@ public:
     }
 
     void interp_picture(const GsnInterpPicture &picture) {
-        inbox_.put(InterpPicture{picture.serial}, 0, false);
+        InterpPicture p = {picture, {}};
+        if (picture.runs && picture.run_bits) {
+            p.run_bits.assign(picture.run_bits, picture.run_bits + (size_t(picture.runs) + 31) / 32);
+        }
+        p.picture.run_bits = nullptr; // (set to the kept bits where it is taken)
+        inbox_.put(std::move(p), 0, false);
     }
 
     int backlog() {
@@ -810,12 +858,14 @@ private:
             } else if (Job *job = std::get_if<Job>(&*message)) {
                 job->work();
                 inbox_.done(0, false, job->reply, 1);
-            } else if (std::holds_alternative<InterpFrame>(*message)) {
+            } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
-                std::get<InterpFrame>(*message).reset(); // (nothing drawn from it yet)
+                intake_.take_frame(std::move(*frame));
                 inbox_.done(0, false, nullptr, 0);
-            } else {
+            } else if (InterpPicture *p = std::get_if<InterpPicture>(&*message)) {
                 stats.interp_pictures++;
+                p->picture.run_bits = p->run_bits.empty() ? nullptr : p->run_bits.data();
+                intake_.walk_picture(p->picture);
                 inbox_.done(0, false, nullptr, 0);
             }
         }
@@ -1330,7 +1380,7 @@ extern "C" void pcr_print_stats(void) {
     const Stats &s = renderer()->stats;
     fprintf(stderr,
             "[stats] pc renderer: %llu packets (%.1f MB), %llu vblanks, %llu pictures (%llu between); pictures "
-            "between: %llu frames taken and freed, %llu pictures asked for\n",
+            "between: %llu frames taken, %llu pictures asked for\n",
             (unsigned long long)s.packets.load(), double(s.bytes.load()) / 1048576.0,
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),

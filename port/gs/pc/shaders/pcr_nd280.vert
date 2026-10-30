@@ -17,7 +17,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 
-// a picture between's (zeros: the pictures between are not moved here yet)
+// a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
@@ -52,13 +52,33 @@ void main() {
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(pl.x) & 0xFFFFu) - offset.x), float(int(uint(pl.y) & 0xFFFFu) - offset.y)) / 16.0;
+    // a picture between's (ND_C_MOVING): moved, S, T and Q by the change of depth; dropped with its kick or one of the
+    // two before it in the batch, the same for all three corners (the native GS's nd_280.vert)
+    int xi = pl.x, yi = pl.y;
+    float f = 1.0;
+    bool gone = false;
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        Moved m = moved(slot, s, pl);
+        xi = m.x;
+        yi = m.y;
+        z = m.z;
+        f = m.f;
+        int kk = mesh.q[kick * 4u + 4u].x; // (the kick's number in the batch)
+        for (int i = 0; i < 3 && i <= kk && !gone; i++) {
+            uint k = kick - 2u * uint(i);
+            gone = k == slot ? m.drop : moved(k, vertex_set(k), vu_place(k)).drop;
+        }
+    }
+    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - offset.x), float(int(uint(yi) & 0xFFFFu) - offset.y)) / 16.0;
     xy += vec2(pc.place);
+    if (gone) {
+        xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
     vec3 stq;
     uvec4 rgba;
     if (!sphere) {
         vec4 st = qf(slot, 2u);
-        stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q));
+        stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q)) * f;
         rgba = lit_colour(gouraud ? slot : kick);
     } else {
         // ((Ms * normal).xy + 1 * 1) * 0.5; Q 1; white, with vertex 1's alpha (its u's: lit.w is 1)

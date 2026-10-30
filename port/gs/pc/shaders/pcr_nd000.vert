@@ -4,7 +4,9 @@
 // each corner what VU1's program would have kicked (port/render/shaders/vu1_000_maths.h: its maths and arithmetic,
 // the native GS's own), given to pcr_prim.frag as a GS primitive's are: X and Y in the target's GS pixels (XYOFFSET
 // off, the surface's place added), the GS's integer Z, RGBA, S T Q and fog. A triangle VU1's clipping would leave out
-// (the ADC of its kick or of the two kicks before it) is not drawn.
+// (the ADC of its kick or of the two kicks before it) is not drawn. In a picture between (ND_C_MOVING) each corner is
+// moved to the picture's time (moved()), S, T and Q by its change of depth, and the triangle dropped with its kick or one
+// of the two before it in the batch, as the native GS's nd_000.vert.
 #define PCR_ND
 #include "pcr_common.h"
 
@@ -18,7 +20,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 
-// a picture between's (zeros: the pictures between are not moved here yet)
+// a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
@@ -64,9 +66,22 @@ void main() {
     }
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
-    uint z = (d.info.w & ND_C_FAR) != 0 ? 0u : gs_z(p); // (at the far plane: the modern sky)
+    int xi = p.x, yi = p.y;
+    uint z = gs_z(p);
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        Moved m = moved(at, p);
+        xi = m.x;
+        yi = m.y;
+        z = m.z;
+        stq *= m.f;
+        for (uint i = 0u; i <= befores && !gone; i++) {
+            uint k = kick - i;
+            gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
+        }
+    }
+    z = (d.info.w & ND_C_FAR) != 0 ? 0u : z; // (at the far plane: the modern sky)
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(p.x) & 0xFFFFu) - d.info.y), float(int(uint(p.y) & 0xFFFFu) - d.info.z)) / 16.0;
+    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)

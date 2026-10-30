@@ -14,6 +14,11 @@
 // The kinds it draws (kinds()) are the only ones gs.c turns on under the PC renderer; a draw of another program met all
 // the same is counted and left out.
 //
+// Pictures between (pcr_between.h): the frame's packets walked again, its draws met again. Each record then carries how
+// its draw moves (port/render/part_moves.hpp: with the picture's camera, with its model between its two places, or
+// not), and the shaders move the vertices (vu1_*_maths.h's moved()); the trail's points are drawn t of the way from
+// their partners in the frame before, as the native GS's nd_strip.vert draws them.
+//
 // One thread: the PC renderer's ("kf4-pc").
 #pragma once
 
@@ -22,6 +27,7 @@
 #include <memory>
 
 #include "device.hpp"
+#include "gsn.h"
 #include "pcr_canvas.h"
 #include "pcr_gif.h"
 
@@ -30,6 +36,7 @@ namespace pcr {
 struct NativeCounts {
     uint64_t draws = 0, batches = 0, triangles = 0, lost = 0, unsupported = 0;
     uint64_t meshes_placed = 0, arenas = 0;
+    uint64_t moved_models = 0, paired_strips = 0; // (pictures between)
 };
 
 class NativeDraws {
@@ -45,6 +52,10 @@ public:
     // PORT_GS_REG_NATIVE_DRAW's value, met in the chain (the front end's native_draw event): a draw drawn, its batches'
     // registers written through front; a frame's mark said to the renderer core
     void met(uint64_t value, GifFrontEnd &front, Canvas &canvas);
+    // PORT_GS_REG_FRAME_INTERP's value (the front end's frame_mark event): which part of the frame the draws after are in
+    void frame_mark(uint64_t value);
+    // A picture between's walk begins (its time) or ends (nullptr)
+    void set_picture(const GsnInterpPicture *picture);
 
     NativeCounts counts() const;
     // --stats: the "[stats] pc native draws" line

@@ -91,16 +91,13 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      page walk was, now fixed (pc keeps 60 vblanks a second at 30, was 20). What is left to merge is batches across
      state changes (textures, CLUTs), which is bindless textures; better designed with step 5, whose pictures
      between draw the frame's calls again.
-  5. **Step 5, the pictures between on the GPU**: `fast` makes 239.75 pictures a second at 240 (map 000); pc 61,
-     because native draws are off under it whenever there are pictures between (`port_gs_native_draws_now`:
-     frame_interp.c's CPU way cannot move a native draw), so the game sends VU1's packets (2.56M VU1 runs and 9.3 GB
-     of GIF per 3,000 vblanks, against 35,739 runs in `fast`). The PC renderer takes `GsnInterpFrame`/
-     `GsnInterpPicture` (`pcr_interp_frame`/`pcr_interp_picture`, now taken and freed): the frame's calls kept, each
-     picture those calls again with the vertices moved (the GIF ones by their `GsnInterpMove`s, the native draws by
-     `VU1_MOVE_*` and the picture's move/mid: the shared `moved()` in `vu1_*_maths.h` does it given `pic` and the
-     record's flags; the CPU parts, `nd_model_flags`, `nd_between`, `nd_remember` in `gsn_native_draw.inc`, move into
-     `port/render/`). Then `port_gs_interp_gpu` true for pc and the gate lifted. The renderer thread was 39% idle at
-     240 on packets: the limit was upstream.
+  5. **Step 5, the pictures between on the GPU**: 5a built 2026-10-30 ("Step 5a built", below): pc takes the frame
+     and the pictures, walks the frame's packets again for each picture, and the shaders move every vertex; native
+     draws are on under pc at 240. Map 000 at 240: 100-103 pictures a second (was 63-64); 009 61-64 (was 61). The
+     limit is now pc's own thread walking the packets each picture (sampled at 009: busy all of the time, `feed` 68
+     of 80 samples, the native draws 54, the texture store's lookups 40). **Next, 5b**: the walk's calls kept on the
+     frame's first picture and made again for the others (the canvas's batches, their surfaces, textures and
+     records), so that a picture between costs pc's thread nearly nothing; its header to be agreed first.
   6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
      `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
@@ -231,6 +228,55 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## Step 5a built (2026-10-30): the pictures between drawn by pc, moved on the GPU
+
+**What it does.** frame_interp.c's GPU way ("On the GPU") now runs under pc too (`port_gs_interp_gpu`; `KF4_PC_BETWEEN=0`
+turns it off: the CPU way and the game's packets, as before). pc keeps the frame (`pcr_between.h`, `Between`); for each
+picture it walks the frame's packets again through its front end, which numbers every vertex kick fed (XYZ2, XYZF2,
+XYZ3, XYZF3; PACKED, A+D or REGLIST) as frame_interp.c does, and the stretch in which ST, RGBAQ (and its Q) and UV were
+last written (the owners: gsn.cpp's `InterpKick`). Each numbered kick goes into a buffer of the picture's own; the
+picture's cameras, time and runs into another (`gs_replay.h`'s Picture); the frame's moves into a third. Set 1 of
+every canvas draw is those three (zeros outside a picture).
+- **GIF primitives**: a corner names its kicks (`pcr_prim.vert`'s `a_kicks`: a triangle's own, its colour's, its third;
+  a sprite's two and which corner) and is made again of them at the picture's time in the vertex shader, by
+  `gs_replay.comp`'s maths, now in `port/render/shaders/gif_moves.h` (`moved()`, shared: `gsn_shaders.h` byte for
+  byte). The kick's registers as the picture has them (`kick_now`) is there for pc only (`GIF_KICK_NOW`): as a function
+  it changed the native GS's SPIR-V, so `gs_replay.comp`'s main keeps its own copy of it. A triangle whose third kick, or
+  one of the two before it with a place, is dropped is not drawn. A batch with moved corners is taken to draw anywhere
+  in its scissor within its surface (the store's pages drawn, DATE's and shader blending's rectangles).
+- **Native draws**: their records carry how they move (`port/render/part_moves.hpp`, `PartMoves`: the native GS's
+  `nd_mark`, `nd_key`, `nd_remember`, `nd_model_flags`, `nd_between`, the same maths; the native GS keeps its own copy),
+  and `pcr_nd000/280/700.vert` move each corner by `vu1_*_maths.h`'s `moved()` as the native GS's `nd_*.vert` do. The
+  trail's points are written t of the way from their partners in the frame before (`PartMoves::strip`, nd_strip.vert's
+  rounding) on the CPU, as the packets are walked anyway; not seen paired at the four spots (no swing in them).
+- `port_gs_native_draws_now` is true under pc whenever the pictures between go the GPU's way (`port_interp_on_gpu`:
+  not `KF4_INTERP_CPU`, not `KF4_INTERP_STILL`).
+- Tests: `part_moves_test` (a part's move against its matrices at t 0, 1 and between, the moves refused, the sections,
+  the pairing by identity, the trail's pairs); `pcr_gif_test`'s `test_kick_numbers`.
+
+**Pictures against the native GS** (240, `KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th; pixels over 8 levels a
+picture): the pictures between are as close as pc's own frames at every time.
+
+| | frame | `_250` | `_500` | `_750` |
+|---|---|---|---|---|
+| 000 | 424,509 | 424,564 | 424,560 | 424,532 |
+| 009 | 834,221 | 835,805 | 835,762 | 835,625 |
+| 009:2 | 435,821 | 435,999 | 435,904 | 436,166 |
+| 063 | 483,414 | 483,415 | 483,415 | 483,416 |
+
+In every run 968 frames and 6,772 pictures were taken, none of another frame, none whose kicks were not the frame's.
+Seen at 240 now that native draws are on there, but there before at 30 as well (the build before, map 000): pc's top
+row of the picture is grey (row 0 about 155, the rows below about 87; native 54), a native draws' matter, not looked into.
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): pictures a second at 000 99.6-103.1 (the
+build before 62.8-64.4), at 009 61.2-63.8 (60.7-60.8); the GPU a picture 1.85-2.05 ms (1.33-1.41: the native batches
+are now drawn in every picture, moved). What limits it is pc's thread: walking the frame's packets again for every
+picture (5b, the handoff's item 5).
+
+**Checks**: `KF4_PC_BETWEEN=0` byte for byte with the build before at the four spots (204 pictures each); native and
+`fast` byte for byte with the build before at the four spots; the map tour as before (450,157 pixels, worst 106 at map
+030, every scanout the same); ctest, `vu1_test`; ASan + UBSan pc runs at 000 and 009:2 at 240 (only the known reports).
 
 ## Step 4b's rest built (2026-10-30): DATE by the stencil, shader blending from a rectangle, pc's thread freed
 

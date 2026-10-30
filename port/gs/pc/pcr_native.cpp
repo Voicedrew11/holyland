@@ -4,10 +4,12 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <unordered_map>
 #include <vector>
 
+#include "../../render/part_moves.hpp"
 #include "../../render/render_internal.hpp"
 #include "../../render/vu1_record.hpp"
 
@@ -55,15 +57,40 @@ public:
             break;
         case RD_ND_FRAME:
             rd_consumer_frame(value);
+            parts_.frame(uint32_t(value) & 0xFFFFFF, in_picture_);
             break;
         default:
             break; // (ALT_BEGIN and _END: --native-draw-compare, off under the PC renderer; READS_SHOWN: frame_interp.c's)
         }
     }
 
+    void frame_mark(uint64_t value) {
+        parts_.mark(value);
+    }
+
+    void set_picture(const GsnInterpPicture *picture) {
+        in_picture_ = picture != nullptr;
+        picture_u_ = picture ? 1.0f - picture->t : 0.0f;
+    }
+
+    NativeCounts counts() const {
+        NativeCounts c = counts_;
+        c.moved_models = parts_.moved_models();
+        c.paired_strips = parts_.paired_strips();
+        return c;
+    }
+
     NativeCounts counts_;
 
 private:
+    // How a picture between moves the draw (none outside one: its place kept for the next frame's)
+    void moves_of(const RdDraw &d, const RdCamera &cam, Vu1Record &k) {
+        PartMove m = parts_.draw(d, cam, in_picture_);
+        k.info[3] |= m.flags;
+        memcpy(k.obj, m.obj, sizeof(k.obj));
+        k.bt = m.model;
+    }
+
     void draw(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
         RdDraw d;
         RdCamera cam;
@@ -81,7 +108,7 @@ private:
             return;
         }
         if (d.program == RD_PROGRAM_GS_STRIP) {
-            draw_gs_strip(front);
+            draw_gs_strip(d, front);
             return;
         }
         if (d.program != 0 && d.program != 0x5A0) {
@@ -93,6 +120,7 @@ private:
         // (program 0x5A0, the shadows: 0x000's maths from the silhouette meshes, no lights and no fog)
         bool shadow = d.program == 0x5A0;
         Vu1Record k = shadow ? vu1_record_5a0(d, cam) : vu1_record_000(d, cam);
+        moves_of(d, cam, k);
         // (the XYOFFSET of the context the draw's PRIM picks, before its batches write PRIM: the game's draws keep both
         // contexts' the same)
         const GsRegisterFile &file = front.registers();
@@ -160,6 +188,7 @@ private:
     void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record k = vu1_record_700(d, cam);
+        moves_of(d, cam, k);
         const GsRegisterFile &file = front.registers();
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
@@ -213,8 +242,26 @@ private:
 
     // A draw of a GIF packet the game built on the CPU (the weapon's trail: render.cpp, parse_gs_strip): written as the
     // GS takes the packet, PRIM from the tag's PRE, Q 1, then each vertex's RGBAQ and XYZ2 (XYZ3 with ADC); its
-    // triangles come to the canvas as the front end's primitives
-    void draw_gs_strip(GifFrontEnd &front) {
+    // triangles come to the canvas as the front end's primitives. In a picture between, each point t of the way from
+    // its partner in the frame before (an untextured strip's), X and Y in 12.4 units rounded, each colour rounded, as
+    // the native GS's nd_strip.vert
+    void draw_gs_strip(const RdDraw &d, GifFrontEnd &front) {
+        std::vector<uint32_t> xy, rgba, from;
+        for (const auto &mesh : fetched_) {
+            if (mesh->format != RD_VF_GS_STRIP) {
+                continue;
+            }
+            for (const RdBatch &b : mesh->batches) {
+                for (uint32_t k = 0; k < b.count; k++) {
+                    const int32_t *v = &mesh->vertices[size_t(b.first + k) * 8];
+                    xy.push_back((uint32_t(v[4]) & 0xFFFF) | (uint32_t(v[5]) & 0xFFFF) << 16);
+                    rgba.push_back((uint32_t(v[0]) & 0xFF) | (uint32_t(v[1]) & 0xFF) << 8 | (uint32_t(v[2]) & 0xFF) << 16 |
+                                   (uint32_t(v[3]) & 0xFF) << 24);
+                }
+            }
+        }
+        const PartMoves::StripPoints *before = parts_.strip(d, xy, rgba, in_picture_, from);
+        size_t at = 0;
         for (const auto &mesh : fetched_) {
             if (mesh->format != RD_VF_GS_STRIP) {
                 counts_.unsupported++;
@@ -223,17 +270,33 @@ private:
             counts_.draws++;
             for (const RdBatch &b : mesh->batches) {
                 front.write_packed_tag((b.tag[0] >> 47) & 0x7FF);
-                for (uint32_t k = 0; k < b.count; k++) {
+                bool lerp = before && !((front.prim_in_effect() >> 4) & 1);
+                for (uint32_t k = 0; k < b.count; k++, at++) {
                     const int32_t *v = &mesh->vertices[size_t(b.first + k) * 8];
-                    front.write_packed_qword(0x1, uint32_t(v[0]) | uint64_t(uint32_t(v[1])) << 32,
-                                             uint32_t(v[2]) | uint64_t(uint32_t(v[3])) << 32); // RGBAQ
-                    front.write_packed_qword(0x5, uint32_t(v[4]) | uint64_t(uint32_t(v[5])) << 32,
-                                             uint32_t(v[6]) | uint64_t(uint32_t(v[7])) << 32); // XYZ2 (XYZ3: ADC)
+                    int32_t q[8];
+                    memcpy(q, v, sizeof(q));
+                    if (lerp) {
+                        uint32_t was_xy = before->xy[from[at]], was_rgba = before->rgba[from[at]];
+                        q[4] = int32_t(lerped(uint32_t(v[4]) & 0xFFFF, was_xy & 0xFFFF));
+                        q[5] = int32_t(lerped(uint32_t(v[5]) & 0xFFFF, was_xy >> 16));
+                        for (int c = 0; c < 4; c++) {
+                            q[c] = int32_t(lerped(uint32_t(v[c]) & 0xFF, (was_rgba >> (8 * c)) & 0xFF));
+                        }
+                    }
+                    front.write_packed_qword(0x1, uint32_t(q[0]) | uint64_t(uint32_t(q[1])) << 32,
+                                             uint32_t(q[2]) | uint64_t(uint32_t(q[3])) << 32); // RGBAQ
+                    front.write_packed_qword(0x5, uint32_t(q[4]) | uint64_t(uint32_t(q[5])) << 32,
+                                             uint32_t(q[6]) | uint64_t(uint32_t(q[7])) << 32); // XYZ2 (XYZ3: ADC)
                 }
                 counts_.batches++;
             }
         }
         fetched_.clear();
+    }
+
+    // now, moved t of the way back to was (nd_strip.vert's rounding: u = 1 - t)
+    uint32_t lerped(uint32_t now, uint32_t was) const {
+        return uint32_t(int32_t(now) + int32_t(std::floor(float(int32_t(was) - int32_t(now)) * picture_u_ + 0.5f)));
     }
 
     // A draw's record into a list of records (a new list when full): its number there
@@ -250,6 +313,10 @@ private:
     void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record280 k = vu1_record_280(d, cam);
+        PartMove m = parts_.draw(d, cam, in_picture_);
+        k.info[1] = m.flags;
+        k.bt[0] = m.model;
+        k.bt[1] = m.parent;
         const GsRegisterFile &file = front.registers();
         for (int c = 0; c < 2; c++) {
             uint64_t offset = file.reg[gs_reg::xyoffset_1 + c];
@@ -395,6 +462,9 @@ private:
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
+    PartMoves parts_;
+    bool in_picture_ = false;
+    float picture_u_ = 0.0f; // (1 - the picture's t)
 
 public:
     std::map<uint32_t, uint64_t> unsupported_; // (the draws not drawn, by program)
@@ -413,18 +483,28 @@ void NativeDraws::met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
     impl_->met(value, front, canvas);
 }
 
+void NativeDraws::frame_mark(uint64_t value) {
+    impl_->frame_mark(value);
+}
+
+void NativeDraws::set_picture(const GsnInterpPicture *picture) {
+    impl_->set_picture(picture);
+}
+
 NativeCounts NativeDraws::counts() const {
-    return impl_->counts_;
+    return impl_->counts();
 }
 
 void NativeDraws::print_counts(FILE *out) const {
-    const NativeCounts &c = impl_->counts_;
+    const NativeCounts c = impl_->counts();
     fprintf(out,
             "[stats] pc native draws: %llu draws, %llu batches (%llu triangles); %llu lost (their slot reused), %llu of a "
             "program not drawn yet; %llu meshes placed in %llu arenas\n",
             (unsigned long long)c.draws, (unsigned long long)c.batches, (unsigned long long)c.triangles,
             (unsigned long long)c.lost, (unsigned long long)c.unsupported, (unsigned long long)c.meshes_placed,
             (unsigned long long)c.arenas);
+    fprintf(out, "[stats] pc native draws in pictures between: %llu moved by their own matrices, %llu trails paired\n",
+            (unsigned long long)c.moved_models, (unsigned long long)c.paired_strips);
     for (const auto &[program, n] : impl_->unsupported_) {
         fprintf(out, "[stats] pc native draws not drawn yet: program 0x%x, %llu draws\n", program, (unsigned long long)n);
     }

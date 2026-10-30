@@ -442,8 +442,8 @@ void port_gs_set_native_shine_exact(int exact);
    frame */
 void port_gs_set_native_draw(int kinds, int compare);
 /* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
-   PC renderer only at --frame-rate 30, without pictures between, which it does not move yet (docs/port/PC_RENDERER.md,
-   step 5); the game's packets otherwise */
+   PC renderer only when it moves them in the pictures between itself (port_interp_on_gpu; docs/port/PC_RENDERER.md,
+   step 5) or there are none (--frame-rate 30); the game's packets otherwise */
 int port_gs_native_draws_now(void);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
@@ -459,7 +459,7 @@ int port_gs_enabled(void);
    again instead of sending them (port/platform/frame_interp.c) */
 int port_gs_replay_uploads(void);
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"): 1 when
-   the native GS draws them (alone, and not KF4_INTERP_CPU); the frame (a GsnInterpFrame, handed over:
+   the native GS draws them (alone), or the PC renderer (not KF4_PC_BETWEEN=0); the frame (a GsnInterpFrame, handed over:
    the native GS frees it) and each picture (a GsnInterpPicture) of port/gs/native/gsn.h */
 int port_gs_interp_gpu(void);
 void port_gs_interp_frame(void *frame);
@@ -497,6 +497,9 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
 void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes));
 /* 1 while a frame kept is being drawn between (the vblank's pictures come from it) */
 int port_interp_active(void);
+/* 1 when the pictures between are drawn on the GPU ("On the GPU": port_gs_interp_gpu, not KF4_INTERP_STILL's check nor
+   KF4_INTERP_CPU) */
+int port_interp_on_gpu(void);
 /* The pictures a second (port_options.frame_rate, the screen's for PORT_FRAME_RATE_MONITOR), and the
    times in vblank (0 to 1) of the pictures shown in it: up to max, their count returned (the
    vblank's own, at 0, among them when it is shown) */

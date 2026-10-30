@@ -6,6 +6,9 @@
 // - A primitive is drawn into its context's FRAME surface (and ZBUF's depth surface when TEST's ZTE is on), with
 //   the GS's pixel arithmetic in shaders/pcr_prim.frag and Vulkan's blend for ALPHA. Primitives of the same state
 //   go to the GPU together.
+// - In a picture between (pcr_between.h: set_between), a primitive's corners name the kicks they were made of, and the
+//   shaders make them again of those at the picture's time; a native batch's record says how it moves. The pictures
+//   between's set (the picture, the kicks, the moves) is bound to every draw: zeros outside one.
 // - Its texture is the texture store's (pcr_textures.h): decoded from its uploads, or, where a surface was drawn
 //   since, read from that surface (a copy of it, so a surface can be read while drawn into).
 // - An upload is given to the store, and written into the surfaces it falls on; a local copy is the store's when
@@ -24,6 +27,7 @@
 #include <span>
 
 #include "device.hpp"
+#include "pcr_between.h"
 #include "pcr_gif.h"
 #include "pcr_gpu_time.h"
 #include "pcr_textures.h"
@@ -76,6 +80,9 @@ public:
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);
+    // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
+    // ends; the open batch is drawn first either way (its corners are the walk's, or not)
+    void set_between(const Between *between);
 
     // The front end's events (pcr_gif.h), with its register file at each
     void primitive(const GsRegisterFile &file, const GifPrimitive &primitive);

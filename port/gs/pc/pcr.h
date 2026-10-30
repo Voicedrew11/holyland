@@ -11,8 +11,10 @@
      cleared to black (KF4_PC_CLEAR=RRGGBB: that colour), handed out as the native GS hands out its pictures
      (the scanout ring of pcr_scanout_take_tag, the presenter's callbacks, pixels read back into frame);
      a picture between (GSN_EXTRA) is the last picture again;
-   - the packets are counted, the read-back FIFO reads zeroes, a picture between's frame is freed, save
-     states and captures hold nothing of it (size 0), and the settings are kept for the steps to come. */
+   - the packets are counted, the read-back FIFO reads zeroes, save states and captures hold nothing of it
+     (size 0), and the settings are kept for the steps to come.
+   Since step 5: pcr_interp_frame's frame is kept, and each pcr_interp_picture draws its packets again, moved on
+   the GPU to the picture's time (pcr_between.h). */
 #ifndef PORT_GS_PC_PCR_H
 #define PORT_GS_PC_PCR_H
 

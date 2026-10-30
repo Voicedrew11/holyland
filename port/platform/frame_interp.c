@@ -3176,6 +3176,10 @@ static int gpu_wanted(void) {
     return !cpu && !interp_still() && port_gs_interp_gpu();
 }
 
+int port_interp_on_gpu(void) {
+    return gpu_wanted();
+}
+
 /* The packets of a REPLAY on the GPU's way, gathered for the native GS: a uint32_t path and size, then
    the bytes */
 static uint8_t *gpu_stream;

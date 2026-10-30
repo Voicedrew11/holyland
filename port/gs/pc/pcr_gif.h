@@ -26,6 +26,7 @@
 // - native_draw (0x7B), upload_again (0x7C), frame_mark (0x7D), widescreen (0x7E): the port's own registers. A
 //   native draw's handler may write the registers its batches kick (write()).
 // - gs_sync: SIGNAL, FINISH, LABEL (not kept in the file, as gsn's does not keep them).
+// - kick_numbered: in a picture between's walk (number_kicks), each vertex kick of the packets fed, numbered.
 // TEXFLUSH and NOP (0x0F) make no event.
 //
 // Packets may come split, at qword boundaries, over any number of feeds; each path keeps its own tag. Bytes past
@@ -66,6 +67,9 @@ struct GsRegisterFile {
     uint32_t internal_q = 0x3F800000u; // (a float's bits)
 };
 
+// A kick not numbered (gsn.h's GSN_IM_NONE): outside a picture between's walk, or not of the packets fed
+constexpr uint32_t no_kick = 0xFFFFFFFFu;
+
 // A vertex: what the GS latched at its kick
 struct GifVertex {
     uint16_t x = 0, y = 0; // XYZ's X and Y: 12.4 fixed, as written (XYOFFSET not taken off)
@@ -75,6 +79,11 @@ struct GifVertex {
     float s = 0.0f, t = 0.0f;
     uint16_t u = 0, v = 0; // UV: 10.4 fixed (14 bits)
     uint8_t fog = 0;       // XYZF's F, or FOG's when the kick was XYZ
+    // (a picture between's walk, GifFrontEnd::number_kicks) the kick's number, and the kick in whose stretch ST, RGBAQ,
+    // RGBAQ's Q (a PACKED RGBAQ's, from the PACKED ST before it) and UV were last written (no_kick: before the walk,
+    // or Q by an A+D RGBAQ): what frame_interp.c's GsnInterpMoves of those kicks change (gsn.cpp's InterpKick)
+    uint32_t kick = no_kick;
+    uint32_t st_owner = no_kick, rgba_owner = no_kick, q_owner = no_kick, uv_owner = no_kick;
 };
 
 enum class PrimitiveShape : uint8_t { point, line, triangle, sprite };
@@ -111,6 +120,9 @@ public:
     virtual void frame_mark(uint64_t value) = 0;
     virtual void widescreen(uint64_t value) = 0;
     virtual void gs_sync(uint32_t address, uint64_t value) = 0; // SIGNAL, FINISH or LABEL
+    // (a picture between's walk, GifFrontEnd::number_kicks) a numbered kick, before the primitive it finishes, with PRIM
+    // in effect then
+    virtual void kick_numbered(const GifVertex &vertex, uint32_t prim) = 0;
 };
 
 class GifFrontEnd {
@@ -139,6 +151,13 @@ public:
 
     // PRIM's 11 bits in effect (GifPrimitive::prim's: PRMODE's attributes when PRMODECONT's AC is 0)
     uint32_t prim_in_effect() const;
+
+    // A picture between's walk of the frame's packets (pcr_between.h): from here every vertex kick fed (XYZ2, XYZF2,
+    // XYZ3, XYZF3; PACKED, A+D or REGLIST) is numbered from 0, as frame_interp.c numbers the kicks of the packets it
+    // hands over; a native draw's own writes (write(), write_packed_qword()) are not. Until stop_numbering.
+    void number_kicks();
+    void stop_numbering();
+    uint32_t kicks_numbered() const { return kicks_; }
 
     // A state loaded: its register file taken, every path between packets, no vertex queued, no transfer begun
     void restore(const GsRegisterFile &file);
@@ -180,6 +199,11 @@ private:
     std::array<GifVertex, 3> queue_{}; // the GS's vertex queue
     uint32_t queued_ = 0;
     std::optional<PendingUpload> upload_;
+    // the kicks' numbers (number_kicks): on, whether the write is the packets' (not a native draw's), the next number,
+    // and the stretches the vertex registers were written in
+    bool numbering_ = false, feeding_ = false;
+    uint32_t kicks_ = 0;
+    uint32_t st_src_ = no_kick, rgba_src_ = no_kick, q_src_ = no_kick, rgba_q_src_ = no_kick, uv_src_ = no_kick;
 };
 
 } // namespace pcr

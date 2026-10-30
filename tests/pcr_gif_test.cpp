@@ -99,6 +99,8 @@ public:
     void frame_mark(uint64_t v) override { log.push_back("mark " + hex(v)); }
     void widescreen(uint64_t v) override { log.push_back("wide " + hex(v)); }
     void gs_sync(uint32_t address, uint64_t v) override { log.push_back("sync " + hex(address) + " " + hex(v)); }
+    std::vector<GifVertex> numbered;
+    void kick_numbered(const GifVertex &v, uint32_t) override { numbered.push_back(v); }
 };
 
 // A front end with its recorder
@@ -317,6 +319,64 @@ void test_uv_and_fog_packed() {
         CHECK(v.u == 0x3FFF && v.v == 0x3ABC && v.x == 5 && v.y == 6 && v.z == 0x777 && v.fog == 0x12);
     }
     CHECK(r.gif.registers().reg[gs_reg::fog] == 0x9AULL << 56);
+}
+
+// A picture between's walk (number_kicks): every kick fed numbered, PACKED, A+D or REGLIST, XYZ3 too; the stretch each
+// vertex register was written in; a native draw's own kicks not numbered; none after stop_numbering
+void test_kick_numbers() {
+    // (a native draw's handler that kicks a vertex itself, as the trail's does)
+    struct NativeKicks : Recorder {
+        GifFrontEnd *gif = nullptr;
+        void native_draw(uint64_t) override { gif->write(gs_reg::xyz2, 0); }
+    };
+    NativeKicks events;
+    GifFrontEnd gif(events);
+    events.front_end = &gif;
+    events.gif = &gif;
+    gif.feed(1, Packet::writes({{gs_reg::prim, 6}, {gs_reg::xyz2, 0}}).bytes);
+    CHECK(events.numbered.empty() && events.primitives.empty());
+
+    gif.number_kicks();
+    Packet p;
+    // PACKED: ST, RGBAQ, XYZ2 (kick 0), XYZ3 by ADC (kick 1)
+    p.tag(1, packed, 4, 0x5512, 0);
+    p.qword(float_bits(1.0f) | uint64_t(float_bits(2.0f)) << 32, float_bits(0.5f)); // ST
+    p.qword(1 | uint64_t(2) << 32, 3 | uint64_t(4) << 32);                             // RGBAQ: Q the ST's
+    packed_xyz(p, 0x10, 0x20, 0x30);
+    packed_xyz(p, 0x11, 0x21, 0x31, true);
+    gif.feed(1, p.bytes);
+    // A+D: RGBAQ (its own Q), a native draw (its kick not numbered), XYZ2 (kick 2)
+    gif.feed(1, Packet::writes({{gs_reg::rgbaq, 5}, {gs_reg::native_draw, 1}, {gs_reg::xyz2, 0}}).bytes);
+    // REGLIST: UV, XYZF2 (kick 3)
+    Packet r;
+    r.tag(1, reglist, 2, 0x43);
+    r.qword(0x12 | uint64_t(0x34) << 16, 0);
+    gif.feed(2, r.bytes);
+    CHECK(gif.kicks_numbered() == 4);
+    CHECK(events.numbered.size() == 4);
+    if (events.numbered.size() == 4) {
+        const auto &n = events.numbered;
+        CHECK(n[0].kick == 0 && n[0].st_owner == 0 && n[0].rgba_owner == 0 && n[0].q_owner == 0 && n[0].uv_owner == no_kick);
+        CHECK(n[1].kick == 1 && n[1].st_owner == 0 && n[1].rgba_owner == 0 && n[1].q_owner == 0);
+        CHECK(n[2].kick == 2 && n[2].st_owner == 0 && n[2].rgba_owner == 2 && n[2].q_owner == no_kick);
+        CHECK(n[3].kick == 3 && n[3].uv_owner == 3 && n[3].rgba_owner == 2 && n[3].u == 0x12 && n[3].v == 0x34);
+    }
+    // the primitives carry their vertices' numbers; the native draw's kick has none
+    bool native_unnumbered = false;
+    for (const GifPrimitive &g : events.primitives) {
+        for (uint32_t i = 0; i < g.vertex_count; i++) {
+            native_unnumbered |= g.vertices[i].kick == no_kick;
+        }
+    }
+    CHECK(native_unnumbered);
+
+    gif.stop_numbering();
+    gif.feed(1, Packet::writes({{gs_reg::xyz2, 0}}).bytes);
+    CHECK(events.numbered.size() == 4 && gif.kicks_numbered() == 4);
+    // a new walk numbers from 0, the stretches forgotten
+    gif.number_kicks();
+    gif.feed(1, Packet::writes({{gs_reg::xyz2, 0}}).bytes);
+    CHECK(events.numbered.size() == 5 && events.numbered.back().kick == 0 && events.numbered.back().rgba_owner == no_kick);
 }
 
 void test_tex2_merge() {
@@ -1054,6 +1114,7 @@ int main() {
     test_prmode();
     test_q_latching();
     test_uv_and_fog_packed();
+    test_kick_numbers();
     test_tex2_merge();
     test_mip_addresses();
     test_reglist();

@@ -81,8 +81,13 @@ struct Vertex {
     uint8_t rgba[4];
     float s, t, q;
     float fog;
+    // (a picture between's corner, pcr_prim.vert's a_kicks: the kicks it is made of and how, K_* below; no_kick: as
+    // it is)
+    uint32_t kicks[4] = {no_kick, no_kick, no_kick, 0};
 };
-static_assert(sizeof(Vertex) == 32, "Vertex: the vertex shader's inputs, packed");
+static_assert(sizeof(Vertex) == 48, "Vertex: the vertex shader's inputs, packed");
+// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
+enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
 
 // The GS pixels a primitive may draw (those whose integer points are in its box), less XYOFFSET, inclusive
 struct PixelBox {
@@ -303,6 +308,11 @@ public:
 
     void set_scale(uint32_t x, uint32_t y) {
         pending_scale_ = {std::clamp(x, 1u, 8u), std::clamp(y, 1u, 8u)};
+    }
+
+    void set_between(const Between *between) {
+        flush_batch();
+        between_ = between;
     }
 
     // ---- The events ----
@@ -1392,6 +1402,7 @@ private:
             uint32_t first, count, instance;
         };
         bool native = false;
+        bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
         NativeProgram program = NativeProgram::vu1_000;
@@ -1428,6 +1439,7 @@ private:
         batch_.texture = BoundTexture();
         batch_.vertices.clear();
         batch_.native = false;
+        batch_.moved = false;
         batch_.arena.reset();
         batch_.records.reset();
         batch_.triangles.reset();
@@ -1479,10 +1491,26 @@ private:
             batch_.x1 = std::max(batch_.x1, int32_t(std::ceil(v.x)));
             batch_.y1 = std::max(batch_.y1, int32_t(std::ceil(v.y)));
         };
+        // (a picture between's: every corner of the walk's kicks, or none moved)
+        uint32_t corners = p.shape == PrimitiveShape::triangle ? 3 : 2;
+        bool moved = between_ && between_->active();
+        for (uint32_t i = 0; i < corners; i++) {
+            moved = moved && p.vertices[i].kick != no_kick;
+        }
+        batch_.moved |= moved;
+        uint32_t fst_bit = fst ? K_FST : 0;
         if (p.shape == PrimitiveShape::triangle) {
             const GifVertex &last = p.vertices[2];
             for (uint32_t i = 0; i < 3; i++) {
                 batch_.vertices.push_back(make(p.vertices[i], last));
+                if (moved) {
+                    const GifVertex &colour = gouraud ? p.vertices[i] : last;
+                    Vertex &v = batch_.vertices.back();
+                    v.kicks[0] = p.vertices[i].kick;
+                    v.kicks[1] = colour.kick;
+                    v.kicks[2] = last.kick;
+                    v.kicks[3] = fst_bit;
+                }
                 touch(batch_.vertices.back());
             }
             counts_.triangles++;
@@ -1511,6 +1539,16 @@ private:
         c.s = vb.s; // (x1, y0)
         d.y = vb.y;
         d.t = vb.t; // (x0, y1)
+        if (moved) {
+            // (corner 0 a's X and Y, 1 b's X a's Y, 2 a's X b's Y, 3 b's)
+            Vertex *corner[4] = {&va, &c, &d, &vb};
+            for (uint32_t i = 0; i < 4; i++) {
+                corner[i]->kicks[0] = a.kick;
+                corner[i]->kicks[1] = b.kick;
+                corner[i]->kicks[2] = no_kick;
+                corner[i]->kicks[3] = i | K_SPRITE | fst_bit;
+            }
+        }
         batch_.vertices.insert(batch_.vertices.end(), {va, c, d, c, vb, d});
         touch(va);
         touch(vb);
@@ -1619,6 +1657,14 @@ private:
         }
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
+        if (batch_.moved) {
+            // (a picture between's corners are where the shader moves them: anywhere in the scissor, within the surface
+            // as tall as the frame drew it)
+            batch_.x0 = int32_t(scax0);
+            batch_.y0 = int32_t(scay0);
+            batch_.x1 = std::min(int32_t(scax1), int32_t(colour->width()) - 1 - int32_t(placed.x));
+            batch_.y1 = std::min(int32_t(scay1), int32_t(colour->height) - 1 - int32_t(placed.y));
+        }
         date_stencil = date_stencil && depth != nullptr;
         // (KF4_PC_STENCIL=0: the destination as it is before the draw, which the shader reads: a copy, as the draw
         // writes it)
@@ -1733,8 +1779,8 @@ private:
         float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
                               float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
         c.set_blend_constants(constants);
+        bind_between(c);
         if (batch_.native) {
-            c.set_storage_buffer(1, 0, *picture_);
             c.set_storage_buffer(2, 0, *batch_.arena);
             c.set_storage_buffer(2, 1, *batch_.records);
             c.set_storage_buffer(2, 2, *batch_.triangles);
@@ -1829,6 +1875,7 @@ private:
         push.flags = datm ? F_DATM : 0;
         c.push_constants(&push, 0, sizeof(push));
         c.set_input_attachments(0, 5);
+        bind_between(c);
         // (a triangle over the whole target: the scissor is the rectangle)
         float fw = float(colour.width()), fh = float(colour.height);
         Vertex corners[3] = {};
@@ -1857,12 +1904,21 @@ private:
         }
     }
 
+    // Set 1: the pictures between's picture, kicks and moves (zeros outside a picture between)
+    void bind_between(CommandBuffer &c) {
+        bool on = between_ && between_->active();
+        c.set_storage_buffer(1, 0, on ? between_->picture() : *picture_);
+        c.set_storage_buffer(1, 1, on ? between_->kicks() : *picture_);
+        c.set_storage_buffer(1, 2, on ? between_->moves() : *picture_);
+    }
+
     void set_vertex_attribs(CommandBuffer &c) {
         c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
         c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, z));
         c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba));
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
+        c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -1916,8 +1972,12 @@ private:
 
     void make_programs() {
         ResourceLayout vert = {};
-        vert.input_mask = 0x1F;
+        vert.input_mask = 0x3F;
         vert.push_constant_size = sizeof(PrimPush);
+        vert.sets[1].storage_buffer_mask = 7u;
+        for (int b : {0, 1, 2}) {
+            vert.sets[1].meta[b].array_size = 1;
+        }
         ResourceLayout frag = {};
         frag.output_mask = 1;
         frag.push_constant_size = sizeof(PrimPush);
@@ -1951,7 +2011,7 @@ private:
         native_280_program_ = device_.request_program(nvs280, fs);
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
         native_700_program_ = device_.request_program(nvs700, fs);
-        // (the pictures between's camera for native draws: none yet, zeros)
+        // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
         info.size = 256;
@@ -1969,6 +2029,7 @@ private:
     bool stencil_on_ = false;
     PassReads pass_reads_ = PassReads::nothing;
     BufferHandle picture_;
+    const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
     Surface *pass_colour_ = nullptr, *pass_depth_ = nullptr;
@@ -2055,6 +2116,9 @@ Canvas::~Canvas() = default;
 
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
+}
+void Canvas::set_between(const Between *between) {
+    impl_->set_between(between);
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {
     impl_->primitive(file, primitive);

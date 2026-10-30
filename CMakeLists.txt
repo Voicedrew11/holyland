@@ -138,6 +138,14 @@ add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp)
 target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
+# the native draws' moves in the pictures between, for the PC renderer (port/render/part_moves.hpp): a library of its own
+# (C++20; the renderer core is C++14), with its test below
+add_library(kf4_part_moves STATIC port/render/part_moves.cpp)
+target_include_directories(kf4_part_moves PUBLIC port/include port/render)
+set_target_properties(kf4_part_moves PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_part_moves PRIVATE -Wall -Wextra -Wshadow)
+endif()
 target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
 # native GS (kf4_gs, built into tests without the port) adds to them as well
@@ -264,7 +272,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
     target_include_directories(kf4_pc PRIVATE port/include port/gs/native PUBLIC port/gs/pc)
-    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render)
+    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
@@ -592,6 +600,16 @@ if(NOT WIN32)
     target_link_libraries(vu1_record_test PRIVATE m)
 endif()
 add_test(NAME vu1_record COMMAND vu1_record_test)
+
+# The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
+# at t 0 and 1, the sections, the pairing by identity, the trail's pairs
+add_executable(part_moves_test tests/part_moves_test.cpp)
+target_link_libraries(part_moves_test PRIVATE kf4_part_moves)
+set_target_properties(part_moves_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(part_moves_test PRIVATE m)
+endif()
+add_test(NAME part_moves COMMAND part_moves_test)
 
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)

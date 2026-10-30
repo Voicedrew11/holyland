@@ -87,6 +87,7 @@ void GifFrontEnd::feed(int path, std::span<const uint8_t> bytes) {
         return;
     }
     PathTag &tag = paths_[size_t(path)];
+    feeding_ = true; // (the packets' own writes: their kicks are numbered in a picture between's walk)
     const size_t qwords = bytes.size() / 16;
     size_t i = 0;
     while (i < qwords) {
@@ -114,6 +115,7 @@ void GifFrontEnd::feed(int path, std::span<const uint8_t> bytes) {
         tag.qwords_left--;
         i++;
     }
+    feeding_ = false;
 }
 
 void GifFrontEnd::read_tag(PathTag &tag, uint64_t low, uint64_t high) {
@@ -149,9 +151,11 @@ void GifFrontEnd::write_packed(uint32_t descriptor, uint64_t low, uint64_t high)
     case 0x1: // R, G, B, A from four words, Q from the last ST
         write_register(gs_reg::rgbaq, bits(low, 0, 8) | bits(low, 32, 8) << 8 | bits(high, 0, 8) << 16 |
                                           bits(high, 32, 8) << 24 | uint64_t(file_.internal_q) << 32);
+        rgba_q_src_ = q_src_; // (its Q is the last PACKED ST's)
         return;
     case 0x2:
         file_.internal_q = uint32_t(high);
+        q_src_ = kicks_;
         write_register(gs_reg::st, low);
         return;
     case 0x3:
@@ -208,6 +212,15 @@ void GifFrontEnd::write_register(uint32_t address, uint64_t value) {
     case gs_reg::uv:
     case gs_reg::fog:
         file_.reg[address] = value; // (no event: the vertices carry them)
+        // (in whose stretch it was written: write_packed sets RGBAQ's Q's after)
+        if (address == gs_reg::rgbaq) {
+            rgba_src_ = kicks_;
+            rgba_q_src_ = no_kick;
+        } else if (address == gs_reg::st) {
+            st_src_ = kicks_;
+        } else if (address == gs_reg::uv) {
+            uv_src_ = kicks_;
+        }
         return;
     case gs_reg::prim:
         write_prim(value);
@@ -227,9 +240,14 @@ void GifFrontEnd::write_register(uint32_t address, uint64_t value) {
     case gs_reg::texflush:
     case 0x0F: // NOP
         return;
-    case gs_reg::native_draw:
+    case gs_reg::native_draw: {
+        // (a native draw's writes are not the packets': their kicks are not numbered)
+        const bool feeding = feeding_;
+        feeding_ = false;
         events_.native_draw(value);
+        feeding_ = feeding;
         return;
+    }
     case gs_reg::upload_again:
         events_.upload_again(value);
         return;
@@ -333,7 +351,15 @@ GifVertex GifFrontEnd::latch_vertex(uint32_t address, uint64_t value) const {
 void GifFrontEnd::kick(uint32_t address, uint64_t value) {
     const bool draws = address == gs_reg::xyzf2 || address == gs_reg::xyz2;
     const uint32_t prim = prim_in_effect();
-    const GifVertex v = latch_vertex(address, value);
+    GifVertex v = latch_vertex(address, value);
+    if (numbering_ && feeding_) {
+        v.kick = kicks_++;
+        v.st_owner = st_src_;
+        v.rgba_owner = rgba_src_;
+        v.q_owner = rgba_q_src_;
+        v.uv_owner = uv_src_;
+        events_.kick_numbered(v, prim);
+    }
     switch (prim & 7) {
     case 0: // points
         queue_[0] = v;
@@ -411,6 +437,16 @@ void GifFrontEnd::emit(PrimitiveShape shape, uint32_t prim, uint32_t vertex_coun
     p.vertex_count = vertex_count;
     std::copy_n(queue_.begin(), vertex_count, p.vertices.begin());
     events_.primitive(p);
+}
+
+void GifFrontEnd::number_kicks() {
+    numbering_ = true;
+    kicks_ = 0;
+    st_src_ = rgba_src_ = q_src_ = rgba_q_src_ = uv_src_ = no_kick;
+}
+
+void GifFrontEnd::stop_numbering() {
+    numbering_ = false;
 }
 
 void GifFrontEnd::restore(const GsRegisterFile &file) {
