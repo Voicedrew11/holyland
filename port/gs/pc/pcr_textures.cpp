@@ -359,11 +359,48 @@ struct Owner {
     Cover cover;
 };
 
+// Blocks of one page a walk read: the page, and a bit for each of its 32 blocks
+struct PageBlocks {
+    uint32_t page = 0;
+    uint32_t blocks = 0;
+};
+
+void add_block(std::vector<PageBlocks> &read, uint32_t block) {
+    uint32_t page = block / kBlocksPerPage, bit = 1u << (block % kBlocksPerPage);
+    if (!read.empty() && read.back().page == page) {
+        read.back().blocks |= bit; // (most blocks are the page of the block before)
+        return;
+    }
+    for (PageBlocks &p : read) {
+        if (p.page == page) {
+            p.blocks |= bit;
+            return;
+        }
+    }
+    read.push_back({page, bit});
+}
+
 // The uploads a rectangle's nibbles are, in the order met, or where it is not the uploads'
 struct Owners {
     TextureSource source = TextureSource::FromUploads;
     MissingBlock missing;
     std::vector<uint64_t> chunks;
+};
+
+// A texture's levels walked: their owners, and the blocks read to find them out
+struct LevelsWalked {
+    Owners owners;
+    std::vector<PageBlocks> read;
+};
+
+// A resolve's answer kept: the walk's source, missing block and chunks (in the order met), the blocks it read and their
+// pages' signatures then
+struct KeptAnswer {
+    TextureSource source = TextureSource::NotUploaded;
+    MissingBlock missing;
+    std::vector<uint64_t> chunks;
+    std::vector<PageBlocks> read;
+    std::vector<uint64_t> signatures; // (read's pages')
 };
 
 // The rectangles of an upload's pixels: its whole rows, then the row it ended in the middle of
@@ -404,6 +441,11 @@ struct TextureStore::State {
     mutable bool watching = false;
     mutable std::bitset<kBlocks + 1> written_in_stretch;
     mutable PagesRead read_now;
+    // each page's signature as last made (512 the CLUT buffer), and the pages changed since (made again when asked)
+    mutable std::array<uint64_t, kPages + 1> signatures{};
+    mutable std::bitset<kPages + 1> signature_stale = std::bitset<kPages + 1>().set();
+    // resolve's answers kept, by what was asked (the key without its chunks)
+    std::unordered_map<TextureKey, KeptAnswer, KeyHash> answers;
     std::unordered_map<uint64_t, Chunk> chunks;
     std::unordered_multimap<uint64_t, uint64_t> chunk_by_hash;
     std::list<uint64_t> unowned; // (chunks owning nothing, oldest first)
@@ -425,7 +467,13 @@ struct TextureStore::State {
     void take_nibbles(uint32_t block, uint64_t id, uint64_t seq, const Cover &cover, std::vector<uint64_t> &now_unowned);
     bool drawn_over(uint32_t page, uint64_t seq, uint8_t parts) const;
     uint64_t signature_of(uint32_t page) const;
+    uint64_t make_signature(uint32_t page) const;
+    void changed(uint32_t page);
+    const KeptAnswer *kept_answer(const TextureKey &asked) const;
+    LevelsWalked walk_levels(const TextureKey &asked) const;
+    void keep_answer(const TextureKey &asked, const LevelsWalked &walked);
     void note_read(uint32_t block) const;
+    void note_reads(const std::vector<PageBlocks> &read) const;
     void note_write(uint32_t block);
     void set_mirror(uint32_t at, uint16_t value, bool unloaded);
     void lose_entry(uint64_t id, std::vector<uint64_t> &now_unowned);
@@ -433,6 +481,7 @@ struct TextureStore::State {
     void mark_owned(Chunk &c);
     void let_go_unowned();
     Owners owners_of(const VramRect &r, uint32_t level) const;
+    template <class OnBlock> Owners owners_walk(const VramRect &r, uint32_t level, OnBlock &&on_block) const;
     void write_chunks(const std::vector<uint64_t> &ids, std::span<const VramRect> zeroed);
     std::shared_ptr<const DecodedTexture> decode(const TextureKey &key);
     void keep_decoded(const TextureKey &key, std::shared_ptr<const DecodedTexture> texture);
@@ -493,6 +542,7 @@ void TextureStore::State::own(uint64_t id) {
 // and the chunk owns them, newest
 void TextureStore::State::take_nibbles(uint32_t block, uint64_t id, uint64_t seq, const Cover &cover,
                                        std::vector<uint64_t> &now_unowned) {
+    changed(block / kBlocksPerPage);
     std::vector<Owner> &owners = block_owners[block];
     size_t kept = 0;
     for (Owner &o : owners) {
@@ -515,11 +565,27 @@ bool TextureStore::State::drawn_over(uint32_t page, uint64_t seq, uint8_t parts)
     return ((parts & kLowParts) && drawn_low_at[page] > seq) || ((parts & kTopParts) && drawn_top_at[page] > seq);
 }
 
+// A page's signature, as kept: made again only when the page changed since it was last made
+uint64_t TextureStore::State::signature_of(uint32_t page) const {
+    if (signature_stale[page]) {
+        signatures[page] = make_signature(page);
+        signature_stale.reset(page);
+    }
+    return signatures[page];
+}
+
+// Something in the page (512 the CLUT buffer) changed: its signature is made again when next asked
+void TextureStore::State::changed(uint32_t page) {
+    signature_stale.set(page);
+}
+
 // A page's signature: a hash of what the store answers from it, the same for two pages that answer the same. Per block
 // (32 in a page, in order): the owners, each as its chunk, its cover, and whether its low parts and its top parts are
 // drawn over (yes or no, never the seq: an upload again of an owner leaves it as it was). The owners are added up, so
-// their order does not count. The CLUT buffer (page 512) hashes its mirror: entries, loaded marks, CBPs.
-uint64_t TextureStore::State::signature_of(uint32_t page) const {
+// their order does not count. Then whether the page was ever drawn into, low parts and top byte apart (a block no upload
+// owns answers DrawnSurface or NotUploaded by it). The CLUT buffer (page 512) hashes its mirror: entries, loaded marks,
+// CBPs.
+uint64_t TextureStore::State::make_signature(uint32_t page) const {
     uint64_t h = 0;
     if (page == kClutPage) {
         for (size_t i = 0; i < clut.size(); i++) {
@@ -545,7 +611,41 @@ uint64_t TextureStore::State::signature_of(uint32_t page) const {
         }
         h = mix(mix(h, sum), owners.size());
     }
-    return h;
+    return mix(h, uint64_t(drawn_low_at[page] != 0) | uint64_t(drawn_top_at[page] != 0) << 1);
+}
+
+// The answer kept for this question, if every page its walk read answers as it did then (nullptr: walk)
+const KeptAnswer *TextureStore::State::kept_answer(const TextureKey &asked) const {
+    auto found = answers.find(asked);
+    if (found == answers.end()) {
+        return nullptr;
+    }
+    const KeptAnswer &kept = found->second;
+    for (size_t i = 0; i < kept.read.size(); i++) {
+        if (signature_of(kept.read[i].page) != kept.signatures[i]) {
+            return nullptr;
+        }
+    }
+    return &kept;
+}
+
+// A walk's answer kept for its question (all let go first when the limit is met)
+void TextureStore::State::keep_answer(const TextureKey &asked, const LevelsWalked &walked) {
+    if (limits.answers_kept == 0) {
+        return;
+    }
+    if (answers.size() >= limits.answers_kept) {
+        answers.clear();
+    }
+    KeptAnswer &kept = answers[asked];
+    kept.source = walked.owners.source;
+    kept.missing = walked.owners.missing;
+    kept.chunks = walked.owners.chunks;
+    kept.read = walked.read;
+    kept.signatures.clear();
+    for (const PageBlocks &p : walked.read) {
+        kept.signatures.push_back(signature_of(p.page));
+    }
 }
 
 // A block read: while a stretch is watched, a block not written in it reads its page, with the page's signature now
@@ -562,11 +662,23 @@ void TextureStore::State::note_read(uint32_t block) const {
     read_now.signatures[page] = signature_of(page);
 }
 
+// A kept answer's blocks read again, as its walk read them
+void TextureStore::State::note_reads(const std::vector<PageBlocks> &read) const {
+    for (const PageBlocks &p : read) {
+        for (uint32_t b = 0; b < kBlocksPerPage; b++) {
+            if (p.blocks & (1u << b)) {
+                note_read(p.page * kBlocksPerPage + b);
+            }
+        }
+    }
+}
+
 void TextureStore::State::note_write(uint32_t block) {
     written_in_stretch.set(block);
 }
 
 void TextureStore::State::set_mirror(uint32_t at, uint16_t value, bool unloaded) {
+    changed(kClutPage);
     clut[at] = value;
     clut_unloaded[at] = unloaded;
 }
@@ -619,11 +731,18 @@ void TextureStore::State::let_go_unowned() {
 // The uploads a wrapped rectangle's nibbles are: every nibble an upload's, and that upload's page not drawn
 // into or copied over since in that nibble
 Owners TextureStore::State::owners_of(const VramRect &r, uint32_t level) const {
+    return owners_walk(r, level, [](uint32_t) {});
+}
+
+// owners_of's walk, on_block(block) told of each block read
+template <class OnBlock>
+Owners TextureStore::State::owners_walk(const VramRect &r, uint32_t level, OnBlock &&on_block) const {
     Owners found;
     each_block(r, [&](uint32_t block, uint32_t x, uint32_t y) {
         Cover need = cover_in_block(r, x, y);
         uint32_t page = block / kBlocksPerPage;
         note_read(block);
+        on_block(block);
         Cover covered{};
         for (const Owner &o : block_owners[block]) {
             Cover theirs = both(o.cover, need);
@@ -653,6 +772,29 @@ Owners TextureStore::State::owners_of(const VramRect &r, uint32_t level) const {
         return true;
     });
     return found;
+}
+
+// A texture's levels walked (the key's shape, places and part read): the uploads every level read is, in the order met,
+// or the first level that is not the uploads'; the blocks read in all
+LevelsWalked TextureStore::State::walk_levels(const TextureKey &asked) const {
+    LevelsWalked all;
+    for (uint32_t l = 0; l < asked.levels; l++) {
+        VramRect r = wrapped({asked.level_tbp[l], asked.level_tbw[l], asked.psm, 0, 0, std::max(1u, asked.read_cols >> l),
+                              std::max(1u, asked.read_rows >> l)});
+        Owners owners = owners_walk(r, l, [&](uint32_t block) { add_block(all.read, block); });
+        if (owners.source != TextureSource::FromUploads) {
+            all.owners.source = owners.source;
+            all.owners.missing = owners.missing;
+            all.owners.chunks.clear();
+            return all;
+        }
+        for (uint64_t id : owners.chunks) {
+            if (std::find(all.owners.chunks.begin(), all.owners.chunks.end(), id) == all.owners.chunks.end()) {
+                all.owners.chunks.push_back(id);
+            }
+        }
+    }
+    return all;
 }
 
 // Oldest first: the order they were last uploaded in
@@ -820,6 +962,7 @@ void TextureStore::drawn(const VramRect &rect) {
             continue;
         }
         // (the draw writes the page's marks, not any block's owners: no block is written here)
+        s.changed(page);
         if (parts & kLowParts) {
             s.drawn_low_at[page] = now;
         }
@@ -926,22 +1069,28 @@ TextureAnswer TextureStore::resolve(const TextureRegs &regs, uint32_t cols_read,
         uint32_t ph = page_height_px(key.psm);
         key.read_rows = std::min(key.read_rows, (std::clamp(rows_read, 1u, key.read_rows) + ph - 1) / ph * ph);
     }
-    for (uint32_t l = 0; l < key.levels; l++) {
-        VramRect r = wrapped({key.level_tbp[l], key.level_tbw[l], key.psm, 0, 0, std::max(1u, key.read_cols >> l),
-                              std::max(1u, key.read_rows >> l)});
-        Owners owners = s.owners_of(r, l);
-        if (owners.source != TextureSource::FromUploads) {
-            answer.source = owners.source;
-            answer.missing = owners.missing;
-            key = TextureKey{};
-            return answer;
+    // the question's answer kept, while what it read answers the same; else the walk, kept
+    Owners walked;
+    if (const KeptAnswer *kept = s.kept_answer(key)) {
+        s.counts.resolves_kept++;
+        if (s.watching) {
+            s.note_reads(kept->read);
         }
-        for (uint64_t id : owners.chunks) {
-            if (std::find(key.chunks.begin(), key.chunks.end(), id) == key.chunks.end()) {
-                key.chunks.push_back(id);
-            }
-        }
+        walked.source = kept->source;
+        walked.missing = kept->missing;
+        walked.chunks = kept->chunks;
+    } else {
+        LevelsWalked levels = s.walk_levels(key);
+        s.keep_answer(key, levels);
+        walked = std::move(levels.owners);
     }
+    if (walked.source != TextureSource::FromUploads) {
+        answer.source = walked.source;
+        answer.missing = walked.missing;
+        key = TextureKey{};
+        return answer;
+    }
+    key.chunks = std::move(walked.chunks);
     s.sort_by_upload(key.chunks);
     answer.source = TextureSource::FromUploads;
     auto found = s.decoded_by_key.find(key);
@@ -967,6 +1116,7 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
         break;
     case 2:
     case 3:
+        s.changed(kClutPage);
         s.clut_cbp[cld - 2] = cbp;
         break;
     case 4:
@@ -975,6 +1125,7 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
         if (s.clut_cbp[cld - 4] == cbp) {
             return std::nullopt;
         }
+        s.changed(kClutPage);
         s.clut_cbp[cld - 4] = cbp;
         break;
     default:
@@ -1082,6 +1233,7 @@ TextureStore::ClutState TextureStore::clut_state() const {
 void TextureStore::set_clut_state(const ClutState &c) {
     State &s = *state_;
     s.note_write(kClutBlock);
+    s.changed(kClutPage);
     s.clut = c.clut;
     for (size_t i = 0; i < 512; i++) {
         s.clut_unloaded[i] = c.unloaded[i] != 0;

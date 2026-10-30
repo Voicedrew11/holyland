@@ -9,6 +9,9 @@
 // the uploads', every texel and colour read must be what that VRAM gives. A store that answers nothing
 // would pass that, so each kind of answer must also have been met.
 //
+// Every call goes to a second store too that keeps no resolve's answer (every resolve walks): each answer must be
+// that store's, and each watched stretch's reads too.
+//
 // pcr_textures_test [seed...]: the seeds to run (by default 1-6).
 #include "pcr_textures.h"
 
@@ -209,6 +212,7 @@ struct Tally {
     uint64_t uploads = 0, sent_again = 0, made_again = 0, draws = 0, copies = 0, copies_checked = 0, read_backs = 0, forgets = 0;
     uint64_t answers[3] = {};
     uint64_t texels = 0, mipmapped = 0, other_format = 0, clut_compared = 0, clut_csm2 = 0, clut_16 = 0;
+    uint64_t stretches = 0; // (watched stretches compared with the walking store's)
     uint64_t failures = 0;
 };
 
@@ -225,9 +229,25 @@ struct Placed {
     std::array<uint32_t, 7> tbp, tbw;
 };
 
+pcr::TextureStoreLimits walking(pcr::TextureStoreLimits limits) {
+    limits.answers_kept = 0;
+    return limits;
+}
+
+bool same_reads(const pcr::PagesRead &a, const pcr::PagesRead &b) {
+    for (uint32_t p = 0; p < 513; p++) {
+        if (a.pages[p] != b.pages[p] || (a.pages[p] && a.signatures[p] != b.signatures[p])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct Run {
     Rng rng;
     pcr::TextureStore store;
+    pcr::TextureStore walker; // (the same calls, no answer kept: every resolve walks)
+    bool watching = false;
     ReferenceGs gs;
     Tally tally;
     std::vector<Placed> placed;
@@ -238,10 +258,12 @@ struct Run {
     };
     std::vector<Sent> recent; // (uploads to send again)
 
-    Run(uint64_t seed, pcr::TextureStoreLimits limits) : rng{seed * 0x9E3779B97F4A7C15ull + 1}, store(limits) {}
+    Run(uint64_t seed, pcr::TextureStoreLimits limits)
+        : rng{seed * 0x9E3779B97F4A7C15ull + 1}, store(limits), walker(walking(limits)) {}
 
     void upload(const pcr::TransferRegs &regs, const std::vector<uint8_t> &bytes) {
         bool taken = store.upload(regs, bytes);
+        walker.upload(regs, bytes);
         gs.upload(regs, bytes);
         tally.uploads++;
         recent.push_back({regs, bytes, taken ? store.last_chunk() : 0});
@@ -260,6 +282,9 @@ struct Run {
         tally.sent_again++;
         // (half of them made again from their chunk, as a picture between asks: the VRAM as if the bytes came)
         if (sent.chunk != 0 && rng.one_in(2) && store.upload_again(sent.chunk)) {
+            if (!walker.upload_again(sent.chunk)) {
+                fail(tally, "a chunk made again by the store is let go by the walking store");
+            }
             gs.upload(sent.regs, sent.bytes);
             tally.made_again++;
             return;
@@ -340,6 +365,7 @@ struct Run {
                         1 + rng.below(64), 1 + rng.below(32)};
         gs.draw(r, rng);
         store.drawn(r);
+        walker.drawn(r);
         tally.draws++;
     }
 
@@ -358,6 +384,7 @@ struct Run {
                                uint64_t(from) << 16 | uint64_t(to) << 48, uint64_t(w) | uint64_t(rows) << 32};
         gsn_vram_copy(gs.vram.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
         store.copied(regs);
+        walker.copied(regs);
         tally.copies++;
         pcr::TextureRegs t;
         t.tex0 = tex0_of(dbp, p.tbw[0], p.psm, p.tw, p.th);
@@ -376,8 +403,12 @@ struct Run {
         uint32_t w = 1 + rng.below(1u << p.tw), h = 1 + rng.below(1u << p.th);
         pcr::TransferRegs regs{bitbltbuf_of(p.tbp[0], p.tbw[0], psm) >> 32,
                                uint64_t(rng.below(8)) | uint64_t(rng.below(8)) << 16, uint64_t(w) | uint64_t(h) << 32};
-        std::vector<uint8_t> mine;
-        if (!store.read_back(regs, mine)) {
+        std::vector<uint8_t> mine, walked;
+        bool had = walker.read_back(regs, walked);
+        if (store.read_back(regs, mine) != had) {
+            fail(tally, "a read-back is not the walking store's");
+        }
+        if (!had) {
             return;
         }
         std::vector<uint8_t> want(mine.size());
@@ -405,12 +436,24 @@ struct Run {
                                uint64_t(1 + rng.below(48)) | uint64_t(1 + rng.below(48)) << 32};
         gsn_vram_copy(gs.vram.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
         store.copied(regs);
+        walker.copied(regs);
         tally.copies++;
     }
 
     // The texture's answer checked: every texel of every level of the part read against the reference
-    TextureSource check(const pcr::TextureRegs &regs, uint32_t cols_read, uint32_t rows_read) {
+    // The answer of both stores: the same source, key and missing block
+    pcr::TextureAnswer resolve_both(const pcr::TextureRegs &regs, uint32_t cols_read, uint32_t rows_read) {
         pcr::TextureAnswer a = store.resolve(regs, cols_read, rows_read);
+        pcr::TextureAnswer w = walker.resolve(regs, cols_read, rows_read);
+        if (a.source != w.source || !(a.key == w.key) || a.missing.level != w.missing.level ||
+            a.missing.block != w.missing.block) {
+            fail(tally, "a resolve's answer is not the walking store's");
+        }
+        return a;
+    }
+
+    TextureSource check(const pcr::TextureRegs &regs, uint32_t cols_read, uint32_t rows_read) {
+        pcr::TextureAnswer a = resolve_both(regs, cols_read, rows_read);
         tally.answers[int(a.source)]++;
         if (a.source != TextureSource::FromUploads) {
             return a.source;
@@ -449,7 +492,7 @@ struct Run {
             }
         }
         // asked again, the same key and the same texels (kept or decoded again)
-        pcr::TextureAnswer again = store.resolve(regs, cols_read, rows_read);
+        pcr::TextureAnswer again = resolve_both(regs, cols_read, rows_read);
         if (again.source != TextureSource::FromUploads || !(again.key == a.key) ||
             again.texture->rgba != t->rgba || again.texture->indices != t->indices) {
             fail(tally, "a texture asked for again is not the same");
@@ -511,12 +554,18 @@ struct Run {
         }
         uint64_t tex0 = tex0_of(0, 1, psm, 4, 4) | uint64_t(cbp) << 37 | uint64_t(cpsm) << 51 | uint64_t(csm) << 55 |
                         uint64_t(csa) << 56 | uint64_t(cld) << 61;
-        store.load_clut(tex0, texclut);
+        if (store.load_clut(tex0, texclut) != walker.load_clut(tex0, texclut)) {
+            fail(tally, "a CLUT load is not the walking store's");
+        }
         gs.load_clut(tex0, texclut);
         uint64_t texa = uint64_t(rng.below(256)) | uint64_t(rng.below(2)) << 15 | uint64_t(rng.below(256)) << 32;
         // the colours of this TEX0, and of another CSA's over the same buffer
         for (uint64_t read : {tex0, (tex0 & ~(uint64_t(31) << 56)) | uint64_t(rng.below(32)) << 56}) {
             pcr::ClutColours mine = store.clut_colours(read, texa);
+            pcr::ClutColours walked = walker.clut_colours(read, texa);
+            if (mine.rgba != walked.rgba || mine.from_uploads != walked.from_uploads) {
+                fail(tally, "a CLUT's colours are not the walking store's");
+            }
             if (!mine.from_uploads) {
                 continue;
             }
@@ -549,7 +598,9 @@ struct Run {
             upload(transfers[i], {}); // (no bytes)
         }
         store.drawn({0x7FFFFFFF, 0xFFFF, 0x3F, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 3});
+        walker.drawn({0x7FFFFFFF, 0xFFFF, 0x3F, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 3});
         store.copied({~uint64_t(0), ~uint64_t(0), ~uint64_t(0)});
+        walker.copied({~uint64_t(0), ~uint64_t(0), ~uint64_t(0)});
         pcr::TextureRegs regs;
         regs.tex0 = ~uint64_t(0) >> 3; // (TW and TH 15, psm 0x3F: no format)
         check(regs, 0, 0);
@@ -563,11 +614,31 @@ struct Run {
         check(regs, 8, 8);
         uint64_t clut0 = tex0_of(0, 1, GSN_PSMT8, 4, 4) | uint64_t(16383) << 37 | uint64_t(1) << 55 | uint64_t(1) << 61;
         store.load_clut(clut0, 0x3FFFFF);
+        walker.load_clut(clut0, 0x3FFFFF);
         gs.load_clut(clut0, 0x3FFFFF);
         store.clut_colours(~uint64_t(0), ~uint64_t(0));
+        walker.clut_colours(~uint64_t(0), ~uint64_t(0));
+    }
+
+    // A stretch's reads watched in both stores, from now or until now: the same pages with the same signatures
+    void watch_round() {
+        if (!watching) {
+            store.watch_reads();
+            walker.watch_reads();
+            watching = true;
+            return;
+        }
+        if (!same_reads(store.reads_watched(), walker.reads_watched())) {
+            fail(tally, "a stretch's reads are not the walking store's");
+        }
+        watching = false;
+        tally.stretches++;
     }
 
     void step() {
+        if (rng.one_in(40)) {
+            watch_round();
+        }
         uint32_t what = rng.below(100);
         if (what < 22) {
             random_upload();
@@ -587,6 +658,7 @@ struct Run {
             random_copy();
         } else if (rng.one_in(10)) {
             store.forget();
+            walker.forget();
             gs.clut_cbp = {UINT32_MAX, UINT32_MAX}; // (a state loaded: CLD 4 and 5 load again, as the store does)
             tally.forgets++;
         }
@@ -609,9 +681,11 @@ bool vram_round_trip(uint64_t seed) {
                (unsigned long long)seed, at);
         return false;
     }
-    pcr::TextureStore restored;
+    pcr::TextureStore restored, restored_walker(walking({}));
     restored.restore_vram(image);
+    restored_walker.restore_vram(image);
     std::swap(run.store, restored);
+    std::swap(run.walker, restored_walker);
     uint64_t failures = run.tally.failures;
     for (int i = 0; i < 300; i++) {
         run.resolve_placed();
@@ -640,17 +714,18 @@ bool run_seed(uint64_t seed) {
     pcr::TextureStoreCounts c = run.store.counts();
     printf("seed %llu: %llu uploads (%llu sent again, %llu from their chunk), %llu draws, %llu copies (%llu read back as uploads), %llu read-backs, %llu forgets; textures %llu from uploads, %llu drawn, "
            "%llu not uploaded (%llu mipmapped, %llu in another format); %llu texels compared; CLUTs %llu compared (%llu "
-           "CSM2, %llu of 16); store: %llu chunks kept, %llu decodes, %llu hits, %llu CLUT decodes, %llu refused\n",
+           "CSM2, %llu of 16); store: %llu chunks kept, %llu decodes, %llu hits, %llu answered kept, %llu CLUT decodes, %llu refused; "
+           "%llu stretches compared\n",
            (unsigned long long)seed, (unsigned long long)t.uploads, (unsigned long long)t.sent_again, (unsigned long long)t.made_again,
            (unsigned long long)t.draws,
            (unsigned long long)t.copies, (unsigned long long)t.copies_checked, (unsigned long long)t.read_backs, (unsigned long long)t.forgets, (unsigned long long)t.answers[0],
            (unsigned long long)t.answers[1], (unsigned long long)t.answers[2], (unsigned long long)t.mipmapped,
            (unsigned long long)t.other_format, (unsigned long long)t.texels, (unsigned long long)t.clut_compared,
            (unsigned long long)t.clut_csm2, (unsigned long long)t.clut_16, (unsigned long long)c.chunks_kept,
-           (unsigned long long)c.decodes, (unsigned long long)c.decode_hits, (unsigned long long)c.clut_decodes,
-           (unsigned long long)c.uploads_refused);
+           (unsigned long long)c.decodes, (unsigned long long)c.decode_hits, (unsigned long long)c.resolves_kept,
+           (unsigned long long)c.clut_decodes, (unsigned long long)c.uploads_refused, (unsigned long long)t.stretches);
     Tally check = t;
-    bool met_all = t.answers[0] > 100 && t.answers[1] > 0 && t.answers[2] > 0 && t.mipmapped > 0 && t.other_format > 0 &&
+    bool met_all = t.answers[0] > 100 && c.resolves_kept > 100 && t.stretches > 20 && t.answers[1] > 0 && t.answers[2] > 0 && t.mipmapped > 0 && t.other_format > 0 &&
                    t.clut_compared > 50 && t.sent_again > 0 && t.clut_csm2 > 0 && t.clut_16 > 0 && c.uploads_refused > 0;
     if (!met_all) {
         fail(check, "a kind of answer was not met: the test tests too little");
@@ -956,6 +1031,90 @@ bool partly_written_page() {
     return expect_true(written_over.pages[page], "an upload over owned blocks did not read them first") && ok;
 }
 
+// ---- Resolve's answers kept ---------------------------------------------------------------------
+// The same question again is answered kept while its pages answer the same, and walked once one changed: the answer
+// every time the walking store's
+bool kept_answers() {
+    Rng rng{27};
+    pcr::TextureStore store, walker(walking({}));
+    const uint32_t psm = GSN_PSMCT32, page = 90;
+    bool ok = true;
+    auto both = [&](auto &&call) {
+        call(store);
+        call(walker);
+    };
+    auto ask = [&](const pcr::TextureRegs &regs, const char *what) {
+        pcr::TextureAnswer a = store.resolve(regs, 64, 32), w = walker.resolve(regs, 64, 32);
+        ok = expect_true(a.source == w.source && a.key == w.key && a.missing.block == w.missing.block, what) && ok;
+        return a.source;
+    };
+    auto kept_since = [&](uint64_t before) {
+        return store.counts().resolves_kept - before;
+    };
+    std::vector<uint8_t> bytes = bytes_from(rng, 8192);
+    both([&](pcr::TextureStore &s) { s.upload(upload_regs(page * 32, 1, psm, 64, 32), bytes); });
+    uint64_t chunk = store.last_chunk();
+    pcr::TextureRegs regs;
+    regs.tex0 = tex0_of(page * 32, 1, psm, 6, 5);
+
+    uint64_t kept = store.counts().resolves_kept;
+    ok = expect_true(ask(regs, "the first answer is not the walk's") == TextureSource::FromUploads, "an uploaded page is not the uploads'") && ok;
+    ask(regs, "the same question again is not the walk's answer");
+    ok = expect_true(kept_since(kept) == 1, "the same question again was not answered kept") && ok;
+
+    kept = store.counts().resolves_kept;
+    both([&](pcr::TextureStore &s) { s.upload(upload_regs(400 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); });
+    ask(regs, "after an upload elsewhere, not the walk's answer");
+    ok = expect_true(kept_since(kept) == 1, "an upload elsewhere turned the kept answer away") && ok;
+
+    kept = store.counts().resolves_kept;
+    both([&](pcr::TextureStore &s) { s.upload_again(chunk); });
+    ask(regs, "after the same chunk again over itself, not the walk's answer");
+    ok = expect_true(kept_since(kept) == 1, "the same chunk again over itself turned the kept answer away") && ok;
+
+    kept = store.counts().resolves_kept;
+    std::vector<uint8_t> other = bytes_from(rng, 4096);
+    both([&](pcr::TextureStore &s) { s.upload(upload_regs_at(page * 32, 1, psm, 0, 16, 64, 16), other); });
+    ask(regs, "after a different upload into the page, not the walk's answer");
+    ok = expect_true(kept_since(kept) == 0, "a different upload into the page read was answered kept") && ok;
+
+    kept = store.counts().resolves_kept;
+    both([&](pcr::TextureStore &s) { s.drawn(pcr::VramRect{page * 32, 1, psm, 0, 0, 64, 32}); });
+    ok = expect_true(ask(regs, "after a draw over the page, not the walk's answer") == TextureSource::DrawnSurface,
+                     "a page drawn over is not DrawnSurface") && ok;
+    ok = expect_true(kept_since(kept) == 0, "a draw over the page read was answered kept") && ok;
+    ask(regs, "a DrawnSurface answer asked again is not the walk's");
+    ok = expect_true(kept_since(kept) == 1, "a DrawnSurface answer asked again was not kept") && ok;
+
+    kept = store.counts().resolves_kept;
+    both([&](pcr::TextureStore &s) { s.upload(upload_regs(page * 32, 1, psm, 64, 32), bytes); });
+    ok = expect_true(ask(regs, "after the page uploaded again, not the walk's answer") == TextureSource::FromUploads,
+                     "a drawn page uploaded whole again is not the uploads'") && ok;
+    ok = expect_true(kept_since(kept) == 0, "the page uploaded again over a draw was answered kept") && ok;
+
+    // a page no upload owns: NotUploaded, then drawn into, DrawnSurface (its owners did not change, its draw marks did)
+    pcr::TextureRegs empty;
+    empty.tex0 = tex0_of(200 * 32, 1, psm, 6, 5);
+    ok = expect_true(ask(empty, "a page never uploaded is not the walk's answer") == TextureSource::NotUploaded,
+                     "a page never uploaded is not NotUploaded") && ok;
+    both([&](pcr::TextureStore &s) { s.drawn(pcr::VramRect{200 * 32, 1, psm, 0, 0, 64, 32}); });
+    ok = expect_true(ask(empty, "a page drawn into is not the walk's answer") == TextureSource::DrawnSurface,
+                     "a page no upload owns, drawn into, is not DrawnSurface") && ok;
+
+    // watched: a kept answer notes the blocks the walk read
+    both([&](pcr::TextureStore &s) { s.watch_reads(); });
+    kept = store.counts().resolves_kept;
+    ask(regs, "a kept answer while watched is not the walk's");
+    ok = expect_true(kept_since(kept) == 1, "the answer while watched was not kept") && ok;
+    ok = expect_true(same_reads(store.reads_watched(), walker.reads_watched()), "a kept answer's reads are not the walk's") && ok;
+
+    // forget: nothing kept
+    both([&](pcr::TextureStore &s) { s.forget(); });
+    kept = store.counts().resolves_kept;
+    ask(regs, "after forget, not the walk's answer");
+    return expect_true(kept_since(kept) == 0, "an answer kept from before forget was used") && ok;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -973,6 +1132,7 @@ int main(int argc, char **argv) {
     ok = clut_signatures() && ok;
     ok = reupload_in_stretch() && ok;
     ok = partly_written_page() && ok;
+    ok = kept_answers() && ok;
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
         ok = vram_round_trip(seed) && ok;

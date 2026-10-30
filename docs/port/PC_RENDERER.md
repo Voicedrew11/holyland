@@ -97,7 +97,13 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      again for its other pictures while what it read of the texture store is as it was (86% of the pictures at the
      four spots), the pictures byte for byte 5a's. Map 000 at 240: 183-186 pictures a second (5a 101-102); 009 still
      61-66, held by pc's thread taking the packets in (about 68% busy: the frame's own packets, about 200 MB a second
-     there, and each frame's first walk), not by the pictures between. Next for 009: what limits it, measured first.
+     there, and each frame's first walk), not by the pictures between. **What held 009**, measured 2026-10-30 ("What
+     held 009, and resolve's answers kept", below): pc's thread a vblank behind, so every picture between was left
+     out; a quarter of its work resolve's walk of the blocks' owners. Resolve's answers kept (exact, by the pages'
+     signatures): 009 98-99 pictures a second (was 60), 000 214-226 (155-165 without). Next: pc walks each frame
+     twice (the frame's own packets, then the same packets for its first picture between): the frame's own walk
+     kept as its kept walk, so that a frame is walked once; then VU1 0x280's records and the uploads found again
+     (about 15% and 14% of the walk at 009).
   6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
      `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
@@ -228,6 +234,46 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## What held 009, and resolve's answers kept (built 2026-10-30)
+
+**What held 009** (measured at 240, `--renderer pc`, the owner's settings): in play no picture between was shown at
+all, 60 pictures a second, each a vblank's own. pc's thread was a vblank behind as each vblank began (`pcr_backlog`
+1), so gs.c's cut came down to one picture between a vblank and left that one out every vblank too (in a diagnostic
+build; gs.c's "left out as the renderer was behind" line is printed only under the native GS). pc's thread, sampled
+208 times with `eu-stack`: 23% waiting for work, 9% waiting for a GPU frame context, the rest the frame's own packets
+(no picture between was walked). Of that work about a quarter was `TextureStore::resolve` walking every block's
+owners (`owners_of`, its `Cover` compares), about 15% VU1 0x280's records and kicks, about 14% uploads found again.
+In a diagnostic build 95.8% of resolves asked what was answered before while every page that answer read had its
+signature (5b's) as then, and none of those answers differed from the walk's.
+
+**What it does.** `TextureStore` keeps resolve's answers (`pcr_textures.h`'s top): under what was asked (the
+texture's shape, its levels' places and the part read: the key without its chunks), the walk's source, missing
+block and chunks, the blocks it read (a 32-bit mask a page) and their pages' signatures then. The same question
+while every one of those pages answers as it did is answered from it without the walk; the chunks are sorted by
+their uploads as now, so the key and the decode found are the walk's. While a stretch's reads are watched (5b), a
+kept answer notes the blocks its walk read, as the walk would. Each page's signature is kept and made again only
+after the page changed (an owner taken, a draw or copy over it, the CLUT buffer written). `answers_kept` (8,192)
+bounds them, all let go when met. `KF4_PC_RESOLVE_KEPT=0`: none kept, every resolve walks.
+- **The signature now has the page's draw marks** (whether it was ever drawn into, low parts and top byte apart):
+  a block no upload owns answers DrawnSurface or NotUploaded by them, which the signature did not show before (so 5b's
+  check could take a page drawn into for the first time as unchanged). The replays at the four spots are as before
+  (5,684 of 6,632 drawn again at 000 and 009).
+- `[stats] pc texture store` says how many resolves were answered kept.
+- Tests: `pcr_textures_test` runs every random call on a second store that keeps nothing, and every answer, CLUT
+  load, read-back and watched stretch must be its; `kept_answers` (asked again, an upload elsewhere, the same chunk
+  again, a different upload into the page, a draw over it, a DrawnSurface answer asked again and then uploaded over,
+  a page never uploaded then drawn into, watched, forget). Without the draw marks in the signature both fail.
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th): byte for byte
+with `KF4_PC_RESOLVE_KEPT=0` (204 pictures a spot; 162 at 009:2, the same in both runs: some of its dump vblanks have no
+pictures between). Answered kept: 95% of resolves at 000, 97% at 009, 94% at 009:2. ctest; `pcr_textures_test` under
+ASan + UBSan; an ASan + UBSan pc run at 009:2 at 240 (only the known reports). No native or `fast` checks: their
+paths are not changed.
+
+**Speed** (`pace_test` at 240, `--renderer pc`, runs alternated): 009 98-99 pictures a second (60 with
+`KF4_PC_RESOLVE_KEPT=0`: none between), 000 214-226 (155-165 with it off; the build before 163-168 that day, 5b's
+183-186 measured another day). The GPU 2.1-2.3 ms a picture.
 
 ## Step 5b built (2026-10-30): a frame's walk kept, and drawn again for its other pictures
 

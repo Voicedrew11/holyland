@@ -16,6 +16,14 @@
 //
 // The CLUT buffer is mirrored the same way: TEX0's CLD loads read the CLUT from its uploads.
 //
+// A resolve's answer is kept, under what it was asked (the texture's shape, its levels' places and the part
+// read), with the blocks its walk read and each of their pages' signatures then. The same question again,
+// while every one of those pages answers as it did, is answered from it without the walk. The answer is
+// the walk's, whatever it was (FromUploads, DrawnSurface, NotUploaded), and its decoded texture is still
+// found by its key, as now. While a stretch's reads are watched, a kept answer notes the blocks its walk
+// read, exactly as the walk would have noted them. Each page's signature is kept, and made again only
+// after something changed the page (its blocks' owners, a draw or copy over it, the CLUT buffer).
+//
 // The design is the native GS's page-ownership table (docs/port/NATIVE_DRAW_P8.md, "Textures from their
 // source: the page-ownership table"; port/gs/native/gsn_standalone.inc), without the GS's VRAM behind it.
 //
@@ -129,12 +137,14 @@ std::vector<uint32_t> colour_texels(const DecodedTexture &texture, uint32_t psm,
 struct TextureStoreLimits {
     size_t decoded_bytes = size_t(256) << 20; // decoded textures kept (least recently used let go)
     size_t unowned_chunk_bytes = size_t(64) << 20; // chunks that own nothing now, kept to be found again
+    size_t answers_kept = 8192; // resolve's answers kept (0: none, every resolve walks)
 };
 
 struct TextureStoreCounts {
     uint64_t uploads = 0, upload_bytes = 0, uploads_refused = 0;
     uint64_t chunks_new = 0, chunks_kept = 0, chunk_bytes_kept = 0;
     uint64_t resolves = 0, decodes = 0, decode_hits = 0, decoded_bytes_kept = 0;
+    uint64_t resolves_kept = 0; // (of resolves: answered from a kept answer, without the walk)
     uint64_t clut_loads = 0, clut_decodes = 0, clut_hits = 0;
     uint64_t copies_as_uploads = 0; // local copies whose source was uploads': uploads of what they wrote
     uint64_t read_backs = 0, read_backs_refused = 0;

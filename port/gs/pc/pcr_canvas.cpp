@@ -284,6 +284,16 @@ struct DrawState {
     bool operator==(const DrawState &) const = default;
 };
 
+// The texture store's limits: KF4_PC_RESOLVE_KEPT=0 keeps no resolve's answer (every resolve walks: to compare with)
+TextureStoreLimits store_limits() {
+    TextureStoreLimits limits;
+    const char *kept = getenv("KF4_PC_RESOLVE_KEPT");
+    if (kept && strcmp(kept, "0") == 0) {
+        limits.answers_kept = 0;
+    }
+    return limits;
+}
+
 } // namespace
 
 class Canvas::Impl {
@@ -2165,7 +2175,7 @@ private:
     Surface *pass_colour_ = nullptr, *pass_depth_ = nullptr;
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
-    TextureStore store_;
+    TextureStore store_{store_limits()};
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
     std::unordered_map<uint32_t, SamplerHandle> samplers_; // (by sampler_for's key)
@@ -2226,12 +2236,12 @@ public:
                 (unsigned long long)counts_clut_not_uploads_);
         fprintf(out,
                 "[stats] pc texture store: %llu uploads (%.1f MB, %llu refused), %llu chunks kept; %llu resolves, %llu "
-                "decodes, %llu found again; %llu CLUT loads (%llu decodes); %llu copies made as uploads; read-backs %llu "
+                "decodes, %llu found again, %llu answered kept; %llu CLUT loads (%llu decodes); %llu copies made as uploads; read-backs %llu "
                 "from uploads, %llu from surfaces, %llu not had; pictures between: %llu uploads made again (%llu "
                 "missed, %llu from their chunk), %llu reads of the frame kept\n",
                 (unsigned long long)t.uploads, double(t.upload_bytes) / 1048576.0, (unsigned long long)t.uploads_refused,
                 (unsigned long long)t.chunks_kept, (unsigned long long)t.resolves, (unsigned long long)t.decodes,
-                (unsigned long long)t.decode_hits, (unsigned long long)t.clut_loads, (unsigned long long)t.clut_decodes,
+                (unsigned long long)t.decode_hits, (unsigned long long)t.resolves_kept, (unsigned long long)t.clut_loads, (unsigned long long)t.clut_decodes,
                 (unsigned long long)t.copies_as_uploads, (unsigned long long)c.read_backs_from_uploads,
                 (unsigned long long)c.read_backs_from_surfaces, (unsigned long long)c.unsupported_read_backs,
                 (unsigned long long)c.uploads_made_again, (unsigned long long)c.uploads_again_missed,
