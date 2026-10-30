@@ -4,3 +4,6 @@
 [submodule "third_party/parallel-gs"]
 	path = third_party/parallel-gs
 	url = https://github.com/Arntzen-Software/parallel-gs.git
+	# (CMake writes holyland's patches into Granite's source at every configure: cmake/granite_*.cmake. Those edits
+	# are not commits; git still shows the submodule moved to another commit.)
+	ignore = dirty
