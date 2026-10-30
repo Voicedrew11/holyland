@@ -70,6 +70,13 @@ On Linux (the owner's machine) the order, with the commands:
 | ASan + UBSan | `cmake --build out/linux-clang-asan`, a run to map 000 and 009:2 ("Measuring on Linux": the options and the known reports) | 5 min a spot |
 | speed, if it could cost | `tools/pace_test.py` ("Measuring on Linux") | 2 min a run |
 
+**A change confined to the PC renderer** (`port/gs/pc/`, its shaders, its tests; the owner, 2026-10-30) skips the map
+tour and the native/fast byte-for-byte check: neither runs any of its code (the tour is the native GS against
+paraLLEl-GS). Its own checks stand in: its pictures against `--renderer native` at the spots, its switch byte for byte
+against the build before, ASan + UBSan on pc runs, its unit tests; plus `cmp` of `gsn_shaders.h` when
+`tools/build_shaders.py` ran. Until pc has a tour of its own; a change that touches shared code (`port/render/`,
+`gs.c`, Granite) runs everything.
+
 The gcc sanitizer builds (`out/linux-gcc-asan`, `-tsan`) do not link on this machine (Fedora's libasan, libubsan and
 libtsan are not installed): use `out/linux-clang-asan` and `out/linux-clang-tsan`. The project has no clang-tidy
 configuration (only Granite's vendored one, which is not ours).

@@ -22,7 +22,8 @@ The PC port of King's Field IV, built from the kfiv-decomp source. Start with
   the pictures, what is next and the owner's decisions. The rest of that file is history, read when a section is named.
 - **Every check in RENDERER.md's "The checks before a renderer change goes in" runs before the commit**: the build,
   ctest (`gsn_draw` among them), `vu1_test`, boot and frame tests, the change's switch byte for byte, the map tour, ASan
-  + UBSan, and speed if it could cost. One that cannot run is named in the commit with why, and the owner is asked
+  + UBSan, and speed if it could cost. A change confined to `port/gs/pc/` skips the map tour and native/fast byte for
+  byte (RENDERER.md says what stands in). One that cannot run is named in the commit with why, and the owner is asked
   first.
 - Measuring on this machine (spots, picture comparisons, pace_test, sampling, sanitizers, disk): RENDERER.md,
   "Measuring on Linux". Put it, or point to it, in every subagent's brief: subagents see no memory.
