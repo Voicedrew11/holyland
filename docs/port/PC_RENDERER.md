@@ -78,26 +78,41 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
   for again (0x7C/0x7D), and step 3's native draws of programs 0x000, 0x280, 0x5A0, 0x700 and the GS strips (kinds:
   map, sky, items, picked, objects, skinned, arm, gold, shadows, effects; `pcr_native_kinds()`), each checked against
   the PC renderer on packets at 000, 009, 009:2 and 063.
-- **Step 3, left**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind `water`)
-  and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). Same method as the
-  others: move the shader's maths into `port/render/shaders/` (check `gsn_shaders.h` stays byte for byte:
-  `cmp` against a copy after `tools/build_shaders.py`), CPU set-up into `port/render/` with a test against the VU1 or
-  EE code it stands for, the draw in `pcr_native.cpp`, the kind added to `kinds()`, pictures against
-  `--renderer pc` without `--native-draw` at the four spots. `[stats] pc native draws not drawn yet` names what is
-  still sent to it and left out.
-- **Then step 5, the speed**: `fast` makes 239.75 pictures a second at 240 (map 000, `pace_test.py`); the PC renderer
-  makes 61, because native draws are off under it whenever there are pictures between
-  (`port_gs_native_draws_now`: frame_interp.c's CPU way cannot move a native draw), so the game sends VU1's packets
-  (2.56M VU1 runs and 9.3 GB of GIF per 3,000 vblanks, against 35,739 runs in `fast`). Step 5 is the PC renderer
-  taking `GsnInterpFrame`/`GsnInterpPicture` (`pcr_interp_frame`/`pcr_interp_picture`, now taken and freed) as the
-  native GS does: the frame's stream drawn once, each picture drawn again with the vertices moved (the GIF ones by
-  their `GsnInterpMove`s, the native draws by `VU1_MOVE_*` and the picture's move/mid: the shared `moved()` in
-  `vu1_*_maths.h` already does it given `pic` and the record's flags; the CPU parts are `nd_model_flags`,
-  `nd_between`, `nd_remember` in `gsn_native_draw.inc`, to move into `port/render/`). Then `port_gs_interp_gpu` true
-  for pc, and the gate lifted. The renderer thread was 39% idle at 240: the limit was upstream, not the canvas.
-- **Then**: the settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's), blends with
-  As above 128, copies within a surface, non-CT32 uploads into surfaces; then step 7 (`fast` switched to it, the full
-  checks incl. the map tour and pace).
+- **The direction (the owner's decision, 2026-10-29, night)**: the PC renderer is built as a modern game draws, not as
+  a second GS emulator ("How it draws", below): the native GS is the exact reference, every picture is compared with
+  it, and pc does not need to be exact first. So what comes next is the GPU's way, then the pictures between, then
+  what is left of step 3. In order:
+  1. **GPU timestamps** in the PC renderer (pace_test's "GPU ms a picture" reads 0 for it now), and a profile of
+     where its GPU time goes at the owner's settings (4x, native widescreen, MSAA 2, aniso 16).
+  2. **Textures by the GPU's sampler**: decode once (CLUT applied) into RGBA8 textures, sampled by the hardware
+     with the GS's filter modes mapped to the sampler's; the GS's texel read in `pcr_prim.frag` kept only for what
+     cannot be (counted). `fast`'s P1 (`gsn_pc_world.inc`, the hardware sampler) is the model, and how close it came.
+  3. **DATE by the stencil** (the copy of the whole surface goes); a blend with no Vulkan form copies only the
+     rectangle drawn.
+  4. **Merged draws**: batches of one state into one call (GIF primitives already are; native batches by runs: grow
+     them across draws, as P7's `grow_last_draw`).
+  5. **Step 5, the pictures between on the GPU**: `fast` makes 239.75 pictures a second at 240 (map 000); pc 61,
+     because native draws are off under it whenever there are pictures between (`port_gs_native_draws_now`:
+     frame_interp.c's CPU way cannot move a native draw), so the game sends VU1's packets (2.56M VU1 runs and 9.3 GB
+     of GIF per 3,000 vblanks, against 35,739 runs in `fast`). The PC renderer takes `GsnInterpFrame`/
+     `GsnInterpPicture` (`pcr_interp_frame`/`pcr_interp_picture`, now taken and freed): the frame's calls kept, each
+     picture those calls again with the vertices moved (the GIF ones by their `GsnInterpMove`s, the native draws by
+     `VU1_MOVE_*` and the picture's move/mid: the shared `moved()` in `vu1_*_maths.h` does it given `pic` and the
+     record's flags; the CPU parts, `nd_model_flags`, `nd_between`, `nd_remember` in `gsn_native_draw.inc`, move into
+     `port/render/`). Then `port_gs_interp_gpu` true for pc and the gate lifted. The renderer thread was 39% idle at
+     240 on packets: the limit was upstream.
+  6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
+     `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
+     others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
+     after `tools/build_shaders.py`), the CPU set-up into `port/render/` with a test against the code it stands
+     for, the draw in `pcr_native.cpp`, the kind in `kinds()`. `[stats] pc native draws not drawn yet` names what is
+     still sent and left out.
+  7. The settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's); then step 7
+     (`fast` switched to it, the full checks incl. the map tour and pace).
+- **How pictures are judged**: against `--renderer native` (the exact GS), not against pc's own earlier pictures;
+  the tolerance per case (P1's and P7's were a level or two over few pixels), and every place the GPU's way cannot
+  match counted in `--stats`. A rough estimate (not measured): with the GPU's way, several hundred to over a
+  thousand pictures a second at the owner's settings; without it, about `fast`'s.
 - **How to run things on this machine** (no memory to rely on): every game run under a memory cap (`systemd-run
   --user --scope -p MemoryMax=10G -p MemorySwapMax=0`; the machine has crashed from memory at 240), one at a time;
   `KF4_DATA_DIR` a temporary folder; spots by `--input tests/newgame.pad --teleport 1900:MAP:PLACE --invincible`;
@@ -178,12 +193,31 @@ the reference; paraLLEl-GS stays as `gs`.
   the native GS's directory the PC renderer uses), or read from the surface drawn there since.
 - **Copies** (local to local) are image copies between surfaces; read-backs (local to host) read a surface.
 
-**How it draws.** Native draws by their records (P7's maths, the material from the registers at the draw). GIF
-primitives by one generic pipeline (the GS's colour arithmetic as the scene's shaders have it: texture function, alpha
-test, fog, blending by Vulkan's blend where it can, the shader's from a copy where not; DATE by the stencil). The
-display registers pick the surface shown; the picture goes to the presenter as the native GS's does.
+**How it draws: as a modern game draws, not as an emulator (the owner's decision, 2026-10-29, night).** The native
+GS is the exact GS, and every picture is compared with it: the PC renderer does not need to be exact itself, and is
+not built exact first. Each piece is built the GPU's own way from the start and judged against the native GS's
+pictures, with the same comparisons (`--dump-frames` at the spots, the map tour), the tolerance decided case by case
+as P1 and P7 were accepted in `fast` (a level or two over a few pixels). An exact path is kept only where the GPU's
+way measurably cannot match, each such case counted in `--stats` so that they can be worked off. What that means:
+- **Textures**: decoded once (the CLUT applied) into ordinary GPU textures and read by the GPU's sampler, as P1 did
+  in `fast`; not the GS's texel reads, filtering and CLUT lookups in the pixel shader. The exact read only for what
+  the sampler cannot stand in for (measured: e.g. a texture read from a surface the game drew, a region clamp).
+- **Colour, fog, alpha test**: plain shader maths; blending by Vulkan's blend. Where a blend has no Vulkan form, a
+  copy of only the rectangle drawn, not the surface.
+- **DATE** (the destination alpha test): the stencil, not a copy of the surface.
+- **Draws**: batches of the same state merged into few calls (instanced or appended), not one call a batch.
+- **Native draws** by their records (P7's maths, the material from the registers at the draw).
+- **Pictures between**: the frame drawn once; each picture between the frame's calls again on the GPU with the
+  vertices moved, drawing again only what moves.
+- **Measured from the start**: GPU timestamps in the PC renderer, so that each change's cost is seen.
+The display registers pick the surface shown; the picture goes to the presenter as the native GS's does.
 
-**The order** (each step runs, and is checked against `--renderer native`'s pictures):
+(Until 2026-10-29 the PC renderer was built the other way: `pcr_prim.frag` is the GS's pixel again, texel reads,
+bilinear by hand, CLUT, DATE by a copy of the surface, one draw call a batch. That is what the steps below replace;
+the surfaces, the texture store, the uploads, the native draws' records and VU1's shader maths stay as they are.)
+
+**The order** (each step runs, and is checked against `--renderer native`'s pictures; steps 1-3 built, as far as
+the handoff above says, the GPU's way coming next):
 1. **The skeleton**: `--renderer pc` (development name; `fast` is switched to it at the end), the device, its thread,
    the vblank, the presenter, a picture (cleared surfaces), `gs_api.h` in `gs.c`, the presenter and frame_interp.c.
 2. **The 2D**: register state, sprites and triangles from GIF packets, uploads and the texture store, surfaces, the
@@ -191,6 +225,8 @@ display registers pick the surface shown; the picture goes to the presenter as t
 3. **The 3D**: native draws (0x000, 0x280, 0x700) with depth, fog, alpha test, blending, layers.
 4. **The rest of the play**: shadows (0x5A0, DATE as the stencil), the PATH2 strips (the trail, the water), the
    reflection target, the frame copies, the scrolling textures, the screen passes.
+4b. **The GPU's way** (the decision above): GPU timestamps; textures by the sampler; DATE by the stencil; merged
+   draws; a blend's copy of the rectangle drawn only. Before step 5, so that the pictures between are built on it.
 5. **Pictures between**: each picture drawn from the frame's draws with the picture's camera and moves, on the GPU.
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
