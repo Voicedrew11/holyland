@@ -26,6 +26,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -46,6 +47,10 @@ struct VramRect {
     uint32_t bp = 0, bw = 0, psm = 0;
     uint32_t x = 0, y = 0, width_px = 0, height_px = 0;
 };
+
+// The 8 KB pages (0..511) a rectangle's pixels are in, wrapped as the GS wraps it (a format the GS does not have
+// taken as PSMCT32). A base on a page's start (every FRAME and ZBUF) is worked out by pages, else block by block.
+std::bitset<512> pages_of(const VramRect &rect);
 
 // The registers a texture is sampled with (a context's TEX0, TEX1, MIPTBP1, MIPTBP2, CLAMP)
 struct TextureRegs {

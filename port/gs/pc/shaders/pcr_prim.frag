@@ -4,7 +4,8 @@
 // (the texture's colours decoded once, the GS's filters and wrap modes as the sampler's, the level from Q), else the
 // GS's read (its region modes, filters and mipmap level from Q, the CLUT, TEXA); texture function, fog and alpha
 // test, in its integers. The blend is
-// Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it.
+// Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it; a blend
+// with no Vulkan form is the GS's here, from a copy of the destination (PCR_F_SHADER_BLEND).
 #include "pcr_common.h"
 
 layout(location = 0) noperspective in vec4 v_color;
@@ -15,7 +16,8 @@ layout(location = 0) out vec4 o_color;
 
 layout(set = 0, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
 layout(set = 0, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
-layout(set = 0, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE) the destination before the draw
+layout(set = 0, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE, PCR_F_SHADER_BLEND) the destination before
+                                                           // the draw, from pc.dest_offset
 layout(set = 0, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
 layout(set = 0, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
@@ -116,6 +118,30 @@ uvec4 sample_texture() {
     return read_level(uv / float(1u << l), l, linear);
 }
 
+// The destination as it was before the draw, in the GS's integers
+uvec4 destination() {
+    return uvec4(round(texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dest_offset, 0) * 255.0));
+}
+
+// ALPHA's (A - B) * C + D in the GS's integers (as gs_frag.h's), COLCLAMP's clamp or wrap; with PABE, Cs where As's
+// bit 7 is clear
+uvec3 blended(uvec4 cs) {
+    if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
+        return cs.rgb;
+    }
+    uvec4 cd = destination();
+    ivec3 s = ivec3(cs.rgb), d = ivec3(cd.rgb);
+    uint sel_a = pc.alpha & 3u, sel_b = (pc.alpha >> 2) & 3u, sel_c = (pc.alpha >> 4) & 3u, sel_d = (pc.alpha >> 6) & 3u;
+    ivec3 a = sel_a == 0u ? s : sel_a == 1u ? d : ivec3(0);
+    ivec3 b = sel_b == 0u ? s : sel_b == 1u ? d : ivec3(0);
+    ivec3 dd = sel_d == 0u ? s : sel_d == 1u ? d : ivec3(0);
+    // (a 24-bit frame has no alpha: its Ad is 1.0)
+    int ad = (pc.alpha & 0x40000u) != 0u ? 0x80 : int(cd.a);
+    int c = sel_c == 0u ? int(cs.a) : sel_c == 1u ? ad : int((pc.alpha >> 8) & 0xFFu);
+    ivec3 r = (((a - b) * c) >> 7) + dd;
+    return (pc.alpha & 0x10000u) != 0u ? uvec3(clamp(r, 0, 255)) : uvec3(r & 0xFF);
+}
+
 bool alpha_passes(uint a) {
     uint aref = (pc.test >> 3) & 0xFFu;
     switch (pc.test & 7u) {
@@ -132,7 +158,7 @@ bool alpha_passes(uint a) {
 
 void main() {
     if ((pc.flags & PCR_F_DATE) != 0u) {
-        uint da = uint(round(texelFetch(u_dest, ivec2(gl_FragCoord.xy), 0).a * 255.0));
+        uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
             discard;
         }
@@ -170,7 +196,7 @@ void main() {
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
         discard;
     }
-    uvec3 rgb = c.rgb;
+    uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
     if ((pc.flags & PCR_F_PREMUL) != 0u) {
         uint k = (pc.flags & PCR_F_C_FIX) != 0u ? pc.clamp_hi >> 24 : c.a;
         rgb = min((rgb * k) >> 7, uvec3(255u));

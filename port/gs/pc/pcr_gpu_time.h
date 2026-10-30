@@ -24,7 +24,8 @@ enum class GpuWork : uint8_t {
     native_000,   // native batches by their VU1 program
     native_280,
     native_700,
-    date_copy,    // the surface copied for DATE
+    date_copy,    // the surface copied for DATE (KF4_PC_STENCIL=0)
+    blend_copy,   // the rectangle a blend with no Vulkan form draws in, copied
     texture_copy, // a texture read from a surface: the surface copied
     surface,      // surfaces made, grown, cleared
     upload,       // uploads written into surfaces

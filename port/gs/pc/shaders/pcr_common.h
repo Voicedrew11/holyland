@@ -17,6 +17,9 @@ layout(push_constant, std430) uniform Push {
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts
     ivec2 src_scale;  // ... the surface's pixels a GS pixel is, across and down
     ivec2 place;      // (native draws, pcr_nd000.vert) the frame's place in its surface, GS pixels
+    ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
+    uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
+                       // a 24-bit frame 18
 } pc;
 
 #define PCR_F_TME 0x1u
@@ -32,6 +35,7 @@ layout(push_constant, std430) uniform Push {
 #define PCR_F_ALPHA_FACTOR 0x4000u // the alpha out is As / 128, the blend's factor (the blend constant puts it back)
 #define PCR_F_DATE 0x8000u        // TEST's DATE: drawn only where the destination's alpha bit 7 (u_dest) is DATM
 #define PCR_F_DATM 0x10000u
+#define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
 
 #define PCR_SRC_CT32 0u
 #define PCR_SRC_CT24 1u

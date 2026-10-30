@@ -52,6 +52,8 @@ struct PrimPush {
     int32_t src_offset[2];
     int32_t src_scale[2];
     int32_t place[2];
+    int32_t dest_offset[2];
+    uint32_t alpha;
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 
@@ -69,6 +71,7 @@ enum : uint32_t {
     F_ALPHA_FACTOR = 0x4000,
     F_DATE = 0x8000,
     F_DATM = 0x10000,
+    F_SHADER_BLEND = 0x20000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
@@ -80,6 +83,25 @@ struct Vertex {
     float fog;
 };
 static_assert(sizeof(Vertex) == 32, "Vertex: the vertex shader's inputs, packed");
+
+// The GS pixels a primitive may draw (those whose integer points are in its box), less XYOFFSET, inclusive
+struct PixelBox {
+    int32_t x0, y0, x1, y1;
+};
+
+PixelBox box_of(const GifPrimitive &p, uint64_t xyoffset) {
+    float ox = float(bits(xyoffset, 0, 16)) / 16.0f, oy = float(bits(xyoffset, 32, 16)) / 16.0f;
+    float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+    uint32_t n = p.shape == PrimitiveShape::triangle ? 3 : 2;
+    for (uint32_t i = 0; i < n; i++) {
+        float x = float(p.vertices[i].x) / 16.0f - ox, y = float(p.vertices[i].y) / 16.0f - oy;
+        x0 = std::min(x0, x);
+        y0 = std::min(y0, y);
+        x1 = std::max(x1, x);
+        y1 = std::max(y1, y);
+    }
+    return {int32_t(std::ceil(x0)), int32_t(std::ceil(y0)), int32_t(std::ceil(x1)) - 1, int32_t(std::ceil(y1)) - 1};
+}
 
 // ---- The GS's formats ----------------------------------------------------------------------------------------
 bool is_colour_16(uint32_t psm) {
@@ -261,6 +283,7 @@ struct DrawState {
 class Canvas::Impl {
 public:
     Impl(Device &device, GpuTimes &times) : device_(device), times_(times) {
+        choose_depth_format();
         make_programs();
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(1, 1, VK_FORMAT_R8G8B8A8_UINT);
         uint32_t zero = 0;
@@ -291,7 +314,8 @@ public:
         }
         DrawState s = state_of(file, p.prim);
         bool tme = bits(p.prim, 4, 1) != 0;
-        if (!batch_open_ || batch_.native || !(s == batch_.state) || (tme && !texture_covers(p))) {
+        if (!batch_open_ || batch_.native || !(s == batch_.state) || (tme && !texture_covers(p)) ||
+            (batch_.shader_blend && overlaps_batch(p))) {
             flush_batch();
             open_batch(s, p);
         }
@@ -567,12 +591,17 @@ private:
             full_barrier(cmd());
             pass_colour_ = nullptr;
             pass_depth_ = nullptr;
+            pass_reads_ = PassReads::nothing;
         }
     }
 
+    // What the draws of a pass read of its colour target in the pass (an input attachment of itself: DATE's set-up)
+    enum class PassReads { nothing, target };
+
     // The pass drawing into colour (and depth): the open one when it is that, else a new one
-    void begin_pass(Surface &colour, Surface *depth) {
-        if (pass_colour_ == &colour && (depth == nullptr || pass_depth_ == depth)) {
+    void begin_pass(Surface &colour, Surface *depth, PassReads reads) {
+        if (pass_colour_ == &colour && (depth == nullptr || pass_depth_ == depth) &&
+            (reads == PassReads::nothing || pass_reads_ == reads)) {
             return;
         }
         end_pass();
@@ -585,18 +614,45 @@ private:
             rp.depth_stencil = &depth->image->get_view();
             rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
         }
+        RenderPassInfo::Subpass subpass = {};
+        if (reads == PassReads::target) {
+            subpass.num_color_attachments = 1;
+            subpass.color_attachments[0] = 0;
+            subpass.num_input_attachments = 1;
+            subpass.input_attachments[0] = 0;
+            subpass.depth_stencil_mode =
+                depth ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+            rp.subpasses = &subpass;
+            rp.num_subpasses = 1;
+        }
         CommandBuffer &c = cmd();
         full_barrier(c);
         c.begin_render_pass(rp);
         pass_colour_ = &colour;
         pass_depth_ = depth;
+        pass_reads_ = reads;
         counts_.passes++;
+    }
+
+    // In the pass: the colour target's writes so far before the input attachment reads after (the subpass's own
+    // dependency on itself)
+    void in_pass_barrier(CommandBuffer &c) {
+        VkMemoryBarrier2 b = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+        VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &b;
+        device_.get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
     }
 
     // ---- Surfaces ----
     ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
-                                                              depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM);
+                                                              depth ? depth_format_ : VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
@@ -1291,6 +1347,26 @@ private:
         return copy;
     }
 
+    // A rectangle of an image (its pixels), copied for a shader to read while the image is drawn into
+    ImageHandle copy_of_rect(const Image &image, const VkRect2D &rect) {
+        ImageCreateInfo info = ImageCreateInfo::render_target(rect.extent.width, rect.extent.height, image.get_format());
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        ImageHandle copy = device_.create_image(info, nullptr);
+        if (!copy) {
+            return copy;
+        }
+        end_pass();
+        CommandBuffer &c = cmd(GpuWork::blend_copy);
+        full_barrier(c);
+        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.copy_image(*copy, image, {0, 0, 0}, {rect.offset.x, rect.offset.y, 0},
+                     {rect.extent.width, rect.extent.height, 1}, colour, colour);
+        full_barrier(c);
+        return copy;
+    }
+
     void evict_textures() {
         if (textures_.size() >= 4096) {
             for (auto it = textures_.begin(); it != textures_.end();) {
@@ -1316,6 +1392,8 @@ private:
             uint32_t first, count, instance;
         };
         bool native = false;
+        bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
+        std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
         NativeProgram program = NativeProgram::vu1_000;
         BufferHandle arena, records, triangles;
         std::vector<Run> runs;
@@ -1354,6 +1432,8 @@ private:
         batch_.records.reset();
         batch_.triangles.reset();
         batch_.runs.clear();
+        batch_.boxes.clear();
+        batch_.shader_blend = shader_blend_on_ && !choose_blend(s.alpha, bits(s.prim, 6, 1) != 0).supported;
         if (bits(s.prim, 4, 1)) {
             batch_.texture = bind_texture(s, cols, rows);
             if (batch_.texture.src == SRC_INDEX) {
@@ -1366,6 +1446,9 @@ private:
 
     void add_primitive(const GifPrimitive &p) {
         uint64_t xy = batch_.state.xyoffset;
+        if (batch_.shader_blend) {
+            batch_.boxes.push_back(box_of(p, xy));
+        }
         float ox = float(bits(xy, 0, 16)) / 16.0f, oy = float(bits(xy, 32, 16)) / 16.0f;
         bool gouraud = bits(p.prim, 3, 1) != 0, fst = bits(p.prim, 8, 1) != 0;
         auto make = [&](const GifVertex &v, const GifVertex &colour_from) {
@@ -1432,6 +1515,18 @@ private:
         touch(va);
         touch(vb);
         counts_.triangles += 2;
+    }
+
+    // Whether a primitive may draw over a pixel the open batch's primitives draw (their boxes overlap): a blend the
+    // shader makes reads the destination as it was before the batch
+    bool overlaps_batch(const GifPrimitive &p) const {
+        PixelBox b = box_of(p, batch_.state.xyoffset);
+        for (const PixelBox &o : batch_.boxes) {
+            if (b.x0 <= o.x1 && o.x0 <= b.x1 && b.y0 <= o.y1 && o.y0 <= b.y1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void flush_batch() {
@@ -1504,8 +1599,11 @@ private:
                 v.y += float(placed.y);
             }
         }
+        // DATE: by the stencil, which a DATE batch's pass has with its Z buffer's surface (ZBUF's, ZTE on or off)
+        bool date = bits(s.test, 14, 1) != 0;
+        bool date_stencil = date && stencil_on_;
         Surface *depth = nullptr;
-        if (zte) {
+        if (zte || date_stencil) {
             depth = depth_surface(bits(s.zbuf, 0, 9), fbw, z_psm(s.zbuf), height);
             if (depth && (depth->image->get_width() != colour->image->get_width() ||
                           depth->image->get_height() != colour->image->get_height())) {
@@ -1521,23 +1619,33 @@ private:
         }
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
-        // DATE: the destination as it is before the draw, which the shader reads (a copy: the draw writes it)
+        date_stencil = date_stencil && depth != nullptr;
+        // (KF4_PC_STENCIL=0: the destination as it is before the draw, which the shader reads: a copy, as the draw
+        // writes it)
         ImageHandle dest_copy;
-        bool date = bits(s.test, 14, 1) != 0;
+        VkOffset2D dest_offset = {0, 0};
         if (date) {
-            dest_copy = copy_of(*colour->image, GpuWork::date_copy);
             counts_.date_draws++;
+            if (!date_stencil) {
+                dest_copy = copy_of(*colour->image, GpuWork::date_copy);
+            }
+        }
+        // a blend with no Vulkan form: the GS's in the shader, from a copy of the rectangle drawn in
+        if (batch_.shader_blend) {
+            counts_blends_by_shader_++;
+            counts_native_shader_blends_ += batch_.native ? 1 : 0;
+            if (!dest_copy) {
+                VkRect2D rect = drawn_rect(*colour, placed);
+                if (rect.extent.width == 0 || rect.extent.height == 0) {
+                    return;
+                }
+                dest_copy = copy_of_rect(*colour->image, rect);
+                dest_offset = rect.offset;
+            }
         }
         cmd(batch_work());
-        begin_pass(*colour, depth);
+        begin_pass(*colour, depth, date_stencil ? PassReads::target : PassReads::nothing);
         CommandBuffer &c = cmd();
-        c.set_program(!batch_.native                              ? program_
-                      : batch_.program == NativeProgram::vu1_280 ? native_280_program_
-                      : batch_.program == NativeProgram::vu1_700 ? native_700_program_
-                                                                 : native_program_);
-        c.set_opaque_state();
-        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        c.set_cull_mode(VK_CULL_MODE_NONE);
         VkViewport vp = {0, 0, float(colour->image->get_width()), float(colour->image->get_height()), 0, 1};
         c.set_viewport(vp);
         int32_t sx0 = int32_t((scax0 + placed.x) * scale_[0]), sy0 = int32_t((scay0 + placed.y) * scale_[1]);
@@ -1546,13 +1654,27 @@ private:
         if (sx1 <= sx0 || sy1 <= sy0) {
             return;
         }
-        c.set_scissor({{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}});
+        VkRect2D scissor_px = {{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}};
+        if (date_stencil) {
+            set_up_date(c, *colour, placed, bits(s.test, 15, 1) != 0);
+        }
+        c.set_scissor(scissor_px);
+        c.set_program(!batch_.native                              ? program_
+                      : batch_.program == NativeProgram::vu1_280 ? native_280_program_
+                      : batch_.program == NativeProgram::vu1_700 ? native_700_program_
+                                                                 : native_program_);
+        c.set_opaque_state();
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
         c.set_depth_compare(ztst == 0 ? VK_COMPARE_OP_NEVER
                             : ztst == 1 ? VK_COMPARE_OP_ALWAYS
                             : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                         : VK_COMPARE_OP_GREATER);
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
-        if (!blend.supported) {
+        if (batch_.shader_blend) {
+            blend = BlendChoice();
+            blend.flags = F_SHADER_BLEND;
+        } else if (!blend.supported) {
             counts_.unsupported_blends++;
         }
         PrimPush push = {};
@@ -1572,7 +1694,7 @@ private:
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= blend.flags & ~0x80000000u;
-        flags |= date ? F_DATE | (bits(s.test, 15, 1) ? F_DATM : 0) : 0;
+        flags |= date && !date_stencil ? F_DATE | (bits(s.test, 15, 1) ? F_DATM : 0) : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -1590,6 +1712,10 @@ private:
         push.src_scale[1] = int32_t(scale_[1]);
         push.place[0] = int32_t(placed.x);
         push.place[1] = int32_t(placed.y);
+        push.dest_offset[0] = dest_offset.x;
+        push.dest_offset[1] = dest_offset.y;
+        push.alpha = bits(s.alpha, 0, 8) | bits(s.alpha, 32, 8) << 8 | bits(s.colclamp, 0, 1) << 16 |
+                     bits(s.pabe, 0, 1) << 17 | (fpsm == GSN_PSMCT24 ? 1u : 0u) << 18;
         // textures: the texels, the surface's copy, the sampled texture (each the dummy when not this batch's kind)
         const BoundTexture &bt = batch_.texture;
         bool sampled = bt.ok && bt.src == SRC_SAMPLED, from_surface = bt.ok && bt.src == SRC_SURFACE;
@@ -1619,6 +1745,9 @@ private:
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
             c.push_constants(&push, 0, sizeof(push));
             c.set_depth_test(zte, pass.z);
+            if (date_stencil) {
+                draw_where_date_passes(c, pass.alpha, bits(s.fba, 0, 1) != 0, bits(s.test, 15, 1) != 0);
+            }
             if (blend.enable) {
                 c.set_blend_enable(true);
                 c.set_blend_factors(blend.src, blend.src_alpha, blend.dst, VK_BLEND_FACTOR_ZERO);
@@ -1637,11 +1766,7 @@ private:
             }
             void *v = c.allocate_vertex_data(0, bytes, sizeof(Vertex));
             memcpy(v, batch_.vertices.data(), bytes);
-            c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
-            c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, z));
-            c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba));
-            c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
-            c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
+            set_vertex_attribs(c);
             c.draw(uint32_t(batch_.vertices.size()));
         }
         // what was drawn over, for the texture store (its pages are a surface's now, not the uploads')
@@ -1653,6 +1778,107 @@ private:
                 store_.drawn({bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
                               uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
             }
+        }
+    }
+
+    // The open batch's rectangle in its colour surface's pixels (at the canvas's scale): its primitives' box within its
+    // scissor (a native batch's: its scissor), within the surface; empty when it draws nothing
+    VkRect2D drawn_rect(const Surface &colour, const Placed &placed) const {
+        int32_t x0 = std::max(batch_.x0, int32_t(bits(batch_.state.scissor, 0, 11)));
+        int32_t x1 = std::min(batch_.x1, int32_t(bits(batch_.state.scissor, 16, 11)));
+        int32_t y0 = std::max(batch_.y0, int32_t(bits(batch_.state.scissor, 32, 11)));
+        int32_t y1 = std::min(batch_.y1, int32_t(bits(batch_.state.scissor, 48, 11)));
+        int32_t w = int32_t(colour.image->get_width()), h = int32_t(colour.image->get_height());
+        int32_t rx0 = std::clamp((x0 + int32_t(placed.x)) * int32_t(scale_[0]), 0, w);
+        int32_t ry0 = std::clamp((y0 + int32_t(placed.y)) * int32_t(scale_[1]), 0, h);
+        int32_t rx1 = std::clamp((x1 + 1 + int32_t(placed.x)) * int32_t(scale_[0]), 0, w);
+        int32_t ry1 = std::clamp((y1 + 1 + int32_t(placed.y)) * int32_t(scale_[1]), 0, h);
+        if (rx1 <= rx0 || ry1 <= ry0) {
+            return {{0, 0}, {0, 0}};
+        }
+        return {{rx0, ry0}, {uint32_t(rx1 - rx0), uint32_t(ry1 - ry0)}};
+    }
+
+    // ---- DATE by the stencil (PC_RENDERER.md, "How it draws") ----
+    // The GS draws a DATE pixel only where the target's alpha bit 7 is DATM as it is then. Over the rectangle the batch
+    // draws in (its primitives' box within its scissor; a native batch's scissor), the stencil is cleared and set
+    // where the target's bit is DATM, read in the pass (pcr_date.frag); the batch then draws where it is set. The
+    // scissor is the rectangle's after (the caller sets the batch's again).
+    void set_up_date(CommandBuffer &c, const Surface &colour, const Placed &placed, bool datm) {
+        counts_date_by_stencil_++;
+        VkRect2D rect = drawn_rect(colour, placed);
+        if (rect.extent.width == 0 || rect.extent.height == 0) {
+            return; // (the batch draws nothing within its scissor)
+        }
+        VkClearValue zero = {};
+        c.clear_quad(0, {rect, 0, 1}, zero, VK_IMAGE_ASPECT_STENCIL_BIT);
+        in_pass_barrier(c);
+        c.set_program(date_program_);
+        c.set_opaque_state();
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        c.set_depth_test(false, false);
+        c.set_color_write_mask(0);
+        c.set_stencil_test(true);
+        c.set_stencil_ops(VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(1, 1, 1);
+        c.set_scissor(rect);
+        PrimPush push = {};
+        push.inv_size[0] = 1.0f / float(colour.width());
+        push.inv_size[1] = 1.0f / float(colour.height);
+        push.flags = datm ? F_DATM : 0;
+        c.push_constants(&push, 0, sizeof(push));
+        c.set_input_attachments(0, 5);
+        // (a triangle over the whole target: the scissor is the rectangle)
+        float fw = float(colour.width()), fh = float(colour.height);
+        Vertex corners[3] = {};
+        corners[0].x = -1.0f;
+        corners[0].y = -1.0f;
+        corners[1].x = 2.0f * fw + 1.0f;
+        corners[1].y = -1.0f;
+        corners[2].x = -1.0f;
+        corners[2].y = 2.0f * fh + 1.0f;
+        void *v = c.allocate_vertex_data(0, sizeof(corners), sizeof(Vertex));
+        memcpy(v, corners, sizeof(corners));
+        set_vertex_attribs(c);
+        c.draw(3);
+    }
+
+    // A pass of a DATE batch drawn where the stencil is set. A pixel it writes with FBA has alpha bit 7 set, so with
+    // DATM 0 the primitives after it in the batch may no longer draw there: its stencil is cleared. A pixel whose
+    // alpha it writes without FBA has the bit the fragment's (not known to the stencil): kept, and counted.
+    void draw_where_date_passes(CommandBuffer &c, bool writes_alpha, bool fba, bool datm) {
+        c.set_stencil_test(true);
+        VkStencilOp written = writes_alpha && fba && !datm ? VK_STENCIL_OP_ZERO : VK_STENCIL_OP_KEEP;
+        c.set_stencil_ops(VK_COMPARE_OP_EQUAL, written, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(1, 1, 1);
+        if (writes_alpha && !fba) {
+            counts_date_alpha_unknown_++;
+        }
+    }
+
+    void set_vertex_attribs(CommandBuffer &c) {
+        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
+        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, z));
+        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba));
+        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
+        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
+    }
+
+    // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
+    void choose_depth_format() {
+        const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                           VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+        bool asked = !getenv("KF4_PC_STENCIL") || strcmp(getenv("KF4_PC_STENCIL"), "0") != 0;
+        for (VkFormat f : {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}) {
+            if (asked && device_.image_format_is_supported(f, need)) {
+                depth_format_ = f;
+                stencil_on_ = true;
+                return;
+            }
+        }
+        if (asked) {
+            fprintf(stderr, "[pcr] no depth format with a stencil: DATE by a copy of the target\n");
         }
     }
 
@@ -1704,6 +1930,13 @@ private:
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         program_ = device_.request_program(vs, fs);
+        ResourceLayout date = {};
+        date.push_constant_size = sizeof(PrimPush);
+        date.sets[0].input_attachment_mask = 1u << 5;
+        date.sets[0].fp_mask = 1u << 5;
+        date.sets[0].meta[5].array_size = 1;
+        Shader *dfs = device_.request_shader(pcr_spv_pcr_date_frag, sizeof(pcr_spv_pcr_date_frag), &date);
+        date_program_ = device_.request_program(vs, dfs);
         ResourceLayout nd = {};
         nd.push_constant_size = sizeof(PrimPush);
         nd.sets[1].storage_buffer_mask = 1u;
@@ -1730,7 +1963,11 @@ private:
     Device &device_;
     GpuTimes &times_;
     Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
-            *native_700_program_ = nullptr;
+            *native_700_program_ = nullptr, *date_program_ = nullptr;
+    // the depth surfaces' format, and whether DATE is by its stencil (KF4_PC_STENCIL=0: by a copy, as before)
+    VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
+    bool stencil_on_ = false;
+    PassReads pass_reads_ = PassReads::nothing;
     BufferHandle picture_;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
@@ -1743,6 +1980,8 @@ private:
     std::unordered_map<uint32_t, SamplerHandle> samplers_; // (by sampler_for's key)
     // KF4_PC_SAMPLER=0: every texture by the GS's read (to compare with)
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
+    // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
+    const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
     Batch batch_;
     bool batch_open_ = false;
@@ -1761,18 +2000,21 @@ private:
     uint32_t kept_page_ = 0;
     size_t fifo_at_ = 0;
     uint64_t counts_unsupported_shape_ = 0, counts_unsupported_upload_ = 0, counts_untextured_ = 0,
-             counts_clut_not_uploads_ = 0;
+             counts_clut_not_uploads_ = 0, counts_date_by_stencil_ = 0, counts_date_alpha_unknown_ = 0,
+             counts_blends_by_shader_ = 0, counts_native_shader_blends_ = 0;
 
 public:
     void print(FILE *out) const {
         TextureStoreCounts t = store_.counts();
         const CanvasCounts &c = counts_;
         fprintf(out,
-                "[stats] pc canvas: %llu primitives (%llu triangles) in %llu batches, %llu passes; textures %llu "
+                "[stats] pc canvas: %llu primitives (%llu triangles) in %llu batches, %llu passes; %llu native batches in %llu "
+                "draw calls; textures %llu "
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
                 "from uploads; %llu uploads into surfaces, %llu copies between them\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
-                (unsigned long long)c.passes, (unsigned long long)c.textures_uploaded,
+                (unsigned long long)c.passes, (unsigned long long)c.native_batches,
+                (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
                 (unsigned long long)c.textures_from_surfaces, (unsigned long long)c.textures_missing,
                 (unsigned long long)counts_untextured_, (unsigned long long)c.surfaces_made,
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
@@ -1783,9 +2025,13 @@ public:
                 (unsigned long long)c.textures_sampled, (unsigned long long)c.exact_textures_region,
                 (unsigned long long)c.exact_textures_part);
         fprintf(out,
-                "[stats] pc canvas, not done yet: %llu blends, (%llu DATE draws done), %llu textures on a surface, %llu "
-                "copies, %llu uploads into a surface, %llu points and lines, %llu CLUT loads not from uploads\n",
-                (unsigned long long)c.unsupported_blends, (unsigned long long)c.date_draws,
+                "[stats] pc canvas, not done yet: %llu blends (%llu batches blended by the shader, %llu of them native: their "
+                "triangles may overlap), (%llu DATE draws done, %llu by the stencil, %llu writing an "
+                "alpha the stencil does not know), %llu textures on a surface, %llu copies, %llu uploads into a surface, "
+                "%llu points and lines, %llu CLUT loads not from uploads\n",
+                (unsigned long long)c.unsupported_blends, (unsigned long long)counts_blends_by_shader_,
+                (unsigned long long)counts_native_shader_blends_, (unsigned long long)c.date_draws,
+                (unsigned long long)counts_date_by_stencil_, (unsigned long long)counts_date_alpha_unknown_,
                 (unsigned long long)c.unsupported_texture_on_surface, (unsigned long long)c.unsupported_copies,
                 (unsigned long long)counts_unsupported_upload_, (unsigned long long)counts_unsupported_shape_,
                 (unsigned long long)counts_clut_not_uploads_);

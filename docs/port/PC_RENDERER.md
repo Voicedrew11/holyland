@@ -84,10 +84,13 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
   what is left of step 3. In order:
   1. **GPU timestamps**: built 2026-10-30 (`pcr_gpu_time.h`; "Item 2 built", below).
   2. **Textures by the GPU's sampler**: built 2026-10-30 ("Item 2 built", below).
-  3. **DATE by the stencil** (the copy of the whole surface goes); a blend with no Vulkan form copies only the
-     rectangle drawn.
-  4. **Merged draws**: batches of one state into one call (GIF primitives already are; native batches by runs: grow
-     them across draws, as P7's `grow_last_draw`).
+  3. **DATE by the stencil**: built 2026-10-30 ("Step 4b's rest built", below), and a blend with no Vulkan form
+     the GS's in the shader from a copy of only the rectangle drawn.
+  4. **Merged draws**: measured 2026-10-30, not built ("Step 4b's rest built", below): the native batches already
+     go out at about 1.2 draw calls a batch, and the draw calls were not where pc's time went: a texture store's
+     page walk was, now fixed (pc keeps 60 vblanks a second at 30, was 20). What is left to merge is batches across
+     state changes (textures, CLUTs), which is bindless textures; better designed with step 5, whose pictures
+     between draw the frame's calls again.
   5. **Step 5, the pictures between on the GPU**: `fast` makes 239.75 pictures a second at 240 (map 000); pc 61,
      because native draws are off under it whenever there are pictures between (`port_gs_native_draws_now`:
      frame_interp.c's CPU way cannot move a native draw), so the game sends VU1's packets (2.56M VU1 runs and 9.3 GB
@@ -228,6 +231,57 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## Step 4b's rest built (2026-10-30): DATE by the stencil, shader blending from a rectangle, pc's thread freed
+
+**What limited pc was its own thread, and not its draw calls.** Sampled at map 000 (30, native draws; 160 samples of
+`kf4-pc` with `eu-stack`): 76% of the thread was `TextureStore::drawn`, which after each batch marked the pages it
+drew over by walking every 8 x 8 block of its rectangle through `gsn_vram_offset` (a native batch's rectangle is its
+scissor: the whole screen, twice with Z, about 100 batches a picture). `pages_of` (`pcr_textures.h`) now works out the
+pages of a rectangle on a page's start (every FRAME and ZBUF) by rows and columns of pages, as `gsn_vram.c`'s
+`pixel_nibble` has them, and walks the blocks only for other bases; `pcr_textures_test` checks it against every pixel's
+address for every format, Z formats too (3,000 rectangles a seed, wrapping and odd widths). After it, the same thread
+waits 59% of the time.
+
+| `pace_test`, 15 s, two runs a side alternated | the build before | now |
+|---|---|---|
+| at 30, native draws: game vblanks a second, maps 000 / 009 | 21.2-21.3 / 19.9-20.4 | 59.93 / 59.93 |
+| at 240 (packets): pictures a second, 000 / 009 | 61.4-62.0 / 60.7-60.8 | 61.4-63.6 / 60.9 |
+| GPU ms a picture at 240, 000 / 009 | 1.50-1.51 / 1.51-1.53 | 1.43-1.44 / 1.46-1.47 |
+
+At 240 pc is still held by the packets of its pictures between (step 5); at 30 the GPU's time is within the runs'
+noise (1.18-1.46 ms against 1.24-1.46).
+
+**DATE by the stencil.** Depth surfaces are D32F with a stencil (D24S8 where the device has no D32FS8; neither: DATE
+by a copy). A DATE batch's pass has its Z buffer's surface (ZBUF's, ZTE on or off) and reads its colour target as an
+input attachment of itself. Before the batch, over the rectangle it draws in, the stencil is cleared and set where
+the target's alpha bit 7 is DATM (`pcr_date.frag`); the batch draws where it is set. A pass that writes alpha with FBA
+and DATM 0 clears the stencil where it draws, so a later primitive of the batch no longer draws there, as on the GS
+(the copy let overlapping shadow triangles darken twice). A pass that writes alpha without FBA writes a bit 7 the
+stencil cannot know: kept, and counted (`[stats] pc canvas, not done yet: ... writing an alpha the stencil does not
+know`: at 000, 603 of 1,080 DATE draws, a 2D batch of DATM 1 sprites; the copy was no more exact there).
+`KF4_PC_STENCIL=0`: DATE by a copy of the surface, as before. The GPU's "DATE copy" (0.04 ms a picture) is gone.
+
+**A blend with no Vulkan form** is the GS's `(A - B) * C >> 7 + D` in `pcr_prim.frag` (as `gs_frag.h`'s: COLCLAMP,
+PABE, a 24-bit frame's Ad 0x80), Vulkan's blend off, reading the destination from a copy of only the batch's
+rectangle (GPU work "blend copy"). A GIF batch is split where a primitive's pixels overlap those of the batch's
+primitives before it, so each reads the destination as the GS would; a native batch's triangles cannot be split on the
+CPU and are counted (`... of them native: their triangles may overlap`). None of the four spots has such a blend (0
+counted before and after); checked by sending every blended GIF batch through it (a diagnostic build, native draws
+off): within 3 levels of Vulkan's blend at 000, 009:2 and 063; at 009, 2,269 pixels over 8, all in the picture's top
+row, where both differ from the native GS by about 215 levels anyway. `KF4_PC_SHADER_BLEND=0`: the nearest Vulkan
+blend, as before (counted).
+
+**Pictures against the native GS** (vblank 2700, 30, native draws; pixels over 8 levels): 000 432,166 -> 428,442; 009
+868,994 (the same); 009:2 464,453 -> 458,533; 063 483,639 (the same). With `KF4_PC_STENCIL=0 KF4_PC_SHADER_BLEND=0`
+byte for byte with the build before (204 pictures a spot at 240, 51 at 30).
+
+**Merged draws, measured.** At 000 (3,397 vblanks) 1,974,468 native batches went out in 398,504 draw calls (`--stats`'
+`pc canvas` line now has them) and 332,623 canvas batches in all: about 117 calls a vblank. Growing runs across draws
+would save at most the calls past one a batch (about 66,000, 20 a vblank); `CommandBuffer::draw` was 3 of 160 samples.
+Not built. What breaks batches is state (texture, CLUT, registers), so merging further is bindless textures and the
+material in the draw's record; it pays when step 5 draws the frame's calls again for each picture between, and is to
+be designed with it.
 
 ## Item 2 built (2026-10-30): GPU timestamps, and textures by the GPU's sampler
 

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -707,6 +708,41 @@ bool colour_texels_rules() {
     return ok;
 }
 
+// pages_of against every pixel's address as gsn_vram.c has it: random rectangles of every format (the Z formats too),
+// bases on a page's start and not, widths odd and 0, rectangles that wrap at 2048 and at the end of VRAM
+bool pages_of_rules(uint64_t seed) {
+    const uint32_t formats[] = {GSN_PSMCT32, GSN_PSMCT24, GSN_PSMCT16, GSN_PSMCT16S, GSN_PSMT8,  GSN_PSMT4,
+                                GSN_PSMT8H,  GSN_PSMT4HL, GSN_PSMT4HH, GSN_PSMZ32,   GSN_PSMZ24, GSN_PSMZ16,
+                                GSN_PSMZ16S};
+    Rng rng{seed * 0x9E3779B97F4A7C15ull + 7};
+    for (int round = 0; round < 3000; round++) {
+        pcr::VramRect r;
+        r.psm = formats[rng.below(std::size(formats))];
+        r.bp = rng.one_in(3) ? rng.below(0x4000) : rng.below(512) * 32;
+        r.bw = rng.one_in(8) ? rng.below(64) : 1 + rng.below(16);
+        r.x = rng.one_in(4) ? 2048 - rng.below(200) : rng.below(1024);
+        r.y = rng.one_in(4) ? 2048 - rng.below(200) : rng.below(1024);
+        r.width_px = rng.one_in(10) ? 0 : 1 + rng.below(rng.one_in(8) ? 2048 : 300);
+        r.height_px = 1 + rng.below(rng.one_in(8) ? 40 : 300);
+        std::bitset<512> want;
+        for (uint32_t y = 0; y < r.height_px; y++) {
+            for (uint32_t x = 0; x < r.width_px; x++) {
+                uint32_t at = gsn_vram_offset(r.psm, r.bp, r.bw, (r.x + x) % 2048, (r.y + y) % 2048, nullptr);
+                want.set(at / 8192 % 512);
+            }
+        }
+        std::bitset<512> got = pcr::pages_of(r);
+        if (got != want) {
+            printf("pcr_textures_test: pages_of, seed %llu round %d: psm 0x%x bp 0x%x bw %u (%u, %u) %ux%u: %zu pages, "
+                   "not %zu\n",
+                   (unsigned long long)seed, round, r.psm, r.bp, r.bw, r.x, r.y, r.width_px, r.height_px, got.count(),
+                   want.count());
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -721,6 +757,7 @@ int main(int argc, char **argv) {
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
         ok = vram_round_trip(seed) && ok;
+        ok = pages_of_rules(seed) && ok;
     }
     printf("pcr_textures_test: %s\n", ok ? "ok" : "FAILED");
     return ok ? 0 : 1;

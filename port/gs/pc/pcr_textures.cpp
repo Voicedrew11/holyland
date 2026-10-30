@@ -259,6 +259,35 @@ struct KeyHash {
 
 } // namespace
 
+std::bitset<512> pages_of(const VramRect &rect) {
+    VramRect r = rect;
+    if (!gsn_psm_valid(r.psm)) {
+        r.psm = GSN_PSMCT32;
+    }
+    r = wrapped(r);
+    std::bitset<kPages> pages;
+    if (r.width_px == 0 || r.height_px == 0) {
+        return pages;
+    }
+    if (r.bp % kBlocksPerPage != 0) {
+        each_block(r, [&](uint32_t block, uint32_t, uint32_t) {
+            pages.set(block / kBlocksPerPage);
+            return true;
+        });
+        return pages;
+    }
+    // (a pixel's page is the base's, on by its row of pages and its column, as gsn_vram.c's pixel_nibble has it: the
+    // blocks within a page, the Z formats' arrangement too, stay in it)
+    uint32_t pw = page_width_px(r.psm), ph = page_height_px(r.psm);
+    uint32_t stride = pw == 128 ? r.bw >> 1 : r.bw;
+    for (uint32_t y = r.y / ph * ph; y < r.y + r.height_px; y += ph) {
+        for (uint32_t x = r.x / pw * pw; x < r.x + r.width_px; x += pw) {
+            pages.set((r.bp / kBlocksPerPage + y % kWrap / ph * stride + x % kWrap / pw) % kPages);
+        }
+    }
+    return pages;
+}
+
 uint64_t TextureKey::hash() const {
     uint64_t h = mix(0, uint64_t(tbp) | uint64_t(tbw) << 14 | uint64_t(psm) << 20 | uint64_t(tw_log2) << 26 |
                             uint64_t(th_log2) << 30 | uint64_t(levels) << 34);
@@ -695,19 +724,20 @@ void TextureStore::drawn(const VramRect &rect) {
     if (!gsn_psm_valid(r.psm)) {
         r.psm = GSN_PSMCT32; // (a format the GS does not have: all of each word taken as drawn)
     }
-    r = wrapped(r);
     uint8_t parts = word_parts(r.psm);
     uint64_t now = ++s.seq;
-    each_block(r, [&](uint32_t block, uint32_t, uint32_t) {
-        uint32_t page = block / kBlocksPerPage;
+    std::bitset<kPages> pages = pages_of(r);
+    for (uint32_t page = 0; page < kPages; page++) {
+        if (!pages[page]) {
+            continue;
+        }
         if (parts & kLowParts) {
             s.drawn_low_at[page] = now;
         }
         if (parts & kTopParts) {
             s.drawn_top_at[page] = now;
         }
-        return true;
-    });
+    }
 }
 
 void TextureStore::copied(const TransferRegs &regs) {
