@@ -1,37 +1,84 @@
-# holyland
+# CLAUDE.md
 
-The PC port of King's Field IV, built from the kfiv-decomp source. Start with
-[docs/port/README.md](docs/port/README.md). [docs/port/RULES.md](docs/port/RULES.md) is for editing the game code
-(`work/src/game`) only; renderer work starts below instead.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+holyland is a native PC port (Windows, Linux; 64-bit) of King's Field IV, built from the
+[kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PS2 game. The game's own
+C is compiled as is (with patches); `port/` stands in for the PS2 beneath it. No game data is in the repo:
+running needs the owner's disc image (`--disc <iso or folder>` or `KF4_DISC`).
+
+`README.md` is out of date (it still says "step 0"). Trust the code and the git log.
+
+## Build, test, run
+
+```sh
+git submodule update --init                # decomp/ and third_party/parallel-gs
+cmake --preset linux-clang                 # or linux-gcc, windows-clang (llvm-mingw); output in out/<preset>/
+cmake --build out/linux-clang
+ctest --test-dir out/linux-clang           # all unit tests
+ctest --test-dir out/linux-clang -R pcr_gif   # one test (names: add_test in CMakeLists.txt)
+out/linux-clang/kf4 --disc <image> [--renderer native|gs|both|modern|fast|pc] ...
+out/linux-clang/kf4 --help                 # every option
+```
+
+- The game code is GNU C: MSVC `cl` cannot build it.
+- Sanitizers: `-DKF4_SANITIZE=address,undefined` (or `thread`). Use clang (`out/linux-clang-asan`,
+  `out/linux-clang-tsan`); the gcc sanitizer builds don't link.
+- Useful run options for testing without playing: `--headless` (needs `--dump-frames` to produce
+  anything), `--teleport [VBLANK:]MAP[:PLACE]` with `--invincible`, `--input FILE` (`tests/*.pad`),
+  `--frame-rate 240`, `--state-save-at`, `--gs-capture-at`.
+- Many `KF4_*` environment variables switch debug paths and alternatives on and off (grep `getenv("KF4_`).
+- No `.clang-format` or `.clang-tidy` in the project.
+
+Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py`, `pace_test.py`
+(pictures a second at a few maps), `map_tour.py` (every map pictured), `screen_fx_test.py`,
+`flash_find.py`. `kf4-gsreplay` (built with the game) replays a GS capture (`.kf4gs`, F9 in game).
 
 ## The decomp is read-only
 
-- Never edit `decomp/` (the kfiv-decomp submodule) or anything under `out/<preset>/decomp_src/` (the
-  patched copy that is compiled; compiler errors point into it).
-- Change game code only in `work/`: `python3 tools/patches.py apply`, edit `work/src/game`, then
-  `python3 tools/patches.py save` and commit `patches/`. The same path below `work/` as below
-  `decomp_src/` is the file to edit.
-- Never hand-edit the files in `patches/`; `patches.py save` writes them.
-- Fixes to the reconstruction itself (names, types, structs) go to kfiv-decomp, not here.
-- `game/` and `port/` are ordinary source, edited in place.
+- `decomp/` is a submodule pinned to one commit and must not be edited (configure fails if it is).
+- PC edits to game code are patches in `patches/` (`patches/game/<folder>.patch`, `_top.patch`,
+  `nonmatching.patch`). At configure, CMake copies the decomp, applies the patches, and compiles the copy
+  in `out/<preset>/decomp_src/`. Compiler errors point there, but those files are read-only and
+  regenerated each configure.
+- To change game code: `python3 tools/patches.py apply` (builds the `work/` git copy), edit in `work/`,
+  then `python3 tools/patches.py save` to write `patches/`. `upgrade` moves the decomp pin and carries the
+  patches along.
+- `tools/port_census.py` (what still stops each folder compiling) and `tools/port_abi_check.py`
+  (declarations that disagree with definitions; these break on 64-bit even when they compile).
+- Fixes to the reconstruction itself belong upstream in kfiv-decomp.
 
-## Before changing anything that draws
+## Layout
 
-- Read [docs/port/RENDERER.md](docs/port/RENDERER.md) (where things are) and, in
-  [docs/port/PC_RENDERER.md](docs/port/PC_RENDERER.md), only "Where it stands" at the top: what is built, what limits
-  the pictures, what is next and the owner's decisions. The rest of that file is history, read when a section is named.
-- **Every check in RENDERER.md's "The checks before a renderer change goes in" runs before the commit**: the build,
-  ctest (`gsn_draw` among them), `vu1_test`, boot and frame tests, the change's switch byte for byte, the map tour, ASan
-  + UBSan, and speed if it could cost. A change confined to `port/gs/pc/` skips the map tour and native/fast byte for
-  byte (RENDERER.md says what stands in). One that cannot run is named in the commit with why, and the owner is asked
-  first.
-- Measuring on this machine (spots, picture comparisons, pace_test, sampling, sanitizers, disk): RENDERER.md,
-  "Measuring on Linux". Put it, or point to it, in every subagent's brief: subagents see no memory.
-- A new check that guards correctness (which draws can be taken, which results reused) is exact: it compares what is
-  read. Never removed, loosened or replaced by a count to win speed (the owner, 2026-10-29).
-- Measure before estimating: give a number for a gain only from a measure (a profile's share, a count of what a change
-  would take), and say what it rests on.
+- `game/`: new game-side features in C that live with the game code (quick save, automap, cheats,
+  widescreen, draw distance, frame interpolation, screen effects, stats, weapon sets) and
+  `game/native_draw/` (draws the game's models directly instead of through its VU1 packets).
+- `port/platform/`: the PS2 under the game: kernel and threads (`fiber.c`), memory and EE addresses, DMA,
+  VIF1, VU1 (interpreter `vu1.c` plus HLE per VU1 program `vu1_hle_*.c`), disc, save states, pacing
+  (`refresh_clock.c`, `unlocked_rate.c`, `screen_vblank.c`), the Vulkan presenter, and `main_host.c` (options).
+- `port/sdk/`: the PS2 SDK libraries the game links against (libgraph, libpad, libcdvd, libmc, libc/libm
+  with PS2-exact results, MPEG). `port/include/`: their headers. `port/audio/`: the IOP sound side.
+- `port/gs/`: the Graphics Synthesizer. Three implementations behind `port/platform/gs_api.h`, chosen
+  by `--renderer`:
+  - `gs_parallel.cpp`: paraLLEl-GS (`third_party/parallel-gs`), the accurate GS emulator (`gs`).
+  - `native/` (`gsn*`): the native GS, a Vulkan renderer at higher resolution (`native`, `modern`,
+    `fast`). Built as one translation unit, `gsn.cpp`, from many `.inc` files; also holds upscaling
+    (FSR/DLSS).
+  - `pc/` (`pcr*`): the PC renderer (`--renderer pc`), drawing the GS's input with its own code and
+    none of the native GS's. It shares `gsn.h`'s interface and plain types. Current work on branch
+    `pc/renderer`; the plan and where it stands are in `docs/port/PC_RENDERER.md`.
+- `port/render/`: CPU-side records shared by the renderers (VU1 recording, part moves for pictures
+  between game frames). Shared shader headers in `port/render/shaders/`.
+- `port/overlay/`: the ImGui overlay (settings, stats panels, profiler, automap view).
+- `cmake/granite_*.cmake`: patches written into paraLLEl-GS's Granite at each configure. The submodule
+  shows as dirty because of them (`ignore = dirty`); that's expected.
 
-## Tests never touch the player's data
+## Concepts that span files
 
-Every run of the game in a test sets `KF4_DATA_DIR` to a temporary folder.
+- The game runs at the PS2's rates (30/60 game frames a second); higher display rates draw
+  "pictures between" game frames by moving the kept frame's vertices to the picture's time
+  (`frame_interp.c`, `part_moves`, `pcr_between`).
+- EE addresses stay 32-bit integers in game structs; the port maps them to host memory
+  (`port/platform/ee_address.c`, `memory.c`).
+- Save states are exact but tied to one build. Quick saves (F2/F4) are the game's own save and survive
+  updates.
