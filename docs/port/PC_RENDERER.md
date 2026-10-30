@@ -187,7 +187,12 @@ whole; drawing the native draws themselves is step 3.
   4,263 of 286,720 pixels differ by more than 8 (blend rounding, the 2D's edges); the torches, the HUD's gauge, the
   menus and the scrolling textures as native. `KF4_PC_CENSUS=1` counts what the game sends (targets, tests, blends,
   textures, transfers) for `--stats`.
-- **Not yet**: native draws (step 3), save states (the PC renderer saves nothing: next), MSAA, `--native-colour`,
+- **Save states** (built after): the GS's 4 MB first (the uploads' chunks in order, the colour surfaces' pixels over
+  the pages drawn last), then the registers, Q and the CLUT's mirror; taken back as one upload of the whole memory.
+  States of the native GS load into the PC renderer and the PC renderer's into the native GS by their first 4 MB
+  (gs.c's take_other_vram). Each of the three, loaded at 2600 at map 000, gives at 2700 the picture of the run that
+  went on (0 pixels differ). Z buffers are not kept (the game draws its Z anew each frame).
+- **Not yet**: native draws (step 3), MSAA, `--native-colour`,
   anisotropic filtering, captures, the overlay's settings; performance not measured yet.
 
 # Part 1: the PC renderer (P1-P6)

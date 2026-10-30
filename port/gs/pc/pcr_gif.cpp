@@ -413,6 +413,14 @@ void GifFrontEnd::emit(PrimitiveShape shape, uint32_t prim, uint32_t vertex_coun
     events_.primitive(p);
 }
 
+void GifFrontEnd::restore(const GsRegisterFile &file) {
+    file_ = file;
+    paths_ = {};
+    queue_ = {};
+    queued_ = 0;
+    upload_.reset();
+}
+
 void GifFrontEnd::begin_transfer(uint32_t direction) {
     cut_upload_short();
     const TransferRegisters transfer = {file_.reg[gs_reg::bitbltbuf], file_.reg[gs_reg::trxpos],

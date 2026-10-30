@@ -1602,6 +1602,10 @@ void port_gs_state(PortStateIo *io) {
             native_loaded = 1;
         } else if (have_gs && io->loading && !backend_bytes) {
             take_other_vram(io, native_bytes, 0);
+        } else if (have_native && io->loading && native_bytes >= (4u << 20)) {
+            /* the native GS's state in the PC renderer or the PC renderer's in the native GS: both begin with
+               the GS's 4 MB */
+            take_other_vram(io, native_bytes, 1);
         } else
 #endif
         {

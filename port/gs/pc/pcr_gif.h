@@ -123,6 +123,9 @@ public:
 
     const GsRegisterFile &registers() const { return file_; }
 
+    // A state loaded: its register file taken, every path between packets, no vertex queued, no transfer begun
+    void restore(const GsRegisterFile &file);
+
 private:
     enum class TagMode : uint8_t { packed, reglist, image };
     struct PathTag {

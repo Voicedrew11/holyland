@@ -357,6 +357,43 @@ public:
         evict_textures();
     }
 
+    std::vector<uint8_t> vram_image() {
+        flush_batch();
+        std::vector<uint8_t> image = store_.vram_image();
+        for (auto &surface : colour_) {
+            if (surface->psm != GSN_PSMCT32) {
+                continue;
+            }
+            std::vector<uint32_t> pixels;
+            if (!read_surface(*surface, pixels)) {
+                continue;
+            }
+            uint32_t w = surface->width();
+            for (uint32_t page = surface->base_page; page < surface->end_page(); page++) {
+                uint32_t px, py;
+                if (store_.page_source(page) != TextureSource::DrawnSurface || !surface->page_place(page, px, py) ||
+                    py + 32 > surface->height) {
+                    continue;
+                }
+                for (uint32_t y = 0; y < 32; y++) {
+                    gsn_vram_write_row(image.data(), GSN_PSMCT32, surface->base_page * 32, surface->fbw, px, py + y, 64,
+                                       &pixels[size_t(py + y) * w + px]);
+                }
+            }
+        }
+        return image;
+    }
+
+    TextureStore::ClutState clut_state() const {
+        return store_.clut_state();
+    }
+
+    void restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut) {
+        forget();
+        store_.restore_vram(vram);
+        store_.set_clut_state(clut);
+    }
+
     bool scanout(CommandBuffer &out, const ShownRect &rect, const Image &dst) {
         flush_batch();
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
@@ -743,6 +780,50 @@ private:
         counts_.copies_between_surfaces++;
     }
 
+    // A rectangle of a colour surface's GS pixels (the middle of each at the canvas's scale) read from the GPU, as
+    // RGBA8 (w x h). Waits for the GPU.
+    bool read_pixels(Surface &from, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint32_t> &out) {
+        ImageCreateInfo info = ImageCreateInfo::render_target(w, h, VK_FORMAT_R8G8B8A8_UNORM);
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        ImageHandle one = device_.create_image(info, nullptr);
+        BufferCreateInfo binfo = {};
+        binfo.domain = BufferDomain::CachedHost;
+        binfo.size = VkDeviceSize(w) * h * 4;
+        binfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        BufferHandle buffer = device_.create_buffer(binfo, nullptr);
+        if (!one || !buffer) {
+            return false;
+        }
+        end_pass();
+        CommandBuffer &c = cmd();
+        full_barrier(c);
+        int32_t x0 = int32_t(x * scale_[0]), y0 = int32_t(y * scale_[1]);
+        c.blit_image(*one, *from.image, {0, 0, 0}, {int32_t(w), int32_t(h), 1}, {x0, y0, 0},
+                     {int32_t(w * scale_[0]), int32_t(h * scale_[1]), 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
+        full_barrier(c);
+        c.copy_image_to_buffer(*buffer, *one, 0, {0, 0, 0}, {w, h, 1}, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        c.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                  VK_ACCESS_2_HOST_READ_BIT);
+        Fence fence;
+        device_.submit(cmd_, &fence);
+        cmd_.reset();
+        fence->wait();
+        const uint8_t *mapped = static_cast<const uint8_t *>(device_.map_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT));
+        if (!mapped) {
+            return false;
+        }
+        out.resize(size_t(w) * h);
+        memcpy(out.data(), mapped, out.size() * 4);
+        device_.unmap_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT);
+        return true;
+    }
+
+    bool read_surface(Surface &s, std::vector<uint32_t> &out) {
+        return read_pixels(s, 0, 0, s.width(), s.height, out);
+    }
+
     // A read-back of a drawn CT32 surface: its GS pixels (the middle of each at the canvas's scale) read from the GPU
     bool read_back_surface(const TransferRegisters &t) {
         uint32_t sbp = bits(t.bitbltbuf, 0, 14), sbw = bits(t.bitbltbuf, 16, 6), spsm = bits(t.bitbltbuf, 24, 6);
@@ -762,40 +843,12 @@ private:
         if (!from || fx + sx + w > from->width() || fy + sy + h > from->height) {
             return false;
         }
-        ImageCreateInfo info = ImageCreateInfo::render_target(w, h, VK_FORMAT_R8G8B8A8_UNORM);
-        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        ImageHandle one = device_.create_image(info, nullptr);
-        BufferCreateInfo binfo = {};
-        binfo.domain = BufferDomain::CachedHost;
-        binfo.size = VkDeviceSize(w) * h * 4;
-        binfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        BufferHandle buffer = device_.create_buffer(binfo, nullptr);
-        if (!one || !buffer) {
-            return false;
-        }
-        end_pass();
-        CommandBuffer &c = cmd();
-        full_barrier(c);
-        int32_t x0 = int32_t((fx + sx) * scale_[0]), y0 = int32_t((fy + sy) * scale_[1]);
-        c.blit_image(*one, *from->image, {0, 0, 0}, {int32_t(w), int32_t(h), 1}, {x0, y0, 0},
-                     {int32_t(w * scale_[0]), int32_t(h * scale_[1]), 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
-        full_barrier(c);
-        c.copy_image_to_buffer(*buffer, *one, 0, {0, 0, 0}, {w, h, 1}, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
-        c.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
-                  VK_ACCESS_2_HOST_READ_BIT);
-        Fence fence;
-        device_.submit(cmd_, &fence);
-        cmd_.reset();
-        fence->wait();
-        const uint8_t *mapped = static_cast<const uint8_t *>(device_.map_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT));
-        if (!mapped) {
+        std::vector<uint32_t> pixels;
+        if (!read_pixels(*from, fx + sx, fy + sy, w, h, pixels)) {
             return false;
         }
         fifo_.assign((size_t(w) * h * 4 + 15) / 16 * 16, 0);
-        memcpy(fifo_.data(), mapped, size_t(w) * h * 4);
-        device_.unmap_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT);
+        memcpy(fifo_.data(), pixels.data(), pixels.size() * 4);
         return true;
     }
 
@@ -1421,6 +1474,15 @@ void Canvas::read_fifo(void *dst, uint32_t qwords) {
 }
 void Canvas::forget() {
     impl_->forget();
+}
+std::vector<uint8_t> Canvas::vram_image() {
+    return impl_->vram_image();
+}
+TextureStore::ClutState Canvas::clut_state() const {
+    return impl_->clut_state();
+}
+void Canvas::restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut) {
+    impl_->restore(vram, clut);
 }
 bool Canvas::scanout(CommandBuffer &cmd, const ShownRect &rect, const Image &dst) {
     return impl_->scanout(cmd, rect, dst);

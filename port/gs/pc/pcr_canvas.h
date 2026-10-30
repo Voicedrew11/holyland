@@ -25,6 +25,7 @@
 
 #include "device.hpp"
 #include "pcr_gif.h"
+#include "pcr_textures.h"
 
 namespace pcr {
 
@@ -66,6 +67,13 @@ public:
     void read_fifo(void *dst, uint32_t qwords);
     // A state loaded: nothing of the GS's memory is known any more
     void forget();
+
+    // Save states: the GS's 4 MB (the uploads', with the colour surfaces' pixels over the pages drawn last) and the
+    // CLUT buffer; taken back as the uploads' (the surfaces made again from them as they are drawn into or shown).
+    // Z buffers are not kept (the game draws its Z anew each frame).
+    std::vector<uint8_t> vram_image();
+    TextureStore::ClutState clut_state() const;
+    void restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut);
 
     // Everything drawn so far recorded, the shown rectangle copied (scaled to dst's size) into dst, which the
     // commands that follow in cmd may read. False when there is nothing to show (dst left as it was).

@@ -163,6 +163,25 @@ public:
     // The colours a texture with this TEX0 sees, from the mirror
     ClutColours clut_colours(uint64_t tex0, uint64_t texa) const;
 
+    // The GS's 4 MB as the uploads made it (each kept chunk written in the order it came, over zeroes): a save
+    // state's VRAM, which the caller completes with what its surfaces drew
+    std::vector<uint8_t> vram_image();
+    // A state's (or another renderer's) VRAM taken: everything forgotten, then the 4 MB as one upload (the whole
+    // memory read as 1024 x 1024 PSMCT32 at buffer width 16, which covers every byte once)
+    void restore_vram(std::span<const uint8_t> vram);
+
+    // An 8 KB page as a whole: the uploads' (FromUploads), drawn over since (DrawnSurface), or neither
+    TextureSource page_source(uint32_t page) const;
+
+    // The CLUT buffer's mirror, for save states
+    struct ClutState {
+        std::array<uint16_t, 512> clut{};
+        std::array<uint8_t, 512> unloaded{}; // 1: not loaded from uploads
+        std::array<uint32_t, 2> cbp{};
+    };
+    ClutState clut_state() const;
+    void set_clut_state(const ClutState &state);
+
     // A state loaded: nothing of VRAM is known any more (chunks, decodes and the CLUT forgotten; the counts
     // go on)
     void forget();

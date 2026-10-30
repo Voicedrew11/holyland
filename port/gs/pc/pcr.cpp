@@ -20,6 +20,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -34,6 +35,7 @@
 #include "pcr_canvas.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
+#include "port/gs_capture_format.h"
 #include "device.hpp"
 #include "thread_id.hpp"
 
@@ -86,7 +88,13 @@ struct InterpPicture {
     uint64_t serial;
 };
 
-using Message = std::variant<GifPacket, VblankPicture, InterpFrame, InterpPicture>;
+// Work that must be done on the PC renderer's thread (its device's), its sender waiting: save states
+struct Job {
+    std::function<void()> work;
+    Reply *reply;
+};
+
+using Message = std::variant<GifPacket, VblankPicture, InterpFrame, InterpPicture, Job>;
 
 // The queue from the senders (the DMA controller's thread, mostly) to the PC renderer's thread, and the waits on
 // it: for the thread to be idle, for a picture's reply, for room (the packets' bytes held), for a window's
@@ -402,6 +410,10 @@ public:
         return canvas_.get();
     }
 
+    pcr::GifFrontEnd &front() {
+        return front_;
+    }
+
     Intake() : front_(*this) {
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
@@ -631,6 +643,20 @@ public:
         return clear_.rgba;
     }
 
+    // fn on the PC renderer's thread, after everything sent before; returns once it has run (false if the thread
+    // is gone)
+    bool run_job(std::function<void()> fn) {
+        Reply reply;
+        if (!inbox_.put(Job{std::move(fn), &reply}, 0, false)) {
+            return false;
+        }
+        return inbox_.wait_reply(reply) != 0;
+    }
+
+    Intake &intake() {
+        return intake_;
+    }
+
     // The canvas, once everything sent before is done (the thread idle until more is sent: the read-back FIFO's
     // caller, the DMA controller's thread, sends nothing meanwhile)
     pcr::Canvas *canvas_after_wait() {
@@ -755,6 +781,9 @@ private:
                 }
                 int result = make_picture(*v);
                 inbox_.done(0, !extra, v->reply, result);
+            } else if (Job *job = std::get_if<Job>(&*message)) {
+                job->work();
+                inbox_.done(0, false, job->reply, 1);
             } else if (std::holds_alternative<InterpFrame>(*message)) {
                 stats.interp_frames++;
                 std::get<InterpFrame>(*message).reset(); // (nothing drawn from it yet)
@@ -1179,19 +1208,73 @@ extern "C" void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t
     (void)emit; // (no state of its own yet)
 }
 
+// ---- Save states --------------------------------------------------------------------------------------
+// The PC renderer's state: the GS's 4 MB first (so that the native GS and paraLLEl-GS take it by its VRAM, as the PC
+// renderer takes theirs: gs.c's take_other_vram), then the GS's registers, the GIF's Q and the CLUT buffer's mirror
+namespace {
+constexpr size_t STATE_VRAM_BYTES = size_t(4) << 20;
+
+size_t state_bytes() {
+    return STATE_VRAM_BYTES + sizeof(pcr::GsRegisterFile::reg) + sizeof(uint32_t) +
+           sizeof(pcr::TextureStore::ClutState::clut) + sizeof(pcr::TextureStore::ClutState::unloaded) +
+           sizeof(pcr::TextureStore::ClutState::cbp);
+}
+
+} // namespace
+
 extern "C" int pcr_restore(uint32_t type, const void *data, size_t size) {
-    (void)type;
-    (void)data;
-    (void)size;
-    return 0;
+    if (!renderer() || type != KF4GS_VRAM || size != STATE_VRAM_BYTES) {
+        return 0;
+    }
+    std::vector<uint8_t> vram(static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + size);
+    Renderer &r = *renderer();
+    return r.run_job([&] {
+        pcr::TextureStore::ClutState clut;
+        clut.unloaded.fill(1);
+        clut.cbp = {UINT32_MAX, UINT32_MAX};
+        if (pcr::Canvas *canvas = r.intake().canvas()) {
+            canvas->restore(vram, clut);
+        }
+    });
 }
 
 extern "C" size_t pcr_state_size(void) {
-    return 0;
+    return renderer() ? state_bytes() : 0;
 }
 
 extern "C" void pcr_state(PortStateIo *io) {
-    (void)io;
+    if (!renderer()) {
+        return;
+    }
+    Renderer &r = *renderer();
+    std::vector<uint8_t> vram;
+    pcr::GsRegisterFile file;
+    pcr::TextureStore::ClutState clut;
+    if (!io->loading) {
+        r.run_job([&] {
+            pcr::Canvas *canvas = r.intake().canvas();
+            vram = canvas ? canvas->vram_image() : std::vector<uint8_t>(STATE_VRAM_BYTES);
+            if (canvas) {
+                clut = canvas->clut_state();
+            }
+            file = r.intake().front().registers();
+        });
+    }
+    vram.resize(STATE_VRAM_BYTES);
+    port_state_bytes(io, vram.data(), vram.size());
+    port_state_bytes(io, file.reg.data(), sizeof(file.reg));
+    port_state_bytes(io, &file.internal_q, sizeof(file.internal_q));
+    port_state_bytes(io, clut.clut.data(), sizeof(clut.clut));
+    port_state_bytes(io, clut.unloaded.data(), sizeof(clut.unloaded));
+    port_state_bytes(io, clut.cbp.data(), sizeof(clut.cbp));
+    if (io->loading) {
+        r.run_job([&] {
+            if (pcr::Canvas *canvas = r.intake().canvas()) {
+                canvas->restore(vram, clut);
+            }
+            r.intake().front().restore(file);
+        });
+    }
 }
 
 extern "C" size_t pcr_table_state_size(void) {

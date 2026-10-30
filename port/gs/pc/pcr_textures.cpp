@@ -860,6 +860,62 @@ ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
     return out;
 }
 
+std::vector<uint8_t> TextureStore::vram_image() {
+    State &s = *state_;
+    std::vector<uint64_t> ids;
+    ids.reserve(s.chunks.size());
+    for (const auto &[id, c] : s.chunks) {
+        ids.push_back(id);
+    }
+    s.sort_by_upload(ids);
+    std::fill(s.scratch.begin(), s.scratch.end(), uint8_t(0));
+    s.write_chunks(ids, {});
+    std::vector<uint8_t> image = s.scratch;
+    s.decoded.clear(); // (the scratch is not what any decode left: none is found by it, but say so plainly)
+    s.decoded_by_key.clear();
+    s.decoded_bytes = 0;
+    return image;
+}
+
+void TextureStore::restore_vram(std::span<const uint8_t> vram) {
+    forget();
+    if (vram.size() != GSN_VRAM_BYTES) {
+        return;
+    }
+    const uint64_t whole = uint64_t(16) << 16 | uint64_t(GSN_PSMCT32) << 24; // (BP 0, BW 16, PSMCT32)
+    const uint64_t size = 1024 | uint64_t(1024) << 32;
+    std::vector<uint8_t> bytes(GSN_VRAM_BYTES);
+    gsn_vram_read_image(vram.data(), whole, 0, size, bytes.data(), bytes.size() / 16);
+    upload({whole << 32, 0, size}, bytes);
+}
+
+TextureSource TextureStore::page_source(uint32_t page) const {
+    if (page >= kPages) {
+        return TextureSource::NotUploaded;
+    }
+    return state_->owners_of({page * kBlocksPerPage, 1, GSN_PSMCT32, 0, 0, 64, 32}, 0).source;
+}
+
+TextureStore::ClutState TextureStore::clut_state() const {
+    const State &s = *state_;
+    ClutState c;
+    c.clut = s.clut;
+    for (size_t i = 0; i < 512; i++) {
+        c.unloaded[i] = s.clut_unloaded[i] ? 1 : 0;
+    }
+    c.cbp = s.clut_cbp;
+    return c;
+}
+
+void TextureStore::set_clut_state(const ClutState &c) {
+    State &s = *state_;
+    s.clut = c.clut;
+    for (size_t i = 0; i < 512; i++) {
+        s.clut_unloaded[i] = c.unloaded[i] != 0;
+    }
+    s.clut_cbp = c.cbp;
+}
+
 void TextureStore::forget() {
     auto fresh = std::make_unique<State>();
     fresh->limits = state_->limits;

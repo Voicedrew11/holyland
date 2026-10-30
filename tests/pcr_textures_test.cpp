@@ -580,6 +580,36 @@ struct Run {
     }
 };
 
+// Uploads only: the store's VRAM image is the reference's whole; restored into a new store, its textures are too
+bool vram_round_trip(uint64_t seed) {
+    Run run(seed, pcr::TextureStoreLimits{});
+    for (int i = 0; i < 400; i++) {
+        run.random_upload();
+    }
+    std::vector<uint8_t> image = run.store.vram_image();
+    if (image != run.gs.vram) {
+        size_t at = 0;
+        while (at < image.size() && image[at] == run.gs.vram[at]) {
+            at++;
+        }
+        printf("pcr_textures_test: seed %llu: the VRAM image differs from the GS's at byte %zu\n",
+               (unsigned long long)seed, at);
+        return false;
+    }
+    pcr::TextureStore restored;
+    restored.restore_vram(image);
+    std::swap(run.store, restored);
+    uint64_t failures = run.tally.failures;
+    for (int i = 0; i < 300; i++) {
+        run.resolve_placed();
+    }
+    if (run.tally.failures != failures) {
+        printf("pcr_textures_test: seed %llu: a texture of the restored VRAM is not the GS's\n", (unsigned long long)seed);
+        return false;
+    }
+    return true;
+}
+
 bool run_seed(uint64_t seed) {
     // (every other seed with small limits: chunks owning nothing and decodes let go often)
     pcr::TextureStoreLimits limits;
@@ -628,6 +658,7 @@ int main(int argc, char **argv) {
     bool ok = true;
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
+        ok = vram_round_trip(seed) && ok;
     }
     printf("pcr_textures_test: %s\n", ok ? "ok" : "FAILED");
     return ok ? 0 : 1;
