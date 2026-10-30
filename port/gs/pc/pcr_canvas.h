@@ -46,10 +46,18 @@ struct ShownRect {
     uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
 };
 
-// A batch of a native draw of program 0x000 (pcr_native.h): its triangles from first_triangle in triangles (a uvec4
-// each: the arena's numbers of its corners, and of its kick with the kicks before it), drawn by the record of
-// records at instance's bits 0-29 (bit 30: Gouraud), the meshes' vertices in arena (shaders/pcr_nd000.vert)
+// The VU1 program whose maths draws a native batch (its vertex shader)
+enum class NativeProgram : uint8_t {
+    vu1_000, // shaders/pcr_nd000.vert: a triangle the arena's numbers of its corners, and of its kick with the kicks
+             // before it; instance: the record (bits 0-29), Gouraud (30)
+    vu1_280, // shaders/pcr_nd280.vert: a triangle the arena's slots of its corners and of its kick; instance: the record
+             // (bits 0-27), the context whose XYOFFSET (28), the sphere pass (29), Gouraud (30)
+};
+
+// A batch of a native draw (pcr_native.h): its triangles from first_triangle in triangles (a uvec4 each), drawn by the
+// record of records the instance names, the meshes' vertices in arena
 struct NativeBatch {
+    NativeProgram program = NativeProgram::vu1_000;
     Vulkan::BufferHandle arena, records, triangles;
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
 };

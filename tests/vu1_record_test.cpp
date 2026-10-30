@@ -1,9 +1,10 @@
-// Checks port/render/vu1_record.cpp (a native draw's record for program 0x000, worked out on the CPU) against VU1's
-// own set-up: port/platform/vu1_hle.c's, which is the interpreter's bit for bit (vu1_test). For random draws, the
+// Checks port/render/vu1_record.cpp (a native draw's record for programs 0x000 and 0x280, worked out on the CPU)
+// against VU1's own set-up: port/platform/vu1_hle.c's and vu1_hle_280.c's, the interpreter's bit for bit (vu1_test). For random draws, the
 // fixed block VU1 would have (the camera's world_screen, the part's model, the light directions and colours, the
 // point lights) is put in data memory and program 0x000 run on a small batch; the vertex matrix (0x14-0x17), the light
 // directions by the model's rotation (vf05-vf07) and the point lights in the part's space (0x4A-0x4D) are compared
-// with the record's, bit for bit.
+// with the record's, bit for bit. Program 0x280 likewise for both matrix sets (the part's model, its parent's):
+// 0x14-0x17 and 0x1C-0x1F, 0x18-0x1A and 0x20-0x22, 0x4A-0x4D and 0x53-0x56.
 //
 //     out/<preset>/vu1_record_test     prints the failures, and exits 1 if any
 #include <fenv.h>
@@ -173,6 +174,36 @@ int main() {
         float lights[16];
         memcpy(lights, data_mem + 0x4A * 16, 64);
         compare("the point lights (0x4A-0x4D)", trial, k.point_pos, lights, 16);
+
+        // program 0x280: the parent's matrix at 0x08 too, its batch's tag at TOP
+        random_matrix(d.parent);
+        for (int i = 0; i < 4; i++) {
+            put_qword(0x08 + i, d.parent[i]);
+        }
+        Vu1Record280 k2 = vu1_record_280(d, cam);
+        memset(&vu, 0, sizeof(vu));
+        vu.vf[0][3] = 0x3F800000u;
+        fesetround(FE_TOWARDZERO);
+        _mm_setcsr(_mm_getcsr() | 0x1F80u | MXCSR_DAZ);
+        pairs = vu1_hle_280_run(&vu, data_mem, 0x280, top);
+        fesetround(FE_TONEAREST);
+        if (pairs == 0) {
+            printf("FAIL trial %d: the HLE did not take the run of program 0x280\n", trial);
+            failures++;
+            continue;
+        }
+        const uint32_t vertex_at[2] = {0x14, 0x1C}, dirs_at[2] = {0x18, 0x20}, lights_at[2] = {0x4A, 0x53};
+        for (int set = 0; set < 2; set++) {
+            memcpy(got, data_mem + vertex_at[set] * 16, 64);
+            compare(set ? "0x280: set B's vertex matrix (0x1C-0x1F)" : "0x280: set A's vertex matrix (0x14-0x17)", trial,
+                    k2.vertex[set], got, 16);
+            memcpy(dirs, data_mem + dirs_at[set] * 16, 48);
+            compare(set ? "0x280: set B's light directions (0x20-0x22)" : "0x280: set A's light directions (0x18-0x1A)",
+                    trial, k2.light_dir[set], dirs, 12);
+            memcpy(lights, data_mem + lights_at[set] * 16, 64);
+            compare(set ? "0x280: set B's point lights (0x53-0x56)" : "0x280: set A's point lights (0x4A-0x4D)", trial,
+                    &k2.point_pos[4 * set][0], lights, 16);
+        }
     }
     printf("%d of %d checks failed\n", failures, checks);
     return failures ? 1 : 0;

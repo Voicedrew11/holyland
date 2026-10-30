@@ -41,7 +41,7 @@ public:
     explicit Impl(Device &device) : device_(device) {}
 
     ~Impl() {
-        for (GpuList *l : {&arena_, &triangles_, &records_}) {
+        for (GpuList *l : {&arena_, &triangles_, &records_, &records_280_, &kicked_}) {
             if (l->buffer && l->map) {
                 device_.unmap_host_buffer(*l->buffer, MEMORY_ACCESS_WRITE_BIT);
             }
@@ -72,6 +72,10 @@ private:
             counts_.lost++;
             return;
         }
+        if (d.program == 0x280) {
+            draw_280(d, cam, front, canvas);
+            return;
+        }
         if (d.program != 0) {
             counts_.unsupported++;
             unsupported_[d.program]++;
@@ -85,7 +89,7 @@ private:
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
         k.info[2] = int32_t((offset >> 32) & 0xFFFF);
-        uint32_t record = put_record(k);
+        uint32_t record = put(records_, RECORDS_ROOM, &k, sizeof(k));
         for (const auto &mesh : fetched_) {
             if (mesh->format != RD_VF_PACKED16) {
                 counts_.unsupported++;
@@ -108,6 +112,7 @@ private:
                 }
                 uint32_t prim = front.prim_in_effect();
                 NativeBatch nb;
+                nb.program = NativeProgram::vu1_000;
                 nb.arena = arena_.buffer;
                 nb.first_triangle = place_triangles(*mesh, b, base);
                 nb.triangles = triangles_.buffer;
@@ -140,12 +145,106 @@ private:
         l.unit = unit;
     }
 
-    uint32_t put_record(const Vu1Record &k) {
-        if (!records_.buffer || records_.used == records_.room) {
-            make(records_, RECORDS_ROOM, sizeof(Vu1Record));
+    // A draw's record into a list of records (a new list when full): its number there
+    uint32_t put(GpuList &list, uint32_t room, const void *record, uint32_t bytes) {
+        if (!list.buffer || list.used == list.room) {
+            make(list, room, bytes);
         }
-        memcpy(records_.map + size_t(records_.used) * sizeof(Vu1Record), &k, sizeof(k));
-        return records_.used++;
+        memcpy(list.map + size_t(list.used) * bytes, record, bytes);
+        return list.used++;
+    }
+
+    // A draw of program 0x280 (the skinned models): as VU1's run of each batch, the plan says whether the run draws
+    // (its strip and second pass, and so their registers) and which triangles VU1 kicks; those are listed each time
+    void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
+        counts_.draws++;
+        Vu1Record280 k = vu1_record_280(d, cam);
+        const GsRegisterFile &file = front.registers();
+        for (int c = 0; c < 2; c++) {
+            uint64_t offset = file.reg[gs_reg::xyoffset_1 + c];
+            k.offset[2 * c] = int32_t(offset & 0xFFFF);
+            k.offset[2 * c + 1] = int32_t((offset >> 32) & 0xFFFF);
+        }
+        uint32_t record = put(records_280_, RECORDS_ROOM, &k, sizeof(k));
+        for (const auto &mesh : fetched_) {
+            if (mesh->format != RD_VF_FLOAT_SKIN) {
+                counts_.unsupported++;
+                continue;
+            }
+            uint32_t base = place(*mesh);
+            for (const RdBatch &b : mesh->batches) {
+                // what the run kicks: FOGCOL at an MSCAL (the set-up), the A+D packet; then, unless every vertex is
+                // clipped, the strip (PRIM from its tag), and the second pass's A+D packet and strip
+                if (b.start != RD_PROGRAM_CONTINUE) {
+                    front.write(gs_reg::fogcol, d.fogcol);
+                }
+                for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
+                    front.write(uint32_t(b.ad[i]), b.ad[i + 1]);
+                }
+                counts_.batches++;
+                Vu1Kicks280 plan;
+                if (!vu1_kicks_280(&mesh->vertices[size_t(b.first) * 32], b, k, plan)) {
+                    counts_.unsupported++;
+                    continue;
+                }
+                if (plan.all_clipped) {
+                    continue;
+                }
+                for (uint32_t pass = 0; pass < 1u + b.sphere; pass++) {
+                    if (pass) {
+                        for (size_t i = 0; i + 1 < b.ad2.size(); i += 2) {
+                            front.write(uint32_t(b.ad2[i]), b.ad2[i + 1]);
+                        }
+                    }
+                    front.write(gs_reg::prim, ((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF);
+                    uint32_t prim = front.prim_in_effect();
+                    NativeBatch nb;
+                    nb.program = NativeProgram::vu1_280;
+                    nb.first_triangle = list_kicked_280(b, plan, base, nb.triangle_count);
+                    if (nb.triangle_count == 0) {
+                        continue;
+                    }
+                    nb.arena = arena_.buffer;
+                    nb.records = records_280_.buffer;
+                    nb.triangles = kicked_.buffer;
+                    nb.instance = record | ((prim >> 9) & 1) << 28 | pass << 29 | ((prim >> 3) & 1) << 30;
+                    canvas.native_batch(front.registers(), prim, nb);
+                    counts_.triangles += nb.triangle_count;
+                }
+            }
+        }
+        fetched_.clear();
+    }
+
+    // The triangles VU1 kicks of a batch of program 0x280 (those whose kick has no ADC), listed for one pass: each the
+    // arena's slots (two a vertex) of its corners and of its kick. Their first's place in the list; n their count.
+    uint32_t list_kicked_280(const RdBatch &b, const Vu1Kicks280 &plan, uint32_t base, uint32_t &n) {
+        n = 0;
+        for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
+            n += !plan.adc[b.triangles[i + 2]];
+        }
+        if (n == 0) {
+            return 0;
+        }
+        if (!kicked_.buffer || kicked_.used + n > kicked_.room) {
+            make(kicked_, std::max(kicked_.room ? kicked_.room : TRIANGLES_FIRST, n), 16);
+        }
+        uint32_t first = kicked_.used;
+        uint32_t *out = reinterpret_cast<uint32_t *>(kicked_.map) + size_t(first) * 4;
+        uint32_t slot0 = base + 2 * b.first;
+        for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
+            uint32_t kick = b.triangles[i + 2];
+            if (plan.adc[kick]) {
+                continue;
+            }
+            out[0] = slot0 + 2 * b.triangles[i];
+            out[1] = slot0 + 2 * b.triangles[i + 1];
+            out[2] = slot0 + 2 * kick;
+            out[3] = slot0 + 2 * kick;
+            out += 4;
+        }
+        kicked_.used += n;
+        return first;
     }
 
     // The mesh's first vertex in the arena (put there the first time it is drawn into this arena)
@@ -201,7 +300,7 @@ private:
     }
 
     Device &device_;
-    GpuList arena_, triangles_, records_;
+    GpuList arena_, triangles_, records_, records_280_, kicked_;
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
@@ -214,8 +313,9 @@ NativeDraws::NativeDraws(Device &device) : impl_(std::make_unique<Impl>(device))
 NativeDraws::~NativeDraws() = default;
 
 int NativeDraws::kinds() {
-    // (program 0x000's kinds; the map's objects are 0x280's too, the skinned ones: not yet)
-    return PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_PICKED;
+    // (programs 0x000 and 0x280)
+    return PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_PICKED | PORT_ND_OBJECTS | PORT_ND_SKINNED | PORT_ND_ARM |
+           PORT_ND_GOLD;
 }
 
 void NativeDraws::met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {

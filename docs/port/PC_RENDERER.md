@@ -216,6 +216,12 @@ by `port/render/vu1_record.cpp`, checked bit for bit against VU1's own set-up (`
   GS's native draws differ from its packets there the same way (14,615), so it is native draw's sky, not this.
 - A batch's texture is read whole and what it draws over is taken as its scissor's rectangle (its corners are the
   GPU's), as P7 takes them.
+- **Program 0x280** (the skinned models: the map's skinned objects, the creatures, the arm and what it holds, the gold;
+  built after): `port/render/vu1_record.cpp` makes its record (both matrix sets, checked bit for bit against VU1's
+  set-up in `vu1_record_test`) and VU1's clipping plan of each batch (whether the run draws its strip at all, which
+  triangles it kicks); those triangles are listed each time and drawn by `shaders/pcr_nd280.vert` (the maths shared
+  with the native GS's `nd_280.vert`: `port/render/shaders/vu1_280_*.h`), the sphere-mapped second pass too. At vblank
+  2700 against the PC renderer on packets: 000 111 pixels (by 2), 009 378 (by 3), 009:2 251 (by 2), 063 as before.
 
 # Part 1: the PC renderer (P1-P6)
 

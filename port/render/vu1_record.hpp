@@ -1,4 +1,4 @@
-// A native draw's record for VU1's program 0x000 on the GPU (port/include/port/render.h's draws): what VU1's set-up
+// A native draw's record for VU1's programs 0x000 and 0x280 on the GPU (port/include/port/render.h's draws): what VU1's set-up
 // leaves in its memory for the vertex program, worked out on the CPU in VU1's arithmetic, laid out as the shaders read
 // it (port/render/shaders/vu1_000_draw.h's Draw). For the renderers that draw native draws without VU1: the PC
 // renderer (port/gs/pc/pcr_native.cpp). The native GS has its own copy (gsn_native_draw.inc, nd_const), the same
@@ -6,9 +6,7 @@
 #pragma once
 #include <stdint.h>
 
-extern "C" {
-#include "port/render.h"
-}
+#include "render_internal.hpp"
 
 // A model part's move in the pictures between (vu1_000_draw.h's Between; gsn_native_draw.inc's NdBetween says what
 // each field is)
@@ -53,3 +51,37 @@ enum : int32_t {
 // the draw's own fog, colours, wave offsets and far plane. XYOFFSET (info[1], info[2]) and the pictures between's
 // moves (obj, bt, the VU1_MOVE_* flags) are left 0: the renderer's.
 Vu1Record vu1_record_000(const RdDraw &draw, const RdCamera &camera);
+
+// vu1_280_draw.h's Draw (program 0x280, the skinned models): two matrix sets, A the part's (VU1 0x04) and B its
+// parent's (0x08), each vertex taking one by its ST's w
+struct Vu1Record280 {
+    float vertex[2][16];    // VU1 0x14-0x17, 0x1C-0x1F
+    float light_dir[2][16]; // VU1 0x18-0x1A, 0x20-0x22
+    float light_col[16];    // the light colours, then the ambient
+    float sphere[2][16];    // the sphere pass's turns (RdDraw.turn)
+    float fog[4];           // VU1 0x3C
+    float scale[4], bias[4]; // the colour's scale and bias (RdDraw.colour[0], [1])
+    float point_pos[8][4];  // set A's space (VU1 0x4A-0x4D), set B's (0x53-0x56); w the falloff
+    float point_col[4][4];
+    int32_t info[4];        // the point lights; VU1_MOVE_* flags (info[1])
+    int32_t offset[4];      // XYOFFSET_1's X and Y, XYOFFSET_2's (12.4): the renderer's
+    float screen[16];       // view to screen
+    Vu1Between bt[2];       // (VU1_MOVE_MODEL) set A's and set B's moves from the frame before
+};
+static_assert(sizeof(Vu1Record280) == 71 * 16, "Vu1Record280 is the shaders' Draw");
+
+// The draw's record for program 0x280: VU1's set-up for each matrix set (vu1_record_000's maths), the light colours,
+// fog, sphere matrices, colour scale and bias as they are. XYOFFSET and the moves are left 0: the renderer's.
+Vu1Record280 vu1_record_280(const RdDraw &draw, const RdCamera &camera);
+
+// A batch of program 0x280 as VU1 runs it (vu1_hle_280.c's run): which of its kicks get ADC (VU1's clipping of the kick
+// and the two vertices before it, and the tag's; not the data's, which the batch's triangles leave out already), and
+// whether the run ends without a strip (its count of clipped vertices reached n: no strip, no second pass)
+constexpr uint32_t VU1_BATCH_MOST = 40;
+struct Vu1Kicks280 {
+    uint32_t n = 0;
+    bool adc[VU1_BATCH_MOST] = {};
+    bool all_clipped = false;
+};
+// vertices: the batch's first vertex's eight qwords in its mesh. False when the batch has more vertices than a run.
+bool vu1_kicks_280(const int32_t *vertices, const RdBatch &batch, const Vu1Record280 &record, Vu1Kicks280 &out);

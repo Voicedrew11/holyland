@@ -284,7 +284,8 @@ public:
         counts_.native_batches++;
         counts_.triangles += nb.triangle_count;
         DrawState s = state_of(file, prim);
-        bool same = batch_open_ && batch_.native && s == batch_.state && batch_.arena == nb.arena &&
+        bool same = batch_open_ && batch_.native && batch_.program == nb.program && s == batch_.state &&
+                    batch_.arena == nb.arena &&
                     batch_.records == nb.records && batch_.triangles == nb.triangles;
         if (!same) {
             flush_batch();
@@ -1157,6 +1158,7 @@ private:
             uint32_t first, count, instance;
         };
         bool native = false;
+        NativeProgram program = NativeProgram::vu1_000;
         BufferHandle arena, records, triangles;
         std::vector<Run> runs;
     };
@@ -1175,6 +1177,7 @@ private:
     void open_native_batch(const DrawState &s, const NativeBatch &nb) {
         begin_batch(s, 1u << std::min(bits(s.tex0, 26, 4), 10u), 1u << std::min(bits(s.tex0, 30, 4), 10u));
         batch_.native = true;
+        batch_.program = nb.program;
         batch_.arena = nb.arena;
         batch_.records = nb.records;
         batch_.triangles = nb.triangles;
@@ -1369,7 +1372,9 @@ private:
         }
         begin_pass(*colour, depth);
         CommandBuffer &c = cmd();
-        c.set_program(batch_.native ? native_program_ : program_);
+        c.set_program(!batch_.native                              ? program_
+                      : batch_.program == NativeProgram::vu1_280 ? native_280_program_
+                                                                 : native_program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -1547,6 +1552,8 @@ private:
         }
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
         native_program_ = device_.request_program(nvs, fs);
+        Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
+        native_280_program_ = device_.request_program(nvs280, fs);
         // (the pictures between's camera for native draws: none yet, zeros)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -1557,7 +1564,7 @@ private:
     }
 
     Device &device_;
-    Program *program_ = nullptr, *native_program_ = nullptr;
+    Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr;
     BufferHandle picture_;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
