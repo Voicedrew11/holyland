@@ -1247,12 +1247,12 @@ void port_gs_finish(void) {
 }
 
 int port_gs_replay_uploads(void) {
-    /* (the PC renderer takes the frame's packets again whole: frame_interp.c's own way) */
-    return have_native && !have_gs && !gsr_pc_renderer && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+    return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
 }
 
 int port_gs_interp_gpu(void) {
-    return port_gs_replay_uploads();
+    /* (the PC renderer takes the frame's packets again, moved, frame_interp.c's own way; its uploads asked for again) */
+    return port_gs_replay_uploads() && !gsr_pc_renderer;
 }
 
 void port_gs_interp_frame(void *frame) {

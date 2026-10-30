@@ -488,14 +488,20 @@ private:
             census_->other("native draw (0x7B)");
         }
     }
-    void upload_again(uint64_t) override {
+    void upload_again(uint64_t value) override {
         if (census_) {
             census_->other("upload again (0x7C)");
         }
+        if (canvas_) {
+            canvas_->upload_again(front_.registers(), value);
+        }
     }
-    void frame_mark(uint64_t) override {
+    void frame_mark(uint64_t value) override {
         if (census_) {
             census_->other("frame mark (0x7D)");
+        }
+        if (canvas_) {
+            canvas_->frame_mark(value);
         }
     }
     void widescreen(uint64_t) override {}

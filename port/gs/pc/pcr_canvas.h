@@ -37,6 +37,7 @@ struct CanvasCounts {
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
     uint64_t unsupported_copies = 0;
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
+    uint64_t uploads_made_again = 0, uploads_again_missed = 0, kept_frame_reads = 0;
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
@@ -65,6 +66,13 @@ public:
     // The read-back's next qwords (zeroes past its end). Any thread, while the canvas's thread is idle (after
     // everything sent before was done: pcr_read_fifo waits for that).
     void read_fifo(void *dst, uint32_t qwords);
+    // The port's marks for the pictures between (frame_interp.c; the native GS's meaning): 0x7D's 0xF0 and 0xF1 a
+    // picture between begins and ends (its uploads are not the frame's), 0xF2 the frame shown kept, 0xF4 to 0xF5
+    // the draws that read that kept frame in place of its buffer; 0x7C the frame's k-th upload made again (its
+    // registers checked against those set now, as the native GS checks them)
+    void frame_mark(uint64_t value);
+    void upload_again(const GsRegisterFile &file, uint64_t value);
+
     // A state loaded: nothing of the GS's memory is known any more
     void forget();
 

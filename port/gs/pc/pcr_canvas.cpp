@@ -299,8 +299,50 @@ public:
     void upload(const TransferRegisters &t, std::span<const uint8_t> bytes) {
         flush_batch();
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
-        store_.upload(regs, bytes);
+        bool taken = store_.upload(regs, bytes);
         write_upload_into_surfaces(t, bytes);
+        if (!replaying_) {
+            // (the frame's uploads: what its pictures between ask for again)
+            uploads_now_.push_back({t, std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end()),
+                                    taken ? store_.last_chunk() : 0});
+        }
+    }
+
+    void frame_mark(uint64_t value) {
+        switch (bits(value, 32, 8)) {
+        case 0xF0:
+            replaying_ = true;
+            break;
+        case 0xF1:
+            replaying_ = false;
+            break;
+        case 0xF2:
+            keep_frame(bits(value, 0, 9));
+            break;
+        case 0xF4:
+        case 0xF5:
+            flush_batch();
+            kept_reads_ = bits(value, 32, 8) == 0xF4;
+            break;
+        }
+    }
+
+    void upload_again(const GsRegisterFile &file, uint64_t value) {
+        uint32_t k = uint32_t(value);
+        const TransferRegisters now = {file.reg[gs_reg::bitbltbuf], file.reg[gs_reg::trxpos], file.reg[gs_reg::trxreg]};
+        if (k >= uploads_frame_.size() || uint32_t(uploads_frame_[k].transfer.bitbltbuf >> 32) != uint32_t(value >> 32) ||
+            (uploads_frame_[k].transfer.bitbltbuf >> 32) != (now.bitbltbuf >> 32) ||
+            uploads_frame_[k].transfer.trxpos != now.trxpos || uploads_frame_[k].transfer.trxreg != now.trxreg) {
+            counts_.uploads_again_missed++;
+            return;
+        }
+        const RecordedUpload &r = uploads_frame_[k];
+        flush_batch();
+        if (r.chunk == 0 || !store_.upload_again(r.chunk)) {
+            store_.upload({r.transfer.bitbltbuf, r.transfer.trxpos, r.transfer.trxreg}, *r.bytes);
+        }
+        write_upload_into_surfaces(r.transfer, *r.bytes);
+        counts_.uploads_made_again++;
     }
 
     void local_copy(const TransferRegisters &t) {
@@ -339,6 +381,9 @@ public:
     void forget() {
         flush_batch();
         end_pass();
+        uploads_now_.clear();
+        uploads_frame_.clear();
+        kept_frame_.reset();
         store_.forget();
         colour_.clear();
         depth_.clear();
@@ -348,6 +393,10 @@ public:
 
     void vblank() {
         flush_batch();
+        if (!uploads_now_.empty()) {
+            uploads_frame_.swap(uploads_now_);
+            uploads_now_.clear();
+        }
         submit();
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
@@ -1012,7 +1061,13 @@ private:
         c.clear_image(*b.surface_copy, zero);
         full_barrier(c);
         const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.copy_image(*b.surface_copy, *from->image, {0, 0, 0}, {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0},
+        // (between 0xF4 and 0xF5 of a picture between, the frame shown kept at 0xF2 in place of its buffer)
+        bool kept = replaying_ && kept_reads_ && kept_frame_ && from->base_page == kept_page_ &&
+                    kept_frame_->get_width() == from->image->get_width() &&
+                    kept_frame_->get_height() == from->image->get_height();
+        counts_.kept_frame_reads += kept ? 1 : 0;
+        c.copy_image(*b.surface_copy, kept ? *kept_frame_ : *from->image, {0, 0, 0},
+                     {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0},
                      {w * scale_[0], h * scale_[1], 1}, colour, colour);
         full_barrier(c);
         b.view = &b.surface_copy->get_view();
@@ -1022,6 +1077,19 @@ private:
         b.ok = true;
         counts_.textures_from_surfaces++;
         return b;
+    }
+
+    // 0xF2: the frame shown (the colour surface at that base page), kept before a picture between draws over it
+    void keep_frame(uint32_t base_page) {
+        flush_batch();
+        kept_frame_.reset();
+        for (auto &s : colour_) {
+            if (s->base_page == base_page) {
+                kept_frame_ = copy_of(*s->image);
+                kept_page_ = base_page;
+                return;
+            }
+        }
     }
 
     // An image's copy, for a shader to read while the image is drawn into
@@ -1411,6 +1479,17 @@ private:
     bool batch_open_ = false;
     CanvasCounts counts_;
     std::vector<uint8_t> fifo_; // (the last read-back's bytes, read_fifo's)
+    // the pictures between: the uploads since the vblank and the last vblank's, a picture between under way, the
+    // frame shown kept (0xF2) and whether draws read it now
+    struct RecordedUpload {
+        TransferRegisters transfer;
+        std::shared_ptr<const std::vector<uint8_t>> bytes;
+        uint64_t chunk; // (the texture store's: 0 if it refused it)
+    };
+    std::vector<RecordedUpload> uploads_now_, uploads_frame_;
+    bool replaying_ = false, kept_reads_ = false;
+    ImageHandle kept_frame_;
+    uint32_t kept_page_ = 0;
     size_t fifo_at_ = 0;
     uint64_t counts_unsupported_shape_ = 0, counts_unsupported_upload_ = 0, counts_untextured_ = 0,
              counts_clut_not_uploads_ = 0;
@@ -1439,12 +1518,15 @@ public:
         fprintf(out,
                 "[stats] pc texture store: %llu uploads (%.1f MB, %llu refused), %llu chunks kept; %llu resolves, %llu "
                 "decodes, %llu found again; %llu CLUT loads (%llu decodes); %llu copies made as uploads; read-backs %llu "
-                "from uploads, %llu from surfaces, %llu not had\n",
+                "from uploads, %llu from surfaces, %llu not had; pictures between: %llu uploads made again (%llu "
+                "missed, %llu from their chunk), %llu reads of the frame kept\n",
                 (unsigned long long)t.uploads, double(t.upload_bytes) / 1048576.0, (unsigned long long)t.uploads_refused,
                 (unsigned long long)t.chunks_kept, (unsigned long long)t.resolves, (unsigned long long)t.decodes,
                 (unsigned long long)t.decode_hits, (unsigned long long)t.clut_loads, (unsigned long long)t.clut_decodes,
                 (unsigned long long)t.copies_as_uploads, (unsigned long long)c.read_backs_from_uploads,
-                (unsigned long long)c.read_backs_from_surfaces, (unsigned long long)c.unsupported_read_backs);
+                (unsigned long long)c.read_backs_from_surfaces, (unsigned long long)c.unsupported_read_backs,
+                (unsigned long long)c.uploads_made_again, (unsigned long long)c.uploads_again_missed,
+                (unsigned long long)t.uploads_again, (unsigned long long)c.kept_frame_reads);
     }
 };
 
@@ -1474,6 +1556,12 @@ void Canvas::read_fifo(void *dst, uint32_t qwords) {
 }
 void Canvas::forget() {
     impl_->forget();
+}
+void Canvas::frame_mark(uint64_t value) {
+    impl_->frame_mark(value);
+}
+void Canvas::upload_again(const GsRegisterFile &file, uint64_t value) {
+    impl_->upload_again(file, value);
 }
 std::vector<uint8_t> Canvas::vram_image() {
     return impl_->vram_image();

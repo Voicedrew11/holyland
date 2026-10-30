@@ -127,6 +127,7 @@ struct TextureStoreCounts {
     uint64_t clut_loads = 0, clut_decodes = 0, clut_hits = 0;
     uint64_t copies_as_uploads = 0; // local copies whose source was uploads': uploads of what they wrote
     uint64_t read_backs = 0, read_backs_refused = 0;
+    uint64_t uploads_again = 0; // (of uploads: made again from their chunk)
 };
 
 class TextureStore {
@@ -141,6 +142,12 @@ public:
     // A host-to-local transfer, whole: the bytes its IMAGE data carried (past the rectangle ignored; fewer
     // than it needs: the pixels they hold). false when refused (a format the GS does not have, no pixels).
     bool upload(const TransferRegs &regs, std::span<const uint8_t> bytes);
+    // The chunk the last upload taken was kept as (0: none yet), and that upload made again from it (the same bytes to
+    // the same place, so nothing compared: the pictures between ask for the frame's uploads again). False if the
+    // chunk has been let go (the caller sends the bytes again).
+    uint64_t last_chunk() const;
+    bool upload_again(uint64_t chunk);
+
     // A surface drawn into over this rectangle (in its format: a 24-bit one leaves the top byte the uploads')
     void drawn(const VramRect &rect);
     // A local-to-local transfer: when every pixel it reads is the uploads', an upload of what it writes (made

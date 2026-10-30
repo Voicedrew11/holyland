@@ -337,7 +337,7 @@ bool same_regs(const TransferRegs &a, const TransferRegs &b) {
 struct TextureStore::State {
     TextureStoreLimits limits;
     TextureStoreCounts counts;
-    uint64_t seq = 0, next_chunk = 1;
+    uint64_t seq = 0, next_chunk = 1, last_chunk = 0;
     std::vector<std::vector<Owner>> block_owners = std::vector<std::vector<Owner>>(kBlocks);
     // the count when a page was last drawn into or copied over, in its low 24 bits and in its top byte
     std::array<uint64_t, kPages> drawn_low_at{}, drawn_top_at{};
@@ -639,7 +639,26 @@ bool TextureStore::upload(const TransferRegs &regs, std::span<const uint8_t> byt
     std::span<const uint8_t> used = bytes.first(size_t((pixels * uint64_t(bits) + 7) / 8));
     s.counts.uploads++;
     s.counts.upload_bytes += used.size();
-    s.own(s.keep(dest, used, pixels));
+    s.last_chunk = s.keep(dest, used, pixels);
+    s.own(s.last_chunk);
+    return true;
+}
+
+uint64_t TextureStore::last_chunk() const {
+    return state_->last_chunk;
+}
+
+bool TextureStore::upload_again(uint64_t chunk) {
+    State &s = *state_;
+    auto found = s.chunks.find(chunk);
+    if (found == s.chunks.end()) {
+        return false;
+    }
+    s.counts.uploads++;
+    s.counts.uploads_again++;
+    s.counts.upload_bytes += found->second.bytes.size();
+    s.last_chunk = chunk;
+    s.own(chunk);
     return true;
 }
 

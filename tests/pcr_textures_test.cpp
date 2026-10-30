@@ -204,7 +204,7 @@ struct ReferenceGs {
 
 // ---- What a run met ---------------------------------------------------------------------------------
 struct Tally {
-    uint64_t uploads = 0, sent_again = 0, draws = 0, copies = 0, copies_checked = 0, read_backs = 0, forgets = 0;
+    uint64_t uploads = 0, sent_again = 0, made_again = 0, draws = 0, copies = 0, copies_checked = 0, read_backs = 0, forgets = 0;
     uint64_t answers[3] = {};
     uint64_t texels = 0, mipmapped = 0, other_format = 0, clut_compared = 0, clut_csm2 = 0, clut_16 = 0;
     uint64_t failures = 0;
@@ -229,15 +229,20 @@ struct Run {
     ReferenceGs gs;
     Tally tally;
     std::vector<Placed> placed;
-    std::vector<std::pair<pcr::TransferRegs, std::vector<uint8_t>>> recent; // (uploads to send again)
+    struct Sent {
+        pcr::TransferRegs regs;
+        std::vector<uint8_t> bytes;
+        uint64_t chunk; // (the store's, 0 if it refused it)
+    };
+    std::vector<Sent> recent; // (uploads to send again)
 
     Run(uint64_t seed, pcr::TextureStoreLimits limits) : rng{seed * 0x9E3779B97F4A7C15ull + 1}, store(limits) {}
 
     void upload(const pcr::TransferRegs &regs, const std::vector<uint8_t> &bytes) {
-        store.upload(regs, bytes);
+        bool taken = store.upload(regs, bytes);
         gs.upload(regs, bytes);
         tally.uploads++;
-        recent.emplace_back(regs, bytes);
+        recent.push_back({regs, bytes, taken ? store.last_chunk() : 0});
         if (recent.size() > 48) {
             recent.erase(recent.begin());
         }
@@ -249,9 +254,15 @@ struct Run {
         if (recent.empty()) {
             return;
         }
-        auto sent = recent[rng.below(uint32_t(recent.size()))];
-        upload(sent.first, sent.second);
+        Sent sent = recent[rng.below(uint32_t(recent.size()))];
         tally.sent_again++;
+        // (half of them made again from their chunk, as a picture between asks: the VRAM as if the bytes came)
+        if (sent.chunk != 0 && rng.one_in(2) && store.upload_again(sent.chunk)) {
+            gs.upload(sent.regs, sent.bytes);
+            tally.made_again++;
+            return;
+        }
+        upload(sent.regs, sent.bytes);
     }
 
     std::vector<uint8_t> random_bytes(size_t n) {
@@ -625,10 +636,10 @@ bool run_seed(uint64_t seed) {
     run.edges();
     const Tally &t = run.tally;
     pcr::TextureStoreCounts c = run.store.counts();
-    printf("seed %llu: %llu uploads (%llu sent again), %llu draws, %llu copies (%llu read back as uploads), %llu read-backs, %llu forgets; textures %llu from uploads, %llu drawn, "
+    printf("seed %llu: %llu uploads (%llu sent again, %llu from their chunk), %llu draws, %llu copies (%llu read back as uploads), %llu read-backs, %llu forgets; textures %llu from uploads, %llu drawn, "
            "%llu not uploaded (%llu mipmapped, %llu in another format); %llu texels compared; CLUTs %llu compared (%llu "
            "CSM2, %llu of 16); store: %llu chunks kept, %llu decodes, %llu hits, %llu CLUT decodes, %llu refused\n",
-           (unsigned long long)seed, (unsigned long long)t.uploads, (unsigned long long)t.sent_again,
+           (unsigned long long)seed, (unsigned long long)t.uploads, (unsigned long long)t.sent_again, (unsigned long long)t.made_again,
            (unsigned long long)t.draws,
            (unsigned long long)t.copies, (unsigned long long)t.copies_checked, (unsigned long long)t.read_backs, (unsigned long long)t.forgets, (unsigned long long)t.answers[0],
            (unsigned long long)t.answers[1], (unsigned long long)t.answers[2], (unsigned long long)t.mipmapped,
