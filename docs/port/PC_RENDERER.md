@@ -93,11 +93,11 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      between draw the frame's calls again.
   5. **Step 5, the pictures between on the GPU**: 5a built 2026-10-30 ("Step 5a built", below): pc takes the frame
      and the pictures, walks the frame's packets again for each picture, and the shaders move every vertex; native
-     draws are on under pc at 240. Map 000 at 240: 100-103 pictures a second (was 63-64); 009 61-64 (was 61). The
-     limit is now pc's own thread walking the packets each picture (sampled at 009: busy all of the time, `feed` 68
-     of 80 samples, the native draws 54, the texture store's lookups 40). **Next, 5b**: the walk's calls kept on the
-     frame's first picture and made again for the others (the canvas's batches, their surfaces, textures and
-     records), so that a picture between costs pc's thread nearly nothing; its header to be agreed first.
+     draws are on under pc at 240. **5b built** 2026-10-30 ("Step 5b built", below): a frame's walk kept and drawn
+     again for its other pictures while what it read of the texture store is as it was (86% of the pictures at the
+     four spots), the pictures byte for byte 5a's. Map 000 at 240: 183-186 pictures a second (5a 101-102); 009 still
+     61-66, held by pc's thread taking the packets in (about 68% busy: the frame's own packets, about 200 MB a second
+     there, and each frame's first walk), not by the pictures between. Next for 009: what limits it, measured first.
   6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
      `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
@@ -228,6 +228,48 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## Step 5b built (2026-10-30): a frame's walk kept, and drawn again for its other pictures
+
+**What it does.** The first picture between of a frame walks the frame's packets as in 5a, and the canvas keeps what
+the walk made (`pcr_canvas.h`'s `KeptWalk`): its batches (state, vertices, textures, native runs, with the images and
+buffers they use held), and in their order its uploads, uploads asked for again, copies, CLUT loads and marks. The
+frame's other pictures make those again (`Canvas::draw_again`) with only their Picture buffer new
+(`Between::begin_picture_again`; the kicks are the walk's): no front end, no native draws, no texture store resolves.
+A texture read from a surface is copied from it again, DATE and shader blending are set up again, and the store's own
+changes (uploads again, pages drawn, copies, CLUT loads) are made again, so that the store and the surfaces are left
+as a walk leaves them. `KF4_PC_KEPT_WALK=0`: every picture walks (5a).
+- **Every walk of a frame starts from one state**: the front end's when the frame was handed over
+  (`GifFrontEnd::State`, `state()`, `set_state()`), and the live state is put back after the walk (as the native GS's
+  interp_capture; pc walked from what the live packets left, and left the walk's registers behind). So every walk of
+  a frame makes the same kicks.
+- **When a kept walk is drawn again**: while every page of the texture store it read from before it (a block read
+  before the walk wrote it; page 512 the CLUT buffer) answers as it did then (`TextureStore::watch_reads`,
+  `reads_watched`, `unchanged`; `page_signature`: a hash of the page's owners, their nibbles and whether each is
+  drawn over, never the upload counts, so a walk that uploads a chunk again and draws over it again leaves its pages'
+  signatures as they were). Change counts were tried first and turned every picture away: each walk's own uploads
+  again and draws moved them, though the pages ended answering what they did. Surfaces are looked up again as the
+  kept draws are made, so they need no check.
+- **Not kept** (the pictures walk, counted): a walk that read back from the GS's memory, or whose kicks were not the
+  frame's count, or that met a trail paired with the frame before (its points are moved t of the way on the CPU,
+  `NativeDraws::moved_on_cpu`; moving that into the shader is to come).
+- `[stats] pc pictures between` now says how many were drawn again, and why the others walked.
+- The texture store's chunk ids are no longer used again after a state is loaded (`forget`), so that a signature
+  cannot match a new chunk (the random seeds' counts move by one or two uploads found again).
+- Tests: `pcr_gif_test`'s `test_state_round_trip`; `pcr_textures_test`'s signatures (an upload again of the owner, a
+  draw over it again, a different upload, an equal and a different CLUT load) and the watch (read before write, a
+  page partly written in the stretch, a stretch uploading again over owned blocks unchanged after).
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th, 204 pictures a
+spot): with the kept walks byte for byte as with `KF4_PC_KEPT_WALK=0`, and that byte for byte as the build before
+(5a): the walk's start state changed nothing at these spots. In each run 5,684 of 6,632 pictures (5,696 of 6,646 at
+063) were drawn again, the rest each frame's first; none turned away by the store, none not kept. So the pictures
+against the native GS are 5a's (the table above).
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): 000 183.4-186.1 pictures a second (5a
+100.9-101.7), the GPU 2.13-2.19 ms a picture (1.90-2.04); 009 61.1-66.2 (63.5-64.9). At 009 pc's thread is about
+68% busy, sampled all in taking packets in (uploads, kicks, CLUT loads: the frame's own packets and each frame's first
+walk, inlined together), and only about 60 pictures a second are asked of it: what holds 009 is to be measured.
 
 ## Step 5a built (2026-10-30): the pictures between drawn by pc, moved on the GPU
 

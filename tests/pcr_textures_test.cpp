@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <vector>
 
@@ -743,6 +744,218 @@ bool pages_of_rules(uint64_t seed) {
     return true;
 }
 
+// ---- The signatures and the watch of a stretch's reads ------------------------------------------
+bool expect_true(bool held, const char *what) {
+    if (!held) {
+        printf("pcr_textures_test: %s\n", what);
+    }
+    return held;
+}
+
+std::vector<uint8_t> bytes_from(Rng &rng, size_t n) {
+    std::vector<uint8_t> bytes(n);
+    for (uint8_t &b : bytes) {
+        b = uint8_t(rng.next() >> 24);
+    }
+    return bytes;
+}
+
+// A w x h rectangle at bp (bw 1 for a page's worth of 64 x 32 32-bit pixels) as an upload's registers
+pcr::TransferRegs upload_regs(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h) {
+    return {bitbltbuf_of(bp, bw, psm), 0, uint64_t(w) | uint64_t(h) << 32};
+}
+
+// Every page's signature (512 the CLUT buffer)
+std::vector<uint64_t> signatures_of(const pcr::TextureStore &store) {
+    std::vector<uint64_t> signatures;
+    for (uint32_t p = 0; p <= 512; p++) {
+        signatures.push_back(store.page_signature(p));
+    }
+    return signatures;
+}
+
+// The pages (512 the CLUT buffer) whose signatures differ
+std::bitset<513> pages_changed(const std::vector<uint64_t> &before, const std::vector<uint64_t> &after) {
+    std::bitset<513> changed;
+    for (size_t p = 0; p < before.size(); p++) {
+        if (before[p] != after[p]) {
+            changed.set(p);
+        }
+    }
+    return changed;
+}
+
+std::bitset<513> pages_of_list(std::initializer_list<uint32_t> list) {
+    std::bitset<513> pages;
+    for (uint32_t p : list) {
+        pages.set(p);
+    }
+    return pages;
+}
+
+// An upload changes the signatures of the pages it covers only; upload again of the current owner, and draws over
+// it, leave a page as it was; a different upload changes it; forget returns every page to the empty store's answer
+bool signatures_of_uploads() {
+    Rng rng{21};
+    pcr::TextureStore store;
+    const uint32_t psm = GSN_PSMCT32;
+    std::vector<uint64_t> start = signatures_of(store);
+    store.upload(upload_regs(5 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // page 5
+    std::vector<uint64_t> uploaded = signatures_of(store);
+    bool ok = expect_true(pages_changed(start, uploaded) == pages_of_list({5}), "an upload did not change exactly its pages");
+    pcr::VramRect page5{5 * 32, 1, psm, 0, 0, 64, 32};
+    ok = expect_true(pcr::pages_of(page5) == std::bitset<512>().set(5), "the test's rectangle is not page 5") && ok;
+
+    store.upload_again(store.last_chunk());
+    ok = expect_true(pages_changed(uploaded, signatures_of(store)).none(), "an upload again of the current owner changed a signature") && ok;
+
+    store.drawn(page5);
+    uint64_t drawn_first = store.page_signature(5);
+    ok = expect_true(drawn_first != uploaded[5], "a draw over an owner did not change its page's signature") && ok;
+    store.upload_again(store.last_chunk());
+    ok = expect_true(store.page_signature(5) != drawn_first, "an upload again over a drawn owner did not clear the draw") && ok;
+    store.drawn(page5);
+    ok = expect_true(store.page_signature(5) == drawn_first, "a draw over the owner again changed its page's signature") && ok;
+
+    store.upload(upload_regs(5 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // a different upload
+    ok = expect_true(store.page_signature(5) != drawn_first, "a different upload did not change its page's signature") && ok;
+
+    pcr::TextureStore empty;
+    store.forget();
+    bool as_empty = true;
+    for (uint32_t p = 0; p <= 512; p++) {
+        as_empty = as_empty && store.page_signature(p) == empty.page_signature(p);
+    }
+    return expect_true(as_empty, "forget did not return every page to the empty store's answer, the CLUT buffer included") && ok;
+}
+
+// A stretch's reads: a resolve over two uploaded pages reads exactly those, with their signatures then; an upload
+// elsewhere leaves them unchanged, an upload over one of them does not
+bool watched_reads() {
+    Rng rng{22};
+    pcr::TextureStore store;
+    const uint32_t psm = GSN_PSMCT32;
+    store.upload(upload_regs(40 * 32, 1, psm, 64, 64), bytes_from(rng, 16384)); // pages 40 and 41
+    store.upload(upload_regs(300 * 32, 1, psm, 64, 32), bytes_from(rng, 8192));
+    std::vector<uint64_t> before = signatures_of(store);
+    store.watch_reads();
+    pcr::TextureRegs regs;
+    regs.tex0 = tex0_of(40 * 32, 1, psm, 6, 6);
+    pcr::TextureAnswer answer = store.resolve(regs, 64, 64);
+    pcr::PagesRead read = store.reads_watched();
+    bool ok = expect_true(answer.source == TextureSource::FromUploads, "a texture over two uploaded pages is not the uploads'");
+    ok = expect_true(read.pages == pages_of_list({40, 41}), "the reads watched are not the texture's two pages") && ok;
+    ok = expect_true(read.signatures[40] == before[40] && read.signatures[41] == before[41], "the reads' signatures are not then") && ok;
+
+    store.upload(upload_regs(500 * 32, 1, psm, 64, 32), bytes_from(rng, 8192));
+    ok = expect_true(store.unchanged(read), "an upload elsewhere changed the reads") && ok;
+    store.upload(upload_regs(41 * 32, 1, psm, 64, 32), bytes_from(rng, 8192));
+    ok = expect_true(!store.unchanged(read), "an upload over a page read left the reads unchanged") && ok;
+    return ok;
+}
+
+// Reads before writes: a page written in the stretch and then read is no read of it; a page read and then written
+// is one
+bool read_before_write() {
+    Rng rng{23};
+    pcr::TextureStore store;
+    const uint32_t psm = GSN_PSMCT32;
+    store.upload(upload_regs(60 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // page 60, before the stretch
+    uint64_t page60_then = store.page_signature(60);
+    store.watch_reads();
+    store.upload(upload_regs(50 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // page 50, written first
+    pcr::TextureRegs over50;
+    over50.tex0 = tex0_of(50 * 32, 1, psm, 6, 5);
+    bool ok = expect_true(store.resolve(over50, 64, 32).source == TextureSource::FromUploads, "page 50 is not the uploads'");
+    pcr::TextureRegs over60;
+    over60.tex0 = tex0_of(60 * 32, 1, psm, 6, 5);
+    store.resolve(over60, 64, 32);
+    store.upload(upload_regs(60 * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // page 60, read first, then written
+    pcr::PagesRead read = store.reads_watched();
+    ok = expect_true(!read.pages[50], "a page written in the stretch and then read is among its reads") && ok;
+    ok = expect_true(read.pages[60] && read.signatures[60] == page60_then, "a page read and then written is not among the reads") && ok;
+    ok = expect_true(!store.unchanged(read), "the write over page 60 left the reads unchanged") && ok;
+    return ok;
+}
+
+// The CLUT buffer (page 512): a load that changes the mirror changes its signature, a reload that changes nothing does
+// not; the colours read inside a stretch are among its reads
+bool clut_signatures() {
+    Rng rng{24};
+    pcr::TextureStore store;
+    const uint32_t cbp = 100; // (a CT32 16 x 16 CLUT at block 100)
+    const uint64_t tex0 = tex0_of(0, 1, GSN_PSMT8, 4, 4) | uint64_t(cbp) << 37 | uint64_t(1) << 61; // (CLD 1)
+    store.upload(upload_regs(cbp, 1, GSN_PSMCT32, 16, 16), bytes_from(rng, 1024));
+    uint64_t start = store.page_signature(512);
+    store.load_clut(tex0, 0);
+    uint64_t loaded = store.page_signature(512);
+    bool ok = expect_true(loaded != start, "a load that changed the CLUT did not change the CLUT buffer's signature");
+    store.load_clut(tex0, 0);
+    ok = expect_true(store.page_signature(512) == loaded, "a reload that changed nothing changed the CLUT buffer's signature") && ok;
+    store.upload(upload_regs(cbp, 1, GSN_PSMCT32, 16, 16), bytes_from(rng, 1024));
+    store.load_clut(tex0, 0);
+    ok = expect_true(store.page_signature(512) != loaded, "a load of different entries did not change the CLUT buffer's signature") && ok;
+    store.watch_reads();
+    store.clut_colours(tex0, 0);
+    pcr::PagesRead read = store.reads_watched();
+    return expect_true(read.pages[512], "colours read in a stretch are not among its reads") && ok;
+}
+
+// A stretch that re-uploads the same chunk over owned blocks, then reads them, is unchanged right after; and the walk
+// that reads a page drawn over by the last walk, re-uploads its owner and draws over it again, is unchanged too
+bool reupload_in_stretch() {
+    Rng rng{26};
+    pcr::TextureStore store;
+    const uint32_t psm = GSN_PSMCT32, page = 80;
+    store.upload(upload_regs(page * 32, 1, psm, 64, 32), bytes_from(rng, 8192));
+    uint64_t chunk = store.last_chunk();
+    store.watch_reads();
+    store.upload_again(chunk);
+    pcr::TextureRegs regs;
+    regs.tex0 = tex0_of(page * 32, 1, psm, 6, 5);
+    bool ok = expect_true(store.resolve(regs, 64, 32).source == TextureSource::FromUploads, "the re-uploaded page is not the uploads'");
+    pcr::PagesRead read = store.reads_watched();
+    ok = expect_true(read.pages[page] && store.unchanged(read), "a re-upload of the same chunk over owned blocks changed the reads") && ok;
+
+    store.drawn(pcr::VramRect{page * 32, 1, psm, 0, 0, 64, 32}); // (the last walk drew over it)
+    store.watch_reads();
+    store.resolve(regs, 64, 32);
+    store.upload_again(chunk);
+    store.drawn(pcr::VramRect{page * 32, 1, psm, 0, 0, 64, 32});
+    pcr::PagesRead walk = store.reads_watched();
+    return expect_true(walk.pages[page] && store.unchanged(walk), "a walk's re-upload and draw over a drawn page changed its reads") && ok;
+}
+
+// A w x h rectangle at (x, y) of a buffer at bp (bw 1: a page's 64 x 32 32-bit pixels is one page of its own)
+pcr::TransferRegs upload_regs_at(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    return {bitbltbuf_of(bp, bw, psm), uint64_t(x) << 32 | uint64_t(y) << 48, uint64_t(w) | uint64_t(h) << 32};
+}
+
+// The reads are per block: a page part-written in a stretch is still read by a resolve of its other blocks, and an
+// upload of a block the stretch's own writes owned before is read as the blocks it owned
+bool partly_written_page() {
+    Rng rng{25};
+    pcr::TextureStore store;
+    const uint32_t psm = GSN_PSMCT32, page = 70;
+    store.upload(upload_regs(page * 32, 1, psm, 64, 32), bytes_from(rng, 8192)); // the whole page, before the stretch
+    store.watch_reads();
+    store.upload(upload_regs_at(page * 32, 1, psm, 0, 16, 64, 16), bytes_from(rng, 4096)); // its bottom half, written
+    pcr::TextureRegs top;
+    top.tex0 = tex0_of(page * 32, 1, psm, 6, 4); // its top half, the earlier upload's
+    bool ok = expect_true(store.resolve(top, 64, 16).source == TextureSource::FromUploads, "the top half is not the uploads'");
+    pcr::PagesRead read = store.reads_watched();
+    ok = expect_true(read.pages == pages_of_list({page}), "a page part-written, read in its other blocks, is not among the reads") && ok;
+    // (not unchanged yet: the stretch's own upload over the bottom half is a change to what its owners read)
+    store.upload(upload_regs_at(page * 32, 1, psm, 0, 0, 64, 16), bytes_from(rng, 4096)); // outside: the top half
+    ok = expect_true(!store.unchanged(read), "an upload over the top half left the reads unchanged") && ok;
+
+    // an upload over blocks with owners reads them first: the page is among the stretch's reads, though nothing else is read
+    store.watch_reads();
+    store.upload(upload_regs_at(page * 32, 1, psm, 0, 0, 64, 16), bytes_from(rng, 4096));
+    pcr::PagesRead written_over = store.reads_watched();
+    return expect_true(written_over.pages[page], "an upload over owned blocks did not read them first") && ok;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -754,6 +967,12 @@ int main(int argc, char **argv) {
         seeds = {1, 2, 3, 4, 5, 6};
     }
     bool ok = colour_texels_rules();
+    ok = signatures_of_uploads() && ok;
+    ok = watched_reads() && ok;
+    ok = read_before_write() && ok;
+    ok = clut_signatures() && ok;
+    ok = reupload_in_stretch() && ok;
+    ok = partly_written_page() && ok;
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
         ok = vram_round_trip(seed) && ok;

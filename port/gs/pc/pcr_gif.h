@@ -65,6 +65,7 @@ constexpr uint32_t native_draw = 0x7B, upload_again = 0x7C, frame_mark = 0x7D, w
 struct GsRegisterFile {
     std::array<uint64_t, 256> reg{};
     uint32_t internal_q = 0x3F800000u; // (a float's bits)
+    bool operator==(const GsRegisterFile &) const = default;
 };
 
 // A kick not numbered (gsn.h's GSN_IM_NONE): outside a picture between's walk, or not of the packets fed
@@ -84,6 +85,7 @@ struct GifVertex {
     // or Q by an A+D RGBAQ): what frame_interp.c's GsnInterpMoves of those kicks change (gsn.cpp's InterpKick)
     uint32_t kick = no_kick;
     uint32_t st_owner = no_kick, rgba_owner = no_kick, q_owner = no_kick, uv_owner = no_kick;
+    bool operator==(const GifVertex &) const = default;
 };
 
 enum class PrimitiveShape : uint8_t { point, line, triangle, sprite };
@@ -100,6 +102,7 @@ struct GifPrimitive {
 // BITBLTBUF, TRXPOS and TRXREG as a transfer began with them
 struct TransferRegisters {
     uint64_t bitbltbuf = 0, trxpos = 0, trxreg = 0;
+    bool operator==(const TransferRegisters &) const = default;
 };
 
 enum class UploadEnd : uint8_t { complete, cut_short };
@@ -126,6 +129,24 @@ public:
 };
 
 class GifFrontEnd {
+private:
+    enum class TagMode : uint8_t { packed, reglist, image };
+    struct PathTag {
+        TagMode mode = TagMode::packed;
+        uint32_t qwords_left = 0;  // of the tag's data; 0: the next qword is a tag
+        uint32_t dwords_left = 0;  // REGLIST: of the tag's registers (the last qword may be half used)
+        uint32_t register_count = 16;
+        uint32_t next_register = 0;
+        uint64_t registers = 0;    // the tag's REGS: 4 bits a register
+        bool operator==(const PathTag &) const = default;
+    };
+    struct PendingUpload {
+        TransferRegisters transfer;
+        size_t expected_bytes = 0;
+        std::vector<uint8_t> bytes;
+        bool operator==(const PendingUpload &) const = default;
+    };
+
 public:
     static constexpr int path_count = 4; // PATH1, 2 and 3 by their numbers (0 is taken too, as gsn takes it)
 
@@ -162,22 +183,20 @@ public:
     // A state loaded: its register file taken, every path between packets, no vertex queued, no transfer begun
     void restore(const GsRegisterFile &file);
 
-private:
-    enum class TagMode : uint8_t { packed, reglist, image };
-    struct PathTag {
-        TagMode mode = TagMode::packed;
-        uint32_t qwords_left = 0;  // of the tag's data; 0: the next qword is a tag
-        uint32_t dwords_left = 0;  // REGLIST: of the tag's registers (the last qword may be half used)
-        uint32_t register_count = 16;
-        uint32_t next_register = 0;
-        uint64_t registers = 0;    // the tag's REGS: 4 bits a register
+    // Everything the front end carries from one feed to the next: the register file, each path's tag, the vertex
+    // queue, a transfer begun. Two equal states: the same packets fed make the same events.
+    struct State {
+        GsRegisterFile file;
+        std::array<PathTag, path_count> paths{};
+        std::array<GifVertex, 3> queue{};
+        uint32_t queued = 0;
+        std::optional<PendingUpload> upload;
+        bool operator==(const State &) const = default;
     };
-    struct PendingUpload {
-        TransferRegisters transfer;
-        size_t expected_bytes = 0;
-        std::vector<uint8_t> bytes;
-    };
+    State state() const;
+    void set_state(const State &state); // (restore(file) stays for save states)
 
+private:
     void read_tag(PathTag &tag, uint64_t low, uint64_t high);
     void write_packed(uint32_t descriptor, uint64_t low, uint64_t high);
     void write_reglist(PathTag &tag, uint64_t low, uint64_t high);

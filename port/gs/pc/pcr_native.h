@@ -56,6 +56,8 @@ public:
     void frame_mark(uint64_t value);
     // A picture between's walk begins (its time) or ends (nullptr)
     void set_picture(const GsnInterpPicture *picture);
+    // Since set_picture(picture): a trail's points moved t of the way on the CPU (the walk's calls hold that time)
+    bool moved_on_cpu() const;
 
     NativeCounts counts() const;
     // --stats: the "[stats] pc native draws" line

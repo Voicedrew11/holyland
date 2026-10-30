@@ -15,6 +15,7 @@
 #include <span>
 #include <list>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "pcr_shaders.h"
@@ -313,6 +314,10 @@ public:
     void set_between(const Between *between) {
         flush_batch();
         between_ = between;
+        if (!between && keeping_) {
+            keeping_ = false;
+            kept_->read = store_.reads_watched();
+        }
     }
 
     // ---- The events ----
@@ -353,6 +358,9 @@ public:
     }
 
     void texture_written(uint64_t tex0, uint64_t texclut) {
+        if (keeping_) {
+            kept_->steps.emplace_back(KeptClutLoad{tex0, texclut});
+        }
         std::optional<TextureSource> loaded = store_.load_clut(tex0, texclut);
         if (loaded) {
             clut_serial_++;
@@ -367,6 +375,10 @@ public:
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         bool taken = store_.upload(regs, bytes);
         write_upload_into_surfaces(t, bytes);
+        if (keeping_) {
+            kept_->steps.emplace_back(KeptUpload{{t, std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end()),
+                                                  0}});
+        }
         if (!replaying_) {
             // (the frame's uploads: what its pictures between ask for again)
             uploads_now_.push_back({t, std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end()),
@@ -375,6 +387,9 @@ public:
     }
 
     void frame_mark(uint64_t value) {
+        if (keeping_) {
+            kept_->steps.emplace_back(KeptMark{value});
+        }
         switch (bits(value, 32, 8)) {
         case 0xF0:
             replaying_ = true;
@@ -402,17 +417,14 @@ public:
             counts_.uploads_again_missed++;
             return;
         }
-        const RecordedUpload &r = uploads_frame_[k];
-        flush_batch();
-        if (r.chunk == 0 || !store_.upload_again(r.chunk)) {
-            store_.upload({r.transfer.bitbltbuf, r.transfer.trxpos, r.transfer.trxreg}, *r.bytes);
-        }
-        write_upload_into_surfaces(r.transfer, *r.bytes);
-        counts_.uploads_made_again++;
+        upload_made_again(uploads_frame_[k]);
     }
 
     void local_copy(const TransferRegisters &t) {
         flush_batch();
+        if (keeping_) {
+            kept_->steps.emplace_back(KeptCopy{t});
+        }
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         copy_between_surfaces(t);
         store_.copied(regs);
@@ -420,6 +432,7 @@ public:
 
     void local_to_host(const TransferRegisters &t) {
         flush_batch();
+        kept_spoilt_ |= keeping_; // (what is read back goes to the game: a walk made again would not send it)
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         fifo_at_ = 0;
         if (store_.read_back(regs, fifo_)) {
@@ -446,6 +459,7 @@ public:
 
     void forget() {
         flush_batch();
+        kept_spoilt_ |= keeping_;
         end_pass();
         uploads_now_.clear();
         uploads_frame_.clear();
@@ -1043,6 +1057,7 @@ private:
         uint32_t levels = 1;
         uint32_t cols = 0, rows = 0; // the part of level 0 the batch may read
         ImageHandle surface_copy;     // (a surface's copy: kept until the batch is drawn)
+        ImageHandle held;             // (a decoded texture's image: held while a kept walk may draw with it)
         bool ok = false;
     };
 
@@ -1113,6 +1128,7 @@ private:
                     return b;
                 }
                 b.view = &t->image->get_view();
+                b.held = t->image;
                 b.src = SRC_SAMPLED;
                 b.levels = t->levels;
                 b.sampler = &sampler_for(s.tex1, s.clamp, t->levels);
@@ -1127,6 +1143,7 @@ private:
                 return b;
             }
             b.view = &t->image->get_view();
+            b.held = t->image;
             b.levels = t->levels;
             b.cols = std::max(cols, a.texture->read_cols);
             b.rows = std::max(rows, a.texture->read_rows);
@@ -1410,6 +1427,116 @@ private:
         std::vector<Run> runs;
     };
 
+    // An upload of the frame's (what its pictures between ask for again), or a kept walk's
+    struct RecordedUpload {
+        TransferRegisters transfer;
+        std::shared_ptr<const std::vector<uint8_t>> bytes;
+        uint64_t chunk; // (the texture store's: 0 if it refused it)
+    };
+
+    // ---- A kept walk's steps (keep_walk), in the order the walk made them ----
+    struct KeptUpload {
+        RecordedUpload upload; // (chunk 0: its bytes taken again)
+    };
+    struct KeptUploadAgain {
+        RecordedUpload upload;
+    };
+    struct KeptCopy {
+        TransferRegisters transfer;
+    };
+    struct KeptClutLoad {
+        uint64_t tex0, texclut;
+    };
+    struct KeptMark {
+        uint64_t value;
+    };
+    using KeptStep = std::variant<Batch, KeptUpload, KeptUploadAgain, KeptCopy, KeptClutLoad, KeptMark>;
+    struct Kept {
+        std::vector<KeptStep> steps;
+        PagesRead read;
+    };
+    friend class pcr::KeptWalk;
+    friend class pcr::Canvas;
+
+    // ---- Step 5b: a walk's calls kept, and made again ----
+    void keep_walk() {
+        kept_ = std::make_unique<Kept>();
+        kept_spoilt_ = false;
+        keeping_ = true;
+        store_.watch_reads();
+    }
+
+    std::unique_ptr<Kept> take_kept_walk() {
+        std::unique_ptr<Kept> walk = std::move(kept_);
+        if (keeping_) {
+            return nullptr; // (taken before the walk's end)
+        }
+        if (kept_spoilt_ || !walk || walk->steps.empty()) {
+            return nullptr;
+        }
+        return walk;
+    }
+
+    bool fits(const Kept &walk) const {
+        return store_.unchanged(walk.read);
+    }
+
+    void draw_again(const Kept &walk, const Between &between) {
+        flush_batch();
+        between_ = &between;
+        for (const KeptStep &step : walk.steps) {
+            std::visit([this](const auto &kept) { make_again(kept); }, step);
+        }
+        flush_batch();
+        between_ = nullptr;
+    }
+
+    void upload_made_again(const RecordedUpload &r) {
+        flush_batch();
+        if (keeping_) {
+            kept_->steps.emplace_back(KeptUploadAgain{r});
+        }
+        if (r.chunk == 0 || !store_.upload_again(r.chunk)) {
+            store_.upload({r.transfer.bitbltbuf, r.transfer.trxpos, r.transfer.trxreg}, *r.bytes);
+        }
+        write_upload_into_surfaces(r.transfer, *r.bytes);
+        counts_.uploads_made_again++;
+    }
+
+    // The open batch as a kept walk keeps it: a surface's copy is made again when it is drawn again
+    Batch kept_batch() const {
+        Batch b = batch_;
+        b.texture.surface_copy.reset();
+        if (b.texture.src == SRC_SURFACE) {
+            b.texture.view = nullptr;
+        }
+        return b;
+    }
+
+    void make_again(const Batch &kept) {
+        batch_ = kept;
+        if (kept.texture.src == SRC_SURFACE) {
+            batch_.texture = surface_texture(kept.state.tex0, kept.texture.cols, kept.texture.rows);
+        }
+        batch_open_ = true;
+        flush_batch();
+    }
+    void make_again(const KeptUpload &kept) {
+        upload(kept.upload.transfer, *kept.upload.bytes);
+    }
+    void make_again(const KeptUploadAgain &kept) {
+        upload_made_again(kept.upload);
+    }
+    void make_again(const KeptCopy &kept) {
+        local_copy(kept.transfer);
+    }
+    void make_again(const KeptClutLoad &kept) {
+        texture_written(kept.tex0, kept.texclut);
+    }
+    void make_again(const KeptMark &kept) {
+        frame_mark(kept.value);
+    }
+
     void open_batch(const DrawState &s, const GifPrimitive &p) {
         uint32_t cols = 0, rows = 0;
         if (bits(s.prim, 4, 1)) {
@@ -1573,6 +1700,9 @@ private:
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            if (keeping_) {
+                kept_->steps.emplace_back(kept_batch());
+            }
             draw_batch();
         }
         batch_.texture = BoundTexture(); // (a surface's copy let go once drawn)
@@ -2050,13 +2180,11 @@ private:
     std::vector<uint8_t> fifo_; // (the last read-back's bytes, read_fifo's)
     // the pictures between: the uploads since the vblank and the last vblank's, a picture between under way, the
     // frame shown kept (0xF2) and whether draws read it now
-    struct RecordedUpload {
-        TransferRegisters transfer;
-        std::shared_ptr<const std::vector<uint8_t>> bytes;
-        uint64_t chunk; // (the texture store's: 0 if it refused it)
-    };
     std::vector<RecordedUpload> uploads_now_, uploads_frame_;
     bool replaying_ = false, kept_reads_ = false;
+    // (step 5b) the walk being kept, and whether it read back from the GS's memory or forgot it
+    std::unique_ptr<Kept> kept_;
+    bool keeping_ = false, kept_spoilt_ = false;
     ImageHandle kept_frame_;
     uint32_t kept_page_ = 0;
     size_t fifo_at_ = 0;
@@ -2119,6 +2247,26 @@ void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
 }
 void Canvas::set_between(const Between *between) {
     impl_->set_between(between);
+}
+
+// (Canvas::Impl's Kept, under the name the header gives it)
+class KeptWalk : public Canvas::Impl::Kept {
+public:
+    explicit KeptWalk(Canvas::Impl::Kept &&kept) : Canvas::Impl::Kept(std::move(kept)) {}
+};
+
+void Canvas::keep_walk() {
+    impl_->keep_walk();
+}
+std::shared_ptr<const KeptWalk> Canvas::take_kept_walk() {
+    std::unique_ptr<Impl::Kept> kept = impl_->take_kept_walk();
+    return kept ? std::make_shared<const KeptWalk>(std::move(*kept)) : nullptr;
+}
+bool Canvas::fits(const KeptWalk &walk) const {
+    return impl_->fits(walk);
+}
+void Canvas::draw_again(const KeptWalk &walk, const Between &between) {
+    impl_->draw_again(walk, between);
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {
     impl_->primitive(file, primitive);

@@ -71,6 +71,11 @@ public:
     void set_picture(const GsnInterpPicture *picture) {
         in_picture_ = picture != nullptr;
         picture_u_ = picture ? 1.0f - picture->t : 0.0f;
+        moved_on_cpu_ = picture ? false : moved_on_cpu_; // (asked after the walk's end)
+    }
+
+    bool moved_on_cpu() const {
+        return moved_on_cpu_;
     }
 
     NativeCounts counts() const {
@@ -271,6 +276,7 @@ private:
             for (const RdBatch &b : mesh->batches) {
                 front.write_packed_tag((b.tag[0] >> 47) & 0x7FF);
                 bool lerp = before && !((front.prim_in_effect() >> 4) & 1);
+                moved_on_cpu_ |= lerp;
                 for (uint32_t k = 0; k < b.count; k++, at++) {
                     const int32_t *v = &mesh->vertices[size_t(b.first + k) * 8];
                     int32_t q[8];
@@ -463,7 +469,7 @@ private:
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
     PartMoves parts_;
-    bool in_picture_ = false;
+    bool in_picture_ = false, moved_on_cpu_ = false;
     float picture_u_ = 0.0f; // (1 - the picture's t)
 
 public:
@@ -489,6 +495,9 @@ void NativeDraws::frame_mark(uint64_t value) {
 
 void NativeDraws::set_picture(const GsnInterpPicture *picture) {
     impl_->set_picture(picture);
+}
+bool NativeDraws::moved_on_cpu() const {
+    return impl_->moved_on_cpu();
 }
 
 NativeCounts NativeDraws::counts() const {

@@ -407,22 +407,45 @@ public:
         between_ = std::make_unique<pcr::Between>(device);
     }
 
-    // (pcr_between.h) The frame for the pictures between
+    // (pcr_between.h) The frame for the pictures between. The front end's state now is where each of its walks
+    // starts (as the native GS's interp_capture), so that every walk of the frame makes the same calls.
     void take_frame(InterpFrame frame) {
         if (between_) {
             between_->take_frame(std::move(frame));
+            walk_start_ = front_.state();
+            kept_walk_.reset();
         }
     }
 
-    // A picture between: the frame's packets walked again, its kicks numbered, the canvas's and the native draws'
-    // corners moved by the shaders to the picture's time
+    // A picture between: drawn again from the frame's kept walk when what that read of the store is as it was (step
+    // 5b); else the frame's packets walked again from the frame's state, its kicks numbered, the canvas's and the
+    // native draws' corners moved by the shaders to the picture's time, and the walk kept. The live state is put
+    // back after.
     void walk_picture(const GsnInterpPicture &picture) {
         if (!between_ || !canvas_) {
             return;
         }
+        pcr::WalkReason why = pcr::WalkReason::none_kept;
+        if (kept_walk_ && keep_walks_) {
+            if (canvas_->fits(*kept_walk_)) {
+                if (between_->begin_picture_again(picture)) {
+                    canvas_->draw_again(*kept_walk_, *between_);
+                    between_->end_picture_again();
+                }
+                return;
+            }
+            why = pcr::WalkReason::store_changed;
+        }
+        kept_walk_.reset();
         std::span<const uint8_t> stream = between_->begin_picture(picture);
         if (stream.empty()) {
             return;
+        }
+        between_->walked(why);
+        const pcr::GifFrontEnd::State live = front_.state();
+        front_.set_state(walk_start_);
+        if (keep_walks_) {
+            canvas_->keep_walk();
         }
         canvas_->set_between(between_.get());
         natives_->set_picture(&picture);
@@ -439,7 +462,17 @@ public:
         front_.stop_numbering();
         natives_->set_picture(nullptr);
         canvas_->set_between(nullptr); // (the walk's last batch drawn while the picture's buffers are bound)
-        between_->end_picture(front_.kicks_numbered());
+        bool kicks_right = between_->end_picture(front_.kicks_numbered());
+        front_.set_state(live);
+        if (keep_walks_) {
+            kept_walk_ = canvas_->take_kept_walk();
+            if (!kicks_right || natives_->moved_on_cpu()) {
+                kept_walk_.reset();
+            }
+            if (!kept_walk_) {
+                between_->walked(pcr::WalkReason::not_kept);
+            }
+        }
     }
 
     pcr::Canvas *canvas() {
@@ -455,6 +488,8 @@ public:
     }
 
     Intake() : front_(*this) {
+        const char *keep = getenv("KF4_PC_KEPT_WALK");
+        keep_walks_ = !(keep && strcmp(keep, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -573,6 +608,10 @@ private:
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::NativeDraws> natives_;
     std::unique_ptr<pcr::Between> between_;
+    // (step 5b) where the frame's walks start, the frame's kept walk, and KF4_PC_KEPT_WALK (0: every picture walks)
+    pcr::GifFrontEnd::State walk_start_;
+    std::shared_ptr<const pcr::KeptWalk> kept_walk_;
+    bool keep_walks_ = true;
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------

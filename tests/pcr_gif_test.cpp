@@ -589,6 +589,79 @@ void test_splits() {
     CHECK(single.events.log == whole.events.log);
 }
 
+// The packets fed before a state is taken: registers set, a strip's first vertex queued on path 1, and path 2 one
+// write into a tag of three A+D writes
+void feed_prelude(GifFrontEnd &gif) {
+    gif.feed(1, Packet::writes({{gs_reg::prim, 4}, {gs_reg::frame_1, 0x1234}, {gs_reg::texclut, 0x77}}).bytes);
+    Packet strip;
+    strip.tag(1, packed, 1, 0x5);
+    packed_xyz(strip, 0x10, 0, 0);
+    gif.feed(1, strip.bytes);
+    Packet tag;
+    tag.tag(3, packed, 1, 0xE);
+    tag.ad(gs_reg::zbuf_1, 0x55);
+    gif.feed(2, tag.bytes);
+}
+
+// The packets fed after it: path 2 ends its tag, path 1 completes the strip (its queued vertex the first), path 3
+// writes a register
+void feed_continuation(GifFrontEnd &gif) {
+    Packet rest;
+    rest.ad(gs_reg::zbuf_2, 0x66);
+    rest.ad(gs_reg::frame_2, 0x77);
+    gif.feed(2, rest.bytes);
+    Packet strip;
+    strip.tag(2, packed, 1, 0x5);
+    packed_xyz(strip, 0x20, 0, 0);
+    packed_xyz(strip, 0x30, 0, 0);
+    gif.feed(1, strip.bytes);
+    gif.feed(3, Packet::writes({{gs_reg::frame_2, 0x99}}).bytes);
+}
+
+// state(), set_state(): a state taken mid-stream, loaded into the front end that went on past it and into a fresh one,
+// makes the same packets give the same events as the front end that was never disturbed
+void test_state_round_trip() {
+    Rig before;
+    feed_prelude(before.gif);
+    const GifFrontEnd::State saved = before.gif.state();
+    CHECK(saved.queued == 1 && saved.paths[2].qwords_left == 2);
+    CHECK(saved.file.reg[gs_reg::frame_1] == 0x1234);
+    // the reference: the same packets, never interrupted
+    Rig never;
+    feed_prelude(never.gif);
+    never.events.log.clear();
+    feed_continuation(never.gif);
+    CHECK(!never.events.log.empty());
+    // the front end that went on: its state changed, and set_state puts it back
+    before.events.log.clear();
+    feed_continuation(before.gif);
+    CHECK(before.gif.state() != saved);
+    CHECK(before.events.log == never.events.log);
+    before.gif.set_state(saved);
+    CHECK(before.gif.state() == saved);
+    // a fresh front end restored from the state
+    Rig restored;
+    restored.gif.set_state(saved);
+    CHECK(restored.gif.state() == saved);
+    feed_continuation(restored.gif);
+    CHECK(restored.events.log == never.events.log);
+    CHECK(restored.gif.state() == never.gif.state());
+    // the front end that went on, set back, makes the same events again
+    before.events.log.clear();
+    feed_continuation(before.gif);
+    CHECK(before.events.log == never.events.log);
+    // states that differ in one part compare unequal
+    GifFrontEnd::State other = saved;
+    other.queued = 0;
+    CHECK(other != saved);
+    other = saved;
+    other.paths[2].qwords_left++;
+    CHECK(other != saved);
+    other = saved;
+    other.file.reg[gs_reg::frame_1] = 0;
+    CHECK(other != saved);
+}
+
 // ---- The reference walk: from the packets' structure, as the GS is described ------------------------------------
 
 // What one qword of a packet does, known from how it was made (not read back from its bytes)
@@ -1121,6 +1194,7 @@ int main() {
     test_uploads();
     test_truncated_and_malformed();
     test_splits();
+    test_state_round_trip();
     test_random_streams();
     test_random_bytes();
     if (failures) {

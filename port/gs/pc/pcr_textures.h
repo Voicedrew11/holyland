@@ -141,6 +141,14 @@ struct TextureStoreCounts {
     uint64_t uploads_again = 0; // (of uploads: made again from their chunk)
 };
 
+// What a stretch of calls read of the store from before the stretch: each page (0..511; 512 the CLUT buffer) read by
+// resolve, load_clut, clut_colours, read_back, copied or page_source before the stretch changed it, with its
+// signature then (each page's signature when first read)
+struct PagesRead {
+    std::bitset<513> pages;
+    std::array<uint64_t, 513> signatures{};
+};
+
 class TextureStore {
 public:
     explicit TextureStore(TextureStoreLimits limits = {});
@@ -205,6 +213,15 @@ public:
     void forget();
 
     TextureStoreCounts counts() const;
+
+    // What a page (0..511; 512 the CLUT buffer) answers now, as a hash: two pages answering the same give the same
+    // hash, whatever was written between (a page past 512: 0)
+    uint64_t page_signature(uint32_t page) const;
+    // A stretch's reads watched from now, until reads_watched
+    void watch_reads();
+    PagesRead reads_watched();
+    // Every page read as it was then
+    bool unchanged(const PagesRead &read) const;
 
 private:
     struct State;

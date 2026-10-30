@@ -70,6 +70,10 @@ struct NativeBatch {
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
 };
 
+// A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
+// in order, every image and buffer they use held, and what it read of the texture store from before it
+class KeptWalk;
+
 class Canvas {
 public:
     // times: the GPU's time of what the canvas records (outlives the canvas)
@@ -83,6 +87,19 @@ public:
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);
+
+    // Step 5b: a walk's calls kept. keep_walk() before set_between(between): every call until set_between(nullptr)
+    // is kept as well as made (its images and buffers held), with what it read of the texture store from before it,
+    // then taken by take_kept_walk (nullptr when nothing was kept, or the walk read back from the GS's memory)
+    void keep_walk();
+    std::shared_ptr<const KeptWalk> take_kept_walk();
+    // Whether a kept walk can be made again now: every page of the store it read from before it as it was then (the
+    // surfaces are looked up again as its draws are made)
+    bool fits(const KeptWalk &walk) const;
+    // A kept walk's calls made again, between's picture bound as set_between's (its kicks: the walk's), without the
+    // walk: its draws, copies of surfaces, uploads and copies, CLUT loads and marks in their order, so that the store
+    // and the surfaces are left as the walk leaves them
+    void draw_again(const KeptWalk &walk, const Between &between);
 
     // The front end's events (pcr_gif.h), with its register file at each
     void primitive(const GsRegisterFile &file, const GifPrimitive &primitive);
@@ -128,6 +145,7 @@ public:
 
 private:
     class Impl;
+    friend class KeptWalk;
     std::unique_ptr<Impl> impl_;
 };
 

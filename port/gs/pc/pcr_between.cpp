@@ -73,13 +73,8 @@ void Between::take_frame(InterpFrame frame) {
     }
 }
 
-std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
-    counts_.pictures++;
-    if (!frame_ || frame_->serial != p.serial) {
-        counts_.missed++;
-        return {};
-    }
-    // the picture's buffer: the header (the frame's projections and kicks added), then the runs' bits
+// The picture's buffer: the header (the frame's projections and kicks added), then the runs' bits
+void Between::make_picture(const GsnInterpPicture &p) {
     size_t words = (size_t(p.runs) + 31) / 32;
     std::vector<uint8_t> data(sizeof(PictureHeader) + std::max<size_t>(words, 1) * 4, 0);
     PictureHeader h = {};
@@ -98,6 +93,15 @@ std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
         memcpy(data.data() + sizeof(h), p.run_bits, words * 4);
     }
     picture_ = make(data.data(), data.size(), false);
+}
+
+std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
+    counts_.pictures++;
+    if (!frame_ || frame_->serial != p.serial) {
+        counts_.missed++;
+        return {};
+    }
+    make_picture(p);
     // the walk's kicks: a buffer of the picture's own (the last picture's draws may still read theirs)
     if (kicks_ && kick_map_) {
         device_.unmap_host_buffer(*kicks_, MEMORY_ACCESS_WRITE_BIT);
@@ -108,8 +112,40 @@ std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
         fprintf(stderr, "[pcr] pictures between: the kicks' buffer cannot be mapped\n");
         abort();
     }
+    walked_serial_ = frame_->serial;
+    walked_ = true;
     active_ = true;
     return {frame_->stream, frame_->stream_bytes};
+}
+
+bool Between::begin_picture_again(const GsnInterpPicture &p) {
+    counts_.pictures++;
+    if (!frame_ || frame_->serial != p.serial || !walked_ || walked_serial_ != p.serial || !kicks_) {
+        counts_.missed++;
+        return false;
+    }
+    make_picture(p);
+    counts_.drawn_again++;
+    active_ = true;
+    return true;
+}
+
+void Between::end_picture_again() {
+    active_ = false;
+}
+
+void Between::walked(WalkReason why) {
+    switch (why) {
+    case WalkReason::none_kept:
+        counts_.walked_none_kept++;
+        break;
+    case WalkReason::store_changed:
+        counts_.walked_store_changed++;
+        break;
+    case WalkReason::not_kept:
+        counts_.walked_not_kept++;
+        break;
+    }
 }
 
 void Between::kicked(const GifVertex &v, uint64_t xyoffset) {
@@ -166,9 +202,12 @@ const Buffer &Between::moves() const {
 void Between::print_counts(FILE *out) const {
     fprintf(out,
             "[stats] pc pictures between: %llu frames, %llu pictures (%llu not of the frame taken, %llu whose kicks were "
-            "not the frame's)\n",
+            "not the frame's); %llu drawn again from a kept walk, walked: %llu with none kept, %llu the store "
+            "changed; %llu walks not kept\n",
             (unsigned long long)counts_.frames, (unsigned long long)counts_.pictures, (unsigned long long)counts_.missed,
-            (unsigned long long)counts_.kicks_not_the_frames);
+            (unsigned long long)counts_.kicks_not_the_frames, (unsigned long long)counts_.drawn_again,
+            (unsigned long long)counts_.walked_none_kept, (unsigned long long)counts_.walked_store_changed,
+            (unsigned long long)counts_.walked_not_kept);
 }
 
 } // namespace pcr

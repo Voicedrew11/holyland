@@ -18,7 +18,9 @@ namespace {
 constexpr uint32_t kBlocks = GSN_VRAM_BYTES / 256;
 constexpr uint32_t kBlocksPerPage = 32;
 constexpr uint32_t kPages = kBlocks / kBlocksPerPage;
-constexpr uint32_t kWrap = 2048; // (a transfer's and a buffer's coordinates wrap here)
+constexpr uint32_t kClutPage = kPages;  // (the CLUT buffer's entries, as a page for the signatures)
+constexpr uint32_t kClutBlock = kBlocks; // (and as a block for the watch of a stretch's reads and writes)
+constexpr uint32_t kWrap = 2048;       // (a transfer's and a buffer's coordinates wrap here)
 constexpr uint32_t kMaxLevels = 7;
 constexpr uint32_t kMaxSizeLog2 = 10;
 constexpr uint32_t kNoBlock = UINT32_MAX;
@@ -397,6 +399,11 @@ struct TextureStore::State {
     std::vector<std::vector<Owner>> block_owners = std::vector<std::vector<Owner>>(kBlocks);
     // the count when a page was last drawn into or copied over, in its low 24 bits and in its top byte
     std::array<uint64_t, kPages> drawn_low_at{}, drawn_top_at{};
+    // a stretch's watch of its reads: the blocks written in it (the CLUT buffer last), and the reads noted so far
+    // (mutable: a read notes itself from the const methods too)
+    mutable bool watching = false;
+    mutable std::bitset<kBlocks + 1> written_in_stretch;
+    mutable PagesRead read_now;
     std::unordered_map<uint64_t, Chunk> chunks;
     std::unordered_multimap<uint64_t, uint64_t> chunk_by_hash;
     std::list<uint64_t> unowned; // (chunks owning nothing, oldest first)
@@ -415,6 +422,12 @@ struct TextureStore::State {
 
     uint64_t keep(const TransferRegs &regs, std::span<const uint8_t> bytes, uint64_t pixels);
     void own(uint64_t id);
+    void take_nibbles(uint32_t block, uint64_t id, uint64_t seq, const Cover &cover, std::vector<uint64_t> &now_unowned);
+    bool drawn_over(uint32_t page, uint64_t seq, uint8_t parts) const;
+    uint64_t signature_of(uint32_t page) const;
+    void note_read(uint32_t block) const;
+    void note_write(uint32_t block);
+    void set_mirror(uint32_t at, uint16_t value, bool unloaded);
     void lose_entry(uint64_t id, std::vector<uint64_t> &now_unowned);
     void mark_unowned(uint64_t id);
     void mark_owned(Chunk &c);
@@ -457,21 +470,13 @@ void TextureStore::State::own(uint64_t id) {
     for (const VramRect &r : upload_rects(c.regs, c.pixels)) {
         each_block(r, [&](uint32_t block, uint32_t x, uint32_t y) {
             Cover cover = cover_in_block(r, x, y);
-            std::vector<Owner> &owners = block_owners[block];
-            size_t kept = 0;
-            for (Owner &o : owners) {
-                for (size_t k = 0; k < cover.size(); k++) {
-                    o.cover[k] &= ~cover[k];
-                }
-                if (any(o.cover)) {
-                    owners[kept++] = o;
-                } else {
-                    lose_entry(o.chunk, now_unowned);
-                }
+            // (the owners a block has before this upload decide what it answers after, so they are read first; a block
+            // with none is answered by this upload alone)
+            if (!block_owners[block].empty()) {
+                note_read(block);
             }
-            owners.resize(kept);
-            owners.push_back({id, c.seq, cover});
-            c.owner_entries++;
+            note_write(block);
+            take_nibbles(block, id, c.seq, cover, now_unowned);
             return true;
         });
     }
@@ -482,6 +487,88 @@ void TextureStore::State::own(uint64_t id) {
         mark_unowned(lost);
     }
     let_go_unowned();
+}
+
+// The chunk takes the cover's nibbles of a block: the owners before it lose them (and are let go if they own none),
+// and the chunk owns them, newest
+void TextureStore::State::take_nibbles(uint32_t block, uint64_t id, uint64_t seq, const Cover &cover,
+                                       std::vector<uint64_t> &now_unowned) {
+    std::vector<Owner> &owners = block_owners[block];
+    size_t kept = 0;
+    for (Owner &o : owners) {
+        for (size_t k = 0; k < cover.size(); k++) {
+            o.cover[k] &= ~cover[k];
+        }
+        if (any(o.cover)) {
+            owners[kept++] = o;
+        } else {
+            lose_entry(o.chunk, now_unowned);
+        }
+    }
+    owners.resize(kept);
+    owners.push_back({id, seq, cover});
+    chunks.at(id).owner_entries++;
+}
+
+// Whether a draw over a page (the parts of it: low 24 bits, top byte) came after an owner's seq
+bool TextureStore::State::drawn_over(uint32_t page, uint64_t seq, uint8_t parts) const {
+    return ((parts & kLowParts) && drawn_low_at[page] > seq) || ((parts & kTopParts) && drawn_top_at[page] > seq);
+}
+
+// A page's signature: a hash of what the store answers from it, the same for two pages that answer the same. Per block
+// (32 in a page, in order): the owners, each as its chunk, its cover, and whether its low parts and its top parts are
+// drawn over (yes or no, never the seq: an upload again of an owner leaves it as it was). The owners are added up, so
+// their order does not count. The CLUT buffer (page 512) hashes its mirror: entries, loaded marks, CBPs.
+uint64_t TextureStore::State::signature_of(uint32_t page) const {
+    uint64_t h = 0;
+    if (page == kClutPage) {
+        for (size_t i = 0; i < clut.size(); i++) {
+            h = mix(mix(h, clut[i]), clut_unloaded[i]);
+        }
+        return mix(mix(h, clut_cbp[0]), clut_cbp[1]);
+    }
+    for (uint32_t b = page * kBlocksPerPage; b < (page + 1) * kBlocksPerPage; b++) {
+        const std::vector<Owner> &owners = block_owners[b];
+        if (owners.empty()) {
+            h = mix(h, 0x0E3791E5ull); // (an empty block)
+            continue;
+        }
+        uint64_t sum = 0;
+        for (const Owner &o : owners) {
+            uint8_t parts = word_parts_in(o.cover);
+            uint64_t oh = mix(0, o.chunk);
+            for (uint64_t word : o.cover) {
+                oh = mix(oh, word);
+            }
+            oh = mix(oh, drawn_over(page, o.seq, parts & kLowParts) ? 1 : 0);
+            sum += mix(oh, drawn_over(page, o.seq, parts & kTopParts) ? 1 : 0);
+        }
+        h = mix(mix(h, sum), owners.size());
+    }
+    return h;
+}
+
+// A block read: while a stretch is watched, a block not written in it reads its page, with the page's signature now
+// (unless read already in it)
+void TextureStore::State::note_read(uint32_t block) const {
+    if (!watching || written_in_stretch[block]) {
+        return;
+    }
+    uint32_t page = block == kClutBlock ? kClutPage : block / kBlocksPerPage;
+    if (read_now.pages[page]) {
+        return;
+    }
+    read_now.pages.set(page);
+    read_now.signatures[page] = signature_of(page);
+}
+
+void TextureStore::State::note_write(uint32_t block) {
+    written_in_stretch.set(block);
+}
+
+void TextureStore::State::set_mirror(uint32_t at, uint16_t value, bool unloaded) {
+    clut[at] = value;
+    clut_unloaded[at] = unloaded;
 }
 
 void TextureStore::State::lose_entry(uint64_t id, std::vector<uint64_t> &now_unowned) {
@@ -536,6 +623,7 @@ Owners TextureStore::State::owners_of(const VramRect &r, uint32_t level) const {
     each_block(r, [&](uint32_t block, uint32_t x, uint32_t y) {
         Cover need = cover_in_block(r, x, y);
         uint32_t page = block / kBlocksPerPage;
+        note_read(block);
         Cover covered{};
         for (const Owner &o : block_owners[block]) {
             Cover theirs = both(o.cover, need);
@@ -543,7 +631,7 @@ Owners TextureStore::State::owners_of(const VramRect &r, uint32_t level) const {
                 continue;
             }
             uint8_t parts = word_parts_in(theirs);
-            if (((parts & kLowParts) && drawn_low_at[page] > o.seq) || ((parts & kTopParts) && drawn_top_at[page] > o.seq)) {
+            if (drawn_over(page, o.seq, parts)) {
                 found.source = TextureSource::DrawnSurface;
                 found.missing = {level, block};
                 return false;
@@ -731,6 +819,7 @@ void TextureStore::drawn(const VramRect &rect) {
         if (!pages[page]) {
             continue;
         }
+        // (the draw writes the page's marks, not any block's owners: no block is written here)
         if (parts & kLowParts) {
             s.drawn_low_at[page] = now;
         }
@@ -882,6 +971,7 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
         break;
     case 4:
     case 5:
+        s.note_read(kClutBlock); // (the CBP compared is the mirror's)
         if (s.clut_cbp[cld - 4] == cbp) {
             return std::nullopt;
         }
@@ -897,16 +987,17 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
     if (from_uploads) {
         s.sort_by_upload(owners.chunks);
         values = s.clut_from(owners.chunks, tex0, texclut);
+    } else {
+        s.note_read(kClutBlock); // (the entries not loaded keep the mirror's)
     }
+    s.note_write(kClutBlock);
     bool ct32 = field(tex0, 51, 4) == 0;
     uint32_t entries = has_256_entries(psm) ? 256 : 16;
     for (uint32_t i = 0; i < entries; i++) {
         uint32_t at = clut_halfword(tex0, i);
-        s.clut[at] = from_uploads ? uint16_t(values[i]) : s.clut[at];
-        s.clut_unloaded[at] = !from_uploads;
+        s.set_mirror(at, from_uploads ? uint16_t(values[i]) : s.clut[at], !from_uploads);
         if (ct32) {
-            s.clut[at + 256] = from_uploads ? uint16_t(values[i] >> 16) : s.clut[at + 256];
-            s.clut_unloaded[at + 256] = !from_uploads;
+            s.set_mirror(at + 256, from_uploads ? uint16_t(values[i] >> 16) : s.clut[at + 256], !from_uploads);
         }
     }
     return owners.source;
@@ -914,6 +1005,7 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
 
 ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
     const State &s = *state_;
+    s.note_read(kClutBlock);
     ClutColours out;
     out.from_uploads = true;
     uint32_t entries = has_256_entries(field(tex0, 20, 6)) ? 256 : 16;
@@ -938,6 +1030,9 @@ ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
 
 std::vector<uint8_t> TextureStore::vram_image() {
     State &s = *state_;
+    for (uint32_t block = 0; block <= kClutBlock; block++) {
+        s.note_read(block); // (the whole store is read)
+    }
     std::vector<uint64_t> ids;
     ids.reserve(s.chunks.size());
     for (const auto &[id, c] : s.chunks) {
@@ -974,6 +1069,7 @@ TextureSource TextureStore::page_source(uint32_t page) const {
 
 TextureStore::ClutState TextureStore::clut_state() const {
     const State &s = *state_;
+    s.note_read(kClutBlock);
     ClutState c;
     c.clut = s.clut;
     for (size_t i = 0; i < 512; i++) {
@@ -985,6 +1081,7 @@ TextureStore::ClutState TextureStore::clut_state() const {
 
 void TextureStore::set_clut_state(const ClutState &c) {
     State &s = *state_;
+    s.note_write(kClutBlock);
     s.clut = c.clut;
     for (size_t i = 0; i < 512; i++) {
         s.clut_unloaded[i] = c.unloaded[i] != 0;
@@ -993,10 +1090,45 @@ void TextureStore::set_clut_state(const ClutState &c) {
 }
 
 void TextureStore::forget() {
+    const State &old = *state_;
     auto fresh = std::make_unique<State>();
-    fresh->limits = state_->limits;
-    fresh->counts = state_->counts; // (the counts go on: --stats's)
+    fresh->limits = old.limits;
+    fresh->counts = old.counts; // (the counts go on: --stats's)
+    fresh->next_chunk = old.next_chunk; // (a chunk's id is never used again, so a read's signature can't match a new chunk)
+    // (a watch goes on: every block is the empty store's now, so nothing read before it is what it reads)
+    fresh->watching = old.watching;
+    fresh->read_now = old.read_now;
+    fresh->written_in_stretch.set();
     state_ = std::move(fresh);
+}
+
+uint64_t TextureStore::page_signature(uint32_t page) const {
+    return page <= kClutPage ? state_->signature_of(page) : 0;
+}
+
+void TextureStore::watch_reads() {
+    State &s = *state_;
+    s.written_in_stretch.reset();
+    s.read_now = PagesRead{};
+    s.watching = true;
+}
+
+PagesRead TextureStore::reads_watched() {
+    State &s = *state_;
+    s.watching = false;
+    PagesRead read = s.read_now;
+    s.read_now = PagesRead{};
+    return read;
+}
+
+bool TextureStore::unchanged(const PagesRead &read) const {
+    const State &s = *state_;
+    for (uint32_t page = 0; page <= kClutPage; page++) {
+        if (read.pages[page] && s.signature_of(page) != read.signatures[page]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 TextureStoreCounts TextureStore::counts() const {

@@ -457,6 +457,19 @@ void GifFrontEnd::restore(const GsRegisterFile &file) {
     upload_.reset();
 }
 
+// (the kick numbering is not part of a state: number_kicks sets it for a picture between's walk)
+GifFrontEnd::State GifFrontEnd::state() const {
+    return State{file_, paths_, queue_, queued_, upload_};
+}
+
+void GifFrontEnd::set_state(const State &state) {
+    file_ = state.file;
+    paths_ = state.paths;
+    queue_ = state.queue;
+    queued_ = state.queued;
+    upload_ = state.upload;
+}
+
 void GifFrontEnd::begin_transfer(uint32_t direction) {
     cut_upload_short();
     const TransferRegisters transfer = {file_.reg[gs_reg::bitbltbuf], file_.reg[gs_reg::trxpos],

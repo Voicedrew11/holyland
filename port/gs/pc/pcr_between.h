@@ -6,6 +6,10 @@
 // (shaders/pcr_prim.vert, port/render/shaders/gif_moves.h: gs_replay.comp's maths), a native draw's by its record's
 // (port/render/part_moves.hpp, vu1_*_maths.h's moved()).
 //
+// Step 5b: a walk is kept (pcr_canvas.h's KeptWalk) and the frame's other pictures draw it again, with only their
+// Picture new (begin_picture_again): every walk of a frame starts from the front end's state when the frame was taken,
+// so its kicks are the last walk's. pcr.cpp's Intake decides, by what the kept walk read of the texture store.
+//
 // Set 1 of the canvas's draws: binding 0 the picture (gs_replay.h's Picture: the cameras, the projections, t, the
 // kicks and runs and the runs' bits; zeros outside a picture between), 1 the walk's kicks as the GS queued them
 // (gsn.cpp's InterpKick), 2 the frame's moves.
@@ -37,7 +41,15 @@ using InterpFrame = std::unique_ptr<GsnInterpFrame, FreeInterpFrame>;
 
 struct BetweenCounts {
     uint64_t frames = 0, pictures = 0, missed = 0, kicks_not_the_frames = 0;
+    // (step 5b) pictures drawn again from a kept walk, and those that walked: no walk of the frame kept, or what the
+    // kept walk read of the store changed since; and walks not kept (a trail moved on the CPU, a read-back, a kick
+    // count off)
+    uint64_t drawn_again = 0, walked_none_kept = 0, walked_store_changed = 0, walked_not_kept = 0;
 };
+
+// Why a picture walked the frame's packets in place of drawing a kept walk again (BetweenCounts)
+// (not_kept: after the walk, a walk not kept)
+enum class WalkReason : uint8_t { none_kept, store_changed, not_kept };
 
 class Between {
 public:
@@ -57,7 +69,14 @@ public:
     // The walk's end, after its draws: false (counted) when its kicks were not the frame's count (moves taken by kicks
     // past the frame's are none)
     bool end_picture(uint32_t kicks);
-    // Between begin_picture and end_picture
+    // A picture drawn again from a kept walk: its Picture made, the kicks the last walk's. False (counted, nothing
+    // made) when it is not of the frame taken or the frame has not been walked yet.
+    bool begin_picture_again(const GsnInterpPicture &picture);
+    void end_picture_again();
+    // A picture that walked, and why (counted)
+    void walked(WalkReason why);
+
+    // Between begin_picture and end_picture (or the _again pair)
     bool active() const { return active_; }
 
     // Set 1's buffers (the picture's while active, else zeros and empty lists)
@@ -71,6 +90,7 @@ public:
 
 private:
     Vulkan::BufferHandle make(const void *data, size_t bytes, bool mapped);
+    void make_picture(const GsnInterpPicture &picture);
 
     Vulkan::Device &device_;
     InterpFrame frame_;
@@ -78,6 +98,8 @@ private:
     Vulkan::BufferHandle zero_picture_, empty_list_;
     uint8_t *kick_map_ = nullptr;
     bool active_ = false;
+    uint32_t walked_serial_ = 0; // (the frame whose kicks kicks_ holds)
+    bool walked_ = false;
     BetweenCounts counts_;
 };
 
