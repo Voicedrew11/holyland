@@ -175,9 +175,17 @@ static void open_backend(void *unused) {
     }
 #ifdef KF4_HAVE_PARALLEL_GS
     if (port_options.native_draw && gsr_pc_renderer) {
-        /* (the PC renderer does not draw native draws yet, docs/port/PC_RENDERER.md: the game's own packets) */
-        fprintf(stderr, "[gs] --native-draw is not drawn by the PC renderer yet: off\n");
-        port_options.native_draw = 0;
+        /* (the PC renderer draws the kinds it has: the others go the PS2 path's way, its packets; and not
+           --native-draw-compare, a check of the native GS's) */
+        if (port_options.native_draw & ~pcr_native_kinds()) {
+            fprintf(stderr, "[gs] --native-draw: the PC renderer draws kinds 0x%x of 0x%x natively, the rest as packets\n",
+                    port_options.native_draw & pcr_native_kinds(), port_options.native_draw);
+        }
+        port_options.native_draw &= pcr_native_kinds();
+        if (port_options.native_draw_compare) {
+            fprintf(stderr, "[gs] --native-draw-compare is the native GS's: off under the PC renderer\n");
+            port_options.native_draw_compare = 0;
+        }
     }
 #endif
     /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
@@ -1024,6 +1032,10 @@ void port_gs_set_native_colour(int mode) {
 #endif
 }
 
+int port_gs_native_draws_now(void) {
+    return !gsr_pc_renderer || port_frame_rate_hz() <= 30;
+}
+
 void port_gs_set_native_draw(int kinds, int compare) {
     port_options.native_draw = 0; /* (the native draws are the native GS's) */
     port_options.native_draw_compare = compare;
@@ -1031,6 +1043,10 @@ void port_gs_set_native_draw(int kinds, int compare) {
     if (have_native && !gsr_pc_renderer) {
         port_options.native_draw = kinds;
         gsr_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
+    } else if (have_native) {
+        /* (the PC renderer: the kinds it draws, and no compare: as at the start) */
+        port_options.native_draw = kinds & pcr_native_kinds();
+        port_options.native_draw_compare = 0;
     }
 #endif
 }

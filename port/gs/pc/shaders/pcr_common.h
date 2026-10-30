@@ -16,6 +16,7 @@ layout(push_constant, std430) uniform Push {
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts
     ivec2 src_scale;  // ... the surface's pixels a GS pixel is, across and down
+    ivec2 place;      // (native draws, pcr_nd000.vert) the frame's place in its surface, GS pixels
 } pc;
 
 #define PCR_F_TME 0x1u

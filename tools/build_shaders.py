@@ -21,6 +21,8 @@ SHADERS = os.path.join(ROOT, "port", "gs", "native", "shaders")
 OUT = os.path.join(ROOT, "port", "gs", "native", "gsn_shaders.h")
 PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
+# the native draws' VU1 maths, shared by both renderers' shaders
+SHARED = os.path.join(ROOT, "port", "render", "shaders")
 
 
 # Shaders built a second time with a define, under a name of their own: (source, name, defines)
@@ -88,7 +90,7 @@ def build(glslang, folder, target, prefix, variants, what, where, table):
     with tempfile.TemporaryDirectory() as tmp:
         for source, name, defines in builds:
             out = os.path.join(tmp, name + ".spv")
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + SHADERS] + defines + ["-o", out,
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + SHADERS, "-I" + SHARED] + defines + ["-o", out,
                    os.path.join(SHADERS, source)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:

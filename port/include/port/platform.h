@@ -441,6 +441,10 @@ void port_gs_set_native_shine_exact(int exact);
 /* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
    frame */
 void port_gs_set_native_draw(int kinds, int compare);
+/* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
+   PC renderer only at --frame-rate 30, without pictures between, which it does not move yet (docs/port/PC_RENDERER.md,
+   step 5); the game's packets otherwise */
+int port_gs_native_draws_now(void);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {

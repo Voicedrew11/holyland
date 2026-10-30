@@ -33,6 +33,7 @@
 
 #include "context.hpp"
 #include "pcr_canvas.h"
+#include "pcr_native.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
 #include "port/gs_capture_format.h"
@@ -41,6 +42,7 @@
 
 extern "C" {
 #include "port/platform.h"
+#include "port/render.h"
 #include "pcr.h"
 }
 
@@ -404,6 +406,7 @@ public:
     // (on the thread, once the device is there)
     void attach(Device &device) {
         canvas_ = std::make_unique<pcr::Canvas>(device);
+        natives_ = std::make_unique<pcr::NativeDraws>(device);
     }
 
     pcr::Canvas *canvas() {
@@ -438,6 +441,9 @@ public:
     void print_census() const {
         if (canvas_) {
             canvas_->print_counts();
+        }
+        if (natives_) {
+            natives_->print_counts(stderr);
         }
         if (census_) {
             census_->print();
@@ -483,9 +489,14 @@ private:
             canvas_->local_to_host(transfer);
         }
     }
-    void native_draw(uint64_t) override {
+    void native_draw(uint64_t value) override {
         if (census_) {
             census_->other("native draw (0x7B)");
+        }
+        if (natives_ && canvas_) {
+            natives_->met(value, front_, *canvas_);
+        } else if (RD_ND_COMMAND(value) == RD_ND_FRAME) {
+            rd_consumer_frame(value); // (the core waits for the frames' marks to be met)
         }
     }
     void upload_again(uint64_t value) override {
@@ -510,6 +521,7 @@ private:
     pcr::GifFrontEnd front_;
     std::unique_ptr<pcr::Census> census_;
     std::unique_ptr<pcr::Canvas> canvas_;
+    std::unique_ptr<pcr::NativeDraws> natives_;
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
@@ -1165,6 +1177,10 @@ extern "C" void pcr_set_layer_z(int mode) {
 
 extern "C" void pcr_set_shine_exact(int exact) {
     settings().shine_exact.store(exact ? 1 : 0);
+}
+
+extern "C" int pcr_native_kinds(void) {
+    return pcr::NativeDraws::kinds();
 }
 
 extern "C" void pcr_set_native_draw(int mode) {

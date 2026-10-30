@@ -23,7 +23,8 @@
 //   TRXDIR before then gives what had come, UploadEnd::cut_short. A transfer of no pixels (TRXREG's width or
 //   height 0) or of a format that is not one gives nothing, and its data is dropped (as gsn's).
 // - local_copy (TRXDIR 2), local_to_host (TRXDIR 1): with the transfer's registers as TRXDIR found them.
-// - native_draw (0x7B), upload_again (0x7C), frame_mark (0x7D), widescreen (0x7E): the port's own registers.
+// - native_draw (0x7B), upload_again (0x7C), frame_mark (0x7D), widescreen (0x7E): the port's own registers. A
+//   native draw's handler may write the registers its batches kick (write()).
 // - gs_sync: SIGNAL, FINISH, LABEL (not kept in the file, as gsn's does not keep them).
 // TEXFLUSH and NOP (0x0F) make no event.
 //
@@ -123,6 +124,13 @@ public:
 
     const GsRegisterFile &registers() const { return file_; }
 
+    // A register written as an A+D write is, with its events: what a native draw's batch kicks (pcr_native.h). Not
+    // during a feed's event but native_draw's.
+    void write(uint32_t address, uint64_t value) { write_register(address, value); }
+
+    // PRIM's 11 bits in effect (GifPrimitive::prim's: PRMODE's attributes when PRMODECONT's AC is 0)
+    uint32_t prim_in_effect() const;
+
     // A state loaded: its register file taken, every path between packets, no vertex queued, no transfer begun
     void restore(const GsRegisterFile &file);
 
@@ -151,7 +159,6 @@ private:
     void write_tex0(uint32_t context, uint64_t value);
     void make_mip_addresses(uint32_t context);
     void kick(uint32_t address, uint64_t value);
-    uint32_t prim_in_effect() const;
     GifVertex latch_vertex(uint32_t address, uint64_t value) const;
     void emit(PrimitiveShape shape, uint32_t prim, uint32_t vertex_count);
     void begin_transfer(uint32_t direction);

@@ -66,6 +66,8 @@ void pcr_set_2d(int mode);
 void pcr_set_colour(int mode);
 void pcr_set_layer_z(int mode);
 void pcr_set_shine_exact(int exact);
+/* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
+int pcr_native_kinds(void);
 void pcr_set_native_draw(int mode);
 void pcr_set_standalone(int on);
 void pcr_set_hardware_sampler(int on);

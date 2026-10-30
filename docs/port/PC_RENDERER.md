@@ -195,6 +195,28 @@ whole; drawing the native draws themselves is step 3.
 - **Not yet**: native draws (step 3), MSAA, `--native-colour`,
   anisotropic filtering, captures, the overlay's settings; performance not measured yet.
 
+## Step 3, first part (2026-10-29): native draws of program 0x000
+
+`--renderer pc --native-draw on` draws the native draws of program 0x000 itself (`port/gs/pc/pcr_native.cpp`): the
+map's records, the sky, the items lying in the maps and the picked item. Each batch's registers (FOGCOL at the set-up,
+the A+D packet, PRIM from the strip's tag) are written to the GIF front end as the GS gets them, so the state a draw
+leaves is the PS2 path's; its triangles are drawn from the mesh on the GPU (`shaders/pcr_nd000.vert`) through the same
+GS pixel as any primitive. VU1's maths is shared with the native GS's shaders (`port/render/shaders/vu1_000_*.h`, moved
+out of `nd_000.vert`; the native GS's SPIR-V byte for byte as before), and the draw's record is worked out on the CPU
+by `port/render/vu1_record.cpp`, checked bit for bit against VU1's own set-up (`vu1_record_test`, ctest `vu1_record`).
+
+- **The kinds**: gs.c turns on only the kinds the PC renderer draws (`pcr_native_kinds()`); the others go as packets.
+  The map's objects wait for program 0x280 (a door at map 000 is a skinned object). `--native-draw-compare` is off
+  under it.
+- **Only at `--frame-rate 30` for now**: frame_interp.c's CPU way of making the pictures between cannot move a native
+  draw (the native GS moves them only on its GPU way), so under the PC renderer the game sends packets whenever there
+  are pictures between (`port_gs_native_draws_now`). Step 5 lifts it.
+- **Measured** at vblank 2700 against the PC renderer on packets: map 000 110 pixels differ (by 2 at most), 009 374
+  (by 3), 009:2 251 (by 2); the sky and the items alone 0. Map 063's clouds differ (14,654 pixels, by 36): the native
+  GS's native draws differ from its packets there the same way (14,615), so it is native draw's sky, not this.
+- A batch's texture is read whole and what it draws over is taken as its scissor's rectangle (its corners are the
+  GPU's), as P7 takes them.
+
 # Part 1: the PC renderer (P1-P6)
 
 A real PC renderer for King's Field IV's world: the map, the map objects, the items, the characters and the arm

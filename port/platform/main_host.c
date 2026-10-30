@@ -858,7 +858,7 @@ int port_invincible(void) {
 }
 
 int port_native_draw(int kind) {
-    return (port_options.native_draw & kind) != 0;
+    return (port_options.native_draw & kind) != 0 && port_gs_native_draws_now();
 }
 
 int port_native_draw_compare(void) {

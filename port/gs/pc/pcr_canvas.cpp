@@ -49,6 +49,7 @@ struct PrimPush {
     uint32_t levels;
     int32_t src_offset[2];
     int32_t src_scale[2];
+    int32_t place[2];
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 
@@ -270,20 +271,32 @@ public:
             counts_unsupported_shape_++;
             return;
         }
-        const auto &r = file.reg;
-        uint32_t ctxt = bits(p.prim, 9, 1);
-        DrawState s = {r[gs_reg::frame_1 + ctxt], r[gs_reg::zbuf_1 + ctxt], r[gs_reg::test_1 + ctxt],
-                       r[gs_reg::alpha_1 + ctxt], r[gs_reg::tex0_1 + ctxt] & ~(uint64_t(7) << 61),
-                       r[gs_reg::tex1_1 + ctxt], r[gs_reg::clamp_1 + ctxt], r[gs_reg::texa], r[gs_reg::fogcol],
-                       r[gs_reg::scissor_1 + ctxt], r[gs_reg::xyoffset_1 + ctxt], r[gs_reg::fba_1 + ctxt],
-                       r[gs_reg::colclamp], r[gs_reg::pabe], r[gs_reg::dthe], r[gs_reg::miptbp1_1 + ctxt],
-                       r[gs_reg::miptbp2_1 + ctxt], p.prim & 0x7F8u, clut_serial_};
+        DrawState s = state_of(file, p.prim);
         bool tme = bits(p.prim, 4, 1) != 0;
-        if (!batch_open_ || !(s == batch_.state) || (tme && !texture_covers(p))) {
+        if (!batch_open_ || batch_.native || !(s == batch_.state) || (tme && !texture_covers(p))) {
             flush_batch();
             open_batch(s, p);
         }
         add_primitive(p);
+    }
+
+    void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) {
+        counts_.native_batches++;
+        counts_.triangles += nb.triangle_count;
+        DrawState s = state_of(file, prim);
+        bool same = batch_open_ && batch_.native && s == batch_.state && batch_.arena == nb.arena &&
+                    batch_.records == nb.records && batch_.triangles == nb.triangles;
+        if (!same) {
+            flush_batch();
+            open_native_batch(s, nb);
+        }
+        // (a run of triangles by one record: the next batch of the same draw's mesh goes on from where it ends)
+        if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance &&
+            batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
+            batch_.runs.back().count += nb.triangle_count;
+        } else {
+            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance});
+        }
     }
 
     void texture_written(uint64_t tex0, uint64_t texclut) {
@@ -901,6 +914,18 @@ private:
         return true;
     }
 
+    // What a primitive of PRIM's bits prim draws with
+    DrawState state_of(const GsRegisterFile &file, uint32_t prim) const {
+        const auto &r = file.reg;
+        uint32_t ctxt = bits(prim, 9, 1);
+        return {r[gs_reg::frame_1 + ctxt], r[gs_reg::zbuf_1 + ctxt], r[gs_reg::test_1 + ctxt],
+                r[gs_reg::alpha_1 + ctxt], r[gs_reg::tex0_1 + ctxt] & ~(uint64_t(7) << 61),
+                r[gs_reg::tex1_1 + ctxt], r[gs_reg::clamp_1 + ctxt], r[gs_reg::texa], r[gs_reg::fogcol],
+                r[gs_reg::scissor_1 + ctxt], r[gs_reg::xyoffset_1 + ctxt], r[gs_reg::fba_1 + ctxt],
+                r[gs_reg::colclamp], r[gs_reg::pabe], r[gs_reg::dthe], r[gs_reg::miptbp1_1 + ctxt],
+                r[gs_reg::miptbp2_1 + ctxt], prim & 0x7F8u, clut_serial_};
+    }
+
     // ---- Textures ----
     struct BoundTexture {
         const ImageView *view = nullptr; // (u_texels, or u_surface for SRC_SURFACE)
@@ -1127,17 +1152,48 @@ private:
         std::array<uint32_t, 256> clut{};
         std::vector<Vertex> vertices;
         int32_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN; // (GS pixels touched)
+        // a native batch's (pcr_nd000.vert): its buffers, and its runs of triangles, a draw call each
+        struct Run {
+            uint32_t first, count, instance;
+        };
+        bool native = false;
+        BufferHandle arena, records, triangles;
+        std::vector<Run> runs;
     };
 
     void open_batch(const DrawState &s, const GifPrimitive &p) {
+        uint32_t cols = 0, rows = 0;
+        if (bits(s.prim, 4, 1)) {
+            texels_read(p, s.tex0, cols, rows);
+        }
+        begin_batch(s, cols, rows);
+        batch_.x0 = batch_.y0 = INT32_MAX;
+        batch_.x1 = batch_.y1 = INT32_MIN;
+    }
+
+    // (a native batch's texture is read whole, and what it draws over taken as its scissor: its corners are the GPU's)
+    void open_native_batch(const DrawState &s, const NativeBatch &nb) {
+        begin_batch(s, 1u << std::min(bits(s.tex0, 26, 4), 10u), 1u << std::min(bits(s.tex0, 30, 4), 10u));
+        batch_.native = true;
+        batch_.arena = nb.arena;
+        batch_.records = nb.records;
+        batch_.triangles = nb.triangles;
+        batch_.x0 = int32_t(bits(s.scissor, 0, 11));
+        batch_.x1 = int32_t(bits(s.scissor, 16, 11));
+        batch_.y0 = int32_t(bits(s.scissor, 32, 11));
+        batch_.y1 = int32_t(bits(s.scissor, 48, 11));
+    }
+
+    void begin_batch(const DrawState &s, uint32_t cols, uint32_t rows) {
         batch_.state = s;
         batch_.texture = BoundTexture();
         batch_.vertices.clear();
-        batch_.x0 = batch_.y0 = INT32_MAX;
-        batch_.x1 = batch_.y1 = INT32_MIN;
+        batch_.native = false;
+        batch_.arena.reset();
+        batch_.records.reset();
+        batch_.triangles.reset();
+        batch_.runs.clear();
         if (bits(s.prim, 4, 1)) {
-            uint32_t cols, rows;
-            texels_read(p, s.tex0, cols, rows);
             batch_.texture = bind_texture(s, cols, rows);
             if (batch_.texture.src == SRC_INDEX) {
                 ClutColours colours = store_.clut_colours(s.tex0, s.texa);
@@ -1222,10 +1278,13 @@ private:
             return;
         }
         batch_open_ = false;
-        if (!batch_.vertices.empty()) {
+        if (!batch_.vertices.empty() || !batch_.runs.empty()) {
             draw_batch();
         }
         batch_.texture = BoundTexture(); // (a surface's copy let go once drawn)
+        batch_.arena.reset();
+        batch_.records.reset();
+        batch_.triangles.reset();
     }
 
     void draw_batch() {
@@ -1277,7 +1336,7 @@ private:
         if (!colour) {
             return;
         }
-        if (placed.x != 0 || placed.y != 0) {
+        if (!batch_.native && (placed.x != 0 || placed.y != 0)) {
             // (a frame inside a surface: its pixels at their place there)
             for (Vertex &v : batch_.vertices) {
                 v.x += float(placed.x);
@@ -1310,7 +1369,7 @@ private:
         }
         begin_pass(*colour, depth);
         CommandBuffer &c = cmd();
-        c.set_program(program_);
+        c.set_program(batch_.native ? native_program_ : program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -1364,6 +1423,8 @@ private:
         push.levels = batch_.texture.levels;
         push.src_scale[0] = int32_t(scale_[0]);
         push.src_scale[1] = int32_t(scale_[1]);
+        push.place[0] = int32_t(placed.x);
+        push.place[1] = int32_t(placed.y);
         // textures: the texels (or the dummy), the surface's copy (or the dummy), the CLUT
         if (batch_.texture.ok && batch_.texture.src == SRC_SURFACE) {
             c.set_texture(0, 0, dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -1379,6 +1440,12 @@ private:
         float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
                               float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
         c.set_blend_constants(constants);
+        if (batch_.native) {
+            c.set_storage_buffer(1, 0, *picture_);
+            c.set_storage_buffer(2, 0, *batch_.arena);
+            c.set_storage_buffer(2, 1, *batch_.records);
+            c.set_storage_buffer(2, 2, *batch_.triangles);
+        }
         size_t bytes = batch_.vertices.size() * sizeof(Vertex);
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
@@ -1394,6 +1461,13 @@ private:
             }
             uint32_t mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
             c.set_color_write_mask(mask);
+            if (batch_.native) {
+                for (const Batch::Run &r : batch_.runs) {
+                    c.draw(r.count * 3, 1, r.first * 3, r.instance);
+                    counts_.native_draw_calls++;
+                }
+                continue;
+            }
             void *v = c.allocate_vertex_data(0, bytes, sizeof(Vertex));
             memcpy(v, batch_.vertices.data(), bytes);
             c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
@@ -1463,10 +1537,28 @@ private:
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         program_ = device_.request_program(vs, fs);
+        ResourceLayout nd = {};
+        nd.push_constant_size = sizeof(PrimPush);
+        nd.sets[1].storage_buffer_mask = 1u;
+        nd.sets[2].storage_buffer_mask = 7u;
+        nd.sets[1].meta[0].array_size = 1;
+        for (int b : {0, 1, 2}) {
+            nd.sets[2].meta[b].array_size = 1;
+        }
+        Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
+        native_program_ = device_.request_program(nvs, fs);
+        // (the pictures between's camera for native draws: none yet, zeros)
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::Device;
+        info.size = 256;
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        std::array<uint8_t, 256> zeros{};
+        picture_ = device_.create_buffer(info, zeros.data());
     }
 
     Device &device_;
-    Program *program_ = nullptr;
+    Program *program_ = nullptr, *native_program_ = nullptr;
+    BufferHandle picture_;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
     Surface *pass_colour_ = nullptr, *pass_depth_ = nullptr;
@@ -1556,6 +1648,9 @@ void Canvas::read_fifo(void *dst, uint32_t qwords) {
 }
 void Canvas::forget() {
     impl_->forget();
+}
+void Canvas::native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch) {
+    impl_->native_batch(file, prim, batch);
 }
 void Canvas::frame_mark(uint64_t value) {
     impl_->frame_mark(value);

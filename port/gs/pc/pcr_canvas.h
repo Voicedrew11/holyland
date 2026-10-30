@@ -33,7 +33,7 @@ struct CanvasCounts {
     uint64_t primitives = 0, triangles = 0, batches = 0, passes = 0;
     uint64_t textures_uploaded = 0, textures_from_surfaces = 0, textures_missing = 0;
     uint64_t surfaces_made = 0, surfaces_filled_from_uploads = 0, uploads_into_surfaces = 0, copies_between_surfaces = 0;
-    uint64_t date_draws = 0;
+    uint64_t date_draws = 0, native_batches = 0, native_draw_calls = 0;
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
     uint64_t unsupported_copies = 0;
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
@@ -44,6 +44,14 @@ struct CanvasCounts {
 // format, and the pixels (x, y, w, h)
 struct ShownRect {
     uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
+};
+
+// A batch of a native draw of program 0x000 (pcr_native.h): its triangles from first_triangle in triangles (a uvec4
+// each: the arena's numbers of its corners, and of its kick with the kicks before it), drawn by the record of
+// records at instance's bits 0-29 (bit 30: Gouraud), the meshes' vertices in arena (shaders/pcr_nd000.vert)
+struct NativeBatch {
+    Vulkan::BufferHandle arena, records, triangles;
+    uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
 };
 
 class Canvas {
@@ -59,6 +67,9 @@ public:
     // The front end's events (pcr_gif.h), with its register file at each
     void primitive(const GsRegisterFile &file, const GifPrimitive &primitive);
     void texture_written(uint64_t tex0, uint64_t texclut);
+    // A native batch, with the registers as its writes left them and PRIM's 11 bits in effect. Its texture is read
+    // whole; what it draws over is taken as its scissor's rectangle.
+    void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch);
     void upload(const TransferRegisters &transfer, std::span<const uint8_t> bytes);
     void local_copy(const TransferRegisters &transfer);
     // A local-to-host transfer (TRXDIR 1): its pixels made ready for read_fifo, from the uploads or the surface
