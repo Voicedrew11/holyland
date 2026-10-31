@@ -259,24 +259,22 @@ struct KeyHash {
     }
 };
 
-} // namespace
-
-std::bitset<512> pages_of(const VramRect &rect) {
+// Visits the pages a rectangle's pixels are in (a page may be visited more than once): visit(page)
+template <class Visit> void each_page(const VramRect &rect, Visit &&visit) {
     VramRect r = rect;
     if (!gsn_psm_valid(r.psm)) {
         r.psm = GSN_PSMCT32;
     }
     r = wrapped(r);
-    std::bitset<kPages> pages;
     if (r.width_px == 0 || r.height_px == 0) {
-        return pages;
+        return;
     }
     if (r.bp % kBlocksPerPage != 0) {
         each_block(r, [&](uint32_t block, uint32_t, uint32_t) {
-            pages.set(block / kBlocksPerPage);
+            visit(block / kBlocksPerPage);
             return true;
         });
-        return pages;
+        return;
     }
     // (a pixel's page is the base's, on by its row of pages and its column, as gsn_vram.c's pixel_nibble has it: the
     // blocks within a page, the Z formats' arrangement too, stay in it)
@@ -284,9 +282,16 @@ std::bitset<512> pages_of(const VramRect &rect) {
     uint32_t stride = pw == 128 ? r.bw >> 1 : r.bw;
     for (uint32_t y = r.y / ph * ph; y < r.y + r.height_px; y += ph) {
         for (uint32_t x = r.x / pw * pw; x < r.x + r.width_px; x += pw) {
-            pages.set((r.bp / kBlocksPerPage + y % kWrap / ph * stride + x % kWrap / pw) % kPages);
+            visit((r.bp / kBlocksPerPage + y % kWrap / ph * stride + x % kWrap / pw) % kPages);
         }
     }
+}
+
+} // namespace
+
+std::bitset<512> pages_of(const VramRect &rect) {
+    std::bitset<kPages> pages;
+    each_page(rect, [&](uint32_t page) { pages.set(page); });
     return pages;
 }
 
@@ -544,6 +549,12 @@ void TextureStore::State::take_nibbles(uint32_t block, uint64_t id, uint64_t seq
                                        std::vector<uint64_t> &now_unowned) {
     changed(block / kBlocksPerPage);
     std::vector<Owner> &owners = block_owners[block];
+    // (the newest owner taking the same nibbles again, as an upload found again does: the older owners hold none of
+    // them, so the walk below would only take its entry out and put it back newest; its count is all that moves)
+    if (!owners.empty() && owners.back().chunk == id && owners.back().cover == cover) {
+        owners.back().seq = seq;
+        return;
+    }
     size_t kept = 0;
     for (Owner &o : owners) {
         for (size_t k = 0; k < cover.size(); k++) {
@@ -956,12 +967,9 @@ void TextureStore::drawn(const VramRect &rect) {
     }
     uint8_t parts = word_parts(r.psm);
     uint64_t now = ++s.seq;
-    std::bitset<kPages> pages = pages_of(r);
-    for (uint32_t page = 0; page < kPages; page++) {
-        if (!pages[page]) {
-            continue;
-        }
-        // (the draw writes the page's marks, not any block's owners: no block is written here)
+    // (the draw writes the page's marks, not any block's owners: no block is written here; only the rectangle's pages
+    // are walked, not all of them: a picture drawn again marks every batch's)
+    each_page(r, [&](uint32_t page) {
         s.changed(page);
         if (parts & kLowParts) {
             s.drawn_low_at[page] = now;
@@ -969,7 +977,7 @@ void TextureStore::drawn(const VramRect &rect) {
         if (parts & kTopParts) {
             s.drawn_top_at[page] = now;
         }
-    }
+    });
 }
 
 void TextureStore::copied(const TransferRegs &regs) {

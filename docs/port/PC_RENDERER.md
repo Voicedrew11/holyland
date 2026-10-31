@@ -104,8 +104,9 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      built 2026-10-30 ("A frame walked once", below): the frame's own walk kept and made its pictures' walk by
      frame_interp.c's rules; 99.9% of frames, 61% of them drawn from it at once (the others had uploaded over
      pages they read before them: their first picture walks the stream). 009 114-119 (100-105 without), 000 at the
-     cap (238-240). Next: what is left of 009's thread (sample it again: the frame's own packets with what keeping
-     them costs, the first walks of the 39%), then VU1 0x280's records and the uploads found again.
+     cap (238-240). Sampled again 2026-10-30 ("The store's marks walked by their pages", below): the store's marks
+     walked by their pages and an owner's nibbles taken again in place; 009 132-142 (115-118 before). Next: the
+     draw calls (merged draws, item 4, designed on the walks kept), then VU1 0x280's records and the uploads.
   6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
      `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
@@ -236,6 +237,33 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## The store's marks walked by their pages (built 2026-10-30)
+
+**Measured first** (009 at 240, `--renderer pc`, the owner's settings, 250 samples of `kf4-pc` with `eu-stack`): pc's
+thread 92% busy (4% waiting for the game, 4% for the GPU). 48% drawing the pictures between again (`draw_again`): of
+it 16% Vulkan's draw calls, 13% `TextureStore::drawn`, 8% the uploads asked again (`own`), 5% CLUT loads. 39% taking
+the frame's packets in: 17% program 0x280 (its batches' draw calls 7%, its CLUT loads 4%, `vu1_kicks_280` 3%,
+`vu1_record_280` 2%), 9% uploads (`image_data`). Over both, Granite's draw 26%: RADV's `CmdDraw` 11%, the descriptor
+sets 7%, pipeline binds 6%.
+
+**What it does** (`pcr_textures.cpp`; exact: the store's answers, signatures and seqs are as before):
+- `TextureStore::drawn` walks only the pages the rectangle is in (`each_page`, which `pages_of` is now built on),
+  not all 512 testing a bit set each (the 13% above: a picture drawn again marks every batch's rectangle).
+- `take_nibbles`: a block's newest owner taking the same nibbles again (an upload found again, an upload asked again)
+  only has its seq moved. The full walk took its entry out (the older owners hold none of those nibbles) and put it
+  back newest; the chunk's count dropped to 0 only for that moment, and `mark_unowned` leaves alone a chunk that owns.
+
+**Checks.** Byte for byte against dc18e2f6 at 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks
+2300-2650 every 7th: 204 pictures a spot). ctest 13/13; `pcr_textures_test` under ASan + UBSan. Not run: an ASan pc run
+in play, TSan, native and `fast` checks (their paths are not changed), clang-tidy (no configuration).
+
+**Speed** (`pace_test --hz 240 --frame-rate 240 -- --renderer pc`, three runs a side alternated): 009 132.1-142.1
+pictures a second (dc18e2f6 115.1-118.0); 000 237.1-239.8 (234.1-239.8, the cap). The GPU 2.5-2.8 ms a picture.
+
+**What is left** (from the samples above): the draw calls (fewer of them: the merged draws of item 4, now with step
+5's walks kept to design them on), program 0x280's records and kicks, the CLUT loads (a key vector made for each, 512
+mirror writes), the uploads.
 
 ## A frame walked once (built 2026-10-30)
 
