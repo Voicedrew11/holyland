@@ -551,6 +551,18 @@ if(KF4_TESTS)
     add_test(NAME pcr_gif COMMAND pcr_gif_test)
 endif()
 
+# The PC renderer's frame walk rules (port/gs/pc/pcr_frame_walk.h, header only): the registers of a frame's own walk
+# as its pictures between's walk, with pcr_gif.h's include path from kf4_pc_gif
+add_executable(pcr_frame_walk_test tests/pcr_frame_walk_test.cpp)
+target_link_libraries(pcr_frame_walk_test PRIVATE kf4_pc_gif)
+set_target_properties(pcr_frame_walk_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_frame_walk_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_frame_walk COMMAND pcr_frame_walk_test)
+endif()
+
 # The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
 # (port/gs/native/gsn_vram.c) as its format library and nothing else of the native GS
 add_library(kf4_gsn_vram STATIC port/gs/native/gsn_vram.c)

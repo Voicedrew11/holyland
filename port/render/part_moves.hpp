@@ -29,6 +29,11 @@ struct PartMove {
 // more, a turn of nearly half way round, or a matrix with no rotation in it.
 bool vu1_between(Vu1Between &out, const float *cur, const float *prev, const float *view_cur, const float *view_prev);
 
+// Which walk of a frame's packets meets the draws: the frame's own (its places kept for the next frame's pictures), the
+// frame's own kept to be made its pictures' walk again (its places kept, and the move each picture between of it
+// gives), or a picture between's
+enum class PartWalk : uint8_t { frame, frame_kept, picture };
+
 class PartMoves {
 public:
     // A trail's points in a frame: X | Y << 16 (12.4) and RGBA each
@@ -36,18 +41,19 @@ public:
         std::vector<uint32_t> xy, rgba;
     };
 
-    // RD_ND_FRAME met (in_picture: in a picture between's walk of the frame's packets): the section starts again, and
-    // the draws are counted again; a new serial outside a picture makes this frame's places the frame before's
-    void frame(uint32_t serial, bool in_picture);
+    // RD_ND_FRAME met: the section starts again, and the draws are counted again; a new serial outside a picture
+    // makes this frame's places the frame before's
+    void frame(uint32_t serial, PartWalk walk);
     // PORT_GS_REG_FRAME_INTERP's value (0x7D): its header marks say which part of the frame the draws after it are in
     void mark(uint64_t frame_interp_value);
-    // A draw of program 0x000, 0x280, 0x5A0 or 0x700 met. Outside a picture between: its place kept for the next
-    // frame's pictures (no move). In one: how it moves.
-    PartMove draw(const RdDraw &d, const RdCamera &cam, bool in_picture);
-    // A trail (RD_PROGRAM_GS_STRIP) met, its points this frame. Outside a picture: kept (nullptr). In one: the frame
-    // before's points when paired, from[i] the partner of point i there; nullptr when not paired.
+    // A draw of program 0x000, 0x280, 0x5A0 or 0x700 met. In the frame's walk: its place kept for the next frame's
+    // pictures (no move). In a picture between: how it moves. frame_kept: both, the place kept and the picture's move.
+    PartMove draw(const RdDraw &d, const RdCamera &cam, PartWalk walk);
+    // A trail (RD_PROGRAM_GS_STRIP) met, its points this frame. In the frame's walk: kept (nullptr). In a picture: the
+    // frame before's points when paired, from[i] the partner of point i there; nullptr when not paired. frame_kept:
+    // kept, and the picture's answer.
     const StripPoints *strip(const RdDraw &d, std::span<const uint32_t> xy, std::span<const uint32_t> rgba,
-                             bool in_picture, std::vector<uint32_t> &from);
+                             PartWalk walk, std::vector<uint32_t> &from);
 
     // --stats: the draws moved by their own matrices, the trails paired
     uint64_t moved_models() const { return moved_models_; }
@@ -69,6 +75,8 @@ private:
     };
 
     Key key_of(const RdDraw &d);
+    // How a picture between moves the draw
+    PartMove move_of(const Key &key, const RdDraw &d, const RdCamera &cam);
     int32_t model_flags(const Key &key, const RdDraw &d, const RdCamera &cam, Vu1Between *a, Vu1Between *b);
 
     Section section_ = Section::none;

@@ -58,6 +58,13 @@ public:
     void set_picture(const GsnInterpPicture *picture);
     // Since set_picture(picture): a trail's points moved t of the way on the CPU (the walk's calls hold that time)
     bool moved_on_cpu() const;
+    // The frame's own walk kept to be made its pictures' (pcr.cpp's Intake, pcr_frame_walk.h), from begin_frame_kept
+    // to end_frame_kept, outside a picture between: each draw's record made twice, side by side in one buffer, the
+    // frame's and then the one its pictures between draw with (its move: NativeBatch::picture_instance)
+    void begin_frame_kept();
+    void end_frame_kept();
+    // Since begin_frame_kept: a trail that a picture between moves on the CPU (its walk cannot be made from this one)
+    bool trail_paired() const;
 
     NativeCounts counts() const;
     // --stats: the "[stats] pc native draws" line

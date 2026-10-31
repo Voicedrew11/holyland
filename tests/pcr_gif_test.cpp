@@ -379,6 +379,24 @@ void test_kick_numbers() {
     CHECK(events.numbered.size() == 5 && events.numbered.back().kick == 0 && events.numbered.back().rgba_owner == no_kick);
 }
 
+// A new numbering clears the vertices still queued: a strip's first two vertices kicked numbered, the third kicked in
+// the next numbering (from 0) draws the triangle, and its first two corners carry no number
+void test_renumber_clears_queue() {
+    Rig r;
+    r.gif.number_kicks();
+    r.feed(1, Packet::writes({{gs_reg::prim, 4}, {gs_reg::xyz2, xyz(16, 0, 0)}, {gs_reg::xyz2, xyz(32, 0, 0)}}).bytes);
+    CHECK(r.events.numbered.size() == 2 && r.events.primitives.empty());
+    r.gif.stop_numbering();
+    r.gif.number_kicks();
+    r.feed(1, Packet::writes({{gs_reg::xyz2, xyz(48, 0, 0)}}).bytes);
+    CHECK(r.events.primitives.size() == 1 && r.events.numbered.size() == 3);
+    if (r.events.primitives.size() == 1) {
+        const GifPrimitive &g = r.events.primitives[0];
+        CHECK(g.vertices[0].kick == no_kick && g.vertices[1].kick == no_kick);
+        CHECK(g.vertices[2].kick == 0 && g.vertices[2].x == 48);
+    }
+}
+
 void test_tex2_merge() {
     Rig r;
     const uint64_t tex0 = 0x123456789ABCDEF0ull;
@@ -1188,6 +1206,7 @@ int main() {
     test_q_latching();
     test_uv_and_fog_packed();
     test_kick_numbers();
+    test_renumber_clears_queue();
     test_tex2_merge();
     test_mip_addresses();
     test_reglist();

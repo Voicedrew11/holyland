@@ -175,7 +175,8 @@ public:
 
     // A picture between's walk of the frame's packets (pcr_between.h): from here every vertex kick fed (XYZ2, XYZF2,
     // XYZ3, XYZF3; PACKED, A+D or REGLIST) is numbered from 0, as frame_interp.c numbers the kicks of the packets it
-    // hands over; a native draw's own writes (write(), write_packed_qword()) are not. Until stop_numbering.
+    // hands over; a native draw's own writes (write(), write_packed_qword()) are not. Until stop_numbering. Also the
+    // frame's own walk when it is kept (pcr.cpp's Intake). The vertices still queued lose their numbers.
     void number_kicks();
     void stop_numbering();
     uint32_t kicks_numbered() const { return kicks_; }

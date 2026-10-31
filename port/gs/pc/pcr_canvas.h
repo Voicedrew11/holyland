@@ -28,6 +28,7 @@
 
 #include "device.hpp"
 #include "pcr_between.h"
+#include "pcr_frame_walk.h"
 #include "pcr_gif.h"
 #include "pcr_gpu_time.h"
 #include "pcr_textures.h"
@@ -52,6 +53,8 @@ struct ShownRect {
     uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
 };
 
+constexpr uint32_t no_instance = 0xFFFFFFFFu;
+
 // The VU1 program whose maths draws a native batch (its vertex shader)
 enum class NativeProgram : uint8_t {
     vu1_000, // shaders/pcr_nd000.vert: a triangle the arena's numbers of its corners, and of its kick with the kicks
@@ -68,6 +71,9 @@ struct NativeBatch {
     NativeProgram program = NativeProgram::vu1_000;
     Vulkan::BufferHandle arena, records, triangles;
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
+    // (the frame's own walk kept: NativeDraws::begin_frame_kept) the instance its pictures between draw it with, the
+    // record with its move; no_instance: none
+    uint32_t picture_instance = no_instance;
 };
 
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
@@ -100,6 +106,21 @@ public:
     // walk: its draws, copies of surfaces, uploads and copies, CLUT loads and marks in their order, so that the store
     // and the surfaces are left as the walk leaves them
     void draw_again(const KeptWalk &walk, const Between &between);
+
+    // A frame walked once (pcr_frame_walk.h): keep_walk() outside a picture between, the frame's own packets, then
+    // stop_keeping() (set_between(nullptr) also stops) and take_kept_walk(). A read-back in it is left out of what is
+    // kept, as the stream leaves it out.
+    void stop_keeping();
+    // The frame's own walk as the frame's stream would make its pictures' walk: the draws into the buffer shown, the
+    // uploads asked for again, the read-backs and copies left out, the draws reading the kept frame shown between
+    // 0xF4 and 0xF5, the native batches with their pictures' records, 0xF0 before and 0xF1 after; the GIF corners
+    // moved by their kicks (the walk's numbered: Between::adopt_live_kicks). Refused (walk nullptr) where the rules
+    // cannot make the stream's.
+    struct PictureWalk {
+        std::shared_ptr<const KeptWalk> walk;
+        FrameWalkRefused refused = FrameWalkRefused::none;
+    };
+    PictureWalk as_picture_walk(const KeptWalk &frame, const FrameTargets &targets) const;
 
     // The front end's events (pcr_gif.h), with its register file at each
     void primitive(const GsRegisterFile &file, const GifPrimitive &primitive);

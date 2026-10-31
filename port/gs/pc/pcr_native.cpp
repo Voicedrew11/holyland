@@ -57,7 +57,7 @@ public:
             break;
         case RD_ND_FRAME:
             rd_consumer_frame(value);
-            parts_.frame(uint32_t(value) & 0xFFFFFF, in_picture_);
+            parts_.frame(uint32_t(value) & 0xFFFFFF, walk_);
             break;
         default:
             break; // (ALT_BEGIN and _END: --native-draw-compare, off under the PC renderer; READS_SHOWN: frame_interp.c's)
@@ -69,9 +69,28 @@ public:
     }
 
     void set_picture(const GsnInterpPicture *picture) {
-        in_picture_ = picture != nullptr;
+        walk_ = picture ? PartWalk::picture : (frame_kept_ ? PartWalk::frame_kept : PartWalk::frame);
         picture_u_ = picture ? 1.0f - picture->t : 0.0f;
         moved_on_cpu_ = picture ? false : moved_on_cpu_; // (asked after the walk's end)
+    }
+
+    void begin_frame_kept() {
+        frame_kept_ = true;
+        trail_paired_ = false;
+        if (walk_ != PartWalk::picture) {
+            walk_ = PartWalk::frame_kept;
+        }
+    }
+
+    void end_frame_kept() {
+        frame_kept_ = false;
+        if (walk_ != PartWalk::picture) {
+            walk_ = PartWalk::frame;
+        }
+    }
+
+    bool trail_paired() const {
+        return trail_paired_;
     }
 
     bool moved_on_cpu() const {
@@ -88,12 +107,48 @@ public:
     NativeCounts counts_;
 
 private:
-    // How a picture between moves the draw (none outside one: its place kept for the next frame's)
-    void moves_of(const RdDraw &d, const RdCamera &cam, Vu1Record &k) {
-        PartMove m = parts_.draw(d, cam, in_picture_);
+    // A move on a draw's record (the frame's walk's is none: its place kept for the next frame's pictures)
+    static void apply_move(Vu1Record &k, const PartMove &m) {
         k.info[3] |= m.flags;
         memcpy(k.obj, m.obj, sizeof(k.obj));
         k.bt = m.model;
+    }
+
+    static void apply_move(Vu1Record280 &k, const PartMove &m) {
+        k.info[1] = m.flags;
+        k.bt[0] = m.model;
+        k.bt[1] = m.parent;
+    }
+
+    // A draw's record with its move in a list. In the frame's walk kept, twice: the frame's (no move) and then the
+    // picture's, as put_pair; k is the frame's, the one the kick plans read
+    uint32_t put_moved(GpuList &list, Vu1Record &k, const PartMove &m) {
+        if (walk_ != PartWalk::frame_kept) {
+            apply_move(k, m);
+            return put(list, RECORDS_ROOM, &k, sizeof(k));
+        }
+        Vu1Record picture = k;
+        apply_move(k, PartMove());
+        apply_move(picture, m);
+        return put_pair(list, RECORDS_ROOM, &k, &picture, sizeof(k));
+    }
+
+    uint32_t put_moved(GpuList &list, Vu1Record280 &k, const PartMove &m) {
+        if (walk_ != PartWalk::frame_kept) {
+            apply_move(k, m);
+            return put(list, RECORDS_ROOM, &k, sizeof(k));
+        }
+        Vu1Record280 picture = k;
+        apply_move(k, PartMove());
+        apply_move(picture, m);
+        return put_pair(list, RECORDS_ROOM, &k, &picture, sizeof(k));
+    }
+
+    // A batch of a draw whose record is put twice in the frame's walk kept: the instance its picture between draws
+    void name_picture(NativeBatch &nb) const {
+        if (walk_ == PartWalk::frame_kept) {
+            nb.picture_instance = nb.instance + 1;
+        }
     }
 
     void draw(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
@@ -125,14 +180,13 @@ private:
         // (program 0x5A0, the shadows: 0x000's maths from the silhouette meshes, no lights and no fog)
         bool shadow = d.program == 0x5A0;
         Vu1Record k = shadow ? vu1_record_5a0(d, cam) : vu1_record_000(d, cam);
-        moves_of(d, cam, k);
         // (the XYOFFSET of the context the draw's PRIM picks, before its batches write PRIM: the game's draws keep both
         // contexts' the same)
         const GsRegisterFile &file = front.registers();
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
         k.info[2] = int32_t((offset >> 32) & 0xFFFF);
-        uint32_t record = put(records_, RECORDS_ROOM, &k, sizeof(k));
+        uint32_t record = put_moved(records_, k, parts_.draw(d, cam, walk_));
         for (const auto &mesh : fetched_) {
             if (mesh->format != (shadow ? RD_VF_SILHOUETTE : RD_VF_PACKED16)) {
                 counts_.unsupported++;
@@ -162,6 +216,7 @@ private:
                 nb.records = records_.buffer;
                 nb.triangle_count = n;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
+                name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += n;
             }
@@ -193,12 +248,11 @@ private:
     void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record k = vu1_record_700(d, cam);
-        moves_of(d, cam, k);
         const GsRegisterFile &file = front.registers();
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
         k.info[2] = int32_t((offset >> 32) & 0xFFFF);
-        uint32_t record = put(records_, RECORDS_ROOM, &k, sizeof(k));
+        uint32_t record = put_moved(records_, k, parts_.draw(d, cam, walk_));
         for (const auto &mesh : fetched_) {
             if (mesh->format != RD_VF_PACKED16) {
                 counts_.unsupported++;
@@ -238,6 +292,7 @@ private:
                 nb.records = records_.buffer;
                 nb.triangles = kicked_.buffer;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
+                name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += nb.triangle_count;
             }
@@ -265,7 +320,7 @@ private:
                 }
             }
         }
-        const PartMoves::StripPoints *before = parts_.strip(d, xy, rgba, in_picture_, from);
+        const PartMoves::StripPoints *before = parts_.strip(d, xy, rgba, walk_, from);
         size_t at = 0;
         for (const auto &mesh : fetched_) {
             if (mesh->format != RD_VF_GS_STRIP) {
@@ -275,8 +330,12 @@ private:
             counts_.draws++;
             for (const RdBatch &b : mesh->batches) {
                 front.write_packed_tag((b.tag[0] >> 47) & 0x7FF);
-                bool lerp = before && !((front.prim_in_effect() >> 4) & 1);
+                bool untextured = !((front.prim_in_effect() >> 4) & 1);
+                bool lerp = before && walk_ == PartWalk::picture && untextured;
                 moved_on_cpu_ |= lerp;
+                if (before && untextured && walk_ == PartWalk::frame_kept) {
+                    trail_paired_ = true; // (its picture between would move it on the CPU)
+                }
                 for (uint32_t k = 0; k < b.count; k++, at++) {
                     const int32_t *v = &mesh->vertices[size_t(b.first + k) * 8];
                     int32_t q[8];
@@ -314,22 +373,31 @@ private:
         return list.used++;
     }
 
+    // A draw's two records side by side in one list (the frame's, then its picture's): the first's number, the
+    // second's the next (an instance plus one: the record is its low bits)
+    uint32_t put_pair(GpuList &list, uint32_t room, const void *first, const void *second, uint32_t bytes) {
+        if (!list.buffer || list.used + 2 > list.room) {
+            make(list, room, bytes);
+        }
+        uint32_t at = list.used;
+        memcpy(list.map + size_t(at) * bytes, first, bytes);
+        memcpy(list.map + size_t(at + 1) * bytes, second, bytes);
+        list.used += 2;
+        return at;
+    }
+
     // A draw of program 0x280 (the skinned models): as VU1's run of each batch, the plan says whether the run draws
     // (its strip and second pass, and so their registers) and which triangles VU1 kicks; those are listed each time
     void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record280 k = vu1_record_280(d, cam);
-        PartMove m = parts_.draw(d, cam, in_picture_);
-        k.info[1] = m.flags;
-        k.bt[0] = m.model;
-        k.bt[1] = m.parent;
         const GsRegisterFile &file = front.registers();
         for (int c = 0; c < 2; c++) {
             uint64_t offset = file.reg[gs_reg::xyoffset_1 + c];
             k.offset[2 * c] = int32_t(offset & 0xFFFF);
             k.offset[2 * c + 1] = int32_t((offset >> 32) & 0xFFFF);
         }
-        uint32_t record = put(records_280_, RECORDS_ROOM, &k, sizeof(k));
+        uint32_t record = put_moved(records_280_, k, parts_.draw(d, cam, walk_));
         for (const auto &mesh : fetched_) {
             if (mesh->format != RD_VF_FLOAT_SKIN) {
                 counts_.unsupported++;
@@ -372,6 +440,7 @@ private:
                     nb.records = records_280_.buffer;
                     nb.triangles = kicked_.buffer;
                     nb.instance = record | ((prim >> 9) & 1) << 28 | pass << 29 | ((prim >> 3) & 1) << 30;
+                    name_picture(nb);
                     canvas.native_batch(front.registers(), prim, nb);
                     counts_.triangles += nb.triangle_count;
                 }
@@ -469,7 +538,8 @@ private:
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
     PartMoves parts_;
-    bool in_picture_ = false, moved_on_cpu_ = false;
+    PartWalk walk_ = PartWalk::frame;
+    bool frame_kept_ = false, trail_paired_ = false, moved_on_cpu_ = false;
     float picture_u_ = 0.0f; // (1 - the picture's t)
 
 public:
@@ -498,6 +568,18 @@ void NativeDraws::set_picture(const GsnInterpPicture *picture) {
 }
 bool NativeDraws::moved_on_cpu() const {
     return impl_->moved_on_cpu();
+}
+
+void NativeDraws::begin_frame_kept() {
+    impl_->begin_frame_kept();
+}
+
+void NativeDraws::end_frame_kept() {
+    impl_->end_frame_kept();
+}
+
+bool NativeDraws::trail_paired() const {
+    return impl_->trail_paired();
 }
 
 NativeCounts NativeDraws::counts() const {

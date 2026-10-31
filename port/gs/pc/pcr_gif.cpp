@@ -443,6 +443,9 @@ void GifFrontEnd::number_kicks() {
     numbering_ = true;
     kicks_ = 0;
     st_src_ = rgba_src_ = q_src_ = rgba_q_src_ = uv_src_ = no_kick;
+    for (GifVertex &v : queue_) {
+        v.kick = v.st_owner = v.rgba_owner = v.q_owner = v.uv_owner = no_kick;
+    }
 }
 
 void GifFrontEnd::stop_numbering() {

@@ -289,6 +289,14 @@ typedef struct {
     GsnInterpMove *moves;  /* (malloc'd) */
     uint8_t *stream;       /* (malloc'd) GIF packets: a uint32_t path, a uint32_t size, then the bytes */
     size_t stream_bytes;
+    /* What the stream did to the frame's packets, for a renderer that keeps the frame's own walk and makes the
+       stream's of it (the PC renderer: pcr.cpp's Intake); the native GS reads none of it */
+    uint64_t packet_bytes;          /* the frame's packets as the game sent them (the pending frame's), in bytes */
+    uint32_t draw_fbp, shown_fbp;   /* the buffer the frame drew into (FBP), and the one shown, which the stream draws
+                                       into instead (FRAME, TEX0 and BITBLTBUF naming draw_fbp name shown_fbp) */
+    uint32_t uploads_asked_again;   /* 1: its uploads into anything but draw_fbp are asked for again (0x7C) */
+    uint32_t shown_kept;            /* 1: the frame shown is kept (0xF2), and the stream's records that set TEX0 to
+                                       shown_fbp read that copy (between 0xF4 and 0xF5) */
 } GsnInterpFrame;
 typedef struct {
     uint64_t serial;   /* the frame's */

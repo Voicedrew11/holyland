@@ -3268,6 +3268,22 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     }
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
+    {
+        /* (for a renderer that makes the stream's walk from the frame's own: replay_pending's choices) */
+        size_t at;
+
+        for (at = 0; at < pending.size;) {
+            Record r;
+
+            memcpy(&r, pending.data + at, sizeof(r));
+            f->packet_bytes += r.bytes;
+            at += sizeof(r) + r.bytes;
+        }
+        f->draw_fbp = pending.scan.draw_fbp;
+        f->shown_fbp = pending.shown;
+        f->uploads_asked_again = port_gs_replay_uploads() != 0;
+        f->shown_kept = pending.reads_prev && port_gs_replay_uploads();
+    }
     /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
     f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
                memcmp(pending.before.t, pending.scan.camera.t, sizeof(pending.before.t)) == 0;

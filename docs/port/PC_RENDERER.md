@@ -100,10 +100,12 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      there, and each frame's first walk), not by the pictures between. **What held 009**, measured 2026-10-30 ("What
      held 009, and resolve's answers kept", below): pc's thread a vblank behind, so every picture between was left
      out; a quarter of its work resolve's walk of the blocks' owners. Resolve's answers kept (exact, by the pages'
-     signatures): 009 98-99 pictures a second (was 60), 000 214-226 (155-165 without). Next: pc walks each frame
-     twice (the frame's own packets, then the same packets for its first picture between): the frame's own walk
-     kept as its kept walk, so that a frame is walked once; then VU1 0x280's records and the uploads found again
-     (about 15% and 14% of the walk at 009).
+     signatures): 009 98-99 pictures a second (was 60), 000 214-226 (155-165 without). **A frame walked once**,
+     built 2026-10-30 ("A frame walked once", below): the frame's own walk kept and made its pictures' walk by
+     frame_interp.c's rules; 99.9% of frames, 61% of them drawn from it at once (the others had uploaded over
+     pages they read before them: their first picture walks the stream). 009 114-119 (100-105 without), 000 at the
+     cap (238-240). Next: what is left of 009's thread (sample it again: the frame's own packets with what keeping
+     them costs, the first walks of the 39%), then VU1 0x280's records and the uploads found again.
   6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
      `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
@@ -234,6 +236,58 @@ the handoff above says, the GPU's way coming next):
 6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
+
+## A frame walked once (built 2026-10-30)
+
+**Why.** Sampled at 009 at 240 (250 samples of `kf4-pc`): 38% of pc's thread was each frame's first picture between
+walking the frame's stream (frame_interp.c's copy of the frame's packets), 37% the frame's own packets, 20% the other
+pictures drawn again (5b); the thread was busy all the time, 101 pictures a second. The stream is the frame's packets
+again, changed by replay_pending: FRAME, TEX0 and BITBLTBUF naming the buffer drawn name the buffer shown, the
+uploads into anything else asked for again (0x7C), read-backs, copies into anything but the frame, SIGNAL, FINISH and
+LABEL left out, 0xF0 and 0xF1 around it, the records that set TEX0 to the frame shown between 0xF4 and 0xF5. So
+the frame's own walk, kept, can be made the stream's walk by those rules, and the frame is walked once.
+
+**What it does.**
+- **The stretch** (pcr.cpp's Intake): the packets from the first after a vblank to the next vblank are kept as they
+  are walked (the canvas's `keep_walk`, the kicks numbered as a picture's walk numbers them, the native draws' records
+  made twice). A picture between, a frame taken or a state loaded in a stretch drops it (the 0xF2 mark after the
+  vblank), and frame_interp.c's replays sent as packets (the exact restore, between 0xF0 and 0xF1) are kept out.
+  Stretches are kept only while frames are taken (none at 30, in the menus).
+- **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
+  it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
+  the frame shown is kept. A stretch whose bytes are not the frame's, or whose kicks are not its count, is not it.
+- **The rules** (`pcr_frame_walk.h`, plain functions, `pcr_frame_walk_test`): a draw's FRAME and TEX0 moved to the
+  buffer shown; an upload into anything but the buffer drawn asked for again (its chunk the frame's), a read-back and
+  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5. Refused
+  (the frame walks its stream, counted): a copy from or into the buffer drawn, an upload into it, a draw textured from
+  it other than from its surface's pixels (a full-screen pass that reads the frame it draws: looked up again in the
+  buffer shown, as the stream has it), a trail its pictures move on the CPU, a native batch without its picture's
+  record, a mark or upload asked again of a picture's. The stream's own choices for those (frame_interp.c's table of
+  copies) are not handed over: none was met at the four spots.
+- **`Canvas::as_picture_walk`** makes the kept walk from the stretch's: the batches' FRAME and TEX0 moved, a GIF
+  batch's numbered corners moved (`Batch::numbered`: the corners name their kicks in the stretch, which nothing moves
+  outside a picture), a native batch's runs drawn by their pictures' records, the uploads as uploads asked again, 0xF0
+  before and 0xF1 after. Then the frame's pictures are drawn again from it as from a 5b walk, while what it read of the
+  store is as it was (`fits`); its kicks are the frame's walked kicks (`Between::adopt_live_kicks`).
+- **Native draws** (`NativeDraws::begin_frame_kept`): in the stretch each draw's record is made twice side by side, the
+  frame's and the picture's (its move: `PartMoves::draw` with `PartWalk::frame_kept` keeps the place and gives the
+  move a picture of the frame gives; `part_moves_test` checks it against a frame's walk and a picture's).
+- A read-back in a kept walk no longer spoils it (the stream never had one); `KF4_PC_LIVE_WALK=0`: the frame's stream
+  walked for its first picture, as before. `[stats] pc pictures between` counts the frames made so and why not.
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th, fixed clock):
+byte for byte with `KF4_PC_LIVE_WALK=0` (204 pictures a spot). 947-949 of 948-950 frames a spot made from their own
+walk (the first frame of a run: not the frame), none refused by the rules; 366-370 a spot then walked their stream,
+the store changed (the frame had uploaded over pages it read before the upload, so its own walk read what the stream's
+would not), so 6,262-6,279 of 6,632-6,646 pictures drawn again (5,684 before). ctest 13/13; pcr_gif_test,
+pcr_frame_walk_test, part_moves_test under ASan + UBSan; an ASan + UBSan pc run at 009:2 at 240: the known reports
+only. Not run: native and fast checks (frame_interp.c only fills fields the native GS does not read), TSan, clang-tidy
+(no configuration).
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): 009 113.9-118.6 pictures a second
+(100.1-105.4 with `KF4_PC_LIVE_WALK=0`); 000 238.3-239.8 (238.1-238.9: at the cap either way; 178-226 measured on other
+days). The GPU 2.3-2.6 ms a picture (2.2-2.3). Less than the first walks' 38%: 39% of frames still walk their
+stream, and keeping the stretch (its batches copied, its kicks, two records a draw) costs the frame's own walk.
 
 ## What held 009, and resolve's answers kept (built 2026-10-30)
 

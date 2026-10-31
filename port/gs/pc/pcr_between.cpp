@@ -37,6 +37,25 @@ struct Kick {
 static_assert(sizeof(Kick) == 64, "Kick is gs_replay.h's");
 static_assert(sizeof(GsnInterpMove) == 64, "GsnInterpMove is gif_moves.h's M()");
 
+// A numbered vertex as its kick (gsn.cpp's InterpKick), with its context's XYOFFSET
+Kick kick_of(const GifVertex &v, uint64_t xyoffset) {
+    Kick k = {};
+    k.xy = uint32_t(v.x) | uint32_t(v.y) << 16;
+    k.z = v.z;
+    k.rgba = v.rgba;
+    k.s = v.s;
+    k.t = v.t;
+    k.q = v.q;
+    k.uv = uint32_t(v.u) | uint32_t(v.v) << 16;
+    k.fog = v.fog;
+    k.offset = uint32_t(xyoffset & 0xFFFF) | uint32_t((xyoffset >> 32) & 0xFFFF) << 16;
+    k.st_owner = v.st_owner;
+    k.rgba_owner = v.rgba_owner;
+    k.q_owner = v.q_owner;
+    k.uv_owner = v.uv_owner;
+    return k;
+}
+
 } // namespace
 
 Between::Between(Device &device) : device_(device) {
@@ -149,24 +168,56 @@ void Between::walked(WalkReason why) {
 }
 
 void Between::kicked(const GifVertex &v, uint64_t xyoffset) {
-    if (!active_ || v.kick >= frame_->kicks) {
-        return; // (end_picture counts it)
+    if (active_) {
+        if (v.kick >= frame_->kicks) {
+            return; // (end_picture counts it)
+        }
+        const Kick k = kick_of(v, xyoffset);
+        memcpy(kick_map_ + size_t(v.kick) * sizeof(Kick), &k, sizeof(k)); // (one write to the mapped buffer)
+        return;
     }
-    Kick k = {};
-    k.xy = uint32_t(v.x) | uint32_t(v.y) << 16;
-    k.z = v.z;
-    k.rgba = v.rgba;
-    k.s = v.s;
-    k.t = v.t;
-    k.q = v.q;
-    k.uv = uint32_t(v.u) | uint32_t(v.v) << 16;
-    k.fog = v.fog;
-    k.offset = uint32_t(xyoffset & 0xFFFF) | uint32_t((xyoffset >> 32) & 0xFFFF) << 16;
-    k.st_owner = v.st_owner;
-    k.rgba_owner = v.rgba_owner;
-    k.q_owner = v.q_owner;
-    k.uv_owner = v.uv_owner;
-    memcpy(kick_map_ + size_t(v.kick) * sizeof(Kick), &k, sizeof(k)); // (one write to the mapped buffer)
+    if (!live_on_ || v.kick == no_kick) {
+        return;
+    }
+    const size_t bytes = (size_t(v.kick) + 1) * sizeof(Kick);
+    if (live_kicks_.size() < bytes) {
+        live_kicks_.resize(bytes, 0);
+    }
+    const Kick k = kick_of(v, xyoffset);
+    memcpy(live_kicks_.data() + size_t(v.kick) * sizeof(Kick), &k, sizeof(k));
+}
+
+void Between::keep_live_kicks() {
+    live_kicks_.clear();
+    live_on_ = true;
+}
+
+Between::KickList Between::end_live_kicks() {
+    live_on_ = false;
+    return std::move(live_kicks_);
+}
+
+bool Between::adopt_live_kicks(KickList kicks) {
+    if (!frame_ || kicks.size() != size_t(frame_->kicks) * sizeof(Kick)) {
+        return false;
+    }
+    if (kicks_ && kick_map_) {
+        device_.unmap_host_buffer(*kicks_, MEMORY_ACCESS_WRITE_BIT);
+        kick_map_ = nullptr;
+    }
+    kicks.resize(std::max(kicks.size(), sizeof(Kick)), 0); // (no kicks: one zeroed)
+    kicks_ = make(kicks.data(), kicks.size(), false);
+    walked_serial_ = uint32_t(frame_->serial);
+    walked_ = true;
+    return true;
+}
+
+void Between::frame_from_own_walk(FrameWalkRefused refused) {
+    if (refused == FrameWalkRefused::none) {
+        counts_.frames_from_own_walk++;
+        return;
+    }
+    counts_.own_walk_refused[size_t(refused)]++;
 }
 
 bool Between::end_picture(uint32_t kicks) {
@@ -200,14 +251,25 @@ const Buffer &Between::moves() const {
 }
 
 void Between::print_counts(FILE *out) const {
+    const auto own_walk_refused = [this](FrameWalkRefused why) { return counts_.own_walk_refused[size_t(why)]; };
     fprintf(out,
             "[stats] pc pictures between: %llu frames, %llu pictures (%llu not of the frame taken, %llu whose kicks were "
             "not the frame's); %llu drawn again from a kept walk, walked: %llu with none kept, %llu the store "
-            "changed; %llu walks not kept\n",
+            "changed; %llu walks not kept; %llu frames' pictures made from the frame's own walk, refused: "
+            "%llu not kept, %llu not the frame, %llu trail paired, %llu reads the buffer drawn, %llu copies it, "
+            "%llu uploads into it, %llu native unpaired, %llu marks\n",
             (unsigned long long)counts_.frames, (unsigned long long)counts_.pictures, (unsigned long long)counts_.missed,
             (unsigned long long)counts_.kicks_not_the_frames, (unsigned long long)counts_.drawn_again,
             (unsigned long long)counts_.walked_none_kept, (unsigned long long)counts_.walked_store_changed,
-            (unsigned long long)counts_.walked_not_kept);
+            (unsigned long long)counts_.walked_not_kept, (unsigned long long)counts_.frames_from_own_walk,
+            (unsigned long long)own_walk_refused(FrameWalkRefused::not_kept),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::not_the_frame),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::trail_paired),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::reads_drawn),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::copies_drawn),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::uploads_drawn),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::native_unpaired),
+            (unsigned long long)own_walk_refused(FrameWalkRefused::marks));
 }
 
 } // namespace pcr

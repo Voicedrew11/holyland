@@ -409,12 +409,26 @@ public:
 
     // (pcr_between.h) The frame for the pictures between. The front end's state now is where each of its walks
     // starts (as the native GS's interp_capture), so that every walk of the frame makes the same calls.
+    //
+    // A frame walked once (pcr_frame_walk.h): the frame's own walk, kept (the last stretch of packets between two
+    // vblanks), is made its pictures' walk when the frame is its packets, and the rules make the stream's of it.
     void take_frame(InterpFrame frame) {
-        if (between_) {
-            between_->take_frame(std::move(frame));
-            walk_start_ = front_.state();
-            kept_walk_.reset();
+        if (!between_) {
+            return;
         }
+        drop_stretch();
+        frame_taken_at_ = vblanks_;
+        const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
+                                           frame->shown_kept != 0};
+        const uint64_t packet_bytes = frame->packet_bytes;
+        between_->take_frame(std::move(frame));
+        walk_start_ = front_.state();
+        kept_walk_.reset();
+        if (own_walks_) {
+            pcr::FrameWalkRefused refused = own_walk(packet_bytes, targets);
+            between_->frame_from_own_walk(refused);
+        }
+        last_stretch_.reset();
     }
 
     // A picture between: drawn again from the frame's kept walk when what that read of the store is as it was (step
@@ -425,6 +439,7 @@ public:
         if (!between_ || !canvas_) {
             return;
         }
+        drop_stretch();
         pcr::WalkReason why = pcr::WalkReason::none_kept;
         if (kept_walk_ && keep_walks_) {
             if (canvas_->fits(*kept_walk_)) {
@@ -490,6 +505,8 @@ public:
     Intake() : front_(*this) {
         const char *keep = getenv("KF4_PC_KEPT_WALK");
         keep_walks_ = !(keep && strcmp(keep, "0") == 0);
+        const char *own = getenv("KF4_PC_LIVE_WALK");
+        own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -497,10 +514,25 @@ public:
     }
 
     void feed(int path, const std::vector<uint8_t> &bytes) {
+        if (own_walks_ && !stretch_open_ && !in_replay_ && vblanks_ <= frame_taken_at_ + STRETCHES_KEPT_VBLANKS) {
+            open_stretch();
+        }
+        stretch_bytes_ += bytes.size();
         front_.feed(path, bytes);
     }
 
+    // A state loaded: no stretch kept from before it
+    void forget() {
+        drop_stretch();
+        last_stretch_.reset();
+        in_replay_ = false;
+    }
+
     void vblank(const uint64_t *privileged, uint32_t scale) {
+        vblanks_++;
+        if (stretch_open_) {
+            last_stretch_ = close_stretch();
+        }
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->vblank();
@@ -587,6 +619,15 @@ private:
         if (census_) {
             census_->other("frame mark (0x7D)");
         }
+        // (frame_interp.c's replays sent as packets, between 0xF0 and 0xF1 (the exact restore): not the game's, no
+        // stretch of them kept)
+        uint32_t index = uint32_t(value >> 32) & 0xFF;
+        if (index == 0xF0 && !between_active()) {
+            drop_stretch();
+            in_replay_ = true;
+        } else if (index == 0xF1 && !between_active()) {
+            in_replay_ = false;
+        }
         if (canvas_) {
             canvas_->frame_mark(value);
         }
@@ -602,6 +643,69 @@ private:
     void widescreen(uint64_t) override {}
     void gs_sync(uint32_t, uint64_t) override {}
 
+    // (a frame walked once) The packets from here kept as they are walked: the canvas's calls, the kicks numbered, the
+    // native draws' records for the pictures made beside the frame's
+    struct Stretch {
+        std::shared_ptr<const pcr::KeptWalk> walk; // (nullptr: not kept whole)
+        pcr::Between::KickList kicks;
+        uint64_t bytes = 0;
+        bool trail_paired = false;
+    };
+    void open_stretch() {
+        if (!canvas_ || !natives_ || !between_) {
+            return;
+        }
+        canvas_->keep_walk();
+        front_.number_kicks();
+        between_->keep_live_kicks();
+        natives_->begin_frame_kept();
+        stretch_open_ = true;
+        stretch_bytes_ = 0;
+    }
+    Stretch close_stretch() {
+        Stretch s;
+        canvas_->stop_keeping();
+        s.walk = canvas_->take_kept_walk();
+        front_.stop_numbering();
+        s.kicks = between_->end_live_kicks();
+        natives_->end_frame_kept();
+        s.trail_paired = natives_->trail_paired();
+        s.bytes = stretch_bytes_;
+        stretch_open_ = false;
+        return s;
+    }
+    bool between_active() const {
+        return between_ && between_->active();
+    }
+    // A picture between, a frame taken or a state loaded in a stretch: what it kept is not a frame's own walk
+    void drop_stretch() {
+        if (stretch_open_) {
+            close_stretch();
+        }
+    }
+    // The last stretch as the frame's pictures' walk (kept_walk_, its kicks the frame's walked kicks), or why not
+    pcr::FrameWalkRefused own_walk(uint64_t packet_bytes, const pcr::FrameTargets &targets) {
+        if (!last_stretch_ || !last_stretch_->walk) {
+            return pcr::FrameWalkRefused::not_kept;
+        }
+        Stretch &s = *last_stretch_;
+        if (s.bytes != packet_bytes) {
+            return pcr::FrameWalkRefused::not_the_frame;
+        }
+        if (s.trail_paired) {
+            return pcr::FrameWalkRefused::trail_paired;
+        }
+        pcr::Canvas::PictureWalk picture = canvas_->as_picture_walk(*s.walk, targets);
+        if (!picture.walk) {
+            return picture.refused;
+        }
+        if (!between_->adopt_live_kicks(std::move(s.kicks))) {
+            return pcr::FrameWalkRefused::not_the_frame; // (its kicks not the frame's count)
+        }
+        kept_walk_ = std::move(picture.walk);
+        return pcr::FrameWalkRefused::none;
+    }
+
     pcr::GifFrontEnd front_;
     std::unique_ptr<pcr::Census> census_;
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
@@ -612,6 +716,14 @@ private:
     pcr::GifFrontEnd::State walk_start_;
     std::shared_ptr<const pcr::KeptWalk> kept_walk_;
     bool keep_walks_ = true;
+    // (a frame walked once) the stretch being kept and its bytes, the last kept at a vblank, and KF4_PC_LIVE_WALK (0:
+    // the frame's stream walked for its first picture, as before)
+    // (kept only while frames are taken: none at 30, in the menus)
+    static constexpr uint64_t STRETCHES_KEPT_VBLANKS = 8;
+    bool stretch_open_ = false, in_replay_ = false;
+    uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
+    std::optional<Stretch> last_stretch_;
+    bool own_walks_ = true;
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
@@ -1358,6 +1470,7 @@ extern "C" int pcr_restore(uint32_t type, const void *data, size_t size) {
         pcr::TextureStore::ClutState clut;
         clut.unloaded.fill(1);
         clut.cbp = {UINT32_MAX, UINT32_MAX};
+        r.intake().forget();
         if (pcr::Canvas *canvas = r.intake().canvas()) {
             canvas->restore(vram, clut);
         }
@@ -1395,6 +1508,7 @@ extern "C" void pcr_state(PortStateIo *io) {
     port_state_bytes(io, clut.cbp.data(), sizeof(clut.cbp));
     if (io->loading) {
         r.run_job([&] {
+            r.intake().forget();
             if (pcr::Canvas *canvas = r.intake().canvas()) {
                 canvas->restore(vram, clut);
             }

@@ -324,7 +324,14 @@ public:
     void set_between(const Between *between) {
         flush_batch();
         between_ = between;
-        if (!between && keeping_) {
+        if (!between) {
+            stop_keeping();
+        }
+    }
+
+    void stop_keeping() {
+        flush_batch();
+        if (keeping_) {
             keeping_ = false;
             kept_->read = store_.reads_watched();
         }
@@ -363,7 +370,7 @@ public:
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
             batch_.runs.back().count += nb.triangle_count;
         } else {
-            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance});
+            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance});
         }
     }
 
@@ -385,14 +392,17 @@ public:
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         bool taken = store_.upload(regs, bytes);
         write_upload_into_surfaces(t, bytes);
+        uint64_t chunk = taken ? store_.last_chunk() : 0;
+        std::shared_ptr<const std::vector<uint8_t>> kept_bytes;
+        if (keeping_ || !replaying_) {
+            kept_bytes = std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end());
+        }
         if (keeping_) {
-            kept_->steps.emplace_back(KeptUpload{{t, std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end()),
-                                                  0}});
+            kept_->steps.emplace_back(KeptUpload{{t, kept_bytes, chunk}});
         }
         if (!replaying_) {
             // (the frame's uploads: what its pictures between ask for again)
-            uploads_now_.push_back({t, std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end()),
-                                    taken ? store_.last_chunk() : 0});
+            uploads_now_.push_back({t, kept_bytes, chunk});
         }
     }
 
@@ -442,7 +452,8 @@ public:
 
     void local_to_host(const TransferRegisters &t) {
         flush_batch();
-        kept_spoilt_ |= keeping_; // (what is read back goes to the game: a walk made again would not send it)
+        // (what is read back goes to the game: not kept, as the frame's stream leaves it out; a picture between's walk
+        // has none)
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         fifo_at_ = 0;
         if (store_.read_back(regs, fifo_)) {
@@ -1427,9 +1438,11 @@ private:
         // a native batch's (pcr_nd000.vert): its buffers, and its runs of triangles, a draw call each
         struct Run {
             uint32_t first, count, instance;
+            uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
         };
         bool native = false;
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
+        bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
         NativeProgram program = NativeProgram::vu1_000;
@@ -1446,7 +1459,7 @@ private:
 
     // ---- A kept walk's steps (keep_walk), in the order the walk made them ----
     struct KeptUpload {
-        RecordedUpload upload; // (chunk 0: its bytes taken again)
+        RecordedUpload upload; // (made again from its bytes; its chunk what an upload asked again finds)
     };
     struct KeptUploadAgain {
         RecordedUpload upload;
@@ -1499,6 +1512,93 @@ private:
         }
         flush_batch();
         between_ = nullptr;
+    }
+
+    // ---- A frame walked once (pcr_frame_walk.h): the frame's own walk as its stream's ----
+    struct PictureKept {
+        std::unique_ptr<Kept> walk;
+        FrameWalkRefused refused = FrameWalkRefused::none;
+    };
+    PictureKept as_picture_walk(const Kept &frame, const FrameTargets &t) const {
+        PictureKept out;
+        out.walk = std::make_unique<Kept>();
+        out.walk->read = frame.read;
+        std::vector<KeptStep> &steps = out.walk->steps;
+        steps.reserve(frame.steps.size() + 2);
+        steps.emplace_back(KeptMark{uint64_t(0xF0) << 32});
+        for (const KeptStep &step : frame.steps) {
+            out.refused = std::visit([&](const auto &kept) { return in_picture(kept, t, steps); }, step);
+            if (out.refused != FrameWalkRefused::none) {
+                out.walk.reset();
+                return out;
+            }
+        }
+        steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
+        return out;
+    }
+
+    // A draw into the buffer shown where it drew into the buffer drawn, and reading it there where it read the buffer
+    // drawn's pixels (a surface's, looked up again as it is drawn); textured from the frame shown, between 0xF4 and
+    // 0xF5; a native batch by its pictures' records, a GIF batch's numbered corners moved
+    static FrameWalkRefused in_picture(const Batch &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
+        bool textured = bits(kept.state.prim, 4, 1) != 0;
+        if (textured && tex0_reads_drawn(kept.state.tex0, t) && kept.texture.src != SRC_SURFACE) {
+            return FrameWalkRefused::reads_drawn;
+        }
+        Batch b = kept;
+        b.state.frame = frame_in_picture(kept.state.frame, t);
+        b.state.tex0 = tex0_in_picture(kept.state.tex0, t);
+        if (b.native) {
+            for (Batch::Run &run : b.runs) {
+                if (run.picture_instance == no_instance) {
+                    return FrameWalkRefused::native_unpaired;
+                }
+                run.instance = run.picture_instance;
+                run.picture_instance = no_instance;
+            }
+        } else {
+            b.moved = b.numbered;
+        }
+        bool kept_read = textured && tex0_reads_kept(kept.state.tex0, t);
+        if (kept_read) {
+            steps.emplace_back(KeptMark{uint64_t(0xF4) << 32});
+        }
+        steps.emplace_back(std::move(b));
+        if (kept_read) {
+            steps.emplace_back(KeptMark{uint64_t(0xF5) << 32});
+        }
+        return FrameWalkRefused::none;
+    }
+    static FrameWalkRefused in_picture(const KeptUpload &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
+        switch (transfer_in_picture(0, kept.upload.transfer, t)) {
+        case TransferInPicture::asked_again:
+            steps.emplace_back(KeptUploadAgain{kept.upload});
+            return FrameWalkRefused::none;
+        case TransferInPicture::as_is:
+            steps.emplace_back(kept);
+            return FrameWalkRefused::none;
+        default:
+            return FrameWalkRefused::uploads_drawn;
+        }
+    }
+    static FrameWalkRefused in_picture(const KeptUploadAgain &, const FrameTargets &, std::vector<KeptStep> &) {
+        return FrameWalkRefused::marks; // (0x7C: not the game's own packets)
+    }
+    static FrameWalkRefused in_picture(const KeptCopy &kept, const FrameTargets &t, std::vector<KeptStep> &) {
+        return transfer_in_picture(2, kept.transfer, t) == TransferInPicture::left_out ? FrameWalkRefused::none
+                                                                                       : FrameWalkRefused::copies_drawn;
+    }
+    static FrameWalkRefused in_picture(const KeptClutLoad &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
+        steps.emplace_back(KeptClutLoad{tex0_in_picture(kept.tex0, t), kept.texclut});
+        return FrameWalkRefused::none;
+    }
+    static FrameWalkRefused in_picture(const KeptMark &kept, const FrameTargets &, std::vector<KeptStep> &steps) {
+        uint32_t index = bits(kept.value, 32, 8);
+        if (index >= 0xF0 && index <= 0xF5) {
+            return FrameWalkRefused::marks;
+        }
+        steps.emplace_back(kept);
+        return FrameWalkRefused::none;
     }
 
     void upload_made_again(const RecordedUpload &r) {
@@ -1577,6 +1677,7 @@ private:
         batch_.vertices.clear();
         batch_.native = false;
         batch_.moved = false;
+        batch_.numbered = false;
         batch_.arena.reset();
         batch_.records.reset();
         batch_.triangles.reset();
@@ -1628,13 +1729,15 @@ private:
             batch_.x1 = std::max(batch_.x1, int32_t(std::ceil(v.x)));
             batch_.y1 = std::max(batch_.y1, int32_t(std::ceil(v.y)));
         };
-        // (a picture between's: every corner of the walk's kicks, or none moved)
+        // (a picture between's: every corner of the walk's kicks, or none moved; numbered outside one, the frame's own
+        // walk kept: the corners name their kicks, which nothing moves until the walk is made the pictures')
         uint32_t corners = p.shape == PrimitiveShape::triangle ? 3 : 2;
-        bool moved = between_ && between_->active();
+        bool moved = true;
         for (uint32_t i = 0; i < corners; i++) {
             moved = moved && p.vertices[i].kick != no_kick;
         }
-        batch_.moved |= moved;
+        batch_.numbered |= moved;
+        batch_.moved |= moved && between_ && between_->active();
         uint32_t fst_bit = fst ? K_FST : 0;
         if (p.shape == PrimitiveShape::triangle) {
             const GifVertex &last = p.vertices[2];
@@ -2277,6 +2380,16 @@ bool Canvas::fits(const KeptWalk &walk) const {
 }
 void Canvas::draw_again(const KeptWalk &walk, const Between &between) {
     impl_->draw_again(walk, between);
+}
+void Canvas::stop_keeping() {
+    impl_->stop_keeping();
+}
+Canvas::PictureWalk Canvas::as_picture_walk(const KeptWalk &frame, const FrameTargets &targets) const {
+    Impl::PictureKept kept = impl_->as_picture_walk(frame, targets);
+    if (!kept.walk) {
+        return {nullptr, kept.refused};
+    }
+    return {std::make_shared<const KeptWalk>(std::move(*kept.walk)), FrameWalkRefused::none};
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {
     impl_->primitive(file, primitive);

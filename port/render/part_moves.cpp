@@ -151,11 +151,11 @@ size_t PartMoves::KeyHash::operator()(const Key &key) const {
     return size_t(h ^ (h >> 29));
 }
 
-void PartMoves::frame(uint32_t serial, bool in_picture) {
+void PartMoves::frame(uint32_t serial, PartWalk walk) {
     section_ = Section::none;
     seen_.clear();
     // (a frame's packets drawn again, for a picture between, are the same frame)
-    if (in_picture || serial == serial_) {
+    if (walk == PartWalk::picture || serial == serial_) {
         return;
     }
     serial_ = serial;
@@ -214,20 +214,12 @@ int32_t PartMoves::model_flags(const Key &key, const RdDraw &d, const RdCamera &
     if (!vu1_between(*a, &d.model[0][0], was.model, vc, vp)) {
         return flags;
     }
-    moved_models_++;
     return VU1_MOVE_CAMERA | VU1_MOVE_MODEL | (eye ? VU1_MOVE_EYE : 0);
 }
 
-PartMove PartMoves::draw(const RdDraw &d, const RdCamera &cam, bool in_picture) {
+// How a picture between moves a draw (the frame's places are kept by draw())
+PartMove PartMoves::move_of(const Key &key, const RdDraw &d, const RdCamera &cam) {
     PartMove move;
-    Key key = key_of(d);
-    if (!in_picture) {
-        Place &p = now_[key];
-        memcpy(p.model, d.model, 64);
-        memcpy(p.parent, d.parent, 64);
-        memcpy(p.view, cam.view, 64);
-        return move;
-    }
     if (d.program == 0x280) {
         move.flags = model_flags(key, d, cam, &move.model, &move.parent);
         return move;
@@ -255,15 +247,36 @@ PartMove PartMoves::draw(const RdDraw &d, const RdCamera &cam, bool in_picture) 
     return move;
 }
 
+PartMove PartMoves::draw(const RdDraw &d, const RdCamera &cam, PartWalk walk) {
+    PartMove move;
+    Key key = key_of(d);
+    if (walk != PartWalk::picture) {
+        Place &p = now_[key];
+        memcpy(p.model, d.model, 64);
+        memcpy(p.parent, d.parent, 64);
+        memcpy(p.view, cam.view, 64);
+    }
+    if (walk == PartWalk::frame) {
+        return move;
+    }
+    move = move_of(key, d, cam);
+    if (walk == PartWalk::picture && (move.flags & VU1_MOVE_MODEL)) {
+        moved_models_++;
+    }
+    return move;
+}
+
 const PartMoves::StripPoints *PartMoves::strip(const RdDraw &d, std::span<const uint32_t> xy,
-                                               std::span<const uint32_t> rgba, bool in_picture,
+                                               std::span<const uint32_t> rgba, PartWalk walk,
                                                std::vector<uint32_t> &from) {
     Key key = key_of(d);
-    if (!in_picture) {
+    if (walk != PartWalk::picture) {
         StripPoints &now = strip_now_[key];
         now.xy.assign(xy.begin(), xy.end());
         now.rgba.assign(rgba.begin(), rgba.end());
-        return nullptr;
+        if (walk == PartWalk::frame) {
+            return nullptr;
+        }
     }
     // Each point's partner in the frame before (from[i]). The trail is a ring of the blade's two ends, pushed a pair a
     // frame and kept where they were on the screen until they die: the frame before's points the same, from some point
@@ -297,6 +310,8 @@ const PartMoves::StripPoints *PartMoves::strip(const RdDraw &d, std::span<const 
     if (!paired) {
         return nullptr;
     }
-    paired_strips_++;
+    if (walk == PartWalk::picture) {
+        paired_strips_++;
+    }
     return &it->second;
 }

@@ -19,12 +19,15 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <array>
 #include <cstdlib>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "device.hpp"
 #include "gsn.h"
+#include "pcr_frame_walk.h"
 #include "pcr_gif.h"
 
 namespace pcr {
@@ -45,6 +48,9 @@ struct BetweenCounts {
     // kept walk read of the store changed since; and walks not kept (a trail moved on the CPU, a read-back, a kick
     // count off)
     uint64_t drawn_again = 0, walked_none_kept = 0, walked_store_changed = 0, walked_not_kept = 0;
+    // (a frame walked once) frames whose pictures' walk was made from the frame's own, and why the others' was not
+    uint64_t frames_from_own_walk = 0;
+    std::array<uint64_t, size_t(FrameWalkRefused::count)> own_walk_refused{};
 };
 
 // Why a picture walked the frame's packets in place of drawing a kept walk again (BetweenCounts)
@@ -64,8 +70,20 @@ public:
     // uint32_t size, then the bytes, as GsnInterpFrame's stream), or none when it is not of the frame taken (counted:
     // nothing is drawn again).
     std::span<const uint8_t> begin_picture(const GsnInterpPicture &picture);
-    // During the walk: a numbered kick (GifVertex::kick), with its context's XYOFFSET
+    // During the walk: a numbered kick (GifVertex::kick), with its context's XYOFFSET. Outside one, while the frame's
+    // own walk's kicks are kept (keep_live_kicks): kept for adopt_live_kicks.
     void kicked(const GifVertex &v, uint64_t xyoffset);
+
+    // A frame walked once (pcr_frame_walk.h): the frame's own walk's kicks kept from keep_live_kicks until
+    // end_live_kicks, which hands them out (Kick's bytes by kick number), outside a picture between
+    using KickList = std::vector<uint8_t>;
+    void keep_live_kicks();
+    KickList end_live_kicks();
+    // After take_frame: kicks made the frame's walked kicks, as a first walk's (begin_picture_again draws with them),
+    // when they are the frame's count. False otherwise (nothing changed).
+    bool adopt_live_kicks(KickList kicks);
+    // A frame's own walk made its pictures' (adopted), or why not (counted)
+    void frame_from_own_walk(FrameWalkRefused refused);
     // The walk's end, after its draws: false (counted) when its kicks were not the frame's count (moves taken by kicks
     // past the frame's are none)
     bool end_picture(uint32_t kicks);
@@ -100,6 +118,9 @@ private:
     bool active_ = false;
     uint32_t walked_serial_ = 0; // (the frame whose kicks kicks_ holds)
     bool walked_ = false;
+    // the frame's own walk's kicks (keep_live_kicks), and whether they are kept
+    KickList live_kicks_;
+    bool live_on_ = false;
     BetweenCounts counts_;
 };
 
