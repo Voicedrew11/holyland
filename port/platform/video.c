@@ -438,7 +438,15 @@ static SDL_Window *make_window(Uint32 flags) {
     if (getenv("KF4_OVERLAY_SHOT") != NULL) {
         flags |= SDL_WINDOW_HIDDEN;
     }
-    return SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, flags);
+    SDL_Window *made = SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
+                                        height, flags);
+    /* SDL2 (and sdl2-compat, per window) starts text input by default, which hands the keys to the
+       desktop's input method (IBus, Fcitx): its language box opens over the game and holds the keys,
+       and the player stops walking. Nothing here reads typed text (the overlay has no text fields) */
+    if (made != NULL) {
+        SDL_StopTextInput();
+    }
+    return made;
 }
 #endif
 
