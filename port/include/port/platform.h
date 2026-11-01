@@ -493,7 +493,7 @@ void port_interp_vsync(const uint64_t *privileged);
 /* A picture between at this point of the vblank (phase 0 to 1): the frame kept drawn again into the
    buffer shown, everything moved to where it is at that time (1 when it was drawn; 0: the buffer shown
    is right as it is, or nothing to draw). port_interp_end_vblank after the vblank's last. */
-int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes));
+int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, const void *data, size_t bytes));
 void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes));
 /* 1 while a frame kept is being drawn between (the vblank's pictures come from it) */
 int port_interp_active(void);

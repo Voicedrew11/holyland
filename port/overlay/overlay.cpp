@@ -556,6 +556,13 @@ void controls_page() {
             port_controls_set_mouse(sensitivity, invert);
             changed();
         }
+        bool lead = port_controls_mouse_lead() != 0;
+        if (ImGui::Checkbox("Instant mouse look", &lead)) {
+            port_controls_set_mouse_lead(lead);
+            changed();
+        }
+        tooltip("The pictures between the game's frames show the mouse's turn as soon as it is read, rather\n"
+                "when the game's frame that spends it is shown. Needs a frame rate of 60 or more.");
         static const int menu_actions[] = {-1, ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE,
                                            ACTION_START, ACTION_SELECT};
         static const char *const menu_labels[] = {"Nothing", "Cross", "Circle", "Square", "Triangle", "Start", "Select"};

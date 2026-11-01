@@ -175,6 +175,8 @@ int port_frame_interp(void);
 #define PORT_FRAME_INTERP_ARM 0xFFFE /* the header before the arm: models in the world, moved as they move */
 #define PORT_FRAME_INTERP_SKY 19    /* 1: the world's runs from here are the sky (map records that follow the
                                        player: flags bit 31), all moved by one move; 0: no longer */
+#define PORT_FRAME_INTERP_MOUSE_YAW 20   /* 20-21: the mouse turn spent when this camera was built (a float, radians, */
+#define PORT_FRAME_INTERP_MOUSE_PITCH 21 /* wrapped: port_mouse_lead_spent_total), for instant mouse look */
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max

@@ -15,6 +15,7 @@
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
+                    "instant_mouse_look": true,
                     "menu_mouse": ["cross", "circle", "cross"], "menu_side_keys": true,
                     "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
        "mods":     {"myus_necklace": false, "separate_run": false},
@@ -211,6 +212,7 @@ static void read_controls(const cJSON *controls) {
     }
     port_controls_set_mouse(read_number(controls, "mouse_sensitivity", 1.0, 0.05, 10.0),
                             read_bool(controls, "invert_y", 0));
+    port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 1));
     port_controls_set_menu_side_keys(read_bool(controls, "menu_side_keys", 1));
     for (i = 0; i < 3 && cJSON_IsArray(menu); i++) {
         const cJSON *item = cJSON_GetArrayItem(menu, i);
@@ -620,6 +622,7 @@ static void write_controls(cJSON *controls) {
     put(controls, "layout", cJSON_CreateString(port_settings.layout));
     put(controls, "mouse_sensitivity", cJSON_CreateNumber(port_controls_mouse_sensitivity()));
     put(controls, "invert_y", cJSON_CreateBool(port_controls_mouse_invert()));
+    put(controls, "instant_mouse_look", cJSON_CreateBool(port_controls_mouse_lead()));
     for (i = 0; i < 3; i++) {
         int action = port_controls_menu_mouse(i);
 

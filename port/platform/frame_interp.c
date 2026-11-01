@@ -65,6 +65,7 @@
 #include <stdint.h>
 
 #include "port/host.h"
+#include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/render.h"
 #include "port/unlocked_rate.h"
@@ -1278,13 +1279,14 @@ typedef struct {
     int mode;
     GifWalk paths[4];
     /* the marks */
-    float fields[19];
+    float fields[22];
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
     int alt;          /* the runs from here are the PS2 path's packets of native draws, which the GS leaves out
                          (--native-draw-compare native: between RD_ND_ALT_BEGIN and _END); not paired */
     Camera camera;    /* SCAN: the first world mark's camera */
+    MouseTurn mouse_spent; /* SCAN: and the mouse turn the game had spent then (instant mouse look) */
     Screen screen;
     Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
     float reflect_view[12];
@@ -1391,7 +1393,8 @@ static void mark(Walk *w, uint64_t value) {
     uint32_t bits = (uint32_t)value;
 
 
-    if (index >= PORT_FRAME_INTERP_VIEW && index < PORT_FRAME_INTERP_SCREEN + 6) {
+    if ((index >= PORT_FRAME_INTERP_VIEW && index < PORT_FRAME_INTERP_SCREEN + 6) ||
+        index == PORT_FRAME_INTERP_MOUSE_YAW || index == PORT_FRAME_INTERP_MOUSE_PITCH) {
         memcpy(&w->fields[index], &bits, 4);
         return;
     }
@@ -1438,6 +1441,8 @@ static void mark(Walk *w, uint64_t value) {
         const float *s = &w->fields[PORT_FRAME_INTERP_SCREEN];
 
         camera_from_fields(&w->camera, &w->fields[PORT_FRAME_INTERP_VIEW]);
+        w->mouse_spent.yaw_rad = w->fields[PORT_FRAME_INTERP_MOUSE_YAW];
+        w->mouse_spent.pitch_rad = w->fields[PORT_FRAME_INTERP_MOUSE_PITCH];
         if (w->have_reflect) {
             /* the reflection's view moves with the world's when it is the world's camera */
             int k;
@@ -2833,6 +2838,7 @@ typedef struct {
     Walk scan;        /* what the walk found in it */
     uint32_t shown;   /* the buffer shown at the vblank that kept it */
     Camera before;    /* the camera of the frame shown then */
+    MouseTurn mouse_before; /* and the mouse turn it had spent */
     int have_before;
     const Objects *objects, *objects_before; /* its runs, and the frame's before (NULL: none) */
     Flat *flat;                    /* its 2D items, paired with the frame before's */
@@ -2857,6 +2863,7 @@ static Uploads *uploads_new = &uploads_new_frame;
 static Pending pending; /* a frame drawn and not yet shown (size 0: none) */
 static size_t pending_room;
 static Camera last_camera; /* the camera of the last frame drawn */
+static MouseTurn last_mouse_spent; /* and the mouse turn it had spent */
 static int last_camera_set;
 static uint8_t *copy;
 static size_t copy_room;
@@ -3125,6 +3132,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.scan = w;
         pending.shown = shown;
         pending.before = last_camera;
+        pending.mouse_before = last_mouse_spent;
         pending.have_before = last_camera_set;
         pending.objects = objects_last;
         pending.objects_before = objects_before_set ? objects_before : NULL;
@@ -3158,6 +3166,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         }
     }
     last_camera = w.camera;
+    last_mouse_spent = w.mouse_spent;
     last_camera_set = 1;
 }
 
@@ -3534,19 +3543,42 @@ static void outside_check(const Camera *between, double t, double phase, int gpu
     fflush(log);
 }
 
-int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes)) {
+/* Instant mouse look (port/include/port/mouse_lead.h): the camera t of the way turned on by the mouse's turn that
+   it does not show yet. 0 when there is none to speak of. */
+#define MOUSE_LEAD_LEAST_RAD 1e-5 /* (a hundredth of the turn of a pixel at the least sensitivity) */
+
+static int camera_lead(Camera *c, double t, double picture_vblank) {
+    MouseTurn ahead = port_mouse_lead_ahead(pending.mouse_before, pending.scan.mouse_spent, t, picture_vblank);
+    int row;
+
+    if (fabs(ahead.yaw_rad) < MOUSE_LEAD_LEAST_RAD && fabs(ahead.pitch_rad) < MOUSE_LEAD_LEAST_RAD) {
+        return 0;
+    }
+    mouse_lead_turn_view(c->r, ahead);
+    for (row = 0; row < 3; row++) {
+        c->t[row] = -(c->r[row][0] * c->eye[0] + c->r[row][1] * c->eye[1] + c->r[row][2] * c->eye[2]);
+    }
+    return 1;
+}
+
+int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, const void *data, size_t bytes)) {
     Camera between;
     double t;
+    int led;
 
     if (!port_interp_active()) {
         return 0;
     }
     t = (pending.age + phase) * 0.5;
-    if (t <= 0 || t >= 1) {
-        return 0; /* the frame shown, as the game drew it */
+    if (t < 0 || t >= 1) {
+        return 0;
     }
     if (!camera_between(&pending.before, &pending.scan.camera, t, &between)) {
         return 0;
+    }
+    led = camera_lead(&between, t, (double)vblank + phase);
+    if (t == 0 && !led) {
+        return 0; /* the frame shown, as the game drew it (turned by the mouse, it is drawn again as the others) */
     }
     if (pending.gpu == 0) {
         pending.gpu = gpu_wanted() && gpu_frame(&between, t, send) ? 1 : -1;

@@ -1447,7 +1447,7 @@ void port_gs_run_vsync(void) {
         /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
         own_shown = interp_phases[0] == 0 || !interp_live;
         if (interp_live && (own_shown || dump)) {
-            port_interp_picture(0, replay_gif);
+            port_interp_picture(request->vblank, 0, replay_gif);
         }
         interp_on = 1;
     } else {
@@ -1517,7 +1517,7 @@ void port_gs_run_vsync(void) {
                 interp_behind++;
                 continue;
             }
-            if (port_interp_picture(interp_phases[i], replay_gif)) {
+            if (port_interp_picture(request->vblank, interp_phases[i], replay_gif)) {
                 present_extra(request, interp_phases[i], more, dump);
             }
         }

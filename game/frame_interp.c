@@ -16,6 +16,8 @@
 
 #include <string.h>
 
+#include "port/mouse_lead.h"
+
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int reg, s64 value);
 void Packet_EndGsRegisters(void);
@@ -76,10 +78,14 @@ void FrameInterp_MarkCamera(int projection, int mode) {
         return;
     }
     if (mode != 2) {
+        MouseTurn spent = port_mouse_lead_spent_total(); /* (instant mouse look: what this camera has spent) */
+
         Packet_BeginGsRegisters();
         for (i = 0; i < 12; i++) {
             add_float(PORT_FRAME_INTERP_VIEW + i, world_view_matrix[view_fields[i]]);
         }
+        add_float(PORT_FRAME_INTERP_MOUSE_YAW, (f32)spent.yaw_rad);
+        add_float(PORT_FRAME_INTERP_MOUSE_PITCH, (f32)spent.pitch_rad);
         Packet_EndGsRegisters();
     }
     Packet_BeginGsRegisters();

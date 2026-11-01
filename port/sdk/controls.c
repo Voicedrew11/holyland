@@ -43,6 +43,7 @@
 #include "port/controls.h"
 #include "port/debug.h"
 #include "port/host.h"
+#include "port/mouse_lead.h"
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/savestate.h"
@@ -258,6 +259,7 @@ static int menu_mouse[3];
 static int menu_side_keys;
 static double sensitivity;
 static int invert_y;
+static int mouse_lead = 1; /* instant mouse look (port/include/port/mouse_lead.h) */
 
 static void reset_layout(int layout) {
     memcpy(bindings[layout], default_bindings[layout], sizeof(bindings[layout]));
@@ -349,6 +351,30 @@ void port_controls_set_mouse(double new_sensitivity, int new_invert_y) {
     invert_y = new_invert_y != 0;
 }
 
+int port_controls_mouse_lead(void) {
+    return mouse_lead;
+}
+
+void port_controls_set_mouse_lead(int on) {
+    mouse_lead = on != 0;
+}
+
+/* The mouse motion not yet spent, as the next port_mouse_look will give it, to instant mouse look (nothing
+   while it is off: then nothing is spent there either, and no picture is turned) */
+static double held_turn(double turn) {
+    return turn < -MAX_TURN ? -MAX_TURN : turn > MAX_TURN ? MAX_TURN : turn;
+}
+
+static void lead_waiting(void) {
+    MouseTurn waiting = {0, 0};
+
+    if (mouse_lead) {
+        waiting.yaw_rad = held_turn(pc.yaw);
+        waiting.pitch_rad = held_turn(pc.pitch);
+    }
+    port_mouse_lead_waiting(waiting, port_vblank_count());
+}
+
 /* ---- Layouts ---------------------------------------------------------------------------------- */
 static const char *const layout_names[CONTROLS_LAYOUTS] = {"ps2", "verdite"};
 
@@ -407,6 +433,9 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
 
     *yaw = *pitch = 0.0f;
     if (!port_controls_verdite() || port_options.record_input != NULL) {
+        MouseTurn none = {0, 0};
+
+        port_mouse_lead_waiting(none, port_vblank_count()); /* (no mouse look: nothing ahead) */
         return 0;
     }
     pc.seen_look = 1;
@@ -414,13 +443,21 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     pc.look_gameplay = gameplay;
     if (!gameplay || !pc.captured) {
         pc.yaw = pc.pitch = 0.0;
+        lead_waiting();
         return 0;
     }
-    y = pc.yaw < -MAX_TURN ? -MAX_TURN : pc.yaw > MAX_TURN ? MAX_TURN : pc.yaw;
-    p = pc.pitch < -MAX_TURN ? -MAX_TURN : pc.pitch > MAX_TURN ? MAX_TURN : pc.pitch;
+    y = held_turn(pc.yaw);
+    p = held_turn(pc.pitch);
     pc.yaw = pc.pitch = 0.0;
     if (y == 0.0 && p == 0.0) {
         return 0;
+    }
+    if (mouse_lead) {
+        MouseTurn spent = {y, p};
+
+        port_mouse_lead_spent(spent); /* (out of what waited: the hand is where it was) */
+    } else {
+        lead_waiting();
     }
     *yaw = (float)y;
     *pitch = (float)p;
@@ -710,6 +747,7 @@ static void set_captured(int captured) {
     }
     pc.captured = captured;
     pc.yaw = pc.pitch = 0.0;
+    lead_waiting();
     SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
     SDL_GetRelativeMouseState(NULL, NULL); /* motion before the change is dropped */
     pc.indicator_time = SDL_GetTicks() | 1u;
@@ -960,6 +998,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     } else {
         pc.yaw = pc.pitch = 0.0;
     }
+    lead_waiting();
     if (!gameplay) {
         pressed |= menu;
         if (pc.wheel > 0) {

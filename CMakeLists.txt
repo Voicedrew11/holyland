@@ -91,6 +91,7 @@ add_library(kf4_port STATIC
     port/platform/video.c
     port/platform/refresh_clock.c
     port/platform/unlocked_rate.c
+    port/platform/mouse_lead.c
     port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/ipu.c
@@ -527,6 +528,16 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME refresh_clock COMMAND refresh_clock_test)
+endif()
+
+# Instant mouse look's turn of the pictures between (port/platform/mouse_lead.c)
+add_executable(mouse_lead_test tests/mouse_lead_test.c port/platform/mouse_lead.c port/math/libvu0.c)
+target_include_directories(mouse_lead_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(mouse_lead_test PRIVATE m pthread)
+endif()
+if(KF4_TESTS)
+    add_test(NAME mouse_lead COMMAND mouse_lead_test)
 endif()
 
 # --frame-rate unlocked's rate from whether the renderer keeps up (port/platform/unlocked_rate.c)
