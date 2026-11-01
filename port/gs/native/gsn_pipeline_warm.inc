@@ -17,6 +17,12 @@
 
 #include "gsn_pipeline_list.h" // (the shipped list: gsn_pipeline_list[])
 
+// (gsn_pipeline_set.inc: every pipeline the draws can ask for, worked out from the code)
+struct PwJob;
+void ps_jobs(std::vector<PwJob> &jobs, std::set<uint64_t> &taken, std::vector<ImageHandle> &images);
+void ps_on_play_compile(const DeferredPipelineCompile &c, bool compute, int64_t ns);
+bool ps_only();
+
 // a compatible render pass: what Device::request_render_pass hashes, and the samples it makes the pass with
 struct PwPass {
     uint32_t colours;
@@ -53,11 +59,14 @@ struct PipelineWarm {
     std::atomic<int> total{0}, done{0}, building{0}, ready{0}, stale{0};
     std::atomic<bool> running{false}, stop{false};
     double seconds_check = 0, seconds_build = 0;
-    // made in play: by a draw that waited (and those not on any list)
-    std::atomic<uint64_t> play_made{0}, play_ns{0}, play_new{0};
+    // made in play and not on any list (those made by a draw that waited: port_profile_compiles)
+    std::atomic<uint64_t> play_new{0};
     std::atomic<uint64_t> made{0}; // every pipeline made (the cache and the list are written a while after it moves)
     uint64_t made_saved = 0;
 } pw;
+// a pipeline made in play gets a line in the log only when it took longer than this (the rest are counted: --stats,
+// the profiler)
+const int64_t PW_LOG_NS = 5000000;
 thread_local bool pw_starting; // (pw_start's thread, holding pw.lock: Granite's hooks leave it be)
 
 std::string pw_hex(const void *data, size_t size) {
@@ -171,13 +180,14 @@ void pw_read_line(const std::string &line, bool shipped) {
     }
 }
 
-// The data folder's list, written again when it has more (the shaders and passes its lines name, then its lines)
-void pw_save() {
+// The data folder's list as text when it has more than was last taken (the shaders and passes its lines name, then its
+// lines); empty otherwise. Written by the cache writer's thread (gsn.cpp, "The pipeline cache").
+std::string pw_list_text() {
     std::string text;
     {
         std::lock_guard<std::mutex> hold(pw.lock);
         if (pw.path.empty() || pw.unshipped == pw.saved) {
-            return;
+            return {};
         }
         std::set<uint64_t> shaders, passes;
         std::string lines;
@@ -212,15 +222,7 @@ void pw_save() {
         text += lines;
         pw.saved = pw.unshipped;
     }
-    std::string temp = pw.path + ".new";
-    if (FILE *f = fopen(temp.c_str(), "wb")) {
-        bool written = fwrite(text.data(), 1, text.size(), f) == text.size();
-        written = fclose(f) == 0 && written;
-        if (written) {
-            remove(pw.path.c_str());
-            rename(temp.c_str(), pw.path.c_str());
-        }
-    }
+    return text;
 }
 
 // ---- Granite's hooks (cmake/granite_pipeline_warm.inc) -----------------------------------------------------------
@@ -276,13 +278,10 @@ void pw_on_compile(Device *device, const DeferredPipelineCompile &c, bool comput
     if (!sync) {
         return; // (the start's own)
     }
-    pw.play_made++;
-    pw.play_ns += uint64_t(ns);
-    if (port_profile_on()) {
-        port_profile_add(PROFILE_COMPILE, uint64_t(ns));
-    }
+    port_profile_compile(uint64_t(ns)); // (counted for --stats and the profiler)
     hitch_compiles++;
     hitch_compile_ns += uint64_t(ns);
+    ps_on_play_compile(c, compute, ns);
     PwEntry e;
     e.tag = pw_tag();
     e.hash = c.hash;
@@ -320,7 +319,7 @@ void pw_on_compile(Device *device, const DeferredPipelineCompile &c, bool comput
     pw.entries.push_back(e);
     pw.unshipped++;
     pw.play_new++;
-    if (!pw.path.empty()) {
+    if (!pw.path.empty() && !ps_only() && ns > PW_LOG_NS) {
         fprintf(stderr, "[gsn] a pipeline not on the list was made in play (%.1f ms): kept in the data folder's list\n",
                 double(ns) / 1e6);
     }
@@ -501,8 +500,8 @@ void pw_start(const std::string &list_path) {
             }
         }
         pw.saved = pw.unshipped;
-        const char *env = getenv("KF4_GSN_WARM"); // (0: nothing made ahead; the lists are still kept)
-        if (env && atoi(env) == 0) {
+        const char *env = getenv("KF4_GSN_WARM"); // (0: nothing made ahead; the lists are still kept. set: the set alone)
+        if (env && strcmp(env, "0") == 0) {
             return;
         }
         // this settings' pipelines, made again from their lines and checked by their hashes
@@ -511,7 +510,7 @@ void pw_start(const std::string &list_path) {
         std::vector<ImageHandle> images;
         VkPipelineCache cache = CommandBuffer::holyland_pipeline_cache(gs->device);
         for (const PwEntry &e : pw.entries) {
-            if (e.tag != tag || !taken.insert(e.hash).second) {
+            if (ps_only() || e.tag != tag || !taken.insert(e.hash).second) {
                 continue;
             }
             PwJob j;
@@ -550,6 +549,7 @@ void pw_start(const std::string &list_path) {
             }
             jobs.push_back(j);
         }
+        ps_jobs(jobs, taken, images); // (the set's not on the lists)
     }
     if (jobs.empty()) {
         return;

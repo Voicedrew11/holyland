@@ -289,6 +289,14 @@ typedef struct {
     GsnInterpMove *moves;  /* (malloc'd) */
     uint8_t *stream;       /* (malloc'd) GIF packets: a uint32_t path, a uint32_t size, then the bytes */
     size_t stream_bytes;
+    /* What the stream did to the frame's packets, for a renderer that keeps the frame's own walk and makes the
+       stream's of it (the PC renderer: pcr.cpp's Intake); the native GS reads none of it */
+    uint64_t packet_bytes;          /* the frame's packets as the game sent them (the pending frame's), in bytes */
+    uint32_t draw_fbp, shown_fbp;   /* the buffer the frame drew into (FBP), and the one shown, which the stream draws
+                                       into instead (FRAME, TEX0 and BITBLTBUF naming draw_fbp name shown_fbp) */
+    uint32_t uploads_asked_again;   /* 1: its uploads into anything but draw_fbp are asked for again (0x7C) */
+    uint32_t shown_kept;            /* 1: the frame shown is kept (0xF2), and the stream's records that set TEX0 to
+                                       shown_fbp read that copy (between 0xF4 and 0xF5) */
 } GsnInterpFrame;
 typedef struct {
     uint64_t serial;   /* the frame's */
@@ -329,6 +337,7 @@ typedef struct {
        CLUT written since; replays that named a target the recording made and kept, or made and dropped (its own) */
     uint64_t interp_rerecord[8];
     uint64_t interp_kept_targets, interp_own_targets;
+    uint64_t interp_newer_settled; /* replays that first made a multisampled target's two images the same (interp_settle_newer) */
     /* graphics pipelines bound (Granite's vkCmdBindPipeline, all of the GS's thread's and the presenter's), and those of
        the pictures between drawn from the packets and from the recording; the draws of those from the recording */
     uint64_t pipeline_binds, interp_record_binds, interp_replay_binds, interp_replay_draws;
@@ -350,6 +359,9 @@ typedef struct {
     uint64_t ns_backend;
     uint64_t loads_before_pass; /* targets loaded from VRAM before the render pass under way, not ending it */
     uint64_t loads_scaled;      /* target loads sent at the PS2's size and scaled on the GPU (load_target_rect) */
+    /* images let go by the back end's thread (let_go: the last reference dropped there), and images made without
+       Granite's own layout change (general_image: UNDEFINED, the change in the GS's stream) */
+    uint64_t images_let_go, images_untransitioned;
 } GsnStats;
 enum {
     GSN_WHY_OTHER, GSN_WHY_TARGET, GSN_WHY_MSAA, GSN_WHY_BLEND, GSN_WHY_TEXTURE, GSN_WHY_DECODE, GSN_WHY_UPLOAD,

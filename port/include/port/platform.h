@@ -40,6 +40,9 @@ typedef struct {
     int renderer_modern;
     /* --renderer fast: modern, with the PC renderer's parts built so far (docs/port/PC_RENDERER.md) */
     int renderer_fast;
+    /* --renderer pc (its development name; docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native
+       GS"): the PC renderer (port/gs/pc/) opened in place of the native GS, renderer PORT_RENDERER_NATIVE */
+    int renderer_pc;
     /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
        --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
        (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
@@ -139,9 +142,17 @@ typedef struct {
     /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
        PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
        or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
-       live from the overlay. */
+       live from the overlay. PORT_FRAME_RATE_UNLOCKED: as many as the renderer keeps up with
+       (port/include/port/unlocked_rate.h), no more than frame_rate_cap a second (0: no cap). */
 #define PORT_FRAME_RATE_MONITOR 1000
+#define PORT_FRAME_RATE_UNLOCKED 1001
     int frame_rate;
+    int frame_rate_cap;
+    int frame_rate_cap_forced; /* --frame-rate-cap: this run's, whatever settings.json says */
+    /* --tearing or settings.json: unlocked's swapchain immediate (tearing, the least latency; a VRR screen's), not
+       mailbox (port/platform/present_vk.cpp) */
+    int tearing;
+    int tearing_forced;
     /* --present-scaling, --present-sharpen: how the picture is scaled to the window (port_video_scaling,
        port/platform/video.c), this run's whatever settings.json says (-1: the settings'); --dump-present
        WxH: dumps write the picture as a window of that size shows it */
@@ -430,6 +441,10 @@ void port_gs_set_native_shine_exact(int exact);
 /* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
    frame */
 void port_gs_set_native_draw(int kinds, int compare);
+/* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
+   PC renderer only when it moves them in the pictures between itself (port_interp_on_gpu; docs/port/PC_RENDERER.md,
+   step 5) or there are none (--frame-rate 30); the game's packets otherwise */
+int port_gs_native_draws_now(void);
 
 #define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
@@ -444,7 +459,7 @@ int port_gs_enabled(void);
    again instead of sending them (port/platform/frame_interp.c) */
 int port_gs_replay_uploads(void);
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"): 1 when
-   the native GS draws them (alone, and not KF4_INTERP_CPU); the frame (a GsnInterpFrame, handed over:
+   the native GS draws them (alone), or the PC renderer (not KF4_PC_BETWEEN=0); the frame (a GsnInterpFrame, handed over:
    the native GS frees it) and each picture (a GsnInterpPicture) of port/gs/native/gsn.h */
 int port_gs_interp_gpu(void);
 void port_gs_interp_frame(void *frame);
@@ -482,11 +497,19 @@ int port_interp_picture(double phase, void (*send)(int path, const void *data, s
 void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes));
 /* 1 while a frame kept is being drawn between (the vblank's pictures come from it) */
 int port_interp_active(void);
+/* 1 when the pictures between are drawn on the GPU ("On the GPU": port_gs_interp_gpu, not KF4_INTERP_STILL's check nor
+   KF4_INTERP_CPU) */
+int port_interp_on_gpu(void);
 /* The pictures a second (port_options.frame_rate, the screen's for PORT_FRAME_RATE_MONITOR), and the
    times in vblank (0 to 1) of the pictures shown in it: up to max, their count returned (the
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
+/* (the controller's thread) --frame-rate unlocked: a game vblank judged, behind 1 when the native GS was behind
+   as it began (port/include/port/unlocked_rate.h); port_interp_unlocked_at_floor: 1 when the rate is as low as it
+   goes (gs.c's cut of the pictures between then judges); port_interp_print_unlocked: its --stats line */
+void port_interp_unlocked_vblank(uint64_t vblank, int behind);
+int port_interp_unlocked_at_floor(void);
 /* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
    (0: none; the F3 counter's "CUT") */
 int port_interp_cut(void);
@@ -536,6 +559,16 @@ void port_gs_present_scale(int width, int height, float sharpen);
 float port_video_sharpen(void);
 /* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
 int port_video_refresh_rate(void);
+/* (any thread) the window's screen refreshed at seen_s (port_wall_seconds): its vblank as the system knows it
+   (port/include/port/screen_vblank.h), or the KF4_PRESENT_SIM screen's. The screen's refresh clock learns from
+   them (port/include/port/refresh_clock.h). */
+void port_video_refresh_seen(double seen_s);
+/* (the controller's thread) --frame-rate monitor: the times in the vblank (0 to 1) of its pictures, one a
+   refresh of the screen, each the world a little before the refresh it is shown at, by as much as the
+   renderer's pictures need (port/platform/video.c, "Pictures timed by the screen's refreshes";
+   port_interp_schedule). Up to max, their count returned; -1 while the refresh clock is not sure of the
+   screen's refreshes. */
+int port_video_refresh_schedule(uint64_t vblank, double *phases, int max);
 /* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
 int port_video_simulated(void);
 /* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */

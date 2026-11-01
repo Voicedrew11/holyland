@@ -881,3 +881,7 @@ bool sat_blend_exact() {
     snt.fill = false;
     return fill;
 }
+// (gsn_pc_draw.inc's snapshot) Whether sat_blend_exact would answer true, without taking the answer
+bool sat_fill_waiting() {
+    return snt.fill;
+}

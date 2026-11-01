@@ -310,6 +310,11 @@ void make_call(CommandBuffer &c, const Recording &r, const Recording::Op &op, Re
         c.clear_image(image(a.image), a.value);
         break;
     }
+    case OP_IMAGE_LAYOUT: {
+        const ArgImageLayout &a = r.args<ArgImageLayout>(op);
+        Cmd::image_layout_raw(c, image(a.image), a.from, a.to);
+        break;
+    }
     case OP_INTERP_KICKS:
         if (replaying) {
             const ReplayJob &j = replaying->job;
@@ -448,6 +453,9 @@ void backend_make(Recording &s) {
             break;
         case OP_REPLAY:
             replay_ops(*b.cmd, s.replays[s.args<ArgValues>(op).v[0]]);
+            break;
+        case OP_RELEASE:
+            // (the images it holds let go when the stream is cleared, here: let_go)
             break;
         case OP_RECORDING_BINDS:
             if (s.args<ArgValues>(op).v[0]) {

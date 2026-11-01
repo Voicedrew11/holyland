@@ -51,6 +51,18 @@ void port_profile_picture(void);
 void port_profile_vblank(void);
 ProfileCounters port_profile_read(void);
 
+/* The pipelines made while a draw waited (a compile in play), since the start: counted whether the panel is
+   open or not, so that one line says how many there were and how long they took */
+typedef struct {
+    uint64_t count;
+    uint64_t ns;         /* all of them */
+    uint64_t longest_ns; /* the longest one */
+} ProfileCompiles;
+/* A pipeline made while a draw waited, ns long: counted, and while the panel is open its time is added to
+   PROFILE_COMPILE */
+void port_profile_compile(uint64_t ns);
+ProfileCompiles port_profile_compiles(void);
+
 /* A stall worth naming (a picture over twice its time): kept, the last PROFILE_HITCHES of them */
 #define PROFILE_HITCHES 8
 #define PROFILE_HITCH_TEXT 160

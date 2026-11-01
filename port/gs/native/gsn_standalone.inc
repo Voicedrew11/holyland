@@ -371,6 +371,7 @@ struct SaTable {
     uint64_t gen = 1;
     // the CLUT buffer as the table has it (sa_clut_load): TEX0's CLD loads mirrored, from the uploads
     uint16_t clut[512] = {};
+    uint64_t clut_gen = 1; // (bumped when clut changes: gsn_pc_draw.inc's materials are good while it stays)
     uint32_t clut_cbp[2] = {UINT32_MAX, UINT32_MAX};
     uint64_t clut_gs[8] = {};     // (bit k: halfword k is not the table's: loaded from the GS's VRAM, or not yet)
     uint64_t clut_packed[8] = {}; // (bit k: halfword k came from a texture pack's chunk)
@@ -405,6 +406,8 @@ struct Sa {
     // (pc world, gsn_pc_world.inc) the draw being met is the PC renderer's (its map records); the corners pending after
     // a draw are a taken draw's; the batch being drawn is (sa_flush: a batch's corners are drawn after their draws)
     bool pc_take = false, pending_pc = false, batch_pc = false;
+    // (--renderer fast, gsn_pc_draw.inc) the draw being met is drawn by the PC renderer from its meshes, batch by batch
+    bool pcd = false;
     // every ported kind (T1): map records and the sky, objects, items, gold, entities, the arm and the held
     // weapon (and its trail), effects, shadows, the picked item, and (T3) the reflection's water, reading the
     // reflection the scene drew (gsn_scene_targets.inc). Not the screen passes (the GS's 2D). (KF4_SA_KINDS: a
@@ -532,6 +535,7 @@ bool sat_stencil_number(uint32_t *gen);
 bool sat_flush();
 bool sat_fill();
 bool sat_blend_exact();
+bool sat_fill_waiting();
 void sat_gs_batch();
 bool sat_transfer(uint32_t dir);
 void sat_sync();
@@ -1199,6 +1203,7 @@ void sa_clut_load(uint64_t tex0) {
         if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
             flush_batch();
         }
+        sat.clut_gen += changed;
         for (uint32_t i = 0; i < 256; i++) {
             sat.clut[i] = uint16_t(values[i]);
             sat.clut[256 + i] = uint16_t(values[i] >> 16);
@@ -1231,6 +1236,7 @@ void sa_clut_load(uint64_t tex0) {
     if (changed && !gs->verts.empty() && (sa.in_draw ? sa.draw_on : sa.pending)) {
         flush_batch();
     }
+    sat.clut_gen += changed;
     for (uint32_t k = 0; k < n; k++) {
         uint64_t bit = uint64_t(1) << (at[k] % 64);
         sat.clut[at[k]] = uint16_t(value[k]);
@@ -1481,6 +1487,8 @@ void sa_verify(uint64_t tex0, uint32_t levels, const uint32_t *mip_tbp, const ui
 
 // The batch's texture (flush_batch's, "the texture"): from the table where all of it is the uploads';
 // else the GS's (a render target, or VRAM)
+// (gsn_pc_draw.inc) The batch has no corners: its texture is read whole, as a picture between's
+bool sa_reads_whole = false;
 void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_t tex1, uint64_t clamp, bool fst,
                 const Target *color) {
     uint32_t tbp = bits(tex0, 0, 14), tbw = bits(tex0, 14, 6), tpsm = bits(tex0, 20, 6);
@@ -1503,7 +1511,7 @@ void sa_texture(SaTexture &st, Push &push, uint32_t ctxt, uint64_t tex0, uint64_
     // the rows and columns the batch reads (flush_batch's rows_read, cols_read; in a picture between all)
     auto read_extent = [&](bool across) -> uint32_t {
         uint32_t n = across ? 1u << tw : 1u << th;
-        if (interp.active) {
+        if (interp.active || sa_reads_whole) {
             return n;
         }
         float lo = 0.0f, hi = 0.0f;
@@ -1946,18 +1954,23 @@ void sa_resample_pass(const Image &dst, const Image &src, bool depth, uint32_t y
     sa_stats.resampled++;
 }
 
+// The scene's samples beside GS targets of target (--scene-msaa, else the targets'; those the device has)
+uint32_t sa_samples_for(uint32_t target) {
+    uint32_t want = sa_wanted_samples ? sa_wanted_samples : target;
+    uint32_t n = 1;
+    while (n * 2 <= want && n < 8 && (msaa_samples_have & (n * 2))) {
+        n *= 2;
+    }
+    return sample_shading || n == target ? n : 1;
+}
+
 // (T2) The scene's scale and samples for a frame target: --scene-scale and --scene-msaa, or the GS's (the most
 // samples the GPU has up to those wanted; more than one only with sample-rate shading, which the copies need)
 void sa_shape(const Target &color, uint32_t *sx, uint32_t *sy, uint32_t *samples) {
     uint32_t w = sa_wanted_scale;
     *sx = (w & 0xFF) ? std::min(w & 0xFF, uint32_t(GSN_MAX_SCALE_X)) : color.sx;
     *sy = (w >> 8) ? std::min(w >> 8, 4u) : color.sy;
-    uint32_t want = sa_wanted_samples ? sa_wanted_samples : target_samples;
-    uint32_t n = 1;
-    while (n * 2 <= want && n < 8 && (msaa_samples_have & (n * 2))) {
-        n *= 2;
-    }
-    *samples = sample_shading || n == target_samples ? n : 1;
+    *samples = sa_samples_for(target_samples);
 }
 
 // (T2) Whether the scene has the GS frame target's shape (its scale and samples): its pictures are copied as they are
@@ -2847,6 +2860,9 @@ void sa_group_draw() {
 
 // ---- The PC renderer's world (--renderer fast, P2): the map records kept and drawn by material (gsn_pc_world.inc) ---
 #include "gsn_pc_world.inc"
+
+// ---- The PC renderer's draws (--renderer fast, P7): a world draw's batches from their meshes (gsn_pc_draw.inc) -------
+#include "gsn_pc_draw.inc"
 
 // ---- The frame's batches' work kept for its first picture between (rc/own) ------------------------------
 // A frame's first picture between draws the frame's packets again (gsn.cpp, "Pictures between on the GPU"), and so
@@ -4014,7 +4030,7 @@ bool sa_draw_batch(int *why) {
     // where the two samples differ by an odd amount). KF4_SA_BLEND_COPY=1 (tests): the copies between passes.
     bool in_pass = shader_blend && !blend_copy && !per_sample && nd.active && !nd.pass_active && !nd.strip_active &&
                    !sa.gs3d && !sa.gs_water && !ndw_batch() && sa.programs_in[0][sa.samples > 1 ? 1 : 0] &&
-                   !wide(*sa.color);
+                   (!wide(*sa.color) || msaa_blend_in_pass()); // (16-bit: fast's, gsn.cpp's msaa_blend_in_pass)
     in_pass = in_pass && all_native;
     bool copied_in_pass = false;
     uint64_t bound_pass = UINT64_MAX; // (the render pass the run's bindings were made in)
@@ -4096,7 +4112,7 @@ bool sa_draw_batch(int *why) {
             Push p = push;
             p.flags |= draws[0].select << F_PASS_SHIFT;
             p.src_offset[0] = int32_t(sa.samples);
-            p.lod_k = 255.0f;
+            p.lod_k = wide(*sa.color) ? 65535.0f : 255.0f;
             c.push_constants(&p, 0, sizeof(p));
             sa_draw_range(c, false, count, first, in_pass, true);
             in_pass_barrier();
@@ -4135,7 +4151,7 @@ bool sa_draw_batch(int *why) {
                     struct {
                         int32_t samples;
                         float scale;
-                    } pp = {int32_t(sa.samples), 255.0f};
+                    } pp = {int32_t(sa.samples), wide(*sa.color) ? 65535.0f : 255.0f};
                     c.push_constants(&pp, 0, sizeof(pp));
                 }
                 c.draw(3);
@@ -4374,6 +4390,7 @@ bool sa_kind(const RdDraw &d) {
 void sa_draw_begin(uint64_t value) {
     sa.in_draw = false;
     sa.pc_take = false;
+    sa.pcd = false;
     if (!sa.on) {
         return;
     }
@@ -4381,9 +4398,14 @@ void sa_draw_begin(uint64_t value) {
     RdCamera cam;
     // (sa's, not a static here: one made on the GS's thread, after main's atexit(print_stats), was gone at
     // the exit while the GS's thread still drew: the heap broken at the end of a modern run)
-    bool scene = rd_fetch(value, d, cam, sa.fetched) && sa_kind(d);
+    bool scene = nd_fetch(value, d, cam, sa.fetched) && sa_kind(d); // (a snapshot's draw: the frame's, gsn_pc_draw.inc)
     sa.fetched.clear();
-    sa.pc_take = pc_world_mode && scene && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
+    sa.pcd = scene && pcd_takes(d);
+    if (sa.pcd) {
+        pcd.draws++;
+    }
+    // (a draw the PC renderer draws is not the PC world's: its batches are drawn as met, none kept for the pictures between)
+    sa.pc_take = pc_world_mode && scene && !sa.pcd && pc_world_takes(d.kind, d.program) && !(d.flags & RD_DRAW_FAR_Z);
     if (sa.pc_take) {
         sa_group_draw_parts(); // (pc world: the map's records are kept by the PC renderer, not drawn after the parts)
     } else if (!scene || d.program != 0x280) {
@@ -4394,6 +4416,10 @@ void sa_draw_begin(uint64_t value) {
     }
     sa.in_draw = true;
     sa.draw_on = scene;
+}
+// (nd_draw) Whether the PC renderer draws the draw being met (gsn_pc_draw.inc)
+bool sa_pcd_draw() {
+    return sa.on && sa.in_draw && sa.pcd;
 }
 void pc_kept_draw_end();
 bool pc_between_cuts();
@@ -4534,6 +4560,16 @@ void sa_sync() {
     }
 }
 
+// The scene's depth format: with a stencil, for the shadows (KF4_SA_NO_STENCIL=1, tests: without, DATE as the GS)
+VkFormat sa_depth_format_wanted() {
+    const char *no_stencil = getenv("KF4_SA_NO_STENCIL");
+    bool stencil = !(no_stencil && atoi(no_stencil) > 0) &&
+                   gs->device->image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                                         VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                                             VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT);
+    return stencil ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+}
+
 void sa_held_forget(); // (gsn_composite.inc)
 // (gsn_set_standalone, at a vblank) on or off
 void sa_switch(bool on) {
@@ -4553,13 +4589,8 @@ void sa_switch(bool on) {
         if (kinds && *kinds) {
             sa.kinds = uint32_t(strtoul(kinds, nullptr, 0));
         }
-        // the scene's depth with a stencil, for the shadows (KF4_SA_NO_STENCIL=1, tests: without, DATE as the GS)
-        const char *no_stencil = getenv("KF4_SA_NO_STENCIL");
-        sa.stencil = !(no_stencil && atoi(no_stencil) > 0) &&
-                     gs->device->image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT,
-                                                           VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
-                                                               VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT);
-        VkFormat format = sa.stencil ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+        VkFormat format = sa_depth_format_wanted();
+        sa.stencil = format == VK_FORMAT_D32_SFLOAT_S8_UINT;
         if (format != sa.depth_format) {
             sa.depth_format = format;
             sa.color.reset(); // (the targets made again at the next acquire)
@@ -4981,6 +5012,7 @@ void sa_print_stats() {
     if (pc_world_mode) {
         pc_world_print_stats(); // (gsn_pc_world.inc)
         pc_between_print_stats();
+        pcd_print_stats(); // (gsn_pc_draw.inc)
     }
 }
 

@@ -18,7 +18,8 @@
                          --renderer-shown native shows the other, and --renderer-shown heatmap
                          where they differ); modern: native, with the scene drawn into targets of
                          its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
-                         on unless given)
+                         on unless given); pc: the PC renderer (port/gs/pc/, in work: docs/port/
+                         PC_RENDERER.md), none of the native GS's code
        --scene-scale N, --scene-msaa N
                          with --renderer modern, the scene (the world) at a scale (1 to 4) and samples
                          (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
@@ -132,12 +133,19 @@
        --dump-present WxH
                          --dump-frames writes the picture as a WxH window shows it with the best
                          scaling (and --present-sharpen)
-       --frame-rate 30|60|120|144|240|N|monitor
+       --frame-rate 30|60|120|144|240|N|monitor|unlocked
                          the opt-in higher frame rates: pictures between the game's 30 a second
                          in play, each drawn from the game's frame with the camera, the moving
                          models, the HUD, fades and scrolling textures moved to where they are at
                          that time (port/platform/frame_interp.c); monitor: the window's screen's
-                         refresh rate; 30, the PS2's, by default
+                         refresh rate; unlocked: as many as the renderer keeps up with (the
+                         swapchain mailbox with VSync, immediate without); 30, the PS2's, by default
+       --frame-rate-cap N
+                         unlocked no faster than N pictures a second (a few under a VRR screen's
+                         rate keeps it in its range); 0, no cap, by default
+       --tearing         unlocked's pictures shown at once, tearing (the swapchain immediate:
+                         the least latency, and a VRR screen's), not the newest at each
+                         refresh (mailbox, by default)
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -252,7 +260,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast] [--renderer-shown gs|native|heatmap]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast|pc] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
             "          [--upscaler off|bilinear|fsr3|dlss]\n"
@@ -260,7 +268,7 @@ static void usage(const char *program) {
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
             "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor|unlocked]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
@@ -431,6 +439,10 @@ static void parse_options(int argc, char **argv) {
             port_options.show_fps = port_options.show_fps_forced = 1;
             continue;
         }
+        if (strcmp(option, "--tearing") == 0) {
+            port_options.tearing = port_options.tearing_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--stats") == 0) {
             port_options.stats = 1;
             continue;
@@ -450,9 +462,10 @@ static void parse_options(int argc, char **argv) {
                         : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
                         : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
                         : both && strcmp(value, "fast") == 0 ? PORT_RENDERER_NATIVE
+                        : both && strcmp(value, "pc") == 0   ? PORT_RENDERER_NATIVE
                                                              : -1;
             if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern or fast" : " or heatmap", value);
+                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern, fast or pc" : " or heatmap", value);
                 exit(2);
             }
             if (both) {
@@ -460,6 +473,7 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer_forced = 1;
                 port_options.renderer_modern = strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0;
                 port_options.renderer_fast = strcmp(value, "fast") == 0;
+                port_options.renderer_pc = strcmp(value, "pc") == 0;
             } else {
                 port_options.renderer_shown = which;
                 port_options.renderer_heatmap = heatmap;
@@ -504,13 +518,23 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
         } else if (strcmp(option, "--frame-rate") == 0) {
-            port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
-            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&
+            port_options.frame_rate = strcmp(value, "monitor") == 0    ? PORT_FRAME_RATE_MONITOR
+                                      : strcmp(value, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
+                                                                       : atoi(value);
+            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED &&
                 (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
-                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...) or monitor, not %s\n", value);
+                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...), monitor or unlocked, not %s\n",
+                        value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--frame-rate-cap") == 0) {
+            port_options.frame_rate_cap = atoi(value);
+            if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap > 1000)) {
+                fprintf(stderr, "--frame-rate-cap wants 60 to 1000, or 0 for none, not %s\n", value);
+                exit(2);
+            }
+            port_options.frame_rate_cap_forced = 1;
         } else if (strcmp(option, "--draw-distance") == 0) {
             port_options.draw_distance = port_draw_distance_parse(value);
             if (port_options.draw_distance < 0) {
@@ -834,7 +858,7 @@ int port_invincible(void) {
 }
 
 int port_native_draw(int kind) {
-    return (port_options.native_draw & kind) != 0;
+    return (port_options.native_draw & kind) != 0 && port_gs_native_draws_now();
 }
 
 int port_native_draw_compare(void) {

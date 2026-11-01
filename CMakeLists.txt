@@ -89,6 +89,9 @@ add_library(kf4_port STATIC
     port/platform/frame_interp.c
     port/platform/field_frames.c
     port/platform/video.c
+    port/platform/refresh_clock.c
+    port/platform/unlocked_rate.c
+    port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/ipu.c
     port/platform/host_time.c
@@ -131,10 +134,18 @@ target_include_directories(kf4_port PRIVATE third_party/cjson)
 # native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the native
 # GS draws them (docs/port/NATIVE_DRAW.md)
 enable_language(CXX)
-add_library(kf4_render STATIC port/render/render.cpp)
+add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp)
 target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
+# the native draws' moves in the pictures between, for the PC renderer (port/render/part_moves.hpp): a library of its own
+# (C++20; the renderer core is C++14), with its test below
+add_library(kf4_part_moves STATIC port/render/part_moves.cpp)
+target_include_directories(kf4_part_moves PUBLIC port/include port/render)
+set_target_properties(kf4_part_moves PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_part_moves PRIVATE -Wall -Wextra -Wshadow)
+endif()
 target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
 # native GS (kf4_gs, built into tests without the port) adds to them as well
@@ -156,6 +167,22 @@ if(WIN32)
     target_link_libraries(kf4_port PUBLIC winmm)
 else()
     target_link_libraries(kf4_port PUBLIC m)
+endif()
+# The screen's vblanks for the refresh clock (port/platform/screen_vblank.c): the desktop compositor's on
+# Windows, the kernel's (libdrm, where it is) on Linux
+if(WIN32)
+    target_link_libraries(kf4_port PRIVATE dwmapi)
+elseif(NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBDRM QUIET IMPORTED_TARGET libdrm)
+    endif()
+    if(LIBDRM_FOUND)
+        target_compile_definitions(kf4_port PRIVATE KF4_HAVE_LIBDRM)
+        target_link_libraries(kf4_port PRIVATE PkgConfig::LIBDRM)
+    else()
+        message(STATUS "libdrm not found: the screen's vblanks are not known, and --frame-rate monitor times the pictures by the rate alone")
+    endif()
 endif()
 # SDL2 for the pad (and, from step 2, the window); without it the pad takes only a pad script
 option(KF4_USE_SDL "Use SDL2 for the pad" ON)
@@ -213,6 +240,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # and with the hooks of the native GS's pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
     include(cmake/granite_pipeline_warm.cmake)
     kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    kf4_granite_pipeline_cache_locks(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # and the native GS (port/gs/native/), on the same Vulkan layer
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c
@@ -237,6 +265,17 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
+    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md: --renderer pc), on Granite as well, with none of the
+    # native GS's code: of port/gs/native it takes gsn.h's plain types only
+    # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
+    file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
+    list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
+    add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
+    target_include_directories(kf4_pc PRIVATE port/include port/gs/native PUBLIC port/gs/pc)
+    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)
+    target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
+    set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
+    target_link_libraries(kf4_port PUBLIC kf4_pc)
     # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the native GS's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
     if(TARGET imgui)
@@ -433,7 +472,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
     add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c tools/gsreplay/nd_oracle_700.c port/platform/vif1.c port/platform/vu1.c
-        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/lz4_block.c)
+        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
     target_link_libraries(kf4-gsreplay PRIVATE kf4_gs Threads::Threads)
@@ -480,6 +519,70 @@ if(KF4_TESTS)
     add_test(NAME profile COMMAND profile_test)
 endif()
 
+# The screen's refresh clock: its period and phase from the times pictures were seen (port/platform/refresh_clock.c)
+add_executable(refresh_clock_test tests/refresh_clock_test.c port/platform/refresh_clock.c)
+target_include_directories(refresh_clock_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(refresh_clock_test PRIVATE m)
+endif()
+if(KF4_TESTS)
+    add_test(NAME refresh_clock COMMAND refresh_clock_test)
+endif()
+
+# --frame-rate unlocked's rate from whether the renderer keeps up (port/platform/unlocked_rate.c)
+add_executable(unlocked_rate_test tests/unlocked_rate_test.c port/platform/unlocked_rate.c)
+target_include_directories(unlocked_rate_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME unlocked_rate COMMAND unlocked_rate_test)
+endif()
+
+# The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
+add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
+target_include_directories(kf4_pc_gif PUBLIC port/gs/pc)
+set_target_properties(kf4_pc_gif PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_executable(pcr_gif_test tests/pcr_gif_test.cpp)
+target_link_libraries(pcr_gif_test PRIVATE kf4_pc_gif)
+set_target_properties(pcr_gif_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_pc_gif PRIVATE -Wall -Wextra -Wshadow -Wconversion -Wsign-conversion)
+    target_compile_options(pcr_gif_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_gif COMMAND pcr_gif_test)
+endif()
+
+# The PC renderer's frame walk rules (port/gs/pc/pcr_frame_walk.h, header only): the registers of a frame's own walk
+# as its pictures between's walk, with pcr_gif.h's include path from kf4_pc_gif
+add_executable(pcr_frame_walk_test tests/pcr_frame_walk_test.cpp)
+target_link_libraries(pcr_frame_walk_test PRIVATE kf4_pc_gif)
+set_target_properties(pcr_frame_walk_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_frame_walk_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_frame_walk COMMAND pcr_frame_walk_test)
+endif()
+
+# The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
+# (port/gs/native/gsn_vram.c) as its format library and nothing else of the native GS
+add_library(kf4_gsn_vram STATIC port/gs/native/gsn_vram.c)
+target_include_directories(kf4_gsn_vram PUBLIC port/gs/native)
+add_library(kf4_pc_textures STATIC port/gs/pc/pcr_textures.cpp)
+target_include_directories(kf4_pc_textures PUBLIC port/gs/pc)
+target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
+set_target_properties(kf4_pc_textures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+# against the same uploads written into a 4 MB VRAM with gsn_vram.c in order
+add_executable(pcr_textures_test tests/pcr_textures_test.cpp)
+target_link_libraries(pcr_textures_test PRIVATE kf4_pc_textures)
+set_target_properties(pcr_textures_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_pc_textures PRIVATE -Wall -Wextra)
+    target_compile_options(pcr_textures_test PRIVATE -Wall -Wextra)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_textures COMMAND pcr_textures_test)
+endif()
+
 # INT_MIN / -1 and a division by zero, as the EE does them (port/platform/int_divide.c)
 add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
 target_include_directories(int_divide_test PRIVATE port/include)
@@ -497,6 +600,28 @@ target_compile_options(vu1_test PRIVATE -frounding-math -ffp-contract=off)
 if(NOT WIN32)
     target_link_libraries(vu1_test PRIVATE m)
 endif()
+
+# A native draw's record for program 0x000 (port/render/vu1_record.cpp) against VU1's own set-up (the HLE's)
+add_executable(vu1_record_test tests/vu1_record_test.cpp port/render/vu1_record.cpp port/platform/vu1.c
+               port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
+               port/math/libvu0.c)
+target_include_directories(vu1_record_test PRIVATE port/include)
+target_compile_options(vu1_record_test PRIVATE -frounding-math -ffp-contract=off)
+set_target_properties(vu1_record_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(vu1_record_test PRIVATE m)
+endif()
+add_test(NAME vu1_record COMMAND vu1_record_test)
+
+# The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
+# at t 0 and 1, the sections, the pairing by identity, the trail's pairs
+add_executable(part_moves_test tests/part_moves_test.cpp)
+target_link_libraries(part_moves_test PRIVATE kf4_part_moves)
+set_target_properties(part_moves_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(part_moves_test PRIVATE m)
+endif()
+add_test(NAME part_moves COMMAND part_moves_test)
 
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)

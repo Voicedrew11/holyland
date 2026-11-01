@@ -1,4 +1,606 @@
-# The PC renderer (`--renderer fast`)
+# `--renderer fast` and smooth play
+
+One plan for how `fast` draws and how smoothly it plays. It was two documents until 2026-10-29: the PC renderer's
+plan (this file: P1-P6, how the world is drawn) and the smooth play plan (SMOOTH.md: steps 0-5, pipelines, pacing,
+unlocked, the GPU's time). They were judged at different rates and drifted apart: the PC renderer's plan was closed
+out at 170 Hz, where every spot kept up, and the smooth play plan took the GPU for the ceiling of a higher rate. Both
+parts are kept below as they were written and measured, each with its corrections marked; this top says where the
+whole stands.
+
+## Where it stands (2026-10-29)
+
+**Built.**
+- The PC renderer (part 1): P1 (hardware textures), P2 (the map's records, objects, items and gold, opaque,
+  alpha-tested and blended, kept and drawn by material), P3's three steps (the skinned parts' first pass once, alphas a
+  little above 1.0 by Vulkan's blending, the skinned groups on P1's textures), P5's first step (a taken draw's kept
+  batches drawn again in its pictures between). P4 and P6 measured and left (nothing to win on the GPU). **P7**
+  (2026-10-29, below): the world drawn from its meshes on the GPU, off the GS's batches: the map, objects, items,
+  creatures, arm and effects, the material still resolved where the GS's thread meets the draw.
+- Smooth play (part 2): the refresh clock (step 0); the pipeline set, the pipeline files off the GS's thread, one
+  count of compiles (step 1); a frame recorded once (step 2a); `--frame-rate unlocked` as a rate found as it plays,
+  `--frame-rate-cap`, `--tearing` (step 3); shader blending's copies in the render pass in `fast` at every colour depth
+  (step 4, item 1).
+
+**What limits the pictures now: the native GS's thread, not the GPU.** `fast` is not a renderer apart from the native
+GS: P2 and P3 grew it inside the native GS's scene ("P2, revised" below: a draw's material is only known on that
+thread, in the chain's order). Every draw still goes through that thread, and each game frame is recorded there for
+its pictures between. At the owner's settings of 2026-10-28 (4x, native widescreen, MSAA 2, `--native-colour high`,
+170 Hz; heavier than those part 1 was measured at: MSAA 1, colour exact), map 000:
+
+| | |
+|---|---|
+| the GPU a picture | 3.33 ms: room for about 300 pictures a second |
+| the GS's thread a game frame | about 31 ms of 33 (step 2's measures) |
+| a recording, and what the pictures between wait for it | 4.2-5.8 ms; 10.75 ms median in the recording's vblank |
+| fixed 240 | 189 pictures a second, 1,353 left out as the GS's thread fell behind (the GPU then busy about 80% of the time) |
+| unlocked | settles about 175 a second, as monitor |
+
+Below about 200 a second it keeps up (part 1's "every spot keeps 168-170 at 170 Hz" is still so), which is why part 1
+was closed out as done and why it did not show as the limit. Above it, it is the first limit at these settings.
+
+**Since P7** (the table above is from before it): the GS's thread a game frame is 18-19% less at maps 000 and 009
+(13.1 and 13.9 ms in `pace_test.py --mode cost` at 240); fixed 240 keeps 239.75 a second at both; unlocked map 000
+256-258 a second (was 198-203), map 009 262-264 (was 225-228). The thread is still the limit unlocked, now mostly the
+recording and the draws P7 declines ("P7" below: what still goes through the GS's batches).
+
+**Since (2026-10-29, later): two pieces of the recording.**
+- **The GS's thread no longer waits for Granite's lock** (RENDERER.md, "The back end"; `KF4_GSN_IMAGES_OFF_THREAD`).
+  Sampled with `eu-stack`, 28% of a recording at map 000 was the GS's thread waiting for Granite's device lock, which
+  the back end's `next_frame_context` holds while it waits for the GPU: a target dropped by an upload asked for again
+  (`destroy_image`), and made again by the next draw (`create_image` asking for a command buffer to make it GENERAL).
+  Now the images are let go on the back end's thread and made GENERAL by a call of the stream. A recording at map 000
+  (`--fast` at 240, 12,000 vblanks, alternating): 3.85 and 4.11 ms, against 5.42 and 6.76 with the switch off; the
+  pictures byte for byte (maps 000 and 009, 204 each, and with `KF4_GSN_BACKEND=0`).
+- **P7's calls kept for the pictures between** ("P7, kept", below; `KF4_PC_KEPT`): built, about 3% of a recording at
+  000, held back by its table check.
+
+**The owner's decision (2026-10-29, evening): zero native GS in `fast`.** Everything above made the native GS's thread
+cheaper; none of it took the native GS out of `fast`. The owner: "I want ZERO native gs in the fast renderer by any
+means necessary", the whole job, however long. The plan for it is "The PC renderer: `fast` without the native GS"
+(below); it replaces "Next" and "The earlier order" further down.
+
+**Since (2026-10-29, later still): the world's snapshot, steps 1-3 of the next item below** ("The world's snapshot",
+below; `KF4_PC_SNAPSHOT`). A picture between makes each world draw the frame kept whole from the frame's snapshot: its
+calls put back at its place in the chain, the registers and CLUT left as its writes left them without the writes, its
+record made from the kept draw (no fetch, no batches walked). The kept calls' table count is replaced by an exact check
+of what each call reads (the table's answer for its texture). At map 000 169,380 of 172,537 kept draws are made so, the
+pictures byte for byte as with the switch off and as the build before. **It took less than hoped**: a recording 4.37-4.47
+ms against 4.62-4.65 at 000 (-4%), 4.49-4.55 against 4.81-4.94 at 009 (-7%); the world's draws were not most of a
+recording any more. Sampled at 000 (106 samples in recordings, `eu-stack`): the snapshot's draws 29% of a recording
+(of it the CLUT mirror hashed again after each load about 6%, the table's answer `pcd_table_same` about 7%, the CLUT
+loads about 4%), the uploads asked for again (`replay_upload`) 29%, the rest the GS's own batches, the 2D and the
+walk. So next is the uploads, then the snapshot's own checks made cheaper (exact still: e.g. the CLUT compared by the
+loads' sources, the table's answer kept by its pages), then the GS's own batches, one kind at a time.
+
+**Handoff (2026-10-29, late; branch `pc/renderer`).** Where the PC renderer (`--renderer pc`) stands and what is next,
+in order. Read "The PC renderer: `fast` without the native GS" below first, then its "Step 2 built" and "Step 3" sections.
+- **Done**: steps 1 and 2 (the whole game from its GIF packets), save states, the pictures between's uploads asked
+  for again (0x7C/0x7D), and step 3's native draws of programs 0x000, 0x280, 0x5A0, 0x700 and the GS strips (kinds:
+  map, sky, items, picked, objects, skinned, arm, gold, shadows, effects; `pcr_native_kinds()`), each checked against
+  the PC renderer on packets at 000, 009, 009:2 and 063.
+- **The direction (the owner's decision, 2026-10-29, night)**: the PC renderer is built as a modern game draws, not as
+  a second GS emulator ("How it draws", below): the native GS is the exact reference, every picture is compared with
+  it, and pc does not need to be exact first. So what comes next is the GPU's way, then the pictures between, then
+  what is left of step 3. In order:
+  1. **GPU timestamps**: built 2026-10-30 (`pcr_gpu_time.h`; "Item 2 built", below).
+  2. **Textures by the GPU's sampler**: built 2026-10-30 ("Item 2 built", below).
+  3. **DATE by the stencil**: built 2026-10-30 ("Step 4b's rest built", below), and a blend with no Vulkan form
+     the GS's in the shader from a copy of only the rectangle drawn.
+  4. **Merged draws**: measured 2026-10-30, not built ("Step 4b's rest built", below): the native batches already
+     go out at about 1.2 draw calls a batch, and the draw calls were not where pc's time went: a texture store's
+     page walk was, now fixed (pc keeps 60 vblanks a second at 30, was 20). What is left to merge is batches across
+     state changes (textures, CLUTs), which is bindless textures; better designed with step 5, whose pictures
+     between draw the frame's calls again.
+  5. **Step 5, the pictures between on the GPU**: 5a built 2026-10-30 ("Step 5a built", below): pc takes the frame
+     and the pictures, walks the frame's packets again for each picture, and the shaders move every vertex; native
+     draws are on under pc at 240. **5b built** 2026-10-30 ("Step 5b built", below): a frame's walk kept and drawn
+     again for its other pictures while what it read of the texture store is as it was (86% of the pictures at the
+     four spots), the pictures byte for byte 5a's. Map 000 at 240: 183-186 pictures a second (5a 101-102); 009 still
+     61-66, held by pc's thread taking the packets in (about 68% busy: the frame's own packets, about 200 MB a second
+     there, and each frame's first walk), not by the pictures between. **What held 009**, measured 2026-10-30 ("What
+     held 009, and resolve's answers kept", below): pc's thread a vblank behind, so every picture between was left
+     out; a quarter of its work resolve's walk of the blocks' owners. Resolve's answers kept (exact, by the pages'
+     signatures): 009 98-99 pictures a second (was 60), 000 214-226 (155-165 without). **A frame walked once**,
+     built 2026-10-30 ("A frame walked once", below): the frame's own walk kept and made its pictures' walk by
+     frame_interp.c's rules; 99.9% of frames, 61% of them drawn from it at once (the others had uploaded over
+     pages they read before them: their first picture walks the stream). 009 114-119 (100-105 without), 000 at the
+     cap (238-240). Sampled again 2026-10-30 ("The store's marks walked by their pages", below): the store's marks
+     walked by their pages and an owner's nibbles taken again in place; 009 132-142 (115-118 before). Next: the
+     draw calls (merged draws, item 4, designed on the walks kept), then VU1 0x280's records and the uploads.
+  6. **Step 3's last two**: `RD_PROGRAM_RIPPLE` (the reflection's water: `gsn_nd_water.inc`, `nd_water.vert`, kind
+     `water`) and `RD_PROGRAM_PASS` (the screen passes: `gsn_nd_pass.inc`, `nd_pass.vert`, kind `passes`). As the
+     others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
+     after `tools/build_shaders.py`), the CPU set-up into `port/render/` with a test against the code it stands
+     for, the draw in `pcr_native.cpp`, the kind in `kinds()`. `[stats] pc native draws not drawn yet` names what is
+     still sent and left out.
+  7. The settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's); then step 7
+     (`fast` switched to it, the full checks incl. the map tour and pace).
+- **How pictures are judged**: against `--renderer native` (the exact GS), not against pc's own earlier pictures;
+  the tolerance per case (P1's and P7's were a level or two over few pixels), and every place the GPU's way cannot
+  match counted in `--stats`. A rough estimate (not measured): with the GPU's way, several hundred to over a
+  thousand pictures a second at the owner's settings; without it, about `fast`'s.
+- **How to run things on this machine** (no memory to rely on): every game run under a memory cap (`systemd-run
+  --user --scope -p MemoryMax=10G -p MemorySwapMax=0`; the machine has crashed from memory at 240), one at a time;
+  `KF4_DATA_DIR` a temporary folder; spots by `--input tests/newgame.pad --teleport 1900:MAP:PLACE --invincible`;
+  headless draws nothing without `--dump-frames`; ASan with `out/linux-clang-asan`, `ASAN_OPTIONS=detect_leaks=0:
+  halt_on_error=0 UBSAN_OPTIONS=halt_on_error=0`, known reports: SoundDriver_Remote's stack underflow, the decomp's
+  and kernel.c's/libmpeg.c's function-pointer casts, Granite render_pass.cpp:52, frame_interp.c:666.
+
+**Next: the world off the native GS, done properly (the owner's decision, 2026-10-29).** Item 3 below is the next
+step, not a trim of the recording: the owner chose it over trimming, and chose that it be done the proper way, no
+shortcut or workaround (the kept calls' table check, above, is the example: replaced by a check of what is read, not
+removed). The kept calls ("P7, kept") are its snapshot of the world. What it has to solve, in order:
+1. **Its place in the chain.** The world's draws are among the GS's own (the shadows, the batches P7 declines, the
+   effects it does not take, the 2D), and blending and Z are right only in the chain's order. The snapshot's calls go
+   back in at their places among the GS's draws, without the walk working them out.
+2. **The GS's state they leave.** The GS's batches after a world draw expect the registers it wrote, and the CLUT loads
+   its TEX0 writes start. That state is set as each place left it, without the writes (and the CLUT as loaded then).
+3. **The picture's records.** Each draw's moves (`nd_model_flags`, the sky's and objects') are made in the walk now, one
+   draw at a time. They are made another way: all at once from the kept draws, or on the GPU.
+With those, a picture's world costs the GS's thread nearly nothing, and the walk is left with the 2D, the effects the
+GS draws and the uploads. Then item 1's rest (the uploads asked for again: 31% of a recording at 000 before the lock
+fix) and the GS's own batches, one kind at a time, toward a renderer apart from the native GS.
+
+**The earlier order** (before the owner's decision):
+1. **P5 continued: the recording made cheaper** (part 1's P5 and part 2's step 2a are one piece of work). What a
+   recording still costs, from both parts' profiles: native draw's draws as a picture between makes them (74% of a
+   recording at map 000), of them the skinned models' batches, each batch's state written and flushed again though
+   the frame already has it (28%); the uploads a picture between asks for again (13% at map 000, 27% at map 009); the
+   test at t 0 of the batches the frame drew nothing of (15% at map 009); the PC world's flushes. One at a time, each
+   measured with `pace_test.py` at 240 and unlocked (several alternating runs: a third of runs lose a second with no
+   hitch logged, cause not found) and the recording's time in `--stats`. Since P7 the world's batches are draw calls
+   made from meshes, so a recording's world is P7's calls again; at map 000 a recording went from 4.3 to 4.8 ms.
+   P7's declined kinds next: shader blending for 0x280 and 0x700 by in-pass copies over the plan's screen places,
+   the shadows, the water's ripple, the trails.
+2. **Then the GPU**, once the thread has room: first what the 0.5 ms of "pass: untagged" is (full-screen work at the
+   start of passes, not identified; cheap to find); then step 4's items 2 and 3 (one scene pass a picture, about
+   0.15-0.4 ms; the alpha-tested Z-first draws, about 0.1-0.25 ms).
+3. **A picture between without the frame's packets.** P5 as first designed interpolated the world from snapshots. The
+   snapshot cannot be made on the game's side ("P2, revised"), but the kept draws are a snapshot made on the GS's
+   thread: a picture between drawn from them alone (and the GS's recording for the 2D and effects), not by walking
+   the frame's packets again, takes the recording's world cost away rather than trimming it. A large change; to be
+   decided with step 1's measures in hand.
+4. Step 2b (the pictures between made by the back end), if unlocked past the screen's rate still wants it then; and
+   step 5 (stalls outside the renderer).
+
+**The owner's choices** (both parts):
+- **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
+- **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
+  draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
+  per-pixel light and real fog would need), but nothing of it is the default.
+- Step 1.4 (smooth play): a pipeline not made yet in `fast`, the batch left out for a few pictures (proposed) or
+  the stall. Undecided.
+- Unlocked without VRR is mailbox (no tearing; 2026-10-28); immediate is `--tearing`. Whether fixed rates leave the
+  settings page's main list is still open.
+- P1 under `modern` too: open (part 1's last section).
+
+# The PC renderer: `fast` without the native GS (begun 2026-10-29)
+
+**The goal.** `--renderer fast` runs no native GS code: no `gsn.cpp`, no VRAM image, no GS render targets, no GS
+batches, no GS thread. A renderer of its own (`port/gs/pc/`, "the PC renderer") takes the same input the native GS
+takes and draws every picture with the GPU's own pipelines. The native GS stays as `--renderer native` (and `modern`),
+the reference; paraLLEl-GS stays as `gs`.
+
+**What it takes in.** The seam is the native GS's C interface (`gsn.h`), which `gs.c`, the presenter and
+`frame_interp.c` call. The PC renderer has its own (`pcr.h`) with the same calls; `gs.c` picks one at start
+(`port/platform/gs_api.h`: `gsr_*`, the native GS's or the PC renderer's). Its input is what the game sends:
+- **GIF packets** (PATH1, 2 and 3): register writes, primitives (sprites, triangles, strips), image transfers.
+- **Native draws** (register 0x7B, `RD_ND_*`): the game's 3D as draws with meshes, matrices, lights and fog
+  (`port/render`, `game/native_draw`), drawn by the PC renderer's own vertex shaders (P7's `pc_000/280/700.vert`).
+- **The vblank's display registers**, and the port's marks (0x7C uploads asked again, 0x7D pictures between).
+
+**What it keeps instead of VRAM.**
+- **Surfaces**: every buffer the game draws into (the frame and Z buffers, the reflection's 256 x 256, the frame copies,
+  the scrolling textures' targets) is a GPU image, found by its base, width and format; at the renderer's scale, its own
+  formats (D32F depth).
+- **Textures from their uploads**: every image transfer is kept as a chunk (where it went, its bytes, a hash), and an
+  ownership map says which chunk owns each block. A texture is decoded from the chunks that own it (the PS2's texel
+  formats are the game's data: decoded with the swizzle functions of `gsn_vram.c`, a format library, the only file of
+  the native GS's directory the PC renderer uses), or read from the surface drawn there since.
+- **Copies** (local to local) are image copies between surfaces; read-backs (local to host) read a surface.
+
+**How it draws: as a modern game draws, not as an emulator (the owner's decision, 2026-10-29, night).** The native
+GS is the exact GS, and every picture is compared with it: the PC renderer does not need to be exact itself, and is
+not built exact first. Each piece is built the GPU's own way from the start and judged against the native GS's
+pictures, with the same comparisons (`--dump-frames` at the spots, the map tour), the tolerance decided case by case
+as P1 and P7 were accepted in `fast` (a level or two over a few pixels). An exact path is kept only where the GPU's
+way measurably cannot match, each such case counted in `--stats` so that they can be worked off. What that means:
+- **Textures**: decoded once (the CLUT applied) into ordinary GPU textures and read by the GPU's sampler, as P1 did
+  in `fast`; not the GS's texel reads, filtering and CLUT lookups in the pixel shader. The exact read only for what
+  the sampler cannot stand in for (measured: e.g. a texture read from a surface the game drew, a region clamp).
+- **Colour, fog, alpha test**: plain shader maths; blending by Vulkan's blend. Where a blend has no Vulkan form, a
+  copy of only the rectangle drawn, not the surface.
+- **DATE** (the destination alpha test): the stencil, not a copy of the surface.
+- **Draws**: batches of the same state merged into few calls (instanced or appended), not one call a batch.
+- **Native draws** by their records (P7's maths, the material from the registers at the draw).
+- **Pictures between**: the frame drawn once; each picture between the frame's calls again on the GPU with the
+  vertices moved, drawing again only what moves.
+- **Measured from the start**: GPU timestamps in the PC renderer, so that each change's cost is seen.
+The display registers pick the surface shown; the picture goes to the presenter as the native GS's does.
+
+(Until 2026-10-29 the PC renderer was built the other way: `pcr_prim.frag` is the GS's pixel again, texel reads,
+bilinear by hand, CLUT, DATE by a copy of the surface, one draw call a batch. That is what the steps below replace;
+the surfaces, the texture store, the uploads, the native draws' records and VU1's shader maths stay as they are.)
+
+**The order** (each step runs, and is checked against `--renderer native`'s pictures; steps 1-3 built, as far as
+the handoff above says, the GPU's way coming next):
+1. **The skeleton**: `--renderer pc` (development name; `fast` is switched to it at the end), the device, its thread,
+   the vblank, the presenter, a picture (cleared surfaces), `gs_api.h` in `gs.c`, the presenter and frame_interp.c.
+2. **The 2D**: register state, sprites and triangles from GIF packets, uploads and the texture store, surfaces, the
+   scanout. The title, menus, HUD, messages and movies show.
+3. **The 3D**: native draws (0x000, 0x280, 0x700) with depth, fog, alpha test, blending, layers.
+4. **The rest of the play**: shadows (0x5A0, DATE as the stencil), the PATH2 strips (the trail, the water), the
+   reflection target, the frame copies, the scrolling textures, the screen passes.
+4b. **The GPU's way** (the decision above): GPU timestamps; textures by the sampler; DATE by the stencil; merged
+   draws; a blend's copy of the rectangle drawn only. Before step 5, so that the pictures between are built on it.
+5. **Pictures between**: each picture drawn from the frame's draws with the picture's camera and moves, on the GPU.
+6. **The rest of the interface**: save states, captures, `--dump-frames`, `--stats`, the overlay's settings.
+7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
+   speed), the old `fast` kept as `--renderer modern`.
+
+## The store's marks walked by their pages (built 2026-10-30)
+
+**Measured first** (009 at 240, `--renderer pc`, the owner's settings, 250 samples of `kf4-pc` with `eu-stack`): pc's
+thread 92% busy (4% waiting for the game, 4% for the GPU). 48% drawing the pictures between again (`draw_again`): of
+it 16% Vulkan's draw calls, 13% `TextureStore::drawn`, 8% the uploads asked again (`own`), 5% CLUT loads. 39% taking
+the frame's packets in: 17% program 0x280 (its batches' draw calls 7%, its CLUT loads 4%, `vu1_kicks_280` 3%,
+`vu1_record_280` 2%), 9% uploads (`image_data`). Over both, Granite's draw 26%: RADV's `CmdDraw` 11%, the descriptor
+sets 7%, pipeline binds 6%.
+
+**What it does** (`pcr_textures.cpp`; exact: the store's answers, signatures and seqs are as before):
+- `TextureStore::drawn` walks only the pages the rectangle is in (`each_page`, which `pages_of` is now built on),
+  not all 512 testing a bit set each (the 13% above: a picture drawn again marks every batch's rectangle).
+- `take_nibbles`: a block's newest owner taking the same nibbles again (an upload found again, an upload asked again)
+  only has its seq moved. The full walk took its entry out (the older owners hold none of those nibbles) and put it
+  back newest; the chunk's count dropped to 0 only for that moment, and `mark_unowned` leaves alone a chunk that owns.
+
+**Checks.** Byte for byte against dc18e2f6 at 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks
+2300-2650 every 7th: 204 pictures a spot). ctest 13/13; `pcr_textures_test` under ASan + UBSan. Not run: an ASan pc run
+in play, TSan, native and `fast` checks (their paths are not changed), clang-tidy (no configuration).
+
+**Speed** (`pace_test --hz 240 --frame-rate 240 -- --renderer pc`, three runs a side alternated): 009 132.1-142.1
+pictures a second (dc18e2f6 115.1-118.0); 000 237.1-239.8 (234.1-239.8, the cap). The GPU 2.5-2.8 ms a picture.
+
+**What is left** (from the samples above): the draw calls (fewer of them: the merged draws of item 4, now with step
+5's walks kept to design them on), program 0x280's records and kicks, the CLUT loads (a key vector made for each, 512
+mirror writes), the uploads.
+
+## A frame walked once (built 2026-10-30)
+
+**Why.** Sampled at 009 at 240 (250 samples of `kf4-pc`): 38% of pc's thread was each frame's first picture between
+walking the frame's stream (frame_interp.c's copy of the frame's packets), 37% the frame's own packets, 20% the other
+pictures drawn again (5b); the thread was busy all the time, 101 pictures a second. The stream is the frame's packets
+again, changed by replay_pending: FRAME, TEX0 and BITBLTBUF naming the buffer drawn name the buffer shown, the
+uploads into anything else asked for again (0x7C), read-backs, copies into anything but the frame, SIGNAL, FINISH and
+LABEL left out, 0xF0 and 0xF1 around it, the records that set TEX0 to the frame shown between 0xF4 and 0xF5. So
+the frame's own walk, kept, can be made the stream's walk by those rules, and the frame is walked once.
+
+**What it does.**
+- **The stretch** (pcr.cpp's Intake): the packets from the first after a vblank to the next vblank are kept as they
+  are walked (the canvas's `keep_walk`, the kicks numbered as a picture's walk numbers them, the native draws' records
+  made twice). A picture between, a frame taken or a state loaded in a stretch drops it (the 0xF2 mark after the
+  vblank), and frame_interp.c's replays sent as packets (the exact restore, between 0xF0 and 0xF1) are kept out.
+  Stretches are kept only while frames are taken (none at 30, in the menus).
+- **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
+  it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
+  the frame shown is kept. A stretch whose bytes are not the frame's, or whose kicks are not its count, is not it.
+- **The rules** (`pcr_frame_walk.h`, plain functions, `pcr_frame_walk_test`): a draw's FRAME and TEX0 moved to the
+  buffer shown; an upload into anything but the buffer drawn asked for again (its chunk the frame's), a read-back and
+  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5. Refused
+  (the frame walks its stream, counted): a copy from or into the buffer drawn, an upload into it, a draw textured from
+  it other than from its surface's pixels (a full-screen pass that reads the frame it draws: looked up again in the
+  buffer shown, as the stream has it), a trail its pictures move on the CPU, a native batch without its picture's
+  record, a mark or upload asked again of a picture's. The stream's own choices for those (frame_interp.c's table of
+  copies) are not handed over: none was met at the four spots.
+- **`Canvas::as_picture_walk`** makes the kept walk from the stretch's: the batches' FRAME and TEX0 moved, a GIF
+  batch's numbered corners moved (`Batch::numbered`: the corners name their kicks in the stretch, which nothing moves
+  outside a picture), a native batch's runs drawn by their pictures' records, the uploads as uploads asked again, 0xF0
+  before and 0xF1 after. Then the frame's pictures are drawn again from it as from a 5b walk, while what it read of the
+  store is as it was (`fits`); its kicks are the frame's walked kicks (`Between::adopt_live_kicks`).
+- **Native draws** (`NativeDraws::begin_frame_kept`): in the stretch each draw's record is made twice side by side, the
+  frame's and the picture's (its move: `PartMoves::draw` with `PartWalk::frame_kept` keeps the place and gives the
+  move a picture of the frame gives; `part_moves_test` checks it against a frame's walk and a picture's).
+- A read-back in a kept walk no longer spoils it (the stream never had one); `KF4_PC_LIVE_WALK=0`: the frame's stream
+  walked for its first picture, as before. `[stats] pc pictures between` counts the frames made so and why not.
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th, fixed clock):
+byte for byte with `KF4_PC_LIVE_WALK=0` (204 pictures a spot). 947-949 of 948-950 frames a spot made from their own
+walk (the first frame of a run: not the frame), none refused by the rules; 366-370 a spot then walked their stream,
+the store changed (the frame had uploaded over pages it read before the upload, so its own walk read what the stream's
+would not), so 6,262-6,279 of 6,632-6,646 pictures drawn again (5,684 before). ctest 13/13; pcr_gif_test,
+pcr_frame_walk_test, part_moves_test under ASan + UBSan; an ASan + UBSan pc run at 009:2 at 240: the known reports
+only. Not run: native and fast checks (frame_interp.c only fills fields the native GS does not read), TSan, clang-tidy
+(no configuration).
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): 009 113.9-118.6 pictures a second
+(100.1-105.4 with `KF4_PC_LIVE_WALK=0`); 000 238.3-239.8 (238.1-238.9: at the cap either way; 178-226 measured on other
+days). The GPU 2.3-2.6 ms a picture (2.2-2.3). Less than the first walks' 38%: 39% of frames still walk their
+stream, and keeping the stretch (its batches copied, its kicks, two records a draw) costs the frame's own walk.
+
+## What held 009, and resolve's answers kept (built 2026-10-30)
+
+**What held 009** (measured at 240, `--renderer pc`, the owner's settings): in play no picture between was shown at
+all, 60 pictures a second, each a vblank's own. pc's thread was a vblank behind as each vblank began (`pcr_backlog`
+1), so gs.c's cut came down to one picture between a vblank and left that one out every vblank too (in a diagnostic
+build; gs.c's "left out as the renderer was behind" line is printed only under the native GS). pc's thread, sampled
+208 times with `eu-stack`: 23% waiting for work, 9% waiting for a GPU frame context, the rest the frame's own packets
+(no picture between was walked). Of that work about a quarter was `TextureStore::resolve` walking every block's
+owners (`owners_of`, its `Cover` compares), about 15% VU1 0x280's records and kicks, about 14% uploads found again.
+In a diagnostic build 95.8% of resolves asked what was answered before while every page that answer read had its
+signature (5b's) as then, and none of those answers differed from the walk's.
+
+**What it does.** `TextureStore` keeps resolve's answers (`pcr_textures.h`'s top): under what was asked (the
+texture's shape, its levels' places and the part read: the key without its chunks), the walk's source, missing
+block and chunks, the blocks it read (a 32-bit mask a page) and their pages' signatures then. The same question
+while every one of those pages answers as it did is answered from it without the walk; the chunks are sorted by
+their uploads as now, so the key and the decode found are the walk's. While a stretch's reads are watched (5b), a
+kept answer notes the blocks its walk read, as the walk would. Each page's signature is kept and made again only
+after the page changed (an owner taken, a draw or copy over it, the CLUT buffer written). `answers_kept` (8,192)
+bounds them, all let go when met. `KF4_PC_RESOLVE_KEPT=0`: none kept, every resolve walks.
+- **The signature now has the page's draw marks** (whether it was ever drawn into, low parts and top byte apart):
+  a block no upload owns answers DrawnSurface or NotUploaded by them, which the signature did not show before (so 5b's
+  check could take a page drawn into for the first time as unchanged). The replays at the four spots are as before
+  (5,684 of 6,632 drawn again at 000 and 009).
+- `[stats] pc texture store` says how many resolves were answered kept.
+- Tests: `pcr_textures_test` runs every random call on a second store that keeps nothing, and every answer, CLUT
+  load, read-back and watched stretch must be its; `kept_answers` (asked again, an upload elsewhere, the same chunk
+  again, a different upload into the page, a draw over it, a DrawnSurface answer asked again and then uploaded over,
+  a page never uploaded then drawn into, watched, forget). Without the draw marks in the signature both fail.
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th): byte for byte
+with `KF4_PC_RESOLVE_KEPT=0` (204 pictures a spot; 162 at 009:2, the same in both runs: some of its dump vblanks have no
+pictures between). Answered kept: 95% of resolves at 000, 97% at 009, 94% at 009:2. ctest; `pcr_textures_test` under
+ASan + UBSan; an ASan + UBSan pc run at 009:2 at 240 (only the known reports). No native or `fast` checks: their
+paths are not changed.
+
+**Speed** (`pace_test` at 240, `--renderer pc`, runs alternated): 009 98-99 pictures a second (60 with
+`KF4_PC_RESOLVE_KEPT=0`: none between), 000 214-226 (155-165 with it off; the build before 163-168 that day, 5b's
+183-186 measured another day). The GPU 2.1-2.3 ms a picture.
+
+## Step 5b built (2026-10-30): a frame's walk kept, and drawn again for its other pictures
+
+**What it does.** The first picture between of a frame walks the frame's packets as in 5a, and the canvas keeps what
+the walk made (`pcr_canvas.h`'s `KeptWalk`): its batches (state, vertices, textures, native runs, with the images and
+buffers they use held), and in their order its uploads, uploads asked for again, copies, CLUT loads and marks. The
+frame's other pictures make those again (`Canvas::draw_again`) with only their Picture buffer new
+(`Between::begin_picture_again`; the kicks are the walk's): no front end, no native draws, no texture store resolves.
+A texture read from a surface is copied from it again, DATE and shader blending are set up again, and the store's own
+changes (uploads again, pages drawn, copies, CLUT loads) are made again, so that the store and the surfaces are left
+as a walk leaves them. `KF4_PC_KEPT_WALK=0`: every picture walks (5a).
+- **Every walk of a frame starts from one state**: the front end's when the frame was handed over
+  (`GifFrontEnd::State`, `state()`, `set_state()`), and the live state is put back after the walk (as the native GS's
+  interp_capture; pc walked from what the live packets left, and left the walk's registers behind). So every walk of
+  a frame makes the same kicks.
+- **When a kept walk is drawn again**: while every page of the texture store it read from before it (a block read
+  before the walk wrote it; page 512 the CLUT buffer) answers as it did then (`TextureStore::watch_reads`,
+  `reads_watched`, `unchanged`; `page_signature`: a hash of the page's owners, their nibbles and whether each is
+  drawn over, never the upload counts, so a walk that uploads a chunk again and draws over it again leaves its pages'
+  signatures as they were). Change counts were tried first and turned every picture away: each walk's own uploads
+  again and draws moved them, though the pages ended answering what they did. Surfaces are looked up again as the
+  kept draws are made, so they need no check.
+- **Not kept** (the pictures walk, counted): a walk that read back from the GS's memory, or whose kicks were not the
+  frame's count, or that met a trail paired with the frame before (its points are moved t of the way on the CPU,
+  `NativeDraws::moved_on_cpu`; moving that into the shader is to come).
+- `[stats] pc pictures between` now says how many were drawn again, and why the others walked.
+- The texture store's chunk ids are no longer used again after a state is loaded (`forget`), so that a signature
+  cannot match a new chunk (the random seeds' counts move by one or two uploads found again).
+- Tests: `pcr_gif_test`'s `test_state_round_trip`; `pcr_textures_test`'s signatures (an upload again of the owner, a
+  draw over it again, a different upload, an equal and a different CLUT load) and the watch (read before write, a
+  page partly written in the stretch, a stretch uploading again over owned blocks unchanged after).
+
+**Checks.** At 000, 009, 009:2 and 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th, 204 pictures a
+spot): with the kept walks byte for byte as with `KF4_PC_KEPT_WALK=0`, and that byte for byte as the build before
+(5a): the walk's start state changed nothing at these spots. In each run 5,684 of 6,632 pictures (5,696 of 6,646 at
+063) were drawn again, the rest each frame's first; none turned away by the store, none not kept. So the pictures
+against the native GS are 5a's (the table above).
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): 000 183.4-186.1 pictures a second (5a
+100.9-101.7), the GPU 2.13-2.19 ms a picture (1.90-2.04); 009 61.1-66.2 (63.5-64.9). At 009 pc's thread is about
+68% busy, sampled all in taking packets in (uploads, kicks, CLUT loads: the frame's own packets and each frame's first
+walk, inlined together), and only about 60 pictures a second are asked of it: what holds 009 is to be measured.
+
+## Step 5a built (2026-10-30): the pictures between drawn by pc, moved on the GPU
+
+**What it does.** frame_interp.c's GPU way ("On the GPU") now runs under pc too (`port_gs_interp_gpu`; `KF4_PC_BETWEEN=0`
+turns it off: the CPU way and the game's packets, as before). pc keeps the frame (`pcr_between.h`, `Between`); for each
+picture it walks the frame's packets again through its front end, which numbers every vertex kick fed (XYZ2, XYZF2,
+XYZ3, XYZF3; PACKED, A+D or REGLIST) as frame_interp.c does, and the stretch in which ST, RGBAQ (and its Q) and UV were
+last written (the owners: gsn.cpp's `InterpKick`). Each numbered kick goes into a buffer of the picture's own; the
+picture's cameras, time and runs into another (`gs_replay.h`'s Picture); the frame's moves into a third. Set 1 of
+every canvas draw is those three (zeros outside a picture).
+- **GIF primitives**: a corner names its kicks (`pcr_prim.vert`'s `a_kicks`: a triangle's own, its colour's, its third;
+  a sprite's two and which corner) and is made again of them at the picture's time in the vertex shader, by
+  `gs_replay.comp`'s maths, now in `port/render/shaders/gif_moves.h` (`moved()`, shared: `gsn_shaders.h` byte for
+  byte). The kick's registers as the picture has them (`kick_now`) is there for pc only (`GIF_KICK_NOW`): as a function
+  it changed the native GS's SPIR-V, so `gs_replay.comp`'s main keeps its own copy of it. A triangle whose third kick, or
+  one of the two before it with a place, is dropped is not drawn. A batch with moved corners is taken to draw anywhere
+  in its scissor within its surface (the store's pages drawn, DATE's and shader blending's rectangles).
+- **Native draws**: their records carry how they move (`port/render/part_moves.hpp`, `PartMoves`: the native GS's
+  `nd_mark`, `nd_key`, `nd_remember`, `nd_model_flags`, `nd_between`, the same maths; the native GS keeps its own copy),
+  and `pcr_nd000/280/700.vert` move each corner by `vu1_*_maths.h`'s `moved()` as the native GS's `nd_*.vert` do. The
+  trail's points are written t of the way from their partners in the frame before (`PartMoves::strip`, nd_strip.vert's
+  rounding) on the CPU, as the packets are walked anyway; not seen paired at the four spots (no swing in them).
+- `port_gs_native_draws_now` is true under pc whenever the pictures between go the GPU's way (`port_interp_on_gpu`:
+  not `KF4_INTERP_CPU`, not `KF4_INTERP_STILL`).
+- Tests: `part_moves_test` (a part's move against its matrices at t 0, 1 and between, the moves refused, the sections,
+  the pairing by identity, the trail's pairs); `pcr_gif_test`'s `test_kick_numbers`.
+
+**Pictures against the native GS** (240, `KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650 every 7th; pixels over 8 levels a
+picture): the pictures between are as close as pc's own frames at every time.
+
+| | frame | `_250` | `_500` | `_750` |
+|---|---|---|---|---|
+| 000 | 424,509 | 424,564 | 424,560 | 424,532 |
+| 009 | 834,221 | 835,805 | 835,762 | 835,625 |
+| 009:2 | 435,821 | 435,999 | 435,904 | 436,166 |
+| 063 | 483,414 | 483,415 | 483,415 | 483,416 |
+
+In every run 968 frames and 6,772 pictures were taken, none of another frame, none whose kicks were not the frame's.
+Seen at 240 now that native draws are on there, but there before at 30 as well (the build before, map 000): pc's top
+row of the picture is grey (row 0 about 155, the rows below about 87; native 54), a native draws' matter, not looked into.
+
+**Speed** (`pace_test` at 240, `--renderer pc`, two runs a side alternated): pictures a second at 000 99.6-103.1 (the
+build before 62.8-64.4), at 009 61.2-63.8 (60.7-60.8); the GPU a picture 1.85-2.05 ms (1.33-1.41: the native batches
+are now drawn in every picture, moved). What limits it is pc's thread: walking the frame's packets again for every
+picture (5b, the handoff's item 5).
+
+**Checks**: `KF4_PC_BETWEEN=0` byte for byte with the build before at the four spots (204 pictures each); native and
+`fast` byte for byte with the build before at the four spots; the map tour as before (450,157 pixels, worst 106 at map
+030, every scanout the same); ctest, `vu1_test`; ASan + UBSan pc runs at 000 and 009:2 at 240 (only the known reports).
+
+## Step 4b's rest built (2026-10-30): DATE by the stencil, shader blending from a rectangle, pc's thread freed
+
+**What limited pc was its own thread, and not its draw calls.** Sampled at map 000 (30, native draws; 160 samples of
+`kf4-pc` with `eu-stack`): 76% of the thread was `TextureStore::drawn`, which after each batch marked the pages it
+drew over by walking every 8 x 8 block of its rectangle through `gsn_vram_offset` (a native batch's rectangle is its
+scissor: the whole screen, twice with Z, about 100 batches a picture). `pages_of` (`pcr_textures.h`) now works out the
+pages of a rectangle on a page's start (every FRAME and ZBUF) by rows and columns of pages, as `gsn_vram.c`'s
+`pixel_nibble` has them, and walks the blocks only for other bases; `pcr_textures_test` checks it against every pixel's
+address for every format, Z formats too (3,000 rectangles a seed, wrapping and odd widths). After it, the same thread
+waits 59% of the time.
+
+| `pace_test`, 15 s, two runs a side alternated | the build before | now |
+|---|---|---|
+| at 30, native draws: game vblanks a second, maps 000 / 009 | 21.2-21.3 / 19.9-20.4 | 59.93 / 59.93 |
+| at 240 (packets): pictures a second, 000 / 009 | 61.4-62.0 / 60.7-60.8 | 61.4-63.6 / 60.9 |
+| GPU ms a picture at 240, 000 / 009 | 1.50-1.51 / 1.51-1.53 | 1.43-1.44 / 1.46-1.47 |
+
+At 240 pc is still held by the packets of its pictures between (step 5); at 30 the GPU's time is within the runs'
+noise (1.18-1.46 ms against 1.24-1.46).
+
+**DATE by the stencil.** Depth surfaces are D32F with a stencil (D24S8 where the device has no D32FS8; neither: DATE
+by a copy). A DATE batch's pass has its Z buffer's surface (ZBUF's, ZTE on or off) and reads its colour target as an
+input attachment of itself. Before the batch, over the rectangle it draws in, the stencil is cleared and set where
+the target's alpha bit 7 is DATM (`pcr_date.frag`); the batch draws where it is set. A pass that writes alpha with FBA
+and DATM 0 clears the stencil where it draws, so a later primitive of the batch no longer draws there, as on the GS
+(the copy let overlapping shadow triangles darken twice). A pass that writes alpha without FBA writes a bit 7 the
+stencil cannot know: kept, and counted (`[stats] pc canvas, not done yet: ... writing an alpha the stencil does not
+know`: at 000, 603 of 1,080 DATE draws, a 2D batch of DATM 1 sprites; the copy was no more exact there).
+`KF4_PC_STENCIL=0`: DATE by a copy of the surface, as before. The GPU's "DATE copy" (0.04 ms a picture) is gone.
+
+**A blend with no Vulkan form** is the GS's `(A - B) * C >> 7 + D` in `pcr_prim.frag` (as `gs_frag.h`'s: COLCLAMP,
+PABE, a 24-bit frame's Ad 0x80), Vulkan's blend off, reading the destination from a copy of only the batch's
+rectangle (GPU work "blend copy"). A GIF batch is split where a primitive's pixels overlap those of the batch's
+primitives before it, so each reads the destination as the GS would; a native batch's triangles cannot be split on the
+CPU and are counted (`... of them native: their triangles may overlap`). None of the four spots has such a blend (0
+counted before and after); checked by sending every blended GIF batch through it (a diagnostic build, native draws
+off): within 3 levels of Vulkan's blend at 000, 009:2 and 063; at 009, 2,269 pixels over 8, all in the picture's top
+row, where both differ from the native GS by about 215 levels anyway. `KF4_PC_SHADER_BLEND=0`: the nearest Vulkan
+blend, as before (counted).
+
+**Pictures against the native GS** (vblank 2700, 30, native draws; pixels over 8 levels): 000 432,166 -> 428,442; 009
+868,994 (the same); 009:2 464,453 -> 458,533; 063 483,639 (the same). With `KF4_PC_STENCIL=0 KF4_PC_SHADER_BLEND=0`
+byte for byte with the build before (204 pictures a spot at 240, 51 at 30).
+
+**Merged draws, measured.** At 000 (3,397 vblanks) 1,974,468 native batches went out in 398,504 draw calls (`--stats`'
+`pc canvas` line now has them) and 332,623 canvas batches in all: about 117 calls a vblank. Growing runs across draws
+would save at most the calls past one a batch (about 66,000, 20 a vblank); `CommandBuffer::draw` was 3 of 160 samples.
+Not built. What breaks batches is state (texture, CLUT, registers), so merging further is bindless textures and the
+material in the draw's record; it pays when step 5 draws the frame's calls again for each picture between, and is to
+be designed with it.
+
+## Item 2 built (2026-10-30): GPU timestamps, and textures by the GPU's sampler
+
+**GPU timestamps** (`port/gs/pc/pcr_gpu_time.h`): a timestamp wherever the kind of work recorded changes (the 2D,
+native batches by program, DATE's copy, a texture's copy from a surface, surfaces, uploads, copies, the picture), each
+interval added to its kind; on with `KF4_GSN_GPU_TIME=1` (pace_test sets it) and the Shift+P profiler. `--stats`
+prints `[stats] pc renderer GPU time: ...`, pace_test's "GPU ms a picture". The time between submits is not counted.
+Run time the same with it on and off (map 000 at 30, 3,100 vblanks: 57.8 and 58.8 s).
+
+**Textures by the sampler.** A texture from uploads is decoded once with the CLUT and TEXA applied
+(`colour_texels` in `pcr_textures.h`, tested in `pcr_textures_test`) into an RGBA8 UNORM image, found again by its
+uploads, TEXA and CLUT colours compared whole, and read by `textureLod` with the GS's level from Q; MMAG and MMIN are the
+sampler's filters (without mipmaps the lod is held at 0.25, which reads level 0 by MMIN's filter), REPEAT and CLAMP
+its address modes. The GS's read in `pcr_prim.frag` stays for the region modes and textures decoded in part (counted:
+`[stats] pc canvas textures`), and for textures read from surfaces. `KF4_PC_SAMPLER=0` reads every texture the GS's
+way. At maps 000, 009, 009:2 and 063 every textured batch was the sampler's (0 by the GS's read).
+
+**Measured** (pace_test, 4x, native widescreen, 15 s, two runs each side alternated; MSAA, aniso and colour are not in
+pc yet):
+
+| GPU ms a picture | GS's read | sampler |
+|---|---|---|
+| 240 (all packets), maps 000 / 009 | 1.82-1.83 / 1.87-1.88 | 1.31-1.36 / 1.34-1.41 |
+| 30 (native draws), maps 000 / 009 | 1.07 / 1.21-1.22 | 0.86-1.00 / 0.95-1.08 |
+
+At 240 the 2D (GIF primitives) went from 1.60-1.66 to 1.09-1.18 ms a picture. Pictures against the native GS at vblank
+2700 (at 30, native draws on), pixels over 8 levels: 000 441,724 -> 432,166; 009 906,109 -> 868,994; 009:2 502,334 ->
+464,453; 063 505,549 -> 483,639 (closer at every spot; pc and native differ this much before the change too, not yet
+looked into). Against the GS's read: 000 and 063 within 7 levels; the fire at 009 13,325 pixels over 8 (worst 93), its
+additive layers adding up the sampler's finer filter fraction (8 bits against the GS's 4).
+
+**What limits pc is not the GPU.** Pictures a second did not move: 61 at 240 (packets: the game's VU1 runs and GIF,
+step 5), and at 30 the game itself runs at 19-21 vblanks a second under pc with native draws (2.1-2.9M native batches
+in 3,196 pictures, one at a time on pc's thread), already before this change. With about 1 ms of GPU a picture, the
+next gains in pictures a second are on the CPU: merged draws (item 4) for the native batches, and step 5.
+
+## Step 2 built (2026-10-29): the PC renderer draws the whole game from its GIF packets
+
+`--renderer pc` draws every picture the game sends as GIF packets, with none of the native GS's code
+(`port/gs/pc/pcr_canvas.cpp`, shaders in `port/gs/pc/shaders/`, built by `tools/build_shaders.py` into
+`pcr_shaders.h`). Native draws are turned off under it for now (the game's VU1 packets carry the 3D), so the picture is
+whole; drawing the native draws themselves is step 3.
+
+- **Surfaces**: a GPU image for each buffer drawn into (base page, width, format), as tall as what is drawn in it. A
+  frame whose base is inside a surface of its width is that surface at an offset (the game's 128-wide targets at 1d2
+  and 1d4 are one buffer a page row apart); a surface made takes in those of its width it overlaps. A new surface
+  starts as the uploads left its pages.
+- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there.
+  Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
+  host) are made from the uploads or the surface: the game reads its effect atlas back and uploads it again, so a
+  read-back of zeroes lost the torches' flames.
+- **The GS's pixel** in `pcr_prim.frag`: texture read (wrap modes, filters, the mipmap level from Q, CLUT, TEXA),
+  texture function, fog, alpha test with AFAIL's passes, DATE (from a copy of the destination), FBA; ALPHA by
+  Vulkan's blend (the colour premultiplied in the shader where it needs it; As above 128 is clamped: counted).
+- **Pictures between** at `--frame-rate` 60-240: frame_interp.c's own way (the frame's packets sent again, moved),
+  each drawn and scanned out.
+- **Measured against `--renderer native --native-draw off`** (title, menus, map 000 at vblanks 300-2700): 29 to
+  4,263 of 286,720 pixels differ by more than 8 (blend rounding, the 2D's edges); the torches, the HUD's gauge, the
+  menus and the scrolling textures as native. `KF4_PC_CENSUS=1` counts what the game sends (targets, tests, blends,
+  textures, transfers) for `--stats`.
+- **Save states** (built after): the GS's 4 MB first (the uploads' chunks in order, the colour surfaces' pixels over
+  the pages drawn last), then the registers, Q and the CLUT's mirror; taken back as one upload of the whole memory.
+  States of the native GS load into the PC renderer and the PC renderer's into the native GS by their first 4 MB
+  (gs.c's take_other_vram). Each of the three, loaded at 2600 at map 000, gives at 2700 the picture of the run that
+  went on (0 pixels differ). Z buffers are not kept (the game draws its Z anew each frame).
+- **Not yet**: native draws (step 3), MSAA, `--native-colour`,
+  anisotropic filtering, captures, the overlay's settings; performance not measured yet.
+
+## Step 3, first part (2026-10-29): native draws of program 0x000
+
+`--renderer pc --native-draw on` draws the native draws of program 0x000 itself (`port/gs/pc/pcr_native.cpp`): the
+map's records, the sky, the items lying in the maps and the picked item. Each batch's registers (FOGCOL at the set-up,
+the A+D packet, PRIM from the strip's tag) are written to the GIF front end as the GS gets them, so the state a draw
+leaves is the PS2 path's; its triangles are drawn from the mesh on the GPU (`shaders/pcr_nd000.vert`) through the same
+GS pixel as any primitive. VU1's maths is shared with the native GS's shaders (`port/render/shaders/vu1_000_*.h`, moved
+out of `nd_000.vert`; the native GS's SPIR-V byte for byte as before), and the draw's record is worked out on the CPU
+by `port/render/vu1_record.cpp`, checked bit for bit against VU1's own set-up (`vu1_record_test`, ctest `vu1_record`).
+
+- **The kinds**: gs.c turns on only the kinds the PC renderer draws (`pcr_native_kinds()`); the others go as packets.
+  The map's objects wait for program 0x280 (a door at map 000 is a skinned object). `--native-draw-compare` is off
+  under it.
+- **Only at `--frame-rate 30` for now**: frame_interp.c's CPU way of making the pictures between cannot move a native
+  draw (the native GS moves them only on its GPU way), so under the PC renderer the game sends packets whenever there
+  are pictures between (`port_gs_native_draws_now`). Step 5 lifts it.
+- **Measured** at vblank 2700 against the PC renderer on packets: map 000 110 pixels differ (by 2 at most), 009 374
+  (by 3), 009:2 251 (by 2); the sky and the items alone 0. Map 063's clouds differ (14,654 pixels, by 36): the native
+  GS's native draws differ from its packets there the same way (14,615), so it is native draw's sky, not this.
+- A batch's texture is read whole and what it draws over is taken as its scissor's rectangle (its corners are the
+  GPU's), as P7 takes them.
+- **Program 0x280** (the skinned models: the map's skinned objects, the creatures, the arm and what it holds, the gold;
+  built after): `port/render/vu1_record.cpp` makes its record (both matrix sets, checked bit for bit against VU1's
+  set-up in `vu1_record_test`) and VU1's clipping plan of each batch (whether the run draws its strip at all, which
+  triangles it kicks); those triangles are listed each time and drawn by `shaders/pcr_nd280.vert` (the maths shared
+  with the native GS's `nd_280.vert`: `port/render/shaders/vu1_280_*.h`), the sphere-mapped second pass too. At vblank
+  2700 against the PC renderer on packets: 000 111 pixels (by 2), 009 378 (by 3), 009:2 251 (by 2), 063 as before.
+- **Programs 0x5A0, 0x700 and the GS strips** (built after). The shadows are 0x000's maths on the silhouette meshes
+  with no lights and no fog (`vu1_record_5a0`). The effects (`vu1_record_700`, `vu1_ad_700`: the flipbook's TEX0,
+  `vu1_kicks_700`: VU1's clipping with the vertex past the strip) are drawn by `shaders/pcr_nd700.vert`, its maths
+  shared with `nd_700.vert` (`port/render/shaders/vu1_700_*.h`). The weapon's trail (`RD_PROGRAM_GS_STRIP`) is
+  written to the front end as its GIF packet (`write_packed_tag`, `write_packed_qword`). At vblank 2700 against
+  packets: 000 111 pixels (by 2), 009 388 (by 4), 009:2 251 (by 2).
+
+# Part 1: the PC renderer (P1-P6)
 
 A real PC renderer for King's Field IV's world: the map, the map objects, the items, the characters and the arm
 drawn by our own Vulkan renderer from the game's data and state, the way a PC game draws its world, instead of
@@ -7,7 +609,9 @@ text, the fades and the screen passes) and, until they are ported, the effects. 
 reference (the PS2's pictures, checked byte for byte); `fast` is checked against it by how much it differs, not
 whether, and is free to differ where that is the point (filtering, depth, anti-aliasing, frame rate).
 
-Status: the plan, agreed with the owner (October 2026); P1 built, P2 built (the map's records, objects, items and gold,
+**Status as written when the plan was closed out** (October 2026; corrected at the top: the native GS's thread, which
+"limit no spot measured" then, limits map 000 above about 200 pictures a second at the owner's later settings):
+the plan, agreed with the owner (October 2026); P1 built, P2 built (the map's records, objects, items and gold,
 opaque, alpha-tested and blended), P3's first two steps built (the skinned parts' first pass drawn once, alphas a
 little above 1.0 by Vulkan's blending): at 170 Hz `fast` keeps the owner's settings at 168-170 pictures a second at
 maps 000 and 009, where P1 kept 84 and 118 (below, "In real time"). The steps since P2's first were decided overnight
@@ -16,12 +620,7 @@ the rule of agreeing the interface first while the plan is finished). **Where th
 every spot keeps 168-170 pictures a second; at 240 maps 003, 004, 009, 013, 017 and 030 keep 239-240, map 000 236 (GPU
 bound: 239 at 2x with aniso 1). What is left is not a phase's: the scene's own draws, the Z-first draws of As up to
 2.0 (below, "What still has a Z-first draw"), the GS's 2D and screen passes; and on the GS's thread the uploads a
-picture between asks for again (P5, "What a recording still costs"), which limit no spot measured. The
-owner's choices:
-- **The name** is `fast` (`--renderer fast`, the Debug page's choice and `settings.json`'s `display.renderer`).
-- **The look** is the original's, as exactly as a PC renderer can have it: the PS2's lighting, fog, colours and
-  draw order, the vertex programs as they are. Room is left for a remastered look (the shaders' inputs carry what
-  per-pixel light and real fog would need), but nothing of it is the default.
+picture between asks for again (P5, "What a recording still costs"), which limit no spot measured.
 
 ## Why (measured October 2026, branch `p8/gpu-plan`)
 
@@ -473,7 +1072,688 @@ void pc_world_print_stats(); // --stats: draws taken, batches, materials, flushe
 - **Later phases**: P5's pictures between interpolate the kept draws (their `RdDraw` identity and matrices are in
   the snapshot as before); only where the snapshot is made has changed.
 
+## P7: the world off the GS's batches (built 2026-10-29)
+
+**What stopped the last attempt, and how it is dealt with.** A PC renderer apart from the GS was stopped by "P2,
+revised": a draw's material (TEX0 read against VRAM as the chain has it at that point, TEST and ALPHA the chain's
+registers then) is only known on the GS's thread, in the chain's order. P7 keeps that: the material is still resolved
+where the GS's thread meets the draw. What it takes away is everything else the GS did with the batch: no corners
+planned on the CPU, no GS batch, no `sa_draw_batch`, no runs, no ties' Z-first draws, no texture rows from the
+vertices. The batch is drawn at once, in the chain's order, from its mesh on the GPU.
+
+`port/gs/native/gsn_pc_draw.inc` (included by `gsn_standalone.inc` after `gsn_pc_world.inc`; the GS's thread):
+
+- **Program 0x000** (the map's records and sky, objects, items, gold, the picked item): one draw a batch, its triangles
+  a list on the GPU made once per mesh (`pcd.tris`: the arena vertex of each corner and the kick bits), the draw's
+  `NdConst` record its instance; `pc_000.vert` (`nd_000.vert` built with `PC_DRAW`) does VU1's maths, the ADC that
+  leaves a triangle out and a layer's Z slope. Consecutive batches with the same material and record grow the last
+  draw (`Cmd::grow_last_draw`): at map 000 2.24 million batches in 2,500 vblanks became 602,000 draw calls.
+- **Program 0x280** (the creatures, the arm and what it holds): the CPU's plan (`nd280_plan_cached`) still says whether
+  a run draws and which triangles VU1 kicks; those go into a list each time (`pcd.kicked`), each pass one draw with
+  `pc_280.vert`. No corners, no GS batch, no skinned groups.
+- **Program 0x700** (the effects): the same, one strip a draw with `pc_700.vert`, the layer's slope from the plan.
+- **Materials** are cached by the registers they are resolved from, the vertices' alpha range and the CLUT's contents
+  (`PcdKey`); dropped when the page-ownership table changes. A material that reads a render target or VRAM (the
+  reflection, the scrolling textures, a region clamp) uses the GS's sampling (`gs_frag.h`) and is resolved again
+  each time. A draw into a named target (the reflection's 256 x 256) is drawn there.
+- **Declined** to the GS's batch as before: shader blending (As above 1, PABE, no COLCLAMP, FBA; about 3% of the
+  batches at map 000, 8-12% at 009 and 063), two alpha-test passes, DATE. `KF4_PC_DRAW=0` turns P7 off.
+- The pipelines (both samplers, `ps_scene_samples()` x the scratch formats) are in the pipeline set: `KF4_GSN_WARM=set`
+  made none outside it.
+
+**Measured** (the owner's settings: 4x, native widescreen, MSAA 2, aniso 16, cut-out SSAA, `--native-colour high`;
+headless, `pace_test.py`, P7 against `KF4_PC_DRAW=0`, runs alternated):
+
+| | map 000 | map 009 |
+|---|---|---|
+| the GS's thread a game frame (cost, 240) | 13.1 ms, was 16.2 (-19%) | 13.9 ms, was 17.0 (-18%) |
+| a recording | 4.83 ms, was 4.34 | 4.2-4.3 ms, was 4.63 |
+| fixed 240: pictures a second (lowest second) | 239.75 (239), was 236-238 (230-234) | 239.75, as before |
+| the GPU a picture at 240 | 3.40 ms, was 3.61 | 3.40, as before |
+| unlocked: pictures a second | 256-258, was 198-203 (+28%) | 262-264, was 225-228 (+16%) |
+
+**Pictures** against the GS's batches (2,500 vblanks, the frame and three pictures between): map 000 differs by one
+level over whole surfaces (the GPU's interpolation of colour and UV against the GS's corners: 270,345 pixels, worst
+18, 2 above 16); 009:0 22 pixels (worst 4); 009:2's creatures 2,374 by one; 063 6,420, of which 127 above 16: a seam
+crack the GS's batches drew and P7 does not.
+
+**What still goes through the GS's batches in `fast`**: the declined batches above; the shadows (0x5A0: DATE and the
+stencil, about 570 batches at map 000); the GS's own 3D (about 7,000 batches); the water's ripple and the weapon's trail
+strips; the 2D and the screen passes (by design, part 1's top). A picture between still walks the frame's packets
+again (the recording), and at map 000 P7's recording is about 0.5 ms dearer, its many small draws recorded as calls
+rather than replayed GS batches: "Where it stands", next item 1.
+
+### P7, kept: the frame's calls made again in its pictures between (built 2026-10-29)
+
+A picture between walked the frame's packets again and, for each world draw, resolved every batch's material again and
+planned its triangles again, for the picture's record. Now the frame keeps what P7 did, and a picture makes it again
+(`gsn_pc_draw.inc`, "Kept calls"; `PcdKept` in `gsn_nd_prep.inc`, beside the record and corners nd_prep keeps):
+
+- **The frame keeps each call.** Every P7 call of a draw goes into `NdPrepFrame::pcd_calls`, in the draw's order: a batch
+  of program 0x000, a pass of 0x280, a strip of 0x700, and those that drew nothing (`PCD_CALL_NOTHING`) or were not
+  kicked or all clipped (`PCD_CALL_UNKICKED`, no PRIM). A drawn call holds its material (`shared_ptr`: the material cache
+  may let it go), its triangles' list (a buffer never written again), its first triangle and count, its instance bits
+  and the registers its material was resolved from. A draw is kept whole when every one of its batches went to P7 and
+  was kept; a declined batch, a material that reads a target or VRAM (`!kept`), an unsupported mesh, or an arena that
+  changed while the draw was made, makes it not whole.
+- **A picture takes the draw** when the frame's draw at that place is whole, the table has changed no more since the
+  frame began than the frame's had (`sat.gen`, counted from each frame's own start: the counter goes on from frame to
+  frame) and the arena is the frame's (`pcd_between_takes`).
+- **Each call is made again** (`pcd_between_call`). Its registers are checked against the picture's, less what the
+  picture has of its own: FRAME's base and width and ZBUF's base (a picture is shown in its own buffer), the scissor
+  and the scene's places. Then the place part of `pcd_prepare` runs as it does for any batch (`pcd_where`: what came
+  before in the chain is drawn, a reflection kept as the frame drew it, ZTST NEVER, `sa_acquire` from the picture's
+  FRAME and ZBUF, the viewport and scissor), and `pcd_finish` draws with the kept material and triangles and the
+  picture's record. Nothing is resolved or planned: `nd280_plan_cached`, `nd700_plan` and the corners are not made for a
+  taken draw, and 0x700 learns from its kept call whether a strip is kicked (PRIM is written only then).
+- **`pcd_prepare` is three parts**: `pcd_key_regs` (the registers, and the declines that draw nothing), `pcd_where` (what
+  came before, the target, the place) and `pcd_material` (the material, held when kept). A kept call uses the first for
+  its check and the second for where it goes; the third is the frame's, kept.
+- **A fallback** (a call whose registers or place differ, or that declines in the picture) turns the draw back to the
+  normal path from that call on (`pcd_between_stop`). The calls before it were checked and stand.
+- `--stats`: `pc draws, pictures between (KF4_PC_KEPT)`: the draws made again from the kept calls, and those worked out
+  again, by why (no frame kept, not whole, the table or arena changed, a call on: its registers differed or it declined).
+- `KF4_PC_KEPT=0`: nothing kept and nothing taken, `fast` as before.
+
+**Checked**: every picture (the frame's and `_250`, `_500`, `_750`, every 7th vblank from 2300 to 2650, 204 a spot) byte
+for byte the build's before at 000, 009, 009:2 and 063, and `KF4_PC_KEPT=0`'s; frame_test `--renderer native` and
+`fast` PASS; ASan + UBSan (clang) at 000 and 009:2, nothing in port/gs.
+
+**Measured** (the owner's settings, `pace_test.py --hz 240 --mode cost`, alternating runs, two each):
+
+| | kept on | `KF4_PC_KEPT=0` |
+|---|---|---|
+| 000: a recording | 4.85, 4.79 ms | 5.05, 4.93 ms |
+| 000: the GS's thread a game frame | 12.79, 12.81 ms | 12.92, 12.97 ms |
+| 009: a recording | 5.13, 5.22 ms | 5.12, 5.10 ms |
+
+About 3% of a recording at 000, nothing at 009, because the table check turns most draws away: made again / turned away
+by it, 60,046 / 112,491 at 000, 42,794 / 187,606 at 009, 45,669 / 58,410 at 009:2, 86,668 / 0 at 063.
+
+**Open: the table check is a count, and a count cannot say "unchanged".** A picture between changes the table less than
+its frame did: it asks only for the uploads it needs again (frame_interp.c's uploads left out), leaves the kept
+reflection's draws and the frame's copies out, and draws into the buffer shown. Counting only the named targets' rows,
+or only the owners' changes (the uploads and the table made again), turned away the same draws (tried, not kept). With
+the check removed (a test run at 009:2) twice the draws were taken and the pictures were the same, but that is not a
+proof. The owner's rule (2026-10-29): no shortcut and no workaround; the check is replaced by one of what the call reads
+(the table's answer for its texture's pages, the same image as the frame's), not removed or loosened. That check is
+part of the next step ("Where it stands", "Next"), where the kept calls become the world's snapshot.
+
+### The world's snapshot: a picture's world draws without the walk (built 2026-10-29)
+
+"Where it stands", next item's steps 1-3, built on the kept calls ("P7, kept", above). `gsn_pc_draw.inc`, "Snapshot";
+`PcdSnapDraw` in `gsn_nd_prep.inc`.
+
+**What the frame keeps.** For each draw kept whole (every batch the PC renderer's, every call kept), besides its calls:
+the draw and camera as fetched; the 33 registers it began with (`pcd_entry_regs`: everything a call or the record reads
+but the vertex, transfer and port registers, FRAME and ZBUF less their bases and FRAME's width, and the scissor: a
+picture's own); each TEX0 write among its calls (`pcd_batch_write`: the CLUT load it starts, with TEXCLUT then, and
+before which call); and the registers its writes left (those written, and those a write changed besides: TEX0's
+mipmap addresses). A draw that writes a vertex, transfer or port register, or FRAME, ZBUF or a scissor, or one of whose
+calls drew nothing for its place (the kept reflection, an empty scissor), keeps none.
+
+**What a picture does with it** (`pcd_snapshot_find` at `RD_ND_DRAW`, `pcd_snapshot_draw` in place of the batches):
+1. **Its place in the chain.** When the 33 registers are the frame's at the draw's start (exact), the draw is the frame's
+   from there: its writes are the meshes' and the draw's, the same data, so every call's registers are the frame's
+   (the per-call check of the registers is not needed). Its record is made from the kept draw and camera (`nd_fetch`:
+   no `rd_fetch`, no meshes); the GS's vertices pending are drawn first and the scene's kept parts after the loads
+   before the first call, as the walk's first call does; then the calls, with their materials, by the picture's
+   record. One `pcd_where` for the draw: every drawn call's frame, Z buffer and scissor (its context's, the picture's
+   bases) must be the first's.
+2. **The state it leaves.** The CLUT loads are made again in order (they read VRAM: `clut_load`, `sa_clut_load`), each
+   drawn call's CLUT checked as the frame's after the loads before it (the mirror's hash); then the registers are set
+   as the writes left them, without writing them.
+3. **The records.** Each draw's record is made from the kept draw and camera, as the walk made it from the fetched ones
+   (the same code: the moves by `nd_model_flags`), with no fetch and no batch walked.
+
+**Exact checks** (none is a count): the registers at the draw's start; each drawn call's CLUT; the place (`pcd_where`'s,
+and each call's `pcd_place_same`); the table's answer for each call's texture (`pcd_table_same`: `sa_texture` asked as
+the material was resolved, the same decode by its serial, not a target; found once a material while the table, the frame
+copy and the scene's image are as then). A CLUT load from a page some target has walks the draw (its write-back would be
+an act among the draws). Anything that fails walks the draw as before, its loads undone first (the GS's and the table's
+CLUT put back). **The kept calls' table count is replaced** by `pcd_table_same` in `pcd_between_call` too: at 000 every
+kept draw is now taken (172,537; was 60,046 with 112,491 turned away by the count).
+
+`--stats`: `pc draws, snapshot (KF4_PC_SNAPSHOT)`: the draws made from the snapshot, their calls and loads, the draws
+walked by why, and the frame's draws kept whole without a snapshot by why. `KF4_PC_SNAPSHOT=0`: none kept, all walked.
+
+**Checked**: at 000, 009:0, 009:2 and 063 (the start: hex 0x63, 99 to `--teleport`, where the game starts; 204 pictures
+each: the frames and `_250`, `_500`, `_750`, every 7th vblank 2300-2650) byte for byte with `KF4_PC_SNAPSHOT=0` and with
+the build before; ctest (gsn_draw among them), vu1_test, boot_test, frame_test native and fast; the map tour (64 maps,
+its captures made the first time on this machine in 9 min 17 s: 450,157 pixels, worst 106 on map 030, every scanout
+the same; the same with the build before); ASan + UBSan (clang) at 000 and 009:2, nothing in port/gs. Made from the
+snapshot: 169,380 draws at 000 (208 walked for their registers, 2,949 for a CLUT on a target's page), 226,187 at 009
+(474, 3,739), 100,565 at 009:2 (569, 1,608, 1,337 for the place or the table).
+
+**Measured** (the owner's settings, `pace_test.py --hz 240 --mode cost`, alternating, two runs each):
+
+| | snapshot | `KF4_PC_SNAPSHOT=0` |
+|---|---|---|
+| 000: a recording | 4.37, 4.47 ms | 4.62, 4.65 ms |
+| 000: the GS's thread a game frame | 12.42, 12.32 ms | 12.65, 12.62 ms |
+| 009: a recording | 4.49, 4.55 ms | 4.94, 4.81 ms |
+| 009: the GS's thread a game frame | 14.58, 14.53 ms | 15.34, 15.03 ms |
+
 ## Open question
 
 - **P1 under `modern` too** (`--native-sampler hardware`): the plan builds it so, so every map is faster before
   P2-P6; its pictures differ from the PS2's in filtering only. Not decided: `fast` uses it either way.
+
+# Part 2: smooth play (steps 0-5)
+
+The owner's report: on a top GPU (RX 9070 XT, 170 Hz screen) the game still drops pictures, stalls, and logs
+`a pipeline not on the list was made in play`; it should be much better than it is, and have an unlocked frame
+rate. This plan takes each cause measured below to its fix, in order of what the owner feels, and adds
+`--frame-rate unlocked`.
+
+## Smooth play: what was measured (main 74149928 + the refresh clock, 2026-10-28)
+
+Headless, `KF4_PRESENT_SIM=169.83` (the owner's screen), the owner's settings from `settings.json`: `--renderer
+fast --native-draw on --native-scale 4 --native-widescreen --native-msaa 2 --native-aniso 16 --native-cutout-aa
+ssaa --native-colour high`, newgame.pad and `--teleport 1900:MAP:0 --invincible`, 30 s of play, a fresh
+`KF4_DATA_DIR`. Ryzen 7 5700X, RADV (Mesa 26.2). A real window was not measured (below, step 0).
+
+| run | pictures a second (lowest second) | refreshes not one step of the world | longest gap in play |
+|---|---|---|---|
+| 000, `--frame-rate monitor` | 169.1 (165) | 0.9% | 23.6 ms |
+| 009, `--frame-rate monitor` | 169.8 (168) | 0.1% | 11.8 ms |
+| 000, `--frame-rate 240` (the owner's setting) | 221.8 (216), 654 pictures left out | **9.4%** | 16.9 ms |
+| 000, monitor, driver's shader cache off | 169.2 (164) | 0.5% | compiles: **7.7 s in all, the longest 1,058 ms** |
+
+What each says:
+
+1. **The pipelines.** The shipped list (`gsn_pipeline_list.h`) was last made on 2026-10-24, before `fast` existed,
+   and has no line for `--native-colour high` (tag `k1`). For the owner's settings (`m2.c1.k1.s1.x0`) nothing is
+   made ahead: `pipelines made ahead: 224 on the lists, 0 built`. Every pipeline `fast` needs is made by the draw
+   that first needs it, with the GS's thread waiting. On RADV with Mesa's own disk cache warm that is 0-2 ms each
+   (25 on map 000); with it cold (a new Mesa, a shader changed by a new build, a first run) it is seconds in all,
+   and up to a second for one. Every build that changes a shader makes its lines in both lists stale, so the owner,
+   who builds often, meets them again and again.
+2. **The pipeline cache is written on the GS's thread** (`save_pipeline_cache`, gsn.cpp): 3.5 MB from
+   `vkGetPipelineCacheData` and a file written, two seconds after any pipeline is made. A second, smaller hitch
+   after each compile.
+3. **240 on a 169.83 Hz screen judders by design.** Pictures timed for 240 a second land on 170 refreshes: one in
+   ten refreshes shows the world move by two steps or none, and the GPU draws 70 pictures a second nobody sees. The
+   owner's `settings.json` has `frame_rate: 240` with vsync off.
+4. **The GS's thread works in bursts, and is nearly full.** The frame's packets (gif ~13 ms) and the back end's
+   flush come within one vblank: about 20 ms (p99 26, worst 45 ms on 000). That is not all a game frame costs it:
+   the recording of the pictures between comes in the next vblank (step 2, measured again). Over 33 ms the
+   pictures between are cut (`cut to fewer a vblank`). RENDERER.md, "Where 240 stands", found the same at 009 at
+   240.
+5. **The refresh clock's latency is taken from the hitches.** The time before each refresh a picture is made
+   for is the 98th percentile of the last 256 pictures' lateness: 6-7.5 ms after a clean run, 17 ms after the
+   cold one. A compile makes every picture after it a refresh later than it needs to be.
+6. **The GPU's time a picture is far above what the scene needs.** 3.46 ms a picture at 4x MSAA 2x
+   (`KF4_GSN_GPU_TIME=2`, 000) for about 21,000 triangles. A picture is 13.6 render passes and 11.6 resolves,
+   with 221 MB loaded, 233 MB stored, 204 MB resolved and 78 MB copied for blending: about 0.7 GB of memory
+   traffic a picture. 156,137 of 193,234 render passes ended for shader blending. By kind: scene draws 0.54 ms,
+   passes untagged 0.55, resolves 0.49, skinned groups 0.39, Z-first alpha-tested 0.38, MSAA loads 0.28, scene
+   ops 0.26, GS batches 0.20. This is the ceiling of any unlocked frame rate: about 285 a second today.
+   **(Corrected 2026-10-29: not at the owner's settings.** The native GS's thread stops the pictures first, at about
+   175 a second on map 000: "Where it stands" at the top, and step 3's measures.)
+7. **The game's thread hashes about 5 MB of meshes a game frame** (native draw finds its meshes by content: 5.9 GB
+   hashed in the run). It keeps up on this CPU (no game vblank over 25 ms in play) but it is the first thing a
+   slower CPU or a busier map loses.
+
+## Smooth play: the targets
+
+At the owner's settings, on this machine and on Windows with an NVIDIA card (the work is platform-neutral):
+
+- **No stall from a pipeline, ever**: no gap over two refreshes from a compile in play, including a first run of
+  a new build on a cold driver cache.
+- **Steady play**: at least 99.5% of refreshes one step of the world, at 170 and 240 Hz, every spot of the map
+  tour; no second under the refresh rate.
+- **GPU at most 1.5 ms a picture** at 4x MSAA 2x (from 3.46), so that unlocked reaches 500 a second and 240 Hz
+  keeps up with room.
+- **`--frame-rate unlocked`**, as smooth as `monitor` where the screen can show it (VRR, or tearing allowed).
+
+## Smooth play, step 0: land what is in flight, and measure what the owner sees
+
+- Commit the refresh clock (`refresh_clock.c`, `screen_vblank.c`, `refresh_clock_test`) with its checks.
+- **A real window's record.** `KF4_PRESENT_LOG` in a real window, with each picture's present and, where the
+  system knows it, the refresh it reached; `pace_test.py --window` reads it. The headless runs above cannot see the
+  compositor, the swapchain or fullscreen; this is how the owner's own play gets numbers.
+- **`pace_test.py --cold`**: a fresh data folder and the driver's cache off (`MESA_SHADER_CACHE_DISABLE=true`;
+  `__GL_SHADER_DISK_CACHE=0` on NVIDIA); prints the compiles made in play, their total and the longest. Step 1's
+  check.
+- Owner, now: set the frame rate to **monitor** (the Debug page, or `"frame_rate": "monitor"`): it is item 3
+  above, and it costs nothing.
+
+## Smooth play, step 1: pipelines never stall play
+
+Why there is building at all: the shaders are compiled ahead, into SPIR-V (`gsn_shaders.h`), but SPIR-V is not
+what a GPU runs. The driver turns each pipeline (shaders together with the render pass's formats and samples, the
+vertex layout and the state not made dynamic) into its own GPU's machine code, which differs by GPU and by driver
+version; a pipeline cache from another GPU or driver is refused by its header. So the machine code cannot be
+shipped (Steam's shader pre-caching does it by collecting caches per GPU and driver from players). What can be
+done is to make every pipeline before play and keep the driver's result on disk: this step makes that complete.
+
+In order; each is useful alone.
+
+1. **The shipped list made again, for `fast` and every tag the settings offer** (MSAA 1/2/4/8, colour exact and
+   high, cut-out AA, the scene's samples), from map tours with `--renderer fast` and `modern`. A ctest checks the
+   shipped list against the built shaders: no stale line, every tag the settings page can produce present. A
+   shader change that forgets to remake the list then fails the tests, instead of the owner's next play.
+2. **Lines not tied to the settings.** A pipeline's shaders and state are the same at MSAA 2 and 4; only its
+   render pass differs. The warm-up makes each line again with the render pass of the settings in use
+   (attachments' formats and samples rewritten, then checked by Granite's hash as now). One tour then covers every
+   combination, and the data folder's lines made at other settings count too.
+   **Then the whole set worked out, not found by playing: the pipeline set** (agreed 2026-10-28; built, below).
+3. **The pipeline cache and the data folder's list written on a thread of their own**, not the GS's. **Built**:
+   the GS's thread only says the files are wanted; `kf4-gs-files` takes the cache's bytes from Granite (about 3 ms
+   at 3 MB, 1.2 ms more of it allocating) and writes them (1.3-1.5 ms). Taking the bytes was the larger part, and
+   was not safe on any thread: on RADV Granite keeps pipeline binaries (`VK_KHR_pipeline_binary`) and walked their
+   maps without their locks, while the back end's thread and the warm-up's could be adding to them. A Granite edit
+   made at configure (`cmake/granite_pipeline_warm.cmake`) holds the maps' read locks for the walk. The cache is now
+   written while a cold warm-up runs too (every two seconds, as it grows), so a start cut short keeps what was
+   built. Checked: TSan over a cold start with the files written seven times while two warm-up threads compiled,
+   nothing from this code or Granite's cache; the next start took all 184 pipelines from the file.
+4. **A draw in `fast` never waits for a compile.** A pipeline not made is handed to the warm-up's threads, and the
+   batch is not drawn until it is (a few pictures with RADV's cache warm; up to a second cold). `modern` and
+   `native` are the references and still wait (their pictures are checked byte for byte). **Owner's choice**: an
+   object missing for a few pictures, or a stall; this plan proposes the first for `fast` only.
+5. **One line, not one a pipeline**: `--stats` and Shift+P's profiler count the compiles made in play and their
+   time; the log keeps a line only for those over 5 ms. **Built**: `port_profile_compile` counts them whether the
+   panel is open or not (`profile_test`); the profiler's line and `--stats`' `pipelines made ahead` give the count,
+   the time in all and the longest.
+
+Check: `pace_test.py --cold` at 000, 009, 063 and 022: no picture gap over two refreshes.
+
+### The pipeline set (`gsn_pipeline_set.inc`)
+
+The start already built pipelines ahead ("Building shaders... N/M"); what it lacked was a complete list, since the
+lists are what tours happened to draw, at the settings they ran with. The set is every pipeline the draws can ask
+for, worked out from the code for the settings in use.
+
+**Why it is small.** Granite keys a pipeline on its program (vertex and fragment shader), the compatible render
+pass (the attachments' formats, the subpass), the vertex layout and the state it bakes in. With dynamic state
+(`dynamic_state_choice`) depth, stencil, culling, blending and the write mask are set at each draw and left out of
+the key. Decoded, every pipeline in the recorded lists had the same baked state (a triangle list, the dynamic bits)
+and one of two vertex layouts. So a pipeline is a program and a pass shape: at the owner's settings the lists held
+33 graphics pipelines from 25 programs and 9 pass shapes, and 14-57 at other settings.
+
+**How it works.**
+- Each place that draws is an entry of `ps_sites[]`, a function that adds the pipelines it can ask for:
+  the program and the pass it draws in (`PsPass`: colour format, depth format, samples, subpass: none,
+  `msaa_subpass`'s, `scratch_subpass`'s or `resolve_subpass`'s, the last split out of `begin_pass` for this), the vertex layout (none, `Vtx`, native draw's `Corner`) and
+  conservative rasterization; or a compute program. A new kind of draw is a new entry.
+- The passes are made from the same functions the draws take them from: `colour_format_of`,
+  `sa_depth_format_wanted`, `sa_samples_for` (split out of `sa_switch` and `sa_shape` for this), at the settings
+  wanted, since the targets take them only at a vblank after the start. The samples matter more than they look:
+  Granite's hash of a compatible render pass leaves them out, so a pipeline made at the wrong samples would be found
+  by a draw at the right ones.
+- At the start (`pw_start`, from `gsn_pipeline_cache`) the entries are listed, each pipeline's `DeferredPipelineCompile`
+  made as a `Cmd`'s draw would have it (Granite's opaque state with the dynamic bits) and its hash worked out with
+  Granite's own function, and those not already on a list are added to the warm-up's jobs, made on its threads
+  before play. The entries are made in the order the game needs them: the scanout, the copies and the GS's 2D (the
+  title) first, the world last.
+- **The check:** a pipeline a draw makes in play is counted against the set (`--stats`, "pipeline set"), and with
+  `KF4_GSN_WARM=set` (the set alone made ahead, not the lists) each one outside it is logged with its shaders'
+  names (`gsn_spv_all` now has them, from `tools/build_shaders.py`) and its pass. Outside the set means an entry is
+  missing or names a pass wrong. The set's hashes are also checked against the lists': at the owner's settings all
+  35 recorded (33 graphics, 2 compute) are in the set.
+- Not covered: a device without blending as dynamic state (no `VK_EXT_extended_dynamic_state3`): the blend
+  equation is then in the key, and the lists alone are used, as before. And the upscalers' composite and motion
+  passes (`gsn_composite.inc`), `--upscaler` only: not entries yet.
+
+**The entries** (184 pipelines at the owner's settings):
+
+| entry | what | pipelines |
+|---|---|---|
+| the scanout | `narrow_pass`, the movies' fields, the picture scaled and sharpened: 8-bit, one sample | 4 |
+| the full-screen copies | a target's picture and Z into its multisampled images and back, the copy shader blending reads in the pass; the scene's taken from the targets, given back, resampled | 24 |
+| the GS's batches | in a target's pass: Z clamped with its Z buffer, the plain program without; Z only; cut-outs at every sample; shader blending from the scratch; multisampled, resolving the copy the next run blends from; native draw's screen passes and trail (2D) over the plain programs; without the scene, the models' own vertex programs (`nd_program_of`: made whether native draw is on yet or not) | 40 |
+| the replay | the pictures between's compute programs | 2 |
+| the GS's draws in the scene | `sa_draw_range`'s PS2 corners and the water, in the scene's pass | 36 |
+| the scene's draws | its batches, skinned groups, the PC world's materials, the ties' Z-first draws, shader blending in the pass and its copies, in the scene's pass at its samples and at one, with the scratch or not | 78 |
+
+**Measured** (map 000, the owner's settings, 30 s of play, a fresh data folder each run):
+
+| | before (the lists) | the set |
+|---|---|---|
+| driver's cache warm: pipelines made in play | 25 | **0** (all from the cache in 0.01 s) |
+| driver's cache cold (`MESA_SHADER_CACHE_DISABLE=true`): made in play | 25 compiles, 7.7 s, the longest 1,058 ms | **0** in play (1 by the title before play, 3.9 s) |
+| cold: made ahead | 0 | 177 in 36 s on 8 threads; play waited 13.7 s |
+| cold: refreshes not one step, the longest gap | 0.5%, a 4-refresh jump 6 times | 0.7%, 25.6 ms (as with the cache warm) |
+
+(The cold rows are of the set at 177, before the resolve passes' 7 were added.)
+
+**Coverage** (`KF4_GSN_WARM=set`, a fresh data folder, 20 s of play after a teleport): pipelines made in play
+outside the set.
+
+| settings | map | the set | outside it |
+|---|---|---|---|
+| the owner's (`fast`, 4x, MSAA 2, colour high, 169.83 Hz monitor) | 000, 009, 063 | 184 | 0 |
+| `fast`, 3x, MSAA 8, colour high, 240 | 022 | 177 | 0 |
+| `modern`, 4x, MSAA 1 | 000 | 73 | 0 |
+| `native`, 3x, MSAA 4 | 000 | 129 | 0 (3 before `nd_program_of` and the resolve pass) |
+
+ASan and UBSan (`out/linux-clang-asan`, the owner's settings, map 000, the set alone): nothing from this code (the
+known underflow in `SoundDriver_Remote`; Granite's `memcpy` of no bytes from null for any pass without colour, the
+game's own too).
+
+**The over-build is accepted** (the owner, 2026-10-28: comprehensive over small). The set is a superset, 184 at the
+owner's settings against 35 recorded there; a cold start pays for it once per driver or shader change (36 s on 8
+threads, play waiting for what the intro and title have not hidden). An entry is narrowed only where the code shows
+a draw cannot reach a pipeline, never by what a tour happened not to draw.
+
+## Smooth play, step 2: the pictures between off the GS's thread
+
+### Measured again (smooth/picture-pump: step 1 and the refresh clock, 2026-10-28)
+
+Map 000, the owner's settings, `KF4_PRESENT_SIM=169.83`, `--frame-rate monitor`, `KF4_HITCH_MS=1`, vblanks 2000 to
+3600. The machine was busy (a browser playing video, load 2-4), and the game itself was measured as before.
+
+| a game frame on the GS's thread | ms |
+|---|---|
+| the frame's packets (gif) | 15.2 |
+| the vblank (mostly the flush) | 7.6 |
+| the recording: the frame's packets drawn a second time, for the first picture between | 7.1 (4.55 ms each in `--stats`) |
+| a replay of the recording | 0.0006 a picture |
+| **in all** (median, p90, p99, worst) | **31.2**, 34.7, 36.4, 38.0 of 33 |
+
+In play: 160.4 pictures a second (lowest second 154) and 8.4% of refreshes not one step of the world, against
+169.1 and 0.9% in the table above. The difference is the load, which is the finding: the GS's thread has about 2
+ms to spare a game frame, so anything else on the machine takes pictures between. The pictures left out are
+mostly in the vblank of the burst.
+
+What this changes. The plan below (2b) has the back end make the pictures between, so that none waits behind the
+GS's thread's next packets. But a replay already costs nothing; what the late pictures wait for is the recording,
+made on the GS's thread after the frame's burst (23-27 ms, then 7 ms more). The pump cannot make a picture before
+its recording is there, so on its own it would not take this lateness away. So step 2 is now in two parts, the
+recording first (agreed by the owner, 2026-10-28).
+
+### 2a: the recording made from the frame's own drawing
+
+The frame is drawn from its packets once into the buffer not shown, and then once more, rewritten by
+frame_interp.c, as the first picture between: recorded as it is drawn (Cmd, Recording), and its kicks set up to be
+moved (InterpKick, gs_replay.vert). Instead, the frame's own drawing is recorded, and its replays made into the
+buffer shown. That takes about 7 ms of 31 off the GS's thread each game frame, and the pictures between can start
+as soon as the frame is drawn.
+
+What the second drawing does differently, and so what the replay must do instead (to be checked first, before a
+header):
+- Its draws go into the buffer shown (FRAME), and TEX0 and BITBLTBUF where they read the frame point there too:
+  at a replay, the frame's images swapped for the shown buffer's, as the replay already swaps the targets' images
+  (`ReplayJob::images`, `now_image`).
+- Local-to-local transfers into anything but the frame are not started, but for the copies of the frame it reads
+  after them and the map change's COPY_RESTORE; local-to-host ones neither; FINISH, SIGNAL and LABEL are not sent.
+  The frame's drawing has them: each kept out of the recording (marked as the GS records it), or made again as a
+  copy of the swapped images.
+- Its vertices are drawn by gs_replay.vert from kicks, the frame's by the usual programs. Either the frame's draws
+  record their kicks too (and its own picture is then drawn as now, its pixels the same), or the recording keeps
+  both programs. The game's own frames must stay the same pixels with the frame rate above 30 or not (frame_test
+  `--dump-frames` of the even vblanks, as now).
+- The recording is checked against the GS's state before it (`interp_cannot_replay`: targets, registers, VRAM):
+  for the frame's own drawing that state is the one before the frame, which the GS has again only if nothing
+  between drew differently (`port_interp_end_vblank`'s exact restore).
+
+If the frame's drawing cannot be recorded for a frame (a read-back, a cut), the picture is drawn from the packets
+and recorded as now.
+
+**Checked (2026-10-28): not as written.** Two things stop it:
+- **The moves come after the frame is drawn.** frame_interp.c makes the frame's `GsnInterpMove`s at its first
+  picture between (`port_interp_picture` → `gpu_frame`), after the vblank, from the whole frame and the one
+  before (`objects_pair` pairs both ways). The GS draws the frame's packets as they come, before that. But the
+  recording's draws are decided from the moves (`interp_moving`, `interp_place_at_0`, `interp_alpha_range`,
+  `interp_t_at_0`: the scissor, the blending's copies at t 0, the alphas, the texture rows, the Z). Recording the
+  frame's own drawing means holding its packets until the vblank (losing the overlap with the game's sending) or
+  deciding all of those as if anything could move anywhere, in the frame's own drawing too.
+- **The recording is not the frame's drawing with its draws' vertices swapped.** 89 places in the GS decide
+  otherwise while recording (`interp.active`: native draw's six paths, the scene's targets, the copies, the
+  corners made on the GPU, the PC world). Each would have to make both, for the frame and for its pictures.
+
+### 2a, instead: the recording made cheaper (the owner's choice, 2026-10-28)
+
+The same recording, the same pictures, less of the GS's thread.
+
+**Built: a frame recorded once** (`interp_settle_newer`, gsn.cpp). A frame's recording that began with the frame
+buffer's multisampled image newer and ended with its 2D drawn into the image found the GS "not as recorded" at its
+next picture (`--stats`: "drawn from the packets again ... (targets)") and was recorded again: 367 of the first 1,400
+frames of tests/newgame.pad, 4 ms each. Now the two images are made the same first (a resolve or a load, exact) and
+named newer as before the recording. In play on map 000 the frames were already recorded once (none of the 367 is
+after the teleport); at the new game's start, a quarter of the frames lose a second recording. `--stats`: "with a
+multisampled target's images made the same first". Checked: 1,017 pictures (every 7th vblank to 2,420 at 170, every
+picture of it, 299 of them right after a settle) byte for byte the old build's; ASan and UBSan over the same run,
+nothing from it.
+
+**Where a recording's 4.2-4.5 ms goes** (map 000 in play, the owner's settings, `--fast`, 170; `--stats`' timers
+over the recordings, and 400 samples of `kf4-gs`'s stack with `eu-stack`, 125 of them in a recording):
+
+| | share of a recording |
+|---|---|
+| native draw's draws (`nd_register`) | 74% |
+| of it, the skinned models (`nd280_draw`): each batch's A+D writes, which end the batch before (`gs_write` → `flush_batch`) | 28% |
+| the batches drawn (`sa_draw_batch`, `fast`'s), from native draw's and the GS's | 31% |
+| the uploads asked for again (`replay_upload`, `sa_upload_replayed`) | 13% |
+| native draw's own planning (`ns_nd_plan`) | 1% |
+
+So what is left to cut is in native draw's draws as a picture between makes them, chiefly the skinned models'
+batches: a picture's corners already come from the frame's (`nd_prep`: "taken from the frame's draws"), but each
+batch's state is still written and flushed through the GS one batch at a time.
+
+**What the pictures wait for** (2026-10-29; map 000, the owner's settings, 169.83 Hz, real time; a diagnostic build
+timing each picture from when the controller sends it to when the GS's thread takes it):
+
+| | pictures | wait: median, p90, p99 |
+|---|---|---|
+| replays in the vblank of the recording | 3,064 | 10.75, 12.5, 14.2 ms |
+| replays in the vblank after | 4,715 | 0.6, 4.8, 7.3 ms (none behind the next frame's packets) |
+| the recordings themselves | 1,666 | 4.7, 5.9, 7.3 ms, then 5.8 ms to record |
+| the exact restore (571 of 1,666 frames) | | 0.76, 4.3, 4.6 ms of the GS's thread |
+
+So a picture between waits for its recording, not for the GS's thread's next packets: the pump (2b) would make the
+same pictures at the same times. In the present log this is the steady part of the uneven refreshes: a gap of 4
+refreshes (23.6 ms) at the start of a recording's vblank, 1-3 a second.
+
+Sampled in real time (`eu-stack`, both threads): the GS's thread 12% waiting at the vblank for the back end
+(`backend_send`), the back end 28% waiting for the GPU (`next_frame_context`: Granite's frame contexts are taken a
+picture each, pictures between too, so 4 is 4 pictures in flight), 18% making calls, 51% idle. 8 frame contexts
+instead of 4: no difference (10 runs of 25-40 s, within the runs' spread). What is left of a recording is flat:
+native draw's batches drawn through `sa_draw_batch`, no line over 2% of the thread.
+
+Also: runs where the game itself falls behind for a second or so (55-58 game vblanks a second, gaps of 77-117 ms),
+in about a third of the runs, before this change as after it, with no hitch on the GS's or the game's thread; the
+desktop was busy (kwin, plasmashell, a browser playing video). Not found yet. And pace_test.py counted the last
+vblank's pictures, which the run writes out as PNGs (0.4 s): that was every run's lowest second (about 114); fixed.
+
+| map 000, 25 s, 169.83 Hz | uneven refreshes a second | pictures a second (lowest second) |
+|---|---|---|
+| before (d4919d86), three runs | 4.16, 8.76, 1.80 | 168.3 (142), 162.6 (110), 168.7 (150) |
+| after (a frame recorded once), three runs | 1.64, 1.12, 1.00 | 169.0 (159), 169.2 (165), 169.3 (164) |
+
+(Alternating runs; the spread between runs is as large as the difference.)
+
+**So, next:** the pump is not built (it buys nothing while the recording is what pictures wait for). What would move
+the pictures are less of the GS's thread before and in the recording, and the GPU's time a picture (step 4), which
+is what the back end, and through it the GS's thread, waits for at the vblank.
+
+### 2b: what it needs (checked 2026-10-28)
+
+A replay needs more of the GS's than the recording and the phase: it draws into the GS's own targets (the buffer
+shown, the scrolling textures' targets, the reflection), found as the GS has them at that point of its stream
+(`interp_cannot_replay`'s `replay_images`), and the buffer shown is the one the next game frame draws into once
+the game swaps. So the back end cannot make a picture whenever one is due while the GS's thread works through the
+next frame's packets: it would draw into the targets that frame is drawing. The pump needs the pictures between
+drawn into images of their own (each target the recording writes, a copy of each it only reads, and its own
+picture for the scanout), named through `ReplayJob::images` as now.
+
+Checks: the pictures between the same as today's at each phase (frame_test with `--renderer native` and `fast`,
+the map tour's pictures between, `KF4_INTERP_STILL`); the GS's thread's time a game frame (`pace_test.py --mode
+cost`, and `KF4_HITCH_MS` in real time as above) before and after.
+
+### 2b: the pictures between, made by the back end (the picture pump)
+
+After 2a. It still matters for step 3 (unlocked), and so that no picture waits behind the GS's thread's next
+packets once its recording is made.
+
+Today the controller's thread works out each vblank's pictures between (`port_interp_schedule`, up to 16) and the
+GS's thread sends each one's replay. A burst on the GS's thread (item 4) delays or cuts them. The replay is
+already one call in the back end's stream (`OP_REPLAY`: the recording, shared, and the picture's buffers), and
+costs the GS's thread under a microsecond.
+
+So: the back end's thread makes the pictures between itself, from the newest recording, whenever one is due,
+while the GS's thread works through the next game frame's packets. When a picture is due comes from one policy,
+asked by the pump (header first, for agreement, per the C/C++ rules):
+
+```c
+/* port/include/port/picture_clock.h: when the next picture is due and which moment of the game it shows.
+   One implementation a mode: a fixed rate, the screen's refreshes (the refresh clock), unlocked, capped. */
+typedef struct {
+    double due_s;    /* when the picture is to be handed to the presenter (port_wall_seconds) */
+    double world_s;  /* the moment of the game's world it shows (from which the phase between frames) */
+} PictureTime;
+```
+
+with the GPU's pictures in flight held to two (a timeline semaphore the pump waits on). The GS's thread then only
+records game frames, and keeps one game frame's budget (33 ms) on average instead of one vblank's at its worst.
+Also: the refresh clock's latency from a measure that a hitch does not move for the next 256 pictures (item 5),
+a median with an allowance, decaying.
+
+What to check first: that a replay needs nothing of the GS's thread's but the recording and the phase (the
+corners are moved on the GPU, `gs_replay.comp`). Anything else it reads moves into the recording.
+
+Checks: the pictures are the same as today's at each phase (frame_test with `--renderer native` and `fast`, the
+map tour's pictures between, `KF4_INTERP_STILL`); the TSan build (`out/linux-clang-tsan`) over a pace run;
+`pace_test.py` at 170 and 240: 99.5% one-step refreshes at 000, 009 (its bursts), 063.
+
+## Smooth play, step 3: `--frame-rate unlocked`
+
+As planned, one more policy for the pump (step 2), not a new path:
+
+- **unlocked**: a picture whenever the GPU has room (two in flight), each showing the world at the time it is
+  expected on screen (now and the measured latency). The swapchain immediate where tearing is allowed, mailbox
+  otherwise (no tearing; only the newest picture before each refresh is shown, for the least latency).
+- **a cap** (`--frame-rate-cap N`, and the settings page): unlocked, no faster than N. For VRR screens (FreeSync,
+  G-Sync) the cap a few below the screen's rate keeps it in the VRR range.
+- The settings page: 30, 60, monitor, unlocked, and the fixed rates under "other"; a fixed rate that is not the
+  screen's says it will judder (item 3).
+
+Without VRR and without tearing, a screen shows one picture a refresh, and `monitor` is already the smoothest it
+can be; unlocked then gives less latency, not more smoothness. With VRR or tearing it is smoother.
+
+Left as they are, as at every rate above 30: flipbook animations and the HUD's orb change 30 times a second.
+
+### Built (2026-10-29): unlocked as a rate found as it plays
+
+The pump is not built (step 2: it buys nothing while pictures wait for their recording), so unlocked is built on
+today's schedule: the pictures between a vblank are still worked out ahead (`port_interp_schedule`, up to 16 a
+vblank) and shown at their times, at a rate that follows the renderer.
+
+- `--frame-rate unlocked` (`settings.json` `"frame_rate": "unlocked"`, the Display page's "Unlocked"),
+  `--frame-rate-cap N` (`frame_rate_cap`, 0 none; a slider under it), `--tearing` (`tearing`, off).
+- **The rate** (`port/include/port/unlocked_rate.h`, `unlocked_rate.c`; `unlocked_rate_test`, ctest
+  `unlocked_rate`): between 60 and the cap (or 16 a vblank, 959). At each game vblank gs.c says whether the native
+  GS was behind, as the cut judges it, or left pictures between of the vblank before out; and frame_interp.c gives
+  the pictures presented a second (the window's half-second measure). Behind two vblanks in a row: down 15% (28%
+  when it fell just before). Presented under 90% of the rate asked, 45 vblanks after a change: down to 95% of what
+  was presented. Kept up for a second: up 5%, quickly to 95% of the rate it last fell from, past that only after a
+  probe's rest that doubles each time a probe falls (to 8 s). The cut of the pictures between judges only at the
+  floor. `--stats`: "frame rate unlocked: N a second at the end ..., M times down, K up".
+- The second signal is needed: past its limit the renderer leaves pictures out (gs.c's "left out as the renderer
+  was behind the game") before its thread is a vblank late, and a fixed 280 at the owner's settings showed 36 of
+  the game's vblanks a second on screen without the cut ever judging.
+- **The swapchain** (present_vk.cpp): unlocked is mailbox whatever VSync says (the owner's choice), FIFO where
+  there is no mailbox; with `--tearing` immediate, then mailbox. SDL_Renderer's presenter keeps VSync as set.
+
+**Measured** (map 000, the owner's settings, `pace_test.py --mode pace`, 169.83 Hz simulated screen, real time;
+`--renderer fast --native-msaa 2 --native-colour high`):
+
+| | pictures a second (lowest second) | game vblanks shown a second | uneven refreshes a second |
+|---|---|---|---|
+| monitor | 159.0 (153) | 56.5 | 15.5 |
+| fixed 240 | 188.8 (183); 1,353 pictures left out | 60.7 | 40.8 |
+| fixed 280 | 147.4 (141) | **36.5** | 77.8 |
+| unlocked, first (behind alone) | 155.8, 154.0 | **48.7, 49.0** | 73 |
+| unlocked, built (with the pictures presented) | 155.1 (147), 155.3 (141) | 58.3, 59.0 | 20.2, 18.4 |
+
+At the owner's settings the rate settles about 175 (7 falls, 33 rises in 25 s). What holds it there is not the GPU
+(3.1 ms a picture: room for 320) but the GS's thread: at fixed 240, the pictures left out are left out for it (the
+recording's vblank, step 2's finding). So at these settings on this machine unlocked gives what monitor gives, and
+more only where the renderer has room: at `--native-scale 2 --native-msaa 1` (1.73 ms a picture) it reached 285 a
+second and was still climbing. A real window with mailbox is not measured yet (step 0's window record).
+
+## Smooth play, step 4: the GPU's time a picture to 1.5 ms
+
+**Premise corrected (2026-10-29).** This step was planned on item 6's "the ceiling of any unlocked frame rate". At
+the owner's settings it is not the ceiling: the native GS's thread is (step 3's measures). The GPU's time matters
+again once the thread has room; until then a GPU at 1.5 ms gives the same pictures.
+
+The world in `fast` is 21,000 triangles a picture; what costs is the passes around them (item 6). In order of
+what it saves:
+
+1. **Shader blending without ending the pass.** 156,137 of 193,234 passes end for it. First a count by blend
+   equation (`--stats`); then the equations the world uses mapped onto Vulkan's blending where `fast` may differ
+   a little (dual-source blending covers most of `(A - B) * C + D`; reverse subtract the rest), the remainder
+   drawn in the pass from an input attachment as the runs are now.
+2. **One scene pass a picture.** The scene's draws, Z-first draws, skinned groups and shadows in one
+   multisampled pass with one resolve; the GS's 2D and screen passes after it, at the window's pixels. This takes
+   the MSAA loads (0.28 ms) and most resolves (0.49 ms).
+3. **The Z-first alpha-tested draws** (0.38 ms): alpha to coverage at MSAA, or the depth test alone where the
+   texture's alpha is only 0 and 1.
+4. **The back end's time a draw** (`radv_CmdDraw` on RADV, PS epilogs from dynamic blending): batches of one
+   material drawn with one indirect draw; the pictures between's command buffers kept and submitted again with
+   only their phase changed.
+
+Checks: RENDERER.md's (gsn_draw_test, the map tour with the scanouts, frame_test `--renderer native`), and
+`fast` against `modern` by how much it differs at every tour spot. `KF4_GSN_GPU_TIME=2` before and after each.
+
+### Item 1, built (2026-10-29): the copies in the render pass, in `fast`
+
+Why the passes ended: not the blend equations. Shader blending already copies the destination inside the render
+pass for 8-bit single-sampled targets (`COPY_IN_PASS`, the scene's `in_pass`); a multisampled target's copy was a
+resolve between passes, and `--native-colour high`'s 16-bit targets (the owner's) were turned away from the
+in-pass copy in both paths (`!wide(...)`): every shader-blended run ended the pass and resolved. The in-pass
+copies' shaders already handle 16-bit samples (`pass_resolve.frag`'s scale 65535; the scene's run copies took a
+fixed 255, now the target's). So `fast` takes `KF4_GSN_MSAA_BLEND=fast` by default (`msaa_blend_in_pass`, gsn.cpp)
+and for 16-bit targets too; `KF4_GSN_MSAA_BLEND=exact` gives the resolves back, in `fast` too. `native` and
+`modern` are unchanged (their pictures are references).
+
+| map 000, the owner's settings, `KF4_GSN_GPU_TIME=1` | before (`exact`) | after |
+|---|---|---|
+| GPU a picture (two runs) | 3.418, 3.425 ms | **3.329, 3.335 ms** |
+| render passes, resolves a picture | 12.0, 10.2 | 3.1, 0.5 |
+| loaded, stored, resolved by passes a picture | 212, 231, 180 MB | 144, 162, 65 MB |
+
+The pictures: map 009:2 (the pond's creatures, the most shader blending), 64 pictures at 120 with every picture
+between drawn, 1280 x 600 presented: 82 pixels of 41 million differ, by 1 at most. Pipelines: none made in play
+(the set has the scratch passes at every format already).
+
+A pass a run cost less than item 6 implied: 2.6%. Where the rest goes (`KF4_GSN_GPU_TIME=2`, which serializes the
+GPU at each mark, so as shares of its 3.33 ms): scene draws 0.55, passes' untagged time 0.50 (10 draws a picture:
+the full-screen work at the start of a pass), Z-first alpha-tested 0.35, skinned groups 0.35, GS batches 0.31, the
+scene's ops 0.28, MSAA loads 0.27, the in-pass copies of pictures between 0.21, resolves 0.18, copies 0.14. More
+than half is full-screen work at 3840 x 1792, two samples, 16 bits a channel, not the 21,000 triangles.
+
+### The other items, measured (2026-10-29)
+
+- **The scene's ops** (the game's depth clear and alpha set, drawn as sprites over the whole scene): left out
+  (a diagnostic build, not kept), the GPU's time a picture did not change for the depth clear and fell 0.04 ms for
+  the alpha set. Not worth a clear in the pass.
+- **Items 2-4 are not built.** Each is a change to how the scene's passes are made (item 2), to the GS's alpha test
+  where the colour pass depends on it (item 3), or to the back end's stream (item 4), several days each with the
+  checks above; and the measures above say they would not move what the owner sees now: at the owner's settings
+  the GS's thread, not the GPU, holds the pictures at about 175 a second (step 3), so a GPU at 1.5 ms would give
+  the same pictures until the recording's cost (step 2) comes down.
+
+## Smooth play, step 5: stalls outside the renderer
+
+1. **Map changes.** Measure door and area changes (`KF4_HITCH_MS=25`, `[hitch] game vblank`: disc reads, meshes
+   parsed and hashed) at a dozen MAP:PLACE spots; then read the disc image ahead into memory, and parse and hash
+   new meshes on a worker thread while the game's own load runs.
+2. **The meshes hashed each game frame** (item 7): know an unchanged mesh by where it is and VRAM's write
+   tracking, hashing only what changed.
+3. **The first picture of each game frame** is drawn from the packets (4.8 ms of the GS's thread each, 2,033 in
+   the 000 run; 367 drawn again as the GS was not as recorded): after step 2, measure whether it still matters.
+
+## Smooth play: the order it was planned in, and the owner's choices
+
+Step 0 and step 1's 1-3 first: they are small and take the stalls the owner sees now. Then step 2 (the larger
+change: 2a, the recording from the frame's own drawing, then 2b, the pump), step 3 on it, step 4, step 5. Each step lands with its checks, `KF4_DATA_DIR` a temporary folder in
+every run, and its numbers here.
+
+For the owner:
+- Step 1.4: a pipeline not made yet in `fast`, the batch left out for a few pictures (proposed) or the stall.
+- Step 3: unlocked's default without VRR is mailbox (no tearing; **the owner's choice**, 2026-10-28); immediate
+  stays an option. Whether fixed rates leave the settings page's main list is still open.
+- The targets above.

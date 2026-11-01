@@ -76,6 +76,18 @@ std::string verdict_text(const ProfileReport &r) {
     return line;
 }
 
+// The pipelines made while a draw waited, since the start: one line for all of them
+std::string compiles_text() {
+    ProfileCompiles c = port_profile_compiles();
+    char line[160];
+    if (c.count == 0) {
+        return "Pipelines made in play: none";
+    }
+    std::snprintf(line, sizeof(line), "Pipelines made in play: %llu, %.1f ms in all, the longest %.1f ms",
+                  (unsigned long long)c.count, double(c.ns) / 1e6, double(c.longest_ns) / 1e6);
+    return line;
+}
+
 // The report as text, for the clipboard (lock held)
 std::string report_text() {
     char line[256];
@@ -94,6 +106,7 @@ std::string report_text() {
                       rows[i].share * 100.0);
         text += line;
     }
+    text += compiles_text() + "\n";
     char hitches[PROFILE_HITCHES][PROFILE_HITCH_TEXT];
     int count = port_profile_hitches(hitches, PROFILE_HITCHES);
     text += count ? "stalls, newest first:\n" : "no stalls\n";
@@ -245,6 +258,7 @@ void profiler_draw(bool overlay_open) {
                      float(target_per_second * 1.1), ImVec2(bars_at + bar_width - ImGui::GetStyle().WindowPadding.x, 50));
     ImGui::Separator();
 
+    ImGui::TextUnformatted(compiles_text().c_str());
     char hitches[PROFILE_HITCHES][PROFILE_HITCH_TEXT];
     int count = port_profile_hitches(hitches, PROFILE_HITCHES);
     ImGui::TextDisabled(count ? "Stalls (over two vblanks), newest first" : "No stalls while the panel was open");

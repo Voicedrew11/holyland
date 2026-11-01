@@ -459,8 +459,12 @@ void nd280_const(Nd280Const &k, const RdDraw &d, const RdCamera &cam) {
 }
 
 // (nd_draw, the hook: a draw of program 0x280) as nd_draw draws 0x000's
+// (--renderer fast: a pass drawn by the PC renderer, gsn_pc_draw.inc)
+bool pcd_pass_280(const RdBatch &b, const Nd280Plan &p, bool sphere, uint32_t base, uint32_t record, const Buffer &records);
+
 void nd280_draw(const RdDraw &d, const RdCamera &cam) {
     gsn_stats.nd_draws++;
+    bool pc_draw = sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
     if (nd_buffer_room(nd280.draws, 1, nd280.pending)) {
         nd_new_buffer(nd280.draws, ND280_RECORDS, sizeof(Nd280Const), nd280.pending);
     }
@@ -474,6 +478,9 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
         }
         k = again;
         nd_prep_keep_const(0x280, &k, sizeof(k));
+    }
+    if (pc_draw) {
+        pcd_draw_begin(d, cam); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
     }
     for (int c = 0; c < 2; c++) {
         uint64_t offset = gs->reg[R_XYOFFSET_1 + c];
@@ -489,9 +496,14 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
         k.info[1] = nd_model_flags(key, d, cam, &k.bt[0], &k.bt[1]);
     }
     memcpy(nd280.draws.map + size_t(record) * sizeof(Nd280Const), &k, sizeof(k));
+    // (--renderer fast: a picture's draw made from the frame's snapshot, gsn_pc_draw.inc: no meshes fetched, no batches)
+    pcd_snapshot_draw(pc_draw, *nd280.draws.buffer, record);
     for (const auto &mesh : nd.fetched) {
         if (mesh->format != RD_VF_FLOAT_SKIN) {
             gsn_stats.nd_unsupported++;
+            if (pc_draw) {
+                pcd_keep_fail(); // (not kept whole: the GS's batches draw what the PC renderer did not)
+            }
             continue;
         }
         uint32_t base = nd_place(*mesh);
@@ -499,10 +511,10 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
             // what the run kicks: FOGCOL at an MSCAL (the set-up), the A+D packet; then, unless every vertex
             // is clipped, the strip (PRIM from its tag), and the second pass's A+D packet and strip
             if (b.start != RD_PROGRAM_CONTINUE) {
-                gs_write(R_FOGCOL, d.fogcol);
+                pcd_batch_write(R_FOGCOL, d.fogcol);
             }
             for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
-                gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
+                pcd_batch_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
             // (rc/own: in the frame's first picture between, the frame's corners: the plan only when one is not the frame's)
             uint32_t bno = uint32_t(&b - mesh->batches.data());
@@ -517,15 +529,33 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
             }
             gsn_stats.nd_batches++;
             if (p ? p->all_clipped : clipped->all_clipped) {
+                if (pc_draw) {
+                    pcd_unkicked(); // (gsn_pc_draw.inc: its call, kept or the frame's)
+                }
                 continue;
+            }
+            if (pc_draw && !p && !pcd_between_on()) {
+                p = &nd280_plan_cached(*mesh, b, k); // (the PC renderer's triangles are the plan's: pcd_pass_280)
             }
             for (int pass = 0; pass < 1 + b.sphere; pass++) {
                 if (pass) {
                     for (size_t i = 0; i + 1 < b.ad2.size(); i += 2) {
-                        gs_write(uint32_t(b.ad2[i]), b.ad2[i + 1]);
+                        pcd_batch_write(uint32_t(b.ad2[i]), b.ad2[i + 1]);
                     }
                 }
-                gs_write(R_PRIM, uint32_t(((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF));
+                pcd_batch_write(R_PRIM, uint32_t(((pass ? b.tag2[0] : b.tag[0]) >> 47) & 0x7FF));
+                // (a picture's kept call of this pass, made again: its plan is not made)
+                if (const PcdKept *kept = pc_draw ? pcd_between_next() : nullptr) {
+                    if (pcd_between_call(*kept, *nd280.draws.buffer, record)) {
+                        continue;
+                    }
+                }
+                if (pc_draw && !p) {
+                    p = &nd280_plan_cached(*mesh, b, k); // (a kept call not taken here: worked out again)
+                }
+                if (pc_draw && pcd_pass_280(b, *p, pass != 0, base, record, *nd280.draws.buffer)) {
+                    continue; // (drawn by the PC renderer from the mesh: gsn_pc_draw.inc)
+                }
                 // (as nd_draw's: the strip joins the batch, the PS2 path's corners and 0x000's in it too; a
                 // batch of other buffers is drawn first, and in a picture between a batch of the PS2
                 // path's: nd_kick)
@@ -563,6 +593,9 @@ void nd280_draw(const RdDraw &d, const RdCamera &cam) {
                 nd280.batch_draws = nd280.draws.buffer.get();
             }
         }
+    }
+    if (pc_draw) {
+        pcd_draw_end();
     }
     gs->queue_count = 0;
 }

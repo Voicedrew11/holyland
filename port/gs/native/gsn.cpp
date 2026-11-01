@@ -32,6 +32,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <array>
+#include <bitset>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -466,10 +467,15 @@ volatile int shine_exact = 0;
 uint32_t target_colour = GSN_COLOUR_EXACT;
 volatile uint32_t wanted_colour = GSN_COLOUR_EXACT;
 
-// The colour targets' format: 16-bit UNORM holds every 8-bit value exactly (v * 257), so what the GS's
-// arithmetic writes there reads back as it is
+// The colour targets' format at a precision (GSN_COLOUR_*): 16-bit UNORM holds every 8-bit value exactly (v * 257),
+// so what the GS's arithmetic writes there reads back as it is. colour_format(): the targets' now; the pipeline set
+// takes the one wanted (the targets take it at a vblank, after the start)
+VkFormat colour_format_of(uint32_t colour) {
+    return colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+}
+
 VkFormat colour_format() {
-    return target_colour == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+    return colour_format_of(target_colour);
 }
 
 bool wide(const Image &image) {
@@ -583,9 +589,10 @@ enum OpKind : uint32_t {
     OP_BLEND_FACTORS, OP_BLEND_OP, OP_VERTEX_DATA, OP_VERTEX_BINDING, OP_VERTEX_ATTRIB, OP_WRITE_MASK, OP_PUSH,
     OP_DRAW, OP_COPY_IMAGE, OP_UPDATE_IMAGE, OP_RESOLVE, OP_CLEAR_IMAGE, OP_INTERP_KICKS, OP_MEMORY_BARRIER,
     OP_INPUT_ATTACHMENTS, OP_STORAGE, OP_DEPTH_BOUNDS, OP_STENCIL, OP_GPU_MARK, OP_CONSERVATIVE, OP_STORAGE_DATA,
+    OP_IMAGE_LAYOUT,
     // (the back end's only, gsn_backend.inc: a stream's calls that are not a recording's)
     OP_NEW_CMD, OP_SUBMIT, OP_NEXT_FRAME, OP_PUBLISH, OP_PRESENT, OP_BLIT, OP_COPY_TO_BUFFER, OP_TIMESTAMP, OP_KICKS,
-    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE,
+    OP_REPLAY, OP_RECORDING_BINDS, OP_UPSCALE, OP_RELEASE,
 };
 
 struct Recording;
@@ -597,6 +604,10 @@ struct ReplayJob {
     uint32_t kick_count = 0;
     std::vector<std::pair<const Image *, ImageHandle>> images;
 };
+
+// Every call added to any recording or stream so far: a caller that marks it after its own calls knows, while it is
+// the same, that nothing else was added since (gsn_pc_draw.inc)
+uint64_t recording_adds = 0;
 
 // The calls kept: each an OpKind and its arguments (a struct of its own, then any bytes) in `arena`; the
 // images and buffers they name, held so they live as long as the recording. The back end's streams
@@ -663,6 +674,7 @@ struct Recording {
     }
     // a call, its arguments, and room for `extra` bytes after them (returned: their place in arena)
     template <class T> uint32_t add(OpKind kind, const T &args, size_t extra = 0) {
+        recording_adds++;
         settle();
         uint32_t at = uint32_t((arena.size() + 7) & ~size_t(7));
         arena.resize(at + sizeof(T) + extra);
@@ -788,6 +800,10 @@ struct ArgResolve {
 struct ArgClear {
     const Image *image;
     VkClearValue value;
+};
+struct ArgImageLayout { // (an image's layout changed from and to: an image nothing has used yet)
+    const Image *image;
+    VkImageLayout from, to;
 };
 struct ArgValues {
     uint32_t v[4];
@@ -989,6 +1005,27 @@ public:
         dep.dependencyFlags = flags;
         dep.memoryBarrierCount = 1;
         dep.pMemoryBarriers = &b;
+        gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
+    }
+    // The layout change of an image nothing has used yet (make_image's UNDEFINED to GENERAL): a raw barrier, as Granite's
+    // would be, but in this command buffer rather than one of Granite's of its own (Cmd::image_layout keeps it out of a
+    // render pass)
+    static void image_layout_raw(CommandBuffer &c, const Image &image, VkImageLayout from, VkImageLayout to) {
+        const ImageCreateInfo &info = image.get_create_info();
+        VkImageMemoryBarrier2 b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        b.srcAccessMask = VK_ACCESS_2_NONE;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image.get_image();
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.subresourceRange = {format_to_aspect_mask(info.format), 0, info.levels, 0, info.layers};
+        VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
         gs->device->get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
     }
     // (native draw's mesh, and its pictures between's Picture: gsn_native_draw.inc)
@@ -1282,17 +1319,40 @@ public:
         uint32_t at = s.add(OP_PUSH, a, size_t(range));
         memcpy(s.arena.data() + at, data, size_t(range));
     }
-    void draw(uint32_t count, uint32_t first = 0) {
+    void draw(uint32_t count, uint32_t first = 0, uint32_t first_instance = 0) {
         apply_program();
         if (on()) {
-            rec().add(OP_DRAW, ArgDraw{count, 1, first, 0});
+            rec().add(OP_DRAW, ArgDraw{count, 1, first, first_instance});
             rec().draws++;
         }
         if (gpu_time >= 2) {
             gpu_draws[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED]++;
             gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += count / 3;
         }
-        out().add(OP_DRAW, ArgDraw{count, 1, first, 0});
+        out().add(OP_DRAW, ArgDraw{count, 1, first, first_instance});
+    }
+    // (gsn_pc_draw.inc) The last call, a draw, made `more` vertices longer, in the stream and in the recording under
+    // way: false if the last call of either is not a draw (the caller knows nothing was added since its draw:
+    // recording_adds)
+    bool grow_last_draw(uint32_t more) {
+        Recording *in[2] = {&backend_stream(), on() ? &rec() : nullptr};
+        for (Recording *r : in) {
+            if (r && (r->ops.empty() || r->ops.back().kind != OP_DRAW || r->insert_at != SIZE_MAX)) {
+                return false;
+            }
+        }
+        for (Recording *r : in) {
+            if (r) {
+                ArgDraw a;
+                memcpy(&a, r->arena.data() + r->ops.back().at, sizeof(a));
+                a.count += more;
+                memcpy(r->arena.data() + r->ops.back().at, &a, sizeof(a));
+            }
+        }
+        if (gpu_time >= 2) {
+            gpu_tris[gpu_cur >= 0 ? gpu_cur : GPU_UNTAGGED] += more / 3;
+        }
+        return true;
     }
     void copy_image(const Image &dst, const Image &src, const VkOffset3D &dst_offset, const VkOffset3D &src_offset,
                     const VkExtent3D &extent, const VkImageSubresourceLayers &dst_sub, const VkImageSubresourceLayers &src_sub) {
@@ -1353,6 +1413,14 @@ public:
         Recording &s = out();
         s.keep(image);
         s.add(OP_CLEAR_IMAGE, ArgClear{&image, value});
+    }
+    // An image's first layout change (make_image): in the stream only, not a picture between's recording, since the
+    // recording's calls come after it and an image made while one is recorded is changed before any replay uses it.
+    // The caller has ended the render pass or put this before it (image_made_general)
+    void image_layout(const Image &image, VkImageLayout from, VkImageLayout to) {
+        Recording &s = out();
+        s.keep(image);
+        s.add(OP_IMAGE_LAYOUT, ArgImageLayout{&image, from, to});
     }
     void copy_image_to_buffer(const Buffer &dst, const Image &src, VkDeviceSize buffer_offset, const VkOffset3D &offset,
                               const VkExtent3D &extent, unsigned row_length, unsigned slice_height,
@@ -1715,6 +1783,50 @@ void transfer_barrier() {
     full_barrier();
 }
 
+// KF4_GSN_IMAGES_OFF_THREAD=0: the images let go on the GS's thread, and made GENERAL by Granite (both as before)
+bool images_off_thread_on() {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("KF4_GSN_IMAGES_OFF_THREAD");
+        on = !(v && atoi(v) == 0);
+    }
+    return on != 0;
+}
+
+// The layout change of an image nothing has used yet (general_image): in the stream, before the render pass under way if it
+// can go there (Cmd::before_pass, as load_target_rect's), else after ending the pass, which costs only its time: the image
+// is new, so no draw of the pass has read it
+void image_made_general(const Image &image) {
+    bool before = gs->in_pass && cmd().before_pass_can(&image, nullptr);
+    if (before) {
+        cmd().before_pass_begin();
+    } else {
+        end_pass();
+    }
+    cmd().image_layout(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    if (before) {
+        cmd().before_pass_end();
+    }
+}
+
+// An image made GENERAL (info's layout) without Granite's own layout change: Granite makes that change in a command buffer
+// of its own, requested under its lock, which the back end's frame contexts hold while they wait for the GPU. So the image
+// is made UNDEFINED, and its change recorded in the GS's stream before anything uses it
+ImageHandle general_image(ImageCreateInfo &info) {
+    if (!images_off_thread_on()) {
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        return gs->device->create_image(info, nullptr);
+    }
+    info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ImageHandle image = gs->device->create_image(info, nullptr);
+    if (!image) {
+        return image;
+    }
+    gsn_stats.images_untransitioned++;
+    image_made_general(*image);
+    return image;
+}
+
 ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_t levels, bool attachment) {
     ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
     info.levels = levels;
@@ -1725,8 +1837,7 @@ ImageHandle make_image(uint32_t width, uint32_t height, VkFormat format, uint32_
                                                      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     }
     info.layout = ImageLayout::General;
-    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-    return gs->device->create_image(info, nullptr);
+    return general_image(info);
 }
 
 // Pixels from the GPU: an image's rectangle, as RGBA8 (or D32 floats), when the GPU is done
@@ -1811,8 +1922,39 @@ ImageHandle make_ms_image(uint32_t width, uint32_t height, bool depth) {
                  (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                         : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
     info.layout = ImageLayout::General;
-    info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-    return gs->device->create_image(info, nullptr);
+    return general_image(info);
+}
+
+// An image the GS's thread lets go of (a target dropped, its multisampled image forgotten). The stream holds the handle
+// until the back end has made the calls before it and cleared the stream (backend_thread), so when this is the last
+// reference, it is dropped on the back end's thread, where the lock Granite's destroy_image takes is free, and not on the
+// GS's thread, which waited for it. Without the back end's thread the stream is cleared here, as before.
+// KF4_GSN_IMAGES_OFF_THREAD=0: dropped here at once
+void let_go(ImageHandle &image) {
+    if (!image) {
+        return;
+    }
+    if (!images_off_thread_on()) {
+        image.reset();
+        return;
+    }
+    Recording &s = backend_stream();
+    s.images.push_back(std::move(image));
+    s.add(OP_RELEASE, ArgValues{});
+    gsn_stats.images_let_go++;
+}
+
+// A target's images let go (the target is being dropped)
+void let_go_target(Target &t) {
+    let_go(t.image);
+    let_go(t.ms);
+}
+
+// Every target's images let go, ahead of targets.clear()
+void targets_let_go() {
+    for (auto &t : gs->targets) {
+        let_go_target(*t);
+    }
 }
 
 // One of the copying passes (shaders/msaa.vert): src read at each pixel of dst, written to its colour
@@ -1915,7 +2057,7 @@ void msaa_ready(Target &t) {
 
 // The multisampled image let go (the target's image was made again at another size)
 void msaa_forget(Target &t) {
-    t.ms.reset();
+    let_go(t.ms);
     t.ms_newer = t.image_newer = false;
 }
 
@@ -2179,6 +2321,12 @@ struct Shadow {
 std::vector<Shadow> shadows;
 std::vector<uint8_t> shadow_mask; // (GSN_VRAM_BYTES: the bits written since a shadow was made)
 bool shadow_busy;                  // (write_back for a shadow: no shadows looked at again)
+// Every shadow's images let go, ahead of shadows.clear()
+void shadows_let_go() {
+    for (Shadow &sh : shadows) {
+        let_go_target(*sh.t);
+    }
+}
 
 void write_back(Target &t);
 void shadow_resolve(uint32_t lo, uint32_t count);
@@ -2467,6 +2615,7 @@ void drop_target(Target *t) {
     }
     for (size_t i = 0; i < gs->targets.size(); i++) {
         if (gs->targets[i].get() == t) {
+            let_go_target(*t);
             gs->targets.erase(gs->targets.begin() + long(i));
             return;
         }
@@ -2567,6 +2716,7 @@ void shadow_written(uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg) {
         }
         if (!left) {
             gsn_stats.shadows_gone++;
+            let_go_target(*shadows[i].t);
             shadows.erase(shadows.begin() + long(i));
             continue;
         }
@@ -2623,6 +2773,7 @@ void shadow_resolve(uint32_t lo, uint32_t count) {
         t.dirty_pages = keep;
         t.dirty = std::find(keep.begin(), keep.end(), 1) != keep.end();
         if (!t.dirty) {
+            let_go_target(*shadows[i].t);
             shadows.erase(shadows.begin() + long(i));
             continue;
         }
@@ -3565,13 +3716,17 @@ bool blend_copy_16_by_pass() {
 // mean rounded here (pass_resolve.frag), which is not always the resolve's: a few pixels at edges come
 // out 1 or 2 apart from the default's (about a hundred a picture on map 000). A third less GPU time a
 // picture again at --native-scale 4 with MSAA 2 (STEP3.md, "Render passes").
+// --renderer fast has it by default, and for --native-colour high's 16-bit targets too, whose copies were
+// resolved between passes (the scene's and the GS's runs alike: a render pass ended and a resolve a run, about
+// ten a picture on map 000; PC_RENDERER.md, smooth play step 4). KF4_GSN_MSAA_BLEND=exact: the resolves, in fast too.
+extern volatile int pc_world_mode; // (gsn_pc_world.inc: --renderer fast)
 bool msaa_blend_in_pass() {
-    static int fast = -1;
-    if (fast < 0) {
+    static int mode = -1; // 0 by the renderer, 1 fast, 2 exact
+    if (mode < 0) {
         const char *v = getenv("KF4_GSN_MSAA_BLEND");
-        fast = v && strcmp(v, "fast") == 0;
+        mode = v && strcmp(v, "fast") == 0 ? 1 : v && strcmp(v, "exact") == 0 ? 2 : 0;
     }
-    return fast != 0 && !blend_copy_forced();
+    return (mode == 1 || (mode == 0 && pc_world_mode)) && !blend_copy_forced();
 }
 
 const Image &blend_scratch(const Image &like) {
@@ -3588,6 +3743,19 @@ const Image &blend_scratch(const Image &like) {
     info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
     gs->scratch.push_back(gs->device->create_image(info, nullptr));
     return *gs->scratch.back();
+}
+
+// The render pass's subpass that resolves as it ends: colour attachment 0 (the multisampled target) resolved into 1
+// (a copy of one sample)
+void resolve_subpass(RenderPassInfo &rp, RenderPassInfo::Subpass &subpass) {
+    subpass = {};
+    subpass.num_color_attachments = 1;
+    subpass.color_attachments[0] = 0;
+    subpass.num_resolve_attachments = 1;
+    subpass.resolve_attachments[0] = 1;
+    subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
+    rp.subpasses = &subpass;
+    rp.num_subpasses = 1;
 }
 
 // The render pass's subpass with the scratch: colour attachments 0 (the target) and 1 (the scratch),
@@ -3663,14 +3831,7 @@ void begin_pass(Target *color, Target *depth, bool ms = false, bool scratch = fa
         rp.num_color_attachments = 2;
         rp.color_attachments[1] = &resolve_to->get_view();
         rp.store_attachments = 3;
-        subpass = {};
-        subpass.num_color_attachments = 1;
-        subpass.color_attachments[0] = 0;
-        subpass.num_resolve_attachments = 1;
-        subpass.resolve_attachments[0] = 1;
-        subpass.depth_stencil_mode = rp.depth_stencil ? RenderPassInfo::DepthStencil::ReadWrite : RenderPassInfo::DepthStencil::None;
-        rp.subpasses = &subpass;
-        rp.num_subpasses = 1;
+        resolve_subpass(rp, subpass);
     } else if (scratch) {
         // (the scratch's contents are not wanted before the pass nor after it)
         rp.num_color_attachments = 2;
@@ -7448,6 +7609,43 @@ void interp_record() {
             (unsigned long long)gsn_stats.interp_records, (unsigned long long)interp.risky_runs, recording_ops->ops.size());
 }
 
+// A multisampled target that now has its newer pixels in the other of its two images than before the recording (a
+// frame's recording that begins with the frame buffer's multisampled image newer and ends with its 2D drawn into the
+// image): both made the same picture (resolved, or loaded from the image), then named newer as before the recording,
+// so that the recorded calls find what they found (the pictures the same: checked, every picture after one). Without
+// it the frame was recorded again at its next picture, 367 of the first 1,400 frames of tests/newgame.pad (4 ms of
+// this thread each). Only when nothing else differs (the calls cannot be made again otherwise).
+void interp_settle_newer(InterpState &now) {
+    std::vector<std::pair<InterpTargetState *, const InterpTargetState *>> differ;
+    InterpState as_before = now;
+    for (InterpTargetState &x : as_before.targets) {
+        for (const InterpTargetState &s : interp.start.targets) {
+            if (std::make_tuple(s.bp, s.bw, s.psm, s.depth) == std::make_tuple(x.bp, x.bw, x.psm, x.depth) && x.has_ms &&
+                s.has_ms && (s.ms_newer != x.ms_newer || s.image_newer != x.image_newer)) {
+                differ.push_back({&now.targets[size_t(&x - as_before.targets.data())], &s});
+                x.ms_newer = s.ms_newer;
+                x.image_newer = s.image_newer;
+            }
+        }
+    }
+    if (differ.empty() || !interp_same(as_before, interp.start)) {
+        return;
+    }
+    Why why(GSN_WHY_MSAA);
+    for (const auto &d : differ) {
+        Target &t = *d.first->t;
+        if (t.ms_newer) {
+            msaa_settle(t);
+        }
+        if (t.image_newer) {
+            msaa_ready(t);
+        }
+        t.ms_newer = d.first->ms_newer = d.second->ms_newer;
+        t.image_newer = d.first->image_newer = d.second->image_newer;
+    }
+    gsn_stats.interp_newer_settled++;
+}
+
 // Why the recording cannot be made again for this picture (GsnStats' interp_rerecord): 0 it can; 1 the GS's targets are
 // not as they were before it (their state, the render pass); 2 its registers differ; 3 nothing recorded yet (the frame's
 // first picture between); 4 what was recorded cannot be made again (a read-back in it, its kicks miscounted, the field
@@ -7493,6 +7691,7 @@ int interp_cannot_replay() {
         return false;
     }), now.targets.end());
     bool kept = now.targets.size() != had;
+    interp_settle_newer(now);
     if (!interp_same(now, interp.start)) {
         return 1;
     }
@@ -7903,46 +8102,127 @@ void ring_start() {
 // Vulkan pipelines are made as draws first need them (a second or two of them in the first minutes of
 // play, when the driver has not kept them itself: a new build, or its own cache full). The pipeline
 // cache is kept in the data folder (gsn_pipeline_cache), and written again a while after it grows.
+//
+// The files (the cache, 3 MB, and the data folder's pipeline list) are taken and written on a thread of their own,
+// the cache writer's: taking the cache's bytes from Granite is about 3 ms and writing them 1-2 ms more, which the
+// GS's thread once spent two seconds after any pipeline was made. Granite's cache may be read while pipelines are
+// made on other threads (the driver's own cache is made for it; Granite's pipeline binaries hold their maps' read
+// locks while they are walked: cmake/granite_pipeline_warm.cmake).
 std::string cache_path;
-size_t cache_saved_size;
+size_t cache_saved_size; // (the cache writer's thread; at exit, the exiting one once that has stopped)
 uint32_t cache_vsyncs;
 
-void save_pipeline_cache() {
+// (gsn_pipeline_warm.inc) the data folder's list as text when it has more than was last taken; empty otherwise
+std::string pw_list_text();
+
+// the pipeline cache's bytes when it has grown since they were last taken; empty otherwise
+std::vector<uint8_t> pipeline_cache_bytes() {
     size_t size = gs->device->get_pipeline_cache_size();
     if (size == 0 || size == cache_saved_size) {
-        return;
+        return {};
     }
     std::vector<uint8_t> data(size);
     if (!gs->device->get_pipeline_cache_data(data.data(), size)) {
-        return;
+        return {}; // (it grew meanwhile: the next look)
     }
-    // (into a file beside it, then in its place: never half written)
-    std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\"));
+    cache_saved_size = size;
+    return data;
+}
+
+// a whole file written: into a file beside it, then in its place, so never half written
+bool write_whole_file(const std::string &path, const void *data, size_t size) {
+    std::string folder = path.substr(0, path.find_last_of("/\\"));
 #ifdef _WIN32
     _mkdir(folder.c_str());
 #else
     mkdir(folder.c_str(), 0755);
 #endif
-    std::string temp = cache_path + ".new";
+    std::string temp = path + ".new";
     FILE *f = fopen(temp.c_str(), "wb");
     if (!f) {
-        return;
+        return false;
     }
-    bool written = fwrite(data.data(), 1, size, f) == size;
+    bool written = fwrite(data, 1, size, f) == size;
     written = fclose(f) == 0 && written;
     if (written) {
-        remove(cache_path.c_str());
-        written = rename(temp.c_str(), cache_path.c_str()) == 0;
+        remove(path.c_str());
+        written = rename(temp.c_str(), path.c_str()) == 0;
     }
-    if (written) {
-        cache_saved_size = size;
-        GSN_LOG(1, "pipeline cache written: %zu bytes\n", size);
+    return written;
+}
+
+struct PipelineFiles {
+    std::string list_path; // the data folder's list
+    std::mutex lock;
+    std::condition_variable wake;
+    bool wanted = false; // pipelines were made: the files are to be written again (those that changed)
+    bool stop = false;
+    std::thread thread;
+} pipeline_files;
+
+// the cache and the list written, those that changed since they were last
+void write_pipeline_files() {
+    std::vector<uint8_t> cache = pipeline_cache_bytes();
+    if (!cache.empty()) {
+        if (write_whole_file(cache_path, cache.data(), cache.size())) {
+            GSN_LOG(1, "pipeline cache written: %zu bytes\n", cache.size());
+        } else {
+            fprintf(stderr, "[gsn] the pipeline cache could not be written to %s\n", cache_path.c_str());
+        }
     }
+    std::string list = pw_list_text();
+    if (!list.empty() && !write_whole_file(pipeline_files.list_path, list.data(), list.size())) {
+        fprintf(stderr, "[gsn] the pipeline list could not be written to %s\n", pipeline_files.list_path.c_str());
+    }
+}
+
+// (the cache writer's thread) writes the files each time they are wanted, until stopped
+void pipeline_files_thread() {
+    name_thread("kf4-gs-files");
+    PipelineFiles &pf = pipeline_files;
+    std::unique_lock<std::mutex> hold(pf.lock);
+    for (;;) {
+        pf.wake.wait(hold, [&] { return pf.stop || pf.wanted; });
+        if (pf.stop) {
+            return;
+        }
+        pf.wanted = false;
+        hold.unlock();
+        write_pipeline_files();
+        hold.lock();
+    }
+}
+
+// (the GS's thread) pipelines were made: the cache writer's thread writes the files again
+void pipeline_files_want() {
+    std::lock_guard<std::mutex> hold(pipeline_files.lock);
+    pipeline_files.wanted = true;
+    pipeline_files.wake.notify_one();
+}
+
+void pipeline_files_start(const std::string &list_path) {
+    pipeline_files.list_path = list_path;
+    pipeline_files.thread = std::thread(pipeline_files_thread);
+}
+
+// (at exit) the cache writer's thread stopped once it has written what it was writing, then the files written a
+// last time here (what the last seconds made is kept)
+void pipeline_files_stop() {
+    if (pipeline_files.thread.joinable()) {
+        {
+            std::lock_guard<std::mutex> hold(pipeline_files.lock);
+            pipeline_files.stop = true;
+            pipeline_files.wake.notify_one();
+        }
+        pipeline_files.thread.join();
+    }
+    write_pipeline_files();
 }
 
 #include "gsn_standalone.inc" // (P8: the scene drawn into its own targets)
 #include "gsn_composite.inc"  // (P8 T2: the scene at a scale of its own, and the composite)
 #include "gsn_pipeline_warm.inc" // (pipelines made ahead: the lists, and the start's work)
+#include "gsn_pipeline_set.inc"  // (pipelines made ahead: every one the draws can ask for, from the code)
 
 // (gsn_open, --upscaler dlss) A context with DLSS's Vulkan extensions besides the presenter's: the instance with those
 // NGX names (that the loader has), then the GPU Granite would choose (GRANITE_VULKAN_DEVICE_INDEX, or the first of the
@@ -8196,10 +8476,10 @@ extern "C" void gsn_pipeline_cache(const char *path) {
     // and the cache written at the end too (not only while it runs: what the last seconds made is kept)
     std::string folder = cache_path.substr(0, cache_path.find_last_of("/\\") + 1);
     pw_start(folder + "native_gs_pipeline_list.txt");
+    pipeline_files_start(folder + "native_gs_pipeline_list.txt");
     atexit([] {
         pw.stop = true;
-        save_pipeline_cache();
-        pw_save();
+        pipeline_files_stop();
     });
 }
 
@@ -8214,12 +8494,18 @@ extern "C" int gsn_pipelines_running(void) {
 }
 
 extern "C" void gsn_print_pipeline_stats(void) {
+    ProfileCompiles play = port_profile_compiles();
     fprintf(stderr,
             "[stats] pipelines made ahead: %zu on the lists (%zu not shipped), %d ready from the cache in %.2f s, %d built in "
-            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms), %llu not on a list\n",
+            "%.1f s, %d stale; made by draws that waited: %llu (%.1f ms, the longest %.1f ms), %llu not on a list\n",
             pw.entries.size(), pw.unshipped, pw.ready.load(), pw.seconds_check, pw.done.load(), pw.seconds_build,
-            pw.stale.load(), (unsigned long long)pw.play_made.load(), double(pw.play_ns.load()) / 1e6,
+            pw.stale.load(), (unsigned long long)play.count, double(play.ns) / 1e6, double(play.longest_ns) / 1e6,
             (unsigned long long)pw.play_new.load());
+    fprintf(stderr,
+            "[stats] pipeline set: %zu from the code (%s; %zu on the lists too%s); made by draws that waited: %llu "
+            "outside it, %llu in it not built yet\n",
+            ps.hashes.size(), ps.by_site.c_str(), ps.on_lists, ps_only() ? "; the set alone made ahead" : "",
+            (unsigned long long)ps.outside.load(), (unsigned long long)ps.inside_late.load());
 }
 
 extern "C" void gsn_read_fifo(void *dst, uint32_t qwords) {
@@ -8455,11 +8741,10 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         return ok;
     }
     // the pipeline cache and the data folder's pipeline list, written when pipelines have been made (looked at
-    // every two seconds)
+    // every two seconds, by the cache writer's thread)
     if (!cache_path.empty() && ++cache_vsyncs % 120 == 0 && pw.made.load() != pw.made_saved) {
         pw.made_saved = pw.made.load();
-        save_pipeline_cache();
-        pw_save();
+        pipeline_files_want();
     }
     gsn_stats.targets = gs->targets.size();
     gsn_stats.textures = gs->textures.size();
@@ -8471,11 +8756,13 @@ int vsync_now(const uint64_t *privileged, int field, int want_pixels, PortGsFram
         wanted_colour != target_colour) {
         // every target back to VRAM; they come again at the new size as they are drawn into
         shadows_resolve_all();
+        shadows_let_go();
         shadows.clear();
         for (auto &t : gs->targets) {
             write_back(*t);
         }
         end_pass();
+        targets_let_go();
         gs->targets.clear();
         gs->scratch.clear(); // (shader blending's images, as large as the targets were)
         gs->resolved[0].reset();
@@ -8773,7 +9060,9 @@ extern "C" void gsn_state(PortStateIo *io) {
         flush_batch();
         sa_forget();
         end_pass();
+        targets_let_go();
         gs->targets.clear();
+        shadows_let_go();
         shadows.clear();
         gs->textures.clear();
         texture_index.clear();
@@ -8811,7 +9100,9 @@ extern "C" int gsn_restore(uint32_t type, const void *data, size_t size) {
         flush_batch();
         sa_forget();
         end_pass();
+        targets_let_go();
         gs->targets.clear();
+        shadows_let_go();
         shadows.clear();
         gs->textures.clear();
         texture_index.clear();

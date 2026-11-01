@@ -35,6 +35,8 @@
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
+#include "port/refresh_clock.h"
+#include "port/screen_vblank.h"
 #include "port/settings.h"
 
 /* ---- The pictures, between the threads -------------------------------------------------------- */
@@ -86,6 +88,7 @@ static uint64_t stat_intervals, stat_vblanks_since, stat_between;
 
 /* (under the lock) the queue's next place, the oldest left out when it is full */
 static FILE *sim_log;
+static void note_ready(uint64_t tag);
 
 static Picture *queue_add(uint64_t tag) {
     Picture *p;
@@ -103,6 +106,7 @@ static Picture *queue_add(uint64_t tag) {
     p = &queue[(queue_first + queue_count) % PICTURES];
     queue_count++;
     p->tag = tag;
+    note_ready(tag);
     if (PORT_PICTURE_VBLANK(tag) + 1 > newest_in) {
         __atomic_store_n(&newest_in, PORT_PICTURE_VBLANK(tag) + 1, __ATOMIC_RELEASE);
     }
@@ -192,6 +196,107 @@ static double picture_time(uint64_t tag) {
 
 static int refresh_rate; /* the window's screen's (port_video_refresh_rate) */
 
+/* The screen's refresh clock (port_video_refresh_seen), under the lock; started again with the rate the
+   system names whenever that changes */
+static RefreshClock refresh_clock;
+static int refresh_clock_named = -1;
+
+void port_video_refresh_seen(double seen_s) {
+    int named = port_video_refresh_rate();
+
+    LOCK();
+    if (named != refresh_clock_named) {
+        refresh_clock_init(&refresh_clock, named);
+        refresh_clock_named = named;
+    }
+    refresh_clock_add(&refresh_clock, seen_s);
+    UNLOCK();
+}
+
+/* The thread shows each picture a quarter of a vblank after its time (the vblank's own too): the
+   renderer makes them one after another from the vblank on, and the first between is due a quarter of
+   a vblank (at 240) after it; so each is there before it is due, and they are shown evenly. */
+#define THREAD_DELAY (0.25 * VBLANK_SECONDS)
+
+/* ---- Pictures timed by the screen's refreshes -------------------------------------------------------
+   With --frame-rate monitor, once the refresh clock is sure of the screen's refreshes (by_refresh), each
+   picture is the world ahead_s before the refresh it is shown at (port_video_refresh_schedule), and is
+   handed to the screen from just after the refresh before that one (show_at): a mailbox swapchain shows
+   at each refresh the last picture it was given, FIFO the next one. So a picture may come as late as the
+   screen's last moment for its refresh and still be on it, every refresh one picture on from the last,
+   as with vsync, whose queue holds back pictures that come early and gives those that come late a
+   refresh more.
+   ahead_s is how late after their time the pictures come from the renderer (the first after a new game
+   frame waits for the frame: several milliseconds), the READY_PERCENTILE of the last READY_KEPT, and half a
+   refresh more for the screen's own lead (a compositor takes its picture before the refresh) and the
+   refresh clock's error: the latency the pictures need, and no more. It goes up at once and down slowly,
+   so that a picture's refresh moves seldom. */
+#define READY_KEPT 256
+#define READY_PERCENTILE 0.98
+#define AHEAD_MOST 0.05            /* seconds: a hitch does not hold every picture back after it */
+#define AHEAD_DOWN 0.0002          /* seconds ahead_s comes down at most each READY_EVERY pictures */
+#define READY_EVERY 32             /* pictures between two looks at ahead_s */
+#define SHOW_AFTER_REFRESH 0.125   /* a picture handed over this much of a refresh after the refresh before its own */
+static double ready_after[READY_KEPT]; /* the last pictures' times from their time to being handed over */
+static int ready_count, ready_next;
+static double ahead_s; /* 0: not measured yet */
+
+/* (under the lock) the pictures are timed by the screen's refreshes now (monitor's rate is the screen's:
+   port_frame_rate_hz, which kf4-gsreplay does not link) */
+static int by_refresh(void) {
+    return port_options.frame_rate == PORT_FRAME_RATE_MONITOR && port_video_refresh_rate() > 60 && !port_options.fast &&
+           times_set && refresh_clock_locked(&refresh_clock);
+}
+
+static double refresh_ahead_s(void) {
+    double half = 0.5 * refresh_clock_period_s(&refresh_clock);
+
+    return ahead_s > 0 ? ahead_s : half + THREAD_DELAY;
+}
+
+static int compare_doubles(const void *a, const void *b) {
+    double x = *(const double *)a, y = *(const double *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+/* (under the lock) a picture handed over now: how late after its time, and ahead_s from the last ones */
+static void note_ready(uint64_t tag) {
+    double sorted[READY_KEPT], target;
+
+    if (!by_refresh()) {
+        ready_count = ready_next = 0;
+        return;
+    }
+    ready_after[ready_next] = port_wall_seconds() - picture_time(tag);
+    ready_next = (ready_next + 1) % READY_KEPT;
+    ready_count += ready_count < READY_KEPT;
+    if (ready_count < 2 * READY_EVERY || ready_next % READY_EVERY != 0) {
+        return;
+    }
+    memcpy(sorted, ready_after, sizeof(double) * (size_t)ready_count);
+    qsort(sorted, (size_t)ready_count, sizeof(double), compare_doubles);
+    target = sorted[(int)(READY_PERCENTILE * (ready_count - 1))] + 0.5 * refresh_clock_period_s(&refresh_clock);
+    target = target < AHEAD_MOST ? target : AHEAD_MOST;
+    if (ahead_s == 0 || target > ahead_s) {
+        ahead_s = target;
+    } else {
+        ahead_s = target > ahead_s - AHEAD_DOWN ? target : ahead_s - AHEAD_DOWN;
+    }
+}
+
+/* (under the lock) When a picture may be handed to the screen: by the refreshes, just after the refresh
+   before its own (the one nearest its time and ahead_s); else at its time and delay */
+static double show_at(uint64_t tag, double delay) {
+    if (by_refresh()) {
+        double period = refresh_clock_period_s(&refresh_clock);
+        double refresh = refresh_clock_next_s(&refresh_clock, picture_time(tag) + refresh_ahead_s() - 0.5 * period);
+
+        return refresh - (1.0 - SHOW_AFTER_REFRESH) * period;
+    }
+    return picture_time(tag) + delay;
+}
+
 int port_video_scaling(void) {
 #ifdef KF4_HAVE_SDL
     return port_options.present_scaling >= 0 ? port_options.present_scaling : port_settings.scaling;
@@ -209,11 +314,18 @@ float port_video_sharpen(void) {
 }
 
 /* KF4_PRESENT_SIM=HZ, a test of the pacing without a window (--headless): pictures are handed over and
-   presented at their times as for the Vulkan presenter, with nothing drawn; the screen's refresh rate
-   is HZ (0: none); --stats counts them and KF4_PRESENT_LOG=FILE writes each present's wall time and
-   the picture's vblank and phase */
+   presented at their times as for the Vulkan presenter, with nothing drawn, to a screen that refreshes
+   HZ times a second (169.83: named 170, as a system names it; 0: none). Each picture presented is seen
+   at the screen's next refresh, and the refresh clock learns the refreshes as from a screen's vblanks.
+   --stats counts them, and the refreshes whose picture is not one refresh on from the last one's (a
+   step of none, or two: what shows as a jump); KF4_PRESENT_LOG=FILE writes each present's wall time and
+   the picture's vblank and phase (and "R" with the screen's first refresh and rate, "S" each handed over) */
 static int sim;
 static FILE *sim_log;
+static double sim_hz, sim_start;  /* the simulated screen: refresh n at sim_start + n / sim_hz */
+static int64_t sim_refresh = -1; /* the refresh the last picture presented is seen at */
+static double sim_shown, sim_before; /* its picture's time, and the picture's at the refresh before */
+static uint64_t stat_refreshes, stat_uneven;
 #ifdef KF4_HAVE_SDL
 static void between_start(void);
 #endif
@@ -272,13 +384,19 @@ static void window_size(int *width, int *height) {
 #endif
 
 #ifdef KF4_HAVE_SDL
-/* The window's screen's refresh rate, for --frame-rate monitor */
+/* The window's screen's refresh rate, for --frame-rate monitor; and its vblanks, for the refresh clock, when
+   the screen is another */
 static void read_refresh_rate(void) {
+    static SDL_DisplayMode opened;
     SDL_DisplayMode mode;
     int display = SDL_GetWindowDisplayIndex(window);
 
     if (display >= 0 && SDL_GetCurrentDisplayMode(display, &mode) == 0 && mode.refresh_rate > 0) {
         __atomic_store_n(&refresh_rate, mode.refresh_rate, __ATOMIC_RELEASE);
+        if (mode.w != opened.w || mode.h != opened.h || mode.refresh_rate != opened.refresh_rate) {
+            opened = mode;
+            port_screen_vblank_open(mode.w, mode.h, mode.refresh_rate);
+        }
     }
 }
 #endif
@@ -328,10 +446,15 @@ void port_video_init(void) {
 #ifdef KF4_HAVE_SDL
     if (port_options.headless && port_gs_enabled() && getenv("KF4_PRESENT_SIM") != NULL) {
         sim = 1;
-        refresh_rate = atoi(getenv("KF4_PRESENT_SIM"));
+        sim_hz = atof(getenv("KF4_PRESENT_SIM"));
+        refresh_rate = (int)floor(sim_hz + 0.5);
+        sim_start = port_wall_seconds() + 0.37 / (sim_hz > 0 ? sim_hz : 60);
         __atomic_store_n(&presenter, PORT_PRESENTER_VULKAN, __ATOMIC_RELEASE);
         if (getenv("KF4_PRESENT_LOG") != NULL) {
             sim_log = fopen(getenv("KF4_PRESENT_LOG"), "w");
+        }
+        if (sim_log != NULL && sim_hz > 0) {
+            fprintf(sim_log, "R %.6f %.6f\n", sim_start, sim_hz); /* (the screen: its first refresh, its rate) */
         }
         between_start();
         return;
@@ -596,17 +719,17 @@ void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned i
 #endif
 
 #ifdef KF4_HAVE_SDL
-/* Takes the picture to show: the newest whose time is no later than `until` (with --fast, the newest),
-   those before it left out. 1 if there is one: its pixels into shown (or image: the native GS's, by
-   its tag). */
-static int take_picture(double until, int *image, uint64_t *tag) {
+/* Takes the picture to show: the newest that may be shown at `now` (show_at, with delay) and whose
+   time is no later than `before` (with --fast, the newest), those before it left out. 1 if there is one:
+   its pixels into shown (or image: the native GS's, by its tag). */
+static int take_picture(double now, double delay, double before, int *image, uint64_t *tag) {
     int i, pick = -1;
 
     LOCK();
     for (i = 0; i < queue_count; i++) {
         const Picture *p = &queue[(queue_first + i) % PICTURES];
 
-        if (port_options.fast || picture_time(p->tag) <= until) {
+        if (port_options.fast || (show_at(p->tag, delay) <= now && picture_time(p->tag) <= before)) {
             pick = i;
         }
     }
@@ -626,6 +749,34 @@ static int take_picture(double until, int *image, uint64_t *tag) {
     }
     UNLOCK();
     return pick >= 0;
+}
+
+/* (KF4_PRESENT_SIM) the picture tag presented now, seen at the simulated screen's next refresh: the
+   refreshes from the last one seen to that one counted, each even when its picture is one refresh after
+   the one before it (to half a refresh) */
+static void sim_screen(uint64_t tag) {
+    double period = 1.0 / sim_hz, shown;
+    int64_t refresh = (int64_t)ceil((port_wall_seconds() - sim_start) * sim_hz);
+
+    LOCK();
+    shown = picture_time(tag);
+    UNLOCK();
+    if (refresh != sim_refresh) {
+        if (sim_refresh >= 0) {
+            int64_t again = refresh - sim_refresh - 1; /* refreshes that showed sim_shown once more */
+
+            if (sim_before > 0) {
+                stat_refreshes++;
+                stat_uneven += fabs(sim_shown - sim_before - period) > 0.5 * period;
+            }
+            stat_refreshes += (uint64_t)(again > 0 ? again : 0);
+            stat_uneven += (uint64_t)(again > 0 ? again : 0);
+            sim_before = sim_shown;
+        }
+        sim_refresh = refresh;
+        port_video_refresh_seen(sim_start + (double)refresh * period);
+    }
+    sim_shown = shown;
 }
 
 /* The window drawn: a new picture (fresh: its pixels in shown, or image: the native GS's by its tag),
@@ -653,7 +804,20 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         }
         stat_last = now;
     }
+    if (fresh && !sim && port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
+        /* the screen's last vblank, to the refresh clock (each once) */
+        static double fed;
+        double vblank;
+
+        if (port_screen_vblank_last(&vblank) && vblank != fed) {
+            fed = vblank;
+            port_video_refresh_seen(vblank);
+        }
+    }
     if (sim) {
+        if (fresh && sim_hz > 0) {
+            sim_screen(tag);
+        }
         if (sim_log != NULL && fresh) {
             fprintf(sim_log, "%.6f %llu %.4f\n", port_wall_seconds(), (unsigned long long)PORT_PICTURE_VBLANK(tag),
                     PORT_PICTURE_PHASE(tag));
@@ -768,7 +932,7 @@ void port_video_present(void) {
         }
     }
     PRESENT_LOCK();
-    fresh = take_picture(port_wall_seconds() + 0.001, &image, &tag);
+    fresh = take_picture(port_wall_seconds() + 0.001, 0, 1e30, &image, &tag);
     last_fresh = fresh;
     LOCK();
     presented_vblank = times_newest;
@@ -813,27 +977,46 @@ static int thread_shows(void) {
     return between_thread_up && !port_overlay_visible() && !port_controls_indicator_shown();
 }
 
-/* The thread shows each picture a quarter of a vblank after its time (the vblank's own too): the
-   renderer makes them one after another from the vblank on, and the first between is due a quarter of
-   a vblank (at 240) after it; so each is there before it is due, and they are shown evenly. */
-#define THREAD_DELAY (0.25 * VBLANK_SECONDS)
+int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {
+    int n = 0;
+
+    LOCK();
+    if (!by_refresh()) {
+        UNLOCK();
+        return -1;
+    }
+    {
+        /* a picture at each refresh's time less ahead_s */
+        double period = refresh_clock_period_s(&refresh_clock), ahead = refresh_ahead_s();
+        double start = picture_time(PORT_PICTURE_TAG(vblank, 0)), end = start + VBLANK_SECONDS, t;
+
+        for (t = refresh_clock_next_s(&refresh_clock, start + ahead) - ahead; t < end - 1e-6 && n < max; t += period) {
+            double phase = (t - start) / VBLANK_SECONDS;
+
+            phases[n++] = phase < 1e-6 ? 0 : phase;
+        }
+    }
+    UNLOCK();
+    return n;
+}
 
 /* Shows the picture that is due at `now`, if there is one: from the game's thread, a picture between
    (not the next vblank's own, which is port_video_present's); from the thread, any, THREAD_DELAY after
-   its time. 1 if it did. *first: when the oldest picture waiting is due (-1: none). */
+   its time (show_at: by the screen's refreshes when they are known). 1 if it did. *first: when the oldest
+   picture waiting is due (-1: none). */
 static int show_between(double now, double *first, int from_thread) {
-    double before, until, delay = from_thread ? THREAD_DELAY : 0;
+    double before, delay = from_thread ? THREAD_DELAY : 0;
     int image = 0, i, pick = -1;
     uint64_t tag = 0;
 
+    now += 0.0003;
     LOCK();
     before = from_thread ? 1e30 : picture_time(PORT_PICTURE_TAG(presented_vblank + 1, 0)) - 0.0005;
-    until = now - delay + 0.0003 < before ? now - delay + 0.0003 : before;
-    *first = queue_count > 0 ? picture_time(queue[queue_first].tag) + delay : -1;
+    *first = queue_count > 0 ? show_at(queue[queue_first].tag, delay) : -1;
     for (i = 0; i < queue_count; i++) {
         const Picture *p = &queue[(queue_first + i) % PICTURES];
 
-        if (picture_time(p->tag) <= until) {
+        if (show_at(p->tag, delay) <= now && picture_time(p->tag) <= before) {
             pick = i;
         }
     }
@@ -842,7 +1025,7 @@ static int show_between(double now, double *first, int from_thread) {
         return 0;
     }
     PRESENT_LOCK();
-    if (!take_picture(until, &image, &tag)) {
+    if (!take_picture(now, delay, before, &image, &tag)) {
         PRESENT_UNLOCK();
         return 0;
     }
@@ -920,6 +1103,13 @@ static void between_start(void) {
     if (between_thread_up) {
         atexit(between_end);
     }
+}
+#else
+int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {
+    (void)vblank;
+    (void)phases;
+    (void)max;
+    return -1;
 }
 #endif
 
@@ -1090,6 +1280,22 @@ void port_video_print_stats(void) {
             (unsigned long long)stat_between, mean * 1e3, sd * 1e3, stat_max * 1e3, (unsigned long long)stat_late);
     fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second, %.1f game frames a second\n",
             port_video_pictures_per_second(), port_video_frames_per_second());
+    LOCK();
+    if (refresh_clock_named < 0) {
+        fprintf(stderr, "[stats] window: no vblanks of the screen known (the refresh clock not started)\n");
+    } else {
+        fprintf(stderr, "[stats] window: the screen's refresh clock %s, %.4f Hz (named %d); pictures %s, %.2f ms "
+                        "before their refresh\n",
+                refresh_clock_locked(&refresh_clock) ? "locked" : "not locked",
+                1.0 / refresh_clock_period_s(&refresh_clock), port_video_refresh_rate(),
+                by_refresh() ? "timed by it" : "not timed by it", refresh_ahead_s() * 1e3);
+    }
+    UNLOCK();
+    if (sim && sim_hz > 0) {
+        fprintf(stderr, "[stats] window: the screen (KF4_PRESENT_SIM) refreshed %llu times, %llu of them uneven (a "
+                        "step of none or two refreshes)\n",
+                (unsigned long long)stat_refreshes, (unsigned long long)stat_uneven);
+    }
 #endif
 }
 

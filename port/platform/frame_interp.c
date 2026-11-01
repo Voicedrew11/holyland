@@ -67,6 +67,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/render.h"
+#include "port/unlocked_rate.h"
 #include "../gs/native/gsn.h"
 
 #define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
@@ -98,21 +99,78 @@ int port_frame_interp(void) {
    are F / 59.94 a vblank: when that is a whole number n (to 1%: 60, 120, 240, 360 Hz), the vblank's own
    picture and n - 1 more between it and the next, evenly; otherwise (144, 165 Hz) a picture every
    1 / (F / 59.94) of a vblank from vblank 0 on, wherever it falls. Each is the time the window shows it
-   at (port/platform/video.c), and what the picture shows is the game's world at that time. */
+   at (port/platform/video.c), and what the picture shows is the game's world at that time.
+   With the screen's rate (PORT_FRAME_RATE_MONITOR), once the screen's refresh clock is sure of its
+   refreshes (port_video_refresh_schedule), one picture each refresh instead, timed for it: the screen
+   keeps its own time (169.83 Hz where the system names 170), and pictures on any other clock beat
+   against it, a refresh with two steps of the world or none every few seconds, which vsync hides
+   (each refresh takes one picture) and nothing else does.
+   Unlocked (PORT_FRAME_RATE_UNLOCKED): as many a second as the renderer keeps up with, found as it plays
+   (port/include/port/unlocked_rate.h: gs.c says at each game vblank whether the native GS was behind), up to the
+   cap and UNLOCKED_MOST_A_VBLANK a vblank, and timed as a fixed rate is (the window shows each at its time; the
+   swapchain mailbox, so that each refresh shows the newest, or immediate with --tearing). */
+#define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
+#define UNLOCKED_FLOOR_HZ 60
+static UnlockedRate unlocked;
+static int unlocked_on;            /* (the controller's thread) unlocked was on at the last vblank judged */
+static int unlocked_cap_made = -1; /* the cap its bounds were made with */
+static volatile int unlocked_hz;   /* its rate now, for any thread (port_frame_rate_hz) */
+
+/* (the controller's thread) the rate's bounds: UNLOCKED_FLOOR_HZ to the cap, and the schedule's most */
+static double unlocked_ceiling_hz(void) {
+    double most = UNLOCKED_MOST_A_VBLANK * 60000.0 / 1001.0;
+    int cap = port_options.frame_rate_cap;
+
+    return cap > 0 && cap < most ? cap : most;
+}
+
+void port_interp_unlocked_vblank(uint64_t vblank, int behind) {
+    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED) {
+        unlocked_on = 0;
+        return;
+    }
+    if (!unlocked_on) {
+        /* (from the screen's rate: the least a window shows smoothly, and up from there) */
+        int screen = port_video_refresh_rate();
+
+        unlocked_rate_init(&unlocked, screen > UNLOCKED_FLOOR_HZ ? screen : 2 * UNLOCKED_FLOOR_HZ, UNLOCKED_FLOOR_HZ,
+                           unlocked_ceiling_hz(), vblank);
+        unlocked_cap_made = port_options.frame_rate_cap;
+        unlocked_on = 1;
+    } else if (unlocked_cap_made != port_options.frame_rate_cap) {
+        unlocked_rate_bound(&unlocked, UNLOCKED_FLOOR_HZ, unlocked_ceiling_hz());
+        unlocked_cap_made = port_options.frame_rate_cap;
+    }
+    unlocked_rate_vblank(&unlocked, vblank, behind);
+    unlocked_rate_presented(&unlocked, vblank, port_video_pictures_per_second());
+    __atomic_store_n(&unlocked_hz, (int)(unlocked.rate_hz + 0.5), __ATOMIC_RELAXED);
+}
+
+int port_interp_unlocked_at_floor(void) {
+    return !unlocked_on || unlocked_rate_at_floor(&unlocked);
+}
+
 int port_frame_rate_hz(void) {
     int hz = port_options.frame_rate;
 
     if (hz == PORT_FRAME_RATE_MONITOR) {
         hz = port_video_refresh_rate();
         hz = hz > 0 ? hz : 60;
+    } else if (hz == PORT_FRAME_RATE_UNLOCKED) {
+        hz = __atomic_load_n(&unlocked_hz, __ATOMIC_RELAXED);
+        hz = hz > 0 ? hz : port_video_refresh_rate() > UNLOCKED_FLOOR_HZ ? port_video_refresh_rate() : 2 * UNLOCKED_FLOOR_HZ;
     }
     return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
 }
 
 static double pictures_a_vblank(void) {
-    double p = port_frame_rate_hz() * 1001.0 / 60000.0;
-    double n = floor(p + 0.5);
+    double p, n;
 
+    if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
+        return port_frame_rate_hz() * 1001.0 / 60000.0; /* (a fraction as found: no whole number to keep) */
+    }
+    p = port_frame_rate_hz() * 1001.0 / 60000.0;
+    n = floor(p + 0.5);
     return n >= 1 && fabs(p - n) <= 0.01 * n ? n : p;
 }
 
@@ -124,6 +182,10 @@ int port_interp_schedule(uint64_t vblank, double *phases, int max) {
         phases[0] = 0;
         return 1;
     }
+    if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR && (n = port_video_refresh_schedule(vblank, phases, max)) >= 0) {
+        return n;
+    }
+    n = 0;
     if (p == floor(p)) {
         for (n = 0; n < (int)p && n < max; n++) {
             phases[n] = n / p;
@@ -3114,6 +3176,10 @@ static int gpu_wanted(void) {
     return !cpu && !interp_still() && port_gs_interp_gpu();
 }
 
+int port_interp_on_gpu(void) {
+    return gpu_wanted();
+}
+
 /* The packets of a REPLAY on the GPU's way, gathered for the native GS: a uint32_t path and size, then
    the bytes */
 static uint8_t *gpu_stream;
@@ -3202,6 +3268,22 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     }
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
+    {
+        /* (for a renderer that makes the stream's walk from the frame's own: replay_pending's choices) */
+        size_t at;
+
+        for (at = 0; at < pending.size;) {
+            Record r;
+
+            memcpy(&r, pending.data + at, sizeof(r));
+            f->packet_bytes += r.bytes;
+            at += sizeof(r) + r.bytes;
+        }
+        f->draw_fbp = pending.scan.draw_fbp;
+        f->shown_fbp = pending.shown;
+        f->uploads_asked_again = port_gs_replay_uploads() != 0;
+        f->shown_kept = pending.reads_prev && port_gs_replay_uploads();
+    }
     /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
     f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
                memcmp(pending.before.t, pending.scan.camera.t, sizeof(pending.before.t)) == 0;
@@ -3505,6 +3587,11 @@ void port_interp_print_stats(void) {
     fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets; of %llu model parts placed, %llu "
             "paired by their batch and %llu by their order\n", (double)stat_sent / 1048576.0, (unsigned long long)stat_runs,
             (unsigned long long)stat_runs_key, (unsigned long long)stat_runs_order);
+    if (unlocked_on) {
+        fprintf(stderr, "[stats] frame rate unlocked: %.0f a second at the end (between %.0f and %.0f), %llu times down "
+                "as the renderer fell behind, %llu up\n", unlocked.rate_hz, unlocked.floor_hz, unlocked.ceiling_hz,
+                (unsigned long long)unlocked.falls, (unsigned long long)unlocked.rises);
+    }
     if (stat_gpu_frames) {
         fprintf(stderr, "[stats] frame rate on the GPU: %llu frames handed over, %llu pictures between (%.3f s on this thread, "
                 "%.1f us a picture)\n", (unsigned long long)stat_gpu_frames, (unsigned long long)stat_gpu_pictures,

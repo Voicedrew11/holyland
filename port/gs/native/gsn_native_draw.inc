@@ -202,6 +202,7 @@ struct NdState {
     std::unordered_map<Program *, Program *> strip_programs; // (and the GS's programs with nd_strip.vert)
     Shader *strip_vs = nullptr;
     NdBuffer arena;        // the meshes' vertices
+    uint32_t arena_gen = 0; // (a count of the arenas made: what is placed in one is placed again in the next)
     std::unordered_map<RdMesh, uint32_t> placed; // a mesh's first vertex in the arena
     NdBuffer draws;        // the draws' records
     std::vector<NdBoxInfo> boxes; // (nd_box_at_0) what a picture between's box needs of each record in draws
@@ -266,10 +267,17 @@ bool nd_batch_3d() {
 }
 
 // The program p (one of the GS's, its fragment shader) with nd_000.vert, while a native batch is drawn
+Program *nd_program_of(Program *p);
 Program *nd_program(Program *p) {
     if (!nd.active || !p) {
         return p;
     }
+    return nd_program_of(p);
+}
+
+// The program p (one of the GS's, its fragment shader) with nd_000.vert, whether native draw is on now or not (the
+// pipeline set makes its pipelines at the start)
+Program *nd_program_of(Program *p) {
     auto it = nd.programs.find(p);
     if (it != nd.programs.end()) {
         return it->second;
@@ -370,6 +378,7 @@ uint32_t nd_place(const RdMeshData &m) {
         room = std::min(room, ND_ARENA_MAX); // (64 MB at most: a corner names a vertex in 22 bits)
         nd_new_buffer(nd.arena, room, ND_VERTEX_BYTES, nd.pending);
         nd.placed.clear();
+        nd.arena_gen++;
         gsn_stats.nd_arenas++;
     }
     uint32_t at = nd.arena.used;
@@ -886,11 +895,26 @@ int32_t nd_model_flags(const NdKey &key, const RdDraw &d, const RdCamera &cam, N
 void pc_kept_record(uint32_t record);
 bool pc_between_takes(uint32_t record);
 void pc_between_draw(uint32_t record);
+bool sa_pcd_draw();                                                               // (gsn_standalone.inc)
+bool pcd_batch(const RdMeshData &m, const RdBatch &b, uint32_t base, uint32_t record); // (gsn_pc_draw.inc)
+// (gsn_pc_draw.inc: the PC renderer's kept calls, made again in a picture between, and its snapshot)
+void pcd_draw_begin(const RdDraw &draw, const RdCamera &camera);
+void pcd_draw_end();
+void pcd_batch_write(uint32_t address, uint64_t value);
+void pcd_snapshot_find(uint64_t value);
+void pcd_snapshot_done();
+bool pcd_snapshot_draw(bool pc_draw, const Buffer &records, uint32_t record);
+bool nd_fetch(uint64_t value, RdDraw &d, RdCamera &cam, std::vector<std::shared_ptr<const RdMeshData>> &meshes);
+void pcd_keep_fail();
+void pcd_unkicked();
+bool pcd_between_on();
+const PcdKept *pcd_between_next();
+bool pcd_between_call(const PcdKept &k, const Buffer &records, uint32_t record);
 
 void nd_draw(uint64_t value) {
     RdDraw d;
     RdCamera cam;
-    if (!rd_fetch(value, d, cam, nd.fetched)) {
+    if (!nd_fetch(value, d, cam, nd.fetched)) {
         gsn_stats.nd_lost++;
         return;
     }
@@ -1005,18 +1029,36 @@ void nd_draw(uint64_t value) {
     }
     // (pc world, P5) a picture's draw whose batches the frame kept: its record only; the batches are the frame's
     bool pc_frame_batches = d.program == 0 && pc_between_takes(record);
+    bool pc_draw = d.program == 0 && sa_pcd_draw(); // (--renderer fast: gsn_pc_draw.inc)
+    if (pc_draw) {
+        pcd_draw_begin(d, cam); // (gsn_pc_draw.inc: the frame keeps its calls; a picture takes the frame's, when it kept them)
+    }
+    // (--renderer fast: a picture's draw made from the frame's snapshot, gsn_pc_draw.inc: no meshes fetched, no batches)
+    pcd_snapshot_draw(pc_draw, *nd.draws.buffer, record);
     for (const auto &mesh : nd.fetched) {
         uint32_t base = nd_place(*mesh);
         for (const RdBatch &b : mesh->batches) {
             // what the VU1 run kicks before its strip (each write flushes the batch as on the PS2 path, when
             // it changes something)
             if (b.start != RD_PROGRAM_CONTINUE) {
-                gs_write(R_FOGCOL, d.fogcol); // (an MSCAL: the set-up kicks FOGCOL, VU1 0x3D)
+                pcd_batch_write(R_FOGCOL, d.fogcol); // (an MSCAL: the set-up kicks FOGCOL, VU1 0x3D)
             }
             for (size_t i = 0; i + 1 < b.ad.size(); i += 2) {
-                gs_write(uint32_t(b.ad[i]), b.ad[i + 1]);
+                pcd_batch_write(uint32_t(b.ad[i]), b.ad[i + 1]);
             }
-            gs_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            pcd_batch_write(R_PRIM, uint32_t((b.tag[0] >> 47) & 0x7FF));
+            // (--renderer fast: a picture's kept call, made again; the PC renderer draws the batch from its mesh,
+            // gsn_pc_draw.inc; or the GS's batch, below)
+            if (const PcdKept *kept = pc_draw ? pcd_between_next() : nullptr) {
+                if (pcd_between_call(*kept, *nd.draws.buffer, record)) {
+                    gsn_stats.nd_batches++;
+                    continue;
+                }
+            }
+            if (pc_draw && pcd_batch(*mesh, b, base, record)) {
+                gsn_stats.nd_batches++;
+                continue;
+            }
             // the strip's triangles join the batch, the PS2 path's corners in it too (a batch of other
             // buffers is drawn first; and in a picture between, a batch of the PS2 path's: nd_kick)
             // (0x280's corners pending join too: nd_draw_range draws each kind with its program and records)
@@ -1064,6 +1106,9 @@ void nd_draw(uint64_t value) {
             gsn_stats.nd_batches++;
         }
     }
+    if (pc_draw) {
+        pcd_draw_end();
+    }
     if (pc_frame_batches) {
         pc_between_draw(record);
     }
@@ -1078,9 +1123,11 @@ void nd_register(uint64_t value) {
     case RD_ND_DRAW:
         if (nd_mode == GSN_NATIVE_DRAW_NATIVE) {
             nd_prep_draw_begin(value); // (rc/own: the frame's draw kept for its pictures between, or a picture's taken)
+            pcd_snapshot_find(value); // (--renderer fast: a picture's draw made from the frame's snapshot)
             sa_draw_begin(value); // (standalone: a batch holds the scene's corners or none)
             nd_draw(value);
             sa_draw_end();
+            pcd_snapshot_done();
             nd_prep_draw_end();
         }
         break;
