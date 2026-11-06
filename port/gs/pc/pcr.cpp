@@ -869,7 +869,7 @@ public:
         m.drawn = true;
         if (!draw_picture(*cmd, *size, v, canvas)) {
             times.end(*cmd);
-            device_.submit(cmd);
+            submit_now(cmd);
             return m;
         }
         times.picture();
@@ -886,7 +886,7 @@ public:
             }
         } else {
             times.end(*cmd);
-            device_.submit(cmd);
+            submit_now(cmd);
         }
         return m;
     }
@@ -913,6 +913,14 @@ public:
     }
 
 private:
+    // cmd submitted and on the GPU's queue, before the picture is handed out: Granite holds a submit without a fence
+    // until the next frame context, which only kf4-pc moves on (the pump's pictures would be shown before they are
+    // drawn, and drawn up to a vblank late)
+    void submit_now(CommandBufferHandle &cmd) {
+        device_.submit(cmd);
+        device_.flush_frame();
+    }
+
     // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
     // there is none). False if the image cannot be made.
     bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Canvas *canvas) {
@@ -966,7 +974,7 @@ private:
             if (!readback_) {
                 fprintf(stderr, "[pcr] no buffer to read a picture back into\n");
                 times.end(*cmd);
-                device_.submit(cmd);
+                submit_now(cmd);
                 return false;
             }
         }
@@ -1164,7 +1172,10 @@ private:
         pictures_++;
         MadePicture made = out_.make(e.picture, e.scale, canvas_.get(), *times_);
         out_.hand_out(made, inbox_);
+        // (under Granite's device lock: kf4-pc's next_frame_context writes the timestamps' results as they come in)
+        device_.external_queue_lock();
         times_->collect();
+        device_.external_queue_unlock();
     }
 
     // (a picture kf4-pc made: never one whose pixels are kf4-pc's own, which it hands out itself)

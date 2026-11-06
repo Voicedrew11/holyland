@@ -73,6 +73,14 @@ static inline int gsr_picture(const uint64_t *privileged, int field, int want_pi
 static inline int gsr_backlog(void) {
     return gsr_pc_renderer ? pcr_backlog() : gsn_backlog();
 }
+/* At a vblank whose own picture is sent (gsr_picture): the renderer is behind the game, so its pictures between are
+   left out. The game posts a vblank a vblank before its time, and the window shows its picture THREAD_DELAY after
+   that time (port/platform/video.c). The PC renderer hands out a vblank's picture after the frame's packets sent
+   before it, about when the next vblank is posted and still in time for the window: it is behind when the vblank
+   before that one is not handed out either. The native GS: when any vblank before this one is not done. */
+static inline int gsr_behind(void) {
+    return gsr_pc_renderer ? pcr_backlog() > 2 : gsn_backlog() > 1;
+}
 static inline void gsr_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag),
                                      void (*image)(uint64_t tag)) {
     if (gsr_pc_renderer) {

@@ -578,11 +578,14 @@ public:
         return true;
     }
 
+    // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
+    // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture)
     void submit() {
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
             device_.submit(cmd_);
+            device_.flush_frame();
             cmd_.reset();
         }
     }

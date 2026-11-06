@@ -1095,11 +1095,24 @@ int port_gs_native_scale_x(void) {
     return s;
 }
 
+#ifdef KF4_HAVE_PARALLEL_GS
+/* --stats: the pictures between this thread left out (either renderer's) */
+static void print_interp_left_out(void) {
+    if (interp_behind || interp_vblanks_fewer) {
+        fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
+                "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
+                (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
+                (unsigned long long)interp_vblanks_left_out);
+    }
+}
+#endif
+
 /* --stats: what the native GS did */
 void port_gs_print_stats(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_native && gsr_pc_renderer) {
         pcr_print_stats(); /* (--renderer pc: its own; the lines below are the native GS's) */
+        print_interp_left_out();
         return;
     }
     if (have_native) {
@@ -1131,12 +1144,7 @@ void port_gs_print_stats(void) {
                     "in the stream)\n",
                     (unsigned long long)s->images_let_go, (unsigned long long)s->images_untransitioned);
         }
-        if (interp_behind || interp_vblanks_fewer) {
-            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
-                    "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
-                    (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
-                    (unsigned long long)interp_vblanks_left_out);
-        }
+        print_interp_left_out();
         if (s->interp_records || s->interp_replays || s->interp_misses) {
             fprintf(stderr,
                     "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
@@ -1513,7 +1521,7 @@ void port_gs_run_vsync(void) {
                 }
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_backlog() > 1)) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
                 interp_behind++;
                 continue;
             }

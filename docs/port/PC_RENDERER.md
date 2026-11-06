@@ -277,6 +277,12 @@ the passes. Not twice as many: sampled at 009, kf4-pc is now 44% and the pump 61
 picture and left none out, so what holds 009 now is outside pc's two threads (to measure next: the GPU's time and
 frame contexts, the presenter's pacing).
 
+**Corrected (2026-11-06, docs/port/PERFORMANCE.md "Measured again after the pump").** gs.c did leave pictures out:
+every second vblank's three, as kf4-pc's vblank picture came a third of a millisecond after the next vblank was
+posted (gs.c's count was not printed with `--renderer pc`). And the pump's pictures were not on the GPU's queue when
+handed out (Granite holds a plain submit until the next frame context, which only kf4-pc moves on): a median 17 ms
+later. Both fixed (`gsr_behind`, `submit_now`, `Canvas::submit` flushing): 009 at 240 239.3-239.7 pictures a second.
+
 ## The store's marks walked by their pages (built 2026-10-30)
 
 **Measured first** (009 at 240, `--renderer pc`, the owner's settings, 250 samples of `kf4-pc` with `eu-stack`): pc's
