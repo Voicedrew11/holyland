@@ -5,7 +5,7 @@
 //
 // Intervals never span two command buffers, so the time between submits (the GPU idle) is not counted.
 //
-// One thread: the PC renderer's ("kf4-pc").
+// One thread each: the PC renderer's ("kf4-pc") and the pump's ("kf4-pc-pump") have one each, put together for --stats.
 #pragma once
 
 #include <cstdint>
@@ -51,6 +51,9 @@ public:
     void picture();
     // The intervals whose timestamps are in, added to their kinds (and to the profiler's PROFILE_GPU): each vblank
     void collect();
+
+    // (both threads idle) other's time and pictures added to this one's, other left empty: the pump's into kf4-pc's
+    void take_in(GpuTimes &other);
 
     // --stats: "[stats] pc renderer GPU time: T ms in all, P ms a picture (N pictures): <kind> <ms a picture> ...",
     // the shape pace_test reads. Waits for the GPU first. Nothing when it was never on.

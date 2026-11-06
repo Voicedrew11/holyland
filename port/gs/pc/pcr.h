@@ -14,7 +14,11 @@
    - the packets are counted, the read-back FIFO reads zeroes, save states and captures hold nothing of it
      (size 0), and the settings are kept for the steps to come.
    Since step 5: pcr_interp_frame's frame is kept, and each pcr_interp_picture draws its packets again, moved on
-   the GPU to the picture's time (pcr_between.h). */
+   the GPU to the picture's time (pcr_between.h).
+   Since docs/port/PERFORMANCE.md's item 1: a second thread, the pump ("kf4-pc-pump"), draws the pictures between
+   again from the frame's kept walk on surfaces of its own (copied from kf4-pc's at the frame's first), and makes the
+   pictures that show them, while kf4-pc takes the next frame's packets in. Every picture is handed out in the order
+   asked for. KF4_PC_PUMP=0: no pump (kf4-pc draws them all, as before). */
 #ifndef PORT_GS_PC_PCR_H
 #define PORT_GS_PC_PCR_H
 

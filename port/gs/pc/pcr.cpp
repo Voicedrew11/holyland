@@ -86,6 +86,14 @@ struct InterpPicture {
     std::vector<uint32_t> run_bits;
 };
 
+// A frame's pictures between as the pump draws them again (the pump, below): the frame's kept walk, the frame as walked,
+// and kf4-pc's surfaces copied for the pump's canvas to draw on
+struct PumpFrame {
+    std::shared_ptr<const pcr::KeptWalk> walk;
+    pcr::Between::Walked walked;
+    std::shared_ptr<pcr::SurfaceCopies> surfaces;
+};
+
 // Work that must be done on the PC renderer's thread (its device's), its sender waiting: save states
 struct Job {
     std::function<void()> work;
@@ -126,17 +134,28 @@ public:
         return message;
     }
 
-    // (the PC renderer's thread) The message taken is done; with reply, its answer
-    void done(size_t bytes, bool vblank, Reply *reply, int result) {
+    // (the PC renderer's thread) The message taken is done
+    void done(size_t bytes) {
         std::lock_guard<std::mutex> hold(lock_);
         held_bytes_ -= bytes;
-        vblanks_done_ += vblank ? 1 : 0;
         busy_ = false;
-        if (reply) {
-            reply->result = result;
-            reply->done = true;
-        }
         room_.notify_all();
+        idle_.notify_all();
+    }
+
+    // (kf4-pc or the pump) A message's sender answered (the reply is the sender's: not touched after)
+    void answer(Reply *reply, int result) {
+        std::lock_guard<std::mutex> hold(lock_);
+        reply->result = result;
+        reply->done = true;
+        idle_.notify_all();
+    }
+
+    // (kf4-pc or the pump) A vblank's picture handed out (or none made): the vblank done, for backlog and the window's
+    // wait
+    void vblank_handed_out() {
+        std::lock_guard<std::mutex> hold(lock_);
+        vblanks_done_++;
         idle_.notify_all();
     }
 
@@ -158,7 +177,7 @@ public:
         return reply.done ? reply.result : 0;
     }
 
-    // The sender of a window's picture: at most two vblanks ahead of the thread
+    // The sender of a window's picture: at most two vblanks ahead of their pictures handed out
     void wait_behind_at_most(uint64_t vblanks) {
         std::unique_lock<std::mutex> hold(lock_);
         idle_.wait(hold, [&] { return gone_ || vblanks_sent_ - vblanks_done_ <= vblanks; });
@@ -395,6 +414,12 @@ struct Stats {
         interp_pictures{0};
 };
 
+// KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before)
+bool pump_wanted() {
+    const char *v = getenv("KF4_PC_PUMP");
+    return !(v && strcmp(v, "0") == 0);
+}
+
 // ---- What the GIF packets make ------------------------------------------------------------------------
 // (the PC renderer's thread) The front end's events, drawn by the canvas; with KF4_PC_CENSUS=1 counted for the census
 class Intake final : public pcr::GifEvents {
@@ -431,30 +456,38 @@ public:
         last_stretch_.reset();
     }
 
+    // What a picture between leaves to the pump: the picture, with the frame first when the pump has not this walk
+    struct ForPump {
+        std::optional<PumpFrame> frame;
+    };
+
     // A picture between: drawn again from the frame's kept walk when what that read of the store is as it was (step
-    // 5b); else the frame's packets walked again from the frame's state, its kicks numbered, the canvas's and the
-    // native draws' corners moved by the shaders to the picture's time, and the walk kept. The live state is put
-    // back after.
-    void walk_picture(const GsnInterpPicture &picture) {
+    // 5b): by the pump when there is one (returned: the picture is the pump's, nothing drawn here); else the frame's
+    // packets walked again from the frame's state, its kicks numbered, the canvas's and the native draws' corners
+    // moved by the shaders to the picture's time, and the walk kept. The live state is put back after.
+    std::optional<ForPump> walk_picture(const GsnInterpPicture &picture) {
         if (!between_ || !canvas_) {
-            return;
+            return std::nullopt;
         }
         drop_stretch();
         pcr::WalkReason why = pcr::WalkReason::none_kept;
         if (kept_walk_ && keep_walks_) {
             if (canvas_->fits(*kept_walk_)) {
+                if (pump_on_) {
+                    return to_pump(picture);
+                }
                 if (between_->begin_picture_again(picture)) {
                     canvas_->draw_again(*kept_walk_, *between_);
                     between_->end_picture_again();
                 }
-                return;
+                return std::nullopt;
             }
             why = pcr::WalkReason::store_changed;
         }
         kept_walk_.reset();
         std::span<const uint8_t> stream = between_->begin_picture(picture);
         if (stream.empty()) {
-            return;
+            return std::nullopt;
         }
         between_->walked(why);
         const pcr::GifFrontEnd::State live = front_.state();
@@ -488,6 +521,22 @@ public:
                 between_->walked(pcr::WalkReason::not_kept);
             }
         }
+        return std::nullopt;
+    }
+
+    // The picture to the pump (nullopt: not of the frame, counted, nothing drawn), with the frame when the pump has
+    // not this walk: kf4-pc's surfaces copied now, where the picture would have been drawn on them
+    std::optional<ForPump> to_pump(const GsnInterpPicture &picture) {
+        std::optional<pcr::Between::Walked> walked = between_->hand_over(picture);
+        if (!walked) {
+            return std::nullopt;
+        }
+        ForPump out;
+        if (kept_walk_ != pump_walk_) {
+            out.frame = PumpFrame{kept_walk_, std::move(*walked), canvas_->copy_surfaces()};
+            pump_walk_ = kept_walk_;
+        }
+        return out;
     }
 
     pcr::Canvas *canvas() {
@@ -505,6 +554,7 @@ public:
     Intake() : front_(*this) {
         const char *keep = getenv("KF4_PC_KEPT_WALK");
         keep_walks_ = !(keep && strcmp(keep, "0") == 0);
+        pump_on_ = pump_wanted();
         const char *own = getenv("KF4_PC_LIVE_WALK");
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
@@ -716,6 +766,9 @@ private:
     pcr::GifFrontEnd::State walk_start_;
     std::shared_ptr<const pcr::KeptWalk> kept_walk_;
     bool keep_walks_ = true;
+    // (the pump) KF4_PC_PUMP (0: none), and the walk it was handed last (held: never another's address)
+    bool pump_on_ = true;
+    std::shared_ptr<const pcr::KeptWalk> pump_walk_;
     // (a frame walked once) the stretch being kept and its bytes, the last kept at a vblank, and KF4_PC_LIVE_WALK (0:
     // the frame's stream walked for its first picture, as before)
     // (kept only while frames are taken: none at 30, in the menus)
@@ -724,6 +777,414 @@ private:
     uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
     std::optional<Stretch> last_stretch_;
     bool own_walks_ = true;
+};
+
+// ---- A picture made, and handed out ------------------------------------------------------------------
+// The pictures' colour where nothing is shown: KF4_PC_CLEAR=RRGGBB (black without it)
+struct ClearColour {
+    uint32_t rgba; // R in the low byte, alpha 255
+    VkClearValue value;
+};
+
+ClearColour clear_colour() {
+    uint32_t rgb = 0;
+    const char *asked = getenv("KF4_PC_CLEAR");
+    if (asked) {
+        char *end = nullptr;
+        unsigned long v = strtoul(asked, &end, 16);
+        if (end == asked || *end != '\0' || v > 0xFFFFFF) {
+            fprintf(stderr, "[pcr] KF4_PC_CLEAR wants RRGGBB in hex, not %s: black\n", asked);
+        } else {
+            rgb = uint32_t(v);
+        }
+    }
+    uint32_t r = rgb >> 16, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+    ClearColour c = {};
+    c.rgba = 0xFF000000u | b << 16 | g << 8 | r;
+    c.value.color.float32[0] = float(r) / 255.0f;
+    c.value.color.float32[1] = float(g) / 255.0f;
+    c.value.color.float32[2] = float(b) / 255.0f;
+    c.value.color.float32[3] = 1.0f;
+    return c;
+}
+
+// The presenter's callbacks (pcr_set_presenter): any thread sets them, the threads that hand pictures out call them
+struct PresenterHooks {
+    std::atomic<void (*)(const PortGsFrame *, uint64_t)> pixels{nullptr};
+    std::atomic<void (*)(uint64_t)> image{nullptr};
+};
+
+// A picture made (its commands submitted, read back when asked), to be handed out: published in the scanout ring, given
+// to the presenter, its sender answered. By the thread that made it, or by the pump after the pictures before it.
+struct MadePicture {
+    int want = 0, ok = 0, slot = -1;
+    bool scaled_pixels = false;
+    bool drawn = false;  // (its commands submitted: kf4-pc moves Granite's frame context on)
+    bool vblank = false; // (a vblank's own picture: the vblank done once handed out)
+    const PortGsFrame *frame = nullptr;
+    uint64_t tag = 0;
+    Reply *reply = nullptr;
+};
+
+// The pictures one thread makes (kf4-pc's, the pump's), as gsn_picture hands them out: GSN_WANT_IMAGE when the scanout
+// ring has it, GSN_WANT_PIXELS when frame has it, and with GSN_PRESENT to the presenter once it is there
+class PictureOut {
+public:
+    PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear)
+        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear) {}
+
+    // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
+    // it before), from canvas at scale (across | down << 8, the vblank's)
+    MadePicture make(const VblankPicture &v, uint32_t scale, pcr::Canvas *canvas, pcr::GpuTimes &times) {
+        MadePicture m;
+        bool extra = (v.want & GSN_EXTRA) != 0;
+        m.want = v.want;
+        m.tag = v.tag;
+        m.reply = v.reply;
+        m.vblank = !extra;
+        PortGsFrame *frame = v.frame;
+        // SDL_Renderer's picture at the window's size (GSN_WANT_SCALED with GSN_PRESENT and GSN_WANT_IMAGE): no
+        // scaled picture yet, so the picture's own pixels for the presenter
+        int want = v.want;
+        m.scaled_pixels = (want & GSN_PRESENT) && (want & GSN_WANT_SCALED) && (want & GSN_WANT_IMAGE) &&
+                          !(want & GSN_WANT_PIXELS);
+        bool present_pixels =
+            ((want & GSN_PRESENT) && !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) || m.scaled_pixels;
+        if (present_pixels) {
+            frame = &presented_;
+        }
+        m.frame = frame;
+        stats_.pictures++;
+        if (extra) {
+            stats_.extras++;
+        } else {
+            stats_.vblanks++;
+        }
+        std::optional<PictureSize> size = picture_size(v, extra, scale & 0xFF, scale >> 8);
+        if (!size || !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_PRESENT))) {
+            return m; // (no picture shown, or none wanted)
+        }
+        CommandBufferHandle cmd = device_.request_command_buffer();
+        times.begin(*cmd, pcr::GpuWork::picture);
+        m.drawn = true;
+        if (!draw_picture(*cmd, *size, v, canvas)) {
+            times.end(*cmd);
+            device_.submit(cmd);
+            return m;
+        }
+        times.picture();
+        if (want & GSN_WANT_IMAGE) {
+            m.slot = scanout_.claim(device_, picture_->get_width(), picture_->get_height());
+            if (m.slot >= 0) {
+                copy_to_scanout(*cmd, scanout_.image(m.slot));
+                m.ok |= GSN_WANT_IMAGE;
+            }
+        }
+        if (frame && ((want & GSN_WANT_PIXELS) || present_pixels)) {
+            if (read_back(cmd, *frame, times)) {
+                m.ok |= GSN_WANT_PIXELS;
+            }
+        } else {
+            times.end(*cmd);
+            device_.submit(cmd);
+        }
+        return m;
+    }
+
+    // Whether handing m out reads this one's own pixels (which its next picture writes over)
+    bool own_pixels(const MadePicture &m) const {
+        return m.frame == &presented_;
+    }
+
+    // m published, given to the presenter, its sender answered, its vblank done
+    void hand_out(const MadePicture &m, Inbox &inbox) {
+        if (m.slot >= 0) {
+            scanout_.publish(m.slot, m.tag);
+        }
+        if (m.ok && (m.want & GSN_PRESENT)) {
+            hand_to_presenter(m);
+        }
+        if (m.reply) {
+            inbox.answer(m.reply, m.ok);
+        }
+        if (m.vblank) {
+            inbox.vblank_handed_out();
+        }
+    }
+
+private:
+    // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
+    // there is none). False if the image cannot be made.
+    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Canvas *canvas) {
+        if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
+            picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height);
+            if (!picture_) {
+                fprintf(stderr, "[pcr] no image for a %ux%u picture\n", size.width, size.height);
+                return false;
+            }
+        }
+        // (after whatever read or wrote it before: the copies of the last picture)
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        GsnRect rect;
+        bool shown = false;
+        if (canvas && display_rect(v.privileged.data(), rect)) {
+            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h};
+            shown = canvas->scanout(cmd, shown_rect, *picture_);
+        }
+        if (!shown) {
+            cmd.clear_image(*picture_, clear_.value);
+        }
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_READ_BIT);
+        return true;
+    }
+
+    // The picture into a slot of the scanout ring, after whatever the presenter submitted before (it reads the
+    // slot after a barrier of its own)
+    void copy_to_scanout(CommandBuffer &cmd, const Image &slot) {
+        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd.copy_image(slot, *picture_, {0, 0, 0}, {0, 0, 0}, {picture_->get_width(), picture_->get_height(), 1},
+                       colour, colour);
+        cmd.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    }
+
+    // The picture read back into frame (alpha 255): submitted with the commands so far, and waited for. False
+    // (submitted all the same) if there is no buffer to read it into.
+    bool read_back(CommandBufferHandle &cmd, PortGsFrame &frame, pcr::GpuTimes &times) {
+        uint32_t width = picture_->get_width(), height = picture_->get_height();
+        VkDeviceSize size = VkDeviceSize(width) * height * 4;
+        if (!readback_ || readback_->get_create_info().size < size) {
+            BufferCreateInfo info = {};
+            info.domain = BufferDomain::CachedHost;
+            info.size = size;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            readback_ = device_.create_buffer(info, nullptr);
+            if (!readback_) {
+                fprintf(stderr, "[pcr] no buffer to read a picture back into\n");
+                times.end(*cmd);
+                device_.submit(cmd);
+                return false;
+            }
+        }
+        cmd->copy_image_to_buffer(*readback_, *picture_, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
+                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
+        cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                     VK_ACCESS_2_HOST_READ_BIT);
+        Fence fence;
+        times.end(*cmd);
+        device_.submit(cmd, &fence);
+        fence->wait();
+        if (&frame == &presented_ && presented_pixels_.size() < size_t(width) * height) {
+            presented_pixels_.resize(size_t(width) * height);
+            presented_.rgba = presented_pixels_.data();
+        }
+        const uint8_t *mapped = static_cast<const uint8_t *>(device_.map_host_buffer(*readback_, MEMORY_ACCESS_READ_BIT));
+        if (!mapped) {
+            fprintf(stderr, "[pcr] the read-back buffer could not be mapped\n");
+            return false;
+        }
+        for (size_t i = 0; i < size_t(width) * height; i++) {
+            uint32_t pixel;
+            memcpy(&pixel, mapped + i * 4, 4);
+            frame.rgba[i] = pixel | 0xFF000000u;
+        }
+        device_.unmap_host_buffer(*readback_, MEMORY_ACCESS_READ_BIT);
+        frame.width = width;
+        frame.height = height;
+        return true;
+    }
+
+    // The window's picture, now that it is there: its pixels, or word that the image is published
+    void hand_to_presenter(const MadePicture &m) {
+        void (*pixels)(const PortGsFrame *, uint64_t) = presenter_.pixels.load();
+        void (*image)(uint64_t) = presenter_.image.load();
+        if (m.scaled_pixels && (m.ok & GSN_WANT_PIXELS) && pixels) {
+            pixels(m.frame, m.tag);
+        } else if ((m.ok & GSN_WANT_IMAGE) && image && !m.scaled_pixels) {
+            image(m.tag);
+        } else if (!(m.want & GSN_WANT_IMAGE) && (m.ok & GSN_WANT_PIXELS) && pixels) {
+            pixels(m.frame, m.tag);
+        }
+    }
+
+    Device &device_;
+    ScanoutRing &scanout_;
+    PresenterHooks &presenter_;
+    Stats &stats_;
+    const ClearColour &clear_;
+    ImageHandle picture_;
+    BufferHandle readback_;
+    std::vector<uint32_t> presented_pixels_;
+    PortGsFrame presented_ = {0, 0, nullptr};
+};
+
+// ---- The pump: the pictures between drawn again on a thread of their own ------------------------------
+// docs/port/PERFORMANCE.md, item 1. While kf4-pc takes the next frame's packets in, the pump ("kf4-pc-pump") draws the
+// pictures between again from the frame's kept walk, on a canvas of its own. kf4-pc hands it, in the order it takes
+// them:
+// - a frame (PumpFrame): its kept walk, the frame as walked (Between::hand_over), and kf4-pc's surfaces copied as they
+//   were at the frame's first picture handed over (Canvas::copy_surfaces), which the pump's canvas draws on from then;
+// - each picture between whose kept walk kf4-pc would have drawn again, and the picture that shows it (an extra one, or
+//   the vblank's own when the picture between is at the vblank: frame_interp.c's phase 0);
+// - the pictures kf4-pc made itself while the pump had work, which the pump hands out after its own before them, so
+//   that the presenter, the scanout ring and the vblanks' count (pcr_backlog) have every picture in its order.
+// The pump never moves Granite's frame contexts on (kf4-pc does, at each of its pictures: that waits for every thread's
+// open command buffer, so the pump's canvas submits every few dozen batches).
+// A picture that shows the pump's picture between (a vblank's own or an extra one), at the vblank's scale
+struct PumpPicture {
+    VblankPicture picture;
+    uint32_t scale;
+};
+using PumpMessage = std::variant<PumpFrame, InterpPicture, PumpPicture, MadePicture>;
+
+class Pump {
+public:
+    Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
+         Inbox &inbox)
+        : device_(device), inbox_(inbox), out_(device, scanout, presenter, stats, clear) {}
+
+    ~Pump() {
+        stop();
+    }
+
+    // (kf4-pc) The thread
+    void start() {
+        thread_ = std::thread([this] { run(); });
+    }
+
+    // (kf4-pc) In order
+    void send(PumpMessage message) {
+        std::lock_guard<std::mutex> hold(lock_);
+        messages_.push_back(std::move(message));
+        wake_.notify_one();
+    }
+
+    // (kf4-pc) Nothing sent left to do. Only kf4-pc sends, so an idle pump stays idle until it sends again.
+    bool idle() {
+        std::lock_guard<std::mutex> hold(lock_);
+        return messages_.empty() && !busy_;
+    }
+
+    // Any thread: everything sent before done, or the thread gone
+    void wait_idle() {
+        std::unique_lock<std::mutex> hold(lock_);
+        idle_.wait(hold, [&] { return gone_ || (messages_.empty() && !busy_); });
+    }
+
+    bool wait_idle_for(std::chrono::milliseconds most) {
+        std::unique_lock<std::mutex> hold(lock_);
+        return idle_.wait_for(hold, most, [&] { return gone_ || (messages_.empty() && !busy_); });
+    }
+
+    // At exit: nothing more is taken (what is left is dropped), and the thread is joined
+    void stop() {
+        {
+            std::lock_guard<std::mutex> hold(lock_);
+            stopping_ = true;
+            wake_.notify_all();
+        }
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    // (the pump idle) --stats
+    pcr::GpuTimes *gpu_times() {
+        return times_.get();
+    }
+
+    void print_counts(const pcr::CanvasCounts &intake) const {
+        if (!canvas_ || !between_) {
+            return;
+        }
+        pcr::BetweenCounts b = between_->counts();
+        pcr::CanvasCounts c = canvas_->counts();
+        fprintf(stderr,
+                "[stats] pc pump: %llu frames (%llu surfaces copied for them), %llu pictures between drawn again "
+                "(%llu not of its frame), %llu pictures showing them; its canvas: %llu batches, %llu native draw calls, %llu "
+                "passes, %llu surfaces made, %llu uploads into surfaces\n",
+                (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
+                (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
+                (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
+                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces);
+    }
+
+private:
+    // ("kf4-pc-pump") The messages, in the order sent, until stop
+    void run() {
+        Util::register_thread_index(1); // (Granite's command pools: this thread's)
+#ifdef __linux__
+        pthread_setname_np(pthread_self(), "kf4-pc-pump");
+#endif
+        times_ = std::make_unique<pcr::GpuTimes>(device_);
+        canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
+        between_ = std::make_unique<pcr::Between>(device_);
+        while (std::optional<PumpMessage> message = take()) {
+            std::visit([this](auto &m) { work(m); }, *message);
+            std::lock_guard<std::mutex> hold(lock_);
+            busy_ = false;
+            idle_.notify_all();
+        }
+        std::lock_guard<std::mutex> hold(lock_);
+        gone_ = true;
+        idle_.notify_all();
+    }
+
+    std::optional<PumpMessage> take() {
+        std::unique_lock<std::mutex> hold(lock_);
+        wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+        if (stopping_) {
+            return std::nullopt;
+        }
+        PumpMessage message = std::move(messages_.front());
+        messages_.pop_front();
+        busy_ = true;
+        return message;
+    }
+
+    void work(PumpFrame &frame) {
+        canvas_->start_from(*frame.surfaces);
+        between_->take_walked(std::move(frame.walked));
+        walk_ = std::move(frame.walk);
+    }
+
+    void work(InterpPicture &p) {
+        p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
+        if (walk_ && between_->begin_picture_again(p.picture)) {
+            canvas_->draw_again_alone(*walk_, *between_);
+            between_->end_picture_again();
+        }
+    }
+
+    void work(PumpPicture &e) {
+        pictures_++;
+        MadePicture made = out_.make(e.picture, e.scale, canvas_.get(), *times_);
+        out_.hand_out(made, inbox_);
+        times_->collect();
+    }
+
+    // (a picture kf4-pc made: never one whose pixels are kf4-pc's own, which it hands out itself)
+    void work(MadePicture &made) {
+        out_.hand_out(made, inbox_);
+    }
+
+    Device &device_;
+    Inbox &inbox_;
+    PictureOut out_;
+    std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
+    std::unique_ptr<pcr::Canvas> canvas_;
+    std::unique_ptr<pcr::Between> between_;
+    std::shared_ptr<const pcr::KeptWalk> walk_;
+    uint64_t pictures_ = 0;
+    std::mutex lock_;
+    std::condition_variable wake_, idle_;
+    std::deque<PumpMessage> messages_;
+    bool busy_ = false, stopping_ = false, gone_ = false;
+    std::thread thread_;
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
@@ -750,7 +1211,11 @@ public:
                                                                                  : GSN_GPU_OTHER;
         msaa_samples_have_ = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
                              props.limits.sampledImageDepthSampleCounts;
-        clear_ = clear_colour();
+        out_.emplace(*device_, scanout_, presenter_, stats, clear_);
+        if (pump_wanted()) {
+            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_);
+            pump_->start();
+        }
         thread_ = std::thread([this] { run(); });
         fprintf(stderr, "[pcr] the PC renderer on %s\n", props.deviceName);
         return true;
@@ -758,13 +1223,20 @@ public:
 
     // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
     // seconds more it is left (the process ends with it)
+    // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
     void stop() {
         inbox_.wait_idle_for(std::chrono::seconds(2));
+        if (pump_) {
+            pump_->wait_idle_for(std::chrono::seconds(2));
+        }
         inbox_.stop();
         if (inbox_.wait_gone_for(std::chrono::seconds(2))) {
             thread_.join();
         } else {
             thread_.detach();
+        }
+        if (pump_) {
+            pump_->stop();
         }
     }
 
@@ -773,8 +1245,12 @@ public:
         inbox_.put(GifPacket{path, std::vector<uint8_t>(p, p + bytes)}, bytes, false);
     }
 
+    // Everything sent before done: kf4-pc's, then the pump's (which only kf4-pc sends to)
     void wait() {
         inbox_.wait_idle();
+        if (pump_) {
+            pump_->wait_idle();
+        }
     }
 
     int picture(const uint64_t *privileged, int field, int want, PortGsFrame *frame, uint64_t tag) {
@@ -825,8 +1301,8 @@ public:
     }
 
     void set_presenter(void (*pixels)(const PortGsFrame *, uint64_t), void (*image)(uint64_t)) {
-        presenter_pixels_.store(pixels);
-        presenter_image_.store(image);
+        presenter_.pixels.store(pixels);
+        presenter_.image.store(image);
     }
 
     bool present_device(GsnPresentDevice &out) const {
@@ -882,6 +1358,11 @@ public:
         return intake_;
     }
 
+    // (after wait) the pump's GPU time, or nullptr without a pump
+    pcr::GpuTimes *pump_gpu_times() {
+        return pump_ ? pump_->gpu_times() : nullptr;
+    }
+
     // The canvas, once everything sent before is done (the thread idle until more is sent: the read-back FIFO's
     // caller, the DMA controller's thread, sends nothing meanwhile)
     pcr::Canvas *canvas_after_wait() {
@@ -889,40 +1370,15 @@ public:
         return intake_.canvas();
     }
 
-    // (after wait: the thread is idle)
-    void print_census() const {
+    // (after wait: the threads are idle)
+    void print_census() {
         intake_.print_census();
+        if (pump_ && intake_.canvas()) {
+            pump_->print_counts(intake_.canvas()->counts());
+        }
     }
 
 private:
-    struct ClearColour {
-        uint32_t rgba; // R in the low byte, alpha 255
-        VkClearValue value;
-    };
-
-    // KF4_PC_CLEAR=RRGGBB: the pictures' colour (black without it)
-    static ClearColour clear_colour() {
-        uint32_t rgb = 0;
-        const char *asked = getenv("KF4_PC_CLEAR");
-        if (asked) {
-            char *end = nullptr;
-            unsigned long v = strtoul(asked, &end, 16);
-            if (end == asked || *end != '\0' || v > 0xFFFFFF) {
-                fprintf(stderr, "[pcr] KF4_PC_CLEAR wants RRGGBB in hex, not %s: black\n", asked);
-            } else {
-                rgb = uint32_t(v);
-            }
-        }
-        uint32_t r = rgb >> 16, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
-        ClearColour c = {};
-        c.rgba = 0xFF000000u | b << 16 | g << 8 | r;
-        c.value.color.float32[0] = float(r) / 255.0f;
-        c.value.color.float32[1] = float(g) / 255.0f;
-        c.value.color.float32[2] = float(b) / 255.0f;
-        c.value.color.float32[3] = 1.0f;
-        return c;
-    }
-
     // The Vulkan instance and device: with the presenter's surface and swapchain extensions when it wants
     // them, else (or when that fails) without
     bool make_context() {
@@ -932,7 +1388,7 @@ private:
         }
         if (!instance_ext.empty()) {
             context_ = std::make_unique<Context>();
-            context_->set_num_thread_indices(1); // (the PC renderer's thread)
+            context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
             if (context_->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
                                                    device_ext.data(), uint32_t(device_ext.size()), 0)) {
                 return true;
@@ -941,7 +1397,7 @@ private:
         }
         present_wanted_ = false;
         context_ = std::make_unique<Context>();
-        context_->set_num_thread_indices(1);
+        context_->set_num_thread_indices(2);
         if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
             context_.reset();
             return false;
@@ -998,194 +1454,82 @@ private:
                 stats.packets++;
                 stats.bytes += packet->bytes.size();
                 intake_.feed(packet->path, packet->bytes);
-                inbox_.done(packet->bytes.size(), false, nullptr, 0);
+                inbox_.done(packet->bytes.size());
             } else if (VblankPicture *v = std::get_if<VblankPicture>(&*message)) {
-                bool extra = (v->want & GSN_EXTRA) != 0;
-                if (!extra) {
-                    intake_.vblank(v->privileged.data(), settings.scale.load());
-                }
-                int result = make_picture(*v);
-                inbox_.done(0, !extra, v->reply, result);
+                take_picture(std::move(*v));
+                inbox_.done(0);
             } else if (Job *job = std::get_if<Job>(&*message)) {
                 job->work();
-                inbox_.done(0, false, job->reply, 1);
+                inbox_.answer(job->reply, 1);
+                inbox_.done(0);
             } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
                 intake_.take_frame(std::move(*frame));
-                inbox_.done(0, false, nullptr, 0);
+                inbox_.done(0);
             } else if (InterpPicture *p = std::get_if<InterpPicture>(&*message)) {
                 stats.interp_pictures++;
-                p->picture.run_bits = p->run_bits.empty() ? nullptr : p->run_bits.data();
-                intake_.walk_picture(p->picture);
-                inbox_.done(0, false, nullptr, 0);
+                take_picture_between(std::move(*p));
+                inbox_.done(0);
             }
         }
         inbox_.gone();
     }
 
-    // (the PC renderer's thread) A vblank's picture, or with GSN_EXTRA one more between two (the last picture
-    // again), handed out as gsn_picture's: GSN_WANT_IMAGE when the scanout ring has it, GSN_WANT_PIXELS when
-    // frame has it, and with GSN_PRESENT to the presenter once it is there
-    int make_picture(const VblankPicture &v) {
+    // (kf4-pc) A vblank's picture, or an extra one: the pump's when it shows the picture between the pump drew (the
+    // last picture between taken was the pump's, and no picture has shown it yet: gs.c draws a picture between, then
+    // the picture that shows it), else made here and handed out in order
+    void take_picture(VblankPicture v) {
         bool extra = (v.want & GSN_EXTRA) != 0;
-        int want = v.want;
-        PortGsFrame *frame = v.frame;
-        // SDL_Renderer's picture at the window's size (GSN_WANT_SCALED with GSN_PRESENT and GSN_WANT_IMAGE): no
-        // scaled picture yet, so the picture's own pixels for the presenter
-        bool scaled_pixels = (want & GSN_PRESENT) && (want & GSN_WANT_SCALED) && (want & GSN_WANT_IMAGE) &&
-                             !(want & GSN_WANT_PIXELS);
-        bool present_pixels = ((want & GSN_PRESENT) && !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS))) || scaled_pixels;
-        if (present_pixels) {
-            frame = &presented_;
-        }
-        stats.pictures++;
-        if (extra) {
-            stats.extras++;
-        } else {
-            stats.vblanks++;
+        if (!extra) {
+            intake_.vblank(v.privileged.data(), settings.scale.load());
         }
         uint32_t scale = picture_scale_;
-        std::optional<PictureSize> size = picture_size(v, extra, scale & 0xFF, scale >> 8);
         if (!extra) {
             picture_scale_ = settings.scale.load(); // (a new scale from the next vblank)
         }
-        if (!size || !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_PRESENT))) {
-            return 0; // (no picture shown, or none wanted)
+        bool pumped = shows_pumped_;
+        shows_pumped_ = false;
+        if (pumped) {
+            pump_->send(PumpPicture{std::move(v), scale});
+            return;
         }
-        CommandBufferHandle cmd = device_->request_command_buffer();
-        pcr::GpuTimes &times = *intake_.gpu_times();
-        times.begin(*cmd, pcr::GpuWork::picture);
-        // (a picture between too: the frame's packets were sent again, moved to its time, before it)
-        if (!draw_picture(*cmd, *size, v)) {
-            times.end(*cmd);
-            device_->submit(cmd);
-            return 0;
+        MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
+        if (made.drawn) {
+            device_->next_frame_context();
         }
-        times.picture();
-        int ok = 0, slot = -1;
-        if (want & GSN_WANT_IMAGE) {
-            slot = scanout_.claim(*device_, picture_->get_width(), picture_->get_height());
-            if (slot >= 0) {
-                copy_to_scanout(*cmd, scanout_.image(slot));
-                ok |= GSN_WANT_IMAGE;
-            }
-        }
-        if (frame && ((want & GSN_WANT_PIXELS) || present_pixels)) {
-            if (read_back(cmd, *frame)) {
-                ok |= GSN_WANT_PIXELS;
-            }
-        } else {
-            times.end(*cmd);
-            device_->submit(cmd);
-        }
-        if (slot >= 0) {
-            scanout_.publish(slot, v.tag);
-        }
-        device_->next_frame_context();
-        if (ok && (want & GSN_PRESENT)) {
-            hand_to_presenter(want, ok, scaled_pixels, frame, v.tag);
-        }
-        return ok;
+        hand_out_in_order(made);
     }
 
-    // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
-    // there is none). False if the image cannot be made.
-    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v) {
-        if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
-            picture_ = ScanoutRing::make_picture_image(*device_, size.width, size.height);
-            if (!picture_) {
-                fprintf(stderr, "[pcr] no image for a %ux%u picture\n", size.width, size.height);
-                return false;
-            }
+    // (kf4-pc) After the pump's pictures before it. A picture whose sender waits, or whose pixels are kf4-pc's own
+    // (written over by its next picture), waits for the pump here.
+    void hand_out_in_order(const MadePicture &made) {
+        if (!pump_ || pump_->idle()) {
+            out_->hand_out(made, inbox_);
+            return;
         }
-        // (after whatever read or wrote it before: the copies of the last picture)
-        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        GsnRect rect;
-        pcr::Canvas *canvas = intake_.canvas();
-        bool shown = false;
-        if (canvas && display_rect(v.privileged.data(), rect)) {
-            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h};
-            shown = canvas->scanout(cmd, shown_rect, *picture_);
+        if (made.reply || out_->own_pixels(made)) {
+            pump_->wait_idle();
+            out_->hand_out(made, inbox_);
+            return;
         }
-        if (!shown) {
-            cmd.clear_image(*picture_, clear_.value);
-        }
-        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
-                    VK_ACCESS_2_TRANSFER_READ_BIT);
-        return true;
+        pump_->send(made);
     }
 
-    // The picture into a slot of the scanout ring, after whatever the presenter submitted before (it reads the
-    // slot after a barrier of its own)
-    void copy_to_scanout(CommandBuffer &cmd, const Image &slot) {
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
-        cmd.copy_image(slot, *picture_, {0, 0, 0}, {0, 0, 0}, {picture_->get_width(), picture_->get_height(), 1},
-                       colour, colour);
-        cmd.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    // (kf4-pc) A picture between: walked here, or handed to the pump (with its frame first when the pump has not that
+    // walk yet), and then its extra picture too
+    void take_picture_between(InterpPicture p) {
+        p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
+        std::optional<Intake::ForPump> for_pump = intake_.walk_picture(p.picture);
+        shows_pumped_ = for_pump.has_value();
+        if (!for_pump) {
+            return;
+        }
+        if (for_pump->frame) {
+            pump_->send(std::move(*for_pump->frame));
+        }
+        pump_->send(std::move(p));
     }
 
-    // The picture read back into frame (alpha 255): submitted with the commands so far, and waited for. False
-    // (submitted all the same) if there is no buffer to read it into.
-    bool read_back(CommandBufferHandle &cmd, PortGsFrame &frame) {
-        uint32_t width = picture_->get_width(), height = picture_->get_height();
-        VkDeviceSize size = VkDeviceSize(width) * height * 4;
-        if (!readback_ || readback_->get_create_info().size < size) {
-            BufferCreateInfo info = {};
-            info.domain = BufferDomain::CachedHost;
-            info.size = size;
-            info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            readback_ = device_->create_buffer(info, nullptr);
-            if (!readback_) {
-                fprintf(stderr, "[pcr] no buffer to read a picture back into\n");
-                intake_.gpu_times()->end(*cmd);
-                device_->submit(cmd);
-                return false;
-            }
-        }
-        cmd->copy_image_to_buffer(*readback_, *picture_, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
-                                  {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
-        cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
-                     VK_ACCESS_2_HOST_READ_BIT);
-        Fence fence;
-        intake_.gpu_times()->end(*cmd);
-        device_->submit(cmd, &fence);
-        fence->wait();
-        if (&frame == &presented_ && presented_pixels_.size() < size_t(width) * height) {
-            presented_pixels_.resize(size_t(width) * height);
-            presented_.rgba = presented_pixels_.data();
-        }
-        const uint8_t *mapped = static_cast<const uint8_t *>(device_->map_host_buffer(*readback_, MEMORY_ACCESS_READ_BIT));
-        if (!mapped) {
-            fprintf(stderr, "[pcr] the read-back buffer could not be mapped\n");
-            return false;
-        }
-        for (size_t i = 0; i < size_t(width) * height; i++) {
-            uint32_t pixel;
-            memcpy(&pixel, mapped + i * 4, 4);
-            frame.rgba[i] = pixel | 0xFF000000u;
-        }
-        device_->unmap_host_buffer(*readback_, MEMORY_ACCESS_READ_BIT);
-        frame.width = width;
-        frame.height = height;
-        return true;
-    }
-
-    // The window's picture, now that it is there: its pixels, or word that the image is published
-    void hand_to_presenter(int want, int ok, bool scaled_pixels, const PortGsFrame *frame, uint64_t tag) {
-        void (*pixels)(const PortGsFrame *, uint64_t) = presenter_pixels_.load();
-        void (*image)(uint64_t) = presenter_image_.load();
-        if (scaled_pixels && (ok & GSN_WANT_PIXELS) && pixels) {
-            pixels(frame, tag);
-        } else if ((ok & GSN_WANT_IMAGE) && image && !scaled_pixels) {
-            image(tag);
-        } else if (!(want & GSN_WANT_IMAGE) && (ok & GSN_WANT_PIXELS) && pixels) {
-            pixels(frame, tag);
-        }
-    }
 
 public:
     Settings settings;
@@ -1197,18 +1541,16 @@ private:
     std::unique_ptr<Device> device_;
     int gpu_kind_ = GSN_GPU_OTHER;
     uint32_t msaa_samples_have_ = 1;
-    ClearColour clear_ = {};
+    ClearColour clear_ = clear_colour();
     Inbox inbox_;
     ScanoutRing scanout_;
+    PresenterHooks presenter_;
     Intake intake_; // (the PC renderer's thread's)
-    std::atomic<void (*)(const PortGsFrame *, uint64_t)> presenter_pixels_{nullptr};
-    std::atomic<void (*)(uint64_t)> presenter_image_{nullptr};
-    // (the PC renderer's thread's)
+    // (kf4-pc's: the pictures it makes, the vblank's scale, whether the next picture shows the pump's picture between)
+    std::optional<PictureOut> out_;
     uint32_t picture_scale_ = 1 | 1 << 8;
-    ImageHandle picture_;
-    BufferHandle readback_;
-    std::vector<uint32_t> presented_pixels_;
-    PortGsFrame presented_ = {0, 0, nullptr};
+    bool shows_pumped_ = false;
+    std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
     std::thread thread_;
 };
 
@@ -1541,6 +1883,9 @@ extern "C" void pcr_print_stats(void) {
     renderer()->print_census();
     // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
     if (pcr::GpuTimes *times = renderer()->intake().gpu_times()) {
+        if (pcr::GpuTimes *pump = renderer()->pump_gpu_times()) {
+            times->take_in(*pump);
+        }
         times->print();
     }
 }

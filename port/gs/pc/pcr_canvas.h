@@ -18,7 +18,10 @@
 //
 // What is not done yet is counted (counts(): unsupported_*) and drawn as near as can be, never dropped silently.
 //
-// One thread: the PC renderer's ("kf4-pc"), which owns the device's command buffers while it works.
+// Two canvases, a thread each: the PC renderer's ("kf4-pc"), which takes the GS's input in, and the pump's
+// ("kf4-pc-pump", pcr.cpp), which draws the pictures between again from kept walks (draw_again_alone) into surfaces of
+// its own, copied from kf4-pc's (copy_surfaces, start_from). Each canvas is used by its thread only; what passes
+// between them (a KeptWalk, SurfaceCopies) is not written once handed over.
 #pragma once
 
 #include <cstdint>
@@ -45,6 +48,7 @@ struct CanvasCounts {
     uint64_t unsupported_copies = 0;
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
     uint64_t uploads_made_again = 0, uploads_again_missed = 0, kept_frame_reads = 0;
+    uint64_t surfaces_copied = 0; // (for the pump: copy_surfaces)
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
@@ -80,6 +84,10 @@ struct NativeBatch {
 // in order, every image and buffer they use held, and what it read of the texture store from before it
 class KeptWalk;
 
+// A canvas's surfaces as they were (Canvas::copy_surfaces): each colour and depth surface's image copied on the GPU, the
+// frame shown kept (0xF2), and the scale; for a canvas on another thread to draw on from there (Canvas::start_from)
+class SurfaceCopies;
+
 class Canvas {
 public:
     // times: the GPU's time of what the canvas records (outlives the canvas)
@@ -106,6 +114,20 @@ public:
     // walk: its draws, copies of surfaces, uploads and copies, CLUT loads and marks in their order, so that the store
     // and the surfaces are left as the walk leaves them
     void draw_again(const KeptWalk &walk, const Between &between);
+
+    // The pictures between on a thread of their own (pcr.cpp's pump):
+    // - (kf4-pc) Everything drawn so far, then every surface copied, submitted: a canvas on another thread whose
+    //   commands are submitted after this returns may draw on the copies
+    std::shared_ptr<SurfaceCopies> copy_surfaces();
+    // - (the pump's canvas) Its surfaces from here on the copies' (its own let go; the copies' images taken), at their
+    //   scale
+    void start_from(SurfaceCopies &copies);
+    // - (the pump's canvas) A kept walk's calls made again as draw_again makes them, but none of the texture store's
+    //   changes (the store is kf4-pc's: what the walk's draws read of it is held in the walk): its uploads and copies
+    //   only where they fall on this canvas's surfaces, its CLUT loads passed over. Submitted every so many batches
+    //   and at the end, so that kf4-pc's next frame context (Granite's, which waits for every thread's open command
+    //   buffer) never waits long, and never for a pump with nothing to do.
+    void draw_again_alone(const KeptWalk &walk, const Between &between);
 
     // A frame walked once (pcr_frame_walk.h): keep_walk() outside a picture between, the frame's own packets, then
     // stop_keeping() (set_between(nullptr) also stops) and take_kept_walk(). A read-back in it is left out of what is
@@ -167,6 +189,7 @@ public:
 private:
     class Impl;
     friend class KeptWalk;
+    friend class SurfaceCopies;
     std::unique_ptr<Impl> impl_;
 };
 

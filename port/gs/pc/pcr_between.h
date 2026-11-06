@@ -14,7 +14,9 @@
 // kicks and runs and the runs' bits; zeros outside a picture between), 1 the walk's kicks as the GS queued them
 // (gsn.cpp's InterpKick), 2 the frame's moves.
 //
-// One thread: the PC renderer's ("kf4-pc").
+// Two threads: the PC renderer's ("kf4-pc") has the Between that frames are given to and walked with; the pump's
+// ("kf4-pc-pump", pcr.cpp) has one of its own, given the frame as walked (hand_over, take_walked), which draws the
+// kept walks again. Each Between is used by one thread only.
 #pragma once
 
 #include <cstdint>
@@ -22,6 +24,7 @@
 #include <array>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -97,6 +100,21 @@ public:
     // Between begin_picture and end_picture (or the _again pair)
     bool active() const { return active_; }
 
+    // A frame as walked, for the pump's Between: its serial, its projections and kick count, its walked kicks and its
+    // moves (buffers nothing writes again once walked)
+    struct Walked {
+        uint64_t serial = 0;
+        std::array<std::array<float, 5>, 2> screen{};
+        uint32_t kicks = 0;
+        Vulkan::BufferHandle kick_list, moves;
+    };
+    // (kf4-pc) A picture to be drawn again by the pump: the frame as walked when the picture is of the frame taken
+    // and the frame was walked (counted as begin_picture_again counts a picture drawn again), else nullopt (counted
+    // as not of the frame)
+    std::optional<Walked> hand_over(const GsnInterpPicture &picture);
+    // (the pump) The frame its pictures are drawn again with (begin_picture_again): the one before let go
+    void take_walked(Walked frame);
+
     // Set 1's buffers (the picture's while active, else zeros and empty lists)
     const Vulkan::Buffer &picture() const;
     const Vulkan::Buffer &kicks() const;
@@ -112,11 +130,18 @@ private:
 
     Vulkan::Device &device_;
     InterpFrame frame_;
+    // the frame's serial, projections and kicks (frame_'s, or the pump's frame as walked)
+    struct Shape {
+        uint64_t serial = 0;
+        std::array<std::array<float, 5>, 2> screen{};
+        uint32_t kicks = 0;
+    };
+    std::optional<Shape> shape_;
     Vulkan::BufferHandle moves_, kicks_, picture_;
     Vulkan::BufferHandle zero_picture_, empty_list_;
     uint8_t *kick_map_ = nullptr;
     bool active_ = false;
-    uint32_t walked_serial_ = 0; // (the frame whose kicks kicks_ holds)
+    uint64_t walked_serial_ = 0; // (the frame whose kicks kicks_ holds)
     bool walked_ = false;
     // the frame's own walk's kicks (keep_live_kicks), and whether they are kept
     KickList live_kicks_;

@@ -86,6 +86,15 @@ BufferHandle Between::make(const void *data, size_t bytes, bool mapped) {
 void Between::take_frame(InterpFrame frame) {
     counts_.frames++;
     frame_ = std::move(frame);
+    Shape shape;
+    shape.serial = frame_->serial;
+    for (int i = 0; i < 2; i++) {
+        for (int k = 0; k < 5; k++) {
+            shape.screen[i][k] = frame_->screen[i][k];
+        }
+    }
+    shape.kicks = frame_->kicks;
+    shape_ = shape;
     moves_.reset();
     if (frame_->kicks != 0 && frame_->moves) {
         moves_ = make(frame_->moves, size_t(frame_->kicks) * sizeof(GsnInterpMove), false);
@@ -100,12 +109,12 @@ void Between::make_picture(const GsnInterpPicture &p) {
     memcpy(h.move, p.move, sizeof(h.move));
     memcpy(h.mid, p.mid, sizeof(h.mid));
     for (int i = 0; i < 2; i++) {
-        memcpy(h.screen[i], frame_->screen[i], 4 * sizeof(float));
-        h.zt[i] = frame_->screen[i][4];
+        memcpy(h.screen[i], shape_->screen[i].data(), 4 * sizeof(float));
+        h.zt[i] = shape_->screen[i][4];
     }
     h.zt[2] = p.t;
     h.zt[3] = 1.0f - p.t;
-    h.kicks = frame_->kicks;
+    h.kicks = shape_->kicks;
     h.runs = p.runs;
     memcpy(data.data(), &h, sizeof(h));
     if (words && p.run_bits) {
@@ -139,7 +148,7 @@ std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
 
 bool Between::begin_picture_again(const GsnInterpPicture &p) {
     counts_.pictures++;
-    if (!frame_ || frame_->serial != p.serial || !walked_ || walked_serial_ != p.serial || !kicks_) {
+    if (!shape_ || shape_->serial != p.serial || !walked_ || walked_serial_ != p.serial || !kicks_) {
         counts_.missed++;
         return false;
     }
@@ -147,6 +156,36 @@ bool Between::begin_picture_again(const GsnInterpPicture &p) {
     counts_.drawn_again++;
     active_ = true;
     return true;
+}
+
+std::optional<Between::Walked> Between::hand_over(const GsnInterpPicture &p) {
+    counts_.pictures++;
+    if (!shape_ || shape_->serial != p.serial || !walked_ || walked_serial_ != p.serial || !kicks_ || kick_map_) {
+        counts_.missed++;
+        return std::nullopt;
+    }
+    counts_.drawn_again++;
+    Walked w;
+    w.serial = shape_->serial;
+    w.screen = shape_->screen;
+    w.kicks = shape_->kicks;
+    w.kick_list = kicks_;
+    w.moves = moves_;
+    return w;
+}
+
+void Between::take_walked(Walked frame) {
+    if (kicks_ && kick_map_) {
+        device_.unmap_host_buffer(*kicks_, MEMORY_ACCESS_WRITE_BIT);
+        kick_map_ = nullptr;
+    }
+    counts_.frames++;
+    frame_.reset();
+    shape_ = Shape{frame.serial, frame.screen, frame.kicks};
+    kicks_ = std::move(frame.kick_list);
+    moves_ = std::move(frame.moves);
+    walked_serial_ = frame.serial;
+    walked_ = true;
 }
 
 void Between::end_picture_again() {
@@ -207,7 +246,7 @@ bool Between::adopt_live_kicks(KickList kicks) {
     }
     kicks.resize(std::max(kicks.size(), sizeof(Kick)), 0); // (no kicks: one zeroed)
     kicks_ = make(kicks.data(), kicks.size(), false);
-    walked_serial_ = uint32_t(frame_->serial);
+    walked_serial_ = frame_->serial;
     walked_ = true;
     return true;
 }

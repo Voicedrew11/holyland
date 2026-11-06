@@ -238,6 +238,45 @@ the handoff above says, the GPU's way coming next):
 7. **`fast` switched to it**, the checks (pictures against native at every spot and the map tour's maps, sanitizers,
    speed), the old `fast` kept as `--renderer modern`.
 
+## The pictures between on a thread of their own: the pump (built 2026-11-06)
+
+docs/port/PERFORMANCE.md's item 1. At 009 pc's thread was 97% busy: 45% drawing the pictures between again
+(`draw_again`), 41% taking the frame's packets in.
+
+**What it does** (pcr.cpp's `Pump`; `KF4_PC_PUMP=0`: no pump, as before):
+- A second thread, `kf4-pc-pump`, with a canvas, a `Between` and GPU times of its own. kf4-pc still decides each
+  picture between as before (`fits`, or walk the stream); a picture it would draw again from the kept walk it hands to
+  the pump instead, with, the first time for that walk, the frame (`PumpFrame`: the walk, `Between::hand_over`'s
+  frame as walked, and `Canvas::copy_surfaces`: every colour and depth surface copied on the GPU, the kept frame shown).
+- The pump's canvas draws the walk on those copies (`Canvas::draw_again_alone`): the draws, uploads and copies only
+  as far as they fall on its surfaces, none of the texture store's changes (CLUT loads passed over): what the draws
+  read of the store is held in the walk. So kf4-pc's store and surfaces now see only the game's packets and the walks
+  of the stream, not each picture between's side effects.
+- The picture that shows a pumped picture between (the extra one, or the vblank's own at phase 0) is the pump's too.
+  kf4-pc's own pictures are handed out after the pump's before them (sent through the pump while it has work; one whose
+  sender waits, or whose pixels are kf4-pc's own, waits for the pump), so the presenter, the ring and
+  `pcr_backlog` (now vblanks sent less vblanks handed out) see every picture in order.
+- Granite's frame contexts are moved on by kf4-pc only; that waits for every thread's open command buffer, so the
+  pump submits every 128 batches and at each picture's end (a pump left open blocked kf4-pc for good).
+- `[stats] pc pump` line; the pump's GPU time is added into the one `GPU time` line.
+
+**Checks.** Against `KF4_PC_PUMP=0` at 000, 009, 009:2, 063 at 240 (`KF4_INTERP_DRAW_ALL=1`, vblanks 2300-2650
+every 7th, 204 pictures a spot): 000 byte for byte; 009 and 063 differ only in the top two rows of the picture (half
+a GS line at 4x), where both builds are equally far from the native GS (009 mean 39.4 against 39.7 off the native GS's
+pictures in those rows; 063 16.4 against 16.1); 009:2 from vblank 2447 in 2 pixels by 1. The rows are the buffer's
+leftover top line, which the pictures between no longer draw over in kf4-pc's buffers. ctest 14/14. ASan + UBSan pc
+run at 009:2: only the known reports. TSan pc run at 009: of 266 reports, 4 in renderer code, all inside RADV while
+the two canvases are made at once at start (Mesa's futex locks are not seen by TSan); the rest the known dmac, kernel
+and menu ones. Not run: native and `fast` checks (their paths are not changed), clang-tidy (no configuration).
+
+**Speed** (`pace_test --hz 240 --frame-rate 240 -- --renderer pc`, 009, runs alternated): with the pump 147.6,
+161.4, 157.9 pictures a second (lowest seconds 112, 134, 138); without 138.3, 133.6, 132.3 (123, 126, 118). An
+earlier set of runs at 009 and 000 was too noisy to read (both builds fell to 82-85 in one run). GPU time a picture
+2.7-3.2 ms with the pump against 2.5 without; fewer submits (one a picture) gave 3.0 against 3.2, so most of it is not
+the passes. Not twice as many: sampled at 009, kf4-pc is now 44% and the pump 61% waiting for work, gs.c cut no
+picture and left none out, so what holds 009 now is outside pc's two threads (to measure next: the GPU's time and
+frame contexts, the presenter's pacing).
+
 ## The store's marks walked by their pages (built 2026-10-30)
 
 **Measured first** (009 at 240, `--renderer pc`, the owner's settings, 250 samples of `kf4-pc` with `eu-stack`): pc's

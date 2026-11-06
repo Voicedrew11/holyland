@@ -95,6 +95,20 @@ public:
         }
     }
 
+    void take_in(Impl &other) {
+        other.device_.wait_idle();
+        other.collect();
+        for (size_t k = 0; k < ns_.size(); k++) {
+            ns_[k] += other.ns_[k];
+        }
+        pictures_ += other.pictures_;
+        dropped_ += other.dropped_ + other.pending_.size();
+        other.ns_.fill(0);
+        other.pictures_ = other.dropped_ = 0;
+        other.pending_.clear();
+        on_ = on_ || other.on_;
+    }
+
     void print() {
         if (!on_ && pictures_ == 0) {
             return;
@@ -161,6 +175,10 @@ void GpuTimes::picture() {
 
 void GpuTimes::collect() {
     impl_->collect();
+}
+
+void GpuTimes::take_in(GpuTimes &other) {
+    impl_->take_in(*other.impl_);
 }
 
 void GpuTimes::print() {

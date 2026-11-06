@@ -1479,6 +1479,7 @@ private:
         PagesRead read;
     };
     friend class pcr::KeptWalk;
+    friend class pcr::SurfaceCopies;
     friend class pcr::Canvas;
 
     // ---- Step 5b: a walk's calls kept, and made again ----
@@ -1512,6 +1513,97 @@ private:
         }
         flush_batch();
         between_ = nullptr;
+    }
+
+    // ---- The pictures between on a thread of their own (the pump's canvas) ----
+    struct Copies {
+        std::vector<std::unique_ptr<Surface>> colour, depth;
+        ImageHandle kept_frame;
+        uint32_t kept_page = 0;
+        std::array<uint32_t, 2> scale = {1, 1};
+    };
+
+    std::unique_ptr<Copies> copy_surfaces() {
+        flush_batch();
+        end_pass();
+        auto copies = std::make_unique<Copies>();
+        copies->kept_frame = kept_frame_; // (never written: a 0xF2 makes a new one)
+        copies->kept_page = kept_page_;
+        copies->scale = scale_;
+        CommandBuffer &c = cmd(GpuWork::copy);
+        full_barrier(c);
+        for (auto *list : {&colour_, &depth_}) {
+            for (const auto &s : *list) {
+                ImageHandle image = make_surface_image(s->width(), s->height, s->depth);
+                if (!image) {
+                    continue; // (the pump makes it again, as a surface it never had)
+                }
+                VkImageAspectFlags aspect = !s->depth ? VK_IMAGE_ASPECT_COLOR_BIT
+                                            : stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                                          : VK_IMAGE_ASPECT_DEPTH_BIT;
+                const VkImageSubresourceLayers layers = {aspect, 0, 0, 1};
+                c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, {s->image->get_width(), s->image->get_height(), 1},
+                             layers, layers);
+                auto copy = std::make_unique<Surface>(*s);
+                copy->image = std::move(image);
+                (s->depth ? copies->depth : copies->colour).push_back(std::move(copy));
+                counts_.surfaces_copied++;
+            }
+        }
+        full_barrier(c);
+        submit();
+        return copies;
+    }
+
+    void start_from(Copies &copies) {
+        flush_batch();
+        end_pass();
+        colour_ = std::move(copies.colour);
+        depth_ = std::move(copies.depth);
+        kept_frame_ = std::move(copies.kept_frame);
+        kept_page_ = copies.kept_page;
+        scale_ = pending_scale_ = copies.scale;
+        replaying_ = kept_reads_ = false;
+    }
+
+    // (draw_again_alone) Batches drawn between two submits of the pump's command buffer: kf4-pc's next frame context
+    // waits for at most that many
+    static constexpr uint32_t batches_a_submit = 128;
+
+    void draw_again_alone(const Kept &walk, const Between &between) {
+        flush_batch();
+        between_ = &between;
+        uint32_t batches = 0;
+        for (const KeptStep &step : walk.steps) {
+            std::visit([this](const auto &kept) { make_again_alone(kept); }, step);
+            if (std::holds_alternative<Batch>(step) && ++batches % batches_a_submit == 0) {
+                submit();
+            }
+        }
+        flush_batch();
+        between_ = nullptr;
+        submit();
+    }
+
+    void make_again_alone(const Batch &kept) {
+        make_again(kept);
+    }
+    void make_again_alone(const KeptUpload &kept) {
+        flush_batch();
+        write_upload_into_surfaces(kept.upload.transfer, *kept.upload.bytes);
+    }
+    void make_again_alone(const KeptUploadAgain &kept) {
+        flush_batch();
+        write_upload_into_surfaces(kept.upload.transfer, *kept.upload.bytes);
+        counts_.uploads_made_again++;
+    }
+    void make_again_alone(const KeptCopy &kept) {
+        flush_batch();
+        copy_between_surfaces(kept.transfer);
+    }
+    void make_again_alone(const KeptClutLoad &) {}
+    void make_again_alone(const KeptMark &kept) {
+        frame_mark(kept.value);
     }
 
     // ---- A frame walked once (pcr_frame_walk.h): the frame's own walk as its stream's ----
@@ -2281,7 +2373,8 @@ private:
     TextureStore store_{store_limits()};
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
-    std::unordered_map<uint32_t, SamplerHandle> samplers_; // (by sampler_for's key)
+    // (by sampler_for's key; never let go: a kept walk's batches name them, drawn again on the pump's thread too)
+    std::unordered_map<uint32_t, SamplerHandle> samplers_;
     // KF4_PC_SAMPLER=0: every texture by the GS's read (to compare with)
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
@@ -2367,6 +2460,22 @@ class KeptWalk : public Canvas::Impl::Kept {
 public:
     explicit KeptWalk(Canvas::Impl::Kept &&kept) : Canvas::Impl::Kept(std::move(kept)) {}
 };
+
+// (Canvas::Impl's Copies, under the name the header gives it)
+class SurfaceCopies : public Canvas::Impl::Copies {
+public:
+    explicit SurfaceCopies(Canvas::Impl::Copies &&copies) : Canvas::Impl::Copies(std::move(copies)) {}
+};
+
+std::shared_ptr<SurfaceCopies> Canvas::copy_surfaces() {
+    return std::make_shared<SurfaceCopies>(std::move(*impl_->copy_surfaces()));
+}
+void Canvas::start_from(SurfaceCopies &copies) {
+    impl_->start_from(copies);
+}
+void Canvas::draw_again_alone(const KeptWalk &walk, const Between &between) {
+    impl_->draw_again_alone(walk, between);
+}
 
 void Canvas::keep_walk() {
     impl_->keep_walk();
