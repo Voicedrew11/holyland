@@ -1,9 +1,9 @@
-// VU1's program 0x280 (the skinned models) on the GPU, shared by the renderers that draw native draws: the native GS's
-// nd_280.vert (and its builds) and the PC renderer's pcr_nd280.vert. This part: a draw's record as the shaders read it
-// (the native GS's Nd280Const, port/render/vu1_record.hpp's Vu1Record280) and its flags. Include it, declare the buffer
+// VU1's program 0x280 (the skinned models) on the GPU, shared by the renderers that draw native draws: the PC
+// renderer's pcr_nd280.vert. This part: a draw's record as the shaders read it (port/render/vu1_record.hpp's
+// Vu1Record280) and its flags. Include it, declare the buffer of records, then vu1_280_maths.h.
 // of records, then vu1_280_maths.h.
 #include "nd_between.h"
-// the draws (gsn_nd_280.inc, Nd280Const): matrices a VU qword a column; [0] set A, [1] set B
+// the draws (Vu1Record280): matrices a VU qword a column; [0] set A, [1] set B
 struct Draw {
     mat4 vertex[2];     // VU1 0x14-0x17, 0x1C-0x1F: view-screen by the part's matrix, by its parent's
     mat4 light_dir[2];  // VU1 0x18-0x1A, 0x20-0x22: the light directions by them (a column each)

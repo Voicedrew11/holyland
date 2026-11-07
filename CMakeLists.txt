@@ -146,8 +146,10 @@ add_library(kf4_port STATIC
     port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
-# native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the native
-# GS draws them (docs/port/NATIVE_DRAW.md)
+# the plain GS types the PC renderer and the port share (port/gs/shared/gsn.h, gs_api.h includes it)
+target_include_directories(kf4_port PRIVATE port/gs/shared)
+# native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the PC renderer
+# draws them (docs/port/NATIVE_DRAW.md)
 enable_language(CXX)
 add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp)
 target_include_directories(kf4_render PUBLIC port/include)
@@ -163,7 +165,7 @@ if(NOT MSVC)
 endif()
 target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
-# native GS (kf4_gs, built into tests without the port) adds to them as well
+# GS libraries (kf4_gs, built into tests without the port) add to them as well
 add_library(kf4_profile STATIC port/platform/profile.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
@@ -266,56 +268,41 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # Granite with the depth bounds test (cmake/granite_depth_bounds.cmake: made in its checkout)
     include(cmake/granite_depth_bounds.cmake)
     kf4_granite_depth_bounds(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with dynamic state for the native GS's draws (cmake/granite_dynamic_state.cmake, after the above)
+    # and with dynamic state for the PC renderer's draws (cmake/granite_dynamic_state.cmake, after the above)
     include(cmake/granite_dynamic_state.cmake)
     kf4_granite_dynamic_state(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with the hooks of the native GS's pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
+    # and with the hooks of the pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
     include(cmake/granite_pipeline_warm.cmake)
     kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     kf4_granite_pipeline_cache_locks(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
-    # and the native GS (port/gs/native/), on the same Vulkan layer
-    add_library(kf4_gs STATIC port/gs/gs_parallel.cpp port/gs/native/gsn.cpp port/gs/native/gsn_vram.c
-                port/gs/native/upscale_ffx.cpp port/gs/native/upscale_dlss.cpp)
-    target_include_directories(kf4_gs PRIVATE port/include third_party/ffx-api/include PUBLIC port/gs/native)
-    # --upscaler fsr3 (docs/port/UPSCALING.md): AMD's signed amd_fidelityfx_vk.dll, loaded at run time from beside
-    # kf4.exe. Not kept here: KF4_FFX_DLL names one (the FidelityFX SDK's PrebuiltSignedDLL) to copy there
-    set(KF4_FFX_DLL "" CACHE FILEPATH "amd_fidelityfx_vk.dll to copy beside kf4.exe (--upscaler fsr3)")
-    # --upscaler dlss: NGX's headers from NVIDIA's DLSS SDK, whose licence keeps it out of this repository.
-    # KF4_DLSS_SDK names the SDK (github.com/NVIDIA/DLSS); without it the build has no DLSS
-    set(KF4_DLSS_SDK "" CACHE PATH "NVIDIA's DLSS SDK, for --upscaler dlss (Windows)")
-    if(KF4_DLSS_SDK AND WIN32)
-        if(NOT EXISTS ${KF4_DLSS_SDK}/include/nvsdk_ngx_defs.h)
-            message(FATAL_ERROR "KF4_DLSS_SDK: ${KF4_DLSS_SDK}/include/nvsdk_ngx_defs.h is not there")
-        endif()
-        set_source_files_properties(port/gs/native/upscale_dlss.cpp PROPERTIES
-            COMPILE_DEFINITIONS KF4_HAVE_DLSS INCLUDE_DIRECTORIES ${KF4_DLSS_SDK}/include)
-    endif()
+    # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
+    add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
+    target_include_directories(kf4_gs PRIVATE port/include)
     target_link_libraries(kf4_gs PRIVATE parallel-gs)
     target_link_libraries(kf4_gs PUBLIC kf4_render)
     target_link_libraries(kf4_gs PUBLIC kf4_profile)
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
-    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md: --renderer pc), on Granite as well, with none of the
-    # native GS's code: of port/gs/native it takes gsn.h's plain types only
+    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md), on Granite as well: of port/gs/shared it takes
+    # gsn.h's plain types only
     # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
     file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
     list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
-    target_include_directories(kf4_pc PRIVATE port/include port/gs/native PUBLIC port/gs/pc)
+    target_include_directories(kf4_pc PRIVATE port/include port/gs/shared PUBLIC port/gs/pc)
     target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
-    # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the native GS's
+    # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the PC renderer's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
     if(TARGET imgui)
         target_sources(imgui PRIVATE third_party/imgui/backends/imgui_impl_vulkan.cpp)
         target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
         target_link_libraries(imgui PUBLIC Vulkan::Headers)
         target_sources(kf4_port PRIVATE port/platform/present_vk.cpp)
-        target_include_directories(kf4_port PRIVATE port/gs/native)
         target_compile_definitions(kf4_port PRIVATE KF4_HAVE_VULKAN_PRESENTER)
     endif()
 elseif(KF4_USE_PARALLEL_GS)
@@ -503,7 +490,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # kf4-gsreplay draws a GS frame capture again (tools/gsreplay): the GIF stream, or the VIF1 stream
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
-    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c tools/gsreplay/nd_oracle.c tools/gsreplay/nd_oracle_280.c tools/gsreplay/nd_oracle_700.c port/platform/vif1.c port/platform/vu1.c
+    add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
         port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
@@ -511,29 +498,13 @@ if(TARGET kf4_gs)
     if(NOT WIN32)
         target_link_libraries(kf4-gsreplay PRIVATE m)
     endif()
-    # The CPU model of the GS's memory (port/gs/native/gsn_vram.c) against paraLLEl-GS
-    add_executable(gsn_vram_test tests/gsn_vram_test.c port/gs/native/gsn_vram.c)
-    target_include_directories(gsn_vram_test PRIVATE port/include port/gs/native)
+    # The CPU model of the GS's memory (port/gs/shared/gsn_vram.c) against paraLLEl-GS
+    add_executable(gsn_vram_test tests/gsn_vram_test.c port/gs/shared/gsn_vram.c)
+    target_include_directories(gsn_vram_test PRIVATE port/include port/gs/shared)
     target_link_libraries(gsn_vram_test PRIVATE kf4_gs)
     if(KF4_TESTS)
         add_test(NAME gsn_vram COMMAND gsn_vram_test)
         set_tests_properties(gsn_vram PROPERTIES SKIP_RETURN_CODE 77)
-    endif()
-    # The native GS's drawing against paraLLEl-GS: random draws, the same packets to both
-    add_executable(gsn_draw_test tests/gsn_draw_test.c)
-    target_include_directories(gsn_draw_test PRIVATE port/include port/gs/native)
-    target_link_libraries(gsn_draw_test PRIVATE kf4_gs)
-    if(NOT WIN32)
-        target_link_libraries(gsn_draw_test PRIVATE m)
-    endif()
-    if(KF4_TESTS)
-        add_test(NAME gsn_draw COMMAND gsn_draw_test)
-        set_tests_properties(gsn_draw PROPERTIES SKIP_RETURN_CODE 77)
-        if(NOT WIN32)
-            # likely lavapipe: it keeps what a process's device has had until the process ends (5 cases
-            # a process), and its sampler filters paraLLEl-GS's textures otherwise than a GPU's
-            set_tests_properties(gsn_draw PROPERTIES ENVIRONMENT "GSN_CHUNK=5;GSN_SOFTWARE=1")
-        endif()
     endif()
 endif()
 
@@ -617,9 +588,9 @@ if(KF4_TESTS)
 endif()
 
 # The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
-# (port/gs/native/gsn_vram.c) as its format library and nothing else of the native GS
-add_library(kf4_gsn_vram STATIC port/gs/native/gsn_vram.c)
-target_include_directories(kf4_gsn_vram PUBLIC port/gs/native)
+# (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
+add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)
+target_include_directories(kf4_gsn_vram PUBLIC port/gs/shared)
 add_library(kf4_pc_textures STATIC port/gs/pc/pcr_textures.cpp)
 target_include_directories(kf4_pc_textures PUBLIC port/gs/pc)
 target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
@@ -692,13 +663,4 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:kf4> ${KF4_RUNTIME_DLLS}
             $<TARGET_FILE_DIR:kf4>
         COMMAND_EXPAND_LISTS)
-    if(KF4_FFX_DLL) # (--upscaler fsr3: the FidelityFX DLL beside kf4.exe)
-        add_custom_command(TARGET kf4 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KF4_FFX_DLL} $<TARGET_FILE_DIR:kf4>/amd_fidelityfx_vk.dll)
-    endif()
-    if(KF4_DLSS_SDK) # (--upscaler dlss: the SDK's release build of DLSS beside kf4.exe)
-        add_custom_command(TARGET kf4 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KF4_DLSS_SDK}/lib/Windows_x86_64/rel/nvngx_dlss.dll
-                $<TARGET_FILE_DIR:kf4>/nvngx_dlss.dll)
-    endif()
 endif()

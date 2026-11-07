@@ -1,8 +1,7 @@
 // A native draw's record for VU1's programs 0x000, 0x280, 0x5A0 and 0x700 on the GPU (port/include/port/render.h's draws): what VU1's set-up
 // leaves in its memory for the vertex program, worked out on the CPU in VU1's arithmetic, laid out as the shaders read
 // it (port/render/shaders/vu1_000_draw.h's Draw). For the renderers that draw native draws without VU1: the PC
-// renderer (port/gs/pc/pcr_native.cpp). The native GS has its own copy (gsn_native_draw.inc, nd_const), the same
-// maths. port/platform/vu1_hle.c (setup) is the specification.
+// renderer (port/gs/pc/pcr_native.cpp). port/platform/vu1_hle.c (setup) is the specification.
 #pragma once
 #include <stdint.h>
 
@@ -10,8 +9,7 @@
 
 #include "render_internal.hpp"
 
-// A model part's move in the pictures between (vu1_000_draw.h's Between; gsn_native_draw.inc's NdBetween says what
-// each field is)
+// A model part's move in the pictures between (vu1_000_draw.h's Between; shaders/nd_between.h says what each field is)
 struct Vu1Between {
     float rot[12];
     float s[12];

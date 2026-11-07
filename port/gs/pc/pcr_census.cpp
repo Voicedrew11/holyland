@@ -1,6 +1,6 @@
 // KF4_PC_CENSUS=1 (diagnostic, --renderer pc): what the game sends the GS, counted by kind, printed at exit:
 // the targets drawn into, the tests and blends, the textures sampled, the primitives, the transfers. The PC
-// renderer is built for what is here (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS").
+// renderer is built for what is here (docs/port/PC_RENDERER.md).
 #include "pcr_census.h"
 
 #include <stdio.h>

@@ -1,6 +1,5 @@
-# Granite (third_party/parallel-gs/Granite) with the hooks the native GS's pipeline list needs (gsn_pipeline_warm.inc,
-# docs/port/RENDERER.md "Pipelines made ahead"): a pipeline made by Granite is told to the native GS (what it was made
-# from, so that it can be made again at the next start before a draw needs it), a compatible render pass made for
+# Granite (third_party/parallel-gs/Granite) with the hooks a pipeline list needs: a pipeline made by Granite is told to the list (what it was
+# made from, so that it can be made again at the next start before a draw needs it), a compatible render pass made for
 # the first time is told too (its attachments' formats and samples, which a pipeline is made against), and the
 # pipeline's hash can be worked out again from outside a command buffer. The code is cmake/granite_pipeline_warm.inc,
 # included into command_buffer.cpp; the edits are made as cmake/granite_dynamic_state.cmake makes its own (at
@@ -25,8 +24,7 @@ endfunction()
 
 # Granite's pipeline binaries (VK_KHR_pipeline_binary, RADV's way) are serialized for the pipeline cache's file by
 # walking its maps without their locks, while a draw or the warm-up may be adding a pipeline to them on another thread.
-# The native GS writes the file on a thread of its own (gsn.cpp, "The pipeline cache"), so the walk holds the maps'
-# read locks: a pipeline made meanwhile waits for it (a few milliseconds), and is in the next file.
+# The file is written on a thread of its own, so the walk holds the maps' read locks: a pipeline made meanwhile waits for it (a few milliseconds), and is in the next file.
 function(kf4_granite_pipeline_cache_locks granite)
     set(map ${granite}/util/intrusive_hash_map.hpp)
     set(cache ${granite}/vulkan/pipeline_cache.cpp)

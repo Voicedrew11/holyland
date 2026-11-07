@@ -1,16 +1,16 @@
-// The PC renderer's GIF front end (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS"):
+// The PC renderer's GIF front end (docs/port/PC_RENDERER.md):
 // the GIF packets of PATH1, 2 and 3 taken as the GS takes them, and turned into events for the renderer. It keeps
 // the GS's register file and the GIF's tag state, and nothing else: no VRAM, no drawing.
 //
-// It is the native GS's front end (port/gs/native/gsn.cpp: gif(), packed(), gs_write(), vertex_kick(),
-// begin_transfer(), image_data()) again, without what that does with the packets.
+// Its parts are the GIF's tags, the register writes, the vertex queue and the image transfers, with what the
+// packets do to the GS's state only. (The renderer does the drawing.)
 //
 // The events, in the order the packets make them (GifEvents below). At each, registers() is the register file as
 // the write left it (the write's own value stored first), so the renderer reads FRAME, ZBUF, TEST, ALPHA, TEX0 ...
 // there when it needs them.
 // - register_written: a register of the file changed (old and new value). Not for the vertex registers (RGBAQ, ST,
 //   UV, FOG: they come in the primitives' vertices), nor TEX0 (its own event), nor the kicks (XYZ*), which the file
-//   does not keep, as gsn's does not.
+//   does not keep.
 // - texture_written: TEX0_1 or TEX0_2 written, or TEX2_1 or TEX2_2 (which write TEX0's PSM and CLUT fields only),
 //   each time, changed or not: the renderer loads the CLUT then. With the TEX0 that results and TEXCLUT then.
 //   MIPTBP1 is made from it first when TEX1's MTBA says so (as the GS does).
@@ -21,11 +21,11 @@
 // - image_upload: a host-to-local transfer (TRXDIR 0) whose bytes have all come (IMAGE data or HWREG writes, over
 //   any number of packets and feeds): the pixels' bytes, w * h * bits rounded up to a byte, and no more. A new
 //   TRXDIR before then gives what had come, UploadEnd::cut_short. A transfer of no pixels (TRXREG's width or
-//   height 0) or of a format that is not one gives nothing, and its data is dropped (as gsn's).
+//   height 0) or of a format that is not one gives nothing, and its data is dropped (as the GS does).
 // - local_copy (TRXDIR 2), local_to_host (TRXDIR 1): with the transfer's registers as TRXDIR found them.
 // - native_draw (0x7B), upload_again (0x7C), frame_mark (0x7D), widescreen (0x7E): the port's own registers. A
 //   native draw's handler may write the registers its batches kick (write()).
-// - gs_sync: SIGNAL, FINISH, LABEL (not kept in the file, as gsn's does not keep them).
+// - gs_sync: SIGNAL, FINISH, LABEL (not kept in the file, as the GS does not keep them).
 // - kick_numbered: in a picture between's walk (number_kicks), each vertex kick of the packets fed, numbered.
 // TEXFLUSH and NOP (0x0F) make no event.
 //
@@ -82,7 +82,7 @@ struct GifVertex {
     uint8_t fog = 0;       // XYZF's F, or FOG's when the kick was XYZ
     // (a picture between's walk, GifFrontEnd::number_kicks) the kick's number, and the kick in whose stretch ST, RGBAQ,
     // RGBAQ's Q (a PACKED RGBAQ's, from the PACKED ST before it) and UV were last written (no_kick: before the walk,
-    // or Q by an A+D RGBAQ): what frame_interp.c's GsnInterpMoves of those kicks change (gsn.cpp's InterpKick)
+    // or Q by an A+D RGBAQ): what frame_interp.c's GsnInterpMoves of those kicks change (the GIF front end's kick)
     uint32_t kick = no_kick;
     uint32_t st_owner = no_kick, rgba_owner = no_kick, q_owner = no_kick, uv_owner = no_kick;
     bool operator==(const GifVertex &) const = default;
@@ -148,7 +148,7 @@ private:
     };
 
 public:
-    static constexpr int path_count = 4; // PATH1, 2 and 3 by their numbers (0 is taken too, as gsn takes it)
+    static constexpr int path_count = 4; // PATH1, 2 and 3 by their numbers (0 is taken too)
 
     explicit GifFrontEnd(GifEvents &events);
 

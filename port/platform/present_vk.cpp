@@ -1,22 +1,22 @@
 // The Vulkan presenter (port/include/port/present_vk.h, --presenter vulkan, docs/port/STEP3.md).
 //
-// The window's swapchain is made on the native GS's own Vulkan device (port/gs/native/gsn.cpp turns
-// the surface and swapchain extensions on for it). Each picture the window shows is
-// - the native GS's: the image gsn_scanout_take hands out, which the native GS wrote on the GPU at the
+// The window's swapchain is made on the PC renderer's own Vulkan device (pcr_enable_present turns the
+// surface and swapchain extensions on for it). Each picture the window shows is
+// - the PC renderer's: the image pcr_scanout_take hands out, which the PC renderer wrote on the GPU at the
 //   vblank, so nothing comes back to the CPU;
-// - or another's (paraLLEl-GS's with --renderer both, the heat map): its pixels, copied into a buffer
+// - or paraLLEl-GS's (--renderer gs): its pixels, copied into a buffer
 //   and from there into an image of the presenter's own;
 // blitted into the swapchain's image, scaled and placed as port_video_fit says (4:3 or the widescreen
 // 16:9, with black bars, or stretched), filtered as "Smooth scaling" says. Dear ImGui's draw lists
 // (the settings overlay and the mouse indicator, port/overlay/overlay.cpp) go over it in a render
 // pass, with ImGui's own Vulkan backend (third_party/imgui/backends/imgui_impl_vulkan.cpp).
 //
-// The presenter submits to the native GS's queue, under its lock (gsn_queue_lock): the queue's order
-// and a barrier at the start of each command buffer are all the synchronisation the native GS's
-// picture needs. The native GS draws on a thread of its own (port/gs/native/gsn.cpp): it writes the
-// picture into its image at the vblank and then says so (gsn_set_presenter's image callback,
-// port_video_submit_image), so a picture is never taken half made; gsn_scanout_take and
-// gsn_scanout_release keep the image alive while this uses it. Everything here runs on the game's
+// The presenter submits to the PC renderer's queue, under its lock (pcr_queue_lock): the queue's order
+// and a barrier at the start of each command buffer are all the synchronisation the PC renderer's
+// picture needs. The PC renderer draws on a thread of its own (port/gs/pc/pcr.cpp): it writes the
+// picture into its image at the vblank and then says so (pcr_set_presenter's image callback,
+// port_video_submit_image), so a picture is never taken half made; pcr_scanout_take and
+// pcr_scanout_release keep the image alive while this uses it. Everything here runs on the game's
 // thread, with command pools of its own; the queue is shared under Granite's device lock.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -47,7 +47,7 @@ extern "C" {
 
 namespace {
 
-// ---- Vulkan's functions, from the native GS's instance and device -------------------------------
+// ---- Vulkan's functions, from the PC renderer's instance and device -------------------------------
 #define INSTANCE_FUNCTIONS(X)                                                                              \
     X(vkGetDeviceProcAddr)                                                                                 \
     X(vkDestroySurfaceKHR)                                                                                 \
@@ -178,7 +178,7 @@ struct Presenter {
     uint32_t upload_width = 0, upload_height = 0;
     bool upload_new = false; // made, and not yet in its layout
     Source source = SOURCE_NONE;
-    uint64_t tag = 0; // the native GS's picture shown (PORT_PICTURE_TAG)
+    uint64_t tag = 0; // the PC renderer's picture shown (PORT_PICTURE_TAG)
 
     // the window read back for KF4_OVERLAY_SHOT
     VkBuffer readback = VK_NULL_HANDLE;
@@ -896,7 +896,7 @@ void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkIma
 }
 
 // ImGui's textures (the font atlas) are made with a submit of ImGui's own and a wait for the queue:
-// those go under the native GS's queue lock
+// those go under the PC renderer's queue lock
 bool imgui_textures_pending(ImDrawData *data) {
     if (data->Textures == nullptr) {
         return false;
@@ -962,8 +962,7 @@ void read_window(Frame &f) {
 extern "C" int port_vk_open(void *sdl_window) {
     pr = Presenter();
     if (!gsr_present_device(&pr.gsn)) {
-        std::fprintf(stderr, "[present] the Vulkan presenter needs the native GS's device with a swapchain "
-                             "(--renderer native or both)\n");
+        std::fprintf(stderr, "[present] the Vulkan presenter needs the PC renderer's device with a swapchain\n");
         return 0;
     }
     pr.window = static_cast<SDL_Window *>(sdl_window);
@@ -998,7 +997,7 @@ extern "C" int port_vk_open(void *sdl_window) {
     VkBool32 supported = VK_FALSE;
     vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
     if (!supported) {
-        std::fprintf(stderr, "[present] the native GS's queue cannot present to the window\n");
+        std::fprintf(stderr, "[present] the PC renderer's queue cannot present to the window\n");
         close_all();
         return 0;
     }
@@ -1024,7 +1023,7 @@ extern "C" int port_vk_open(void *sdl_window) {
             }
         });
     }
-    std::fprintf(stderr, "[present] the window is presented with Vulkan, on the native GS's device\n");
+    std::fprintf(stderr, "[present] the window is presented with Vulkan, on the PC renderer's device\n");
     return 1;
 }
 
@@ -1128,11 +1127,11 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         pr.source = SOURCE_NATIVE;
         pr.tag = tag;
     }
-    // the native GS's picture of that tag (with nothing new, the one shown last again)
+    // the PC renderer's picture of that tag (with nothing new, the one shown last again)
     GsnScanout scanout = {};
     bool have_scanout = pr.source == SOURCE_NATIVE && gsr_scanout_take_tag(&scanout, pr.tag);
 
-    // the picture's place; the native GS scales its next pictures to it with the best scaling (or the
+    // the picture's place; the PC renderer scales its next pictures to it with the best scaling (or the
     // sharpening), this one when it was made at this size
     int x, y, w, h;
     port_video_fit(int(pr.extent.width), int(pr.extent.height), &x, &y, &w, &h);
@@ -1173,7 +1172,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk.vkBeginCommandBuffer(cmd, &begin);
-    // what the queue wrote before (the native GS's picture, this presenter's copies) before it is read
+    // what the queue wrote before (the PC renderer's picture, this presenter's copies) before it is read
     VkMemoryBarrier memory = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     memory.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1298,7 +1297,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     gsr_queue_lock();
     check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done));
     if (have_scanout) {
-        gsr_scanout_release(); // (submitted: whatever the native GS writes into it next comes after)
+        gsr_scanout_release(); // (submitted: whatever the PC renderer writes into it next comes after)
     }
     result = vk.vkQueuePresentKHR(pr.queue, &present);
     gsr_queue_unlock();

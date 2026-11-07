@@ -1,18 +1,17 @@
-// The PC renderer's pictures between on the GPU (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native
-// GS", step 5). frame_interp.c ("On the GPU") hands over the frame once (its packets, as a picture between draws them,
+// The PC renderer's pictures between on the GPU (docs/port/PC_RENDERER.md, step 5). frame_interp.c ("On the GPU") hands over the frame once (its packets, as a picture between draws them,
 // and for each vertex kick in them how a picture between moves it: gsn.h's GsnInterpMove), then for each picture its
 // time, its cameras and the model parts that move with their model then. The frame's packets are walked again for each
 // picture with the vertices where the game put them, and the shaders move them: a GIF vertex by its kicks' moves
-// (shaders/pcr_prim.vert, port/render/shaders/gif_moves.h: gs_replay.comp's maths), a native draw's by its record's
+// (shaders/pcr_prim.vert, port/render/shaders/gif_moves.h), a native draw's by its record's
 // (port/render/part_moves.hpp, vu1_*_maths.h's moved()).
 //
 // Step 5b: a walk is kept (pcr_canvas.h's KeptWalk) and the frame's other pictures draw it again, with only their
 // Picture new (begin_picture_again): every walk of a frame starts from the front end's state when the frame was taken,
 // so its kicks are the last walk's. pcr.cpp's Intake decides, by what the kept walk read of the texture store.
 //
-// Set 1 of the canvas's draws: binding 0 the picture (gs_replay.h's Picture: the cameras, the projections, t, the
+// Set 1 of the canvas's draws: binding 0 the picture (the picture's header: the cameras, the projections, t, the
 // kicks and runs and the runs' bits; zeros outside a picture between), 1 the walk's kicks as the GS queued them
-// (gsn.cpp's InterpKick), 2 the frame's moves.
+// (the GIF front end's kick), 2 the frame's moves.
 //
 // Two threads: the PC renderer's ("kf4-pc") has the Between that frames are given to and walked with; the pump's
 // ("kf4-pc-pump", pcr.cpp) has one of its own, given the frame as walked (hand_over, take_walked), which draws the

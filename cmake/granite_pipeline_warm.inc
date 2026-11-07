@@ -1,5 +1,5 @@
 // (holyland) Included into Granite's vulkan/command_buffer.cpp, in namespace Vulkan, by cmake/granite_pipeline_warm.cmake:
-// the hooks the native GS's pipeline list uses (port/gs/native/gsn_pipeline_warm.inc).
+// the hooks a pipeline list uses.
 
 // a pipeline Granite made (sync: a draw or dispatch waited for it; ok: it was made), and a compatible render pass made
 // for the first time (any thread)
@@ -22,7 +22,7 @@ VkPipelineCache CommandBuffer::holyland_pipeline_cache(Device *device)
 	return device->legacy_pipeline_cache;
 }
 
-// a compatible render pass (the native GS's list makes them again before a draw asks for them)
+// a compatible render pass (a pipeline list makes them again before a draw asks for them)
 const RenderPass &CommandBuffer::holyland_render_pass(Device *device, const RenderPassInfo &info)
 {
 	return device->request_render_pass(info, true);

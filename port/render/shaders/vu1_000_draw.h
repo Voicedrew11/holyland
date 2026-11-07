@@ -1,9 +1,9 @@
-// VU1's program 0x000 on the GPU, shared by the renderers that draw native draws (port/include/port/render.h): the
-// native GS's nd_000.vert (and its builds: sa_000, pc_000) and the PC renderer's pcr_nd000.vert. This part: a draw's
-// record as the shaders read it (the native GS's NdConst, the PC renderer's pcr_nd.h: a qword a column), and its
+// VU1's program 0x000 on the GPU, shared by the renderers that draw native draws (port/include/port/render.h): the PC
+// renderer's pcr_nd000.vert. This part: a draw's record as the shaders read it (the struct in vu1_record.hpp: a qword a
+// column), and its flags. Include it, declare the buffer of records, then vu1_000_maths.h.
 // flags. Include it, declare the buffer of records, then vu1_000_maths.h.
 #include "nd_between.h"
-// the draws (gsn_native_draw.inc, NdConst), a record each: matrices a VU qword a column
+// the draws (vu1_record.hpp's Vu1Record), a record each: matrices a VU qword a column
 struct Draw {
     mat4 vertex;       // VU1 0x14: the set-up's vertex matrix (0x00 by 0x04)
     mat4 model;        // VU1 0x04: the part to the world (not read yet)

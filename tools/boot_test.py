@@ -7,7 +7,7 @@ Runs the program twice with tests/newgame.pad as the pad, at full speed with not
 clock, and compares the two logs (each line is a vblank's events or the game's state that frame). Then
 checks the log goes title -> New Game -> the first map: the title's files load, the opening movie ends,
 099.map loads, and the player stands in map 0x63 with 50 HP. The disc comes from --disc or KF4_DISC; the
-program from --exe, or out/linux-gcc, out/linux-clang or out/windows-clang, whichever exists.
+program from --exe, or the first of out/linux-clang, out/linux-gcc and out/windows-clang that exists.
 """
 import argparse
 import os
@@ -29,7 +29,7 @@ STAGES = [
 
 
 def find_exe():
-    for preset in ("linux-gcc", "linux-clang", "windows-clang"):
+    for preset in ("linux-clang", "linux-gcc", "windows-clang"):
         for name in ("kf4", "kf4.exe"):
             path = os.path.join(ROOT, "out", preset, name)
             if os.path.exists(path):

@@ -26,88 +26,54 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
-    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_NATIVE, step 3's (port/gs/native/),
-       is the default (paraLLEl-GS instead if it cannot start: the renderers that did start are
-       written back here); PORT_RENDERER_GS is paraLLEl-GS, the reference; PORT_RENDERER_BOTH runs
-       the two side by side and compares their pictures, showing renderer_shown's. */
+    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_PC, the PC renderer (port/gs/pc/), is the
+       default and the only one a player gets; PORT_RENDERER_GS is paraLLEl-GS, for comparing pictures
+       against (developers only). gs.c sets it to what started. */
     int renderer;
-    int renderer_shown;
-    int renderer_forced;     /* --renderer: this run's, whatever settings.json says */
-    int renderer_heatmap;    /* with both: the window shows how the two differ (--renderer-shown heatmap) */
-    /* --renderer modern (P8, docs/port/NATIVE_DRAW_P8.md): the native GS, with the scene's native draws (map
-       records and items: --native-draw map,sky,items unless it says otherwise) drawn into the scene's own
-       targets (gsn_set_standalone); or settings.json's "renderer": "modern" */
-    int renderer_modern;
-    /* --renderer fast: modern, with the PC renderer's parts built so far (docs/port/PC_RENDERER.md) */
-    int renderer_fast;
-    /* --renderer pc (its development name; docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native
-       GS"): the PC renderer (port/gs/pc/) opened in place of the native GS, renderer PORT_RENDERER_NATIVE */
-    int renderer_pc;
-    /* --scene-scale, --scene-msaa (P8 T2): with --renderer modern, the scene's own scale (1 to 4; with
-       --native-widescreen and widescreen, 4/3 of it across) and samples (1, 2, 4, 8), apart from the GS's
-       (--native-scale, --native-msaa), which then draws the 2D, the menus and the title alone; 0: the GS's */
-    int scene_scale;
-    int scene_msaa;
-    /* --upscaler (docs/port/UPSCALING.md): with --renderer modern and a --scene-scale below the GS's, the scene
-       brought up to the GS's scale at the composite, the 2D the GS's at its own scale (0: off, the composite at the
-       scene's scale; 1: bilinear; 2: FSR 3.1; 3: DLSS) */
-    int upscaler;
-    /* --native-shine: with --renderer modern, a skinned model's sphere-mapped shine blended in the shader
-       (the ice creatures on map 017: Cs + Cd As, As above 0x80) drawn whole, the default (0), or in runs of
-       triangles that do not overlap (1, exact): where a part folds over its own edge the GS blends both
-       triangles there, drawn whole one is (docs/port/NATIVE_DRAW_P8.md, "The icy corridor"). Live. */
-    int native_shine_exact;
-    int native_shine_exact_forced;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
-       the default, a swapchain on the native GS's own device (port/platform/present_vk.cpp), with the
-       native GS's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
-       window's when the native GS is not running or the Vulkan one does not start). */
+       the default, a swapchain on the renderer's own device (port/platform/present_vk.cpp), with the
+       renderer's picture taken from the GPU as it is; PORT_PRESENTER_SDL through SDL_Renderer (the
+       window's when the renderer is not running or the Vulkan one does not start). */
     int presenter;
     int presenter_forced;    /* --presenter: this run's, whatever settings.json says */
-    int native_scale;        /* --native-scale: the native GS's render targets, 1 to 4 times the PS2's size,
+    int native_scale;        /* --native-scale: the renderer's render targets, 1 to 4 times the PS2's size,
                                 or 0, auto (port_gs_native_scale()) */
     int native_scale_forced;
-    /* --native-widescreen: with widescreen on and the native GS, the render targets wider still
+    /* --native-widescreen: with widescreen on, the render targets wider still
        (port_gs_native_scale_x(), port/platform/gs.c): the 16:9 picture drawn with square pixels
        instead of 640 columns stretched. Off by default; live from the overlay. */
     int native_widescreen;
     int native_widescreen_forced;
-    /* --native-msaa: the native GS draws the 3D with this many samples a pixel (1, the default: none,
+    /* --native-msaa: the renderer draws the 3D with this many samples a pixel (1, the default: none,
        the PS2's picture; 2, 4 or 8), its edges smoothed. Live from the overlay (but for a change from
        one count to another, which takes a restart). */
     int native_msaa;
     int native_msaa_forced;
-    /* --native-lod: the mipmap level the native GS reads a texture at (GSN_LOD_*, port/gs/native/gsn.h:
+    /* --native-lod: the mipmap level the renderer reads a texture at (GSN_LOD_*, gsn.h:
        0 ps2, the GS's own, picked for 640x448; 1 scale, the default, finer by log2 of --native-scale,
        which at 1x is the GS's own; 2 full, level 0 at every distance). Live from the overlay. */
     int native_lod;
     int native_lod_forced;
-    /* --native-aniso: anisotropic filtering of the native GS's mipmapped textures, the most reads along
-       a pixel's footprint (1, off, the default; 2, 4, 8, 16; gsn_set_aniso) */
+    /* --native-aniso: anisotropic filtering of the renderer's mipmapped textures, the most reads along
+       a pixel's footprint (1, off, the default; 2, 4, 8, 16; pcr_set_aniso) */
     int native_aniso;
     int native_aniso_forced;
-    /* --native-sampler: PORT_SAMPLER_GS, the GS's texture unit in the shader, or PORT_SAMPLER_HARDWARE, the GPU's
-       sampler on RGBA8 textures (docs/port/PC_RENDERER.md, P1) */
-    int native_sampler;
-    int native_sampler_forced; /* --native-sampler given */
-#define PORT_SAMPLER_GS 0
-#define PORT_SAMPLER_HARDWARE 1
-    /* --native-cutout-aa: with MSAA, the native GS's cut-outs (netting, foliage, fences, grates: textures
-       see-through in places) shaded at every sample (GSN_CUTOUT_AA_*, port/gs/native/gsn.h: 0 off, 1
+    /* --native-cutout-aa: with MSAA, the renderer's cut-outs (netting, foliage, fences, grates: textures
+       see-through in places) shaded at every sample (GSN_CUTOUT_AA_*, gsn.h: 0 off, 1
        ssaa, the default). Nothing without MSAA. Live from the overlay. */
     int native_cutout_aa;
     int native_cutout_aa_forced;
     /* --native-2d: at a --native-scale above 1, the 2D's textures read nearest by the game (the font,
        the HUD, the menus' and title's pictures) read bilinear where magnified (GSN_2D_*,
-       port/gs/native/gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
+       gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
     int native_2d;
     int native_2d_forced;
-    /* --native-colour: how precisely the native GS keeps colours (GSN_COLOUR_*, port/gs/native/gsn.h: 0
+    /* --native-colour: how precisely the renderer keeps colours (GSN_COLOUR_*, gsn.h: 0
        exact, the default, the GS's 8 bits a channel and its roundings; 1 high, 16 bits a channel and the
        colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
     int native_colour;
     int native_colour_forced;
-    /* --native-layer-z: how the native GS keeps and tests the 3D's Z (GSN_LAYER_Z_*, port/gs/native/gsn.h:
+    /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
        0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
        surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
        within one Z, clean layers and seams). Live from the overlay. */
@@ -186,13 +152,11 @@ typedef struct {
     int flash_height;
     /* --native-draw (port_native_draw(), port/include/port/host.h; docs/port/NATIVE_DRAW.md): which kinds
        of the game's draws go to the renderer core instead of VU1 and the GS's packets, PORT_ND_* bits (0,
-       off, by default: the PS2 path, the game byte for byte as without it). --native-draw-compare: the PS2
-       path's packets queued too, and which of the two the native GS draws (PORT_ND_COMPARE_*; 0 none).
-       Both live from the overlay's Debug page. Of the kinds only the switch for the whole path is saved:
-       settings.json's "native_draw", on (PORT_ND_ACCEPTED) or off, also the overlay's Renderer section. */
+       off, by default: the PS2 path, the game byte for byte as without it). Live from the overlay's
+       Debug page. Of the kinds only the switch for the whole path is saved: settings.json's "native_draw",
+       on (PORT_ND_ACCEPTED, the default) or off. */
     int native_draw;
     int native_draw_forced; /* --native-draw: this run's, whatever settings.json says */
-    int native_draw_compare;
     /* --native-wave-uvs (port_native_wave_uvs(), port/include/port/host.h): how a native map record's wave
        UVs (flag 0x100) are drawn, PORT_WAVE_UVS_*; never saved. --test-dma-wait (port_test_dma_wait()):
        tests only, the packet chain sent and waited for at once (no race with the next frame's update) */
@@ -383,9 +347,9 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 
 /* ---- The GS (port/platform/gs.c, port/gs/gs_parallel.cpp) -----------------------------------
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
-/* MODERN and FAST are the settings' (port_settings.renderer, settings.json's "renderer") only: port_options.renderer is
-   then NATIVE, with renderer_modern (and renderer_fast) set */
-enum { PORT_RENDERER_GS = 0, PORT_RENDERER_NATIVE = 1, PORT_RENDERER_BOTH = 2, PORT_RENDERER_MODERN = 3, PORT_RENDERER_FAST = 4 };
+/* port_options.renderer: what draws. PORT_RENDERER_GS (paraLLEl-GS, --renderer gs) is for comparing against only */
+#define PORT_RENDERER_GS 0
+#define PORT_RENDERER_PC 1
 /* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
 enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
        PORT_DRAW_DISTANCE_COUNT };
@@ -393,23 +357,12 @@ enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, P
 int port_draw_distance_parse(const char *name);
 const char *port_draw_distance_name(int level);
 enum { PORT_PRESENTER_SDL = 0, PORT_PRESENTER_VULKAN = 1 };
-/* --renderer both: how the last pictures of the two compared (port/platform/gs.c) */
-typedef struct {
-    uint64_t frames;          /* pictures compared */
-    uint64_t frames_differ;   /* of which some pixel differs by more than 1 in a channel */
-    uint32_t last_max;        /* the last picture's largest difference in a channel */
-    uint32_t last_pixels;     /* its pixels that differ by more than 1 */
-    double last_mean;         /* its mean difference per channel */
-    uint32_t worst_max;       /* the largest difference seen */
-    uint64_t worst_vblank;    /* where */
-} PortRendererDiff;
-extern PortRendererDiff port_renderer_diff;
 void port_gs_print_stats(void);
 /* --frame-rate: a quick load or teleport ends any cut of the pictures between (any thread) */
 void port_gs_interp_cut_reset(void);
-/* The native GS's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
+/* The renderer's scale (port_options.native_scale: 1 to 4, or 0 for auto), from the next vblank */
 void port_gs_set_native_scale(int scale);
-/* The scale the native GS draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines
+/* The scale the renderer draws at: port_options.native_scale, or for auto (0) the multiple of 448 lines
    nearest the height the window shows the picture at (port_video_picture_height()), 1 to 4; at most 2
    on an integrated GPU, 1 on any other that is not a discrete one (lavapipe) and with no window
    (headless) */
@@ -417,36 +370,32 @@ int port_gs_native_scale(void);
 /* The height in pixels the window shows the picture at (port_video_fit), 0 with no window: written
    at each present, read by the GS's thread */
 int port_video_picture_height(void);
-/* The native GS's scale across: native_scale, or with --native-widescreen (and widescreen on) the
+/* The renderer's scale across: native_scale, or with --native-widescreen (and widescreen on) the
    smallest whole number at least 4/3 of it */
 int port_gs_native_scale_x(void);
-/* The native GS's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
-   gives (see gsn_set_msaa) */
+/* The renderer's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
+   gives (see pcr_set_msaa) */
 int port_gs_set_native_msaa(int samples);
-/* The native GS's mipmap levels (port_options.native_lod), from the next draw */
+/* The renderer's mipmap levels (port_options.native_lod), from the next draw */
 void port_gs_set_native_lod(int mode);
-/* The native GS's anisotropic filtering (port_options.native_aniso: 1 off, 2 to 16), from the next draw */
+/* The renderer's anisotropic filtering (port_options.native_aniso: 1 off, 2 to 16), from the next draw */
 void port_gs_set_native_aniso(int taps);
-/* The native GS's cut-outs with MSAA (port_options.native_cutout_aa), from the next draw */
+/* The renderer's cut-outs with MSAA (port_options.native_cutout_aa), from the next draw */
 void port_gs_set_native_cutout_aa(int mode);
-/* The native GS's 2D at a larger scale (port_options.native_2d), from the next draw */
+/* The renderer's 2D at a larger scale (port_options.native_2d), from the next draw */
 void port_gs_set_native_2d(int mode);
-/* The native GS's colour precision (port_options.native_colour), from the next vblank */
+/* The renderer's colour precision (port_options.native_colour), from the next vblank */
 void port_gs_set_native_colour(int mode);
-/* The native GS's Z (port_options.native_layer_z), from the next draw */
+/* The renderer's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
-/* --renderer modern's shines blended in the shader: whole (0) or exact, in runs (1)
-   (port_options.native_shine_exact), from the next draw */
-void port_gs_set_native_shine_exact(int exact);
-/* --native-draw and --native-draw-compare (port_options.native_draw, native_draw_compare), from the next
-   frame */
-void port_gs_set_native_draw(int kinds, int compare);
+/* --native-draw (port_options.native_draw), from the next frame */
+void port_gs_set_native_draw(int kinds);
 /* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
    PC renderer only when it moves them in the pictures between itself (port_interp_on_gpu; docs/port/PC_RENDERER.md,
    step 5) or there are none (--frame-rate 30); the game's packets otherwise */
 int port_gs_native_draws_now(void);
 
-#define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the native GS at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
+#define PORT_GS_FRAME_PIXELS (3840u * 2048u) /* the renderer at 4 times the PS2's 448 down, 6 across (--native-widescreen) */
 typedef struct {
     uint32_t width, height;
     uint32_t *rgba; /* width * height pixels, R in the low byte */
@@ -455,12 +404,12 @@ typedef struct {
 void port_gs_init(void);
 /* 1 when there is a renderer. */
 int port_gs_enabled(void);
-/* 1 when the native GS draws alone: --frame-rate's pictures between ask it for the frame's uploads
+/* 1 when the renderer draws alone: --frame-rate's pictures between ask it for the frame's uploads
    again instead of sending them (port/platform/frame_interp.c) */
 int port_gs_replay_uploads(void);
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"): 1 when
-   the native GS draws them (alone), or the PC renderer (not KF4_PC_BETWEEN=0); the frame (a GsnInterpFrame, handed over:
-   the native GS frees it) and each picture (a GsnInterpPicture) of port/gs/native/gsn.h */
+   the PC renderer draws them (not KF4_PC_BETWEEN=0); the frame (a GsnInterpFrame, handed over: the
+   renderer frees it) and each picture (a GsnInterpPicture) of gsn.h */
 int port_gs_interp_gpu(void);
 void port_gs_interp_frame(void *frame);
 void port_gs_interp_picture(const void *picture);
@@ -476,7 +425,7 @@ void port_gs_post_vsync(void);
 void port_gs_finish(void);
 /* The controller's side: a vblank is queued; scan it out. */
 int port_gs_vsync_pending(void);
-/* The native GS's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they
+/* The renderer's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they
    are made (running), and while those not in the pipeline cache are (building: how many of how many); any thread */
 int port_gs_shaders_running(void);
 int port_gs_shaders_building(int *done, int *total);
@@ -505,7 +454,7 @@ int port_interp_on_gpu(void);
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
-/* (the controller's thread) --frame-rate unlocked: a game vblank judged, behind 1 when the native GS was behind
+/* (the controller's thread) --frame-rate unlocked: a game vblank judged, behind 1 when the renderer was behind
    as it began (port/include/port/unlocked_rate.h); port_interp_unlocked_at_floor: 1 when the rate is as low as it
    goes (gs.c's cut of the pictures between then judges); port_interp_print_unlocked: its --stats line */
 void port_interp_unlocked_vblank(uint64_t vblank, int behind);
@@ -539,8 +488,8 @@ void port_video_init(void);
 #define PORT_PICTURE_PHASE(tag) ((double)((tag) & 0xFFFF) / 65536.0)
 /* (the controller's or the GS's thread) a picture for the window, with its tag */
 void port_video_submit(const PortGsFrame *frame, uint64_t tag);
-/* (the controller's or the GS's thread) a picture that is the native GS's image on the GPU
-   (gsn_scanout_take_tag) */
+/* (the controller's or the GS's thread) a picture that is the renderer's image on the GPU
+   (pcr_scanout_take_tag) */
 void port_video_submit_image(uint64_t tag);
 /* (the game thread) the wall time (port_wall_seconds) a vblank is shown at: its pictures' times */
 void port_video_vblank(uint64_t vblank, double wall);
@@ -553,7 +502,7 @@ void port_video_poll(void);
    sharpening's strength (0 to 1) */
 enum { PORT_SCALING_SHARP = 0, PORT_SCALING_SMOOTH = 1, PORT_SCALING_BEST = 2 };
 int port_video_scaling(void);
-/* (port/platform/gs.c) the size the window shows the picture at, which the native GS scales it to with
+/* (port/platform/gs.c) the size the window shows the picture at, which the renderer scales it to with
    the best scaling (0 x 0: none) */
 void port_gs_present_scale(int width, int height, float sharpen);
 float port_video_sharpen(void);
@@ -571,7 +520,7 @@ void port_video_refresh_seen(double seen_s);
 int port_video_refresh_schedule(uint64_t vblank, double *phases, int max);
 /* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
 int port_video_simulated(void);
-/* 1 while the window is the Vulkan presenter's, which takes the native GS's picture as an image */
+/* 1 while the window is the Vulkan presenter's, which takes the renderer's picture as an image */
 int port_video_takes_images(void);
 /* the presenter running: PORT_PRESENTER_ (SDL when the Vulkan one was asked for and did not start) */
 int port_video_presenter(void);

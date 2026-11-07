@@ -72,7 +72,7 @@ uint32_t element(const uint8_t *bytes, uint32_t index, uint32_t vl, bool usn) {
 // none), its colour is 0 (no lights: RGBAQ 0), its fog 0 (clamped to 0..0), and ST's z is 1.0 for every
 // vertex but the last two, which keep the data's. So the batch is stored as program 0x000 would draw it to
 // give the same: each vertex's colour qword 0 and its ST's z 4096 (ITOF12: exactly 1.0) but the last two's;
-// the draw's record has no lights and no fog (gsn_nd_5a0.inc), and nd_000.vert draws it.
+// the draw's record has no lights and no fog, and the program 0x000 shader draws it.
 bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mesh, bool silhouette = false) {
     if (silhouette && start != RD_PROGRAM_CONTINUE && start != 0x5A0) {
         why_refused = "an MSCAL of another program in a 0x5A0 block";
@@ -162,9 +162,9 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
         b.alpha_lo = std::min(b.alpha_lo, ac);
         b.alpha_hi = std::max(b.alpha_hi, ac);
     }
-    // The triangles, as the GS queues the kicks (gsn.cpp, vertex_kick): a kick whose XYZF2 has ADC set
+    // The triangles, as the GS queues the kicks (the GIF front end, port/gs/pc/pcr_gif.cpp): a kick whose XYZF2 has ADC set
     // by the data (the normal's w, ORed into it by the program) draws nothing. Clipping's ADC is the
-    // frame's (gsn_native_draw.inc).
+    // frame's.
     uint32_t prim = uint32_t((b.tag[0] >> 47) & 0x7FF);
     if (!((b.tag[0] >> 46) & 1)) {
         why_refused = "a batch tag without PRE";
@@ -345,7 +345,7 @@ bool take_batch_280(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData 
 // 4), its registers RGBAQ and XYZ2, then NLOOP vertices of the two qwords. One batch: its tag, the
 // vertices as the packet has them (eight words: RGBAQ's qword, XYZ2's; the ADC bit is XYZ2's bit 111,
 // word 7 bit 15), the triangles the GS makes of them (a kick with ADC makes none), and the alpha range.
-// The native GS writes them as the GIF would (gsn_nd_strip.inc).
+// The renderer writes them as the GIF would.
 bool parse_gs_strip(const uint8_t *bytes, uint32_t qwords, RdMeshData &mesh) {
     if (qwords < 1) {
         why_refused = "a strip without its GIF tag";
@@ -609,7 +609,7 @@ std::mutex slots_lock; // (the game's thread writes the slot of its frame; the G
 Slot slots[SLOTS];
 uint32_t serial = 0; // the frame's (24 bits in a handle)
 uint32_t frame_count = 0;
-// the consumer (the native GS): the last frame whose RD_ND_FRAME mark it has met (rd_consumer_frame)
+// the consumer (the PC renderer): the last frame whose RD_ND_FRAME mark it has met (rd_consumer_frame)
 std::atomic<uint32_t> consumer_frame{0};
 std::atomic<bool> consumer{false};
 std::atomic<uint64_t> drawn{0}; // rd_draw's calls (rd_capture_poll looks for new ones)
@@ -1083,8 +1083,8 @@ extern "C" void rd_capture_poll(RdCaptureEmit emit) {
     std::lock_guard<std::mutex> g(slots_lock);
     uint32_t now = serial;
     if (capture.fresh) {
-        // what the chain on its way to the GS can still name: the frames from the native GS's last mark
-        // on (it is behind the DMA), or the last few when there is no native GS
+        // what the chain on its way to the GS can still name: the frames from the consumer's last mark
+        // on (it is behind the DMA), or the last few when there is no consumer
         uint32_t back = consumer.load() ? ((now - consumer_frame.load()) & 0xFFFFFF) : 3;
         back = std::min(back, SLOTS - 2);
         capture.cursor = (now - back) & 0xFFFFFF;
@@ -1177,7 +1177,7 @@ extern "C" int rd_replay_record(uint32_t type, const void *data, size_t size) {
         s.draws.resize(head.first);
         s.first_mesh.resize(head.first);
     }
-    RdDraw none; // (a draw left out: the native GS counts it as of a program it does not draw)
+    RdDraw none; // (a draw left out: the renderer counts it as of a program it does not draw)
     memset(&none, 0, sizeof(none));
     none.program = 0xFFFFFFFFu;
     while (s.draws.size() < head.first) {

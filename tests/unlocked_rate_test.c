@@ -20,7 +20,7 @@ static void check(const char *what, int ok) {
 }
 
 /* A renderer that draws capacity_hz pictures a second: each vblank it is given rate / 60 pictures' work and does
-   capacity / 60 of it; behind when more than a vblank's work waits (the native GS's thread a vblank late) */
+   capacity / 60 of it; behind when more than a vblank's work waits (the renderer's thread a vblank late) */
 typedef struct {
     double backlog; /* vblanks of work waiting */
 } Renderer;

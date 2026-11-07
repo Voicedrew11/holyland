@@ -13,16 +13,15 @@
    (draw_parts, additive, as a map record).
 
    Natively the strip is a draw of its own with an identity (RD_KIND_WATER: the model, the part) and
-   program RD_PROGRAM_RIPPLE: the GS's side (port/gs/native/gsn_nd_water.inc, shaders/nd_water.vert) makes
-   each corner on the GPU from the part's mesh (the record's own blocks, cached: only the positions and the
+   program RD_PROGRAM_RIPPLE: the renderer makes each corner on the GPU from the part's mesh (the PC renderer
+   does not draw it yet: PORT_ND_WATER is off under it) (the record's own blocks, cached: only the positions and the
    data's ADC are read), the part's matrix and the 32 sines, in the EE's arithmetic, so the game's frames are
    the PS2 path's bit for bit; and in a picture between the place and the texture coordinates are made by the
    camera between, so the water's reflection moves with the camera (the PS2 path's strip keeps the frame's
    texture coordinates while its corners move: its reflection slides over the water). The GS registers the
    strip's first and last packets write (TEX0_1, TEX1_1, ALPHA_1, CLAMP_1, RGBAQ; CLAMP_1 again) are queued as
    they are. Wobble_DrawRippledModel still runs (the call site is its last line, where it appends its
-   packets): VU0's registers and the packet buffer are left as the PS2 path leaves them, and with
-   --native-draw-compare its packets follow between the marks.
+   packets): VU0's registers and the packet buffer are left as the PS2 path leaves them.
 
    Nothing here changes what the game does: it reads the game's state and the packets the game built,
    writes only the packet chain, and with the switch off is never called. */
@@ -44,7 +43,6 @@ void Packet_EndGsRegisters(void);
 void Packet_AppendToChain(u32 *start, u32 *end);
 int NativeDraw_PartMeshes(ModelPart *part, RdMesh *meshes); /* (native_draw.c) */
 u32 NativeDraw_CurrentCamera(void);
-void NativeDraw_QueueMark(u32 command, u64 bits);
 
 extern f32 world_screen_matrix[16]; /* (what Wobble_DrawRippledModel multiplies by) */
 extern int port_fpu_round_nearest;  /* (--fpu-round nearest: port/include/port/platform.h) */
@@ -71,7 +69,7 @@ static void vu_matrix_multiply(f32 *dst, const f32 *matrix, const f32 *src) {
 }
 
 /* ---- KF4_ND_WATER_CHECK=1 (debug only): the game's own strips against the native draw's maths ----------
-   gsn_nd_water.inc's plan (and nd_water.vert) make each vertex's place, ADC, S and T from the part's mesh;
+   The water draw (RD_PROGRAM_RIPPLE) makes each vertex's place, ADC, S and T from the part's mesh;
    this makes them the same way here, from the block, and compares them with what Wobble_DrawRippledModel
    wrote into its packets, word for word: a difference is printed (the first few) and counted. */
 static void check_place(const f32 *vm, f32 x, f32 y, f32 z, s32 out[3]) {
@@ -170,9 +168,8 @@ static u64 word64(const u32 *at) {
 /* Wobble_DrawRippledModel's packets, from packet_start to packet_end (the tail it would append), natively:
    its first packet's A+D writes (TEX0_1, TEX1_1, ALPHA_1, CLAMP_1) and RGBAQ (the tint, PACKED, Q 1 as the
    tag leaves it) and its last packet's (CLAMP_1) queued as GS registers, and between them a draw of
-   RD_PROGRAM_RIPPLE for each part. sines: wobble_sines (32). 1 if done (the packets themselves are appended
-   only with --native-draw-compare, between the marks); 0 if not, and nothing was queued: the caller appends
-   them. */
+   RD_PROGRAM_RIPPLE for each part. sines: wobble_sines (32). 1 if done (the packets themselves are not
+   appended); 0 if not, and nothing was queued: the caller appends them. */
 int NativeDraw_RippledModel(ModelInstance *model, u32 *packet_start, u32 *packet_end, const f32 *sines) {
     static RdMesh meshes[ND_MAX_MESHES];
     const u32 *end = packet_end - 16; /* (the last packet: a CNT of 3 qwords, DIRECT 2, one A+D write) */
@@ -229,11 +226,6 @@ int NativeDraw_RippledModel(ModelInstance *model, u32 *packet_start, u32 *packet
     Packet_BeginGsRegisters();
     Packet_AddGsRegister((int)(word64(end + 14) & 0xFF), (s64)word64(end + 12));
     Packet_EndGsRegisters();
-    if (port_native_draw_compare()) {
-        NativeDraw_QueueMark(RD_ND_ALT_BEGIN, 0);
-        Packet_AppendToChain(packet_start, packet_end);
-        NativeDraw_QueueMark(RD_ND_ALT_END, 0);
-    }
     return 1;
 }
 
@@ -246,8 +238,8 @@ int NativeDraw_RippledModel(ModelInstance *model, u32 *packet_start, u32 *packet
    record's meshes are made from copies of its blocks that hold the vertices' own coordinates and, in the
    ST's w (which program 0x000 does not read), the vertex's wave: the same bytes every frame, so a block is
    parsed and put on the GPU once instead of every frame (P0-3: up to 201 blocks a frame on 042). The draw
-   carries the 16 offsets of the frame (RD_DRAW_WAVE_UVS, in RdDraw.parent), which the plan and nd_000.vert
-   add as Wobble_ApplyWaveUvs adds them (16 bits). The offsets are those Wobble_ApplyWaveUvs used last for
+   carries the 16 offsets of the frame (RD_DRAW_WAVE_UVS, in RdDraw.parent), which the renderer's shader
+   adds as Wobble_ApplyWaveUvs adds them (16 bits). The offsets are those Wobble_ApplyWaveUvs used last for
    the model (NativeDraw_WaveUvsApplied keeps them: every record in the draw list had it this frame), so the
    picture is the frame the game drew, as PORT_WAVE_UVS_CPU's is.
 

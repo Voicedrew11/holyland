@@ -1,7 +1,5 @@
-// The PC renderer's textures from their uploads (pcr_textures.h). The logic is the native GS's
-// page-ownership table (port/gs/native/gsn_standalone.inc: sa_blocks_of, sa_own, sa_owners_walk,
-// sa_table_texture, sa_scratch_write, sa_clut_load, sa_clut_colours) with its own state, and the GS's
-// CLUT load (gsn.cpp's clut_load, clut_read_entries, clut_colours).
+// The PC renderer's textures from their uploads (pcr_textures.h): the page-ownership table of which upload owns
+// each block of VRAM, with the state of its own, and the GS's CLUT load.
 #include "pcr_textures.h"
 
 #include <algorithm>

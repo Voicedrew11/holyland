@@ -53,7 +53,7 @@ void main() {
     bool gone = false;
     if ((d.info.w & ND_C_MOVING) != 0) {
         // a picture between's: moved, S, T and Q by the change of depth; dropped with its kick or one of the two kicks
-        // before it, the same for its three corners (the native GS's nd_700.vert)
+        // before it, the same for its three corners
         Moved m = moved(at, p);
         xi = m.x;
         yi = m.y;

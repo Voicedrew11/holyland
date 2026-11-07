@@ -1,8 +1,7 @@
 /* The renderer core of native draw (docs/port/NATIVE_DRAW.md, "Architecture"): what the game's patched
    draw code (through its adapter, game/native_draw/) hands over instead of VU1 packets. It knows
    nothing of King's Field IV: meshes made from PS2 data blocks, cameras, and draws that carry what VU1's
-   fixed block carries. port/render/render.cpp is it; the native GS (port/gs/native/gsn_native_draw.inc)
-   draws what it holds.
+   fixed block carries. port/render/render.cpp is it; the renderer (port/gs/pc/) draws what it holds.
 
    How a draw travels (hosted mode, NATIVE_DRAW.md 3.3):
    1. On the game's thread, at the call site, while the game builds its packet chain: rd_mesh_from_block
@@ -11,10 +10,10 @@
       returns a 64-bit handle.
    2. The adapter queues the handle in the chain as a GS register write to PORT_GS_REG_NATIVE_DRAW
       (RD_ND_DRAW), at the very place of the packets it replaces.
-   3. The native GS meets that write in order with everything else of the frame (on its own thread, a
+   3. The renderer meets that write in order with everything else of the frame (on its own thread, a
       frame later), takes the draw back (render_internal.hpp, rd_fetch), and draws it into its current
       target and Z buffer with its own GS state, textures and pipelines; the vertex program runs on the
-      GPU (shaders/nd_000.vert).
+      GPU (port/gs/pc/shaders/pcr_nd000.vert).
    The side buffer is a ring of frames (128); a handle names its frame. The consumer meets a mark at each
    frame's start (RD_ND_FRAME) and says so (rd_consumer_frame), and a slot is not reused before it is two
    frames past it; a draw met after its slot was reused all the same is not drawn, and counted
@@ -151,9 +150,8 @@ typedef struct {
 /* ---- Screen passes (P7: docs/port/NATIVE_DRAW.md 1.3) ------------------------------------------
    A full-screen pass of GameLoop_DrawFrame's (the brightness, a tint, a fill or fade, the flicker filter,
    the previous frame blended in, the view-turn shift, haze, the wobble grid) as data: what it is and its
-   parameters, instead of the GIF packets of sprites VU1's program 0x276 would pass on. Hosted, the native
-   GS draws it into its own targets with its own state and fragment shader (gsn_nd_pass.inc), exactly as
-   the packets would have been drawn; a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
+   parameters, instead of the GIF packets of sprites VU1's program 0x276 would pass on. Hosted, the renderer draws it into its targets, exactly as
+   the packets would have been drawn (the PC renderer does not draw passes yet: PORT_ND_PASSES is off under it); a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
    program RD_PROGRAM_PASS), its identity the pass and the call site's count in the frame. */
 #define RD_KIND_PASS 11u
 #define RD_PROGRAM_PASS 0x20000u
@@ -210,8 +208,6 @@ void rd_consumer_frame(uint64_t value);
    PORT_GS_REG_NATIVE_DRAW (port/include/port/host.h): bits 56-63 of the value are one of these, the rest
    theirs. */
 #define RD_ND_DRAW 0x01u       /* bits 0-55: rd_draw's handle */
-#define RD_ND_ALT_BEGIN 0x02u  /* --native-draw-compare: the PS2 path's packets for the native draws before follow */
-#define RD_ND_ALT_END 0x03u    /* ... and end here */
 #define RD_ND_FRAME 0x04u      /* bits 0-23: a frame's serial (rd_begin_frame) */
 #define RD_ND_READS_SHOWN 0x05u /* the screen pass after it reads the frame shown before (RD_PASS_PREVIOUS): for
                                    frame_interp.c, which keeps that frame for the pictures between; the GS ignores it */
@@ -229,7 +225,7 @@ void rd_capture_begin(void);
 /* (the capture's thread, before each GIF or VIF1 record) emits what rd_draw added since the last call:
    new meshes first, then the frames' draws. Costs an atomic load when nothing was added. */
 void rd_capture_poll(RdCaptureEmit emit);
-/* (kf4-gsreplay) a KF4GS_ND_MESH or KF4GS_ND_DRAWS record: into the side buffer, for the native GS to
+/* (kf4-gsreplay) a KF4GS_ND_MESH or KF4GS_ND_DRAWS record: into the side buffer, for the renderer to
    meet the frame's writes. 1 if it was one of them (0: another type; -1: one it could not read) */
 int rd_replay_record(uint32_t type, const void *data, size_t size);
 /* (kf4-gsreplay) forgets the replay's meshes (a run of a capture begins) */

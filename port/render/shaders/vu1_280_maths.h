@@ -1,9 +1,9 @@
 // VU1's program 0x280 on the GPU, shared (vu1_280_draw.h): its arithmetic and maths. Before it, the including shader
 // declares `pic` (a picture between's Picture), `mesh` (the arena: eight qwords a vertex) and the record's struct.
-// nd_280.vert's top says what each step is (port/platform/vu1_hle_280.c is the specification).
+// The steps are VU1's: port/platform/vu1_hle_280.c is the specification.
 Draw d;
 
-// ---- VU1's arithmetic (nd_000.vert's helpers) ----
+// ---- VU1's arithmetic ----
 // FTOI: toward zero; from 2^31 on, the largest integer with the float's sign (VU1's saturation: a vertex
 // far past the guard band, never drawn, then has VU1's X, Y and Z too)
 int ftoi(float v) {
@@ -73,7 +73,7 @@ vec4 qf(uint slot, uint i) {
     return intBitsToFloat(mesh.q[slot * 4u + i]);
 }
 
-// ---- Pictures between (nd_000.vert's moved, for a vertex of set s) ----
+// ---- Pictures between (moved, for a vertex of set s) ----
 // n / (dh + dl), the float nearest it
 float div_nearest(float n, float dh, float dl) {
     precise float r = n / dh;

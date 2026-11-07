@@ -12,17 +12,17 @@ namespace pcr {
 
 namespace {
 
-// gs_replay.h's Picture, before the runs' bits (gsn.cpp's InterpPictureHeader)
+// the picture's header, before the runs' bits
 struct PictureHeader {
     float move[12], mid[12];
     float screen[2][4]; // sx sy cx cy: the world's, the reflection's
     float zt[4];        // cz (the world's, the reflection's), t, 1 - t
     uint32_t kicks, runs;
-    float jitter[2];    // (the native GS's upscaling: 0 here)
+    float jitter[2];    // (no upscaling here: 0)
 };
-static_assert(sizeof(PictureHeader) == 160, "PictureHeader is gs_replay.h's Picture");
+static_assert(sizeof(PictureHeader) == 160, "PictureHeader is the picture's header");
 
-// A kick as the GS queued it (gif_moves.h's K(): gsn.cpp's InterpKick)
+// A kick as the GS queued it (gif_moves.h's K(): the GIF front end's kick)
 struct Kick {
     uint32_t xy;     // X | Y << 16 (12.4, before XYOFFSET)
     uint32_t z;
@@ -34,10 +34,10 @@ struct Kick {
     uint32_t st_owner, rgba_owner, q_owner, uv_owner;
     uint32_t pad[3];
 };
-static_assert(sizeof(Kick) == 64, "Kick is gs_replay.h's");
+static_assert(sizeof(Kick) == 64, "Kick is the kick's record in gif_moves.h");
 static_assert(sizeof(GsnInterpMove) == 64, "GsnInterpMove is gif_moves.h's M()");
 
-// A numbered vertex as its kick (gsn.cpp's InterpKick), with its context's XYOFFSET
+// A numbered vertex as its kick (the GIF front end's kick), with its context's XYOFFSET
 Kick kick_of(const GifVertex &v, uint64_t xyoffset) {
     Kick k = {};
     k.xy = uint32_t(v.x) | uint32_t(v.y) << 16;

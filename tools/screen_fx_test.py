@@ -4,7 +4,7 @@ headless, measured at the owner's settings and checked for broken pictures betwe
 
     python tools/screen_fx_test.py --out DIR [--exe out/windows-clang/kf4.exe] [--iso ISO] [--save QUICKSAVE]
                                    [--spots DIR] [--cases a,b,...] [--perf] [--pictures] [--frames N] [--keep]
-                                   [--renderer modern] [-- extra kf4 options]
+                                   [-- extra kf4 options]
 
 Each case is a run of the game (always --no-audio, --headless, a fresh data folder in DIR):
 - the forced ones load --save (a quick save in play; without it a new game, tests/newgame.pad, and the cases
@@ -14,16 +14,14 @@ Each case is a run of the game (always --no-audio, --headless, a fresh data fold
 - the real scenes need quick saves from --spots: quick_underwater.kf4quick (walking forward into the water),
   quick_deathwater.kf4quick (falling into deadly water), quick_palace.kf4quick (the Queen's Palace, the MP
   drain), quick_wand.kf4quick (standing on a Symbol of Passage: the Item screen, Up x4 to the Green Wand, used:
-  the map change's fade of its last frame, 0x2BC0), quick_icy.kf4quick (the icy corridor and its creatures: their
-  shine drawn whole, and with --native-shine exact), quick_succubus_hotspot.kf4quick (map 038 at the Dark
+  the map change's fade of its last frame, 0x2BC0), quick_icy.kf4quick (the icy corridor and its creatures), quick_succubus_hotspot.kf4quick (map 038 at the Dark
   Succubus' room: her body drawn with a copy of the screen; and up close, KF4_FX=succubus). Cases whose save is
   missing are left out.
 
 --perf (real time, KF4_PRESENT_SIM=240, KF4_GSN_GPU_TIME=2, KF4_HITCH_MS=50, --stats): over the case's window of
-vblanks, the pictures handed over a second and the game's frames a second (KF4_PRESENT_LOG), and from --stats
-for the whole run, a picture: write-backs (each a read-back of a GPU target to VRAM), textures decoded,
-pictures between drawn from the packets (a re-recording) and the fallback's cuts (pictures between left out
-as the renderer fell behind), and the hitches over 50 ms.
+vblanks, the pictures handed over a second and the game's frames a second (KF4_PRESENT_LOG); and from --stats
+for the whole run, the pictures between left out as the renderer fell behind (the cuts), the GPU's time a
+picture, and the hitches over 50 ms.
 --pictures (--fast): every picture (all phases) of 12 vblanks in the window dumped and compared with
 tools/flash_find.py --frames: a picture between that is not between its game frames is flagged (the
 under-water and death-water bugs were of this kind). A case with same30 (the wand) also runs at 30 and its game
@@ -89,9 +87,7 @@ def cases():
                                         (660, "UP", 4), (680, "UP", 4), (720, "CROSS", 4)],
         base=None, window=(700, 800), dump=(738, 749), same30=(740, 749))
     # the icy corridor (map 017, the ice creatures): standing still where the owner's game fell to 11 frames a second.
-    # Their shine drawn whole (the default), and exact, in runs (--native-shine exact: the PS2's fold edges, slower)
     add("icy", spot="quick_icy", base=None, window=(300, 980), dump=(400, 411))
-    add("icy exact", spot="quick_icy", args=["--native-shine", "exact"], base=None, window=(300, 980), dump=(400, 411))
     # the Dark Succubus' room (map 038), standing still at its entrance where the owner's game fell to 15 frames a
     # second: her body is drawn with the screen copied to 0x3540 (Entity_PrepareScreenTexturedDraw), and its parts
     # each made render passes over the whole frame (NATIVE_DRAW_P8.md, "The Dark Succubus' body"). Up close
@@ -133,7 +129,7 @@ def run_case(a, name, case, mode, out):
     dump = case["dump"] or (600, 611)
     dump = (dump[0] + offset, dump[1] + offset)
     cmd = [a.exe, "--disc", a.iso, "--headless", "--memcard", "none", "--no-audio", "--input", pad,
-           "--frames", str(frames), "--renderer", a.renderer] + OWNER + case["args"] + a.extra
+           "--frames", str(frames)] + OWNER + case["args"] + a.extra
     if case["spot"]:
         cmd += ["--quick-load", os.path.join(a.spots, case["spot"] + ".kf4quick")]
     elif a.save:
@@ -145,10 +141,7 @@ def run_case(a, name, case, mode, out):
         env.pop(k, None)
     if case["fx"]:
         env["KF4_FX"] = case["fx"]
-    if mode == "cost":
-        env.update(KF4_INTERP_DRAW_ALL="1")
-        cmd += ["--fast", "--stats", "--dump-frames", str(frames - 1), "--dump-dir", d]
-    elif mode == "perf":
+    if mode == "perf":
         if a.pipelines and os.path.isfile(a.pipelines):
             shutil.copy(a.pipelines, os.path.join(d, "data", "native_gs_pipelines.bin"))
         env.update(KF4_PRESENT_SIM="240", KF4_PRESENT_LOG=os.path.join(d, "present.log"), KF4_GSN_GPU_TIME="2",
@@ -163,18 +156,7 @@ def run_case(a, name, case, mode, out):
     shutil.rmtree(os.path.join(d, "data"), ignore_errors=True)
     text = open(os.path.join(d, "out.txt"), errors="replace").read()
     r = {"rc": rc}
-    if mode == "cost":
-        frames_drawn = stat(text, r"pictures between on the GPU: (\d+) drawn from the packets", 1) or 1
-        r["gif_ms"] = stat(text, r"native GS time: GIF ([\d.]+) s") * 1000 / frames_drawn
-        r["pkt_ms"] = stat(text, r"drawn from the packets \([\d.]+ s, ([\d.]+) us each") / 1000
-        r["rec_ms"] = stat(text, r"from the recording \([\d.]+ s, ([\d.]+) us each") / 1000
-        r["c_wb"] = stat(text, r"copies, (\d+) write-backs")
-        r["c_dec"] = stat(text, r"write-backs; (\d+) textures decoded")
-        r["wall"] = stat(text, r"\[stats\] wall ([\d.]+) s")
-        for f in os.listdir(d):
-            if f.endswith(".png"):
-                os.remove(os.path.join(d, f))
-    elif mode == "perf":
+    if mode == "perf":
         rows = []
         if os.path.isfile(os.path.join(d, "present.log")):
             for line in open(os.path.join(d, "present.log")):
@@ -186,10 +168,6 @@ def run_case(a, name, case, mode, out):
             span = w[-1][0] - w[0][0]
             r["pps"] = len(w) / span
             r["gfps"] = (w[-1][1] - w[0][1]) / 2 / span
-        pictures = stat(text, r"native GS: (\d+) pictures;", 1) or 1
-        r["wb"] = stat(text, r"copies, (\d+) write-backs") / pictures
-        r["dec"] = stat(text, r"write-backs; (\d+) textures decoded") / pictures
-        r["rerec"] = stat(text, r"pictures between on the GPU: (\d+) drawn from the packets")
         r["cut"] = stat(text, r"behind the game: (\d+);")
         r["cuts"] = stat(text, r"cut to fewer a vblank (\d+) times")
         r["hitch"] = len(re.findall(r"^\[hitch\]", text, re.M))
@@ -249,11 +227,7 @@ def main():
     ap.add_argument("--cases", help="comma-separated case names (default: all); 'list' lists them")
     ap.add_argument("--perf", action="store_true")
     ap.add_argument("--pictures", action="store_true")
-    ap.add_argument("--cost", action="store_true", help="--fast with every picture between drawn: the GS thread's time a "
-                    "game frame (GIF), a picture between from the packets and from the recording, write-backs and "
-                    "decodes in all; robust to a GPU shared with other work")
     ap.add_argument("--frames", type=int, default=1000, help="vblanks a forced case runs (1000)")
-    ap.add_argument("--renderer", default="modern")
     ap.add_argument("--keep", action="store_true", help="keep the --pictures dumps")
     ap.add_argument("extra", nargs="*", help="more kf4 options (after --)")
     a = ap.parse_args()
@@ -267,7 +241,7 @@ def main():
     for n in names:
         if n not in all_cases:
             sys.exit("no case %r (--cases list)" % n)
-    modes = [m for m, on in (("perf", a.perf), ("pictures", a.pictures), ("cost", a.cost)) if on] or ["perf", "pictures"]
+    modes = [m for m, on in (("perf", a.perf), ("pictures", a.pictures)) if on] or ["perf", "pictures"]
     os.makedirs(a.out, exist_ok=True)
     results = {}
     for n in names:
@@ -283,10 +257,9 @@ def main():
                                           for k, v in r.items())), flush=True)
 
     print()
-    print("| case | pictures/s | game fps | write-backs/pic | decodes/pic | re-recordings | cut (left out) | "
-          "hitches | GPU ms/pic | flagged pictures between (worst %) | GS ms a frame, a picture between "
-          "(packets, recording) | verdict |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| case | pictures/s | game fps | cut (left out) | hitches | GPU ms/pic | flagged pictures between (worst %) "
+          "| verdict |")
+    print("|---|---|---|---|---|---|---|---|")
     for n, r in results.items():
         base = results.get(all_cases[n]["base"] or "", {})
         verdict = "OK"
@@ -294,20 +267,16 @@ def main():
             verdict = "corrupt"
         elif "pps" in r and (r.get("gfps", 30) < 29 or ("pps" in base and r["pps"] < 0.9 * base["pps"])):
             verdict = "slow"
-        elif "gif_ms" in r and "gif_ms" in base and (r["gif_ms"] > 1.5 * base["gif_ms"] + 2 or
-                                                     r["pkt_ms"] > 1.5 * base["pkt_ms"] + 2 or r["c_wb"] > base["c_wb"] + 10):
-            verdict = "slow"
         elif "perf" in modes and "pps" not in r:
             verdict = "no data"
 
         def f(k, fmt):
             return fmt % r[k] if k in r else ""
 
-        print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
-            n, f("pps", "%.1f"), f("gfps", "%.1f"), f("wb", "%.2f"), f("dec", "%.2f"), f("rerec", "%d"),
-            ("%d (%d)" % (r["cuts"], r["cut"])) if "cuts" in r else "", f("hitch", "%d"), f("gpu", "%.2f"),
-            ("%d of %d (%.2f)" % (r["flagged"], r["pics"], r["worst"])) if "flagged" in r else "",
-            ("%.1f (%.1f, %.1f)" % (r["gif_ms"], r["pkt_ms"], r["rec_ms"])) if "gif_ms" in r else "", verdict))
+        print("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            n, f("pps", "%.1f"), f("gfps", "%.1f"), ("%d (%d)" % (r["cuts"], r["cut"])) if "cuts" in r else "",
+            f("hitch", "%d"), f("gpu", "%.2f"),
+            ("%d of %d (%.2f)" % (r["flagged"], r["pics"], r["worst"])) if "flagged" in r else "", verdict))
 
 
 if __name__ == "__main__":

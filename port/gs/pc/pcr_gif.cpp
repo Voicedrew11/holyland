@@ -1,5 +1,5 @@
 // The PC renderer's GIF front end (pcr_gif.h): the GIF's tags, the GS's register writes, its vertex queue and its
-// image transfers, as the native GS's front end has them (port/gs/native/gsn.cpp), made into events.
+// image transfers, made into events.
 #include "pcr_gif.h"
 
 #include <algorithm>
@@ -297,7 +297,7 @@ void GifFrontEnd::write_tex0(uint32_t context, uint64_t value) {
 }
 
 // TEX1's MTBA: a TEX0 written makes MIPTBP1 itself, levels 1 to 3 packed after level 0, each a quarter of the one
-// before and half its buffer width (gsn.cpp's mip_addresses)
+// before and half its buffer width (as the GS lays them out)
 void GifFrontEnd::make_mip_addresses(uint32_t context) {
     if (!bits(file_.reg[gs_reg::tex1_1 + context], 9, 1)) {
         return;
@@ -347,7 +347,7 @@ GifVertex GifFrontEnd::latch_vertex(uint32_t address, uint64_t value) const {
 }
 
 // A vertex kick: the vertex queued, and the primitive it finishes drawn if the kick draws (XYZ2, XYZF2). Strips
-// keep their last two vertices, fans their first and last, line strips their last (gsn.cpp's vertex_kick)
+// keep their last two vertices, fans their first and last, line strips their last (the vertex kick, kick() below)
 void GifFrontEnd::kick(uint32_t address, uint64_t value) {
     const bool draws = address == gs_reg::xyzf2 || address == gs_reg::xyz2;
     const uint32_t prim = prim_in_effect();

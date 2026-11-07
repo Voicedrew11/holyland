@@ -1,4 +1,4 @@
-# Granite (third_party/parallel-gs/Granite) with Vulkan's dynamic state for the native GS's draws (gsn.cpp, Cmd):
+# Granite (third_party/parallel-gs/Granite) with Vulkan's dynamic state for the PC renderer's draws (pcr_canvas.cpp):
 # depth test, write, compare, depth bounds test, stencil test and ops, culling, front face, topology (within its
 # class) and blend constants (Vulkan 1.3's extended dynamic state); blend enable, the blend equation and the colour
 # write mask where the device has VK_EXT_extended_dynamic_state3's. The tie rule's Z-first and colour draws differ in

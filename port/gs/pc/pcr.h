@@ -1,15 +1,14 @@
-/* The PC renderer (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS"): the GS's input
-   (GIF packets, the vblank's display registers, the read-back FIFO, the pictures between) drawn by code of its
-   own on the GPU, with none of the native GS's. --renderer pc (its development name) opens it in place of the
-   native GS (port/platform/gs.c, through port/platform/gs_api.h).
+/* The PC renderer (docs/port/PC_RENDERER.md): the GS's input (GIF packets, the vblank's display registers, the
+   read-back FIFO, the pictures between) drawn by code of its own on the GPU. It is the renderer a player gets: it
+   opens through port/platform/gs_api.h, which port/platform/gs.c calls.
 
-   Its C interface is the native GS's (port/gs/native/gsn.h, whose plain types it shares): every call has the
-   native GS's shape and contract, and gsn.h says what each does. What it does so far (step 1, the skeleton):
+   Its C interface takes and gives the plain types of port/gs/shared/gsn.h, which says what the constants and the
+   structs mean. Each call's comment says what it does. What it does so far (step 1, the skeleton):
    - its own Vulkan device (with the presenter's swapchain when pcr_enable_present was called first) and its
      own thread ("kf4-pc"), which takes the packets, vblanks and pictures between in the order sent;
    - at each vblank, the picture the display registers name, at their size times pcr_set_scale's: an image
-     cleared to black (KF4_PC_CLEAR=RRGGBB: that colour), handed out as the native GS hands out its pictures
-     (the scanout ring of pcr_scanout_take_tag, the presenter's callbacks, pixels read back into frame);
+     cleared to black (KF4_PC_CLEAR=RRGGBB: that colour), handed out through the scanout ring of
+     pcr_scanout_take_tag, the presenter's callbacks, and pixels read back into frame;
      a picture between (GSN_EXTRA) is the last picture again;
    - the packets are counted, the read-back FIFO reads zeroes, save states and captures hold nothing of it
      (size 0), and the settings are kept for the steps to come.
@@ -25,7 +24,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "gsn.h" /* (the shared plain types only: GsnRect, GsnScanout, GsnPresentDevice, GsnInterp*) */
+#include "gsn.h" /* (port/gs/shared: the plain types and constants only) */
 #include "port/platform.h"
 #include "port/savestate.h"
 
@@ -62,7 +61,7 @@ void pcr_set_present_scale(int width, int height, float sharpen);
 int pcr_display_rect(const uint64_t *privileged, GsnRect *rect);
 void pcr_read_rect(const GsnRect *rect, uint32_t *rgba);
 
-/* The settings (gsn.h's): kept for the steps that draw; the counts returned are those the PC renderer will use */
+/* The settings: kept for the steps that draw; the counts returned are those the PC renderer will use */
 void pcr_set_scale(int x_scale, int y_scale);
 void pcr_set_lod(int mode);
 int pcr_set_aniso(int taps);
@@ -71,16 +70,9 @@ void pcr_set_cutout_aa(int mode);
 void pcr_set_2d(int mode);
 void pcr_set_colour(int mode);
 void pcr_set_layer_z(int mode);
-void pcr_set_shine_exact(int exact);
 /* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
 int pcr_native_kinds(void);
 void pcr_set_native_draw(int mode);
-void pcr_set_standalone(int on);
-void pcr_set_hardware_sampler(int on);
-void pcr_set_pc_world(int on);
-void pcr_set_scene(int x_scale, int y_scale, int samples);
-void pcr_set_upscaler(int mode);
-void pcr_set_scene_map(int map);
 
 /* Pipelines: none made ahead yet */
 void pcr_pipeline_cache(const char *path);

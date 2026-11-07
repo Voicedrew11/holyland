@@ -1,9 +1,8 @@
-// VU1's program 0x700 (the effects) on the GPU, shared by the renderers that draw native draws: the native GS's
-// nd_700.vert (and its builds) and the PC renderer's pcr_nd700.vert. This part: a draw's record as the shaders read it
-// (0x000's layout: the native GS's NdConst, port/render/vu1_record.hpp's Vu1Record, the model's colour in point_col[0])
-// and its flags. Include it, declare the buffer of records, then vu1_700_maths.h.
+// VU1's program 0x700 (the effects) on the GPU, shared by the renderers that draw native draws: the PC renderer's
+// pcr_nd700.vert. This part: a draw's record as the shaders read it (0x000's layout: port/render/vu1_record.hpp's
+// Vu1Record, the model's colour in point_col[0]) and its flags. Include it, declare the buffer of records, then vu1_700_maths.h.
 #include "nd_between.h"
-// the draws (gsn_native_draw.inc, NdConst), a record each: matrices a VU qword a column
+// the draws (Vu1Record), a record each: matrices a VU qword a column
 struct Draw {
     mat4 vertex;       // VU1 0x14: the set-up's vertex matrix (0x00 by 0x04)
     mat4 model;        // VU1 0x04: the part to the world (not read yet)
@@ -17,7 +16,7 @@ struct Draw {
     vec4 obj;          // (ND_C_OBJ) the part's move from the frame before to this one, in the world
     ivec4 info;        // (0), XYOFFSET X and Y (12.4), ND_C_*
     Between bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between.h)
-    uvec4 wave[4];     // (nd_000.vert's ND_C_WAVE: not read here; the records are NdConst, 0x000's)
+    uvec4 wave[4];     // (the program 0x000 shader's wave: not read here; the records are 0x000's)
 };
 #define ND_C_MOVING 1
 #define ND_C_OBJ 2

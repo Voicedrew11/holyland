@@ -1,16 +1,15 @@
 /* The window, and --dump-frames' pictures (port/include/port/platform.h).
 
-   The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread (or, the native
-   GS's, kept on the GPU) and queued here with its time; the window shows each when it is due (at each
+   The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread (or, under the PC renderer, kept on the GPU) and queued here with its time; the window shows each when it is due (at each
    vblank the game's thread, waiting a little for the vblank's own; with --frame-rate above 60 the
    pictures between too, "The pictures between") in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
    the settings overlay (F1) over it. That is
-   SDL_Renderer's work, or with --presenter vulkan a swapchain's on the native GS's own device
-   (port/platform/present_vk.cpp), which takes the native GS's picture as the image it is on the GPU
+   SDL_Renderer's work, or with --presenter vulkan a swapchain's on the PC renderer's own device
+   (port/platform/present_vk.cpp), which takes the PC renderer's picture as the image it is on the GPU
    (port_video_submit_image) and the others' pixels as they are here. A dumped frame is
    written as a PNG, uncompressed, so no library is needed. It is the GS's own picture, 640x448 (or
    the scanout's size) whatever the window shows: with --widescreen it is the squeezed picture, to be
-   shown at 16:9 (with --native-widescreen, the native GS's wider one, 4/3 or more as many pixels
+   shown at 16:9 (with --native-widescreen, the PC renderer's wider one, 4/3 or more as many pixels
    across as --native-scale gives). */
 #include <math.h>
 #include <stdio.h>
@@ -65,11 +64,11 @@ static pthread_mutex_t present_lock = PTHREAD_MUTEX_INITIALIZER;
    port_video_wait shows them then. A present shows the newest picture due and leaves out those before
    it (a picture that came late is not shown after a newer one). The queue holds a few vblanks'
    pictures: more, and the oldest goes. Pixels (SDL_Renderer, or paraLLEl-GS's) are copied in; the
-   native GS's pictures on the GPU are only named (gsn_scanout_take_tag: it keeps the last 16). */
+   PC renderer's pictures on the GPU are only named (pcr_scanout_take_tag: it keeps the last 16). */
 #define PICTURES 24
 typedef struct {
     uint64_t tag;
-    int image;        /* the native GS's image, not pixels */
+    int image;        /* the PC renderer's image, not pixels */
     uint32_t *pixels; /* (the queue's own buffer, kept for the next) */
     size_t room;      /* in pixels */
     uint32_t width, height;
@@ -479,12 +478,11 @@ void port_video_init(void) {
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     /* the Vulkan presenter on the window, if it starts; else the window again, for SDL_Renderer. It
-       needs the native GS's device: with paraLLEl-GS alone (--renderer gs, or the native GS did not
-       start; port_options.renderer is what started) the window is SDL_Renderer's, quietly unless
-       --presenter vulkan asked for it */
+       needs the PC renderer's device: with --renderer gs (paraLLEl-GS) the window is SDL_Renderer's,
+       quietly unless --presenter vulkan asked for it */
     if (port_options.presenter == PORT_PRESENTER_VULKAN && port_options.renderer == PORT_RENDERER_GS) {
         if (port_options.presenter_forced) {
-            fprintf(stderr, "[video] --presenter vulkan needs the native GS: the window is SDL_Renderer's\n");
+            fprintf(stderr, "[video] --presenter vulkan needs the PC renderer: the window is SDL_Renderer's\n");
         }
     } else if (port_options.presenter == PORT_PRESENTER_VULKAN) {
         window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
@@ -729,7 +727,7 @@ void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned i
 #ifdef KF4_HAVE_SDL
 /* Takes the picture to show: the newest that may be shown at `now` (show_at, with delay) and whose
    time is no later than `before` (with --fast, the newest), those before it left out. 1 if there is one:
-   its pixels into shown (or image: the native GS's, by its tag). */
+   its pixels into shown (or image: the PC renderer's, by its tag). */
 static int take_picture(double now, double delay, double before, int *image, uint64_t *tag) {
     int i, pick = -1;
 
@@ -787,7 +785,7 @@ static void sim_screen(uint64_t tag) {
     sim_shown = shown;
 }
 
-/* The window drawn: a new picture (fresh: its pixels in shown, or image: the native GS's by its tag),
+/* The window drawn: a new picture (fresh: its pixels in shown, or image: the PC renderer's by its tag),
    or the last again for the overlay; with overlay, the overlay and the mouse indicator over it (the
    game's thread only). Under PRESENT_LOCK. */
 static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
@@ -866,7 +864,7 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
 
         SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
         port_video_fit(out_w, out_h, &dst.x, &dst.y, &dst.w, &dst.h);
-        /* the native GS's picture scaled to the window already (the best scaling): a pixel a pixel;
+        /* the PC renderer's picture scaled to the window already (the best scaling): a pixel a pixel;
            else SDL's bilinear (smooth, best) or nearest (sharp). The GS scales its next pictures to the
            picture's place now. */
         smooth = port_video_scaling() != PORT_SCALING_SHARP && !(texture_width == (uint32_t)dst.w && texture_height == (uint32_t)dst.h);
@@ -931,7 +929,7 @@ void port_video_present(void) {
        for it, sometimes a little after. Shown at the next vblank instead, the one before was shown
        twice. So while pictures are coming (the last present had one) and none of this vblank's has come,
        the window waits for it, up to half a vblank; not with --fast, which does not wait for the
-       renderer (it is held at most two vblanks behind, gsn_vsync). */
+       renderer (it is held at most two vblanks behind, pcr_vsync). */
     if (!port_options.fast && last_fresh && times_set) {
         double until = port_wall_seconds() + 0.5 * VBLANK_SECONDS;
 

@@ -1,6 +1,6 @@
 // The PC renderer's GPU time by kind of work (docs/port/PC_RENDERER.md, handoff item 1): a timestamp wherever the kind
 // of work recorded into a command buffer changes, each interval added to the kind being recorded in it. On with
-// KF4_GSN_GPU_TIME=1 (the switch the native GS reads, which tools/pace_test.py sets: its "GPU ms a picture") and while
+// KF4_GSN_GPU_TIME=1 (the switch tools/pace_test.py sets: its "GPU ms a picture") and while
 // the overlay's profiler is open (Shift+P: PROFILE_GPU); off, nothing is written.
 //
 // Intervals never span two command buffers, so the time between submits (the GPU idle) is not counted.

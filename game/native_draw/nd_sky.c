@@ -22,18 +22,9 @@
      so nothing is hidden by the dome any more. Its place on the screen, fog, colour and clouds are worked
      out as before; from 220 units higher its horizon and its rim (where it fades into the fog's colour)
      are about half a degree higher, a level or a few at the rim.
-     Where the game draws other records before the sky (000, whose sky is 32nd of 35; 004, 3rd of 6) it is
-     composited over what was drawn: on 000 the dome adds its clouds (ALPHA Cs * As + Cd) over the canyon's
-     silhouettes that rise beyond it, which show through them as soft dark shapes; at the far plane they
-     turn into hard black shapes overhead (P3-2's survey, NATIVE_DRAW_TASKS.md). So there:
-     - hosted (--renderer native, the GS's targets and Z): the PS2's, at the feet with its real Z;
-     - --renderer modern (the scene's own depth, P8 T5): centred on the eye with its own Z (the dome's
-       distance from the eye, unrounded in the scene) and the game's TEST, where it comes in the list. What
-       lies beyond the dome is under its clouds, as on the PS2: the silhouettes stay soft. Nothing is drawn
-       at the far plane, so nothing jumps as records come and go (004's sky is drawn first from a few
-       places). What the dome hides is what the PS2's hides, from 220 units higher: on 000, from under the
-       silhouettes looking up, a few pieces of records drawn after the sky (Map_DrawLateRecords) that lie
-       beyond it (6 of 64 views, up to 4,163 pixels at 1x); on 004 nothing (64 views).
+     Where the game draws other records before the sky (000, whose sky is 32nd of 35; 004, 3rd of 6) it stays
+     the PS2's, at the feet with its real Z: at the far plane its clouds would turn into hard black shapes over
+     the canyon's silhouettes (P3-2's survey, NATIVE_DRAW_TASKS.md).
      What the far plane shows that the PS2's dome hid (the same survey): the tops of far hills and a tree's
      trunk on 002, 013 and 027, a little taller than the dome cut them.
    The PS2 path's sky (sky not native) is always the PS2's. */
@@ -49,7 +40,7 @@
 #include <string.h>
 
 int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner); /* (native_draw.c) */
-int NativeDraw_PosedAs(ModelInstance *model, ModelInstance *game, int kind, const void *owner, u32 flags);
+int NativeDraw_PosedWithFlags(ModelInstance *model, int kind, const void *owner, u32 flags);
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int reg, s64 value);
 void Packet_EndGsRegisters(void);
@@ -122,35 +113,24 @@ static void queue_test(s64 test) {
    it is not first: as every map record (its model is already at the feet, its fog block already the
    PS2's). --sky modern, first: a copy of its model put at the eye, drawn at the far plane with Map_DrawRecords'
    TEST (0x5000D) made Z ALWAYS around it (see the top). The game's model is not touched (the CPU's near cut
-   and the next frame read it), and --native-draw-compare's PS2 path draws it at the feet (inside the same
-   TEST: drawn first, the same as the game's). */
+   and the next frame read it). */
 static int sky_record(ModelInstance *model, const MapDrawRecord *record, int first) {
     ModelInstance at_eye;
     f32 eye[3];
     int drawn;
-    int in_file;
 
     if (port_native_sky() != PORT_SKY_MODERN || !eye_position(eye)) {
         return NativeDraw_Posed(model, RD_KIND_MAP_RECORD, record);
     }
-    in_file = first_in_file(record);
-    if (!in_file && !port_options.renderer_modern) {
-        return NativeDraw_Posed(model, RD_KIND_MAP_RECORD, record); /* (hosted: the PS2's on 000 and 004) */
-    }
-    if (in_file && !first) {
-        return NativeDraw_Posed(model, RD_KIND_MAP_RECORD, record);
+    if (!first_in_file(record) || !first) {
+        return NativeDraw_Posed(model, RD_KIND_MAP_RECORD, record); /* (where other records come first, 000 and 004: the PS2's) */
     }
     memcpy(&at_eye, model, sizeof(at_eye));
     ((f32 *)at_eye.model_matrix)[12] = eye[0];
     ((f32 *)at_eye.model_matrix)[13] = eye[1];
     ((f32 *)at_eye.model_matrix)[14] = eye[2];
-    if (!in_file) {
-        /* --renderer modern, where other records come before it (000, 004): at the eye with its own Z (the
-           scene's, unrounded) and the game's TEST, where it comes in the list (see the top) */
-        return NativeDraw_PosedAs(&at_eye, model, RD_KIND_MAP_RECORD, record, 0);
-    }
     queue_test(0x3000D);
-    drawn = NativeDraw_PosedAs(&at_eye, model, RD_KIND_MAP_RECORD, record, RD_DRAW_FAR_Z);
+    drawn = NativeDraw_PosedWithFlags(&at_eye, RD_KIND_MAP_RECORD, record, RD_DRAW_FAR_Z);
     queue_test(0x5000D);
     return drawn;
 }

@@ -365,7 +365,7 @@ void display_page() {
         tooltip("How the picture is fitted to the window.\nSharp pixels: each pixel repeated, blocky.\n"
                 "Smooth: bilinear filtering, as before. Made much smaller (a large native scale in a smaller\n"
                 "window) it reads only 2 x 2 pixels for each, so fine detail flickers and edges step.\n"
-                "Best (the default): the native GS scales the picture itself, with a cubic filter that\n"
+                "Best (the default): the renderer scales the picture itself, with a cubic filter that\n"
                 "averages every pixel the window's pixel covers when made smaller, and keeps edges sharp\n"
                 "when made larger, on linear light. About 0.2 to 0.4 ms of the GPU a picture.\n"
                 "(--present-scaling sharp|smooth|best)");
@@ -432,7 +432,7 @@ void display_page() {
          "On (the default): the rows as the game drew them. Off: as on the PS2, every frame the game\n"
          "blends each row of the picture half with the row above, so that thin lines do not flicker\n"
          "between an interlaced TV's two fields; on a PC screen that blurs the picture up and down, and\n"
-         "at a native GS resolution above 1x shows it twice, a GS row apart. (--flicker-filter)",
+         "at a resolution above 1x shows it twice, a GS row apart. (--flicker-filter)",
          &s.flicker_filter, &port_options.flicker_filter, true},
     };
     for (Switch &item : switches) {
@@ -812,29 +812,9 @@ std::string bug_report() {
     return text;
 }
 
-// The renderer (docs/port/STEP3.md): which draws from the next start; with both, which is shown and how
-// their pictures compare
+// The renderer's settings (docs/port/PC_RENDERER.md): the picture's resolution and smoothing, and the presenter
 void renderer_section() {
-    static const char *const names[] = {"paraLLEl-GS (gs, the reference)", "Native GS (native, the default)",
-                                        "Both, compared (both)", "Modern (modern)", "Fast, the PC renderer (fast)"};
     ImGui::SeparatorText("Renderer");
-    int now = port_options.renderer_fast     ? PORT_RENDERER_FAST
-              : port_options.renderer_modern ? PORT_RENDERER_MODERN
-                                             : port_options.renderer;
-    ImGui::Text("This run: %s", names[now]);
-    int next = port_settings.renderer;
-    if (ImGui::Combo("From the next start", &next, names, IM_ARRAYSIZE(names))) {
-        port_settings.renderer = next;
-        port_settings_changed();
-    }
-    tooltip("The native GS (step 3, the default) draws with the GPU's own rasteriser: faster, and the\n"
-            "base for the higher resolutions, true widescreen and anti-aliasing. paraLLEl-GS emulates the\n"
-            "PS2's GS and is the reference to compare with (and what draws if the native GS cannot start).\n"
-            "Both runs the two side by side and compares the pictures every vblank (slower; for testing).\n"
-            "Modern draws the scene (the map, the sky, the items) itself into its own targets, at the\n"
-            "game's level; fast is modern with the PC renderer's parts built so far (textures read by the\n"
-            "GPU's sampler: much less GPU time at high scales and anisotropy).\n"
-            "--renderer on the command line wins over this.");
     if (port_options.renderer != PORT_RENDERER_GS) {
         int scale = port_options.native_scale;
         char scale_name[32];
@@ -843,14 +823,13 @@ void renderer_section() {
         } else {
             snprintf(scale_name, sizeof(scale_name), "Auto (%dx)", port_gs_native_scale());
         }
-        if (ImGui::SliderInt("Native GS resolution", &scale, 0, 4, scale_name)) {
+        if (ImGui::SliderInt("Resolution", &scale, 0, 4, scale_name)) {
             port_gs_set_native_scale(scale);
             port_settings.native_scale = scale;
             port_settings_changed();
         }
-        tooltip("The native GS draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
-                "4x: 2560x1792). 1x is the PS2's picture; with --renderer both the comparison is made at 1x\n"
-                "pixels either way. Auto (the default): the multiple of 448 lines nearest the height the\n"
+        tooltip("The renderer draws its frame buffers at this many times the PS2's 640x448 (2x: 1280x896,\n"
+                "4x: 2560x1792). 1x is the PS2's picture. Auto (the default): the multiple of 448 lines nearest the height the\n"
                 "window shows the picture at (1080: 2x, 1440: 3x, 2160: 4x), at most 2x on an integrated GPU.");
         bool wide = port_options.native_widescreen != 0;
         if (ImGui::Checkbox("Native widescreen", &wide)) {
@@ -858,13 +837,13 @@ void renderer_section() {
             port_gs_set_native_scale(port_options.native_scale);
             port_settings_changed();
         }
-        tooltip("With widescreen on: the native GS draws the 16:9 picture with more pixels across, about\n"
+        tooltip("With widescreen on: the renderer draws the 16:9 picture with more pixels across, about\n"
                 "square ones, instead of the 640 columns the PS2 has stretched to 16:9 (at 1x 1280x448,\n"
                 "2x 1920x896, 3x 2560x1344, 4x 3840x1792). The picture is the same, sharper across.\n"
                 "Without widescreen it changes nothing. (--native-widescreen)");
         static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
         int msaa_at = port_settings.native_msaa >= 8 ? 3 : port_settings.native_msaa >= 4 ? 2 : port_settings.native_msaa >= 2 ? 1 : 0;
-        if (ImGui::Combo("Native GS anti-aliasing (MSAA)", &msaa_at, msaa_names, 4)) {
+        if (ImGui::Combo("Anti-aliasing (MSAA)", &msaa_at, msaa_names, 4)) {
             port_settings.native_msaa = 1 << msaa_at;
             port_gs_set_native_msaa(port_settings.native_msaa);
             port_settings_changed();
@@ -874,12 +853,12 @@ void renderer_section() {
                                 port_options.native_msaa > 1 ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
                                                              : "Off");
         }
-        tooltip("The native GS draws the 3D with this many samples a pixel, which smooths its edges (the 2D\n"
+        tooltip("The renderer draws the 3D with this many samples a pixel, which smooths its edges (the 2D\n"
                 "and the passes over the whole frame stay as they are). Off is the PS2's picture. Costs GPU\n"
                 "time, more with the resolution above. Off and back on is live; from one count to another\n"
                 "takes a restart. (--native-msaa)");
         bool cutout = port_options.native_cutout_aa != 0;
-        if (ImGui::Checkbox("Native GS anti-aliasing: smooth cut-outs too", &cutout)) {
+        if (ImGui::Checkbox("Anti-aliasing: smooth cut-outs too", &cutout)) {
             port_gs_set_native_cutout_aa(cutout ? 1 : 0);
             port_settings.native_cutout_aa = cutout ? 1 : 0;
             port_settings_changed();
@@ -889,7 +868,7 @@ void renderer_section() {
                 "shimmer less (more so with more samples). Costs GPU time only where they are drawn.\n"
                 "Without MSAA it changes nothing. (--native-cutout-aa ssaa|off)");
         bool smooth = port_options.native_2d != 0;
-        if (ImGui::Checkbox("Native GS: smooth 2D at the larger resolution", &smooth)) {
+        if (ImGui::Checkbox("Smooth 2D at the larger resolution", &smooth)) {
             port_gs_set_native_2d(smooth ? 1 : 0);
             port_settings.native_2d = smooth ? 1 : 0;
             port_settings_changed();
@@ -901,20 +880,20 @@ void renderer_section() {
         static const char *const lod_names[] = {"PS2's (ps2)", "Matched to the resolution (scale, the default)",
                                                 "Finest everywhere (full)"};
         int lod = port_options.native_lod;
-        if (ImGui::Combo("Native GS texture detail", &lod, lod_names, 3)) {
+        if (ImGui::Combo("Texture detail", &lod, lod_names, 3)) {
             port_gs_set_native_lod(lod);
             port_settings.native_lod = lod;
             port_settings_changed();
         }
         tooltip("Which of a texture's mipmap levels (its smaller copies; about half the maps have them) the\n"
-                "native GS reads. The PS2 picks the level from the distance alone, for its 640x448, so at a\n"
+                "renderer reads. The PS2 picks the level from the distance alone, for its 640x448, so at a\n"
                 "higher resolution far surfaces blur where the PS2's were sharp. Matched: the level the PS2\n"
                 "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
                 "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
                 "shimmer. (--native-lod)");
         static const char *const aniso_names[] = {"Off", "2x", "4x", "8x", "16x"};
         int aniso_at = port_options.native_aniso >= 16 ? 4 : port_options.native_aniso >= 8 ? 3 : port_options.native_aniso >= 4 ? 2 : port_options.native_aniso >= 2 ? 1 : 0;
-        if (ImGui::Combo("Native GS anisotropic filtering", &aniso_at, aniso_names, 5)) {
+        if (ImGui::Combo("Anisotropic filtering", &aniso_at, aniso_names, 5)) {
             port_gs_set_native_aniso(1 << aniso_at);
             port_settings.native_aniso = port_options.native_aniso;
             port_settings_changed();
@@ -926,47 +905,34 @@ void renderer_section() {
                 "(--native-aniso)");
         static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
         int colour = port_options.native_colour;
-        if (ImGui::Combo("Native GS colour precision", &colour, colour_names, 2)) {
+        if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {
             port_gs_set_native_colour(colour);
             port_settings.native_colour = colour;
             port_settings_changed();
         }
-        tooltip("How precisely the native GS keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
+        tooltip("How precisely the renderer keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
                 "the GS rounds it, which shows as steps in smooth dark gradients (the sky, dim walls, glows).\n"
                 "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
                 "screen's 8 bits, so the gradients are smooth. Alpha, and what the game reads back, stay the\n"
                 "PS2's. (--native-colour)");
         static const char *const layer_z_names[] = {"PS2's (whole numbers)", "Tolerant (clean layers and seams, the default)"};
         int layer_z = port_options.native_layer_z;
-        if (ImGui::Combo("Native GS depth", &layer_z, layer_z_names, 2)) {
+        if (ImGui::Combo("Depth", &layer_z, layer_z_names, 2)) {
             port_gs_set_native_layer_z(layer_z);
             port_settings.native_layer_z = layer_z;
             port_settings_changed();
         }
-        tooltip("How the native GS keeps the 3D's depth. Much of a map is drawn twice, a surface and then a\n"
+        tooltip("How the renderer keeps the 3D's depth. Much of a map is drawn twice, a surface and then a\n"
                 "layer blended over it (a second texture, the darkness in the arches), and on the PS2 the\n"
                 "layer fails the depth test in places: dark hatching, combs of teeth, a lace of light lines,\n"
                 "very visible at a higher resolution. Where two surfaces meet at a shallow angle the PS2's\n"
                 "whole-number depth makes a sawtooth. Tolerant keeps depth's fraction and lets a layer pass\n"
                 "within a hair of the surface under it: clean layers and straight seams. PS2's is the PS2's\n"
                 "picture. (--native-layer-z)");
-        if (port_options.renderer_modern) {
-            bool shine_exact = port_options.native_shine_exact != 0;
-            if (ImGui::Checkbox("Ice shine: exact PS2 folds (slower)", &shine_exact)) {
-                port_gs_set_native_shine_exact(shine_exact ? 1 : 0);
-                port_settings.native_shine_exact = shine_exact ? 1 : 0;
-                port_settings_changed();
-            }
-            tooltip("The ice creatures' shine (map 017) is blended in a shader. Where a part of a creature\n"
-                    "folds over its own edge, the PS2 blends the shine twice along that edge. Off (the default):\n"
-                    "the shine is drawn whole, once, and much faster (a few pixels along those edges are a little\n"
-                    "darker). On: drawn in many small pieces, the PS2's picture exactly. Applies at once.\n"
-                    "(--native-shine exact|whole)");
-        }
         // (--native-draw on / off, saved; the kinds one by one are the Debug page's: docs/port/NATIVE_DRAW.md)
         bool native_draw = (port_options.native_draw & PORT_ND_ACCEPTED) == PORT_ND_ACCEPTED;
         if (ImGui::Checkbox("Native draw (experimental)", &native_draw)) {
-            port_gs_set_native_draw(native_draw ? PORT_ND_ACCEPTED : 0, port_options.native_draw_compare);
+            port_gs_set_native_draw(native_draw ? PORT_ND_ACCEPTED : 0);
             port_settings.native_draw = native_draw ? 1 : 0;
             port_settings_changed();
         }
@@ -974,7 +940,7 @@ void renderer_section() {
                 "the water) drawn at the game's level: the renderer core and vertex shaders doing VU1's maths,\n"
                 "instead of VU1 and its packets. The picture is the PS2 path's (at a larger resolution the\n"
                 "enemies' highlights are not snapped to pixel edges); between the game's frames at a higher\n"
-                "frame rate, moving models move smoothly. The way to the native renderer's own targets (P8).\n"
+                "frame rate, moving models move smoothly.\n"
                 "Off is the PS2 path. Applies at once. (--native-draw on|off; the kinds one by one on the\n"
                 "Debug page)");
         if (port_options.native_draw != 0 && port_options.native_draw != PORT_ND_ACCEPTED) {
@@ -982,11 +948,11 @@ void renderer_section() {
             ImGui::TextColored(colour_note, "(this run: a choice of kinds, the Debug page)");
         }
     }
-    static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the native GS's device (vulkan, the default)"};
+    static const char *const presenters[] = {"SDL_Renderer (sdl)", "Vulkan, on the renderer's device (vulkan, the default)"};
     int presenter = port_video_presenter();
     if (port_options.presenter == PORT_PRESENTER_VULKAN && presenter != PORT_PRESENTER_VULKAN)
         ImGui::Text("Presenter this run: %s (vulkan %s)", presenters[presenter],
-                    port_options.renderer == PORT_RENDERER_GS ? "needs the native GS" : "did not start");
+                    port_options.renderer == PORT_RENDERER_GS ? "needs the PC renderer" : "did not start");
     else
         ImGui::Text("Presenter this run: %s", presenters[presenter]);
     int next_presenter = port_settings.presenter;
@@ -995,32 +961,10 @@ void renderer_section() {
         port_settings_changed();
     }
     tooltip("How the picture reaches the window. SDL_Renderer copies each picture through the CPU into\n"
-            "a texture. Vulkan presents on the native GS's own device: the native GS's picture goes to\n"
+            "a texture. Vulkan presents on the renderer's own device: the picture goes to\n"
             "the window without leaving the GPU (faster, most of all at higher resolutions). Vulkan needs\n"
-            "the native GS (renderer native or both); without it, or if it fails, the window is\n"
+            "the PC renderer (not --renderer gs); without it, or if it fails, the window is\n"
             "SDL_Renderer's. --presenter on the command line wins over this.");
-    if (port_options.renderer == PORT_RENDERER_BOTH) {
-        bool native = port_options.renderer_shown == PORT_RENDERER_NATIVE;
-        ImGui::BeginDisabled(port_options.renderer_heatmap != 0);
-        if (ImGui::Checkbox("Show the native GS's picture", &native))
-            port_options.renderer_shown = native ? PORT_RENDERER_NATIVE : PORT_RENDERER_GS;
-        ImGui::EndDisabled();
-        bool heatmap = port_options.renderer_heatmap != 0;
-        if (ImGui::Checkbox("Show where they differ (heat map)", &heatmap))
-            port_options.renderer_heatmap = heatmap;
-        tooltip("The window shows the displayed frame buffer's difference, pixel by pixel: grey where the\n"
-                "two are within 1 in every channel, else coloured by the largest difference, from blue (2)\n"
-                "through green and yellow (16) to red (64 and more). At the PS2's resolution. Not saved.\n"
-                "(--renderer-shown heatmap)");
-        const PortRendererDiff &d = port_renderer_diff;
-        ImGui::Text("Last picture: %u pixels differ by more than 1, at most %u (mean %.3f)", d.last_pixels, d.last_max,
-                    d.last_mean);
-        ImGui::Text("%llu of %llu pictures differ; the largest difference %u, at vblank %llu",
-                    (unsigned long long)d.frames_differ, (unsigned long long)d.frames, d.worst_max,
-                    (unsigned long long)d.worst_vblank);
-        tooltip("The frame buffer the display shows, as each renderer drew it (not the scanout, where the\n"
-                "two place and weave the picture each their own way).");
-    }
 }
 
 // The debugging tools (port/include/port/debug.h): files for a bug report, in the captures folder
@@ -1220,7 +1164,7 @@ void debug_page() {
 
     ImGui::SeparatorText("Native draw (experimental)");
     {
-        // (--native-draw, --native-draw-compare: docs/port/NATIVE_DRAW.md)
+        // (--native-draw: docs/port/NATIVE_DRAW.md)
         static const struct {
             const char *name;
             int bits;
@@ -1238,7 +1182,7 @@ void debug_page() {
                      {"Water", PORT_ND_WATER, "The reflection's rippled water on maps 008, 009 and 014 (Wobble_DrawRippledModel)."},
                      {"Screen passes", PORT_ND_PASSES,
                       "The brightness, tints, fills and fades, the flicker filter, the frame before, haze, the wobble."}};
-        int kinds_on = port_options.native_draw, compare = port_options.native_draw_compare;
+        int kinds_on = port_options.native_draw;
         for (const auto &k : kinds) {
             bool on = (kinds_on & k.bits) != 0;
             if (ImGui::Checkbox(k.name, &on))
@@ -1276,13 +1220,8 @@ void debug_page() {
                 ImGui::TextColored(colour_note, "(for this run: command line)");
             }
         }
-        const char *compares[] = {"Off", "Both queued, native drawn", "Both queued, PS2 path drawn"};
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
-        ImGui::Combo("Compare", &compare, compares, 3);
-        tooltip("--native-draw-compare: the PS2 path's packets are queued as well (VU1 runs them), and the\n"
-                "native GS draws one of the two: switch to see the difference in the same frame.");
-        if (kinds_on != port_options.native_draw || compare != port_options.native_draw_compare)
-            port_gs_set_native_draw(kinds_on, compare);
+        if (kinds_on != port_options.native_draw)
+            port_gs_set_native_draw(kinds_on);
         if (port_options.native_draw)
             ImGui::TextDisabled("%llu draws queued, %llu lost, %llu meshes held, %llu parsed",
                                 (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.lost,
@@ -1468,7 +1407,7 @@ void draw_toast() {
     draw->AddText(font, size, at, IM_COL32(255, 235, 170, (int)(255 * alpha)), text);
 }
 
-// "Building shaders": the native GS's pipelines not in the pipeline cache, made at the start (port_gs_shaders_building)
+// "Building shaders": the renderer's pipelines not in the pipeline cache, made at the start (port_gs_shaders_building)
 bool building_shown() {
     int done, total;
     return port_gs_shaders_building(&done, &total) != 0 && total > 0;

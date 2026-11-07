@@ -167,7 +167,7 @@ int port_seamless_scroll(void);
    frame again for each picture between, everything moved to that picture's time. */
 int port_frame_interp(void);
 #define PORT_GS_REG_FRAME_INTERP 0x7D
-#define PORT_GS_REG_REPLAY_UPLOAD 0x7C /* (port/platform/frame_interp.c to the native GS) */
+#define PORT_GS_REG_REPLAY_UPLOAD 0x7C /* (port/platform/frame_interp.c to the renderer) */
 #define PORT_FRAME_INTERP_HEADER 0  /* last: projection | mode << 8 (GameLoop_SetCameraMatrices'), or _END */
 #define PORT_FRAME_INTERP_VIEW 1    /* 1-12: world_view_matrix's columns' x, y, z */
 #define PORT_FRAME_INTERP_SCREEN 13 /* 13-18: view_screen_matrix's [0], [5], [8], [9], [10], [14] */
@@ -197,12 +197,8 @@ int port_draw_distance_sky(void);
    (PORT_ND_ACCEPTED); off by default. The patched draw
    code then queues, where it would have queued a model part's packets, a GS register write to
    PORT_GS_REG_NATIVE_DRAW (another address the GS does not have) naming a draw in the core's side
-   buffer (port/include/port/render.h), and the native GS draws it. Off, the game is what it was.
-   port_native_draw_compare(): PORT_ND_COMPARE_NATIVE or _PS2 while the PS2 path's packets are queued as
-   well, between marks after the native draws (--native-draw-compare), for the native GS to draw one or
-   the other: two runs alike in everything the game does, one drawn each way; 0 otherwise. */
+   buffer (port/include/port/render.h), and the renderer draws it. Off, the game is what it was. */
 int port_native_draw(int kind);
-int port_native_draw_compare(void);
 #define PORT_GS_REG_NATIVE_DRAW 0x7B
 #define PORT_ND_MAP 0x1          /* map records (P1; in work: Map_DrawRecords, Map_DrawLateRecords) */
 #define PORT_ND_OBJECTS 0x2      /* map objects (P2-1: Model_DrawPosedWithAlpha) */
@@ -257,8 +253,6 @@ int port_native_wave_uvs(void);
 #define PORT_SKY_MODERN 1
 int port_native_sky(void);
 int port_test_dma_wait(void);
-#define PORT_ND_COMPARE_NATIVE 1 /* the native draws drawn, the PS2 path's packets left out */
-#define PORT_ND_COMPARE_PS2 2    /* the PS2 path's packets drawn, the native draws left out */
 
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
    Each changes the game, so each is off by default; while it is off the game does what it did on

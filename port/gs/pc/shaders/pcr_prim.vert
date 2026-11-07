@@ -6,7 +6,7 @@
 // The GS interpolates everything linearly across the screen: noperspective throughout.
 //
 // In a picture between (port/gs/pc/pcr_between.h) a corner names the kicks it was made of (a_kicks), and is made again
-// of them at the picture's time (port/render/shaders/gif_moves.h, gs_replay.comp's maths) as the canvas made it of
+// of them at the picture's time (port/render/shaders/gif_moves.h) as the canvas made it of
 // them in the frame: a triangle's corner of its own kick (its colour the third's when flat), a sprite's of its two;
 // a triangle whose third kick, or one of the two before it with a place, is dropped there is not drawn.
 #include "pcr_common.h"
@@ -24,7 +24,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 
-// the picture's (gs_replay.h's Picture; zeros outside a picture between)
+// the picture's (the picture's header; zeros outside a picture between)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
@@ -33,7 +33,7 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
     uvec4 counts;
     uint run_bits[];
 } pic;
-// the walk's kicks as the GS queued them (gsn.cpp's InterpKick), 16 words each
+// the walk's kicks as the GS queued them (the GIF front end's kick), 16 words each
 layout(set = 1, binding = 1, std430) readonly buffer Kicks {
     uint kicks[];
 };

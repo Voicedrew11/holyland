@@ -135,7 +135,7 @@ int port_profile_hitches(char texts[][PROFILE_HITCH_TEXT], int most) {
 
 const char *port_profile_bound_name(ProfileBound bound) {
     static const char *const names[PROFILE_BOUNDS] = {
-        "nothing: keeping up", "the GPU", "the native GS's thread", "the back end's thread",
+        "nothing: keeping up", "the GPU", "the PC renderer's thread", "the back end's thread",
         "the game's thread", "the DMA controller's thread", "stalls now and then (no stage busy throughout)",
     };
     return (unsigned)bound < PROFILE_BOUNDS ? names[bound] : "?";

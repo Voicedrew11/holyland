@@ -60,7 +60,7 @@ public:
             parts_.frame(uint32_t(value) & 0xFFFFFF, walk_);
             break;
         default:
-            break; // (ALT_BEGIN and _END: --native-draw-compare, off under the PC renderer; READS_SHOWN: frame_interp.c's)
+            break; // (READS_SHOWN: frame_interp.c's)
         }
     }
 
@@ -304,7 +304,7 @@ private:
     // GS takes the packet, PRIM from the tag's PRE, Q 1, then each vertex's RGBAQ and XYZ2 (XYZ3 with ADC); its
     // triangles come to the canvas as the front end's primitives. In a picture between, each point t of the way from
     // its partner in the frame before (an untextured strip's), X and Y in 12.4 units rounded, each colour rounded, as
-    // the native GS's nd_strip.vert
+    // the strip's shader
     void draw_gs_strip(const RdDraw &d, GifFrontEnd &front) {
         std::vector<uint32_t> xy, rgba, from;
         for (const auto &mesh : fetched_) {
@@ -359,7 +359,7 @@ private:
         fetched_.clear();
     }
 
-    // now, moved t of the way back to was (nd_strip.vert's rounding: u = 1 - t)
+    // now, moved t of the way back to was (the strip shader's rounding: u = 1 - t)
     uint32_t lerped(uint32_t now, uint32_t was) const {
         return uint32_t(int32_t(now) + int32_t(std::floor(float(int32_t(was) - int32_t(now)) * picture_u_ + 0.5f)));
     }

@@ -40,17 +40,15 @@ typedef struct {
     int tearing;           /* unlocked's swapchain immediate, not mailbox (port_options.tearing; off) */
     int draw_distance;     /* the opt-in longer view: PORT_DRAW_DISTANCE_ (port_options.draw_distance) */
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
-    int renderer;          /* who draws, from the next start: PORT_RENDERER_ (port_options.renderer) */
-    int native_scale;      /* the native GS's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
-    int native_widescreen; /* with widescreen, the native GS's picture drawn wider (port_options.native_widescreen) */
-    int native_msaa;       /* the native GS's samples a pixel for the 3D: 1, 2, 4, 8 (port_options.native_msaa) */
-    int native_lod;        /* the native GS's mipmap levels: 0 ps2, 1 scale, 2 full (port_options.native_lod) */
-    int native_aniso;      /* the native GS's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
-    int native_cutout_aa;  /* with MSAA, the native GS's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
-    int native_2d;         /* at a larger scale, the native GS's 2D: 0 ps2, 1 smooth (port_options.native_2d) */
-    int native_colour;     /* the native GS's colour precision: 0 exact, 1 high (port_options.native_colour) */
-    int native_layer_z;    /* the native GS's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
-    int native_shine_exact; /* modern's shines blended in the shader: 0 whole, 1 exact (port_options.native_shine_exact) */
+    int native_scale;      /* the renderer's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
+    int native_widescreen; /* with widescreen, the renderer's picture drawn wider (port_options.native_widescreen) */
+    int native_msaa;       /* the renderer's samples a pixel for the 3D: 1, 2, 4, 8 (port_options.native_msaa) */
+    int native_lod;        /* the renderer's mipmap levels: 0 ps2, 1 scale, 2 full (port_options.native_lod) */
+    int native_aniso;      /* the renderer's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
+    int native_cutout_aa;  /* with MSAA, the renderer's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
+    int native_2d;         /* at a larger scale, the renderer's 2D: 0 ps2, 1 smooth (port_options.native_2d) */
+    int native_colour;     /* the renderer's colour precision: 0 exact, 1 high (port_options.native_colour) */
+    int native_layer_z;    /* the renderer's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int native_draw;       /* native draw, the whole path: 0 off (the PS2 path), 1 every accepted kind
                               (port_options.native_draw = PORT_ND_ACCEPTED; docs/port/NATIVE_DRAW.md) */
     int native_sky;        /* the native sky: PORT_SKY_PS2 or PORT_SKY_MODERN (port_options.native_sky) */

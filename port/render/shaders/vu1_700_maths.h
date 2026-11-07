@@ -1,6 +1,6 @@
 // VU1's program 0x700 on the GPU, shared (vu1_700_draw.h): its arithmetic and maths. Before it, the including shader
 // declares `pic` (a picture between's Picture), `mesh` (the arena: four qwords a vertex) and the record's struct.
-// nd_700.vert's top says what each step is (port/platform/vu1_hle_700.c is the specification).
+// The steps are VU1's: port/platform/vu1_hle_700.c is the specification.
 Draw d;
 
 // FTOI: toward zero, kept within what an int holds
@@ -127,7 +127,7 @@ float view_place(float n, float q, float s) {
     return div_nearest(n, dh, dl);
 }
 
-// A picture between's place (gs_replay.comp's moved): X and Y 12.4, Z, the depth's change (f), dropped
+// A picture between's place (the moved()): X and Y 12.4, Z, the depth's change (f), dropped
 struct Moved {
     int x, y;
     uint z;

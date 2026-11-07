@@ -11,8 +11,8 @@ EXE is the program that was sampled: its DWARF (a RelWithDebInfo build) names th
 in ntdll or win32u. For each function, of the thread's busy samples: inclusive, the share whose stack has it anywhere
 (so the shares overlap: a caller's covers its callees'), and self, the share it was the innermost frame of.
 
---thread FUNC|TID  the thread: a thread id, or a function, the thread whose busy stacks have it most (ring_thread:
-                   the native GS's thread; backend_thread: its back end's); by default the busiest
+--thread FUNC|TID  the thread: a thread id, or a function, the thread whose busy stacks have it most (backend_thread:
+                   the back end's thread; ring_thread names no thread in this build); by default the busiest
 --threads          every thread first: its CPU time while sampled, its busy share of the samples, and what it runs
                    (its stacks' commonest outermost function of the program's own)
 --callers FUNC     the stacks FUNC is called from, --depth (3) frames up, by share of the thread's busy samples

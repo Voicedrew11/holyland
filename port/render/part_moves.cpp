@@ -82,7 +82,7 @@ bool vu1_between(Vu1Between &out, const float *cur, const float *prev, const flo
     }
     double dt[3] = {p[12] - c[12], p[13] - c[13], p[14] - c[14]};
     double d2 = dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2];
-    // (the bound as a float, as gsn_native_draw.inc has it)
+    // (the bound as a float)
     if (!(d2 < double(float(MAX_MOVE)) * float(MAX_MOVE))) {
         return false;
     }

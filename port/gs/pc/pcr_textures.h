@@ -24,8 +24,8 @@
 // read, exactly as the walk would have noted them. Each page's signature is kept, and made again only
 // after something changed the page (its blocks' owners, a draw or copy over it, the CLUT buffer).
 //
-// The design is the native GS's page-ownership table (docs/port/NATIVE_DRAW_P8.md, "Textures from their
-// source: the page-ownership table"; port/gs/native/gsn_standalone.inc), without the GS's VRAM behind it.
+// The design is a page-ownership table (docs/port/NATIVE_DRAW_P8.md, "Textures from their
+// source: the page-ownership table"), without the GS's VRAM behind it.
 //
 // Everything a TextureStore is given comes from the game's GIF packets and is checked: a rectangle that
 // runs off VRAM wraps as the GS wraps it, a format the GS does not have is refused.
@@ -190,7 +190,7 @@ public:
 
     // The texture a draw samples. cols_read and rows_read: the texels of level 0 its draws read across and
     // down (1 << tw and 1 << th when not known); without mipmaps and not REGION_REPEAT, the texture is
-    // only that part, rounded up to whole pages, as the native GS has it.
+    // only that part, rounded up to whole pages.
     TextureAnswer resolve(const TextureRegs &regs, uint32_t cols_read, uint32_t rows_read);
 
     // TEX0 written: its CLD's load of the CLUT buffer (TEXCLUT for CSM2). nullopt when CLD loads nothing;

@@ -6,12 +6,10 @@
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "frame_rate_cap": 0, "tearing": false,
-                    "renderer": "native",
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
-                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "off", "native_sky": "modern",
-                    "native_shine": "whole",
+                    "native_colour": "exact", "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -26,12 +24,12 @@
    each as its three slots: two keys or mouse buttons, and a controller button. Keys this version does
    not know are kept as they are. A missing or broken file means the defaults.
 
-   "version" is the file's: 2 from stage 4 (docs/port/STEP3.md), when the native GS and the Vulkan
-   presenter became the defaults. Every save writes every setting out, so a file from before (no
-   "version") says "renderer": "gs" and "presenter": "sdl" whether the player chose them or never
-   looked: there those two values are read as the old defaults, and the new ones are used (and the
-   file written again, as version 2). A file from before that says "native", "both" or "vulkan" is
-   kept as it is; from version 2 on, "gs" and "sdl" are the player's choice and kept too.
+   "version" is the file's: 2 from stage 4 (docs/port/STEP3.md), when the Vulkan presenter became the
+   default. Every save writes every setting out, so a file from before (no "version") says
+   "presenter": "sdl" whether the player chose it or never looked: there that value is read as the old
+   default, and the new one is used (and the file written again, as version 2). A file from before that
+   says "vulkan" is kept as it is; from version 2 on, "sdl" is the player's choice and kept too. A
+   "renderer" key from any version is ignored and left in the file.
 
    3 from October 2026, when "native_scale" got "auto" (port_gs_native_scale: the picture drawn about as
    tall as the window shows it) and it and "native_widescreen": true became the defaults. A file from
@@ -74,7 +72,6 @@ PortSettings port_settings = {
     .volume = 100,
     .layout = "ps2",
     .ui_scale = 1.0f,
-    .renderer = PORT_RENDERER_NATIVE,
     .presenter = PORT_PRESENTER_VULKAN,
     .native_lod = 1, /* GSN_LOD_SCALE */
     .native_scale = 0, /* auto */
@@ -83,6 +80,7 @@ PortSettings port_settings = {
     .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
+    .native_draw = 1, /* on: PORT_ND_ACCEPTED */
     .native_sky = PORT_SKY_MODERN,
 };
 
@@ -176,12 +174,6 @@ static double read_number(const cJSON *object, const char *key, double fallback,
     double value = cJSON_IsNumber(item) ? item->valuedouble : fallback;
 
     return value < low ? low : value > high ? high : value;
-}
-
-/* settings.json's "renderer" for PORT_RENDERER_ */
-static const char *renderer_name(int renderer) {
-    static const char *const names[] = {"gs", "native", "both", "modern", "fast"};
-    return renderer >= 0 && renderer <= PORT_RENDERER_FAST ? names[renderer] : "gs";
 }
 
 static const char *read_string(const cJSON *object, const char *key) {
@@ -363,19 +355,6 @@ void port_settings_load(void) {
         }
     }
     {
-        const char *renderer = read_string(display, "renderer");
-
-        if (renderer != NULL && version < 2 && strcmp(renderer, "gs") == 0) {
-            migrated = 1; /* the old default, written out: the new default (port_settings above) */
-        } else if (renderer != NULL) {
-            s->renderer = strcmp(renderer, "native") == 0   ? PORT_RENDERER_NATIVE
-                          : strcmp(renderer, "both") == 0   ? PORT_RENDERER_BOTH
-                          : strcmp(renderer, "modern") == 0 ? PORT_RENDERER_MODERN
-                          : strcmp(renderer, "fast") == 0   ? PORT_RENDERER_FAST
-                                                            : PORT_RENDERER_GS;
-        }
-    }
-    {
         const char *scale = read_string(display, "native_scale");
 
         if (scale != NULL) {
@@ -428,13 +407,6 @@ void port_settings_load(void) {
 
         if (layer_z != NULL) {
             s->native_layer_z = strcmp(layer_z, "ps2") == 0 ? 0 : 1;
-        }
-    }
-    {
-        const char *shine = read_string(display, "native_shine");
-
-        if (shine != NULL) {
-            s->native_shine_exact = strcmp(shine, "exact") == 0;
         }
     }
     {
@@ -527,12 +499,6 @@ void port_settings_load(void) {
     if (!port_options.draw_distance_sky_forced) {
         port_options.draw_distance_sky = s->draw_distance_sky;
     }
-    if (!port_options.renderer_forced) {
-        /* (modern and fast: the native GS drawing the scene; main_host.c's renderer_implies does the rest) */
-        port_options.renderer = s->renderer >= PORT_RENDERER_MODERN ? PORT_RENDERER_NATIVE : s->renderer;
-        port_options.renderer_modern = s->renderer >= PORT_RENDERER_MODERN;
-        port_options.renderer_fast = s->renderer == PORT_RENDERER_FAST;
-    }
     if (!port_options.native_scale_forced) {
         port_options.native_scale = s->native_scale;
     }
@@ -560,9 +526,6 @@ void port_settings_load(void) {
     if (!port_options.native_layer_z_forced) {
         port_options.native_layer_z = s->native_layer_z;
     }
-    if (!port_options.native_shine_exact_forced) {
-        port_options.native_shine_exact = s->native_shine_exact;
-    }
     if (!port_options.native_sky_forced) {
         port_options.native_sky = s->native_sky;
     }
@@ -581,9 +544,8 @@ void port_settings_load(void) {
     }
     if (migrated && active == 1) {
         dirty = 1;
-        fprintf(stderr, "[settings] from before the native GS was the default: renderer \"%s\", presenter \"%s\" "
-                        "(the overlay's Debug page, or --renderer gs / --presenter sdl, go back)\n",
-                renderer_name(s->renderer),
+        fprintf(stderr, "[settings] from an older version: presenter \"%s\" "
+                        "(the overlay's Debug page, or --presenter sdl, go back)\n",
                 s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl");
     }
     fprintf(stderr, "[settings] %s%s\n", port_settings_path(), file == NULL ? " (new)" : "");
@@ -710,9 +672,7 @@ void port_settings_save(void) {
     put(display, "native_colour", cJSON_CreateString(s->native_colour == 1 ? "high" : "exact"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
-    put(display, "native_shine", cJSON_CreateString(s->native_shine_exact ? "exact" : "whole"));
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
-    put(display, "renderer", cJSON_CreateString(renderer_name(s->renderer)));
     put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));

@@ -6,7 +6,7 @@
    share of the time, the GPU's time a picture and what bounds the pictures a second
    (port_profile_report). Closed, a stage costs one relaxed atomic load.
 
-   port/platform/profile.c, a library of its own (kf4_profile) that the native GS links as well as the
+   port/platform/profile.c, a library of its own (kf4_profile) that the renderer links as well as the
    port. Any thread may call any of these. */
 #ifndef PORT_PROFILE_H
 #define PORT_PROFILE_H
@@ -21,15 +21,15 @@ typedef enum {
     PROFILE_GAME,         /* the game's thread: its work between vblanks, not its wait for the next one */
     PROFILE_DISC,         /* (of PROFILE_GAME) disc reads */
     PROFILE_DMA,          /* the DMA controller's thread: VIF1, VU1 and the GIF's packets */
-    PROFILE_RING_WAIT,    /* (of PROFILE_DMA) waiting for room in the native GS's ring: the GS behind */
-    PROFILE_GS,           /* the native GS's thread: all its work, waits included */
+    PROFILE_RING_WAIT,    /* (of PROFILE_DMA) waiting for room in the GS's ring: the GS behind */
+    PROFILE_GS,           /* the PC renderer's thread: all its work, waits included */
     PROFILE_GS_INTERP,    /* (of PROFILE_GS) the pictures between, recorded and replayed */
     PROFILE_GS_WAIT,      /* (of PROFILE_GS) waiting for the back end or the GPU */
     PROFILE_COMPILE,      /* (of PROFILE_GS or PROFILE_BACKEND) pipelines made while a draw waited */
     PROFILE_BACKEND,      /* the back end's thread: Granite's calls into Vulkan */
     PROFILE_BACKEND_WAIT, /* the back end's thread: waiting for the GPU at a frame context */
     PROFILE_PRESENT_WAIT, /* the presenter: waiting for its frame's fence and a swapchain image */
-    PROFILE_GPU,          /* the GPU's time on the native GS's work */
+    PROFILE_GPU,          /* the GPU's time on the renderer's work */
     PROFILE_STAGES
 } ProfileStage;
 
@@ -37,7 +37,7 @@ typedef enum {
 typedef struct {
     uint64_t now_ns;
     uint64_t ns[PROFILE_STAGES];
-    uint64_t pictures; /* drawn by the native GS (vblanks' own and pictures between) */
+    uint64_t pictures; /* drawn by the renderer (vblanks' own and pictures between) */
     uint64_t vblanks;  /* the game's */
 } ProfileCounters;
 
@@ -106,7 +106,7 @@ uint64_t port_profile_gpu_pictures(void);
 typedef enum {
     PROFILE_BOUND_NONE,    /* keeping up with the screen */
     PROFILE_BOUND_GPU,
-    PROFILE_BOUND_GS,      /* the native GS's thread */
+    PROFILE_BOUND_GS,      /* the PC renderer's thread */
     PROFILE_BOUND_BACKEND, /* the back end's thread */
     PROFILE_BOUND_GAME,    /* the game's thread */
     PROFILE_BOUND_DMA,     /* the DMA controller's thread */
@@ -120,7 +120,7 @@ typedef struct {
     double seconds;
     double share[PROFILE_STAGES]; /* each stage's time over the span's: a thread's busy share of a core */
     double gpu_ms_per_picture;    /* 0: no pictures, or no GPU times yet */
-    double pictures_per_second;   /* drawn by the native GS */
+    double pictures_per_second;   /* drawn by the renderer */
     double vblanks_per_second;
     ProfileBound bound;
     double bound_share; /* the busy share that named it (0 for none and bursts) */

@@ -17,7 +17,7 @@ cmake --preset linux-clang                 # or linux-gcc, windows-clang (llvm-m
 cmake --build out/linux-clang
 ctest --test-dir out/linux-clang           # all unit tests
 ctest --test-dir out/linux-clang -R pcr_gif   # one test (names: add_test in CMakeLists.txt)
-out/linux-clang/kf4 --disc <image> [--renderer native|gs|both|modern|fast|pc] ...
+out/linux-clang/kf4 --disc <image> [--renderer pc|gs] ...
 out/linux-clang/kf4 --help                 # every option
 ```
 
@@ -58,15 +58,15 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   (`refresh_clock.c`, `unlocked_rate.c`, `screen_vblank.c`), the Vulkan presenter, and `main_host.c` (options).
 - `port/sdk/`: the PS2 SDK libraries the game links against (libgraph, libpad, libcdvd, libmc, libc/libm
   with PS2-exact results, MPEG). `port/include/`: their headers. `port/audio/`: the IOP sound side.
-- `port/gs/`: the Graphics Synthesizer. Three implementations behind `port/platform/gs_api.h`, chosen
-  by `--renderer`:
-  - `gs_parallel.cpp`: paraLLEl-GS (`third_party/parallel-gs`), the accurate GS emulator (`gs`).
-  - `native/` (`gsn*`): the native GS, a Vulkan renderer at higher resolution (`native`, `modern`,
-    `fast`). Built as one translation unit, `gsn.cpp`, from many `.inc` files; also holds upscaling
-    (FSR/DLSS).
-  - `pc/` (`pcr*`): the PC renderer (`--renderer pc`), drawing the GS's input with its own code and
-    none of the native GS's. It shares `gsn.h`'s interface and plain types. Current work on branch
-    `pc/renderer`; the plan and where it stands are in `docs/port/PC_RENDERER.md`.
+- `port/gs/`: the Graphics Synthesizer, behind `port/platform/gs_api.h`:
+  - `pc/` (`pcr*`): the PC renderer, the only one players get (the default). It draws the GS's input
+    with its own Vulkan code on Granite. The plan and where it stands: `docs/port/PC_RENDERER.md`.
+  - `gs_parallel.cpp`: paraLLEl-GS (`third_party/parallel-gs`), the accurate GS emulator. Developers
+    only (`--renderer gs`), to compare pictures against; never chosen by settings, the overlay or a
+    fallback.
+  - `shared/`: `gsn.h` (plain types and constants the PC renderer and the port share) and `gsn_vram.c`
+    (the GS's memory formats). Left from the native GS, which was removed in November 2026 along with
+    `--renderer native|modern|fast|both`, scene scale and FSR/DLSS; docs/ still describe it as history.
 - `port/render/`: CPU-side records shared by the renderers (VU1 recording, part moves for pictures
   between game frames). Shared shader headers in `port/render/shaders/`.
 - `port/overlay/`: the ImGui overlay (settings, stats panels, profiler, automap view).

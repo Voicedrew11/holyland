@@ -1,12 +1,12 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 // The PC renderer's native draws of program 0x000 (port/gs/pc/pcr_native.cpp): a batch's triangles from its mesh,
-// each corner what VU1's program would have kicked (port/render/shaders/vu1_000_maths.h: its maths and arithmetic,
-// the native GS's own), given to pcr_prim.frag as a GS primitive's are: X and Y in the target's GS pixels (XYOFFSET
+// each corner what VU1's program would have kicked (port/render/shaders/vu1_000_maths.h: its maths and arithmetic),
+// given to pcr_prim.frag as a GS primitive's are: X and Y in the target's GS pixels (XYOFFSET
 // off, the surface's place added), the GS's integer Z, RGBA, S T Q and fog. A triangle VU1's clipping would leave out
 // (the ADC of its kick or of the two kicks before it) is not drawn. In a picture between (ND_C_MOVING) each corner is
 // moved to the picture's time (moved()), S, T and Q by its change of depth, and the triangle dropped with its kick or one
-// of the two before it in the batch, as the native GS's nd_000.vert.
+// of the two before it in the batch.
 #define PCR_ND
 #include "pcr_common.h"
 

@@ -10,9 +10,9 @@
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
-| `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, write-backs, decodes, cuts) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
+| `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
-| `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and a game frame's cost on the native GS's threads (docs/port/RENDERER.md, "Measuring the pace") |
+| `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and the GPU time a picture (docs/port/RENDERER.md, "Measuring the pace") |
 | `sampler/` | `profile.py` plays to a map as `pace_test.py` does and profiles every thread's functions, then prints each thread's CPU time and the busiest's (or `--thread`'s) functions by inclusive and self share; on Linux the game samples itself (`--profile-at`) and the GPU's time a picture by kind of work (`--gpu-detail`: by shader state) follows, on Windows `kf4-sampler` samples from outside (stacks unwound from the program's `.pdata`). `stacks.py` reads a kept run again, or one saved from Shift+P (`--thread`, `--callers`, `--callees`, `--gpu`, `--exports`); docs/port/PROFILING.md |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 
@@ -44,10 +44,7 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--vertices N` | draw N's vertices: X, Y (12.4, as sent, before XYOFFSET), Z, RGBA, STQ, UV, fog, and whether it kicked a primitive |
 | `--compare OTHER` | another capture's draws against these, one by one: the GS state, and the vertices (the first that differs, and the largest Z difference) |
 | `--compare-mode gif\|vif` | compare this capture with itself in that mode (with `--vu-round`: the VU1 variant against the recorded packets, draw by draw) |
-| `--limit N` | how many differing draws `--compare` and `--compare-renderers` print (50) |
-| `--renderer gs\|native\|both` | who draws: paraLLEl-GS (the default), the native GS (`port/gs/native/`), or both; with both, `--draws` and `--frames` write `_native` pictures beside paraLLEl-GS's |
-| `--compare-renderers` | both renderers. After each draw (or each of `--draws`), the pixels of its box are compared: the draws where they differ are printed, and the native GS is then given paraLLEl-GS's pixels so that the next draw printed made its own difference (`--no-resync`: not). At each vblank, and at the end of the capture, the frame buffer on display is compared, and at the end the other in-play frame buffer too (`end-other`: the frame is drawn into the one not on display, so that is the comparison that counts in play), and the two renderers' scanouts (each vblank's picture as shown: `scanout N`, and `scanouts:` at the end). `--draws 999999-999999` skips the per-draw comparisons |
-| `--exact` | with `--compare-renderers`: a pixel differs when a channel differs at all (else by more than 1) |
+| `--limit N` | how many differing draws `--compare` prints (50) |
 
 A **draw** is a run of vertices in one GIF packet with no GS register written between them other than
 a vertex's own (RGBAQ, ST, UV, FOG). `--list` gives, for each:
@@ -63,8 +60,7 @@ the Z range, and the GS state it drew with: FRAME, ZBUF, TEST (alpha test, desti
 depth test: ZTST 0 never, 1 always, 2 greater or equal, 3 greater), ALPHA (A B C D and FIX), FBA,
 PABE, TEX0, TEX1, CLAMP, SCISSOR and XYOFFSET.
 
-Pictures need a Vulkan GPU; `--info`, `--list`, `--vertices` and `--compare` do not. On Mesa's lavapipe,
-`--renderer both` needs `LP_NUM_THREADS=1` (two Vulkan devices in one process abort its threaded rasteriser).
+Pictures need a Vulkan GPU; `--info`, `--list`, `--vertices` and `--compare` do not.
 
 ### Example: a flicker on the water
 

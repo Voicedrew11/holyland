@@ -1,6 +1,6 @@
 // Native draw's pictures between for models (P2-5): a model part's move from the frame before to this one
-// by its own matrices (gsn_native_draw.inc's NdBetween and nd_between, which say what each field is), for
-// nd_000.vert and nd_280.vert. With u = 1 - t, the part at the picture's time is R Q(u) S(u) p + T(u):
+// by its own matrices (Vu1Between in vu1_record.hpp says what each field is), for
+// pcr_nd000.vert and pcr_nd280.vert. With u = 1 - t, the part at the picture's time is R Q(u) S(u) p + T(u):
 // the rotation by quaternion slerp (Q(u) the turn from this frame's rotation R to the frame before's, by u
 // of its angle), the rest of the matrix (S: the scale) and the translation along the line. between_move is
 // how far that is from where the part is in this frame, R (Q(u) S(u) - S) p + (T_P - T) u p.w: exactly 0 at

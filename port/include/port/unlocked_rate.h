@@ -3,7 +3,7 @@
    Unlocked draws as many pictures between the game's frames as the renderer can, each shown at its time (the
    swapchain mailbox, or immediate where tearing is allowed: port/platform/present_vk.cpp). How many it can is not
    known ahead (the GPU, the settings, the place), so the rate is found as it plays: at each game vblank the caller
-   says whether the native GS was behind (its thread a vblank late, as the cut of the pictures between judges it:
+   says whether the renderer was behind (its thread a vblank late, as the cut of the pictures between judges it:
    port/platform/gs.c). Behind at two vblanks in a row, the rate comes down by UNLOCKED_RATE_DOWN (twice that when it
    fell just before too: a place much heavier than the last), and is not judged again for UNLOCKED_RATE_SETTLE
    vblanks (the pictures already asked for drain). Kept up, it goes up by UNLOCKED_RATE_UP every UNLOCKED_RATE_REST

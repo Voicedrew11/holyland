@@ -19,8 +19,8 @@
        TEX0_2 from the part's first data block, ALPHA_2 with the block's A, B and D and C = FIX, the fade
        as FIX (fade_alpha), TEST_2, and ZBUF_2 masked while fade_alpha is below 0x80;
    - after the parts: PRMODECONT 1 and ZBUF_2 twice.
-   The batches' own A+D packets (TEX0_1 ...) and PRIM go through the native GS as VU1's kicks would
-   (gsn_native_draw.inc), so with PRMODECONT 0 the GS draws them in context 2 with the fade, as on the
+   The batches' own A+D packets (TEX0_1 ...) and PRIM go through the GS front end (port/gs/pc/pcr_gif.cpp) as VU1's
+   kicks would, so with PRMODECONT 0 the GS draws them in context 2 with the fade, as on the
    PS2 path.
 
    The draws' identity: kind RD_KIND_MAP_OBJECT, the model (its EE word), the part. */
@@ -41,12 +41,10 @@ void Packet_AddGsRegister(int reg, s64 value);
 void Packet_EndGsRegisters(void);
 void Matrix_Multiply(void *dst, void *matrix, void *src);
 void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
-void Model_DrawPosedWithAlpha(ModelInstance *model);
 
 /* native_draw.c's helpers (its "For the other adapter files") */
 int NativeDraw_PartMeshes(ModelPart *part, RdMesh *meshes);
 u32 NativeDraw_CurrentCamera(void);
-void NativeDraw_QueueMark(u32 command, u64 bits);
 void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, const void *matrix_b);
 
 extern f32 world_view_matrix[16];
@@ -57,12 +55,8 @@ extern f32 world_view_matrix[16];
    with more blocks than this has its parts' meshes found again (and hashed again) part by part */
 #define ND_MODEL_MESHES 8192
 
-/* set while the PS2 path's packets are queued for --native-draw-compare: Model_DrawPosedWithAlpha, whose
-   head calls in here, then draws the PS2 way */
-static int queuing_ps2_path;
-
 /* Model_DrawPosedWithAlpha(model), natively: 1 if drawn (or nothing to draw), 0 if the caller is to draw
-   it the PS2 way (a block the core cannot draw, model flag 0x800, or the compare mode's own call). */
+   it the PS2 way (a block the core cannot draw, or model flag 0x800). */
 int NativeDraw_PosedWithAlpha(ModelInstance *model) {
     static RdMesh meshes[ND_MODEL_MESHES];
     static RdMesh scratch[ND_MAX_MESHES];
@@ -75,9 +69,6 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
     u32 used = 0;
     int i;
 
-    if (queuing_ps2_path) {
-        return 0;
-    }
     if (model->parts == NULL || model->part_count == 0) {
         return 1; /* (the PS2 path queues nothing either) */
     }
@@ -101,10 +92,8 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
         used += part->data_count;
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
-    if (!port_native_draw_compare()) {
-        /* (without the parts: VU1 is left as the PS2 path leaves it; native_draw.c's queue_fixed_block) */
-        NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
-    }
+    /* (without the parts: VU1 is left as the PS2 path leaves it; native_draw.c's queue_fixed_block) */
+    NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
     ee_word_try(model, &owner);
     memset(&d, 0, sizeof(d));
     d.kind = RD_KIND_MAP_OBJECT;
@@ -181,13 +170,6 @@ int NativeDraw_PosedWithAlpha(ModelInstance *model) {
     Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     Packet_AddGsRegister(GS_REG_ZBUF_2, 0x10A000118LL);
     Packet_EndGsRegisters();
-    if (port_native_draw_compare()) {
-        NativeDraw_QueueMark(RD_ND_ALT_BEGIN, 0);
-        queuing_ps2_path = 1;
-        Model_DrawPosedWithAlpha(model);
-        queuing_ps2_path = 0;
-        NativeDraw_QueueMark(RD_ND_ALT_END, 0);
-    }
     return 1;
 }
 

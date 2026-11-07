@@ -1,9 +1,7 @@
 // The native draws' moves in the pictures between (docs/port/NATIVE_DRAW.md 3.5, P2-5), for the renderers that draw
-// native draws without the native GS's code (the PC renderer: port/gs/pc/pcr_native.cpp): which part of the frame a
-// draw is in (frame_interp.c's marks), where each model part was in the frame before, and how a picture between moves
-// it. The native GS's gsn_native_draw.inc (nd_mark, nd_key, nd_remember, nd_model_flags, nd_between) and
-// gsn_nd_strip.inc (nd_strip_between's pairing), the same maths; the native GS keeps its own copy, as with
-// vu1_record.hpp.
+// native draws (the PC renderer: port/gs/pc/pcr_native.cpp): which part of the frame a draw is in (frame_interp.c's
+// marks), where each model part was in the frame before, and how a picture between moves it. The shaders do the
+// moving (shaders/vu1_*_maths.h); this is the CPU side, with the same maths (vu1_record.hpp).
 //
 // One thread: the renderer's.
 #pragma once

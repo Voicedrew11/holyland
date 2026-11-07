@@ -1,4 +1,4 @@
-/* The CPU model of the GS's memory (port/gs/native/gsn_vram.c) against paraLLEl-GS as the oracle.
+/* The CPU model of the GS's memory (port/gs/shared/gsn_vram.c) against paraLLEl-GS as the oracle.
 
    Both are fed the same random transfers in every pixel format: host to local (as a GIF packet on
    PATH 2 for paraLLEl, in random pieces for the model), local to local, and local to host; after

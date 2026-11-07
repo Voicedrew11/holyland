@@ -1,4 +1,4 @@
-// The PC renderer's native draws (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS", step 3):
+// The PC renderer's native draws (docs/port/PC_RENDERER.md, step 3):
 // the game's draws handed over at their own level (port/include/port/render.h) instead of VU1's packets, met in the
 // chain as PORT_GS_REG_NATIVE_DRAW writes and drawn there, in order with everything else.
 //
@@ -17,7 +17,7 @@
 // Pictures between (pcr_between.h): the frame's packets walked again, its draws met again. Each record then carries how
 // its draw moves (port/render/part_moves.hpp: with the picture's camera, with its model between its two places, or
 // not), and the shaders move the vertices (vu1_*_maths.h's moved()); the trail's points are drawn t of the way from
-// their partners in the frame before, as the native GS's nd_strip.vert draws them.
+// their partners in the frame before, as the renderer's strip draws them.
 //
 // One thread: the PC renderer's ("kf4-pc").
 #pragma once

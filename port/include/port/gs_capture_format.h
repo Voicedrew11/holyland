@@ -54,10 +54,8 @@ enum {
     /* micro memory (16 KB), data memory (16 KB), then Kf4GsVu1Regs */
     KF4GS_VU1 = 6,
     KF4GS_VIF1 = 7, /* Kf4GsVif1Regs */
-    /* (--renderer modern, P8) the native GS's page-ownership table: which uploads own VRAM's blocks, with
-       their BITBLTBUF, TRXPOS, TRXREG and bytes, so that a replay's scene samples textures from their
-       source from the start (port/gs/native/gsn_standalone.inc, "The table in save states and captures",
-       has the layout). After the GS's records; only in a capture taken with the scene on. */
+    /* 8 was the page-ownership table of the removed native GS. No build writes it now; the number stays so that
+       old captures still read as they were. */
     KF4GS_SA_TABLE = 8,
 
     KF4GS_GIF = 16,       /* uint32 path (1, 2, 3), then whole qwords, as handed to the GS */

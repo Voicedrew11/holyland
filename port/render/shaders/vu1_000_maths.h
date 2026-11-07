@@ -1,7 +1,7 @@
 // VU1's program 0x000 on the GPU, shared (vu1_000_draw.h): its arithmetic and maths. Before it, the including shader
 // declares `pic` (a picture between's Picture), `mesh` (the arena: four qwords a vertex) and the record's struct
-// (vu1_000_draw.h). nd_000.vert's top says what each step is (port/platform/vu1_hle.c is the specification).
-// PC_DRAW (pc_000.vert) and PCR_ND (the PC renderer) also take VU1's clip judgement (vu_clipped).
+// (vu1_000_draw.h). The steps are VU1's: port/platform/vu1_hle.c is the specification.
+// PCR_ND (the PC renderer's shaders) also takes VU1's clip judgement (vu_clipped).
 Draw d;
 
 // FTOI: toward zero, kept within what an int holds
@@ -99,7 +99,7 @@ struct Place {
     int x, y, z;
     float q;
 #ifdef ND_STANDALONE
-    float zf; // (sa_000.vert) Z before FTOI4: what the scene's depth is made of, unrounded
+    float zf; // (the shader) Z before FTOI4: what the scene's depth is made of, unrounded
 #endif
 };
 
@@ -138,14 +138,14 @@ float view_place(float n, float q, float s) {
     return div_nearest(n, dh, dl);
 }
 
-// A picture between's place (gs_replay.comp's moved): X and Y 12.4, Z, the depth's change (f), dropped
+// A picture between's place (the moved()): X and Y 12.4, Z, the depth's change (f), dropped
 struct Moved {
     int x, y;
     uint z;
     float f;
     bool drop;
 #ifdef ND_STANDALONE
-    float zf; // (sa_000.vert) Z unrounded
+    float zf; // (the shader) Z unrounded
 #endif
 };
 

@@ -53,7 +53,7 @@ void main() {
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
     // a picture between's (ND_C_MOVING): moved, S, T and Q by the change of depth; dropped with its kick or one of the
-    // two before it in the batch, the same for all three corners (the native GS's nd_280.vert)
+    // two before it in the batch, the same for all three corners
     int xi = pl.x, yi = pl.y;
     float f = 1.0;
     bool gone = false;

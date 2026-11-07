@@ -1,9 +1,9 @@
-// --frame-rate's pictures between on the GPU, shared by both renderers: a vertex kick of the frame's packets at the
+// --frame-rate's pictures between on the GPU: a vertex kick of the frame's packets at the
 // picture's time, as port/platform/frame_interp.c moves it on the CPU (move_vertex: with the camera or its model, or
-// dropped; move_flat_vertex: a 2D item t of the way from the frame before's). The native GS's
-// shaders/gs_replay.comp, and the PC renderer's shaders/pcr_prim.vert (port/gs/pc/pcr_between.h).
-// Before it, the including shader declares `pic` (gs_replay.h's Picture), `kicks` (the frame's kicks as the GS queued
-// them, gsn.cpp's InterpKick: 16 words each) and `moves` (how each kick moves, gsn.h's GsnInterpMove: 16 words each).
+// dropped; move_flat_vertex: a 2D item t of the way from the frame before's). The PC renderer's
+// shaders/pcr_prim.vert (port/gs/pc/pcr_between.h) does it.
+// Before it, the including shader declares `pic` (the picture's header), `kicks` (the frame's kicks as the GS queued
+// them, the kick as the GIF front end queues it: 16 words each) and `moves` (how each kick moves, gsn.h's GsnInterpMove: 16 words each).
 // gsn.h's GSN_IM_*
 #define IM_3D 1u
 #define IM_FLAT 2u
@@ -121,8 +121,7 @@ Moved moved(uint k) {
 
 
 #ifdef GIF_KICK_NOW
-// (the PC renderer's pcr_prim.vert, which makes each corner's kicks at its vertex: gs_replay.comp's main, which writes
-// the same into its Resolved buffer, does it in place, so that the native GS's SPIR-V stays as it was)
+// (the PC renderer's pcr_prim.vert, which makes each corner's kicks at its vertex)
 // A kick at the picture's time: its place (12.4) and Z, the registers queued with it as the picture has them (RGBAQ,
 // ST, UV written in a stretch frame_interp.c changes: their owners), and whether it was moved as a vertex with a place
 // (it may be dropped: its triangles are not drawn then)

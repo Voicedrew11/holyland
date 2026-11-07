@@ -1,4 +1,4 @@
-// The PC renderer's drawing (docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS", step 2):
+// The PC renderer's drawing (docs/port/PC_RENDERER.md, step 2):
 // what the GS draws, without its VRAM. The GIF front end's events come in (pcr_gif.h); what they draw goes into
 // surfaces, GPU images of their own for each buffer the game draws into, found by its base page, width and
 // format, at the renderer's scale.
@@ -157,10 +157,10 @@ public:
     // The read-back's next qwords (zeroes past its end). Any thread, while the canvas's thread is idle (after
     // everything sent before was done: pcr_read_fifo waits for that).
     void read_fifo(void *dst, uint32_t qwords);
-    // The port's marks for the pictures between (frame_interp.c; the native GS's meaning): 0x7D's 0xF0 and 0xF1 a
+    // The port's marks for the pictures between (frame_interp.c's meaning): 0x7D's 0xF0 and 0xF1 a
     // picture between begins and ends (its uploads are not the frame's), 0xF2 the frame shown kept, 0xF4 to 0xF5
     // the draws that read that kept frame in place of its buffer; 0x7C the frame's k-th upload made again (its
-    // registers checked against those set now, as the native GS checks them)
+    // registers checked against those set now, as the GS checks them)
     void frame_mark(uint64_t value);
     void upload_again(const GsRegisterFile &file, uint64_t value);
 

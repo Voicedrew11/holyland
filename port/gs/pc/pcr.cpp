@@ -1,15 +1,16 @@
-// The PC renderer (pcr.h; docs/port/PC_RENDERER.md, "The PC renderer: `fast` without the native GS"), step 1:
-// the skeleton. Its own Vulkan device (through Granite, the layer paraLLEl-GS and the native GS run on) and its
+// The PC renderer (pcr.h; docs/port/PC_RENDERER.md), step 1:
+// the skeleton. Its own Vulkan device (through Granite, the layer paraLLEl-GS runs on) and its
 // own thread, "kf4-pc", which takes what gs.c sends in the order sent: GIF packets, vblanks and the pictures
 // between. At a vblank the display registers name the buffer shown; its picture is, for now, an image cleared to
-// black (KF4_PC_CLEAR=RRGGBB: that colour), handed out as the native GS hands out its pictures:
+// black (KF4_PC_CLEAR=RRGGBB: that colour), handed out in three ways:
 // - with GSN_WANT_IMAGE, copied into a slot of the scanout ring, which the presenter (port/platform/present_vk.cpp)
 //   takes on the game's thread (pcr_scanout_take_tag) and gives back once its command buffer is submitted
 //   (pcr_scanout_release). A slot is published (given a serial and the picture's tag) only after the commands that
 //   write it are on the queue, so the presenter, submitting to the same queue after it, sees the whole picture;
 // - with GSN_WANT_PIXELS (and for the presenter's pixels), read back into a PortGsFrame;
 // - with GSN_PRESENT, handed to the presenter's callbacks from this thread once it is there.
-// Nothing of the native GS's code is here or linked from here: gsn.h is included for its plain types only.
+// Nothing of the old native GS's code is here or linked from here: gsn.h (port/gs/shared) is included for its plain
+// types only.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,7 +106,7 @@ using Message = std::variant<GifPacket, VblankPicture, InterpFrame, InterpPictur
 
 // The queue from the senders (the DMA controller's thread, mostly) to the PC renderer's thread, and the waits on
 // it: for the thread to be idle, for a picture's reply, for room (the packets' bytes held), for a window's
-// pictures to be at most two vblanks behind (as the native GS holds its sender)
+// pictures to be at most two vblanks behind
 class Inbox {
 public:
     // Any thread. False once the PC renderer's thread has stopped (the message is dropped).
@@ -220,7 +221,7 @@ private:
 };
 
 // ---- The scanout ring --------------------------------------------------------------------------------
-// The pictures handed to the presenter: a ring of images, as the native GS keeps them (with --frame-rate above 60
+// The pictures handed to the presenter: a ring of images (with --frame-rate above 60
 // a vblank has several pictures, shown at their own times, so the newest must not write over those waiting). The
 // slot the presenter holds is passed over. Written by the PC renderer's thread, taken by the game's.
 constexpr int SCANOUT_SLOTS = 16;
@@ -347,7 +348,7 @@ uint32_t bits(uint64_t value, int first, int count) {
     return uint32_t((value >> first) & ((uint64_t(1) << count) - 1));
 }
 
-// The buffer the display shows (circuit 2, else 1; a field's lines in field mode): as gsn.h's gsn_display_rect
+// The buffer the display shows (circuit 2, else 1; a field's lines in field mode)
 bool display_rect(const uint64_t *privileged, GsnRect &rect) {
     uint64_t pmode = privileged[0], smode2 = privileged[2 * 2];
     int circuit = (pmode & 2) ? 2 : (pmode & 1) ? 1 : 0;
@@ -372,7 +373,7 @@ struct PictureSize {
     uint32_t width, height;
 };
 
-// The picture's size at a vblank, as the native GS's scanout makes it from the buffer shown at scale sx x sy: a
+// The picture's size at a vblank, from the buffer shown at scale sx x sy: a
 // field-mode picture woven with the one before (--deinterlace) or alone; a frame-mode picture whole (progressive),
 // or a field's lines (deinterlaced to the whole height, or alone). A picture between is whole or none.
 std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint32_t sx, uint32_t sy) {
@@ -400,12 +401,11 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
     return PictureSize{rect.w * sx, lines * sy};
 }
 
-// ---- The settings (gsn.h's): kept for the steps that draw ---------------------------------------------
+// ---- The settings: kept for the steps that draw -------------------------------------------------------
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
     std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, msaa{1}, cutout_aa{GSN_CUTOUT_AA_OFF}, mode_2d{GSN_2D_PS2},
-        colour{GSN_COLOUR_EXACT}, layer_z{GSN_LAYER_Z_PS2}, shine_exact{0}, native_draw{GSN_NATIVE_DRAW_NATIVE},
-        standalone{0}, hardware_sampler{0}, pc_world{0}, upscaler{0}, scene_map{-1};
+        colour{GSN_COLOUR_EXACT}, layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
 
@@ -434,7 +434,7 @@ public:
     }
 
     // (pcr_between.h) The frame for the pictures between. The front end's state now is where each of its walks
-    // starts (as the native GS's interp_capture), so that every walk of the frame makes the same calls.
+    // starts, so that every walk of the frame makes the same calls.
     //
     // A frame walked once (pcr_frame_walk.h): the frame's own walk, kept (the last stretch of packets between two
     // vblanks), is made its pictures' walk when the frame is its packets, and the rules make the stream's of it.
@@ -827,7 +827,7 @@ struct MadePicture {
     Reply *reply = nullptr;
 };
 
-// The pictures one thread makes (kf4-pc's, the pump's), as gsn_picture hands them out: GSN_WANT_IMAGE when the scanout
+// The pictures one thread makes (kf4-pc's, the pump's), as pcr_picture hands them out: GSN_WANT_IMAGE when the scanout
 // ring has it, GSN_WANT_PIXELS when frame has it, and with GSN_PRESENT to the presenter once it is there
 class PictureOut {
 public:
@@ -1289,7 +1289,7 @@ public:
         v.deinterlace = port_options.deinterlace != 0;
         v.tag = tag;
         bool extra = (want & GSN_EXTRA) != 0;
-        // As the native GS: a picture nobody waits for (none, or one this thread hands to the presenter) is
+        // A picture nobody waits for (none, or one this thread hands to the presenter) is
         // queued and the sender goes on; one wanted in frame, or an image the sender shows itself, is waited for
         bool queued = !(want & GSN_WANT_PIXELS) && (!(want & GSN_WANT_IMAGE) || (want & GSN_PRESENT));
         if (queued) {
@@ -1614,7 +1614,6 @@ extern "C" int pcr_open(void *shared_context) {
         return 1;
     }
     auto made = std::make_unique<Renderer>();
-    made->settings.upscaler.store(settings_before_open.upscaler.load());
     if (!made->open(present_asked)) {
         return 0;
     }
@@ -1730,7 +1729,7 @@ extern "C" void pcr_set_lod(int mode) {
 }
 
 extern "C" int pcr_set_aniso(int taps) {
-    // a power of two, at most 16 (gsn.h)
+    // a power of two, at most 16
     int l = 0;
     while (l < 4 && (2 << l) <= taps) {
         l++;
@@ -1766,42 +1765,12 @@ extern "C" void pcr_set_layer_z(int mode) {
     settings().layer_z.store(mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2);
 }
 
-extern "C" void pcr_set_shine_exact(int exact) {
-    settings().shine_exact.store(exact ? 1 : 0);
-}
-
 extern "C" int pcr_native_kinds(void) {
     return pcr::NativeDraws::kinds();
 }
 
 extern "C" void pcr_set_native_draw(int mode) {
     settings().native_draw.store(mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
-}
-
-extern "C" void pcr_set_standalone(int on) {
-    settings().standalone.store(on != 0);
-}
-
-extern "C" void pcr_set_hardware_sampler(int on) {
-    settings().hardware_sampler.store(on != 0);
-}
-
-extern "C" void pcr_set_pc_world(int on) {
-    settings().pc_world.store(on != 0);
-}
-
-extern "C" void pcr_set_scene(int x_scale, int y_scale, int samples) {
-    (void)x_scale; // (the scene has no scale of its own in the PC renderer: the picture is drawn at one)
-    (void)y_scale;
-    (void)samples;
-}
-
-extern "C" void pcr_set_upscaler(int mode) {
-    settings().upscaler.store(mode);
-}
-
-extern "C" void pcr_set_scene_map(int map) {
-    settings().scene_map.store(map);
 }
 
 extern "C" void pcr_pipeline_cache(const char *path) {
@@ -1822,8 +1791,8 @@ extern "C" void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t
 }
 
 // ---- Save states --------------------------------------------------------------------------------------
-// The PC renderer's state: the GS's 4 MB first (so that the native GS and paraLLEl-GS take it by its VRAM, as the PC
-// renderer takes theirs: gs.c's take_other_vram), then the GS's registers, the GIF's Q and the CLUT buffer's mirror
+// The PC renderer's state: the GS's 4 MB first (so that paraLLEl-GS takes it by its VRAM, as the PC renderer takes
+// theirs: gs.c's take_other_vram), then the GS's registers, the GIF's Q and the CLUT buffer's mirror
 namespace {
 constexpr size_t STATE_VRAM_BYTES = size_t(4) << 20;
 
@@ -1897,7 +1866,7 @@ extern "C" size_t pcr_table_state_size(void) {
 }
 
 extern "C" void pcr_table_state(PortStateIo *io, size_t size) {
-    port_state_bytes(io, nullptr, size); // (a table saved by the native GS's modern: passed over)
+    port_state_bytes(io, nullptr, size); // (a table saved by an older build's native GS (since removed): passed over)
 }
 
 extern "C" void pcr_print_stats(void) {
