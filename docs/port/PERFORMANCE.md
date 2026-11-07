@@ -84,25 +84,88 @@ submitting the intake every 128 batches as well (13% and 28% late against 3% and
 pump is 77% busy at 240; each picture between ends about 13 render passes, each with a full barrier
 (`Canvas::end_pass`).
 
+## Profiled 2026-11-07: which functions (the in-game profiler)
+
+At 4a2932e7, with the profiler (docs/port/PROFILING.md): `tools/sampler/profile.py --map 9 --hz 240 --seconds 20
+-- --renderer pc --frame-rate 240` (the owner's picture settings, `KF4_INTERP_CUT=0`), and a second run with
+`--gpu-detail` for the GPU by shader state. Shares below are of that thread's CPU time; "self" is the function's own
+code, "incl." with what it calls. Read again with `stacks.py ~/.cache/kf4p9/samples.txt out/linux-clang/kf4`.
+
+**Where 009 stands.** At 240 it holds the cap (239.6 a second). Uncapped (`--hz 500`) it makes 238-250 a second and
+the game falls behind (56-58 vblanks a second): about 240 is the ceiling today. CPU in 20 s of play: the pump
+(`kf4-pc-pump`) 16.0 s (80% of a core), `kf4-pc` 12.6 s (63%), `kf4-dma` 4.0 s, the game's thread 3.7 s,
+`kf4-between` 2.0 s. The GPU: 3.16 ms a picture, three quarters of the 4.17 ms a picture has at 240.
+
+**The pump is the busiest thread now**, and almost all of it is drawing the kept batches again (`draw_again_alone`
+97%, `draw_batch` 76%). Its own code is small; what it pays for is per batch:
+
+| self | what | from |
+|---|---|---|
+| 13.4% | `release_reference` (Granite's atomic reference counts) | `~BufferBlockAllocation` 7.3% (each batch's vertex and constant blocks let go), `flush_batch`'s `reset` 5.2% |
+| 17.5% incl. | `radv_CmdDraw` and the state it emits | the driver |
+| 10.0% incl. | `TextureStore::drawn` marking pages (`changed`'s bitset 6.1%) | every batch drawn again marks its pages again |
+| 8.7% | the kernel submit (`ioctl` in `ac_drm_cs_submit_raw2`) | one queue submit a picture between, since every pc submit is flushed at once (2026-11-06) |
+| 6.9% | `memcmp` in Granite's `bind_pipeline` | a pipeline change at most batches: native 280 alternates between two blend states about 900 times a picture |
+| 6.2% incl. | `radv_UpdateDescriptorSetWithTemplate` | a descriptor set a batch |
+
+**`kf4-pc`'s intake:**
+
+| self / incl. | what | from |
+|---|---|---|
+| 14.7% incl. | copying `std::variant` kept steps (`_Copy_ctor_base` in `construct_at`) | `Kept::steps` is a vector of `KeptStep`, a variant as large as its largest, `Batch` (a 1 KB CLUT inline): every step, a 16-byte `KeptClutLoad` too, takes a `Batch`'s room, and the vector's growth copies them (the move is not used) |
+| 11.8% | `memcpy` | the kept walk's copies (`as_picture_walk`, the variant above), `image_data`'s inserts, `shared_ptr` byte copies |
+| about 14% | exact VU float maths (`vu_float_round`, `_add`, `_value`) | the CPU half of native 280 (`clipped`, `vu_add`: `draw_280` is 38% incl.) |
+| 5.9% incl. | `hash_bytes` (`mix`) | `TextureStore::keep` hashing uploads |
+
+**The GPU at 009, by shader state** (detail on; the kinds' total agrees within 1%):
+
+| ms a picture | runs a picture | state |
+|---|---|---|
+| 1.075 | 438 | native 280, sampled rgb, fog, blend (Cs-Cd)*As+Cd, Z >= write: the map |
+| 0.351 | 5 | 2D untextured, blend (Cs-Cd)*As+Cd: a few large blended rectangles (not looked at yet) |
+| 0.221 + 0.206 | 59 + 451 | native 280, sampled rgba, the two other blends: the state the map alternates with |
+| 0.210 | 3 | 2D untextured, Z always write: probably clears drawn as rectangles (not looked at yet) |
+| 0.300 | | native 700 (two states) |
+
 ## The list, best first
 
-0. **Done 2026-11-06** (above): the pictures between of every second vblank, and the pump's pictures on the GPU's
-   queue when handed out.
+0. **Done 2026-11-06**: the pictures between of every second vblank, and the pump's pictures on the GPU's queue when
+   handed out. **Done 2026-11-07**: the in-game profiler (docs/port/PROFILING.md), which the items below come from.
+   The pump (the old item 1) is done too (305b216a).
 
-1. **pc's work on two threads.** Done (305b216a, the pump; PC_RENDERER.md "The pictures between on a thread of
-   their own").
-2. **Fewer draw calls and descriptor writes.** About 23% of pc's thread is Granite's per-draw cost: merged draws
-   (item 4 of the handoff), bindless textures for draws across texture and CLUT changes. Since 2026-11-06 this is
-   what makes pictures late (kf4-pc's intake, 12-16 ms a frame after its last packet), and the pump's 3.2 ms of CPU
-   a picture between is the same per-draw cost again. Then the GPU (85% busy at 240): the full barrier after every
-   render pass.
-3. **Uploads not sent and checked again.** The pictures between ask again for uploads the store already holds;
-   each is hashed and compared again. Refer to the kept chunk instead. CLUT loads are another 11% (a key vector and
-   512 mirror writes each).
+1. **The pump's cost a batch** (it is the busiest thread: 80% at 240, the first to stop more pictures):
+   - **Reference counts.** 13% of the pump is Granite's atomic `release_reference`: each batch's vertex and
+     constant blocks, and its `flush_batch` handles, let go one at a time. Keep a picture's blocks in one allocation
+     released at the end of the picture, and let `flush_batch` keep its handles instead of resetting them per batch.
+   - **Pages marked again.** 10% is `TextureStore::drawn` marking each batch's pages, which the frame's walk marked
+     already. Mark a kept walk's pages once (its union, kept with the walk), or not at all when nothing in the
+     pictures between reads the store.
+   - **Pipeline changes.** 7% is Granite comparing the whole pipeline state at each bind, and native 280 changes it
+     about 900 times a picture between two blend states. Make blend dynamic for these batches (or key the pipeline so
+     the two share one) so a bind is skipped; this is also most of `radv_CmdDraw`'s emitted state (17.5%).
+   - **One submit a picture between** (9%, the kernel's submit): the price of the 2026-11-06 flush. Measure the
+     pictures' lateness with two pictures between a submit before trading any back.
+   - Then the old item 2: **merged draws and bindless textures** for the rest of the per-draw and descriptor cost
+     (descriptor writes 6%, the draws themselves).
+2. **`kf4-pc`'s intake** (63%; its lateness made pictures late on 2026-11-06):
+   - **Kept steps out of the variant.** Keep `Batch` out of line (a vector of batches, or a `unique_ptr`) so a
+     `KeptStep` is small; give the kept types non-throwing moves so the vector's growth moves; reserve the frame's
+     steps from the last frame's count. About 15% of `kf4-pc` and part of its 12% `memcpy`.
+   - **Uploads not sent and checked again** (the old item 3): `keep`'s hashing is 6%; the pictures between ask again
+     for uploads the store holds. CLUT loads: `load_clut` and `clut_colours` 3-5%.
+   - **The VU maths for native 280** (about 14%): exact EE float rounding (`vu_float_round`) for each vertex in
+     `clipped`. A wider exact path (four lanes at once) or skipping the exact rounding where the result cannot
+     differ.
+3. **The GPU** (3.16 ms a picture at 009: room for about 315 a second, less with the owner's MSAA 2 and colour high):
+   - Look at the **2D untextured blended rectangles** (0.35 ms in about 5 a picture) and the **2D Z-always
+     rectangles** (0.21 ms in 3: if they are clears, `vkCmdClearAttachments` or a pass's load op).
+   - The native 280 map state (1.08 ms): the full barrier after every render pass (`Canvas::end_pass`), then the
+     shader itself (RGP: `KF4_GPU_LABELS=1`, PROFILING.md).
 4. **`fast` switched to `pc` (step 7)**, with the settings pc lacks (MSAA 2, `--native-colour high` and the
-   others): the owner's MSAA 2 and colour high raise pc's GPU time from today's 2.7 ms a picture.
-5. **A release build.** The presets are `RelWithDebInfo` (-O2, no LTO). Try LTO, then PGO.
-6. **The game's thread lighter** (for slower CPUs; not a limit here):
+   others): they raise pc's GPU time from today's 3.2 ms a picture at 009, so item 3 comes first.
+5. **A release build.** The presets are `RelWithDebInfo` (-O2, no LTO, and since 2026-11-07 frame pointers: about
+   1.8% at 009 uncapped, `-DKF4_FRAME_POINTERS=OFF` for a release). Try LTO, then PGO.
+6. **The game's thread lighter** (for slower CPUs; 19% of a core here, not a limit):
    - About half its work is exact VU0 float maths, mostly the CPU's near cut of map records
      (`ModelScreen_CutClippedTriangles` → `Vu0_ProjectToScreen3`), still run when a record is drawn natively.
    - About 4.8 MB of meshes hashed each game frame (`rd_mesh_from_block`; smooth play step 5, item 2): hash only
@@ -110,6 +173,10 @@ pump is 77% busy at 240; each picture between ends about 13 render passes, each 
 7. **Small ones.**
    - `KF4_HITCH_MS` times from one vblank's start to the next, so it counts the game's own work: every other vblank
      shows about 22 ms at a threshold of 20. Time how late each vblank is against when it was due.
-   - The pictures-between thread (`show_until`, video.c) spins up to 0.5 ms before each picture.
+   - The pictures-between thread (`kf4-between`, `show_until`, video.c) spins up to 0.5 ms before each picture: 10%
+     of a core at 240.
    - Door and area loads from a disc not in the page cache: not measured (smooth play step 5, item 1).
    - Not measured: Windows, NVIDIA, other GPUs.
+
+Measure each with `pace_test.py` (uncapped, `--hz 500`, alternated, 3+ runs: runs differ by about 5 a second) and
+the profiler's share of the thread it targets.
