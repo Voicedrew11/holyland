@@ -74,6 +74,19 @@ if(KF4_SANITIZE)
     message(STATUS "Sanitizers: ${KF4_SANITIZE}")
 endif()
 
+# ---- Frame pointers (docs/port/PROFILING.md) ------------------------------------------------------
+# The function profiler (port/include/port/sampler.h) walks stacks by frame pointers: kept in every function,
+# leaves too, for about 1% of the speed. On by default on Linux, where the profiler is.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(KF4_FRAME_POINTERS_DEFAULT ON)
+else()
+    set(KF4_FRAME_POINTERS_DEFAULT OFF)
+endif()
+option(KF4_FRAME_POINTERS "Keep frame pointers everywhere, for the function profiler" ${KF4_FRAME_POINTERS_DEFAULT})
+if(KF4_FRAME_POINTERS AND NOT MSVC)
+    add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
+endif()
+
 # ---- The PS2 side ---------------------------------------------------------------------------------
 add_library(kf4_port STATIC
     port/platform/memory.c
@@ -114,6 +127,7 @@ add_library(kf4_port STATIC
     port/platform/automap.c
     port/platform/lz4_block.c
     port/debug/debug.c
+    port/platform/profile_run.c
     port/debug/gs_capture.c
     port/overlay/settings.c
     third_party/cjson/cJSON.c
@@ -153,6 +167,22 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 add_library(kf4_profile STATIC port/platform/profile.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
+# the function profiler (port/include/port/sampler.h): a library of its own, for its test; with liblzma it names
+# the functions of the system's stripped libraries too (their MiniDebugInfo)
+add_library(kf4_sampler STATIC port/platform/sampler.c port/platform/sample_table.c port/platform/elf_symbols.c)
+target_include_directories(kf4_sampler PUBLIC port/include)
+target_link_libraries(kf4_sampler PUBLIC Threads::Threads)
+if(NOT WIN32)
+    target_compile_options(kf4_sampler PRIVATE -Wall -Wextra -Wshadow)
+    find_package(LibLZMA QUIET)
+    if(LibLZMA_FOUND)
+        target_compile_definitions(kf4_sampler PRIVATE KF4_HAVE_LZMA)
+        target_link_libraries(kf4_sampler PRIVATE LibLZMA::LibLZMA)
+    else()
+        message(STATUS "liblzma not found: the profiler names only the exported functions of stripped libraries")
+    endif()
+endif()
+target_link_libraries(kf4_port PUBLIC kf4_sampler)
 target_compile_options(kf4_port PRIVATE $<$<COMPILE_LANGUAGE:C>:${KF4_GAME_FLAGS}>)
 # VU1 rounds toward zero, which it sets with fesetround: the compiler must not fold float maths
 # across that
@@ -215,7 +245,8 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
     target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp
-                   port/overlay/profiler.cpp)
+                   port/overlay/profiler.cpp
+                   port/overlay/profile_run_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
@@ -506,7 +537,7 @@ if(TARGET kf4_gs)
     endif()
 endif()
 
-# kf4-sampler, the sampling profiler (tools/sampler, docs/port/RENDERER.md "Profiling"): every thread of a
+# kf4-sampler, the sampling profiler on Windows (tools/sampler, docs/port/PROFILING.md): every thread of a
 # running kf4.exe, its stacks unwound from the program's .pdata
 if(WIN32)
     add_executable(kf4-sampler tools/sampler/sampler.c)
@@ -518,6 +549,17 @@ add_executable(profile_test tests/profile_test.c)
 target_link_libraries(profile_test PRIVATE kf4_profile)
 if(KF4_TESTS)
     add_test(NAME profile COMMAND profile_test)
+endif()
+
+# The function profiler: its counts, the ELF symbols that name them, and a live run on a busy thread
+# (port/platform/sample_table.c, elf_symbols.c, sampler.c)
+add_executable(sampler_test tests/sampler_test.c)
+target_link_libraries(sampler_test PRIVATE kf4_sampler)
+if(NOT WIN32)
+    target_compile_options(sampler_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME sampler COMMAND sampler_test)
 endif()
 
 # The screen's refresh clock: its period and phase from the times pictures were seen (port/platform/refresh_clock.c)

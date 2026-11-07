@@ -34,7 +34,11 @@ struct Backend {
     uint64_t gpu_last_serial = 0;
     // (Shift+P's profiler) the GPU's intervals not read yet: Granite fills in their timestamps at the frame context
     // that finds their work done (on this thread); and this thread's waits for the GPU there
-    std::deque<std::pair<QueryPoolHandle, QueryPoolHandle>> profile_intervals;
+    struct ProfileInterval {
+        QueryPoolHandle start, end;
+        int kind;
+    };
+    std::deque<ProfileInterval> profile_intervals;
     uint64_t profile_wait_ns = 0;
     uint64_t binds_at_record = 0;
     // (--stats, added to gsn_stats by backend_drain)
@@ -125,12 +129,21 @@ void profile_gpu_intervals() {
     double period_ns = double(gs->device->get_gpu_properties().limits.timestampPeriod);
     while (!b.profile_intervals.empty()) {
         const auto &i = b.profile_intervals.front();
-        if (!i.first->is_signalled() || !i.second->is_signalled()) {
+        if (!i.start->is_signalled() || !i.end->is_signalled()) {
             break;
         }
-        uint64_t t0 = i.first->get_timestamp_ticks(), t1 = i.second->get_timestamp_ticks();
+        uint64_t t0 = i.start->get_timestamp_ticks(), t1 = i.end->get_timestamp_ticks();
         if (t1 > t0) {
-            port_profile_add(PROFILE_GPU, uint64_t(double(t1 - t0) * period_ns));
+            uint64_t ns = uint64_t(double(t1 - t0) * period_ns);
+            if (port_profile_on()) {
+                port_profile_add(PROFILE_GPU, ns);
+            }
+            if (port_profile_gpu_recording()) {
+                // (a profile run's table: by kind, "native GS <kind>")
+                char name[PROFILE_GPU_NAME];
+                snprintf(name, sizeof(name), "native GS %s", gpu_kinds[i.kind]);
+                port_profile_gpu_add((uint64_t(3) << 56) | uint64_t(i.kind), name, PROFILE_GPU_KIND, ns, 1);
+            }
         }
         b.profile_intervals.pop_front();
     }
@@ -148,8 +161,8 @@ void backend_timestamp(int kind, bool granite) {
             gs->device->register_time_interval("gsn", b.gpu_last, ts, std::string("gsn ") + gpu_kinds[kind]);
             gpu_marks[kind]++;
         }
-        if (port_profile_on()) {
-            b.profile_intervals.emplace_back(b.gpu_last, ts);
+        if (port_profile_on() || port_profile_gpu_recording()) {
+            b.profile_intervals.push_back({b.gpu_last, ts, kind});
         }
     }
     b.gpu_last = ts;

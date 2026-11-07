@@ -70,6 +70,38 @@ void port_profile_hitch(const char *text);
 /* The hitches kept, newest first, into texts (at most PROFILE_HITCHES); their count */
 int port_profile_hitches(char texts[][PROFILE_HITCH_TEXT], int most);
 
+/* The GPU's time by what it was doing, while a profile run records (port/include/port/profile_run.h): rows by
+   kind of work (the renderers' timestamp kinds) and, with detail on, by shader state (the PC renderer's: the
+   GPU's "functions"). The renderers add an interval to a row as its timestamps come in. */
+#define PROFILE_GPU_ROWS 512
+#define PROFILE_GPU_NAME 112
+typedef enum {
+    PROFILE_GPU_KIND,   /* a kind of work: these rows add up to the GPU's time */
+    PROFILE_GPU_SHADER, /* a shader state, within its kind: these too, of the renderers that time them */
+    PROFILE_GPU_LEVELS
+} ProfileGpuLevel;
+typedef struct {
+    char name[PROFILE_GPU_NAME];
+    ProfileGpuLevel level;
+    uint64_t ns;
+    uint64_t intervals;
+} ProfileGpuRow;
+/* Recording: the renderers time their GPU work and add it here */
+int port_profile_gpu_recording(void);
+void port_profile_gpu_set_recording(int on);
+/* Detail: the PC renderer also times each change of shader state (a timestamp at each: a little GPU time) */
+int port_profile_gpu_detail(void);
+void port_profile_gpu_set_detail(int on);
+/* Every row let go, the pictures counted from now */
+void port_profile_gpu_reset(void);
+/* ns of the GPU's time in `intervals` timed intervals to the row of key (the caller's, one for each name: the first
+   add names the row). A table full keeps the time in a row "(others)". */
+void port_profile_gpu_add(uint64_t key, const char *name, ProfileGpuLevel level, uint64_t ns, uint64_t intervals);
+/* The rows, most time first, into rows (at most most); their count */
+int port_profile_gpu_rows(ProfileGpuRow *rows, int most);
+/* The pictures drawn since the reset (port_profile_picture's) */
+uint64_t port_profile_gpu_pictures(void);
+
 /* What bounds the pictures a second */
 typedef enum {
     PROFILE_BOUND_NONE,    /* keeping up with the screen */

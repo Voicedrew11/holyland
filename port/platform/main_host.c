@@ -191,6 +191,11 @@
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
+       --profile-at VBLANK:SECONDS:FILE
+                         record a profile run (docs/port/PROFILING.md): every thread's functions by CPU
+                         time (Linux) and the GPU's time by kind of work, from VBLANK for SECONDS of the
+                         game's vblanks, written to FILE for tools/sampler/stacks.py; KF4_GPU_DETAIL=1
+                         also times the PC renderer's draws by shader state
        --flash-recorder off|on|SECONDS[,HEIGHT]
                          the flash recorder (F8, docs/port/README.md "Debugging"): the last SECONDS of
                          presented pictures (2 for on, the default) kept on the GPU at HEIGHT rows (540),
@@ -212,6 +217,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/profile_run.h"
 #include "port/settings.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
@@ -259,7 +265,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast|pc] [--renderer-shown gs|native|heatmap]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
@@ -759,6 +765,10 @@ static void parse_options(int argc, char **argv) {
             port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
+        } else if (strcmp(option, "--profile-at") == 0) {
+            if (!port_profile_run_at(value)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(option, "--flash-recorder") == 0) {
             if (!parse_flash_recorder(value)) {
                 usage(argv[0]);

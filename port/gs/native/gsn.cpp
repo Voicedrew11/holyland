@@ -1648,7 +1648,7 @@ void gpu_mark(int kind) {
         gpu_time = getenv("KF4_GSN_GPU_TIME") ? std::max(atoi(getenv("KF4_GSN_GPU_TIME")), 0) : 0;
     }
     // (the profiler, Shift+P, while open: the same marks, for the GPU's time in all)
-    if ((!gpu_time && !port_profile_on()) || !cmd().begun()) {
+    if ((!gpu_time && !port_profile_on() && !port_profile_gpu_recording()) || !cmd().begun()) {
         return;
     }
     if (gpu_time >= 2 && recording_ops->on) {

@@ -636,6 +636,8 @@ void port_pad_poll(void);
 double port_wall_seconds(void);
 /* Sleeps for about the given seconds. */
 void port_sleep(double seconds);
+/* The calling thread's name, as the profiler and debuggers show it (at most 15 characters; Linux only) */
+void port_name_thread(const char *name);
 /* The host's fastest monotonic counter (for --stats), and its ticks a second. */
 uint64_t port_ticks(void);
 double port_ticks_per_second(void);

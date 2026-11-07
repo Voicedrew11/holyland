@@ -1,5 +1,5 @@
 /* kf4-sampler: a sampling profiler for a running kf4.exe (Windows only; tools/sampler/profile.py runs the game with
-   it, docs/port/RENDERER.md "Profiling").
+   it, docs/port/PROFILING.md).
 
      kf4-sampler PID SECONDS INTERVAL_US OUT [DELAY_S]
 

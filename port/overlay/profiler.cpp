@@ -2,7 +2,8 @@
 // adds to while it is open, and what the last two readings say: the pictures shown against those the screen could
 // show, what bounds them, each thread's busy share of a core, the GPU's time a picture against its budget, the
 // pictures a second over the last half minute, and the last stalls with what they did. "Copy report" (with the
-// settings open, F1: the mouse is then the overlay's) puts the same as text on the clipboard.
+// settings open, F1: the mouse is then the overlay's) puts the same as text on the clipboard. Below, a profile run's
+// functions and GPU times (profile_run_view.cpp).
 //
 // profiler_key and profiler_step run on the game's thread (the window's events, the vblank); profiler_draw on the
 // thread that shows the picture. What step works out is handed to draw under a lock.
@@ -14,6 +15,7 @@
 
 #include "imgui.h"
 
+#include "profile_run_view.h"
 #include "profiler.h"
 
 extern "C" {
@@ -178,6 +180,7 @@ void profiler_step() {
     double target = port_frame_rate_hz() > 60 ? double(port_frame_rate_hz()) : 60.0;
     ProfileReport r = port_profile_report(&last, &now, shown_rate, target);
     last = now;
+    profile_run_view_step();
     std::lock_guard<std::mutex> hold(lock);
     report = r;
     have_report = true;
@@ -265,6 +268,8 @@ void profiler_draw(bool overlay_open) {
     for (int i = 0; i < count; i++) {
         ImGui::BulletText("%s", hitches[i]);
     }
+    ImGui::Separator();
+    profile_run_view_draw(overlay_open);
     ImGui::Separator();
     if (overlay_open) {
         if (ImGui::Button("Copy report")) {

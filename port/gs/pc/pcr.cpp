@@ -44,6 +44,7 @@
 
 extern "C" {
 #include "port/platform.h"
+#include "port/profile.h"
 #include "port/render.h"
 #include "pcr.h"
 }
@@ -873,6 +874,7 @@ public:
             return m;
         }
         times.picture();
+        port_profile_picture(); // (a picture drawn: the profiler's GPU time a picture divides by these)
         if (want & GSN_WANT_IMAGE) {
             m.slot = scanout_.claim(device_, picture_->get_width(), picture_->get_height());
             if (m.slot >= 0) {

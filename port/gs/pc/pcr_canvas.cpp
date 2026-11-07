@@ -24,6 +24,7 @@
 
 extern "C" {
 #include "gsn_vram.h"
+#include "port/profile.h"
 }
 
 using namespace Vulkan;
@@ -612,6 +613,34 @@ private:
     CommandBuffer &cmd(GpuWork work) {
         times_.begin(cmd(), work);
         return *cmd_;
+    }
+
+    // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
+    uint32_t batch_state_key(bool zte, bool zwrite, uint32_t ztst, bool date, bool date_stencil, int passes) const {
+        if (!port_profile_gpu_detail()) {
+            return 0;
+        }
+        const DrawState &s = batch_.state;
+        const BoundTexture &bt = batch_.texture;
+        ShaderState st = {};
+        st.program = !batch_.native                              ? 0
+                     : batch_.program == NativeProgram::vu1_280 ? 2
+                     : batch_.program == NativeProgram::vu1_700 ? 3
+                                                                : 1;
+        if (bits(s.prim, 4, 1) && bt.ok) {
+            st.texture = bt.src == SRC_SAMPLED ? 3 : bt.src == SRC_SURFACE ? 2 : 1;
+            st.tfx = uint8_t(bits(s.tex0, 35, 2));
+            st.alpha_channel = bits(s.tex0, 34, 1) != 0;
+        }
+        st.fog = bits(s.prim, 5, 1) != 0;
+        st.blending = bits(s.prim, 6, 1) != 0 || batch_.shader_blend;
+        st.blend = uint8_t(bits(s.alpha, 0, 8));
+        st.shader_blend = batch_.shader_blend;
+        st.date = !date ? 0 : date_stencil ? 1 : 2;
+        st.depth = zte ? uint8_t(ztst) : 0;
+        st.depth_write = zwrite;
+        st.passes = uint8_t(passes);
+        return shader_state_key(st);
     }
 
     GpuWork batch_work() const {
@@ -2027,7 +2056,7 @@ private:
                 dest_offset = rect.offset;
             }
         }
-        cmd(batch_work());
+        times_.begin_draw(cmd(), batch_work(), batch_state_key(zte, zwrite, ztst, date, date_stencil, pass_count));
         begin_pass(*colour, depth, date_stencil ? PassReads::target : PassReads::nothing);
         CommandBuffer &c = cmd();
         VkViewport vp = {0, 0, float(colour->image->get_width()), float(colour->image->get_height()), 0, 1};

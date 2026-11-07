@@ -5,9 +5,15 @@
 //
 // Intervals never span two command buffers, so the time between submits (the GPU idle) is not counted.
 //
+// While a profile run records (port/include/port/profile_run.h) each interval is also added to the profiler's GPU
+// table (port_profile_gpu_add): by kind, and with its detail on (port_profile_gpu_detail), by shader state too, a
+// timestamp at each change of state. KF4_GPU_LABELS=1 also marks each interval in the command buffer as a debug label
+// (VK_EXT_debug_utils) named for its kind, for Radeon GPU Profiler, RenderDoc or Nsight.
+//
 // One thread each: the PC renderer's ("kf4-pc") and the pump's ("kf4-pc-pump") have one each, put together for --stats.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -34,6 +40,26 @@ enum class GpuWork : uint8_t {
     count,
 };
 
+// A draw's shader state, as the GPU's time is told by it (port_profile_gpu_detail): what changes the work its shader
+// does. 0 is none (work that is not a draw).
+struct ShaderState {
+    uint8_t program;      // 0: 2D; 1, 2, 3: native 000, 280, 700
+    uint8_t texture;      // 0: none; 1: texels; 2: a surface's copy; 3: sampled (filtered) texture
+    uint8_t tfx;          // the texture function (modulate, decal, highlight, highlight2)
+    bool alpha_channel;   // TCC
+    bool fog;
+    uint8_t blend;        // ALPHA's A, B, C, D (2 bits each), when blending
+    bool blending;
+    bool shader_blend;    // the GS's blend done in the shader, from a copy
+    uint8_t date;         // 0: none; 1: by the stencil; 2: from a copy
+    uint8_t depth;        // 0: no Z test; else ZTST (1 always, 2 greater or equal, 3 greater)
+    bool depth_write;
+    uint8_t passes;       // the alpha test's passes (1 or 2)
+};
+// The state in 32 bits (never 0), and back as text for the profiler's row
+uint32_t shader_state_key(const ShaderState &state);
+void shader_state_text(uint32_t key, char *text, size_t size);
+
 class GpuTimes {
 public:
     explicit GpuTimes(Vulkan::Device &device);
@@ -44,6 +70,9 @@ public:
     // What cmd records from here on is work's, until the next begin or end (a begin in another command buffer ends
     // the open one's interval first)
     void begin(Vulkan::CommandBuffer &cmd, GpuWork work);
+    // The same for a draw of shader state key (shader_state_key): with the profiler's detail on, a change of state
+    // begins an interval of its own
+    void begin_draw(Vulkan::CommandBuffer &cmd, GpuWork work, uint32_t state_key);
     // cmd about to be submitted: its open interval closed (no-op if cmd has none). Every submit is preceded by it.
     void end(Vulkan::CommandBuffer &cmd);
 

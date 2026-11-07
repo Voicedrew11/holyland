@@ -1078,6 +1078,7 @@ static DWORD WINAPI between_main(LPVOID unused) {
 static void *between_main(void *unused) {
 #endif
     (void)unused;
+    port_name_thread("kf4-between");
     while (!between_stop) {
         if (between_on() && thread_shows()) {
             show_until(port_wall_seconds() + 0.01, 1);

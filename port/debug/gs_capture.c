@@ -40,8 +40,6 @@ int port_gs_capture_recording;  /* the controller's thread only */
 volatile int port_gs_capture_armed;
 
 void port_debug_set_message(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-const char *port_debug_capture_path(const char *stem, uint64_t vblank, const char *extension, char *out,
-                                    size_t size);
 int port_debug_at_pending(void);
 void port_debug_at_vblank(uint64_t vblank);
 

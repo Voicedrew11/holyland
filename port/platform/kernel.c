@@ -37,6 +37,7 @@
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/profile.h"
+#include "port/profile_run.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
@@ -372,6 +373,7 @@ static void vblank_start(void) {
     hitch_vblank();
     profile_vblank();
     vblank_count++;
+    port_profile_run_vblank(vblank_count);
     /* the GS scans out the field the display registers say, alongside the game. It is the field
        CSR's FIELD names until now: the GS turns FIELD over a few lines into the vblank, after the
        picture is handed on (as PCSX2 has it). Reading FIELD after the turn shows each of a

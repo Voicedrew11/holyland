@@ -37,6 +37,9 @@ void port_debug_write_audio_tail(void);
 /* The captures folder, and what the last request did (for the overlay and stderr) */
 const char *port_debug_folder(void);
 const char *port_debug_message(void);
+/* <captures>/<stem>_<vblank>_<local time>.<extension> into out (size bytes), the folders made if missing: out */
+const char *port_debug_capture_path(const char *stem, uint64_t vblank, const char *extension, char *out,
+                                    size_t size);
 /* 1 while a GS capture is asked for or being recorded */
 int port_debug_gs_capture_busy(void);
 
