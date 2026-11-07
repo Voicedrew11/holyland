@@ -11,7 +11,10 @@ whole stands.
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
 from item 7 below: the PC renderer keeps but does not yet apply MSAA, anisotropy, texture detail (LOD), colour
-precision, cut-out AA, the 2D mode and layer Z; the overlay and settings.json still offer them. Pictures are now
+precision, cut-out AA, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
+command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug, "Renderer (for
+testing)", lists them). The settings that change live go through `port/overlay/live_settings.c`, which
+`KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 

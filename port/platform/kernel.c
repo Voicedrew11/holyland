@@ -33,6 +33,7 @@
 
 #include "eekernel.h"
 #include "port/host.h"
+#include "port/live_settings.h"
 #include "port/audio.h"
 #include "port/overlay.h"
 #include "port/platform.h"
@@ -417,6 +418,7 @@ static void vblank_start(void) {
     mode = port_host_float_begin();
     port_pad_poll();
     port_overlay_vblank();
+    port_live_vblank(); /* KF4_SET_AT's test changes */
     port_video_present();
     port_host_float_end(mode);
     port_teleport_vblank();

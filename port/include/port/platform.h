@@ -390,6 +390,8 @@ void port_gs_set_native_colour(int mode);
 void port_gs_set_native_layer_z(int mode);
 /* --native-draw (port_options.native_draw), from the next frame */
 void port_gs_set_native_draw(int kinds);
+/* The --native-draw kinds (PORT_ND_*) the renderer draws: the PC renderer's, 0 under paraLLEl-GS */
+int port_gs_native_kinds(void);
 /* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
    PC renderer only when it moves them in the pictures between itself (port_interp_on_gpu; docs/port/PC_RENDERER.md,
    step 5) or there are none (--frame-rate 30); the game's packets otherwise */

@@ -1521,7 +1521,11 @@ private:
             // (Granite frees what a thread lets go of, the pump's each picture's blocks and command buffers too, only
             // as its frame contexts come round, and only kf4-pc moves them on: at a rate where the pump made most
             // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
-            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches.)
+            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches, and
+            // for kf4-pc's own: submitted first, or kf4-pc waits for itself for good.)
+            if (pcr::Canvas *canvas = intake_.canvas()) {
+                canvas->submit();
+            }
             device_->next_frame_context();
             return;
         }

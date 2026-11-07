@@ -841,6 +841,15 @@ void port_gs_set_native_draw(int kinds) {
 #endif
 }
 
+int port_gs_native_kinds(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_pc) {
+        return pcr_native_kinds();
+    }
+#endif
+    return 0;
+}
+
 void port_gs_set_native_layer_z(int mode) {
     port_options.native_layer_z = mode;
 #ifdef KF4_HAVE_PARALLEL_GS

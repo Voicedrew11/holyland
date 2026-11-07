@@ -130,6 +130,7 @@ add_library(kf4_port STATIC
     port/platform/profile_run.c
     port/debug/gs_capture.c
     port/overlay/settings.c
+    port/overlay/live_settings.c
     third_party/cjson/cJSON.c
     port/sdk/sif.c
     port/sdk/stubs.c

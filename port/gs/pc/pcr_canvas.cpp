@@ -501,11 +501,14 @@ public:
             uploads_frame_.swap(uploads_now_);
             uploads_now_.clear();
         }
+        // (the surfaces made again at a new scale before the submit: next_frame_context waits for every command buffer
+        // asked for to be submitted, this thread's too, so one left open after it hangs kf4-pc at its next; 2026-11-07,
+        // native widescreen switched off with the pump drawing)
+        apply_scale();
         submit();
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
         device_.next_frame_context();
-        apply_scale();
         frame_++;
         evict_textures();
     }
