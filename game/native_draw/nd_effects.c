@@ -9,11 +9,11 @@
    - VU1's fixed block: the two light matrices, the fog, FOGCOL, the point lights (none: Effect_DrawAll sets
      hit_count 0) and, with flag 0x800, VU1 0x64-0x66: the model's colour (colour_red ... alpha), 0x65.w the
      record id whose TEX0 is to be replaced (found_record_id) and 0x66 the TEX0 that replaces it
-     (found_record: the flipbook's frame, Effect_FindModelRecord). Queued without the parts outside compare
-     mode (native_draw.c's queue_fixed_block), so VU1's memory is left as the PS2 path leaves it;
+     (found_record: the flipbook's frame, Effect_FindModelRecord). Queued without the parts (native_draw.c's
+     queue_fixed_block), so VU1's memory is left as the PS2 path leaves it;
    - per part not switched off (bit40): the part's matrix (model x part) and its data blocks. The blocks
      start VU1's program 0x700 (Model_SetVu1Program's MSCALF in each part's first block): a draw of program
-     0x700 (port/gs/native/gsn_nd_700.inc, shaders/nd_700.vert) carrying 0x64-0x66 in RdDraw.colour. A part
+     0x700 (port/gs/pc/shaders/pcr_nd700.vert) carrying 0x64-0x66 in RdDraw.colour. A part
      whose blocks are program 0x000's is drawn as such; one of any other, or a block the core cannot parse,
      gives the whole model back to the PS2 path (counted: --stats' "models declined").
    The draws' identity: kind RD_KIND_EFFECT, the effect's model (its EE word: an effect's slot is reserved
@@ -36,19 +36,13 @@ void Packet_AddGsRegister(int reg, s64 value);
 void Packet_EndGsRegisters(void);
 void Matrix_Multiply(void *dst, void *matrix, void *src);
 void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
-void Model_DrawPosed(ModelInstance *model);
 
 /* native_draw.c's helpers (its "For the other adapter files") */
 u32 NativeDraw_CurrentCamera(void);
-void NativeDraw_QueueMark(u32 command, u64 bits);
 void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, const void *matrix_b);
 
 #define ND_MAX_MESHES 2048 /* (ModelPart.data_count is 11 bits; as native_draw.c) */
 #define ND_MODEL_MESHES 4096 /* an effect model's blocks kept from the check to the draws (more: found again) */
-
-/* set while the PS2 path's packets are queued for --native-draw-compare: Model_DrawPosed, whose head calls
-   in here, then draws the PS2 way */
-static int queuing_ps2_path;
 
 /* A model given back to the PS2 path, counted (rd_stats.declined: --stats' "models declined"); with
    KF4_ND_LOG the first few are named */
@@ -106,7 +100,7 @@ static u32 part_meshes(ModelPart *part, RdMesh *meshes, const char **why) {
 }
 
 /* Model_DrawPosed(model) of an effect (model flag 0x800), natively: 1 if drawn (or nothing to draw), 0 if
-   the caller is to draw it the PS2 way (a block the core cannot draw, or the compare mode's own call) */
+   the caller is to draw it the PS2 way (a block the core cannot draw) */
 int NativeDraw_Effect(ModelInstance *model) {
     static RdMesh meshes[ND_MODEL_MESHES];
     static RdMesh scratch[ND_MAX_MESHES];
@@ -121,9 +115,6 @@ int NativeDraw_Effect(ModelInstance *model) {
     u32 used = 0;
     int i;
 
-    if (queuing_ps2_path) {
-        return 0;
-    }
     if (model->parts == NULL || model->part_count == 0) {
         return 1; /* (the PS2 path queues nothing either) */
     }
@@ -146,10 +137,8 @@ int NativeDraw_Effect(ModelInstance *model) {
         used += part->data_count;
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
-    if (!port_native_draw_compare()) {
-        /* (without the parts: VU1 is left as the PS2 path leaves it, 0x64-0x66 included) */
-        NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
-    }
+    /* (without the parts: VU1 is left as the PS2 path leaves it, 0x64-0x66 included) */
+    NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
     ee_word_try(model, &owner);
     memset(&d, 0, sizeof(d));
     d.kind = RD_KIND_EFFECT;
@@ -194,13 +183,6 @@ int NativeDraw_Effect(ModelInstance *model) {
             Packet_AddGsRegister(PORT_GS_REG_NATIVE_DRAW, (s64)value);
             Packet_EndGsRegisters();
         }
-    }
-    if (port_native_draw_compare()) {
-        NativeDraw_QueueMark(RD_ND_ALT_BEGIN, 0);
-        queuing_ps2_path = 1;
-        Model_DrawPosed(model);
-        queuing_ps2_path = 0;
-        NativeDraw_QueueMark(RD_ND_ALT_END, 0);
     }
     return 1;
 }

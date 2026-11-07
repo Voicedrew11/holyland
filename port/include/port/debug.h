@@ -37,6 +37,9 @@ void port_debug_write_audio_tail(void);
 /* The captures folder, and what the last request did (for the overlay and stderr) */
 const char *port_debug_folder(void);
 const char *port_debug_message(void);
+/* <captures>/<stem>_<vblank>_<local time>.<extension> into out (size bytes), the folders made if missing: out */
+const char *port_debug_capture_path(const char *stem, uint64_t vblank, const char *extension, char *out,
+                                    size_t size);
 /* 1 while a GS capture is asked for or being recorded */
 int port_debug_gs_capture_busy(void);
 
@@ -77,7 +80,7 @@ const void *port_gs_backend_vram(void);
 /* A rectangle of a buffer read back through the GS itself, as RGBA: for comparing the renderers */
 void port_gs_backend_read_rect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w,
                                uint32_t h, uint32_t *rgba);
-/* The renderer's state as capture records: paraLLEl-GS's, or the native GS's (port/platform/gs.c) */
+/* The renderer's state as capture records: paraLLEl-GS's, or the PC renderer's (port/platform/gs.c) */
 void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t size));
 
 /* ---- The sound (port/audio/output.c): frames as the SPU2 made them, before the volume ----------- */

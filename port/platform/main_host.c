@@ -12,44 +12,22 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
-       --renderer NAME   who draws: native (step 3's renderer, port/gs/native/, the default; if
-                         it cannot start, paraLLEl-GS), gs (paraLLEl-GS, the reference) or both
-                         (side by side, their pictures compared; the window shows gs's,
-                         --renderer-shown native shows the other, and --renderer-shown heatmap
-                         where they differ); modern: native, with the scene drawn into targets of
-                         its own (P8, in work: docs/port/NATIVE_DRAW_P8.md; --native-draw
-                         on unless given)
-       --scene-scale N, --scene-msaa N
-                         with --renderer modern, the scene (the world) at a scale (1 to 4) and samples
-                         (1, 2, 4, 8) of its own, the GS's (--native-scale, --native-msaa) for the 2D, the
-                         menus and the title; the picture shown made from both (gsn_composite.inc). By
-                         default the GS's
-       --upscaler off|bilinear|fsr3|dlss
-                         with --renderer modern and a --scene-scale below the GS's (single-sampled, both),
-                         the scene brought up to the GS's scale at the composite, the 2D the GS's at its
-                         own scale (docs/port/UPSCALING.md): bilinear, AMD's FSR 3.1 or NVIDIA's DLSS
-                         (temporal: the scene jittered, with its motion; amd_fidelityfx_vk.dll, or
-                         nvngx_dlss.dll and an NVIDIA GPU, beside kf4.exe; DLSS falls back to FSR, FSR to
-                         bilinear). Off by default
-       --native-shine whole|exact
-                         with --renderer modern, a skinned model's sphere-mapped shine that is blended
-                         in the shader (the ice creatures on map 017): drawn whole (the default, much
-                         faster) or exact, in runs of triangles that do not overlap, as the GS blends
-                         it where a part folds over its own edge (a few pixels along those edges)
+       --renderer NAME   who draws: pc (the default: the PC renderer, port/gs/pc/) or gs
+                         (paraLLEl-GS, the accurate GS, for comparing pictures against; developers only)
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
-                         the native GS's device, the picture kept on the GPU;
-                         port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the native
-                         GS, or if vulkan cannot start, sdl
-       --native-scale N  the native GS draws at N times the PS2's resolution (1 to 4), or auto (the
+                         the renderer's device, the picture kept on the GPU;
+                         port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the renderer,
+                         or if vulkan cannot start, sdl
+       --native-scale N  the renderer draws at N times the PS2's resolution (1 to 4), or auto (the
                          default): the multiple of 448 lines nearest the picture's height in the
                          window (1440: 3; 2160: 4), at most 2 on an integrated GPU, 1 with no window
        --native-widescreen, --no-native-widescreen
-                         with --widescreen, the native GS draws the 16:9 picture wider still, with
+                         with --widescreen, the renderer draws the 16:9 picture wider still, with
                          square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6); on in
                          a new settings.json, off without one (headless)
        --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
                          half with the row above (port_flicker_filter()); off by default
-       --native-msaa N   the native GS draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
+       --native-msaa N   the renderer draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
                          by default): its edges smoothed
        --native-cutout-aa MODE
                          with --native-msaa, the cut-outs (netting, foliage, fences, grates):
@@ -59,44 +37,33 @@
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
-       --native-lod MODE the mipmap level the native GS reads textures at: scale (the default: the
+       --native-lod MODE the mipmap level the renderer reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
                          full (level 0, the finest, at every distance)
        --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
                          default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
                          and walls at a grazing angle (gs_frag.h, sample_texture)
-       --native-sampler MODE
-                         how the native GS's scene reads its textures: gs (the default: the GS's texture
-                         unit in the shader, texel by texel), or hardware (the GPU's sampler on RGBA8
-                         copies with their mip levels; faster, filtering differs only). --renderer fast
-                         takes hardware unless this says otherwise (PC_RENDERER.md, P1)
-       --renderer fast   modern, with the PC renderer's parts built so far (PC_RENDERER.md)
        --native-colour MODE
-                         how precisely the native GS keeps colours: exact (the default: the GS's 8
+                         how precisely the renderer keeps colours: exact (the default: the GS's 8
                          bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
                          colours' arithmetic in floats, the picture dithered to 8 bits: smooth
                          gradients in the dark instead of steps)
        --native-layer-z MODE
-                         how the native GS keeps and tests the 3D's Z: tolerant (the default: Z's
+                         how the renderer keeps and tests the 3D's Z: tolerant (the default: Z's
                          fraction kept, straight seams where surfaces meet, and the layers the game
                          blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
                          or ps2 (the GS's whole numbers)
        --native-draw off|on|KINDS
                          draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
-                         the patched draw code hands them to the renderer core, and the native GS draws
+                         the patched draw code hands them to the renderer core, and the renderer draws
                          them with a vertex shader doing VU1's maths, instead of VU1 and its packets.
                          on: the kinds that have passed their checks (map, sky, items, objects, picked,
                          entities, arm, gold, effects, shadows, water and passes); KINDS, by name: map, models
                          (objects and picked), skinned (or entities), arm, sky, effects, shadows,
                          reflection, water, passes, items, objects, picked, gold. off is
-                         the game as without it, and the default unless settings.json says "native_draw":
-                         "on" (the overlay's Renderer section). The overlay's Debug page changes the kinds
-                         live
-       --native-draw-compare native|ps2
-                         with --native-draw, the PS2 path's packets are queued too, and the native GS
-                         draws the native draws (native) or the PS2 path's (ps2): two runs alike in all
-                         the game does, to compare the pictures
+                         the game as without it. The default is on, unless settings.json says "native_draw":
+                         "off". The overlay's Debug page changes the kinds live
        --native-wave-uvs ps2|gpu|cpu|late
                          with --native-draw map, the wave UVs of the water records: ps2 (the default: the
                          PS2 path's picture, late, or gpu with the test wait), gpu (the frame's offsets
@@ -125,19 +92,26 @@
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --present-scaling sharp|smooth|best
                          how the picture is fitted to the window: nearest, bilinear, or best (the
-                         default: the native GS scales it with a cubic, area-weighted when made
+                         default: the renderer scales it with a cubic, area-weighted when made
                          smaller, on linear light; present_scale.frag)
        --present-sharpen X
                          contrast-adaptive sharpening after the scaling, 0 (off) to 1
        --dump-present WxH
                          --dump-frames writes the picture as a WxH window shows it with the best
                          scaling (and --present-sharpen)
-       --frame-rate 30|60|120|144|240|N|monitor
+       --frame-rate 30|60|120|144|240|N|monitor|unlocked
                          the opt-in higher frame rates: pictures between the game's 30 a second
                          in play, each drawn from the game's frame with the camera, the moving
                          models, the HUD, fades and scrolling textures moved to where they are at
                          that time (port/platform/frame_interp.c); monitor: the window's screen's
-                         refresh rate; 30, the PS2's, by default
+                         refresh rate; unlocked: as many as the renderer keeps up with (the
+                         swapchain mailbox with VSync, immediate without); 30, the PS2's, by default
+       --frame-rate-cap N
+                         unlocked no faster than N pictures a second (a few under a VRR screen's
+                         rate keeps it in its range); 0, no cap, by default
+       --tearing         unlocked's pictures shown at once, tearing (the swapchain immediate:
+                         the least latency, and a VRR screen's), not the newest at each
+                         refresh (mailbox, by default)
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -183,6 +157,11 @@
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
+       --profile-at VBLANK:SECONDS:FILE
+                         record a profile run (docs/port/PROFILING.md): every thread's functions by CPU
+                         time (Linux) and the GPU's time by kind of work, from VBLANK for SECONDS of the
+                         game's vblanks, written to FILE for tools/sampler/stacks.py; KF4_GPU_DETAIL=1
+                         also times the PC renderer's draws by shader state
        --flash-recorder off|on|SECONDS[,HEIGHT]
                          the flash recorder (F8, docs/port/README.md "Debugging"): the last SECONDS of
                          presented pictures (2 for on, the default) kept on the GPU at HEIGHT rows (540),
@@ -204,6 +183,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/profile_run.h"
 #include "port/settings.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
@@ -251,16 +231,15 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer native|gs|both|modern|fast] [--renderer-shown gs|native|heatmap]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--native-msaa 1|2|4|8] [--flicker-filter] [--scene-scale 1-4] [--scene-msaa 1|2|4|8]\n"
-            "          [--upscaler off|bilinear|fsr3|dlss]\n"
-            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16] [--native-sampler gs|hardware]\n"
+            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
+            "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
-            "          [--native-layer-z tolerant|ps2] [--native-shine whole|exact]\n"
+            "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
-            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor]\n"
+            "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor|unlocked]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
     exit(2);
@@ -331,7 +310,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
-    port_options.renderer = PORT_RENDERER_NATIVE; /* stage 4 (docs/port/STEP3.md) */
+    port_options.renderer = PORT_RENDERER_PC;
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
     for (i = 1; i < argc; i++) {
@@ -431,6 +410,10 @@ static void parse_options(int argc, char **argv) {
             port_options.show_fps = port_options.show_fps_forced = 1;
             continue;
         }
+        if (strcmp(option, "--tearing") == 0) {
+            port_options.tearing = port_options.tearing_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--stats") == 0) {
             port_options.stats = 1;
             continue;
@@ -441,28 +424,17 @@ static void parse_options(int argc, char **argv) {
         i++;
         if (strcmp(option, "--disc") == 0) {
             port_options.disc = value;
-        } else if (strcmp(option, "--renderer") == 0 || strcmp(option, "--renderer-shown") == 0) {
-            int both = strcmp(option, "--renderer") == 0;
-            int heatmap = !both && strcmp(value, "heatmap") == 0;
-            int which = heatmap                              ? PORT_RENDERER_NATIVE
-                        : strcmp(value, "gs") == 0           ? PORT_RENDERER_GS
-                        : strcmp(value, "native") == 0       ? PORT_RENDERER_NATIVE
-                        : both && strcmp(value, "modern") == 0 ? PORT_RENDERER_NATIVE
-                        : both && strcmp(value, "both") == 0 ? PORT_RENDERER_BOTH
-                        : both && strcmp(value, "fast") == 0 ? PORT_RENDERER_NATIVE
-                                                             : -1;
-            if (which < 0) {
-                fprintf(stderr, "%s wants gs, native%s, not %s\n", option, both ? ", both, modern or fast" : " or heatmap", value);
-                exit(2);
-            }
-            if (both) {
-                port_options.renderer = which;
-                port_options.renderer_forced = 1;
-                port_options.renderer_modern = strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0;
-                port_options.renderer_fast = strcmp(value, "fast") == 0;
+        } else if (strcmp(option, "--renderer") == 0) {
+            if (strcmp(value, "gs") == 0) {
+                port_options.renderer = PORT_RENDERER_GS;
+            } else if (strcmp(value, "pc") == 0) {
+                port_options.renderer = PORT_RENDERER_PC;
+            } else if (strcmp(value, "native") == 0 || strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0) {
+                port_options.renderer = PORT_RENDERER_PC;
+                fprintf(stderr, "[options] --renderer %s: the PC renderer draws now\n", value);
             } else {
-                port_options.renderer_shown = which;
-                port_options.renderer_heatmap = heatmap;
+                fprintf(stderr, "--renderer wants pc or gs, not %s\n", value);
+                exit(2);
             }
         } else if (strcmp(option, "--presenter") == 0) {
             if (strcmp(value, "sdl") == 0) {
@@ -504,13 +476,23 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
         } else if (strcmp(option, "--frame-rate") == 0) {
-            port_options.frame_rate = strcmp(value, "monitor") == 0 ? PORT_FRAME_RATE_MONITOR : atoi(value);
-            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR &&
+            port_options.frame_rate = strcmp(value, "monitor") == 0    ? PORT_FRAME_RATE_MONITOR
+                                      : strcmp(value, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
+                                                                       : atoi(value);
+            if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED &&
                 (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
-                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...) or monitor, not %s\n", value);
+                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...), monitor or unlocked, not %s\n",
+                        value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--frame-rate-cap") == 0) {
+            port_options.frame_rate_cap = atoi(value);
+            if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap > 1000)) {
+                fprintf(stderr, "--frame-rate-cap wants 60 to 1000, or 0 for none, not %s\n", value);
+                exit(2);
+            }
+            port_options.frame_rate_cap_forced = 1;
         } else if (strcmp(option, "--draw-distance") == 0) {
             port_options.draw_distance = port_draw_distance_parse(value);
             if (port_options.draw_distance < 0) {
@@ -528,32 +510,6 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.draw_distance_sky_forced = 1;
-        } else if (strcmp(option, "--scene-scale") == 0) {
-            port_options.scene_scale = atoi(value);
-            if (port_options.scene_scale < 1 || port_options.scene_scale > 4) {
-                fprintf(stderr, "--scene-scale wants 1 to 4, not %s\n", value);
-                exit(2);
-            }
-        } else if (strcmp(option, "--upscaler") == 0) {
-            if (strcmp(value, "off") == 0) {
-                port_options.upscaler = 0;
-            } else if (strcmp(value, "bilinear") == 0) {
-                port_options.upscaler = 1;
-            } else if (strcmp(value, "fsr3") == 0) {
-                port_options.upscaler = 2;
-            } else if (strcmp(value, "dlss") == 0) {
-                port_options.upscaler = 3;
-            } else {
-                fprintf(stderr, "--upscaler wants off, bilinear, fsr3 or dlss, not %s\n", value);
-                exit(2);
-            }
-        } else if (strcmp(option, "--scene-msaa") == 0) {
-            port_options.scene_msaa = atoi(value);
-            if (port_options.scene_msaa != 1 && port_options.scene_msaa != 2 && port_options.scene_msaa != 4 &&
-                port_options.scene_msaa != 8) {
-                fprintf(stderr, "--scene-msaa wants 1, 2, 4 or 8, not %s\n", value);
-                exit(2);
-            }
         } else if (strcmp(option, "--native-msaa") == 0) {
             port_options.native_msaa = atoi(value);
             if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
@@ -582,16 +538,6 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_aniso_forced = 1;
-        } else if (strcmp(option, "--native-sampler") == 0) {
-            if (strcmp(value, "gs") == 0) {
-                port_options.native_sampler = PORT_SAMPLER_GS;
-            } else if (strcmp(value, "hardware") == 0) {
-                port_options.native_sampler = PORT_SAMPLER_HARDWARE;
-            } else {
-                fprintf(stderr, "--native-sampler wants gs or hardware, not %s\n", value);
-                exit(2);
-            }
-            port_options.native_sampler_forced = 1;
         } else if (strcmp(option, "--native-cutout-aa") == 0) {
             if (strcmp(value, "off") == 0) {
                 port_options.native_cutout_aa = 0;
@@ -632,17 +578,6 @@ static void parse_options(int argc, char **argv) {
             }
             port_options.native_draw = bits;
             port_options.native_draw_forced = 1;
-        } else if (strcmp(option, "--native-draw-compare") == 0) {
-            if (strcmp(value, "native") == 0) {
-                port_options.native_draw_compare = PORT_ND_COMPARE_NATIVE;
-            } else if (strcmp(value, "ps2") == 0) {
-                port_options.native_draw_compare = PORT_ND_COMPARE_PS2;
-            } else if (strcmp(value, "off") == 0) {
-                port_options.native_draw_compare = 0;
-            } else {
-                fprintf(stderr, "--native-draw-compare wants native, ps2 or off, not %s\n", value);
-                exit(2);
-            }
         } else if (strcmp(option, "--native-wave-uvs") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
@@ -676,16 +611,6 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_layer_z_forced = 1;
-        } else if (strcmp(option, "--native-shine") == 0) {
-            if (strcmp(value, "whole") == 0) {
-                port_options.native_shine_exact = 0;
-            } else if (strcmp(value, "exact") == 0) {
-                port_options.native_shine_exact = 1;
-            } else {
-                fprintf(stderr, "--native-shine wants whole or exact, not %s\n", value);
-                exit(2);
-            }
-            port_options.native_shine_exact_forced = 1;
         } else if (strcmp(option, "--vu1") == 0) {
             if (strcmp(value, "interp") == 0) {
                 port_options.vu1 = PORT_VU1_INTERP;
@@ -735,6 +660,10 @@ static void parse_options(int argc, char **argv) {
             port_options.teleport = value;
         } else if (strcmp(option, "--gs-capture-at") == 0) {
             gs_capture_at = value;
+        } else if (strcmp(option, "--profile-at") == 0) {
+            if (!port_profile_run_at(value)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(option, "--flash-recorder") == 0) {
             if (!parse_flash_recorder(value)) {
                 usage(argv[0]);
@@ -834,11 +763,7 @@ int port_invincible(void) {
 }
 
 int port_native_draw(int kind) {
-    return (port_options.native_draw & kind) != 0;
-}
-
-int port_native_draw_compare(void) {
-    return port_options.native_draw ? port_options.native_draw_compare : 0;
+    return (port_options.native_draw & kind) != 0 && port_gs_native_draws_now();
 }
 
 int port_native_wave_uvs(void) {
@@ -981,14 +906,6 @@ static void print_stats(void) {
                 (unsigned long long)port_field_frames_replays());
     }
     port_video_print_stats();
-    if (port_options.renderer == PORT_RENDERER_BOTH) {
-        const PortRendererDiff *d = &port_renderer_diff;
-
-        fprintf(stderr, "[stats] renderers: %llu pictures compared, %llu differ (a channel by more than 1); "
-                        "the largest difference %u at vblank %llu\n",
-                (unsigned long long)d->frames, (unsigned long long)d->frames_differ, d->worst_max,
-                (unsigned long long)d->worst_vblank);
-    }
     fprintf(stderr, "[stats] VU1 %.3f s: %llu runs, %llu instructions (%.2f ns each)\n", vu1,
             (unsigned long long)port_stats.vu1_runs, (unsigned long long)port_stats.vu1_insns,
             port_stats.vu1_insns ? vu1 * 1e9 / (double)port_stats.vu1_insns : 0.0);
@@ -1006,18 +923,6 @@ static void print_stats(void) {
     port_host_float_end(mode);
 }
 
-/* What --renderer modern and fast (or settings.json's "renderer") bring with them, once both have been read */
-static void renderer_implies(void) {
-    if (port_options.renderer_modern && port_options.native_draw == 0) {
-        port_options.native_draw = PORT_ND_ACCEPTED; /* (the scene's kinds: every one, P8 T1; settings.json's "off"
-                                                        must not empty the scene) */
-    }
-    if (port_options.renderer_fast && !port_options.native_sampler_forced) {
-        /* fast: the GPU's sampler unless --native-sampler says otherwise */
-        port_options.native_sampler = PORT_SAMPLER_HARDWARE;
-    }
-}
-
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -1027,7 +932,6 @@ int main(int argc, char **argv) {
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     port_settings_load(); /* settings.json, where the command line left an option alone */
-    renderer_implies();
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);

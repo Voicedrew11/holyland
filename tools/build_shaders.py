@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Compiles the native GS's shaders (port/gs/native/shaders/) to SPIR-V and writes them into
-port/gs/native/gsn_shaders.h, which is committed: building the port needs no shader compiler, only
-changing a shader does.
+"""Compiles the PC renderer's shaders (port/gs/pc/shaders/) to SPIR-V and writes them into port/gs/pc/pcr_shaders.h.
+The file is committed: building the port needs no shader compiler, only changing a shader does.
 
     python tools/build_shaders.py [--glslang PATH]
 
@@ -17,35 +16,10 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHADERS = os.path.join(ROOT, "port", "gs", "native", "shaders")
-OUT = os.path.join(ROOT, "port", "gs", "native", "gsn_shaders.h")
-
-
-# Shaders built a second time with a define, under a name of their own: (source, name, defines)
-VARIANTS = [
-    ("nd_000.vert", "nd_000_oracle.vert", ["-DND_ORACLE"]),  # the vertex oracle (gsn_nd_oracle.inc)
-    ("nd_280.vert", "nd_280_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x280 (gsn_nd_280.inc)
-    ("nd_700.vert", "nd_700_oracle.vert", ["-DND_ORACLE"]),  # ... for program 0x700 (gsn_nd_700.inc)
-    ("nd_000.vert", "sa_000.vert", ["-DND_STANDALONE"]),  # P8's scene: the same, its own depth (gsn_standalone.inc)
-    ("nd_280.vert", "sa_280.vert", ["-DND_STANDALONE"]),  # ... program 0x280's in the scene
-    ("nd_700.vert", "sa_700.vert", ["-DND_STANDALONE"]),  # ... program 0x700's in the scene
-    ("nd_water.vert", "sa_water.vert", ["-DND_STANDALONE"]),  # ... the reflection's water in the scene (T3)
-    # ... with an upscaler's sub-pixel jitter (sa_jitter_on): their own, so that without one the scene's are as before
-    ("nd_000.vert", "sa_000_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
-    ("nd_280.vert", "sa_280_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
-    ("nd_700.vert", "sa_700_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
-    ("nd_water.vert", "sa_water_jitter.vert", ["-DND_STANDALONE", "-DND_JITTER"]),
-    ("sa_depth.frag", "sa_depth_ms.frag", ["-DSA_MS"]),  # ... the scene's depth into a multisampled Z buffer
-    ("sa_resample.frag", "sa_resample_ms.frag", ["-DSA_MS"]),
-    ("sa_copy_run.frag", "sa_copy_run_ms.frag", ["-DSA_MS"]),  # ... a run's copy by its own triangles, multisampled  # ... T2: from a multisampled image at another scale
-    ("sa_resample.frag", "sa_resample_depth.frag", ["-DSA_DEPTH"]),  # ... a depth at another scale
-    ("sa_resample.frag", "sa_resample_depth_ms.frag", ["-DSA_DEPTH", "-DSA_MS"]),  # ... from a multisampled one
-    # --native-sampler hardware (docs/port/PC_RENDERER.md, P1): the GS's fragment shaders reading the RGBA8 texture
-    ("gs.frag", "gs_hw.frag", ["-DGSN_HW_SAMPLER"]),
-    ("sa_sample.frag", "sa_sample_hw.frag", ["-DGSN_HW_SAMPLER"]),
-    ("gs_in.frag", "gs_in_hw.frag", ["-DGSN_HW_SAMPLER"]),
-    ("gs_in_ms.frag", "gs_in_ms_hw.frag", ["-DGSN_HW_SAMPLER"]),
-]
+PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
+PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
+# the native draws' VU1 maths, shared with the PC renderer's shaders
+SHARED = os.path.join(ROOT, "port", "render", "shaders")
 
 
 def find_glslang(given):
@@ -60,45 +34,37 @@ def main():
     parser.add_argument("--glslang")
     args = parser.parse_args()
     glslang = find_glslang(args.glslang)
+    build(glslang, PC_SHADERS, PC_OUT, "pcr_spv_", "The PC renderer's shaders", "port/gs/pc/shaders/")
 
-    sources = sorted(f for f in os.listdir(SHADERS) if f.endswith((".vert", ".frag", ".comp")))
+
+def build(glslang, folder, target, prefix, what, where):
+    sources = sorted(f for f in os.listdir(folder) if f.endswith((".vert", ".frag", ".comp")))
     lines = [
-        "/* The native GS's shaders as SPIR-V, made by tools/build_shaders.py from port/gs/native/shaders/.",
+        "/* %s as SPIR-V, made by tools/build_shaders.py from %s." % (what, where),
         "   Generated: edit the shaders and run the script again. */",
         "#pragma once",
         "#include <stddef.h>",
         "#include <stdint.h>",
         "",
     ]
-    builds = [(name, name, []) for name in sources] + [v for v in VARIANTS if v[0] in sources]
-    idents = []
     with tempfile.TemporaryDirectory() as tmp:
-        for source, name, defines in builds:
+        for name in sources:
             out = os.path.join(tmp, name + ".spv")
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + SHADERS] + defines + ["-o", out,
-                   os.path.join(SHADERS, source)]
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED, "-o", out,
+                   os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 sys.exit("%s failed:\n%s%s" % (name, result.stdout, result.stderr))
             data = open(out, "rb").read()
             words = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
-            ident = "gsn_spv_" + name.replace(".", "_")
-            lines.append("static const uint32_t %s[%d] = {" % (ident, len(words)))
+            lines.append("static const uint32_t %s%s[%d] = {" % (prefix, name.replace(".", "_"), len(words)))
             for i in range(0, len(words), 8):
                 lines.append("    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + ",")
             lines.append("};")
             lines.append("")
-            idents.append(ident)
-    # every shader in one table, for the pipeline list (port/gs/native/gsn_pipeline_warm.inc)
-    lines.append("/* every shader above (the pipeline list finds a shader by its SPIR-V: gsn_pipeline_warm.inc) */")
-    lines.append("static const struct { const uint32_t *code; size_t size; } gsn_spv_all[] = {")
-    for ident in idents:
-        lines.append("    {%s, sizeof(%s)}," % (ident, ident))
-    lines.append("};")
-    lines.append("")
-    with open(OUT, "w", newline="\n") as f:
+    with open(target, "w", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %s (%d shaders)" % (os.path.relpath(OUT, ROOT), len(builds)))
+    print("wrote %s (%d shaders)" % (os.path.relpath(target, ROOT), len(sources)))
 
 
 if __name__ == "__main__":

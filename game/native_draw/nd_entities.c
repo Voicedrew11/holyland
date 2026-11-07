@@ -1,6 +1,6 @@
 /* nd_entities.c: PC-only. Native draw (--native-draw entities; docs/port/NATIVE_DRAW.md, P2-3): the
    skinned models of the entities (enemies and NPCs), drawn at the game's level with VU1 program 0x280's
-   maths (port/gs/native/shaders/nd_280.vert) instead of their packets.
+   maths (port/gs/pc/shaders/pcr_nd280.vert) instead of their packets.
 
    Entities draw through Model_DrawSkinned in two places, both patched in entity/ (entity.patch):
    - Entity_DrawAll calls it directly for an opaque entity;
@@ -58,12 +58,6 @@ static inline f32 wrap_angle(f32 angle) {
     return angle - (f32)(s32)(angle / 6.2831855f) * 6.2831855f - 3.1415927f;
 }
 
-static void queue_mark(u32 command) {
-    Packet_BeginGsRegisters();
-    Packet_AddGsRegister(PORT_GS_REG_NATIVE_DRAW, (s64)((u64)command << 56));
-    Packet_EndGsRegisters();
-}
-
 /* Model_DrawSkinned's test for a part it sends */
 static int part_drawn(ModelPart *part) {
     if (MODEL_PART_FLAG_WORD(part) & MODEL_PART_BIT40) {
@@ -110,8 +104,7 @@ static u32 skinned_camera(void) {
    lights at 0x40-0x48, the colour bias and scale at 0x64-0x65), then the last part it sends: its two
    matrices at 0x04 and 0x24 and its parent's at 0x08 and 0x28. So whatever runs on VU1 after a model drawn
    natively finds what the PS2 path would have left there (the CPU's near cut, also on program 0x280,
-   reads the set-up's inputs from here; native_draw.c's queue_fixed_block is the same for posed models).
-   With --native-draw-compare the PS2 path's packets follow, and this is not queued. */
+   reads the set-up's inputs from here; native_draw.c's queue_fixed_block is the same for posed models). */
 static void queue_vu1_state(ModelInstance *model, int last) {
     f32 (*part_matrices)[16] = MODEL_TURN_PART_MATRICES;
     f32 (*part_turns)[16] = MODEL_TURN_PART_TURNS;
@@ -198,8 +191,7 @@ static void queue_vu1_state(ModelInstance *model, int last) {
 /* Model_DrawSkinned(model), natively: the same matrices (into the same scratchpad), the same parts left
    out, a draw per part on program 0x280 with what the packets would have put in VU1's memory. kind and
    owner make the draws' identity. 1 if drawn; 0 if a part it would send has a block the core cannot draw,
-   and nothing was queued: the caller draws it the PS2 way (a model goes one way or the other, whole). With
-   --native-draw-compare the PS2 path's packets follow, between the marks. */
+   and nothing was queued: the caller draws it the PS2 way (a model goes one way or the other, whole). */
 int NativeDraw_Skinned(ModelInstance *model, int kind, const void *owner) {
     static RdMesh meshes[ND_MAX_MESHES];
     f32 (*part_matrices)[16] = MODEL_TURN_PART_MATRICES;
@@ -208,7 +200,6 @@ int NativeDraw_Skinned(ModelInstance *model, int kind, const void *owner) {
     RdDraw d;
     f32 pitch;
     f32 yaw;
-    int compare = port_native_draw_compare();
     int last = -1;
     int i;
 
@@ -275,12 +266,6 @@ int NativeDraw_Skinned(ModelInstance *model, int kind, const void *owner) {
             Packet_EndGsRegisters();
         }
     }
-    if (compare) {
-        queue_mark(RD_ND_ALT_BEGIN);
-        Model_DrawSkinned(model);
-        queue_mark(RD_ND_ALT_END);
-    } else {
-        queue_vu1_state(model, last);
-    }
+    queue_vu1_state(model, last);
     return 1;
 }

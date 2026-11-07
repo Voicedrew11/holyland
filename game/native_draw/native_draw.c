@@ -8,11 +8,7 @@
    that carries what the packets would have put in VU1's fixed block (vu1_hle.c is what VU1 makes of it).
    It queues, in the packet chain, the GS registers the PS2 path queues itself (ZBUF, TEST) and, for each
    part, a write to PORT_GS_REG_NATIVE_DRAW naming the draw: at the very place of the packets it
-   replaces, so that the native GS draws it in the same order, with the same GS state.
-
-   With --native-draw-compare the PS2 path's packets are queued too, after the native draws, between the
-   marks RD_ND_ALT_BEGIN and _END: VU1 runs them either way, so the game does the same whichever the GS
-   draws.
+   replaces, so that the renderer draws it in the same order, with the same GS state.
 
    Nothing here changes what the game does: it reads the game's state, writes only the packet chain (and
    the scratchpad matrices the PS2 path writes too), and with the switch off is never called. */
@@ -34,7 +30,6 @@ void Matrix_Multiply(void *dst, void *matrix, void *src);
 u32 *Packet_Alloc(int quadwords);
 void Packet_AppendToChain(u32 *start, u32 *end);
 void ModelMatrix_BuildDrawMatrices(ModelInstance *, sptr, sptr, void *, void *);
-void Model_DrawPosedDepthByPart(ModelInstance *model);
 void Model_DrawPosed(ModelInstance *model);
 
 extern f32 world_screen_matrix[16]; /* VU1 0x00: what GsDraw_QueueVu1Matrix sent last */
@@ -129,8 +124,7 @@ static int part_meshes(ModelPart *part, RdMesh *meshes) {
    VU1 after it and reads what it left: the CPU's near cut (ModelScreen_CutClippedTriangles, after each
    record of Map_DrawRecords and Map_DrawLateRecords; it stays the PS2 path, --clip ps2) sends only its part
    matrix and starts program 0x000's set-up, which reads the rest from here. Without this its pieces were
-   lit and fogged by whatever model VU1 drew last (a close wall on map 021 bright, up to 83 levels). With
-   --native-draw-compare the PS2 path's packets that follow do the same, so it is not queued then. */
+   lit and fogged by whatever model VU1 drew last (a close wall on map 021 bright, up to 83 levels). */
 static void queue_fixed_block(ModelInstance *model, const void *matrix_a, const void *matrix_b) {
     u32 *packet_start;
     u32 *packet;
@@ -199,10 +193,9 @@ enum { FORM_POSED, FORM_DEPTH_BY_PART };
 /* What the form's function queues, drawn natively: the same parts left out, the same GS registers, the
    same VU1 fixed block. kind and owner make the draws' identity. 1 if drawn; 0 if the model has a block
    the core cannot draw (another VU1 program, a block that is not self-contained ...), and nothing was
-   queued: the caller draws it the PS2 way. With --native-draw-compare the PS2 path's packets follow,
-   between the marks: game's (the game's model, where model is a changed copy of it: the modern sky's). flags:
-   RD_DRAW_* the draws carry besides (the modern sky's RD_DRAW_FAR_Z). */
-static int posed_model(ModelInstance *model, int form, int kind, const void *owner, u32 flags, ModelInstance *game) {
+   queued: the caller draws it the PS2 way. flags: RD_DRAW_* the draws carry besides (the modern sky's
+   RD_DRAW_FAR_Z). */
+static int posed_model(ModelInstance *model, int form, int kind, const void *owner, u32 flags) {
     static RdMesh meshes[ND_MAX_MESHES];
     f32 (*matrix_a)[4] = MODEL_DRAW_MATRIX_A;
     f32 (*matrix_b)[4] = MODEL_DRAW_MATRIX_B;
@@ -225,9 +218,7 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
         }
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
-    if (!port_native_draw_compare()) {
-        queue_fixed_block(model, matrix_a, matrix_b);
-    }
+    queue_fixed_block(model, matrix_a, matrix_b);
     camera = current_camera();
     memset(&d, 0, sizeof(d));
     d.kind = (u32)kind;
@@ -305,15 +296,6 @@ static int posed_model(ModelInstance *model, int form, int kind, const void *own
         }
         Packet_EndGsRegisters();
     }
-    if (port_native_draw_compare()) {
-        queue_mark(RD_ND_ALT_BEGIN, 0);
-        if (form == FORM_DEPTH_BY_PART) {
-            Model_DrawPosedDepthByPart(game);
-        } else {
-            Model_DrawPosed(game);
-        }
-        queue_mark(RD_ND_ALT_END, 0);
-    }
     return 1;
 }
 
@@ -333,26 +315,25 @@ static int declined(ModelInstance *model, int kind, const char *why) {
 
 /* Model_DrawPosedDepthByPart(model), natively (posed_model) */
 int NativeDraw_PosedDepthByPart(ModelInstance *model, int kind, const void *owner) {
-    if (!posed_model(model, FORM_DEPTH_BY_PART, kind, owner, 0, model)) {
+    if (!posed_model(model, FORM_DEPTH_BY_PART, kind, owner, 0)) {
         return declined(model, kind, "a block the core cannot draw");
     }
     return 1;
 }
 
-int NativeDraw_PosedAs(ModelInstance *model, ModelInstance *game, int kind, const void *owner, u32 flags);
+int NativeDraw_PosedWithFlags(ModelInstance *model, int kind, const void *owner, u32 flags);
 
 /* Model_DrawPosed(model), natively (posed_model); a model whose draw_parts is something else is not */
 int NativeDraw_Posed(ModelInstance *model, int kind, const void *owner) {
-    return NativeDraw_PosedAs(model, model, kind, owner, 0);
+    return NativeDraw_PosedWithFlags(model, kind, owner, 0);
 }
 
-/* NativeDraw_Posed of model, a changed copy of the game's model game (whose packets --native-draw-compare
-   queues), its draws carrying flags (RD_DRAW_*) besides: nd_sky.c's modern sky */
-int NativeDraw_PosedAs(ModelInstance *model, ModelInstance *game, int kind, const void *owner, u32 flags) {
+/* NativeDraw_Posed with its draws carrying flags (RD_DRAW_*) besides: nd_sky.c's modern sky */
+int NativeDraw_PosedWithFlags(ModelInstance *model, int kind, const void *owner, u32 flags) {
     if (model->draw_parts != Model_DrawPosed) {
         return declined(model, kind, "draw_parts is not Model_DrawPosed");
     }
-    if (!posed_model(model, FORM_POSED, kind, owner, flags, game)) {
+    if (!posed_model(model, FORM_POSED, kind, owner, flags)) {
         return declined(model, kind, "a block the core cannot draw");
     }
     return 1;

@@ -12,13 +12,12 @@
 
    The trail is a PATH2 strip (RGBAQ, XYZ2) the game builds on the CPU from the blade's points, projected
    when WeaponTrail_Update ran: NativeDraw_ArmTrail hands it to the core as a strip of its own
-   (RD_VF_GS_STRIP, program RD_PROGRAM_GS_STRIP) with the arm's identity, and the native GS writes the
+   (RD_VF_GS_STRIP, program RD_PROGRAM_GS_STRIP) with the arm's identity, and the renderer writes the
    same registers as the packet would.
 
-   With --native-draw-compare the PS2 path's packets follow the native draws, between the marks
-   RD_ND_ALT_BEGIN and _END, as native_draw.c does for the posed models. Without it, VU1 still gets what
-   Model_DrawSkinned sends but the data blocks (the fixed block and each part's matrices: VU1 runs
-   nothing for them), so VU1's memory is left as the PS2 path leaves it for whatever reads it next.
+   VU1 still gets what Model_DrawSkinned sends but the data blocks (the fixed block and each part's
+   matrices: VU1 runs nothing for them), so VU1's memory is left as the PS2 path leaves it for whatever
+   reads it next.
 
    Nothing here changes what the game does: it reads the game's state and writes only the packet chain
    and the scratchpad matrices (and VU0's registers) that Model_DrawSkinned writes too. */
@@ -111,10 +110,10 @@ static inline f32 wrap_angle(f32 angle) {
     } while (0)
 
 /* Model_DrawSkinned (model/model.c) to the letter but for the data blocks: the turn and the matrices
-   into the scratchpad, and, when vu1 is set, its packets for VU1 without the parts' data references
+   into the scratchpad, and its packets for VU1 without the parts' data references
    (VU1 0x0C-0x13, 0x3C-0x3E, 0x40-0x48 and 0x64-0x65; then each drawn part's matrices at 0x04, 0x24 and its
    parent's at 0x08, 0x28). Nothing is run on VU1: no MSCAL is sent. */
-static void skinned_without_data(ModelInstance *model, int vu1) {
+static void skinned_without_data(ModelInstance *model) {
     void *matrix_a = MODEL_TURN_MATRIX_A;
     void *matrix_b = MODEL_TURN_MATRIX_B;
     f32 (*part_matrices)[16] = MODEL_TURN_PART_MATRICES;
@@ -143,9 +142,6 @@ static void skinned_without_data(ModelInstance *model, int vu1) {
     for (; i < part_count; i++, part++) {
         Matrix_Multiply(part_matrices[i], model->model_matrix, part);
         Matrix_Multiply(part_turns[i], MODEL_TURN_SCRATCH, part);
-    }
-    if (!vu1) {
-        return;
     }
     packet_start = packet = Packet_Alloc(0x20);
     *packet = 0x10000009;
@@ -258,7 +254,6 @@ int NativeDraw_Arm(ModelInstance *model, int which) {
     static RdMesh meshes[ARM_MAX_MESHES];
     f32 (*part_matrices)[16] = MODEL_TURN_PART_MATRICES;
     f32 (*part_turns)[16] = MODEL_TURN_PART_TURNS;
-    int compare = port_native_draw_compare() != 0;
     ModelPart *part;
     RdDraw d;
     int i;
@@ -273,7 +268,7 @@ int NativeDraw_Arm(ModelInstance *model, int which) {
             return 0;
         }
     }
-    skinned_without_data(model, !compare);
+    skinned_without_data(model);
     memset(&d, 0, sizeof(d));
     d.kind = RD_KIND_ARM;
     d.id[0] = (u32)which;
@@ -310,20 +305,14 @@ int NativeDraw_Arm(ModelInstance *model, int which) {
             queue_value(value);
         }
     }
-    if (compare) {
-        queue_value((u64)RD_ND_ALT_BEGIN << 56);
-        Model_DrawSkinned(model);
-        queue_value((u64)RD_ND_ALT_END << 56);
-    }
     return 1;
 }
 
 /* Player_DrawArm's trail: the packet it built from packet_start to packet_end (a DMA CNT tag, VIF1 DIRECT,
    then a PATH2 GIF packet of a PACKED triangle strip of RGBAQ and XYZ2, ADC on the points off the screen),
    appended to the chain, natively: the strip handed to the core as a mesh of RD_VF_GS_STRIP and a draw of
-   program RD_PROGRAM_GS_STRIP (identity RD_KIND_ARM, 2), which the native GS writes as the GIF would.
-   1 if done (the packet itself is queued only with --native-draw-compare, between the marks); 0 if not,
-   and nothing was queued: the caller appends it. */
+   program RD_PROGRAM_GS_STRIP (identity RD_KIND_ARM, 2), which the renderer writes as the GIF would.
+   1 if done; 0 if not, and nothing was queued: the caller appends it. */
 int NativeDraw_ArmTrail(u32 *packet_start, u32 *packet_end) {
     u32 qwords = packet_start[7] & 0xFFFF; /* (DIRECT's size: the GIF packet's qwords) */
     RdMesh mesh;
@@ -347,10 +336,5 @@ int NativeDraw_ArmTrail(u32 *packet_start, u32 *packet_end) {
         return 0;
     }
     queue_value(value);
-    if (port_native_draw_compare()) {
-        queue_value((u64)RD_ND_ALT_BEGIN << 56);
-        Packet_AppendToChain(packet_start, packet_end);
-        queue_value((u64)RD_ND_ALT_END << 56);
-    }
     return 1;
 }

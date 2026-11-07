@@ -1,5 +1,4 @@
-# Granite (third_party/parallel-gs/Granite) with the depth bounds test, for the native GS (gsn.cpp, "Two
-# phases"): a pipeline state bit, depth_bounds_test, that turns the test on with its bounds dynamic (set
+# Granite (third_party/parallel-gs/Granite) with the depth bounds test: a pipeline state bit, depth_bounds_test, that turns the test on with its bounds dynamic (set
 # with vkCmdSetDepthBounds before each draw), and the device feature turned on where the GPU has it.
 # Granite is a submodule of a submodule, so the change is made here, at configure, in its checkout: each
 # edit is a line added beside one of Granite's, made once (a checkout that has it is left alone), with the

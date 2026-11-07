@@ -38,7 +38,7 @@
      which the next frame's clear wipes (FRAME, and TEX0 and BITBLTBUF where they read the frame, point
      there instead). Everything else it draws (the scrolling textures' 128x128 targets, the
      reflection's 256x256 view) is drawn again from the same packets, and the uploads go again in their
-     order (asked for again from the native GS, which recorded them: PORT_GS_REG_REPLAY_UPLOAD), so
+     order (asked for again from the PC renderer, which recorded them: PORT_GS_REG_REPLAY_UPLOAD), so
      every draw finds the textures it found the first time. A buffer a picture between drew differently
      that the frame reads before it draws it is drawn again exact after the pictures
      (port_interp_end_vblank). Local-to-local transfers into anything but the frame are not started,
@@ -51,8 +51,7 @@
      every rate (checked: --dump-frames of the even vblanks). (Dropping the draws into the other
      targets instead does not work: on map 000 the sky samples a 128x128 target at FBP 0x1D4 that the
      frame draws, then draws over with another at 0x1D2.)
-   - The previous frame blended in (Game_BlendPreviousFrame) reads, in a picture between, the native
-     GS's copy of the frame shown, by a^t (replay_pending, move_flat_vertex).
+   - The previous frame blended in (Game_BlendPreviousFrame) reads, in a picture between, the GS's copy of the frame shown, by a^t (replay_pending, move_flat_vertex).
    - Not interpolated: pictures the CPU makes anew (the HUD orb's swirl, flipbook animations: a new
      texture, not a move), models that come or go, a cut.
    With the switch off nothing here runs: the game sends no marks, and nothing is kept.
@@ -65,9 +64,11 @@
 #include <stdint.h>
 
 #include "port/host.h"
+#include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/render.h"
-#include "../gs/native/gsn.h"
+#include "port/unlocked_rate.h"
+#include "../gs/shared/gsn.h"
 
 #define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
 #define INTERP_MAX_MOVE 400.0 /* world units between two frames: more is a cut */
@@ -98,21 +99,78 @@ int port_frame_interp(void) {
    are F / 59.94 a vblank: when that is a whole number n (to 1%: 60, 120, 240, 360 Hz), the vblank's own
    picture and n - 1 more between it and the next, evenly; otherwise (144, 165 Hz) a picture every
    1 / (F / 59.94) of a vblank from vblank 0 on, wherever it falls. Each is the time the window shows it
-   at (port/platform/video.c), and what the picture shows is the game's world at that time. */
+   at (port/platform/video.c), and what the picture shows is the game's world at that time.
+   With the screen's rate (PORT_FRAME_RATE_MONITOR), once the screen's refresh clock is sure of its
+   refreshes (port_video_refresh_schedule), one picture each refresh instead, timed for it: the screen
+   keeps its own time (169.83 Hz where the system names 170), and pictures on any other clock beat
+   against it, a refresh with two steps of the world or none every few seconds, which vsync hides
+   (each refresh takes one picture) and nothing else does.
+   Unlocked (PORT_FRAME_RATE_UNLOCKED): as many a second as the renderer keeps up with, found as it plays
+   (port/include/port/unlocked_rate.h: gs.c says at each game vblank whether the PC renderer was behind), up to the
+   cap and UNLOCKED_MOST_A_VBLANK a vblank, and timed as a fixed rate is (the window shows each at its time; the
+   swapchain mailbox, so that each refresh shows the newest, or immediate with --tearing). */
+#define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
+#define UNLOCKED_FLOOR_HZ 60
+static UnlockedRate unlocked;
+static int unlocked_on;            /* (the controller's thread) unlocked was on at the last vblank judged */
+static int unlocked_cap_made = -1; /* the cap its bounds were made with */
+static volatile int unlocked_hz;   /* its rate now, for any thread (port_frame_rate_hz) */
+
+/* (the controller's thread) the rate's bounds: UNLOCKED_FLOOR_HZ to the cap, and the schedule's most */
+static double unlocked_ceiling_hz(void) {
+    double most = UNLOCKED_MOST_A_VBLANK * 60000.0 / 1001.0;
+    int cap = port_options.frame_rate_cap;
+
+    return cap > 0 && cap < most ? cap : most;
+}
+
+void port_interp_unlocked_vblank(uint64_t vblank, int behind) {
+    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED) {
+        unlocked_on = 0;
+        return;
+    }
+    if (!unlocked_on) {
+        /* (from the screen's rate: the least a window shows smoothly, and up from there) */
+        int screen = port_video_refresh_rate();
+
+        unlocked_rate_init(&unlocked, screen > UNLOCKED_FLOOR_HZ ? screen : 2 * UNLOCKED_FLOOR_HZ, UNLOCKED_FLOOR_HZ,
+                           unlocked_ceiling_hz(), vblank);
+        unlocked_cap_made = port_options.frame_rate_cap;
+        unlocked_on = 1;
+    } else if (unlocked_cap_made != port_options.frame_rate_cap) {
+        unlocked_rate_bound(&unlocked, UNLOCKED_FLOOR_HZ, unlocked_ceiling_hz());
+        unlocked_cap_made = port_options.frame_rate_cap;
+    }
+    unlocked_rate_vblank(&unlocked, vblank, behind);
+    unlocked_rate_presented(&unlocked, vblank, port_video_pictures_per_second());
+    __atomic_store_n(&unlocked_hz, (int)(unlocked.rate_hz + 0.5), __ATOMIC_RELAXED);
+}
+
+int port_interp_unlocked_at_floor(void) {
+    return !unlocked_on || unlocked_rate_at_floor(&unlocked);
+}
+
 int port_frame_rate_hz(void) {
     int hz = port_options.frame_rate;
 
     if (hz == PORT_FRAME_RATE_MONITOR) {
         hz = port_video_refresh_rate();
         hz = hz > 0 ? hz : 60;
+    } else if (hz == PORT_FRAME_RATE_UNLOCKED) {
+        hz = __atomic_load_n(&unlocked_hz, __ATOMIC_RELAXED);
+        hz = hz > 0 ? hz : port_video_refresh_rate() > UNLOCKED_FLOOR_HZ ? port_video_refresh_rate() : 2 * UNLOCKED_FLOOR_HZ;
     }
     return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
 }
 
 static double pictures_a_vblank(void) {
-    double p = port_frame_rate_hz() * 1001.0 / 60000.0;
-    double n = floor(p + 0.5);
+    double p, n;
 
+    if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
+        return port_frame_rate_hz() * 1001.0 / 60000.0; /* (a fraction as found: no whole number to keep) */
+    }
+    p = port_frame_rate_hz() * 1001.0 / 60000.0;
+    n = floor(p + 0.5);
     return n >= 1 && fabs(p - n) <= 0.01 * n ? n : p;
 }
 
@@ -124,6 +182,10 @@ int port_interp_schedule(uint64_t vblank, double *phases, int max) {
         phases[0] = 0;
         return 1;
     }
+    if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR && (n = port_video_refresh_schedule(vblank, phases, max)) >= 0) {
+        return n;
+    }
+    n = 0;
     if (p == floor(p)) {
         for (n = 0; n < (int)p && n < max; n++) {
             phases[n] = n / p;
@@ -392,7 +454,6 @@ typedef struct {
     uint64_t tex;      /* and TEX0's texture and CLUT */
     int32_t pair;      /* the run of the frame before that is this one (objects_pair), -1: none */
     int sky;           /* of the sky (PORT_FRAME_INTERP_SKY: a map record that follows the player) */
-    int native;        /* the PS2 path's packets of a native draw, which the GS leaves out (Walk's alt) */
     int shadow;        /* sent by program 0x5A0 (RECORD_SHADOW) */
 } Run;
 
@@ -419,7 +480,7 @@ static void objects_reset(Objects *o) {
     o->sky_ok = 0;
 }
 
-static void objects_add_run(Objects *o, uint64_t key, int section, int sky, int native) {
+static void objects_add_run(Objects *o, uint64_t key, int section, int sky) {
     Run *r;
 
     if (o->nruns == o->runs_room) {
@@ -435,7 +496,6 @@ static void objects_add_run(Objects *o, uint64_t key, int section, int sky, int 
     r->count = 0;
     r->section = section;
     r->sky = sky && section == SECTION_WORLD;
-    r->native = native;
     r->shadow = 0;
     r->prim = 0;
     r->tex = 0;
@@ -628,7 +688,7 @@ static const Run *objects_find(const Objects *o, const Run *cur) {
         double d2 = 0;
         int k;
 
-        if (r->count != cur->count || !r->placed || r->section != cur->section || r->native) {
+        if (r->count != cur->count || !r->placed || r->section != cur->section) {
             continue;
         }
         for (k = 0; k < 3; k++) {
@@ -1084,7 +1144,7 @@ static void objects_sky_move(Objects *o, const Objects *prev) {
 
 /* (objects_pair's second way) a run of the frame before that may be r: drawn alike, in the same section */
 static int run_alike(const Run *a, const Run *r) {
-    return a->placed && !a->native && !r->native && a->section == r->section && a->count == r->count && a->prim == r->prim &&
+    return a->placed && a->section == r->section && a->count == r->count && a->prim == r->prim &&
            a->tex == r->tex;
 }
 
@@ -1116,9 +1176,6 @@ static void objects_pair(Objects *o, const Objects *prev, const double eye[3]) {
         Run *r = &o->runs[i];
         const Run *a;
 
-        if (r->native) {
-            continue; /* (native draw pairs its draws by their identity: gsn_native_draw.inc) */
-        }
         a = objects_find(prev, r);
         stat_runs += r->placed;
         if (a != NULL && objects_find(o, a) == r) {
@@ -1130,7 +1187,7 @@ static void objects_pair(Objects *o, const Objects *prev, const double eye[3]) {
     for (i = 0; i < o->nruns; i++) {
         Run *r = &o->runs[i];
 
-        if (r->pair >= 0 || !r->placed || r->native || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
+        if (r->pair >= 0 || !r->placed || r->section == SECTION_OTHER || r->section == SECTION_REFLECT) {
             continue;
         }
         /* the nearest look-alike within the window, and this run the nearest to it in turn among this
@@ -1216,13 +1273,12 @@ typedef struct {
     int mode;
     GifWalk paths[4];
     /* the marks */
-    float fields[19];
+    float fields[22];
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
-    int alt;          /* the runs from here are the PS2 path's packets of native draws, which the GS leaves out
-                         (--native-draw-compare native: between RD_ND_ALT_BEGIN and _END); not paired */
     Camera camera;    /* SCAN: the first world mark's camera */
+    MouseTurn mouse_spent; /* SCAN: and the mouse turn the game had spent then (instant mouse look) */
     Screen screen;
     Screen screen_reflect; /* the reflection's projection (SECTION_REFLECT) */
     float reflect_view[12];
@@ -1238,7 +1294,7 @@ typedef struct {
     uint32_t upload;     /* the next upload's number in the frame */
     uint32_t copy;       /* the next copy of the frame's */
     const Flat *copies;  /* REPLAY: the frame's, for its copies (NULL: none made) */
-    int ask_uploads;     /* REPLAY: the native GS has the frame's uploads: ask for them again */
+    int ask_uploads;     /* REPLAY: the PC renderer has the frame's uploads: ask for them again */
     int skip_image;      /* REPLAY: the next IMAGE data is an upload asked for again: left out */
     uint64_t upload_bytes_left_out;
     /* the 2D (Flat): SCAN keeps this frame's items; REPLAY moves the paired ones */
@@ -1267,8 +1323,8 @@ typedef struct {
     uint32_t shown_fbp; /* the buffer the replay draws into, in place of draw_fbp */
     double t;           /* how far between the frame shown (0) and the one drawn (1) the picture is */
     int exact;          /* the frame as it was, for the buffers other than the frame (port_interp_end_vblank) */
-    int prev_frame_kept; /* the native GS keeps the frame shown before the pictures between (take_snapshot) */
-    int record_reads_prev; /* REPLAY: this record reads the frame shown as a texture (the native GS: read the copy) */
+    int prev_frame_kept; /* the PC renderer keeps the frame shown before the pictures between (take_snapshot) */
+    int record_reads_prev; /* REPLAY: this record reads the frame shown as a texture (the PC renderer: read the copy) */
     int native_reads_shown; /* SCAN: a native draw's screen pass reads the frame shown (RD_ND_READS_SHOWN) */
     Move move;          /* the frame's view to the camera between */
     Camera mid;         /* the camera between */
@@ -1329,7 +1385,8 @@ static void mark(Walk *w, uint64_t value) {
     uint32_t bits = (uint32_t)value;
 
 
-    if (index >= PORT_FRAME_INTERP_VIEW && index < PORT_FRAME_INTERP_SCREEN + 6) {
+    if ((index >= PORT_FRAME_INTERP_VIEW && index < PORT_FRAME_INTERP_SCREEN + 6) ||
+        index == PORT_FRAME_INTERP_MOUSE_YAW || index == PORT_FRAME_INTERP_MOUSE_PITCH) {
         memcpy(&w->fields[index], &bits, 4);
         return;
     }
@@ -1376,6 +1433,8 @@ static void mark(Walk *w, uint64_t value) {
         const float *s = &w->fields[PORT_FRAME_INTERP_SCREEN];
 
         camera_from_fields(&w->camera, &w->fields[PORT_FRAME_INTERP_VIEW]);
+        w->mouse_spent.yaw_rad = w->fields[PORT_FRAME_INTERP_MOUSE_YAW];
+        w->mouse_spent.pitch_rad = w->fields[PORT_FRAME_INTERP_MOUSE_PITCH];
         if (w->have_reflect) {
             /* the reflection's view moves with the world's when it is the world's camera */
             int k;
@@ -1825,7 +1884,7 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
             uint32_t tw = 1u << ((v >> 26) & 0xF), th = 1u << ((v >> 30) & 0xF);
 
             if (levels > 0 && levels <= 3 && ((w->tex1[n] >> 9) & 1)) {
-                /* (a block of the format, in pixels: gsn.cpp's mip_addresses) */
+                /* (a block of the format, in pixels) */
                 uint32_t bw = psm == 0x14 ? 32 : psm == 0x13 || psm == 0x02 || psm == 0x0A ? 16 : 8;
                 uint32_t bh = psm == 0x13 || psm == 0x14 ? 16 : 8;
                 uint32_t blocks = (tw / bw) * (th / bh), end = tbp + blocks, l;
@@ -1954,7 +2013,7 @@ static void ad_write(Walk *w, GifWalk *p, uint32_t *reg, uint64_t *value) {
                 *reg = PORT_GS_REG_FRAME_INTERP;
                 *value = (uint64_t)0xFF << 32;
             } else if (dir == 0 && w->ask_uploads && dbp != w->draw_fbp * 32) {
-                /* the native GS asked for the frame's upload again (it kept its pages, or its bytes):
+                /* the PC renderer asked for the frame's upload again (it kept its pages, or its bytes):
                    the data left out (walk_record) */
                 *reg = PORT_GS_REG_REPLAY_UPLOAD;
                 *value = (uint64_t)w->upload | (uint64_t)(uint32_t)(w->bitbltbuf >> 32) << 32;
@@ -2138,7 +2197,7 @@ static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
         (uint32_t)(b->tex & 0x3FFF) == w->flat->shown_fbp * 32 && p->rgbaq != NULL) {
         /* The frame shown before blended in (Game_BlendPreviousFrame: ALPHA 0x44, As of 0x80 from it):
            P = a Prev + (1 - a) Drawn, which decays the frames before by a each frame. A picture between at
-           t blends in the frame shown before it (the native GS's copy of it, take_snapshot) by a^t: from
+           t blends in the frame shown before it (the PC renderer's copy of it, take_snapshot) by a^t: from
            the frame shown at t 0 to the game's own blend at t 1, with no jump at either; the trail as long
            in time as the game's. (Blending each picture with the one before instead, by the weight that
            gives the same lag, moved evenly between the frames but jumped at each: the game's frame is
@@ -2198,17 +2257,17 @@ static void move_flat_vertex(Walk *w, GifWalk *p, uint8_t *q) {
 }
 
 /* ---- On the GPU ---------------------------------------------------------------------------------
-   With the native GS alone, the pictures between are drawn on the GPU (port/gs/native/gsn.cpp, "Pictures
+   With the PC renderer alone, the pictures between are drawn on the GPU (port/gs/pc/pcr_between.cpp, "Pictures
    between on the GPU"): the first picture of a frame walks its packets as REPLAY does, but leaves every
    vertex where the game put it and notes, for each vertex kick, what moving it takes (a GsnInterpMove:
    its place in the frame's view, its model's two places, a 2D item's two places, colours and texture
-   coordinates); the native GS draws the packets from that once and records what it did, and each
+   coordinates); the PC renderer draws the packets from that once and records what it did, and each
    picture after it hands over only its time, its cameras and the model parts that move with their model
-   then (gpu_picture), and gs_replay.vert moves the vertices as move_vertex and move_flat_vertex do here.
-   Not done on the GPU (the CPU's walk as before): with paraLLEl-GS (--renderer both), KF4_INTERP_STILL,
+   then (gpu_picture), and the PC renderer's pcr_prim.vert moves the vertices as move_vertex and move_flat_vertex do here.
+   Not done on the GPU (the CPU's walk as before): with paraLLEl-GS (--renderer gs), KF4_INTERP_STILL,
    the frame drawn again exact for the buffers it changed (port_interp_end_vblank), and with
    KF4_INTERP_CPU set. */
-static GsnInterpMove *gpu_moves; /* the frame's, by kick (the native GS frees the array it is handed) */
+static GsnInterpMove *gpu_moves; /* the frame's, by kick (the PC renderer frees the array it is handed) */
 static size_t gpu_moves_room;
 static uint8_t *gpu_run_ok;      /* by run: paired, moved, not apart (the pictures' bits: gpu_picture) */
 static size_t gpu_run_room;
@@ -2502,7 +2561,7 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
         w->run_vertex = 0;
         w->nseen = 0;
         if (w->mode == SCAN && w->objects != NULL) {
-            objects_add_run(w->objects, r->key, w->section, w->sky, w->alt);
+            objects_add_run(w->objects, r->key, w->section, w->sky);
             w->objects->runs[w->objects->nruns - 1].shadow = (r->program & RECORD_SHADOW) != 0;
         } else if (w->mode == REPLAY) {
             const Objects *o = w->objects;
@@ -2655,7 +2714,7 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                 p->st = NULL;
                 p->rgbaq = NULL;
                 p->uv = NULL;
-                w->kick++; /* (the GS's vertex kicks, all of them: gsn.cpp numbers them alike) */
+                w->kick++; /* (the GS's vertex kicks, all of them: numbered as the GIF front end numbers them) */
                 break;
             case 0xC:
             case 0xD:
@@ -2680,18 +2739,11 @@ static size_t walk_record(Walk *w, const Record *r, uint8_t *data) {
                 uint32_t reg = (uint32_t)(v[1] & 0xFF);
 
                 if (reg == PORT_GS_REG_NATIVE_DRAW) {
-                    /* native draw's marks: the PS2 path's packets of the native draws before them follow, for
-                       the native GS to leave out when it draws the native ones (gsn_set_native_draw). Their
-                       runs are not paired: the native draws are, by their identity (gsn_native_draw.inc) */
+                    /* native draw's marks */
                     uint32_t command = RD_ND_COMMAND(v[0]);
 
-                    if (command == RD_ND_ALT_BEGIN) {
-                        w->alt = port_options.renderer == PORT_RENDERER_NATIVE &&
-                                 port_options.native_draw_compare != PORT_ND_COMPARE_PS2;
-                    } else if (command == RD_ND_ALT_END) {
-                        w->alt = 0;
-                    } else if (command == RD_ND_READS_SHOWN) {
-                        w->native_reads_shown = 1; /* (native draw's screen pass, gsn_nd_pass.inc: no packet says so) */
+                    if (command == RD_ND_READS_SHOWN) {
+                        w->native_reads_shown = 1; /* (native draw's screen pass: no packet says so) */
                     } else if (command == RD_ND_DRAW && w->mode == REPLAY && w->exact && exact_frame(w)) {
                         /* (the exact restore: a native draw into the frame is left out, as the PS2 path's
                            vertices are: exact_kick) */
@@ -2771,15 +2823,16 @@ typedef struct {
     Walk scan;        /* what the walk found in it */
     uint32_t shown;   /* the buffer shown at the vblank that kept it */
     Camera before;    /* the camera of the frame shown then */
+    MouseTurn mouse_before; /* and the mouse turn it had spent */
     int have_before;
     const Objects *objects, *objects_before; /* its runs, and the frame's before (NULL: none) */
     Flat *flat;                    /* its 2D items, paired with the frame before's */
     const Flat *flat_before;       /* (NULL: none) */
     int dirty;                     /* a picture between changed a buffer the next frame reads first */
     int reads_prev;                /* the frame blends in the frame shown (Game_BlendPreviousFrame) */
-    int snapshot_sent;             /* and the native GS was asked to keep the frame shown */
+    int snapshot_sent;             /* and the PC renderer was asked to keep the frame shown */
     int gpu;                       /* its pictures between on the GPU ("On the GPU"): 1 handed over, -1 not */
-    uint64_t gpu_serial;           /* (the frame's, for the native GS) */
+    uint64_t gpu_serial;           /* (the frame's, for the PC renderer) */
 } Pending;
 
 /* The runs of the last frame drawn and of the one before, and one to walk the next into */
@@ -2795,6 +2848,7 @@ static Uploads *uploads_new = &uploads_new_frame;
 static Pending pending; /* a frame drawn and not yet shown (size 0: none) */
 static size_t pending_room;
 static Camera last_camera; /* the camera of the last frame drawn */
+static MouseTurn last_mouse_spent; /* and the mouse turn it had spent */
 static int last_camera_set;
 static uint8_t *copy;
 static size_t copy_room;
@@ -2893,7 +2947,7 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
         w.paths[i].win[0] = w.paths[i].win[1] = GSN_IM_NONE;
     }
     {
-        /* the native GS's marks around the picture between (it records the game's uploads, not these) */
+        /* the PC renderer's marks around the picture between (it records the game's uploads, not these) */
         uint64_t mark_begin[4] = {1 | ((uint64_t)1 << 15) | ((uint64_t)1 << 60), 0xE, (uint64_t)0xF0 << 32,
                                   PORT_GS_REG_FRAME_INTERP};
 
@@ -2920,7 +2974,7 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
 
         memcpy(&r, pending.data + at, sizeof(r));
         {
-            /* a record that is all an upload's data: sent as it is, or left out when the native GS has
+            /* a record that is all an upload's data: sent as it is, or left out when the PC renderer has
                the upload (no copy, no walk) */
             GifWalk *pw = &w.paths[r.what & 0xFF];
             size_t qwords = r.bytes / 16;
@@ -2951,7 +3005,7 @@ static void replay_pending(const Camera *between, double t, int exact, void (*se
             bytes = walk_record(&w, &r, copy);
             if (bytes != 0) {
                 /* a record that reads the frame shown before (Game_BlendPreviousFrame's packet is one of
-                   its own): between marks that have the native GS read its copy (take_snapshot) */
+                   its own): between marks that have the PC renderer read its copy (take_snapshot) */
                 uint64_t mark[4] = {1 | ((uint64_t)1 << 15) | ((uint64_t)1 << 60), 0xE, (uint64_t)0xF4 << 32,
                                     PORT_GS_REG_FRAME_INTERP};
 
@@ -3063,6 +3117,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         pending.scan = w;
         pending.shown = shown;
         pending.before = last_camera;
+        pending.mouse_before = last_mouse_spent;
         pending.have_before = last_camera_set;
         pending.objects = objects_last;
         pending.objects_before = objects_before_set ? objects_before : NULL;
@@ -3096,6 +3151,7 @@ void port_interp_vsync(const uint64_t *privileged) {
         }
     }
     last_camera = w.camera;
+    last_mouse_spent = w.mouse_spent;
     last_camera_set = 1;
 }
 
@@ -3103,7 +3159,7 @@ int port_interp_active(void) {
     return pending.size != 0 && pending.have_before && !pending.cut;
 }
 
-/* The pictures between on the GPU ("On the GPU"): with the native GS alone (it asks for the uploads
+/* The pictures between on the GPU ("On the GPU"): with the PC renderer alone (it asks for the uploads
    again), not KF4_INTERP_STILL's check, and not KF4_INTERP_CPU */
 static int gpu_wanted(void) {
     static int cpu = -1;
@@ -3114,7 +3170,11 @@ static int gpu_wanted(void) {
     return !cpu && !interp_still() && port_gs_interp_gpu();
 }
 
-/* The packets of a REPLAY on the GPU's way, gathered for the native GS: a uint32_t path and size, then
+int port_interp_on_gpu(void) {
+    return gpu_wanted();
+}
+
+/* The packets of a REPLAY on the GPU's way, gathered for the PC renderer: a uint32_t path and size, then
    the bytes */
 static uint8_t *gpu_stream;
 static size_t gpu_stream_size, gpu_stream_room;
@@ -3184,7 +3244,7 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     f->screen[1][3] = (float)pending.scan.screen_reflect.cy;
     f->screen[1][4] = (float)pending.scan.screen_reflect.cz;
     {
-        /* (the native GS bounds the copies its blending reads by where the vertices are at t 0 and 1) */
+        /* (the PC renderer bounds the copies its blending reads by where the vertices are at t 0 and 1) */
         Move move0;
         int i;
 
@@ -3202,10 +3262,26 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
     }
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
+    {
+        /* (for a renderer that makes the stream's walk from the frame's own: replay_pending's choices) */
+        size_t at;
+
+        for (at = 0; at < pending.size;) {
+            Record r;
+
+            memcpy(&r, pending.data + at, sizeof(r));
+            f->packet_bytes += r.bytes;
+            at += sizeof(r) + r.bytes;
+        }
+        f->draw_fbp = pending.scan.draw_fbp;
+        f->shown_fbp = pending.shown;
+        f->uploads_asked_again = port_gs_replay_uploads() != 0;
+        f->shown_kept = pending.reads_prev && port_gs_replay_uploads();
+    }
     /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
     f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
                memcmp(pending.before.t, pending.scan.camera.t, sizeof(pending.before.t)) == 0;
-    /* (the native GS frees what it is handed: these start again) */
+    /* (the PC renderer frees what it is handed: these start again) */
     f->moves = gpu_moves;
     f->stream = gpu_stream;
     f->stream_bytes = gpu_stream_size;
@@ -3365,7 +3441,7 @@ static void outside_check(const Camera *between, double t, double phase, int gpu
         int moving, flag, i;
         uint32_t k;
 
-        if (cur->section != SECTION_WORLD || !cur->placed || cur->native) {
+        if (cur->section != SECTION_WORLD || !cur->placed) {
             continue;
         }
         w.run = (int)r;
@@ -3452,19 +3528,42 @@ static void outside_check(const Camera *between, double t, double phase, int gpu
     fflush(log);
 }
 
-int port_interp_picture(double phase, void (*send)(int path, const void *data, size_t bytes)) {
+/* Instant mouse look (port/include/port/mouse_lead.h): the camera t of the way turned on by the mouse's turn that
+   it does not show yet. 0 when there is none to speak of. */
+#define MOUSE_LEAD_LEAST_RAD 1e-5 /* (a hundredth of the turn of a pixel at the least sensitivity) */
+
+static int camera_lead(Camera *c, double t, double picture_vblank) {
+    MouseTurn ahead = port_mouse_lead_ahead(pending.mouse_before, pending.scan.mouse_spent, t, picture_vblank);
+    int row;
+
+    if (fabs(ahead.yaw_rad) < MOUSE_LEAD_LEAST_RAD && fabs(ahead.pitch_rad) < MOUSE_LEAD_LEAST_RAD) {
+        return 0;
+    }
+    mouse_lead_turn_view(c->r, ahead);
+    for (row = 0; row < 3; row++) {
+        c->t[row] = -(c->r[row][0] * c->eye[0] + c->r[row][1] * c->eye[1] + c->r[row][2] * c->eye[2]);
+    }
+    return 1;
+}
+
+int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, const void *data, size_t bytes)) {
     Camera between;
     double t;
+    int led;
 
     if (!port_interp_active()) {
         return 0;
     }
     t = (pending.age + phase) * 0.5;
-    if (t <= 0 || t >= 1) {
-        return 0; /* the frame shown, as the game drew it */
+    if (t < 0 || t >= 1) {
+        return 0;
     }
     if (!camera_between(&pending.before, &pending.scan.camera, t, &between)) {
         return 0;
+    }
+    led = camera_lead(&between, t, (double)vblank + phase);
+    if (t == 0 && !led) {
+        return 0; /* the frame shown, as the game drew it (turned by the mouse, it is drawn again as the others) */
     }
     if (pending.gpu == 0) {
         pending.gpu = gpu_wanted() && gpu_frame(&between, t, send) ? 1 : -1;
@@ -3505,6 +3604,11 @@ void port_interp_print_stats(void) {
     fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets; of %llu model parts placed, %llu "
             "paired by their batch and %llu by their order\n", (double)stat_sent / 1048576.0, (unsigned long long)stat_runs,
             (unsigned long long)stat_runs_key, (unsigned long long)stat_runs_order);
+    if (unlocked_on) {
+        fprintf(stderr, "[stats] frame rate unlocked: %.0f a second at the end (between %.0f and %.0f), %llu times down "
+                "as the renderer fell behind, %llu up\n", unlocked.rate_hz, unlocked.floor_hz, unlocked.ceiling_hz,
+                (unsigned long long)unlocked.falls, (unsigned long long)unlocked.rises);
+    }
     if (stat_gpu_frames) {
         fprintf(stderr, "[stats] frame rate on the GPU: %llu frames handed over, %llu pictures between (%.3f s on this thread, "
                 "%.1f us a picture)\n", (unsigned long long)stat_gpu_frames, (unsigned long long)stat_gpu_pictures,

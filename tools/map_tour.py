@@ -2,7 +2,7 @@
 """A tour of the game's maps: every map visited and pictured, without playing there.
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
-                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|native|modern]
+                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc]
                       [--extra "ARGS"] [--turn]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
@@ -18,10 +18,9 @@ The places come from the map file itself (read from KF4.DAT on the disc): the ma
 the biggest boxes of the records that have floors to stand on. Each place is seen at --headings
 headings.
 
-Each map is one run of the program: headless with the GS on (paraLLEl-GS, the reference, so the
-pictures compare with the tours from before the native GS became the default; --renderer native for
-the native GS's), it loads the map's quick saves one after another (--quick-load A,V:B,...), writes
-the picture of each view once the fade-in is over, and a GS frame capture of the first view
+Each map is one run of the program: headless with the GS on (the PC renderer, the default here;
+--renderer gs for paraLLEl-GS's pictures), it loads the map's quick saves one after another
+(--quick-load A,V:B,...), writes the picture of each view once the fade-in is over, and a GS frame capture of the first view
 (--gs-capture-at). Then kf4-gsreplay lists the capture's draws (the
 census: VU1 programs, PRIM, TEX0 PSM, ALPHA, TEST, ZBUF, FRAME) and runs its VIF1 stream through the
 VU1 interpreter again (--mode vif: VU1 runs and cycles for the frame, and packets that come out
@@ -69,7 +68,7 @@ CLOCK = "2026-01-01T12:00:00"
 
 
 def find_exe(name):
-    for preset in ("linux-gcc", "linux-clang", "windows-clang"):
+    for preset in ("linux-clang", "linux-gcc", "windows-clang"):
         for suffix in ("", ".exe"):
             path = os.path.join(ROOT, "out", preset, name + suffix)
             if os.path.exists(path):
@@ -536,9 +535,6 @@ def run_map(args, base, number, name, places, folder):
             out["vif_replay"] = {"same": int(m.group(1)), "differ": int(m.group(2)), "missing": int(m.group(3)),
                                  "extra": int(m.group(4))}
     shutil.rmtree(saves, ignore_errors=True)  # game state; made again each run
-    kept = os.path.join(data_dir, "native_gs_pipeline_list.txt")  # (the native GS's pipelines: tools/pipeline_list.py)
-    if os.path.exists(kept):
-        shutil.copy(kept, folder)
     shutil.rmtree(data_dir, ignore_errors=True)
     return out
 
@@ -634,14 +630,11 @@ def main():
     parser.add_argument("--jobs", type=int, default=3, help="maps run at once (default 3)")
     parser.add_argument("--base", help="the quick save to start from (default: made from tests/newgame.pad)")
     parser.add_argument("--no-capture", action="store_true", help="no GS capture, so no census")
-    parser.add_argument("--renderer", default="gs", choices=("gs", "native", "modern"),
-                        help="who draws the pictures (default gs, paraLLEl-GS; modern: the native GS with the scene "
-                             "in its own targets, P8, whose captures carry the page-ownership table)")
-    parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --native-msaa 2\" (each "
-                             "map's NNN/native_gs_pipeline_list.txt then has the native GS's pipelines at those settings: "
-                             "tools/pipeline_list.py)")
+    parser.add_argument("--renderer", default="pc", choices=("gs", "pc"),
+                        help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS)")
+    parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --native-msaa 2\"")
     parser.add_argument("--turn", action="store_true", help="turn right all along (the views are then not the same "
-                             "each tour: for the native GS's pipeline lists, the pictures between drawn moving)")
+                             "each tour, and the pictures between are drawn moving)")
     args = parser.parse_args()
     if not args.disc:
         sys.exit("map_tour: pass --disc or set KF4_DISC")

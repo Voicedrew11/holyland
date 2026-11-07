@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""What a thread of the game spends its time in, from kf4-sampler's stacks (tools/sampler/sampler.c; profile.py
-runs the game with it, docs/port/RENDERER.md "Profiling").
+"""What a thread of the game spends its time in, from a profile's stacks (docs/port/PROFILING.md): kf4-sampler's on
+Windows (tools/sampler/sampler.c), or the game's own on Linux (port/platform/sampler.c: Shift+P's Save, or
+--profile-at; profile.py runs the game either way).
 
-    python tools/sampler/stacks.py SAMPLES EXE [--thread FUNC|TID] [--threads] [--top N]
-                                   [--callers FUNC | --callees FUNC] [--depth D] [--exports]
+    python tools/sampler/stacks.py SAMPLES EXE [--thread FUNC|TID|NAME] [--threads] [--top N]
+                                   [--callers FUNC | --callees FUNC] [--depth D] [--exports] [--gpu]
 
 EXE is the program that was sampled: its DWARF (a RelWithDebInfo build) names the frames, through llvm-symbolizer
 (llvm-mingw's bin on PATH), inlined functions as frames of their own. A thread's busy samples are those not waiting
 in ntdll or win32u. For each function, of the thread's busy samples: inclusive, the share whose stack has it anywhere
 (so the shares overlap: a caller's covers its callees'), and self, the share it was the innermost frame of.
 
---thread FUNC|TID  the thread: a thread id, or a function, the thread whose busy stacks have it most (ring_thread:
-                   the native GS's thread; backend_thread: its back end's); by default the busiest
+--thread FUNC|TID  the thread: a thread id, or a function, the thread whose busy stacks have it most (backend_thread:
+                   the back end's thread; ring_thread names no thread in this build); by default the busiest
 --threads          every thread first: its CPU time while sampled, its busy share of the samples, and what it runs
                    (its stacks' commonest outermost function of the program's own)
 --callers FUNC     the stacks FUNC is called from, --depth (3) frames up, by share of the thread's busy samples
 --callees FUNC     what FUNC's time goes into, --depth (1) frames down ("(self)": FUNC's own)
 --exports          a DLL's frames by the export at or before them ([ucrtbase.dll!memcmp]), not the DLL alone: right
-                   for an exported function, a guess inside a DLL's own functions (a driver's)
+                   for an exported function, a guess inside a DLL's own functions (a driver's). On Linux the game
+                   names other modules' frames itself (its "N" lines, from their symbols and MiniDebugInfo): always
+                   [libvulkan_radeon.so!radv_CmdDraw] where it could, the module alone where not
+--gpu              the GPU's time a picture by kind of work and by shader state, from the run's "G" lines (Linux runs)
+
+On Linux the sampler catches threads only while they run, so every sample is busy: a function's share is its share
+of the thread's CPU time. --thread can also be a thread's name (kf4-pc, kf4-pc-pump, kf4-dma, kf4, kf4-between).
 """
 import argparse
 import bisect
@@ -29,22 +36,55 @@ import sys
 IDLE = ("ntdll.dll", "win32u.dll")
 
 
+class Profile:
+    """A profile's file: the modules' paths by name, each thread's CPU ms and name, each thread's stacks as (count,
+    frames innermost first), other modules' frames named by the game ("N", Linux), the GPU's rows ("G", "P")"""
+
+    def __init__(self, path):
+        self.mods, self.cpu, self.names, self.frame_names = {}, {}, {}, {}
+        self.stacks = collections.defaultdict(list)
+        self.gpu, self.pictures = [], 0
+        with open(path) as f:
+            for line in f:
+                p = line.split()
+                if not p:
+                    continue
+                if p[0] == "M":
+                    self.mods[p[1].lower()] = line.rstrip("\n").split(" ", 2)[2]  # (a path may have spaces)
+                elif p[0] == "T":
+                    self.cpu[int(p[1])] = float(p[2])
+                elif p[0] == "C":
+                    self.names[int(p[1])] = p[2] if len(p) > 2 else "?"
+                elif p[0] == "K":
+                    self.stacks[int(p[1])].append((int(p[2]), p[3:]))
+                elif p[0] == "N":
+                    self.frame_names[p[1]] = line.rstrip("\n").split(" ", 2)[2]
+                elif p[0] == "G":
+                    self.gpu.append((int(p[1]), int(p[2]), p[3], line.rstrip("\n").split(" ", 4)[4]))
+                elif p[0] == "P":
+                    self.pictures = int(p[1])
+
+
 def load(path):
-    """kf4-sampler's file: the modules' paths by name, each thread's CPU ms, and each thread's stacks as
-    (count, frames innermost first)"""
-    mods, cpu, stacks = {}, {}, collections.defaultdict(list)
-    with open(path) as f:
-        for line in f:
-            p = line.split()
-            if not p:
-                continue
-            if p[0] == "M":
-                mods[p[1].lower()] = line.rstrip("\n").split(" ", 2)[2]  # (a path may have spaces)
-            elif p[0] == "T":
-                cpu[int(p[1])] = float(p[2])
-            elif p[0] == "K":
-                stacks[int(p[1])].append((int(p[2]), p[3:]))
-    return mods, cpu, stacks
+    """(as before Profile) the modules, CPU ms and stacks"""
+    prof = Profile(path)
+    return prof.mods, prof.cpu, prof.stacks
+
+
+def gpu_report(prof, top):
+    if not prof.gpu:
+        sys.exit("stacks: no GPU rows in this file (a Linux profile run has them)")
+    per = 1.0 / prof.pictures if prof.pictures else 0.0
+    kinds = [g for g in prof.gpu if g[2] == "kind"]
+    shaders = [g for g in prof.gpu if g[2] == "shader"]
+    print("GPU: %.3f ms a picture over %d pictures" % (sum(g[0] for g in kinds) / 1e6 * per, prof.pictures))
+    print("-- ms a picture  kind of work")
+    for ns, n, level, name in sorted(kinds, reverse=True):
+        print("%9.3f        %s" % (ns / 1e6 * per, name))
+    if shaders:
+        print("-- ms a picture  intervals  shader state")
+        for ns, n, level, name in sorted(shaders, reverse=True)[:top]:
+            print("%9.3f   %10d  %s" % (ns / 1e6 * per, n, name))
 
 
 def symbolize(exe, addrs):
@@ -54,7 +94,7 @@ def symbolize(exe, addrs):
         out = subprocess.run(["llvm-symbolizer", "--obj=" + exe, "--functions=short"],
                              input="".join("0x%x\n" % a for a in addrs), capture_output=True, text=True).stdout
     except FileNotFoundError:
-        sys.exit("stacks: no llvm-symbolizer: put llvm-mingw's bin on PATH")
+        sys.exit("stacks: no llvm-symbolizer: install LLVM (Windows: put llvm-mingw's bin on PATH)")
     return {a: block.split("\n")[0::2] for a, block in zip(addrs, out.strip("\n").split("\n\n"))}
 
 
@@ -87,8 +127,12 @@ def exports(path):
 
 
 def report(path, exe, thread=None, threads=False, top=40, callers_of=None, callees_of=None, depth=None,
-           by_export=False):
-    mods, cpu, stacks = load(path)
+           by_export=False, gpu=False):
+    prof = Profile(path)
+    if gpu:
+        gpu_report(prof, top)
+        return
+    mods, cpu, stacks = prof.mods, prof.cpu, prof.stacks
     addrs = set()
     for tid in stacks:
         for n, f in stacks[tid]:
@@ -99,6 +143,8 @@ def report(path, exe, thread=None, threads=False, top=40, callers_of=None, calle
     tables = {}
 
     def dll_frame(a):
+        if a in prof.frame_names:
+            return "[%s!%s]" % (a.rpartition("+")[0], prof.frame_names[a])
         mod, _, rva = a.rpartition("+")
         if not by_export or mod.lower() not in mods:
             return "[%s]" % mod
@@ -129,12 +175,15 @@ def report(path, exe, thread=None, threads=False, top=40, callers_of=None, calle
                 # (the outermost of the program's own, past libc++'s std::thread wrappers and a fiber's start; else the DLL)
                 own = [x for x in fr if not x.startswith(("[", "__", "??"))]
                 outer[own[-1] if own else fr[0]] += n
-            print("%7d %9.0f ms %5.1f%%  %s" % (tid, cpu.get(tid, 0), 100.0 * sum(outer.values()) / samples,
-                                                outer.most_common(1)[0][0] if outer else "-"))
+            print("%7d %-15s %9.0f ms %5.1f%%  %s" % (tid, prof.names.get(tid, ""), cpu.get(tid, 0),
+                                                      100.0 * sum(outer.values()) / samples if samples else 0.0,
+                                                      outer.most_common(1)[0][0] if outer else "-"))
     if thread is None:
         tid = max(busy, key=lambda t: sum(n for n, fr in busy[t]))
     elif str(thread).isdigit():
         tid = int(thread)
+    elif thread in prof.names.values():
+        tid = next(t for t, name in prof.names.items() if name == thread)
     else:
         tid = max(busy, key=lambda t: sum(n for n, fr in busy[t] if thread in fr))
         if not any(thread in fr for n, fr in busy[tid]):
@@ -157,7 +206,7 @@ def report(path, exe, thread=None, threads=False, top=40, callers_of=None, calle
             callees[" > ".join(reversed(fr[max(0, k - (depth or 1)):k]))] += n
     if total == 0:
         sys.exit("stacks: thread %d has no busy samples" % tid)
-    print("thread %d: %.0f ms of CPU; %d busy samples" % (tid, cpu.get(tid, 0), total))
+    print("thread %d %s: %.0f ms of CPU; %d busy samples" % (tid, prof.names.get(tid, ""), cpu.get(tid, 0), total))
     if callers_of:
         print("-- callers of %s (%.1f%% inclusive)" % (callers_of, 100.0 * incl[callers_of] / total))
         for k, n in callers.most_common(top):
@@ -183,9 +232,10 @@ def main():
     parser.add_argument("--callees")
     parser.add_argument("--depth", type=int)
     parser.add_argument("--exports", action="store_true")
+    parser.add_argument("--gpu", action="store_true")
     args = parser.parse_args()
     report(args.samples, args.exe, args.thread, args.threads, args.top, args.callers, args.callees, args.depth,
-           args.exports)
+           args.exports, args.gpu)
 
 
 if __name__ == "__main__":

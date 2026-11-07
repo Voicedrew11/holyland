@@ -1,5 +1,5 @@
-// The renderer core's insides, for the code that draws what it holds (the native GS in hosted mode:
-// port/gs/native/gsn_native_draw.inc). C++ only; the game's side uses port/include/port/render.h.
+// The renderer core's insides, for the code that draws what it holds (the PC renderer: port/gs/pc/).
+// C++ only; the game's side uses port/include/port/render.h.
 #pragma once
 #include <stdint.h>
 

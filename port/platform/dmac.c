@@ -482,6 +482,7 @@ static void *dmac_thread(void *unused)
     int idle = 0;
 
     (void)unused;
+    port_name_thread("kf4-dma");
     for (;;) {
         Work work;
 

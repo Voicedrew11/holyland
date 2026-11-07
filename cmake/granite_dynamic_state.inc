@@ -3,9 +3,9 @@
 // blend enable, the blend equation and the colour write mask. Included into vulkan/command_buffer.cpp (inside
 // namespace Vulkan) by cmake/granite_dynamic_state.cmake, which also adds the calls into Granite's own code.
 //
-// A command buffer whose static state has `dynamic_ds` (and `dynamic_blend`) set (set_dynamic_state: the native GS's,
-// gsn.cpp's Cmd) makes its pipelines with that state dynamic and looks them up by a hash without it: draws that differ
-// only there share one pipeline, and each draw sets what differs (holyland_flush_dynamic) instead of binding another.
+// A command buffer whose static state has `dynamic_ds` (and `dynamic_blend`) set (set_dynamic_state) makes its pipelines with that state dynamic and looks them up by a hash without it:
+// draws that differ only there share one pipeline, and each draw sets what differs (holyland_flush_dynamic) instead of
+// binding another.
 // The rest of Granite is as it was: a command buffer without the bits makes and binds its pipelines as before.
 
 std::atomic<uint64_t> holyland_pipeline_binds{0}; // graphics pipelines bound (--stats)

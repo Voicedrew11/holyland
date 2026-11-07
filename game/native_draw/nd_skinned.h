@@ -11,8 +11,7 @@
    out, a draw per part on program 0x280. kind (RD_KIND_*) and owner (its EE word) make the draws'
    identity, id[1] the part. 1 if drawn; 0 if a part it would send has a block the core cannot draw (or
    the model has no parts), and nothing was queued: the caller draws it the PS2 way. It does not count a
-   decline (rd_stats.declined): the caller does. With --native-draw-compare the PS2 path's packets follow,
-   between the marks (Model_DrawSkinned itself, not the model's draw_parts). */
+   decline (rd_stats.declined): the caller does. */
 int NativeDraw_Skinned(ModelInstance *model, int kind, const void *owner);
 
 #endif

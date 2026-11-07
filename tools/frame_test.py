@@ -2,7 +2,7 @@
 """Step 2's check: the game's pictures, drawn by paraLLEl-GS, the same every run.
 
     tools/frame_test.py [--disc ISO] [--exe PATH] [--keep DIR] [--frames N,N,...] [--dense A-B] [--runs N]
-                        [--renderer gs|native|modern|fast]
+                        [--renderer gs|pc]
 
 Plays tests/newgame.pad as tools/boot_test.py does, headless with a fixed clock, and writes the picture
 shown at a few vblanks (--dump-frames): the Agetec logo, the title menu, the brightness screen, the
@@ -11,13 +11,12 @@ of them is a single colour. It also writes every picture of a stretch of the ope
 for none), where the frame's clear, its scene and its overlays come by both DMA channels, so the order
 the GS gets them in is checked frame by frame. Then one more run dumps the last of the pictures alone,
 which must be byte for byte the one the runs that dumped them all wrote: reading a picture back must
-leave nothing behind in the GS (the native GS's read-backs write its render targets back to VRAM). Needs
-a Vulkan GPU that paraLLEl-GS runs on. The pictures are kept with --keep, for looking at; the disc comes
+leave nothing behind in the GS (the PC renderer's read-backs write its render targets back to VRAM). Needs
+a Vulkan GPU that the renderer runs on. The pictures are kept with --keep, for looking at; the disc comes
 from --disc or KF4_DISC.
 
-The runs ask for --renderer gs: the program's default is the native GS since stage 4, and this test is
-paraLLEl-GS's (the reference's) determinism. --renderer native runs the same checks on the native GS; modern and
-fast on its scene and on the PC renderer (docs/port/PC_RENDERER.md).
+The runs ask for --renderer pc by default: the PC renderer, which is what a player gets. --renderer gs runs the
+same checks on paraLLEl-GS, the accurate GS emulator (docs/port/PC_RENDERER.md).
 """
 import argparse
 import hashlib
@@ -37,7 +36,7 @@ DENSE = "990-1010"
 
 
 def find_exe():
-    for preset in ("linux-gcc", "linux-clang", "windows-clang"):
+    for preset in ("linux-clang", "linux-gcc", "windows-clang"):
         for name in ("kf4", "kf4.exe"):
             path = os.path.join(ROOT, "out", preset, name)
             if os.path.exists(path):
@@ -45,9 +44,7 @@ def find_exe():
     sys.exit("frame_test: no built program under out/; build one or pass --exe")
 
 
-STARTED = {"gs": ("[gs] paraLLEl-GS on", "paraLLEl-GS"), "native": ("[gsn] the native GS on", "the native GS"),
-           "modern": ("[gsn] the native GS on", "the native GS's scene (modern)"),
-           "fast": ("[gsn] the native GS on", "the PC renderer (fast)")}
+STARTED = {"gs": ("[gs] paraLLEl-GS on", "paraLLEl-GS"), "pc": ("[pcr] the PC renderer on", "the PC renderer")}
 
 
 def run(exe, disc, frames, folder, renderer):
@@ -91,8 +88,8 @@ def main():
     parser.add_argument("--dense", default=DENSE, help="also every vblank from A to B (default %s)" % DENSE)
     parser.add_argument("--runs", type=int, default=2, help="runs to compare (default 2)")
     parser.add_argument("--keep", help="write the pictures into this folder")
-    parser.add_argument("--renderer", default="gs", choices=sorted(STARTED),
-                        help="who draws (default gs, paraLLEl-GS, whatever the program's default)")
+    parser.add_argument("--renderer", default="pc", choices=sorted(STARTED),
+                        help="who draws (default pc, the PC renderer; gs: paraLLEl-GS)")
     args = parser.parse_args()
     # never the player's data folder: settings, saves and caches go to a temporary one
     os.environ.setdefault("KF4_DATA_DIR", tempfile.mkdtemp(prefix="kf4_data_"))

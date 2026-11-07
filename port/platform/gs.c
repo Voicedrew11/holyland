@@ -1,18 +1,17 @@
 /* The GS: the GIF's three paths and the display, on the DMA controller's thread.
 
    Packets come from VU1's XGKICK (PATH1, port/platform/vif1.c), VIF1's DIRECT (PATH2) and DMA
-   channel 2 (PATH3, port/platform/dmac.c), and go to the renderer --renderer chose: the backend in
-   port/gs/gs_parallel.cpp (paraLLEl-GS, the default), the native GS (port/gs/native/, step 3's), or
-   both, whose pictures are then compared (port_renderer_diff). At each vblank the kernel snapshots the display registers (PMODE..BGCOLOR in the
+   channel 2 (PATH3, port/platform/dmac.c), and go to the renderer: the PC renderer (port/gs/pc/, the
+   default), or with --renderer gs paraLLEl-GS (port/gs/gs_parallel.cpp), the accurate GS emulator, which is
+   for comparing against. At each vblank the kernel snapshots the display registers (PMODE..BGCOLOR in the
    register page) and queues them here; the controller's thread finishes the channels started before
-   it, then has the backend scan the frame out, and hands the picture to the window
+   it, then has the renderer scan the frame out, and hands the picture to the window
    (port/platform/video.c) and to --dump-frames.
 
-   Without the backend (no Vulkan, or a --headless run that neither dumps nor captures) the packets are read all
+   Without a renderer (none starts, or a --headless run that neither dumps nor captures) the packets are read all
    the same, so VIF1 and VU1 run, and then dropped. What the game does never depends on it: the
    picture is all the GS gives back, apart from the textures sceGsExecStoreImage reads, which the
    game only sends to the GS again. */
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +33,7 @@ void port_gs_backend_gif(int path, const void *data, size_t bytes);
 void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 void *port_gs_backend_context(void);
-#include "gsn.h"
+#include "gs_api.h"
 #endif
 
 #define VSYNC_QUEUE 16
@@ -45,17 +44,16 @@ typedef struct {
     int field;
 } VsyncRequest;
 
-static int backend;     /* a renderer is up */
-static int have_gs;     /* paraLLEl-GS is */
-static int have_native; /* the native GS is */
-PortRendererDiff port_renderer_diff;
+static int backend; /* a renderer is up */
+static int have_gs; /* paraLLEl-GS is (--renderer gs) */
+static int have_pc; /* the PC renderer is (the default) */
 static VsyncRequest queue[VSYNC_QUEUE];
 static volatile uint64_t queue_head; /* written by the game thread */
 static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
-static PortGsFrame native_frame; /* --renderer both: the native GS's picture, beside paraLLEl-GS's */
+static PortGsFrame pc_frame;     /* the PC renderer's picture, read back as pixels when it is wanted */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
-/* --frame-rate: the pictures between cut to fewer a vblank while the native GS's thread is behind
+/* --frame-rate: the pictures between cut to fewer a vblank while the PC renderer's thread is behind
    (port_gs_run_vsync): interp_allow of them a vblank (INTERP_ALL: no cut), one fewer each time it falls
    behind, one more after interp_rest vblanks; vblanks drawn with fewer and with none; the cuts */
 #define INTERP_ALL 16
@@ -72,7 +70,7 @@ void port_gs_interp_cut_reset(void) {
     __atomic_store_n(&interp_cut_reset_asked, 1, __ATOMIC_RELEASE);
 }
 
-/* KF4_INTERP_CUT=0 (measure): no cut, every picture between drawn however far behind the native GS falls (the
+/* KF4_INTERP_CUT=0 (measure): no cut, every picture between drawn however far behind the PC renderer falls (the
    game's thread then waits for it): what a place can keep up */
 static int interp_cut_on(void) {
     static int on = -1;
@@ -112,70 +110,57 @@ static void parse_dumps(void) {
     }
 }
 
+#ifdef KF4_HAVE_PARALLEL_GS
+/* The PC renderer on a Vulkan device of its own, with the window's swapchain on it for --presenter vulkan
+   (port/platform/present_vk.cpp). 1 when it started; without a device it can use, it does not, and nothing
+   is drawn. */
+static int open_pc_renderer(void) {
+    char path[1100];
+
+    if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
+        gsr_enable_present();
+    }
+    if (!gsr_open(NULL)) {
+        fprintf(stderr, "[gs] the PC renderer did not start (no Vulkan device it can use)\n");
+        return 0;
+    }
+    gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+    if (port_options.native_msaa > 1) {
+        port_options.native_msaa = gsr_set_msaa(port_options.native_msaa);
+    }
+    gsr_set_lod(port_options.native_lod);
+    port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
+    gsr_set_cutout_aa(port_options.native_cutout_aa);
+    gsr_set_2d(port_options.native_2d);
+    gsr_set_colour(port_options.native_colour);
+    gsr_set_layer_z(port_options.native_layer_z);
+    gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
+    gsr_set_presenter(port_video_submit, port_video_submit_image);
+    snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
+    gsr_pipeline_cache(path);
+    return 1;
+}
+#endif
+
 static void open_backend(void *unused) {
     (void)unused;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (port_options.renderer != PORT_RENDERER_NATIVE) {
+    if (port_options.renderer == PORT_RENDERER_GS) {
         have_gs = port_gs_backend_open();
+    } else {
+        have_pc = open_pc_renderer();
     }
-    if (port_options.renderer != PORT_RENDERER_GS) {
-        /* a Vulkan device of its own, beside paraLLEl-GS's (whose context has features on that the
-           native GS does not want, and whose threads submit to the queue unlocked by the other device);
-           with the window's swapchain on it for --presenter vulkan (port/platform/present_vk.cpp) */
-        if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
-            gsn_enable_present();
+    if (!have_pc) {
+        port_options.native_draw = 0; /* (the native draws are the PC renderer's: nothing else draws them) */
+    } else if (port_options.native_draw) {
+        /* the PC renderer draws the kinds it has: the others go the PS2 path's way, as packets */
+        if (port_options.native_draw & ~pcr_native_kinds()) {
+            fprintf(stderr, "[gs] --native-draw: the PC renderer draws kinds 0x%x of 0x%x natively, the rest as packets\n",
+                    port_options.native_draw & pcr_native_kinds(), port_options.native_draw);
         }
-        gsn_set_upscaler(port_options.upscaler); /* (before: --upscaler dlss's Vulkan extensions) */
-        have_native = gsn_open(NULL);
-        if (have_native) {
-            char path[1100];
-
-            gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
-            if (port_options.native_msaa > 1) {
-                port_options.native_msaa = gsn_set_msaa(port_options.native_msaa);
-            }
-            gsn_set_lod(port_options.native_lod);
-            port_options.native_aniso = gsn_set_aniso(port_options.native_aniso);
-            gsn_set_cutout_aa(port_options.native_cutout_aa);
-            gsn_set_2d(port_options.native_2d);
-            gsn_set_colour(port_options.native_colour);
-            gsn_set_layer_z(port_options.native_layer_z);
-            gsn_set_shine_exact(port_options.native_shine_exact);
-            gsn_set_native_draw(port_options.native_draw_compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2
-                                                                                        : GSN_NATIVE_DRAW_NATIVE);
-            gsn_set_standalone(port_options.renderer_modern); /* --renderer modern (P8) */
-            gsn_set_hardware_sampler(port_options.native_sampler == PORT_SAMPLER_HARDWARE); /* --native-sampler (P1) */
-            gsn_set_pc_world(port_options.renderer_fast);                                  /* --renderer fast (P2) */
-            if (port_options.scene_scale || port_options.scene_msaa) {
-                /* --scene-scale, --scene-msaa (P8 T2): across as port_gs_native_scale_x has it */
-                int s = port_options.scene_scale;
-                int sx = s && port_options.native_widescreen && port_options.widescreen ? (4 * s + 2) / 3 : s;
-                gsn_set_scene(sx, s, port_options.scene_msaa);
-            }
-            gsn_set_presenter(port_video_submit, port_video_submit_image);
-            snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
-            gsn_pipeline_cache(path);
-        }
+        port_options.native_draw &= pcr_native_kinds();
     }
-    if (port_options.renderer == PORT_RENDERER_NATIVE && !have_native) {
-        /* the default renderer did not start (no Vulkan device it can use): paraLLEl-GS, if it can */
-        have_gs = port_gs_backend_open();
-        if (have_gs) {
-            fprintf(stderr, "[gs] the native GS did not start: paraLLEl-GS draws instead\n");
-        }
-    }
-    if (port_options.native_draw && !have_native) {
-        /* (the native draws are the native GS's: without it, nothing would draw them) */
-        fprintf(stderr, "[gs] --native-draw needs the native GS: off\n");
-        port_options.native_draw = 0;
-    }
-    /* what did start, for the window (the Vulkan presenter needs the native GS), the overlay and --stats */
-    if (have_gs || have_native) {
-        port_options.renderer = have_gs && have_native ? PORT_RENDERER_BOTH
-                                : have_native          ? PORT_RENDERER_NATIVE
-                                                       : PORT_RENDERER_GS;
-    }
-    backend = have_gs || have_native;
+    backend = have_gs || have_pc;
 #endif
 }
 
@@ -580,8 +565,8 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     if (have_gs) {
         port_gs_backend_gif(path, data, bytes);
     }
-    if (have_native) {
-        gsn_gif(path, data, bytes);
+    if (have_pc) {
+        gsr_gif(path, data, bytes);
     }
 #endif
     if (port_options.stats) {
@@ -597,20 +582,12 @@ void port_gs_read_fifo(void *dst, uint32_t qwords) {
         port_gs_capture_read_fifo(qwords);
     }
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_gs && have_native) {
-        /* both read the same transfer; paraLLEl-GS's pixels are the ones the game gets */
-        void *scratch = malloc((size_t)qwords * 16);
-
-        if (scratch != NULL) {
-            gsn_read_fifo(scratch, qwords);
-            free(scratch);
-        }
-    } else if (have_native) {
-        gsn_read_fifo(dst, qwords);
-        return;
-    }
     if (have_gs) {
         port_gs_backend_read_fifo(dst, qwords);
+        return;
+    }
+    if (have_pc) {
+        gsr_read_fifo(dst, qwords);
         return;
     }
 #endif
@@ -624,266 +601,111 @@ static void replay_gif(int path, const void *data, size_t bytes) {
     if (have_gs) {
         port_gs_backend_gif(path, data, bytes);
     }
-    if (have_native) {
-        gsn_gif(path, data, bytes);
+    if (have_pc) {
+        gsr_gif(path, data, bytes);
     }
 }
 
-/* --renderer both: the two pictures, compared channel by channel */
-static void compare_frames(const PortGsFrame *a, const PortGsFrame *b, uint64_t vblank) {
-    PortRendererDiff *d = &port_renderer_diff;
-    uint64_t sum = 0;
-    uint32_t max = 0, pixels = 0;
-    size_t i, n;
-
-    if (a->width != b->width || a->height != b->height) {
-        max = 255;
-        pixels = a->width * a->height;
-        n = 0;
-    } else {
-        n = (size_t)a->width * a->height;
-    }
-    for (i = 0; i < n; i++) {
-        uint32_t p = a->rgba[i], q = b->rgba[i];
-        uint32_t worst = 0;
-        int c;
-
-        if (p == q) {
-            continue;
-        }
-        for (c = 0; c < 24; c += 8) {
-            int e = (int)((p >> c) & 0xFF) - (int)((q >> c) & 0xFF);
-            uint32_t m = (uint32_t)(e < 0 ? -e : e);
-
-            sum += m;
-            worst = m > worst ? m : worst;
-        }
-        max = worst > max ? worst : max;
-        pixels += worst > 1;
-    }
-    d->frames++;
-    d->frames_differ += pixels != 0;
-    d->last_max = max;
-    d->last_pixels = pixels;
-    d->last_mean = n ? (double)sum / (double)(n * 3) : 255.0;
-    if (max > d->worst_max) {
-        d->worst_max = max;
-        d->worst_vblank = vblank;
-    }
-}
-
-/* --renderer-shown heatmap: where the two buffers differ, over the native GS's picture dimmed to grey.
-   A pixel whose channels are all within 1 stays grey; any more is coloured by its largest difference,
-   from blue (2) through green and yellow (around 16) to red (64 and more). */
-static void heat_map(const PortGsFrame *a, const PortGsFrame *b, PortGsFrame *out) {
-    size_t i, n = (size_t)a->width * a->height;
-
-    out->width = a->width;
-    out->height = a->height;
-    for (i = 0; i < n; i++) {
-        uint32_t p = a->rgba[i], q = b->rgba[i];
-        uint32_t worst = 0, grey;
-        int c;
-
-        for (c = 0; c < 24; c += 8) {
-            int e = (int)((p >> c) & 0xFF) - (int)((q >> c) & 0xFF);
-            uint32_t m = (uint32_t)(e < 0 ? -e : e);
-
-            worst = m > worst ? m : worst;
-        }
-        if (worst <= 1) {
-            grey = (((q & 0xFF) * 77 + ((q >> 8) & 0xFF) * 150 + ((q >> 16) & 0xFF) * 29) >> 8) / 3;
-            out->rgba[i] = 0xFF000000u | grey << 16 | grey << 8 | grey;
-        } else {
-            /* t: 0 at 2, 1 at 64 and beyond, on a log scale */
-            double t = worst >= 64 ? 1.0 : log2((double)worst / 2.0) / 5.0;
-            double r = t < 0.5 ? 0.0 : t < 0.75 ? (t - 0.5) * 4.0 : 1.0;
-            double g = t < 0.25 ? t * 4.0 : t < 0.75 ? 1.0 : (1.0 - t) * 4.0;
-            double bl = t < 0.25 ? 1.0 : t < 0.5 ? (0.5 - t) * 4.0 : 0.0;
-
-            out->rgba[i] = 0xFF000000u | (uint32_t)(bl * 255.0 + 0.5) << 16 | (uint32_t)(g * 255.0 + 0.5) << 8 |
-                           (uint32_t)(r * 255.0 + 0.5);
-        }
-    }
-}
-
-/* --renderer both: the buffer the display shows, as each renderer drew it (the scanouts differ by
-   their own conventions: paraLLEl-GS's crop of the TV picture and its weave of the fields). With the
-   heat map on, its picture into heat (1 if there is one). */
-static int compare_buffers(VsyncRequest *request, int dump, PortGsFrame *heat) {
-    static PortGsFrame a, b;
-    GsnRect rect;
-
-    if (!gsn_display_rect(request->privileged, &rect)) {
-        return 0;
-    }
-    if (a.rgba == NULL) {
-        a.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
-        b.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
-    }
-    a.width = b.width = rect.w;
-    a.height = b.height = rect.h;
-    port_gs_backend_read_rect(rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h, a.rgba);
-    gsn_read_rect(&rect, b.rgba);
-    compare_frames(&a, &b, request->vblank);
-    if (dump) {
-        char name[64];
-
-        snprintf(name, sizeof(name), "frame_%06llu_gs_fb.png", (unsigned long long)request->vblank);
-        port_video_dump_named(&a, name);
-        snprintf(name, sizeof(name), "frame_%06llu_native_fb.png", (unsigned long long)request->vblank);
-        port_video_dump_named(&b, name);
-    }
-    if (port_options.renderer_heatmap) {
-        heat_map(&a, &b, heat);
-        return 1;
-    }
-    return 0;
-}
-
-/* With SDL_Renderer and the native GS alone, the best scaling (or the sharpening): the native GS's
+/* With SDL_Renderer and the PC renderer alone, the best scaling (or the sharpening): the PC renderer's
    picture at the window's size, read back (GSN_WANT_SCALED), for SDL_Renderer to draw a pixel a pixel */
 static int sdl_scaled(void) {
-    if (port_video_takes_images() || !have_native || have_gs || port_options.headless ||
+    if (port_video_takes_images() || !have_pc || port_options.headless ||
         (port_video_scaling() != PORT_SCALING_BEST && port_video_sharpen() <= 0)) {
         return 0;
     }
     return GSN_WANT_IMAGE | GSN_WANT_SCALED;
 }
 
-/* The size the window shows the picture at, for the native GS's scaling (video.c's SDL_Renderer) */
+/* The size the window shows the picture at, for the PC renderer's scaling (video.c's SDL_Renderer) */
 void port_gs_present_scale(int width, int height, float sharpen) {
-    if (have_native) {
-        gsn_set_present_scale(width, height, sharpen);
+    if (have_pc) {
+        gsr_set_present_scale(width, height, sharpen);
     }
 }
 
-/* A picture of a renderer's (or each's, with both) for the window and --dump-frames: 1 if one is shown.
-   With the Vulkan presenter the native GS's picture stays on the GPU (GSN_WANT_IMAGE), and is read back
-   only for a dump. */
+/* The window's and --dump-frames' picture of this vblank: 1 if one is shown. With the Vulkan presenter the PC
+   renderer's picture stays on the GPU (GSN_WANT_IMAGE), and is read back only for a dump. */
 static int present_frames(VsyncRequest *request, int shown, int dump) {
-    static PortGsFrame heat;
     uint64_t tag = PORT_PICTURE_TAG(request->vblank, 0);
     int want = shown || dump;
-    int want_native = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
-                      : want                             ? GSN_WANT_PIXELS
-                                                         : 0;
+    int want_pc = shown && port_video_takes_images() ? GSN_WANT_IMAGE | (dump ? GSN_WANT_PIXELS : 0)
+                  : want                             ? GSN_WANT_PIXELS
+                                                     : 0;
+    int got;
+
     if (dump && port_options.dump_present_width > 0) {
-        want_native |= GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_WANT_SCALED; /* (--dump-present) */
+        want_pc |= GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_WANT_SCALED; /* (--dump-present) */
     }
-    int got_gs = 0, got_native = 0, got_heat = 0;
-    PortGsFrame *show;
-
     if (have_gs) {
-        got_gs = port_gs_backend_vsync(request->privileged, request->field, want, &frame);
-    }
-    if (have_native) {
-        if (!have_gs && shown && !dump) {
-            /* the native GS's thread hands the window the picture (or with the Vulkan presenter word of
-               the new image) when it has it, and this thread goes on */
-            return gsn_picture(request->privileged, request->field,
-                               GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL,
-                               tag) != 0;
-        }
-        got_native = gsn_picture(request->privileged, request->field, want_native, &native_frame, tag);
-    }
-    if (have_gs && have_native) {
-        if (heat.rgba == NULL) {
-            heat.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
-        }
-        got_heat = compare_buffers(request, dump, &heat);
-    }
-    if (have_gs && have_native && got_heat) {
-        /* the heat map, in place of either picture (each still dumped under its own name) */
-        if (dump && got_gs && (got_native & GSN_WANT_PIXELS)) {
-            char name[64];
-
-            snprintf(name, sizeof(name), "frame_%06llu_gs.png", (unsigned long long)request->vblank);
-            port_video_dump_named(&frame, name);
-            snprintf(name, sizeof(name), "frame_%06llu_native.png", (unsigned long long)request->vblank);
-            port_video_dump_named(&native_frame, name);
-        }
-        show = &heat;
-    } else if (have_gs && have_native) {
-        show = port_options.renderer_shown == PORT_RENDERER_NATIVE ? &native_frame : &frame;
-        if (show == &native_frame && !(got_native & GSN_WANT_PIXELS) && (got_native & GSN_WANT_IMAGE)) {
-            port_video_submit_image(tag);
-            return 1;
-        }
-        if (dump && got_gs && (got_native & GSN_WANT_PIXELS)) {
-            /* each picture, the one shown under the usual name */
-            char name[64];
-
-            port_video_dump(show, request->vblank);
-            snprintf(name, sizeof(name), "frame_%06llu_gs.png", (unsigned long long)request->vblank);
-            port_video_dump_named(&frame, name);
-            snprintf(name, sizeof(name), "frame_%06llu_native.png", (unsigned long long)request->vblank);
-            port_video_dump_named(&native_frame, name);
-            dump = 0;
-        }
-        if (!(show == &frame ? got_gs : got_native & GSN_WANT_PIXELS)) {
+        if (!port_gs_backend_vsync(request->privileged, request->field, want, &frame)) {
             return 0;
         }
-        if (show == &native_frame && (got_native & GSN_WANT_IMAGE) && shown) {
-            /* (dumped above) the window takes the image */
-            port_video_submit_image(tag);
-            return 1;
+        if (dump) {
+            port_video_dump(&frame, request->vblank);
         }
-    } else if (have_native) {
-        if (got_native & GSN_WANT_IMAGE) {
-            if (dump && (got_native & GSN_WANT_PIXELS)) {
-                port_video_dump(&native_frame, request->vblank);
-            }
-            port_video_submit_image(tag);
-            return 1;
+        if (shown) {
+            port_video_submit(&frame, tag);
         }
-        if (!got_native) {
-            return 0;
+        return 1;
+    }
+    if (!have_pc) {
+        return 0;
+    }
+    if (shown && !dump) {
+        /* the PC renderer's thread hands the window the picture (or with the Vulkan presenter word of the new
+           image) when it has it, and this thread goes on */
+        return gsr_picture(request->privileged, request->field,
+                           GSN_PRESENT | (port_video_takes_images() ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL,
+                           tag) != 0;
+    }
+    got = gsr_picture(request->privileged, request->field, want_pc, &pc_frame, tag);
+    if (got & GSN_WANT_IMAGE) {
+        if (dump && (got & GSN_WANT_PIXELS)) {
+            port_video_dump(&pc_frame, request->vblank);
         }
-        show = &native_frame;
-    } else {
-        if (!got_gs) {
-            return 0;
-        }
-        show = &frame;
+        port_video_submit_image(tag);
+        return 1;
+    }
+    if (!got) {
+        return 0;
     }
     if (dump) {
-        port_video_dump(show, request->vblank);
+        port_video_dump(&pc_frame, request->vblank);
     }
     if (shown) {
-        port_video_submit(show, tag);
+        port_video_submit(&pc_frame, tag);
     }
     return 1;
 }
 
 /* --frame-rate above 60: a picture between two vblanks (phase of the way from this one to the next),
-   drawn into the buffer shown: the native GS's, read again whole (gsn_picture with GSN_EXTRA), for the
+   drawn into the buffer shown: the PC renderer's, read again whole (pcr_picture with GSN_EXTRA), for the
    window (shown) and as frame_<vblank>_<phase in thousandths>.png (dump) */
 static void present_extra(VsyncRequest *request, double phase, int shown, int dump) {
     uint64_t tag = PORT_PICTURE_TAG(request->vblank, phase);
     int images = shown && (port_video_takes_images() || port_options.headless);
 
     if (dump) {
-        int got = gsn_picture(request->privileged, request->field,
+        int got = gsr_picture(request->privileged, request->field,
                               GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
                                   (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
-                              &native_frame, tag);
+                              &pc_frame, tag);
         char name[64];
 
         if (got & GSN_WANT_PIXELS) {
             snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
                      (int)(phase * 1000.0 + 0.5));
-            port_video_dump_named(&native_frame, name);
+            port_video_dump_named(&pc_frame, name);
             if (shown) {
                 if (images) {
                     port_video_submit_image(tag);
                 } else {
-                    port_video_submit(&native_frame, tag);
+                    port_video_submit(&pc_frame, tag);
                 }
             }
         }
     } else if (shown) {
-        gsn_picture(request->privileged, request->field,
+        gsr_picture(request->privileged, request->field,
                     GSN_EXTRA | GSN_PRESENT | (images ? GSN_WANT_IMAGE : 0) | sdl_scaled(), NULL, tag);
     }
 }
@@ -918,14 +740,6 @@ void port_gs_post_vsync(void) {
     memcpy(request->privileged, ee_hw_ptr(0x12000000), sizeof(request->privileged));
     request->vblank = port_vblank_count();
     request->field = (int)((*(volatile uint64_t *)ee_hw_ptr(0x12001000) >> 13) & 1);
-#ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native && port_options.renderer_modern) {
-        PortGameReadout game; /* --renderer modern's --stats a map (P8) */
-
-        kf4_game_readout(&game);
-        gsn_set_scene_map(game.map_loaded ? game.map_tag : -1);
-    }
-#endif
     if (port_gs_capture_armed) {
         port_gs_capture_note_vblank(request->vblank);
     }
@@ -936,8 +750,8 @@ void port_gs_post_vsync(void) {
 void port_gs_set_native_scale(int scale) {
     port_options.native_scale = scale;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+    if (have_pc) {
+        gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
 #endif
 }
@@ -954,8 +768,8 @@ int port_gs_native_scale(void) {
         return port_options.native_scale > 4 ? 4 : port_options.native_scale;
     }
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        int kind = gsn_gpu_kind();
+    if (have_pc) {
+        int kind = gsr_gpu_kind();
 
         most = kind == GSN_GPU_DISCRETE ? 4 : kind == GSN_GPU_INTEGRATED ? 2 : 1;
     }
@@ -971,8 +785,8 @@ int port_gs_native_scale(void) {
 void port_gs_set_native_aniso(int taps) {
     port_options.native_aniso = taps < 1 ? 1 : taps;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        port_options.native_aniso = gsn_set_aniso(taps);
+    if (have_pc) {
+        port_options.native_aniso = gsr_set_aniso(taps);
     }
 #endif
 }
@@ -980,8 +794,8 @@ void port_gs_set_native_aniso(int taps) {
 void port_gs_set_native_lod(int mode) {
     port_options.native_lod = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_lod(mode);
+    if (have_pc) {
+        gsr_set_lod(mode);
     }
 #endif
 }
@@ -989,8 +803,8 @@ void port_gs_set_native_lod(int mode) {
 void port_gs_set_native_2d(int mode) {
     port_options.native_2d = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_2d(mode);
+    if (have_pc) {
+        gsr_set_2d(mode);
     }
 #endif
 }
@@ -998,8 +812,8 @@ void port_gs_set_native_2d(int mode) {
 void port_gs_set_native_cutout_aa(int mode) {
     port_options.native_cutout_aa = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_cutout_aa(mode);
+    if (have_pc) {
+        gsr_set_cutout_aa(mode);
     }
 #endif
 }
@@ -1007,19 +821,22 @@ void port_gs_set_native_cutout_aa(int mode) {
 void port_gs_set_native_colour(int mode) {
     port_options.native_colour = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_colour(mode);
+    if (have_pc) {
+        gsr_set_colour(mode);
     }
 #endif
 }
 
-void port_gs_set_native_draw(int kinds, int compare) {
-    port_options.native_draw = 0; /* (the native draws are the native GS's) */
-    port_options.native_draw_compare = compare;
+int port_gs_native_draws_now(void) {
+    /* (the PC renderer moves them only in its own pictures between: frame_interp.c's CPU way cannot) */
+    return port_frame_rate_hz() <= 30 || port_interp_on_gpu();
+}
+
+void port_gs_set_native_draw(int kinds) {
+    port_options.native_draw = 0;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        port_options.native_draw = kinds;
-        gsn_set_native_draw(compare == PORT_ND_COMPARE_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
+    if (have_pc) {
+        port_options.native_draw = kinds & pcr_native_kinds();
     }
 #endif
 }
@@ -1027,25 +844,16 @@ void port_gs_set_native_draw(int kinds, int compare) {
 void port_gs_set_native_layer_z(int mode) {
     port_options.native_layer_z = mode;
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_layer_z(mode);
-    }
-#endif
-}
-
-void port_gs_set_native_shine_exact(int exact) {
-    port_options.native_shine_exact = exact;
-#ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        gsn_set_shine_exact(exact);
+    if (have_pc) {
+        gsr_set_layer_z(mode);
     }
 #endif
 }
 
 int port_gs_set_native_msaa(int samples) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        samples = gsn_set_msaa(samples);
+    if (have_pc) {
+        samples = gsr_set_msaa(samples);
     }
 #endif
     port_options.native_msaa = samples;
@@ -1053,7 +861,7 @@ int port_gs_set_native_msaa(int samples) {
 }
 
 /* --native-widescreen: the widescreen picture is the GS's 640x448 shown at 16:9, its 3D drawn with a
-   16:9 field of view and its 2D squeezed (above). The native GS draws it as it is, only with more
+   16:9 field of view and its 2D squeezed (above). The PC renderer draws it as it is, only with more
    pixels across than down: 4/3 of --native-scale, rounded up (1x: 2, 2x: 3, 3x: 4, exactly 4/3; 4x: 6),
    so that a GS pixel's width on the 16:9 screen is never more than one of the target's pixels'
    height, and the window shrinks the picture across instead of stretching it. Nothing in the game or
@@ -1067,151 +875,35 @@ int port_gs_native_scale_x(void) {
     return s;
 }
 
-/* --stats: what the native GS did */
+#ifdef KF4_HAVE_PARALLEL_GS
+/* --stats: the pictures between this thread left out */
+static void print_interp_left_out(void) {
+    if (interp_behind || interp_vblanks_fewer) {
+        fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
+                "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
+                (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
+                (unsigned long long)interp_vblanks_left_out);
+    }
+}
+#endif
+
+/* --stats: the PC renderer's, and the pictures between this thread left out */
 void port_gs_print_stats(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        const GsnStats *s = &gsn_stats;
-
-        gsn_wait();
-        fprintf(stderr,
-                "[stats] native GS: %llu draws, %llu triangles, %llu render passes, %llu shader blends, %llu target "
-                "copies, %llu write-backs; %llu textures decoded (%llu texels), %llu found again; %llu uploads (%.1f MB, %llu found in VRAM already, %llu copied in whole; %llu pages known unchanged)\n",
-                (unsigned long long)s->draws, (unsigned long long)s->primitives, (unsigned long long)s->passes,
-                (unsigned long long)s->shader_blends, (unsigned long long)s->target_copies,
-                (unsigned long long)s->writebacks, (unsigned long long)s->texture_decodes,
-                (unsigned long long)s->texture_bytes, (unsigned long long)s->texture_reuses, (unsigned long long)s->uploads, (double)s->upload_bytes / 1048576.0,
-                (unsigned long long)s->uploads_skipped,
-                (unsigned long long)s->uploads_copied, (unsigned long long)s->upload_pages_held);
-        fprintf(stderr,
-                "[stats] native GS time: GIF %.3f s (draws %.3f, uploads %.3f: swizzle %.3f, targets %.3f; "
-                "write-backs %.3f, decodes %.3f), vsync %.3f s\n",
-                s->ns_gif / 1e9, s->ns_flush / 1e9, s->ns_upload / 1e9, s->ns_swizzle / 1e9, s->ns_sync / 1e9,
-                s->ns_writeback / 1e9, s->ns_decode / 1e9, s->ns_vsync / 1e9);
-        fprintf(stderr, "[stats] native GS draws: %.3f s working out their state, %.3f s recording them\n",
-                s->ns_draw_setup / 1e9, s->ns_draw_record / 1e9);
-        fprintf(stderr, "[stats] native GS back end: %.3f s playing the calls into Vulkan; %llu targets loaded before "
-                "the render pass under way (not ending it); %llu target loads scaled on the GPU\n", s->ns_backend / 1e9,
-                (unsigned long long)s->loads_before_pass, (unsigned long long)s->loads_scaled);
-        if (interp_behind || interp_vblanks_fewer) {
-            fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
-                    "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
-                    (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
-                    (unsigned long long)interp_vblanks_left_out);
-        }
-        if (s->interp_records || s->interp_replays || s->interp_misses) {
-            fprintf(stderr,
-                    "[stats] native GS pictures between on the GPU: %llu drawn from the packets (%.3f s, %.1f us each), "
-                    "%llu from the recording (%.3f s, %.1f us each), %llu of no frame; drawn from the packets again as "
-                    "the GS was not as recorded: %llu (targets), %llu (registers), %llu (VRAM or the CLUT written), %llu (the "
-                    "recording could not be made again); %llu submits while recording; replays with a target the recording "
-                    "made: %llu kept, %llu its own\n",
-                    (unsigned long long)s->interp_records, s->ns_interp_record / 1e9,
-                    s->interp_records ? s->ns_interp_record / 1e3 / (double)s->interp_records : 0.0,
-                    (unsigned long long)s->interp_replays, s->ns_interp_replay / 1e9,
-                    s->interp_replays ? s->ns_interp_replay / 1e3 / (double)s->interp_replays : 0.0,
-                    (unsigned long long)s->interp_misses, (unsigned long long)s->interp_rerecord[1],
-                    (unsigned long long)s->interp_rerecord[2], (unsigned long long)s->interp_rerecord[5],
-                    (unsigned long long)s->interp_rerecord[4], (unsigned long long)s->interp_mid_submits,
-                    (unsigned long long)s->interp_kept_targets, (unsigned long long)s->interp_own_targets);
-        }
-        if (s->pipeline_binds) {
-            fprintf(stderr, "[stats] native GS pipelines bound: %llu for %llu draws; pictures between: %.1f a recording, "
-                    "%.1f a replay (for %.1f draws)\n", (unsigned long long)s->pipeline_binds, (unsigned long long)s->draws,
-                    s->interp_records ? s->interp_record_binds / (double)s->interp_records : 0.0,
-                    s->interp_replays ? s->interp_replay_binds / (double)s->interp_replays : 0.0,
-                    s->interp_replays ? s->interp_replay_draws / (double)s->interp_replays : 0.0);
-        }
-        if (s->replay_uploads || s->replay_misses) {
-            fprintf(stderr, "[stats] native GS: %llu uploads asked for again by the pictures between, %llu not found\n",
-                    (unsigned long long)s->replay_uploads, (unsigned long long)s->replay_misses);
-        }
-        if (s->ms_resolves || s->ms_loads) {
-            fprintf(stderr,
-                    "[stats] native GS MSAA: %llu resolves, %llu loads into the multisampled images, %llu cut-out "
-                    "draws shaded at every sample\n",
-                    (unsigned long long)s->ms_resolves, (unsigned long long)s->ms_loads,
-                    (unsigned long long)s->cutout_draws);
-        }
-        if (s->shadows) {
-            fprintf(stderr, "[stats] native GS: %llu write-backs put off: %llu never owed, %llu pages' made later; %llu textures read "
-                            "over pages owed without them (all they read written since)\n",
-                    (unsigned long long)s->shadows, (unsigned long long)s->shadows_gone, (unsigned long long)s->shadows_resolved,
-                    (unsigned long long)s->shadow_reads_covered);
-        }
-        if (s->writebacks_overwritten) {
-            fprintf(stderr, "[stats] native GS: %llu write-backs not made: the targets under a copy of the frame\n",
-                    (unsigned long long)s->writebacks_overwritten);
-        }
-        if (s->silhouettes_whole) {
-            fprintf(stderr, "[stats] native GS: %llu silhouettes drawn whole\n", (unsigned long long)s->silhouettes_whole);
-        }
-        if (s->layer_draws) {
-            fprintf(stderr, "[stats] native GS: %llu batches with layers (--native-layer-z tolerant)\n",
-                    (unsigned long long)s->layer_draws);
-        }
-        if (port_options.native_draw) {
-            fprintf(stderr,
-                    "[stats] native draw: %llu draws queued (%llu screen passes), %llu drawn (%llu batches), %llu lost, %llu not drawn yet; "
-                    "%llu meshes parsed (%llu refused), %llu found again, %.1f MB hashed; %llu meshes put on the GPU; "
-                    "%llu PS2-path writes left out; %llu models declined (drawn the PS2 way); the plan %.3f s, "
-                    "%llu vertices (%llu found planned); pictures between: %llu model parts and %llu strips moved "
-                    "between their frames\n",
-                    (unsigned long long)rd_stats.draws, (unsigned long long)rd_stats.passes, (unsigned long long)s->nd_draws,
-                    (unsigned long long)s->nd_batches, (unsigned long long)s->nd_lost,
-                    (unsigned long long)s->nd_unsupported, (unsigned long long)rd_stats.meshes_parsed,
-                    (unsigned long long)rd_stats.mesh_unsupported, (unsigned long long)rd_stats.mesh_hits,
-                    rd_stats.hash_bytes / 1048576.0, (unsigned long long)s->nd_mesh_uploads,
-                    (unsigned long long)s->nd_skipped, (unsigned long long)rd_stats.declined, s->ns_nd_plan / 1e9,
-                    (unsigned long long)s->nd_plan_vertices, (unsigned long long)s->nd_plan_reused,
-                    (unsigned long long)s->nd_moved_models, (unsigned long long)s->nd_moved_strips);
-        }
-        if (port_options.renderer_modern || port_options.native_draw) {
-            gsn_print_standalone_stats(); /* (P8; and native draw's for the pictures between) */
-        }
-        gsn_print_pipeline_stats();
-        {
-            int w;
-            double pictures = s->pictures ? (double)s->pictures : 1.0;
-
-            fprintf(stderr, "[stats] native GS: %llu pictures; a picture: %.1f render passes, %.1f resolves, "
-                            "%.1f MB loaded and %.1f MB stored by passes, %.1f MB resolved, %.1f MB copied for blending\n",
-                    (unsigned long long)s->pictures, (double)s->passes / pictures, (double)s->ms_resolves / pictures,
-                    (double)s->pass_load_bytes / pictures / 1048576.0, (double)s->pass_store_bytes / pictures / 1048576.0,
-                    (double)s->resolve_bytes / pictures / 1048576.0, (double)s->copy_bytes / pictures / 1048576.0);
-            if (s->blend_copies_in_pass) {
-                fprintf(stderr, "[stats] native GS: %llu copies for shader blending made in the render pass\n",
-                        (unsigned long long)s->blend_copies_in_pass);
-            }
-            fprintf(stderr, "[stats] native GS render passes ended by:");
-            for (w = 0; w < GSN_WHY_COUNT; w++) {
-                if (s->pass_ends[w]) {
-                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->pass_ends[w]);
-                }
-            }
-            fprintf(stderr, "\n[stats] native GS resolves for:");
-            for (w = 0; w < GSN_WHY_COUNT; w++) {
-                if (s->resolves_by[w]) {
-                    fprintf(stderr, " %s %llu;", gsn_why_name(w), (unsigned long long)s->resolves_by[w]);
-                }
-            }
-            fprintf(stderr, "\n");
-            gsn_print_gpu_times();
-        }
-        fprintf(stderr, "[stats] native GS holds: %llu targets, %llu textures, %llu decoded images (%llu MB), %llu uploads\n",
-                (unsigned long long)s->targets, (unsigned long long)s->textures, (unsigned long long)s->pool_images,
-                (unsigned long long)s->pool_mb, (unsigned long long)s->upload_copies);
+    if (have_pc) {
+        pcr_print_stats();
+        print_interp_left_out();
     }
 #endif
 }
 
-/* The GS's state as capture records (port/debug/gs_capture.c): paraLLEl-GS's, or the native GS's */
+/* The GS's state as capture records (port/debug/gs_capture.c): paraLLEl-GS's, or the PC renderer's */
 void port_gs_state_records(void (*emit)(uint32_t type, const void *data, size_t size)) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_gs) {
         port_gs_backend_capture(emit);
-    } else if (have_native) {
-        gsn_capture(emit);
+    } else if (have_pc) {
+        gsr_capture(emit);
     }
 #else
     (void)emit;
@@ -1225,16 +917,24 @@ void port_gs_finish(void) {
 }
 
 int port_gs_replay_uploads(void) {
-    return have_native && !have_gs && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
+    return have_pc && getenv("KF4_INTERP_SEND_UPLOADS") == NULL;
 }
 
 int port_gs_interp_gpu(void) {
-    return port_gs_replay_uploads();
+    /* (unless KF4_PC_BETWEEN=0: then the PC renderer takes the frame's packets again, moved, frame_interp.c's own
+       way, and the game's packets in place of its native draws) */
+    static int pc_between = -1;
+
+    if (pc_between < 0) {
+        const char *e = getenv("KF4_PC_BETWEEN");
+        pc_between = e == NULL || strcmp(e, "0") != 0;
+    }
+    return port_gs_replay_uploads() && pc_between;
 }
 
 void port_gs_interp_frame(void *frame) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    gsn_interp_frame((GsnInterpFrame *)frame);
+    gsr_interp_frame((GsnInterpFrame *)frame);
 #else
     (void)frame;
 #endif
@@ -1242,7 +942,7 @@ void port_gs_interp_frame(void *frame) {
 
 void port_gs_interp_picture(const void *picture) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    gsn_interp_picture((const GsnInterpPicture *)picture);
+    gsr_interp_picture((const GsnInterpPicture *)picture);
 #else
     (void)picture;
 #endif
@@ -1250,8 +950,8 @@ void port_gs_interp_picture(const void *picture) {
 
 int port_gs_shaders_building(int *done, int *total) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native) {
-        return gsn_pipelines_building(done, total);
+    if (have_pc) {
+        return gsr_pipelines_building(done, total);
     }
 #endif
     *done = *total = 0;
@@ -1260,7 +960,7 @@ int port_gs_shaders_building(int *done, int *total) {
 
 int port_gs_shaders_running(void) {
 #ifdef KF4_HAVE_PARALLEL_GS
-    return have_native && gsn_pipelines_running();
+    return have_pc && gsr_pipelines_running();
 #else
     return 0;
 #endif
@@ -1294,16 +994,16 @@ void port_gs_run_vsync(void) {
     }
     if (frame.rgba == NULL) {
         frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
-        native_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
+        pc_frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
 #ifdef KF4_HAVE_SDL
-    if (port_options.dump_present_width > 0 && have_native) {
+    if (port_options.dump_present_width > 0 && have_pc) {
         /* --dump-present WxH: the pictures scaled as a window of that size shows them (the best scaling;
            the others are the presenter's blit) */
         int x, y, w, h;
 
         port_video_fit(port_options.dump_present_width, port_options.dump_present_height, &x, &y, &w, &h);
-        gsn_set_present_scale(w, h, port_video_sharpen());
+        gsr_set_present_scale(w, h, port_video_sharpen());
     }
 #endif
     if (port_frame_interp()) {
@@ -1311,10 +1011,9 @@ void port_gs_run_vsync(void) {
            start when the vblank's own picture is one (the second vblank of a game frame), and after it
            (frame rates above 60) */
         int idle = port_gs_path_idle(1) && port_gs_path_idle(2) && port_gs_path_idle(3);
-        /* the pictures between are the native GS's (paraLLEl-GS is the reference, at the vblanks only),
-           whole frames (not read a field at a time) */
-        int extras = have_native && (!have_gs || port_options.renderer_shown == PORT_RENDERER_NATIVE) &&
-                     port_whole_frame();
+        /* the pictures between are the PC renderer's (paraLLEl-GS draws the vblanks only), whole frames (not read a
+           field at a time) */
+        int extras = have_pc && port_whole_frame();
 
         interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, 16) : 1;
         if (!extras) {
@@ -1325,12 +1024,12 @@ void port_gs_run_vsync(void) {
         }
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
-        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_native && interp_cut_on() &&
-                                    gsn_backlog() > 1
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && interp_cut_on() &&
+                                    gsr_backlog() > 1
                                 ? interp_behind_run + 1
                                 : 0;
         {
-            /* The native GS's thread a vblank behind as this vblank and the one before began: one picture
+            /* The PC renderer's thread a vblank behind as this vblank and the one before began: one picture
                between fewer a vblank (down to none: the game's own pictures, as at 30), so that a place whose
                pictures between cost more than the thread has keeps the game's rate and as many pictures as fit,
                not a cliff to 60. Up to half a second to catch up after a cut; one more picture after interp_rest
@@ -1356,8 +1055,17 @@ void port_gs_run_vsync(void) {
             if (interp_behind_run == 0) {
                 interp_settle_until = 0; /* (caught up since the last cut: the next fall behind is judged at once) */
             }
+            /* --frame-rate unlocked: the rate follows the renderer (frame_interp.c), judged as the cut is, and behind
+               too when pictures between of the vblank before were left out for it (below); the cut only once the
+               rate is as low as it goes */
+            static uint64_t unlocked_left_seen;
+            int unlocked = port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED;
+            if (unlocked && interp_live && !dump && request->vblank >= interp_judge_from) {
+                port_interp_unlocked_vblank(request->vblank, interp_behind_run > 0 || interp_behind != unlocked_left_seen);
+            }
+            unlocked_left_seen = interp_behind;
             if (interp_behind_run >= 2 && request->vblank >= interp_settle_until && request->vblank >= interp_judge_from &&
-                interp_allow > 0) {
+                interp_allow > 0 && (!unlocked || port_interp_unlocked_at_floor())) {
                 interp_allow = (interp_allow < between ? interp_allow : between) - 1;
                 if (interp_allow < 0) {
                     interp_allow = 0;
@@ -1391,7 +1099,7 @@ void port_gs_run_vsync(void) {
         /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
         own_shown = interp_phases[0] == 0 || !interp_live;
         if (interp_live && (own_shown || dump)) {
-            port_interp_picture(0, replay_gif);
+            port_interp_picture(request->vblank, 0, replay_gif);
         }
         interp_on = 1;
     } else {
@@ -1419,17 +1127,17 @@ void port_gs_run_vsync(void) {
             if (have_gs) {
                 port_gs_backend_vsync(other, request->field ^ 1, 0, &frame);
             }
-            if (have_native) {
-                gsn_vsync(other, request->field ^ 1, 0, NULL);
+            if (have_pc) {
+                gsr_vsync(other, request->field ^ 1, 0, NULL);
             }
         }
         port_field_frames_reset(idle);
     } else {
         port_field_frames_reset(0);
     }
-    if (have_native) {
+    if (have_pc) {
         /* (widescreen and --native-widescreen change live: the scale follows, from this vblank's end) */
-        gsn_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
+        gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
     }
     if (present_frames(request, shown && own_shown, dump)) {
     } else if (dump) {
@@ -1437,7 +1145,7 @@ void port_gs_run_vsync(void) {
     }
     if (interp_live && interp_count > 0) {
         /* the pictures between this vblank and the next: for the window, only while this thread and the
-           native GS's keep up with the game (a picture between left out rather than the game held up) */
+           PC renderer's keeps up with the game (a picture between left out rather than the game held up) */
         int i, j = 0, more = shown || draw_all();
 
         for (i = 0; i < interp_count; i++) {
@@ -1457,11 +1165,11 @@ void port_gs_run_vsync(void) {
                 }
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsn_backlog() > 1)) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
                 interp_behind++;
                 continue;
             }
-            if (port_interp_picture(interp_phases[i], replay_gif)) {
+            if (port_interp_picture(request->vblank, interp_phases[i], replay_gif)) {
                 present_extra(request, interp_phases[i], more, dump);
             }
         }
@@ -1509,7 +1217,7 @@ static void take_other_vram(PortStateIo *io, uint64_t bytes, int into_native) {
     port_state_bytes(io, NULL, (size_t)(bytes - (4u << 20)));
 #ifdef KF4_HAVE_PARALLEL_GS
     if (into_native) {
-        gsn_restore(KF4GS_VRAM, vram, 4u << 20);
+        gsr_restore(KF4GS_VRAM, vram, 4u << 20);
     } else {
         port_gs_backend_restore(KF4GS_VRAM, vram, 4u << 20);
     }
@@ -1538,14 +1246,14 @@ void port_gs_state(PortStateIo *io) {
     PORT_STATE(io, image_bitbltbuf);
     PORT_STATE(io, image_trxreg);
     PORT_STATE(io, image_bits_left);
-    /* paraLLEl-GS's state, then the native GS's: each only when it runs; a state loaded into the other
+    /* paraLLEl-GS's state, then the PC renderer's: each only when it runs; a state loaded into the other
        renderer gives it the VRAM (take_other_vram) */
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_gs) {
         backend_bytes = port_gs_backend_state_size();
     }
-    if (have_native) {
-        native_bytes = gsn_state_size();
+    if (have_pc) {
+        native_bytes = gsr_state_size();
     }
 #endif
     PORT_STATE(io, backend_bytes);
@@ -1553,9 +1261,9 @@ void port_gs_state(PortStateIo *io) {
 #ifdef KF4_HAVE_PARALLEL_GS
         if (have_gs) {
             port_gs_backend_state(io);
-        } else if (have_native && io->loading) {
+        } else if (have_pc && io->loading) {
             take_other_vram(io, backend_bytes, 1);
-            backend_bytes = 0; /* (the native GS's own, if any, is read below) */
+            backend_bytes = 0; /* (the PC renderer's own, if any, is read below) */
         } else
 #endif
         {
@@ -1565,29 +1273,33 @@ void port_gs_state(PortStateIo *io) {
     PORT_STATE(io, native_bytes);
     if (native_bytes != 0) {
 #ifdef KF4_HAVE_PARALLEL_GS
-        if (have_native && native_bytes == gsn_state_size()) {
-            gsn_state(io);
+        if (have_pc && native_bytes == gsr_state_size()) {
+            gsr_state(io);
             native_loaded = 1;
         } else if (have_gs && io->loading && !backend_bytes) {
             take_other_vram(io, native_bytes, 0);
+        } else if (have_pc && io->loading && native_bytes >= (4u << 20)) {
+            /* a state from the native GS (since removed: an older build) in the PC renderer, or the other way: both begin with
+               the GS's 4 MB */
+            take_other_vram(io, native_bytes, 1);
         } else
 #endif
         {
             port_state_bytes(io, NULL, (size_t)native_bytes);
         }
     }
-    /* (--renderer modern) the native GS's page-ownership table, when the scene was on: kept when it is
+    /* the renderer's page-ownership table, when it has one: kept when it is
        on again, so that its textures come from their uploads at once */
 #ifdef KF4_HAVE_PARALLEL_GS
-    if (have_native && !io->loading) {
-        table_bytes = gsn_table_state_size();
+    if (have_pc && !io->loading) {
+        table_bytes = gsr_table_state_size();
     }
 #endif
     PORT_STATE(io, table_bytes);
     if (table_bytes != 0) {
 #ifdef KF4_HAVE_PARALLEL_GS
-        if (have_native && (!io->loading || native_loaded)) {
-            gsn_table_state(io, (size_t)table_bytes);
+        if (have_pc && (!io->loading || native_loaded)) {
+            gsr_table_state(io, (size_t)table_bytes);
         } else
 #endif
         {

@@ -37,6 +37,7 @@
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/profile.h"
+#include "port/profile_run.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
@@ -372,6 +373,7 @@ static void vblank_start(void) {
     hitch_vblank();
     profile_vblank();
     vblank_count++;
+    port_profile_run_vblank(vblank_count);
     /* the GS scans out the field the display registers say, alongside the game. It is the field
        CSR's FIELD names until now: the GS turns FIELD over a few lines into the vblank, after the
        picture is handed on (as PCSX2 has it). Reading FIELD after the turn shows each of a
@@ -421,7 +423,7 @@ static void vblank_start(void) {
     port_quick_vblank();
     /* the settings overlay can hold the game while it is open: EE time stands still, and the pacing
        starts again from here. A save state asked for meanwhile is taken below, at once. */
-    /* the native GS's pipelines made ahead (docs/port/RENDERER.md, "Pipelines made ahead"): when play starts (the
+    /* the renderer's pipelines made ahead (docs/port/RENDERER.md, "Pipelines made ahead"): when play starts (the
        first native draw) the game waits for the rest, "Building shaders" in the window, rather than for each as a draw
        first needs it */
     if (!play_started && rd_stats.draws > 0) {
@@ -437,7 +439,7 @@ static void vblank_start(void) {
             }
             port_host_float_end(mode);
             pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
-            fprintf(stderr, "[gsn] play waited %.2f s for the pipelines made ahead\n", port_wall_seconds() - t0);
+            fprintf(stderr, "[gs] play waited %.2f s for the pipelines made ahead\n", port_wall_seconds() - t0);
         }
     }
     if (port_overlay_paused()) {

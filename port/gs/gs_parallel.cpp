@@ -60,7 +60,7 @@ extern "C" int port_gs_backend_open(void) {
     return 1;
 }
 
-// The Vulkan context, for the native GS to run beside paraLLEl-GS (--renderer both)
+// The Vulkan context paraLLEl-GS draws on (--renderer gs)
 extern "C" void *port_gs_backend_context(void) {
     return context;
 }

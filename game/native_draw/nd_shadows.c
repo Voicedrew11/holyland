@@ -12,12 +12,11 @@
    The call site is that draw_parts call (entity.patch): this queues what Model_DrawPosed would, drawn
    natively:
    - VU1's fixed block (the light matrices, the fog, FOGCOL, the point lights), without the parts, so that
-     VU1 is left as the PS2 path leaves it (native_draw.c's queue_fixed_block; not with
-     --native-draw-compare, whose PS2 path's packets do it);
+     VU1 is left as the PS2 path leaves it (native_draw.c's queue_fixed_block);
    - per part (not switched off by bit40) a draw of program 0x5A0 (RdDraw.program 0x5A0, meshes of
      RD_VF_SILHOUETTE: the parser's 0x5A0 batches, render.cpp) with the part's matrix (the model's by the
-     part's) and the fixed block's values by value; the native GS draws it with nd_000.vert, the lights and
-     the fog taken out (gsn_nd_5a0.inc), as VU1's program 0x5A0 would.
+     part's) and the fixed block's values by value; the renderer draws it with the program 0x000 shader
+     (pcr_nd000.vert), the lights and the fog taken out, as VU1's program 0x5A0 would.
    Model_DrawPosed queues no GS registers of its own, so neither does this: ALPHA_2 and the rest stay the
    caller's, in the chain where they were.
 
@@ -43,7 +42,6 @@ void Packet_EndGsRegisters(void);
 
 /* native_draw.c's helpers (its "For the other adapter files") */
 u32 NativeDraw_CurrentCamera(void);
-void NativeDraw_QueueMark(u32 command, u64 bits);
 void NativeDraw_QueueFixedBlock(ModelInstance *model, const void *matrix_a, const void *matrix_b);
 
 #define ND_MAX_MESHES 2048 /* (ModelPart.data_count is 11 bits; as native_draw.c) */
@@ -87,8 +85,7 @@ static int declined(ModelInstance *model, const char *why) {
 
 /* model->draw_parts(model) for a shadow (Entity_DrawPoolModels), natively: 1 if drawn (or nothing to draw), 0
    if the caller is to draw it the PS2 way (its draw_parts is not Model_DrawPosed, or a block the core cannot
-   draw); owner: the entity's own model, the draws' identity. With --native-draw-compare the PS2 path's
-   packets follow, between the marks. */
+   draw); owner: the entity's own model, the draws' identity. */
 int NativeDraw_Shadow(ModelInstance *model, const void *owner) {
     static RdMesh meshes[ND_MODEL_MESHES];
     static RdMesh scratch[ND_MAX_MESHES];
@@ -121,9 +118,7 @@ int NativeDraw_Shadow(ModelInstance *model, const void *owner) {
         used += part->data_count;
     }
     ModelMatrix_BuildDrawMatrices(model, model->light_block, model->light_block + 0x40, matrix_a, matrix_b);
-    if (!port_native_draw_compare()) {
-        NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
-    }
+    NativeDraw_QueueFixedBlock(model, matrix_a, matrix_b);
     ee_word_try(owner, &id);
     memset(&d, 0, sizeof(d));
     d.kind = RD_KIND_SHADOW;
@@ -164,11 +159,6 @@ int NativeDraw_Shadow(ModelInstance *model, const void *owner) {
             Packet_AddGsRegister(PORT_GS_REG_NATIVE_DRAW, (s64)value);
             Packet_EndGsRegisters();
         }
-    }
-    if (port_native_draw_compare()) {
-        NativeDraw_QueueMark(RD_ND_ALT_BEGIN, 0);
-        Model_DrawPosed(model);
-        NativeDraw_QueueMark(RD_ND_ALT_END, 0);
     }
     return 1;
 }
