@@ -164,23 +164,61 @@ cap GPU memory: run game runs with a watchdog on `/sys/class/drm/card*/device/me
 The smoother 240 comes from the frame contexts moved on at the pump's pictures (Granite's deferred work done
 evenly). Uncapped, the game now falls behind a little (57-58 vblanks a second): the next limit.
 
+## Built 2026-11-07 (later): no pipeline binds between blends, and a walk's vertices on the GPU once
+
+Profiled again first (009 at 240, after the two commits above): the pump's reference counts were down to 4.6% (one
+a GIF batch, the vertex block's handle in `allocate_vertex_data`); its pipeline binds 11%, of which the `memcmp` is
+RADV's own (`radv_CmdBindPipeline`, called from Granite's `bind_pipeline`), not Granite's state compare.
+
+- **Dynamic state** (`Canvas::Impl::choose_dynamic`): pc's command buffers take the native GS's Granite patch
+  (cmake/granite_dynamic_state.cmake): depth, stencil, culling and blend constants dynamic with Vulkan 1.3, blend
+  enable, equation and write mask too with VK_EXT_extended_dynamic_state3. Native 280's two blend states then share
+  a pipeline: the binds go (12% of the pump), RADV's PS epilog lookups for the dynamic blend come (about 8%:
+  `lookup_ps_epilog`, `radv_generate_ps_epilog_key`). `KF4_PC_DYNAMIC=0`: none; 1: not the blending.
+- **A kept walk's vertices on the GPU once** (`put_vertices_on_gpu`, `Kept::vertices`, `Batch::gpu_first`): when a
+  walk is handed out (`take_kept_walk`, `as_picture_walk`) its GIF batches' vertices go into one buffer of its own
+  (host-visible; without such memory, copied at each draw as before). Drawn again, a batch binds its place there:
+  no allocation, copy or reference count a batch. A frame inside a surface no longer has its vertices moved on the
+  CPU: `pcr_prim.vert` adds `PrimPush::place`, as `place_of` already did for moved corners (so every batch, the
+  open one too, binds its vertices once for its passes). `KF4_PC_WALK_VERTICES=0`: copied at each draw.
+
+009 at 240, 20 s profiled: the pump 10.7 s of CPU to 9.3 s (-13%; dynamic state alone 10.8 to 10.0);
+`allocate_vertex_data`, `release_reference` and `bind_pipeline` are out of its top 100. GPU 3.1-3.2 ms a picture,
+the same. `pace_test.py` at 009 (alternated against 16069b27):
+
+| | 16069b27 | now |
+|---|---|---|
+| 240: pictures a second / uneven refreshes | 239.75 each / 0.6-1.6 | 239.75 each / 1.1-2.7 |
+| 500: pictures a second | 356.5, 356.7, 347.2, 351.4, 352.9, 348.3 (mean 352) | 368.5, 360.2, 356.0, 350.8, 353.0 (mean 358) |
+| 500: game vblanks a second | 56.6-58.3 | 56.8-58.8 |
+
+Uncapped, about 5 a second more, within the runs' noise; dynamic state alone measured none (351-353 either way).
+**The pump is not what limits 500**: there it is 77% busy, kf4-pc 48%, the GPU about 80%, and the game still
+falls to 57-58 vblanks a second. The limit is how the threads wait on each other: next, a per-picture timeline at
+500 (the diagnostic patch from 2026-11-06, ~/.cache/kf4tl) to find what the game's vblank waits on.
+
+**Checks.** Pictures byte for byte at 000, 009, 009:2, 063 (816), and with both switches off at 000 and 009:2. ctest
+15/15. ASan+UBSan pc runs at 000 and 009:2: only the known reports. TSan pc runs: the known ones only (in pc's code
+only Granite's and RADV's image making in the canvas's constructor). Not run: native and `fast` checks (their
+paths unchanged: the Granite patch was already theirs, gsn_shaders.h made again the same), clang-tidy (no
+configuration).
+
+`pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
+unless `--keep` names one.
+
 ## The list, best first
 
-0. **Done 2026-11-07**: pages marked again (item 1) and kept steps out of the variant (item 2), above.
+0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
+   once), above: the pump 13% less CPU, the uncapped rate about the same.
+   **Done 2026-11-07**: pages marked again (item 1) and kept steps out of the variant (item 2), above.
    **Done 2026-11-06**: the pictures between of every second vblank, and the pump's pictures on the GPU's queue when
    handed out. **Done 2026-11-07**: the in-game profiler (docs/port/PROFILING.md), which the items below come from.
    The pump (the old item 1) is done too (305b216a).
 
-1. **The pump's cost a batch** (it is the busiest thread: 80% at 240, the first to stop more pictures):
-   - **Reference counts.** 13% of the pump is Granite's atomic `release_reference`: each batch's vertex and
-     constant blocks, and its `flush_batch` handles, let go one at a time. Keep a picture's blocks in one allocation
-     released at the end of the picture, and let `flush_batch` keep its handles instead of resetting them per batch.
-   - **Pages marked again.** 10% is `TextureStore::drawn` marking each batch's pages, which the frame's walk marked
-     already. Mark a kept walk's pages once (its union, kept with the walk), or not at all when nothing in the
-     pictures between reads the store.
-   - **Pipeline changes.** 7% is Granite comparing the whole pipeline state at each bind, and native 280 changes it
-     about 900 times a picture between two blend states. Make blend dynamic for these batches (or key the pipeline so
-     the two share one) so a bind is skipped; this is also most of `radv_CmdDraw`'s emitted state (17.5%).
+1. **What limits the uncapped rate** (new, 2026-11-07): at 500 no thread is full (the pump 77%, kf4-pc 48%, the GPU
+   about 80%) and the game falls to 57-58 vblanks a second. Follow each picture and vblank through the threads
+   (the 2026-11-06 timeline) to find what the game's vblank waits on, before more per-thread work.
+   **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
    - **One submit a picture between** (9%, the kernel's submit): the price of the 2026-11-06 flush. Measure the
      pictures' lateness with two pictures between a submit before trading any back.
    - Then the old item 2: **merged draws and bindless textures** for the rest of the per-draw and descriptor cost

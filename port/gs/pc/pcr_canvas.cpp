@@ -606,8 +606,29 @@ private:
     CommandBuffer &cmd() {
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
+            cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);
         }
         return *cmd_;
+    }
+
+    // Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake), as the native GS has it: depth,
+    // stencil, culling and blend constants where the device has Vulkan 1.3; blending and the colour write mask too
+    // where it has VK_EXT_extended_dynamic_state3's. A batch that differs from the one before only there (native
+    // 280's two blends, a DATE batch's stencil passes) then binds no pipeline of its own. KF4_PC_DYNAMIC=0: none
+    // (the pipelines as before, to compare); 1: not the blending and the write mask.
+    struct DynamicChoice {
+        bool ds = false, blend = false;
+    };
+    static DynamicChoice choose_dynamic(const Device &device) {
+        const char *v = getenv("KF4_PC_DYNAMIC");
+        int want = v ? atoi(v) : 2;
+        const auto &f = device.get_device_features();
+        DynamicChoice d;
+        d.ds = want >= 1 && f.device_api_core_version >= VK_API_VERSION_1_3;
+        d.blend = d.ds && want >= 2 && f.eds3_features.extendedDynamicState3ColorBlendEnable &&
+                  f.eds3_features.extendedDynamicState3ColorBlendEquation &&
+                  f.eds3_features.extendedDynamicState3ColorWriteMask;
+        return d;
     }
 
     // The command buffer, what is recorded into it from here on timed as work's
@@ -1439,6 +1460,10 @@ private:
         NativeProgram program = NativeProgram::vu1_000;
         BufferHandle arena, records, triangles;
         std::vector<Run> runs;
+        // (a kept walk's GIF batch: where its vertices start in the walk's buffer, Kept::vertices; none: copied to
+        // the GPU at each draw)
+        static constexpr uint32_t no_gpu_vertices = UINT32_MAX;
+        uint32_t gpu_first = no_gpu_vertices;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -1519,6 +1544,7 @@ private:
         std::vector<KeptStep> steps;
         std::vector<Batch> batches;
         PagesRead read;
+        BufferHandle vertices; // (its GIF batches' vertices, put on the GPU once: put_vertices_on_gpu)
 
         void keep(Batch &&batch) {
             steps.emplace_back(KeptBatch{uint32_t(batches.size())});
@@ -1561,11 +1587,50 @@ private:
     void draw_again(const Kept &walk, const Between &between) {
         flush_batch();
         between_ = &between;
+        walk_vertices_ = walk.vertices.get();
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again(walk, kept); }, step);
         }
         flush_batch();
         between_ = nullptr;
+        walk_vertices_ = nullptr;
+    }
+
+    // A walk's GIF batches' vertices put in one buffer of its own, which its pictures between draw from: drawn again,
+    // a batch then binds its place there instead of copying its vertices to the GPU (the pump's cost a batch,
+    // PERFORMANCE.md). Called once, before the walk is handed out (it is not changed after); without memory the
+    // GPU can map, the batches are copied at each draw as before. KF4_PC_WALK_VERTICES=0: never (to compare).
+    void put_vertices_on_gpu(Kept &walk) const {
+        // (a batch copied from another walk, drawn again while this one was kept, names its place in that one's)
+        size_t count = 0;
+        for (Batch &b : walk.batches) {
+            b.gpu_first = Batch::no_gpu_vertices;
+            count += b.native ? 0 : b.vertices.size();
+        }
+        walk.vertices.reset();
+        if (!walk_vertices_on_ || count == 0 || count > Batch::no_gpu_vertices) {
+            return;
+        }
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.size = VkDeviceSize(count) * sizeof(Vertex);
+        info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        BufferHandle buffer = device_.create_buffer(info, nullptr);
+        auto *v = buffer ? static_cast<Vertex *>(device_.map_host_buffer(*buffer, MEMORY_ACCESS_WRITE_BIT)) : nullptr;
+        if (!v) {
+            return;
+        }
+        uint32_t first = 0;
+        for (Batch &b : walk.batches) {
+            if (b.native || b.vertices.empty()) {
+                continue;
+            }
+            memcpy(v + first, b.vertices.data(), b.vertices.size() * sizeof(Vertex));
+            b.gpu_first = first;
+            first += uint32_t(b.vertices.size());
+        }
+        device_.unmap_host_buffer(*buffer, MEMORY_ACCESS_WRITE_BIT);
+        walk.vertices = std::move(buffer);
     }
 
     // ---- The pictures between on a thread of their own (the pump's canvas) ----
@@ -1629,6 +1694,7 @@ private:
     void draw_again_alone(const Kept &walk, const Between &between) {
         flush_batch();
         between_ = &between;
+        walk_vertices_ = walk.vertices.get();
         uint32_t batches = 0;
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again_alone(walk, kept); }, step);
@@ -1638,6 +1704,7 @@ private:
         }
         flush_batch();
         between_ = nullptr;
+        walk_vertices_ = nullptr;
         submit();
     }
 
@@ -2197,7 +2264,9 @@ private:
             c.set_storage_buffer(2, 1, *b.records);
             c.set_storage_buffer(2, 2, *b.triangles);
         }
-        size_t bytes = b.vertices.size() * sizeof(Vertex);
+        if (!b.native) {
+            bind_vertices(c, b);
+        }
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
@@ -2222,18 +2291,6 @@ private:
                 }
                 continue;
             }
-            auto *v = static_cast<Vertex *>(c.allocate_vertex_data(0, bytes, sizeof(Vertex)));
-            if (placed.x == 0 && placed.y == 0) {
-                memcpy(v, b.vertices.data(), bytes);
-            } else {
-                // (a frame inside a surface: its pixels at their place there)
-                for (size_t i = 0; i < b.vertices.size(); i++) {
-                    Vertex moved = b.vertices[i];
-                    moved.x += float(placed.x);
-                    moved.y += float(placed.y);
-                    v[i] = moved;
-                }
-            }
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
@@ -2247,6 +2304,17 @@ private:
                               uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
             }
         }
+    }
+
+    // A GIF batch's vertices bound for its passes: its place in the kept walk's buffer when drawn again from one, else
+    // copied to the GPU. (A frame inside a surface: the vertex shader adds its place there, PrimPush::place.)
+    void bind_vertices(CommandBuffer &c, const Batch &b) {
+        if (walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) {
+            c.set_vertex_binding(0, *walk_vertices_, VkDeviceSize(b.gpu_first) * sizeof(Vertex), sizeof(Vertex));
+            return;
+        }
+        size_t bytes = b.vertices.size() * sizeof(Vertex);
+        memcpy(c.allocate_vertex_data(0, bytes, sizeof(Vertex)), b.vertices.data(), bytes);
     }
 
     // A batch's rectangle in its colour surface's pixels (at the canvas's scale): its primitives' box within its
@@ -2448,6 +2516,7 @@ private:
     }
 
     Device &device_;
+    const DynamicChoice dynamic_ = choose_dynamic(device_);
     GpuTimes &times_;
     Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
             *native_700_program_ = nullptr, *date_program_ = nullptr;
@@ -2484,6 +2553,9 @@ private:
     // (step 5b) the walk being kept, and whether it read back from the GS's memory or forgot it
     std::unique_ptr<Kept> kept_;
     bool store_follows_draws_ = true; // (false on the pump's canvas: start_from)
+    const Buffer *walk_vertices_ = nullptr; // (the kept walk's vertices while one is drawn again: draw_again)
+    // KF4_PC_WALK_VERTICES=0: a kept walk's vertices copied to the GPU at each draw, as before (to compare)
+    const bool walk_vertices_on_ = !getenv("KF4_PC_WALK_VERTICES") || strcmp(getenv("KF4_PC_WALK_VERTICES"), "0") != 0;
     KeptSizes kept_sizes_;
     bool keeping_ = false, kept_spoilt_ = false;
     ImageHandle kept_frame_;
@@ -2577,7 +2649,11 @@ void Canvas::keep_walk() {
 }
 std::shared_ptr<const KeptWalk> Canvas::take_kept_walk() {
     std::unique_ptr<Impl::Kept> kept = impl_->take_kept_walk();
-    return kept ? std::make_shared<const KeptWalk>(std::move(*kept)) : nullptr;
+    if (!kept) {
+        return nullptr;
+    }
+    impl_->put_vertices_on_gpu(*kept);
+    return std::make_shared<const KeptWalk>(std::move(*kept));
 }
 bool Canvas::fits(const KeptWalk &walk) const {
     return impl_->fits(walk);
@@ -2593,6 +2669,7 @@ Canvas::PictureWalk Canvas::as_picture_walk(const KeptWalk &frame, const FrameTa
     if (!kept.walk) {
         return {nullptr, kept.refused};
     }
+    impl_->put_vertices_on_gpu(*kept.walk);
     return {std::make_shared<const KeptWalk>(std::move(*kept.walk)), FrameWalkRefused::none};
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {

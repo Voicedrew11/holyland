@@ -187,16 +187,23 @@ def main():
     if not args.disc:
         sys.exit("pace_test: pass --disc or set KF4_DISC")
     args.exe = args.exe or find_exe()
+    # (without --keep, a temporary folder deleted at the end: each run's data folder is about 400 MB, and /tmp is small)
+    temporary = not args.keep
     args.keep = args.keep or tempfile.mkdtemp(prefix="kf4_pace_")
     os.makedirs(args.keep, exist_ok=True)
-    for map_index in [int(m) for m in args.maps.split(",")]:
-        for mode in args.mode.split(","):
-            for n in range(args.runs):
-                result = {"pace": pace, "cost": cost}[mode](args, map_index, n)
-                print("map %03d %s run %d: %s" % (map_index, mode, n, ", ".join(
-                    "%s %.2f" % (k, v) if isinstance(v, float) else "%s %s" % (k, v) for k, v in result.items())),
-                    flush=True)
-    print("pace_test: runs kept in %s" % args.keep)
+    try:
+        for map_index in [int(m) for m in args.maps.split(",")]:
+            for mode in args.mode.split(","):
+                for n in range(args.runs):
+                    result = {"pace": pace, "cost": cost}[mode](args, map_index, n)
+                    print("map %03d %s run %d: %s" % (map_index, mode, n, ", ".join(
+                        "%s %.2f" % (k, v) if isinstance(v, float) else "%s %s" % (k, v) for k, v in result.items())),
+                        flush=True)
+    finally:
+        if temporary:
+            shutil.rmtree(args.keep, ignore_errors=True)
+    if not temporary:
+        print("pace_test: runs kept in %s" % args.keep)
 
 
 if __name__ == "__main__":

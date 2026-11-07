@@ -120,7 +120,8 @@ Corner triangle_corner(uint k, uint colour, uint last, bool fst, out bool gone) 
 }
 
 void main() {
-    vec2 pos = a_pos;
+    vec2 at = a_pos + vec2(pc.place); // (a vertex's place in the surface: the frame's place in it added, as place_of's)
+    vec2 pos = at;
     uint z = a_z;
     vec4 colour = vec4(a_color);
     vec3 stq = a_stq;
@@ -134,7 +135,7 @@ void main() {
         } else if (a_kicks.z < pic.counts.x) {
             c = triangle_corner(a_kicks.x, a_kicks.y, a_kicks.z, fst, gone);
         } else {
-            c = Corner(a_pos, a_z, a_color, a_stq, a_fog);
+            c = Corner(at, a_z, a_color, a_stq, a_fog);
         }
         pos = gone ? vec2(1.0e9) : c.pos; // (far past the target's right edge, as are its two other corners: not drawn)
         z = c.z;
