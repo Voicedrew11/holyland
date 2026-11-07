@@ -283,6 +283,13 @@ posted (gs.c's count was not printed with `--renderer pc`). And the pump's pictu
 handed out (Granite holds a plain submit until the next frame context, which only kf4-pc moves on): a median 17 ms
 later. Both fixed (`gsr_behind`, `submit_now`, `Canvas::submit` flushing): 009 at 240 239.3-239.7 pictures a second.
 
+**Corrected (2026-11-07): the pump leaked GPU memory above about 250 pictures a second.** Granite frees what a
+thread lets go of only as its frame contexts come round, and kf4-pc moved them on only at the pictures it made; where
+the pump made most pictures (`--hz 500`), its blocks and command buffers were never freed (6 MB a picture) and filled
+the GPU's memory and the system's in seconds. kf4-pc now moves the frame context on at the pump's pictures too, and
+waits before sending a frame while one is not yet started. Details and numbers: docs/port/PERFORMANCE.md "Built
+2026-11-07"; 009 uncapped 352-364 pictures a second, 240 now with 1-2 uneven refreshes a second (was 25-32).
+
 ## The store's marks walked by their pages (built 2026-10-30)
 
 **Measured first** (009 at 240, `--renderer pc`, the owner's settings, 250 samples of `kf4-pc` with `eu-stack`): pc's

@@ -1069,8 +1069,17 @@ public:
     // (kf4-pc) In order
     void send(PumpMessage message) {
         std::lock_guard<std::mutex> hold(lock_);
+        frames_waiting_ += std::holds_alternative<PumpFrame>(message) ? 1 : 0;
         messages_.push_back(std::move(message));
         wake_.notify_one();
+    }
+
+    // (kf4-pc) Before a frame is sent: until no frame sent is still waiting to be started. Each frame holds a copy of
+    // every surface (hundreds of MB at 4x), so a pump behind (a rate above what it draws) must hold kf4-pc back, not
+    // queue them: unbounded, they filled the GPU's memory and the system's in seconds at 500 a second (2026-11-07).
+    void wait_for_room_for_frame() {
+        std::unique_lock<std::mutex> hold(lock_);
+        idle_.wait(hold, [&] { return gone_ || frames_waiting_ == 0; });
     }
 
     // (kf4-pc) Nothing sent left to do. Only kf4-pc sends, so an idle pump stays idle until it sends again.
@@ -1153,6 +1162,10 @@ private:
         PumpMessage message = std::move(messages_.front());
         messages_.pop_front();
         busy_ = true;
+        if (std::holds_alternative<PumpFrame>(message)) {
+            frames_waiting_--;
+            idle_.notify_all();
+        }
         return message;
     }
 
@@ -1196,6 +1209,7 @@ private:
     std::mutex lock_;
     std::condition_variable wake_, idle_;
     std::deque<PumpMessage> messages_;
+    int frames_waiting_ = 0; // (PumpFrames in messages_)
     bool busy_ = false, stopping_ = false, gone_ = false;
     std::thread thread_;
 };
@@ -1504,6 +1518,11 @@ private:
         shows_pumped_ = false;
         if (pumped) {
             pump_->send(PumpPicture{std::move(v), scale});
+            // (Granite frees what a thread lets go of, the pump's each picture's blocks and command buffers too, only
+            // as its frame contexts come round, and only kf4-pc moves them on: at a rate where the pump made most
+            // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
+            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches.)
+            device_->next_frame_context();
             return;
         }
         MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
@@ -1538,6 +1557,7 @@ private:
             return;
         }
         if (for_pump->frame) {
+            pump_->wait_for_room_for_frame();
             pump_->send(std::move(*for_pump->frame));
         }
         pump_->send(std::move(p));

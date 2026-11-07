@@ -127,9 +127,47 @@ the game falls behind (56-58 vblanks a second): about 240 is the ceiling today. 
 | 0.210 | 3 | 2D untextured, Z always write: probably clears drawn as rectangles (not looked at yet) |
 | 0.300 | | native 700 (two states) |
 
+## Built 2026-11-07: batches drawn where they are kept, and the GPU's memory at uncapped rates
+
+From the list below: item 1's **pages marked again** and item 2's **kept steps out of the variant**, and with them
+smaller per-batch copies (`pcr_canvas.cpp`):
+- A kept walk holds its batches in a vector of their own (`Kept::batches`); a step is a `KeptBatch` index, so a
+  `KeptStep` is small, the kept types move (non-throwing), and a walk reserves the last walk's sizes.
+- `draw_batch(const Batch &)` draws a batch where it is: the open one, or a kept walk's again without a copy (a copy
+  only for a surface's texture, which is made again). A frame inside a surface moves its vertices as they are copied
+  to the GPU, not in the batch; a moved batch's box is a local.
+- A batch that reads no CLUT binds one shared buffer instead of 1 KB of constant data a batch.
+- The pump's canvas no longer marks the pages it draws over in its texture store, which nothing reads
+  (`store_follows_draws_`; never-uploaded pages answer NotUploaded with or without marks).
+
+At 009, 240, 20 s profiled: the pump 15.7 s of CPU to 10.5 s (-33%), `kf4-pc` 12.0 s to 9.4 s (-22%), the same
+pictures; the variant copies (about 10% of `kf4-pc`) are gone. Pictures byte for byte at 000, 009, 009:2, 063.
+
+**A GPU memory leak at uncapped rates, found by it** (it logged the owner out of the desktop twice): at `--hz 500` the
+pump makes most pictures, and only kf4-pc moves Granite's frame contexts on (at the pictures it makes). Granite
+frees what a thread lets go of (each picture's vertex and constant blocks, command buffers) only as its frame
+contexts come round, so the pump's were never freed: about 6 MB a picture, 2.5 GB a second, until the GPU's 16 GB and
+then the system's memory were full and KWin lost its framebuffer. At 240 kf4-pc made enough pictures to keep them
+turning. Now kf4-pc moves the frame context on for the pump's pictures too (`take_picture`), and kf4-pc waits before
+sending the pump a frame while one sent is not yet started (`Pump::wait_for_room_for_frame`: each holds a copy of every
+surface). At 500 the game's GPU memory now levels off about 2.5-3 GB, as at 240. `systemd-run -p MemoryMax` does not
+cap GPU memory: run game runs with a watchdog on `/sys/class/drm/card*/device/mem_info_vram_used`.
+
+`pace_test.py` at 009, 3 runs each, alternated (the old build cannot run uncapped):
+
+| | 4a2932e7 + docs (32601ee2) | now |
+|---|---|---|
+| 240: pictures a second | 238.3-239.7 (lowest second 229-239) | 239.7-239.75 (237-239) |
+| 240: uneven refreshes a second | 25-32 | 0.6-1.8 |
+| 500 (uncapped) | fills the GPU's memory | 352-364 (lowest second 300-349), the game 57-58 vblanks a second |
+
+The smoother 240 comes from the frame contexts moved on at the pump's pictures (Granite's deferred work done
+evenly). Uncapped, the game now falls behind a little (57-58 vblanks a second): the next limit.
+
 ## The list, best first
 
-0. **Done 2026-11-06**: the pictures between of every second vblank, and the pump's pictures on the GPU's queue when
+0. **Done 2026-11-07**: pages marked again (item 1) and kept steps out of the variant (item 2), above.
+   **Done 2026-11-06**: the pictures between of every second vblank, and the pump's pictures on the GPU's queue when
    handed out. **Done 2026-11-07**: the in-game profiler (docs/port/PROFILING.md), which the items below come from.
    The pump (the old item 1) is done too (305b216a).
 
