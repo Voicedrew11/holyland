@@ -335,6 +335,7 @@ public:
         if (keeping_) {
             keeping_ = false;
             kept_->read = store_.reads_watched();
+            kept_sizes_ = {kept_->steps.size(), kept_->batches.size()};
         }
     }
 
@@ -613,48 +614,6 @@ private:
     CommandBuffer &cmd(GpuWork work) {
         times_.begin(cmd(), work);
         return *cmd_;
-    }
-
-    // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
-    uint32_t batch_state_key(bool zte, bool zwrite, uint32_t ztst, bool date, bool date_stencil, int passes) const {
-        if (!port_profile_gpu_detail()) {
-            return 0;
-        }
-        const DrawState &s = batch_.state;
-        const BoundTexture &bt = batch_.texture;
-        ShaderState st = {};
-        st.program = !batch_.native                              ? 0
-                     : batch_.program == NativeProgram::vu1_280 ? 2
-                     : batch_.program == NativeProgram::vu1_700 ? 3
-                                                                : 1;
-        if (bits(s.prim, 4, 1) && bt.ok) {
-            st.texture = bt.src == SRC_SAMPLED ? 3 : bt.src == SRC_SURFACE ? 2 : 1;
-            st.tfx = uint8_t(bits(s.tex0, 35, 2));
-            st.alpha_channel = bits(s.tex0, 34, 1) != 0;
-        }
-        st.fog = bits(s.prim, 5, 1) != 0;
-        st.blending = bits(s.prim, 6, 1) != 0 || batch_.shader_blend;
-        st.blend = uint8_t(bits(s.alpha, 0, 8));
-        st.shader_blend = batch_.shader_blend;
-        st.date = !date ? 0 : date_stencil ? 1 : 2;
-        st.depth = zte ? uint8_t(ztst) : 0;
-        st.depth_write = zwrite;
-        st.passes = uint8_t(passes);
-        return shader_state_key(st);
-    }
-
-    GpuWork batch_work() const {
-        if (!batch_.native) {
-            return GpuWork::draws_2d;
-        }
-        switch (batch_.program) {
-        case NativeProgram::vu1_280:
-            return GpuWork::native_280;
-        case NativeProgram::vu1_700:
-            return GpuWork::native_700;
-        default:
-            return GpuWork::native_000;
-        }
     }
 
     void full_barrier(CommandBuffer &c) {
@@ -1482,6 +1441,49 @@ private:
         std::vector<Run> runs;
     };
 
+    // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
+    uint32_t batch_state_key(const Batch &b, bool zte, bool zwrite, uint32_t ztst, bool date, bool date_stencil,
+                             int passes) const {
+        if (!port_profile_gpu_detail()) {
+            return 0;
+        }
+        const DrawState &s = b.state;
+        const BoundTexture &bt = b.texture;
+        ShaderState st = {};
+        st.program = !b.native                              ? 0
+                     : b.program == NativeProgram::vu1_280 ? 2
+                     : b.program == NativeProgram::vu1_700 ? 3
+                                                                : 1;
+        if (bits(s.prim, 4, 1) && bt.ok) {
+            st.texture = bt.src == SRC_SAMPLED ? 3 : bt.src == SRC_SURFACE ? 2 : 1;
+            st.tfx = uint8_t(bits(s.tex0, 35, 2));
+            st.alpha_channel = bits(s.tex0, 34, 1) != 0;
+        }
+        st.fog = bits(s.prim, 5, 1) != 0;
+        st.blending = bits(s.prim, 6, 1) != 0 || b.shader_blend;
+        st.blend = uint8_t(bits(s.alpha, 0, 8));
+        st.shader_blend = b.shader_blend;
+        st.date = !date ? 0 : date_stencil ? 1 : 2;
+        st.depth = zte ? uint8_t(ztst) : 0;
+        st.depth_write = zwrite;
+        st.passes = uint8_t(passes);
+        return shader_state_key(st);
+    }
+
+    static GpuWork batch_work(const Batch &b) {
+        if (!b.native) {
+            return GpuWork::draws_2d;
+        }
+        switch (b.program) {
+        case NativeProgram::vu1_280:
+            return GpuWork::native_280;
+        case NativeProgram::vu1_700:
+            return GpuWork::native_700;
+        default:
+            return GpuWork::native_000;
+        }
+    }
+
     // An upload of the frame's (what its pictures between ask for again), or a kept walk's
     struct RecordedUpload {
         TransferRegisters transfer;
@@ -1490,6 +1492,10 @@ private:
     };
 
     // ---- A kept walk's steps (keep_walk), in the order the walk made them ----
+    // (a batch: Kept::batches' index; batches are kept out of the step so a step is small and the list grows cheaply)
+    struct KeptBatch {
+        uint32_t index;
+    };
     struct KeptUpload {
         RecordedUpload upload; // (made again from its bytes; its chunk what an upload asked again finds)
     };
@@ -1505,10 +1511,23 @@ private:
     struct KeptMark {
         uint64_t value;
     };
-    using KeptStep = std::variant<Batch, KeptUpload, KeptUploadAgain, KeptCopy, KeptClutLoad, KeptMark>;
+    using KeptStep = std::variant<KeptBatch, KeptUpload, KeptUploadAgain, KeptCopy, KeptClutLoad, KeptMark>;
+    // (moved, not copied, when the lists grow)
+    static_assert(std::is_nothrow_move_constructible_v<Batch>);
+    static_assert(std::is_nothrow_move_constructible_v<KeptStep>);
     struct Kept {
         std::vector<KeptStep> steps;
+        std::vector<Batch> batches;
         PagesRead read;
+
+        void keep(Batch &&batch) {
+            steps.emplace_back(KeptBatch{uint32_t(batches.size())});
+            batches.push_back(std::move(batch));
+        }
+    };
+    // (the last kept walk's sizes, reserved for the next: a frame's walk is about as long as the frame before's)
+    struct KeptSizes {
+        size_t steps = 0, batches = 0;
     };
     friend class pcr::KeptWalk;
     friend class pcr::SurfaceCopies;
@@ -1517,6 +1536,8 @@ private:
     // ---- Step 5b: a walk's calls kept, and made again ----
     void keep_walk() {
         kept_ = std::make_unique<Kept>();
+        kept_->steps.reserve(kept_sizes_.steps);
+        kept_->batches.reserve(kept_sizes_.batches);
         kept_spoilt_ = false;
         keeping_ = true;
         store_.watch_reads();
@@ -1541,7 +1562,7 @@ private:
         flush_batch();
         between_ = &between;
         for (const KeptStep &step : walk.steps) {
-            std::visit([this](const auto &kept) { make_again(kept); }, step);
+            std::visit([&](const auto &kept) { make_again(walk, kept); }, step);
         }
         flush_batch();
         between_ = nullptr;
@@ -1596,6 +1617,9 @@ private:
         kept_page_ = copies.kept_page;
         scale_ = pending_scale_ = copies.scale;
         replaying_ = kept_reads_ = false;
+        // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
+        // textures are bound already, and its store is never read; so what it draws over is not marked in it)
+        store_follows_draws_ = false;
     }
 
     // (draw_again_alone) Batches drawn between two submits of the pump's command buffer: kf4-pc's next frame context
@@ -1607,8 +1631,8 @@ private:
         between_ = &between;
         uint32_t batches = 0;
         for (const KeptStep &step : walk.steps) {
-            std::visit([this](const auto &kept) { make_again_alone(kept); }, step);
-            if (std::holds_alternative<Batch>(step) && ++batches % batches_a_submit == 0) {
+            std::visit([&](const auto &kept) { make_again_alone(walk, kept); }, step);
+            if (std::holds_alternative<KeptBatch>(step) && ++batches % batches_a_submit == 0) {
                 submit();
             }
         }
@@ -1617,24 +1641,24 @@ private:
         submit();
     }
 
-    void make_again_alone(const Batch &kept) {
-        make_again(kept);
+    void make_again_alone(const Kept &walk, const KeptBatch &kept) {
+        make_again(walk, kept);
     }
-    void make_again_alone(const KeptUpload &kept) {
+    void make_again_alone(const Kept &, const KeptUpload &kept) {
         flush_batch();
         write_upload_into_surfaces(kept.upload.transfer, *kept.upload.bytes);
     }
-    void make_again_alone(const KeptUploadAgain &kept) {
+    void make_again_alone(const Kept &, const KeptUploadAgain &kept) {
         flush_batch();
         write_upload_into_surfaces(kept.upload.transfer, *kept.upload.bytes);
         counts_.uploads_made_again++;
     }
-    void make_again_alone(const KeptCopy &kept) {
+    void make_again_alone(const Kept &, const KeptCopy &kept) {
         flush_batch();
         copy_between_surfaces(kept.transfer);
     }
-    void make_again_alone(const KeptClutLoad &) {}
-    void make_again_alone(const KeptMark &kept) {
+    void make_again_alone(const Kept &, const KeptClutLoad &) {}
+    void make_again_alone(const Kept &, const KeptMark &kept) {
         frame_mark(kept.value);
     }
 
@@ -1647,24 +1671,26 @@ private:
         PictureKept out;
         out.walk = std::make_unique<Kept>();
         out.walk->read = frame.read;
-        std::vector<KeptStep> &steps = out.walk->steps;
-        steps.reserve(frame.steps.size() + 2);
-        steps.emplace_back(KeptMark{uint64_t(0xF0) << 32});
+        Kept &picture = *out.walk;
+        picture.steps.reserve(frame.steps.size() + 2);
+        picture.batches.reserve(frame.batches.size());
+        picture.steps.emplace_back(KeptMark{uint64_t(0xF0) << 32});
         for (const KeptStep &step : frame.steps) {
-            out.refused = std::visit([&](const auto &kept) { return in_picture(kept, t, steps); }, step);
+            out.refused = std::visit([&](const auto &kept) { return in_picture(frame, kept, t, picture); }, step);
             if (out.refused != FrameWalkRefused::none) {
                 out.walk.reset();
                 return out;
             }
         }
-        steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
+        picture.steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
         return out;
     }
 
     // A draw into the buffer shown where it drew into the buffer drawn, and reading it there where it read the buffer
     // drawn's pixels (a surface's, looked up again as it is drawn); textured from the frame shown, between 0xF4 and
     // 0xF5; a native batch by its pictures' records, a GIF batch's numbered corners moved
-    static FrameWalkRefused in_picture(const Batch &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
+    static FrameWalkRefused in_picture(const Kept &frame, const KeptBatch &step, const FrameTargets &t, Kept &picture) {
+        const Batch &kept = frame.batches[step.index];
         bool textured = bits(kept.state.prim, 4, 1) != 0;
         if (textured && tex0_reads_drawn(kept.state.tex0, t) && kept.texture.src != SRC_SURFACE) {
             return FrameWalkRefused::reads_drawn;
@@ -1685,43 +1711,43 @@ private:
         }
         bool kept_read = textured && tex0_reads_kept(kept.state.tex0, t);
         if (kept_read) {
-            steps.emplace_back(KeptMark{uint64_t(0xF4) << 32});
+            picture.steps.emplace_back(KeptMark{uint64_t(0xF4) << 32});
         }
-        steps.emplace_back(std::move(b));
+        picture.keep(std::move(b));
         if (kept_read) {
-            steps.emplace_back(KeptMark{uint64_t(0xF5) << 32});
+            picture.steps.emplace_back(KeptMark{uint64_t(0xF5) << 32});
         }
         return FrameWalkRefused::none;
     }
-    static FrameWalkRefused in_picture(const KeptUpload &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
+    static FrameWalkRefused in_picture(const Kept &, const KeptUpload &kept, const FrameTargets &t, Kept &picture) {
         switch (transfer_in_picture(0, kept.upload.transfer, t)) {
         case TransferInPicture::asked_again:
-            steps.emplace_back(KeptUploadAgain{kept.upload});
+            picture.steps.emplace_back(KeptUploadAgain{kept.upload});
             return FrameWalkRefused::none;
         case TransferInPicture::as_is:
-            steps.emplace_back(kept);
+            picture.steps.emplace_back(kept);
             return FrameWalkRefused::none;
         default:
             return FrameWalkRefused::uploads_drawn;
         }
     }
-    static FrameWalkRefused in_picture(const KeptUploadAgain &, const FrameTargets &, std::vector<KeptStep> &) {
+    static FrameWalkRefused in_picture(const Kept &, const KeptUploadAgain &, const FrameTargets &, Kept &) {
         return FrameWalkRefused::marks; // (0x7C: not the game's own packets)
     }
-    static FrameWalkRefused in_picture(const KeptCopy &kept, const FrameTargets &t, std::vector<KeptStep> &) {
+    static FrameWalkRefused in_picture(const Kept &, const KeptCopy &kept, const FrameTargets &t, Kept &) {
         return transfer_in_picture(2, kept.transfer, t) == TransferInPicture::left_out ? FrameWalkRefused::none
                                                                                        : FrameWalkRefused::copies_drawn;
     }
-    static FrameWalkRefused in_picture(const KeptClutLoad &kept, const FrameTargets &t, std::vector<KeptStep> &steps) {
-        steps.emplace_back(KeptClutLoad{tex0_in_picture(kept.tex0, t), kept.texclut});
+    static FrameWalkRefused in_picture(const Kept &, const KeptClutLoad &kept, const FrameTargets &t, Kept &picture) {
+        picture.steps.emplace_back(KeptClutLoad{tex0_in_picture(kept.tex0, t), kept.texclut});
         return FrameWalkRefused::none;
     }
-    static FrameWalkRefused in_picture(const KeptMark &kept, const FrameTargets &, std::vector<KeptStep> &steps) {
+    static FrameWalkRefused in_picture(const Kept &, const KeptMark &kept, const FrameTargets &, Kept &picture) {
         uint32_t index = bits(kept.value, 32, 8);
         if (index >= 0xF0 && index <= 0xF5) {
             return FrameWalkRefused::marks;
         }
-        steps.emplace_back(kept);
+        picture.steps.emplace_back(kept);
         return FrameWalkRefused::none;
     }
 
@@ -1737,37 +1763,58 @@ private:
         counts_.uploads_made_again++;
     }
 
-    // The open batch as a kept walk keeps it: a surface's copy is made again when it is drawn again
-    Batch kept_batch() const {
-        Batch b = batch_;
+    // The open batch, drawn, as a kept walk keeps it (its lists moved out: begin_batch empties them anyway); a surface's
+    // copy is made again when it is drawn again
+    Batch take_kept_batch() {
+        size_t vertices = batch_.vertices.size();
+        Batch b = std::move(batch_);
+        batch_.vertices.reserve(vertices); // (the next batch's room, as the copy this replaces made)
+        let_go_of_surface_copy(b);
+        return b;
+    }
+    static void let_go_of_surface_copy(Batch &b) {
         b.texture.surface_copy.reset();
         if (b.texture.src == SRC_SURFACE) {
             b.texture.view = nullptr;
         }
-        return b;
     }
 
-    void make_again(const Batch &kept) {
-        batch_ = kept;
-        if (kept.texture.src == SRC_SURFACE) {
-            batch_.texture = surface_texture(kept.state.tex0, kept.texture.cols, kept.texture.rows);
-        }
-        batch_open_ = true;
+    // (drawn from where the walk keeps it: a copy only for a surface's texture, made again)
+    void make_again(const Kept &walk, const KeptBatch &step) {
         flush_batch();
+        const Batch &kept = walk.batches[step.index];
+        if (kept.texture.src != SRC_SURFACE) {
+            draw_made_again(kept);
+            return;
+        }
+        Batch b = kept;
+        b.texture = surface_texture(kept.state.tex0, kept.texture.cols, kept.texture.rows);
+        draw_made_again(b);
     }
-    void make_again(const KeptUpload &kept) {
+    void draw_made_again(const Batch &b) {
+        if (b.vertices.empty() && b.runs.empty()) {
+            return;
+        }
+        draw_batch(b);
+        if (keeping_) {
+            Batch kept = b;
+            let_go_of_surface_copy(kept);
+            kept_->keep(std::move(kept));
+        }
+    }
+    void make_again(const Kept &, const KeptUpload &kept) {
         upload(kept.upload.transfer, *kept.upload.bytes);
     }
-    void make_again(const KeptUploadAgain &kept) {
+    void make_again(const Kept &, const KeptUploadAgain &kept) {
         upload_made_again(kept.upload);
     }
-    void make_again(const KeptCopy &kept) {
+    void make_again(const Kept &, const KeptCopy &kept) {
         local_copy(kept.transfer);
     }
-    void make_again(const KeptClutLoad &kept) {
+    void make_again(const Kept &, const KeptClutLoad &kept) {
         texture_written(kept.tex0, kept.texclut);
     }
-    void make_again(const KeptMark &kept) {
+    void make_again(const Kept &, const KeptMark &kept) {
         frame_mark(kept.value);
     }
 
@@ -1937,10 +1984,10 @@ private:
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            draw_batch(batch_);
             if (keeping_) {
-                kept_->steps.emplace_back(kept_batch());
+                kept_->keep(take_kept_batch());
             }
-            draw_batch();
         }
         batch_.texture = BoundTexture(); // (a surface's copy let go once drawn)
         batch_.arena.reset();
@@ -1948,8 +1995,9 @@ private:
         batch_.triangles.reset();
     }
 
-    void draw_batch() {
-        const DrawState &s = batch_.state;
+    // A batch drawn (the open one, or a kept walk's again); the batch is not changed
+    void draw_batch(const Batch &b) {
+        const DrawState &s = b.state;
         counts_.batches++;
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
         uint64_t scissor = s.scissor;
@@ -1991,18 +2039,11 @@ private:
         }
         // (a surface as tall as what is drawn in it, not its scissor: the game's scissors run past small targets, onto
         // the targets below them)
-        uint32_t height = uint32_t(std::clamp(std::min(batch_.y1, int32_t(scay1)) + 1, 1, 2048));
+        uint32_t height = uint32_t(std::clamp(std::min(b.y1, int32_t(scay1)) + 1, 1, 2048));
         Placed placed = colour_surface(fbp, fbw, fpsm == GSN_PSMCT24 ? GSN_PSMCT32 : fpsm, height);
         Surface *colour = placed.surface;
         if (!colour) {
             return;
-        }
-        if (!batch_.native && (placed.x != 0 || placed.y != 0)) {
-            // (a frame inside a surface: its pixels at their place there)
-            for (Vertex &v : batch_.vertices) {
-                v.x += float(placed.x);
-                v.y += float(placed.y);
-            }
         }
         // DATE: by the stencil, which a DATE batch's pass has with its Z buffer's surface (ZBUF's, ZTE on or off)
         bool date = bits(s.test, 14, 1) != 0;
@@ -2024,13 +2065,13 @@ private:
         }
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
-        if (batch_.moved) {
+        PixelBox box = {b.x0, b.y0, b.x1, b.y1}; // (GS pixels touched)
+        if (b.moved) {
             // (a picture between's corners are where the shader moves them: anywhere in the scissor, within the surface
             // as tall as the frame drew it)
-            batch_.x0 = int32_t(scax0);
-            batch_.y0 = int32_t(scay0);
-            batch_.x1 = std::min(int32_t(scax1), int32_t(colour->width()) - 1 - int32_t(placed.x));
-            batch_.y1 = std::min(int32_t(scay1), int32_t(colour->height) - 1 - int32_t(placed.y));
+            box = {int32_t(scax0), int32_t(scay0),
+                   std::min(int32_t(scax1), int32_t(colour->width()) - 1 - int32_t(placed.x)),
+                   std::min(int32_t(scay1), int32_t(colour->height) - 1 - int32_t(placed.y))};
         }
         date_stencil = date_stencil && depth != nullptr;
         // (KF4_PC_STENCIL=0: the destination as it is before the draw, which the shader reads: a copy, as the draw
@@ -2044,11 +2085,11 @@ private:
             }
         }
         // a blend with no Vulkan form: the GS's in the shader, from a copy of the rectangle drawn in
-        if (batch_.shader_blend) {
+        if (b.shader_blend) {
             counts_blends_by_shader_++;
-            counts_native_shader_blends_ += batch_.native ? 1 : 0;
+            counts_native_shader_blends_ += b.native ? 1 : 0;
             if (!dest_copy) {
-                VkRect2D rect = drawn_rect(*colour, placed);
+                VkRect2D rect = drawn_rect(b.state.scissor, box, *colour, placed);
                 if (rect.extent.width == 0 || rect.extent.height == 0) {
                     return;
                 }
@@ -2056,7 +2097,7 @@ private:
                 dest_offset = rect.offset;
             }
         }
-        times_.begin_draw(cmd(), batch_work(), batch_state_key(zte, zwrite, ztst, date, date_stencil, pass_count));
+        times_.begin_draw(cmd(), batch_work(b), batch_state_key(b, zte, zwrite, ztst, date, date_stencil, pass_count));
         begin_pass(*colour, depth, date_stencil ? PassReads::target : PassReads::nothing);
         CommandBuffer &c = cmd();
         VkViewport vp = {0, 0, float(colour->image->get_width()), float(colour->image->get_height()), 0, 1};
@@ -2069,12 +2110,12 @@ private:
         }
         VkRect2D scissor_px = {{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}};
         if (date_stencil) {
-            set_up_date(c, *colour, placed, bits(s.test, 15, 1) != 0);
+            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0);
         }
         c.set_scissor(scissor_px);
-        c.set_program(!batch_.native                              ? program_
-                      : batch_.program == NativeProgram::vu1_280 ? native_280_program_
-                      : batch_.program == NativeProgram::vu1_700 ? native_700_program_
+        c.set_program(!b.native                              ? program_
+                      : b.program == NativeProgram::vu1_280 ? native_280_program_
+                      : b.program == NativeProgram::vu1_700 ? native_700_program_
                                                                  : native_program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -2084,7 +2125,7 @@ private:
                             : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                         : VK_COMPARE_OP_GREATER);
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
-        if (batch_.shader_blend) {
+        if (b.shader_blend) {
             blend = BlendChoice();
             blend.flags = F_SHADER_BLEND;
         } else if (!blend.supported) {
@@ -2098,9 +2139,9 @@ private:
         push.zscale = zpsm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
         bool tme = bits(s.prim, 4, 1) != 0;
         uint32_t flags = 0;
-        if (tme && batch_.texture.ok) {
+        if (tme && b.texture.ok) {
             flags |= F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
-                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | batch_.texture.src << F_SRC_SHIFT;
+                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT;
         } else if (tme) {
             counts_untextured_++;
         }
@@ -2120,7 +2161,7 @@ private:
                     bits(s.tex1, 19, 2) << 8;
         int32_t k = int32_t(bits(s.tex1, 32, 12) << 20) >> 20; // (signed 7.4)
         push.lod_k = float(k) / 16.0f;
-        push.levels = batch_.texture.levels;
+        push.levels = b.texture.levels;
         push.src_scale[0] = int32_t(scale_[0]);
         push.src_scale[1] = int32_t(scale_[1]);
         push.place[0] = int32_t(placed.x);
@@ -2130,7 +2171,7 @@ private:
         push.alpha = bits(s.alpha, 0, 8) | bits(s.alpha, 32, 8) << 8 | bits(s.colclamp, 0, 1) << 16 |
                      bits(s.pabe, 0, 1) << 17 | (fpsm == GSN_PSMCT24 ? 1u : 0u) << 18;
         // textures: the texels, the surface's copy, the sampled texture (each the dummy when not this batch's kind)
-        const BoundTexture &bt = batch_.texture;
+        const BoundTexture &bt = b.texture;
         bool sampled = bt.ok && bt.src == SRC_SAMPLED, from_surface = bt.ok && bt.src == SRC_SURFACE;
         bool texels = bt.ok && !sampled && !from_surface;
         c.set_texture(0, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -2141,18 +2182,22 @@ private:
             c.set_texture(0, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
         }
         c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
-        void *clut = c.allocate_constant_data(0, 2, sizeof(batch_.clut));
-        memcpy(clut, batch_.clut.data(), sizeof(batch_.clut));
+        if (texels && bt.src == SRC_INDEX) {
+            void *clut = c.allocate_constant_data(0, 2, sizeof(b.clut));
+            memcpy(clut, b.clut.data(), sizeof(b.clut));
+        } else {
+            c.set_uniform_buffer(0, 2, *no_clut_); // (read only for SRC_INDEX: one buffer, not a 1 KB copy a batch)
+        }
         float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
                               float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
         c.set_blend_constants(constants);
         bind_between(c);
-        if (batch_.native) {
-            c.set_storage_buffer(2, 0, *batch_.arena);
-            c.set_storage_buffer(2, 1, *batch_.records);
-            c.set_storage_buffer(2, 2, *batch_.triangles);
+        if (b.native) {
+            c.set_storage_buffer(2, 0, *b.arena);
+            c.set_storage_buffer(2, 1, *b.records);
+            c.set_storage_buffer(2, 2, *b.triangles);
         }
-        size_t bytes = batch_.vertices.size() * sizeof(Vertex);
+        size_t bytes = b.vertices.size() * sizeof(Vertex);
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
@@ -2170,22 +2215,32 @@ private:
             }
             uint32_t mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
             c.set_color_write_mask(mask);
-            if (batch_.native) {
-                for (const Batch::Run &r : batch_.runs) {
+            if (b.native) {
+                for (const Batch::Run &r : b.runs) {
                     c.draw(r.count * 3, 1, r.first * 3, r.instance);
                     counts_.native_draw_calls++;
                 }
                 continue;
             }
-            void *v = c.allocate_vertex_data(0, bytes, sizeof(Vertex));
-            memcpy(v, batch_.vertices.data(), bytes);
+            auto *v = static_cast<Vertex *>(c.allocate_vertex_data(0, bytes, sizeof(Vertex)));
+            if (placed.x == 0 && placed.y == 0) {
+                memcpy(v, b.vertices.data(), bytes);
+            } else {
+                // (a frame inside a surface: its pixels at their place there)
+                for (size_t i = 0; i < b.vertices.size(); i++) {
+                    Vertex moved = b.vertices[i];
+                    moved.x += float(placed.x);
+                    moved.y += float(placed.y);
+                    v[i] = moved;
+                }
+            }
             set_vertex_attribs(c);
-            c.draw(uint32_t(batch_.vertices.size()));
+            c.draw(uint32_t(b.vertices.size()));
         }
         // what was drawn over, for the texture store (its pages are a surface's now, not the uploads')
-        int32_t x0 = std::max(batch_.x0, int32_t(scax0)), x1 = std::min(batch_.x1, int32_t(scax1));
-        int32_t y0 = std::max(batch_.y0, int32_t(scay0)), y1 = std::min(batch_.y1, int32_t(scay1));
-        if (x1 >= x0 && y1 >= y0) {
+        int32_t x0 = std::max(box.x0, int32_t(scax0)), x1 = std::min(box.x1, int32_t(scax1));
+        int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
+        if (x1 >= x0 && y1 >= y0 && store_follows_draws_) {
             store_.drawn({fbp * 32, fbw, fpsm, uint32_t(x0), uint32_t(y0), uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
             if (zte && zwrite) {
                 store_.drawn({bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
@@ -2194,13 +2249,13 @@ private:
         }
     }
 
-    // The open batch's rectangle in its colour surface's pixels (at the canvas's scale): its primitives' box within its
+    // A batch's rectangle in its colour surface's pixels (at the canvas's scale): its primitives' box within its
     // scissor (a native batch's: its scissor), within the surface; empty when it draws nothing
-    VkRect2D drawn_rect(const Surface &colour, const Placed &placed) const {
-        int32_t x0 = std::max(batch_.x0, int32_t(bits(batch_.state.scissor, 0, 11)));
-        int32_t x1 = std::min(batch_.x1, int32_t(bits(batch_.state.scissor, 16, 11)));
-        int32_t y0 = std::max(batch_.y0, int32_t(bits(batch_.state.scissor, 32, 11)));
-        int32_t y1 = std::min(batch_.y1, int32_t(bits(batch_.state.scissor, 48, 11)));
+    VkRect2D drawn_rect(uint64_t scissor, const PixelBox &box, const Surface &colour, const Placed &placed) const {
+        int32_t x0 = std::max(box.x0, int32_t(bits(scissor, 0, 11)));
+        int32_t x1 = std::min(box.x1, int32_t(bits(scissor, 16, 11)));
+        int32_t y0 = std::max(box.y0, int32_t(bits(scissor, 32, 11)));
+        int32_t y1 = std::min(box.y1, int32_t(bits(scissor, 48, 11)));
         int32_t w = int32_t(colour.image->get_width()), h = int32_t(colour.image->get_height());
         int32_t rx0 = std::clamp((x0 + int32_t(placed.x)) * int32_t(scale_[0]), 0, w);
         int32_t ry0 = std::clamp((y0 + int32_t(placed.y)) * int32_t(scale_[1]), 0, h);
@@ -2216,10 +2271,9 @@ private:
     // The GS draws a DATE pixel only where the target's alpha bit 7 is DATM as it is then. Over the rectangle the batch
     // draws in (its primitives' box within its scissor; a native batch's scissor), the stencil is cleared and set
     // where the target's bit is DATM, read in the pass (pcr_date.frag); the batch then draws where it is set. The
-    // scissor is the rectangle's after (the caller sets the batch's again).
-    void set_up_date(CommandBuffer &c, const Surface &colour, const Placed &placed, bool datm) {
+    // scissor is the rectangle's after (the caller sets the batch's again). rect: drawn_rect's.
+    void set_up_date(CommandBuffer &c, const Surface &colour, const VkRect2D &rect, bool datm) {
         counts_date_by_stencil_++;
-        VkRect2D rect = drawn_rect(colour, placed);
         if (rect.extent.width == 0 || rect.extent.height == 0) {
             return; // (the batch draws nothing within its scissor)
         }
@@ -2385,6 +2439,12 @@ private:
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         std::array<uint8_t, 256> zeros{};
         picture_ = device_.create_buffer(info, zeros.data());
+        BufferCreateInfo clut = {};
+        clut.domain = BufferDomain::Device;
+        clut.size = sizeof(Batch::clut);
+        clut.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
+        no_clut_ = device_.create_buffer(clut, no_colours.data());
     }
 
     Device &device_;
@@ -2396,6 +2456,7 @@ private:
     bool stencil_on_ = false;
     PassReads pass_reads_ = PassReads::nothing;
     BufferHandle picture_;
+    BufferHandle no_clut_; // (bound as the CLUT of a batch that reads none)
     const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
@@ -2422,6 +2483,8 @@ private:
     bool replaying_ = false, kept_reads_ = false;
     // (step 5b) the walk being kept, and whether it read back from the GS's memory or forgot it
     std::unique_ptr<Kept> kept_;
+    bool store_follows_draws_ = true; // (false on the pump's canvas: start_from)
+    KeptSizes kept_sizes_;
     bool keeping_ = false, kept_spoilt_ = false;
     ImageHandle kept_frame_;
     uint32_t kept_page_ = 0;
