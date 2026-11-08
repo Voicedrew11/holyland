@@ -44,6 +44,7 @@
 #include "thread_id.hpp"
 
 extern "C" {
+#include "port/host.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/render.h"
@@ -348,6 +349,9 @@ uint32_t bits(uint64_t value, int first, int count) {
     return uint32_t((value >> first) & ((uint64_t(1) << count) - 1));
 }
 
+// GS_CSR's FIELD at a vblank when the field begun is the one an interlaced TV shows a line lower (the odd lines)
+constexpr int LOWER_FIELD = 1;
+
 // The buffer the display shows (circuit 2, else 1; a field's lines in field mode)
 bool display_rect(const uint64_t *privileged, GsnRect &rect) {
     uint64_t pmode = privileged[0], smode2 = privileged[2 * 2];
@@ -368,6 +372,39 @@ bool display_rect(const uint64_t *privileged, GsnRect &rect) {
     }
     return rect.w > 0 && rect.h > 0 && rect.w <= 1024 && rect.h <= 1024;
 }
+
+// (the DMA controller's thread, which tells of every vblank and its pictures between) The screens the game draws as
+// fields (the menus, the title), with whole frames (port_whole_frame(): port/platform/field_frames.c): each vblank's
+// lower field shown from the upper field's buffer, which field_frames drew again for the same moment and told of just
+// before. The game draws the two half a line apart, rounded to a whole line of the field where its pictures are on
+// whole pixels: shown in turn, a line apart or the field's lines moved as on a TV, every other picture was a line
+// higher or lower (the menus shook). Without whole frames, the other buffer holds the moment before: the lower field
+// is moved a line down instead (Canvas::scanout, ShownRect's lower_field).
+class UpperField {
+public:
+    void show_in(VblankPicture &v, bool extra) {
+        uint64_t smode2 = v.privileged[2 * 2];
+        if ((smode2 & 3) != 3 || !v.deinterlace || !port_whole_frame()) {
+            dispfb_.reset();
+            return;
+        }
+        if (v.field != LOWER_FIELD) {
+            if (!extra) {
+                dispfb_ = std::array<uint64_t, 2>{v.privileged[DISPFB1], v.privileged[DISPFB2]};
+            }
+            return;
+        }
+        if (dispfb_) {
+            v.privileged[DISPFB1] = (*dispfb_)[0];
+            v.privileged[DISPFB2] = (*dispfb_)[1];
+            v.field = LOWER_FIELD ^ 1;
+        }
+    }
+
+private:
+    static constexpr size_t DISPFB1 = 7 * 2, DISPFB2 = 9 * 2; // (privileged's words)
+    std::optional<std::array<uint64_t, 2>> dispfb_; // the upper field's buffers, as the last vblank of it told
+};
 
 struct PictureSize {
     uint32_t width, height;
@@ -939,7 +976,10 @@ private:
         GsnRect rect;
         bool shown = false;
         if (canvas && display_rect(v.privileged.data(), rect)) {
-            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h};
+            uint64_t smode2 = v.privileged[2 * 2];
+            bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
+            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
+                                         uint32_t(field_doubled && v.field == LOWER_FIELD)};
             shown = canvas->scanout(cmd, shown_rect, *picture_);
         }
         if (!shown) {
@@ -1289,6 +1329,7 @@ public:
         v.deinterlace = port_options.deinterlace != 0;
         v.tag = tag;
         bool extra = (want & GSN_EXTRA) != 0;
+        upper_field_.show_in(v, extra);
         // A picture nobody waits for (none, or one this thread hands to the presenter) is
         // queued and the sender goes on; one wanted in frame, or an image the sender shows itself, is waited for
         bool queued = !(want & GSN_WANT_PIXELS) && (!(want & GSN_WANT_IMAGE) || (want & GSN_PRESENT));
@@ -1587,6 +1628,7 @@ private:
     std::optional<PictureOut> out_;
     uint32_t picture_scale_ = 1 | 1 << 8;
     bool shows_pumped_ = false;
+    UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
     std::thread thread_;
 };

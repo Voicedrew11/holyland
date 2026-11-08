@@ -572,6 +572,10 @@ public:
         if (x1 <= x0 || y1 <= y0) {
             return false;
         }
+        if (rect.lower_field && dst.get_height() == 2 * uint32_t(y1 - y0)) {
+            scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
+            return true;
+        }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
             const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             out.copy_image(dst, *s->image, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour,
@@ -581,6 +585,25 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
+    }
+
+    // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
+    // (its rows each twice, from the picture's row of the line, dst's height over the rect's lines; the line above
+    // them black, and what falls below dst left out)
+    void scanout_lower_field(CommandBuffer &out, const Image &src, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                             const Image &dst) {
+        int32_t height = int32_t(dst.get_height());
+        int32_t down_rows = std::max<int32_t>(1, int32_t(scale_[1] + 0.5f)); // (a line of the picture: a field's half)
+        int32_t src_rows = (height - down_rows) / 2;
+        VkClearValue black = {};
+        out.clear_image(dst, black);
+        out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        if (src_rows <= 0 || y0 + src_rows > y1) {
+            return;
+        }
+        out.blit_image(dst, src, {0, down_rows, 0}, {int32_t(dst.get_width()), 2 * src_rows, 1}, {x0, y0, 0},
+                       {x1 - x0, src_rows, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
     }
 
     // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
