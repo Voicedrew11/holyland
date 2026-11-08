@@ -608,8 +608,10 @@ whole; drawing the native draws themselves is step 3.
   frame whose base is inside a surface of its width is that surface at an offset (the game's 128-wide targets at 1d2
   and 1d4 are one buffer a page row apart); a surface made takes in those of its width it overlaps. A new surface
   starts as the uploads left its pages.
-- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there.
-  Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
+- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there,
+  read at the surface's scale (its own pixels, filtered among them; the wrap modes on the GS's texels): read one
+  pixel a GS texel, the game's full-screen pass over its frame cut a 4x picture to 640x448's detail (until
+  2026-11-07). Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
   host) are made from the uploads or the surface: the game reads its effect atlas back and uploads it again, so a
   read-back of zeroes lost the torches' flames.
 - **The GS's pixel** in `pcr_prim.frag`: texture read (wrap modes, filters, the mipmap level from Q, CLUT, TEXA),
