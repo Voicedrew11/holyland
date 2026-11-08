@@ -67,7 +67,6 @@
 #include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/render.h"
-#include "port/unlocked_rate.h"
 #include "../gs/shared/gsn.h"
 
 #define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
@@ -105,49 +104,20 @@ int port_frame_interp(void) {
    keeps its own time (169.83 Hz where the system names 170), and pictures on any other clock beat
    against it, a refresh with two steps of the world or none every few seconds, which vsync hides
    (each refresh takes one picture) and nothing else does.
-   Unlocked (PORT_FRAME_RATE_UNLOCKED): as many a second as the renderer keeps up with, found as it plays
-   (port/include/port/unlocked_rate.h: gs.c says at each game vblank whether the PC renderer was behind), up to the
-   cap and UNLOCKED_MOST_A_VBLANK a vblank, and timed as a fixed rate is (the window shows each at its time; the
-   swapchain mailbox, so that each refresh shows the newest, or immediate with --tearing). */
+   Unlocked (PORT_FRAME_RATE_UNLOCKED): as other games' unlocked rate, each picture shows the world at the time it
+   reaches the screen, and as many are drawn as the renderer has time for. The schedule asks for a picture every
+   1 / the cap of a second (UNLOCKED_MOST_A_VBLANK a vblank without one), timed as a fixed rate is; the renderer draws
+   the next one it can still have ready at its time and leaves out those it would be late for (port/gs/pc/pcr.cpp's
+   Pump), so how many are drawn follows what it can do, picture by picture, with no rate to find. The swapchain is
+   mailbox, so that each refresh shows the newest, or immediate with --tearing. */
 #define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
-#define UNLOCKED_FLOOR_HZ 60
-static UnlockedRate unlocked;
-static int unlocked_on;            /* (the controller's thread) unlocked was on at the last vblank judged */
-static int unlocked_cap_made = -1; /* the cap its bounds were made with */
-static volatile int unlocked_hz;   /* its rate now, for any thread (port_frame_rate_hz) */
 
-/* (the controller's thread) the rate's bounds: UNLOCKED_FLOOR_HZ to the cap, and the schedule's most */
-static double unlocked_ceiling_hz(void) {
+/* Unlocked's pictures asked for a second: the cap, and the schedule's most */
+static int unlocked_asked_hz(void) {
     double most = UNLOCKED_MOST_A_VBLANK * 60000.0 / 1001.0;
     int cap = port_options.frame_rate_cap;
 
-    return cap > 0 && cap < most ? cap : most;
-}
-
-void port_interp_unlocked_vblank(uint64_t vblank, int behind) {
-    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED) {
-        unlocked_on = 0;
-        return;
-    }
-    if (!unlocked_on) {
-        /* (from the screen's rate: the least a window shows smoothly, and up from there) */
-        int screen = port_video_refresh_rate();
-
-        unlocked_rate_init(&unlocked, screen > UNLOCKED_FLOOR_HZ ? screen : 2 * UNLOCKED_FLOOR_HZ, UNLOCKED_FLOOR_HZ,
-                           unlocked_ceiling_hz(), vblank);
-        unlocked_cap_made = port_options.frame_rate_cap;
-        unlocked_on = 1;
-    } else if (unlocked_cap_made != port_options.frame_rate_cap) {
-        unlocked_rate_bound(&unlocked, UNLOCKED_FLOOR_HZ, unlocked_ceiling_hz());
-        unlocked_cap_made = port_options.frame_rate_cap;
-    }
-    unlocked_rate_vblank(&unlocked, vblank, behind);
-    unlocked_rate_presented(&unlocked, vblank, port_video_pictures_per_second());
-    __atomic_store_n(&unlocked_hz, (int)(unlocked.rate_hz + 0.5), __ATOMIC_RELAXED);
-}
-
-int port_interp_unlocked_at_floor(void) {
-    return !unlocked_on || unlocked_rate_at_floor(&unlocked);
+    return cap > 0 && cap < most ? cap : (int)most;
 }
 
 int port_frame_rate_hz(void) {
@@ -157,8 +127,7 @@ int port_frame_rate_hz(void) {
         hz = port_video_refresh_rate();
         hz = hz > 0 ? hz : 60;
     } else if (hz == PORT_FRAME_RATE_UNLOCKED) {
-        hz = __atomic_load_n(&unlocked_hz, __ATOMIC_RELAXED);
-        hz = hz > 0 ? hz : port_video_refresh_rate() > UNLOCKED_FLOOR_HZ ? port_video_refresh_rate() : 2 * UNLOCKED_FLOOR_HZ;
+        hz = unlocked_asked_hz();
     }
     return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
 }
@@ -167,7 +136,7 @@ static double pictures_a_vblank(void) {
     double p, n;
 
     if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
-        return port_frame_rate_hz() * 1001.0 / 60000.0; /* (a fraction as found: no whole number to keep) */
+        return port_frame_rate_hz() * 1001.0 / 60000.0; /* (a fraction: the renderer picks among them) */
     }
     p = port_frame_rate_hz() * 1001.0 / 60000.0;
     n = floor(p + 0.5);
@@ -3299,7 +3268,7 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
 }
 
 /* A picture between on the GPU: its time, its cameras, and the runs that move with their model then */
-static void gpu_picture(const Camera *between, double t) {
+static void gpu_picture(const Camera *between, double t, MouseTurn hand, double shown_s, int leave_out_late) {
     static uint32_t *bits;
     static size_t bits_room;
     const Objects *o = pending.objects;
@@ -3341,6 +3310,10 @@ static void gpu_picture(const Camera *between, double t) {
     }
     pic.serial = pending.gpu_serial;
     pic.t = (float)t;
+    pic.shown_s = shown_s;
+    pic.leave_out_late = (uint32_t)leave_out_late;
+    pic.hand_yaw_rad = hand.yaw_rad;
+    pic.hand_pitch_rad = hand.pitch_rad;
     pic.runs = o != NULL ? (uint32_t)o->nruns : 0;
     pic.run_bits = bits;
     port_gs_interp_picture(&pic);
@@ -3546,8 +3519,16 @@ static int camera_lead(Camera *c, double t, double picture_vblank) {
     return 1;
 }
 
+/* The hand has moved since `hand` (the renderer turns the picture on by it as it draws it) */
+static int hand_moved_since(MouseTurn hand) {
+    MouseTurn since = port_mouse_lead_since(hand, HUGE_VAL); /* (to the newest reading) */
+
+    return fabs(since.yaw_rad) >= MOUSE_LEAD_LEAST_RAD || fabs(since.pitch_rad) >= MOUSE_LEAD_LEAST_RAD;
+}
+
 int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, const void *data, size_t bytes)) {
     Camera between;
+    MouseTurn hand;
     double t;
     int led;
 
@@ -3562,7 +3543,8 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
         return 0;
     }
     led = camera_lead(&between, t, (double)vblank + phase);
-    if (t == 0 && !led) {
+    hand = port_mouse_lead_hand((double)vblank + phase);
+    if (t == 0 && !led && !hand_moved_since(hand)) {
         return 0; /* the frame shown, as the game drew it (turned by the mouse, it is drawn again as the others) */
     }
     if (pending.gpu == 0) {
@@ -3570,7 +3552,10 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
     }
     outside_check(&between, t, phase, pending.gpu > 0);
     if (pending.gpu > 0) {
-        gpu_picture(&between, t);
+        /* (unlocked: the renderer leaves out a picture it would be late for) */
+        int unlocked = port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED && phase > 0;
+
+        gpu_picture(&between, t, hand, port_video_picture_due_s(PORT_PICTURE_TAG(vblank, phase)), unlocked);
     } else {
         replay_pending(&between, t, 0, send, 0);
     }
@@ -3604,11 +3589,6 @@ void port_interp_print_stats(void) {
     fprintf(stderr, "[stats] frame rate: the pictures between sent %.1f MB of packets; of %llu model parts placed, %llu "
             "paired by their batch and %llu by their order\n", (double)stat_sent / 1048576.0, (unsigned long long)stat_runs,
             (unsigned long long)stat_runs_key, (unsigned long long)stat_runs_order);
-    if (unlocked_on) {
-        fprintf(stderr, "[stats] frame rate unlocked: %.0f a second at the end (between %.0f and %.0f), %llu times down "
-                "as the renderer fell behind, %llu up\n", unlocked.rate_hz, unlocked.floor_hz, unlocked.ceiling_hz,
-                (unsigned long long)unlocked.falls, (unsigned long long)unlocked.rises);
-    }
     if (stat_gpu_frames) {
         fprintf(stderr, "[stats] frame rate on the GPU: %llu frames handed over, %llu pictures between (%.3f s on this thread, "
                 "%.1f us a picture)\n", (unsigned long long)stat_gpu_frames, (unsigned long long)stat_gpu_pictures,

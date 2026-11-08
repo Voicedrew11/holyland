@@ -87,6 +87,12 @@ static void test_turn_view(void) {
     }
 }
 
+static double wrap_diff(double a, double b) {
+    double d = a - b;
+
+    return d - 2 * PI * floor((d + PI) / (2 * PI));
+}
+
 static MouseTurn turn(double yaw, double pitch) {
     MouseTurn t = {yaw, pitch};
 
@@ -108,7 +114,7 @@ static void test_ahead(void) {
         if (v % 2 == 0 && v > 100) {
             port_mouse_lead_spent(turn(0.02, 0.004));
         }
-        port_mouse_lead_waiting(turn(v % 2 == 0 ? 0 : 0.01, v % 2 == 0 ? 0 : 0.002), (uint64_t)v);
+        port_mouse_lead_waiting(turn(v % 2 == 0 ? 0 : 0.01, v % 2 == 0 ? 0 : 0.002), (double)v);
     }
     /* now spent: 5 x 0.02 = 0.1 (by vblank 110); the hand at vblank v is 0.01 (v - 100) */
     drawn = port_mouse_lead_spent_total();
@@ -123,7 +129,7 @@ static void test_ahead(void) {
     ahead = port_mouse_lead_ahead(shown, shown, 0.0, 130.0);
     check("past the newest reading: the newest, not carried on", near(ahead.yaw_rad, 0.10, 1e-12));
     ahead = port_mouse_lead_ahead(shown, shown, 0.0, 50.0);
-    check("before the oldest kept: the oldest", near(ahead.yaw_rad, 0.11 - 0.01 * MOUSE_LEAD_READINGS, 1e-12));
+    check("before the oldest kept: the oldest", near(ahead.yaw_rad, 0.0, 1e-12));
     {
         double last = -1;
         int even = 1;
@@ -174,11 +180,105 @@ static void test_ahead(void) {
         ahead = port_mouse_lead_ahead(as_float, as_float, 0.5, 42.0 + d);
         check("through the mark's floats: within a millionth of a radian", near(ahead.yaw_rad, 0.01, 1e-6));
     }
+
+    /* read between vblanks too: a reading at its time in the vblank, the hand mixed between them, and how far the
+       hand has moved since a picture's */
+    {
+        MouseTurn hand, since;
+
+        since = port_mouse_lead_since(shown, HUGE_VAL);
+        check("since: to the newest reading", near(since.yaw_rad, 0.01, 1e-9) && near(since.pitch_rad, 0.002, 1e-9));
+        port_mouse_lead_waiting(turn(0.03, 0), 42.25);
+        hand = port_mouse_lead_hand(42.125 + d);
+        check("a reading a quarter of a vblank in: mixed with the one before",
+              near(wrap_diff(hand.yaw_rad, shown.yaw_rad), 0.02, 1e-9) &&
+                  near(wrap_diff(hand.pitch_rad, shown.pitch_rad), 0.001, 1e-9));
+        since = port_mouse_lead_since(hand, HUGE_VAL);
+        check("since the picture's hand: what moved after it", near(since.yaw_rad, 0.01, 1e-9) &&
+                                                                  near(since.pitch_rad, -0.001, 1e-9));
+        since = port_mouse_lead_since(hand, 42.0);
+        check("to the hand at a time: mixed there", near(since.yaw_rad, -0.01, 1e-9) &&
+                                                       near(since.pitch_rad, 0.001, 1e-9));
+        port_mouse_lead_waiting(turn(0.04, 0), 42.2);
+        since = port_mouse_lead_since(shown, HUGE_VAL);
+        check("a reading no later than the newest replaces it", near(since.yaw_rad, 0.04, 1e-9));
+    }
+}
+
+/* A picture's cameras (gsn.h's move and mid) turned: as if the picture's camera had been built turned */
+static void cameras(double yaw, double pitch, const double eye[3], double r[3][3], double t[3]) {
+    int i;
+
+    game_view(yaw, pitch, r);
+    for (i = 0; i < 3; i++) {
+        t[i] = -(r[i][0] * eye[0] + r[i][1] * eye[1] + r[i][2] * eye[2]);
+    }
+}
+
+/* move = picture's view after the inverse of the frame's: rows of the rotation less the identity, with translation */
+static void picture_floats(const double fr[3][3], const double ft[3], const double pr[3][3], const double pt[3],
+                           float move[12], float mid[12]) {
+    int i, j, k;
+
+    for (i = 0; i < 3; i++) {
+        double m[3], tr = pt[i];
+
+        for (j = 0; j < 3; j++) {
+            m[j] = 0;
+            for (k = 0; k < 3; k++) {
+                m[j] += pr[i][k] * fr[j][k]; /* pr fr^T */
+            }
+            mid[i * 4 + j] = (float)pr[i][j];
+            move[i * 4 + j] = (float)(m[j] - (i == j));
+        }
+        for (j = 0; j < 3; j++) {
+            tr -= m[j] * ft[j];
+        }
+        mid[i * 4 + 3] = (float)pt[i];
+        move[i * 4 + 3] = (float)tr;
+    }
+}
+
+static void test_turn_picture(void) {
+    const double frame_eye[3] = {100, -40, 250}, picture_eye[3] = {104, -40, 247};
+    double fr[3][3], ft[3], pr[3][3], pt[3], wr[3][3], wt[3];
+    float move[12], mid[12], want_move[12], want_mid[12];
+    MouseTurn turn = {0.05, -0.02};
+    int i, same = 1;
+
+    cameras(0.4, 0.1, frame_eye, fr, ft);
+    cameras(0.45, 0.12, picture_eye, pr, pt);
+    picture_floats(fr, ft, pr, pt, move, mid);
+    mouse_lead_turn_picture(move, mid, turn);
+    cameras(0.45 + 0.05, 0.12 - 0.02, picture_eye, wr, wt);
+    picture_floats(fr, ft, wr, wt, want_move, want_mid);
+    for (i = 0; i < 12; i++) {
+        double within = i % 4 == 3 ? 2e-3 : 2e-5; /* (translations hundreds of units) */
+
+        same &= near(move[i], want_move[i], within) && near(mid[i], want_mid[i], within);
+    }
+    check("a picture turned: its cameras as if built at the turned yaw and pitch, the eye kept", same);
+    {
+        MouseTurn none = {0, 0};
+        float before_move[12], before_mid[12];
+
+        for (i = 0; i < 12; i++) {
+            before_move[i] = move[i];
+            before_mid[i] = mid[i];
+        }
+        mouse_lead_turn_picture(move, mid, none);
+        same = 1;
+        for (i = 0; i < 12; i++) {
+            same &= near(move[i], before_move[i], 1e-6) && near(mid[i], before_mid[i], 1e-3);
+        }
+        check("no turn leaves them", same);
+    }
 }
 
 int main(void) {
     test_turn_view();
     test_ahead();
+    test_turn_picture();
     printf("%d of %d checks failed\n", failed, checked);
     return failed != 0;
 }

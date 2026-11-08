@@ -331,7 +331,7 @@ void display_page() {
         if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
             snprintf(other, sizeof(other), "The screen's refresh rate (%d)", port_frame_rate_hz());
         } else if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
-            snprintf(other, sizeof(other), "Unlocked (%d now)", port_frame_rate_hz());
+            snprintf(other, sizeof(other), "Unlocked (%.0f now)", port_video_pictures_per_second());
         } else {
             snprintf(other, sizeof(other), "%d", port_options.frame_rate);
         }

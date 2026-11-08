@@ -296,6 +296,24 @@ static double show_at(uint64_t tag, double delay) {
     return picture_time(tag) + delay;
 }
 
+double port_video_vblanks_at(double wall_s) {
+    double at;
+
+    LOCK();
+    at = times_set ? (double)times_newest + (wall_s - time_wall[times_newest % TIMES]) / VBLANK_SECONDS : -1;
+    UNLOCK();
+    return at;
+}
+
+double port_video_picture_due_s(uint64_t tag) {
+    double due;
+
+    LOCK();
+    due = times_set ? show_at(tag, THREAD_DELAY) : 0;
+    UNLOCK();
+    return due;
+}
+
 int port_video_scaling(void) {
 #ifdef KF4_HAVE_SDL
     return port_options.present_scaling >= 0 ? port_options.present_scaling : port_settings.scaling;
@@ -1048,6 +1066,9 @@ static void show_until(double until, int from_thread) {
 
         if (now >= until - 0.0002 || (from_thread && between_stop)) {
             break;
+        }
+        if (!from_thread) {
+            port_controls_sample_mouse(); /* (the game's thread: instant mouse look's readings as it waits) */
         }
         if (show_between(now, &first, from_thread)) {
             continue;

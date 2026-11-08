@@ -103,7 +103,6 @@ add_library(kf4_port STATIC
     port/platform/field_frames.c
     port/platform/video.c
     port/platform/refresh_clock.c
-    port/platform/unlocked_rate.c
     port/platform/mouse_lead.c
     port/platform/screen_vblank.c
     port/platform/disc.c
@@ -554,11 +553,15 @@ if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
 endif()
 
-# --frame-rate unlocked's rate from whether the renderer keeps up (port/platform/unlocked_rate.c)
-add_executable(unlocked_rate_test tests/unlocked_rate_test.c port/platform/unlocked_rate.c)
-target_include_directories(unlocked_rate_test PRIVATE port/include)
+# --frame-rate unlocked: which pictures the PC renderer's pump leaves out as too late (port/gs/pc/pcr_late.h)
+add_executable(pcr_late_test tests/pcr_late_test.cpp)
+target_include_directories(pcr_late_test PRIVATE port/gs/pc)
+set_target_properties(pcr_late_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_late_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
 if(KF4_TESTS)
-    add_test(NAME unlocked_rate COMMAND unlocked_rate_test)
+    add_test(NAME pcr_late COMMAND pcr_late_test)
 endif()
 
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing

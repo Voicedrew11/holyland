@@ -365,6 +365,13 @@ static double held_turn(double turn) {
     return turn < -MAX_TURN ? -MAX_TURN : turn > MAX_TURN ? MAX_TURN : turn;
 }
 
+/* A reading's time in vblanks: now, as the pictures' tags reckon it (the vblank's number before its times are known) */
+static double reading_time(void) {
+    double at = port_video_vblanks_at(port_wall_seconds());
+
+    return at >= 0 ? at : (double)port_vblank_count();
+}
+
 static void lead_waiting(void) {
     MouseTurn waiting = {0, 0};
 
@@ -372,7 +379,7 @@ static void lead_waiting(void) {
         waiting.yaw_rad = held_turn(pc.yaw);
         waiting.pitch_rad = held_turn(pc.pitch);
     }
-    port_mouse_lead_waiting(waiting, port_vblank_count());
+    port_mouse_lead_waiting(waiting, reading_time());
 }
 
 /* ---- Layouts ---------------------------------------------------------------------------------- */
@@ -435,7 +442,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     if (!port_controls_verdite() || port_options.record_input != NULL) {
         MouseTurn none = {0, 0};
 
-        port_mouse_lead_waiting(none, port_vblank_count()); /* (no mouse look: nothing ahead) */
+        port_mouse_lead_waiting(none, reading_time()); /* (no mouse look: nothing ahead) */
         return 0;
     }
     pc.seen_look = 1;
@@ -516,6 +523,9 @@ void port_controls_listen_cancel(void) {
 
 void port_controls_block(int blocked) {
     (void)blocked;
+}
+
+void port_controls_sample_mouse(void) {
 }
 #else
 #define B_UP 0x0010u
@@ -833,6 +843,32 @@ static void side_keys(uint64_t *held_keys, int outside_play) {
         held = moved;
     }
     *held_keys = held;
+}
+
+#define SAMPLE_EVERY_S 0.0005 /* the mouse read between vblanks no more often than this */
+
+void port_controls_sample_mouse(void) {
+    static double next_s;
+    double now;
+    int dx = 0, dy = 0;
+
+    if (pc.layout != CONTROLS_VERDITE || port_options.input != NULL || port_options.headless || !mouse_lead ||
+        pc.blocked || !pc.captured || !in_gameplay()) {
+        return;
+    }
+    now = port_wall_seconds();
+    if (now < next_s) {
+        return;
+    }
+    next_s = now + SAMPLE_EVERY_S;
+    SDL_PumpEvents(); /* (the other events wait in SDL's queue for libpad's poll at the vblank) */
+    SDL_GetRelativeMouseState(&dx, &dy);
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+    pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
+    pc.pitch += (invert_y ? dy : -dy) * RADIANS_PER_PIXEL * sensitivity;
+    lead_waiting();
 }
 
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and the sticks' keys */
