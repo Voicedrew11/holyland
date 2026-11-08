@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 // The PC renderer's GS primitives (port/gs/pc/pcr_canvas.cpp): already in the target's GS pixels (the GS's X and Y
 // less XYOFFSET), one vertex a triangle corner. A GS pixel is drawn when its integer point is inside a primitive;
-// Vulkan tests a pixel's middle, so every vertex moves half a GS pixel (at any scale: the middle of its pixels).
+// Vulkan tests a pixel's middle, so every vertex moves half a pixel of the target (pcr_common.h's gs_to_clip).
 // The GS interpolates everything linearly across the screen: noperspective throughout.
 //
 // In a picture between (port/gs/pc/pcr_between.h) a corner names the kicks it was made of (a_kicks), and is made again
@@ -143,7 +143,7 @@ void main() {
         stq = c.stq;
         fog = c.fog;
     }
-    vec2 ndc = (pos + 0.5) * pc.inv_size * 2.0 - 1.0;
+    vec2 ndc = gs_to_clip(pos);
     // (the GS keeps Z within what the Z buffer's format holds; taken in at the corners)
     gl_Position = vec4(ndc, float(min(z, pc.zmax)) * pc.zscale, 1.0);
     v_color = colour;

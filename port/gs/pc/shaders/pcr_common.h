@@ -15,12 +15,22 @@ layout(push_constant, std430) uniform Push {
     float lod_k;     // TEX1's K
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts
-    ivec2 src_scale;  // ... the surface's pixels a GS pixel is, across and down
+    ivec2 src_scale;  // ... the surface's pixels a GS pixel is, across and down (the canvas's scale: gs_to_clip's too)
     ivec2 place;      // (native draws, pcr_nd000.vert) the frame's place in its surface, GS pixels
     ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
     uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
                        // a 24-bit frame 18
 } pc;
+
+// A place in the target (GS pixels, XYOFFSET taken off) in Vulkan's clip space. The GS draws a pixel when its integer
+// point is inside a primitive, Vulkan when a pixel's middle is: every vertex moves half of one of the target's own
+// pixels (1 / src_scale of a GS pixel), so the first of a GS pixel's pixels at the canvas's scale is tested at the GS's
+// own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
+// was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
+// 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
+vec2 gs_to_clip(vec2 xy) {
+    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+}
 
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u

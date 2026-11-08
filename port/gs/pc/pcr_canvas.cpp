@@ -2364,6 +2364,8 @@ private:
         push.inv_size[0] = 1.0f / float(colour.width());
         push.inv_size[1] = 1.0f / float(colour.height);
         push.flags = datm ? F_DATM : 0;
+        push.src_scale[0] = int32_t(scale_[0]); // (gs_to_clip's)
+        push.src_scale[1] = int32_t(scale_[1]);
         c.push_constants(&push, 0, sizeof(push));
         c.set_input_attachments(0, 5);
         bind_between(c);

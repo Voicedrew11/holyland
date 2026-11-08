@@ -72,7 +72,7 @@ void main() {
     }
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert
-    vec2 ndc = (xy + 0.5) * pc.inv_size * 2.0 - 1.0;
+    vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, float(min(z, pc.zmax)) * pc.zscale, 1.0);
     v_color = vec4(rgba);
     v_stq = stq;

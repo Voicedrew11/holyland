@@ -51,6 +51,25 @@ under 0.4% (blurred) but 014 v5 (3 above) and 112 v10-11 (5); 4x adds 035 (4). c
 026, 115: known reports only (SoundDriver_Remote, decomp function-pointer casts), nothing in port/. Not run: TSan,
 the Vulkan validation layer (not installed here: `vulkan-validation-layers`; it would have named this at once).
 
+**4 fixed (2026-11-08): every vertex moved half a pixel of the target, not half a GS pixel.** The GS draws a pixel
+when its integer point is inside a primitive and Vulkan when the pixel's middle is, so the vertex shaders moved every
+vertex half a GS pixel. At 1x that is exact; at 4x it put a GS pixel's four pixels around its point (-0.375 to
++0.375), so a primitive whose edge is on a whole pixel (a sprite over a whole target) left the first half GS pixel
+undrawn: two columns and two rows at 4x. The game draws its lava (035's floor, page 450) into a 128 x 128 target with
+such sprites and repeats it over the floor, so the undrawn columns and rows showed as lines where it repeats (found with
+a GS capture: `kf4-gsreplay --pixel` named the floor's draw, its texture the target; the target's copy shown on the
+screen had its columns 0-1 empty). Now `gs_to_clip` (pcr_common.h, for pcr_prim.vert and the three native vertex
+shaders) moves a vertex half of the target's own pixel (1 / scale of a GS pixel): a GS pixel's first pixel at any scale
+is tested at the GS's own point, a primitive covers whole GS pixels, and a surface read back at its scale
+(`read_surface`) reads pixel j at pixel j, not two pixels up and left. The 4x picture as a whole sits 3/8 of a GS pixel
+up and left of where it was (no longer centred on the GS's points); at 1x nothing moves.
+
+Checked: the 1x tour byte for byte the build's before (760 views; 039 v0-1 differ by up to 5 levels, and differ run to
+run with the same build); the 4x tour against gs: views over 0.4% (blurred) 48 → 11, the median 0.06% → 0.00%, 035 at
+0.33% (was 0.9-1.2%); the mean difference a little higher (2.98 → 3.19, the 3/8 pixel at sharp edges: 020 v11's
+bright magic circle, 2.70%, is the most). Still open: 014's water (3), 112's rock (5). ctest 14/14. Not run: the
+sanitizers (a shader change and one push constant), the owner's full settings (native widescreen, MSAA).
+
 ## Where it stands (2026-10-29)
 
 **Built.**
