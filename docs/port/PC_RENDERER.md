@@ -18,6 +18,39 @@ testing)", lists them). The settings that change live go through `port/overlay/l
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 
+## Against paraLLEl-GS: the map tour (2026-11-07)
+
+The first whole-game comparison of the PC renderer with `--renderer gs`: `tools/map_tour.py` (64 maps, 3 places x 4
+headings, 760 views) run three times at c2cb20c3 (gs; pc at `--native-scale 1 --no-native-widescreen`; pc at
+`--native-scale 4 --no-native-widescreen`), compared by `tools/tour_compare.py` (pictures paired, the 4x one brought
+down to 640 x 448, ranked by the share of pixels over 24 levels after a 3 x 3 blur). Every run ended, every view's game
+state the same in both. Outside the cases below, views differ in under 0.4% of pixels (filtering and edges). Found:
+
+1. **Objects not drawn.** The Queen's Palace (022) doors (an empty doorway where gs has the carved door: views 2, 11),
+   the torch pedestals of 026 (v0) and 031 (v10, a row of them: their flames are drawn, the stands not), the
+   standing stones of 027 (v6), the crystal flower of 115 (v5). The owner sees the same in play.
+2. **The HUD's health gauge not drawn**: only its ring's outline, at 55 views of 8 maps (016 v4-7, 018 v4-5,7,
+   022 v4-11, 024 v0,3-4,7-8,10-11, 040 nine views, 102 v0-3,8-11, 103 all twelve, 104 v0-3); right at every other map.
+3. **The water of 014** (the Heart of the Forest, v5): pc draws it pale and opaque, gs dark and clear (17% of the
+   picture).
+4. **Seams at 4x**: map 035 at 4x shows hairline lines across the wall and floor (a vertical line near the middle,
+   a horizontal one on the floor) that 1x and gs do not. Likely the same as the lines the owner sees in the sky.
+5. **Small**: a rock's edge at 112 (v10) cut differently near the camera.
+
+Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
+(native widescreen, MSAA).
+
+**1 and 2 fixed (2026-11-07, the same day): one cause.** The canvas recorded copies inside an open render pass:
+`write_pixels` (an upload written into a colour surface) and `grow` ended the open pass only when it drew into the
+surface they wrote. The game uploads into its 128-wide targets (pages 450 and 466, the water's) while the frame's pass
+is open; the blit went into that pass (not allowed in Vulkan), and RADV lost the frame's draws around it: whatever the
+frame drew between the uploads (objects, doors, the gauge). Both now end any open pass. Read back from the GPU after
+each batch the surface was right, so the bug hid from any check that ended the pass (that is how it was found:
+`KF4_DBG`-style probes in a scratch copy, not kept). After the fix: both tours against gs, 760 views each, every view
+under 0.4% (blurred) but 014 v5 (3 above) and 112 v10-11 (5); 4x adds 035 (4). ctest 14/14; ASan + UBSan at 022,
+026, 115: known reports only (SoundDriver_Remote, decomp function-pointer casts), nothing in port/. Not run: TSan,
+the Vulkan validation layer (not installed here: `vulkan-validation-layers`; it would have named this at once).
+
 ## Where it stands (2026-10-29)
 
 **Built.**

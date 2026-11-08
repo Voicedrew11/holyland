@@ -833,11 +833,10 @@ private:
         }
     }
 
-    // A surface made taller: a new image, the old one's pixels copied in
+    // A surface made taller: a new image, the old one's pixels copied in. (The open pass ended whatever it draws
+    // into: copies and clears are not allowed in a render pass, and recorded in one, RADV lost the pass's draws.)
     void grow(Surface &s, uint32_t height) {
-        if (pass_colour_ == &s || pass_depth_ == &s) {
-            end_pass();
-        }
+        end_pass();
         ImageHandle bigger = make_surface_image(s.width(), height, s.depth);
         if (!bigger) {
             return;
@@ -895,11 +894,11 @@ private:
         write_pixels(s, 0, 0, w, h, pixels.data());
     }
 
-    // GS pixels (RGBA8, w x h) into a colour surface at (x, y), each repeated at the canvas's scale
+    // GS pixels (RGBA8, w x h) into a colour surface at (x, y), each repeated at the canvas's scale. (The open pass
+    // ended whatever it draws into, as grow's: an upload into a small target while the frame's pass was open lost
+    // the frame's draws around it, 2026-11-07: objects, doors and the HUD's gauge missing.)
     void write_pixels(Surface &s, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint32_t *pixels) {
-        if (pass_colour_ == &s) {
-            end_pass();
-        }
+        end_pass();
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(w, h, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;

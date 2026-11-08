@@ -8,6 +8,7 @@
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
+| `tour_compare.py` | two map tours (`map_tour.py`, `--renderer pc` and `--renderer gs`, same maps and views) compared picture by picture, ranked by what is drawn differently (a blurred difference, so filtering and edges count little); `report.md`, `report.html` with the worst views as PC / reference / difference |
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
