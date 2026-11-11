@@ -1962,6 +1962,54 @@ private:
         batch_open_ = true;
     }
 
+    // A triangle with a corner's Z past its Z buffer's largest (16 or 24 bits), cut where its Z reaches it. The GS
+    // clamps each pixel's Z, interpolated from the corners as they are; the vertex shader can only clamp the corners,
+    // which lowered every pixel's Z across the triangle, so a rock's face near the camera (map 112, views 10-11) failed
+    // its Z test where the GS's passed. Z, like every attribute, goes linearly across the screen, so the part where Z
+    // is under the largest is drawn as it is, and the part beyond it with every corner at or past it: there the vertex
+    // shader's clamp is the GS's.
+    void add_cut_at_zmax(const std::array<Vertex, 3> &v, uint32_t zmax) {
+        auto cut = [&](const Vertex &a, const Vertex &b) {
+            double t = (double(zmax) - double(a.z)) / (double(b.z) - double(a.z));
+            auto lerp = [&](float x, float y) { return float(double(x) + (double(y) - double(x)) * t); };
+            Vertex c = a;
+            c.x = lerp(a.x, b.x);
+            c.y = lerp(a.y, b.y);
+            c.z = zmax;
+            for (int i = 0; i < 4; i++) {
+                c.rgba[i] = uint8_t(std::lround(lerp(float(a.rgba[i]), float(b.rgba[i]))));
+            }
+            c.s = lerp(a.s, b.s);
+            c.t = lerp(a.t, b.t);
+            c.q = lerp(a.q, b.q);
+            c.fog = lerp(a.fog, b.fog);
+            return c;
+        };
+        // (each side's polygon, the triangle's corners in order with the cuts between: 3 or 4 corners)
+        std::array<Vertex, 4> under, over;
+        uint32_t nu = 0, no = 0;
+        for (uint32_t i = 0; i < 3; i++) {
+            const Vertex &a = v[i], &b = v[(i + 1) % 3];
+            bool a_under = a.z < zmax, b_under = b.z < zmax;
+            if (a_under) {
+                under[nu++] = a;
+            } else {
+                over[no++] = a;
+            }
+            if (a_under != b_under) {
+                Vertex c = cut(a, b);
+                under[nu++] = c;
+                over[no++] = c;
+            }
+        }
+        for (const auto &[polygon, n] : {std::pair<const std::array<Vertex, 4> &, uint32_t>{under, nu}, {over, no}}) {
+            for (uint32_t i = 2; i < n; i++) {
+                batch_.vertices.insert(batch_.vertices.end(), {polygon[0], polygon[i - 1], polygon[i]});
+                counts_.triangles++;
+            }
+        }
+    }
+
     void add_primitive(const GifPrimitive &p) {
         uint64_t xy = batch_.state.xyoffset;
         if (batch_.shader_blend) {
@@ -2010,6 +2058,16 @@ private:
         batch_.sprites = batch_.sprites && p.shape != PrimitiveShape::triangle;
         if (p.shape == PrimitiveShape::triangle) {
             const GifVertex &last = p.vertices[2];
+            uint32_t zpsm = z_psm(batch_.state.zbuf);
+            uint32_t zmax = zpsm == 0x31 ? 0xFFFFFFu : zpsm == 0x30 ? 0xFFFFFFFFu : 0xFFFFu;
+            if (!moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
+                std::array<Vertex, 3> v = {make(p.vertices[0], last), make(p.vertices[1], last), make(p.vertices[2], last)};
+                add_cut_at_zmax(v, zmax);
+                for (const Vertex &corner : v) {
+                    touch(corner);
+                }
+                return;
+            }
             for (uint32_t i = 0; i < 3; i++) {
                 batch_.vertices.push_back(make(p.vertices[i], last));
                 if (moved) {
