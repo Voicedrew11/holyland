@@ -11,9 +11,64 @@ whole stands.
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
 from item 7 below: the PC renderer keeps but does not yet apply MSAA, anisotropy, texture detail (LOD), colour
-precision, cut-out AA, the 2D mode and layer Z; the overlay and settings.json still offer them. Pictures are now
+precision, cut-out AA, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
+command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug, "Renderer (for
+testing)", lists them). The settings that change live go through `port/overlay/live_settings.c`, which
+`KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
+
+## Against paraLLEl-GS: the map tour (2026-11-07)
+
+The first whole-game comparison of the PC renderer with `--renderer gs`: `tools/map_tour.py` (64 maps, 3 places x 4
+headings, 760 views) run three times at c2cb20c3 (gs; pc at `--native-scale 1 --no-native-widescreen`; pc at
+`--native-scale 4 --no-native-widescreen`), compared by `tools/tour_compare.py` (pictures paired, the 4x one brought
+down to 640 x 448, ranked by the share of pixels over 24 levels after a 3 x 3 blur). Every run ended, every view's game
+state the same in both. Outside the cases below, views differ in under 0.4% of pixels (filtering and edges). Found:
+
+1. **Objects not drawn.** The Queen's Palace (022) doors (an empty doorway where gs has the carved door: views 2, 11),
+   the torch pedestals of 026 (v0) and 031 (v10, a row of them: their flames are drawn, the stands not), the
+   standing stones of 027 (v6), the crystal flower of 115 (v5). The owner sees the same in play.
+2. **The HUD's health gauge not drawn**: only its ring's outline, at 55 views of 8 maps (016 v4-7, 018 v4-5,7,
+   022 v4-11, 024 v0,3-4,7-8,10-11, 040 nine views, 102 v0-3,8-11, 103 all twelve, 104 v0-3); right at every other map.
+3. **The water of 014** (the Heart of the Forest, v5): pc draws it pale and opaque, gs dark and clear (17% of the
+   picture).
+4. **Seams at 4x**: map 035 at 4x shows hairline lines across the wall and floor (a vertical line near the middle,
+   a horizontal one on the floor) that 1x and gs do not. Likely the same as the lines the owner sees in the sky.
+5. **Small**: a rock's edge at 112 (v10) cut differently near the camera.
+
+Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
+(native widescreen, MSAA).
+
+**1 and 2 fixed (2026-11-07, the same day): one cause.** The canvas recorded copies inside an open render pass:
+`write_pixels` (an upload written into a colour surface) and `grow` ended the open pass only when it drew into the
+surface they wrote. The game uploads into its 128-wide targets (pages 450 and 466, the water's) while the frame's pass
+is open; the blit went into that pass (not allowed in Vulkan), and RADV lost the frame's draws around it: whatever the
+frame drew between the uploads (objects, doors, the gauge). Both now end any open pass. Read back from the GPU after
+each batch the surface was right, so the bug hid from any check that ended the pass (that is how it was found:
+`KF4_DBG`-style probes in a scratch copy, not kept). After the fix: both tours against gs, 760 views each, every view
+under 0.4% (blurred) but 014 v5 (3 above) and 112 v10-11 (5); 4x adds 035 (4). ctest 14/14; ASan + UBSan at 022,
+026, 115: known reports only (SoundDriver_Remote, decomp function-pointer casts), nothing in port/. Not run: TSan,
+the Vulkan validation layer (not installed here: `vulkan-validation-layers`; it would have named this at once).
+
+**4 fixed (2026-11-08): every vertex moved half a pixel of the target, not half a GS pixel.** The GS draws a pixel
+when its integer point is inside a primitive and Vulkan when the pixel's middle is, so the vertex shaders moved every
+vertex half a GS pixel. At 1x that is exact; at 4x it put a GS pixel's four pixels around its point (-0.375 to
++0.375), so a primitive whose edge is on a whole pixel (a sprite over a whole target) left the first half GS pixel
+undrawn: two columns and two rows at 4x. The game draws its lava (035's floor, page 450) into a 128 x 128 target with
+such sprites and repeats it over the floor, so the undrawn columns and rows showed as lines where it repeats (found with
+a GS capture: `kf4-gsreplay --pixel` named the floor's draw, its texture the target; the target's copy shown on the
+screen had its columns 0-1 empty). Now `gs_to_clip` (pcr_common.h, for pcr_prim.vert and the three native vertex
+shaders) moves a vertex half of the target's own pixel (1 / scale of a GS pixel): a GS pixel's first pixel at any scale
+is tested at the GS's own point, a primitive covers whole GS pixels, and a surface read back at its scale
+(`read_surface`) reads pixel j at pixel j, not two pixels up and left. The 4x picture as a whole sits 3/8 of a GS pixel
+up and left of where it was (no longer centred on the GS's points); at 1x nothing moves.
+
+Checked: the 1x tour byte for byte the build's before (760 views; 039 v0-1 differ by up to 5 levels, and differ run to
+run with the same build); the 4x tour against gs: views over 0.4% (blurred) 48 → 11, the median 0.06% → 0.00%, 035 at
+0.33% (was 0.9-1.2%); the mean difference a little higher (2.98 → 3.19, the 3/8 pixel at sharp edges: 020 v11's
+bright magic circle, 2.70%, is the most). Still open: 014's water (3), 112's rock (5). ctest 14/14. Not run: the
+sanitizers (a shader change and one push constant), the owner's full settings (native widescreen, MSAA).
 
 ## Where it stands (2026-10-29)
 
@@ -605,8 +660,10 @@ whole; drawing the native draws themselves is step 3.
   frame whose base is inside a surface of its width is that surface at an offset (the game's 128-wide targets at 1d2
   and 1d4 are one buffer a page row apart); a surface made takes in those of its width it overlaps. A new surface
   starts as the uploads left its pages.
-- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there.
-  Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
+- **Textures**: the texture store's (uploads, exact, `pcr_textures_test`), or a copy of the surface drawn there,
+  read at the surface's scale (its own pixels, filtered among them; the wrap modes on the GS's texels): read one
+  pixel a GS texel, the game's full-screen pass over its frame cut a 4x picture to 640x448's detail (until
+  2026-11-07). Local copies of uploads' pixels are uploads of what they write (the scrolling textures); read-backs (local to
   host) are made from the uploads or the surface: the game reads its effect atlas back and uploads it again, so a
   read-back of zeroes lost the torches' flames.
 - **The GS's pixel** in `pcr_prim.frag`: texture read (wrap modes, filters, the mipmap level from Q, CLUT, TEXA),

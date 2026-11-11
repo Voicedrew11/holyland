@@ -501,11 +501,14 @@ public:
             uploads_frame_.swap(uploads_now_);
             uploads_now_.clear();
         }
+        // (the surfaces made again at a new scale before the submit: next_frame_context waits for every command buffer
+        // asked for to be submitted, this thread's too, so one left open after it hangs kf4-pc at its next; 2026-11-07,
+        // native widescreen switched off with the pump drawing)
+        apply_scale();
         submit();
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
         device_.next_frame_context();
-        apply_scale();
         frame_++;
         evict_textures();
     }
@@ -569,6 +572,10 @@ public:
         if (x1 <= x0 || y1 <= y0) {
             return false;
         }
+        if (rect.lower_field && dst.get_height() == 2 * uint32_t(y1 - y0)) {
+            scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
+            return true;
+        }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
             const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             out.copy_image(dst, *s->image, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour,
@@ -578,6 +585,25 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
+    }
+
+    // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
+    // (its rows each twice, from the picture's row of the line, dst's height over the rect's lines; the line above
+    // them black, and what falls below dst left out)
+    void scanout_lower_field(CommandBuffer &out, const Image &src, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                             const Image &dst) {
+        int32_t height = int32_t(dst.get_height());
+        int32_t down_rows = std::max<int32_t>(1, int32_t(scale_[1] + 0.5f)); // (a line of the picture: a field's half)
+        int32_t src_rows = (height - down_rows) / 2;
+        VkClearValue black = {};
+        out.clear_image(dst, black);
+        out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        if (src_rows <= 0 || y0 + src_rows > y1) {
+            return;
+        }
+        out.blit_image(dst, src, {0, down_rows, 0}, {int32_t(dst.get_width()), 2 * src_rows, 1}, {x0, y0, 0},
+                       {x1 - x0, src_rows, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
     }
 
     // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
@@ -830,11 +856,10 @@ private:
         }
     }
 
-    // A surface made taller: a new image, the old one's pixels copied in
+    // A surface made taller: a new image, the old one's pixels copied in. (The open pass ended whatever it draws
+    // into: copies and clears are not allowed in a render pass, and recorded in one, RADV lost the pass's draws.)
     void grow(Surface &s, uint32_t height) {
-        if (pass_colour_ == &s || pass_depth_ == &s) {
-            end_pass();
-        }
+        end_pass();
         ImageHandle bigger = make_surface_image(s.width(), height, s.depth);
         if (!bigger) {
             return;
@@ -892,11 +917,11 @@ private:
         write_pixels(s, 0, 0, w, h, pixels.data());
     }
 
-    // GS pixels (RGBA8, w x h) into a colour surface at (x, y), each repeated at the canvas's scale
+    // GS pixels (RGBA8, w x h) into a colour surface at (x, y), each repeated at the canvas's scale. (The open pass
+    // ended whatever it draws into, as grow's: an upload into a small target while the frame's pass was open lost
+    // the frame's draws around it, 2026-11-07: objects, doors and the HUD's gauge missing.)
     void write_pixels(Surface &s, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint32_t *pixels) {
-        if (pass_colour_ == &s) {
-            end_pass();
-        }
+        end_pass();
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(w, h, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
@@ -2362,6 +2387,8 @@ private:
         push.inv_size[0] = 1.0f / float(colour.width());
         push.inv_size[1] = 1.0f / float(colour.height);
         push.flags = datm ? F_DATM : 0;
+        push.src_scale[0] = int32_t(scale_[0]); // (gs_to_clip's)
+        push.src_scale[1] = int32_t(scale_[1]);
         c.push_constants(&push, 0, sizeof(push));
         c.set_input_attachments(0, 5);
         bind_between(c);

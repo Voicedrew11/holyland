@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -39,11 +40,14 @@
 #include "pcr_native.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
+#include "pcr_late.h"
 #include "port/gs_capture_format.h"
 #include "device.hpp"
 #include "thread_id.hpp"
 
 extern "C" {
+#include "port/host.h"
+#include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/render.h"
@@ -87,6 +91,50 @@ struct InterpPicture {
     GsnInterpPicture picture;
     std::vector<uint32_t> run_bits;
 };
+
+// When the pictures' mouse turns are taken (pcr_late.h's TurnLead): kf4-pc's and the pump's, one for both
+struct SharedTurnLead {
+    std::mutex lock;
+    pcr::TurnLead lead;
+};
+
+// (kf4-pc or the pump, as it draws the picture) Instant mouse look's last step (port/include/port/mouse_lead.h): the
+// picture's cameras turned on by what the mouse's hand has moved since the hand they were turned to, to the hand
+// lead.lead_s() before the picture is shown (the newest, when that is not read yet, or the picture's time is not
+// known). How long before it is shown the newest reading was (0: not known), for the caller that knows the turn is the
+// last to give to lead.turned: the game's thread reads the mouse as it waits and between its calls, so a reading may
+// be a few milliseconds old.
+double turn_to_hand(GsnInterpPicture &picture, SharedTurnLead &lead) {
+    constexpr double VBLANK_S = 1001.0 / 60000.0;
+    double at = HUGE_VAL, before_s = 0;
+    if (picture.shown_s > 0) {
+        double lead_s;
+        {
+            std::lock_guard<std::mutex> hold(lead.lock);
+            lead_s = lead.lead.lead_s();
+        }
+        double shown_v = port_video_vblanks_at(picture.shown_s), newest_v = port_mouse_lead_newest_vblanks();
+        if (shown_v >= 0) {
+            at = shown_v - lead_s / VBLANK_S;
+            before_s = newest_v >= 0 ? (shown_v - newest_v) * VBLANK_S : 0;
+        }
+    }
+    MouseTurn hand = {picture.hand_yaw_rad, picture.hand_pitch_rad};
+    MouseTurn since = port_mouse_lead_since(hand, at);
+    if (since.yaw_rad != 0 || since.pitch_rad != 0) {
+        mouse_lead_turn_picture(picture.move, picture.mid, since);
+        picture.hand_yaw_rad += since.yaw_rad;
+        picture.hand_pitch_rad += since.pitch_rad;
+    }
+    return before_s;
+}
+
+void turned_before(SharedTurnLead &lead, double before_s) {
+    if (before_s > 0) {
+        std::lock_guard<std::mutex> hold(lead.lock);
+        lead.lead.turned(before_s);
+    }
+}
 
 // A frame's pictures between as the pump draws them again (the pump, below): the frame's kept walk, the frame as walked,
 // and kf4-pc's surfaces copied for the pump's canvas to draw on
@@ -348,6 +396,9 @@ uint32_t bits(uint64_t value, int first, int count) {
     return uint32_t((value >> first) & ((uint64_t(1) << count) - 1));
 }
 
+// GS_CSR's FIELD at a vblank when the field begun is the one an interlaced TV shows a line lower (the odd lines)
+constexpr int LOWER_FIELD = 1;
+
 // The buffer the display shows (circuit 2, else 1; a field's lines in field mode)
 bool display_rect(const uint64_t *privileged, GsnRect &rect) {
     uint64_t pmode = privileged[0], smode2 = privileged[2 * 2];
@@ -368,6 +419,39 @@ bool display_rect(const uint64_t *privileged, GsnRect &rect) {
     }
     return rect.w > 0 && rect.h > 0 && rect.w <= 1024 && rect.h <= 1024;
 }
+
+// (the DMA controller's thread, which tells of every vblank and its pictures between) The screens the game draws as
+// fields (the menus, the title), with whole frames (port_whole_frame(): port/platform/field_frames.c): each vblank's
+// lower field shown from the upper field's buffer, which field_frames drew again for the same moment and told of just
+// before. The game draws the two half a line apart, rounded to a whole line of the field where its pictures are on
+// whole pixels: shown in turn, a line apart or the field's lines moved as on a TV, every other picture was a line
+// higher or lower (the menus shook). Without whole frames, the other buffer holds the moment before: the lower field
+// is moved a line down instead (Canvas::scanout, ShownRect's lower_field).
+class UpperField {
+public:
+    void show_in(VblankPicture &v, bool extra) {
+        uint64_t smode2 = v.privileged[2 * 2];
+        if ((smode2 & 3) != 3 || !v.deinterlace || !port_whole_frame()) {
+            dispfb_.reset();
+            return;
+        }
+        if (v.field != LOWER_FIELD) {
+            if (!extra) {
+                dispfb_ = std::array<uint64_t, 2>{v.privileged[DISPFB1], v.privileged[DISPFB2]};
+            }
+            return;
+        }
+        if (dispfb_) {
+            v.privileged[DISPFB1] = (*dispfb_)[0];
+            v.privileged[DISPFB2] = (*dispfb_)[1];
+            v.field = LOWER_FIELD ^ 1;
+        }
+    }
+
+private:
+    static constexpr size_t DISPFB1 = 7 * 2, DISPFB2 = 9 * 2; // (privileged's words)
+    std::optional<std::array<uint64_t, 2>> dispfb_; // the upper field's buffers, as the last vblank of it told
+};
 
 struct PictureSize {
     uint32_t width, height;
@@ -412,7 +496,7 @@ struct Settings {
 // ---- --stats ---------------------------------------------------------------------------------------
 struct Stats {
     std::atomic<uint64_t> packets{0}, bytes{0}, vblanks{0}, pictures{0}, extras{0}, interp_frames{0},
-        interp_pictures{0};
+        interp_pictures{0}, interp_late{0};
 };
 
 // KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before)
@@ -827,6 +911,17 @@ struct MadePicture {
     Reply *reply = nullptr;
 };
 
+// (kf4-pc or the pump, as it hands out the extra picture that shows a picture between) --frame-rate unlocked: not to the
+// presenter when it is too late to show (pcr_late.h). 1 if it was left out.
+int not_shown_when_late(MadePicture &made, const GsnInterpPicture &between) {
+    if (!between.leave_out_late || made.vblank || made.reply != nullptr ||
+        !pcr::too_late_to_show(between.shown_s, port_wall_seconds())) {
+        return 0;
+    }
+    made.want &= ~GSN_PRESENT;
+    return 1;
+}
+
 // The pictures one thread makes (kf4-pc's, the pump's), as pcr_picture hands them out: GSN_WANT_IMAGE when the scanout
 // ring has it, GSN_WANT_PIXELS when frame has it, and with GSN_PRESENT to the presenter once it is there
 class PictureOut {
@@ -939,7 +1034,10 @@ private:
         GsnRect rect;
         bool shown = false;
         if (canvas && display_rect(v.privileged.data(), rect)) {
-            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h};
+            uint64_t smode2 = v.privileged[2 * 2];
+            bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
+            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
+                                         uint32_t(field_doubled && v.field == LOWER_FIELD)};
             shown = canvas->scanout(cmd, shown_rect, *picture_);
         }
         if (!shown) {
@@ -1054,8 +1152,8 @@ using PumpMessage = std::variant<PumpFrame, InterpPicture, PumpPicture, MadePict
 class Pump {
 public:
     Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
-         Inbox &inbox)
-        : device_(device), inbox_(inbox), out_(device, scanout, presenter, stats, clear) {}
+         Inbox &inbox, SharedTurnLead &turn_lead)
+        : device_(device), inbox_(inbox), turn_lead_(turn_lead), out_(device, scanout, presenter, stats, clear) {}
 
     ~Pump() {
         stop();
@@ -1124,10 +1222,12 @@ public:
         pcr::CanvasCounts c = canvas_->counts();
         fprintf(stderr,
                 "[stats] pc pump: %llu frames (%llu surfaces copied for them), %llu pictures between drawn again "
-                "(%llu not of its frame), %llu pictures showing them; its canvas: %llu batches, %llu native draw calls, %llu "
+                "(%llu not of its frame), %llu pictures showing them, %llu left out as too late and %llu not shown as made "
+                "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
                 "passes, %llu surfaces made, %llu uploads into surfaces\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
+                (unsigned long long)left_out_, (unsigned long long)late_, cost_.mean_s() * 1e3,
                 (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
                 (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces);
     }
@@ -1155,9 +1255,17 @@ private:
 
     std::optional<PumpMessage> take() {
         std::unique_lock<std::mutex> hold(lock_);
-        wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
-        if (stopping_) {
-            return std::nullopt;
+        for (;;) {
+            wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+            if (stopping_) {
+                return std::nullopt;
+            }
+            leave_out_late();
+            double early_s = early_by_s();
+            if (early_s <= 0) {
+                break;
+            }
+            wake_.wait_for(hold, std::chrono::duration<double>(early_s));
         }
         PumpMessage message = std::move(messages_.front());
         messages_.pop_front();
@@ -1169,24 +1277,72 @@ private:
         return message;
     }
 
-    void work(PumpFrame &frame) {
+    // (under the lock) --frame-rate unlocked: the pictures between at the front that the pump would have ready after their
+    // time, each with the extra picture that shows it, left out while a later picture between waits (pcr_late.h)
+    void leave_out_late() {
+        double now_s = port_wall_seconds();
+        while (messages_.size() >= 2) {
+            const InterpPicture *p = std::get_if<InterpPicture>(&messages_[0]);
+            const PumpPicture *shows = std::get_if<PumpPicture>(&messages_[1]);
+            if (p == nullptr || shows == nullptr || (shows->picture.want & GSN_EXTRA) == 0 ||
+                shows->picture.reply != nullptr) {
+                return;
+            }
+            bool later_waiting = false;
+            for (size_t i = 2; i < messages_.size() && !later_waiting; i++) {
+                later_waiting = std::holds_alternative<InterpPicture>(messages_[i]);
+            }
+            if (!p->picture.leave_out_late || !pcr::leave_out(p->picture.shown_s, now_s, cost_, later_waiting)) {
+                return;
+            }
+            messages_.pop_front();
+            messages_.pop_front();
+            left_out_++;
+        }
+    }
+
+    // (under the lock) --frame-rate unlocked: how long until the picture between at the front need be begun (pcr_late.h:
+    // drawn sooner, it would show the hand and the world sooner than it is shown); 0 or less: now
+    double early_by_s() const {
+        const InterpPicture *p = std::get_if<InterpPicture>(&messages_.front());
+        if (p == nullptr || !p->picture.leave_out_late) {
+            return 0;
+        }
+        return pcr::begin_at_s(p->picture.shown_s, cost_) - port_wall_seconds();
+    }
+
+        void work(PumpFrame &frame) {
         canvas_->start_from(*frame.surfaces);
         between_->take_walked(std::move(frame.walked));
         walk_ = std::move(frame.walk);
     }
 
     void work(InterpPicture &p) {
+        double began_s = port_wall_seconds();
+        turned_before(turn_lead_, turn_to_hand(p.picture, turn_lead_));
+        last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         if (walk_ && between_->begin_picture_again(p.picture)) {
             canvas_->draw_again_alone(*walk_, *between_);
             between_->end_picture_again();
         }
+        between_took_s_ = port_wall_seconds() - began_s;
     }
 
     void work(PumpPicture &e) {
         pictures_++;
+        double began_s = port_wall_seconds();
         MadePicture made = out_.make(e.picture, e.scale, canvas_.get(), *times_);
+        late_ += uint64_t(not_shown_when_late(made, last_between_));
+        last_between_ = {}; // (shown by this picture: not again)
         out_.hand_out(made, inbox_);
+        if (between_took_s_ > 0) {
+            // (the picture between and this, which shows it: their work, not the wait between them)
+            double took_s = between_took_s_ + port_wall_seconds() - began_s;
+            std::lock_guard<std::mutex> hold(lock_);
+            cost_.made(took_s);
+            between_took_s_ = 0;
+        }
         // (under Granite's device lock: kf4-pc's next_frame_context writes the timestamps' results as they come in)
         device_.external_queue_lock();
         times_->collect();
@@ -1200,12 +1356,18 @@ private:
 
     Device &device_;
     Inbox &inbox_;
+    SharedTurnLead &turn_lead_;
     PictureOut out_;
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::Between> between_;
     std::shared_ptr<const pcr::KeptWalk> walk_;
     uint64_t pictures_ = 0;
+    uint64_t left_out_ = 0;         // (under the lock) pictures between left out as too late (unlocked)
+    uint64_t late_ = 0;             // (the pump's thread) and those made but too late to show
+    GsnInterpPicture last_between_{}; // (the pump's thread) the picture between last drawn (its run bits not kept)
+    pcr::PictureCost cost_;         // (under the lock: written by the pump's thread, read in take)
+    double between_took_s_ = 0;     // (the pump's thread) the last picture between's work, until its picture's
     std::mutex lock_;
     std::condition_variable wake_, idle_;
     std::deque<PumpMessage> messages_;
@@ -1240,7 +1402,7 @@ public:
                              props.limits.sampledImageDepthSampleCounts;
         out_.emplace(*device_, scanout_, presenter_, stats, clear_);
         if (pump_wanted()) {
-            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_);
+            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_);
             pump_->start();
         }
         thread_ = std::thread([this] { run(); });
@@ -1289,6 +1451,7 @@ public:
         v.deinterlace = port_options.deinterlace != 0;
         v.tag = tag;
         bool extra = (want & GSN_EXTRA) != 0;
+        upper_field_.show_in(v, extra);
         // A picture nobody waits for (none, or one this thread hands to the presenter) is
         // queued and the sender goes on; one wanted in frame, or an image the sender shows itself, is waited for
         bool queued = !(want & GSN_WANT_PIXELS) && (!(want & GSN_WANT_IMAGE) || (want & GSN_PRESENT));
@@ -1297,7 +1460,8 @@ public:
                 return 0;
             }
             if ((want & GSN_PRESENT) && !extra) {
-                inbox_.wait_behind_at_most(2); // (a window's picture at most two vblanks behind the game)
+                // (a window's picture at most two vblanks behind the game, and the vblank the pump holds its pictures)
+                inbox_.wait_behind_at_most(2 + uint64_t(held_vblanks()));
             }
             return want & (GSN_PRESENT | GSN_WANT_IMAGE);
         }
@@ -1323,8 +1487,16 @@ public:
         inbox_.put(std::move(p), 0, false);
     }
 
+    // The vblanks behind the game, less the one whose pictures the pump holds until their time (unlocked: pcr_late.h):
+    // waiting for its time, a picture is not behind
     int backlog() {
-        return inbox_.backlog();
+        int behind = inbox_.backlog() - held_vblanks();
+        return behind > 0 ? behind : 0;
+    }
+
+    // (any thread) The vblanks of pictures the pump holds back until their time: 1 with --frame-rate unlocked
+    int held_vblanks() const {
+        return pump_ && port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED ? 1 : 0;
     }
 
     void set_presenter(void (*pixels)(const PortGsFrame *, uint64_t), void (*image)(uint64_t)) {
@@ -1517,15 +1689,24 @@ private:
         bool pumped = shows_pumped_;
         shows_pumped_ = false;
         if (pumped) {
+            last_between_ = {}; // (the pump's to show)
             pump_->send(PumpPicture{std::move(v), scale});
             // (Granite frees what a thread lets go of, the pump's each picture's blocks and command buffers too, only
             // as its frame contexts come round, and only kf4-pc moves them on: at a rate where the pump made most
             // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
-            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches.)
+            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches, and
+            // for kf4-pc's own: submitted first, or kf4-pc waits for itself for good.)
+            if (pcr::Canvas *canvas = intake_.canvas()) {
+                canvas->submit();
+            }
             device_->next_frame_context();
             return;
         }
         MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
+        if (extra) {
+            stats.interp_late += uint64_t(not_shown_when_late(made, last_between_));
+        }
+        last_between_ = {}; // (shown by this picture, or not one's: not again)
         if (made.drawn) {
             device_->next_frame_context();
         }
@@ -1550,10 +1731,13 @@ private:
     // (kf4-pc) A picture between: walked here, or handed to the pump (with its frame first when the pump has not that
     // walk yet), and then its extra picture too
     void take_picture_between(InterpPicture p) {
+        double before_s = turn_to_hand(p.picture, turn_lead_);
+        last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         std::optional<Intake::ForPump> for_pump = intake_.walk_picture(p.picture);
         shows_pumped_ = for_pump.has_value();
         if (!for_pump) {
+            turned_before(turn_lead_, before_s); // (drawn here: this turn was its last)
             return;
         }
         if (for_pump->frame) {
@@ -1583,6 +1767,9 @@ private:
     std::optional<PictureOut> out_;
     uint32_t picture_scale_ = 1 | 1 << 8;
     bool shows_pumped_ = false;
+    GsnInterpPicture last_between_{}; // (kf4-pc's) the picture between last taken (its run bits not kept)
+    SharedTurnLead turn_lead_;   // (before the pump, which holds it)
+    UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
     std::thread thread_;
 };
@@ -1877,11 +2064,11 @@ extern "C" void pcr_print_stats(void) {
     const Stats &s = renderer()->stats;
     fprintf(stderr,
             "[stats] pc renderer: %llu packets (%.1f MB), %llu vblanks, %llu pictures (%llu between); pictures "
-            "between: %llu frames taken, %llu pictures asked for\n",
+            "between: %llu frames taken, %llu pictures asked for (%llu drawn here not shown as made too late)\n",
             (unsigned long long)s.packets.load(), double(s.bytes.load()) / 1048576.0,
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
-            (unsigned long long)s.interp_pictures.load());
+            (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load());
     renderer()->print_census();
     // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
     if (pcr::GpuTimes *times = renderer()->intake().gpu_times()) {

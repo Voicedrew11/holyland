@@ -159,6 +159,12 @@ typedef struct {
                           translation */
     float mid[12];     /* the world to the picture's view: rows of the rotation (and the translation) */
     float t;           /* 0 the frame shown, 1 the frame drawn */
+    double hand_yaw_rad, hand_pitch_rad; /* the mouse's hand its camera was turned to (port/include/port/mouse_lead.h): a
+                          renderer turns it on by what the hand has moved since, as it draws it */
+    double shown_s;    /* when the window shows it (port_wall_seconds; 0: not known): the mouse's hand is taken a steady
+                          time before it */
+    uint32_t leave_out_late; /* 1: the renderer leaves it out when it would be late, and begins it no sooner than it
+                          needs (--frame-rate unlocked: port/gs/pc/pcr_late.h) */
     uint32_t runs;     /* bits */
     const uint32_t *run_bits; /* (runs + 31) / 32 words: the runs drawn with their model's move */
 } GsnInterpPicture;

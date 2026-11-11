@@ -24,7 +24,7 @@ static pthread_mutex_t hand_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 typedef struct {
-    uint64_t vblank;
+    double vblank;  /* when it was read, in vblanks */
     MouseTurn hand; /* spent_total and what waited then */
 } Reading;
 
@@ -48,15 +48,15 @@ void port_mouse_lead_spent(MouseTurn spent) {
     spent_total = turn_sum(spent_total, spent);
 }
 
-void port_mouse_lead_waiting(MouseTurn waiting, uint64_t vblank) {
-    Reading reading = {vblank, turn_sum(spent_total, waiting)};
+void port_mouse_lead_waiting(MouseTurn waiting, double at_vblanks) {
+    Reading reading = {at_vblanks, turn_sum(spent_total, waiting)};
 
     LOCK();
-    if (reading_count > 0 && readings[reading_count - 1].vblank > vblank) {
+    if (reading_count > 0 && readings[reading_count - 1].vblank > at_vblanks + 1.0) {
         reading_count = 0; /* (a save state loaded: an earlier time, the readings after it gone) */
     }
-    if (reading_count > 0 && readings[reading_count - 1].vblank == vblank) {
-        readings[reading_count - 1] = reading;
+    if (reading_count > 0 && readings[reading_count - 1].vblank >= at_vblanks) {
+        readings[reading_count - 1].hand = reading.hand;
     } else {
         if (reading_count == MOUSE_LEAD_READINGS) {
             memmove(readings, readings + 1, sizeof(readings[0]) * (MOUSE_LEAD_READINGS - 1));
@@ -79,23 +79,65 @@ static double mixed(double a, double b, double f) {
    Under hand_lock, with a reading. */
 static MouseTurn hand_at(double at) {
     MouseTurn hand;
-    int i;
+    int lo = 0, hi = reading_count - 1;
 
-    if (at <= (double)readings[0].vblank) {
+    if (at <= readings[0].vblank) {
         return readings[0].hand;
     }
-    for (i = 1; i < reading_count; i++) {
-        const Reading *a = &readings[i - 1], *b = &readings[i];
+    if (at >= readings[hi].vblank) {
+        return readings[hi].hand;
+    }
+    while (hi - lo > 1) { /* readings[lo].vblank < at <= readings[hi].vblank */
+        int mid = (lo + hi) / 2;
 
-        if (at <= (double)b->vblank) {
-            double f = (at - (double)a->vblank) / (double)(b->vblank - a->vblank);
-
-            hand.yaw_rad = mixed(a->hand.yaw_rad, b->hand.yaw_rad, f);
-            hand.pitch_rad = mixed(a->hand.pitch_rad, b->hand.pitch_rad, f);
-            return hand;
+        if (readings[mid].vblank < at) {
+            lo = mid;
+        } else {
+            hi = mid;
         }
     }
-    return readings[reading_count - 1].hand;
+    {
+        const Reading *a = &readings[lo], *b = &readings[hi];
+        double f = (at - a->vblank) / (b->vblank - a->vblank);
+
+        hand.yaw_rad = mixed(a->hand.yaw_rad, b->hand.yaw_rad, f);
+        hand.pitch_rad = mixed(a->hand.pitch_rad, b->hand.pitch_rad, f);
+    }
+    return hand;
+}
+
+MouseTurn port_mouse_lead_hand(double picture_vblank) {
+    MouseTurn hand = {0, 0};
+
+    LOCK();
+    if (reading_count > 0) {
+        hand = hand_at(picture_vblank - MOUSE_LEAD_DELAY_VBLANKS);
+    }
+    UNLOCK();
+    return hand;
+}
+
+double port_mouse_lead_newest_vblanks(void) {
+    double at;
+
+    LOCK();
+    at = reading_count > 0 ? readings[reading_count - 1].vblank : -1;
+    UNLOCK();
+    return at;
+}
+
+MouseTurn port_mouse_lead_since(MouseTurn hand, double at_vblanks) {
+    MouseTurn since = {0, 0};
+
+    LOCK();
+    if (reading_count > 0) {
+        MouseTurn there = hand_at(at_vblanks);
+
+        since.yaw_rad = wrap(there.yaw_rad - hand.yaw_rad);
+        since.pitch_rad = wrap(there.pitch_rad - hand.pitch_rad);
+    }
+    UNLOCK();
+    return since;
 }
 
 static double ahead_of(double hand, double shown, double drawn, double t) {
@@ -103,7 +145,7 @@ static double ahead_of(double hand, double shown, double drawn, double t) {
 }
 
 MouseTurn port_mouse_lead_ahead(MouseTurn spent_shown, MouseTurn spent_drawn, double t, double picture_vblank) {
-    MouseTurn hand, ahead = {0, 0};
+    MouseTurn hand = {0, 0}, ahead = {0, 0};
     int read;
 
     LOCK();
@@ -168,4 +210,47 @@ void mouse_lead_turn_view(double r[3][3], MouseTurn turn) {
     rot_y(-turn.yaw_rad, y);
     multiply(r, y, half);
     multiply(x, half, r);
+}
+
+void mouse_lead_turn_picture(float move[12], float mid[12], MouseTurn turn) {
+    double r[3][3], turned[3][3], d[3][3], t[3], m[3][3], mt[3];
+    int i, j, k;
+
+    for (i = 0; i < 3; i++) {
+        for (j = 0; j < 3; j++) {
+            r[i][j] = turned[i][j] = mid[i * 4 + j];
+            m[i][j] = move[i * 4 + j] + (i == j);
+        }
+        t[i] = mid[i * 4 + 3];
+        mt[i] = move[i * 4 + 3];
+    }
+    mouse_lead_turn_view(turned, turn);
+    /* the turn in the picture's view, about the eye: d = turned r^T (the eye stays: d t is the translation) */
+    for (i = 0; i < 3; i++) {
+        for (j = 0; j < 3; j++) {
+            d[i][j] = 0;
+            for (k = 0; k < 3; k++) {
+                d[i][j] += turned[i][k] * r[j][k];
+            }
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        double dt = 0, dmt = 0;
+
+        for (k = 0; k < 3; k++) {
+            dt += d[i][k] * t[k];
+            dmt += d[i][k] * mt[k];
+        }
+        for (j = 0; j < 3; j++) {
+            double dm = 0;
+
+            for (k = 0; k < 3; k++) {
+                dm += d[i][k] * m[k][j];
+            }
+            mid[i * 4 + j] = (float)turned[i][j];
+            move[i * 4 + j] = (float)(dm - (i == j));
+        }
+        mid[i * 4 + 3] = (float)dt;
+        move[i * 4 + 3] = (float)dmt;
+    }
 }

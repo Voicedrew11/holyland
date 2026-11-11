@@ -108,8 +108,8 @@ typedef struct {
     /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
        PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
        or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
-       live from the overlay. PORT_FRAME_RATE_UNLOCKED: as many as the renderer keeps up with
-       (port/include/port/unlocked_rate.h), no more than frame_rate_cap a second (0: no cap). */
+       live from the overlay. PORT_FRAME_RATE_UNLOCKED: as many as the renderer has time for, each shown at
+       the time it shows (port/platform/frame_interp.c), no more than frame_rate_cap a second (0: no cap). */
 #define PORT_FRAME_RATE_MONITOR 1000
 #define PORT_FRAME_RATE_UNLOCKED 1001
     int frame_rate;
@@ -390,6 +390,8 @@ void port_gs_set_native_colour(int mode);
 void port_gs_set_native_layer_z(int mode);
 /* --native-draw (port_options.native_draw), from the next frame */
 void port_gs_set_native_draw(int kinds);
+/* The --native-draw kinds (PORT_ND_*) the renderer draws: the PC renderer's, 0 under paraLLEl-GS */
+int port_gs_native_kinds(void);
 /* Whether the game's draws of --native-draw's kinds go to the renderer now (port_native_draw): always, but under the
    PC renderer only when it moves them in the pictures between itself (port_interp_on_gpu; docs/port/PC_RENDERER.md,
    step 5) or there are none (--frame-rate 30); the game's packets otherwise */
@@ -454,11 +456,6 @@ int port_interp_on_gpu(void);
    vblank's own, at 0, among them when it is shown) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
-/* (the controller's thread) --frame-rate unlocked: a game vblank judged, behind 1 when the renderer was behind
-   as it began (port/include/port/unlocked_rate.h); port_interp_unlocked_at_floor: 1 when the rate is as low as it
-   goes (gs.c's cut of the pictures between then judges); port_interp_print_unlocked: its --stats line */
-void port_interp_unlocked_vblank(uint64_t vblank, int behind);
-int port_interp_unlocked_at_floor(void);
 /* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
    (0: none; the F3 counter's "CUT") */
 int port_interp_cut(void);
@@ -518,6 +515,12 @@ void port_video_refresh_seen(double seen_s);
    port_interp_schedule). Up to max, their count returned; -1 while the refresh clock is not sure of the
    screen's refreshes. */
 int port_video_refresh_schedule(uint64_t vblank, double *phases, int max);
+/* Any thread: a wall time (port_wall_seconds) in the game's vblanks (the newest vblank's number and how far past its
+   time), as a picture's tag reckons it; -1 while the vblanks' times are not known */
+double port_video_vblanks_at(double wall_s);
+/* Any thread: the wall time (port_wall_seconds) the window shows a picture handed over in time, by its tag; 0 while
+   the vblanks' times are not known */
+double port_video_picture_due_s(uint64_t tag);
 /* 1 in a --headless run with KF4_PRESENT_SIM (a test of the window's pacing, with nothing drawn) */
 int port_video_simulated(void);
 /* 1 while the window is the Vulkan presenter's, which takes the renderer's picture as an image */

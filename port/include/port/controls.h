@@ -130,6 +130,9 @@ void port_controls_listen_cancel(void);
 int port_controls_event(const void *sdl_event); /* 1: the event was taken (rebinding) */
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and sticks (rx, ry, lx, ly) */
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller);
+/* (the game's thread) Between vblanks, as it waits and works: the mouse's motion read now for instant mouse look's
+   readings (port/include/port/mouse_lead.h), at most every half millisecond; nothing outside play */
+void port_controls_sample_mouse(void);
 /* While the overlay is open the game gets nothing; what is held when it closes is ignored until let go */
 void port_controls_block(int blocked);
 /* The mouse indicator over the picture (x, y, width, height in the window's pixels), drawn as squares

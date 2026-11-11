@@ -32,7 +32,9 @@
 #include <string.h>
 
 #include "eekernel.h"
+#include "port/controls.h"
 #include "port/host.h"
+#include "port/live_settings.h"
 #include "port/audio.h"
 #include "port/overlay.h"
 #include "port/platform.h"
@@ -366,6 +368,23 @@ static void profile_resume(void) {
     profile_resumed_ns = port_profile_on() ? port_profile_now_ns() : 0;
 }
 
+/* Until `until` (the wall time): asleep, the mouse read every half millisecond meanwhile with --frame-rate above 30
+   (instant mouse look's readings: port_controls_sample_mouse) */
+static void wait_reading_mouse(double until) {
+    for (;;) {
+        double now = port_wall_seconds(), rest = until - now;
+
+        if (rest <= 0) {
+            return;
+        }
+        if (port_frame_interp()) {
+            port_controls_sample_mouse();
+            rest = rest < 0.0005 ? rest : 0.0005;
+        }
+        port_sleep(rest);
+    }
+}
+
 static void vblank_start(void) {
     volatile uint64_t *csr = EE_HW(volatile uint64_t *, 0x12001000);
     uint32_t mode;
@@ -403,11 +422,8 @@ static void vblank_start(void) {
 
             port_dmac_game_sleeps(1);
             port_video_wait(due);
+            wait_reading_mouse(due);
             port_host_float_end(float_mode);
-            now = port_wall_seconds();
-            if (due > now) {
-                port_sleep(due - now);
-            }
             port_dmac_game_sleeps(0);
         }
     } else {
@@ -417,6 +433,7 @@ static void vblank_start(void) {
     mode = port_host_float_begin();
     port_pad_poll();
     port_overlay_vblank();
+    port_live_vblank(); /* KF4_SET_AT's test changes */
     port_video_present();
     port_host_float_end(mode);
     port_teleport_vblank();
@@ -468,6 +485,7 @@ static void advance_to(uint64_t until) {
         uint32_t mode = port_host_float_begin();
 
         port_video_poll();
+        port_controls_sample_mouse();
         port_host_float_end(mode);
     }
     for (;;) {

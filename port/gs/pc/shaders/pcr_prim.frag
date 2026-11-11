@@ -50,10 +50,6 @@ uvec4 texel(ivec2 at, uint level, ivec2 size) {
     at.x = wrap(at.x, size.x, pc.clamp_lo & 3u, (pc.clamp_lo >> 4) & 0x3FFu, (pc.clamp_lo >> 14) & 0x3FFu, level);
     at.y = wrap(at.y, size.y, (pc.clamp_lo >> 2) & 3u, pc.clamp_hi & 0x3FFu, (pc.clamp_hi >> 10) & 0x3FFu, level);
     uint kind = src_kind();
-    if (kind == PCR_SRC_SURFACE) {
-        ivec2 p = (at + pc.src_offset) * pc.src_scale + pc.src_scale / 2;
-        return uvec4(round(texelFetch(u_surface, p, 0) * 255.0));
-    }
     if (kind == PCR_SRC_INDEX) {
         uint i = texelFetch(u_texels, at, int(level)).r;
         return unpack_rgba(u_clut.entries[i >> 2][i & 3u]);
@@ -69,9 +65,48 @@ uvec4 texel(ivec2 at, uint level, ivec2 size) {
     return uvec4(c.rgb, black ? 0u : pc.texa & 0xFFu);
 }
 
+// One axis of a surface's pixel (at the surface's scale, scale of them a GS texel): the texel it is in wrapped as
+// CLAMP says, its place inside the texel kept, or the clamped texel's edge pixel when a clamp moved it
+int surface_axis(int h, int scale, int offset, int size, uint mode, uint lo, uint hi) {
+    int t = h >= 0 ? h / scale : -((scale - 1 - h) / scale);
+    int sub = h - t * scale;
+    int w = wrap(t, size, mode, lo, hi, 0u);
+    if (w != t && (mode == 1u || mode == 2u)) {
+        sub = w > t ? 0 : scale - 1;
+    }
+    return (w + offset) * scale + sub;
+}
+
+// One pixel of a texture that is a drawn surface, at the surface's own scale: the texels drawn finer than the GS's
+// are read as they were drawn, not one GS texel's middle (a frame read back whole keeps the scale's detail)
+uvec4 surface_pixel(ivec2 h, ivec2 size) {
+    int x = surface_axis(h.x, pc.src_scale.x, pc.src_offset.x, size.x, pc.clamp_lo & 3u, (pc.clamp_lo >> 4) & 0x3FFu,
+                         (pc.clamp_lo >> 14) & 0x3FFu);
+    int y = surface_axis(h.y, pc.src_scale.y, pc.src_offset.y, size.y, (pc.clamp_lo >> 2) & 3u, pc.clamp_hi & 0x3FFu,
+                         (pc.clamp_hi >> 10) & 0x3FFu);
+    return uvec4(round(texelFetch(u_surface, ivec2(x, y), 0) * 255.0));
+}
+
+// A surface's texture read at a point (in GS texels), nearest or bilinear among the surface's own pixels
+uvec4 read_surface(vec2 uv, ivec2 size, bool linear) {
+    vec2 h = uv * vec2(pc.src_scale);
+    if (!linear) {
+        return surface_pixel(ivec2(floor(h)), size);
+    }
+    vec2 p = h - 0.5;
+    ivec2 i = ivec2(floor(p));
+    vec2 f = floor(fract(p) * 16.0) / 16.0;
+    vec4 a = vec4(surface_pixel(i, size)), b = vec4(surface_pixel(i + ivec2(1, 0), size));
+    vec4 c = vec4(surface_pixel(i + ivec2(0, 1), size)), d = vec4(surface_pixel(i + ivec2(1, 1), size));
+    return uvec4(floor(mix(mix(a, b, f.x), mix(c, d, f.x), f.y)));
+}
+
 // A level read at a point (in its texels), nearest or bilinear
 uvec4 read_level(vec2 uv, uint level, bool linear) {
     ivec2 size = max(ivec2(int(pc.tex_size & 0xFFFFu), int(pc.tex_size >> 16)) >> int(level), ivec2(1));
+    if (src_kind() == PCR_SRC_SURFACE) {
+        return read_surface(uv, size, linear); // (a surface's copy has one level)
+    }
     if (!linear) {
         return texel(ivec2(floor(uv)), level, size);
     }

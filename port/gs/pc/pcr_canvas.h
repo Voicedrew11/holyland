@@ -52,9 +52,12 @@ struct CanvasCounts {
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
-// format, and the pixels (x, y, w, h)
+// format, and the pixels (x, y, w, h). lower_field 1: a field shown at twice its lines that an interlaced TV shows
+// a line lower than the other (the odd lines): the game drew it half a field's line higher for that
+// (sceGsSetHalfOffset), so it is moved down a line of the picture.
 struct ShownRect {
     uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
+    uint32_t lower_field = 0;
 };
 
 constexpr uint32_t no_instance = 0xFFFFFFFFu;
