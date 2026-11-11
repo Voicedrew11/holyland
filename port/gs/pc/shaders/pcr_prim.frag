@@ -84,7 +84,15 @@ uvec4 surface_pixel(ivec2 h, ivec2 size) {
                          (pc.clamp_lo >> 14) & 0x3FFu);
     int y = surface_axis(h.y, pc.src_scale.y, pc.src_offset.y, size.y, (pc.clamp_lo >> 2) & 3u, pc.clamp_hi & 0x3FFu,
                          (pc.clamp_hi >> 10) & 0x3FFu);
-    return uvec4(round(texelFetch(u_surface, ivec2(x, y), 0) * 255.0));
+    uvec4 c = uvec4(round(texelFetch(u_surface, ivec2(x, y), 0) * 255.0));
+    if ((pc.flags & PCR_F_SURFACE_CT16) != 0u) {
+        // (a 16-bit frame keeps a colour's top 5 bits and alpha's bit 7; read as a texture, the colours are those
+        // bits and the alpha TEXA's, TA1 or TA0 by that bit, 0 for black with AEM: texel()'s PCR_SRC_CT16)
+        c.rgb &= uvec3(0xF8u);
+        bool black = (pc.texa & 0x8000u) != 0u && (c.r | c.g | c.b) == 0u;
+        c.a = c.a >= 0x80u ? (pc.texa >> 16) & 0xFFu : black ? 0u : pc.texa & 0xFFu;
+    }
+    return c;
 }
 
 // A surface's texture read at a point (in GS texels), nearest or bilinear among the surface's own pixels

@@ -74,6 +74,7 @@ enum : uint32_t {
     F_DATE = 0x8000,
     F_DATM = 0x10000,
     F_SHADER_BLEND = 0x20000,
+    F_SURFACE_CT16 = 0x40000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
@@ -1357,7 +1358,9 @@ private:
                 break;
             }
         }
-        if (!from || (psm != GSN_PSMCT32 && psm != GSN_PSMCT24)) {
+        // (a 16-bit texture only from a surface of its own format: PSMCT16 and PSMCT16S place their pixels
+        // differently in a page; the shader reads it as the GS would, F_SURFACE_CT16)
+        if (!from || (psm != GSN_PSMCT32 && psm != GSN_PSMCT24 && !(is_colour_16(psm) && from->psm == psm))) {
             counts_.unsupported_texture_on_surface++;
             return b;
         }
@@ -2233,7 +2236,8 @@ private:
         uint32_t flags = 0;
         if (tme && b.texture.ok) {
             flags |= F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
-                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT;
+                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT |
+                     (b.texture.src == SRC_SURFACE && is_colour_16(bits(s.tex0, 20, 6)) ? F_SURFACE_CT16 : 0);
         } else if (tme) {
             counts_untextured_++;
         }

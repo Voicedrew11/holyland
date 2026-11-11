@@ -46,6 +46,7 @@ vec2 gs_to_clip(vec2 xy) {
 #define PCR_F_DATE 0x8000u        // TEST's DATE: drawn only where the destination's alpha bit 7 (u_dest) is DATM
 #define PCR_F_DATM 0x10000u
 #define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
+#define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
 
 #define PCR_SRC_CT32 0u
 #define PCR_SRC_CT24 1u
