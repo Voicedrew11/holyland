@@ -11,7 +11,7 @@
 #include "pcr_common.h"
 
 // the triangles: x, y, z the arena's numbers of its corners (the kick's two before it, then the kick's)
-layout(set = 2, binding = 2, std430) readonly buffer Tris {
+layout(set = 0, binding = 5, std430) readonly buffer Tris {
     uvec4 tris[];
 };
 
@@ -20,19 +20,19 @@ layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
-layout(set = 1, binding = 0, std430) readonly buffer Picture {
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
     vec4 screen[2];
     vec4 zt;
 } pic;
 // the meshes (the arena): four qwords a vertex (position, normal, ST, colour)
-layout(set = 2, binding = 0, std430) readonly buffer Mesh {
+layout(set = 0, binding = 3, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
 #include "ripple_draw.h"
 // the draws' records (port/render/ripple.hpp)
-layout(set = 2, binding = 1, std430) readonly buffer Draws {
+layout(set = 0, binding = 4, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "ripple_maths.h"

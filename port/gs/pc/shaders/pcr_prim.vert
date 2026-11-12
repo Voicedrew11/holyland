@@ -28,7 +28,7 @@ layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect;
 
 // the picture's (the picture's header; zeros outside a picture between)
-layout(set = 1, binding = 0, std430) readonly buffer Picture {
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
     vec4 screen[2];
@@ -37,11 +37,11 @@ layout(set = 1, binding = 0, std430) readonly buffer Picture {
     uint run_bits[];
 } pic;
 // the walk's kicks as the GS queued them (the GIF front end's kick), 16 words each
-layout(set = 1, binding = 1, std430) readonly buffer Kicks {
+layout(set = 0, binding = 1, std430) readonly buffer Kicks {
     uint kicks[];
 };
 // how each kick moves (gsn.h's GsnInterpMove), 16 words each
-layout(set = 1, binding = 2, std430) readonly buffer Moves {
+layout(set = 0, binding = 2, std430) readonly buffer Moves {
     uint moves[];
 };
 #define GIF_KICK_NOW

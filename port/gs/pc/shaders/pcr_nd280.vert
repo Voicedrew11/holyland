@@ -9,7 +9,7 @@
 #include "pcr_common.h"
 
 // the pass's triangles: x, y, z the arena's slots of its corners (two a vertex), w its kick's
-layout(set = 2, binding = 2, std430) readonly buffer Tris {
+layout(set = 0, binding = 5, std430) readonly buffer Tris {
     uvec4 tris[];
 };
 
@@ -19,19 +19,19 @@ layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
-layout(set = 1, binding = 0, std430) readonly buffer Picture {
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
     vec4 screen[2];
     vec4 zt;
 } pic;
 // the meshes (the arena): eight qwords a vertex (render.cpp, take_batch_280)
-layout(set = 2, binding = 0, std430) readonly buffer Mesh {
+layout(set = 0, binding = 3, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
 #include "vu1_280_draw.h"
 // the draws' records (port/render/vu1_record.hpp, Vu1Record280)
-layout(set = 2, binding = 1, std430) readonly buffer Draws {
+layout(set = 0, binding = 4, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "vu1_280_maths.h"

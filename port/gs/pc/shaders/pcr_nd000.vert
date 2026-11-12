@@ -12,7 +12,7 @@
 
 // the batch's triangles: x, y, z the arena's numbers of its corners; w the kick's (bits 0-27) and how many of the two
 // kicks before it are the batch's (bits 28-29)
-layout(set = 2, binding = 2, std430) readonly buffer Tris {
+layout(set = 0, binding = 5, std430) readonly buffer Tris {
     uvec4 tris[];
 };
 
@@ -22,19 +22,19 @@ layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
-layout(set = 1, binding = 0, std430) readonly buffer Picture {
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
     vec4 move[3];
     vec4 mid[3];
     vec4 screen[2];
     vec4 zt;
 } pic;
 // the meshes (the arena): four qwords a vertex (position, normal, ST, colour), as VU1 memory had them
-layout(set = 2, binding = 0, std430) readonly buffer Mesh {
+layout(set = 0, binding = 3, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
 #include "vu1_000_draw.h"
 // the draws' records (port/render/vu1_record.hpp)
-layout(set = 2, binding = 1, std430) readonly buffer Draws {
+layout(set = 0, binding = 4, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "vu1_000_maths.h"

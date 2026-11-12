@@ -2854,29 +2854,26 @@ private:
         const BoundTexture &bt = b.texture;
         bool sampled = bt.ok && bt.src == SRC_SAMPLED, from_surface = bt.ok && bt.src == SRC_SURFACE;
         bool texels = bt.ok && !sampled && !from_surface;
-        c.set_texture(0, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
-        c.set_texture(0, 1, from_surface ? *bt.view : dummy_float_->get_view(), StockSampler::NearestClamp);
+        // (set 1, the batch's textures and CLUT: the last set, so Granite pushes it, vkCmdPushDescriptorSet, rather
+        // than allocating and writing a set each batch)
+        c.set_texture(1, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
+        c.set_texture(1, 1, from_surface ? *bt.view : dummy_float_->get_view(), StockSampler::NearestClamp);
         if (sampled) {
-            c.set_texture(0, 4, *bt.view, *bt.sampler);
+            c.set_texture(1, 4, *bt.view, *bt.sampler);
         } else {
-            c.set_texture(0, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
+            c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
         }
-        c.set_texture(0, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
+        c.set_texture(1, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
         if (texels && bt.src == SRC_INDEX) {
-            void *clut = c.allocate_constant_data(0, 2, sizeof(b.clut));
+            void *clut = c.allocate_constant_data(1, 2, sizeof(b.clut));
             memcpy(clut, b.clut.data(), sizeof(b.clut));
         } else {
-            c.set_uniform_buffer(0, 2, *no_clut_); // (read only for SRC_INDEX: one buffer, not a 1 KB copy a batch)
+            c.set_uniform_buffer(1, 2, *no_clut_); // (read only for SRC_INDEX: one buffer, not a 1 KB copy a batch)
         }
         float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
                               float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
         c.set_blend_constants(constants);
-        bind_between(c);
-        if (b.native) {
-            c.set_storage_buffer(2, 0, *b.arena);
-            c.set_storage_buffer(2, 1, *b.records);
-            c.set_storage_buffer(2, 2, *b.triangles);
-        }
+        bind_between(c, b.native ? &b : nullptr);
         if (!b.native) {
             bind_vertices(c, b);
         }
@@ -2979,8 +2976,8 @@ private:
         push.src_scale[0] = int32_t(scale_[0]); // (gs_to_clip's)
         push.src_scale[1] = int32_t(scale_[1]);
         c.push_constants(&push, 0, sizeof(push));
-        c.set_input_attachments(0, 5);
-        bind_between(c);
+        c.set_input_attachments(1, 5);
+        bind_between(c, nullptr);
         // (a triangle over the whole target: the scissor is the rectangle)
         float fw = float(colour.width()), fh = float(colour.height);
         Vertex corners[3] = {};
@@ -3009,12 +3006,24 @@ private:
         }
     }
 
-    // Set 1: the pictures between's picture, kicks and moves (zeros outside a picture between)
-    void bind_between(CommandBuffer &c) {
+    // Set 0, the same in every batch program (so that a change of program keeps it bound, and the textures' set 1,
+    // the last, is the one Granite pushes): the pictures between's picture, kicks and moves (zeros outside a picture
+    // between), and a native batch's arena, records and triangles. A GIF batch binds the last native batch's again
+    // (not read; Granite writes a set again only when a binding changes), or a placeholder before any. (Bound at
+    // every batch all the same: Granite forgets what is bound at each render pass.)
+    void bind_between(CommandBuffer &c, const Batch *native) {
         bool on = between_ && between_->active();
-        c.set_storage_buffer(1, 0, on ? between_->picture() : *picture_);
-        c.set_storage_buffer(1, 1, on ? between_->kicks() : *picture_);
-        c.set_storage_buffer(1, 2, on ? between_->moves() : *picture_);
+        c.set_storage_buffer(0, 0, on ? between_->picture() : *picture_);
+        c.set_storage_buffer(0, 1, on ? between_->kicks() : *picture_);
+        c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
+        if (native) {
+            last_native_[0] = native->arena;
+            last_native_[1] = native->records;
+            last_native_[2] = native->triangles;
+        }
+        for (uint32_t i = 0; i < 3; i++) {
+            c.set_storage_buffer(0, 3 + i, last_native_[i] ? *last_native_[i] : *picture_);
+        }
     }
 
     void set_vertex_attribs(CommandBuffer &c) {
@@ -3206,21 +3215,25 @@ private:
     }
 
     void make_programs() {
-        ResourceLayout vert = {};
-        vert.input_mask = 0x7F;
-        vert.push_constant_size = sizeof(PrimPush);
-        vert.sets[1].storage_buffer_mask = 7u;
-        for (int b : {0, 1, 2}) {
-            vert.sets[1].meta[b].array_size = 1;
+        // Every batch program's vertex stage has the same set 0 (bind_between: the pictures between's three buffers,
+        // a native batch's three), so a change of program keeps it; the fragment stage's set 1 (the textures and the
+        // CLUT) is the last set, which Granite pushes (vkCmdPushDescriptorSet) instead of allocating a set a batch
+        ResourceLayout batch_vert = {};
+        batch_vert.push_constant_size = sizeof(PrimPush);
+        batch_vert.sets[0].storage_buffer_mask = 0x3Fu;
+        for (int b : {0, 1, 2, 3, 4, 5}) {
+            batch_vert.sets[0].meta[b].array_size = 1;
         }
+        ResourceLayout vert = batch_vert;
+        vert.input_mask = 0x7F;
         ResourceLayout frag = {};
         frag.output_mask = 1;
         frag.push_constant_size = sizeof(PrimPush);
-        frag.sets[0].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4);
-        frag.sets[0].fp_mask = (1u << 1) | (1u << 3) | (1u << 4);
-        frag.sets[0].uniform_buffer_mask = 1u << 2;
+        frag.sets[1].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4);
+        frag.sets[1].fp_mask = (1u << 1) | (1u << 3) | (1u << 4);
+        frag.sets[1].uniform_buffer_mask = 1u << 2;
         for (int b : {0, 1, 2, 3, 4}) {
-            frag.sets[0].meta[b].array_size = 1;
+            frag.sets[1].meta[b].array_size = 1;
         }
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
@@ -3229,9 +3242,9 @@ private:
         sample_programs_[0] = device_.request_program(vs, sfs);
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
-        date.sets[0].input_attachment_mask = 1u << 5;
-        date.sets[0].fp_mask = 1u << 5;
-        date.sets[0].meta[5].array_size = 1;
+        date.sets[1].input_attachment_mask = 1u << 5;
+        date.sets[1].fp_mask = 1u << 5;
+        date.sets[1].meta[5].array_size = 1;
         Shader *dfs = device_.request_shader(pcr_spv_pcr_date_frag, sizeof(pcr_spv_pcr_date_frag), &date);
         date_program_ = device_.request_program(vs, dfs);
         Shader *dmfs = device_.request_shader(pcr_spv_pcr_date_ms_frag, sizeof(pcr_spv_pcr_date_ms_frag), &date);
@@ -3249,14 +3262,7 @@ private:
         narrow.push_constant_size = 8 * sizeof(int32_t);
         Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
         narrow_program_ = device_.request_program(cvs, nfs);
-        ResourceLayout nd = {};
-        nd.push_constant_size = sizeof(PrimPush);
-        nd.sets[1].storage_buffer_mask = 1u;
-        nd.sets[2].storage_buffer_mask = 7u;
-        nd.sets[1].meta[0].array_size = 1;
-        for (int b : {0, 1, 2}) {
-            nd.sets[2].meta[b].array_size = 1;
-        }
+        ResourceLayout nd = batch_vert;
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
         programs_[1] = device_.request_program(nvs, fs);
         sample_programs_[1] = device_.request_program(nvs, sfs);
@@ -3323,6 +3329,7 @@ private:
     int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
     bool colour_refused_ = false;
     int high_ok_ = -1; // (high_colour_ok's answer, asked once)
+    std::array<BufferHandle, 3> last_native_; // (bind_between) the last native batch's arena, records, triangles
     Program *narrow_program_ = nullptr; // (colour high's scanout: pcr_narrow.frag)
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
