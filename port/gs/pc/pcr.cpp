@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <atomic>
@@ -547,6 +548,69 @@ struct Settings {
 struct Stats {
     std::atomic<uint64_t> packets{0}, bytes{0}, vblanks{0}, pictures{0}, extras{0}, interp_frames{0},
         interp_pictures{0}, interp_late{0};
+};
+
+// (kf4-pc) Each frame's intake, for --stats: the time kf4-pc spent taking its packets in (busy), and from its first
+// packet to its pictures between handed their frame (ready: what a picture between of it waits for at the soonest)
+class IntakeTimes {
+public:
+    using Clock = std::chrono::steady_clock;
+
+    void packet_taken(Clock::time_point start, Clock::time_point end) {
+        if (!in_frame_) {
+            in_frame_ = true;
+            first_ = start;
+        }
+        busy_ += end - start;
+    }
+
+    void frame_taken(Clock::time_point end) {
+        if (in_frame_ && frames_.size() < MOST) {
+            frames_.push_back({ms(busy_), ms(end - first_)});
+        }
+        in_frame_ = false;
+        busy_ = {};
+    }
+
+    // "mean, median, 95th and 99th percentile, most", busy then ready
+    void print(FILE *out) const {
+        if (frames_.empty()) {
+            return;
+        }
+        std::vector<float> busy, ready;
+        for (const Frame &f : frames_) {
+            busy.push_back(f.busy);
+            ready.push_back(f.ready);
+        }
+        auto line = [&](std::vector<float> &v) {
+            std::sort(v.begin(), v.end());
+            double sum = 0;
+            for (float x : v) {
+                sum += x;
+            }
+            auto at = [&](double q) { return v[std::min(v.size() - 1, size_t(q * double(v.size())))]; };
+            fprintf(out, "mean %.3f, median %.3f, p95 %.3f, p99 %.3f, most %.3f", sum / double(v.size()), at(0.5),
+                    at(0.95), at(0.99), double(v.back()));
+        };
+        fprintf(out, "[stats] pc intake a frame (%zu frames, ms): busy ", frames_.size());
+        line(busy);
+        fprintf(out, "; ready ");
+        line(ready);
+        fprintf(out, "\n");
+    }
+
+private:
+    static constexpr size_t MOST = 1 << 20;
+    struct Frame {
+        float busy, ready;
+    };
+    static float ms(Clock::duration d) {
+        return std::chrono::duration<float, std::milli>(d).count();
+    }
+    bool in_frame_ = false;
+    Clock::time_point first_;
+    Clock::duration busy_{};
+    std::vector<Frame> frames_;
 };
 
 // KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before)
@@ -1811,7 +1875,9 @@ private:
             if (GifPacket *packet = std::get_if<GifPacket>(&*message)) {
                 stats.packets++;
                 stats.bytes += packet->bytes.size();
+                const auto start = IntakeTimes::Clock::now();
                 intake_.feed(packet->path, packet->bytes);
+                intake_times.packet_taken(start, IntakeTimes::Clock::now());
                 inbox_.done(packet->bytes.size());
             } else if (VblankPicture *v = std::get_if<VblankPicture>(&*message)) {
                 take_picture(std::move(*v));
@@ -1823,6 +1889,7 @@ private:
             } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
                 intake_.take_frame(std::move(*frame));
+                intake_times.frame_taken(IntakeTimes::Clock::now());
                 inbox_.done(0);
             } else if (InterpPicture *p = std::get_if<InterpPicture>(&*message)) {
                 stats.interp_pictures++;
@@ -1912,6 +1979,7 @@ private:
 public:
     Settings settings;
     Stats stats;
+    IntakeTimes intake_times; // (kf4-pc's; read by --stats once it is idle)
 
 private:
     bool present_wanted_ = false;
@@ -2229,6 +2297,7 @@ extern "C" void pcr_print_stats(void) {
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
             (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load());
+    renderer()->intake_times.print(stderr);
     renderer()->print_census();
     // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
     if (pcr::GpuTimes *times = renderer()->intake().gpu_times()) {
