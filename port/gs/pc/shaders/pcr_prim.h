@@ -135,7 +135,10 @@ uvec4 read_level(vec2 uv, uint level, bool linear) {
 // The texture's coordinates at this pixel, in level 0's texels
 vec2 texture_uv() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
-    return (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    // (UV, FST: the GS's 1/16 texel at the corners, often a whole texel at a pixel, as a frame drawn back 1:1. The GPU's
+    // interpolation lands a little either side of it, which side by vendor (NVIDIA's below, so floor took the texel
+    // before on whole triangles of a frame drawn back); rounded to 1/256 texel it lands on it, 2026-11-11)
+    return (pc.flags & PCR_F_FST) != 0u ? round(v_stq.xy * 256.0) / 256.0 : v_stq.xy / v_stq.z * size;
 }
 
 // (with anisotropy) their change a pixel across and down, taken in main before anything is discarded

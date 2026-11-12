@@ -252,7 +252,10 @@ unless `--keep` names one.
    - The pictures-between thread (`kf4-between`, `show_until`, video.c) spins up to 0.5 ms before each picture: 10%
      of a core at 240.
    - Door and area loads from a disc not in the page cache: not measured (smooth play step 5, item 1).
-   - Not measured: Windows, NVIDIA, other GPUs.
+   - Windows and NVIDIA (RTX 5080, 2026-11-11, PC_RENDERER.md "Windows, NVIDIA and the Vulkan validation layer"):
+     run and checked for pictures, not measured for pace (a game was running beside it on that machine: every
+     rate it gave is unreliable). Still to do there, on an idle machine: `pace_test.py --maps 0,9,9:2,63` at 240
+     and `--hz 500`, alternated, 3+ runs. Not run: Intel, other AMD drivers.
 
 Measure each with `pace_test.py` (uncapped, `--hz 500`, alternated, 3+ runs: runs differ by about 5 a second) and
 the profiler's share of the thread it targets.

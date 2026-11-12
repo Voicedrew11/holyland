@@ -756,7 +756,8 @@ private:
                                                               depth ? depth_format_ : VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                            : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                            : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                  VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT); // (DATE's set-up reads it: begin_pass)
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         if (depth && samples_ > 1) {
@@ -1085,6 +1086,7 @@ private:
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(w, h, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL; // (the blit reads it GENERAL: left READ_ONLY_OPTIMAL, it was not)
         ImageInitialData data = {pixels, 0, 0};
         ImageHandle staged = device_.create_image(info, &data);
         if (!staged) {

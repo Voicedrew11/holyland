@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """How fast the game draws in play at a few places: the pictures a second a window would show.
 
-    tools/pace_test.py [--disc ISO] [--exe PATH] [--maps 0,9] [--hz 170] [--screen-hz 169.83] [--frame-rate monitor]
+    tools/pace_test.py [--disc ISO] [--exe PATH] [--maps 0,9,9:2] [--hz 170] [--screen-hz 169.83] [--frame-rate monitor]
                        [--runs N] [--keep DIR]
                        [-- extra program arguments]
 
-Each run plays tests/newgame.pad and teleports to the map at vblank 1900 (--teleport), headless, with the owner's
-picture settings (4x with native widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz.
+Each run plays tests/newgame.pad and teleports to the map (MAP, or MAP:PLACE) at vblank 1900 (--teleport, with
+--invincible: at 009:2 creatures kill the player), headless, with the owner's picture settings (4x with native
+widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz.
 
 pace: real time with KF4_PRESENT_SIM=HZ (the Vulkan presenter's pacing without a window): the pictures handed over
       each second of play (KF4_PRESENT_LOG), the game's vblanks shown each second (60: the game keeps its speed),
@@ -36,10 +37,24 @@ OWNER = ["--native-draw", "on", "--native-scale", "4", "--widescreen", "--native
 
 
 def find_exe():
-    path = os.path.join(ROOT, "out", "linux-clang", "kf4")
-    if not os.path.exists(path):
-        sys.exit("pace_test: no program at %s; build it or pass --exe" % path)
-    return path
+    for preset in ("linux-clang", "windows-clang"):
+        for name in ("kf4", "kf4.exe"):
+            path = os.path.join(ROOT, "out", preset, name)
+            if os.path.exists(path):
+                return path
+    sys.exit("pace_test: no program in out/linux-clang or out/windows-clang; build it or pass --exe")
+
+
+def place_of(spot):
+    """A spot of --maps ("9", or "9:2" for the map's place 2) as --teleport's MAP:PLACE."""
+    spot = str(spot)
+    return spot if ":" in spot else spot + ":0"
+
+
+def label_of(spot):
+    """A spot as a name for its files and lines: 009, or 009_2 for a place other than 0."""
+    map_index, place = place_of(spot).split(":")
+    return "%03d" % int(map_index) + ("" if place == "0" else "_" + place)
 
 
 def owner_data_dir():
@@ -62,8 +77,8 @@ def command(args, folder, map_index, frames, flags):
     """A run's command line (args.exe, .disc, .hz, .extra; tools/sampler/profile.py's too). It dumps the last frame:
     a --headless run that dumps none starts none of the GS's threads, and draws nothing."""
     return [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
-            "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%d:0" % (TELEPORT, map_index), "--frames",
-            str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
+            "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%s" % (TELEPORT, place_of(map_index)),
+            "--invincible", "--frames", str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
             args.frame_rate or str(args.hz)] + flags + OWNER + args.extra
 
 
@@ -87,14 +102,14 @@ def number(pattern, text, default=0.0):
 
 def pace(args, map_index, n):
     frames = TELEPORT + 400 + args.seconds * 60
-    folder, out = run(args, "pace_%03d_%d" % (map_index, n), map_index, frames,
+    folder, out = run(args, "pace_%s_%d" % (label_of(map_index), n), map_index, frames,
                       {"KF4_PRESENT_SIM": str(args.screen_hz or args.hz), "KF4_GSN_GPU_TIME": "1",
-                       "KF4_PRESENT_LOG": os.path.join(args.keep, "pace_%03d_%d.present" % (map_index, n))}, [])
+                       "KF4_PRESENT_LOG": os.path.join(args.keep, "pace_%s_%d.present" % (label_of(map_index), n))}, [])
     seconds = {}
     vblanks = {}
     screen = None
     shown = {}  # each refresh of the screen in play: the time of the last picture presented before it
-    with open(os.path.join(args.keep, "pace_%03d_%d.present" % (map_index, n))) as f:
+    with open(os.path.join(args.keep, "pace_%s_%d.present" % (label_of(map_index), n))) as f:
         for line in f:
             p = line.split()
             if p[0] == "R":
@@ -161,10 +176,10 @@ def main():
     args.keep = args.keep or tempfile.mkdtemp(prefix="kf4_pace_")
     os.makedirs(args.keep, exist_ok=True)
     try:
-        for map_index in [int(m) for m in args.maps.split(",")]:
+        for map_index in args.maps.split(","):
             for n in range(args.runs):
                 result = pace(args, map_index, n)
-                print("map %03d run %d: %s" % (map_index, n, ", ".join(
+                print("map %s run %d: %s" % (label_of(map_index), n, ", ".join(
                     "%s %.2f" % (k, v) if isinstance(v, float) else "%s %s" % (k, v) for k, v in result.items())),
                     flush=True)
     finally:
