@@ -2320,6 +2320,7 @@ private:
         c.set_program(!b.native                              ? program_
                       : b.program == NativeProgram::vu1_280 ? native_280_program_
                       : b.program == NativeProgram::vu1_700 ? native_700_program_
+                      : b.program == NativeProgram::ripple  ? native_ripple_program_
                                                                  : native_program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -2640,6 +2641,8 @@ private:
         native_280_program_ = device_.request_program(nvs280, fs);
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
         native_700_program_ = device_.request_program(nvs700, fs);
+        Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
+        native_ripple_program_ = device_.request_program(nvsripple, fs);
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -2659,7 +2662,7 @@ private:
     const DynamicChoice dynamic_ = choose_dynamic(device_);
     GpuTimes &times_;
     Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
-            *native_700_program_ = nullptr, *date_program_ = nullptr;
+            *native_700_program_ = nullptr, *native_ripple_program_ = nullptr, *date_program_ = nullptr;
     // the depth surfaces' format, and whether DATE is by its stencil (KF4_PC_STENCIL=0: by a copy, as before)
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
     bool stencil_on_ = false;

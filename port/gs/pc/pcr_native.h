@@ -11,6 +11,10 @@
 // in another (placed once a mesh), the draws' records (port/render/vu1_record.hpp) in a third; all written by the CPU
 // before the GPU reads them, and never written again where a draw reads (a full buffer is replaced).
 //
+// The reflection's rippled water (RD_PROGRAM_RIPPLE, no VU1 program: the EE's maths, port/render/ripple.hpp) is drawn
+// the same way: the strip's PRIM written, its triangles those the EE does not give ADC, made on the GPU
+// (shaders/pcr_ndripple.vert).
+//
 // The kinds it draws (kinds()) are the only ones gs.c turns on under the PC renderer; a draw of another program met all
 // the same is counted and left out.
 //

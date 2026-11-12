@@ -11,6 +11,7 @@
 
 #include "../../render/part_moves.hpp"
 #include "../../render/render_internal.hpp"
+#include "../../render/ripple.hpp"
 #include "../../render/vu1_record.hpp"
 
 extern "C" {
@@ -43,7 +44,7 @@ public:
     explicit Impl(Device &device) : device_(device) {}
 
     ~Impl() {
-        for (GpuList *l : {&arena_, &triangles_, &records_, &records_280_, &kicked_}) {
+        for (GpuList *l : {&arena_, &triangles_, &records_, &records_280_, &records_ripple_, &kicked_}) {
             if (l->buffer && l->map) {
                 device_.unmap_host_buffer(*l->buffer, MEMORY_ACCESS_WRITE_BIT);
             }
@@ -169,6 +170,10 @@ private:
         }
         if (d.program == RD_PROGRAM_GS_STRIP) {
             draw_gs_strip(d, front);
+            return;
+        }
+        if (d.program == RD_PROGRAM_RIPPLE) {
+            draw_ripple(d, cam, front, canvas);
             return;
         }
         if (d.program != 0 && d.program != 0x5A0) {
@@ -359,6 +364,100 @@ private:
         fetched_.clear();
     }
 
+    // A draw of the reflection's rippled water (RD_PROGRAM_RIPPLE: ripple.hpp): each block of the part a strip, PRIM
+    // written as the strip's tag's PRE writes it (a strip, textured, blended); its triangles those the EE does not give
+    // ADC, drawn by shaders/pcr_ndripple.vert with RGBAQ's colour and FOG's fog as the chain left them (the TEX0, ALPHA
+    // and CLAMP of the strips are the chain's own writes, before and after the draws)
+    void draw_ripple(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
+        counts_.draws++;
+        RippleRecord k = ripple_record(d, cam);
+        const GsRegisterFile &file = front.registers();
+        k.info[3] = int32_t(uint32_t(file.reg[gs_reg::rgbaq]));
+        k.fog[0] = float((file.reg[gs_reg::fog] >> 56) & 0xFF);
+        // (the world's and the reflection's move with the picture's camera)
+        const PartMove move = parts_.draw(d, cam, walk_);
+        uint32_t record = 0;
+        bool put_record = false;
+        for (const auto &mesh : fetched_) {
+            uint32_t n = uint32_t(mesh->vertices.size() / 16), total = 0;
+            for (const RdBatch &b : mesh->batches) {
+                total += b.count;
+            }
+            // (the block's vertices in order, its batches' together: Wobble_DrawRippledModel reads them so)
+            if (mesh->format != RD_VF_PACKED16 || total != n || n == 0) {
+                counts_.unsupported++;
+                continue;
+            }
+            front.write(gs_reg::prim, 0x54);
+            uint32_t prim = front.prim_in_effect();
+            if (!put_record) {
+                uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((prim >> 9) & 1)];
+                k.info[0] = int32_t(offset & 0xFFFF);
+                k.info[1] = int32_t((offset >> 32) & 0xFFFF);
+                record = put_ripple(k, move);
+                put_record = true;
+            }
+            uint32_t base = place(*mesh);
+            ripple_adc(mesh->vertices.data(), n, k, adc_);
+            counts_.batches++;
+            NativeBatch nb;
+            nb.program = NativeProgram::ripple;
+            nb.first_triangle = list_ripple(adc_, base, nb.triangle_count);
+            if (nb.triangle_count == 0) {
+                continue;
+            }
+            nb.arena = arena_.buffer;
+            nb.records = records_ripple_.buffer;
+            nb.triangles = kicked_.buffer;
+            nb.instance = record;
+            name_picture(nb);
+            canvas.native_batch(front.registers(), prim, nb);
+            counts_.triangles += nb.triangle_count;
+        }
+        fetched_.clear();
+    }
+
+    // A water draw's record with its move (in the frame's walk kept, the frame's and then its picture's, as put_pair)
+    uint32_t put_ripple(RippleRecord &k, const PartMove &m) {
+        int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA : 0;
+        if (walk_ != PartWalk::frame_kept) {
+            k.info[2] |= moving;
+            return put(records_ripple_, RECORDS_ROOM, &k, sizeof(k));
+        }
+        RippleRecord picture = k;
+        picture.info[2] |= moving;
+        return put_pair(records_ripple_, RECORDS_ROOM, &k, &picture, sizeof(k));
+    }
+
+    // A water strip's triangles (kicks 2 to n - 1 without ADC), listed: each the arena's numbers of its three corners
+    // (and the kick's again). Their first's place; n their count.
+    uint32_t list_ripple(const std::vector<uint8_t> &adc, uint32_t base, uint32_t &n) {
+        n = 0;
+        for (size_t kick = 2; kick < adc.size(); kick++) {
+            n += !adc[kick];
+        }
+        if (n == 0) {
+            return 0;
+        }
+        if (!kicked_.buffer || kicked_.used + n > kicked_.room) {
+            make(kicked_, std::max(kicked_.room ? kicked_.room : TRIANGLES_FIRST, n), 16);
+        }
+        uint32_t first = kicked_.used;
+        uint32_t *out = reinterpret_cast<uint32_t *>(kicked_.map) + size_t(first) * 4;
+        for (uint32_t kick = 2; kick < uint32_t(adc.size()); kick++) {
+            if (adc[kick]) {
+                continue;
+            }
+            out[0] = base + kick - 2;
+            out[1] = base + kick - 1;
+            out[2] = base + kick;
+            out[3] = base + kick;
+            out += 4;
+        }
+        kicked_.used += n;
+        return first;
+    }
+
     // now, moved t of the way back to was (the strip shader's rounding: u = 1 - t)
     uint32_t lerped(uint32_t now, uint32_t was) const {
         return uint32_t(int32_t(now) + int32_t(std::floor(float(int32_t(was) - int32_t(now)) * picture_u_ + 0.5f)));
@@ -533,7 +632,8 @@ private:
     }
 
     Device &device_;
-    GpuList arena_, triangles_, records_, records_280_, kicked_;
+    GpuList arena_, triangles_, records_, records_280_, records_ripple_, kicked_;
+    std::vector<uint8_t> adc_; // (a water strip's ADC)
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
@@ -550,9 +650,9 @@ NativeDraws::NativeDraws(Device &device) : impl_(std::make_unique<Impl>(device))
 NativeDraws::~NativeDraws() = default;
 
 int NativeDraws::kinds() {
-    // (programs 0x000, 0x280, 0x5A0 and 0x700)
+    // (programs 0x000, 0x280, 0x5A0 and 0x700; the reflection's water, RD_PROGRAM_RIPPLE)
     return PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_PICKED | PORT_ND_OBJECTS | PORT_ND_SKINNED | PORT_ND_ARM |
-           PORT_ND_GOLD | PORT_ND_SHADOWS | PORT_ND_EFFECTS;
+           PORT_ND_GOLD | PORT_ND_SHADOWS | PORT_ND_EFFECTS | PORT_ND_WATER;
 }
 
 void NativeDraws::met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
