@@ -1448,12 +1448,15 @@ public:
                 "[stats] pc pump: %llu frames (%llu surfaces copied for them), %llu pictures between drawn again "
                 "(%llu not of its frame), %llu pictures showing them, %llu left out as too late and %llu not shown as made "
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
-                "passes, %llu surfaces made, %llu uploads into surfaces\n",
+                "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
+                "their table, %llu with their CLUT\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
                 (unsigned long long)left_out_, (unsigned long long)late_, cost_.mean_s() * 1e3,
                 (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
-                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces);
+                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces,
+                (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
+                (unsigned long long)c.walk_clut_draws);
     }
 
 private:

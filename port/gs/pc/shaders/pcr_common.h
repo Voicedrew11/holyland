@@ -23,7 +23,11 @@ layout(push_constant, std430) uniform Push {
                        // a 24-bit frame 18
     uint clut_at;      // (PCR_SRC_INDEX, a kept walk's batch) the CLUT's first colour in the walk's CLUTs (pcr_prim.h's
                        // u_walk_cluts); PCR_NO_WALK_CLUT: set 1's u_clut
+    uint table;        // (a kept walk's batch) its texture's place in the walk's table, u_table (bits 0-15; PCR_NO_TABLE:
+                       // set 1's u_texels and u_sampled), and its sampler's in u_samplers (16-19)
 } pc;
+
+#define PCR_NO_TABLE 0xFFFFu
 
 #define PCR_NO_WALK_CLUT 0xFFFFFFFFu
 

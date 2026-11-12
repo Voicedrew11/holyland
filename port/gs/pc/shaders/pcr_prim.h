@@ -4,6 +4,7 @@
 // test, in its integers. The blend is
 // Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it; a blend
 // with no Vulkan form is the GS's here, from a copy of the destination (PCR_F_SHADER_BLEND).
+#extension GL_EXT_nonuniform_qualifier : require
 #include "pcr_common.h"
 
 // (pcr_prim_sample.frag, PCR_SAMPLE: shaded once a sample of a multisampled target, its inputs taken at each sample:
@@ -39,6 +40,51 @@ layout(set = 1, binding = 2) uniform Clut {
 layout(set = 0, binding = 15, std430) readonly buffer WalkCluts {
     uint colours[];
 } u_walk_cluts;
+// (pc.table) a kept walk's textures, written once when the walk is handed out (pcr_canvas.cpp's put_table_on_gpu): its
+// pictures between bind no texture a batch. One binding, the images alone (Granite's bindless set), read as integers
+// (the texels: R8_UINT, R8G8B8A8_UINT) or as colours (a sampled texture's: RGBA8), with the samplers beside them; every
+// draw's index is the same across it (a push constant), so no nonuniformEXT
+layout(set = 2, binding = 0) uniform texture2D u_table[];
+layout(set = 2, binding = 0) uniform utexture2D u_table_uint[];
+layout(set = 0, binding = 16) uniform sampler u_samplers[16]; // (0: nearest, clamped: the texels' texelFetch)
+
+bool from_table() {
+    return (pc.table & 0xFFFFu) != PCR_NO_TABLE;
+}
+
+// The texels (u_texels or the table's)
+uvec4 fetch_texels(ivec2 at, int level) {
+    if (from_table()) {
+        return texelFetch(usampler2D(u_table_uint[pc.table & 0xFFFFu], u_samplers[0]), at, level);
+    }
+    return texelFetch(u_texels, at, level);
+}
+
+// The sampled texture (u_sampled or the table's with its sampler)
+ivec2 sampled_size() {
+    if (from_table()) {
+        return textureSize(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), 0);
+    }
+    return textureSize(u_sampled, 0);
+}
+vec4 sampled_lod(vec2 uv, float lod) {
+    if (from_table()) {
+        return textureLod(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, lod);
+    }
+    return textureLod(u_sampled, uv, lod);
+}
+vec4 sampled_grad(vec2 uv, vec2 dx, vec2 dy) {
+    if (from_table()) {
+        return textureGrad(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, dx, dy);
+    }
+    return textureGrad(u_sampled, uv, dx, dy);
+}
+vec4 sampled_fetch(ivec2 at) {
+    if (from_table()) {
+        return texelFetch(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), at, 0);
+    }
+    return texelFetch(u_sampled, at, 0);
+}
 
 uint src_kind() {
     return (pc.flags >> PCR_F_SRC_SHIFT) & 7u;
@@ -68,11 +114,11 @@ uvec4 texel(ivec2 at, uint level, ivec2 size) {
     at.y = wrap(at.y, size.y, (pc.clamp_lo >> 2) & 3u, pc.clamp_hi & 0x3FFu, (pc.clamp_hi >> 10) & 0x3FFu, level);
     uint kind = src_kind();
     if (kind == PCR_SRC_INDEX) {
-        uint i = texelFetch(u_texels, at, int(level)).r;
+        uint i = fetch_texels(at, int(level)).r;
         return unpack_rgba(pc.clut_at != PCR_NO_WALK_CLUT ? u_walk_cluts.colours[pc.clut_at + i]
                                                           : u_clut.entries[i >> 2][i & 3u]);
     }
-    uvec4 c = texelFetch(u_texels, at, int(level));
+    uvec4 c = fetch_texels(at, int(level));
     if (kind == PCR_SRC_CT32) {
         return c;
     }
@@ -181,8 +227,8 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     if (n < 2.0 || alod >= lod - 1.0 / 16.0) {
         return false;
     }
-    vec2 size = vec2(textureSize(u_sampled, 0));
-    t = textureGrad(u_sampled, uv / size, uv_dx / size, uv_dy / size);
+    vec2 size = vec2(sampled_size());
+    t = sampled_grad(uv / size, uv_dx / size, uv_dy / size);
     return true;
 }
 
@@ -210,7 +256,7 @@ bool smooth_2d_applies(float lod) {
 
 vec4 tap_2d(ivec2 at, ivec2 size) {
     if (src_kind() == PCR_SRC_SAMPLED) {
-        return texelFetch(u_sampled, min(at, textureSize(u_sampled, 0) - 1), 0) * 255.0;
+        return sampled_fetch(min(at, sampled_size() - 1)) * 255.0;
     }
     return vec4(texel(at, 0u, size));
 }
@@ -262,7 +308,7 @@ uvec4 sample_texture() {
         }
         vec4 t;
         if (lod <= 0.0 || aniso_log2() == 0u || !sampled_anisotropic(uv, lod, t)) {
-            t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
+            t = sampled_lod(uv / vec2(sampled_size()), lod);
         }
         texture_f = t * 255.0;
         texture_f_kept = true;

@@ -58,6 +58,7 @@ struct PrimPush {
     int32_t dest_offset[2];
     uint32_t alpha;
     uint32_t clut_at;
+    uint32_t table;
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 
@@ -85,6 +86,10 @@ enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_S
 
 // (PrimPush::clut_at, Batch::clut_at: the CLUT is set 1's, not the kept walk's)
 constexpr uint32_t no_walk_clut = 0xFFFFFFFFu;
+// (PrimPush::table, Batch::table_at: the texture is set 1's, not the kept walk's table's)
+constexpr uint32_t no_table = 0xFFFFu;
+// (a kept walk's samplers, u_samplers: the stock nearest one and 15 of the walk's)
+constexpr uint32_t walk_samplers = 16;
 
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
@@ -329,6 +334,10 @@ public:
         dummy_uint_ = device_.create_image(info, &data);
         info.format = VK_FORMAT_R8G8B8A8_UNORM;
         dummy_float_ = device_.create_image(info, &data);
+        no_table_ = make_table({&dummy_float_->get_view()});
+        table_on_ = bool(no_table_.set);
+        no_samplers_.fill(nullptr);
+        no_samplers_[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
     }
 
     ~Impl() {
@@ -718,6 +727,7 @@ private:
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
             set0_fresh_ = false;
+            table_bound_ = VK_NULL_HANDLE;
             cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);
             pass_ended_ = false; // (what was submitted before: begin_pass's full barrier)
         }
@@ -1891,6 +1901,9 @@ private:
         uint32_t gpu_first = no_gpu_vertices;
         // (a kept walk's batch through the CLUT: its CLUT's first colour in the walk's buffer, Kept::cluts; none: set 1's)
         uint32_t clut_at = no_walk_clut;
+        // (a kept walk's batch: its texture's place in the walk's table, Kept::table, and its sampler's in Kept::samplers;
+        // no_table: set 1's)
+        uint32_t table_at = no_table, sampler_at = 0;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -1943,6 +1956,29 @@ private:
         uint64_t chunk; // (the texture store's: 0 if it refused it)
     };
 
+    // A descriptor table (Granite's bindless set: images alone, pcr_prim.h's u_table), its pool its own
+    struct Table {
+        BindlessDescriptorPoolHandle pool;
+        BindlessDescriptorSet set;
+    };
+    Table make_table(const std::vector<const ImageView *> &views) const {
+        Table t;
+        if (views.empty()) {
+            return t;
+        }
+        t.pool = device_.create_bindless_descriptor_pool(BindlessResourceType::Image, 1, unsigned(views.size()));
+        if (!t.pool || !t.pool->allocate_descriptors(unsigned(views.size()))) {
+            t.pool.reset();
+            return t;
+        }
+        for (const ImageView *v : views) {
+            t.pool->push_texture(*v);
+        }
+        t.pool->update();
+        t.set = t.pool->get_descriptor_set();
+        return t;
+    }
+
     // ---- A kept walk's steps (keep_walk), in the order the walk made them ----
     // (a batch: Kept::batches' index; batches are kept out of the step so a step is small and the list grows cheaply)
     struct KeptBatch {
@@ -1973,6 +2009,8 @@ private:
         PagesRead read;
         BufferHandle vertices; // (its GIF batches' vertices, put on the GPU once: put_vertices_on_gpu)
         BufferHandle cluts;    // (its batches' CLUTs, put on the GPU once: put_cluts_on_gpu)
+        Table table;           // (its batches' textures, put_table_on_gpu) and their samplers
+        std::array<const Sampler *, walk_samplers> samplers{};
 
         void keep(Batch &&batch) {
             steps.emplace_back(KeptBatch{uint32_t(batches.size())});
@@ -2017,6 +2055,7 @@ private:
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
         walk_cluts_ = walk.cluts.get();
+        walk_table_ = walk.table.set ? &walk : nullptr;
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again(walk, kept); }, step);
         }
@@ -2024,6 +2063,7 @@ private:
         between_ = nullptr;
         walk_vertices_ = nullptr;
         walk_cluts_ = nullptr;
+        walk_table_ = nullptr;
     }
 
     // A walk's GIF batches' vertices put in one buffer of its own, which its pictures between draw from: drawn again,
@@ -2100,6 +2140,56 @@ private:
         if (!walk.cluts) {
             for (Batch &b : walk.batches) {
                 b.clut_at = no_walk_clut;
+            }
+        }
+    }
+
+    // A walk's textures (each image its batches read that the walk holds: decoded and sampled textures; not a surface's,
+    // copied at the draw) in one descriptor table of its own, and the samplers they are read with in a small array:
+    // its pictures between then bind no texture a batch (set 1 stays as it is: the dummies), only the table once.
+    // Called once, before the walk is handed out, as put_vertices_on_gpu. A batch whose sampler finds no room (more
+    // than 15 in a walk) keeps set 1's. KF4_PC_BINDLESS=0: never (to compare).
+    void put_table_on_gpu(Kept &walk) const {
+        walk.table = {};
+        walk.samplers.fill(nullptr);
+        walk.samplers[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
+        uint32_t samplers = 1;
+        std::vector<const ImageView *> views;
+        std::unordered_map<const ImageView *, uint32_t> found;
+        for (Batch &b : walk.batches) {
+            b.table_at = no_table;
+            b.sampler_at = 0;
+            const BoundTexture &bt = b.texture;
+            if (!bindless_on_ || !table_on_ || !bt.ok || !bt.view || bt.src == SRC_SURFACE) {
+                continue;
+            }
+            uint32_t s = 0;
+            if (bt.src == SRC_SAMPLED) {
+                while (s < samplers && walk.samplers[s] != bt.sampler) {
+                    s++;
+                }
+                if (s == samplers) {
+                    if (samplers == walk_samplers) {
+                        continue;
+                    }
+                    walk.samplers[samplers++] = bt.sampler;
+                }
+            }
+            auto at = found.find(bt.view);
+            if (at == found.end()) {
+                if (views.size() >= no_table) {
+                    continue;
+                }
+                at = found.emplace(bt.view, uint32_t(views.size())).first;
+                views.push_back(bt.view);
+            }
+            b.table_at = at->second;
+            b.sampler_at = s;
+        }
+        walk.table = make_table(views);
+        if (!walk.table.set) {
+            for (Batch &b : walk.batches) {
+                b.table_at = no_table;
             }
         }
     }
@@ -2191,6 +2281,7 @@ private:
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
         walk_cluts_ = walk.cluts.get();
+        walk_table_ = walk.table.set ? &walk : nullptr;
         uint32_t batches = 0;
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again_alone(walk, kept); }, step);
@@ -2202,6 +2293,7 @@ private:
         between_ = nullptr;
         walk_vertices_ = nullptr;
         walk_cluts_ = nullptr;
+        walk_table_ = nullptr;
         submit(!picture_follows); // (a picture next: its submit puts this on the GPU's queue with it)
     }
 
@@ -2977,6 +3069,14 @@ private:
         const BoundTexture &bt = b.texture;
         bool sampled = bt.ok && bt.src == SRC_SAMPLED, from_surface = bt.ok && bt.src == SRC_SURFACE;
         bool texels = bt.ok && !sampled && !from_surface;
+        // (a kept walk's batch: its texture from the walk's table, set 2, with its sampler from set 0's: set 1 stays the
+        // dummies)
+        bool from_table = walk_table_ && b.table_at != no_table && (texels || sampled);
+        push.table = from_table ? b.table_at | b.sampler_at << 16 : no_table;
+        counts_.table_draws += from_table ? 1 : 0;
+        counts_.walk_texture_draws += walk_table_ && (texels || sampled) ? 1 : 0;
+        texels = texels && !from_table;
+        sampled = sampled && !from_table;
         // (set 1, the batch's textures and CLUT: the last set, so Granite pushes it, vkCmdPushDescriptorSet, rather
         // than allocating and writing a set each batch)
         c.set_texture(1, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -2988,9 +3088,11 @@ private:
         }
         c.set_texture(1, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
         // (a kept walk's batch: its CLUT in the walk's buffer, set 0's, bind_between)
-        bool walk_clut = texels && bt.src == SRC_INDEX && walk_cluts_ && b.clut_at != no_walk_clut;
+        bool indexed = (texels || from_table) && bt.src == SRC_INDEX;
+        bool walk_clut = indexed && walk_cluts_ && b.clut_at != no_walk_clut;
         push.clut_at = walk_clut ? b.clut_at : no_walk_clut;
-        if (texels && bt.src == SRC_INDEX && !walk_clut) {
+        counts_.walk_clut_draws += walk_clut ? 1 : 0;
+        if (indexed && !walk_clut) {
             void *clut = c.allocate_constant_data(1, 2, sizeof(b.clut));
             memcpy(clut, b.clut.data(), sizeof(b.clut));
         } else {
@@ -3206,6 +3308,7 @@ private:
     // writes a set again only when a binding changes, and forgets them at each render pass (set0_fresh_).
     static constexpr uint32_t native_slots = 4;
     static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
+    static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -3233,7 +3336,28 @@ private:
                 c.set_storage_buffer(0, 3 + i, last_native_[i] ? *last_native_[i] : *picture_);
             }
             set0_fresh_ = true;
+            samplers_fresh_ = false;
         }
+        // (a kept walk's samplers, u_samplers: set again only when they change, or at a render pass)
+        const auto &samplers = walk_table_ ? walk_table_->samplers : no_samplers_;
+        if (!samplers_fresh_ || samplers != samplers_bound_) {
+            for (uint32_t i = 0; i < walk_samplers; i++) {
+                c.set_sampler(0, walk_sampler_binding + i, samplers[i] ? *samplers[i] : *samplers[0]);
+            }
+            samplers_bound_ = samplers;
+            samplers_fresh_ = true;
+        }
+        bind_table(c);
+    }
+
+    // Set 2, the table: the kept walk's while one is drawn again, else the canvas's own (one dummy, read by nothing)
+    void bind_table(CommandBuffer &c) {
+        const BindlessDescriptorSet &want = walk_table_ ? walk_table_->table.set : no_table_.set;
+        if (!want || want.handle.set == table_bound_) {
+            return;
+        }
+        c.set_bindless(2, want);
+        table_bound_ = want.handle.set;
     }
 
     void set_vertex_attribs(CommandBuffer &c) {
@@ -3449,6 +3573,12 @@ private:
         // too, so that set 0's layout is the same in every program a batch draws with)
         frag.sets[0].storage_buffer_mask = 1u << walk_clut_binding;
         frag.sets[0].meta[walk_clut_binding].array_size = 1;
+        // (and a kept walk's samplers, u_samplers; set 2 its table, u_table: Granite's bindless set, one binding)
+        frag.sets[0].sampler_mask = 1u << walk_sampler_binding;
+        frag.sets[0].meta[walk_sampler_binding].array_size = walk_samplers;
+        frag.sets[2].separate_image_mask = 1u;
+        frag.sets[2].meta[0].array_size = DescriptorSetLayout::UNSIZED_ARRAY;
+        frag.bindless_set_mask = 1u << 2;
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
@@ -3466,6 +3596,8 @@ private:
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0] = frag.sets[0];
+        date.sets[2] = frag.sets[2];
+        date.bindless_set_mask = frag.bindless_set_mask;
         date.sets[1].input_attachment_mask = 1u << 5;
         date.sets[1].fp_mask = 1u << 5;
         date.sets[1].meta[5].array_size = 1;
@@ -3586,6 +3718,13 @@ private:
     bool store_follows_draws_ = true; // (false on the pump's canvas: start_from)
     const Buffer *walk_vertices_ = nullptr; // (the kept walk's vertices while one is drawn again: draw_again)
     const Buffer *walk_cluts_ = nullptr;    // (... and its CLUTs)
+    const Kept *walk_table_ = nullptr;      // (... and the walk, when it has a table: its table and samplers)
+    Table no_table_;                        // (bound outside a kept walk: one dummy)
+    bool table_on_ = false;                 // (no table where the device has none: set 1's textures, as before)
+    VkDescriptorSet table_bound_ = VK_NULL_HANDLE; // (bind_table: set 2 as bound in the command buffer)
+    std::array<const Sampler *, walk_samplers> no_samplers_{};
+    std::array<const Sampler *, walk_samplers> samplers_bound_{}; // (bind_between: u_samplers as bound, since a render
+    bool samplers_fresh_ = false;                                 // pass)
     // KF4_PC_BINDLESS=0: a kept walk's CLUTs copied to the GPU at each draw, as before (to compare)
     const bool bindless_on_ = !getenv("KF4_PC_BINDLESS") || strcmp(getenv("KF4_PC_BINDLESS"), "0") != 0;
     // KF4_PC_WALK_VERTICES=0: a kept walk's vertices copied to the GPU at each draw, as before (to compare)
@@ -3619,10 +3758,12 @@ public:
                 (unsigned long long)counts_clears_);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
-                "by the GS's read: %llu (a region mode), %llu (decoded in part)\n",
+                "by the GS's read: %llu (a region mode), %llu (decoded in part); kept walks' textured batches: %llu, %llu "
+                "of them from the walk's table, %llu with the walk's CLUT\n",
                 (unsigned long long)c.textures_sampled, (unsigned long long)c.textures_mipmapped,
                 (unsigned long long)c.textures_anisotropic, (unsigned long long)c.exact_textures_region,
-                (unsigned long long)c.exact_textures_part);
+                (unsigned long long)c.exact_textures_part, (unsigned long long)c.walk_texture_draws,
+                (unsigned long long)c.table_draws, (unsigned long long)c.walk_clut_draws);
         fprintf(out,
                 "[stats] pc canvas, not done yet: %llu blends (%llu batches blended by the shader, %llu of them native: their "
                 "triangles may overlap), (%llu DATE draws done, %llu by the stencil, %llu writing an "
@@ -3722,6 +3863,7 @@ std::shared_ptr<const KeptWalk> Canvas::take_kept_walk() {
     }
     impl_->put_vertices_on_gpu(*kept);
     impl_->put_cluts_on_gpu(*kept);
+    impl_->put_table_on_gpu(*kept);
     return std::make_shared<const KeptWalk>(std::move(*kept));
 }
 bool Canvas::fits(const KeptWalk &walk) const {
@@ -3740,6 +3882,7 @@ Canvas::PictureWalk Canvas::as_picture_walk(const KeptWalk &frame, const FrameTa
     }
     impl_->put_vertices_on_gpu(*kept.walk);
     impl_->put_cluts_on_gpu(*kept.walk);
+    impl_->put_table_on_gpu(*kept.walk);
     return {std::make_shared<const KeptWalk>(std::move(*kept.walk)), FrameWalkRefused::none};
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {
