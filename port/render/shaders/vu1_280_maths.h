@@ -184,9 +184,16 @@ Place vu_place(uint slot) {
 // RGB carried on k times, with the vertex's own alpha
 vec4 colour_u(uint slot, int k) {
     vec4 u = vu_add4(vu_mul4(qf(slot - 2u * uint(k), 3u), d.scale), d.bias);
+    // (each step a function of u alone: once a step leaves u as it is, bit for bit, every step after does too, and
+    // the loop ends there with the same u. A scale of 1 and a bias of 0, as most draws have, ends it at once: before,
+    // a strip's vertices each walked back to its first, the GPU's time growing with the square of its length)
     for (int j = 1; j <= k; j++) {
-        u.xyz = vec3(vu_add(vu_mul(u.x, d.scale.x), d.bias.x), vu_add(vu_mul(u.y, d.scale.y), d.bias.y),
-                     vu_add(vu_mul(u.z, d.scale.z), d.bias.z));
+        vec3 next = vec3(vu_add(vu_mul(u.x, d.scale.x), d.bias.x), vu_add(vu_mul(u.y, d.scale.y), d.bias.y),
+                         vu_add(vu_mul(u.z, d.scale.z), d.bias.z));
+        if (floatBitsToUint(next) == floatBitsToUint(u.xyz)) {
+            break;
+        }
+        u.xyz = next;
     }
     u.w = vu_add(vu_mul(qf(slot, 3u).w, d.scale.w), d.bias.w);
     return u;
