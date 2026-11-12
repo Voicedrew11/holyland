@@ -707,6 +707,7 @@ private:
     CommandBuffer &cmd() {
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
+            set0_fresh_ = false;
             cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);
         }
         return *cmd_;
@@ -786,6 +787,7 @@ private:
         CommandBuffer &c = cmd();
         full_barrier(c);
         c.begin_render_pass(rp);
+        set0_fresh_ = false; // (Granite forgets the bindings at a render pass)
         pass_colour_ = &colour;
         pass_depth_ = depth;
         pass_reads_ = reads;
@@ -930,6 +932,7 @@ private:
         rp.store_attachments = 1;
         rp.render_area = rect;
         c.begin_render_pass(rp);
+        set0_fresh_ = false;
         c.set_program(expand_program_);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -3008,21 +3011,37 @@ private:
 
     // Set 0, the same in every batch program (so that a change of program keeps it bound, and the textures' set 1,
     // the last, is the one Granite pushes): the pictures between's picture, kicks and moves (zeros outside a picture
-    // between), and a native batch's arena, records and triangles. A GIF batch binds the last native batch's again
-    // (not read; Granite writes a set again only when a binding changes), or a placeholder before any. (Bound at
-    // every batch all the same: Granite forgets what is bound at each render pass.)
+    // between), and each native program's arena, records and triangles in bindings of its own (3-5 native 000, 6-8
+    // 280, 9-11 700, 12-14 the ripple's: a frame's batches of one program share their buffers, so the set stays the
+    // same across a walk). The buffers a batch does not read are the last bound there, or a placeholder; Granite
+    // writes a set again only when a binding changes, and forgets them at each render pass (set0_fresh_).
+    static constexpr uint32_t native_slots = 4;
+    static uint32_t native_slot(NativeProgram program) {
+        return program == NativeProgram::vu1_000   ? 0
+               : program == NativeProgram::vu1_280 ? 1
+               : program == NativeProgram::vu1_700 ? 2
+                                                    : 3;
+    }
     void bind_between(CommandBuffer &c, const Batch *native) {
         bool on = between_ && between_->active();
         c.set_storage_buffer(0, 0, on ? between_->picture() : *picture_);
         c.set_storage_buffer(0, 1, on ? between_->kicks() : *picture_);
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         if (native) {
-            last_native_[0] = native->arena;
-            last_native_[1] = native->records;
-            last_native_[2] = native->triangles;
+            uint32_t at = 3 * native_slot(native->program);
+            const BufferHandle *mine[3] = {&native->arena, &native->records, &native->triangles};
+            for (uint32_t i = 0; i < 3; i++) {
+                if (last_native_[at + i].get() != mine[i]->get()) {
+                    last_native_[at + i] = *mine[i];
+                }
+                c.set_storage_buffer(0, 3 + at + i, *last_native_[at + i]);
+            }
         }
-        for (uint32_t i = 0; i < 3; i++) {
-            c.set_storage_buffer(0, 3 + i, last_native_[i] ? *last_native_[i] : *picture_);
+        if (!set0_fresh_) {
+            for (uint32_t i = 0; i < 3 * native_slots; i++) {
+                c.set_storage_buffer(0, 3 + i, last_native_[i] ? *last_native_[i] : *picture_);
+            }
+            set0_fresh_ = true;
         }
     }
 
@@ -3220,8 +3239,8 @@ private:
         // CLUT) is the last set, which Granite pushes (vkCmdPushDescriptorSet) instead of allocating a set a batch
         ResourceLayout batch_vert = {};
         batch_vert.push_constant_size = sizeof(PrimPush);
-        batch_vert.sets[0].storage_buffer_mask = 0x3Fu;
-        for (int b : {0, 1, 2, 3, 4, 5}) {
+        batch_vert.sets[0].storage_buffer_mask = (1u << (3 + 3 * native_slots)) - 1; // (bind_between's)
+        for (uint32_t b = 0; b < 3 + 3 * native_slots; b++) {
             batch_vert.sets[0].meta[b].array_size = 1;
         }
         ResourceLayout vert = batch_vert;
@@ -3329,7 +3348,8 @@ private:
     int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
     bool colour_refused_ = false;
     int high_ok_ = -1; // (high_colour_ok's answer, asked once)
-    std::array<BufferHandle, 3> last_native_; // (bind_between) the last native batch's arena, records, triangles
+    std::array<BufferHandle, 12> last_native_; // (bind_between) each native program's last arena, records, triangles
+    bool set0_fresh_ = false; // (bind_between) set 0's native bindings made since the command buffer's last render pass
     Program *narrow_program_ = nullptr; // (colour high's scanout: pcr_narrow.frag)
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;

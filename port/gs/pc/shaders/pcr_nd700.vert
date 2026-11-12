@@ -8,7 +8,7 @@
 #include "pcr_common.h"
 
 // the strip's triangles: x, y, z the arena's numbers of its corners, w its kick's
-layout(set = 0, binding = 5, std430) readonly buffer Tris {
+layout(set = 0, binding = 11, std430) readonly buffer Tris {
     uvec4 tris[];
 };
 
@@ -25,12 +25,12 @@ layout(set = 0, binding = 0, std430) readonly buffer Picture {
     vec4 zt;
 } pic;
 // the meshes (the arena): four qwords a vertex, as VU1 memory had them
-layout(set = 0, binding = 3, std430) readonly buffer Mesh {
+layout(set = 0, binding = 9, std430) readonly buffer Mesh {
     ivec4 q[];
 } mesh;
 #include "vu1_700_draw.h"
 // the draws' records (port/render/vu1_record.hpp, Vu1Record)
-layout(set = 0, binding = 4, std430) readonly buffer Draws {
+layout(set = 0, binding = 10, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "vu1_700_maths.h"
