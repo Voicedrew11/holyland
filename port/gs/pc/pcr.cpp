@@ -1662,6 +1662,8 @@ public:
             pump_->start();
             const char *direct = getenv("KF4_PC_DIRECT");
             direct_on_ = !(direct && strcmp(direct, "0") == 0);
+            const char *wait = getenv("KF4_PC_CONTEXT_WAIT");
+            try_contexts_ = !(wait && strcmp(wait, "1") == 0);
         }
         thread_ = std::thread([this] { run(); });
         fprintf(stderr, "[pcr] the PC renderer on %s\n", props.deviceName);
@@ -2025,13 +2027,16 @@ private:
             // (Granite frees what a thread lets go of, the pump's each picture's blocks and command buffers too, only
             // as its frame contexts come round, and only kf4-pc moves them on: at a rate where the pump made most
             // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
-            // second, 2026-11-07. Waits for the pump's open command buffer, which it submits every 128 batches, and
-            // for kf4-pc's own: submitted first, or kf4-pc waits for itself for good.)
+            // second, 2026-11-07. Moving it on waits for the pump's open command buffer, which it submits every 128
+            // batches, and for kf4-pc's own: submitted first, or kf4-pc waits for itself for good.)
             if (pcr::Canvas *canvas = intake_.canvas()) {
                 canvas->submit();
             }
-            device_->next_frame_context();
+            frame_context_owed();
             return;
+        }
+        if (!extra) {
+            pay_frame_contexts(); // (the canvas submitted at the vblank)
         }
         MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
         if (extra) {
@@ -2042,6 +2047,32 @@ private:
             device_->next_frame_context();
         }
         hand_out_in_order(made);
+    }
+
+    // (kf4-pc) A picture the pump drew: a frame context moved on for it (above), now when that waits for nobody's open
+    // command buffer (the pump's, mostly: kf4-pc waited 0.87 ms a picture for it at 500, 32% of its time), else owed,
+    // and waited for only when FRAME_CONTEXTS_OWED_MOST are owed. Its canvas's submit goes to the GPU's queue at once
+    // either way (next_frame_context flushed it). KF4_PC_CONTEXT_WAIT=1: moved on at each picture, waiting, as before.
+    void frame_context_owed() {
+        if (!try_contexts_) {
+            device_->next_frame_context();
+            return;
+        }
+        contexts_owed_++;
+        pay_frame_contexts();
+        if (contexts_owed_ > FRAME_CONTEXTS_OWED_MOST) {
+            device_->next_frame_context();
+            contexts_owed_--;
+        } else if (contexts_owed_ > 0) {
+            device_->flush_frame();
+        }
+    }
+
+    // (kf4-pc, its canvas submitted) The frame contexts owed moved on while that waits for nobody
+    void pay_frame_contexts() {
+        while (contexts_owed_ > 0 && device_->try_next_frame_context()) {
+            contexts_owed_--;
+        }
     }
 
     // (kf4-pc) After the pump's pictures before it. A picture whose sender waits, or whose pixels are kf4-pc's own
@@ -2114,6 +2145,10 @@ private:
     std::optional<PictureOut> out_;
     uint32_t picture_scale_ = 1 | 1 << 8;
     bool shows_pumped_ = false;
+    // (kf4-pc's) frame contexts owed for the pump's pictures (frame_context_owed): at most this many, about 6 MB each
+    static constexpr int FRAME_CONTEXTS_OWED_MOST = 8;
+    int contexts_owed_ = 0;
+    bool try_contexts_ = true; // (KF4_PC_CONTEXT_WAIT=1: false; set at open)
     // Pictures straight to the pump (interp_picture). The sender's (the DMA controller's thread): the scale its next
     // picture has, whether its next picture shows a picture between sent to the pump directly or to kf4-pc, and the
     // pictures it sent kf4-pc that kf4-pc says it has taken (routed_done_) once taken
