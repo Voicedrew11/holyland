@@ -10,6 +10,15 @@ extern "C" {
 #include "port/vu_float.h"
 }
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+#define VU1_RECORD_FAST 1
+#else
+#define VU1_RECORD_FAST 0
+#endif
+
+bool vu1_record_fast = true;
+
 namespace {
 
 // VU1's arithmetic (port/include/port/vu_float.h: the interpreter's, bit for bit), on floats
@@ -23,13 +32,84 @@ float vu_sub(float a, float b) {
     return vu_float_from_bits(vu_float_sub(vu_float_bits(a), vu_float_bits(b)));
 }
 
+// The arithmetic in two forms (as port/platform/vu1_hle.c has them; its top comment): Exact, VU1's above, and Fast,
+// plain SSE floats in FastMode. In FastMode (toward zero, denormals read as zero, results flushed to zero) an SSE
+// operation is VU1's whenever no operand has exponent 255 (a number to the VU, an infinity or NaN to SSE) and it does
+// not overflow (VU1's results past FLT_MAX are numbers, SSE's FLT_MAX or infinity), divide by zero or raise invalid:
+// the operands are checked before, MXCSR's flags after (underflow too, to be safe), and when either fails the work is
+// done again the exact way. This file is built with -frounding-math -ffp-exception-behavior=strict, so the compiler
+// neither assumes the rounding mode nor moves an operation across the MXCSR reads and writes.
+struct Exact {
+    static float mul(float a, float b) {
+        return vu_mul(a, b);
+    }
+    static float add(float a, float b) {
+        return vu_add(a, b);
+    }
+    static float sub(float a, float b) {
+        return vu_sub(a, b);
+    }
+};
+
+struct Fast {
+    static float mul(float a, float b) {
+        return a * b;
+    }
+    static float add(float a, float b) {
+        return a + b;
+    }
+    static float sub(float a, float b) {
+        return a - b;
+    }
+};
+
+// an exponent of 255: not for the fast way
+bool huge(uint32_t bits) {
+    return (bits & 0x7F800000u) == 0x7F800000u;
+}
+
+bool any_huge(const float *f, int n) {
+    bool any = false;
+    for (int i = 0; i < n; i++) {
+        any |= huge(vu_float_bits(f[i]));
+    }
+    return any;
+}
+
+#if VU1_RECORD_FAST
+// MXCSR for the fast way, set at the start (flags clear) and put back at the end: every exception masked, toward
+// zero, FTZ, DAZ (port/platform.h's PORT_MXCSR_EE)
+class FastMode {
+public:
+    static constexpr unsigned CSR = 0xFFC0u;
+    static constexpr unsigned TROUBLE = 0x001Du; // invalid, divide by zero, overflow, underflow
+
+    FastMode() : saved_(_mm_getcsr()) {
+        _mm_setcsr(CSR);
+    }
+    ~FastMode() {
+        _mm_setcsr(saved_);
+    }
+    FastMode(const FastMode &) = delete;
+    FastMode &operator=(const FastMode &) = delete;
+
+    // whether every operation since the start gave VU1's result (its operands checked)
+    bool clean() const {
+        return (_mm_getcsr() & TROUBLE) == 0;
+    }
+
+private:
+    unsigned saved_;
+};
+#endif
+
 // out = m v, as MULAx ACC; MADDAy; MADDAz; MADDw (each product rounded, then the sum): m a qword a column
-void vu_transform4(float *out, const float *m, const float *v) {
+template <class A> void vu_transform4(float *out, const float *m, const float *v) {
     for (int r = 0; r < 4; r++) {
-        float acc = vu_mul(m[r], v[0]);
-        acc = vu_add(acc, vu_mul(m[4 + r], v[1]));
-        acc = vu_add(acc, vu_mul(m[8 + r], v[2]));
-        out[r] = vu_add(acc, vu_mul(m[12 + r], v[3]));
+        float acc = A::mul(m[r], v[0]);
+        acc = A::add(acc, A::mul(m[4 + r], v[1]));
+        acc = A::add(acc, A::mul(m[8 + r], v[2]));
+        out[r] = A::add(acc, A::mul(m[12 + r], v[3]));
     }
 }
 
@@ -55,15 +135,105 @@ bool clipped(const int32_t *q, const float *m, bool integers) {
            ((z & 0x80000000u) && (z & 0x7FFFFFFFu) > 0x007FFFFFu);
 }
 
+#if VU1_RECORD_FAST
+// clipped's maths the fast way (in FastMode; the place p as floats)
+bool clipped_fast(const float *p, const float *m) {
+    float c[4];
+    for (int r = 0; r < 4; r++) {
+        float acc = m[r] * p[0];
+        acc = acc + m[4 + r] * p[1];
+        acc = acc + m[8 + r] * p[2];
+        c[r] = acc + m[12 + r] * p[3];
+    }
+    float qq = 1.0f / c[3];
+    float x = c[0] * qq, y = c[1] * qq;
+    uint32_t z = vu_float_bits(c[2] * qq);
+    uint32_t rx = vu_float_bits(x - 2048.0f), ry = vu_float_bits(y - 2048.0f);
+    return (rx & 0x7FFFFFFFu) > 0x44FFE000u || (ry & 0x7FFFFFFFu) > 0x44FFE000u ||
+           ((z & 0x80000000u) && (z & 0x7FFFFFFFu) > 0x007FFFFFu);
+}
+#endif
+
+// clipped of n places, the i-th at q + i * stride, each by the matrix matrix_of(place) gives: the fast way for all of
+// them when it can be trusted with every one, else the exact way
+template <class MatrixOf>
+void clip_all(bool *clip, uint32_t n, const int32_t *q, size_t stride, bool integers, bool matrices_huge,
+              MatrixOf &&matrix_of) {
+#if VU1_RECORD_FAST
+    if (vu1_record_fast && !matrices_huge) {
+        bool done;
+        {
+            FastMode mode;
+            bool fit = true;
+            for (uint32_t i = 0; i < n; i++) {
+                const int32_t *v = q + size_t(i) * stride;
+                float p[4];
+                for (int j = 0; j < 4; j++) {
+                    if (integers) {
+                        fit &= v[j] > -(1 << 24) && v[j] < (1 << 24); // (exact as a float in any rounding)
+                        p[j] = float(v[j]);
+                    } else {
+                        fit &= !huge(uint32_t(v[j]));
+                        memcpy(&p[j], &v[j], 4);
+                    }
+                }
+                clip[i] = clipped_fast(p, matrix_of(v));
+            }
+            done = fit && mode.clean();
+        }
+        if (done) {
+            return;
+        }
+    }
+#else
+    (void)matrices_huge;
+#endif
+    for (uint32_t i = 0; i < n; i++) {
+        const int32_t *v = q + size_t(i) * stride;
+        clip[i] = clipped(v, matrix_of(v), integers);
+    }
+}
+
+// vu1_record_000's maths in one arithmetic: the vertex matrix, the light directions and the point lights
+template <class A> void record_000_maths(Vu1Record &k, const RdDraw &d, const RdCamera &cam) {
+    const float *m = &d.model[0][0];
+    for (int col = 0; col < 4; col++) {
+        vu_transform4<A>(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
+        vu_transform4<A>(&k.light_dir[col * 4], &d.light_dir[0][0], &m[col * 4]);
+    }
+    for (int l = 0; l < 4; l++) {
+        // the point light into the part's space: less its translation, then by its rotation with the off-diagonal
+        // signs turned (the set-up's own maths, to the sign of a 0: the translation as 0 + it, the turned signs as
+        // 0 - them)
+        float p[3] = {A::sub(d.point_pos[l][0], A::add(0.0f, m[12])), A::sub(d.point_pos[l][1], A::add(0.0f, m[13])),
+                      A::sub(d.point_pos[l][2], A::add(0.0f, m[14]))};
+        float r0[3] = {A::add(0.0f, m[0]), A::sub(0.0f, m[1]), A::sub(0.0f, m[2])};
+        float r1[3] = {A::sub(0.0f, m[4]), A::add(0.0f, m[5]), A::sub(0.0f, m[6])};
+        float r2[3] = {A::sub(0.0f, m[8]), A::sub(0.0f, m[9]), A::add(0.0f, m[10])};
+        for (int i = 0; i < 3; i++) {
+            float acc = A::mul(r0[i], p[0]);
+            acc = A::add(acc, A::mul(r1[i], p[1]));
+            k.point_pos[l * 4 + i] = A::add(acc, A::mul(r2[i], p[2]));
+        }
+    }
+}
+
 } // namespace
 
 Vu1Record vu1_record_000(const RdDraw &d, const RdCamera &cam) {
     Vu1Record k;
     memset(&k, 0, sizeof(k));
-    const float *m = &d.model[0][0];
-    for (int col = 0; col < 4; col++) {
-        vu_transform4(&k.vertex[col * 4], &cam.world_screen[0][0], &m[col * 4]);
-        vu_transform4(&k.light_dir[col * 4], &d.light_dir[0][0], &m[col * 4]);
+    bool done = false;
+#if VU1_RECORD_FAST
+    if (vu1_record_fast && !any_huge(&cam.world_screen[0][0], 16) && !any_huge(&d.model[0][0], 16) &&
+        !any_huge(&d.light_dir[0][0], 16) && !any_huge(&d.point_pos[0][0], 16)) {
+        FastMode mode;
+        record_000_maths<Fast>(k, d, cam);
+        done = mode.clean();
+    }
+#endif
+    if (!done) {
+        record_000_maths<Exact>(k, d, cam);
     }
     memcpy(k.model, d.model, sizeof(k.model));
     memcpy(k.view, cam.view, sizeof(k.view));
@@ -71,19 +241,6 @@ Vu1Record vu1_record_000(const RdDraw &d, const RdCamera &cam) {
     memcpy(k.light_col, d.light_col, sizeof(k.light_col));
     memcpy(k.fog, d.fog, sizeof(k.fog));
     for (int l = 0; l < 4; l++) {
-        // the point light into the part's space: less its translation, then by its rotation with the off-diagonal
-        // signs turned (the set-up's own maths, to the sign of a 0: the translation as 0 + it, the turned signs as
-        // 0 - them)
-        float p[3] = {vu_sub(d.point_pos[l][0], vu_add(0.0f, m[12])), vu_sub(d.point_pos[l][1], vu_add(0.0f, m[13])),
-                      vu_sub(d.point_pos[l][2], vu_add(0.0f, m[14]))};
-        float r0[3] = {vu_add(0.0f, m[0]), vu_sub(0.0f, m[1]), vu_sub(0.0f, m[2])};
-        float r1[3] = {vu_sub(0.0f, m[4]), vu_add(0.0f, m[5]), vu_sub(0.0f, m[6])};
-        float r2[3] = {vu_sub(0.0f, m[8]), vu_sub(0.0f, m[9]), vu_add(0.0f, m[10])};
-        for (int i = 0; i < 3; i++) {
-            float acc = vu_mul(r0[i], p[0]);
-            acc = vu_add(acc, vu_mul(r1[i], p[1]));
-            k.point_pos[l * 4 + i] = vu_add(acc, vu_mul(r2[i], p[2]));
-        }
         k.point_pos[l * 4 + 3] = d.point_pos[l][3];
         memcpy(&k.point_col[l * 4], d.point_col[l], 16);
     }
@@ -137,10 +294,11 @@ bool vu1_kicks_280(const int32_t *q, const RdBatch &b, const Vu1Record280 &k, Vu
     }
     p.n = b.count;
     bool clip[VU1_BATCH_MOST];
+    // (the set: ST's w, as ILW loads it)
+    clip_all(clip, p.n, q, 32, false, any_huge(k.vertex[0], 32),
+             [&](const int32_t *v) { return k.vertex[(uint32_t(v[11]) & 0xFFFF) != 0 ? 1 : 0]; });
     uint32_t count = 0;
     for (uint32_t i = 0; i < p.n; i++) {
-        const int32_t *v = q + size_t(i) * 32;
-        clip[i] = clipped(v, k.vertex[(uint32_t(v[11]) & 0xFFFF) != 0 ? 1 : 0], false); // (the set: ST's w, as ILW loads it)
         count += clip[i];
     }
     // ("vertex -1": vertex 0's clip seen again before the loop, by the count, ADC and the tag's w)
@@ -188,9 +346,9 @@ bool vu1_kicks_700(const int32_t *q, const RdBatch &b, const Vu1Record &k, Vu1Ki
     }
     p.n = b.count;
     bool clip[VU1_BATCH_MOST];
+    clip_all(clip, p.n, q, 16, true, any_huge(k.vertex, 16), [&](const int32_t *) { return k.vertex; });
     uint32_t unclipped = 0;
     for (uint32_t i = 0; i < p.n; i++) {
-        clip[i] = clipped(q + size_t(i) * 16, k.vertex, true);
         unclipped += !clip[i];
     }
     // vertex n, past the strip: clipped when not known (render.h's RdBatch::past)
