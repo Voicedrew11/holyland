@@ -21,7 +21,11 @@ layout(push_constant, std430) uniform Push {
     ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
     uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
                        // a 24-bit frame 18
+    uint clut_at;      // (PCR_SRC_INDEX, a kept walk's batch) the CLUT's first colour in the walk's CLUTs (pcr_prim.h's
+                       // u_walk_cluts); PCR_NO_WALK_CLUT: set 1's u_clut
 } pc;
+
+#define PCR_NO_WALK_CLUT 0xFFFFFFFFu
 
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u

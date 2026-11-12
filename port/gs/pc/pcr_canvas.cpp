@@ -57,6 +57,7 @@ struct PrimPush {
     int32_t place[2];
     int32_t dest_offset[2];
     uint32_t alpha;
+    uint32_t clut_at;
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 
@@ -81,6 +82,9 @@ enum : uint32_t {
     F_HIGH = 0x200000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
+
+// (PrimPush::clut_at, Batch::clut_at: the CLUT is set 1's, not the kept walk's)
+constexpr uint32_t no_walk_clut = 0xFFFFFFFFu;
 
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
@@ -1885,6 +1889,8 @@ private:
         // the GPU at each draw)
         static constexpr uint32_t no_gpu_vertices = UINT32_MAX;
         uint32_t gpu_first = no_gpu_vertices;
+        // (a kept walk's batch through the CLUT: its CLUT's first colour in the walk's buffer, Kept::cluts; none: set 1's)
+        uint32_t clut_at = no_walk_clut;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -1966,6 +1972,7 @@ private:
         std::vector<Batch> batches;
         PagesRead read;
         BufferHandle vertices; // (its GIF batches' vertices, put on the GPU once: put_vertices_on_gpu)
+        BufferHandle cluts;    // (its batches' CLUTs, put on the GPU once: put_cluts_on_gpu)
 
         void keep(Batch &&batch) {
             steps.emplace_back(KeptBatch{uint32_t(batches.size())});
@@ -2009,12 +2016,14 @@ private:
         flush_batch();
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
+        walk_cluts_ = walk.cluts.get();
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again(walk, kept); }, step);
         }
         flush_batch();
         between_ = nullptr;
         walk_vertices_ = nullptr;
+        walk_cluts_ = nullptr;
     }
 
     // A walk's GIF batches' vertices put in one buffer of its own, which its pictures between draw from: drawn again,
@@ -2052,6 +2061,47 @@ private:
         }
         device_.unmap_host_buffer(*buffer, MEMORY_ACCESS_WRITE_BIT);
         walk.vertices = std::move(buffer);
+    }
+
+    // A walk's CLUTs (its batches through one: 256 colours each, the same CLUT once) put in one buffer of its own, which
+    // its pictures between read (u_walk_cluts, from PrimPush::clut_at) instead of a CLUT copied to the GPU at each draw
+    // into a set 1 of its own. Called once, before the walk is handed out, as put_vertices_on_gpu.
+    // KF4_PC_BINDLESS=0: never (to compare).
+    void put_cluts_on_gpu(Kept &walk) const {
+        walk.cluts.reset();
+        std::vector<uint32_t> colours;
+        std::unordered_map<uint64_t, uint32_t> found; // (a CLUT's hash: its first colour)
+        for (Batch &b : walk.batches) {
+            b.clut_at = no_walk_clut;
+            if (!bindless_on_ || !b.texture.ok || b.texture.src != SRC_INDEX) {
+                continue;
+            }
+            uint64_t h = 0xCBF29CE484222325ull;
+            for (uint32_t c : b.clut) {
+                h = (h ^ c) * 0x100000001B3ull;
+            }
+            auto at = found.find(h);
+            if (at != found.end() && memcmp(colours.data() + at->second, b.clut.data(), sizeof(b.clut)) == 0) {
+                b.clut_at = at->second;
+                continue;
+            }
+            b.clut_at = uint32_t(colours.size());
+            found[h] = b.clut_at;
+            colours.insert(colours.end(), b.clut.begin(), b.clut.end());
+        }
+        if (colours.empty()) {
+            return;
+        }
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.size = colours.size() * sizeof(uint32_t);
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        walk.cluts = device_.create_buffer(info, colours.data());
+        if (!walk.cluts) {
+            for (Batch &b : walk.batches) {
+                b.clut_at = no_walk_clut;
+            }
+        }
     }
 
     // ---- The pictures between on a thread of their own (the pump's canvas) ----
@@ -2140,6 +2190,7 @@ private:
         flush_batch();
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
+        walk_cluts_ = walk.cluts.get();
         uint32_t batches = 0;
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again_alone(walk, kept); }, step);
@@ -2150,6 +2201,7 @@ private:
         flush_batch();
         between_ = nullptr;
         walk_vertices_ = nullptr;
+        walk_cluts_ = nullptr;
         submit(!picture_follows); // (a picture next: its submit puts this on the GPU's queue with it)
     }
 
@@ -2935,7 +2987,10 @@ private:
             c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
         }
         c.set_texture(1, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
-        if (texels && bt.src == SRC_INDEX) {
+        // (a kept walk's batch: its CLUT in the walk's buffer, set 0's, bind_between)
+        bool walk_clut = texels && bt.src == SRC_INDEX && walk_cluts_ && b.clut_at != no_walk_clut;
+        push.clut_at = walk_clut ? b.clut_at : no_walk_clut;
+        if (texels && bt.src == SRC_INDEX && !walk_clut) {
             void *clut = c.allocate_constant_data(1, 2, sizeof(b.clut));
             memcpy(clut, b.clut.data(), sizeof(b.clut));
         } else {
@@ -3150,6 +3205,7 @@ private:
     // same across a walk). The buffers a batch does not read are the last bound there, or a placeholder; Granite
     // writes a set again only when a binding changes, and forgets them at each render pass (set0_fresh_).
     static constexpr uint32_t native_slots = 4;
+    static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -3161,6 +3217,7 @@ private:
         c.set_storage_buffer(0, 0, on ? between_->picture() : *picture_);
         c.set_storage_buffer(0, 1, on ? between_->kicks() : *picture_);
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
+        c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
         if (native) {
             uint32_t at = 3 * native_slot(native->program);
             const BufferHandle *mine[3] = {&native->arena, &native->records, &native->triangles};
@@ -3388,6 +3445,10 @@ private:
         for (int b : {0, 1, 2, 3, 4}) {
             frag.sets[1].meta[b].array_size = 1;
         }
+        // (set 0's one binding of the fragment stage: a kept walk's CLUTs, u_walk_cluts; the DATE programs declare it
+        // too, so that set 0's layout is the same in every program a batch draws with)
+        frag.sets[0].storage_buffer_mask = 1u << walk_clut_binding;
+        frag.sets[0].meta[walk_clut_binding].array_size = 1;
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
@@ -3404,6 +3465,7 @@ private:
         programs_for(0, vs);
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
+        date.sets[0] = frag.sets[0];
         date.sets[1].input_attachment_mask = 1u << 5;
         date.sets[1].fp_mask = 1u << 5;
         date.sets[1].meta[5].array_size = 1;
@@ -3523,6 +3585,9 @@ private:
     std::unique_ptr<Kept> kept_;
     bool store_follows_draws_ = true; // (false on the pump's canvas: start_from)
     const Buffer *walk_vertices_ = nullptr; // (the kept walk's vertices while one is drawn again: draw_again)
+    const Buffer *walk_cluts_ = nullptr;    // (... and its CLUTs)
+    // KF4_PC_BINDLESS=0: a kept walk's CLUTs copied to the GPU at each draw, as before (to compare)
+    const bool bindless_on_ = !getenv("KF4_PC_BINDLESS") || strcmp(getenv("KF4_PC_BINDLESS"), "0") != 0;
     // KF4_PC_WALK_VERTICES=0: a kept walk's vertices copied to the GPU at each draw, as before (to compare)
     const bool walk_vertices_on_ = !getenv("KF4_PC_WALK_VERTICES") || strcmp(getenv("KF4_PC_WALK_VERTICES"), "0") != 0;
     KeptSizes kept_sizes_;
@@ -3656,6 +3721,7 @@ std::shared_ptr<const KeptWalk> Canvas::take_kept_walk() {
         return nullptr;
     }
     impl_->put_vertices_on_gpu(*kept);
+    impl_->put_cluts_on_gpu(*kept);
     return std::make_shared<const KeptWalk>(std::move(*kept));
 }
 bool Canvas::fits(const KeptWalk &walk) const {
@@ -3673,6 +3739,7 @@ Canvas::PictureWalk Canvas::as_picture_walk(const KeptWalk &frame, const FrameTa
         return {nullptr, kept.refused};
     }
     impl_->put_vertices_on_gpu(*kept.walk);
+    impl_->put_cluts_on_gpu(*kept.walk);
     return {std::make_shared<const KeptWalk>(std::move(*kept.walk)), FrameWalkRefused::none};
 }
 void Canvas::primitive(const GsRegisterFile &file, const GifPrimitive &primitive) {

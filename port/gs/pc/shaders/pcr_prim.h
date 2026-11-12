@@ -34,6 +34,11 @@ layout(set = 1, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) 
 layout(set = 1, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
 } u_clut;
+// (pc.clut_at) a kept walk's CLUTs, 256 colours each, put on the GPU once when the walk is handed out (pcr_canvas.cpp's
+// put_cluts_on_gpu): its pictures between bind no CLUT a batch
+layout(set = 0, binding = 15, std430) readonly buffer WalkCluts {
+    uint colours[];
+} u_walk_cluts;
 
 uint src_kind() {
     return (pc.flags >> PCR_F_SRC_SHIFT) & 7u;
@@ -64,7 +69,8 @@ uvec4 texel(ivec2 at, uint level, ivec2 size) {
     uint kind = src_kind();
     if (kind == PCR_SRC_INDEX) {
         uint i = texelFetch(u_texels, at, int(level)).r;
-        return unpack_rgba(u_clut.entries[i >> 2][i & 3u]);
+        return unpack_rgba(pc.clut_at != PCR_NO_WALK_CLUT ? u_walk_cluts.colours[pc.clut_at + i]
+                                                          : u_clut.entries[i >> 2][i & 3u]);
     }
     uvec4 c = texelFetch(u_texels, at, int(level));
     if (kind == PCR_SRC_CT32) {
