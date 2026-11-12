@@ -232,13 +232,16 @@ unless `--keep` names one.
    - **The VU maths for native 280** (about 14%): exact EE float rounding (`vu_float_round`) for each vertex in
      `clipped`. A wider exact path (four lanes at once) or skipping the exact rounding where the result cannot
      differ.
-3. **The GPU** (3.16 ms a picture at 009: room for about 315 a second, less with the owner's MSAA 2 and colour high):
-   - Look at the **2D untextured blended rectangles** (0.35 ms in about 5 a picture) and the **2D Z-always
-     rectangles** (0.21 ms in 3: if they are clears, `vkCmdClearAttachments` or a pass's load op).
-   - The native 280 map state (1.08 ms): the full barrier after every render pass (`Canvas::end_pass`), then the
-     shader itself (RGP: `KF4_GPU_LABELS=1`, PROFILING.md).
+3. **The GPU.** **Done 2026-11-12 (#109, PC_RENDERER.md "GPU time a picture")**: native 280's colour carry no longer
+   walks the strip at every corner, draws that discard nothing are depth tested before their shader, a pass after a
+   pass waits only for its attachments, the game frame's clears are cleared. GPU a picture at 240 (Windows, RTX 5080,
+   display on), base -> new: Andrew's profile 1.52/1.68/1.13/1.27 -> 1.37/1.47/1.01/1.17 ms at 000/009/009:2/099
+   (-8 to -12%), the owner's 1.23/1.33/0.90/0.97 -> 1.12/1.17/0.84/0.92 (-6 to -12%); pictures byte for byte. MSAA 2
+   costs about 0.19 ms at 009 (the owner's 3x), colour high about 0.21 more. Left: native 000 (and the ripple) is the
+   biggest kind now; the native vertex shaders redo each vertex for every triangle (a per-vertex pass first); the kept
+   frame's MSAA resolve (0xF2) of the whole surface.
 4. **`fast` switched to `pc` (step 7)**, with the settings pc lacks (MSAA 2, `--native-colour high` and the
-   others): they raise pc's GPU time from today's 3.2 ms a picture at 009, so item 3 comes first.
+   others): measured 2026-11-12 (item 3): MSAA 2 about 0.19 ms a picture at 009, colour high about 0.21 more.
 5. **A release build.** **Built 2026-11-11, speed not yet measured on a quiet machine.** The `*-release` presets
    (`RelWithDebInfo` -O2, `KF4_FRAME_POINTERS=OFF`, `KF4_LTO=ON`: ThinLTO with clang) and `tools/pgo_train.py` (PGO
    trained at 000, 009, 009:2, 063); how-to in `tools/README.md`, "A release build". LTO leaves the game's objects,
