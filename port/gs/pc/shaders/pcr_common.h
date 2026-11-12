@@ -11,7 +11,8 @@ layout(push_constant, std430) uniform Push {
     uint test;       // TEST: ATST 0-2, AREF 3-10
     uint fogcol;     // FOGCOL: R 0-7, G 8-15, B 16-23
     uint texa;       // TEXA: TA0 0-7, AEM 15, TA1 16-23
-    uint tex1;       // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9
+    uint tex1;       // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9; log2 of the anisotropy 10-12, the texture
+                     // detail's bias to the GS's level 16-31 (signed, 256ths; pcr_canvas.cpp's sampling_bits)
     float lod_k;     // TEX1's K
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts

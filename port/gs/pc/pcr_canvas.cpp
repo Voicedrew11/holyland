@@ -1116,6 +1116,7 @@ private:
         uint32_t cols = 0, rows = 0; // the part of level 0 the batch may read
         ImageHandle surface_copy;     // (a surface's copy: kept until the batch is drawn)
         ImageHandle held;             // (a decoded texture's image: held while a kept walk may draw with it)
+        uint32_t sampling = 0;        // the pushes' tex1 bits 10-31 (pcr_common.h): texture detail and anisotropy
         bool ok = false;
     };
 
@@ -1189,7 +1190,11 @@ private:
                 b.held = t->image;
                 b.src = SRC_SAMPLED;
                 b.levels = t->levels;
-                b.sampler = &sampler_for(s.tex1, s.clamp, t->levels);
+                uint32_t mmin = bits(s.tex1, 6, 3);
+                counts_.textures_mipmapped += t->levels > 1 && mmin >= 2 && mmin <= 5 ? 1 : 0;
+                uint32_t aniso = anisotropy_for(s.tex1, t->levels);
+                b.sampler = &sampler_for(s.tex1, s.clamp, t->levels, aniso);
+                b.sampling = sampling_bits(aniso);
                 b.cols = std::max(cols, a.texture->read_cols);
                 b.rows = std::max(rows, a.texture->read_rows);
                 b.ok = true;
@@ -1203,6 +1208,7 @@ private:
             b.view = &t->image->get_view();
             b.held = t->image;
             b.levels = t->levels;
+            b.sampling = sampling_bits(1);
             b.cols = std::max(cols, a.texture->read_cols);
             b.rows = std::max(rows, a.texture->read_rows);
             b.ok = true;
@@ -1314,14 +1320,52 @@ private:
         return &t;
     }
 
+    // Texture detail and anisotropy (pcr_set_lod, pcr_set_aniso; PC_RENDERER.md, "Texture detail and anisotropy"),
+    // for the batches from the next vblank
+    void set_sampling(int lod, uint32_t aniso) {
+        lod_mode_ = lod;
+        aniso_ = std::clamp(aniso, 1u, 16u);
+    }
+
+    // The anisotropy a sampled texture is read with: aniso_ for a mipmapped texture filtered bilinear within its
+    // levels (MMAG linear, MMIN 4 or 5: the 3D's floors and walls), else 1. The 2D (no mipmaps, read nearest) and the
+    // GS's own reads (region modes, surfaces) never.
+    uint32_t anisotropy_for(uint64_t tex1, uint32_t levels) const {
+        uint32_t mmag = bits(tex1, 5, 1), mmin = bits(tex1, 6, 3);
+        return aniso_ > 1 && levels > 1 && mmag == 1 && (mmin == 4 || mmin == 5) ? aniso_ : 1;
+    }
+
+    // tex1's bits 10-31 in the pushes: log2 of the anisotropy (10-12) and the bias the texture detail adds to the GS's
+    // level (16-31, signed, in 256ths). The GS picks the level from Q, the distance, for 640 x 448: at a larger scale
+    // a surface has more pixels at the same distance and the PS2's level is too coarse for them. scale: -log2 of the
+    // smaller of the two scales (native widescreen's across is the larger; 0 at 1x); full: -64 (level 0); ps2: 0.
+    uint32_t sampling_bits(uint32_t aniso) {
+        float bias = lod_mode_ == GSN_LOD_FULL    ? -64.0f
+                     : lod_mode_ == GSN_LOD_SCALE ? -std::log2(float(std::min(scale_[0], scale_[1])))
+                                                  : 0.0f;
+        int32_t b256 = int32_t(std::lround(bias * 256.0f));
+        uint32_t a = 0;
+        while (a < 4 && (2u << a) <= aniso) {
+            a++;
+        }
+        if (aniso > 1) {
+            counts_.textures_anisotropic++;
+        }
+        return a << 10 | uint32_t(b256) << 16;
+    }
+
     // The sampler for TEX1's filters (MMAG, MMIN) over a texture of levels (TEX1's MXL is in the decode's levels).
     // The level is the GS's, from Q (the shader's textureLod): at 0 or below MMAG's filter, above it MMIN's. Without
-    // mipmaps (MMIN 0 or 1, or one level) the lod is held at 0.25, which reads level 0 by MMIN's filter.
-    const Sampler &sampler_for(uint64_t tex1, uint64_t clamp, uint32_t levels) {
+    // mipmaps (MMIN 0 or 1, or one level) the lod is held at 0.25, which reads level 0 by MMIN's filter. With aniso
+    // above 1 (anisotropy_for), the sampler's anisotropy, which the shader's textureGrad reads with.
+    const Sampler &sampler_for(uint64_t tex1, uint64_t clamp, uint32_t levels, uint32_t aniso) {
         uint32_t mmag = bits(tex1, 5, 1), mmin = bits(tex1, 6, 3);
         bool mipmapped = mmin >= 2 && mmin <= 5 && levels > 1;
         uint32_t wrap = bits(clamp, 0, 4); // (WMS, WMT: REPEAT or CLAMP here)
-        uint32_t key = mmag | mmin << 1 | (mipmapped ? levels : 0) << 4 | wrap << 8;
+        if (!device_.get_device_features().enabled_features.samplerAnisotropy) {
+            aniso = 1;
+        }
+        uint32_t key = mmag | mmin << 1 | (mipmapped ? levels : 0) << 4 | wrap << 8 | aniso << 12;
         auto found = samplers_.find(key);
         if (found != samplers_.end()) {
             return *found->second;
@@ -1336,6 +1380,10 @@ private:
         info.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         info.min_lod = 0.0f;
         info.max_lod = mipmapped ? float(levels - 1) : 0.25f;
+        if (aniso > 1) {
+            info.anisotropy_enable = VK_TRUE;
+            info.max_anisotropy = std::min(float(aniso), device_.get_gpu_properties().limits.maxSamplerAnisotropy);
+        }
         info.border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         SamplerHandle made = device_.create_sampler(info);
         if (!made) {
@@ -2250,7 +2298,7 @@ private:
         push.fogcol = uint32_t(s.fogcol & 0xFFFFFF);
         push.texa = bits(s.texa, 0, 8) | bits(s.texa, 15, 1) << 15 | bits(s.texa, 32, 8) << 16;
         push.tex1 = bits(s.tex1, 5, 1) | bits(s.tex1, 6, 3) << 1 | bits(s.tex1, 2, 3) << 4 | bits(s.tex1, 0, 1) << 7 |
-                    bits(s.tex1, 19, 2) << 8;
+                    bits(s.tex1, 19, 2) << 8 | b.texture.sampling;
         int32_t k = int32_t(bits(s.tex1, 32, 12) << 20) >> 20; // (signed 7.4)
         push.lod_k = float(k) / 16.0f;
         push.levels = b.texture.levels;
@@ -2558,6 +2606,8 @@ private:
     CommandBufferHandle cmd_;
     Surface *pass_colour_ = nullptr, *pass_depth_ = nullptr;
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
+    int lod_mode_ = GSN_LOD_SCALE; // (set_sampling)
+    uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
     std::unordered_map<uint64_t, GpuTexture> textures_;
@@ -2609,9 +2659,10 @@ public:
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
                 (unsigned long long)c.copies_between_surfaces);
         fprintf(out,
-                "[stats] pc canvas textures: %llu batches read by the GPU's sampler; by the GS's read: %llu (a region "
-                "mode), %llu (decoded in part)\n",
-                (unsigned long long)c.textures_sampled, (unsigned long long)c.exact_textures_region,
+                "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
+                "by the GS's read: %llu (a region mode), %llu (decoded in part)\n",
+                (unsigned long long)c.textures_sampled, (unsigned long long)c.textures_mipmapped,
+                (unsigned long long)c.textures_anisotropic, (unsigned long long)c.exact_textures_region,
                 (unsigned long long)c.exact_textures_part);
         fprintf(out,
                 "[stats] pc canvas, not done yet: %llu blends (%llu batches blended by the shader, %llu of them native: their "
@@ -2644,6 +2695,9 @@ Canvas::~Canvas() = default;
 
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
+}
+void Canvas::set_sampling(int lod, uint32_t aniso) {
+    impl_->set_sampling(lod, aniso);
 }
 void Canvas::set_between(const Between *between) {
     impl_->set_between(between);

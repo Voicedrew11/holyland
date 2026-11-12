@@ -663,13 +663,14 @@ public:
         in_replay_ = false;
     }
 
-    void vblank(const uint64_t *privileged, uint32_t scale) {
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
         }
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
+            canvas_->set_sampling(lod, uint32_t(aniso));
             canvas_->vblank();
             times_->collect();
         }
@@ -1680,7 +1681,7 @@ private:
     void take_picture(VblankPicture v) {
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
-            intake_.vblank(v.privileged.data(), settings.scale.load());
+            intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load());
         }
         uint32_t scale = picture_scale_;
         if (!extra) {

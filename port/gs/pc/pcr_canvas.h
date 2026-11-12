@@ -42,6 +42,7 @@ struct CanvasCounts {
     uint64_t primitives = 0, triangles = 0, batches = 0, passes = 0;
     uint64_t textures_uploaded = 0, textures_from_surfaces = 0, textures_missing = 0;
     uint64_t textures_sampled = 0, exact_textures_region = 0, exact_textures_part = 0;
+    uint64_t textures_mipmapped = 0, textures_anisotropic = 0; // (of textures_sampled)
     uint64_t surfaces_made = 0, surfaces_filled_from_uploads = 0, uploads_into_surfaces = 0, copies_between_surfaces = 0;
     uint64_t date_draws = 0, native_batches = 0, native_draw_calls = 0;
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
@@ -101,6 +102,8 @@ public:
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);
+    // Texture detail (GSN_LOD_*) and anisotropy (1 to 16) for the batches from the next vblank
+    void set_sampling(int lod, uint32_t aniso);
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);
