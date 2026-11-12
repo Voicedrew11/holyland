@@ -239,8 +239,28 @@ unless `--keep` names one.
      shader itself (RGP: `KF4_GPU_LABELS=1`, PROFILING.md).
 4. **`fast` switched to `pc` (step 7)**, with the settings pc lacks (MSAA 2, `--native-colour high` and the
    others): they raise pc's GPU time from today's 3.2 ms a picture at 009, so item 3 comes first.
-5. **A release build.** The presets are `RelWithDebInfo` (-O2, no LTO, and since 2026-11-07 frame pointers: about
-   1.8% at 009 uncapped, `-DKF4_FRAME_POINTERS=OFF` for a release). Try LTO, then PGO.
+5. **A release build.** **Built 2026-11-11, speed not yet measured on a quiet machine.** The `*-release` presets
+   (`RelWithDebInfo` -O2, `KF4_FRAME_POINTERS=OFF`, `KF4_LTO=ON`: ThinLTO with clang) and `tools/pgo_train.py` (PGO
+   trained at 000, 009, 009:2, 063); how-to in `tools/README.md`, "A release build". LTO leaves the game's objects,
+   ico-audio's and the state markers alone (the save state's image, and the game's float flags); PGO covers
+   everything. Both give the same pictures, state lines and F10 dump as `windows-clang` at the four spots, byte for
+   byte (`tools/build_compare.py`), and the same unit test results (Windows; Linux clang and gcc: the CPU tests).
+   Frame pointers were already off on Windows, so there "release" is the developers' build plus LTO.
+   Measured with other load on the machine (a game playing, other agents' tests), `tools/build_cost.py` at 009, 240,
+   3 runs each alternated, CPU ms a second of play (the game's thread without its spin in `port_dmac_wait`):
+
+   | thread | windows-clang | + LTO | + LTO + PGO |
+   |---|---|---|---|
+   | `kf4` (the game's), its work | 242 ±14 | 206 ±22 | 207 ±24 |
+   | `kf4-pc` | 633 ±59 | 574 ±117 | 584 ±83 |
+   | `kf4-pc-pump` | 318 ±32 | 318 ±95 | 336 ±122 |
+   | `kf4-dma` | 252 ±22 | 226 ±47 | 222 ±42 |
+
+   Only the game's thread looks lighter (about 15%; its own code is compiled as before, so it would be the port code
+   it calls: `port/math/libvu0.c`, the PS2 libm, the DMA hand-off), and that figure is an estimate from samples (the
+   share of its stacks in the spin); the rest is within the noise. Left: the same on a quiet machine (`build_cost.py --runs 5`, and
+   `pace_test.py --hz 500` uncapped), Linux (`linux-clang-release`, `pgo_train.py` there), and whether PGO earns its
+   extra build step.
 6. **The game's thread lighter** (for slower CPUs; 19% of a core here, not a limit):
    - About half its work is exact VU0 float maths, mostly the CPU's near cut of map records
      (`ModelScreen_CutClippedTriangles` → `Vu0_ProjectToScreen3`), still run when a record is drawn natively.

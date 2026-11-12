@@ -15,7 +15,58 @@
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
 | `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and the GPU time a picture (docs/port/RENDERER.md, "Measuring the pace") |
 | `sampler/` | `profile.py` plays to a map as `pace_test.py` does and profiles every thread's functions, then prints each thread's CPU time and the busiest's (or `--thread`'s) functions by inclusive and self share; on Linux the game samples itself (`--profile-at`) and the GPU's time a picture by kind of work (`--gpu-detail`: by shader state) follows, on Windows `kf4-sampler` samples from outside (stacks unwound from the program's `.pdata`). `stacks.py` reads a kept run again, or one saved from Shift+P (`--thread`, `--callers`, `--callees`, `--gpu`, `--exports`); docs/port/PROFILING.md |
+| `build_compare.py` | two builds of the game played the same way at four spots: their pictures byte for byte, their state each vblank and F10's state dump the same (a release build against the developers' one: below) |
+| `pgo_train.py` | a release build with profile-guided optimisation: built to write a profile, trained at four spots, built again with it (below) |
+| `build_cost.py` | each thread's CPU time in play at a map for several builds, alternated, from `sampler/profile.py`'s runs, and the part of it not spent spinning (the game's thread waits for DMA in a spin); below |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
+
+## A release build
+
+The presets developers use are `RelWithDebInfo` (-O2) without LTO, and on Linux with frame pointers for the
+profiler. The release presets keep -O2 and the debug information, and add:
+
+- `KF4_FRAME_POINTERS=OFF` (already off on Windows);
+- `KF4_LTO=ON`: ThinLTO with clang, gcc's LTO with gcc, for everything but the save state's image. The game's
+  objects, ico-audio's and the state markers stay plain objects: an LTO linker lays the data it compiles out after
+  every plain object, which would take the game's globals out from between the markers (`state_begin.c`), and the
+  game's code keeps its own flags (`KF4_GAME_FLAGS`, `KF4_EE_FLOAT_FLAGS`) with nothing inlined across.
+
+```sh
+cmake --preset windows-clang-release            # or linux-clang-release, linux-gcc-release
+cmake --build out/windows-clang-release
+```
+
+PGO on top (clang or gcc; Windows needs `-D SDL2_DIR=...` as for any configure):
+
+```sh
+python tools/pgo_train.py --preset windows-clang-release --disc <image> [-D SDL2_DIR=...]
+```
+
+It configures `out/<preset>-pgo` with `KF4_PGO=generate`, builds `kf4`, plays the four spots headless and silent for
+3000 vblanks each (the program writes its profile as it stops: `kernel.c`), merges the profiles (clang:
+`llvm-profdata`, beside the compiler or `llvm-profdata-<version>`), and builds the same folder again with
+`KF4_PGO=<the .profdata>` (gcc: `KF4_PGO=use`, the `.gcda` files beside the objects).
+
+A release build must be the same game: compiler differences are bugs here. Check every new release build
+against the developers' one before trusting it:
+
+```sh
+python tools/build_compare.py --exe out/windows-clang/kf4.exe --exe out/windows-clang-release-pgo/kf4.exe --disc <image>
+```
+
+Each spot (maps 000, 009, 009 place 2, 063: `--teleport 1900:MAP:PLACE --invincible --frame-rate 240 --headless`)
+must say SAME: the pictures at three vblanks (and their pictures between), the state line of every vblank (`--log`)
+and F10's state dump (`KF4_DEBUG_AT=state@`; host function pointers in it are compared by name, since PGO moves the
+game's functions). The unit tests too, `libm_test`, `vu1_test` and `int_divide_test` (not in ctest) among them.
+`int_divide_test` is built without LTO: it checks the operand forms of the game's code, which is never LTO'd.
+
+Then the speed (on a quiet machine, the GPU idle):
+
+```sh
+python tools/build_cost.py --map 9 --runs 5 --disc <image> --exe out/windows-clang/kf4.exe \
+    --exe out/windows-clang-release/kf4.exe --exe out/windows-clang-release-pgo/kf4.exe
+python tools/pace_test.py --exe ... --maps 9 --hz 500 --runs 3      # pictures a second uncapped, each build in turn
+```
 
 ## kf4-gsreplay
 
