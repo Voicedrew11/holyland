@@ -63,6 +63,7 @@ static uint64_t interp_kept_one; /* and vblanks that kept one picture between al
 static uint64_t interp_vblanks_left_out, interp_vblanks_fewer, interp_cuts, interp_rest = 30;
 static uint64_t interp_settle_until, interp_next_raise, interp_raised_at, interp_last_cut, interp_judge_from;
 static int interp_behind_run, interp_allow = INTERP_ALL;
+static int interp_left_last; /* pictures between the vblank before left out as behind (the cut judges on them too) */
 static volatile int interp_cut_now; /* (the counter: pictures between a vblank left out by the cut, now) */
 static volatile int interp_cut_reset_asked; /* (port_gs_interp_cut_reset: the game's thread) */
 
@@ -78,6 +79,17 @@ static int interp_cut_on(void) {
 
     if (on < 0) {
         on = getenv("KF4_INTERP_CUT") == NULL || atoi(getenv("KF4_INTERP_CUT")) != 0;
+    }
+    return on;
+}
+
+/* KF4_INTERP_CUT_LEFT=0 (measure): the cut judges on the backlog alone, as before 2026-11-12 (not on the pictures
+   between left out as behind) */
+static int cut_on_left_out(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        on = getenv("KF4_INTERP_CUT_LEFT") == NULL || atoi(getenv("KF4_INTERP_CUT_LEFT")) != 0;
     }
     return on;
 }
@@ -1045,10 +1057,15 @@ void port_gs_run_vsync(void) {
         }
         port_interp_reset(idle);
         interp_live = idle && port_interp_active();
+        /* behind: the backlog over 1 as this vblank begins, or pictures between of the vblank before left out as
+           behind. Left-outs keep the backlog low (a vblank's pictures left out are not drawn), so on the backlog
+           alone the cut seldom lowered the count to what the renderer makes, and the pictures came in bursts and
+           gaps (PERFORMANCE.md, 2026-11-12) */
         interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && interp_cut_on() &&
-                                    gsr_backlog() > 1
+                                    (gsr_backlog() > 1 || (interp_left_last > 0 && cut_on_left_out()))
                                 ? interp_behind_run + 1
                                 : 0;
+        interp_left_last = 0;
         {
             /* The PC renderer's thread a vblank behind as this vblank and the one before began: one picture
                between fewer a vblank (down to none: the game's own pictures, as at 30), so that a place whose
@@ -1183,6 +1200,7 @@ void port_gs_run_vsync(void) {
             if (!dump && !port_options.fast && shown &&
                 (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
                 interp_behind++;
+                interp_left_last++;
                 last_left_out = i;
                 continue;
             }
