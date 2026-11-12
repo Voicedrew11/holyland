@@ -804,9 +804,16 @@ private:
         full_barrier(c);
         fill_from_uploads(*made);
         const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        // (as much of each as fits: a surface is at most 2048 rows, and one taken in a few rows down may be that tall
+        // already; copied whole, the copy ran past the image's end and NVIDIA lost the device: the under-water screen,
+        // 2026-11-11)
         for (auto [o, y] : taken) {
-            c.copy_image(*made->image, *o->image, {0, int32_t(y * scale_[1]), 0}, {0, 0, 0},
-                         {o->image->get_width(), o->image->get_height(), 1}, colour, colour);
+            uint32_t top = y * scale_[1], rows = made->image->get_height() - std::min(top, made->image->get_height());
+            rows = std::min(rows, o->image->get_height());
+            if (rows != 0) {
+                c.copy_image(*made->image, *o->image, {0, int32_t(top), 0}, {0, 0, 0},
+                             {o->image->get_width(), rows, 1}, colour, colour);
+            }
         }
         full_barrier(c);
         let_go_overlapping(colour_, made->base_page, made->end_page());
@@ -2143,16 +2150,12 @@ private:
         Surface *depth = nullptr;
         if (zte || date_stencil) {
             depth = depth_surface(bits(s.zbuf, 0, 9), fbw, z_psm(s.zbuf), height);
-            if (depth && (depth->image->get_width() != colour->image->get_width() ||
-                          depth->image->get_height() != colour->image->get_height())) {
-                // (the Vulkan pass wants them alike: the taller made taller still)
-                uint32_t h = std::max(colour->height, depth->height);
-                if (colour->height < h) {
-                    grow(*colour, h);
-                }
-                if (depth->height < h) {
-                    grow(*depth, h);
-                }
+            // (the Vulkan pass is as large as its smallest attachment: a depth surface shorter than the colour one made
+            // as tall. Not the other way: two targets a page row apart that share a Z buffer each grew the other by
+            // that row whenever one was made again, up to 2048 rows: the under-water screen's copy over the water's
+            // targets makes them again every frame)
+            if (depth && depth->height < colour->height) {
+                grow(*depth, colour->height);
             }
         }
         zte = zte && depth != nullptr;
