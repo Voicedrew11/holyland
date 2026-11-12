@@ -157,7 +157,7 @@ set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
 # the native draws' moves in the pictures between, for the PC renderer (port/render/part_moves.hpp): a library of its own
 # (C++20; the renderer core is C++14), with its test below
-add_library(kf4_part_moves STATIC port/render/part_moves.cpp)
+add_library(kf4_part_moves STATIC port/render/part_moves.cpp port/render/pass_draw.cpp)
 target_include_directories(kf4_part_moves PUBLIC port/include port/render)
 set_target_properties(kf4_part_moves PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(NOT MSVC)
@@ -661,6 +661,17 @@ if(NOT WIN32)
     target_link_libraries(part_moves_test PRIVATE m)
 endif()
 add_test(NAME part_moves COMMAND part_moves_test)
+
+# A screen pass as GIF packets (port/render/pass_draw.cpp) against the game's own passes' packets (decomp game.c,
+# gs_draw.c) through the GIF front end, and the pictures between's moves against gif_moves.h's
+add_executable(pass_draw_test tests/pass_draw_test.cpp)
+target_link_libraries(pass_draw_test PRIVATE kf4_part_moves kf4_pc_gif)
+target_include_directories(pass_draw_test PRIVATE port/gs/pc)
+set_target_properties(pass_draw_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(pass_draw_test PRIVATE m)
+endif()
+add_test(NAME pass_draw COMMAND pass_draw_test)
 
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)

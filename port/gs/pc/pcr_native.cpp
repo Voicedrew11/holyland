@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../../render/part_moves.hpp"
+#include "../../render/pass_draw.hpp"
 #include "../../render/render_internal.hpp"
 #include "../../render/ripple.hpp"
 #include "../../render/vu1_record.hpp"
@@ -59,6 +60,10 @@ public:
         case RD_ND_FRAME:
             rd_consumer_frame(value);
             parts_.frame(uint32_t(value) & 0xFFFFFF, walk_);
+            passes_.frame(uint32_t(value) & 0xFFFFFF, walk_);
+            if (walk_ != PartWalk::picture) {
+                shown_kept_ = false; // (a new frame: its first picture between keeps the frame shown again, 0xF2)
+            }
             break;
         default:
             break; // (READS_SHOWN: frame_interp.c's)
@@ -67,11 +72,17 @@ public:
 
     void frame_mark(uint64_t value) {
         parts_.mark(value);
+        if ((uint32_t(value >> 32) & 0xFF) == 0xF2) {
+            // (frame_interp.c: the frame shown kept for the pictures between, read by the frame shown before's pass)
+            shown_kept_ = true;
+            shown_kept_fbp_ = uint32_t(value) & 0x1FF;
+        }
     }
 
     void set_picture(const GsnInterpPicture *picture) {
         walk_ = picture ? PartWalk::picture : (frame_kept_ ? PartWalk::frame_kept : PartWalk::frame);
         picture_u_ = picture ? 1.0f - picture->t : 0.0f;
+        picture_t_ = picture ? picture->t : 1.0f;
         moved_on_cpu_ = picture ? false : moved_on_cpu_; // (asked after the walk's end)
     }
 
@@ -174,6 +185,10 @@ private:
         }
         if (d.program == RD_PROGRAM_RIPPLE) {
             draw_ripple(d, cam, front, canvas);
+            return;
+        }
+        if (d.program == RD_PROGRAM_PASS) {
+            draw_pass(d, front, canvas);
             return;
         }
         if (d.program != 0 && d.program != 0x5A0) {
@@ -417,6 +432,75 @@ private:
         fetched_.clear();
     }
 
+    // A draw of a screen pass (RD_PROGRAM_PASS: pass_draw.hpp): its packets as the PS2 path's, written as the GS takes
+    // them; their primitives come to the canvas as the front end's. In a picture between, t of the way from the same pass
+    // of the frame before (moved on the CPU: the walk is not kept to be drawn again), and the frame drawn read where the
+    // picture is drawn, as frame_interp.c writes the PS2 path's TEX0 (ad_write); the frame shown before's pass reads the
+    // frame shown kept (0xF2), between the marks that have the canvas read it (0xF4, 0xF5), as frame_interp.c puts them
+    // around the PS2 path's packet
+    void draw_pass(const RdDraw &d, GifFrontEnd &front, Canvas &canvas) {
+        counts_.draws++;
+        RdPass p;
+        rd_pass_of(d, p);
+        const GsRegisterFile &file = front.registers();
+        // (frame_interp.c keeps the frame shown when a pass reads it: so for the frame's own walk kept, the pictures')
+        bool kept = walk_ == PartWalk::frame_kept || (shown_kept_ && shown_kept_fbp_ * 32 == p.frame_tbp);
+        PassMove move = passes_.pass(p, file.reg[gs_reg::tex0_1], kept, walk_, picture_t_);
+        if (move.mode != 0 && walk_ == PartWalk::frame_kept) {
+            trail_paired_ = true; // (its picture between would move it on the CPU)
+        }
+        if (walk_ != PartWalk::picture) {
+            move = PassMove();
+        }
+        moved_on_cpu_ |= move.mode != 0;
+        uint32_t from = 0xFFFFFFFFu, to = 0;
+        if (walk_ == PartWalk::picture && p.pass != RD_PASS_PREVIOUS) {
+            from = p.frame_tbp;
+            to = uint32_t(file.reg[gs_reg::frame_1] & 0x1FF) * 32;
+        }
+        bool reads_kept = walk_ == PartWalk::picture && p.pass == RD_PASS_PREVIOUS && kept;
+        if (reads_kept) {
+            canvas.frame_mark(uint64_t(0xF4) << 32);
+        }
+        stream_.q.clear();
+        pass_stream(p, move, stream_);
+        if (stream_.q.empty()) {
+            counts_.unsupported++;
+            unsupported_[RD_PROGRAM_PASS]++;
+        }
+        walk_packets(stream_, front, from, to);
+        if (reads_kept) {
+            canvas.frame_mark(uint64_t(0xF5) << 32);
+        }
+        counts_.batches++;
+    }
+
+    // GIF packets built on the CPU (PACKED tags and their qwords), written as the GS takes them; a TEX0 write whose TBP0
+    // is from made to, to
+    void walk_packets(const PassStream &s, GifFrontEnd &front, uint32_t from, uint32_t to) {
+        size_t n = s.q.size() / 2;
+        for (size_t i = 0; i < n;) {
+            uint64_t tag = s.q[i * 2], regs = s.q[i * 2 + 1];
+            i++;
+            uint32_t nloop = uint32_t(tag & 0x7FFF), nreg = uint32_t(tag >> 60);
+            nreg = nreg ? nreg : 16;
+            if ((tag >> 46) & 1) {
+                front.write_packed_tag((tag >> 47) & 0x7FF);
+            } else {
+                front.write_packed_tag_no_pre();
+            }
+            for (uint32_t k = 0; k < nloop * nreg && i < n; k++, i++) {
+                uint32_t desc = uint32_t(regs >> ((k % nreg) * 4)) & 0xF;
+                uint64_t lo = s.q[i * 2], hi = s.q[i * 2 + 1];
+                if (desc == 0xE && ((hi & 0xFF) == gs_reg::tex0_1 || (hi & 0xFF) == gs_reg::tex0_2) &&
+                    (lo & 0x3FFF) == from) {
+                    lo = (lo & ~uint64_t(0x3FFF)) | to;
+                }
+                front.write_packed_qword(desc, lo, hi);
+            }
+        }
+    }
+
     // A water draw's record with its move (in the frame's walk kept, the frame's and then its picture's, as put_pair)
     uint32_t put_ripple(RippleRecord &k, const PartMove &m) {
         int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA : 0;
@@ -634,6 +718,11 @@ private:
     Device &device_;
     GpuList arena_, triangles_, records_, records_280_, records_ripple_, kicked_;
     std::vector<uint8_t> adc_; // (a water strip's ADC)
+    PassMoves passes_;
+    PassStream stream_;
+    bool shown_kept_ = false;    // (since the frame's first picture between: the frame shown kept, 0xF2)
+    uint32_t shown_kept_fbp_ = 0;
+    float picture_t_ = 1.0f;
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
@@ -650,9 +739,10 @@ NativeDraws::NativeDraws(Device &device) : impl_(std::make_unique<Impl>(device))
 NativeDraws::~NativeDraws() = default;
 
 int NativeDraws::kinds() {
-    // (programs 0x000, 0x280, 0x5A0 and 0x700; the reflection's water, RD_PROGRAM_RIPPLE)
+    // (programs 0x000, 0x280, 0x5A0 and 0x700; the reflection's water, RD_PROGRAM_RIPPLE; the screen passes,
+    // RD_PROGRAM_PASS)
     return PORT_ND_MAP | PORT_ND_SKY | PORT_ND_ITEMS | PORT_ND_PICKED | PORT_ND_OBJECTS | PORT_ND_SKINNED | PORT_ND_ARM |
-           PORT_ND_GOLD | PORT_ND_SHADOWS | PORT_ND_EFFECTS | PORT_ND_WATER;
+           PORT_ND_GOLD | PORT_ND_SHADOWS | PORT_ND_EFFECTS | PORT_ND_WATER | PORT_ND_PASSES;
 }
 
 void NativeDraws::met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
