@@ -275,6 +275,9 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     include(cmake/granite_pipeline_warm.cmake)
     kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     kf4_granite_pipeline_cache_locks(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with a render pass's samples in its hash (cmake/granite_msaa.cmake: the PC renderer's MSAA)
+    include(cmake/granite_msaa.cmake)
+    kf4_granite_msaa(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
