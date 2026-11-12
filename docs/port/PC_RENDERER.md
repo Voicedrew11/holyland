@@ -70,6 +70,67 @@ run with the same build); the 4x tour against gs: views over 0.4% (blurred) 48 â
 bright magic circle, 2.70%, is the most). Still open: 014's water (3), 112's rock (5). ctest 14/14. Not run: the
 sanitizers (a shader change and one push constant), the owner's full settings (native widescreen, MSAA).
 
+## Windows, NVIDIA and the Vulkan validation layer (2026-11-11)
+
+First runs of the PC renderer on Windows 11 with an NVIDIA RTX 5080 (driver 610.88; the `windows-clang` preset,
+llvm-mingw), and the first under the Khronos validation layer. The build, boot_test, frame_test (pc) and the unit
+tests pass as they are. The map tour (maps 000, 009, 014, 099, 112, 2 places x 4 headings) against `--renderer gs`:
+paraLLEl-GS draws the same pictures on the NVIDIA and on the machine's AMD iGPU (`GRANITE_VULKAN_DEVICE_INDEX=1`),
+but pc on NVIDIA differed at 1x: 112 v4-7 by 1.1-2.6% (blurred), 009 v0 by 0.8%, where pc on the AMD was under 0.4%.
+
+**Fixed: FST texture coordinates rounded to 1/256 texel** (`pcr_prim.frag`'s `sample_texture`). Not the 3D draws:
+their texture coordinates came out the same on both GPUs (checked with the shader writing them out). The difference
+came in the game's 2D passes that draw the frame back over itself in 64-pixel columns (FST, a texel a pixel), where a
+pixel's UV is often a whole texel: the GPU's interpolation lands a hair either side of it, NVIDIA's below, so floor
+(and the sampler's nearest) took the texel before, and the picture moved a pixel over whole triangles. 112 v7 against
+gs: NVIDIA 27,025 pixels over 24 levels -> 17, the AMD iGPU 2,168 -> 17 (AMD had some of it too). After it the 1x
+tour is under 0.4% at every view but 014 v5 (the water, item 3 above), and NVIDIA and AMD are the same (1x, and 4x
+at 009 and 112).
+
+**The validation layer** found, at map 112, 009 and the starting map (pc, 1x and the owner's settings at 240):
+- VUID-VkWriteDescriptorSet-descriptorType-00338 and VUID-VkFramebufferCreateInfo-pAttachments-00879: the colour
+  surfaces lacked `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`, which DATE's set-up reads them as. Fixed.
+- VUID-vkCmdDraw-None-09600 (at the submit): `write_pixels`' staged image left READ_ONLY_OPTIMAL where Granite took
+  it as GENERAL. Fixed.
+- With synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`): SYNC-HAZARD-WRITE-AFTER-WRITE, a
+  first clear racing the layout transition Granite's `create_image` records for a new image (its barrier's second
+  scope is NONE). Fixed by cmake/granite_layout_sync.cmake (a barrier on every platform; no driver showed it).
+
+After them: no messages at maps 000, 009, 009:2 and 063 at the owner's settings at 240 (native draw on), nor in two
+map tours under the layer (the five maps, 1x, and 4x with native draw); sync validation clean at 009 and 009:2.
+`--renderer gs` cannot be checked here: paraLLEl-GS asks for VK_EXT_descriptor_heap, which the layer (1.4.335 and
+1.4.341) does not validate yet (it reports ranges it made up, then crashes in the layer or the driver); with
+descriptor heaps and buffers left off (a scratch change) it still crashes under the layer. Developer-only, not
+followed.
+
+Also: `--teleport` with a vblank needs MAP:PLACE (`1900:9` is map 1900, place 9: use `1900:9:0`); `pace_test.py`
+takes places (`--maps 0,9,9:2,63`), finds the Windows build and runs `--invincible` (at 009:2 the creatures kill the
+player within the run). A crash on Windows now names the module and offset and the callers (`[port] crashed: ...
+(nvoglv64.dll+0x...)`). Pace: not measured cleanly (the machine was in use: a game running beside it). Not run:
+windowed (the presenter's swapchain), Intel, the sanitizers on Windows.
+
+### The validation layer: how to run it
+
+Linux: install the distribution's package (`vulkan-validation-layers`, or the LunarG SDK), then
+`VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`. Windows without an installer: build it with the same llvm-mingw
+(`git clone --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/Vulkan-ValidationLayers`, then
+`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+-DUPDATE_DEPS=ON -DBUILD_TESTS=OFF -DUSE_MIMALLOC=OFF` and `cmake --build build`: about ten minutes), put
+`VkLayer_khronos_validation.dll`, its `.json`, `libc++.dll` and `libunwind.dll` in a folder and point
+`VK_ADD_LAYER_PATH` at it (no registry, no admin). Not MSYS2's build: under it the game's handle count grew by about
+20,000 a second and the process hung at exit. Then, on either system:
+
+```sh
+export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+export VK_KHRONOS_VALIDATION_LOG_FILENAME=vv.txt          # (else the messages go to stdout: map_tour's NNN/stderr.txt)
+export VK_KHRONOS_VALIDATION_DUPLICATE_MESSAGE_LIMIT=3
+export VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true            # synchronization validation (slower)
+kf4 --disc ... --headless --no-audio --dump-frames N ...
+```
+
+Granite enables the layer itself only in a `VULKAN_DEBUG` build (not ours), so the variables above are the way.
+Under the layer the game runs far slower: a few hundred pictures between in a 17-second run at 240.
+
 ## Where it stands (2026-10-29)
 
 **Built.**
