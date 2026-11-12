@@ -198,13 +198,49 @@ static int parse_cheats(const char *list);
 #include <windows.h>
 /* A crash on Windows says where it was, which `llvm-addr2line -f -e kf4.exe ADDRESS` names (the
    program is linked at a fixed address) */
+/* "module+offset" for an address (a crash in a driver or a Vulkan layer is not in kf4.exe) */
+static void crash_where(const void *address, char *out, size_t size) {
+    HMODULE module = NULL;
+    char path[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)address, &module) && module) {
+        GetModuleFileNameA(module, path, sizeof path);
+    }
+    const char *name = strrchr(path, '\\');
+    snprintf(out, size, "%s+0x%llx", name ? name + 1 : path,
+             (unsigned long long)((const char *)address - (const char *)module));
+}
+
 static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
-    fprintf(stderr, "[port] crashed: exception 0x%08lx at %p\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
-            e->ExceptionRecord->ExceptionAddress);
+    char where[MAX_PATH + 32];
+    crash_where(e->ExceptionRecord->ExceptionAddress, where, sizeof where);
+    fprintf(stderr, "[port] crashed: exception 0x%08lx at %p (%s)\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
+            e->ExceptionRecord->ExceptionAddress, where);
     if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && e->ExceptionRecord->NumberParameters >= 2) {
         fprintf(stderr, "[port] (a %s of %p)\n", e->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
                 (void *)e->ExceptionRecord->ExceptionInformation[1]);
     }
+#if defined(_M_X64) || defined(__x86_64__)
+    /* the callers, unwound from each module's .pdata (no symbols here: llvm-addr2line names kf4.exe's) */
+    CONTEXT context = *e->ContextRecord;
+    for (int depth = 0; depth < 16 && context.Rip; depth++) {
+        DWORD64 base = 0;
+        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &base, NULL);
+        if (!function) {
+            context.Rip = *(DWORD64 *)context.Rsp; /* a leaf: the return address is on the stack */
+            context.Rsp += 8;
+        } else {
+            void *handler_data = NULL;
+            DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, context.Rip, function, &context, &handler_data, &frame, NULL);
+        }
+        if (!context.Rip) {
+            break;
+        }
+        crash_where((const void *)context.Rip, where, sizeof where);
+        fprintf(stderr, "[port]   called from %p (%s)\n", (void *)context.Rip, where);
+    }
+#endif
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
