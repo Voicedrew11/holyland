@@ -339,6 +339,39 @@ game frames at 240 the same as at 30. Not covered: breath and glow effects (none
 its window), spells 36, 61 and 76 (nothing showed in their window), the shop, a save point's save screen, doors and
 stairs (the teleport's fade only), real deep water.
 
+**1, 3 and 4 fixed, 2 is #121's (2026-11-11, branch fix/motion-bugs).**
+
+1. **Device lost: a copy past an image's end.** The validation layer with GPU-assisted validation
+   (`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT`) named it at once:
+   VUID-vkCmdCopyImage-dstOffset-00151, a 128 x 2048 surface copied 32 rows down into another 128 x 2048 one. Not the
+   1024 x 512 texture past VRAM's end (that read is refused as before: no surface of its width). The wobbling screen's
+   copy of the frame (page 350, 640 x 448) lies over the water's two 128-wide targets (pages 466 and 468, which map
+   000's lava uses), so every frame they were let go and made again, 466 taking 468 in a page row down. A draw whose
+   depth surface was taller than its colour surface grew the colour one to match; the two targets share a Z buffer, so
+   each making-again grew the pair by 32 rows, to 2048 within a few seconds, and then the take-in copy ran past the
+   end. Now a take-in copies only what fits, and a colour surface is never grown for its depth surface (a Vulkan pass
+   is as large as its smallest attachment; a shorter depth surface is still grown). `underwater` and `drain`: under
+   0.4% at 1x, 4xw at most 0.43% (4x's finer textures). It needs only the under-water bit (`KF4_FX=water` sets the
+   game's own PlayerState status bit 39, so the game draws as in real deep water) where those targets are drawn; real
+   deep water and the real drain were not reached here.
+2. **The MP ring: the missing `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`.** #121's commit 79b08c29 alone (on this branch)
+   draws the ring as `KF4_PC_STENCIL=0` does; all of #121 draws it as gs (no pixel over 24 levels in the HUD; the rest
+   is #121's FST rounding). The ring shows only with MP: `--cheats all` (a new game has none).
+3. **The black picture: two surfaces of one memory.** Play grows the frame's surface (page 0) from 224 to 928 rows,
+   over the title's second field buffer (page 70), which was kept as a surface of its own; the menu draws into page 70
+   (that old surface, grown) and the vblank after CIRCLE shows page 140, found in the old surface's new, empty rows. A
+   colour surface grown now takes in the surfaces that begin in its new pages, as a surface made does. v1805: 62.4% ->
+   0.31% at 1x, 67.0% -> 0.33% at 4xw; no picture between flagged at 240.
+4. **The menus a pixel left: S/T/Q read a hair below a whole texel.** The menus end with the brightness sprite, the
+   buffer drawn back over itself 1:1 by S/T/Q (and the background is copied the same way); S/Q times the size lands
+   on a whole texel and the GPU's lands just below it, so floor took the texel before. Found with a GS capture under gs
+   (`--gs-capture-at`, `kf4-gsreplay --draw`): gs's frame buffer lines up with its picture, pc's picture with it only
+   a pixel over. S/T/Q coordinates are rounded to 1/256 texel (`pcr_prim.frag`). Menus at 1x: median 5.4% -> 0.9%,
+   best offset against gs 0,0; at 4xw still lined up. What is left at 1x is gs's softer field picture. The four spots
+   change by up to 3 levels (bilinear's 1/16 steps), and against gs are as before.
+
+Spots (000, 009, 009:2, 099 at 240): byte for byte main's after 1 and 3.
+
 ## Where it stands (2026-10-29)
 
 **Built.**

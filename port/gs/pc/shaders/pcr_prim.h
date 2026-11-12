@@ -137,8 +137,12 @@ vec2 texture_uv() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
     // (UV, FST: the GS's 1/16 texel at the corners, often a whole texel at a pixel, as a frame drawn back 1:1. The GPU's
     // interpolation lands a little either side of it, which side by vendor (NVIDIA's below, so floor took the texel
-    // before on whole triangles of a frame drawn back); rounded to 1/256 texel it lands on it, 2026-11-11)
-    return (pc.flags & PCR_F_FST) != 0u ? round(v_stq.xy * 256.0) / 256.0 : v_stq.xy / v_stq.z * size;
+    // before on whole triangles of a frame drawn back); rounded to 1/256 texel it lands on it, 2026-11-11. S/T/Q the same:
+    // S/Q times the size lands on a whole texel in the menus' brightness sprite and background, which draw the buffer
+    // back over itself 1:1, and the menus at 1x sat a GS pixel left of gs's, 2026-11-11. The GS's own U and V are in
+    // 1/16 texel.)
+    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    return round(uv * 256.0) / 256.0;
 }
 
 // (with anisotropy) their change a pixel across and down, taken in main before anything is discarded

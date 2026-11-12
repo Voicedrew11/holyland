@@ -912,7 +912,12 @@ private:
             if (s->fbw == fbw && s->page_place(base_page, x, y) && x == 0) {
                 uint32_t needed = rounded_height(y + height, psm);
                 if (s->height < needed) {
-                    grow(*s, needed);
+                    Surface *grown = s.get(); // (the list's elements move when take_in_below lets others go)
+                    uint32_t old_end = grown->end_page();
+                    grow(*grown, needed);
+                    take_in_below(*grown, old_end);
+                    grown->psm = psm;
+                    return {grown, 0, y};
                 }
                 s->psm = psm;
                 return {s.get(), 0, y};
@@ -945,9 +950,15 @@ private:
         c.clear_image(*made->image, zero);
         full_barrier(c);
         fill_from_uploads(*made);
+        // (as much of each as fits: a surface is at most 2048 rows, and one taken in a few rows down may be that tall
+        // already; copied whole, the copy ran past the image's end and NVIDIA lost the device: the under-water screen,
+        // 2026-11-11)
         for (auto [o, y] : taken) {
-            copy_out(c, *made->image, {0, int32_t(y * scale_[1]), 0}, *o, {0, 0, 0},
-                     {o->image->get_width(), o->image->get_height(), 1});
+            uint32_t top = y * scale_[1], rows = made->image->get_height() - std::min(top, made->image->get_height());
+            rows = std::min(rows, o->image->get_height());
+            if (rows != 0) {
+                copy_out(c, *made->image, {0, int32_t(top), 0}, *o, {0, 0, 0}, {o->image->get_width(), rows, 1});
+            }
         }
         full_barrier(c);
         let_go_overlapping(colour_, made->base_page, made->end_page());
@@ -1040,6 +1051,52 @@ private:
             s.ms_ahead = s.ms_behind = false;
         }
         s.height = height;
+    }
+
+    // A colour surface grown over pages from old_end on: the colour surfaces that begin in those pages are its now, as
+    // a surface made takes in those it overlaps. Those of its width and format, at the start of a row of its pages,
+    // copied to their place in it (as much as fits); every one let go. Kept, they held a second, older picture of the
+    // same memory, found first by the base pages inside them: play grows the frame's surface (base 0) over the title's
+    // second field buffer (page 70), the menu draws into page 70 (that old surface, grown), and the first picture of
+    // the menu, showing page 140 (the frame's other buffer, in both), came from the old surface: black (2026-11-11).
+    void take_in_below(Surface &grown, uint32_t old_end) {
+        uint32_t end = grown.end_page(), w = std::max(1u, grown.fbw), rows = page_rows(grown.psm);
+        bool any = false;
+        for (auto &o : colour_) {
+            if (o.get() == &grown || o->base_page < old_end || o->base_page >= end) {
+                continue;
+            }
+            any = true;
+            if (o->fbw != grown.fbw || o->psm != grown.psm || (o->base_page - grown.base_page) % w != 0) {
+                continue;
+            }
+            uint32_t top = (o->base_page - grown.base_page) / w * rows * scale_[1];
+            uint32_t height = grown.image->get_height() - std::min(top, grown.image->get_height());
+            height = std::min(height, o->image->get_height());
+            if (height == 0) {
+                continue;
+            }
+            end_pass();
+            CommandBuffer &c = cmd(GpuWork::surface);
+            full_barrier(c);
+            copy_out(c, *grown.image, {0, int32_t(top), 0}, *o, {0, 0, 0}, {o->image->get_width(), height, 1});
+            full_barrier(c);
+            wrote_image(grown, {{0, int32_t(top)}, {o->image->get_width(), height}}); // (and into its samples)
+        }
+        if (!any) {
+            return;
+        }
+        for (auto it = colour_.begin(); it != colour_.end();) {
+            Surface *o = it->get();
+            if (o != &grown && o->base_page >= old_end && o->base_page < end) {
+                if (pass_colour_ == o) {
+                    end_pass();
+                }
+                it = colour_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     // The surface's pages as the uploads left them (those wholly an upload's): read from the texture store a page
@@ -1146,12 +1203,16 @@ private:
         uint32_t w = bits(t.trxreg, 0, 12), h = bits(t.trxreg, 32, 12);
         Surface *from = nullptr;
         uint32_t fx = 0, fy = 0;
-        for (auto &s : colour_) {
-            if (s->fbw == sbw && sbp % 32 == 0 && s->page_place(sbp / 32, fx, fy)) {
-                from = s.get();
-                break;
+        auto find_from = [&] {
+            from = nullptr;
+            for (auto &s : colour_) {
+                if (s->fbw == sbw && sbp % 32 == 0 && s->page_place(sbp / 32, fx, fy)) {
+                    from = s.get();
+                    break;
+                }
             }
-        }
+        };
+        find_from();
         if (!from || w == 0 || h == 0) {
             return; // (uploads': the texture store's)
         }
@@ -1161,7 +1222,8 @@ private:
         }
         Placed placed = colour_surface(dbp / 32, dbw, GSN_PSMCT32, dy + h);
         Surface *to = placed.surface;
-        if (!to) {
+        find_from(); // (the destination made or grown may have taken the source in and let it go)
+        if (!to || !from) {
             return;
         }
         uint32_t tx = placed.x, ty = placed.y;
@@ -2536,16 +2598,12 @@ private:
         Surface *depth = nullptr;
         if (zte || date_stencil) {
             depth = depth_surface(bits(s.zbuf, 0, 9), fbw, z_psm(s.zbuf), height);
-            if (depth && (depth->image->get_width() != colour->image->get_width() ||
-                          depth->image->get_height() != colour->image->get_height())) {
-                // (the Vulkan pass wants them alike: the taller made taller still)
-                uint32_t h = std::max(colour->height, depth->height);
-                if (colour->height < h) {
-                    grow(*colour, h);
-                }
-                if (depth->height < h) {
-                    grow(*depth, h);
-                }
+            // (the Vulkan pass is as large as its smallest attachment: a depth surface shorter than the colour one made
+            // as tall. Not the other way: two targets a page row apart that share a Z buffer each grew the other by
+            // that row whenever one was made again, up to 2048 rows: the under-water screen's copy over the water's
+            // targets makes them again every frame)
+            if (depth && depth->height < colour->height) {
+                grow(*depth, colour->height);
             }
         }
         // MSAA: drawn into the colour surface's multisampled image (and its depth surface's, made at the samples); DATE
