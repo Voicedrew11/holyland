@@ -20,6 +20,7 @@
 
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
+#include "pcr_pipelines.h"
 #include "pcr_textures.h"
 
 extern "C" {
@@ -75,6 +76,7 @@ enum : uint32_t {
     F_DATM = 0x10000,
     F_SHADER_BLEND = 0x20000,
     F_SURFACE_CT16 = 0x40000,
+    F_MSAA = 0x80000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
@@ -228,8 +230,13 @@ BlendChoice choose_blend(uint64_t alpha, bool abe) {
 struct Surface {
     uint32_t base_page = 0, fbw = 0, psm = 0;
     uint32_t height = 0; // GS pixels
-    ImageHandle image;   // at the canvas's scale
+    ImageHandle image;   // at the canvas's scale (a depth surface's: with the canvas's samples)
     bool depth = false;
+    // MSAA (a colour surface at the canvas's samples above 1): the image drawn into, beside image, which every copy,
+    // read and upload uses. ms_ahead: drawn since image was (image made again from it, resolved, before it is read);
+    // ms_behind: image written since ms was (ms made again from it, expanded, before it is drawn into). Never both.
+    ImageHandle ms;
+    bool ms_ahead = false, ms_behind = false;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -270,6 +277,7 @@ struct SampledTexture {
     ImageHandle image;
     uint32_t levels = 1;
     uint64_t used = 0; // (the frame last drawn with)
+    uint8_t alpha_lo = 0, alpha_hi = 255; // (its colours' least and most alpha, every level: cut-out AA's)
 
     bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c) const {
         return key == k && texa == t && clut == c;
@@ -312,6 +320,7 @@ public:
     }
 
     ~Impl() {
+        warm_stop(); // (its thread reads warm_images_)
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
@@ -321,6 +330,11 @@ public:
 
     void set_scale(uint32_t x, uint32_t y) {
         pending_scale_ = {std::clamp(x, 1u, 8u), std::clamp(y, 1u, 8u)};
+    }
+
+    void set_msaa(uint32_t samples, bool cutout_aa) {
+        pending_samples_ = samples == 2 || samples == 4 || samples == 8 ? samples : 1;
+        cutout_aa_ = cutout_aa && sample_shading_;
     }
 
     void set_between(const Between *between) {
@@ -558,6 +572,9 @@ public:
             return false;
         }
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
+        if (placed.surface) {
+            resolve(*placed.surface);
+        }
         submit();
         times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
         Surface *s = placed.surface;
@@ -691,7 +708,7 @@ private:
         end_pass();
         RenderPassInfo rp;
         rp.num_color_attachments = 1;
-        rp.color_attachments[0] = &colour.image->get_view();
+        rp.color_attachments[0] = colour.ms ? &colour.ms->get_view() : &colour.image->get_view();
         rp.load_attachments = 1;
         rp.store_attachments = 1;
         if (depth) {
@@ -742,11 +759,134 @@ private:
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        if (depth && samples_ > 1) {
+            info.samples = VkSampleCountFlagBits(samples_); // (drawn only: never read, so never resolved)
+        }
         ImageHandle image = device_.create_image(info, nullptr);
         if (!image) {
             fprintf(stderr, "[pcr] no image for a %ux%u surface\n", width, height);
         }
         return image;
+    }
+
+    // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
+    ImageHandle make_ms_image(uint32_t width, uint32_t height) {
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R8G8B8A8_UNORM);
+        info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        info.samples = VkSampleCountFlagBits(samples_);
+        ImageHandle image = device_.create_image(info, nullptr);
+        if (!image) {
+            fprintf(stderr, "[pcr] no multisampled image for a %ux%u surface\n", width, height);
+        }
+        return image;
+    }
+
+    // Before a colour surface is drawn into: its multisampled image there and as image is (made, or expanded where
+    // image was written since). False without MSAA (or without memory for it: drawn into image as at 1x).
+    bool ensure_ms(Surface &s) {
+        if (samples_ <= 1 || s.depth) {
+            return false;
+        }
+        if (s.ms && (s.ms->get_width() != s.image->get_width() || s.ms->get_height() != s.image->get_height())) {
+            resolve(s);
+            s.ms.reset();
+        }
+        if (!s.ms) {
+            s.ms = make_ms_image(s.image->get_width(), s.image->get_height());
+            if (!s.ms) {
+                return false;
+            }
+            s.ms_ahead = false;
+            s.ms_behind = true;
+        }
+        if (s.ms_behind) {
+            expand(s, {{0, 0}, {s.image->get_width(), s.image->get_height()}});
+            s.ms_behind = false;
+            counts_msaa_.expands++;
+        }
+        return true;
+    }
+
+    // Before a colour surface's image is read whole (or written where it was drawn): what was drawn into its
+    // multisampled image resolved into it
+    void resolve(Surface &s) {
+        if (!s.ms || !s.ms_ahead) {
+            return;
+        }
+        end_pass();
+        CommandBuffer &c = cmd(GpuWork::copy);
+        full_barrier(c);
+        resolve_rect(c, *s.image, {0, 0, 0}, *s.ms, {0, 0, 0}, {s.image->get_width(), s.image->get_height(), 1});
+        full_barrier(c);
+        s.ms_ahead = false;
+        counts_msaa_.resolves++;
+    }
+
+    void resolve_rect(CommandBuffer &c, const Image &dst, VkOffset3D dst_at, const Image &ms, VkOffset3D src_at,
+                      VkExtent3D extent) {
+        VkImageResolve r = {};
+        r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        r.dstSubresource = r.srcSubresource;
+        r.srcOffset = src_at;
+        r.dstOffset = dst_at;
+        r.extent = extent;
+        device_.get_device_table().vkCmdResolveImage(c.get_command_buffer(), ms.get_image(), VK_IMAGE_LAYOUT_GENERAL,
+                                                     dst.get_image(), VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+    }
+
+    // A rectangle of a colour surface's pixels (at the canvas's scale) copied into dst at dst_at: from its image, or
+    // resolved from its multisampled image when that was drawn since (outside a render pass, barriers the caller's)
+    void copy_out(CommandBuffer &c, const Image &dst, VkOffset3D dst_at, const Surface &s, VkOffset3D src_at,
+                  VkExtent3D extent) {
+        if (s.ms && s.ms_ahead) {
+            resolve_rect(c, dst, dst_at, *s.ms, src_at, extent);
+            counts_msaa_.rect_resolves++;
+            return;
+        }
+        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.copy_image(dst, *s.image, dst_at, src_at, extent, colour, colour);
+    }
+
+    // After a colour surface's image was written over a rectangle (at the canvas's scale): the same pixels into every
+    // sample of its multisampled image, unless that is to be expanded whole anyway (ms_behind)
+    void wrote_image(Surface &s, const VkRect2D &rect) {
+        if (!s.ms || s.ms_behind || rect.extent.width == 0 || rect.extent.height == 0) {
+            return;
+        }
+        expand(s, rect);
+        counts_msaa_.rect_expands++;
+    }
+
+    // image's pixels over rect into every sample of ms (a pass of its own, image read by pcr_expand.frag)
+    void expand(Surface &s, const VkRect2D &rect) {
+        end_pass();
+        CommandBuffer &c = cmd(GpuWork::surface);
+        full_barrier(c);
+        RenderPassInfo rp;
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &s.ms->get_view();
+        rp.load_attachments = 1;
+        rp.store_attachments = 1;
+        rp.render_area = rect;
+        c.begin_render_pass(rp);
+        c.set_program(expand_program_);
+        c.set_opaque_state();
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        c.set_depth_test(false, false);
+        c.set_stencil_test(false);
+        c.set_blend_enable(false);
+        c.set_color_write_mask(0xF);
+        VkViewport vp = {0, 0, float(s.ms->get_width()), float(s.ms->get_height()), 0, 1};
+        c.set_viewport(vp);
+        c.set_scissor(rect);
+        c.set_texture(0, 0, s.image->get_view(), StockSampler::NearestClamp);
+        c.draw(3);
+        c.end_render_pass();
+        full_barrier(c);
     }
 
     static uint32_t rounded_height(uint32_t height, uint32_t psm) {
@@ -804,10 +944,9 @@ private:
         c.clear_image(*made->image, zero);
         full_barrier(c);
         fill_from_uploads(*made);
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         for (auto [o, y] : taken) {
-            c.copy_image(*made->image, *o->image, {0, int32_t(y * scale_[1]), 0}, {0, 0, 0},
-                         {o->image->get_width(), o->image->get_height(), 1}, colour, colour);
+            copy_out(c, *made->image, {0, int32_t(y * scale_[1]), 0}, *o, {0, 0, 0},
+                     {o->image->get_width(), o->image->get_height(), 1});
         }
         full_barrier(c);
         let_go_overlapping(colour_, made->base_page, made->end_page());
@@ -865,6 +1004,15 @@ private:
         if (!bigger) {
             return;
         }
+        // (the multisampled image grown with it, its samples copied; without memory for it, resolved and let go: drawn
+        // at 1x until ensure_ms makes one again)
+        ImageHandle bigger_ms;
+        if (s.ms) {
+            bigger_ms = make_ms_image(bigger->get_width(), bigger->get_height());
+            if (!bigger_ms) {
+                resolve(s);
+            }
+        }
         CommandBuffer &c = cmd(GpuWork::surface);
         VkClearValue zero = {};
         if (s.depth) {
@@ -872,13 +1020,24 @@ private:
         } else {
             c.clear_image(*bigger, zero);
         }
+        if (bigger_ms) {
+            c.clear_image(*bigger_ms, zero);
+        }
         full_barrier(c);
         VkImageSubresourceLayers layers = {VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0,
                                            0, 1};
         c.copy_image(*bigger, *s.image, {0, 0, 0}, {0, 0, 0}, {s.image->get_width(), s.image->get_height(), 1}, layers,
                      layers);
+        if (bigger_ms) {
+            c.copy_image(*bigger_ms, *s.ms, {0, 0, 0}, {0, 0, 0}, {s.ms->get_width(), s.ms->get_height(), 1}, layers,
+                         layers);
+        }
         full_barrier(c);
         s.image = bigger;
+        s.ms = bigger_ms;
+        if (!s.ms) {
+            s.ms_ahead = s.ms_behind = false;
+        }
         s.height = height;
     }
 
@@ -942,6 +1101,7 @@ private:
         c.blit_image(*s.image, *staged, {dx, dy, 0}, {dw, dh, 1}, {0, 0, 0},
                      {int32_t(dw / scale_[0]), int32_t(dh / scale_[1]), 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         full_barrier(c);
+        wrote_image(s, {{dx, dy}, {uint32_t(dw), uint32_t(dh)}});
     }
 
     // An upload into the GS's memory where a colour surface is: its pixels written into the surface too
@@ -1006,7 +1166,6 @@ private:
         end_pass();
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         uint32_t cw = std::min({w, from->width() - std::min(fx + sx, from->width()), to->width() - std::min(tx + dx, to->width())});
         uint32_t ch = std::min({h, from->height - std::min(fy + sy, from->height), to->height - std::min(ty + dy, to->height)});
         if (cw == 0 || ch == 0) {
@@ -1016,10 +1175,11 @@ private:
             counts_.unsupported_copies++; // (within one surface: overlapping, as the GS orders it; not made)
             return;
         }
-        c.copy_image(*to->image, *from->image, {int32_t((tx + dx) * scale_[0]), int32_t((ty + dy) * scale_[1]), 0},
-                     {int32_t((fx + sx) * scale_[0]), int32_t((fy + sy) * scale_[1]), 0},
-                     {cw * scale_[0], ch * scale_[1], 1}, colour, colour);
+        VkOffset3D to_at = {int32_t((tx + dx) * scale_[0]), int32_t((ty + dy) * scale_[1]), 0};
+        copy_out(c, *to->image, to_at, *from, {int32_t((fx + sx) * scale_[0]), int32_t((fy + sy) * scale_[1]), 0},
+                 {cw * scale_[0], ch * scale_[1], 1});
         full_barrier(c);
+        wrote_image(*to, {{to_at.x, to_at.y}, {cw * scale_[0], ch * scale_[1]}});
         counts_.copies_between_surfaces++;
     }
 
@@ -1039,6 +1199,7 @@ private:
         if (!one || !buffer) {
             return false;
         }
+        resolve(from);
         end_pass();
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
@@ -1119,6 +1280,7 @@ private:
         ImageHandle held;             // (a decoded texture's image: held while a kept walk may draw with it)
         uint32_t sampling = 0;        // the pushes' tex1 bits 10-31 (pcr_common.h): texture detail and anisotropy
         bool ok = false;
+        uint8_t alpha_lo = 0, alpha_hi = 255; // (the texels' least and most alpha where known: cut-out AA's)
     };
 
     static uint32_t source_of(uint32_t psm) {
@@ -1196,6 +1358,8 @@ private:
                 uint32_t aniso = anisotropy_for(s.tex1, t->levels);
                 b.sampler = &sampler_for(s.tex1, s.clamp, t->levels, aniso);
                 b.sampling = sampling_bits(aniso);
+                b.alpha_lo = t->alpha_lo;
+                b.alpha_hi = t->alpha_hi;
                 b.cols = std::max(cols, a.texture->read_cols);
                 b.rows = std::max(rows, a.texture->read_rows);
                 b.ok = true;
@@ -1318,6 +1482,12 @@ private:
         t.image = image;
         t.levels = d.levels;
         t.used = frame_;
+        t.alpha_lo = 255;
+        t.alpha_hi = 0;
+        for (uint32_t c : colours) {
+            t.alpha_lo = std::min(t.alpha_lo, uint8_t(c >> 24));
+            t.alpha_hi = std::max(t.alpha_hi, uint8_t(c >> 24));
+        }
         return &t;
     }
 
@@ -1432,15 +1602,18 @@ private:
         VkClearValue zero = {};
         c.clear_image(*b.surface_copy, zero);
         full_barrier(c);
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         // (between 0xF4 and 0xF5 of a picture between, the frame shown kept at 0xF2 in place of its buffer)
         bool kept = replaying_ && kept_reads_ && kept_frame_ && from->base_page == kept_page_ &&
                     kept_frame_->get_width() == from->image->get_width() &&
                     kept_frame_->get_height() == from->image->get_height();
         counts_.kept_frame_reads += kept ? 1 : 0;
-        c.copy_image(*b.surface_copy, kept ? *kept_frame_ : *from->image, {0, 0, 0},
-                     {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0},
-                     {w * scale_[0], h * scale_[1], 1}, colour, colour);
+        VkOffset3D at = {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0};
+        if (kept) {
+            const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.copy_image(*b.surface_copy, *kept_frame_, {0, 0, 0}, at, {w * scale_[0], h * scale_[1], 1}, colour, colour);
+        } else {
+            copy_out(c, *b.surface_copy, {0, 0, 0}, *from, at, {w * scale_[0], h * scale_[1], 1});
+        }
         full_barrier(c);
         b.view = &b.surface_copy->get_view();
         b.src = SRC_SURFACE;
@@ -1457,15 +1630,16 @@ private:
         kept_frame_.reset();
         for (auto &s : colour_) {
             if (s->base_page == base_page) {
-                kept_frame_ = copy_of(*s->image, GpuWork::copy);
+                kept_frame_ = copy_of(*s, GpuWork::copy);
                 kept_page_ = base_page;
                 return;
             }
         }
     }
 
-    // An image's copy, for a shader to read while the image is drawn into
-    ImageHandle copy_of(const Image &image, GpuWork work) {
+    // A colour surface's copy, for a shader to read while the surface is drawn into
+    ImageHandle copy_of(const Surface &s, GpuWork work) {
+        const Image &image = *s.image;
         ImageCreateInfo info = ImageCreateInfo::render_target(image.get_width(), image.get_height(), image.get_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
@@ -1477,14 +1651,14 @@ private:
         end_pass();
         CommandBuffer &c = cmd(work);
         full_barrier(c);
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.copy_image(*copy, image, {0, 0, 0}, {0, 0, 0}, {image.get_width(), image.get_height(), 1}, colour, colour);
+        copy_out(c, *copy, {0, 0, 0}, s, {0, 0, 0}, {image.get_width(), image.get_height(), 1});
         full_barrier(c);
         return copy;
     }
 
-    // A rectangle of an image (its pixels), copied for a shader to read while the image is drawn into
-    ImageHandle copy_of_rect(const Image &image, const VkRect2D &rect) {
+    // A rectangle of a colour surface (its pixels), copied for a shader to read while the surface is drawn into
+    ImageHandle copy_of_rect(const Surface &s, const VkRect2D &rect) {
+        const Image &image = *s.image;
         ImageCreateInfo info = ImageCreateInfo::render_target(rect.extent.width, rect.extent.height, image.get_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
@@ -1496,9 +1670,7 @@ private:
         end_pass();
         CommandBuffer &c = cmd(GpuWork::blend_copy);
         full_barrier(c);
-        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.copy_image(*copy, image, {0, 0, 0}, {rect.offset.x, rect.offset.y, 0},
-                     {rect.extent.width, rect.extent.height, 1}, colour, colour);
+        copy_out(c, *copy, {0, 0, 0}, s, {rect.offset.x, rect.offset.y, 0}, {rect.extent.width, rect.extent.height, 1});
         full_barrier(c);
         return copy;
     }
@@ -1716,6 +1888,8 @@ private:
         ImageHandle kept_frame;
         uint32_t kept_page = 0;
         std::array<uint32_t, 2> scale = {1, 1};
+        uint32_t samples = 1;
+        bool cutout_aa = false;
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -1725,6 +1899,8 @@ private:
         copies->kept_frame = kept_frame_; // (never written: a 0xF2 makes a new one)
         copies->kept_page = kept_page_;
         copies->scale = scale_;
+        copies->samples = samples_;
+        copies->cutout_aa = cutout_aa_;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
@@ -1737,10 +1913,25 @@ private:
                                             : stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
                                                           : VK_IMAGE_ASPECT_DEPTH_BIT;
                 const VkImageSubresourceLayers layers = {aspect, 0, 0, 1};
-                c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, {s->image->get_width(), s->image->get_height(), 1},
-                             layers, layers);
+                VkExtent3D extent = {s->image->get_width(), s->image->get_height(), 1};
+                // (MSAA: the image and the multisampled one each copied only where it is not to be made again from the
+                // other: an image behind its samples is resolved before it is read, samples behind expanded)
+                ImageHandle ms;
+                if (s->ms) {
+                    ms = make_ms_image(s->ms->get_width(), s->ms->get_height());
+                    if (!ms) {
+                        continue;
+                    }
+                    if (!s->ms_behind) {
+                        c.copy_image(*ms, *s->ms, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
+                    }
+                }
+                if (!s->ms || !s->ms_ahead) {
+                    c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
+                }
                 auto copy = std::make_unique<Surface>(*s);
                 copy->image = std::move(image);
+                copy->ms = std::move(ms);
                 (s->depth ? copies->depth : copies->colour).push_back(std::move(copy));
                 counts_.surfaces_copied++;
             }
@@ -1758,6 +1949,8 @@ private:
         kept_frame_ = std::move(copies.kept_frame);
         kept_page_ = copies.kept_page;
         scale_ = pending_scale_ = copies.scale;
+        samples_ = pending_samples_ = copies.samples;
+        cutout_aa_ = copies.cutout_aa;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
         // textures are bound already, and its store is never read; so what it draws over is not marked in it)
@@ -2199,7 +2392,47 @@ private:
         batch_.triangles.reset();
     }
 
-    // A batch drawn (the open one, or a kept walk's again); the batch is not changed
+    // Cut-out AA: whether a batch is a cut-out, shaded at every sample of a multisampled target. A cut-out is textured
+    // with the texture's alpha (TCC) and alpha-tested, and the alphas it can make fall on both sides of the test: the
+    // netting, foliage, fences and grates, whose edges inside a primitive are where the texture's alpha crosses AREF.
+    // Shaded once a pixel, a pixel is in or out whole; shaded at each sample, each sample is textured and tested at its
+    // own place. The alphas it can make: the texture's least and most (known for a texture the GPU's sampler reads,
+    // else any), by the texture function with the vertices' alphas (a GIF batch's; a native batch's taken as 0x80).
+    // Not the 2D (FST: sprites, the HUD, the menus), which covers whole pixels.
+    bool is_cutout(const Batch &b) const {
+        const DrawState &s = b.state;
+        if (!cutout_aa_ || !bits(s.prim, 4, 1) || !b.texture.ok || !bits(s.tex0, 34, 1) || bits(s.prim, 8, 1) ||
+            !bits(s.test, 0, 1)) {
+            return false;
+        }
+        uint32_t vlo = 0x80, vhi = 0x80;
+        if (!b.native && !b.vertices.empty()) {
+            vlo = 255;
+            vhi = 0;
+            for (const Vertex &v : b.vertices) {
+                vlo = std::min<uint32_t>(vlo, v.rgba[3]);
+                vhi = std::max<uint32_t>(vhi, v.rgba[3]);
+            }
+        }
+        uint32_t tlo = b.texture.alpha_lo, thi = b.texture.alpha_hi, tfx = bits(s.tex0, 35, 2);
+        uint32_t lo = tfx == 0 ? (vlo * tlo) >> 7 : tfx == 2 ? std::min(255u, vlo + tlo) : tlo;
+        uint32_t hi = tfx == 0 ? std::min(255u, (vhi * thi) >> 7) : tfx == 2 ? std::min(255u, vhi + thi) : thi;
+        uint32_t atst = bits(s.test, 1, 3), ref = bits(s.test, 4, 8);
+        switch (atst) {
+        case 2: // LESS
+        case 5: // GEQUAL
+            return lo < ref && hi >= ref;
+        case 3: // LEQUAL
+        case 6: // GREATER
+            return lo <= ref && hi > ref;
+        case 4: // EQUAL
+        case 7: // NOTEQUAL
+            return lo <= ref && ref <= hi && lo < hi;
+        default: // NEVER, ALWAYS
+            return false;
+        }
+    }
+
     // A Z buffer cleared reaches the Z buffers of other widths over the same pages. A depth surface is one width's view
     // of the GS's memory (depth_surface's key: base, width, format), so a Z buffer the game reads at another width
     // than it clears it at kept, in its own image, whatever was last written at that width: the Heart of the Forest
@@ -2245,6 +2478,7 @@ private:
         }
     }
 
+    // A batch drawn (the open one, or a kept walk's again); the batch is not changed
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
         counts_.batches++;
@@ -2312,6 +2546,13 @@ private:
                 }
             }
         }
+        // MSAA: drawn into the colour surface's multisampled image (and its depth surface's, made at the samples); DATE
+        // by the stencil only where each sample can be read (pcr_date_ms.frag), else by a copy
+        bool ms = ensure_ms(*colour);
+        if (depth && uint32_t(depth->image->get_create_info().samples) != (ms ? samples_ : 1u)) {
+            depth = nullptr; // (no multisampled image for the colour: no memory)
+        }
+        date_stencil = date_stencil && (!ms || sample_shading_);
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
         if (zwrite && ztst == 1) {
@@ -2333,7 +2574,7 @@ private:
         if (date) {
             counts_.date_draws++;
             if (!date_stencil) {
-                dest_copy = copy_of(*colour->image, GpuWork::date_copy);
+                dest_copy = copy_of(*colour, GpuWork::date_copy);
             }
         }
         // a blend with no Vulkan form: the GS's in the shader, from a copy of the rectangle drawn in
@@ -2345,7 +2586,7 @@ private:
                 if (rect.extent.width == 0 || rect.extent.height == 0) {
                     return;
                 }
-                dest_copy = copy_of_rect(*colour->image, rect);
+                dest_copy = copy_of_rect(*colour, rect);
                 dest_offset = rect.offset;
             }
         }
@@ -2362,13 +2603,14 @@ private:
         }
         VkRect2D scissor_px = {{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}};
         if (date_stencil) {
-            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0);
+            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0, ms);
         }
         c.set_scissor(scissor_px);
-        c.set_program(!b.native                              ? program_
-                      : b.program == NativeProgram::vu1_280 ? native_280_program_
-                      : b.program == NativeProgram::vu1_700 ? native_700_program_
-                                                                 : native_program_);
+        // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
+        bool per_sample = ms && is_cutout(b);
+        counts_msaa_.cutout_batches += per_sample ? 1 : 0;
+        int v = !b.native ? 0 : b.program == NativeProgram::vu1_280 ? 2 : b.program == NativeProgram::vu1_700 ? 3 : 1;
+        c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -2402,6 +2644,7 @@ private:
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= blend.flags & ~0x80000000u;
         flags |= date && !date_stencil ? F_DATE | (bits(s.test, 15, 1) ? F_DATM : 0) : 0;
+        flags |= ms ? F_MSAA : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -2480,6 +2723,7 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
+        colour->ms_ahead |= ms;
         // what was drawn over, for the texture store (its pages are a surface's now, not the uploads')
         int32_t x0 = std::max(box.x0, int32_t(scax0)), x1 = std::min(box.x1, int32_t(scax1));
         int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
@@ -2526,7 +2770,7 @@ private:
     // draws in (its primitives' box within its scissor; a native batch's scissor), the stencil is cleared and set
     // where the target's bit is DATM, read in the pass (pcr_date.frag); the batch then draws where it is set. The
     // scissor is the rectangle's after (the caller sets the batch's again). rect: drawn_rect's.
-    void set_up_date(CommandBuffer &c, const Surface &colour, const VkRect2D &rect, bool datm) {
+    void set_up_date(CommandBuffer &c, const Surface &colour, const VkRect2D &rect, bool datm, bool ms) {
         counts_date_by_stencil_++;
         if (rect.extent.width == 0 || rect.extent.height == 0) {
             return; // (the batch draws nothing within its scissor)
@@ -2534,7 +2778,7 @@ private:
         VkClearValue zero = {};
         c.clear_quad(0, {rect, 0, 1}, zero, VK_IMAGE_ASPECT_STENCIL_BIT);
         in_pass_barrier(c);
-        c.set_program(date_program_);
+        c.set_program(ms ? date_ms_program_ : date_program_); // (MSAA: each sample's stencil from its own alpha)
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -2547,7 +2791,7 @@ private:
         PrimPush push = {};
         push.inv_size[0] = 1.0f / float(colour.width());
         push.inv_size[1] = 1.0f / float(colour.height);
-        push.flags = datm ? F_DATM : 0;
+        push.flags = (datm ? F_DATM : 0) | (ms ? F_MSAA : 0);
         push.src_scale[0] = int32_t(scale_[0]); // (gs_to_clip's)
         push.src_scale[1] = int32_t(scale_[1]);
         c.push_constants(&push, 0, sizeof(push));
@@ -2617,10 +2861,16 @@ private:
 
     // ---- Scale ----
     void apply_scale() {
+        apply_samples();
         if (pending_scale_ == scale_) {
             return;
         }
         end_pass();
+        for (auto &s : colour_) {
+            resolve(*s); // (the new images made from the old ones' pixels; their samples made again: ensure_ms)
+            s->ms.reset();
+            s->ms_ahead = s->ms_behind = false;
+        }
         std::array<uint32_t, 2> old = scale_;
         scale_ = pending_scale_;
         for (auto *list : {&colour_, &depth_}) {
@@ -2647,6 +2897,65 @@ private:
         (void)old;
     }
 
+    // Small images of the surfaces' colour and depth formats at samples: the attachments the pipelines made ahead are
+    // made against (pcr_pipelines.h)
+    struct WarmImages {
+        ImageHandle colour, depth;
+    };
+    WarmImages make_warm_images(uint32_t samples) {
+        WarmImages w;
+        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, VK_FORMAT_R8G8B8A8_UNORM);
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        info.samples = VkSampleCountFlagBits(samples);
+        w.colour = device_.create_image(info, nullptr);
+        info = ImageCreateInfo::render_target(16, 16, depth_format_);
+        info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        info.samples = VkSampleCountFlagBits(samples);
+        w.depth = device_.create_image(info, nullptr);
+        return w;
+    }
+
+    // MSAA's samples changed (from a vblank, as the scale): the colour surfaces' multisampled images resolved and let go
+    // (made again at the new count as each is drawn into: ensure_ms), the depth surfaces made again at it, cleared (the
+    // game draws its Z anew each frame, as apply_scale has it)
+    void apply_samples() {
+        if (pending_samples_ == samples_) {
+            return;
+        }
+        // (drawn at the old count until the pipelines are made at the new one: pcr_pipelines.h)
+        WarmImages &w = warm_images_[pending_samples_];
+        if (!w.colour) {
+            w = make_warm_images(pending_samples_);
+        }
+        if (w.colour && !warm_ready(pending_samples_, w.colour->get_view(), w.depth ? &w.depth->get_view() : nullptr)) {
+            counts_msaa_.vblanks_waited++;
+            return;
+        }
+        end_pass();
+        for (auto &s : colour_) {
+            resolve(*s);
+            s->ms.reset();
+            s->ms_ahead = s->ms_behind = false;
+        }
+        samples_ = pending_samples_;
+        for (auto &s : depth_) {
+            ImageHandle image = make_surface_image(s->width(), s->height, true);
+            if (!image) {
+                continue;
+            }
+            CommandBuffer &c = cmd(GpuWork::surface);
+            full_barrier(c);
+            VkClearValue zero = {};
+            c.clear_image(*image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
+            full_barrier(c);
+            s->image = image;
+        }
+    }
+
     void make_programs() {
         ResourceLayout vert = {};
         vert.input_mask = 0x3F;
@@ -2666,7 +2975,9 @@ private:
         }
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
-        program_ = device_.request_program(vs, fs);
+        Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
+        programs_[0] = device_.request_program(vs, fs);
+        sample_programs_[0] = device_.request_program(vs, sfs);
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0].input_attachment_mask = 1u << 5;
@@ -2674,6 +2985,17 @@ private:
         date.sets[0].meta[5].array_size = 1;
         Shader *dfs = device_.request_shader(pcr_spv_pcr_date_frag, sizeof(pcr_spv_pcr_date_frag), &date);
         date_program_ = device_.request_program(vs, dfs);
+        Shader *dmfs = device_.request_shader(pcr_spv_pcr_date_ms_frag, sizeof(pcr_spv_pcr_date_ms_frag), &date);
+        date_ms_program_ = device_.request_program(vs, dmfs);
+        ResourceLayout cover = {};
+        ResourceLayout expand = {};
+        expand.output_mask = 1;
+        expand.sets[0].sampled_image_mask = 1u;
+        expand.sets[0].fp_mask = 1u;
+        expand.sets[0].meta[0].array_size = 1;
+        Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
+        Shader *efs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
+        expand_program_ = device_.request_program(cvs, efs);
         ResourceLayout nd = {};
         nd.push_constant_size = sizeof(PrimPush);
         nd.sets[1].storage_buffer_mask = 1u;
@@ -2683,11 +3005,14 @@ private:
             nd.sets[2].meta[b].array_size = 1;
         }
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
-        native_program_ = device_.request_program(nvs, fs);
+        programs_[1] = device_.request_program(nvs, fs);
+        sample_programs_[1] = device_.request_program(nvs, sfs);
         Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
-        native_280_program_ = device_.request_program(nvs280, fs);
+        programs_[2] = device_.request_program(nvs280, fs);
+        sample_programs_[2] = device_.request_program(nvs280, sfs);
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
-        native_700_program_ = device_.request_program(nvs700, fs);
+        programs_[3] = device_.request_program(nvs700, fs);
+        sample_programs_[3] = device_.request_program(nvs700, sfs);
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -2701,13 +3026,30 @@ private:
         clut.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
         no_clut_ = device_.create_buffer(clut, no_colours.data());
+        // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
+        const WarmProgram warmed[5] = {{programs_[0], sample_programs_[0]},
+                                       {programs_[1], sample_programs_[1]},
+                                       {programs_[2], sample_programs_[2]},
+                                       {programs_[3], sample_programs_[3]},
+                                       {date_program_, date_ms_program_}};
+        warm_watch(device_, warmed, 5, expand_program_);
     }
 
     Device &device_;
     const DynamicChoice dynamic_ = choose_dynamic(device_);
     GpuTimes &times_;
-    Program *program_ = nullptr, *native_program_ = nullptr, *native_280_program_ = nullptr,
-            *native_700_program_ = nullptr, *date_program_ = nullptr;
+    // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700; each shaded once a pixel, and once a
+    // sample (cut-out AA: pcr_prim_sample.frag)
+    std::array<Program *, 4> programs_{}, sample_programs_{};
+    Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
+    // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
+    // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
+    uint32_t samples_ = 1, pending_samples_ = 1;
+    bool cutout_aa_ = false;
+    const bool sample_shading_ = device_.get_device_features().enabled_features.sampleRateShading != VK_FALSE;
+    struct MsaaCounts {
+        uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;
+    } counts_msaa_;
     // the depth surfaces' format, and whether DATE is by its stencil (KF4_PC_STENCIL=0: by a copy, as before)
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
     bool stencil_on_ = false;
@@ -2723,6 +3065,7 @@ private:
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
+    std::array<WarmImages, 9> warm_images_; // (by samples: make_warm_images')
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
     // (by sampler_for's key; never let go: a kept walk's batches name them, drawn again on the pump's thread too)
@@ -2789,6 +3132,18 @@ public:
                 (unsigned long long)c.unsupported_texture_on_surface, (unsigned long long)c.unsupported_copies,
                 (unsigned long long)counts_unsupported_upload_, (unsigned long long)counts_unsupported_shape_,
                 (unsigned long long)counts_clut_not_uploads_);
+        if (samples_ > 1 || counts_msaa_.resolves || counts_msaa_.cutout_batches) {
+            fprintf(out,
+                    "[stats] pc canvas MSAA: %u samples, cut-out AA %s; %llu batches shaded at every sample; %llu "
+                    "surfaces resolved whole, %llu rectangles resolved (copies, textures, reads); %llu surfaces "
+                    "expanded into their samples whole, %llu rectangles (uploads, copies into them); %llu vblanks drawn at the old "
+                    "count while the pipelines were made\n",
+                    samples_, cutout_aa_ ? "on" : "off", (unsigned long long)counts_msaa_.cutout_batches,
+                    (unsigned long long)counts_msaa_.resolves, (unsigned long long)counts_msaa_.rect_resolves,
+                    (unsigned long long)counts_msaa_.expands, (unsigned long long)counts_msaa_.rect_expands,
+                    (unsigned long long)counts_msaa_.vblanks_waited);
+        }
+        warm_print_counts();
         fprintf(out,
                 "[stats] pc texture store: %llu uploads (%.1f MB, %llu refused), %llu chunks kept; %llu resolves, %llu "
                 "decodes, %llu found again, %llu answered kept; %llu CLUT loads (%llu decodes); %llu copies made as uploads; read-backs %llu "
@@ -2807,6 +3162,9 @@ public:
 Canvas::Canvas(Device &device, GpuTimes &times) : impl_(std::make_unique<Impl>(device, times)) {}
 Canvas::~Canvas() = default;
 
+void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
+    impl_->set_msaa(samples, cutout_aa);
+}
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
 }

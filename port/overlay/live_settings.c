@@ -47,6 +47,16 @@ static void set_sky(int sky) {
     port_settings.native_sky = port_options.native_sky = sky == PORT_SKY_PS2 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
 }
 
+static void set_msaa(int samples) {
+    port_settings.native_msaa = samples == 2 || samples == 4 || samples == 8 ? samples : 1;
+    port_gs_set_native_msaa(port_settings.native_msaa);
+}
+
+static void set_cutout_aa(int on) {
+    port_settings.native_cutout_aa = on != 0;
+    port_gs_set_native_cutout_aa(on != 0);
+}
+
 typedef struct {
     const char *name;
     void (*set)(int value);
@@ -60,6 +70,8 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_DRAW_DISTANCE] = {"draw_distance", set_draw_distance},
     [PORT_LIVE_NATIVE_DRAW] = {"native_draw", set_native_draw},
     [PORT_LIVE_SKY] = {"sky", set_sky},
+    [PORT_LIVE_MSAA] = {"msaa", set_msaa},
+    [PORT_LIVE_CUTOUT_AA] = {"cutout_aa", set_cutout_aa},
 };
 
 void port_live_set(PortLiveSetting setting, int value) {
