@@ -8,6 +8,7 @@
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
+| `motion_compare.py` | the PC renderer against paraLLEl-GS in motion (below): menus, a pick-up, combat, spells, creatures' effects, fades, under water, each played by a pad script (`tests/motion/`) by both renderers and compared vblank by vblank (as `tour_compare.py` measures), at 1x and at 4x with native widescreen; the PC renderer's pictures between at 240 checked with `flash_find.py --frames` and its game frames there against the 30 run's |
 | `tour_compare.py` | two map tours (`map_tour.py`, `--renderer pc` and `--renderer gs`, same maps and views) compared picture by picture, ranked by what is drawn differently (a blurred difference, so filtering and edges count little); `report.md`, `report.html` with the worst views as PC / reference / difference |
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
@@ -124,3 +125,34 @@ picture is black or more than half one flat colour (a void, or a dark doorway). 
 a `[todo]` the new game did not print, `[fatal]`, a hung kernel, a quick save message, a draw whose
 TEX0 names no PSM, more than two frames' worth of VU1 cycles, or VIF1 packets that replay differently.
 Flags are leads, not verdicts: look at the sheet.
+
+## motion_compare.py
+
+The map tour's comparison for what moves: each case is a pad script played after `tests/newgame.pad`
+(`tests/motion/*.pad`, vblanks counted from the start of the run) with the options and `KF4_FX` it needs
+(`game/screen_fx.c`: `spell=N` keeps spell N in hand to cast, `creature=ROW[:DIST]` puts the player DIST before
+a creature of that chr record once it has been there 60 frames, `water` and `drainramp` force the under-water
+and MP drain screens). The same input and vblanks give the same game, whoever draws, so the two renderers'
+pictures of a vblank show the same moment; the per-frame log (`--log`) at each compared vblank is checked to be the
+same in both runs, and a vblank where it is not is left out and named.
+
+```sh
+python3 tools/motion_compare.py --disc kfiv_us.iso --out /tmp/motion                 # every case, 1x and 4xw, 240
+python3 tools/motion_compare.py --out /tmp/motion --cases menus,combat --profiles 1x --no-240
+python3 tools/motion_compare.py --cases list
+```
+
+For each case and profile (`1x`: `--native-scale 1 --no-native-widescreen`; `4xw`: `--native-scale 4 --widescreen
+--native-widescreen --native-msaa 2`, gs with `--widescreen`, the 4x pictures brought down to 640 x 448), three
+headless runs one after another: gs at 30 dumping the case's vblanks, pc the same, pc at `--frame-rate 240`
+(left out with `--no-240`). Pictures are measured as `tour_compare.py` does (mean, share over 24 levels, the same
+after a 3 x 3 blur). At 240, `flash_find.py --frames` judges each picture between against its game frames, and
+each vblank where the log's frame counter moves on (a game frame's own picture) is compared with the 30 run's
+picture of it. The screens the game draws as fields (title, menus) differ from gs at every edge by design: gs shows
+one field a vblank, pc the upper field each vblank (c043b057), so their numbers are high without anything missing;
+look at the pairs.
+
+Into `--out`: `report.md` (a line a case and profile, then each one's worst vblanks), `report.json` (every
+vblank), `evidence/` (the worst `--top` pairs of each, 640 wide: PC | GS | the difference x4, red over 24; and
+flash_find's sheet of flagged pictures between). The runs' pictures (about 20 MB each at 4x) are deleted as it goes
+(`--keep` keeps them). A full run (12 cases, both profiles, 240) is about an hour and a half; one game at a time.
