@@ -151,7 +151,7 @@ typedef struct {
    A full-screen pass of GameLoop_DrawFrame's (the brightness, a tint, a fill or fade, the flicker filter,
    the previous frame blended in, the view-turn shift, haze, the wobble grid) as data: what it is and its
    parameters, instead of the GIF packets of sprites VU1's program 0x276 would pass on. Hosted, the renderer draws it into its targets, exactly as
-   the packets would have been drawn (the PC renderer does not draw passes yet: PORT_ND_PASSES is off under it); a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
+   the packets would have been drawn (the PC renderer: port/render/pass_draw.cpp); a pass is a draw of the side buffer of its own kind (RD_KIND_PASS,
    program RD_PROGRAM_PASS), its identity the pass and the call site's count in the frame. */
 #define RD_KIND_PASS 11u
 #define RD_PROGRAM_PASS 0x20000u

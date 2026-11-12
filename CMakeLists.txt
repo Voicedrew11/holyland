@@ -151,13 +151,13 @@ target_include_directories(kf4_port PRIVATE port/gs/shared)
 # native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the PC renderer
 # draws them (docs/port/NATIVE_DRAW.md)
 enable_language(CXX)
-add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp)
+add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp port/render/ripple.cpp)
 target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
 # the native draws' moves in the pictures between, for the PC renderer (port/render/part_moves.hpp): a library of its own
 # (C++20; the renderer core is C++14), with its test below
-add_library(kf4_part_moves STATIC port/render/part_moves.cpp)
+add_library(kf4_part_moves STATIC port/render/part_moves.cpp port/render/pass_draw.cpp)
 target_include_directories(kf4_part_moves PUBLIC port/include port/render)
 set_target_properties(kf4_part_moves PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(NOT MSVC)
@@ -647,6 +647,17 @@ if(NOT WIN32)
 endif()
 add_test(NAME vu1_record COMMAND vu1_record_test)
 
+# The reflection's rippled water's record and ADC (port/render/ripple.cpp), and the S and T arithmetic of its shader
+# (port/render/shaders/ripple_maths.h), against Wobble_DrawRippledModel's maths as game/native_draw/nd_water.c writes it
+add_executable(ripple_test tests/ripple_test.cpp port/render/ripple.cpp)
+target_include_directories(ripple_test PRIVATE port/include)
+target_compile_options(ripple_test PRIVATE -frounding-math -ffp-contract=off)
+set_target_properties(ripple_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(ripple_test PRIVATE m)
+endif()
+add_test(NAME ripple COMMAND ripple_test)
+
 # The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
 # at t 0 and 1, the sections, the pairing by identity, the trail's pairs
 add_executable(part_moves_test tests/part_moves_test.cpp)
@@ -656,6 +667,17 @@ if(NOT WIN32)
     target_link_libraries(part_moves_test PRIVATE m)
 endif()
 add_test(NAME part_moves COMMAND part_moves_test)
+
+# A screen pass as GIF packets (port/render/pass_draw.cpp) against the game's own passes' packets (decomp game.c,
+# gs_draw.c) through the GIF front end, and the pictures between's moves against gif_moves.h's
+add_executable(pass_draw_test tests/pass_draw_test.cpp)
+target_link_libraries(pass_draw_test PRIVATE kf4_part_moves kf4_pc_gif)
+target_include_directories(pass_draw_test PRIVATE port/gs/pc)
+set_target_properties(pass_draw_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(pass_draw_test PRIVATE m)
+endif()
+add_test(NAME pass_draw COMMAND pass_draw_test)
 
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)

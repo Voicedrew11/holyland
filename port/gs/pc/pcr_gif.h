@@ -168,6 +168,8 @@ public:
         write_register(gs_reg::prim, prim & 0x7FF);
         file_.internal_q = 0x3F800000u;
     }
+    // (a PACKED tag without PRE: Q set to 1 only)
+    void write_packed_tag_no_pre() { file_.internal_q = 0x3F800000u; }
     void write_packed_qword(uint32_t descriptor, uint64_t low, uint64_t high) { write_packed(descriptor, low, high); }
 
     // PRIM's 11 bits in effect (GifPrimitive::prim's: PRMODE's attributes when PRMODECONT's AC is 0)

@@ -372,6 +372,64 @@ stairs (the teleport's fade only), real deep water.
 
 Spots (000, 009, 009:2, 099 at 240): byte for byte main's after 1 and 3.
 
+## Step 3's last two built (2026-11-11; issues #97, #98): the reflection's water and the screen passes
+
+`[stats] pc native draws not drawn yet` now lists nothing: every native draw is the PC renderer's. `kinds()` adds
+`water` and `passes`, so `--native-draw on` (and the owner's setting) draws both. Branch `pc/native-water-passes`, on
+top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target, which #118 made right; without it
+014's water is pale with either path). Measured on Windows, NVIDIA RTX 5080.
+
+- **The water (`RD_PROGRAM_RIPPLE`, maps 008, 009, 014).** No VU1 program: Wobble_DrawRippledModel makes each vertex
+  on the EE (ripple.hpp says how). The CPU makes the record (the part's vertex matrix in VU0's arithmetic, the 32
+  sines) and the strips' ADC, which needs the places (`port/render/ripple.cpp`); the GPU makes each corner's place,
+  S and T (`shaders/pcr_ndripple.vert`, the maths in `port/render/shaders/ripple_maths.h`, a new `NativeProgram`).
+  In a picture between the places are moved by the picture's camera and S and T made again from the moved ones, as
+  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). `ripple_test`
+  checks the record and the ADC against Wobble_DrawRippledModel's maths as nd_water.c's KF4_ND_WATER_CHECK writes it,
+  and the shader's S and T arithmetic (copied to C++) against the game's floats for every X and Y of 16 bits, toward
+  zero and to nearest.
+- **The passes (`RD_PROGRAM_PASS`).** Each pass is written to the GIF front end as the PS2 path's packets
+  (`port/render/pass_draw.cpp`, the native GS's `gsn_nd_pass.inc` again): the same register writes and primitives,
+  so the state after is the PS2 path's. Only the flat fills are one sprite instead of ten strips. The brightness and
+  the tint stay ten strips: as one sprite reading the frame one texel a pixel, the GPU's interpolated texel at a GS
+  pixel's point now and then came out a little under the whole texel and read the pixel to the left (125,000 pixels
+  of the brightness pass moved by one at map 000, worse against gs than the strips). In a picture between a pass is
+  paired by its identity (pass, call site, count in the frame) with the frame before's (`PassMoves`) and its packets
+  are made at the picture's time on the CPU, with gif_moves.h's numbers: a colour t of the way, the wobble's texels
+  and the view shift's strips t of the way where frame_interp.c's items_pair would pair them, the frame shown before
+  by A^t. A TEX0 of the frame drawn is pointed at the buffer the picture is drawn into (frame_interp.c's ad_write),
+  and the frame shown before's pass is put between 0xF4 and 0xF5 so the canvas reads the frame shown kept (0xF2).
+  `pass_draw_test` puts each pass and the game's own packets for it (written out from game.c and gs_draw.c) through
+  the front end: the same register file after, the same pixels with the same colour and texel; and checks the moves.
+- **The cost.** A pass that moves in a picture between (a fade, a fill whose alpha ramps, the wobble under water, the
+  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again, and the frame's own walk is not
+  made its pictures' (counted as "trail paired"). At 009's start after the teleport, 343 of 972 frames (the fill of
+  the fade-in). Moving them on the GPU from a record of the pass (as the native GS's `nd_pass.vert` did) would take
+  that away; not done.
+
+Checked (1x unless said; on = `--native-draw on`, off = the same kinds but `water` and `passes`, so the packets):
+- **The four spots** (000, 009, 009:2, and 099 for "063", which the teleport reads as map 63, a map with no places;
+  `--teleport 1900:MAP:PLACE --frame-rate 240`, vblanks 2400 and 2700 with their pictures between): on and off byte
+  for byte, the pictures between too. Without `--native-draw` nothing changes (no native draws then).
+- **The water maps** (`map_tour.py --maps 8,9,14 --positions 3`, 36 views): on and off byte for byte at 30 Hz, and at
+  240 turning (`--turn`) at 1x and 4x in the game's frames. In the pictures between only 014's water differs (views
+  4 and 5, up to 28,000 pixels at 1x and 450,000 at 4x, by up to 55 levels): on keeps the reflection where the game's
+  frame has it (014 v5's water at x 0-140: 63,77,66 in the frame and on's three pictures between, 46,61,52 in off's,
+  which also shows the packet path's dark blocks over the water). Against gs (30 Hz) on is off exactly; 014 v5's
+  water matches gs.
+- **The passes forced** (KF4_FX at 000, 240, vblanks 2600 and 2700 with their pictures between):
+  base, water (the tint and the wobble), drain, drainramp, haze, down and updown (`--flicker-filter`), fill, fade,
+  tint, dim, bright40, brightff, shift (`--no-whole-frame`, no pictures between), the pause, the Guardian's Room's
+  green fill (035): on and off byte for byte, pictures between too, and the same against gs. prev and aim (the frame
+  shown before blended in): their pictures between byte for byte, one game frame of the two 3 pixels by 2 levels
+  (one row at x 626-630, the same run to run; see 4x below).
+- **At 4x** (`--native-scale 4 --no-native-widescreen`, 240): the four spots byte for byte; water, drain, fade, fill,
+  tint byte for byte, pictures between too; prev's pictures between byte for byte, its game frames 76 and 3 pixels by
+  2 and 1 levels. The game frame reads the frame shown before, which at 240 is the last picture between drawn into
+  that buffer, not dumped. Dumping vblanks 2597-2600 at 1x (so every picture of them is drawn) makes all 16 pictures,
+  2600 too, byte for byte: which pictures between of the vblank before are drawn or left out is the difference, not
+  the drawing (on moves this pass on the CPU and walks every picture, a little slower).
+
 ## Where it stands (2026-10-29)
 
 **Built.**
@@ -477,7 +535,7 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
      after `tools/build_shaders.py`), the CPU set-up into `port/render/` with a test against the code it stands
      for, the draw in `pcr_native.cpp`, the kind in `kinds()`. `[stats] pc native draws not drawn yet` names what is
-     still sent and left out.
+     still sent and left out. **Built 2026-11-11** ("Step 3's last two built", above).
   7. The settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's); then step 7
      (`fast` switched to it, the full checks incl. the map tour and pace).
 - **How pictures are judged**: against `--renderer native` (the exact GS), not against pc's own earlier pictures;

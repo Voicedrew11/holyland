@@ -2669,7 +2669,11 @@ private:
         // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
         bool per_sample = ms && is_cutout(b);
         counts_msaa_.cutout_batches += per_sample ? 1 : 0;
-        int v = !b.native ? 0 : b.program == NativeProgram::vu1_280 ? 2 : b.program == NativeProgram::vu1_700 ? 3 : 1;
+        int v = !b.native                              ? 0
+                : b.program == NativeProgram::vu1_280 ? 2
+                : b.program == NativeProgram::vu1_700 ? 3
+                : b.program == NativeProgram::ripple  ? 4
+                                                       : 1;
         c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -3073,6 +3077,9 @@ private:
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
         programs_[3] = device_.request_program(nvs700, fs);
         sample_programs_[3] = device_.request_program(nvs700, sfs);
+        Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
+        programs_[4] = device_.request_program(nvsripple, fs);
+        sample_programs_[4] = device_.request_program(nvsripple, sfs);
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -3087,20 +3094,21 @@ private:
         std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
         no_clut_ = device_.create_buffer(clut, no_colours.data());
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        const WarmProgram warmed[5] = {{programs_[0], sample_programs_[0]},
+        const WarmProgram warmed[6] = {{programs_[0], sample_programs_[0]},
                                        {programs_[1], sample_programs_[1]},
                                        {programs_[2], sample_programs_[2]},
                                        {programs_[3], sample_programs_[3]},
+                                       {programs_[4], sample_programs_[4]},
                                        {date_program_, date_ms_program_}};
-        warm_watch(device_, warmed, 5, expand_program_);
+        warm_watch(device_, warmed, 6, expand_program_);
     }
 
     Device &device_;
     const DynamicChoice dynamic_ = choose_dynamic(device_);
     GpuTimes &times_;
-    // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700; each shaded once a pixel, and once a
-    // sample (cut-out AA: pcr_prim_sample.frag)
-    std::array<Program *, 4> programs_{}, sample_programs_{};
+    // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700, the ripple's; each shaded once a pixel,
+    // and once a sample (cut-out AA: pcr_prim_sample.frag)
+    std::array<Program *, 5> programs_{}, sample_programs_{};
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
     // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
