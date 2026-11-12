@@ -85,6 +85,9 @@ struct VblankPicture {
     uint64_t tag;
     PortGsFrame *frame; // (the sender's, while it waits: reply set)
     Reply *reply;       // (nullptr: nobody waits)
+    // (Renderer::picture) The pump has it already, sent there directly (kf4-pc only keeps its count of things), and
+    // whether kf4-pc tells the sender it is done with it (Renderer::routed_done_)
+    bool direct = false, counted = false;
 };
 
 // A picture between's frame (frame_interp.c's: pcr_between.h), and a picture asked for, its runs' bits kept
@@ -92,6 +95,7 @@ using pcr::InterpFrame;
 struct InterpPicture {
     GsnInterpPicture picture;
     std::vector<uint32_t> run_bits;
+    bool direct = false, counted = false; // (as VblankPicture's)
 };
 
 // When the pictures' mouse turns are taken (pcr_late.h's TurnLead): kf4-pc's and the pump's, one for both
@@ -548,6 +552,9 @@ struct Settings {
 struct Stats {
     std::atomic<uint64_t> packets{0}, bytes{0}, vblanks{0}, pictures{0}, extras{0}, interp_frames{0},
         interp_pictures{0}, interp_late{0};
+    // (Renderer::interp_picture) pictures between sent to the pump directly, and of them those kf4-pc then found
+    // the frame's kept walk no longer fitting for (the store changed by the next frame's packets before them)
+    std::atomic<uint64_t> direct{0}, direct_stale{0};
 };
 
 // (kf4-pc) Each frame's intake, for --stats: the time kf4-pc spent taking its packets in (busy), and from its first
@@ -721,6 +728,21 @@ public:
             }
         }
         return std::nullopt;
+    }
+
+    // A picture between the pump was sent directly (Renderer::interp_picture: the frame's walk was the pump's when it
+    // was sent), taken in turn: counted as walk_picture counts one it gives the pump. False when walk_picture would not
+    // have given it to the pump now (the frame's kept walk no longer fits the store: the next frame's packets before it
+    // changed what it read); the pump drew it from the walk all the same.
+    bool direct_picture(const GsnInterpPicture &picture) {
+        if (!between_ || !canvas_) {
+            return false;
+        }
+        drop_stretch();
+        if (!kept_walk_ || !keep_walks_ || !pump_on_ || kept_walk_ != pump_walk_ || !canvas_->fits(*kept_walk_)) {
+            return false;
+        }
+        return between_->hand_over(picture).has_value();
     }
 
     // The picture to the pump (nullopt: not of the frame, counted, nothing drawn), with the frame when the pump has
@@ -1638,6 +1660,8 @@ public:
         if (pump_wanted()) {
             pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_);
             pump_->start();
+            const char *direct = getenv("KF4_PC_DIRECT");
+            direct_on_ = !(direct && strcmp(direct, "0") == 0);
         }
         thread_ = std::thread([this] { run(); });
         fprintf(stderr, "[pcr] the PC renderer on %s\n", props.deviceName);
@@ -1686,11 +1710,41 @@ public:
         v.tag = tag;
         bool extra = (want & GSN_EXTRA) != 0;
         upper_field_.show_in(v, extra);
+        // (the vblank's scale, as kf4-pc takes it: a picture's is the one of the last vblank's before it)
+        uint32_t scale = send_scale_;
+        if (!extra) {
+            send_scale_ = settings.scale.load();
+        }
+        // The picture that shows a picture between sent to the pump directly (the next picture after it): the pump's
+        // too, and kf4-pc only counts it (take_picture). One that shows a picture between kf4-pc was given, or that
+        // kf4-pc may make itself, holds the next pictures between back from the pump until kf4-pc has taken it.
+        bool direct = direct_show_;
+        if (!direct && (normal_show_ || (want & (GSN_PRESENT | GSN_WANT_IMAGE | GSN_WANT_PIXELS)))) {
+            v.counted = true;
+            routed_++;
+        }
+        direct_show_ = normal_show_ = false;
         // A picture nobody waits for (none, or one this thread hands to the presenter) is
         // queued and the sender goes on; one wanted in frame, or an image the sender shows itself, is waited for
         bool queued = !(want & GSN_WANT_PIXELS) && (!(want & GSN_WANT_IMAGE) || (want & GSN_PRESENT));
+        Reply reply;
+        if (!queued) {
+            v.frame = frame;
+            v.reply = &reply;
+        }
+        if (direct) {
+            // (kf4-pc's first: the vblank sent before the pump can hand it out)
+            VblankPicture note = v;
+            note.direct = true;
+            note.frame = nullptr;
+            note.reply = nullptr;
+            if (!inbox_.put(std::move(note), 0, !extra)) {
+                return 0;
+            }
+            pump_->send(PumpPicture{std::move(v), scale});
+        }
         if (queued) {
-            if (!inbox_.put(std::move(v), 0, !extra)) {
+            if (!direct && !inbox_.put(std::move(v), 0, !extra)) {
                 return 0;
             }
             if ((want & GSN_PRESENT) && !extra) {
@@ -1699,10 +1753,7 @@ public:
             }
             return want & (GSN_PRESENT | GSN_WANT_IMAGE);
         }
-        Reply reply;
-        v.frame = frame;
-        v.reply = &reply;
-        if (!inbox_.put(std::move(v), 0, !extra)) {
+        if (!direct && !inbox_.put(std::move(v), 0, !extra)) {
             return 0;
         }
         return inbox_.wait_reply(reply);
@@ -1712,13 +1763,33 @@ public:
         inbox_.put(InterpFrame(frame), 0, false);
     }
 
+    // A picture between: to kf4-pc, or straight to the pump when the pump has this frame's walk from kf4-pc already
+    // and kf4-pc has taken every picture before it that it might give the pump or make itself (so the pump's queue
+    // keeps the pictures' order). kf4-pc's inbox then holds the next frame's packets ahead of it (sent between this
+    // vblank and the one before), which the picture need not wait for: drawn from the kept walk, it reads nothing of
+    // kf4-pc's store or surfaces. kf4-pc is sent it too, to count it and to stop this when the walk no longer fits
+    // (take_picture_between). KF4_PC_DIRECT=0: every picture between through kf4-pc (docs/port/PERFORMANCE.md).
     void interp_picture(const GsnInterpPicture &picture) {
         InterpPicture p = {picture, {}};
         if (picture.runs && picture.run_bits) {
             p.run_bits.assign(picture.run_bits, picture.run_bits + (size_t(picture.runs) + 31) / 32);
         }
         p.picture.run_bits = nullptr; // (set to the kept bits where it is taken)
-        inbox_.put(std::move(p), 0, false);
+        bool direct = direct_on_ && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED && picture.serial != 0 &&
+                      direct_serial_.load(std::memory_order_acquire) == picture.serial &&
+                      routed_done_.load(std::memory_order_acquire) == routed_;
+        direct_show_ = direct;
+        normal_show_ = !direct;
+        if (!direct) {
+            p.counted = true;
+            routed_++;
+            inbox_.put(std::move(p), 0, false);
+            return;
+        }
+        stats.direct++;
+        InterpPicture note = {p.picture, {}, true, false};
+        inbox_.put(std::move(note), 0, false);
+        pump_->send(std::move(p));
     }
 
     // The vblanks behind the game, less the one whose pictures the pump holds until their time (unlocked: pcr_late.h):
@@ -1900,20 +1971,30 @@ private:
                 intake_times.packet_taken(start, IntakeTimes::Clock::now());
                 inbox_.done(packet->bytes.size());
             } else if (VblankPicture *v = std::get_if<VblankPicture>(&*message)) {
+                bool counted = v->counted;
                 take_picture(std::move(*v));
+                if (counted) {
+                    routed_done_.fetch_add(1, std::memory_order_release); // (what it gave the pump sent)
+                }
                 inbox_.done(0);
             } else if (Job *job = std::get_if<Job>(&*message)) {
+                direct_serial_.store(0, std::memory_order_release); // (a state saved or loaded: through kf4-pc again)
                 job->work();
                 inbox_.answer(job->reply, 1);
                 inbox_.done(0);
             } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
+                direct_serial_.store(0, std::memory_order_release); // (a new frame: its walk not the pump's yet)
                 intake_.take_frame(std::move(*frame));
                 intake_times.frame_taken(IntakeTimes::Clock::now());
                 inbox_.done(0);
             } else if (InterpPicture *p = std::get_if<InterpPicture>(&*message)) {
                 stats.interp_pictures++;
+                bool counted = p->counted;
                 take_picture_between(std::move(*p));
+                if (counted) {
+                    routed_done_.fetch_add(1, std::memory_order_release);
+                }
                 inbox_.done(0);
             }
         }
@@ -1934,11 +2015,13 @@ private:
         if (!extra) {
             picture_scale_ = settings.scale.load(); // (a new scale from the next vblank)
         }
-        bool pumped = shows_pumped_;
+        bool pumped = shows_pumped_ || v.direct;
         shows_pumped_ = false;
         if (pumped) {
             last_between_ = {}; // (the pump's to show)
-            pump_->send(PumpPicture{std::move(v), scale});
+            if (!v.direct) {
+                pump_->send(PumpPicture{std::move(v), scale});
+            }
             // (Granite frees what a thread lets go of, the pump's each picture's blocks and command buffers too, only
             // as its frame contexts come round, and only kf4-pc moves them on: at a rate where the pump made most
             // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
@@ -1978,13 +2061,25 @@ private:
 
     // (kf4-pc) A picture between: walked here, or handed to the pump (with its frame first when the pump has not that
     // walk yet), and then its extra picture too
+    // A picture between the pump was sent directly (Renderer::interp_picture) is only counted here; when the walk no
+    // longer fits, the next ones come here again (and are walked again, as walk_picture does).
     void take_picture_between(InterpPicture p) {
+        if (p.direct) {
+            last_between_ = p.picture;
+            shows_pumped_ = true;
+            if (!intake_.direct_picture(p.picture)) {
+                direct_serial_.store(0, std::memory_order_release);
+                stats.direct_stale++;
+            }
+            return;
+        }
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         std::optional<Intake::ForPump> for_pump = intake_.walk_picture(p.picture);
         shows_pumped_ = for_pump.has_value();
         if (!for_pump) {
+            direct_serial_.store(0, std::memory_order_release);
             turned_before(turn_lead_, before_s); // (drawn here: this turn was its last)
             return;
         }
@@ -1992,7 +2087,10 @@ private:
             pump_->wait_for_room_for_frame();
             pump_->send(std::move(*for_pump->frame));
         }
+        uint64_t serial = p.picture.serial;
         pump_->send(std::move(p));
+        // (the pump has this frame's walk: its next pictures between may go to it directly)
+        direct_serial_.store(serial, std::memory_order_release);
     }
 
 
@@ -2016,6 +2114,16 @@ private:
     std::optional<PictureOut> out_;
     uint32_t picture_scale_ = 1 | 1 << 8;
     bool shows_pumped_ = false;
+    // Pictures straight to the pump (interp_picture). The sender's (the DMA controller's thread): the scale its next
+    // picture has, whether its next picture shows a picture between sent to the pump directly or to kf4-pc, and the
+    // pictures it sent kf4-pc that kf4-pc says it has taken (routed_done_) once taken
+    bool direct_on_ = false; // (KF4_PC_DIRECT=0: off; set at open)
+    uint32_t send_scale_ = 1 | 1 << 8;
+    bool direct_show_ = false, normal_show_ = false;
+    uint64_t routed_ = 0;
+    // (kf4-pc's, read by the sender) the frame whose pictures between kf4-pc last gave the pump (0: none, or not now),
+    // and the pictures counted (counted set) it has taken: everything it gives the pump of them sent
+    std::atomic<uint64_t> direct_serial_{0}, routed_done_{0};
     GsnInterpPicture last_between_{}; // (kf4-pc's) the picture between last taken (its run bits not kept)
     SharedTurnLead turn_lead_;   // (before the pump, which holds it)
     UpperField upper_field_;     // (the DMA controller's thread: picture)
@@ -2317,6 +2425,8 @@ extern "C" void pcr_print_stats(void) {
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
             (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load());
+    fprintf(stderr, "[stats] pc pictures between straight to the pump: %llu (%llu then found not fitting)\n",
+            (unsigned long long)s.direct.load(), (unsigned long long)s.direct_stale.load());
     renderer()->intake_times.print(stderr);
     renderer()->print_census();
     // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
