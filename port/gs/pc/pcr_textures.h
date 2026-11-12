@@ -175,6 +175,8 @@ public:
     // the same place, so nothing compared: the pictures between ask for the frame's uploads again). False if the
     // chunk has been let go (the caller sends the bytes again).
     uint64_t last_chunk() const;
+    // A chunk's bytes as kept (the upload's, the first used bytes of it), shared; nullptr if let go
+    std::shared_ptr<const std::vector<uint8_t>> chunk_bytes(uint64_t chunk) const;
     bool upload_again(uint64_t chunk);
 
     // A surface drawn into over this rectangle (in its format: a 24-bit one leaves the top byte the uploads')

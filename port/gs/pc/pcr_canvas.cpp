@@ -420,9 +420,13 @@ public:
         uint64_t chunk = taken ? store_.last_chunk() : 0;
         std::shared_ptr<const std::vector<uint8_t>> kept_bytes;
         if (keeping_ || !replaying_) {
-            auto copy = std::make_shared<std::vector<uint8_t>>(bytes.size());
-            memcpy(copy->data(), bytes.data(), bytes.size()); // (libc++ copies a range a byte at a time)
-            kept_bytes = std::move(copy);
+            // (the store's chunk when it is these bytes, as it is unless the upload had bytes past its pixels)
+            kept_bytes = taken ? store_.chunk_bytes(chunk) : nullptr;
+            if (!kept_bytes || kept_bytes->size() != bytes.size()) {
+                auto copy = std::make_shared<std::vector<uint8_t>>(bytes.size());
+                memcpy(copy->data(), bytes.data(), bytes.size()); // (libc++ copies a range a byte at a time)
+                kept_bytes = std::move(copy);
+            }
         }
         if (keeping_) {
             kept_->steps.emplace_back(KeptUpload{{t, kept_bytes, chunk}});
