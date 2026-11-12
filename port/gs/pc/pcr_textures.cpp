@@ -169,8 +169,21 @@ uint64_t mix(uint64_t h, uint64_t v) {
     return h ^ (h >> 29);
 }
 
+// (four words at a time in four lanes of their own, so the multiplies do not wait on each other, then the lanes and the
+// rest; only ever compared with itself: an upload's chunk looked up)
 uint64_t hash_bytes(uint64_t h, std::span<const uint8_t> bytes) {
     size_t i = 0;
+    if (bytes.size() >= 32) {
+        uint64_t lane[4] = {h, h ^ 0x6A09E667F3BCC908ull, h ^ 0xBB67AE8584CAA73Bull, h ^ 0x3C6EF372FE94F82Bull};
+        for (; i + 32 <= bytes.size(); i += 32) {
+            for (int k = 0; k < 4; k++) {
+                uint64_t v;
+                memcpy(&v, bytes.data() + i + 8 * k, 8);
+                lane[k] = mix(lane[k], v);
+            }
+        }
+        h = mix(mix(mix(lane[0], lane[1]), lane[2]), lane[3]);
+    }
     for (; i + 8 <= bytes.size(); i += 8) {
         uint64_t v;
         memcpy(&v, bytes.data() + i, 8);
@@ -347,7 +360,7 @@ namespace {
 // An upload, kept: its registers (the destination's fields only), its bytes (those its pixels take)
 struct Chunk {
     TransferRegs regs;
-    std::vector<uint8_t> bytes;
+    std::shared_ptr<const std::vector<uint8_t>> bytes; // (shared with the canvas's kept uploads: never changed)
     uint64_t pixels = 0;
     uint64_t hash = 0;
     uint64_t seq = 0;           // the store's count when it was last uploaded
@@ -451,6 +464,7 @@ struct TextureStore::State {
     std::unordered_map<TextureKey, KeptAnswer, KeyHash> answers;
     std::unordered_map<uint64_t, Chunk> chunks;
     std::unordered_multimap<uint64_t, uint64_t> chunk_by_hash;
+    std::unordered_map<uint64_t, uint64_t> chunk_by_regs; // the chunk last kept or found by a hash of its registers
     std::list<uint64_t> unowned; // (chunks owning nothing, oldest first)
     size_t unowned_bytes = 0, chunk_bytes = 0;
     std::vector<uint8_t> scratch = std::vector<uint8_t>(GSN_VRAM_BYTES); // the VRAM a texture is decoded in
@@ -462,8 +476,14 @@ struct TextureStore::State {
     // the CLUT buffer mirrored: its 512 halfwords, those not loaded from uploads, the CLD's CBP0/CBP1
     std::array<uint16_t, 512> clut{};
     std::bitset<512> clut_unloaded = std::bitset<512>().set();
+    // counts the mirror's changes (clut, clut_unloaded); clut_colours' last answer, kept with what it was for
+    uint64_t clut_version = 1;
+    mutable uint64_t clut_kept_version = 0, clut_kept_tex0 = 0, clut_kept_texa = 0;
+    mutable ClutColours clut_kept;
     std::array<uint32_t, 2> clut_cbp = {UINT32_MAX, UINT32_MAX};
     std::unordered_map<std::vector<uint64_t>, std::array<uint32_t, 256>, WordsHash> clut_decoded;
+    // local copies from uploads made (TextureStore::copied): their registers and source chunks, the chunk they made
+    std::unordered_map<std::vector<uint64_t>, uint64_t, WordsHash> copies_made;
 
     uint64_t keep(const TransferRegs &regs, std::span<const uint8_t> bytes, uint64_t pixels);
     void own(uint64_t id);
@@ -494,18 +514,36 @@ struct TextureStore::State {
 
 // The chunk an upload is: found again (the same bytes to the same place), or kept new
 uint64_t TextureStore::State::keep(const TransferRegs &regs, std::span<const uint8_t> bytes, uint64_t pixels) {
-    uint64_t hash = hash_bytes(mix(mix(mix(0, regs.bitbltbuf), regs.trxpos), regs.trxreg), bytes);
+    // (most uploads are the last one to the same place again, the game's textures sent each frame: that chunk is
+    // compared first, without hashing; there is at most one chunk of the same registers and bytes)
+    const uint64_t at = mix(mix(mix(0, regs.bitbltbuf), regs.trxpos), regs.trxreg);
+    auto last = chunk_by_regs.find(at);
+    if (last != chunk_by_regs.end()) {
+        auto c = chunks.find(last->second);
+        if (c != chunks.end() && same_regs(c->second.regs, regs) &&
+            std::equal(c->second.bytes->begin(), c->second.bytes->end(), bytes.begin(), bytes.end())) {
+            return last->second;
+        }
+    }
+    if (chunk_by_regs.size() >= 65536) {
+        chunk_by_regs.clear();
+    }
+    uint64_t hash = hash_bytes(at, bytes);
     auto range = chunk_by_hash.equal_range(hash);
     for (auto it = range.first; it != range.second; ++it) {
         const Chunk &c = chunks.at(it->second);
-        if (same_regs(c.regs, regs) && std::equal(c.bytes.begin(), c.bytes.end(), bytes.begin(), bytes.end())) {
+        if (same_regs(c.regs, regs) && std::equal(c.bytes->begin(), c.bytes->end(), bytes.begin(), bytes.end())) {
+            chunk_by_regs[at] = it->second;
             return it->second;
         }
     }
     uint64_t id = next_chunk++;
+    chunk_by_regs[at] = id;
     Chunk &c = chunks[id];
     c.regs = regs;
-    c.bytes.assign(bytes.begin(), bytes.end());
+    auto copy = std::make_shared<std::vector<uint8_t>>(bytes.size());
+    memcpy(copy->data(), bytes.data(), bytes.size()); // (libc++ copies a range a byte at a time)
+    c.bytes = std::move(copy);
     c.pixels = pixels;
     c.hash = hash;
     chunk_by_hash.emplace(hash, id);
@@ -686,8 +724,9 @@ void TextureStore::State::note_write(uint32_t block) {
     written_in_stretch.set(block);
 }
 
+// (the caller marks the CLUT page changed)
 void TextureStore::State::set_mirror(uint32_t at, uint16_t value, bool unloaded) {
-    changed(kClutPage);
+    clut_version += clut[at] != value || clut_unloaded[at] != unloaded;
     clut[at] = value;
     clut_unloaded[at] = unloaded;
 }
@@ -706,7 +745,7 @@ void TextureStore::State::mark_unowned(uint64_t id) {
         return;
     }
     c.unowned_at = unowned.insert(unowned.end(), id);
-    unowned_bytes += c.bytes.size();
+    unowned_bytes += c.bytes->size();
 }
 
 void TextureStore::State::mark_owned(Chunk &c) {
@@ -715,7 +754,7 @@ void TextureStore::State::mark_owned(Chunk &c) {
     }
     unowned.erase(*c.unowned_at);
     c.unowned_at.reset();
-    unowned_bytes -= c.bytes.size();
+    unowned_bytes -= c.bytes->size();
 }
 
 // The oldest chunks that own nothing let go beyond the limit (no block names them)
@@ -724,8 +763,8 @@ void TextureStore::State::let_go_unowned() {
         uint64_t id = unowned.front();
         unowned.pop_front();
         const Chunk &c = chunks.at(id);
-        unowned_bytes -= c.bytes.size();
-        chunk_bytes -= c.bytes.size();
+        unowned_bytes -= c.bytes->size();
+        chunk_bytes -= c.bytes->size();
         auto range = chunk_by_hash.equal_range(c.hash);
         for (auto it = range.first; it != range.second; ++it) {
             if (it->second == id) {
@@ -823,7 +862,7 @@ void TextureStore::State::write_chunks(const std::vector<uint64_t> &ids, std::sp
         const Chunk &c = chunks.at(id);
         GsnUpload u;
         gsn_upload_begin(&u, c.regs.bitbltbuf, c.regs.trxpos, c.regs.trxreg);
-        gsn_upload_data(&u, scratch.data(), c.bytes.data(), c.bytes.size(), nullptr, nullptr);
+        gsn_upload_data(&u, scratch.data(), c.bytes->data(), c.bytes->size(), nullptr, nullptr);
     }
 }
 
@@ -943,6 +982,11 @@ uint64_t TextureStore::last_chunk() const {
     return state_->last_chunk;
 }
 
+std::shared_ptr<const std::vector<uint8_t>> TextureStore::chunk_bytes(uint64_t chunk) const {
+    auto found = state_->chunks.find(chunk);
+    return found == state_->chunks.end() ? nullptr : found->second.bytes;
+}
+
 bool TextureStore::upload_again(uint64_t chunk) {
     State &s = *state_;
     auto found = s.chunks.find(chunk);
@@ -951,7 +995,7 @@ bool TextureStore::upload_again(uint64_t chunk) {
     }
     s.counts.uploads++;
     s.counts.uploads_again++;
-    s.counts.upload_bytes += found->second.bytes.size();
+    s.counts.upload_bytes += found->second.bytes->size();
     s.last_chunk = chunk;
     s.own(chunk);
     return true;
@@ -998,6 +1042,22 @@ void TextureStore::copied(const TransferRegs &regs) {
         return;
     }
     s.sort_by_upload(owners.chunks);
+    // (what it writes is a function of its registers and the chunks, oldest first, chunks never changing: a copy made
+    // before from the same is its chunk again, as the upload below would find it)
+    std::vector<uint64_t> key = {regs.bitbltbuf, regs.trxpos, regs.trxreg};
+    key.insert(key.end(), owners.chunks.begin(), owners.chunks.end());
+    auto made = s.copies_made.find(key);
+    if (made != s.copies_made.end()) {
+        auto c = s.chunks.find(made->second);
+        if (c != s.chunks.end()) {
+            s.counts.copies_as_uploads++;
+            s.counts.uploads++;
+            s.counts.upload_bytes += c->second.bytes->size();
+            s.last_chunk = made->second;
+            s.own(made->second);
+            return;
+        }
+    }
     s.write_chunks(owners.chunks, {});
     gsn_vram_copy(s.scratch.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
     size_t bytes = (size_t(width) * height * uint32_t(gsn_psm_bits(dpsm)) + 7) / 8;
@@ -1008,7 +1068,12 @@ void TextureStore::copied(const TransferRegs &regs) {
                         pixels.size() / 16);
     pixels.resize(bytes);
     s.counts.copies_as_uploads++;
-    upload(regs, pixels);
+    if (upload(regs, pixels)) {
+        if (s.copies_made.size() >= 4096) {
+            s.copies_made.clear();
+        }
+        s.copies_made[std::move(key)] = s.last_chunk;
+    }
 }
 
 bool TextureStore::read_back(const TransferRegs &regs, std::vector<uint8_t> &out) {
@@ -1150,6 +1215,7 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
     s.note_write(kClutBlock);
     bool ct32 = field(tex0, 51, 4) == 0;
     uint32_t entries = has_256_entries(psm) ? 256 : 16;
+    s.changed(kClutPage);
     for (uint32_t i = 0; i < entries; i++) {
         uint32_t at = clut_halfword(tex0, i);
         s.set_mirror(at, from_uploads ? uint16_t(values[i]) : s.clut[at], !from_uploads);
@@ -1163,6 +1229,13 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
 ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
     const State &s = *state_;
     s.note_read(kClutBlock);
+    // (asked again for each batch of a texture through the CLUT: the last answer kept while the mirror and what is
+    // read of TEX0 (PSM, CPSM, CSA) and TEXA are the same)
+    const uint64_t read_of_tex0 = tex0 & (0x3Full << 20 | 0xFull << 51 | 0x1Full << 56);
+    const uint64_t read_of_texa = texa & (0xFFull | 1ull << 15 | 0xFFull << 32);
+    if (s.clut_kept_version == s.clut_version && s.clut_kept_tex0 == read_of_tex0 && s.clut_kept_texa == read_of_texa) {
+        return s.clut_kept;
+    }
     ClutColours out;
     out.from_uploads = true;
     uint32_t entries = has_256_entries(field(tex0, 20, 6)) ? 256 : 16;
@@ -1182,6 +1255,10 @@ ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
         out.rgba[i] = r | g << 8 | b << 16 | a << 24;
         out.from_uploads = out.from_uploads && !s.clut_unloaded[at];
     }
+    s.clut_kept = out;
+    s.clut_kept_version = s.clut_version;
+    s.clut_kept_tex0 = read_of_tex0;
+    s.clut_kept_texa = read_of_texa;
     return out;
 }
 
@@ -1244,6 +1321,7 @@ void TextureStore::set_clut_state(const ClutState &c) {
     for (size_t i = 0; i < 512; i++) {
         s.clut_unloaded[i] = c.unloaded[i] != 0;
     }
+    s.clut_version++;
     s.clut_cbp = c.cbp;
 }
 

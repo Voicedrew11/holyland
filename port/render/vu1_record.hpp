@@ -9,6 +9,10 @@
 
 #include "render_internal.hpp"
 
+// VU1's arithmetic here is done first in plain SSE floats where that gives VU1's bits, checked, and again exactly
+// where it might not (vu1_record.cpp, Exact and Fast). False: always exactly (the tests compare the two).
+extern bool vu1_record_fast;
+
 // A model part's move in the pictures between (vu1_000_draw.h's Between; shaders/nd_between.h says what each field is)
 struct Vu1Between {
     float rot[12];

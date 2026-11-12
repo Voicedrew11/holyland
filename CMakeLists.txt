@@ -204,6 +204,11 @@ target_include_directories(kf4_port PRIVATE port/gs/shared)
 # draws them (docs/port/NATIVE_DRAW.md)
 enable_language(CXX)
 add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp port/render/ripple.cpp)
+# (vu1_record.cpp's fast arithmetic sets MXCSR's rounding and reads its flags: the compiler must neither assume the
+# rounding nor move a float operation across those). gcc has no -ffp-exception-behavior: its -ftrapping-math (on by
+# default, stated here) with -frounding-math is its equivalent; vu1_record_test compares the fast way with the exact one
+set_source_files_properties(port/render/vu1_record.cpp PROPERTIES COMPILE_OPTIONS
+                            "-frounding-math;$<IF:$<CXX_COMPILER_ID:GNU>,-ftrapping-math,-ffp-exception-behavior=strict>")
 target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
