@@ -486,7 +486,7 @@ void GifFrontEnd::begin_transfer(uint32_t direction) {
         if (expected == 0) {
             return; // (no pixels, or no format: its data is dropped)
         }
-        upload_.emplace();
+        upload_ = PendingUpload{}; // (not emplace(): clang 18 takes PendingUpload as not default-constructible)
         upload_->transfer = transfer;
         upload_->expected_bytes = expected;
         return;
