@@ -608,6 +608,34 @@ pictures a second either way, 60.6-60.8 game vblanks, gap p99 4.5 ms, the same l
 Andrew's longest gap was 18-25 ms with the levers against 5-11 (the sd 0.34-0.39 against 0.17-0.23): one hitch a
 run, not looked into.
 
+**Gated to "behind" (later the same afternoon).** At 240 the levers gave single long gaps between pictures (Andrew's
+profile: longest 15-25 ms against main's 5-11, sd 0.34-0.39 against 0.17-0.23), mostly at a vblank's own picture
+(phase 0): at 240 that picture is often kf4-pc's own, and kf4-pc behind on its notes or paying owed frame contexts
+hands it out late. Main itself shows such gaps in some sessions (29-36 ms at 009 in two runs at 14:00, while the
+bindless agent's builds shared the machine), so the longest gap is a noisy measure; in a quiet round (14:18-14:25)
+main and the gated build stayed at 5.0-5.1 ms and the ungated levers gave 9.5 and 15.0. So both levers now engage only
+while the renderer is behind the game: gs.c's cut lowering the count, or a picture between left out as behind in the
+last half second (`port_interp_behind_lately`); otherwise kf4-pc takes every picture and moves the frame context on
+at each, as main. At 500 the cut is lowering in most vblanks, so the levers stay on there. `KF4_PC_LATENCY_GATE=0`
+engages them always. 240, Andrew's profile, each run's longest gap in ms (gaps over 12 ms), 25 s of play, display off, the bindless agent
+sharing the machine between rounds:
+
+| build | 000 | 009 |
+|---|---|---|
+| main | 5.0, 5.0, 5.1, 5.0 | 29.0 (3), 35.6 (5), 5.1, 6.0 |
+| levers, ungated | 9.5 | 15.0 (1) |
+| gated | 5.0, 5.0 | 5.0, 15.1 (1) |
+
+Gated, no picture between goes direct at 240 (0 in each run; the gate opens only around the few left-outs a run, for
+lever 3); pictures a second 239.7-239.8 and gap sd 0.17-0.20 as main's 0.17 (main's own 35.6 ms run: 0.67). The one
+15.1 ms gap gated was in a run with 30 left-outs (the gate open around them). 
+
+At 500, gated against main (one round, 14:57-15:07, display off): Andrew 000 350.9 against 349.4 pictures a second, gap
+p99/sd 6.5/1.46 against 14.2/2.57, late 1364 against 2763; 009 325.5 against 333.5, 10.3/1.64 against 12.6/1.94, late
+1300 against 1954 (4249 and 2085 pictures direct). The owner's: 000 as main (494.2 against 494.9, 230 direct: the gate
+mostly shut); 009 466.1 against 476.2, 236 left out against 164, late 1036 against 624 (549 direct): the owner's 009
+cost is still there, gated or not. One round only: the earlier rounds' spread is the guide.
+
 **Read.** Lever 1 alone changes little: the pictures of a game frame's first vblank (half of them) still wait for
 kf4-pc, and kf4-pc, slowed by its frame context waits, has often not taken the vblank before's pictures when the next
 vblank's come, so most still go its way. With lever 3 kf4-pc keeps up and more go direct. In both A/Bs, levers 1 and 3:
@@ -637,7 +665,8 @@ pictures sooner, so the backlog the cut judges falls differently?).
    kf4-pc's inbox behind the next frame's packets and for the pump's `start_from`, then run back to back.
    **Built 2026-11-12 (afternoon, above)**: pictures between straight to the pump and kf4-pc's frame context without
    the wait (late pictures -50 to -75%, even gaps; 2-5% fewer pictures a second at 009); `start_from` let go of later
-   was worse and dropped. Next: the first vblank of each game frame (its pictures still wait for kf4-pc's surface
+   was worse and dropped. Both gated to engage only while the renderer is behind (240 draws as main: the ungated
+   levers gave single long gaps there). Next: the first vblank of each game frame (its pictures still wait for kf4-pc's surface
    copies), and why the owner's settings cut more with it.
    **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
    - **One submit a picture between**: **done 2026-11-12** where the picture that shows it is already waiting
