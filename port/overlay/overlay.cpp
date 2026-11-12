@@ -314,6 +314,26 @@ void display_page() {
                 "3x 2560 x 1344, 4x 3840 x 1792). The same picture, sharper across. On by default.\n"
                 "(--native-widescreen, --no-native-widescreen)");
         ImGui::EndDisabled();
+        static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
+        int msaa_at = port_settings.native_msaa >= 8 ? 3 : port_settings.native_msaa >= 4 ? 2 : port_settings.native_msaa >= 2 ? 1 : 0;
+        if (ImGui::Combo("Anti-aliasing (MSAA)", &msaa_at, msaa_names, 4))
+            port_live_set(PORT_LIVE_MSAA, 1 << msaa_at);
+        if (port_settings.native_msaa != port_options.native_msaa)
+            ImGui::TextDisabled("This GPU has at most %s", port_options.native_msaa > 1
+                                                                ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
+                                                                : "none");
+        tooltip("The game is drawn with this many samples a pixel, which smooths the edges of what it draws.\n"
+                "Off is the PS2's picture. Costs GPU time, more with the resolution above. Applies from the\n"
+                "next picture. (--native-msaa 1|2|4|8)");
+        ImGui::BeginDisabled(port_options.native_msaa <= 1);
+        bool cutout = port_options.native_cutout_aa != 0;
+        if (ImGui::Checkbox("Anti-aliasing: smooth cut-outs too", &cutout))
+            port_live_set(PORT_LIVE_CUTOUT_AA, cutout);
+        tooltip("With MSAA above: textures see-through in places by the alpha test (netting, foliage, fences,\n"
+                "grates) are shaded at every sample instead of once a pixel, so the edges inside them are\n"
+                "smoothed and shimmer less. Costs GPU time only where they are drawn. On by default.\n"
+                "(--native-cutout-aa ssaa|off)");
+        ImGui::EndDisabled();
     }
 
     ImGui::SeparatorText("Motion");
@@ -935,9 +955,8 @@ void renderer_section() {
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     ImGui::TextWrapped("Not in the PC renderer yet, so not offered here (kept in settings.json and on the command line, "
-                       "and applied once it has them): anti-aliasing (MSAA) and smooth cut-outs, anisotropic "
-                       "filtering, texture detail, colour precision, depth tolerance, smooth 2D, the best scaling and "
-                       "sharpening.");
+                       "and applied once it has them): anisotropic filtering, texture detail, colour precision, depth "
+                       "tolerance, smooth 2D, the best scaling and sharpening.");
     ImGui::PopStyleColor();
 }
 
