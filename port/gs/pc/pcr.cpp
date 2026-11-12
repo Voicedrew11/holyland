@@ -1751,12 +1751,15 @@ private:
     // The Vulkan instance and device: with the presenter's surface and swapchain extensions when it wants
     // them, else (or when that fails) without
     bool make_context() {
-        // (push descriptors: Granite then pushes the last set of each program's layout, vkCmdPushDescriptorSet, rather
-        // than allocating and writing a descriptor set for it at every change: the batches' textures, pcr_canvas.cpp's
-        // set 1. KF4_PC_PUSH_DESCRIPTORS=0: not, to compare.)
+        // (KF4_PC_PUSH_DESCRIPTORS=1: push descriptors. Granite then pushes the last set of each program's layout,
+        // vkCmdPushDescriptorSet, rather than allocating and writing a descriptor set for it at every change: the
+        // batches' textures, pcr_canvas.cpp's set 1. Off by default: on NVIDIA (RTX 5080, 2026-11-12) it took the
+        // pump's CPU at 009 uncapped from about 490 to 440 ms a second, but Andrew's settings' uncapped rate from about
+        // 321 to 296 pictures a second, the game from 58.4 to 56.5 vblanks a second (the owner's: 491 against 494);
+        // docs/port/PERFORMANCE.md, "Built 2026-11-12".)
         const char *push = getenv("KF4_PC_PUSH_DESCRIPTORS");
         const Vulkan::ContextCreationFlags context_flags =
-            push && strcmp(push, "0") == 0 ? 0 : Vulkan::CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT;
+            push && strcmp(push, "1") == 0 ? Vulkan::CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT : 0;
         std::vector<const char *> instance_ext, device_ext;
         if (present_wanted_) {
             present_extensions(instance_ext, device_ext);
