@@ -10,6 +10,13 @@
 
 #include "port/host.h"
 
+/* A DMA channel's CHCR is the register the game and the DMA controller's thread (port/platform/dmac.c) hand a
+   transfer over by: the game stores STR once its packet and MADR/QWC/TADR are written, the controller clears it once it
+   has taken them, and the game spins on it. _Atomic, so the store publishes what was written before it and the load
+   that sees STR clear sees what the controller wrote (a plain volatile store orders nothing in C, and ThreadSanitizer
+   saw every transfer as a race). The stores are an xchg on x86; the loads are as before. */
+typedef volatile _Atomic int EeChcr;
+
 /* Timers. */ /* derived name */
 #define T0_COUNT EE_HW(volatile int *, 0x10000000)
 #define T0_MODE EE_HW(volatile int *, 0x10000010)
@@ -41,44 +48,44 @@
 #define VIF1_FIFO EE_HW(volatile void *, 0x10005000)  /* derived name */
 
 /* DMA channel 0, VIF0. */ /* derived name */
-#define D0_CHCR EE_HW(volatile int *, 0x10008000)
+#define D0_CHCR EE_HW(EeChcr *, 0x10008000)
 
 /* DMA channel 1, VIF1. */
-#define D1_CHCR EE_HW(volatile int *, 0x10009000)
+#define D1_CHCR EE_HW(EeChcr *, 0x10009000)
 #define D1_MADR EE_HW(volatile int *, 0x10009010)
 #define D1_QWC EE_HW(volatile int *, 0x10009020)
 #define D1_TADR EE_HW(volatile int *, 0x10009030)
 
 /* DMA channel 2, GIF. */
-#define D2_CHCR EE_HW(volatile int *, 0x1000A000)
+#define D2_CHCR EE_HW(EeChcr *, 0x1000A000)
 #define D2_MADR EE_HW(volatile int *, 0x1000A010)
 #define D2_QWC EE_HW(volatile int *, 0x1000A020)
 #define D2_TADR EE_HW(volatile int *, 0x1000A030)
 
 /* DMA channel 3, from IPU. */
-#define D3_CHCR EE_HW(volatile int *, 0x1000B000)
+#define D3_CHCR EE_HW(EeChcr *, 0x1000B000)
 #define D3_MADR EE_HW(volatile int *, 0x1000B010) /* derived name */
 #define D3_QWC EE_HW(volatile int *, 0x1000B020)  /* derived name */
 
 /* DMA channel 4, to IPU. */
-#define D4_CHCR EE_HW(volatile int *, 0x1000B400)
+#define D4_CHCR EE_HW(EeChcr *, 0x1000B400)
 #define D4_MADR EE_HW(volatile int *, 0x1000B410) /* derived name */
 #define D4_QWC EE_HW(volatile int *, 0x1000B420)  /* derived name */
 #define D4_TADR EE_HW(volatile int *, 0x1000B430) /* derived name */
 
 /* DMA channels 5 to 7, SIF0 to SIF2. */ /* derived name */
-#define D5_CHCR EE_HW(volatile int *, 0x1000C000)
-#define D6_CHCR EE_HW(volatile int *, 0x1000C400)
-#define D7_CHCR EE_HW(volatile int *, 0x1000C800)
+#define D5_CHCR EE_HW(EeChcr *, 0x1000C000)
+#define D6_CHCR EE_HW(EeChcr *, 0x1000C400)
+#define D7_CHCR EE_HW(EeChcr *, 0x1000C800)
 
 /* DMA channel 8, from scratchpad. */ /* derived name */
-#define D8_CHCR EE_HW(volatile int *, 0x1000D000)
+#define D8_CHCR EE_HW(EeChcr *, 0x1000D000)
 #define D8_MADR EE_HW(volatile int *, 0x1000D010)
 #define D8_QWC EE_HW(volatile int *, 0x1000D020)
 #define D8_SADR EE_HW(volatile int *, 0x1000D080)
 
 /* DMA channel 9, to scratchpad. */ /* derived name */
-#define D9_CHCR EE_HW(volatile int *, 0x1000D400)
+#define D9_CHCR EE_HW(EeChcr *, 0x1000D400)
 #define D9_MADR EE_HW(volatile int *, 0x1000D410)
 #define D9_QWC EE_HW(volatile int *, 0x1000D420)
 #define D9_TADR EE_HW(volatile int *, 0x1000D430)

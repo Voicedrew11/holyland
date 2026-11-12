@@ -46,7 +46,7 @@ static uint32_t dma_address(const void *packet, void *bounce, size_t bounce_size
 }
 
 /* (the channels the game started before are queued first, port/platform/dmac.c) */
-static void start_channel(volatile int *chcr, int value) {
+static void start_channel(EeChcr *chcr, int value) {
     port_dmac_wake();
     *chcr = value;
     port_dmac_wake();
