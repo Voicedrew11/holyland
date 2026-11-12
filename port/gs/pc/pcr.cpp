@@ -1779,7 +1779,7 @@ public:
         p.picture.run_bits = nullptr; // (set to the kept bits where it is taken)
         bool direct = direct_on_ && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED && picture.serial != 0 &&
                       direct_serial_.load(std::memory_order_acquire) == picture.serial &&
-                      routed_done_.load(std::memory_order_acquire) == routed_;
+                      routed_done_.load(std::memory_order_acquire) == routed_ && port_interp_behind_lately();
         direct_show_ = direct;
         normal_show_ = !direct;
         if (!direct) {
@@ -2054,7 +2054,9 @@ private:
     // and waited for only when FRAME_CONTEXTS_OWED_MOST are owed. Its canvas's submit goes to the GPU's queue at once
     // either way (next_frame_context flushed it). KF4_PC_CONTEXT_WAIT=1: moved on at each picture, waiting, as before.
     void frame_context_owed() {
-        if (!try_contexts_) {
+        if (!try_contexts_ || !port_interp_behind_lately()) {
+            // (and those owed paid when that waits for nobody: kept up, as before the owing)
+            pay_frame_contexts();
             device_->next_frame_context();
             return;
         }
