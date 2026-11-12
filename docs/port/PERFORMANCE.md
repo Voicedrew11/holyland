@@ -206,6 +206,68 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Built 2026-11-12: kf4-pc's intake (#108)
+
+Windows, RTX 5080, on `pc/colour-2d-layerz` ae9a9097 (perf-baseline-1112's base). Profiled first at 009, 240, the
+owner's profile (`tools/sampler/profile.py`, 1 ms): kf4-pc 590 ms of CPU a second, `feed` 89%. What it paid for, and
+what changed (each its own commit, branch `perf/pc-intake`):
+
+| share of kf4-pc | what | now |
+|---|---|---|
+| ~14% | native draws' VU1 set-up and 0x280's/0x700's clipping, every operation exact in software (`vu_float_round`, `_add`, `_mul` under `clipped`, `vu_transform4`) | **Plain SSE floats, checked** (`vu1_record.cpp`, as vu1_hle.c's fast way): MXCSR toward zero + FTZ + DAZ is VU1's arithmetic whenever no operand has exponent 255 and nothing overflows, divides by zero, underflows or is invalid; operands checked first, MXCSR's flags after each record or batch, done again exactly otherwise. Built `-frounding-math -ffp-exception-behavior=strict`. `vu1_record_test` compares the two ways on 20,000 troubling records and batches (fails 4,208 checks with the flag check taken out). Out of the profile |
+| 6.7% | `keep` hashing every upload to find its chunk | the chunk last kept for the same registers compared first (memcmp); hash four lanes wide for the rest: 2.2% |
+| 6.3% | `copied`: each local copy from uploads made again in the scratch VRAM and read back | **kept** by its registers and source chunks (a function of them): 0.5% |
+| 6.1% + 2% | byte-at-a-time copies (libc++'s range insert/construct of `unsigned char`) of uploads gathered from packets, chunks, the frame's kept uploads | memcpy; a found upload's kept copy is its chunk's bytes (shared) |
+| ~3% + 3% | `clut_colours` made for every batch through the CLUT (twice); `set_mirror` marking the CLUT page 512 times a load | the last answer kept while the mirror and TEX0/TEXA's fields are the same; the page marked once a load |
+
+Checks: pictures incl. every picture between (`KF4_INTERP_DRAW_ALL=1`) at 000, 009, 009:2, 099 at 240, 4x (OWNER) and
+1x, byte for byte the base build's (1,632); all 16 `*_test.exe` pass.
+
+**A/B**, display on (nvidia-smi `display_active` Enabled, 2865-2880 MHz), alternated, 3 rounds. CPU (`build_cost.py`, 15
+s, 009, the owner's profile; base = `hl-base` ae9a9097), ms of CPU a second of play:
+
+| thread | 240: base → now | 500: base → now |
+|---|---|---|
+| kf4-pc | 505 (504-507) → **375** (366-380), -26% | 510 (486-540) → **387** (380-400), -24% |
+| kf4-pc-pump | 296 → 284 | 732 → 714 |
+| kf4-dma, kf4, kf4-between | 203, 191, 89 → 200, 189, 86 | 202, 190, 98 → 201, 193, 102 |
+
+Each frame's intake (`--stats`' new "pc intake a frame", the base with only that commit; from the pace runs below,
+whole runs, medians of 3): **busy**, kf4-pc's time taking a frame's packets in, and **ready**, from its first packet
+to its pictures between handed their frame. Median (p95), ms:
+
+| profile | rate | spot | busy | ready | pictures a second | lowest second | game vblanks a second |
+|---|---|---|---|---|---|---|---|
+| andrew | 240 | 000 | 9.38 (10.50) → **6.89** (7.80) | 11.34 (18.34) → 8.81 (17.32) | 239.2 → 239.8 | 233 → 239 | 60.8 → 60.8 |
+| andrew | 240 | 009 | 12.23 (14.46) → **8.57** (9.93) | 14.85 (18.24) → 11.15 (17.15) | 239.7 → 239.8 | 238 → 239 | 60.8 → 60.8 |
+| andrew | 500 | 000 | 9.12 (11.30) → **6.47** (8.53) | 10.90 (15.33) → 8.42 (13.02) | 362.3 [349.5-362.5] → 352.7 [350.9-354.3] | 326 → 333 | 57.3 → 56.5 |
+| andrew | 500 | 009 | 12.33 (15.44) → **8.14** (11.02) | 14.17 (17.83) → 10.52 (14.22) | 337.0 [334.3-342.6] → **346.7** [346.0-348.7] | 293 → 330 | 59.0 → 55.1 |
+| sean | 240 | 000 | 9.13 (10.17) → **6.56** (7.49) | 10.97 (18.51) → 8.22 (17.44) | 239.8 → 239.8 | 239 → 239 | 60.6 → 60.8 |
+| sean | 240 | 009 | 12.59 (14.17) → **8.44** (9.64) | 15.01 (18.25) → 10.61 (17.42) | 239.5 → 239.5 | 235 → 237 | 60.8 → 60.7 |
+| sean | 500 | 000 | 9.11 (10.32) → **6.48** (7.51) | 10.60 (17.81) → 8.13 (17.11) | 498.1 → 499.2 | 484 → 480 | 60.8 → 60.8 |
+| sean | 500 | 009 | 11.90 (14.73) → **7.89** (10.23) | 14.08 (18.10) → 10.42 (17.30) | 472.5 [467.5-474.5] → **493.7** [492.4-495.5] | 428 → 428 | 60.6 → 60.6 |
+
+A frame's intake is 28-34% shorter, its pictures between ready 2.5-3.7 ms sooner (the p95 of ready, ~17 ms, is
+frames that wait behind a picture kf4-pc makes itself, not intake). Uncapped, the owner's 009 now nearly reaches the
+500 cap (+21 a second) and Andrew's 009 gains ~10 a second; Andrew's 000 is within its noise. Andrew's game vblanks
+a second at 500 fall (009: 59.0 → 55.1): that is #107's vblanks left off the screen, not the game. With the pictures
+coming sooner the cut lowers the count a vblank less often (009: 2,488 → 1,569 vblanks drawn with fewer), more
+pictures are asked than made, and more are left out as behind (861 → 2,074), whole vblanks among them; #107's fix
+(b111168a, keep one picture between for a vblank behind) is what stops that. The same at 500 with b111168a's gs.c applied to both builds (3 rounds, display on):
+
+| profile | spot | pictures a second | lowest second | game vblanks a second | busy | ready |
+|---|---|---|---|---|---|---|
+| andrew | 000 | 387.3 [360.0-389.8] → 355.0 [354.2-364.2] | 331 → 334 | 60.6 → 60.4 | 9.13 → 7.25 | 10.83 → 9.00 |
+| andrew | 009 | 337.6 [333.5-338.2] → **351.8** [350.0-353.2] | 294 → 338 | 60.6 → 60.8 | 12.34 → 8.73 | 13.88 → 10.69 |
+| sean | 000 | 498.9 → 499.0 (the cap) | 478 → 483 | 60.8 → 60.8 | 9.10 → 5.96 | 10.67 → 8.21 |
+| sean | 009 | 478.7 [413.6-479.3] → **491.3** [489.5-497.3] | 429 → 459 | 60.8 → 60.7 | 11.92 → 8.55 | 14.22 → 11.09 |
+
+The game keeps 60 vblanks a second then. Andrew's 000 shows fewer pictures in pace_test's 25 s though the renderer
+draws more over the run (23,457-23,892 pictures between against 22,364-22,679): the cut, which judges only on the
+backlog, now seldom lowers the count a vblank (151-422 vblanks drawn with fewer, against 1,127-1,550), so more of the
+8-9 asked are left out as behind (1,179-1,275 against 774-1,077). That is item 1's "the cut judging on pictures left
+out" again; intake is no longer what holds those pictures back.
+
 ## The list, best first
 
 0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
@@ -223,15 +285,16 @@ unless `--keep` names one.
      pictures' lateness with two pictures between a submit before trading any back.
    - Then the old item 2: **merged draws and bindless textures** for the rest of the per-draw and descriptor cost
      (descriptor writes 6%, the draws themselves).
-2. **`kf4-pc`'s intake** (63%; its lateness made pictures late on 2026-11-06):
-   - **Kept steps out of the variant.** Keep `Batch` out of line (a vector of batches, or a `unique_ptr`) so a
-     `KeptStep` is small; give the kept types non-throwing moves so the vector's growth moves; reserve the frame's
-     steps from the last frame's count. About 15% of `kf4-pc` and part of its 12% `memcpy`.
-   - **Uploads not sent and checked again** (the old item 3): `keep`'s hashing is 6%; the pictures between ask again
-     for uploads the store holds. CLUT loads: `load_clut` and `clut_colours` 3-5%.
-   - **The VU maths for native 280** (about 14%): exact EE float rounding (`vu_float_round`) for each vertex in
-     `clipped`. A wider exact path (four lanes at once) or skipping the exact rounding where the result cannot
-     differ.
+2. **`kf4-pc`'s intake**: **done 2026-11-12** (#108, above: the VU maths, uploads found without hashing, copies
+   and CLUT colours kept; kf4-pc -24 to -26% CPU at 009, a frame's intake -28 to -34%). Kept steps out of the variant were done 2026-11-07. Left of it (009, 240):
+   - **An upload owned again block by block** (`own` → `take_nibbles`, ~11%): mostly cache misses on each block's
+     owner list, even for an upload found again whose blocks it already owns newest. A chunk marked as owning all
+     its blocks newest (cleared by any other upload or draw over them) would let `own` skip the walk.
+   - **The bytes themselves** (~5% `memcpy` of uploads gathered from several packets, ~4% `memcmp` finding them):
+     the price of reading what the game sends; only fewer copies (an upload kept where its packet is) would help.
+   - **`Batch` copies** (`take_kept_batch`, `in_picture`: ~5%) and texture binding per batch (`bind_texture`
+     ~12%: `resolve`'s kept answers, `sampled_texture`'s hash of 256 CLUT colours).
+   - The NVIDIA driver (~17% self: kf4-pc's own draws and uploads) and Granite's descriptor sets (~6%).
 3. **The GPU** (3.16 ms a picture at 009: room for about 315 a second, less with the owner's MSAA 2 and colour high):
    - Look at the **2D untextured blended rectangles** (0.35 ms in about 5 a picture) and the **2D Z-always
      rectangles** (0.21 ms in 3: if they are clears, `vkCmdClearAttachments` or a pass's load op).
