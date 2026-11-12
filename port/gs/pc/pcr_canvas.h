@@ -143,8 +143,10 @@ public:
     //   changes (the store is kf4-pc's: what the walk's draws read of it is held in the walk): its uploads and copies
     //   only where they fall on this canvas's surfaces, its CLUT loads passed over. Submitted every so many batches
     //   and at the end, so that kf4-pc's next frame context (Granite's, which waits for every thread's open command
-    //   buffer) never waits long, and never for a pump with nothing to do.
-    void draw_again_alone(const KeptWalk &walk, const Between &between);
+    //   buffer) never waits long, and never for a pump with nothing to do. picture_follows: the next thing this thread
+    //   does is a picture whose scanout and submit follow at once; the end is then submitted without a flush, and goes
+    //   to the GPU's queue in that picture's vkQueueSubmit (one a picture between, not two)
+    void draw_again_alone(const KeptWalk &walk, const Between &between, bool picture_follows = false);
 
     // A frame walked once (pcr_frame_walk.h): keep_walk() outside a picture between, the frame's own packets, then
     // stop_keeping() (set_between(nullptr) also stops) and take_kept_walk(). A read-back in it is left out of what is

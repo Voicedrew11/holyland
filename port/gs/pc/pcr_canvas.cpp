@@ -575,15 +575,17 @@ public:
 
     bool scanout(CommandBuffer &out, const ShownRect &rect, const Image &dst) {
         flush_batch();
+        // (submitted without a flush: the caller submits out right after, and that puts both on the GPU's queue in
+        // one vkQueueSubmit)
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
-            submit();
+            submit(false);
             return false;
         }
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
         if (placed.surface) {
             resolve(*placed.surface);
         }
-        submit();
+        submit(false);
         times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
         Surface *s = placed.surface;
         if (!s) {
@@ -677,13 +679,16 @@ public:
     }
 
     // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
-    // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture)
-    void submit() {
+    // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture).
+    // flush false: handed to Granite but left for the next submit that flushes (one the caller makes at once).
+    void submit(bool flush = true) {
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
             device_.submit(cmd_);
-            device_.flush_frame();
+            if (flush) {
+                device_.flush_frame();
+            }
             cmd_.reset();
         }
     }
@@ -2086,7 +2091,7 @@ private:
     // waits for at most that many
     static constexpr uint32_t batches_a_submit = 128;
 
-    void draw_again_alone(const Kept &walk, const Between &between) {
+    void draw_again_alone(const Kept &walk, const Between &between, bool picture_follows) {
         flush_batch();
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
@@ -2100,7 +2105,7 @@ private:
         flush_batch();
         between_ = nullptr;
         walk_vertices_ = nullptr;
-        submit();
+        submit(!picture_follows); // (a picture next: its submit puts this on the GPU's queue with it)
     }
 
     void make_again_alone(const Kept &walk, const KeptBatch &kept) {
@@ -3456,8 +3461,8 @@ std::shared_ptr<SurfaceCopies> Canvas::copy_surfaces() {
 void Canvas::start_from(SurfaceCopies &copies) {
     impl_->start_from(copies);
 }
-void Canvas::draw_again_alone(const KeptWalk &walk, const Between &between) {
-    impl_->draw_again_alone(walk, between);
+void Canvas::draw_again_alone(const KeptWalk &walk, const Between &between, bool picture_follows) {
+    impl_->draw_again_alone(walk, between, picture_follows);
 }
 
 void Canvas::keep_walk() {

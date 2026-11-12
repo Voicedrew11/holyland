@@ -1094,6 +1094,7 @@ public:
         }
         std::optional<PictureSize> size = picture_size(v, extra, scale & 0xFF, scale >> 8);
         if (!size || !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_PRESENT))) {
+            device_.flush_frame(); // (a picture between submitted for this picture to flush: on the GPU's queue now)
             return m; // (no picture shown, or none wanted)
         }
         CommandBufferHandle cmd = device_.request_command_buffer();
@@ -1482,10 +1483,19 @@ private:
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         if (walk_ && between_->begin_picture_again(p.picture)) {
-            canvas_->draw_again_alone(*walk_, *between_);
+            canvas_->draw_again_alone(*walk_, *between_, picture_next());
             between_->end_picture_again();
         }
         between_took_s_ = port_wall_seconds() - began_s;
+    }
+
+    // Whether the next message is the picture that shows this picture between, already sent: taken at once, its
+    // submit then puts the picture between's commands on the GPU's queue too (one vkQueueSubmit, not two). Not when
+    // it is still to come (at a capped rate, until the picture's time): the picture between is flushed at once then,
+    // so the GPU draws it in the meantime.
+    bool picture_next() {
+        std::lock_guard<std::mutex> hold(lock_);
+        return !messages_.empty() && std::holds_alternative<PumpPicture>(messages_.front()) && !stopping_;
     }
 
     void work(PumpPicture &e) {
