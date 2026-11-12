@@ -524,7 +524,11 @@ void GifFrontEnd::image_data(std::span<const uint8_t> bytes) {
         events_.image_upload(transfer, taken, UploadEnd::complete);
         return;
     }
-    upload_->bytes.insert(upload_->bytes.end(), taken.begin(), taken.end());
+    if (upload_->bytes.empty()) {
+        upload_->bytes.reserve(upload_->expected_bytes);
+    }
+    // (by pointers: libc++ copies a span's iterators byte by byte)
+    upload_->bytes.insert(upload_->bytes.end(), taken.data(), taken.data() + taken.size());
     if (upload_->bytes.size() < upload_->expected_bytes) {
         return;
     }

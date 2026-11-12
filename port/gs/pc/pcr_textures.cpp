@@ -169,8 +169,21 @@ uint64_t mix(uint64_t h, uint64_t v) {
     return h ^ (h >> 29);
 }
 
+// (four words at a time in four lanes of their own, so the multiplies do not wait on each other, then the lanes and the
+// rest; only ever compared with itself: an upload's chunk looked up)
 uint64_t hash_bytes(uint64_t h, std::span<const uint8_t> bytes) {
     size_t i = 0;
+    if (bytes.size() >= 32) {
+        uint64_t lane[4] = {h, h ^ 0x6A09E667F3BCC908ull, h ^ 0xBB67AE8584CAA73Bull, h ^ 0x3C6EF372FE94F82Bull};
+        for (; i + 32 <= bytes.size(); i += 32) {
+            for (int k = 0; k < 4; k++) {
+                uint64_t v;
+                memcpy(&v, bytes.data() + i + 8 * k, 8);
+                lane[k] = mix(lane[k], v);
+            }
+        }
+        h = mix(mix(mix(lane[0], lane[1]), lane[2]), lane[3]);
+    }
     for (; i + 8 <= bytes.size(); i += 8) {
         uint64_t v;
         memcpy(&v, bytes.data() + i, 8);
@@ -451,6 +464,7 @@ struct TextureStore::State {
     std::unordered_map<TextureKey, KeptAnswer, KeyHash> answers;
     std::unordered_map<uint64_t, Chunk> chunks;
     std::unordered_multimap<uint64_t, uint64_t> chunk_by_hash;
+    std::unordered_map<uint64_t, uint64_t> chunk_by_regs; // the chunk last kept or found by a hash of its registers
     std::list<uint64_t> unowned; // (chunks owning nothing, oldest first)
     size_t unowned_bytes = 0, chunk_bytes = 0;
     std::vector<uint8_t> scratch = std::vector<uint8_t>(GSN_VRAM_BYTES); // the VRAM a texture is decoded in
@@ -494,18 +508,34 @@ struct TextureStore::State {
 
 // The chunk an upload is: found again (the same bytes to the same place), or kept new
 uint64_t TextureStore::State::keep(const TransferRegs &regs, std::span<const uint8_t> bytes, uint64_t pixels) {
-    uint64_t hash = hash_bytes(mix(mix(mix(0, regs.bitbltbuf), regs.trxpos), regs.trxreg), bytes);
+    // (most uploads are the last one to the same place again, the game's textures sent each frame: that chunk is
+    // compared first, without hashing; there is at most one chunk of the same registers and bytes)
+    const uint64_t at = mix(mix(mix(0, regs.bitbltbuf), regs.trxpos), regs.trxreg);
+    auto last = chunk_by_regs.find(at);
+    if (last != chunk_by_regs.end()) {
+        auto c = chunks.find(last->second);
+        if (c != chunks.end() && same_regs(c->second.regs, regs) &&
+            std::equal(c->second.bytes.begin(), c->second.bytes.end(), bytes.begin(), bytes.end())) {
+            return last->second;
+        }
+    }
+    if (chunk_by_regs.size() >= 65536) {
+        chunk_by_regs.clear();
+    }
+    uint64_t hash = hash_bytes(at, bytes);
     auto range = chunk_by_hash.equal_range(hash);
     for (auto it = range.first; it != range.second; ++it) {
         const Chunk &c = chunks.at(it->second);
         if (same_regs(c.regs, regs) && std::equal(c.bytes.begin(), c.bytes.end(), bytes.begin(), bytes.end())) {
+            chunk_by_regs[at] = it->second;
             return it->second;
         }
     }
     uint64_t id = next_chunk++;
+    chunk_by_regs[at] = id;
     Chunk &c = chunks[id];
     c.regs = regs;
-    c.bytes.assign(bytes.begin(), bytes.end());
+    c.bytes.assign(bytes.data(), bytes.data() + bytes.size());
     c.pixels = pixels;
     c.hash = hash;
     chunk_by_hash.emplace(hash, id);

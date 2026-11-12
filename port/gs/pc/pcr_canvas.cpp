@@ -420,7 +420,7 @@ public:
         uint64_t chunk = taken ? store_.last_chunk() : 0;
         std::shared_ptr<const std::vector<uint8_t>> kept_bytes;
         if (keeping_ || !replaying_) {
-            kept_bytes = std::make_shared<std::vector<uint8_t>>(bytes.begin(), bytes.end());
+            kept_bytes = std::make_shared<std::vector<uint8_t>>(bytes.data(), bytes.data() + bytes.size());
         }
         if (keeping_) {
             kept_->steps.emplace_back(KeptUpload{{t, kept_bytes, chunk}});
