@@ -23,6 +23,9 @@
    - succubus: the player put 600 before the creature of chr record 0x47 (the Dark Succubus, map 038,
      the one drawn with a copy of the screen, Entity_PrepareScreenTexturedDraw), each frame, when it is
      there (only once the story has woken it; this one changes the game)
+   - creature=ROW[:DIST]: once, when a creature of chr record ROW has been there 60 frames, the player put
+     DIST (600) before it along the heading the player has, so it is ahead (tools/motion_compare.py's combat
+     and creature cases; this one changes the game)
    - copytex: what the Dark Succubus' draw does to the screen without it: GsDraw_CopyFrameToTexture
      into its 256 x 256 texture at 0x3540, then a 256 x 256 sprite in the middle of the screen drawn
      from that texture
@@ -79,6 +82,7 @@ enum {
     FX_SPELL = 1 << 17,
     FX_COPYTEX = 1 << 18,
     FX_MAPVIEW = 1 << 19,
+    FX_CREATURE = 1 << 20,
 };
 
 static const struct {
@@ -92,7 +96,8 @@ static const struct {
     {"succubus", FX_SUCCUBUS}, {"copytex", FX_COPYTEX},
 };
 
-static int fx_read, fx, fx_log, fx_spell, fx_mapview, fx_frames;
+static int fx_read, fx, fx_log, fx_spell, fx_mapview, fx_frames, fx_creature, fx_creature_done, fx_creature_seen;
+static float fx_creature_distance = 600.0f;
 
 /* What Begin changed, for End */
 static struct {
@@ -125,6 +130,14 @@ static void fx_parse(void) {
             if (n > 6 && strncmp(p, "spell=", 6) == 0) {
                 fx |= FX_SPELL;
                 fx_spell = atoi(p + 6);
+            } else if (n > 9 && strncmp(p, "creature=", 9) == 0) {
+                const char *colon = memchr(p, ':', n);
+
+                fx |= FX_CREATURE;
+                fx_creature = atoi(p + 9);
+                if (colon != NULL) {
+                    fx_creature_distance = (float)atof(colon + 1);
+                }
             } else if (n > 8 && strncmp(p, "mapview=", 8) == 0) {
                 fx |= FX_MAPVIEW;
                 fx_mapview = atoi(p + 8);
@@ -140,8 +153,9 @@ static void fx_parse(void) {
     }
 }
 
-/* The nearest creature of type 0x47 (NULL: none) and its distance */
-static Entity *nearest_succubus(float *distance) {
+/* The nearest creature of chr record `type` (NULL: none) and its distance: in the whole pool, or (active)
+   only those the game updates (the pool keeps the spawn records of creatures gone) */
+static Entity *nearest_creature(int type, int active, float *distance) {
     Entity *e, *best = NULL;
     float best_d = 1e30f;
 
@@ -150,8 +164,11 @@ static Entity *nearest_succubus(float *distance) {
     for (k = 0; k < 2 * 0x80; k++) {
         float *pos, dx, dz, d;
 
-        e = &entity_pool[k / 0x80][k % 0x80];
-        if (e->spawn_info == NULL || e->spawn_info->type_id != 0x47 || e->model == NULL) {
+        e = active ? (k == 0 ? active_entities_head : e->next) : &entity_pool[k / 0x80][k % 0x80];
+        if (active && e == NULL) {
+            break;
+        }
+        if (e->spawn_info == NULL || e->spawn_info->type_id != type || e->model == NULL) {
             continue;
         }
         pos = (float *)((char *)e->model + 0xC0);
@@ -165,6 +182,10 @@ static Entity *nearest_succubus(float *distance) {
     }
     *distance = best_d;
     return best;
+}
+
+static Entity *nearest_succubus(float *distance) {
+    return nearest_creature(0x47, 0, distance);
 }
 
 /* Called at the start of each game frame's draw (FrameInterp_BeginFrame's caller, before anything is
@@ -195,9 +216,39 @@ void ScreenFx_Frame(void) {
             player_state.position.z = pos[2] - cosf(h) * 600.0f;
         }
     }
+    if ((fx & FX_CREATURE) && !fx_creature_done) {
+        float d;
+        Entity *e = nearest_creature(fx_creature, 1, &d);
+
+        float *pos = e != NULL ? (float *)((char *)e->model + 0xC0) : NULL;
+
+        /* a creature just spawned (or a map just loaded) is not placed yet: wait until it has been there
+           60 frames, somewhere other than the origin */
+        fx_creature_seen = pos != NULL && (pos[0] != 0.0f || pos[2] != 0.0f) ? fx_creature_seen + 1 : 0;
+        if (fx_creature_seen >= 60) {
+            float h = player_state.rotation.y;
+
+            player_state.position.x = pos[0] - sinf(h) * fx_creature_distance;
+            player_state.position.y = pos[1] - 50.0f; /* y grows downward: from a little over its feet */
+            player_state.position.z = pos[2] - cosf(h) * fx_creature_distance;
+            fx_creature_done = 1;
+            fprintf(stderr, "[fx] frame %u: put before chr record %d (it was %.0f away)\n", frame_counter, fx_creature, d);
+        }
+    }
     if (fx_log && frame_counter % 60 == 0) {
         float d;
         Entity *e = nearest_succubus(&d);
+        Entity *a;
+
+        fprintf(stderr, "[fx] frame %u creatures (chr record, place):", frame_counter);
+        for (a = active_entities_head; a != NULL; a = a->next) {
+            if (a->spawn_info != NULL && a->model != NULL) {
+                float *p = (float *)((char *)a->model + 0xC0);
+
+                fprintf(stderr, " %d@%.0f,%.0f,%.0f", a->spawn_info->type_id, p[0], p[1], p[2]);
+            }
+        }
+        fprintf(stderr, "\n");
 
         fprintf(stderr, "[fx] frame %u map %02X pos %.0f,%.0f,%.0f heading %.3f; chr 0x47: %s %.0f\n", frame_counter,
                 map_slots[current_map_slot].tag, player_state.position.x, player_state.position.y, player_state.position.z,
@@ -210,7 +261,7 @@ void ScreenFx_Begin(void) {
     if (!fx_read) {
         fx_parse();
     }
-    if (!(fx & ~(FX_SPELL | FX_SUCCUBUS))) {
+    if (!(fx & ~(FX_SPELL | FX_SUCCUBUS | FX_CREATURE))) {
         return;
     }
     kept.active = 1;
