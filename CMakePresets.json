@@ -25,11 +25,34 @@
       "displayName": "Linux, clang",
       "inherits": "base",
       "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "release",
+      "hidden": true,
+      "cacheVariables": { "KF4_FRAME_POINTERS": "OFF", "KF4_LTO": "ON" }
+    },
+    {
+      "name": "windows-clang-release",
+      "displayName": "Windows, clang, release (LTO, no frame pointers)",
+      "inherits": [ "release", "windows-clang" ]
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux, gcc, release (LTO, no frame pointers)",
+      "inherits": [ "release", "linux-gcc" ]
+    },
+    {
+      "name": "linux-clang-release",
+      "displayName": "Linux, clang, release (LTO, no frame pointers)",
+      "inherits": [ "release", "linux-clang" ]
     }
   ],
   "buildPresets": [
     { "name": "windows-clang", "configurePreset": "windows-clang" },
     { "name": "linux-gcc", "configurePreset": "linux-gcc" },
-    { "name": "linux-clang", "configurePreset": "linux-clang" }
+    { "name": "linux-clang", "configurePreset": "linux-clang" },
+    { "name": "windows-clang-release", "configurePreset": "windows-clang-release" },
+    { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" },
+    { "name": "linux-clang-release", "configurePreset": "linux-clang-release" }
   ]
 }

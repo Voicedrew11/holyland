@@ -87,6 +87,58 @@ if(KF4_FRAME_POINTERS AND NOT MSVC)
     add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
 endif()
 
+# ---- Release builds: LTO and PGO (the *-release presets, tools/README.md "A release build") ----
+# KF4_LTO: link-time optimisation (ThinLTO with clang) of everything but the save state's image. The
+# game's objects, ico-audio's and the two markers (state_begin.c, state_end.c, below) are left as
+# plain objects: an LTO linker puts the code and data it compiles after every plain object, which
+# would take the game's globals out from between the markers; and the game's code stays compiled
+# exactly as without LTO, with its own flags, never inlined into port code nor port code into it.
+# The rest (port/, the renderers, paraLLEl-GS, the tests) is LTO'd; their per-file float flags
+# (-frounding-math, -fdenormal-fp-math) are function attributes the cross-file inliner respects.
+option(KF4_LTO "Link-time optimisation of everything but the save state's image (the game, ico-audio)" OFF)
+# KF4_PGO: profile-guided optimisation. "generate" builds a program that writes a profile when it
+# stops after --frames (clang: where LLVM_PROFILE_FILE says; gcc: .gcda files beside the objects).
+# Then, in the same build folder, the merged profile (.profdata) with clang, or "use" with gcc (the
+# .gcda files beside the objects). tools/pgo_train.py does all the steps. PGO covers the game's code
+# too: it moves code and changes what is inlined within a file, not how a float is computed; the
+# frames and state are checked the same as without it (tools/build_compare.py).
+set(KF4_PGO "" CACHE STRING "Profile-guided optimisation: generate, then the merged .profdata (clang) or use (gcc)")
+if(KF4_LTO)
+    enable_language(CXX) # (the renderers are C++, enabled further down)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT KF4_LTO_SUPPORTED OUTPUT KF4_LTO_ERROR LANGUAGES C CXX)
+    if(NOT KF4_LTO_SUPPORTED)
+        message(FATAL_ERROR "KF4_LTO: the compiler or linker cannot do LTO: ${KF4_LTO_ERROR}")
+    endif()
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    message(STATUS "LTO: on (not for the game's objects, ico-audio's or the state markers)")
+endif()
+if(KF4_PGO STREQUAL "generate")
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        add_compile_options(-fprofile-generate)
+        add_link_options(-fprofile-generate)
+    else()
+        add_compile_options(-fprofile-generate -fprofile-update=prefer-atomic)
+        add_link_options(-fprofile-generate)
+    endif()
+    add_compile_definitions(KF4_PGO_GENERATE)
+    message(STATUS "PGO: building a program that writes a profile")
+elseif(KF4_PGO)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT EXISTS ${KF4_PGO})
+        message(FATAL_ERROR "KF4_PGO: no profile at ${KF4_PGO} (clang wants the merged .profdata)")
+    elseif(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT KF4_PGO STREQUAL "use")
+        message(FATAL_ERROR "KF4_PGO: generate or use with gcc, not ${KF4_PGO}")
+    endif()
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # a file the profile does not cover (a test, a tool) is built as without it, quietly
+        add_compile_options(-fprofile-use=${KF4_PGO} -Wno-profile-instr-unprofiled
+            -Wno-profile-instr-out-of-date -Wno-backend-plugin)
+    else()
+        add_compile_options(-fprofile-use -fprofile-partial-training -Wno-missing-profile)
+    endif()
+    message(STATUS "PGO: using ${KF4_PGO}")
+endif()
+
 # ---- The PS2 side ---------------------------------------------------------------------------------
 add_library(kf4_port STATIC
     port/platform/memory.c
@@ -469,6 +521,9 @@ endforeach()
 # program's code and data hold in the next run of the same build.
 add_library(kf4_state_begin OBJECT port/platform/state_begin.c)
 add_library(kf4_state_end OBJECT port/platform/state_end.c)
+# never LTO'd (KF4_LTO, above): the linker would lay their data out after every plain object's
+set_target_properties(kf4_state_begin kf4_state_end ico_audio ${KF4_GAME_TARGETS} PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION OFF)
 add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
     $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
@@ -615,6 +670,9 @@ endif()
 add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
 target_include_directories(int_divide_test PRIVATE port/include)
 target_compile_options(int_divide_test PRIVATE ${KF4_GAME_FLAGS})
+# the operand forms the game's code is compiled to, which is never LTO'd: with LTO the whole program
+# shows g_divisor is never written, folds it to -1 and INT_MIN / -1 to undefined
+set_target_properties(int_divide_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
 # The PS2's math library against the retail program's results (tools/ee_libm_ref.py)
 add_executable(libm_test tests/libm_test.c port/sdk/libm_ps2.c $<TARGET_OBJECTS:ps2_libm>)
