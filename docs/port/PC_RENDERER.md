@@ -10,13 +10,82 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: the PC renderer keeps but does not yet apply MSAA, anisotropy, texture detail (LOD), colour
-precision, cut-out AA, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
+from item 7 below: the PC renderer keeps but does not yet apply anisotropy, texture detail (LOD), colour
+precision, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
 command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug, "Renderer (for
 testing)", lists them). The settings that change live go through `port/overlay/live_settings.c`, which
 `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
-`gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
+`gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165. MSAA and cut-out AA are applied
+since 2026-11-11 ("MSAA and cut-out AA", below).
+
+## MSAA and cut-out AA (2026-11-11)
+
+`--native-msaa` and `--native-cutout-aa` (settings.json's `native_msaa`, `native_cutout_aa`) are applied, live from
+a vblank, and the overlay offers them again (Display, Picture). Built the GPU's way, not as the native GS had them:
+
+- **The surfaces.** A colour surface drawn into with MSAA has a multisampled image beside its own (`Surface::ms`); its
+  depth surface is made at the samples. The surface's own image stays what everything else reads: copies between
+  surfaces, read-backs, textures read from a surface, the frame kept for the pictures between (0xF2), shader blending's
+  rectangle and the scanout. Two marks say which is behind: drawn since (`ms_ahead`: resolved before a read, by
+  `vkCmdResolveImage`, of only the rectangle read where that is all it reads) and written since (`ms_behind`: a new
+  surface's samples made from its image at its first draw). An upload or a copy into a surface writes its image and
+  the same pixels into its samples at once (`pcr_expand.frag`, a rectangle), so neither mark is needed for them. The
+  pump's copies carry both images and the marks; each is copied only where it is not behind.
+- **No half-pixel move with MSAA.** At one sample a vertex moves half a target pixel (`gs_to_clip`), so a pixel's
+  middle is tested at the GS's point. With samples a pixel is their area: moved, a primitive on whole GS pixels (a
+  sprite, a target drawn whole) covered half the samples of every pixel on its edges. With MSAA nothing moves
+  (`PCR_F_MSAA`): a GS pixel is its scale's pixels whole. The 3D is shaded at the pixels' middles, so the picture as a
+  whole sits half a GS pixel up and left of paraLLEl-GS's (1/8 of one from MSAA 1's at 4x).
+- **DATE by the stencil** reads each sample's alpha in the pass (`pcr_date_ms.frag`, `subpassInputMS`, shaded a
+  sample at a time); a GPU without sample-rate shading does DATE by a copy with MSAA.
+- **Cut-out AA** (`is_cutout`): an alpha-tested batch, textured with the texture's alpha and not FST, whose alphas
+  fall on both sides of the test is shaded at every sample (`pcr_prim_sample.frag`, its inputs `sample`): each sample
+  is textured and tested at its own place, so the edges inside netting, fences and the torch stands are smoothed. The
+  alphas it can make are the texture's least and most (kept with a texture the GPU's sampler reads; any for the rest)
+  by the texture function with the vertices' alphas (a native batch's taken as 0x80). Without that test (every
+  alpha-tested batch) 79,343 batches at 000 were shaded a sample at a time, with it 13,430.
+- **Pipelines made ahead** (`pcr_pipelines.cpp`). A pipeline is made for a render pass's samples, so a change of MSAA
+  needs the canvas's pipelines again; made by the draw that needs them, the picture stood still 0.2-1.5 s each.
+  Every pipeline made for the canvas's programs is kept (Granite's compile hook, `cmake/granite_pipeline_warm.inc`)
+  with its pass's attachments, and when the samples change each is made again at the new count, with the per-sample,
+  DATE and expand variants, on a thread of its own; the canvas draws at the old count until they are made (a change at
+  009 at 240: 42 pipelines in 1.2 s on that thread, 57 vblanks at the old count, no draw waiting). Only what was drawn
+  is known: a run started with MSAA makes its first pipelines as at 1x (the PC renderer has no pipeline list yet).
+  `KF4_PC_WARM_LOG=1` names each pipeline made.
+- **Granite** hashed a render pass by its formats, not its samples: a multisampled pass was given the single-sampled
+  one of the same formats. `cmake/granite_msaa.cmake` adds the samples.
+
+Checked (Windows, RTX 5080): with MSAA 1 the pictures at 000, 009, 009:2 and 063 byte for byte the build before
+(1x: 48; 4x native widescreen: 16); ctest's 11 tests. The map tour (000, 009, 014, 022, 026, 035, 112 at 4x without
+native widescreen) against `--renderer gs`, MSAA 4 with cut-out AA: no view broken. Views over 0.4% (blurred): 1 at
+MSAA 1 (014 v5, the water, as before), 9 at MSAA 4: 014 v5 again, 112 v1, v4, v6, v7 (1.1-2.0%), whose fine wall
+texture shows the half-pixel shift above (side by side the same picture), and 026 v0, 009 v0, 035 v2, 014 v6
+(0.44-0.69%: the shift, and 026's fire). MSAA 4 against MSAA 1 view by view: under 0.4% (blurred) but those four of
+112. Edges smoothed (the torch stands at 063, the cone at 026); water, reflections, shadows and the HUD as at MSAA 1.
+The four spots at MSAA 4 against MSAA 1 (4x, native widescreen): 0.03-0.13% (blurred). The sky at 000 and 063 at 4x,
+native widescreen, MSAA 2 (issue 96): no lines, by eye and by a search for rows and columns that stand out from both
+neighbours (which finds a line 10 levels darker drawn in); `--native-colour high` is not applied yet, so not with it.
+Nor in the tour's views at MSAA 4: the rows and columns found are the walls' own edges, there in paraLLEl-GS's too.
+
+GPU time, the renderer's timestamps (`KF4_GSN_GPU_TIME=1`), a whole run to 009 at 240 (2,400 vblanks, 3,100
+pictures), 4x native widescreen, alternated three times each, measured with another game running on the machine
+(so only the ratios mean much; one MSAA 4 run took 7 times its least, plainly while the other game drew). A picture,
+the least of the three runs and the median:
+
+| | least | median |
+|---|---|---|
+| MSAA 1 (the build before) | 0.79 ms | 0.82 ms |
+| MSAA 2, cut-out AA | 1.26 ms | 1.38 ms |
+| MSAA 4, cut-out AA | 1.72 ms | (6.8 ms, contended) |
+| MSAA 4, cut-out AA off | 1.52 ms | 1.76 ms |
+
+So about 1.6 times the GPU's time at MSAA 2 and 2.2 at MSAA 4, cut-out AA about 0.2 ms of it at 4. By kind (least
+runs, MSAA 4 against 1): the native draws about 2.4 times, the copies and resolves 4 times (the pump's copies of the
+samples each frame; the depth surface at 4 samples is the largest), and the expands (`surface`) 0.03 ms a picture.
+
+Still open: the half-pixel shift against paraLLEl-GS could be taken back by reading the 3D's inputs half a pixel up
+and left (`interpolateAtOffset`); points and lines are still not drawn; MSAA 8 not tried.
 
 ## Against paraLLEl-GS: the map tour (2026-11-07)
 
