@@ -538,6 +538,88 @@ heap paths (`CONTEXT_CREATION_ENABLE_DESCRIPTOR_BUFFER_BIT`): they change every 
 cut the pump's CPU much further, and if the pump finishing sooner costs the game vblanks, that has to be understood
 first (the 2026-11-06 per-picture timeline at 500, Granite's device lock held by the pump's submits).
 
+## Built 2026-11-12 (afternoon): picture latency, item 1's levers (branch perf/picture-latency)
+
+On main 391e27cf (#126, #128-#132 merged). The timeline above named three levers; each was built and A/B'd:
+
+1. **Pictures between straight to the pump** (`pcr.cpp`, `Renderer::interp_picture`): a picture between of a frame
+   whose kept walk kf4-pc has already given the pump, and the picture that shows it, go from gs.c's thread to the pump
+   directly, not behind the next frame's packets in kf4-pc's inbox. Only while kf4-pc has taken every picture before it
+   that it might give the pump or make itself (`routed_` / `routed_done_`), so the pump's queue keeps the order; kf4-pc
+   gets a note of each (its counts, vblanks, frame contexts, and the walk checked against the store: when it no longer
+   fits, the next ones go through kf4-pc again). Not with `--frame-rate unlocked`. `KF4_PC_DIRECT=0` turns it off;
+   `--stats` counts them ("straight to the pump"). The first vblank of a game frame still goes through kf4-pc (its
+   first picture makes the pump's frame); at 500, 14% of the pump's pictures went direct alone, 30% with lever 3 (single runs, Andrew 000).
+2. **`start_from` cheaper: tried, dropped.** The pump kept the frame before's surface copies and walk until it had
+   nothing queued, so that letting go of their images (Granite's device lock, which kf4-pc holds while moving a frame
+   context on) was off the first picture's path. Worse in every cell (sean 000: 442 pictures a second against 500,
+   698 shown late against 58): the patch is kept out of the branch (C:\code\kf4-tools\latency\dropped). Not profiled
+   further.
+3. **kf4-pc's frame context without the wait** (`Renderer::frame_context_owed`, `cmake/granite_try_frame_context.cmake`):
+   kf4-pc moves the frame context on after a pumped picture only when no command buffer is open
+   (`Device::try_next_frame_context`), else owes it and pays at the next pumped picture or vblank that can, waiting
+   only when FRAME_CONTEXTS_OWED_MOST are owed; its canvas's submit is flushed at once either way.
+   `KF4_PC_CONTEXT_WAIT=1` waits at each picture as before.
+
+**Checks.** Pictures at 240 with `KF4_INTERP_DRAW_ALL=1`, 000/009/009:2/099, 1x and 4x MSAA 2 (160 pictures): byte for
+byte main's. ctest's 16 tests pass. The validation layer with sync validation silent at the four spots (1x, 3x MSAA 2,
+2x MSAA 4, 4x MSAA 2 colour high).
+
+**A/B** (`pace_cut.py`, 25 s, `--hz 500`, builds alternated, 3 rounds, display off in every round: GPU 2160 MHz,
+`display_active` Disabled). Median of 3; pictures a second and left out [min-max]; gap = between pictures handed to the
+window; late = shown more than half a vblank late (`--stats` "window"):
+
+Two A/Bs: A (11:31-12:25) main, lever 1, levers 1 and 3, all three; B (12:25-13:06) main, levers 1 and 3, and levers
+1 and 3 with at most 2 frame contexts owed.
+
+| profile | spot | set | build | pictures/s | game vbl/s | gap p99 / sd ms | left out | late | cuts |
+|---|---|---|---|---|---|---|---|---|---|
+| andrew | 000 | A | main | 345.6 [342.4-355.2] | 60.7 | 14.7 / 2.52 | 472 [462-478] | 2867 | 29 |
+| andrew | 000 | A | +L1 | 349.7 [337.8-353.3] | 60.4 | 14.6 / 2.49 | 446 [438-465] | 2530 | 30 |
+| andrew | 000 | A | +L1+L3 | 354.7 [353.7-359.2] | 60.8 | 8.7 / 1.53 | 392 [345-419] | 999 | 27 |
+| andrew | 000 | A | +L1+L3+L2 (dropped) | 343.7 [341.8-347.0] | 60.7 | 10.8 / 1.71 | 429 [415-433] | 1339 | 30 |
+| andrew | 000 | B | main | 343.1 [341.6-344.1] | 60.4 | 14.6 / 2.65 | 458 [407-474] | 3044 | 28 |
+| andrew | 000 | B | +L1+L3 | 359.8 [354.8-363.2] | 60.8 | 6.8 / 1.41 | 335 [328-354] | 710 | 25 |
+| andrew | 000 | B | +L1+L3, 2 owed | 334.5 [329.5-342.0] | 60.6 | 15.6 / 2.73 | 431 [407-515] | 2666 | 29 |
+| andrew | 009 | A | main | 322.6 [316.5-326.8] | 60.7 | 13.6 / 2.21 | 578 [555-663] | 2338 | 27 |
+| andrew | 009 | A | +L1 | 321.7 [307.5-330.1] | 60.8 | 13.8 / 2.33 | 584 [546-596] | 2221 | 27 |
+| andrew | 009 | A | +L1+L3 | 315.4 [313.5-327.8] | 60.8 | 11.0 / 1.72 | 584 [550-639] | 1081 | 27 |
+| andrew | 009 | A | +L1+L3+L2 (dropped) | 295.4 [294.1-295.9] | 60.7 | 12.3 / 1.86 | 601 [552-699] | 1699 | 30 |
+| andrew | 009 | B | main | 332.5 [327.0-334.5] | 60.6 | 14.1 / 2.14 | 563 [545-573] | 1963 | 26 |
+| andrew | 009 | B | +L1+L3 | 314.6 [314.2-316.2] | 60.7 | 11.8 / 1.87 | 594 [554-633] | 1255 | 30 |
+| andrew | 009 | B | +L1+L3, 2 owed | 326.2 [318.2-333.7] | 60.5 | 14.2 / 2.25 | 524 [504-588] | 1961 | 27 |
+| sean | 000 | A | main | 500.0 [496.6-500.0] | 60.8 | 2.5 / 0.15 | 25 [25-40] | 58 | 2 |
+| sean | 000 | A | +L1 | 500.0 [495.5-500.0] | 60.8 | 2.3 / 0.12 | 25 [25-61] | 56 | 2 |
+| sean | 000 | A | +L1+L3 | 496.5 [492.0-498.4] | 60.7 | 2.4 / 0.41 | 41 [39-62] | 74 | 3 |
+| sean | 000 | A | +L1+L3+L2 (dropped) | 442.4 [436.8-446.5] | 60.8 | 10.2 / 1.45 | 106 [76-111] | 698 | 12 |
+| sean | 000 | B | main | 497.7 [495.9-499.3] | 60.8 | 2.4 / 0.43 | 32 [32-45] | 77 | 2 |
+| sean | 000 | B | +L1+L3 | 496.4 [495.7-496.6] | 60.9 | 2.4 / 0.41 | 40 [40-53] | 70 | 3 |
+| sean | 000 | B | +L1+L3, 2 owed | 498.6 [498.4-500.0] | 60.8 | 2.4 / 0.36 | 32 [25-39] | 71 | 2 |
+| sean | 009 | A | main | 475.7 [461.5-479.0] | 60.9 | 6.0 / 0.99 | 162 [143-223] | 665 | 4 |
+| sean | 009 | A | +L1 | 470.4 [469.0-475.0] | 60.8 | 8.1 / 1.05 | 157 [128-194] | 895 | 3 |
+| sean | 009 | A | +L1+L3 | 460.0 [454.0-461.3] | 60.8 | 4.8 / 0.94 | 191 [185-220] | 381 | 12 |
+| sean | 009 | A | +L1+L3+L2 (dropped) | 409.1 [408.2-419.7] | 60.7 | 7.6 / 1.29 | 238 [229-287] | 719 | 18 |
+| sean | 009 | B | main | 473.0 [472.8-478.8] | 60.8 | 7.7 / 1.00 | 128 [127-152] | 694 | 3 |
+| sean | 009 | B | +L1+L3 | 458.5 [446.9-459.9] | 60.8 | 4.8 / 1.01 | 199 [156-204] | 292 | 12 |
+| sean | 009 | B | +L1+L3, 2 owed | 470.0 [462.6-471.5] | 60.8 | 8.4 / 1.05 | 122 [113-150] | 768 | 4 |
+
+At 240 (both profiles, 000 and 009, 2 rounds alternated, 13:12-13:30, display off) nothing moves: 239.5-239.8
+pictures a second either way, 60.6-60.8 game vblanks, gap p99 4.5 ms, the same left-outs (8-27) and late (60-98).
+Andrew's longest gap was 18-25 ms with the levers against 5-11 (the sd 0.34-0.39 against 0.17-0.23): one hitch a
+run, not looked into.
+
+**Read.** Lever 1 alone changes little: the pictures of a game frame's first vblank (half of them) still wait for
+kf4-pc, and kf4-pc, slowed by its frame context waits, has often not taken the vblank before's pictures when the next
+vblank's come, so most still go its way. With lever 3 kf4-pc keeps up and more go direct. In both A/Bs, levers 1 and 3:
+pictures shown late fall by half to three quarters for both profiles (Andrew 000: 2867 -> 999 and 3044 -> 710), the gaps
+are more even (Andrew 000 p99 14.7 -> 8.7 and 14.6 -> 6.8 ms, sd 2.5 -> 1.5), Andrew 000 makes 3-5% more pictures a
+second and leaves fewer out. The cost: 2-5% fewer pictures a second at 009 (Andrew 322.6 -> 315.4 and 332.5 -> 314.6;
+the owner's 475.7 -> 460.0 and 473.0 -> 458.5), and the owner's profile leaves more out and cuts more often (009: 12
+cuts against 3-4). With only 2 owed the gains go (and the costs): owing is what lets kf4-pc keep up, so
+FRAME_CONTEXTS_OWED_MOST stays 8. Left: the first vblank's pictures (the pump's frame needs kf4-pc's surface copies:
+made on the pump's side they could start sooner); why the cut lowers more often with the owner's settings (the
+pictures sooner, so the backlog the cut judges falls differently?).
+
 ## The list, best first
 
 0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
@@ -552,8 +634,11 @@ first (the 2026-11-06 per-picture timeline at 500, Granite's device lock held by
    of 8-9 asked at 500, neither the pump nor the GPU full). **The cut judges on pictures left out (2026-11-12,
    above)**: half the left-outs and late pictures, more even gaps, the same or more pictures a second, #130's drop
    at 000 undone. **The timeline is followed (above)**: the bound is latency: a frame's pictures between wait in
-   kf4-pc's inbox behind the next frame's packets and for the pump's `start_from`, then run back to back; next, the
-   pictures between to the pump without kf4-pc's queue, and `start_from` cheaper.
+   kf4-pc's inbox behind the next frame's packets and for the pump's `start_from`, then run back to back.
+   **Built 2026-11-12 (afternoon, above)**: pictures between straight to the pump and kf4-pc's frame context without
+   the wait (late pictures -50 to -75%, even gaps; 2-5% fewer pictures a second at 009); `start_from` let go of later
+   was worse and dropped. Next: the first vblank of each game frame (its pictures still wait for kf4-pc's surface
+   copies), and why the owner's settings cut more with it.
    **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
    - **One submit a picture between**: **done 2026-11-12** where the picture that shows it is already waiting
      (uncapped), below. The pump's other submits (every 128 batches) are left.
