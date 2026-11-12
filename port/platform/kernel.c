@@ -1103,6 +1103,18 @@ void InvalidDCache(void *start, void *end) {
 }
 
 /* ---- Once a frame ----------------------------------------------------------------------------- */
+#ifdef KF4_PGO_GENERATE
+/* A profile-generating build (KF4_PGO=generate, tools/pgo_train.py) writes its profile before --frames'
+   exit, in case the exit does not get to the compiler's own atexit writer */
+#if defined(__clang__)
+int __llvm_profile_write_file(void);
+#define write_profile() __llvm_profile_write_file()
+#else
+void __gcov_dump(void);
+#define write_profile() __gcov_dump()
+#endif
+#endif
+
 static void frame_end(void) {
     if (port_log_enabled()) {
         char line[512];
@@ -1115,6 +1127,9 @@ static void frame_end(void) {
     if (port_options.frames > 0 && vblank_count >= (uint64_t)port_options.frames) {
         port_event("stop: %lld vblanks run", port_options.frames);
         port_gs_finish();
+#ifdef KF4_PGO_GENERATE
+        write_profile();
+#endif
         exit(0);
     }
 }
