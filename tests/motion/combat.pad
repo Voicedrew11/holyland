@@ -1,0 +1,19 @@
+# tools/motion_compare.py, case "combat" (with --cheats all, --teleport 2200:2:0, KF4_FX=creature=0:400):
+# after tests/newgame.pad, the menu's Equipment page, the first weapon (a club) put on, the menu closed; then on
+# map 002 a Maneater before the player, and the club swung at it (SQUARE) every 50 vblanks.
+1800 CIRCLE 4     # the menu
+1860 DOWN 4
+1900 DOWN 4
+1940 CROSS 4      # Equipment, the weapon's slot
+2000 RIGHT 4      # the club
+2060 CIRCLE 4     # out of the page
+2120 CIRCLE 4     # the menu closed
+2500 SQUARE 4
+2550 SQUARE 4
+2600 SQUARE 4
+2650 SQUARE 4
+2700 SQUARE 4
+2750 SQUARE 4
+2800 SQUARE 4
+2850 SQUARE 4
+2900 SQUARE 4

@@ -177,7 +177,7 @@ state the same in both. Outside the cases below, views differ in under 0.4% of p
 5. **Small**: a rock's edge at 112 (v10) cut differently near the camera. Fixed 2026-11-11, below.
 
 Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
-(native widescreen, MSAA).
+(native widescreen, MSAA): "Against paraLLEl-GS in motion" below.
 
 **1 and 2 fixed (2026-11-07, the same day): one cause.** The canvas recorded copies inside an open render pass:
 `write_pixels` (an upload written into a colour surface) and `grow` ended the open pass only when it drew into the
@@ -297,6 +297,47 @@ kf4 --disc ... --headless --no-audio --dump-frames N ...
 
 Granite enables the layer itself only in a `VULKAN_DEBUG` build (not ours), so the variables above are the way.
 Under the layer the game runs far slower: a few hundred pictures between in a 17-second run at 240.
+
+## Against paraLLEl-GS in motion (2026-11-11)
+
+What the map tour left out (issue 112): `tools/motion_compare.py` plays 12 cases by pad script after a new game
+(`tests/motion/`), each by gs and by pc with the same input, and compares every dumped vblank's pictures as
+`tour_compare.py` does; the per-frame log at each vblank is the same in both runs (it was at every vblank of every
+case). The cases: the title and the opening's messages, every page of the menu (Item, Magic, Equipment with a weapon's
+model, Status, Journal, Arrange, System and Load), an item picked up, combat (a club put on, map 002, a Maneater put
+before the player with `KF4_FX=creature=0`: swings, the trail, its attacks), spells 3 and 16 cast, creatures (map 102's,
+the Fire Genie and Larvae of 025, the Salamanders of 016, the Watchers of 022), and the under-water and MP drain screens
+(forced by `KF4_FX`). Each at 1x and at 4x with native widescreen and `--native-msaa 2`, and each at 240 (pc only:
+`flash_find.py --frames` on the pictures between; the game frames at 240 against the same vblanks at 30). Run at
+cf80b086 on Windows (RTX 5080). MSAA is passed but not applied on main (item 7 above), so it is not covered.
+
+Found:
+
+1. **The under-water and MP drain screens lose the GPU.** `KF4_FX=water` or `drain` (the wobbling screen drawn from
+   the copy of the frame at 0x2BC0, `Game_DrawWobblingScreen`) gives `vkQueueSubmit2 failed (code: -4)` (device lost)
+   from the first frame it draws, every picture black after, at 1x and 4x, with native draws off too, and with each of
+   the `KF4_PC_*` switches at 0. The other forced effects (copytex, prev, aim, tint, fill, down, bright40, fade, dim)
+   do not. Real deep water (029) and the Queen's Palace drain were not reached; they draw the same.
+2. **The HUD's MP ring is never drawn.** Its blue arc is drawn with DATE (DATM 1) where the MP bar's sprite set
+   alpha bit 7 with FBA (`Hud_Draw`, sprites 5 and 6). By the stencil the set-up (`pcr_date.frag`) finds bit 7 clear
+   under the whole arc, so nothing is drawn; `KF4_PC_STENCIL=0` (DATE by a copy) draws it as gs does. The same build
+   with DATM inverted in the set-up draws the whole arc: the set-up reads the target's alpha without the bit the
+   batch before wrote. Not the dynamic state (`KF4_PC_DYNAMIC=0`) nor a pass shared with earlier draws (a fresh pass
+   for each DATE batch). Every play picture with MP has it (0.3% of the picture: under the tour's 0.4%).
+3. **A black picture as the menu opens**: the vblank after CIRCLE (1805 of the case), at 1x and 4x, at 30 and 240,
+   with and without whole frames. gs shows the last game frame there. Not `UpperField` (c043b057).
+4. **The menus at 1x sit one GS pixel left** of gs's (and sharper: gs shows a field a vblank); at 4x they line up and
+   differ by the smooth 2D only. 5-13% of each menu picture at 1x, 1-4% at 4x. The title: half a line apart (the field
+   screens, by design).
+5. **Small**: at 4x, textures finer (`--native-lod scale`) and the 2D smoothed, as meant. Spell 3's wisps at 240:
+   29 of 240 pictures between flagged, each a translucent wisp moved between its game frames (looked at: no shards, no
+   holes, no wrong places).
+
+Clean: the pick-up, combat (the trail, the creature, the hits), spell 16, the creatures' cases, the teleport's fade
+and the opening, under 0.4% blurred at every vblank but the HUD ring; no picture between flagged outside spell 3; the
+game frames at 240 the same as at 30. Not covered: breath and glow effects (none of the creatures placed used one in
+its window), spells 36, 61 and 76 (nothing showed in their window), the shop, a save point's save screen, doors and
+stairs (the teleport's fade only), real deep water.
 
 ## Where it stands (2026-10-29)
 
