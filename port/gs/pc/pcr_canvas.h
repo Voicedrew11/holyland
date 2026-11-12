@@ -104,6 +104,12 @@ public:
     void set_scale(uint32_t x_scale, uint32_t y_scale);
     // Texture detail (GSN_LOD_*) and anisotropy (1 to 16) for the batches from the next vblank
     void set_sampling(int lod, uint32_t aniso);
+    // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
+    // at a scale above 1
+    void set_2d(int mode);
+    // Colour precision (GSN_COLOUR_*) from the next vblank, as the scale: high keeps the colour surfaces at 16 bits a
+    // channel and the colours' arithmetic in floats, the picture dithered to 8 bits as it is scanned out
+    void set_colour(int mode);
     // MSAA: the samples a pixel of the surfaces drawn into has (1, 2, 4 or 8; 1 none), from the next vblank as the
     // scale; with cutout_aa the cut-outs shaded at every sample (from the next draw)
     void set_msaa(uint32_t samples, bool cutout_aa);

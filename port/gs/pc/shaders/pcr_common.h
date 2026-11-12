@@ -39,6 +39,10 @@ layout(push_constant, std430) uniform Push {
 #define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
 #define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
+#define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
+#define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
+
+#define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)
 
 #define PCR_SRC_CT32 0u
 #define PCR_SRC_CT24 1u

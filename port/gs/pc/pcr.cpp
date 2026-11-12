@@ -714,8 +714,9 @@ public:
     }
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
-    // cutout_aa: MSAA's (Canvas::set_msaa)
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa) {
+    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d and colour: Canvas::set_2d's and set_colour's
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
+                int mode_2d, int colour) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
@@ -724,6 +725,8 @@ public:
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->set_sampling(lod, uint32_t(aniso));
             canvas_->set_msaa(samples, cutout_aa);
+            canvas_->set_2d(mode_2d);
+            canvas_->set_colour(colour);
             canvas_->vblank();
             times_->collect();
         }
@@ -1837,7 +1840,8 @@ private:
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF);
+                           uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
+                           settings.mode_2d.load(), settings.colour.load());
         }
         uint32_t scale = picture_scale_;
         if (!extra) {

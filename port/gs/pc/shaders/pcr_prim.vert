@@ -19,10 +19,13 @@ layout(location = 4) in float a_fog;
 // (pictures between) x: a triangle's corner's own kick, a sprite's first (NONE: as it is); y: the colour's kick, a
 // sprite's second; z: a triangle's third kick; w: PCR_K_* below
 layout(location = 5) in uvec4 a_kicks;
+// (the 2D mode's smooth) the texels the primitive covers, across and down: first | last << 16 (PCR_NO_RECT: none)
+layout(location = 6) in uvec2 a_rect;
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+layout(location = 3) flat out uvec2 v_rect;
 
 // the picture's (the picture's header; zeros outside a picture between)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
@@ -149,4 +152,5 @@ void main() {
     v_color = colour;
     v_stq = stq;
     v_fog = fog;
+    v_rect = a_rect; // (in a picture between the frame's: what the primitive covers does not move with it)
 }

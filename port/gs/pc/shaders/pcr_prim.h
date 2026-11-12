@@ -16,6 +16,7 @@
 layout(location = 0) PCR_IN vec4 v_color;
 layout(location = 1) PCR_IN vec3 v_stq;
 layout(location = 2) PCR_IN float v_fog;
+layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.vert's a_rect)
 
 layout(location = 0) out vec4 o_color;
 
@@ -141,7 +142,8 @@ vec2 texture_uv() {
     return (pc.flags & PCR_F_FST) != 0u ? round(v_stq.xy * 256.0) / 256.0 : v_stq.xy / v_stq.z * size;
 }
 
-// (with anisotropy) their change a pixel across and down, taken in main before anything is discarded
+// (with anisotropy or the 2D mode's smooth) their change a pixel across and down, taken in main before anything is
+// discarded
 vec2 uv_dx, uv_dy;
 
 uint aniso_log2() {
@@ -168,6 +170,62 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     return true;
 }
 
+// (colour high: the texture's colour with its fraction where the read keeps one: the sampler's filter, the 2D mode's
+// cubic; texture_f_kept says it was set, else the colour is sample_texture's whole numbers)
+vec4 texture_f;
+bool texture_f_kept = false;
+
+// The 2D mode's smooth (pcr_canvas.cpp, PCR_F_SMOOTH_2D: at a scale above 1, a sprite's or a 2D triangle's texture
+// read nearest): where the texture is magnified on the target (a texel at least a pixel across), it is read with a
+// Catmull-Rom cubic (16 texels) at this pixel's own place, not nearest: the same picture at every scale, the texels'
+// steps smooth and their edges still sharp (the native GS's --native-2d smooth). Read nearest, a texel covers the
+// target's pixels from where its coordinate is reached; its middle, where the cubic puts it, is half a pixel's change
+// on from this pixel's coordinate (taken at the GS's point: gs_to_clip; none with MSAA). The taps stay inside the
+// texels the primitive covers (v_rect: a letter's cell of a sheet of letters; past it, the letters beside it bled in),
+// and the result inside the four texels around the place (no ring: no colour or alpha they do not have).
+bool smooth_2d_applies(float lod) {
+    if ((pc.flags & PCR_F_SMOOTH_2D) == 0u || v_rect.x == PCR_NO_RECT || lod > 0.0 || (pc.tex1 & 1u) != 0u ||
+        src_kind() == PCR_SRC_SURFACE) {
+        return false;
+    }
+    vec2 m = max(abs(uv_dx), abs(uv_dy));
+    return max(m.x, m.y) <= 1.0 + 1.0 / 64.0;
+}
+
+vec4 tap_2d(ivec2 at, ivec2 size) {
+    if (src_kind() == PCR_SRC_SAMPLED) {
+        return texelFetch(u_sampled, min(at, textureSize(u_sampled, 0) - 1), 0) * 255.0;
+    }
+    return vec4(texel(at, 0u, size));
+}
+
+uvec4 smooth_2d(vec2 uv) {
+    ivec2 size = ivec2(int(pc.tex_size & 0xFFFFu), int(pc.tex_size >> 16));
+    ivec2 first = ivec2(v_rect & 0xFFFFu), last = ivec2(v_rect >> 16);
+    vec2 shift = (pc.flags & PCR_F_MSAA) != 0u ? vec2(0.0) : 0.5 * (uv_dx + uv_dy);
+    vec2 q = clamp(uv + shift, vec2(first) + 0.5, vec2(last) + 0.5) - 0.5;
+    vec2 i = floor(q);
+    vec2 f = q - i;
+    vec4 wx = vec4(f.x * (-0.5 + f.x * (1.0 - 0.5 * f.x)), 1.0 + f.x * f.x * (-2.5 + 1.5 * f.x),
+                   f.x * (0.5 + f.x * (2.0 - 1.5 * f.x)), f.x * f.x * (-0.5 + 0.5 * f.x));
+    vec4 wy = vec4(f.y * (-0.5 + f.y * (1.0 - 0.5 * f.y)), 1.0 + f.y * f.y * (-2.5 + 1.5 * f.y),
+                   f.y * (0.5 + f.y * (2.0 - 1.5 * f.y)), f.y * f.y * (-0.5 + 0.5 * f.y));
+    vec4 sum = vec4(0.0), lo = vec4(255.0), hi = vec4(0.0);
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            vec4 c = tap_2d(clamp(ivec2(i) + ivec2(x - 1, y - 1), first, last), size);
+            sum += c * (wx[x] * wy[y]);
+            if ((x == 1 || x == 2) && (y == 1 || y == 2)) {
+                lo = min(lo, c);
+                hi = max(hi, c);
+            }
+        }
+    }
+    texture_f = clamp(sum, lo, hi);
+    texture_f_kept = true;
+    return uvec4(floor(texture_f + 0.5));
+}
+
 // The texture's colour at this pixel: the level from Q (TEX1's LCM, L, K), the filter MMAG or MMIN picks; above 0 the
 // texture detail's bias moves which level (never the choice between MMAG and MMIN), within the texture's levels
 uvec4 sample_texture() {
@@ -177,6 +235,9 @@ uvec4 sample_texture() {
         lod += log2(1.0 / abs(v_stq.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
     }
     float bias = float(int(pc.tex1) >> 16) / 256.0;
+    if (smooth_2d_applies(lod)) {
+        return smooth_2d(uv);
+    }
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
         // clamp are the texture's: pcr_canvas.cpp's sampler_for)
@@ -187,6 +248,8 @@ uvec4 sample_texture() {
         if (lod <= 0.0 || aniso_log2() == 0u || !sampled_anisotropic(uv, lod, t)) {
             t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
         }
+        texture_f = t * 255.0;
+        texture_f_kept = true;
         return uvec4(round(t * 255.0));
     }
     uint mmin = (pc.tex1 >> 1) & 7u;
@@ -217,6 +280,55 @@ uvec4 destination() {
 
 // ALPHA's (A - B) * C + D in the GS's integers (as gs_frag.h's), COLCLAMP's clamp or wrap; with PABE, Cs where As's
 // bit 7 is clear
+// Colour high (PCR_F_HIGH, pcr_canvas.cpp's set_colour: the colour surfaces 16 bits a channel): the colours' arithmetic
+// in floats, without the GS's roundings, alpha still the GS's integers (the alpha test, DATE and the blend's factors as
+// exact); the picture is dithered to 8 bits as it is scanned out (pcr_narrow.frag). As the native GS's --native-colour
+// high: the fractions the GS's shifts drop are kept, but not the level. Along a gradient the GS's floor takes half a
+// step on average, and the picture's level is the PS2's when that is taken too (else a dark scene comes out about a
+// step brighter). Whole numbers (to 1/128) are taken as whole.
+bvec3 whole(vec3 x) {
+    return lessThan(abs(x - round(x)), vec3(1.0 / 128.0));
+}
+
+// The GS's floor of a colour interpolated across a primitive: exact where it is a whole number, else less half a step
+vec3 gs_floor(vec3 x) {
+    return mix(x - 0.5, round(x), whole(x));
+}
+
+// What the GS's p * k >> 7 drops on average, for p along a gradient: half a step, less what k's factors of two keep
+// exact (k 128 drops nothing; 64 a quarter); for a k that is itself along a gradient, the mean over k
+float shift_loss(float k) {
+    if (abs(k - round(k)) >= 1.0 / 128.0) {
+        return 0.5 - 4.5 / 256.0;
+    }
+    int ki = int(round(k));
+    return ki == 0 ? 0.0 : 0.5 - float(1 << min(findLSB(ki), 7)) / 256.0;
+}
+
+// p * k >> 7 as the GS has it where both are whole numbers; else p * k / 128 less what the shift drops on average
+vec3 gs_shift7(vec3 p, vec3 k) {
+    vec3 x = p * k / 128.0;
+    vec3 loss = vec3(shift_loss(k.r), shift_loss(k.g), shift_loss(k.b));
+    bvec3 exact = bvec3(uvec3(whole(p)) & uvec3(whole(k)));
+    return mix(x - loss, floor(x + 1.0 / 256.0), exact);
+}
+
+// blended() in floats, from the destination's colours with their fraction (COLCLAMP's clamp; its wrap stays the GS's
+// integers, blended()'s)
+vec3 blended_high(uvec4 cs, vec3 hc) {
+    if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
+        return hc;
+    }
+    vec4 dh = texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dest_offset, 0) * 255.0;
+    uint sel_a = pc.alpha & 3u, sel_b = (pc.alpha >> 2) & 3u, sel_c = (pc.alpha >> 4) & 3u, sel_d = (pc.alpha >> 6) & 3u;
+    vec3 a = sel_a == 0u ? hc : sel_a == 1u ? dh.rgb : vec3(0.0);
+    vec3 b = sel_b == 0u ? hc : sel_b == 1u ? dh.rgb : vec3(0.0);
+    vec3 dd = sel_d == 0u ? hc : sel_d == 1u ? dh.rgb : vec3(0.0);
+    float ad = (pc.alpha & 0x40000u) != 0u ? 128.0 : round(dh.a);
+    float c = sel_c == 0u ? float(cs.a) : sel_c == 1u ? ad : float((pc.alpha >> 8) & 0xFFu);
+    return clamp(gs_shift7(a - b, vec3(c)) + dd, 0.0, 255.0);
+}
+
 uvec3 blended(uvec4 cs) {
     if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
         return cs.rgb;
@@ -249,7 +361,7 @@ bool alpha_passes(uint a) {
 }
 
 void main() {
-    if ((pc.flags & PCR_F_TME) != 0u && aniso_log2() != 0u) {
+    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
@@ -262,25 +374,32 @@ void main() {
     }
     uvec4 vc = uvec4(v_color + 0.001);
     uvec4 c = vc;
+    bool high = (pc.flags & PCR_F_HIGH) != 0u;
+    vec3 hc = high ? gs_floor(v_color.rgb) : vec3(0.0); // (colour high: c's colour in floats; c's alpha still used)
     if ((pc.flags & PCR_F_TME) != 0u) {
         uvec4 t = sample_texture();
+        vec3 tf = texture_f_kept ? texture_f.rgb : vec3(t.rgb);
         bool tcc = (pc.flags & PCR_F_TCC) != 0u;
         switch ((pc.flags >> PCR_F_TFX_SHIFT) & 3u) {
         case 0u: // MODULATE
             c.rgb = min((t.rgb * vc.rgb) >> 7, uvec3(255u));
             c.a = tcc ? min((t.a * vc.a) >> 7, 255u) : vc.a;
+            hc = min(gs_shift7(tf, hc), vec3(255.0));
             break;
         case 1u: // DECAL
             c.rgb = t.rgb;
             c.a = tcc ? t.a : vc.a;
+            hc = tf;
             break;
         case 2u: // HIGHLIGHT
             c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
             c.a = tcc ? min(t.a + vc.a, 255u) : vc.a;
+            hc = min(gs_shift7(tf, hc) + float(vc.a), vec3(255.0));
             break;
         default: // HIGHLIGHT2
             c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
             c.a = tcc ? t.a : vc.a;
+            hc = min(gs_shift7(tf, hc) + float(vc.a), vec3(255.0));
             break;
         }
     }
@@ -288,17 +407,24 @@ void main() {
         uint f = uint(clamp(v_fog, 0.0, 255.0));
         uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu);
         c.rgb = (f * c.rgb + (255u - f) * fog) >> 8;
+        float ff = clamp(v_fog, 0.0, 255.0);
+        hc = (ff * hc + (255.0 - ff) * vec3(fog)) / 256.0;
     }
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
         discard;
     }
     uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
+    if (high && (pc.flags & PCR_F_SHADER_BLEND) != 0u) {
+        // (COLCLAMP's wrap: the GS's integers)
+        hc = (pc.alpha & 0x10000u) != 0u ? blended_high(c, hc) : vec3(rgb);
+    }
     if ((pc.flags & PCR_F_PREMUL) != 0u) {
         uint k = (pc.flags & PCR_F_C_FIX) != 0u ? pc.clamp_hi >> 24 : c.a;
         rgb = min((rgb * k) >> 7, uvec3(255u));
+        hc = min(gs_shift7(hc, vec3(float(k))), vec3(255.0));
     }
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
-    o_color = vec4(vec3(rgb) / 255.0, alpha_out);
+    o_color = vec4((high ? clamp(hc, 0.0, 255.0) : vec3(rgb)) / 255.0, alpha_out);
 }

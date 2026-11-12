@@ -77,8 +77,13 @@ enum : uint32_t {
     F_SHADER_BLEND = 0x20000,
     F_SURFACE_CT16 = 0x40000,
     F_MSAA = 0x80000,
+    F_SMOOTH_2D = 0x100000,
+    F_HIGH = 0x200000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
+
+// (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
+constexpr uint32_t no_rect = 0xFFFFFFFFu;
 
 struct Vertex {
     float x, y;
@@ -89,8 +94,11 @@ struct Vertex {
     // (a picture between's corner, pcr_prim.vert's a_kicks: the kicks it is made of and how, K_* below; no_kick: as
     // it is)
     uint32_t kicks[4] = {no_kick, no_kick, no_kick, 0};
+    // (the 2D mode's smooth: the texels its primitive covers across, rect[0], and down, rect[1], each first | last << 16,
+    // of a sprite's or a 2D triangle's corners (FST, or one Z and Q); no_rect for the rest: texel_rect)
+    uint32_t rect[2] = {no_rect, no_rect};
 };
-static_assert(sizeof(Vertex) == 48, "Vertex: the vertex shader's inputs, packed");
+static_assert(sizeof(Vertex) == 56, "Vertex: the vertex shader's inputs, packed");
 // Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
 enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
 
@@ -594,6 +602,11 @@ public:
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
         }
+        if (s->image->get_format() != dst.get_format()) {
+            scanout_narrow(out, *s->image, {x0, y0, x1 - x0, y1 - y0},
+                           {0, 0, int32_t(dst.get_width()), int32_t(dst.get_height())}, dst);
+            return true;
+        }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
             const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             out.copy_image(dst, *s->image, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour,
@@ -603,6 +616,37 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
+    }
+
+    // Colour high: a rectangle of a 16-bit surface (x, y, width, height) stretched over a rectangle of the 8-bit picture
+    // dst, dithered (pcr_narrow.frag); what dst has outside that rectangle is kept
+    void scanout_narrow(CommandBuffer &out, const Image &src, std::array<int32_t, 4> from, std::array<int32_t, 4> to,
+                        const Image &dst) {
+        RenderPassInfo rp;
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.store_attachments = 1;
+        rp.load_attachments = 1;
+        rp.render_area = {{to[0], to[1]}, {uint32_t(to[2]), uint32_t(to[3])}};
+        out.begin_render_pass(rp);
+        out.set_program(narrow_program_);
+        out.set_opaque_state();
+        out.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        out.set_cull_mode(VK_CULL_MODE_NONE);
+        out.set_depth_test(false, false);
+        out.set_stencil_test(false);
+        out.set_blend_enable(false);
+        out.set_color_write_mask(0xF);
+        VkViewport vp = {0, 0, float(dst.get_width()), float(dst.get_height()), 0, 1};
+        out.set_viewport(vp);
+        out.set_scissor(rp.render_area);
+        out.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
+        int32_t push[8] = {from[0], from[1], from[2], from[3], to[2], to[3], to[0], to[1]};
+        out.push_constants(push, 0, sizeof(push));
+        out.draw(3);
+        out.end_render_pass();
+        out.barrier(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
     // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
@@ -618,6 +662,14 @@ public:
         out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
         if (src_rows <= 0 || y0 + src_rows > y1) {
+            return;
+        }
+        if (src.get_format() != dst.get_format()) {
+            out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            scanout_narrow(out, src, {x0, y0, x1 - x0, src_rows}, {0, down_rows, int32_t(dst.get_width()), 2 * src_rows},
+                           dst); // (colour high)
             return;
         }
         out.blit_image(dst, src, {0, down_rows, 0}, {int32_t(dst.get_width()), 2 * src_rows, 1}, {x0, y0, 0},
@@ -753,7 +805,7 @@ private:
     // ---- Surfaces ----
     ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
-                                                              depth ? depth_format_ : VK_FORMAT_R8G8B8A8_UNORM);
+                                                              depth ? depth_format_ : colour_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -772,7 +824,7 @@ private:
 
     // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
     ImageHandle make_ms_image(uint32_t width, uint32_t height) {
-        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R8G8B8A8_UNORM);
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
@@ -1495,6 +1547,11 @@ private:
 
     // Texture detail and anisotropy (pcr_set_lod, pcr_set_aniso; PC_RENDERER.md, "Texture detail and anisotropy"),
     // for the batches from the next vblank
+    // The 2D mode (GSN_2D_*): with smooth, at a scale above 1, the 2D's magnified textures read with a cubic
+    void set_2d(int mode) {
+        mode_2d_ = mode;
+    }
+
     void set_sampling(int lod, uint32_t aniso) {
         lod_mode_ = lod;
         aniso_ = std::clamp(aniso, 1u, 16u);
@@ -1590,7 +1647,7 @@ private:
             counts_.unsupported_texture_on_surface++;
             return b;
         }
-        ImageCreateInfo info = ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], VK_FORMAT_R8G8B8A8_UNORM);
+        ImageCreateInfo info = ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -1607,7 +1664,8 @@ private:
         // (between 0xF4 and 0xF5 of a picture between, the frame shown kept at 0xF2 in place of its buffer)
         bool kept = replaying_ && kept_reads_ && kept_frame_ && from->base_page == kept_page_ &&
                     kept_frame_->get_width() == from->image->get_width() &&
-                    kept_frame_->get_height() == from->image->get_height();
+                    kept_frame_->get_height() == from->image->get_height() &&
+                    kept_frame_->get_format() == from->image->get_format();
         counts_.kept_frame_reads += kept ? 1 : 0;
         VkOffset3D at = {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0};
         if (kept) {
@@ -1892,6 +1950,7 @@ private:
         std::array<uint32_t, 2> scale = {1, 1};
         uint32_t samples = 1;
         bool cutout_aa = false;
+        int precision = GSN_COLOUR_EXACT; // (colour_mode_)
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -1903,6 +1962,7 @@ private:
         copies->scale = scale_;
         copies->samples = samples_;
         copies->cutout_aa = cutout_aa_;
+        copies->precision = colour_mode_;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
@@ -1953,6 +2013,7 @@ private:
         scale_ = pending_scale_ = copies.scale;
         samples_ = pending_samples_ = copies.samples;
         cutout_aa_ = copies.cutout_aa;
+        colour_mode_ = pending_colour_ = copies.precision;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
         // textures are bound already, and its store is never read; so what it draws over is not marked in it)
@@ -2253,6 +2314,38 @@ private:
         }
     }
 
+    // The 2D mode's smooth (pcr_prim.h, smooth_2d): the texels a sprite or a 2D triangle covers as the game gave its
+    // corners, the first and last across and down within the texture, into each corner's rect. The cubic's taps are
+    // kept inside them: a letter of the font is a sprite over its own cell of a sheet of letters (10 x 20 texels drawn
+    // 7 or 8 GS pixels across), and taps past the cell read the letters beside and below it (faint ticks, dots and
+    // specks at the letters' edges: the native GS's text bleed, 2026-10-24). (Not only the texels the GS reads: a
+    // cell's last column, which the GS skips, can hold the letter's edge.)
+    void texel_rect(Vertex *v, size_t count, bool fst) const {
+        float size[2] = {float(1u << std::min(bits(batch_.state.tex0, 26, 4), 10u)),
+                         float(1u << std::min(bits(batch_.state.tex0, 30, 4), 10u))};
+        uint32_t rect[2];
+        for (int a = 0; a < 2; a++) {
+            float lo = INFINITY, hi = -INFINITY;
+            for (size_t k = 0; k < count; k++) {
+                float c = a ? v[k].t : v[k].s;
+                c = fst ? c : (v[k].q != 0 ? c / v[k].q * size[a] : 0.0f);
+                lo = std::min(lo, c);
+                hi = std::max(hi, c);
+            }
+            if (!std::isfinite(lo) || !std::isfinite(hi)) {
+                return;
+            }
+            // (the GS's texel coordinates have 4 bits of fraction: within a sixteenth of a whole number, on it)
+            float first = std::clamp(std::floor(lo + 1.0f / 32.0f), 0.0f, size[a] - 1.0f);
+            float last = std::clamp(std::ceil(hi - 1.0f / 32.0f) - 1.0f, first, size[a] - 1.0f);
+            rect[a] = uint32_t(first) | uint32_t(last) << 16;
+        }
+        for (size_t k = 0; k < count; k++) {
+            v[k].rect[0] = rect[0];
+            v[k].rect[1] = rect[1];
+        }
+    }
+
     void add_primitive(const GifPrimitive &p) {
         uint64_t xy = batch_.state.xyoffset;
         if (batch_.shader_blend) {
@@ -2311,6 +2404,7 @@ private:
                 }
                 return;
             }
+            size_t first_vertex = batch_.vertices.size();
             for (uint32_t i = 0; i < 3; i++) {
                 batch_.vertices.push_back(make(p.vertices[i], last));
                 if (moved) {
@@ -2322,6 +2416,14 @@ private:
                     v.kicks[3] = fst_bit;
                 }
                 touch(batch_.vertices.back());
+            }
+            if (bits(batch_.state.prim, 4, 1)) {
+                // (an FST triangle, or one of the 2D the menus draw with S, T and Q: one Z and one Q at its corners)
+                const Vertex *t = &batch_.vertices[first_vertex];
+                bool flat = t[0].z == t[1].z && t[1].z == t[2].z && t[0].q == t[1].q && t[1].q == t[2].q;
+                if (fst || flat) {
+                    texel_rect(&batch_.vertices[first_vertex], 3, fst);
+                }
             }
             counts_.triangles++;
             return;
@@ -2343,6 +2445,12 @@ private:
             va.q = q;
             vb.s = ub * q;
             vb.t = tb * q;
+        }
+        if (bits(batch_.state.prim, 4, 1)) {
+            Vertex pair[2] = {va, vb};
+            texel_rect(pair, 2, fst);
+            memcpy(va.rect, pair[0].rect, sizeof(va.rect));
+            memcpy(vb.rect, pair[1].rect, sizeof(vb.rect));
         }
         Vertex c = va, d = va;
         c.x = vb.x;
@@ -2647,6 +2755,13 @@ private:
         flags |= blend.flags & ~0x80000000u;
         flags |= date && !date_stencil ? F_DATE | (bits(s.test, 15, 1) ? F_DATM : 0) : 0;
         flags |= ms ? F_MSAA : 0;
+        // (the 2D mode's smooth: only the primitives with texels known read with it, sprites and 2D triangles, and
+        // only where magnified: pcr_prim.h's smooth_2d)
+        flags |= mode_2d_ == GSN_2D_SMOOTH && (scale_[0] > 1 || scale_[1] > 1) && (flags & F_TME) && !b.native &&
+                         b.texture.src != SRC_SURFACE
+                     ? F_SMOOTH_2D
+                     : 0;
+        flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -2842,6 +2957,7 @@ private:
         c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
         c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
+        c.set_vertex_attrib(6, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect));
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -2861,9 +2977,73 @@ private:
         }
     }
 
+    // ---- Colour precision ----
+    // Colour high (GSN_COLOUR_HIGH): the colour surfaces 16 bits a channel (16-bit UNORM holds every 8-bit value exactly,
+    // v * 257, so what the GS's arithmetic writes reads back as it is), the colours' arithmetic in floats (pcr_prim.h,
+    // F_HIGH), the picture dithered to 8 bits as it is scanned out (pcr_narrow.frag). Where the GPU cannot draw into the
+    // format, exact.
+    VkFormat colour_format() const {
+        return colour_mode_ == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+    }
+
+    bool high_colour_ok() {
+        const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
+                                           VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT |
+                                           VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
+                                           VK_FORMAT_FEATURE_2_BLIT_DST_BIT | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
+                                           VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+        if (high_ok_ < 0) {
+            high_ok_ = device_.image_format_is_supported(VK_FORMAT_R16G16B16A16_UNORM, need) ? 1 : 0;
+        }
+        return high_ok_ == 1;
+    }
+
+    void set_colour(int mode) {
+        if (mode == GSN_COLOUR_HIGH && !high_colour_ok()) {
+            if (!colour_refused_) {
+                fprintf(stderr, "[pcr] colour high: this GPU cannot draw 16-bit colour surfaces, so exact\n");
+                colour_refused_ = true;
+            }
+            mode = GSN_COLOUR_EXACT;
+        }
+        pending_colour_ = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
+    }
+
+    // The precision changed (from a vblank, as the scale): every colour surface made again in the new format from its
+    // pixels (a blit converts), its samples made again from it (ensure_ms). (The pipelines made ahead for a change of
+    // MSAA are made against the format of the run's first change of samples, so the other precision's are made as
+    // drawn: warm_images_ is read by the warming thread and not made again here.)
+    void apply_colour() {
+        if (pending_colour_ == colour_mode_) {
+            return;
+        }
+        end_pass();
+        for (auto &s : colour_) {
+            resolve(*s);
+            s->ms.reset();
+            s->ms_ahead = s->ms_behind = false;
+        }
+        colour_mode_ = pending_colour_;
+        for (auto &s : colour_) {
+            ImageHandle image = make_surface_image(s->width(), s->height, false);
+            if (!image) {
+                continue;
+            }
+            CommandBuffer &c = cmd(GpuWork::surface);
+            full_barrier(c);
+            c.blit_image(*image, *s->image, {0, 0, 0}, {int32_t(image->get_width()), int32_t(image->get_height()), 1},
+                         {0, 0, 0}, {int32_t(s->image->get_width()), int32_t(s->image->get_height()), 1}, 0, 0, 0, 0, 1,
+                         VK_FILTER_NEAREST);
+            full_barrier(c);
+            s->image = image;
+        }
+        kept_frame_.reset(); // (of the old format: a picture between reads its buffer until the next 0xF2)
+    }
+
     // ---- Scale ----
     void apply_scale() {
         apply_samples();
+        apply_colour();
         if (pending_scale_ == scale_) {
             return;
         }
@@ -2906,7 +3086,7 @@ private:
     };
     WarmImages make_warm_images(uint32_t samples) {
         WarmImages w;
-        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, VK_FORMAT_R8G8B8A8_UNORM);
+        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format());
         info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -2960,7 +3140,7 @@ private:
 
     void make_programs() {
         ResourceLayout vert = {};
-        vert.input_mask = 0x3F;
+        vert.input_mask = 0x7F;
         vert.push_constant_size = sizeof(PrimPush);
         vert.sets[1].storage_buffer_mask = 7u;
         for (int b : {0, 1, 2}) {
@@ -2998,6 +3178,10 @@ private:
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
         Shader *efs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, efs);
+        ResourceLayout narrow = expand;
+        narrow.push_constant_size = 8 * sizeof(int32_t);
+        Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
+        narrow_program_ = device_.request_program(cvs, nfs);
         ResourceLayout nd = {};
         nd.push_constant_size = sizeof(PrimPush);
         nd.sets[1].storage_buffer_mask = 1u;
@@ -3064,6 +3248,11 @@ private:
     Surface *pass_colour_ = nullptr, *pass_depth_ = nullptr;
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = GSN_LOD_SCALE; // (set_sampling)
+    int mode_2d_ = GSN_2D_PS2;     // (set_2d)
+    int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
+    bool colour_refused_ = false;
+    int high_ok_ = -1; // (high_colour_ok's answer, asked once)
+    Program *narrow_program_ = nullptr; // (colour high's scanout: pcr_narrow.frag)
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
@@ -3169,6 +3358,12 @@ void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
 }
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
+}
+void Canvas::set_colour(int mode) {
+    impl_->set_colour(mode);
+}
+void Canvas::set_2d(int mode) {
+    impl_->set_2d(mode);
 }
 void Canvas::set_sampling(int lod, uint32_t aniso) {
     impl_->set_sampling(lod, aniso);
