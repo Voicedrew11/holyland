@@ -8,6 +8,7 @@
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
+| `motion_compare.py` | the PC renderer against paraLLEl-GS in motion (below): menus, a pick-up, combat, spells, creatures' effects, fades, under water, each played by a pad script (`tests/motion/`) by both renderers and compared vblank by vblank (as `tour_compare.py` measures), at 1x and at 4x with native widescreen; the PC renderer's pictures between at 240 checked with `flash_find.py --frames` and its game frames there against the 30 run's |
 | `tour_compare.py` | two map tours (`map_tour.py`, `--renderer pc` and `--renderer gs`, same maps and views) compared picture by picture, ranked by what is drawn differently (a blurred difference, so filtering and edges count little); `report.md`, `report.html` with the worst views as PC / reference / difference |
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
@@ -15,7 +16,58 @@
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
 | `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and the GPU time a picture (docs/port/RENDERER.md, "Measuring the pace") |
 | `sampler/` | `profile.py` plays to a map as `pace_test.py` does and profiles every thread's functions, then prints each thread's CPU time and the busiest's (or `--thread`'s) functions by inclusive and self share; on Linux the game samples itself (`--profile-at`) and the GPU's time a picture by kind of work (`--gpu-detail`: by shader state) follows, on Windows `kf4-sampler` samples from outside (stacks unwound from the program's `.pdata`). `stacks.py` reads a kept run again, or one saved from Shift+P (`--thread`, `--callers`, `--callees`, `--gpu`, `--exports`); docs/port/PROFILING.md |
+| `build_compare.py` | two builds of the game played the same way at four spots: their pictures byte for byte, their state each vblank and F10's state dump the same (a release build against the developers' one: below) |
+| `pgo_train.py` | a release build with profile-guided optimisation: built to write a profile, trained at four spots, built again with it (below) |
+| `build_cost.py` | each thread's CPU time in play at a map for several builds, alternated, from `sampler/profile.py`'s runs, and the part of it not spent spinning (the game's thread waits for DMA in a spin); below |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
+
+## A release build
+
+The presets developers use are `RelWithDebInfo` (-O2) without LTO, and on Linux with frame pointers for the
+profiler. The release presets keep -O2 and the debug information, and add:
+
+- `KF4_FRAME_POINTERS=OFF` (already off on Windows);
+- `KF4_LTO=ON`: ThinLTO with clang, gcc's LTO with gcc, for everything but the save state's image. The game's
+  objects, ico-audio's and the state markers stay plain objects: an LTO linker lays the data it compiles out after
+  every plain object, which would take the game's globals out from between the markers (`state_begin.c`), and the
+  game's code keeps its own flags (`KF4_GAME_FLAGS`, `KF4_EE_FLOAT_FLAGS`) with nothing inlined across.
+
+```sh
+cmake --preset windows-clang-release            # or linux-clang-release, linux-gcc-release
+cmake --build out/windows-clang-release
+```
+
+PGO on top (clang or gcc; Windows needs `-D SDL2_DIR=...` as for any configure):
+
+```sh
+python tools/pgo_train.py --preset windows-clang-release --disc <image> [-D SDL2_DIR=...]
+```
+
+It configures `out/<preset>-pgo` with `KF4_PGO=generate`, builds `kf4`, plays the four spots headless and silent for
+3000 vblanks each (the program writes its profile as it stops: `kernel.c`), merges the profiles (clang:
+`llvm-profdata`, beside the compiler or `llvm-profdata-<version>`), and builds the same folder again with
+`KF4_PGO=<the .profdata>` (gcc: `KF4_PGO=use`, the `.gcda` files beside the objects).
+
+A release build must be the same game: compiler differences are bugs here. Check every new release build
+against the developers' one before trusting it:
+
+```sh
+python tools/build_compare.py --exe out/windows-clang/kf4.exe --exe out/windows-clang-release-pgo/kf4.exe --disc <image>
+```
+
+Each spot (maps 000, 009, 009 place 2, 063: `--teleport 1900:MAP:PLACE --invincible --frame-rate 240 --headless`)
+must say SAME: the pictures at three vblanks (and their pictures between), the state line of every vblank (`--log`)
+and F10's state dump (`KF4_DEBUG_AT=state@`; host function pointers in it are compared by name, since PGO moves the
+game's functions). The unit tests too, `libm_test`, `vu1_test` and `int_divide_test` (not in ctest) among them.
+`int_divide_test` is built without LTO: it checks the operand forms of the game's code, which is never LTO'd.
+
+Then the speed (on a quiet machine, the GPU idle):
+
+```sh
+python tools/build_cost.py --map 9 --runs 5 --disc <image> --exe out/windows-clang/kf4.exe \
+    --exe out/windows-clang-release/kf4.exe --exe out/windows-clang-release-pgo/kf4.exe
+python tools/pace_test.py --exe ... --maps 9 --hz 500 --runs 3      # pictures a second uncapped, each build in turn
+```
 
 ## kf4-gsreplay
 
@@ -124,3 +176,34 @@ picture is black or more than half one flat colour (a void, or a dark doorway). 
 a `[todo]` the new game did not print, `[fatal]`, a hung kernel, a quick save message, a draw whose
 TEX0 names no PSM, more than two frames' worth of VU1 cycles, or VIF1 packets that replay differently.
 Flags are leads, not verdicts: look at the sheet.
+
+## motion_compare.py
+
+The map tour's comparison for what moves: each case is a pad script played after `tests/newgame.pad`
+(`tests/motion/*.pad`, vblanks counted from the start of the run) with the options and `KF4_FX` it needs
+(`game/screen_fx.c`: `spell=N` keeps spell N in hand to cast, `creature=ROW[:DIST]` puts the player DIST before
+a creature of that chr record once it has been there 60 frames, `water` and `drainramp` force the under-water
+and MP drain screens). The same input and vblanks give the same game, whoever draws, so the two renderers'
+pictures of a vblank show the same moment; the per-frame log (`--log`) at each compared vblank is checked to be the
+same in both runs, and a vblank where it is not is left out and named.
+
+```sh
+python3 tools/motion_compare.py --disc kfiv_us.iso --out /tmp/motion                 # every case, 1x and 4xw, 240
+python3 tools/motion_compare.py --out /tmp/motion --cases menus,combat --profiles 1x --no-240
+python3 tools/motion_compare.py --cases list
+```
+
+For each case and profile (`1x`: `--native-scale 1 --no-native-widescreen`; `4xw`: `--native-scale 4 --widescreen
+--native-widescreen --native-msaa 2`, gs with `--widescreen`, the 4x pictures brought down to 640 x 448), three
+headless runs one after another: gs at 30 dumping the case's vblanks, pc the same, pc at `--frame-rate 240`
+(left out with `--no-240`). Pictures are measured as `tour_compare.py` does (mean, share over 24 levels, the same
+after a 3 x 3 blur). At 240, `flash_find.py --frames` judges each picture between against its game frames, and
+each vblank where the log's frame counter moves on (a game frame's own picture) is compared with the 30 run's
+picture of it. The screens the game draws as fields (title, menus) differ from gs at every edge by design: gs shows
+one field a vblank, pc the upper field each vblank (c043b057), so their numbers are high without anything missing;
+look at the pairs.
+
+Into `--out`: `report.md` (a line a case and profile, then each one's worst vblanks), `report.json` (every
+vblank), `evidence/` (the worst `--top` pairs of each, 640 wide: PC | GS | the difference x4, red over 24; and
+flash_find's sheet of flagged pictures between). The runs' pictures (about 20 MB each at 4x) are deleted as it goes
+(`--keep` keeps them). A full run (12 cases, both profiles, 240) is about an hour and a half; one game at a time.

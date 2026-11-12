@@ -1,0 +1,5 @@
+# tools/motion_compare.py, the "spell N" cases (with --cheats spells,magic and KF4_FX=spell=N, which keeps
+# spell N in hand): after tests/newgame.pad, TRIANGLE (cast) every 120 vblanks.
+1900 TRIANGLE 4
+2020 TRIANGLE 4
+2140 TRIANGLE 4

@@ -253,7 +253,7 @@ state the same in both. Outside the cases below, views differ in under 0.4% of p
 5. **Small**: a rock's edge at 112 (v10) cut differently near the camera. Fixed 2026-11-11, below.
 
 Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
-(native widescreen, MSAA).
+(native widescreen, MSAA): "Against paraLLEl-GS in motion" below.
 
 **1 and 2 fixed (2026-11-07, the same day): one cause.** The canvas recorded copies inside an open render pass:
 `write_pixels` (an upload written into a colour surface) and `grow` ended the open pass only when it drew into the
@@ -374,6 +374,138 @@ kf4 --disc ... --headless --no-audio --dump-frames N ...
 Granite enables the layer itself only in a `VULKAN_DEBUG` build (not ours), so the variables above are the way.
 Under the layer the game runs far slower: a few hundred pictures between in a 17-second run at 240.
 
+## Against paraLLEl-GS in motion (2026-11-11)
+
+What the map tour left out (issue 112): `tools/motion_compare.py` plays 12 cases by pad script after a new game
+(`tests/motion/`), each by gs and by pc with the same input, and compares every dumped vblank's pictures as
+`tour_compare.py` does; the per-frame log at each vblank is the same in both runs (it was at every vblank of every
+case). The cases: the title and the opening's messages, every page of the menu (Item, Magic, Equipment with a weapon's
+model, Status, Journal, Arrange, System and Load), an item picked up, combat (a club put on, map 002, a Maneater put
+before the player with `KF4_FX=creature=0`: swings, the trail, its attacks), spells 3 and 16 cast, creatures (map 102's,
+the Fire Genie and Larvae of 025, the Salamanders of 016, the Watchers of 022), and the under-water and MP drain screens
+(forced by `KF4_FX`). Each at 1x and at 4x with native widescreen and `--native-msaa 2`, and each at 240 (pc only:
+`flash_find.py --frames` on the pictures between; the game frames at 240 against the same vblanks at 30). Run at
+cf80b086 on Windows (RTX 5080). MSAA is passed but not applied on main (item 7 above), so it is not covered.
+
+Found:
+
+1. **The under-water and MP drain screens lose the GPU.** `KF4_FX=water` or `drain` (the wobbling screen drawn from
+   the copy of the frame at 0x2BC0, `Game_DrawWobblingScreen`) gives `vkQueueSubmit2 failed (code: -4)` (device lost)
+   from the first frame it draws, every picture black after, at 1x and 4x, with native draws off too, and with each of
+   the `KF4_PC_*` switches at 0. The other forced effects (copytex, prev, aim, tint, fill, down, bright40, fade, dim)
+   do not. Real deep water (029) and the Queen's Palace drain were not reached; they draw the same.
+2. **The HUD's MP ring is never drawn.** Its blue arc is drawn with DATE (DATM 1) where the MP bar's sprite set
+   alpha bit 7 with FBA (`Hud_Draw`, sprites 5 and 6). By the stencil the set-up (`pcr_date.frag`) finds bit 7 clear
+   under the whole arc, so nothing is drawn; `KF4_PC_STENCIL=0` (DATE by a copy) draws it as gs does. The same build
+   with DATM inverted in the set-up draws the whole arc: the set-up reads the target's alpha without the bit the
+   batch before wrote. Not the dynamic state (`KF4_PC_DYNAMIC=0`) nor a pass shared with earlier draws (a fresh pass
+   for each DATE batch). Every play picture with MP has it (0.3% of the picture: under the tour's 0.4%).
+3. **A black picture as the menu opens**: the vblank after CIRCLE (1805 of the case), at 1x and 4x, at 30 and 240,
+   with and without whole frames. gs shows the last game frame there. Not `UpperField` (c043b057).
+4. **The menus at 1x sit one GS pixel left** of gs's (and sharper: gs shows a field a vblank); at 4x they line up and
+   differ by the smooth 2D only. 5-13% of each menu picture at 1x, 1-4% at 4x. The title: half a line apart (the field
+   screens, by design).
+5. **Small**: at 4x, textures finer (`--native-lod scale`) and the 2D smoothed, as meant. Spell 3's wisps at 240:
+   29 of 240 pictures between flagged, each a translucent wisp moved between its game frames (looked at: no shards, no
+   holes, no wrong places).
+
+Clean: the pick-up, combat (the trail, the creature, the hits), spell 16, the creatures' cases, the teleport's fade
+and the opening, under 0.4% blurred at every vblank but the HUD ring; no picture between flagged outside spell 3; the
+game frames at 240 the same as at 30. Not covered: breath and glow effects (none of the creatures placed used one in
+its window), spells 36, 61 and 76 (nothing showed in their window), the shop, a save point's save screen, doors and
+stairs (the teleport's fade only), real deep water.
+
+**1, 3 and 4 fixed, 2 is #121's (2026-11-11, branch fix/motion-bugs).**
+
+1. **Device lost: a copy past an image's end.** The validation layer with GPU-assisted validation
+   (`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT`) named it at once:
+   VUID-vkCmdCopyImage-dstOffset-00151, a 128 x 2048 surface copied 32 rows down into another 128 x 2048 one. Not the
+   1024 x 512 texture past VRAM's end (that read is refused as before: no surface of its width). The wobbling screen's
+   copy of the frame (page 350, 640 x 448) lies over the water's two 128-wide targets (pages 466 and 468, which map
+   000's lava uses), so every frame they were let go and made again, 466 taking 468 in a page row down. A draw whose
+   depth surface was taller than its colour surface grew the colour one to match; the two targets share a Z buffer, so
+   each making-again grew the pair by 32 rows, to 2048 within a few seconds, and then the take-in copy ran past the
+   end. Now a take-in copies only what fits, and a colour surface is never grown for its depth surface (a Vulkan pass
+   is as large as its smallest attachment; a shorter depth surface is still grown). `underwater` and `drain`: under
+   0.4% at 1x, 4xw at most 0.43% (4x's finer textures). It needs only the under-water bit (`KF4_FX=water` sets the
+   game's own PlayerState status bit 39, so the game draws as in real deep water) where those targets are drawn; real
+   deep water and the real drain were not reached here.
+2. **The MP ring: the missing `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`.** #121's commit 79b08c29 alone (on this branch)
+   draws the ring as `KF4_PC_STENCIL=0` does; all of #121 draws it as gs (no pixel over 24 levels in the HUD; the rest
+   is #121's FST rounding). The ring shows only with MP: `--cheats all` (a new game has none).
+3. **The black picture: two surfaces of one memory.** Play grows the frame's surface (page 0) from 224 to 928 rows,
+   over the title's second field buffer (page 70), which was kept as a surface of its own; the menu draws into page 70
+   (that old surface, grown) and the vblank after CIRCLE shows page 140, found in the old surface's new, empty rows. A
+   colour surface grown now takes in the surfaces that begin in its new pages, as a surface made does. v1805: 62.4% ->
+   0.31% at 1x, 67.0% -> 0.33% at 4xw; no picture between flagged at 240.
+4. **The menus a pixel left: S/T/Q read a hair below a whole texel.** The menus end with the brightness sprite, the
+   buffer drawn back over itself 1:1 by S/T/Q (and the background is copied the same way); S/Q times the size lands
+   on a whole texel and the GPU's lands just below it, so floor took the texel before. Found with a GS capture under gs
+   (`--gs-capture-at`, `kf4-gsreplay --draw`): gs's frame buffer lines up with its picture, pc's picture with it only
+   a pixel over. S/T/Q coordinates are rounded to 1/256 texel (`pcr_prim.frag`). Menus at 1x: median 5.4% -> 0.9%,
+   best offset against gs 0,0; at 4xw still lined up. What is left at 1x is gs's softer field picture. The four spots
+   change by up to 3 levels (bilinear's 1/16 steps), and against gs are as before.
+
+Spots (000, 009, 009:2, 099 at 240): byte for byte main's after 1 and 3.
+
+## Step 3's last two built (2026-11-11; issues #97, #98): the reflection's water and the screen passes
+
+`[stats] pc native draws not drawn yet` now lists nothing: every native draw is the PC renderer's. `kinds()` adds
+`water` and `passes`, so `--native-draw on` (and the owner's setting) draws both. Branch `pc/native-water-passes`, on
+top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target, which #118 made right; without it
+014's water is pale with either path). Measured on Windows, NVIDIA RTX 5080.
+
+- **The water (`RD_PROGRAM_RIPPLE`, maps 008, 009, 014).** No VU1 program: Wobble_DrawRippledModel makes each vertex
+  on the EE (ripple.hpp says how). The CPU makes the record (the part's vertex matrix in VU0's arithmetic, the 32
+  sines) and the strips' ADC, which needs the places (`port/render/ripple.cpp`); the GPU makes each corner's place,
+  S and T (`shaders/pcr_ndripple.vert`, the maths in `port/render/shaders/ripple_maths.h`, a new `NativeProgram`).
+  In a picture between the places are moved by the picture's camera and S and T made again from the moved ones, as
+  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). `ripple_test`
+  checks the record and the ADC against Wobble_DrawRippledModel's maths as nd_water.c's KF4_ND_WATER_CHECK writes it,
+  and the shader's S and T arithmetic (copied to C++) against the game's floats for every X and Y of 16 bits, toward
+  zero and to nearest.
+- **The passes (`RD_PROGRAM_PASS`).** Each pass is written to the GIF front end as the PS2 path's packets
+  (`port/render/pass_draw.cpp`, the native GS's `gsn_nd_pass.inc` again): the same register writes and primitives,
+  so the state after is the PS2 path's. Only the flat fills are one sprite instead of ten strips. The brightness and
+  the tint stay ten strips: as one sprite reading the frame one texel a pixel, the GPU's interpolated texel at a GS
+  pixel's point now and then came out a little under the whole texel and read the pixel to the left (125,000 pixels
+  of the brightness pass moved by one at map 000, worse against gs than the strips). In a picture between a pass is
+  paired by its identity (pass, call site, count in the frame) with the frame before's (`PassMoves`) and its packets
+  are made at the picture's time on the CPU, with gif_moves.h's numbers: a colour t of the way, the wobble's texels
+  and the view shift's strips t of the way where frame_interp.c's items_pair would pair them, the frame shown before
+  by A^t. A TEX0 of the frame drawn is pointed at the buffer the picture is drawn into (frame_interp.c's ad_write),
+  and the frame shown before's pass is put between 0xF4 and 0xF5 so the canvas reads the frame shown kept (0xF2).
+  `pass_draw_test` puts each pass and the game's own packets for it (written out from game.c and gs_draw.c) through
+  the front end: the same register file after, the same pixels with the same colour and texel; and checks the moves.
+- **The cost.** A pass that moves in a picture between (a fade, a fill whose alpha ramps, the wobble under water, the
+  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again, and the frame's own walk is not
+  made its pictures' (counted as "trail paired"). At 009's start after the teleport, 343 of 972 frames (the fill of
+  the fade-in). Moving them on the GPU from a record of the pass (as the native GS's `nd_pass.vert` did) would take
+  that away; not done.
+
+Checked (1x unless said; on = `--native-draw on`, off = the same kinds but `water` and `passes`, so the packets):
+- **The four spots** (000, 009, 009:2, and 099 for "063", which the teleport reads as map 63, a map with no places;
+  `--teleport 1900:MAP:PLACE --frame-rate 240`, vblanks 2400 and 2700 with their pictures between): on and off byte
+  for byte, the pictures between too. Without `--native-draw` nothing changes (no native draws then).
+- **The water maps** (`map_tour.py --maps 8,9,14 --positions 3`, 36 views): on and off byte for byte at 30 Hz, and at
+  240 turning (`--turn`) at 1x and 4x in the game's frames. In the pictures between only 014's water differs (views
+  4 and 5, up to 28,000 pixels at 1x and 450,000 at 4x, by up to 55 levels): on keeps the reflection where the game's
+  frame has it (014 v5's water at x 0-140: 63,77,66 in the frame and on's three pictures between, 46,61,52 in off's,
+  which also shows the packet path's dark blocks over the water). Against gs (30 Hz) on is off exactly; 014 v5's
+  water matches gs.
+- **The passes forced** (KF4_FX at 000, 240, vblanks 2600 and 2700 with their pictures between):
+  base, water (the tint and the wobble), drain, drainramp, haze, down and updown (`--flicker-filter`), fill, fade,
+  tint, dim, bright40, brightff, shift (`--no-whole-frame`, no pictures between), the pause, the Guardian's Room's
+  green fill (035): on and off byte for byte, pictures between too, and the same against gs. prev and aim (the frame
+  shown before blended in): their pictures between byte for byte, one game frame of the two 3 pixels by 2 levels
+  (one row at x 626-630, the same run to run; see 4x below).
+- **At 4x** (`--native-scale 4 --no-native-widescreen`, 240): the four spots byte for byte; water, drain, fade, fill,
+  tint byte for byte, pictures between too; prev's pictures between byte for byte, its game frames 76 and 3 pixels by
+  2 and 1 levels. The game frame reads the frame shown before, which at 240 is the last picture between drawn into
+  that buffer, not dumped. Dumping vblanks 2597-2600 at 1x (so every picture of them is drawn) makes all 16 pictures,
+  2600 too, byte for byte: which pictures between of the vblank before are drawn or left out is the difference, not
+  the drawing (on moves this pass on the CPU and walks every picture, a little slower).
+
 ## Where it stands (2026-10-29)
 
 **Built.**
@@ -479,7 +611,7 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
      after `tools/build_shaders.py`), the CPU set-up into `port/render/` with a test against the code it stands
      for, the draw in `pcr_native.cpp`, the kind in `kinds()`. `[stats] pc native draws not drawn yet` names what is
-     still sent and left out.
+     still sent and left out. **Built 2026-11-11** ("Step 3's last two built", above).
   7. The settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's); then step 7
      (`fast` switched to it, the full checks incl. the map tour and pace).
 - **How pictures are judged**: against `--renderer native` (the exact GS), not against pc's own earlier pictures;

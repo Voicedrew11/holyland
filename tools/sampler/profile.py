@@ -53,7 +53,7 @@ def wait_for_picture(game, path, vblank):
                 rest = lines.pop()
                 for line in lines:
                     p = line.split()
-                    if len(p) >= 2 and p[0] != "S" and int(p[1]) >= vblank:
+                    if len(p) >= 2 and p[0] not in ("S", "R") and int(p[1]) >= vblank:  # (R: the rate line)
                         return True
             time.sleep(0.2)
         return False

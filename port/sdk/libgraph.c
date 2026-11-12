@@ -46,7 +46,7 @@ static uint32_t dma_address(const void *packet, void *bounce, size_t bounce_size
 }
 
 /* (the channels the game started before are queued first, port/platform/dmac.c) */
-static void start_channel(volatile int *chcr, int value) {
+static void start_channel(EeChcr *chcr, int value) {
     port_dmac_wake();
     *chcr = value;
     port_dmac_wake();
@@ -297,11 +297,20 @@ static uint8_t put_draw_env_copy[0x800] __attribute__((aligned(16)));
 
 int sceGsPutDrawEnv(void *pkt) {
     int qwc;
+    size_t bytes;
 
     wait_channel(2);
     qwc = (int)(*(int64_t *)pkt & 0x7FFF);
+    bytes = (size_t)(qwc + 1) * 16;
+    if (bytes > sizeof(put_draw_env_copy)) {
+        PORT_FATAL("libgraph: a draw environment of 0x%zx bytes, more than the copy holds", bytes);
+    }
+    /* Always sent from a copy, as it is at the start (a transfer is done at its start, port/platform/dmac.c): the
+       game rewrites its draw environments without waiting for the channel (Map_DrawRecords sets the clear colour in
+       both every frame), and the controller's thread may not have taken the last one yet (ThreadSanitizer). */
+    memcpy(put_draw_env_copy, pkt, bytes);
     *D2_QWC = qwc + 1;
-    *D2_MADR = (int)dma_address(pkt, put_draw_env_copy, sizeof(put_draw_env_copy), (size_t)(qwc + 1) * 16);
+    *D2_MADR = (int)dma_address(put_draw_env_copy, NULL, 0, bytes);
     start_channel(D2_CHCR, 0x101);
     return 0;
 }

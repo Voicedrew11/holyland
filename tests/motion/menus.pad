@@ -1,0 +1,35 @@
+# tools/motion_compare.py, case "menus": every top-level page of the menu (after tests/newgame.pad, with
+# --cheats all, so the lists are full). <vblank> <buttons> [vblanks held]; the player has control from 1800.
+# The pages fade in and out over about 30 vblanks: presses are 60 apart.
+1800 CIRCLE 4     # the menu (it fades in over the game)
+1860 CROSS 4      # Item
+1920 DOWN 4       # the second item
+1980 RIGHT 4      # the next page
+2040 CIRCLE 4     # back to the menu
+2100 DOWN 4
+2160 CROSS 4      # Magic
+2220 DOWN 4
+2280 CIRCLE 4
+2340 DOWN 4
+2400 CROSS 4      # Equipment: the weapon's slot
+2460 RIGHT 4      # a weapon put on: its model in the box, the body beside it
+2520 RIGHT 4      # the next weapon
+2580 SQUARE 4     # the list
+2640 CIRCLE 4     # out of the list and the page
+2760 DOWN 4
+2820 CROSS 4      # Status
+2880 CIRCLE 4
+2940 DOWN 4
+3000 CROSS 4      # Journal
+3060 CROSS 4
+3120 CIRCLE 4
+3180 CIRCLE 4
+3240 DOWN 4
+3300 CROSS 4      # Arrange
+3360 CIRCLE 4
+3420 DOWN 4
+3480 CROSS 4      # System
+3540 CROSS 4
+3600 CIRCLE 4
+3660 CIRCLE 4
+3720 CIRCLE 4     # the menu closed

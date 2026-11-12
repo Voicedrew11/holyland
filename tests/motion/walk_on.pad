@@ -1,0 +1,4 @@
+# tools/motion_compare.py, "underwater" and "drain" (KF4_FX=water, drainramp): after tests/newgame.pad, walk
+# forward and turn in the first map, so the wobbling screen's copy of the frame moves.
+1750 ly=0 100
+1850 rx=255 80

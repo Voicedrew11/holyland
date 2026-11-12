@@ -1,0 +1,10 @@
+# tools/motion_compare.py, case "message": after tests/newgame.pad, walk to the herb near the start of the
+# first map (as tests/herb.pad), look down at it and pick it up: its message box over the game.
+# <vblank> <buttons or axes> [vblanks held]; axes 0..255, 128 centred, ly=0 is forward, ry=0 looks down
+1600 ly=0 150           # walk toward the herb
+1750 ly=0 ry=0 50       # on, looking down
+1800 ly=0 30            # on, up to it
+1830 CROSS 4            # pick it up
+1850 CROSS 4
+1870 CROSS 4
+1960 CROSS 4            # the message closed
