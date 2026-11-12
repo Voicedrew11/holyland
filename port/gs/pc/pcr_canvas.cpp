@@ -420,7 +420,9 @@ public:
         uint64_t chunk = taken ? store_.last_chunk() : 0;
         std::shared_ptr<const std::vector<uint8_t>> kept_bytes;
         if (keeping_ || !replaying_) {
-            kept_bytes = std::make_shared<std::vector<uint8_t>>(bytes.data(), bytes.data() + bytes.size());
+            auto copy = std::make_shared<std::vector<uint8_t>>(bytes.size());
+            memcpy(copy->data(), bytes.data(), bytes.size()); // (libc++ copies a range a byte at a time)
+            kept_bytes = std::move(copy);
         }
         if (keeping_) {
             kept_->steps.emplace_back(KeptUpload{{t, kept_bytes, chunk}});

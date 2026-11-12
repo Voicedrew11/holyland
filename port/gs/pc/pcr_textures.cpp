@@ -476,6 +476,10 @@ struct TextureStore::State {
     // the CLUT buffer mirrored: its 512 halfwords, those not loaded from uploads, the CLD's CBP0/CBP1
     std::array<uint16_t, 512> clut{};
     std::bitset<512> clut_unloaded = std::bitset<512>().set();
+    // counts the mirror's changes (clut, clut_unloaded); clut_colours' last answer, kept with what it was for
+    uint64_t clut_version = 1;
+    mutable uint64_t clut_kept_version = 0, clut_kept_tex0 = 0, clut_kept_texa = 0;
+    mutable ClutColours clut_kept;
     std::array<uint32_t, 2> clut_cbp = {UINT32_MAX, UINT32_MAX};
     std::unordered_map<std::vector<uint64_t>, std::array<uint32_t, 256>, WordsHash> clut_decoded;
     // local copies from uploads made (TextureStore::copied): their registers and source chunks, the chunk they made
@@ -537,7 +541,8 @@ uint64_t TextureStore::State::keep(const TransferRegs &regs, std::span<const uin
     chunk_by_regs[at] = id;
     Chunk &c = chunks[id];
     c.regs = regs;
-    c.bytes.assign(bytes.data(), bytes.data() + bytes.size());
+    c.bytes.resize(bytes.size());
+    memcpy(c.bytes.data(), bytes.data(), bytes.size()); // (libc++ copies a range a byte at a time)
     c.pixels = pixels;
     c.hash = hash;
     chunk_by_hash.emplace(hash, id);
@@ -722,6 +727,7 @@ void TextureStore::State::set_mirror(uint32_t at, uint16_t value, bool unloaded)
     changed(kClutPage);
     clut[at] = value;
     clut_unloaded[at] = unloaded;
+    clut_version++;
 }
 
 void TextureStore::State::lose_entry(uint64_t id, std::vector<uint64_t> &now_unowned) {
@@ -1216,6 +1222,13 @@ std::optional<TextureSource> TextureStore::load_clut(uint64_t tex0, uint64_t tex
 ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
     const State &s = *state_;
     s.note_read(kClutBlock);
+    // (asked again for each batch of a texture through the CLUT: the last answer kept while the mirror and what is
+    // read of TEX0 (PSM, CPSM, CSA) and TEXA are the same)
+    const uint64_t read_of_tex0 = tex0 & (0x3Full << 20 | 0xFull << 51 | 0x1Full << 56);
+    const uint64_t read_of_texa = texa & (0xFFull | 1ull << 15 | 0xFFull << 32);
+    if (s.clut_kept_version == s.clut_version && s.clut_kept_tex0 == read_of_tex0 && s.clut_kept_texa == read_of_texa) {
+        return s.clut_kept;
+    }
     ClutColours out;
     out.from_uploads = true;
     uint32_t entries = has_256_entries(field(tex0, 20, 6)) ? 256 : 16;
@@ -1235,6 +1248,10 @@ ClutColours TextureStore::clut_colours(uint64_t tex0, uint64_t texa) const {
         out.rgba[i] = r | g << 8 | b << 16 | a << 24;
         out.from_uploads = out.from_uploads && !s.clut_unloaded[at];
     }
+    s.clut_kept = out;
+    s.clut_kept_version = s.clut_version;
+    s.clut_kept_tex0 = read_of_tex0;
+    s.clut_kept_texa = read_of_texa;
     return out;
 }
 
@@ -1297,6 +1314,7 @@ void TextureStore::set_clut_state(const ClutState &c) {
     for (size_t i = 0; i < 512; i++) {
         s.clut_unloaded[i] = c.unloaded[i] != 0;
     }
+    s.clut_version++;
     s.clut_cbp = c.cbp;
 }
 
