@@ -32,10 +32,10 @@ state the same in both. Outside the cases below, views differ in under 0.4% of p
 2. **The HUD's health gauge not drawn**: only its ring's outline, at 55 views of 8 maps (016 v4-7, 018 v4-5,7,
    022 v4-11, 024 v0,3-4,7-8,10-11, 040 nine views, 102 v0-3,8-11, 103 all twelve, 104 v0-3); right at every other map.
 3. **The water of 014** (the Heart of the Forest, v5): pc draws it pale and opaque, gs dark and clear (17% of the
-   picture).
+   picture). Fixed 2026-11-11, below.
 4. **Seams at 4x**: map 035 at 4x shows hairline lines across the wall and floor (a vertical line near the middle,
    a horizontal one on the floor) that 1x and gs do not. Likely the same as the lines the owner sees in the sky.
-5. **Small**: a rock's edge at 112 (v10) cut differently near the camera.
+5. **Small**: a rock's edge at 112 (v10) cut differently near the camera. Fixed 2026-11-11, below.
 
 Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
 (native widescreen, MSAA).
@@ -69,6 +69,34 @@ run with the same build); the 4x tour against gs: views over 0.4% (blurred) 48 �
 0.33% (was 0.9-1.2%); the mean difference a little higher (2.98 → 3.19, the 3/8 pixel at sharp edges: 020 v11's
 bright magic circle, 2.70%, is the most). Still open: 014's water (3), 112's rock (5). ctest 14/14. Not run: the
 sanitizers (a shader change and one push constant), the owner's full settings (native widescreen, MSAA).
+
+**3 and 5 fixed (2026-11-11; issues #94, #95; measured on Windows, NVIDIA RTX 5080).** Three causes, all in the
+GIF path (the tour's 60 Hz runs draw no native draws: `port_gs_native_draws_now`).
+- **014's water, two causes.** The water is two passes (`kf4-gsreplay --pixel` on a capture of the view): the
+  reflection, drawn first into a 256 x 256 PSMCT16S target (FBP 350) and blended over the water at half (ALPHA
+  `(Cs - Cd) * As + Cd`, As 0x40), then a 4-bit texture added. (a) `surface_texture` read only CT32 and CT24 targets
+  as textures, so the reflection pass went untextured: half grey 0x80, the pale opaque water. A 16-bit texture is
+  now read from a surface of its own format, as the GS reads it back from memory (each colour's top 5 bits, alpha
+  TEXA's by bit 7: `PCR_F_SURFACE_CT16`). (b) That showed the water 9 levels darker than gs: the reflection is
+  Z-tested (GEQUAL, ZMSK) against ZBUF page 280 at width 4, which the frame's clear has just zeroed at width 10.
+  Depth surfaces are keyed by base, width and format, so the width-4 image kept Z from earlier frames and most of
+  the reflection failed. A clear (sprites writing one Z, ZTST ALWAYS, over whole rows of pages) now clears the other
+  widths' depth surfaces lying wholly in those pages (`clear_depth_aliases`; the stats line counts them: about two
+  a frame at every map). Partial overlaps (the 128 x 128 water targets write Z = max through ZBUF 280 at width 2,
+  mid-frame too) are still not carried between widths.
+- **112's rock.** Its near triangles have corners' Z up to 0xF39C0F over a Z16S buffer. The GS (and paraLLEl-GS:
+  `ubershader.comp`) clamps each pixel's interpolated Z; the vertex shader clamped the corners, lowering Z across
+  the triangle, and it failed Z tests gs's passed. Such a triangle is now cut on the CPU where its Z reaches the
+  format's largest (`add_cut_at_zmax`): the part beyond has every corner at or past it, where the corner clamp is
+  exact. Not done for a picture between's moved corners (a cut point has no kick) nor native draws (Z made on the
+  GPU): those still clamp the corners, so with pictures between or native draws on this edge can still differ.
+
+Against gs, blurred share: 014 v5 17.08% → 0.14% (1x), 17.04% → 0.00% (4x); 112 v10 2.04% → 0.20% (1x), 1.82% →
+0.05% (4x); 112 v11 0.90% → 0.27% (1x), 0.73% → 0.07% (4x). Byte for byte the build's before: the 1x tour of 000,
+004, 009, 016, 020, 026, 035, 040, 102, 115 (120 views), and 000, 009, 009:2, 063 at the owner's settings (4x, native
+draw, 240 Hz, pictures between included). On this machine 112 v4, v6 and v7 are 1.1-2.6% at 1x (triangle by
+triangle texture detail, the same before these changes, under 0.4% at 4x); Andrew's AMD tour had them under 0.4%,
+so likely the platform's sampling (left for the Windows/NVIDIA check).
 
 ## Where it stands (2026-10-29)
 
