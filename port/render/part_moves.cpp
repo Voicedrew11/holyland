@@ -1,7 +1,7 @@
 // The native draws' moves in the pictures between (part_moves.hpp)
 #include "part_moves.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <string.h>
 
 extern "C" {
