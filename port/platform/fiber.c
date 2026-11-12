@@ -40,6 +40,11 @@ struct PortFiber {
     const void *asan_bottom;
     size_t asan_size;
 #endif
+#if PORT_TSAN
+    /* ThreadSanitizer's context for the fiber: a call stack of its own (without, every fiber's calls and returns
+       were one stack's, and a report's stack ran from one EE thread into another). Not in a save state. */
+    void *tsan;
+#endif
 };
 
 int port_fpu_round_nearest;
@@ -293,6 +298,13 @@ PortFiber *port_fiber_create(size_t stack_size, void (*entry)(void *), void *arg
 #if PORT_ASAN
     asan_fresh_stack(fiber, slot_top(slot));
 #endif
+#if PORT_TSAN
+    /* a fresh context: the one a reused slot had holds the call stack its thread abandoned */
+    if (fiber->tsan != NULL) {
+        __tsan_destroy_fiber(fiber->tsan);
+    }
+    fiber->tsan = __tsan_create_fiber(0);
+#endif
 
     /* the frame port_fiber_swap pops: the EE's float mode and the host's x87 control word, the fiber
        in r12, the trampoline */
@@ -334,6 +346,13 @@ void port_fiber_switch(PortFiber *from, PortFiber *to) {
     port_fiber_swap(&from->sp, to->sp);
     asan_arrived(fake_stack);
 #else
+#if PORT_TSAN
+    /* (with a happens-before from this fiber to the next: they are one host thread taking turns) */
+    if (from->tsan == NULL) {
+        from->tsan = __tsan_get_current_fiber(); /* the host's, at its first switch */
+    }
+    __tsan_switch_to_fiber(to->tsan, 0);
+#endif
     port_fiber_swap(&from->sp, to->sp);
 #endif
 }

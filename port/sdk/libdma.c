@@ -48,7 +48,7 @@ int sceDmaReset(int mode) {
         if (reset_channel[i]) {
             volatile int *registers = EE_HW(volatile int *, channel_base[i]);
 
-            registers[0x00 / 4] = 0;
+            __atomic_store_n(&registers[0x00 / 4], 0, __ATOMIC_RELEASE); /* CHCR: the controller reads it (EeChcr) */
             registers[0x30 / 4] = 0;
             registers[0x10 / 4] = 0;
             registers[0x50 / 4] = 0;
@@ -70,7 +70,7 @@ void sceDmaSend(DmaChan *channel, void *addr) {
     port_dmac_wait(number);
     channel->tadr = (int)EE_WORD(addr);
     channel->qwc = 0;
-    __atomic_store_n(&channel->chcr, (channel->chcr & ~0xC) | 0x105, __ATOMIC_RELEASE);
+    channel->chcr = (channel->chcr & ~0xC) | 0x105;
     port_dmac_wake();
 }
 
@@ -81,7 +81,7 @@ void sceDmaSendN(DmaChan *channel, void *addr, int qwc) {
     port_dmac_wait(number);
     channel->madr = (int)EE_WORD(addr);
     channel->qwc = qwc;
-    __atomic_store_n(&channel->chcr, (channel->chcr & ~0xC) | 0x101, __ATOMIC_RELEASE);
+    channel->chcr = (channel->chcr & ~0xC) | 0x101;
     port_dmac_wake();
 }
 

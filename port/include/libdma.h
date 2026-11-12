@@ -7,9 +7,11 @@
 #ifndef SCE_LIBDMA_LIBDMA_H
 #define SCE_LIBDMA_LIBDMA_H
 
-/* A channel's registers (CHCR, MADR, QWC, TADR), as the game reads them. */
+#include "eeregs.h"
+
+/* A channel's registers (CHCR, MADR, QWC, TADR), as the game reads them. CHCR is atomic (eeregs.h's EeChcr). */
 typedef struct DmaChan {
-    volatile int chcr;
+    EeChcr chcr;
     int pad0[3];
     int madr;
     int pad1[3];

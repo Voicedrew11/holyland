@@ -23,7 +23,8 @@ out/linux-clang/kf4 --help                 # every option
 
 - The game code is GNU C: MSVC `cl` cannot build it.
 - Sanitizers: `-DKF4_SANITIZE=address,undefined` (or `thread`). Use clang (`out/linux-clang-asan`,
-  `out/linux-clang-tsan`); the gcc sanitizer builds don't link.
+  `out/linux-clang-tsan`); the gcc sanitizer builds don't link. How to run them, TSan's suppressions
+  (`tools/tsan.supp`) and the known reports: `docs/port/SANITIZERS.md`.
 - Useful run options for testing without playing: `--headless` (needs `--dump-frames` to produce
   anything), `--teleport [VBLANK:]MAP[:PLACE]` with `--invincible`, `--input FILE` (`tests/*.pad`),
   `--frame-rate 240`, `--state-save-at`, `--gs-capture-at`.
