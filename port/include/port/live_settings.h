@@ -18,6 +18,8 @@ typedef enum {
     PORT_LIVE_SKY,               /* PORT_SKY_: how the sky is drawn natively */
     PORT_LIVE_MSAA,              /* 1, 2, 4 or 8: the samples a pixel (the most the GPU has up to it) */
     PORT_LIVE_CUTOUT_AA,         /* 0 or 1: with MSAA, the cut-outs shaded at every sample */
+    PORT_LIVE_COLOUR,            /* 0 exact or 1 high: the renderer's colour precision */
+    PORT_LIVE_NATIVE_2D,         /* 0 ps2 or 1 smooth: the 2D at a larger scale */
     PORT_LIVE_COUNT
 } PortLiveSetting;
 

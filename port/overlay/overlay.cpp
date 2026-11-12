@@ -371,6 +371,28 @@ void display_page() {
                 "smoothed and shimmer less. Costs GPU time only where they are drawn. On by default.\n"
                 "(--native-cutout-aa ssaa|off)");
         ImGui::EndDisabled();
+        bool smooth = port_options.native_2d != 0;
+        if (ImGui::Checkbox("Smooth 2D at the larger resolution", &smooth)) {
+            port_gs_set_native_2d(smooth ? 1 : 0);
+            port_settings.native_2d = smooth ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("At a resolution above the PS2's: the text, the HUD and the menus' and title's pictures, which\n"
+                "the game reads a texel a pixel, are read smoothly where they are magnified: letters with even,\n"
+                "smooth edges. Off, each texel is a block, as the PS2's picture at 1x blown up. Nothing at 1x.\n"
+                "On by default. (--native-2d smooth|ps2)");
+        static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
+        int colour = port_options.native_colour;
+        if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {
+            port_gs_set_native_colour(colour);
+            port_settings.native_colour = colour;
+            port_settings_changed();
+        }
+        tooltip("How precisely the renderer keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
+                "the GS rounds it, which can show as steps in smooth dark gradients (fog, dim walls, glows).\n"
+                "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
+                "screen's 8 bits. Alpha, and what the game reads back, stay the PS2's. Costs GPU time (twice\n"
+                "the memory for the targets). Applies from the next picture. (--native-colour exact|high)");
     }
 
     ImGui::SeparatorText("Motion");
@@ -991,8 +1013,9 @@ void renderer_section() {
             "SDL_Renderer's. --presenter on the command line wins over this.");
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-    ImGui::TextWrapped("Not in the PC renderer yet, so not offered here (kept in settings.json and on the command line, "
-                       "and applied once it has them): colour precision, depth tolerance, smooth 2D.");
+    ImGui::TextWrapped("Not offered: depth tolerance (--native-layer-z, kept in settings.json and on the command line). "
+                       "The PC renderer keeps the GPU's depth, and its layers do not fight as the native GS's did "
+                       "(docs/port/PC_RENDERER.md, \"Layer Z\").");
     ImGui::PopStyleColor();
 }
 
