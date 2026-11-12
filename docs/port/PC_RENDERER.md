@@ -10,13 +10,82 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: the PC renderer keeps but does not yet apply MSAA, anisotropy, texture detail (LOD), colour
-precision, cut-out AA, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
-command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug, "Renderer (for
-testing)", lists them). The settings that change live go through `port/overlay/live_settings.c`, which
+from item 7 below: the PC renderer keeps but does not yet apply MSAA, colour precision, cut-out AA, the 2D mode and
+layer Z; settings.json and the command line keep them, and since 2026-11-07 (later) the overlay no longer offers them
+(Debug, "Renderer (for testing)", lists them). Anisotropy, texture detail and the presenter's best scaling and
+sharpening are applied since 2026-11-11 (below) and offered again. The settings that change live go through `port/overlay/live_settings.c`, which
 `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
+
+## Texture detail, anisotropy and the presenter's scaling (2026-11-11)
+
+The three settings the native GS had (`--native-lod`, `--native-aniso`, `--present-scaling best` with
+`--present-sharpen`) done the GPU's way, from the native GS at 67af1165 (`gs_frag.h`'s `sample_texture`,
+`gsn.cpp`'s `present_scale`).
+
+**What the game gives.** Its mipmaps are its own: TEX1's MXL and the MIPTBP levels, which the texture store decodes
+with level 0 (`DecodedTexture` has every level). In a census of the map tour (64 maps, 2 places x 2 headings) 41
+maps draw mipmapped textures and 23 none (000, 006, 007, 011, 013 and others); where there are some, 2-25% of the
+sampled batches (100, 107, 109, 031 the most). Every one is MMAG linear, MMIN 4 or 5 (bilinear in a level, nearest or
+linear between them). No 2D texture has levels.
+
+**Texture detail** moves the level the GS picks from Q (pcr_prim.frag's `sample_texture`, both the sampler's read and
+the GS's): `scale` (the default) by -log2 of the smaller of the two scales, `full` by -64 (level 0), `ps2` not at all.
+Only where the GS's level is above 0, so the choice between MMAG and MMIN stays the GS's (a level moved to 0 or below
+is held at 1/256 for the sampler: its minifying filter at level 0). At 1x `scale` is the GS's own level.
+
+**Anisotropy** is the sampler's (`anisotropyEnable`, up to `aniso`), on the samplers of mipmapped bilinear textures
+only (`anisotropy_for`); the 2D, the region modes and textures from surfaces never have it. With it the shader takes
+the texture coordinates' change a pixel across and down (in `main`, before any discard), and where the footprint is
+long enough that its long axis over the reads gives a level finer than the GS's, reads with `textureGrad` and the
+footprint as it is (the hardware's reads along it); elsewhere `textureLod` with the GS's level as before. So it is
+never blurrier than without it. (A first try stretched the footprint where its short axis was under a texel, to keep
+the sampler minifying: that spread the reads past the footprint and blurred floors at 4x; dropped.)
+
+Both reach the shader in tex1's spare bits (anisotropy 10-12, the bias 16-31 in 256ths), set when a batch binds its
+texture, so a kept walk draws again with what it was bound with; the canvas takes the settings at each vblank
+(`Canvas::set_sampling`). `--stats`: `pc canvas textures: ... (N mipmapped, N anisotropic)`.
+
+**The presenter's scaling.** The presenter (present_vk.cpp, SDL_Renderer's video.c, and `--dump-present`) already
+asked for it through `pcr_set_present_scale`, and copies `GsnScanout.scaled` a pixel a pixel when it is there; only the
+PC renderer's side was missing. Now each picture copied into the scanout ring is also drawn into the slot's own
+scaled image with the native GS's two shaders (`pcr_present_scale.frag`: Catmull-Rom, stretched when made smaller,
+on linear light; `pcr_present_sharpen.frag`: contrast-adaptive) and `pcr_present.vert`'s triangle
+(`PresentScaler`, pcr.cpp); a read-back with `GSN_WANT_SCALED` reads it. GPU time kind `present`.
+
+**Checked** (Windows, RTX 5080):
+- Defaults, 1x (the four spots, 240, vblanks 2300/2450/2600/2699: 64 pictures): byte for byte main's.
+- Defaults, 4x: the picture changes on maps with mipmaps, as it should: `scale` was the setting's default and is now
+  applied (main drew the GS's level at every scale, as `ps2`; `--native-lod ps2` is byte for byte main's on the
+  tour's 48 views). Maps without mipmaps are as before.
+- The map tour at 4x (maps 002, 008, 027, 031, 100, 107; 2 places x 4 headings) against `--renderer gs`: every view
+  under 0.02% (blurred) for main, `scale`, `full`, `ps2`, anisotropy 16 and `ps2` with anisotropy 16; nothing drawn
+  differently. By eye: `scale` sharp where main was blurred at 4x, a little grain at a grazing distance (031's floor);
+  anisotropy 16 keeps the detail without the grain; with `ps2` it sharpens the floors at a grazing angle. The HUD's
+  gauge byte for byte with every setting. `full` and `scale` are near the same at 4x (the game's textures have few
+  levels: -2 already reads level 0 almost everywhere).
+- `--dump-present`: 4x into 1280 x 896 (1195 x 896 at 4:3) with and without `--present-sharpen 1`, 1x into 1920 x
+  1344; main's `--dump-present` gave the picture at its own size.
+- In a window the default picture changes too: `best` has been the scaling's default all along, and the presenter
+  blitted bilinear while the PC renderer made no scaled picture; now it gets the cubic (and sharpening, at the
+  owner's settings).
+- The unit tests (11, run one by one: no ctest on this machine) pass.
+- Not checked: motion (shimmer is judged from stills), the Vulkan presenter in a window (no window opened), the
+  sanitizers.
+
+**GPU time a picture** (`--stats` with `KF4_GSN_GPU_TIME=1`, `KF4_PRESENT_SIM=240`, 4x with native widescreen, 240,
+vblanks 1900-3100; variants alternated, three rounds; measured while another game ran on the same GPU, so only the
+larger differences mean anything):
+
+| ms a picture | main | defaults (`scale`) | anisotropy 16 | anisotropy 16, best to 2560 x 1440, sharpen 1 |
+|---|---|---|---|---|
+| map 009 | 1.99, 1.73, 1.90 | 1.96, 2.02, 1.23 | 2.55, 2.15, 1.90 | 2.62, 1.89, 2.38 (of it the scaling 0.73, 0.52, 0.61) |
+| map 100 | 2.06, 2.00, 2.20 | 2.05, 2.49, 2.25 | 2.33, 2.34, 2.18 | |
+
+Texture detail costs nothing measurable; anisotropy 16 perhaps 0.1-0.3 ms (009 has few mipmapped batches, 100 the
+most of the census); the best scaling with sharpening is its own GPU kind, `present`, 0.5-0.7 ms a picture from 4x
+to 2560 x 1440 (two full-screen passes, the cubic's reach 4 x 4 pixels of the picture at that ratio).
 
 ## Against paraLLEl-GS: the map tour (2026-11-07)
 

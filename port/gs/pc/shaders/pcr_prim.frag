@@ -127,18 +127,58 @@ uvec4 read_level(vec2 uv, uint level, bool linear) {
     return uvec4(floor(mix(mix(a, b, f.x), mix(c, d, f.x), f.y)));
 }
 
-// The texture's colour at this pixel: the level from Q (TEX1's LCM, L, K), the filter MMAG or MMIN picks
-uvec4 sample_texture() {
+// The texture's coordinates at this pixel, in level 0's texels
+vec2 texture_uv() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
-    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    return (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+}
+
+// (with anisotropy) their change a pixel across and down, taken in main before anything is discarded
+vec2 uv_dx, uv_dy;
+
+uint aniso_log2() {
+    return (pc.tex1 >> 10) & 7u;
+}
+
+// The sampled texture read with the sampler's anisotropy (aniso_log2 above 0: a mipmapped texture filtered bilinear).
+// The GS picks the level from the distance alone, the same along a surface and across it, so a floor or wall seen at
+// a grazing angle gets a level coarser than its texels across the pixel want. The pixel's footprint on the texture
+// is long: the sampler reads n times along its long axis (n its length over its width, at most the sampler's), each
+// at the level of the long axis over n, by textureGrad with the footprint as it is. Where that is no finer than the
+// GS's level (a footprint about as long as wide, or the GS's level fine enough already) it is read as without it.
+// (The footprint is never made longer: where its width is under a texel, the reads at level 0 are the sampler's.)
+bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
+    float lx = length(uv_dx), ly = length(uv_dy);
+    float lmax = max(lx, ly);
+    float n = min(ceil(lmax / max(min(lx, ly), 1e-8) - 0.01), float(1u << aniso_log2()));
+    float alod = log2(max(lmax / n, 1e-8));
+    if (n < 2.0 || alod >= lod - 1.0 / 16.0) {
+        return false;
+    }
+    vec2 size = vec2(textureSize(u_sampled, 0));
+    t = textureGrad(u_sampled, uv / size, uv_dx / size, uv_dy / size);
+    return true;
+}
+
+// The texture's colour at this pixel: the level from Q (TEX1's LCM, L, K), the filter MMAG or MMIN picks; above 0 the
+// texture detail's bias moves which level (never the choice between MMAG and MMIN), within the texture's levels
+uvec4 sample_texture() {
+    vec2 uv = texture_uv();
     float lod = pc.lod_k;
     if ((pc.tex1 & 0x80u) == 0u) {
         lod += log2(1.0 / abs(v_stq.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
     }
+    float bias = float(int(pc.tex1) >> 16) / 256.0;
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
         // clamp are the texture's: pcr_canvas.cpp's sampler_for)
-        vec4 t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
+        if (lod > 0.0 && bias != 0.0) {
+            lod = max(lod + bias, 1.0 / 256.0);
+        }
+        vec4 t;
+        if (lod <= 0.0 || aniso_log2() == 0u || !sampled_anisotropic(uv, lod, t)) {
+            t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
+        }
         return uvec4(round(t * 255.0));
     }
     uint mmin = (pc.tex1 >> 1) & 7u;
@@ -148,6 +188,7 @@ uvec4 sample_texture() {
     }
     bool linear = mmin == 1u || mmin == 4u || mmin == 5u;
     float most = float(pc.levels - 1u);
+    lod = max(lod + bias, 0.0);
     if (mmin == 3u || mmin == 5u) {
         float l = min(lod, most);
         uint l0 = uint(floor(l));
@@ -200,6 +241,11 @@ bool alpha_passes(uint a) {
 }
 
 void main() {
+    if ((pc.flags & PCR_F_TME) != 0u && aniso_log2() != 0u) {
+        vec2 uv = texture_uv();
+        uv_dx = dFdx(uv);
+        uv_dy = dFdy(uv);
+    }
     if ((pc.flags & PCR_F_DATE) != 0u) {
         uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
