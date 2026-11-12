@@ -206,6 +206,54 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Found 2026-11-12: the game's 57-58 vblanks a second uncapped were vblanks left off the screen (#107)
+
+Windows, RTX 5080, ae9a9097, Andrew's profile (`pace_test.py`'s OWNER) at map 000, `--hz 500`. A per-vblank log (a
+diagnostic build, not committed: each `port_gs_run_vsync`'s start, the backlog, the pictures asked and left out and
+why; each vblank's posting and due time from the game's thread) showed:
+
+- **The game keeps its speed.** Its vblanks are posted 11-16 ms before their time and handed to the PC renderer
+  within 0.3 ms (`run_vsync`); 59.9 vblanks a second over the 25 s, uncapped as at 240. Nothing on the game's side
+  waits.
+- **pace_test's "game vblanks a second" counts the vblanks with a picture on the screen**, and 64-68 of 1497 had
+  none. At 500 a vblank's own picture is not one of its phases (8-9 pictures between at 0.12 steps from 0.01-0.1),
+  so its pictures between are all it has; gs.c left out every one of them while the renderer was behind
+  (`gsr_behind`: `pcr_backlog() > 2`, tested per picture after the vblank's own message is sent). Every such vblank
+  had started with a backlog of 2 (the two before not handed out): all of a vblank's pictures were left out, never
+  some.
+- **That also kept the cut from working.** The cut judges two vblanks in a row starting with a backlog over 1; the
+  whole vblank left out cleared the backlog first, so it cut seldom and never below 7 a vblank (allowed 7: 870
+  vblanks, 8: 462, 9: 165) while the renderer made about 6 a vblank (368 a second).
+
+**Fixed** (gs.c, `port_gs_run_vsync`): a vblank whose own picture is not shown keeps at least one picture between:
+when every one would be left out as behind, the last of them is drawn anyway (still in order: none of the vblank
+after it). `--stats` counts them ("N vblanks behind kept one"); `KF4_INTERP_KEEP_ONE=0` leaves them out as before.
+In the same run: 0 vblanks without a picture (64 with the switch off), the pump's pictures 18,042 against 18,013.
+Pictures byte for byte the base build's at 000, 009, 009:2, 099 (240, `KF4_INTERP_DRAW_ALL=1`, 204 a spot: dumps do
+not take this path). ctest's 16 tests pass.
+
+`pace_test` (25 s), alternated against ae9a9097, 3 rounds; **the display was asleep in all three** (GPU ~2160 MHz:
+the baseline's "display off" state, perf-baseline-1112), so compare within the table. Median [min-max]:
+
+| profile | rate | spot | pictures a second, base → now | game vblanks a second, base → now |
+|---|---|---|---|---|
+| andrew | 500 | 000 | 322.5 [249.1-331.7] → 328.8 [325.0-329.5] | 58.3 [58.0-58.7] → **60.4** [60.2-60.4] |
+| andrew | 500 | 009 | 267.3 [204.2-277.8] → 277.0 [276.5-282.8] | 58.6 [56.7-58.9] → **60.6** [60.3-60.6] |
+| sean | 500 | 000 | 341.4 [338.6-350.9] → 358.1 [349.2-387.1] | 60.6 (reached the rate) → 60.8 |
+| sean | 500 | 009 | 373.9 [366.8-377.5] → 375.1 [374.2-377.2] | 58.7 [57.9-59.0] → **60.7** [60.6-60.8] |
+| both | 240 | 000, 009 | 236.0-239.8 → 237.9-239.8 | 60.6-60.8 → 60.6-60.8 |
+
+(The base's lowest rates, 249 and 204 at 500 and 207.7 at 240 for 009, are all from round 0, where it ran first.)
+Uneven refreshes a second are the same at 500 (andrew 000: 324 → 320; sean 009: 248 → 247).
+
+**What is left:** the picture rate itself. Uncapped, the renderer still makes ~6 pictures a vblank against 8-9 asked
+with neither the pump nor the GPU full; about 1,000 pictures between a run are still left out as behind, some
+vblanks then show one picture, and the cut stays at 7-9 a vblank (it still judges on a backlog the left-outs keep
+low: judging on pictures left out too, as `--frame-rate unlocked` does, would make it hold ~6 evenly, at the cost of
+a few pictures a second). The backlog at a vblank's start is 1 most of the time: the pictures of a game frame wait
+for kf4-pc's intake before the pump starts them (2026-11-06), so the next step is the timeline of a frame's
+pictures between (asked → pump start → GPU done), not the vblank.
+
 ## The list, best first
 
 0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
@@ -215,9 +263,10 @@ unless `--keep` names one.
    handed out. **Done 2026-11-07**: the in-game profiler (docs/port/PROFILING.md), which the items below come from.
    The pump (the old item 1) is done too (305b216a).
 
-1. **What limits the uncapped rate** (new, 2026-11-07): at 500 no thread is full (the pump 77%, kf4-pc 48%, the GPU
-   about 80%) and the game falls to 57-58 vblanks a second. Follow each picture and vblank through the threads
-   (the 2026-11-06 timeline) to find what the game's vblank waits on, before more per-thread work.
+1. **What limits the uncapped rate**: the game's 57-58 vblanks a second are **fixed 2026-11-12** (above: vblanks left
+   off the screen, not the game slowed; 60.4-60.8 now). Left: the rate of pictures between itself (~6 a vblank made
+   of 8-9 asked at 500, neither the pump nor the GPU full): a frame's pictures between followed from asked to the
+   pump's start to GPU done, and the cut judging on pictures left out.
    **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
    - **One submit a picture between** (9%, the kernel's submit): the price of the 2026-11-06 flush. Measure the
      pictures' lateness with two pictures between a submit before trading any back.

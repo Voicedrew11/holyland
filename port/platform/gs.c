@@ -53,6 +53,7 @@ static volatile uint64_t queue_tail; /* written by the controller's thread */
 static PortGsFrame frame;
 static PortGsFrame pc_frame;     /* the PC renderer's picture, read back as pixels when it is wanted */
 static uint64_t interp_behind;   /* --frame-rate: pictures between left out, the renderer behind the game */
+static uint64_t interp_kept_one; /* and vblanks that kept one picture between all the same (port_gs_run_vsync) */
 /* --frame-rate: the pictures between cut to fewer a vblank while the PC renderer's thread is behind
    (port_gs_run_vsync): interp_allow of them a vblank (INTERP_ALL: no cut), one fewer each time it falls
    behind, one more after interp_rest vblanks; vblanks drawn with fewer and with none; the cuts */
@@ -77,6 +78,16 @@ static int interp_cut_on(void) {
 
     if (on < 0) {
         on = getenv("KF4_INTERP_CUT") == NULL || atoi(getenv("KF4_INTERP_CUT")) != 0;
+    }
+    return on;
+}
+
+/* KF4_INTERP_KEEP_ONE=0 (measure): a vblank behind leaves every picture between out, as before 2026-11-12 */
+static int keep_one_on(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        on = getenv("KF4_INTERP_KEEP_ONE") == NULL || atoi(getenv("KF4_INTERP_KEEP_ONE")) != 0;
     }
     return on;
 }
@@ -889,9 +900,10 @@ int port_gs_native_scale_x(void) {
 static void print_interp_left_out(void) {
     if (interp_behind || interp_vblanks_fewer) {
         fprintf(stderr, "[stats] pictures between left out as the renderer was behind the game: %llu; cut to fewer "
-                "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none)\n", (unsigned long long)interp_behind,
-                (unsigned long long)interp_cuts, (unsigned long long)interp_vblanks_fewer,
-                (unsigned long long)interp_vblanks_left_out);
+                "a vblank %llu times: %llu vblanks drawn with fewer (%llu with none); %llu vblanks behind kept one\n",
+                (unsigned long long)interp_behind, (unsigned long long)interp_cuts,
+                (unsigned long long)interp_vblanks_fewer, (unsigned long long)interp_vblanks_left_out,
+                (unsigned long long)interp_kept_one);
     }
 }
 #endif
@@ -1145,8 +1157,12 @@ void port_gs_run_vsync(void) {
     }
     if (interp_live && interp_count > 0) {
         /* the pictures between this vblank and the next: for the window, only while this thread and the
-           PC renderer's keeps up with the game (a picture between left out rather than the game held up) */
-        int i, j = 0, more = shown || draw_all();
+           PC renderer's keeps up with the game (a picture between left out rather than the game held up). A
+           vblank whose own picture is not shown (above 60 its phases need not include 0) keeps at least one: when
+           every picture between would be left out as behind, the last of them is drawn anyway. Leaving all out
+           took the vblank off the screen (the game's speed seemed to drop to 57-58 vblanks a second uncapped,
+           docs/port/PERFORMANCE.md), and it cleared the backlog before the cut above saw two vblanks behind. */
+        int i, j = 0, more = shown || draw_all(), asked = shown && own_shown, last_left_out = -1;
 
         for (i = 0; i < interp_count; i++) {
             if (interp_phases[i] <= 0 || !(more || dump)) {
@@ -1167,10 +1183,20 @@ void port_gs_run_vsync(void) {
             if (!dump && !port_options.fast && shown &&
                 (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
                 interp_behind++;
+                last_left_out = i;
                 continue;
             }
+            asked = 1;
             if (port_interp_picture(request->vblank, interp_phases[i], replay_gif)) {
                 present_extra(request, interp_phases[i], more, dump);
+            }
+        }
+        if (!asked && last_left_out >= 0 && keep_one_on()) {
+            /* (no picture of this vblank after it: still in order) */
+            interp_behind--;
+            interp_kept_one++;
+            if (port_interp_picture(request->vblank, interp_phases[last_left_out], replay_gif)) {
+                present_extra(request, interp_phases[last_left_out], more, dump);
             }
         }
         port_interp_end_vblank(replay_gif);
