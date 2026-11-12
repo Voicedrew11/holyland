@@ -663,13 +663,15 @@ public:
         in_replay_ = false;
     }
 
-    void vblank(const uint64_t *privileged, uint32_t scale) {
+    // scale: across | down << 8; samples and cutout_aa: MSAA's (Canvas::set_msaa)
+    void vblank(const uint64_t *privileged, uint32_t scale, uint32_t samples, bool cutout_aa) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
         }
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
+            canvas_->set_msaa(samples, cutout_aa);
             canvas_->vblank();
             times_->collect();
         }
@@ -1680,7 +1682,8 @@ private:
     void take_picture(VblankPicture v) {
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
-            intake_.vblank(v.privileged.data(), settings.scale.load());
+            intake_.vblank(v.privileged.data(), settings.scale.load(), uint32_t(settings.msaa.load()),
+                           settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF);
         }
         uint32_t scale = picture_scale_;
         if (!extra) {

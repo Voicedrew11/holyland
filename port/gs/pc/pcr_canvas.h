@@ -101,6 +101,9 @@ public:
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);
+    // MSAA: the samples a pixel of the surfaces drawn into has (1, 2, 4 or 8; 1 none), from the next vblank as the
+    // scale; with cutout_aa the cut-outs shaded at every sample (from the next draw)
+    void set_msaa(uint32_t samples, bool cutout_aa);
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);

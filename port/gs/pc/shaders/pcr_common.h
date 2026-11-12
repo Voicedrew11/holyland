@@ -22,16 +22,6 @@ layout(push_constant, std430) uniform Push {
                        // a 24-bit frame 18
 } pc;
 
-// A place in the target (GS pixels, XYOFFSET taken off) in Vulkan's clip space. The GS draws a pixel when its integer
-// point is inside a primitive, Vulkan when a pixel's middle is: every vertex moves half of one of the target's own
-// pixels (1 / src_scale of a GS pixel), so the first of a GS pixel's pixels at the canvas's scale is tested at the GS's
-// own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
-// was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
-// 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
-vec2 gs_to_clip(vec2 xy) {
-    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
-}
-
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u
 #define PCR_F_TFX_SHIFT 2u        // 2 bits
@@ -46,6 +36,7 @@ vec2 gs_to_clip(vec2 xy) {
 #define PCR_F_DATE 0x8000u        // TEST's DATE: drawn only where the destination's alpha bit 7 (u_dest) is DATM
 #define PCR_F_DATM 0x10000u
 #define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
+#define PCR_F_MSAA 0x40000u        // the target is multisampled (gs_to_clip)
 
 #define PCR_SRC_CT32 0u
 #define PCR_SRC_CT24 1u
@@ -53,3 +44,19 @@ vec2 gs_to_clip(vec2 xy) {
 #define PCR_SRC_INDEX 3u
 #define PCR_SRC_SURFACE 4u
 #define PCR_SRC_SAMPLED 5u // the GPU's sampler on a texture of its colours (u_sampled)
+
+// A place in the target (GS pixels, XYOFFSET taken off) in Vulkan's clip space. The GS draws a pixel when its integer
+// point is inside a primitive, Vulkan when a pixel's middle is: every vertex moves half of one of the target's own
+// pixels (1 / src_scale of a GS pixel), so the first of a GS pixel's pixels at the canvas's scale is tested at the GS's
+// own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
+// was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
+// 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
+// With MSAA (PCR_F_MSAA) a pixel is its samples' area, not its middle: nothing moves, so a GS pixel is its scale's
+// pixels whole (from its integer point to the next) and a primitive on whole GS pixels covers every sample of them (moved
+// half a target pixel, a sprite's edge cut each pixel on it in two: half its samples drawn, a line at every edge).
+vec2 gs_to_clip(vec2 xy) {
+    if ((pc.flags & PCR_F_MSAA) != 0u) {
+        return xy * pc.inv_size * 2.0 - 1.0;
+    }
+    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+}
