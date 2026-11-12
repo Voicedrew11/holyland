@@ -1495,7 +1495,8 @@ private:
     // so the GPU draws it in the meantime.
     bool picture_next() {
         std::lock_guard<std::mutex> hold(lock_);
-        return !messages_.empty() && std::holds_alternative<PumpPicture>(messages_.front()) && !stopping_;
+        return pcr::submit_together() && !messages_.empty() && std::holds_alternative<PumpPicture>(messages_.front()) &&
+               !stopping_;
     }
 
     void work(PumpPicture &e) {

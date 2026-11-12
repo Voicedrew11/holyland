@@ -578,14 +578,14 @@ public:
         // (submitted without a flush: the caller submits out right after, and that puts both on the GPU's queue in
         // one vkQueueSubmit)
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
-            submit(false);
+            submit(!submit_together());
             return false;
         }
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
         if (placed.surface) {
             resolve(*placed.surface);
         }
-        submit(false);
+        submit(!submit_together());
         times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
         Surface *s = placed.surface;
         if (!s) {
@@ -3487,6 +3487,13 @@ std::shared_ptr<SurfaceCopies> Canvas::copy_surfaces() {
 }
 void Canvas::start_from(SurfaceCopies &copies) {
     impl_->start_from(copies);
+}
+bool submit_together() {
+    static const bool on = [] {
+        const char *v = getenv("KF4_PC_SUBMIT_TOGETHER");
+        return !(v && strcmp(v, "0") == 0);
+    }();
+    return on;
 }
 void Canvas::draw_again_alone(const KeptWalk &walk, const Between &between, bool picture_follows) {
     impl_->draw_again_alone(walk, between, picture_follows);

@@ -94,6 +94,9 @@ class KeptWalk;
 // frame shown kept (0xF2), and the scale; for a canvas on another thread to draw on from there (Canvas::start_from)
 class SurfaceCopies;
 
+// KF4_PC_SUBMIT_TOGETHER=0: the canvas's command buffer flushed on its own before a picture's (as before #110)
+bool submit_together();
+
 class Canvas {
 public:
     // times: the GPU's time of what the canvas records (outlives the canvas)
