@@ -1,0 +1,3 @@
+# tools/motion_compare.py, the creature cases (with --invincible, --teleport and KF4_FX=creature=ROW): after
+# tests/newgame.pad, standing still while the creature does what it does. Nothing pressed but a look ahead.
+1700 ry=128 4

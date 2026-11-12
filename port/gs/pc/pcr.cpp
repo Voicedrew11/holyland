@@ -41,6 +41,7 @@
 #include "pcr_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
+#include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
 #include "device.hpp"
 #include "thread_id.hpp"
@@ -290,6 +291,7 @@ public:
             }
             Slot &s = slots_[slot];
             s.serial = 0; // (not to be taken while it is written)
+            s.scaled_valid = false;
             fresh = !s.image || s.width != width || s.height != height;
             written_ = slot;
         }
@@ -316,6 +318,47 @@ public:
     const Image &image(int slot) {
         std::lock_guard<std::mutex> hold(lock_);
         return *slots_[slot].image;
+    }
+
+    // (the PC renderer's thread, between claim and publish) The slot's picture at the window's size, and with work the
+    // image the scaling writes before the sharpening: made here when the slot has none of that size (outside the lock,
+    // as claim's). Taken with the slot's picture once published. Both null when they cannot be made.
+    struct Scaled {
+        const Image *scaled = nullptr, *work = nullptr;
+    };
+    Scaled scaled(Device &device, int slot, uint32_t width, uint32_t height, bool work) {
+        bool fresh, fresh_work;
+        {
+            std::lock_guard<std::mutex> hold(lock_);
+            const Slot &s = slots_[slot];
+            fresh = !s.scaled || s.scaled_width != width || s.scaled_height != height;
+            fresh_work = work && (fresh || !s.scaled_work);
+        }
+        ImageHandle made, made_work, old, old_work;
+        if (fresh) {
+            made = make_picture_image(device, width, height);
+        }
+        if (fresh_work) {
+            made_work = make_picture_image(device, width, height);
+        }
+        if ((fresh && !made) || (fresh_work && !made_work)) {
+            fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", width, height);
+            return {};
+        }
+        std::lock_guard<std::mutex> hold(lock_);
+        Slot &s = slots_[slot];
+        if (fresh) {
+            old = std::move(s.scaled);
+            old_work = std::move(s.scaled_work);
+            s.scaled = std::move(made);
+            s.scaled_width = width;
+            s.scaled_height = height;
+        }
+        if (fresh_work) {
+            s.scaled_work = std::move(made_work);
+        }
+        s.scaled_valid = true;
+        return {s.scaled.get(), work ? s.scaled_work.get() : nullptr};
     }
 
     // (the PC renderer's thread) Once the commands writing the slot are on the queue: the presenter may take it
@@ -347,7 +390,11 @@ public:
         out.height = s.height;
         out.serial = s.serial;
         out.tag = s.tag;
-        out.scaled = 0; // (no scaled picture yet: the presenter blits)
+        if (s.scaled_valid) {
+            out.scaled = uint64_t(s.scaled->get_image());
+            out.scaled_width = s.scaled_width;
+            out.scaled_height = s.scaled_height;
+        }
         taken_ = pick;
         return true;
     }
@@ -380,6 +427,9 @@ private:
     struct Slot {
         ImageHandle image;
         uint32_t width = 0, height = 0;
+        ImageHandle scaled, scaled_work; // (scaled: the picture at the window's size; work: before the sharpening)
+        uint32_t scaled_width = 0, scaled_height = 0;
+        bool scaled_valid = false; // (scaled is this picture's)
         uint64_t serial = 0; // 0: none published in it (or it is being written)
         uint64_t tag = 0;
     };
@@ -663,13 +713,20 @@ public:
         in_replay_ = false;
     }
 
-    void vblank(const uint64_t *privileged, uint32_t scale) {
+    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
+    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d and colour: Canvas::set_2d's and set_colour's
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
+                int mode_2d, int colour) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
         }
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
+            canvas_->set_sampling(lod, uint32_t(aniso));
+            canvas_->set_msaa(samples, cutout_aa);
+            canvas_->set_2d(mode_2d);
+            canvas_->set_colour(colour);
             canvas_->vblank();
             times_->collect();
         }
@@ -893,6 +950,85 @@ ClearColour clear_colour() {
     return c;
 }
 
+// ---- The presenter's scaling --------------------------------------------------------------------------
+// The picture scaled to the size the window shows it at (pcr_set_present_scale: the presenter's, SDL_Renderer's, or
+// --dump-present's), on the GPU after its copy into the scanout ring, with shaders/pcr_present_scale.frag (a
+// Catmull-Rom cubic, stretched by the ratio when the picture is made smaller, on linear light) and, with a strength,
+// shaders/pcr_present_sharpen.frag after it; the presenter then copies it into the window a pixel a pixel. None when
+// the presenter scales by itself (sharp or smooth, and no sharpening). One for each thread that makes pictures.
+class PresentScaler {
+public:
+    explicit PresentScaler(Device &device) : device_(device) {}
+
+    // picture into scaled, or with sharpen above 0 into work and sharpened from it into scaled
+    void scale(CommandBuffer &cmd, const Image &picture, const Image &scaled, const Image *work, float sharpen) {
+        if (!scale_) {
+            make_programs();
+        }
+        uint32_t pw = picture.get_width(), ph = picture.get_height();
+        uint32_t w = scaled.get_width(), h = scaled.get_height();
+        struct {
+            int32_t src[2];
+            float ratio[2];
+            int32_t linear;
+        } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
+        bool sharpened = sharpen > 0 && work;
+        pass(cmd, sharpened ? *work : scaled, scale_, picture.get_view(), &scaling, sizeof(scaling));
+        if (sharpened) {
+            struct {
+                int32_t size[2];
+                float strength;
+            } sharpening = {{int32_t(w), int32_t(h)}, sharpen};
+            pass(cmd, scaled, sharpen_, work->get_view(), &sharpening, sizeof(sharpening));
+        }
+    }
+
+private:
+    void make_programs() {
+        ResourceLayout vert = {};
+        Shader *vs = device_.request_shader(pcr_spv_pcr_present_vert, sizeof(pcr_spv_pcr_present_vert), &vert);
+        ResourceLayout frag = {};
+        frag.output_mask = 1;
+        frag.sets[0].sampled_image_mask = 1;
+        frag.sets[0].fp_mask = 1;
+        frag.sets[0].meta[0].array_size = 1;
+        frag.push_constant_size = 5 * sizeof(int32_t);
+        scale_ = device_.request_program(
+            vs, device_.request_shader(pcr_spv_pcr_present_scale_frag, sizeof(pcr_spv_pcr_present_scale_frag), &frag));
+        frag.push_constant_size = 3 * sizeof(int32_t);
+        sharpen_ = device_.request_program(
+            vs, device_.request_shader(pcr_spv_pcr_present_sharpen_frag, sizeof(pcr_spv_pcr_present_sharpen_frag), &frag));
+    }
+
+    // A pass over the whole of dst, reading src (after whatever wrote it; read after by anything)
+    static void pass(CommandBuffer &cmd, const Image &dst, Program *program, const ImageView &src, const void *push,
+                     size_t push_size) {
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        RenderPassInfo rp;
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &dst.get_view();
+        rp.store_attachments = 1;
+        cmd.begin_render_pass(rp);
+        cmd.set_opaque_state();
+        cmd.set_program(program);
+        cmd.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        cmd.set_cull_mode(VK_CULL_MODE_NONE);
+        cmd.set_depth_test(false, false);
+        cmd.set_texture(0, 0, src, StockSampler::NearestClamp);
+        cmd.push_constants(push, 0, push_size);
+        cmd.draw(3);
+        cmd.end_render_pass();
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    }
+
+    Device &device_;
+    Program *scale_ = nullptr, *sharpen_ = nullptr;
+};
+
+Settings &settings(); // (below)
+
 // The presenter's callbacks (pcr_set_presenter): any thread sets them, the threads that hand pictures out call them
 struct PresenterHooks {
     std::atomic<void (*)(const PortGsFrame *, uint64_t)> pixels{nullptr};
@@ -927,7 +1063,7 @@ int not_shown_when_late(MadePicture &made, const GsnInterpPicture &between) {
 class PictureOut {
 public:
     PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear)
-        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear) {}
+        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device) {}
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
@@ -970,15 +1106,18 @@ public:
         }
         times.picture();
         port_profile_picture(); // (a picture drawn: the profiler's GPU time a picture divides by these)
+        const Image *scaled = nullptr;
         if (want & GSN_WANT_IMAGE) {
             m.slot = scanout_.claim(device_, picture_->get_width(), picture_->get_height());
             if (m.slot >= 0) {
                 copy_to_scanout(*cmd, scanout_.image(m.slot));
                 m.ok |= GSN_WANT_IMAGE;
+                scaled = scale_for_window(*cmd, m.slot, times);
             }
         }
         if (frame && ((want & GSN_WANT_PIXELS) || present_pixels)) {
-            if (read_back(cmd, *frame, times)) {
+            // (GSN_WANT_SCALED: the picture as the window shows it, when there is a scaled one)
+            if (read_back(cmd, (want & GSN_WANT_SCALED) && scaled ? *scaled : *picture_, *frame, times)) {
                 m.ok |= GSN_WANT_PIXELS;
             }
         } else {
@@ -1048,6 +1187,25 @@ private:
         return true;
     }
 
+    // The picture scaled to the window's size into the slot's scaled image (PresentScaler), when the presenter asks for
+    // it (pcr_set_present_scale); that image, or null
+    const Image *scale_for_window(CommandBuffer &cmd, int slot, pcr::GpuTimes &times) {
+        uint32_t size = settings().present_size.load(std::memory_order_relaxed);
+        uint32_t w = size >> 16, h = size & 0xFFFF;
+        if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+            return nullptr;
+        }
+        float sharpen = float(settings().present_sharpen.load(std::memory_order_relaxed)) / 1000.0f;
+        ScanoutRing::Scaled images = scanout_.scaled(device_, slot, w, h, sharpen > 0);
+        if (!images.scaled) {
+            return nullptr;
+        }
+        times.begin(cmd, pcr::GpuWork::present);
+        scaler_.scale(cmd, *picture_, *images.scaled, images.work, sharpen);
+        times.begin(cmd, pcr::GpuWork::picture);
+        return images.scaled;
+    }
+
     // The picture into a slot of the scanout ring, after whatever the presenter submitted before (it reads the
     // slot after a barrier of its own)
     void copy_to_scanout(CommandBuffer &cmd, const Image &slot) {
@@ -1062,8 +1220,8 @@ private:
 
     // The picture read back into frame (alpha 255): submitted with the commands so far, and waited for. False
     // (submitted all the same) if there is no buffer to read it into.
-    bool read_back(CommandBufferHandle &cmd, PortGsFrame &frame, pcr::GpuTimes &times) {
-        uint32_t width = picture_->get_width(), height = picture_->get_height();
+    bool read_back(CommandBufferHandle &cmd, const Image &image, PortGsFrame &frame, pcr::GpuTimes &times) {
+        uint32_t width = image.get_width(), height = image.get_height();
         VkDeviceSize size = VkDeviceSize(width) * height * 4;
         if (!readback_ || readback_->get_create_info().size < size) {
             BufferCreateInfo info = {};
@@ -1078,7 +1236,7 @@ private:
                 return false;
             }
         }
-        cmd->copy_image_to_buffer(*readback_, *picture_, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
+        cmd->copy_image_to_buffer(*readback_, image, 0, {0, 0, 0}, {width, height, 1}, 0, 0,
                                   {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1});
         cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
                      VK_ACCESS_2_HOST_READ_BIT);
@@ -1124,6 +1282,7 @@ private:
     PresenterHooks &presenter_;
     Stats &stats_;
     const ClearColour &clear_;
+    PresentScaler scaler_;
     ImageHandle picture_;
     BufferHandle readback_;
     std::vector<uint32_t> presented_pixels_;
@@ -1680,7 +1839,9 @@ private:
     void take_picture(VblankPicture v) {
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
-            intake_.vblank(v.privileged.data(), settings.scale.load());
+            intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
+                           uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
+                           settings.mode_2d.load(), settings.colour.load());
         }
         uint32_t scale = picture_scale_;
         if (!extra) {
@@ -1888,7 +2049,6 @@ extern "C" void pcr_scanout_release(void) {
 }
 
 extern "C" void pcr_set_present_scale(int width, int height, float sharpen) {
-    // (kept: no scaled picture is made yet, so GsnScanout's scaled is 0 and the presenter blits)
     settings().present_size.store(width > 0 && height > 0 ? uint32_t(width) << 16 | uint32_t(height) : 0);
     settings().present_sharpen.store(uint32_t(sharpen > 0 ? sharpen * 1000.0f + 0.5f : 0.0f));
 }

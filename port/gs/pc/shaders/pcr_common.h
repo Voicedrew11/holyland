@@ -11,7 +11,8 @@ layout(push_constant, std430) uniform Push {
     uint test;       // TEST: ATST 0-2, AREF 3-10
     uint fogcol;     // FOGCOL: R 0-7, G 8-15, B 16-23
     uint texa;       // TEXA: TA0 0-7, AEM 15, TA1 16-23
-    uint tex1;       // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9
+    uint tex1;       // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9; log2 of the anisotropy 10-12, the texture
+                     // detail's bias to the GS's level 16-31 (signed, 256ths; pcr_canvas.cpp's sampling_bits)
     float lod_k;     // TEX1's K
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts
@@ -21,16 +22,6 @@ layout(push_constant, std430) uniform Push {
     uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
                        // a 24-bit frame 18
 } pc;
-
-// A place in the target (GS pixels, XYOFFSET taken off) in Vulkan's clip space. The GS draws a pixel when its integer
-// point is inside a primitive, Vulkan when a pixel's middle is: every vertex moves half of one of the target's own
-// pixels (1 / src_scale of a GS pixel), so the first of a GS pixel's pixels at the canvas's scale is tested at the GS's
-// own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
-// was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
-// 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
-vec2 gs_to_clip(vec2 xy) {
-    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
-}
 
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u
@@ -46,6 +37,12 @@ vec2 gs_to_clip(vec2 xy) {
 #define PCR_F_DATE 0x8000u        // TEST's DATE: drawn only where the destination's alpha bit 7 (u_dest) is DATM
 #define PCR_F_DATM 0x10000u
 #define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
+#define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
+#define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
+#define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
+#define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
+
+#define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)
 
 #define PCR_SRC_CT32 0u
 #define PCR_SRC_CT24 1u
@@ -53,3 +50,19 @@ vec2 gs_to_clip(vec2 xy) {
 #define PCR_SRC_INDEX 3u
 #define PCR_SRC_SURFACE 4u
 #define PCR_SRC_SAMPLED 5u // the GPU's sampler on a texture of its colours (u_sampled)
+
+// A place in the target (GS pixels, XYOFFSET taken off) in Vulkan's clip space. The GS draws a pixel when its integer
+// point is inside a primitive, Vulkan when a pixel's middle is: every vertex moves half of one of the target's own
+// pixels (1 / src_scale of a GS pixel), so the first of a GS pixel's pixels at the canvas's scale is tested at the GS's
+// own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
+// was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
+// 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
+// With MSAA (PCR_F_MSAA) a pixel is its samples' area, not its middle: nothing moves, so a GS pixel is its scale's
+// pixels whole (from its integer point to the next) and a primitive on whole GS pixels covers every sample of them (moved
+// half a target pixel, a sprite's edge cut each pixel on it in two: half its samples drawn, a line at every edge).
+vec2 gs_to_clip(vec2 xy) {
+    if ((pc.flags & PCR_F_MSAA) != 0u) {
+        return xy * pc.inv_size * 2.0 - 1.0;
+    }
+    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+}

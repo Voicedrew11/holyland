@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for the TSan build (out/linux-clang-tsan). How to run: docs/port/SANITIZERS.md.
+#   TSAN_OPTIONS="suppressions=tools/tsan.supp halt_on_error=0 second_deadlock_stack=1 report_signal_unsafe=0"
+# Each entry says why it is not ours to fix. A race: entry hides a report when any frame of either stack matches,
+# so keep them to libraries we do not build.
+
+# Mesa's Vulkan drivers (lavapipe, RADV) are not built with TSan: TSan sees their memcpy, malloc and pthread calls but
+# not the atomics and futex locks (simple_mtx) that order them, so their own shared state looks unguarded. Seen with
+# lavapipe: image views made by kf4-pc and kf4-pc-pump at once (llvmpipe_register_texture, the canvases at start),
+# fences freed (lp_fence_destroy), a hash table (util/hash_table.c) on the llvmpipe threads. Earlier
+# RADV runs showed the same in the canvases' image making (docs/port/PC_RENDERER.md, the pump).
+race:libvulkan_lvp.so
+race:libvulkan_radeon.so

@@ -10,13 +10,228 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: the PC renderer keeps but does not yet apply MSAA, anisotropy, texture detail (LOD), colour
-precision, cut-out AA, the 2D mode and layer Z, nor the presenter's best scaling and sharpening; settings.json and the
-command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug, "Renderer (for
-testing)", lists them). The settings that change live go through `port/overlay/live_settings.c`, which
-`KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
+from item 7 below: layer Z (`--native-layer-z`) only, which the PC renderer keeps but does not apply and the overlay
+does not offer: it has no layers fighting to fix, and its removal is proposed ("Colour high, the 2D mode and layer Z",
+below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
+the 2D mode are applied since 2026-11-11 (below) and offered again. The settings that change live go through
+`port/overlay/live_settings.c`, which `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g.
+`2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
+
+## MSAA and cut-out AA (2026-11-11)
+
+`--native-msaa` and `--native-cutout-aa` (settings.json's `native_msaa`, `native_cutout_aa`) are applied, live from
+a vblank, and the overlay offers them again (Display, Picture). Built the GPU's way, not as the native GS had them:
+
+- **The surfaces.** A colour surface drawn into with MSAA has a multisampled image beside its own (`Surface::ms`); its
+  depth surface is made at the samples. The surface's own image stays what everything else reads: copies between
+  surfaces, read-backs, textures read from a surface, the frame kept for the pictures between (0xF2), shader blending's
+  rectangle and the scanout. Two marks say which is behind: drawn since (`ms_ahead`: resolved before a read, by
+  `vkCmdResolveImage`, of only the rectangle read where that is all it reads) and written since (`ms_behind`: a new
+  surface's samples made from its image at its first draw). An upload or a copy into a surface writes its image and
+  the same pixels into its samples at once (`pcr_expand.frag`, a rectangle), so neither mark is needed for them. The
+  pump's copies carry both images and the marks; each is copied only where it is not behind.
+- **No half-pixel move with MSAA.** At one sample a vertex moves half a target pixel (`gs_to_clip`), so a pixel's
+  middle is tested at the GS's point. With samples a pixel is their area: moved, a primitive on whole GS pixels (a
+  sprite, a target drawn whole) covered half the samples of every pixel on its edges. With MSAA nothing moves
+  (`PCR_F_MSAA`): a GS pixel is its scale's pixels whole. The 3D is shaded at the pixels' middles, so the picture as a
+  whole sits half a GS pixel up and left of paraLLEl-GS's (1/8 of one from MSAA 1's at 4x).
+- **DATE by the stencil** reads each sample's alpha in the pass (`pcr_date_ms.frag`, `subpassInputMS`, shaded a
+  sample at a time); a GPU without sample-rate shading does DATE by a copy with MSAA.
+- **Cut-out AA** (`is_cutout`): an alpha-tested batch, textured with the texture's alpha and not FST, whose alphas
+  fall on both sides of the test is shaded at every sample (`pcr_prim_sample.frag`, its inputs `sample`): each sample
+  is textured and tested at its own place, so the edges inside netting, fences and the torch stands are smoothed. The
+  alphas it can make are the texture's least and most (kept with a texture the GPU's sampler reads; any for the rest)
+  by the texture function with the vertices' alphas (a native batch's taken as 0x80). Without that test (every
+  alpha-tested batch) 79,343 batches at 000 were shaded a sample at a time, with it 13,430.
+- **Pipelines made ahead** (`pcr_pipelines.cpp`). A pipeline is made for a render pass's samples, so a change of MSAA
+  needs the canvas's pipelines again; made by the draw that needs them, the picture stood still 0.2-1.5 s each.
+  Every pipeline made for the canvas's programs is kept (Granite's compile hook, `cmake/granite_pipeline_warm.inc`)
+  with its pass's attachments, and when the samples change each is made again at the new count, with the per-sample,
+  DATE and expand variants, on a thread of its own; the canvas draws at the old count until they are made (a change at
+  009 at 240: 42 pipelines in 1.2 s on that thread, 57 vblanks at the old count, no draw waiting). Only what was drawn
+  is known: a run started with MSAA makes its first pipelines as at 1x (the PC renderer has no pipeline list yet).
+  `KF4_PC_WARM_LOG=1` names each pipeline made.
+- **Granite** hashed a render pass by its formats, not its samples: a multisampled pass was given the single-sampled
+  one of the same formats. `cmake/granite_msaa.cmake` adds the samples.
+
+Checked (Windows, RTX 5080): with MSAA 1 the pictures at 000, 009, 009:2 and 063 byte for byte the build before
+(1x: 48; 4x native widescreen: 16); ctest's 11 tests. The map tour (000, 009, 014, 022, 026, 035, 112 at 4x without
+native widescreen) against `--renderer gs`, MSAA 4 with cut-out AA: no view broken. Views over 0.4% (blurred): 1 at
+MSAA 1 (014 v5, the water, as before), 9 at MSAA 4: 014 v5 again, 112 v1, v4, v6, v7 (1.1-2.0%), whose fine wall
+texture shows the half-pixel shift above (side by side the same picture), and 026 v0, 009 v0, 035 v2, 014 v6
+(0.44-0.69%: the shift, and 026's fire). MSAA 4 against MSAA 1 view by view: under 0.4% (blurred) but those four of
+112. Edges smoothed (the torch stands at 063, the cone at 026); water, reflections, shadows and the HUD as at MSAA 1.
+The four spots at MSAA 4 against MSAA 1 (4x, native widescreen): 0.03-0.13% (blurred). The sky at 000 and 063 at 4x,
+native widescreen, MSAA 2 (issue 96): no lines, by eye and by a search for rows and columns that stand out from both
+neighbours (which finds a line 10 levels darker drawn in); `--native-colour high` is not applied yet, so not with it.
+Nor in the tour's views at MSAA 4: the rows and columns found are the walls' own edges, there in paraLLEl-GS's too.
+
+GPU time, the renderer's timestamps (`KF4_GSN_GPU_TIME=1`), a whole run to 009 at 240 (2,400 vblanks, 3,100
+pictures), 4x native widescreen, alternated three times each, measured with another game running on the machine
+(so only the ratios mean much; one MSAA 4 run took 7 times its least, plainly while the other game drew). A picture,
+the least of the three runs and the median:
+
+| | least | median |
+|---|---|---|
+| MSAA 1 (the build before) | 0.79 ms | 0.82 ms |
+| MSAA 2, cut-out AA | 1.26 ms | 1.38 ms |
+| MSAA 4, cut-out AA | 1.72 ms | (6.8 ms, contended) |
+| MSAA 4, cut-out AA off | 1.52 ms | 1.76 ms |
+
+So about 1.6 times the GPU's time at MSAA 2 and 2.2 at MSAA 4, cut-out AA about 0.2 ms of it at 4. By kind (least
+runs, MSAA 4 against 1): the native draws about 2.4 times, the copies and resolves 4 times (the pump's copies of the
+samples each frame; the depth surface at 4 samples is the largest), and the expands (`surface`) 0.03 ms a picture.
+
+Still open: the half-pixel shift against paraLLEl-GS could be taken back by reading the 3D's inputs half a pixel up
+and left (`interpolateAtOffset`); points and lines are still not drawn; MSAA 8 not tried.
+
+## Colour high, the 2D mode and layer Z (2026-11-11)
+
+The last three settings the native GS had (issues #102, #104, #105), each checked first for whether the PC renderer
+has the problem it fixed. The native GS's are at 67af1165 (`gs_frag.h`, `gsn.cpp`'s `texel_rect_2d` and "Z and
+layers", `narrow.frag`).
+
+**The 2D mode (`--native-2d smooth`, the default; #104): applied.** At a scale above 1 the 2D's textures read nearest
+(MMAG nearest at level 0) and magnified on the target (a texel at least a pixel across) are read with a Catmull-Rom
+cubic at each pixel's own place (`pcr_prim.h`'s `smooth_2d`, push flag `PCR_F_SMOOTH_2D`), not as blocks of texels:
+letters with smooth edges, the same picture at every scale. The taps stay inside the texels the primitive covers, so a
+letter's cell of a sheet of letters does not take in the letters beside and below it (the native GS's text-bleed
+fix): each vertex carries its primitive's texel rectangle (`Vertex::rect`, 8 bytes more, `a_rect` / flat `v_rect`),
+made on the CPU for sprites and for 2D triangles (FST, or one Z and one Q at the three corners: the menus draw their
+text and panels as such triangles with S, T and Q; only FST at first, and the menus' text stayed blocky). The result is
+kept inside the four texels around the place (no ring). The place is moved half a pixel's change of the coordinates,
+where nearest puts a texel's middle (none with MSAA: no vertex move there). Not the 3D (no rectangle), not textures
+read from drawn surfaces, not native draws. Nothing at 1x. In a picture between the rectangle is the frame's (the
+primitive's texels do not move with it).
+
+**Colour high (`--native-colour high`, opt-in; #102): applied, default as it was.** The colour surfaces are made
+R16G16B16A16_UNORM (`colour_format`; their multisampled images, copies, the pump's copies too), the colours'
+arithmetic in floats in the shader (`PCR_F_HIGH`: texture function, fog, premultiply, the shader's blend from the
+destination with its fraction; the sampler's filter and the 2D cubic keep their fraction), with the native GS's
+level-keeping (`gs_floor`, `gs_shift7`: the GS's floors take half a step on average, so does the float path, else a
+dark scene comes out a step brighter); alpha stays the GS's integers. The picture is dithered to 8 bits as it is
+scanned out (`pcr_narrow.frag`, interleaved gradient noise, a whole number unchanged; the lower field's half picture
+too). Read-backs to the GS's memory are blits to RGBA8 (rounded). It changes from a vblank (`apply_colour`, surfaces
+made again by a blit; the kept frame let go); a GPU without 16-bit colour attachments with blending stays exact. The
+pipelines made ahead for an MSAA change are made against the format of the run's first change (the other precision's
+are made as drawn). `KF4_SET_AT` takes `colour=` and `native_2d=`.
+
+**Layer Z (`--native-layer-z`; #105): not applied, proposed for removal.** The native GS rounded each pixel's Z to a
+whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
+meshes' Z rounded apart, and tolerant was its way out. The PC renderer keeps the GPU's Z with its fraction and no
+rounding, and its layers are not seen fighting:
+- A tolerant mode built the GPU's way (a `gl_FragDepth` variant of `pcr_prim.frag` testing the colour pass a half Z,
+  or a layer's pixel one Z and half its slope, nearer; ties in two phases, everything else blended Z first) changed
+  the 4x tour views (maps 002, 004, 009, 016, 020, 026, 035, 040, 099, 102, 112, 115, 96 views) by at most 0.05% of
+  pixels (0.02% blurred), and map 000 (12 views) by at most 0.15%, nothing against paraLLEl-GS (the blurred share the
+  same to 0.01%). What it did change was worse: map 004 v1's tree (blended alpha-tested leaves) lost the leaves drawn
+  behind (Z first keeps only the nearest's colour within the slack), light seams through the foliage; a dark line down a
+  wall's corner at 026 v1; the torch flames at 000 v0. At 1x at the four spots: 0-65 pixels a picture.
+- The Equipment screen's figure (the case the native GS's tolerant mode broke and then had to special-case: the menus'
+  Z32 buffer, the second pass over the model): drawn by the PC renderer as by paraLLEl-GS, no patches.
+So the code was not kept; the setting stays in settings.json and on the command line, does nothing, and the overlay
+says so. Proposed: remove `--native-layer-z` and `native_layer_z` (the default "tolerant" there is the native GS's).
+
+Checked (Windows, RTX 5080): with `--native-2d ps2` (and colour exact) the four spots byte for byte the integration
+branch's (1x, 192 pictures); at the defaults too at 1x (the 2D mode does nothing there). At 4x the 2D mode changes
+the menus' and the pause screen's text and panels (evidence: smoother letters, no specks from the cells beside); the
+HUD in play at 000 not at all (its textures are not read nearest-magnified). Colour high at 4x: every pixel within 4-6
+levels of exact, the mean 0.4-0.6 of a level brighter; no banding to see in exact at the spots (stretched crops of the
+sky at 099 and a firelit wall at 009 look the same in both), and the map tour at 000 against paraLLEl-GS the same
+(mean difference 2.36 against 2.37). The owner's earlier finding stands: high is hard to tell from exact, so it stays
+opt-in.
+
+GPU time a picture (`--stats` with `KF4_GSN_GPU_TIME=1`, `KF4_PRESENT_SIM=240`, 009 at 240, 4x with native
+widescreen, a run to vblank 2600, the variants alternated three rounds; **contaminated**: the owner was playing another
+game on the same GPU, so only large differences mean anything):
+
+| ms a picture | rounds | least | median |
+|---|---|---|---|
+| base (2D ps2, colour exact) | 2.136, 2.165, 1.995 | 2.00 | 2.14 |
+| 2D smooth | 2.203, 2.140, 2.005 | 2.01 | 2.14 |
+| colour high | 2.095, 2.268, 1.869 | 1.87 | 2.10 |
+| MSAA 2 | 2.846, 2.751, 2.164 | 2.16 | 2.75 |
+| MSAA 2 + colour high | 2.343, 2.631, 2.481 | 2.34 | 2.48 |
+
+The 2D mode costs nothing measurable here (its draws are few). Colour high's time a picture is within the noise, but
+its runs drew 20-30% fewer pictures in the same run (3,515-4,346 against 4,762-5,930: pictures left out as they fell
+behind), and its copies (`copy`, `texture copy`) about twice the time: the 16-bit surfaces are twice the bytes. Not
+measured cleanly; to be measured on a quiet machine before anyone recommends it.
+
+Still open: colour high's level is a little brighter than exact (0.4-0.6 of a level); textures read from drawn
+surfaces and the GS's own read (the region modes, the CLUT) keep whole numbers in high; the 2D mode does not reach 2D
+drawn as perspective triangles.
+
+## Texture detail, anisotropy and the presenter's scaling (2026-11-11)
+
+The three settings the native GS had (`--native-lod`, `--native-aniso`, `--present-scaling best` with
+`--present-sharpen`) done the GPU's way, from the native GS at 67af1165 (`gs_frag.h`'s `sample_texture`,
+`gsn.cpp`'s `present_scale`).
+
+**What the game gives.** Its mipmaps are its own: TEX1's MXL and the MIPTBP levels, which the texture store decodes
+with level 0 (`DecodedTexture` has every level). In a census of the map tour (64 maps, 2 places x 2 headings) 41
+maps draw mipmapped textures and 23 none (000, 006, 007, 011, 013 and others); where there are some, 2-25% of the
+sampled batches (100, 107, 109, 031 the most). Every one is MMAG linear, MMIN 4 or 5 (bilinear in a level, nearest or
+linear between them). No 2D texture has levels.
+
+**Texture detail** moves the level the GS picks from Q (pcr_prim.h's `sample_texture`, both the sampler's read and
+the GS's): `scale` (the default) by -log2 of the smaller of the two scales, `full` by -64 (level 0), `ps2` not at all.
+Only where the GS's level is above 0, so the choice between MMAG and MMIN stays the GS's (a level moved to 0 or below
+is held at 1/256 for the sampler: its minifying filter at level 0). At 1x `scale` is the GS's own level.
+
+**Anisotropy** is the sampler's (`anisotropyEnable`, up to `aniso`), on the samplers of mipmapped bilinear textures
+only (`anisotropy_for`); the 2D, the region modes and textures from surfaces never have it. With it the shader takes
+the texture coordinates' change a pixel across and down (in `main`, before any discard), and where the footprint is
+long enough that its long axis over the reads gives a level finer than the GS's, reads with `textureGrad` and the
+footprint as it is (the hardware's reads along it); elsewhere `textureLod` with the GS's level as before. So it is
+never blurrier than without it. (A first try stretched the footprint where its short axis was under a texel, to keep
+the sampler minifying: that spread the reads past the footprint and blurred floors at 4x; dropped.)
+
+Both reach the shader in tex1's spare bits (anisotropy 10-12, the bias 16-31 in 256ths), set when a batch binds its
+texture, so a kept walk draws again with what it was bound with; the canvas takes the settings at each vblank
+(`Canvas::set_sampling`). `--stats`: `pc canvas textures: ... (N mipmapped, N anisotropic)`.
+
+**The presenter's scaling.** The presenter (present_vk.cpp, SDL_Renderer's video.c, and `--dump-present`) already
+asked for it through `pcr_set_present_scale`, and copies `GsnScanout.scaled` a pixel a pixel when it is there; only the
+PC renderer's side was missing. Now each picture copied into the scanout ring is also drawn into the slot's own
+scaled image with the native GS's two shaders (`pcr_present_scale.frag`: Catmull-Rom, stretched when made smaller,
+on linear light; `pcr_present_sharpen.frag`: contrast-adaptive) and `pcr_present.vert`'s triangle
+(`PresentScaler`, pcr.cpp); a read-back with `GSN_WANT_SCALED` reads it. GPU time kind `present`.
+
+**Checked** (Windows, RTX 5080):
+- Defaults, 1x (the four spots, 240, vblanks 2300/2450/2600/2699: 64 pictures): byte for byte main's.
+- Defaults, 4x: the picture changes on maps with mipmaps, as it should: `scale` was the setting's default and is now
+  applied (main drew the GS's level at every scale, as `ps2`; `--native-lod ps2` is byte for byte main's on the
+  tour's 48 views). Maps without mipmaps are as before.
+- The map tour at 4x (maps 002, 008, 027, 031, 100, 107; 2 places x 4 headings) against `--renderer gs`: every view
+  under 0.02% (blurred) for main, `scale`, `full`, `ps2`, anisotropy 16 and `ps2` with anisotropy 16; nothing drawn
+  differently. By eye: `scale` sharp where main was blurred at 4x, a little grain at a grazing distance (031's floor);
+  anisotropy 16 keeps the detail without the grain; with `ps2` it sharpens the floors at a grazing angle. The HUD's
+  gauge byte for byte with every setting. `full` and `scale` are near the same at 4x (the game's textures have few
+  levels: -2 already reads level 0 almost everywhere).
+- `--dump-present`: 4x into 1280 x 896 (1195 x 896 at 4:3) with and without `--present-sharpen 1`, 1x into 1920 x
+  1344; main's `--dump-present` gave the picture at its own size.
+- In a window the default picture changes too: `best` has been the scaling's default all along, and the presenter
+  blitted bilinear while the PC renderer made no scaled picture; now it gets the cubic (and sharpening, at the
+  owner's settings).
+- The unit tests (11, run one by one: no ctest on this machine) pass.
+- Not checked: motion (shimmer is judged from stills), the Vulkan presenter in a window (no window opened), the
+  sanitizers.
+
+**GPU time a picture** (`--stats` with `KF4_GSN_GPU_TIME=1`, `KF4_PRESENT_SIM=240`, 4x with native widescreen, 240,
+vblanks 1900-3100; variants alternated, three rounds; measured while another game ran on the same GPU, so only the
+larger differences mean anything):
+
+| ms a picture | main | defaults (`scale`) | anisotropy 16 | anisotropy 16, best to 2560 x 1440, sharpen 1 |
+|---|---|---|---|---|
+| map 009 | 1.99, 1.73, 1.90 | 1.96, 2.02, 1.23 | 2.55, 2.15, 1.90 | 2.62, 1.89, 2.38 (of it the scaling 0.73, 0.52, 0.61) |
+| map 100 | 2.06, 2.00, 2.20 | 2.05, 2.49, 2.25 | 2.33, 2.34, 2.18 | |
+
+Texture detail costs nothing measurable; anisotropy 16 perhaps 0.1-0.3 ms (009 has few mipmapped batches, 100 the
+most of the census); the best scaling with sharpening is its own GPU kind, `present`, 0.5-0.7 ms a picture from 4x
+to 2560 x 1440 (two full-screen passes, the cubic's reach 4 x 4 pixels of the picture at that ratio).
 
 ## Against paraLLEl-GS: the map tour (2026-11-07)
 
@@ -32,13 +247,13 @@ state the same in both. Outside the cases below, views differ in under 0.4% of p
 2. **The HUD's health gauge not drawn**: only its ring's outline, at 55 views of 8 maps (016 v4-7, 018 v4-5,7,
    022 v4-11, 024 v0,3-4,7-8,10-11, 040 nine views, 102 v0-3,8-11, 103 all twelve, 104 v0-3); right at every other map.
 3. **The water of 014** (the Heart of the Forest, v5): pc draws it pale and opaque, gs dark and clear (17% of the
-   picture).
+   picture). Fixed 2026-11-11, below.
 4. **Seams at 4x**: map 035 at 4x shows hairline lines across the wall and floor (a vertical line near the middle,
    a horizontal one on the floor) that 1x and gs do not. Likely the same as the lines the owner sees in the sky.
-5. **Small**: a rock's edge at 112 (v10) cut differently near the camera.
+5. **Small**: a rock's edge at 112 (v10) cut differently near the camera. Fixed 2026-11-11, below.
 
 Not covered by the tour: menus, combat, creatures' effects, motion and the pictures between, the owner's full settings
-(native widescreen, MSAA).
+(native widescreen, MSAA): "Against paraLLEl-GS in motion" below.
 
 **1 and 2 fixed (2026-11-07, the same day): one cause.** The canvas recorded copies inside an open render pass:
 `write_pixels` (an upload written into a colour surface) and `grow` ended the open pass only when it drew into the
@@ -69,6 +284,227 @@ run with the same build); the 4x tour against gs: views over 0.4% (blurred) 48 �
 0.33% (was 0.9-1.2%); the mean difference a little higher (2.98 → 3.19, the 3/8 pixel at sharp edges: 020 v11's
 bright magic circle, 2.70%, is the most). Still open: 014's water (3), 112's rock (5). ctest 14/14. Not run: the
 sanitizers (a shader change and one push constant), the owner's full settings (native widescreen, MSAA).
+
+**3 and 5 fixed (2026-11-11; issues #94, #95; measured on Windows, NVIDIA RTX 5080).** Three causes, all in the
+GIF path (the tour's 60 Hz runs draw no native draws: `port_gs_native_draws_now`).
+- **014's water, two causes.** The water is two passes (`kf4-gsreplay --pixel` on a capture of the view): the
+  reflection, drawn first into a 256 x 256 PSMCT16S target (FBP 350) and blended over the water at half (ALPHA
+  `(Cs - Cd) * As + Cd`, As 0x40), then a 4-bit texture added. (a) `surface_texture` read only CT32 and CT24 targets
+  as textures, so the reflection pass went untextured: half grey 0x80, the pale opaque water. A 16-bit texture is
+  now read from a surface of its own format, as the GS reads it back from memory (each colour's top 5 bits, alpha
+  TEXA's by bit 7: `PCR_F_SURFACE_CT16`). (b) That showed the water 9 levels darker than gs: the reflection is
+  Z-tested (GEQUAL, ZMSK) against ZBUF page 280 at width 4, which the frame's clear has just zeroed at width 10.
+  Depth surfaces are keyed by base, width and format, so the width-4 image kept Z from earlier frames and most of
+  the reflection failed. A clear (sprites writing one Z, ZTST ALWAYS, over whole rows of pages) now clears the other
+  widths' depth surfaces lying wholly in those pages (`clear_depth_aliases`; the stats line counts them: about two
+  a frame at every map). Partial overlaps (the 128 x 128 water targets write Z = max through ZBUF 280 at width 2,
+  mid-frame too) are still not carried between widths.
+- **112's rock.** Its near triangles have corners' Z up to 0xF39C0F over a Z16S buffer. The GS (and paraLLEl-GS:
+  `ubershader.comp`) clamps each pixel's interpolated Z; the vertex shader clamped the corners, lowering Z across
+  the triangle, and it failed Z tests gs's passed. Such a triangle is now cut on the CPU where its Z reaches the
+  format's largest (`add_cut_at_zmax`): the part beyond has every corner at or past it, where the corner clamp is
+  exact. Not done for a picture between's moved corners (a cut point has no kick) nor native draws (Z made on the
+  GPU): those still clamp the corners, so with pictures between or native draws on this edge can still differ.
+
+Against gs, blurred share: 014 v5 17.08% → 0.14% (1x), 17.04% → 0.00% (4x); 112 v10 2.04% → 0.20% (1x), 1.82% →
+0.05% (4x); 112 v11 0.90% → 0.27% (1x), 0.73% → 0.07% (4x). Byte for byte the build's before: the 1x tour of 000,
+004, 009, 016, 020, 026, 035, 040, 102, 115 (120 views), and 000, 009, 009:2, 063 at the owner's settings (4x, native
+draw, 240 Hz, pictures between included). On this machine 112 v4, v6 and v7 are 1.1-2.6% at 1x (triangle by
+triangle texture detail, the same before these changes, under 0.4% at 4x); Andrew's AMD tour had them under 0.4%,
+so likely the platform's sampling (left for the Windows/NVIDIA check).
+
+## Windows, NVIDIA and the Vulkan validation layer (2026-11-11)
+
+First runs of the PC renderer on Windows 11 with an NVIDIA RTX 5080 (driver 610.88; the `windows-clang` preset,
+llvm-mingw), and the first under the Khronos validation layer. The build, boot_test, frame_test (pc) and the unit
+tests pass as they are. The map tour (maps 000, 009, 014, 099, 112, 2 places x 4 headings) against `--renderer gs`:
+paraLLEl-GS draws the same pictures on the NVIDIA and on the machine's AMD iGPU (`GRANITE_VULKAN_DEVICE_INDEX=1`),
+but pc on NVIDIA differed at 1x: 112 v4-7 by 1.1-2.6% (blurred), 009 v0 by 0.8%, where pc on the AMD was under 0.4%.
+
+**Fixed: FST texture coordinates rounded to 1/256 texel** (`pcr_prim.h`'s `texture_uv`). Not the 3D draws:
+their texture coordinates came out the same on both GPUs (checked with the shader writing them out). The difference
+came in the game's 2D passes that draw the frame back over itself in 64-pixel columns (FST, a texel a pixel), where a
+pixel's UV is often a whole texel: the GPU's interpolation lands a hair either side of it, NVIDIA's below, so floor
+(and the sampler's nearest) took the texel before, and the picture moved a pixel over whole triangles. 112 v7 against
+gs: NVIDIA 27,025 pixels over 24 levels -> 17, the AMD iGPU 2,168 -> 17 (AMD had some of it too). After it the 1x
+tour is under 0.4% at every view but 014 v5 (the water, item 3 above), and NVIDIA and AMD are the same (1x, and 4x
+at 009 and 112).
+
+**The validation layer** found, at map 112, 009 and the starting map (pc, 1x and the owner's settings at 240):
+- VUID-VkWriteDescriptorSet-descriptorType-00338 and VUID-VkFramebufferCreateInfo-pAttachments-00879: the colour
+  surfaces lacked `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`, which DATE's set-up reads them as. Fixed.
+- VUID-vkCmdDraw-None-09600 (at the submit): `write_pixels`' staged image left READ_ONLY_OPTIMAL where Granite took
+  it as GENERAL. Fixed.
+- With synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`): SYNC-HAZARD-WRITE-AFTER-WRITE, a
+  first clear racing the layout transition Granite's `create_image` records for a new image (its barrier's second
+  scope is NONE). Fixed by cmake/granite_layout_sync.cmake (a barrier on every platform; no driver showed it).
+
+After them: no messages at maps 000, 009, 009:2 and 063 at the owner's settings at 240 (native draw on), nor in two
+map tours under the layer (the five maps, 1x, and 4x with native draw); sync validation clean at 009 and 009:2.
+`--renderer gs` cannot be checked here: paraLLEl-GS asks for VK_EXT_descriptor_heap, which the layer (1.4.335 and
+1.4.341) does not validate yet (it reports ranges it made up, then crashes in the layer or the driver); with
+descriptor heaps and buffers left off (a scratch change) it still crashes under the layer. Developer-only, not
+followed.
+
+Also: `--teleport` with a vblank needs MAP:PLACE (`1900:9` is map 1900, place 9: use `1900:9:0`); `pace_test.py`
+takes places (`--maps 0,9,9:2,63`), finds the Windows build and runs `--invincible` (at 009:2 the creatures kill the
+player within the run). A crash on Windows now names the module and offset and the callers (`[port] crashed: ...
+(nvoglv64.dll+0x...)`). Pace: not measured cleanly (the machine was in use: a game running beside it). Not run:
+windowed (the presenter's swapchain), Intel, the sanitizers on Windows.
+
+### The validation layer: how to run it
+
+Linux: install the distribution's package (`vulkan-validation-layers`, or the LunarG SDK), then
+`VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`. Windows without an installer: build it with the same llvm-mingw
+(`git clone --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/Vulkan-ValidationLayers`, then
+`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+-DUPDATE_DEPS=ON -DBUILD_TESTS=OFF -DUSE_MIMALLOC=OFF` and `cmake --build build`: about ten minutes), put
+`VkLayer_khronos_validation.dll`, its `.json`, `libc++.dll` and `libunwind.dll` in a folder and point
+`VK_ADD_LAYER_PATH` at it (no registry, no admin). Not MSYS2's build: under it the game's handle count grew by about
+20,000 a second and the process hung at exit. Then, on either system:
+
+```sh
+export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+export VK_KHRONOS_VALIDATION_LOG_FILENAME=vv.txt          # (else the messages go to stdout: map_tour's NNN/stderr.txt)
+export VK_KHRONOS_VALIDATION_DUPLICATE_MESSAGE_LIMIT=3
+export VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true            # synchronization validation (slower)
+kf4 --disc ... --headless --no-audio --dump-frames N ...
+```
+
+Granite enables the layer itself only in a `VULKAN_DEBUG` build (not ours), so the variables above are the way.
+Under the layer the game runs far slower: a few hundred pictures between in a 17-second run at 240.
+
+## Against paraLLEl-GS in motion (2026-11-11)
+
+What the map tour left out (issue 112): `tools/motion_compare.py` plays 12 cases by pad script after a new game
+(`tests/motion/`), each by gs and by pc with the same input, and compares every dumped vblank's pictures as
+`tour_compare.py` does; the per-frame log at each vblank is the same in both runs (it was at every vblank of every
+case). The cases: the title and the opening's messages, every page of the menu (Item, Magic, Equipment with a weapon's
+model, Status, Journal, Arrange, System and Load), an item picked up, combat (a club put on, map 002, a Maneater put
+before the player with `KF4_FX=creature=0`: swings, the trail, its attacks), spells 3 and 16 cast, creatures (map 102's,
+the Fire Genie and Larvae of 025, the Salamanders of 016, the Watchers of 022), and the under-water and MP drain screens
+(forced by `KF4_FX`). Each at 1x and at 4x with native widescreen and `--native-msaa 2`, and each at 240 (pc only:
+`flash_find.py --frames` on the pictures between; the game frames at 240 against the same vblanks at 30). Run at
+cf80b086 on Windows (RTX 5080). MSAA is passed but not applied on main (item 7 above), so it is not covered.
+
+Found:
+
+1. **The under-water and MP drain screens lose the GPU.** `KF4_FX=water` or `drain` (the wobbling screen drawn from
+   the copy of the frame at 0x2BC0, `Game_DrawWobblingScreen`) gives `vkQueueSubmit2 failed (code: -4)` (device lost)
+   from the first frame it draws, every picture black after, at 1x and 4x, with native draws off too, and with each of
+   the `KF4_PC_*` switches at 0. The other forced effects (copytex, prev, aim, tint, fill, down, bright40, fade, dim)
+   do not. Real deep water (029) and the Queen's Palace drain were not reached; they draw the same.
+2. **The HUD's MP ring is never drawn.** Its blue arc is drawn with DATE (DATM 1) where the MP bar's sprite set
+   alpha bit 7 with FBA (`Hud_Draw`, sprites 5 and 6). By the stencil the set-up (`pcr_date.frag`) finds bit 7 clear
+   under the whole arc, so nothing is drawn; `KF4_PC_STENCIL=0` (DATE by a copy) draws it as gs does. The same build
+   with DATM inverted in the set-up draws the whole arc: the set-up reads the target's alpha without the bit the
+   batch before wrote. Not the dynamic state (`KF4_PC_DYNAMIC=0`) nor a pass shared with earlier draws (a fresh pass
+   for each DATE batch). Every play picture with MP has it (0.3% of the picture: under the tour's 0.4%).
+3. **A black picture as the menu opens**: the vblank after CIRCLE (1805 of the case), at 1x and 4x, at 30 and 240,
+   with and without whole frames. gs shows the last game frame there. Not `UpperField` (c043b057).
+4. **The menus at 1x sit one GS pixel left** of gs's (and sharper: gs shows a field a vblank); at 4x they line up and
+   differ by the smooth 2D only. 5-13% of each menu picture at 1x, 1-4% at 4x. The title: half a line apart (the field
+   screens, by design).
+5. **Small**: at 4x, textures finer (`--native-lod scale`) and the 2D smoothed, as meant. Spell 3's wisps at 240:
+   29 of 240 pictures between flagged, each a translucent wisp moved between its game frames (looked at: no shards, no
+   holes, no wrong places).
+
+Clean: the pick-up, combat (the trail, the creature, the hits), spell 16, the creatures' cases, the teleport's fade
+and the opening, under 0.4% blurred at every vblank but the HUD ring; no picture between flagged outside spell 3; the
+game frames at 240 the same as at 30. Not covered: breath and glow effects (none of the creatures placed used one in
+its window), spells 36, 61 and 76 (nothing showed in their window), the shop, a save point's save screen, doors and
+stairs (the teleport's fade only), real deep water.
+
+**1, 3 and 4 fixed, 2 is #121's (2026-11-11, branch fix/motion-bugs).**
+
+1. **Device lost: a copy past an image's end.** The validation layer with GPU-assisted validation
+   (`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT`) named it at once:
+   VUID-vkCmdCopyImage-dstOffset-00151, a 128 x 2048 surface copied 32 rows down into another 128 x 2048 one. Not the
+   1024 x 512 texture past VRAM's end (that read is refused as before: no surface of its width). The wobbling screen's
+   copy of the frame (page 350, 640 x 448) lies over the water's two 128-wide targets (pages 466 and 468, which map
+   000's lava uses), so every frame they were let go and made again, 466 taking 468 in a page row down. A draw whose
+   depth surface was taller than its colour surface grew the colour one to match; the two targets share a Z buffer, so
+   each making-again grew the pair by 32 rows, to 2048 within a few seconds, and then the take-in copy ran past the
+   end. Now a take-in copies only what fits, and a colour surface is never grown for its depth surface (a Vulkan pass
+   is as large as its smallest attachment; a shorter depth surface is still grown). `underwater` and `drain`: under
+   0.4% at 1x, 4xw at most 0.43% (4x's finer textures). It needs only the under-water bit (`KF4_FX=water` sets the
+   game's own PlayerState status bit 39, so the game draws as in real deep water) where those targets are drawn; real
+   deep water and the real drain were not reached here.
+2. **The MP ring: the missing `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`.** #121's commit 79b08c29 alone (on this branch)
+   draws the ring as `KF4_PC_STENCIL=0` does; all of #121 draws it as gs (no pixel over 24 levels in the HUD; the rest
+   is #121's FST rounding). The ring shows only with MP: `--cheats all` (a new game has none).
+3. **The black picture: two surfaces of one memory.** Play grows the frame's surface (page 0) from 224 to 928 rows,
+   over the title's second field buffer (page 70), which was kept as a surface of its own; the menu draws into page 70
+   (that old surface, grown) and the vblank after CIRCLE shows page 140, found in the old surface's new, empty rows. A
+   colour surface grown now takes in the surfaces that begin in its new pages, as a surface made does. v1805: 62.4% ->
+   0.31% at 1x, 67.0% -> 0.33% at 4xw; no picture between flagged at 240.
+4. **The menus a pixel left: S/T/Q read a hair below a whole texel.** The menus end with the brightness sprite, the
+   buffer drawn back over itself 1:1 by S/T/Q (and the background is copied the same way); S/Q times the size lands
+   on a whole texel and the GPU's lands just below it, so floor took the texel before. Found with a GS capture under gs
+   (`--gs-capture-at`, `kf4-gsreplay --draw`): gs's frame buffer lines up with its picture, pc's picture with it only
+   a pixel over. S/T/Q coordinates are rounded to 1/256 texel (`pcr_prim.frag`). Menus at 1x: median 5.4% -> 0.9%,
+   best offset against gs 0,0; at 4xw still lined up. What is left at 1x is gs's softer field picture. The four spots
+   change by up to 3 levels (bilinear's 1/16 steps), and against gs are as before.
+
+Spots (000, 009, 009:2, 099 at 240): byte for byte main's after 1 and 3.
+
+## Step 3's last two built (2026-11-11; issues #97, #98): the reflection's water and the screen passes
+
+`[stats] pc native draws not drawn yet` now lists nothing: every native draw is the PC renderer's. `kinds()` adds
+`water` and `passes`, so `--native-draw on` (and the owner's setting) draws both. Branch `pc/native-water-passes`, on
+top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target, which #118 made right; without it
+014's water is pale with either path). Measured on Windows, NVIDIA RTX 5080.
+
+- **The water (`RD_PROGRAM_RIPPLE`, maps 008, 009, 014).** No VU1 program: Wobble_DrawRippledModel makes each vertex
+  on the EE (ripple.hpp says how). The CPU makes the record (the part's vertex matrix in VU0's arithmetic, the 32
+  sines) and the strips' ADC, which needs the places (`port/render/ripple.cpp`); the GPU makes each corner's place,
+  S and T (`shaders/pcr_ndripple.vert`, the maths in `port/render/shaders/ripple_maths.h`, a new `NativeProgram`).
+  In a picture between the places are moved by the picture's camera and S and T made again from the moved ones, as
+  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). `ripple_test`
+  checks the record and the ADC against Wobble_DrawRippledModel's maths as nd_water.c's KF4_ND_WATER_CHECK writes it,
+  and the shader's S and T arithmetic (copied to C++) against the game's floats for every X and Y of 16 bits, toward
+  zero and to nearest.
+- **The passes (`RD_PROGRAM_PASS`).** Each pass is written to the GIF front end as the PS2 path's packets
+  (`port/render/pass_draw.cpp`, the native GS's `gsn_nd_pass.inc` again): the same register writes and primitives,
+  so the state after is the PS2 path's. Only the flat fills are one sprite instead of ten strips. The brightness and
+  the tint stay ten strips: as one sprite reading the frame one texel a pixel, the GPU's interpolated texel at a GS
+  pixel's point now and then came out a little under the whole texel and read the pixel to the left (125,000 pixels
+  of the brightness pass moved by one at map 000, worse against gs than the strips). In a picture between a pass is
+  paired by its identity (pass, call site, count in the frame) with the frame before's (`PassMoves`) and its packets
+  are made at the picture's time on the CPU, with gif_moves.h's numbers: a colour t of the way, the wobble's texels
+  and the view shift's strips t of the way where frame_interp.c's items_pair would pair them, the frame shown before
+  by A^t. A TEX0 of the frame drawn is pointed at the buffer the picture is drawn into (frame_interp.c's ad_write),
+  and the frame shown before's pass is put between 0xF4 and 0xF5 so the canvas reads the frame shown kept (0xF2).
+  `pass_draw_test` puts each pass and the game's own packets for it (written out from game.c and gs_draw.c) through
+  the front end: the same register file after, the same pixels with the same colour and texel; and checks the moves.
+- **The cost.** A pass that moves in a picture between (a fade, a fill whose alpha ramps, the wobble under water, the
+  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again, and the frame's own walk is not
+  made its pictures' (counted as "trail paired"). At 009's start after the teleport, 343 of 972 frames (the fill of
+  the fade-in). Moving them on the GPU from a record of the pass (as the native GS's `nd_pass.vert` did) would take
+  that away; not done.
+
+Checked (1x unless said; on = `--native-draw on`, off = the same kinds but `water` and `passes`, so the packets):
+- **The four spots** (000, 009, 009:2, and 099 for "063", which the teleport reads as map 63, a map with no places;
+  `--teleport 1900:MAP:PLACE --frame-rate 240`, vblanks 2400 and 2700 with their pictures between): on and off byte
+  for byte, the pictures between too. Without `--native-draw` nothing changes (no native draws then).
+- **The water maps** (`map_tour.py --maps 8,9,14 --positions 3`, 36 views): on and off byte for byte at 30 Hz, and at
+  240 turning (`--turn`) at 1x and 4x in the game's frames. In the pictures between only 014's water differs (views
+  4 and 5, up to 28,000 pixels at 1x and 450,000 at 4x, by up to 55 levels): on keeps the reflection where the game's
+  frame has it (014 v5's water at x 0-140: 63,77,66 in the frame and on's three pictures between, 46,61,52 in off's,
+  which also shows the packet path's dark blocks over the water). Against gs (30 Hz) on is off exactly; 014 v5's
+  water matches gs.
+- **The passes forced** (KF4_FX at 000, 240, vblanks 2600 and 2700 with their pictures between):
+  base, water (the tint and the wobble), drain, drainramp, haze, down and updown (`--flicker-filter`), fill, fade,
+  tint, dim, bright40, brightff, shift (`--no-whole-frame`, no pictures between), the pause, the Guardian's Room's
+  green fill (035): on and off byte for byte, pictures between too, and the same against gs. prev and aim (the frame
+  shown before blended in): their pictures between byte for byte, one game frame of the two 3 pixels by 2 levels
+  (one row at x 626-630, the same run to run; see 4x below).
+- **At 4x** (`--native-scale 4 --no-native-widescreen`, 240): the four spots byte for byte; water, drain, fade, fill,
+  tint byte for byte, pictures between too; prev's pictures between byte for byte, its game frames 76 and 3 pixels by
+  2 and 1 levels. The game frame reads the frame shown before, which at 240 is the last picture between drawn into
+  that buffer, not dumped. Dumping vblanks 2597-2600 at 1x (so every picture of them is drawn) makes all 16 pictures,
+  2600 too, byte for byte: which pictures between of the vblank before are drawn or left out is the difference, not
+  the drawing (on moves this pass on the CPU and walks every picture, a little slower).
 
 ## Where it stands (2026-10-29)
 
@@ -175,7 +611,7 @@ in order. Read "The PC renderer: `fast` without the native GS" below first, then
      others: the shader's maths into `port/render/shaders/` (`gsn_shaders.h` byte for byte: `cmp` against a copy
      after `tools/build_shaders.py`), the CPU set-up into `port/render/` with a test against the code it stands
      for, the draw in `pcr_native.cpp`, the kind in `kinds()`. `[stats] pc native draws not drawn yet` names what is
-     still sent and left out.
+     still sent and left out. **Built 2026-11-11** ("Step 3's last two built", above).
   7. The settings not in pc (MSAA, `--native-colour`, aniso, cut-out AA, captures, the overlay's); then step 7
      (`fast` switched to it, the full checks incl. the map tour and pace).
 - **How pictures are judged**: against `--renderer native` (the exact GS), not against pc's own earlier pictures;

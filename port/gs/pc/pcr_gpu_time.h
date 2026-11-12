@@ -37,6 +37,7 @@ enum class GpuWork : uint8_t {
     upload,       // uploads written into surfaces
     copy,         // local copies between surfaces, read-backs
     picture,      // the picture: the scanout, its copy into the ring, read back
+    present,      // the picture scaled to the window and sharpened (pcr.cpp's PresentScaler)
     count,
 };
 

@@ -42,6 +42,7 @@ struct CanvasCounts {
     uint64_t primitives = 0, triangles = 0, batches = 0, passes = 0;
     uint64_t textures_uploaded = 0, textures_from_surfaces = 0, textures_missing = 0;
     uint64_t textures_sampled = 0, exact_textures_region = 0, exact_textures_part = 0;
+    uint64_t textures_mipmapped = 0, textures_anisotropic = 0; // (of textures_sampled)
     uint64_t surfaces_made = 0, surfaces_filled_from_uploads = 0, uploads_into_surfaces = 0, copies_between_surfaces = 0;
     uint64_t date_draws = 0, native_batches = 0, native_draw_calls = 0;
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
@@ -70,6 +71,8 @@ enum class NativeProgram : uint8_t {
              // (bits 0-27), the context whose XYOFFSET (28), the sphere pass (29), Gouraud (30)
     vu1_700, // shaders/pcr_nd700.vert: a triangle the arena's numbers of its corners and of its kick; instance: the
              // record (bits 0-29), Gouraud (30)
+    ripple,  // shaders/pcr_ndripple.vert (the reflection's water, no VU1 program): a triangle the arena's numbers of its
+             // corners; instance: the record (bits 0-29)
 };
 
 // A batch of a native draw (pcr_native.h): its triangles from first_triangle in triangles (a uvec4 each), drawn by the
@@ -101,6 +104,17 @@ public:
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);
+    // Texture detail (GSN_LOD_*) and anisotropy (1 to 16) for the batches from the next vblank
+    void set_sampling(int lod, uint32_t aniso);
+    // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
+    // at a scale above 1
+    void set_2d(int mode);
+    // Colour precision (GSN_COLOUR_*) from the next vblank, as the scale: high keeps the colour surfaces at 16 bits a
+    // channel and the colours' arithmetic in floats, the picture dithered to 8 bits as it is scanned out
+    void set_colour(int mode);
+    // MSAA: the samples a pixel of the surfaces drawn into has (1, 2, 4 or 8; 1 none), from the next vblank as the
+    // scale; with cutout_aa the cut-outs shaded at every sample (from the next draw)
+    void set_msaa(uint32_t samples, bool cutout_aa);
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);

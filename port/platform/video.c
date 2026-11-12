@@ -159,7 +159,7 @@ int port_video_picture_height(void) {
 static uint64_t time_vblank[TIMES];
 static double time_wall[TIMES];
 static uint64_t times_newest;
-static int times_set;
+static int times_set; /* (written under the lock; between_on reads it without: atomic) */
 
 #ifdef KF4_HAVE_SDL
 static void sample_rates(void);
@@ -170,7 +170,7 @@ void port_video_vblank(uint64_t vblank, double wall) {
     time_vblank[vblank % TIMES] = vblank;
     time_wall[vblank % TIMES] = wall;
     times_newest = vblank;
-    times_set = 1;
+    __atomic_store_n(&times_set, 1, __ATOMIC_RELEASE);
     UNLOCK();
 #ifdef KF4_HAVE_SDL
     sample_rates();
@@ -984,8 +984,8 @@ void port_video_present(void) {
    thread's; the frame-rate counter is not ImGui's and stays on the thread), and with SDL_Renderer (which is the game thread's) they are the game thread's always:
    shown while it waits for the next vblank (port_video_wait) and whenever it is in the kernel meanwhile
    (port_video_poll). (At 60 and below every picture is a vblank's own, shown by port_video_present.) */
-static int between_thread_up;
-static volatile int between_stop;
+static int between_thread_up; /* (atomic: the thread reads it, and runs before between_start sets it) */
+static int between_stop;      /* (atomic) */
 #ifdef _WIN32
 static HANDLE between_handle;
 #else
@@ -993,12 +993,14 @@ static pthread_t between_handle;
 #endif
 
 static int between_on(void) {
-    return (window != NULL || sim) && !port_options.fast && times_set && port_frame_interp() && port_frame_rate_hz() > 60;
+    return (window != NULL || sim) && !port_options.fast && __atomic_load_n(&times_set, __ATOMIC_ACQUIRE) &&
+           port_frame_interp() && port_frame_rate_hz() > 60;
 }
 
 /* the thread shows them now */
 static int thread_shows(void) {
-    return between_thread_up && !port_overlay_visible() && !port_controls_indicator_shown();
+    return __atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE) && !port_overlay_visible() &&
+           !port_controls_indicator_shown();
 }
 
 int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {
@@ -1064,7 +1066,7 @@ static void show_until(double until, int from_thread) {
     for (;;) {
         double now = port_wall_seconds(), next = until, first;
 
-        if (now >= until - 0.0002 || (from_thread && between_stop)) {
+        if (now >= until - 0.0002 || (from_thread && __atomic_load_n(&between_stop, __ATOMIC_ACQUIRE))) {
             break;
         }
         if (!from_thread) {
@@ -1098,7 +1100,7 @@ static void *between_main(void *unused) {
 #endif
     (void)unused;
     port_name_thread("kf4-between");
-    while (!between_stop) {
+    while (!__atomic_load_n(&between_stop, __ATOMIC_ACQUIRE)) {
         if (between_on() && thread_shows()) {
             show_until(port_wall_seconds() + 0.01, 1);
         } else {
@@ -1109,26 +1111,29 @@ static void *between_main(void *unused) {
 }
 
 static void between_end(void) {
-    if (between_thread_up) {
-        between_stop = 1;
+    if (__atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&between_stop, 1, __ATOMIC_RELEASE);
 #ifdef _WIN32
         WaitForSingleObject(between_handle, 1000);
 #else
         pthread_join(between_handle, NULL);
 #endif
-        between_thread_up = 0;
+        __atomic_store_n(&between_thread_up, 0, __ATOMIC_RELEASE);
     }
 }
 
 /* (port_video_init) the thread, for the Vulkan presenter */
 static void between_start(void) {
+    int up;
+
 #ifdef _WIN32
     between_handle = CreateThread(NULL, 0, between_main, NULL, 0, NULL);
-    between_thread_up = between_handle != NULL;
+    up = between_handle != NULL;
 #else
-    between_thread_up = pthread_create(&between_handle, NULL, between_main, NULL) == 0;
+    up = pthread_create(&between_handle, NULL, between_main, NULL) == 0;
 #endif
-    if (between_thread_up) {
+    __atomic_store_n(&between_thread_up, up, __ATOMIC_RELEASE);
+    if (up) {
         atexit(between_end);
     }
 }

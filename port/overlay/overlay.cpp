@@ -258,20 +258,32 @@ void display_page() {
             "own 59.94 Hz pace either way; on a 60 Hz screen a picture\nis shown twice about every 17 "
             "seconds.");
     {
-        // (PORT_SCALING_BEST, the old default, is smooth until the PC renderer scales its pictures itself)
-        static const char *const scalings[] = {"Sharp pixels", "Smooth (bilinear)"};
-        int scaling = s.scaling == PORT_SCALING_SHARP ? 0 : 1;
-        if (ImGui::Combo("Scaling to the window", &scaling, scalings, 2)) {
-            s.scaling = scaling == 0 ? PORT_SCALING_SHARP : PORT_SCALING_SMOOTH;
-            s.smooth = scaling != 0;
+        static const char *const scalings[] = {"Sharp pixels", "Smooth (bilinear)", "Best"};
+        int scaling = s.scaling;
+        if (ImGui::Combo("Scaling to the window", &scaling, scalings, 3)) {
+            s.scaling = scaling;
+            s.smooth = scaling != PORT_SCALING_SHARP;
             changed();
         }
         tooltip("How the picture is fitted to the window.\nSharp pixels: each pixel repeated, blocky.\n"
-                "Smooth: bilinear filtering. With Resolution on Auto the picture is drawn about the window's\n"
-                "size, so there is little left to scale. (--present-scaling sharp|smooth)");
+                "Smooth: bilinear filtering. Made much smaller (a large resolution in a smaller window) it\n"
+                "reads only 2 x 2 pixels for each, so fine detail flickers and edges step.\n"
+                "Best (the default): the renderer scales the picture itself, with a cubic filter that\n"
+                "averages every pixel the window's pixel covers when made smaller, and keeps edges sharp\n"
+                "when made larger, on linear light. With Resolution on Auto the picture is drawn about the\n"
+                "window's size, so there is little left to scale. (--present-scaling sharp|smooth|best)");
         if (port_options.present_scaling >= 0 && port_options.present_scaling != s.scaling) {
             ImGui::SameLine();
             ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+        if (port_options.renderer != PORT_RENDERER_GS) {
+            float sharpen = s.sharpen;
+            if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, sharpen > 0 ? "%.2f" : "off")) {
+                s.sharpen = sharpen < 0.02f ? 0.0f : sharpen;
+                changed();
+            }
+            tooltip("Contrast-adaptive sharpening after the scaling: fine detail crisper, hard edges left\n"
+                    "alone. 0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
         }
     }
 
@@ -314,6 +326,73 @@ void display_page() {
                 "3x 2560 x 1344, 4x 3840 x 1792). The same picture, sharper across. On by default.\n"
                 "(--native-widescreen, --no-native-widescreen)");
         ImGui::EndDisabled();
+        static const char *const lod_names[] = {"PS2's", "Matched to the resolution (the default)", "Finest everywhere"};
+        int lod = port_options.native_lod;
+        if (ImGui::Combo("Texture detail", &lod, lod_names, 3)) {
+            port_gs_set_native_lod(lod);
+            port_settings.native_lod = lod;
+            port_settings_changed();
+        }
+        tooltip("Which of a texture's mipmap levels (its smaller copies; about two thirds of the maps have them) the\n"
+                "renderer reads. The PS2 picks the level from the distance alone, for its 640 x 448, so at a\n"
+                "higher resolution far surfaces blur where the PS2's were sharp. Matched: the level the PS2\n"
+                "would pick at this resolution (at 1x, the PS2's own). PS2's: its level at any resolution.\n"
+                "Finest: the whole texture at every distance (at 1x too), sharpest, but far surfaces can\n"
+                "shimmer. Applies from the next picture. (--native-lod scale|ps2|full)");
+        static const char *const aniso_names[] = {"Off", "2x", "4x", "8x", "16x"};
+        int aniso_at = port_options.native_aniso >= 16 ? 4 : port_options.native_aniso >= 8 ? 3 : port_options.native_aniso >= 4 ? 2 : port_options.native_aniso >= 2 ? 1 : 0;
+        if (ImGui::Combo("Anisotropic filtering", &aniso_at, aniso_names, 5)) {
+            port_gs_set_native_aniso(1 << aniso_at);
+            port_settings.native_aniso = port_options.native_aniso;
+            port_settings_changed();
+        }
+        tooltip("Floors and walls seen at a grazing angle: the PS2 reads a texture's mipmap level from the\n"
+                "distance alone, the same along the surface and across it, so they blur with distance. This\n"
+                "reads up to this many times along a pixel's footprint on the texture, each at a finer level,\n"
+                "for the detail across. Off is the PS2's picture. Only mipmapped surfaces (about two thirds\n"
+                "of the maps have them); a little GPU time. Applies from the next picture. (--native-aniso)");
+        static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
+        int msaa_at = port_settings.native_msaa >= 8 ? 3 : port_settings.native_msaa >= 4 ? 2 : port_settings.native_msaa >= 2 ? 1 : 0;
+        if (ImGui::Combo("Anti-aliasing (MSAA)", &msaa_at, msaa_names, 4))
+            port_live_set(PORT_LIVE_MSAA, 1 << msaa_at);
+        if (port_settings.native_msaa != port_options.native_msaa)
+            ImGui::TextDisabled("This GPU has at most %s", port_options.native_msaa > 1
+                                                                ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
+                                                                : "none");
+        tooltip("The game is drawn with this many samples a pixel, which smooths the edges of what it draws.\n"
+                "Off is the PS2's picture. Costs GPU time, more with the resolution above. Applies from the\n"
+                "next picture. (--native-msaa 1|2|4|8)");
+        ImGui::BeginDisabled(port_options.native_msaa <= 1);
+        bool cutout = port_options.native_cutout_aa != 0;
+        if (ImGui::Checkbox("Anti-aliasing: smooth cut-outs too", &cutout))
+            port_live_set(PORT_LIVE_CUTOUT_AA, cutout);
+        tooltip("With MSAA above: textures see-through in places by the alpha test (netting, foliage, fences,\n"
+                "grates) are shaded at every sample instead of once a pixel, so the edges inside them are\n"
+                "smoothed and shimmer less. Costs GPU time only where they are drawn. On by default.\n"
+                "(--native-cutout-aa ssaa|off)");
+        ImGui::EndDisabled();
+        bool smooth = port_options.native_2d != 0;
+        if (ImGui::Checkbox("Smooth 2D at the larger resolution", &smooth)) {
+            port_gs_set_native_2d(smooth ? 1 : 0);
+            port_settings.native_2d = smooth ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("At a resolution above the PS2's: the text, the HUD and the menus' and title's pictures, which\n"
+                "the game reads a texel a pixel, are read smoothly where they are magnified: letters with even,\n"
+                "smooth edges. Off, each texel is a block, as the PS2's picture at 1x blown up. Nothing at 1x.\n"
+                "On by default. (--native-2d smooth|ps2)");
+        static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
+        int colour = port_options.native_colour;
+        if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {
+            port_gs_set_native_colour(colour);
+            port_settings.native_colour = colour;
+            port_settings_changed();
+        }
+        tooltip("How precisely the renderer keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
+                "the GS rounds it, which can show as steps in smooth dark gradients (fog, dim walls, glows).\n"
+                "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
+                "screen's 8 bits. Alpha, and what the game reads back, stay the PS2's. Costs GPU time (twice\n"
+                "the memory for the targets). Applies from the next picture. (--native-colour exact|high)");
     }
 
     ImGui::SeparatorText("Motion");
@@ -934,10 +1013,9 @@ void renderer_section() {
             "SDL_Renderer's. --presenter on the command line wins over this.");
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-    ImGui::TextWrapped("Not in the PC renderer yet, so not offered here (kept in settings.json and on the command line, "
-                       "and applied once it has them): anti-aliasing (MSAA) and smooth cut-outs, anisotropic "
-                       "filtering, texture detail, colour precision, depth tolerance, smooth 2D, the best scaling and "
-                       "sharpening.");
+    ImGui::TextWrapped("Not offered: depth tolerance (--native-layer-z, kept in settings.json and on the command line). "
+                       "The PC renderer keeps the GPU's depth, and its layers do not fight as the native GS's did "
+                       "(docs/port/PC_RENDERER.md, \"Layer Z\").");
     ImGui::PopStyleColor();
 }
 

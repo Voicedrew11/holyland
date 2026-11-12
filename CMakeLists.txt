@@ -87,6 +87,58 @@ if(KF4_FRAME_POINTERS AND NOT MSVC)
     add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
 endif()
 
+# ---- Release builds: LTO and PGO (the *-release presets, tools/README.md "A release build") ----
+# KF4_LTO: link-time optimisation (ThinLTO with clang) of everything but the save state's image. The
+# game's objects, ico-audio's and the two markers (state_begin.c, state_end.c, below) are left as
+# plain objects: an LTO linker puts the code and data it compiles after every plain object, which
+# would take the game's globals out from between the markers; and the game's code stays compiled
+# exactly as without LTO, with its own flags, never inlined into port code nor port code into it.
+# The rest (port/, the renderers, paraLLEl-GS, the tests) is LTO'd; their per-file float flags
+# (-frounding-math, -fdenormal-fp-math) are function attributes the cross-file inliner respects.
+option(KF4_LTO "Link-time optimisation of everything but the save state's image (the game, ico-audio)" OFF)
+# KF4_PGO: profile-guided optimisation. "generate" builds a program that writes a profile when it
+# stops after --frames (clang: where LLVM_PROFILE_FILE says; gcc: .gcda files beside the objects).
+# Then, in the same build folder, the merged profile (.profdata) with clang, or "use" with gcc (the
+# .gcda files beside the objects). tools/pgo_train.py does all the steps. PGO covers the game's code
+# too: it moves code and changes what is inlined within a file, not how a float is computed; the
+# frames and state are checked the same as without it (tools/build_compare.py).
+set(KF4_PGO "" CACHE STRING "Profile-guided optimisation: generate, then the merged .profdata (clang) or use (gcc)")
+if(KF4_LTO)
+    enable_language(CXX) # (the renderers are C++, enabled further down)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT KF4_LTO_SUPPORTED OUTPUT KF4_LTO_ERROR LANGUAGES C CXX)
+    if(NOT KF4_LTO_SUPPORTED)
+        message(FATAL_ERROR "KF4_LTO: the compiler or linker cannot do LTO: ${KF4_LTO_ERROR}")
+    endif()
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    message(STATUS "LTO: on (not for the game's objects, ico-audio's or the state markers)")
+endif()
+if(KF4_PGO STREQUAL "generate")
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        add_compile_options(-fprofile-generate)
+        add_link_options(-fprofile-generate)
+    else()
+        add_compile_options(-fprofile-generate -fprofile-update=prefer-atomic)
+        add_link_options(-fprofile-generate)
+    endif()
+    add_compile_definitions(KF4_PGO_GENERATE)
+    message(STATUS "PGO: building a program that writes a profile")
+elseif(KF4_PGO)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT EXISTS ${KF4_PGO})
+        message(FATAL_ERROR "KF4_PGO: no profile at ${KF4_PGO} (clang wants the merged .profdata)")
+    elseif(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT KF4_PGO STREQUAL "use")
+        message(FATAL_ERROR "KF4_PGO: generate or use with gcc, not ${KF4_PGO}")
+    endif()
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # a file the profile does not cover (a test, a tool) is built as without it, quietly
+        add_compile_options(-fprofile-use=${KF4_PGO} -Wno-profile-instr-unprofiled
+            -Wno-profile-instr-out-of-date -Wno-backend-plugin)
+    else()
+        add_compile_options(-fprofile-use -fprofile-partial-training -Wno-missing-profile)
+    endif()
+    message(STATUS "PGO: using ${KF4_PGO}")
+endif()
+
 # ---- The PS2 side ---------------------------------------------------------------------------------
 add_library(kf4_port STATIC
     port/platform/memory.c
@@ -151,13 +203,13 @@ target_include_directories(kf4_port PRIVATE port/gs/shared)
 # native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the PC renderer
 # draws them (docs/port/NATIVE_DRAW.md)
 enable_language(CXX)
-add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp)
+add_library(kf4_render STATIC port/render/render.cpp port/render/vu1_record.cpp port/render/ripple.cpp)
 target_include_directories(kf4_render PUBLIC port/include)
 set_target_properties(kf4_render PROPERTIES CXX_STANDARD 14)
 target_link_libraries(kf4_port PUBLIC kf4_render)
 # the native draws' moves in the pictures between, for the PC renderer (port/render/part_moves.hpp): a library of its own
 # (C++20; the renderer core is C++14), with its test below
-add_library(kf4_part_moves STATIC port/render/part_moves.cpp)
+add_library(kf4_part_moves STATIC port/render/part_moves.cpp port/render/pass_draw.cpp)
 target_include_directories(kf4_part_moves PUBLIC port/include port/render)
 set_target_properties(kf4_part_moves PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(NOT MSVC)
@@ -275,6 +327,12 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     include(cmake/granite_pipeline_warm.cmake)
     kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     kf4_granite_pipeline_cache_locks(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with a render pass's samples in its hash (cmake/granite_msaa.cmake: the PC renderer's MSAA)
+    include(cmake/granite_msaa.cmake)
+    kf4_granite_msaa(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with an image's first layout transition visible to what follows (cmake/granite_layout_sync.cmake)
+    include(cmake/granite_layout_sync.cmake)
+    kf4_granite_layout_sync(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
@@ -469,6 +527,9 @@ endforeach()
 # program's code and data hold in the next run of the same build.
 add_library(kf4_state_begin OBJECT port/platform/state_begin.c)
 add_library(kf4_state_end OBJECT port/platform/state_end.c)
+# never LTO'd (KF4_LTO, above): the linker would lay their data out after every plain object's
+set_target_properties(kf4_state_begin kf4_state_end ico_audio ${KF4_GAME_TARGETS} PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION OFF)
 add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
     $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
@@ -615,6 +676,9 @@ endif()
 add_executable(int_divide_test tests/int_divide_test.c port/platform/int_divide.c)
 target_include_directories(int_divide_test PRIVATE port/include)
 target_compile_options(int_divide_test PRIVATE ${KF4_GAME_FLAGS})
+# the operand forms the game's code is compiled to, which is never LTO'd: with LTO the whole program
+# shows g_divisor is never written, folds it to -1 and INT_MIN / -1 to undefined
+set_target_properties(int_divide_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
 # The PS2's math library against the retail program's results (tools/ee_libm_ref.py)
 add_executable(libm_test tests/libm_test.c port/sdk/libm_ps2.c $<TARGET_OBJECTS:ps2_libm>)
@@ -641,6 +705,17 @@ if(NOT WIN32)
 endif()
 add_test(NAME vu1_record COMMAND vu1_record_test)
 
+# The reflection's rippled water's record and ADC (port/render/ripple.cpp), and the S and T arithmetic of its shader
+# (port/render/shaders/ripple_maths.h), against Wobble_DrawRippledModel's maths as game/native_draw/nd_water.c writes it
+add_executable(ripple_test tests/ripple_test.cpp port/render/ripple.cpp)
+target_include_directories(ripple_test PRIVATE port/include)
+target_compile_options(ripple_test PRIVATE -frounding-math -ffp-contract=off)
+set_target_properties(ripple_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(ripple_test PRIVATE m)
+endif()
+add_test(NAME ripple COMMAND ripple_test)
+
 # The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
 # at t 0 and 1, the sections, the pairing by identity, the trail's pairs
 add_executable(part_moves_test tests/part_moves_test.cpp)
@@ -650,6 +725,17 @@ if(NOT WIN32)
     target_link_libraries(part_moves_test PRIVATE m)
 endif()
 add_test(NAME part_moves COMMAND part_moves_test)
+
+# A screen pass as GIF packets (port/render/pass_draw.cpp) against the game's own passes' packets (decomp game.c,
+# gs_draw.c) through the GIF front end, and the pictures between's moves against gif_moves.h's
+add_executable(pass_draw_test tests/pass_draw_test.cpp)
+target_link_libraries(pass_draw_test PRIVATE kf4_part_moves kf4_pc_gif)
+target_include_directories(pass_draw_test PRIVATE port/gs/pc)
+set_target_properties(pass_draw_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT WIN32)
+    target_link_libraries(pass_draw_test PRIVATE m)
+endif()
+add_test(NAME pass_draw COMMAND pass_draw_test)
 
 # Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)
