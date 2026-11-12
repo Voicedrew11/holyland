@@ -703,6 +703,7 @@ private:
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
             cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);
+            pass_ended_ = false; // (what was submitted before: begin_pass's full barrier)
         }
         return *cmd_;
     }
@@ -736,16 +737,47 @@ private:
     void full_barrier(CommandBuffer &c) {
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        pass_ended_ = false;
     }
 
+    // The barriers around a render pass. Everything recorded outside a pass (copies, clears, uploads, resolves, the
+    // picture's scanout) is between full barriers of its own, so a pass ended needs none after it, and one begun needs
+    // a full barrier only after such work (or at the start of a command buffer: what was submitted before). A pass
+    // that follows a pass, nothing recorded between, waits only for the attachment writes before it: its vertex work
+    // then runs while the pass before shades its last pixels, where a full barrier emptied the GPU between them (at
+    // 009 a picture has about ten pass changes: the reflection's target, DATE's set-up, the pump's submits).
+    // KF4_PC_PASS_BARRIER=full: the full barrier after every pass and before every pass, as before (to compare).
     void end_pass() {
         if (pass_colour_) {
             cmd().end_render_pass();
-            full_barrier(cmd());
+            if (full_pass_barriers_) {
+                full_barrier(cmd());
+            } else {
+                pass_ended_ = true;
+            }
             pass_colour_ = nullptr;
             pass_depth_ = nullptr;
             pass_reads_ = PassReads::nothing;
         }
+    }
+
+    // A pass after a pass: the attachment writes before (colour, depth and stencil, and vkCmdClearAttachments') made
+    // visible to the attachment reads and writes after, and to DATE's input attachment read
+    void pass_to_pass_barrier(CommandBuffer &c) {
+        VkMemoryBarrier2 b = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+        VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &b;
+        device_.get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
+        pass_ended_ = false;
     }
 
     // What the draws of a pass read of its colour target in the pass (an input attachment of itself: DATE's set-up)
@@ -779,7 +811,11 @@ private:
             rp.num_subpasses = 1;
         }
         CommandBuffer &c = cmd();
-        full_barrier(c);
+        if (pass_ended_) {
+            pass_to_pass_barrier(c);
+        } else {
+            full_barrier(c);
+        }
         c.begin_render_pass(rp);
         pass_colour_ = &colour;
         pass_depth_ = depth;
@@ -2774,6 +2810,33 @@ private:
             set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0, ms);
         }
         c.set_scissor(scissor_px);
+        // (a clear drawn as a rectangle: cleared, vkCmdClearAttachments, the same pixels without the draw's shader)
+        VkClearRect clear_rect;
+        if (as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect)) {
+            const Vertex &v = b.vertices[0];
+            VkClearAttachment att[2] = {};
+            att[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            att[0].colorAttachment = 0;
+            uint8_t a = bits(s.fba, 0, 1) ? uint8_t(v.rgba[3] | 0x80u) : v.rgba[3];
+            for (int k = 0; k < 3; k++) {
+                att[0].clearValue.color.float32[k] = float(v.rgba[k]) / 255.0f;
+            }
+            att[0].clearValue.color.float32[3] = float(a) / 255.0f;
+            uint32_t count = 1;
+            if (zwrite) {
+                // (pcr_prim.vert's depth: Z within the format's, by its scale)
+                uint32_t zp = z_psm(s.zbuf);
+                uint32_t zmax = zp == 0x30 ? 0xFFFFFFFFu : zp == 0x31 ? 0xFFFFFFu : 0xFFFFu;
+                float zscale = zp == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
+                att[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                att[1].clearValue.depthStencil.depth = float(std::min(v.z, zmax)) * zscale;
+                count = 2;
+            }
+            c.clear_quad(clear_rect, att, count);
+            counts_clears_++;
+            drawn_over(b, *colour, ms, box, zte && zwrite);
+            return;
+        }
         // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
         bool per_sample = ms && is_cutout(b);
         counts_msaa_.cutout_batches += per_sample ? 1 : 0;
@@ -2782,7 +2845,6 @@ private:
                 : b.program == NativeProgram::vu1_700 ? 3
                 : b.program == NativeProgram::ripple  ? 4
                                                        : 1;
-        c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -2878,6 +2940,10 @@ private:
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
+            // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
+            bool early = pass.mode == 0 && !(flags & F_DATE);
+            c.set_program(early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
+                                : (per_sample ? sample_programs_[v] : programs_[v]));
             c.push_constants(&push, 0, sizeof(push));
             c.set_depth_test(zte, pass.z);
             if (date_stencil) {
@@ -2902,17 +2968,79 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
-        colour->ms_ahead |= ms;
-        // what was drawn over, for the texture store (its pages are a surface's now, not the uploads')
+        drawn_over(b, *colour, ms, box, zte && zwrite);
+    }
+
+    // After a batch: its multisampled image ahead of its image, and what was drawn over told to the texture store (its
+    // pages are a surface's now, not the uploads')
+    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &box, bool wrote_z) {
+        const DrawState &s = b.state;
+        uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
+        uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
+        uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
+        colour.ms_ahead |= ms;
         int32_t x0 = std::max(box.x0, int32_t(scax0)), x1 = std::min(box.x1, int32_t(scax1));
         int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
         if (x1 >= x0 && y1 >= y0 && store_follows_draws_) {
             store_.drawn({fbp * 32, fbw, fpsm, uint32_t(x0), uint32_t(y0), uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
-            if (zte && zwrite) {
+            if (wrote_z) {
                 store_.drawn({bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
                               uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
             }
         }
+    }
+
+    // A batch that is a clear drawn as a rectangle: one sprite of one colour and one Z, untextured, unblended, without
+    // fog, every pixel written (no alpha test's pass, no DATE), Z always or no Z test, as the frame has it (not moved
+    // in a picture between). Its pixels: the sprite within the scissor, at the canvas's scale (rect), when each edge of
+    // the sprite inside the scissor is on a whole GS pixel (a sprite covers the pixels from its first edge to before its
+    // last at any scale and with MSAA: gs_to_clip). The colour the shader would write (FBA's bit 7 with it), the depth
+    // pcr_prim.vert's. KF4_PC_CLEARS=0: drawn (to compare).
+    bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
+                  bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
+        const DrawState &s = b.state;
+        if (!clears_on_ || b.native || b.shader_blend || b.moved || (between_ && between_->active()) || !b.sprites ||
+            b.vertices.size() != 6 || bits(s.prim, 4, 3) != 0 || date || pass_count != 1 || pass.mode != 0 ||
+            !pass.rgb || !pass.alpha || (zte && ztst != 1) || (zwrite && !zte)) {
+            return false;
+        }
+        const Vertex &v0 = b.vertices[0];
+        float x0 = v0.x, y0 = v0.y, x1 = v0.x, y1 = v0.y;
+        for (const Vertex &v : b.vertices) {
+            if (memcmp(v.rgba, v0.rgba, 4) != 0 || v.z != v0.z) {
+                return false;
+            }
+            x0 = std::min(x0, v.x);
+            y0 = std::min(y0, v.y);
+            x1 = std::max(x1, v.x);
+            y1 = std::max(y1, v.y);
+        }
+        // (the scissor in GS pixels of the surface, as scissor_px is)
+        float sx0 = float(scissor_px.offset.x) / float(scale_[0]), sy0 = float(scissor_px.offset.y) / float(scale_[1]);
+        float sx1 = float(scissor_px.offset.x + int32_t(scissor_px.extent.width)) / float(scale_[0]);
+        float sy1 = float(scissor_px.offset.y + int32_t(scissor_px.extent.height)) / float(scale_[1]);
+        x0 += float(placed.x);
+        x1 += float(placed.x);
+        y0 += float(placed.y);
+        y1 += float(placed.y);
+        auto whole_or_out = [](float e, float lo, float hi) { return e <= lo || e >= hi || e == std::floor(e); };
+        if (!whole_or_out(x0, sx0, sx1) || !whole_or_out(x1, sx0, sx1) || !whole_or_out(y0, sy0, sy1) ||
+            !whole_or_out(y1, sy0, sy1)) {
+            return false;
+        }
+        int32_t px0 = std::max(scissor_px.offset.x, int32_t(std::max(x0, 0.0f)) * int32_t(scale_[0]));
+        int32_t py0 = std::max(scissor_px.offset.y, int32_t(std::max(y0, 0.0f)) * int32_t(scale_[1]));
+        int32_t px1 = std::min<int64_t>(scissor_px.offset.x + int32_t(scissor_px.extent.width),
+                                        int64_t(std::max(x1, 0.0f)) * scale_[0]);
+        int32_t py1 = std::min<int64_t>(scissor_px.offset.y + int32_t(scissor_px.extent.height),
+                                        int64_t(std::max(y1, 0.0f)) * scale_[1]);
+        px1 = std::min(px1, int32_t(colour.image->get_width()));
+        py1 = std::min(py1, int32_t(colour.image->get_height()));
+        if (px1 <= px0 || py1 <= py0) {
+            return false; // (draws nothing: left to the draw, which draws nothing either)
+        }
+        rect = {{{px0, py0}, {uint32_t(px1 - px0), uint32_t(py1 - py0)}}, 0, 1};
+        return true;
     }
 
     // A GIF batch's vertices bound for its passes: its place in the kept walk's buffer when drawn again from one, else
@@ -3220,8 +3348,17 @@ private:
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
-        programs_[0] = device_.request_program(vs, fs);
-        sample_programs_[0] = device_.request_program(vs, sfs);
+        Shader *efs = device_.request_shader(pcr_spv_pcr_prim_early_frag, sizeof(pcr_spv_pcr_prim_early_frag), &frag);
+        Shader *esfs = device_.request_shader(pcr_spv_pcr_prim_sample_early_frag,
+                                              sizeof(pcr_spv_pcr_prim_sample_early_frag), &frag);
+        // (each vertex shader with the four fragment shaders: draw_batch's choice)
+        auto programs_for = [&](int v, Shader *vertex) {
+            programs_[v] = device_.request_program(vertex, fs);
+            sample_programs_[v] = device_.request_program(vertex, sfs);
+            early_programs_[v] = device_.request_program(vertex, efs);
+            early_sample_programs_[v] = device_.request_program(vertex, esfs);
+        };
+        programs_for(0, vs);
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0].input_attachment_mask = 1u << 5;
@@ -3238,8 +3375,8 @@ private:
         expand.sets[0].fp_mask = 1u;
         expand.sets[0].meta[0].array_size = 1;
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
-        Shader *efs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
-        expand_program_ = device_.request_program(cvs, efs);
+        Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
+        expand_program_ = device_.request_program(cvs, xfs);
         ResourceLayout narrow = expand;
         narrow.push_constant_size = 8 * sizeof(int32_t);
         Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
@@ -3253,17 +3390,13 @@ private:
             nd.sets[2].meta[b].array_size = 1;
         }
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
-        programs_[1] = device_.request_program(nvs, fs);
-        sample_programs_[1] = device_.request_program(nvs, sfs);
+        programs_for(1, nvs);
         Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
-        programs_[2] = device_.request_program(nvs280, fs);
-        sample_programs_[2] = device_.request_program(nvs280, sfs);
+        programs_for(2, nvs280);
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
-        programs_[3] = device_.request_program(nvs700, fs);
-        sample_programs_[3] = device_.request_program(nvs700, sfs);
+        programs_for(3, nvs700);
         Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
-        programs_[4] = device_.request_program(nvsripple, fs);
-        sample_programs_[4] = device_.request_program(nvsripple, sfs);
+        programs_for(4, nvsripple);
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -3278,13 +3411,13 @@ private:
         std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
         no_clut_ = device_.create_buffer(clut, no_colours.data());
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        const WarmProgram warmed[6] = {{programs_[0], sample_programs_[0]},
-                                       {programs_[1], sample_programs_[1]},
-                                       {programs_[2], sample_programs_[2]},
-                                       {programs_[3], sample_programs_[3]},
-                                       {programs_[4], sample_programs_[4]},
-                                       {date_program_, date_ms_program_}};
-        warm_watch(device_, warmed, 6, expand_program_);
+        WarmProgram warmed[11];
+        for (int v = 0; v < 5; v++) {
+            warmed[v] = {programs_[v], sample_programs_[v]};
+            warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
+        }
+        warmed[10] = {date_program_, date_ms_program_};
+        warm_watch(device_, warmed, 11, expand_program_);
     }
 
     Device &device_;
@@ -3293,6 +3426,14 @@ private:
     // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700, the ripple's; each shaded once a pixel,
     // and once a sample (cut-out AA: pcr_prim_sample.frag)
     std::array<Program *, 5> programs_{}, sample_programs_{};
+    // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
+    std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
+    // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
+    bool pass_ended_ = false;
+    const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
+    // (as_clear) KF4_PC_CLEARS=0: clears drawn as the rectangles they are; and the batches cleared
+    const bool clears_on_ = !getenv("KF4_PC_CLEARS") || strcmp(getenv("KF4_PC_CLEARS"), "0") != 0;
+    uint64_t counts_clears_ = 0;
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
     // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
@@ -3364,14 +3505,15 @@ public:
                 "draw calls; textures %llu "
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
                 "from uploads; %llu uploads into surfaces, %llu copies between them; %llu Z buffers cleared by another "
-                "width's clear\n",
+                "width's clear; %llu clears drawn as rectangles cleared\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
                 (unsigned long long)c.textures_from_surfaces, (unsigned long long)c.textures_missing,
                 (unsigned long long)counts_untextured_, (unsigned long long)c.surfaces_made,
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
-                (unsigned long long)c.copies_between_surfaces, (unsigned long long)counts_depth_aliases_cleared_);
+                (unsigned long long)c.copies_between_surfaces, (unsigned long long)counts_depth_aliases_cleared_,
+                (unsigned long long)counts_clears_);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
                 "by the GS's read: %llu (a region mode), %llu (decoded in part)\n",

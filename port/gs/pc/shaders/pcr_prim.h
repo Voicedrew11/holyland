@@ -13,6 +13,12 @@
 #else
 #define PCR_IN noperspective in
 #endif
+// (pcr_prim_early.frag, PCR_EARLY: the draws that discard nothing, no alpha test's pass and no DATE from a copy:
+// without a discard in the shader the depth test and write are made before it (the GPU's early Z), which a shader
+// that may discard keeps until after it; the same pixels either way)
+#ifdef PCR_EARLY
+layout(early_fragment_tests) in;
+#endif
 layout(location = 0) PCR_IN vec4 v_color;
 layout(location = 1) PCR_IN vec3 v_stq;
 layout(location = 2) PCR_IN float v_fog;
@@ -370,12 +376,14 @@ void main() {
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
     }
+#ifndef PCR_EARLY
     if ((pc.flags & PCR_F_DATE) != 0u) {
         uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
             discard;
         }
     }
+#endif
     uvec4 vc = uvec4(v_color + 0.001);
     uvec4 c = vc;
     bool high = (pc.flags & PCR_F_HIGH) != 0u;
@@ -414,10 +422,12 @@ void main() {
         float ff = clamp(v_fog, 0.0, 255.0);
         hc = (ff * hc + (255.0 - ff) * vec3(fog)) / 256.0;
     }
+#ifndef PCR_EARLY
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
         discard;
     }
+#endif
     uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
     if (high && (pc.flags & PCR_F_SHADER_BLEND) != 0u) {
         // (COLCLAMP's wrap: the GS's integers)

@@ -19,6 +19,70 @@ the 2D mode are applied since 2026-11-11 (below) and offered again. The settings
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 
+## GPU time a picture (2026-11-12; issue #109)
+
+Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)
+before changing anything: at 009 the issue's 3.2 ms (an RX 9070 XT, October, `fast`) is 1.3-1.7 ms, and the biggest
+kinds were native 280 (0.33-0.35 ms), native 000 (0.38-0.51), the 2D (0.24-0.39) and native 700 (0.12-0.24). A trace of
+one picture's passes (a scratch build) showed about ten render passes a picture at 009 (the reflection's target, the
+frame, DATE's set-up, the pump's submits every 128 batches), so the full barrier at every pass was not where native 280's
+time went: native 280 costs the same at Andrew's 4x (16 pixels a GS pixel) as at the owner's 3x MSAA 2 (9), so it is
+its **vertex** shader. Four changes, each pictures byte for byte the base build's (000, 009, 009:2, 099 at 240, every
+picture between of five vblanks, 1x and 4x MSAA 2), the validation layer with sync validation silent (1x, 3x MSAA 2,
+2x MSAA 4, 4x MSAA 2 colour high):
+
+1. **Native 280's colour carry** (`vu1_280_maths.h`, `colour_u`): VU1 carries a vertex's RGB through the record's scale
+   and bias once per vertex before it in the strip, and every corner of every triangle walked back to the strip's first
+   vertex: a strip's cost grew with the square of its length. Each step is a function of the colour alone, so the loop
+   ends once a step leaves it unchanged bit for bit (at once for scale 1, bias 0: most draws). Native 280 at 009 about
+   30% less.
+2. **Early depth test** (`pcr_prim_early.frag`, `pcr_prim_sample_early.frag`): pcr_prim.frag may discard (an alpha
+   test's pass, DATE by a copy), so the GPU tested and wrote depth after the shader for every draw. A pass that discards
+   nothing now uses the same shader compiled without the discards and with `early_fragment_tests`. The 2D a little
+   less, native 000 a hair more; small.
+3. **Barriers** (`Canvas::end_pass`, `begin_pass`): a pass ended records no barrier (all work outside a pass is between
+   full barriers of its own), and a pass begun right after a pass waits only for the attachment writes
+   (`pass_to_pass_barrier`); after other work or at a command buffer's start it keeps the full barrier.
+   `KF4_PC_PASS_BARRIER=full` restores the old ones. About 3% at 009.
+4. **Clears** (`as_clear`): a batch that is one untextured, unblended sprite of one colour and Z, Z always, every edge in
+   the scissor on a whole GS pixel and not moved in a picture between, is cleared with `vkCmdClearAttachments` (the
+   shader's colour, FBA's bit, pcr_prim.vert's depth). Only the game frame's clears qualify (the pictures between move
+   theirs, which the pump cannot see on the CPU), so it is worth almost nothing at 240 (2d 0.192 -> 0.189 ms);
+   `KF4_PC_CLEARS=0` to compare. A pass's load op was not possible: the frame's surface holds both buffers, so no clear
+   covers the attachment.
+
+Also fixed: `pcr_ndripple.vert` gave pcr_prim.frag no `v_rect` (location 3; VUID-RuntimeSpirv-OpEntryPoint-08743 at 009,
+the only message the layer gave, in the base build too).
+
+**A/B** (`pace_ab.py`, base `ae9a9097` against these, alternated, 3 rounds, 240, display on: `display_active` Enabled and
+the GPU at full clocks each round, 05:12-06:06). GPU ms a picture, median [min-max]; all cells held 239.3-239.8 pictures
+a second in both builds:
+
+| profile | spot | base | new | change | native 280 | native 000 | 2d | native 700 |
+|---|---|---|---|---|---|---|---|---|
+| andrew | 000 | 1.519 [1.519-1.524] | 1.369 [1.368-1.373] | -9.9% | 0.241 -> 0.179 | 0.669 -> 0.625 | 0.381 -> 0.329 | 0.011 -> 0.008 |
+| andrew | 009 | 1.682 [1.681-1.682] | 1.471 [1.471-1.472] | -12.5% | 0.329 -> 0.225 | 0.505 -> 0.478 | 0.390 -> 0.315 | 0.238 -> 0.227 |
+| andrew | 009:2 | 1.129 [1.129-1.130] | 1.008 [1.008-1.010] | -10.7% | 0.178 -> 0.140 | 0.386 -> 0.350 | 0.355 -> 0.303 | 0.004 -> 0.004 |
+| andrew | 099 | 1.268 [1.264-1.269] | 1.169 [1.163-1.170] | -7.8% | 0.057 -> 0.048 | 0.592 -> 0.552 | 0.389 -> 0.331 | 0.001 -> 0.000 |
+| sean | 000 | 1.233 [1.194-1.234] | 1.123 [1.115-1.130] | -8.9% | 0.218 -> 0.156 | 0.536 -> 0.509 | 0.233 -> 0.206 | 0.010 -> 0.008 |
+| sean | 009 | 1.329 [1.328-1.330] | 1.165 [1.128-1.174] | -12.3% | 0.351 -> 0.244 | 0.383 -> 0.367 | 0.241 -> 0.199 | 0.121 -> 0.116 |
+| sean | 009:2 | 0.898 [0.883-0.905] | 0.839 [0.837-0.841] | -6.6% | 0.167 -> 0.126 | 0.282 -> 0.262 | 0.221 -> 0.197 | 0.003 -> 0.003 |
+| sean | 099 | 0.969 [0.967-0.972] | 0.915 [0.910-0.918] | -5.6% | 0.036 -> 0.026 | 0.441 -> 0.418 | 0.244 -> 0.213 | 0.001 -> 0.000 |
+
+(texture copy, copy and picture unchanged: 0.08-0.12, 0.03-0.08, 0.04-0.06.)
+
+**MSAA 2 and colour high** (the new build, 009, the owner's settings with one changed, 15 s windows, 2 rounds, display on,
+every picture between drawn: `KF4_INTERP_CUT=0`, so higher than pace_test's): MSAA 1 1.10 ms, MSAA 2 (the owner's) 1.29,
+MSAA 2 with `--native-colour high` 1.50. MSAA 2's 0.19 ms: native 280 +0.065, the copy kind +0.068 (the kept frame,
+0xF2, resolved whole from the samples at each game frame), 2d +0.027, native 000 +0.03. Colour high's 0.21 ms on top:
+copy +0.06 and texture copy +0.05 (16-bit surfaces: twice the bytes), 2d +0.04, native 700 +0.02.
+
+Left: native 000 (with the ripple, which the profiler still counts as 000) is now the biggest kind (0.37-0.63 ms); its
+vertex shader and 280's still redo each vertex for every triangle it is in, and in a picture between each corner
+computes its triangle's other two corners' moves for the drop test (a per-vertex pass before the draw would remove
+both). The kept frame's copy (0xF2) resolves the whole two-buffer surface with MSAA; copying only what the pictures between read
+would halve it (not checked which rows those are).
+
 ## MSAA and cut-out AA (2026-11-11)
 
 `--native-msaa` and `--native-cutout-aa` (settings.json's `native_msaa`, `native_cutout_aa`) are applied, live from

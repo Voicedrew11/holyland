@@ -18,6 +18,7 @@ layout(set = 2, binding = 2, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw; pcr_prim.frag reads it)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 1, binding = 0, std430) readonly buffer Picture {
@@ -82,4 +83,5 @@ void main() {
     v_color = vec4(float(rgba & 0xFFu), float((rgba >> 8) & 0xFFu), float((rgba >> 16) & 0xFFu), float(rgba >> 24));
     v_stq = vec3(screen_st(wx, wy), 1.0);
     v_fog = d.fog.x;
+    v_rect = uvec2(PCR_NO_RECT);
 }
