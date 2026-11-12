@@ -1750,6 +1750,12 @@ private:
     // The Vulkan instance and device: with the presenter's surface and swapchain extensions when it wants
     // them, else (or when that fails) without
     bool make_context() {
+        // (push descriptors: Granite then pushes the last set of each program's layout, vkCmdPushDescriptorSet, rather
+        // than allocating and writing a descriptor set for it at every change: the batches' textures, pcr_canvas.cpp's
+        // set 1. KF4_PC_PUSH_DESCRIPTORS=0: not, to compare.)
+        const char *push = getenv("KF4_PC_PUSH_DESCRIPTORS");
+        const Vulkan::ContextCreationFlags context_flags =
+            push && strcmp(push, "0") == 0 ? 0 : Vulkan::CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT;
         std::vector<const char *> instance_ext, device_ext;
         if (present_wanted_) {
             present_extensions(instance_ext, device_ext);
@@ -1758,7 +1764,7 @@ private:
             context_ = std::make_unique<Context>();
             context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
             if (context_->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
-                                                   device_ext.data(), uint32_t(device_ext.size()), 0)) {
+                                                   device_ext.data(), uint32_t(device_ext.size()), context_flags)) {
                 return true;
             }
             fprintf(stderr, "[pcr] no Vulkan device with a swapchain: the window is shown without one\n");
@@ -1766,7 +1772,7 @@ private:
         present_wanted_ = false;
         context_ = std::make_unique<Context>();
         context_->set_num_thread_indices(2);
-        if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
+        if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, context_flags)) {
             context_.reset();
             return false;
         }
