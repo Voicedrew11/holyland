@@ -254,6 +254,84 @@ a few pictures a second). The backlog at a vblank's start is 1 most of the time:
 for kf4-pc's intake before the pump starts them (2026-11-06), so the next step is the timeline of a frame's
 pictures between (asked → pump start → GPU done), not the vblank.
 
+## Built 2026-11-12 (later): the cut judges on pictures left out, and a frame's pictures between followed
+
+**The cut** (gs.c, `port_gs_run_vsync`): a vblank now counts as behind when the backlog is over 1 as it begins (as
+before) **or the vblank before left a picture between out as behind**. Two such vblanks in a row lower the count a
+vblank by one, as before (the same settling, raising and doubling rest). `KF4_INTERP_CUT_LEFT=0` judges on the backlog
+alone. Left-outs had kept the backlog low (a vblank's pictures left out are not drawn), so the cut saw "caught up" and
+the next vblank asked for as many again: pictures came in bursts, the last of each late or left out. Pictures are not
+changed where the renderer keeps up: byte for byte perf/vblank-wait's at 000, 009, 009:2, 099 (240,
+`KF4_INTERP_DRAW_ALL=1`, 816 pictures). The 16 unit tests pass.
+
+`pace_test` (25 s, `--hz 500`), Windows, RTX 5080, alternated, 3 rounds, **the display off in every round** (owner
+at work; GPU 2160 MHz under load), so compare within the table. `tools/pace_test.py`'s numbers plus, from the same
+run: the longest and 99th-percentile gap between pictures handed to the window and their spread (sd), the pictures
+between left out as behind (`--stats`, whole run) and the pictures the window showed more than half a vblank late
+(`--stats` "window"). Median of 3 [min-max]. Before = perf/vblank-wait (b111168a); +#130 = merged with
+perf/pc-intake (kf4-pc's intake -30%).
+
+| profile | spot | build | pictures/s | game vblanks/s | gap p99 / sd ms | left out | shown late |
+|---|---|---|---|---|---|---|---|
+| andrew | 000 | before | 339.7 [336.1-340.4] | 60.7 | 15.1 / 2.31 | 1005 [872-1107] | 3534 |
+| | | now | **350.9** [341.8-351.2] | 60.8 | **10.7 / 1.63** | **497** [465-546] | **1592** |
+| | | before +#130 | 324.3 [317.6-335.4] | 60.5 | 17.1 / 2.95 | 1336 [1053-1658] | 5084 |
+| | | now +#130 | **351.4** [346.5-354.6] | 60.8 | **10.6 / 1.61** | **365** [322-379] | **1607** |
+| andrew | 009 | before | 293.0 [288.6-293.1] | 60.5 | 13.9 / 2.14 | 998 [992-1247] | 3068 |
+| | | now | 286.5 [284.8-286.9] | 60.7 | 12.1 / 1.94 | 743 [681-745] | 1870 |
+| | | before +#130 | 298.0 [295.2-299.0] | 60.7 | 12.6 / 1.92 | 999 [857-1064] | 3275 |
+| | | now +#130 | 298.5 [294.2-301.1] | 60.8 | 10.6 / 1.57 | 561 [542-563] | 1976 |
+| sean | 000 | before | 378.3 [360.1-392.6] | 60.7 | 13.1 / 2.45 | 71 [53-79] | 3552 |
+| | | now | **410.2** [409.5-413.9] | 60.7 | 12.6 / 2.02 | 59 [58-92] | 2540 |
+| | | before +#130 | 420.8 [414.9-437.2] | 60.8 | 10.1 / 1.65 | 47 [25-87] | 1821 |
+| | | now +#130 | 430.0 [415.5-433.0] | 60.8 | 10.6 / 1.62 | 61 [38-90] | 1502 |
+| sean | 009 | before | 382.2 [378.5-385.0] | 60.8 | 11.6 / 1.84 | 763 [630-874] | 3410 |
+| | | now | 387.9 [384.6-390.8] | 60.8 | 9.2 / 1.44 | 462 [407-484] | 1981 |
+| | | before +#130 | 381.2 [379.5-384.1] | 60.6 | 12.1 / 1.96 | 1335 [1091-1370] | 6815 |
+| | | now +#130 | **400.3** [380.2-401.4] | 60.8 | **8.1 / 1.27** | **366** [345-374] | **2324** |
+
+With #110 (perf/pump-draws, the pump's draws 28% less CPU, merged locally), andrew only, same rounds:
+
+| spot | build | pictures/s | game vblanks/s | gap p99 / sd ms | left out | shown late |
+|---|---|---|---|---|---|---|
+| 000 | before +#110 | 302.3 [296.3-308.9] | 60.0 | 23.6 / 3.65 | 1430 [1297-1621] | 3346 |
+| | now +#110 | **342.2** [342.1-344.5] | 60.7 | **12.6 / 2.08** | **495** [456-576] | **1478** |
+| 009 | before +#110 | 247.6 [241.0-263.0] | 60.2 | 27.2 / 4.98 | 1997 [1382-2094] | 3949 |
+| | now +#110 | **286.7** [286.5-287.8] | 60.5 | **14.3 / 2.26** | **694** [684-765] | **1394** |
+
+At 240 (both profiles, 000 and 009, 2 rounds) nothing moves: 238.9-239.8 pictures a second before and 239.3-239.8
+now, 60.7-60.8 game vblanks, the same left-outs (10-35 a run, the load).
+
+The pictures left out as behind fall by a quarter to three quarters and those shown late by about half; the gaps
+between pictures are more even (p99 and sd); pictures a second are the same or higher except andrew 009 without #130
+(-2%). #130's drop at andrew 000 (340 → 324 with it before) is gone (351 with it now): with the intake faster, the
+renderer's backlog fell further and the old cut lowered less while more were left out, which judging on the left-outs
+undoes; the same happened with #110 (its pictures sooner, -11% before at 000 and -15% at 009, across separate rounds), and it is gone too.
+The longest gap and pace_test's uneven refreshes a second do not move (the longest gap is a hitch, not the
+cut; at 500 every refresh whose picture is not new counts as uneven). The cut still lowers only about 28 times a run
+(load and settling): it now settles lower and stays (andrew 000, a diagnostic run: allowed 6 a vblank in 1240 of 1497
+vblanks, 7 in 257; 18 vblanks left any out).
+
+**The timeline of a frame's pictures between** (a diagnostic build, not committed: `KF4_PICLOG` timestamps at gs.c's
+ask, kf4-pc's take, the pump's start and hand-out, kf4-pc's `next_frame_context`, the pump's `start_from`; andrew 000,
+500, with the change, 25 s of play, display off). A game frame is 33.4 ms:
+
+| thread | where its time goes (share of play) |
+|---|---|
+| kf4-pc | the next frame's GIF intake 28% (9.4 ms a frame); `next_frame_context` after each pumped picture 32% (0.87 ms each, p90 2.6: it waits for the pump's open command buffer); idle waiting for the next frame's packets 25% (8.9 ms a frame); the rest 15% |
+| pump | the pictures between, drawn back to back 47% (0.9 ms each); `start_from` (the frame's surfaces copied) 12% (3.0 ms a frame, p90 9.2); idle waiting for the next frame 33% (12.7 ms a frame) |
+| gs (the vblank thread) | under 1% |
+
+A picture between is asked 26 ms before it is due; it waits 6.8 ms (median, p90 14.7) in kf4-pc's inbox behind the
+next frame's packets, then 7.0 ms (p90 13.3) for the pump, which takes it only after the frame's `start_from` and the
+pictures before it; it is drawn in 0.9 ms. So it is handed out 11 ms early in the median but 4.6 ms late at p90: the
+last pictures of each burst are the ones left out. **What bounds ~6 a vblank is latency, not throughput**: a frame's
+pictures between all start after kf4-pc has taken the frame in and the pump has copied its surfaces, and then run
+back to back; the pump is idle a third of the time and kf4-pc a quarter, and the GPU (2.1 ms a picture) has room.
+Levers, in order: pictures between that do not queue behind the next frame's packets in kf4-pc's inbox (the pump
+takes them from gs.c directly once it has the frame's walk); a cheaper or earlier `start_from` (3 ms a frame, 9 at
+p90); kf4-pc's `next_frame_context` per pumped picture (32% of kf4-pc; it waits for the pump's command buffer).
+
 ## The list, best first
 
 0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
@@ -265,8 +343,11 @@ pictures between (asked → pump start → GPU done), not the vblank.
 
 1. **What limits the uncapped rate**: the game's 57-58 vblanks a second are **fixed 2026-11-12** (above: vblanks left
    off the screen, not the game slowed; 60.4-60.8 now). Left: the rate of pictures between itself (~6 a vblank made
-   of 8-9 asked at 500, neither the pump nor the GPU full): a frame's pictures between followed from asked to the
-   pump's start to GPU done, and the cut judging on pictures left out.
+   of 8-9 asked at 500, neither the pump nor the GPU full). **The cut judges on pictures left out (2026-11-12,
+   above)**: half the left-outs and late pictures, more even gaps, the same or more pictures a second, #130's drop
+   at 000 undone. **The timeline is followed (above)**: the bound is latency: a frame's pictures between wait in
+   kf4-pc's inbox behind the next frame's packets and for the pump's `start_from`, then run back to back; next, the
+   pictures between to the pump without kf4-pc's queue, and `start_from` cheaper.
    **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
    - **One submit a picture between** (9%, the kernel's submit): the price of the 2026-11-06 flush. Measure the
      pictures' lateness with two pictures between a submit before trading any back.
