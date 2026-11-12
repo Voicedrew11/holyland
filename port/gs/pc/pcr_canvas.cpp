@@ -2782,7 +2782,6 @@ private:
                 : b.program == NativeProgram::vu1_700 ? 3
                 : b.program == NativeProgram::ripple  ? 4
                                                        : 1;
-        c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -2878,6 +2877,10 @@ private:
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
+            // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
+            bool early = pass.mode == 0 && !(flags & F_DATE);
+            c.set_program(early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
+                                : (per_sample ? sample_programs_[v] : programs_[v]));
             c.push_constants(&push, 0, sizeof(push));
             c.set_depth_test(zte, pass.z);
             if (date_stencil) {
@@ -3220,8 +3223,17 @@ private:
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
         Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
         Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
-        programs_[0] = device_.request_program(vs, fs);
-        sample_programs_[0] = device_.request_program(vs, sfs);
+        Shader *efs = device_.request_shader(pcr_spv_pcr_prim_early_frag, sizeof(pcr_spv_pcr_prim_early_frag), &frag);
+        Shader *esfs = device_.request_shader(pcr_spv_pcr_prim_sample_early_frag,
+                                              sizeof(pcr_spv_pcr_prim_sample_early_frag), &frag);
+        // (each vertex shader with the four fragment shaders: draw_batch's choice)
+        auto programs_for = [&](int v, Shader *vertex) {
+            programs_[v] = device_.request_program(vertex, fs);
+            sample_programs_[v] = device_.request_program(vertex, sfs);
+            early_programs_[v] = device_.request_program(vertex, efs);
+            early_sample_programs_[v] = device_.request_program(vertex, esfs);
+        };
+        programs_for(0, vs);
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0].input_attachment_mask = 1u << 5;
@@ -3238,8 +3250,8 @@ private:
         expand.sets[0].fp_mask = 1u;
         expand.sets[0].meta[0].array_size = 1;
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
-        Shader *efs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
-        expand_program_ = device_.request_program(cvs, efs);
+        Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
+        expand_program_ = device_.request_program(cvs, xfs);
         ResourceLayout narrow = expand;
         narrow.push_constant_size = 8 * sizeof(int32_t);
         Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
@@ -3253,17 +3265,13 @@ private:
             nd.sets[2].meta[b].array_size = 1;
         }
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
-        programs_[1] = device_.request_program(nvs, fs);
-        sample_programs_[1] = device_.request_program(nvs, sfs);
+        programs_for(1, nvs);
         Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
-        programs_[2] = device_.request_program(nvs280, fs);
-        sample_programs_[2] = device_.request_program(nvs280, sfs);
+        programs_for(2, nvs280);
         Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
-        programs_[3] = device_.request_program(nvs700, fs);
-        sample_programs_[3] = device_.request_program(nvs700, sfs);
+        programs_for(3, nvs700);
         Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
-        programs_[4] = device_.request_program(nvsripple, fs);
-        sample_programs_[4] = device_.request_program(nvsripple, sfs);
+        programs_for(4, nvsripple);
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -3278,13 +3286,13 @@ private:
         std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
         no_clut_ = device_.create_buffer(clut, no_colours.data());
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        const WarmProgram warmed[6] = {{programs_[0], sample_programs_[0]},
-                                       {programs_[1], sample_programs_[1]},
-                                       {programs_[2], sample_programs_[2]},
-                                       {programs_[3], sample_programs_[3]},
-                                       {programs_[4], sample_programs_[4]},
-                                       {date_program_, date_ms_program_}};
-        warm_watch(device_, warmed, 6, expand_program_);
+        WarmProgram warmed[11];
+        for (int v = 0; v < 5; v++) {
+            warmed[v] = {programs_[v], sample_programs_[v]};
+            warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
+        }
+        warmed[10] = {date_program_, date_ms_program_};
+        warm_watch(device_, warmed, 11, expand_program_);
     }
 
     Device &device_;
@@ -3293,6 +3301,8 @@ private:
     // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700, the ripple's; each shaded once a pixel,
     // and once a sample (cut-out AA: pcr_prim_sample.frag)
     std::array<Program *, 5> programs_{}, sample_programs_{};
+    // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
+    std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
     // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
