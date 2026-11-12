@@ -4,7 +4,7 @@
 // where that sample's alpha bit 7 is TEST's DATM
 #include "pcr_common.h"
 
-layout(input_attachment_index = 0, set = 0, binding = 5) uniform subpassInputMS u_target;
+layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInputMS u_target;
 
 void main() {
     uint da = uint(round(subpassLoad(u_target, gl_SampleID).a * 255.0));

@@ -1158,6 +1158,7 @@ public:
         }
         std::optional<PictureSize> size = picture_size(v, extra, scale & 0xFF, scale >> 8);
         if (!size || !(want & (GSN_WANT_IMAGE | GSN_WANT_PIXELS | GSN_PRESENT))) {
+            device_.flush_frame(); // (a picture between submitted for this picture to flush: on the GPU's queue now)
             return m; // (no picture shown, or none wanted)
         }
         CommandBufferHandle cmd = device_.request_command_buffer();
@@ -1546,10 +1547,20 @@ private:
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         if (walk_ && between_->begin_picture_again(p.picture)) {
-            canvas_->draw_again_alone(*walk_, *between_);
+            canvas_->draw_again_alone(*walk_, *between_, picture_next());
             between_->end_picture_again();
         }
         between_took_s_ = port_wall_seconds() - began_s;
+    }
+
+    // Whether the next message is the picture that shows this picture between, already sent: taken at once, its
+    // submit then puts the picture between's commands on the GPU's queue too (one vkQueueSubmit, not two). Not when
+    // it is still to come (at a capped rate, until the picture's time): the picture between is flushed at once then,
+    // so the GPU draws it in the meantime.
+    bool picture_next() {
+        std::lock_guard<std::mutex> hold(lock_);
+        return pcr::submit_together() && !messages_.empty() && std::holds_alternative<PumpPicture>(messages_.front()) &&
+               !stopping_;
     }
 
     void work(PumpPicture &e) {
@@ -1804,6 +1815,15 @@ private:
     // The Vulkan instance and device: with the presenter's surface and swapchain extensions when it wants
     // them, else (or when that fails) without
     bool make_context() {
+        // (KF4_PC_PUSH_DESCRIPTORS=1: push descriptors. Granite then pushes the last set of each program's layout,
+        // vkCmdPushDescriptorSet, rather than allocating and writing a descriptor set for it at every change: the
+        // batches' textures, pcr_canvas.cpp's set 1. Off by default: on NVIDIA (RTX 5080, 2026-11-12) it took the
+        // pump's CPU at 009 uncapped from about 490 to 440 ms a second, but Andrew's settings' uncapped rate from about
+        // 321 to 296 pictures a second, the game from 58.4 to 56.5 vblanks a second (the owner's: 491 against 494);
+        // docs/port/PERFORMANCE.md, "Built 2026-11-12".)
+        const char *push = getenv("KF4_PC_PUSH_DESCRIPTORS");
+        const Vulkan::ContextCreationFlags context_flags =
+            push && strcmp(push, "1") == 0 ? Vulkan::CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT : 0;
         std::vector<const char *> instance_ext, device_ext;
         if (present_wanted_) {
             present_extensions(instance_ext, device_ext);
@@ -1812,7 +1832,7 @@ private:
             context_ = std::make_unique<Context>();
             context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
             if (context_->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
-                                                   device_ext.data(), uint32_t(device_ext.size()), 0)) {
+                                                   device_ext.data(), uint32_t(device_ext.size()), context_flags)) {
                 return true;
             }
             fprintf(stderr, "[pcr] no Vulkan device with a swapchain: the window is shown without one\n");
@@ -1820,7 +1840,7 @@ private:
         present_wanted_ = false;
         context_ = std::make_unique<Context>();
         context_->set_num_thread_indices(2);
-        if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, 0)) {
+        if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, context_flags)) {
             context_.reset();
             return false;
         }

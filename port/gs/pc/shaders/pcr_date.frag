@@ -5,7 +5,7 @@
 // the render pass. No colour is written.
 #include "pcr_common.h"
 
-layout(input_attachment_index = 0, set = 0, binding = 5) uniform subpassInput u_target;
+layout(input_attachment_index = 0, set = 1, binding = 5) uniform subpassInput u_target;
 
 void main() {
     uint da = uint(round(subpassLoad(u_target).a * 255.0));

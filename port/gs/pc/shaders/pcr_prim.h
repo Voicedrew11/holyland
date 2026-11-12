@@ -26,12 +26,12 @@ layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.ve
 
 layout(location = 0) out vec4 o_color;
 
-layout(set = 0, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
-layout(set = 0, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
-layout(set = 0, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE, PCR_F_SHADER_BLEND) the destination before
+layout(set = 1, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
+layout(set = 1, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
+layout(set = 1, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE, PCR_F_SHADER_BLEND) the destination before
                                                            // the draw, from pc.dest_offset
-layout(set = 0, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
-layout(set = 0, binding = 2) uniform Clut {
+layout(set = 1, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
+layout(set = 1, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
 } u_clut;
 
