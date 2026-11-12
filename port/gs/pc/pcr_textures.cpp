@@ -478,6 +478,8 @@ struct TextureStore::State {
     std::bitset<512> clut_unloaded = std::bitset<512>().set();
     std::array<uint32_t, 2> clut_cbp = {UINT32_MAX, UINT32_MAX};
     std::unordered_map<std::vector<uint64_t>, std::array<uint32_t, 256>, WordsHash> clut_decoded;
+    // local copies from uploads made (TextureStore::copied): their registers and source chunks, the chunk they made
+    std::unordered_map<std::vector<uint64_t>, uint64_t, WordsHash> copies_made;
 
     uint64_t keep(const TransferRegs &regs, std::span<const uint8_t> bytes, uint64_t pixels);
     void own(uint64_t id);
@@ -1028,6 +1030,22 @@ void TextureStore::copied(const TransferRegs &regs) {
         return;
     }
     s.sort_by_upload(owners.chunks);
+    // (what it writes is a function of its registers and the chunks, oldest first, chunks never changing: a copy made
+    // before from the same is its chunk again, as the upload below would find it)
+    std::vector<uint64_t> key = {regs.bitbltbuf, regs.trxpos, regs.trxreg};
+    key.insert(key.end(), owners.chunks.begin(), owners.chunks.end());
+    auto made = s.copies_made.find(key);
+    if (made != s.copies_made.end()) {
+        auto c = s.chunks.find(made->second);
+        if (c != s.chunks.end()) {
+            s.counts.copies_as_uploads++;
+            s.counts.uploads++;
+            s.counts.upload_bytes += c->second.bytes.size();
+            s.last_chunk = made->second;
+            s.own(made->second);
+            return;
+        }
+    }
     s.write_chunks(owners.chunks, {});
     gsn_vram_copy(s.scratch.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg);
     size_t bytes = (size_t(width) * height * uint32_t(gsn_psm_bits(dpsm)) + 7) / 8;
@@ -1038,7 +1056,12 @@ void TextureStore::copied(const TransferRegs &regs) {
                         pixels.size() / 16);
     pixels.resize(bytes);
     s.counts.copies_as_uploads++;
-    upload(regs, pixels);
+    if (upload(regs, pixels)) {
+        if (s.copies_made.size() >= 4096) {
+            s.copies_made.clear();
+        }
+        s.copies_made[std::move(key)] = s.last_chunk;
+    }
 }
 
 bool TextureStore::read_back(const TransferRegs &regs, std::vector<uint8_t> &out) {
