@@ -7,7 +7,7 @@
    wobble grid in 70 cells), each passed on to the GS by VU1's program 0x276. Natively the call site hands
    the pass and its parameters to the renderer core (rd_pass), and queues a PORT_GS_REG_NATIVE_DRAW write
    naming it at the very place of those packets; the renderer draws it, as the packets would have
-   drawn them (the PC renderer does not draw passes yet: PORT_ND_PASSES is off under it), and leaves the GS's registers as they would have left them. VU1 runs nothing for it.
+   drawn them (the PC renderer: port/render/pass_draw.cpp), and leaves the GS's registers as they would have left them. VU1 runs nothing for it.
 
    Two kinds of call site (core.patch):
    - a whole call, in GameLoop_DrawFrame: `if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_X(...))

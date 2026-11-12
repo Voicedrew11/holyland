@@ -13,8 +13,8 @@
    (draw_parts, additive, as a map record).
 
    Natively the strip is a draw of its own with an identity (RD_KIND_WATER: the model, the part) and
-   program RD_PROGRAM_RIPPLE: the renderer makes each corner on the GPU from the part's mesh (the PC renderer
-   does not draw it yet: PORT_ND_WATER is off under it) (the record's own blocks, cached: only the positions and the
+   program RD_PROGRAM_RIPPLE: the renderer makes each corner on the GPU from the part's mesh (the PC renderer:
+   port/render/ripple.hpp) (the record's own blocks, cached: only the positions and the
    data's ADC are read), the part's matrix and the 32 sines, in the EE's arithmetic, so the game's frames are
    the PS2 path's bit for bit; and in a picture between the place and the texture coordinates are made by the
    camera between, so the water's reflection moves with the camera (the PS2 path's strip keeps the frame's
