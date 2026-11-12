@@ -2205,7 +2205,9 @@ vblank) and shown at their times, at a rate that follows the renderer.
   floor. `--stats`: "frame rate unlocked: N a second at the end ..., M times down, K up".
 - The second signal is needed: past its limit the renderer leaves pictures out (gs.c's "left out as the renderer
   was behind the game") before its thread is a vblank late, and a fixed 280 at the owner's settings showed 36 of
-  the game's vblanks a second on screen without the cut ever judging.
+  the game's vblanks a second on screen without the cut ever judging. Since 2026-11-12 a vblank whose own picture
+  is not shown keeps one picture between however far behind (the last of them; `KF4_INTERP_KEEP_ONE=0` as before),
+  so no vblank leaves the screen: PERFORMANCE.md, "the game's 57-58 vblanks a second uncapped" (#107).
 - **The swapchain** (present_vk.cpp): unlocked is mailbox whatever VSync says (the owner's choice), FIFO where
   there is no mailbox; with `--tearing` immediate, then mailbox. SDL_Renderer's presenter keeps VSync as set.
 
