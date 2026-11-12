@@ -206,6 +206,150 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Built 2026-11-12: the pump's descriptor sets and submits (issue #110)
+
+**Profiled first** (`ae9a9097`, Windows, RTX 5080, 009 uncapped `--hz 500`, the owner's settings, `build_cost.py` +
+`stacks.py`, display on): the pump 709 ms of CPU a second, `draw_again_alone` 95% of it; the NVIDIA driver 66% self;
+`flush_render_state` 59% inclusive, of it `flush_descriptor_sets` 39% (`flush_descriptor_set`, a new set allocated
+and written with `vkUpdateDescriptorSetWithTemplate`, 32%); submits 5.5%; dynamic state 6%; pipeline binds 4%.
+Why so many sets: three things, each found in Granite's code, not guessed:
+- Granite's `set_uniform_buffer` / `set_storage_buffer` (the path without descriptor buffers, which pcr uses) marked
+  the set for a new descriptor set even when the same buffer was bound again (set_texture and the descriptor buffer
+  paths return early). The canvas binds the pictures between's three buffers, a native batch's three and the CLUT's
+  empty buffer at every batch: up to three new sets a batch.
+- The batch programs' sets: textures (changing at most batches) in set 0, the pictures between's buffers in set 1 laid
+  out differently for GIF and native programs (so every switch between them reallocated sets 1 and 2), the native
+  buffers in set 2.
+- Push descriptors were never on: Granite pushes the last set of a layout only when the context is made with
+  `CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT`, and pcr passed no flags.
+
+**Built** (branch `perf/pump-draws`; pictures byte for byte the base build's):
+1. `cmake/granite_descriptor_reuse.cmake`: a buffer bound again unchanged keeps its set (Granite patched at configure,
+   as the other granite_*.cmake).
+2. **One `vkQueueSubmit` a picture between** where there were two: the canvas's command buffer is handed to Granite
+   without a flush where a flushing submit follows at once (in `scanout`, always; at the end of `draw_again_alone`
+   when the picture that shows it is already the pump's next message: uncapped rates. At a capped rate it is flushed at
+   once as before, so the GPU draws it while the picture's time comes).
+3. **One descriptor layout for every batch program** (`make_programs`): set 0 the vertex stage's buffers, set 1 the
+   fragment stage's textures and CLUT, the last set.
+4. **Each native program's buffers in bindings of their own** (set 0: 3-5 native 000, 6-8 280, 9-11 700, 12-14 the
+   ripple's): a frame's batches of one program share their buffers, so set 0 is written again only at a render pass
+   (Granite forgets bindings there: `set0_fresh_`) or when a frame's buffers grow.
+5. **Push descriptors, but off by default** (`make_context`, `KF4_PC_PUSH_DESCRIPTORS=1`): the textures' set pushed.
+   `KF4_PC_SUBMIT_TOGETHER=0` undoes 2, to compare.
+
+With push descriptors (profile of the new build, same settings): the pump 443 ms a second; `flush_descriptor_sets`
+13% of it (12.4% the push itself, no set allocated or written a batch); the driver 61% self; submits 6% (now mostly the
+every-128-batches flushes); dynamic state 9%, pipeline binds 8%. Without them (the default), 488-518 (one run; the
+A/B below): set 1 is allocated and written at each change of a batch's textures, set 0 only at a render pass.
+
+**Why push descriptors are off.** Alternated at 009 `--hz 500` (pace_test, 2 rounds, display on): Andrew's settings
+296 pictures a second with them [285-307], 321 without [316-327], the game 56.5 against 58.4 vblanks a second; the
+owner's 494 against 491. Less CPU in the pump and a lower uncapped rate: the rate there is not bounded by the pump
+(#107: the threads' latency). Why a quicker pump costs Andrew's settings pictures (and, with push descriptors, the
+game vblanks) is not found; candidates, not checked: Granite's device lock (the pump's submits and kf4-pc's frame
+contexts), the order the pump's and kf4-pc's pictures reach the presenter's ring. `KF4_PC_SUBMIT_TOGETHER=0` did not
+change it (one run: 294 against 306, push descriptors on). Until it is found, the default keeps the rate. The same shape, smaller, shows between the base and the new build without them (below).
+
+**A/B** (base `ae9a9097` against this branch, push descriptors off as by default; 009, Windows, RTX 5080, builds
+alternated, display on unless said: `display_active` Enabled and 2880 MHz at each round's start and end):
+
+| | base | new |
+|---|---|---|
+| pump CPU ms a second, `--hz 500`, owner's settings (`build_cost.py`, 3 runs) | 719 +-9 | **518 +-5 (-28%)** |
+| kf4-pc / kf4-dma / kf4 (same runs) | 505 / 205 / 190 | 483 / 203 / 192 |
+| pump CPU ms a second, 240, owner's (3 runs, **display off**, noisy) | 326 +-38 | 251 +-22 (-23%) |
+| pictures a second `--hz 500`, Andrew's (pace_test, rounds 1-2) | 334.1, 334.2 | 320.0, 312.8 (**-5%**) |
+| game vblanks a second, Andrew's | 58.5, 59.0 | 58.4, 58.5 |
+| pictures a second `--hz 500`, owner's (rounds 1-2) | 481.3, 396.2 (lowest second 236) | 486.9, 483.5 |
+| lowest second / uneven refreshes a second, owner's | 426, 236 / 43, 214 | 420, 469 / 41, 44 |
+| GPU ms a picture (both profiles) | 1.81 / 1.40 | 1.81-1.84 / 1.40-1.41 |
+
+Round 3 is left out: the display slept during it (08:30; both builds fell alike, e.g. Andrew's 274 / 271). With push
+descriptors on, 3 rounds all display on (07:28-07:41): Andrew's 333.7 [333.1-343.7] against 290.3 [286.4-296.4],
+the owner's 481.4 [480.9-482.6] against 494.8 [492.8-495.1] (lowest second 422 against 482), the pump 728 +-34 against
+437 +-11. So the owner's uncapped rate is the same or a little better and steadier, and **Andrew's is about 5% lower
+without push descriptors and 13% lower with them, while the pump does less**: not explained yet (above). At 240 every
+spot held the cap in both builds before; not measured again.
+
+**Checks.** Pictures byte for byte the base build's at 000, 009, 009:2, 099 at 240 with every picture between
+(`KF4_INTERP_DRAW_ALL=1`, vblanks 2400-2403 and 2460, 20 pictures a spot), 1x and 4x MSAA 2, with push descriptors
+off (the default) and on. The validation layer with sync validation at the four spots (1x, 4x MSAA 2; with push
+descriptors at 000 and 009): only VUID-RuntimeSpirv-OpEntryPoint-08743 at 009, the base build's (pcr_ndripple.vert's
+missing `v_rect`, fixed on `perf/gpu-picture`). Unit tests 16/16 (Windows). Not run: Linux/RADV, `KF4_PC_PUMP=0`,
+`--renderer gs` (its Granite gets the same patch, which only skips identical rebinds).
+
+### Designed, not built: bindless textures and merged draws on the kept walks
+
+**What a kept walk is to the GPU.** The pump draws the same walk (`Kept`: its batches, uploads, copies, marks) for every
+picture between of a game frame: three times a frame at 240, seven at 500. Only set 0's picture buffer (the time and
+camera) differs between those pictures; every batch's textures, CLUT, vertices, push constants, pipeline and dynamic
+state are the same each time. Today each picture still records every batch as the frame did: set its textures, push
+its constants, set its dynamic state, one `vkCmdDraw` (a native batch one per run). The work a picture can be moved to
+the walk, once a frame.
+
+**1. One descriptor table a walk (bindless, `VK_EXT_descriptor_indexing`, core in 1.2).**
+- When a walk is handed out (`take_kept_walk`, `as_picture_walk`, where `put_vertices_on_gpu` already runs), every
+  image view its batches read that lives as long as the walk (`BoundTexture::held`: decoded textures and sampled
+  ones; the dummies) gets an index in one array descriptor set, written once (Granite: `BindlessAllocator::push`,
+  `commit`, bound with `CommandBuffer::set_bindless`). Each batch keeps its indices: texels, sampled.
+- Granite allows: a bindless set holds **one binding, an unsized array of sampled images** (`texture2D[]`, no
+  sampler: `layout.bindless_set_mask`, "Can only use bindless for sampled images"), with update-after-bind pools.
+  So samplers go elsewhere: the GS's filter and wrap choices are few (`BoundTexture::sampler` comes from a small
+  stock), so a fixed array of `sampler`s in an ordinary set, indexed from the push constants. The integer texels
+  (`usampler2D u_texels`, R8_UINT / R8G8B8A8_UINT) alias the same binding as `utexture2D[]` (a second declaration at
+  the same set and binding: legal, the descriptor is a sampled image either way).
+- Indexing needs `nonuniformEXT` only if one draw reads several textures; per draw the index is uniform (push
+  constant or flat), so plain dynamically uniform indexing (`shaderSampledImageArrayDynamicIndexing`) is enough.
+- **CLUTs**: a walk's CLUTs (1 KB each, today `allocate_constant_data` at every CLUT batch of every picture) go into
+  one buffer of the walk's when it is handed out, as its vertices do; a batch keeps its offset (push constant), the
+  shader reads `clut[offset + index]` from a storage buffer bound once in set 0.
+- **What stays per draw**: a texture read from a surface (`surface_copy`: copied from a surface at the draw, in the
+  pump too: the kept frame's reads between 0xF4 and 0xF5) and the destination copies of shader blends and DATE by a
+  copy (`dest_copy`, made at the draw). They are made after the table is written; they keep today's set 1 (pushed or
+  allocated), a handful a picture at the measured spots (`textures_from_surfaces`, `unsupported_blends`).
+- On the GPU: the table is per walk, so a walk's images are held by the walk (they are now) and the table freed with
+  it. Update-after-bind is not needed: a table is never changed once a picture records with it.
+
+**2. A walk's batches as records, drawn with few calls.**
+- Today's `PrimPush` (24 words) becomes a per-batch record in a buffer of the walk's (written once when handed out),
+  plus the texture/sampler/CLUT indices; the shader finds its record by `gl_InstanceIndex` / `gl_BaseInstance` for GIF
+  batches (drawn with `instanceCount` 1, `firstInstance` = the record), and for native batches by a word added to
+  the instance's record (they already use `firstInstance` for `draws[]`). The push constants keep only what a picture
+  changes (nothing at present) and the pass (`F_PASS_SHIFT`).
+- Runs: consecutive batches into the same render pass with the same pipeline (program, per-sample or not) and the same
+  dynamic state (blend, depth test/compare/write, colour mask, stencil, blend constants, scissor) form a run. A run is
+  one `vkCmdDrawIndirect` over a command list made once per walk (`draw_count` = the run's draws, one per batch or
+  native run); Vulkan keeps primitive order across the draws of one indirect call, so the GS's order (blending, Z
+  ties) is kept. Granite has `draw_indirect(buffer, offset, count, stride)`; it calls `flush_render_state` once.
+- Breaks a run: a render pass change (another target surface), DATE's stencil set-up, a shader blend (its
+  destination copy), a pass whose state differs, an upload or copy into a surface the walk draws on, a batch with a
+  per-draw texture (above). Scissor could be folded into the record (a `discard` outside it, or clipped in the vertex
+  shader), but costs pixels; first measure how often it alone breaks runs.
+- Multi-pass batches (alpha-test passes, `pass_count` 2-3): each pass is a different dynamic state; the run is per pass
+  state, so a batch's passes stay consecutive draws, or the walk's batches are regrouped by pass only where they do
+  not overlap (not attempted: order matters).
+
+**What it should buy.** The pump's per-draw work today (after the commits above): Granite's `flush_render_state` and
+the NVIDIA driver's per-draw cost (set 1, push constants, dynamic state, `vkCmdDraw`). With (1) alone a picture
+writes no descriptors at all (one table bind a picture); with (2) the calls go from one per batch (~N hundred at 009) to
+one per run. kf4-pc's own frame draws (the walk being made) are not helped: they are drawn once, and their textures
+are made as they go.
+
+**Order to build it, each step checked byte for byte at the four spots as today:**
+1. CLUTs into the walk's buffer (smallest; a storage buffer in set 0; no bindless yet).
+2. The bindless table for held textures + a sampler array; per-draw textures stay on set 1 (a flag picks the source).
+3. Records instead of push constants for kept batches.
+4. Runs as indirect draws; `KF4_PC_RUNS=0` keeps one call a batch to compare.
+Granite needs nothing patched for 1-3 (its bindless and indirect paths exist; the device must be made with
+`descriptorIndexing`, which Granite enables when present). Not considered: Granite's descriptor buffer / descriptor
+heap paths (`CONTEXT_CREATION_ENABLE_DESCRIPTOR_BUFFER_BIT`): they change every Granite user in the process
+(paraLLEl-GS too) and are newer in drivers.
+
+**Before building it**, find why less pump CPU lowered Andrew's uncapped rate (push descriptors, above): merged draws
+cut the pump's CPU much further, and if the pump finishing sooner costs the game vblanks, that has to be understood
+first (the 2026-11-06 per-picture timeline at 500, Granite's device lock held by the pump's submits).
+
 ## The list, best first
 
 0. **Done 2026-11-07**: item 1's reference counts and pipeline changes (dynamic state, a walk's vertices on the GPU
@@ -219,10 +363,11 @@ unless `--keep` names one.
    about 80%) and the game falls to 57-58 vblanks a second. Follow each picture and vblank through the threads
    (the 2026-11-06 timeline) to find what the game's vblank waits on, before more per-thread work.
    **The pump's cost a batch** (less than measured above: the pump is 9.3 s of CPU in 20 s at 240 now):
-   - **One submit a picture between** (9%, the kernel's submit): the price of the 2026-11-06 flush. Measure the
-     pictures' lateness with two pictures between a submit before trading any back.
-   - Then the old item 2: **merged draws and bindless textures** for the rest of the per-draw and descriptor cost
-     (descriptor writes 6%, the draws themselves).
+   - **One submit a picture between**: **done 2026-11-12** where the picture that shows it is already waiting
+     (uncapped), below. The pump's other submits (every 128 batches) are left.
+   - **Descriptor sets: done 2026-11-12** (#110, above: the pump 28% less CPU at 009 uncapped; Andrew's uncapped rate
+     5% lower, not yet explained). Left of the old item 2: **merged draws and bindless textures** for the per-draw
+     cost that remains (the driver's draw, set 1 and dynamic state, about 60% of the pump): designed above, not built.
 2. **`kf4-pc`'s intake** (63%; its lateness made pictures late on 2026-11-06):
    - **Kept steps out of the variant.** Keep `Batch` out of line (a vector of batches, or a `unique_ptr`) so a
      `KeptStep` is small; give the kept types non-throwing moves so the vector's growth moves; reserve the frame's
