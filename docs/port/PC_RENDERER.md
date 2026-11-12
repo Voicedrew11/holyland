@@ -10,15 +10,14 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: the PC renderer keeps but does not yet apply colour precision, the 2D mode and layer Z;
-settings.json and the command line keep them, and since 2026-11-07 (later) the overlay no longer offers them (Debug,
-"Renderer (for testing)", lists them). Anisotropy, texture detail and the presenter's best scaling and sharpening are
-applied since 2026-11-11 (below) and offered again. The settings that change live go through
-`port/overlay/live_settings.c`, which
-`KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g. `2400:native_widescreen=0`). Pictures are now
+from item 7 below: layer Z (`--native-layer-z`) only, which the PC renderer keeps but does not apply and the overlay
+does not offer: it has no layers fighting to fix, and its removal is proposed ("Colour high, the 2D mode and layer Z",
+below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
+the 2D mode are applied since 2026-11-11 (below) and offered again. The settings that change live go through
+`port/overlay/live_settings.c`, which `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g.
+`2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
-`gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165. MSAA and cut-out AA are applied
-since 2026-11-11 ("MSAA and cut-out AA", below).
+`gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 
 ## MSAA and cut-out AA (2026-11-11)
 
@@ -87,6 +86,83 @@ samples each frame; the depth surface at 4 samples is the largest), and the expa
 
 Still open: the half-pixel shift against paraLLEl-GS could be taken back by reading the 3D's inputs half a pixel up
 and left (`interpolateAtOffset`); points and lines are still not drawn; MSAA 8 not tried.
+
+## Colour high, the 2D mode and layer Z (2026-11-11)
+
+The last three settings the native GS had (issues #102, #104, #105), each checked first for whether the PC renderer
+has the problem it fixed. The native GS's are at 67af1165 (`gs_frag.h`, `gsn.cpp`'s `texel_rect_2d` and "Z and
+layers", `narrow.frag`).
+
+**The 2D mode (`--native-2d smooth`, the default; #104): applied.** At a scale above 1 the 2D's textures read nearest
+(MMAG nearest at level 0) and magnified on the target (a texel at least a pixel across) are read with a Catmull-Rom
+cubic at each pixel's own place (`pcr_prim.h`'s `smooth_2d`, push flag `PCR_F_SMOOTH_2D`), not as blocks of texels:
+letters with smooth edges, the same picture at every scale. The taps stay inside the texels the primitive covers, so a
+letter's cell of a sheet of letters does not take in the letters beside and below it (the native GS's text-bleed
+fix): each vertex carries its primitive's texel rectangle (`Vertex::rect`, 8 bytes more, `a_rect` / flat `v_rect`),
+made on the CPU for sprites and for 2D triangles (FST, or one Z and one Q at the three corners: the menus draw their
+text and panels as such triangles with S, T and Q; only FST at first, and the menus' text stayed blocky). The result is
+kept inside the four texels around the place (no ring). The place is moved half a pixel's change of the coordinates,
+where nearest puts a texel's middle (none with MSAA: no vertex move there). Not the 3D (no rectangle), not textures
+read from drawn surfaces, not native draws. Nothing at 1x. In a picture between the rectangle is the frame's (the
+primitive's texels do not move with it).
+
+**Colour high (`--native-colour high`, opt-in; #102): applied, default as it was.** The colour surfaces are made
+R16G16B16A16_UNORM (`colour_format`; their multisampled images, copies, the pump's copies too), the colours'
+arithmetic in floats in the shader (`PCR_F_HIGH`: texture function, fog, premultiply, the shader's blend from the
+destination with its fraction; the sampler's filter and the 2D cubic keep their fraction), with the native GS's
+level-keeping (`gs_floor`, `gs_shift7`: the GS's floors take half a step on average, so does the float path, else a
+dark scene comes out a step brighter); alpha stays the GS's integers. The picture is dithered to 8 bits as it is
+scanned out (`pcr_narrow.frag`, interleaved gradient noise, a whole number unchanged; the lower field's half picture
+too). Read-backs to the GS's memory are blits to RGBA8 (rounded). It changes from a vblank (`apply_colour`, surfaces
+made again by a blit; the kept frame let go); a GPU without 16-bit colour attachments with blending stays exact. The
+pipelines made ahead for an MSAA change are made against the format of the run's first change (the other precision's
+are made as drawn). `KF4_SET_AT` takes `colour=` and `native_2d=`.
+
+**Layer Z (`--native-layer-z`; #105): not applied, proposed for removal.** The native GS rounded each pixel's Z to a
+whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
+meshes' Z rounded apart, and tolerant was its way out. The PC renderer keeps the GPU's Z with its fraction and no
+rounding, and its layers are not seen fighting:
+- A tolerant mode built the GPU's way (a `gl_FragDepth` variant of `pcr_prim.frag` testing the colour pass a half Z,
+  or a layer's pixel one Z and half its slope, nearer; ties in two phases, everything else blended Z first) changed
+  the 4x tour views (maps 002, 004, 009, 016, 020, 026, 035, 040, 099, 102, 112, 115, 96 views) by at most 0.05% of
+  pixels (0.02% blurred), and map 000 (12 views) by at most 0.15%, nothing against paraLLEl-GS (the blurred share the
+  same to 0.01%). What it did change was worse: map 004 v1's tree (blended alpha-tested leaves) lost the leaves drawn
+  behind (Z first keeps only the nearest's colour within the slack), light seams through the foliage; a dark line down a
+  wall's corner at 026 v1; the torch flames at 000 v0. At 1x at the four spots: 0-65 pixels a picture.
+- The Equipment screen's figure (the case the native GS's tolerant mode broke and then had to special-case: the menus'
+  Z32 buffer, the second pass over the model): drawn by the PC renderer as by paraLLEl-GS, no patches.
+So the code was not kept; the setting stays in settings.json and on the command line, does nothing, and the overlay
+says so. Proposed: remove `--native-layer-z` and `native_layer_z` (the default "tolerant" there is the native GS's).
+
+Checked (Windows, RTX 5080): with `--native-2d ps2` (and colour exact) the four spots byte for byte the integration
+branch's (1x, 192 pictures); at the defaults too at 1x (the 2D mode does nothing there). At 4x the 2D mode changes
+the menus' and the pause screen's text and panels (evidence: smoother letters, no specks from the cells beside); the
+HUD in play at 000 not at all (its textures are not read nearest-magnified). Colour high at 4x: every pixel within 4-6
+levels of exact, the mean 0.4-0.6 of a level brighter; no banding to see in exact at the spots (stretched crops of the
+sky at 099 and a firelit wall at 009 look the same in both), and the map tour at 000 against paraLLEl-GS the same
+(mean difference 2.36 against 2.37). The owner's earlier finding stands: high is hard to tell from exact, so it stays
+opt-in.
+
+GPU time a picture (`--stats` with `KF4_GSN_GPU_TIME=1`, `KF4_PRESENT_SIM=240`, 009 at 240, 4x with native
+widescreen, a run to vblank 2600, the variants alternated three rounds; **contaminated**: the owner was playing another
+game on the same GPU, so only large differences mean anything):
+
+| ms a picture | rounds | least | median |
+|---|---|---|---|
+| base (2D ps2, colour exact) | 2.136, 2.165, 1.995 | 2.00 | 2.14 |
+| 2D smooth | 2.203, 2.140, 2.005 | 2.01 | 2.14 |
+| colour high | 2.095, 2.268, 1.869 | 1.87 | 2.10 |
+| MSAA 2 | 2.846, 2.751, 2.164 | 2.16 | 2.75 |
+| MSAA 2 + colour high | 2.343, 2.631, 2.481 | 2.34 | 2.48 |
+
+The 2D mode costs nothing measurable here (its draws are few). Colour high's time a picture is within the noise, but
+its runs drew 20-30% fewer pictures in the same run (3,515-4,346 against 4,762-5,930: pictures left out as they fell
+behind), and its copies (`copy`, `texture copy`) about twice the time: the 16-bit surfaces are twice the bytes. Not
+measured cleanly; to be measured on a quiet machine before anyone recommends it.
+
+Still open: colour high's level is a little brighter than exact (0.4-0.6 of a level); textures read from drawn
+surfaces and the GS's own read (the region modes, the CLUT) keep whole numbers in high; the 2D mode does not reach 2D
+drawn as perspective triangles.
 
 ## Texture detail, anisotropy and the presenter's scaling (2026-11-11)
 
