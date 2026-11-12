@@ -19,6 +19,14 @@ the 2D mode are applied since 2026-11-11 (below) and offered again. The settings
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 
+**2026-11-12: a kept walk's textures in a descriptor table** (issue #110, PERFORMANCE.md "a kept walk's CLUTs and
+textures bound once"). When a walk is handed out, its held textures go into one bindless table (set 2, `u_table` /
+`u_table_uint`), its samplers into set 0's `u_samplers` (bindings 16-31) and its CLUTs into a storage buffer (set 0,
+binding 15, `u_walk_cluts`); a batch finds them by `PrimPush::table` and `clut_at`. The pump's pictures between then
+bind no textures a batch. Set 1 stays for kf4-pc's own frame draws, a surface's texture and the destination copies.
+The batch programs' layout: set 0 the vertex stage's buffers and these, set 1 the per-draw textures (the set Granite
+pushes with `KF4_PC_PUSH_DESCRIPTORS=1`), set 2 the table. `KF4_PC_BINDLESS=0` reads everything from set 1 again.
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)

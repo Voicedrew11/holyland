@@ -254,6 +254,75 @@ a few pictures a second). The backlog at a vblank's start is 1 most of the time:
 for kf4-pc's intake before the pump starts them (2026-11-06), so the next step is the timeline of a frame's
 pictures between (asked → pump start → GPU done), not the vblank.
 
+## Built 2026-11-12 (afternoon): a kept walk's CLUTs and textures bound once (#110, steps 1-2 of the design below)
+
+Branch `perf/bindless`, two commits, the design's first two steps ("Designed, not built" below):
+1. **A walk's CLUTs in one buffer of the walk's** (`put_cluts_on_gpu`): its batches' CLUTs (the same CLUT once) are put
+   in a storage buffer when the walk is handed out, as its vertices are; its pictures between read them there (set 0,
+   binding 15, `u_walk_cluts`, at `PrimPush::clut_at`) instead of a 1 KB copy into a set 1 of its own at each draw.
+   **Worth almost nothing at the measured spots**: a CLUT is read by the shader only for a texture the GPU's sampler
+   cannot read (a region mode, a texture decoded in part), and at 009 there are none (`--stats`: 514,208 of 547,112
+   batches sampled, 0 by the GS's read); the sampler's textures have their CLUT applied when decoded. Kept because
+   step 2 needs a CLUT that is not in set 1, and other maps do read by the GS.
+2. **A walk's textures in one descriptor table of the walk's** (`put_table_on_gpu`, `make_table`): every image its
+   batches read that the walk holds (decoded and sampled textures) gets a place in a bindless table (Granite's
+   bindless set: set 2, binding 0, an unsized array of sampled images; `u_table` and `u_table_uint` alias it, colours
+   and integer texels), written once when the walk is handed out; its pool is the walk's and goes with it. The
+   samplers go in a 16-entry array in set 0 (bindings 16-31, `u_samplers`, the stock nearest one first, 15 of the
+   walk's; a batch whose sampler finds no room keeps set 1's). A batch's places are in `PrimPush::table`. Its
+   pictures between leave set 1 as it is (the dummies) and bind the table once: **no descriptor set is allocated or
+   written a batch** (set 0 still at each render pass, as before). A surface's texture and the destination copies
+   (shader blends, DATE by a copy) stay on set 1, made at the draw. kf4-pc's own frame draws bind a one-dummy table
+   and read set 1 as before. Granite needed no patch. The device must have `descriptorIndexing` (Vulkan 1.2's; every
+   desktop driver): without it the batch programs' layout fails, as no fallback was built.
+
+`KF4_PC_BINDLESS=0` undoes both (to compare). `--stats`' pump line counts the walks' textured batches and how many
+read the table (Andrew's 009 at 500, 2470 vblanks: 3,746,274 textured batches, all from the table, none with a walk's CLUT).
+
+**Checks.** Pictures byte for byte origin/main's (391e27cf) at 000, 009, 009:2, 099 at 240 with every picture between
+(`KF4_INTERP_DRAW_ALL=1`, vblanks 2400-2403 and 2460, 20 pictures a spot), 1x and 4x MSAA 2, after each step (160
+each); the title and menus (`tests/newgame.pad`, vblanks 300-1800) byte for byte. The validation layer with sync
+validation silent at the four spots, 1x and 4x MSAA 2, and with `KF4_PC_PUSH_DESCRIPTORS=1` at 000 and 009 (1x).
+Unit tests 16/16 (Windows). Not run: Linux/RADV, `KF4_PC_PUMP=0` (kf4-pc drawing the walks itself: the same code
+path, `draw_again`).
+
+**A/B** (origin/main 391e27cf against the branch; Windows, RTX 5080, **display off** in every round (owner at work),
+builds alternated). Pump CPU (`build_cost.py`, 009, the owner's settings, 15 s, 3 runs, ms of CPU a second of play):
+
+| rate | main | bindless | kf4-pc main → bindless |
+|---|---|---|---|
+| `--hz 500` | 494 +-18 | **363 +-7 (-27%)** | 379 → 369 |
+| 240 | 200 +-6 | **167 +-4 (-17%)** | 365 → 365 |
+
+Pace (`pace_cut.py`: `pace_test` 25 s at `--hz 500`, plus the gaps between pictures handed to the window, the
+pictures between left out as behind and those the window showed late; 3 rounds 15:26-15:55, the order swapped each
+round, GPU 2167-2175 MHz at each round's end). Median [min-max] of 3:
+
+| profile | spot | build | pictures/s | game vblanks/s | gap p99 / sd ms | left out | shown late |
+|---|---|---|---|---|---|---|---|
+| andrew | 000 | main | 355.0 [341.4-358.5] | 60.7 | 14.0 / 2.43 | 471 [369-495] | 2274 |
+| | | bindless | **370.1** [361.3-380.7] | 60.6 | 13.8 / 2.23 | 496 [478-500] | 1965 |
+| andrew | 009 | main | 331.6 [323.2-334.2] | 60.7 | 13.2 / 2.14 | 613 [574-629] | 2158 |
+| | | bindless | 335.4 [329.8-345.2] | 60.6 | 13.9 / 2.16 | 606 [583-629] | 1658 |
+| sean | 000 | main | 498.1 [496.6-498.4] | 60.8 | 2.4 / 0.41 | 32 [25-32] | 73 |
+| | | bindless | 496.1 [495.3-499.2] | 60.9 | 2.5 / 0.51 | 47 [32-79] | 75 |
+| sean | 009 | main | 474.8 [474.0-486.6] | 60.8 | 7.3 / 0.94 | 143 [143-148] | 536 |
+| | | bindless | **493.8** [493.7-498.5] | 60.9 | **2.3 / 0.59** | 150 [149-186] | **206** |
+
+Less pump CPU did **not** cost Andrew's uncapped rate this time (the worry in "Before building it" below: #131's push
+descriptors lowered it): Andrew's 000 +4%, 009 +1%, the game at 60.6-60.9 vblanks a second in every cell. The owner's
+009 now reaches the cap (+4%, the gaps' p99 7.3 → 2.3 ms, shown late 536 → 206); 000 was at the cap already. Left-outs
+are the same within the spread. The rate is still bounded by latency, not the pump (the timeline above).
+Push descriptors (`KF4_PC_PUSH_DESCRIPTORS=1`) were not measured again: with the table, a kept walk's set 1 does not
+change from batch to batch, so pushing it matters only for kf4-pc's own draws.
+
+**What is left** (the design's steps 3-4): records instead of push constants (by `firstInstance`) and runs of
+batches with the same pass, pipeline and dynamic state drawn with one `vkCmdDrawIndirect` each. Not started: step 3
+alone buys nothing (a push constant is cheap); with step 4 it takes the per-draw driver cost that remains (pipeline,
+dynamic state, push constants, `vkCmdDraw`). Step 4 has to build its runs at draw time or check them each picture,
+since a batch's target surface, DATE set-up, clears and destination copies are decided in `draw_batch` against the
+surfaces as they are.
+
 ## Built 2026-11-12 (later): the cut judges on pictures left out, and a frame's pictures between followed
 
 **The cut** (gs.c, `port_gs_run_vsync`): a vblank now counts as behind when the backlog is over 1 as it begins (as
@@ -467,7 +536,7 @@ descriptors at 000 and 009): only VUID-RuntimeSpirv-OpEntryPoint-08743 at 009, t
 missing `v_rect`, fixed on `perf/gpu-picture`). Unit tests 16/16 (Windows). Not run: Linux/RADV, `KF4_PC_PUMP=0`,
 `--renderer gs` (its Granite gets the same patch, which only skips identical rebinds).
 
-### Designed, not built: bindless textures and merged draws on the kept walks
+### Designed: bindless textures and merged draws on the kept walks (steps 1-2 built 2026-11-12, above; 3-4 not)
 
 **What a kept walk is to the GPU.** The pump draws the same walk (`Kept`: its batches, uploads, copies, marks) for every
 picture between of a game frame: three times a frame at 240, seven at 500. Only set 0's picture buffer (the time and
@@ -559,7 +628,9 @@ first (the 2026-11-06 per-picture timeline at 500, Granite's device lock held by
      (uncapped), below. The pump's other submits (every 128 batches) are left.
    - **Descriptor sets: done 2026-11-12** (#110, above: the pump 28% less CPU at 009 uncapped; Andrew's uncapped rate
      5% lower, not yet explained). Left of the old item 2: **merged draws and bindless textures** for the per-draw
-     cost that remains (the driver's draw, set 1 and dynamic state, about 60% of the pump): designed above, not built.
+     cost that remains (the driver's draw, set 1 and dynamic state, about 60% of the pump): designed above. **Bindless
+     textures built 2026-11-12** (steps 1-2, above: no descriptor set a batch in a kept walk; the pump -27% CPU at 009
+     uncapped); merged draws (steps 3-4) not built.
 2. **`kf4-pc`'s intake**: **done 2026-11-12** (#108, above: the VU maths, uploads found without hashing, copies
    and CLUT colours kept; kf4-pc -24 to -26% CPU at 009, a frame's intake -28 to -34%). Kept steps out of the variant were done 2026-11-07. Left of it (009, 240):
    - **An upload owned again block by block** (`own` → `take_nibbles`, ~11%): mostly cache misses on each block's
