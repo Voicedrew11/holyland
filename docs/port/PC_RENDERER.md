@@ -100,7 +100,7 @@ maps draw mipmapped textures and 23 none (000, 006, 007, 011, 013 and others); w
 sampled batches (100, 107, 109, 031 the most). Every one is MMAG linear, MMIN 4 or 5 (bilinear in a level, nearest or
 linear between them). No 2D texture has levels.
 
-**Texture detail** moves the level the GS picks from Q (pcr_prim.frag's `sample_texture`, both the sampler's read and
+**Texture detail** moves the level the GS picks from Q (pcr_prim.h's `sample_texture`, both the sampler's read and
 the GS's): `scale` (the default) by -log2 of the smaller of the two scales, `full` by -64 (level 0), `ps2` not at all.
 Only where the GS's level is above 0, so the choice between MMAG and MMIN stays the GS's (a level moved to 0 or below
 is held at 1/256 for the sampler: its minifying filter at level 0). At 1x `scale` is the GS's own level.
@@ -245,7 +245,7 @@ tests pass as they are. The map tour (maps 000, 009, 014, 099, 112, 2 places x 4
 paraLLEl-GS draws the same pictures on the NVIDIA and on the machine's AMD iGPU (`GRANITE_VULKAN_DEVICE_INDEX=1`),
 but pc on NVIDIA differed at 1x: 112 v4-7 by 1.1-2.6% (blurred), 009 v0 by 0.8%, where pc on the AMD was under 0.4%.
 
-**Fixed: FST texture coordinates rounded to 1/256 texel** (`pcr_prim.frag`'s `sample_texture`). Not the 3D draws:
+**Fixed: FST texture coordinates rounded to 1/256 texel** (`pcr_prim.h`'s `texture_uv`). Not the 3D draws:
 their texture coordinates came out the same on both GPUs (checked with the shader writing them out). The difference
 came in the game's 2D passes that draw the frame back over itself in 64-pixel columns (FST, a texel a pixel), where a
 pixel's UV is often a whole texel: the GPU's interpolation lands a hair either side of it, NVIDIA's below, so floor
