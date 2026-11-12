@@ -703,6 +703,7 @@ private:
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
             cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);
+            pass_ended_ = false; // (what was submitted before: begin_pass's full barrier)
         }
         return *cmd_;
     }
@@ -736,16 +737,47 @@ private:
     void full_barrier(CommandBuffer &c) {
         c.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        pass_ended_ = false;
     }
 
+    // The barriers around a render pass. Everything recorded outside a pass (copies, clears, uploads, resolves, the
+    // picture's scanout) is between full barriers of its own, so a pass ended needs none after it, and one begun needs
+    // a full barrier only after such work (or at the start of a command buffer: what was submitted before). A pass
+    // that follows a pass, nothing recorded between, waits only for the attachment writes before it: its vertex work
+    // then runs while the pass before shades its last pixels, where a full barrier emptied the GPU between them (at
+    // 009 a picture has about ten pass changes: the reflection's target, DATE's set-up, the pump's submits).
+    // KF4_PC_PASS_BARRIER=full: the full barrier after every pass and before every pass, as before (to compare).
     void end_pass() {
         if (pass_colour_) {
             cmd().end_render_pass();
-            full_barrier(cmd());
+            if (full_pass_barriers_) {
+                full_barrier(cmd());
+            } else {
+                pass_ended_ = true;
+            }
             pass_colour_ = nullptr;
             pass_depth_ = nullptr;
             pass_reads_ = PassReads::nothing;
         }
+    }
+
+    // A pass after a pass: the attachment writes before (colour, depth and stencil, and vkCmdClearAttachments') made
+    // visible to the attachment reads and writes after, and to DATE's input attachment read
+    void pass_to_pass_barrier(CommandBuffer &c) {
+        VkMemoryBarrier2 b = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+        VkDependencyInfo dep = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &b;
+        device_.get_device_table().vkCmdPipelineBarrier2(c.get_command_buffer(), &dep);
+        pass_ended_ = false;
     }
 
     // What the draws of a pass read of its colour target in the pass (an input attachment of itself: DATE's set-up)
@@ -779,7 +811,11 @@ private:
             rp.num_subpasses = 1;
         }
         CommandBuffer &c = cmd();
-        full_barrier(c);
+        if (pass_ended_) {
+            pass_to_pass_barrier(c);
+        } else {
+            full_barrier(c);
+        }
         c.begin_render_pass(rp);
         pass_colour_ = &colour;
         pass_depth_ = depth;
@@ -3303,6 +3339,9 @@ private:
     std::array<Program *, 5> programs_{}, sample_programs_{};
     // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
     std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
+    // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
+    bool pass_ended_ = false;
+    const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
     // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
