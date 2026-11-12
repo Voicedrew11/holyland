@@ -74,6 +74,7 @@ enum : uint32_t {
     F_DATE = 0x8000,
     F_DATM = 0x10000,
     F_SHADER_BLEND = 0x20000,
+    F_SURFACE_CT16 = 0x40000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
@@ -1357,7 +1358,9 @@ private:
                 break;
             }
         }
-        if (!from || (psm != GSN_PSMCT32 && psm != GSN_PSMCT24)) {
+        // (a 16-bit texture only from a surface of its own format: PSMCT16 and PSMCT16S place their pixels
+        // differently in a page; the shader reads it as the GS would, F_SURFACE_CT16)
+        if (!from || (psm != GSN_PSMCT32 && psm != GSN_PSMCT24 && !(is_colour_16(psm) && from->psm == psm))) {
             counts_.unsupported_texture_on_surface++;
             return b;
         }
@@ -1481,6 +1484,7 @@ private:
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
+        bool sprites = true;          // (every primitive a sprite: clear_depth_aliases)
         std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
         NativeProgram program = NativeProgram::vu1_000;
         BufferHandle arena, records, triangles;
@@ -1946,6 +1950,7 @@ private:
         batch_.triangles.reset();
         batch_.runs.clear();
         batch_.boxes.clear();
+        batch_.sprites = true;
         batch_.shader_blend = shader_blend_on_ && !choose_blend(s.alpha, bits(s.prim, 6, 1) != 0).supported;
         if (bits(s.prim, 4, 1)) {
             batch_.texture = bind_texture(s, cols, rows);
@@ -1955,6 +1960,54 @@ private:
             }
         }
         batch_open_ = true;
+    }
+
+    // A triangle with a corner's Z past its Z buffer's largest (16 or 24 bits), cut where its Z reaches it. The GS
+    // clamps each pixel's Z, interpolated from the corners as they are; the vertex shader can only clamp the corners,
+    // which lowered every pixel's Z across the triangle, so a rock's face near the camera (map 112, views 10-11) failed
+    // its Z test where the GS's passed. Z, like every attribute, goes linearly across the screen, so the part where Z
+    // is under the largest is drawn as it is, and the part beyond it with every corner at or past it: there the vertex
+    // shader's clamp is the GS's.
+    void add_cut_at_zmax(const std::array<Vertex, 3> &v, uint32_t zmax) {
+        auto cut = [&](const Vertex &a, const Vertex &b) {
+            double t = (double(zmax) - double(a.z)) / (double(b.z) - double(a.z));
+            auto lerp = [&](float x, float y) { return float(double(x) + (double(y) - double(x)) * t); };
+            Vertex c = a;
+            c.x = lerp(a.x, b.x);
+            c.y = lerp(a.y, b.y);
+            c.z = zmax;
+            for (int i = 0; i < 4; i++) {
+                c.rgba[i] = uint8_t(std::lround(lerp(float(a.rgba[i]), float(b.rgba[i]))));
+            }
+            c.s = lerp(a.s, b.s);
+            c.t = lerp(a.t, b.t);
+            c.q = lerp(a.q, b.q);
+            c.fog = lerp(a.fog, b.fog);
+            return c;
+        };
+        // (each side's polygon, the triangle's corners in order with the cuts between: 3 or 4 corners)
+        std::array<Vertex, 4> under, over;
+        uint32_t nu = 0, no = 0;
+        for (uint32_t i = 0; i < 3; i++) {
+            const Vertex &a = v[i], &b = v[(i + 1) % 3];
+            bool a_under = a.z < zmax, b_under = b.z < zmax;
+            if (a_under) {
+                under[nu++] = a;
+            } else {
+                over[no++] = a;
+            }
+            if (a_under != b_under) {
+                Vertex c = cut(a, b);
+                under[nu++] = c;
+                over[no++] = c;
+            }
+        }
+        for (const auto &[polygon, n] : {std::pair<const std::array<Vertex, 4> &, uint32_t>{under, nu}, {over, no}}) {
+            for (uint32_t i = 2; i < n; i++) {
+                batch_.vertices.insert(batch_.vertices.end(), {polygon[0], polygon[i - 1], polygon[i]});
+                counts_.triangles++;
+            }
+        }
     }
 
     void add_primitive(const GifPrimitive &p) {
@@ -2002,8 +2055,19 @@ private:
         batch_.numbered |= moved;
         batch_.moved |= moved && between_ && between_->active();
         uint32_t fst_bit = fst ? K_FST : 0;
+        batch_.sprites = batch_.sprites && p.shape != PrimitiveShape::triangle;
         if (p.shape == PrimitiveShape::triangle) {
             const GifVertex &last = p.vertices[2];
+            uint32_t zpsm = z_psm(batch_.state.zbuf);
+            uint32_t zmax = zpsm == 0x31 ? 0xFFFFFFu : zpsm == 0x30 ? 0xFFFFFFFFu : 0xFFFFu;
+            if (!moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
+                std::array<Vertex, 3> v = {make(p.vertices[0], last), make(p.vertices[1], last), make(p.vertices[2], last)};
+                add_cut_at_zmax(v, zmax);
+                for (const Vertex &corner : v) {
+                    touch(corner);
+                }
+                return;
+            }
             for (uint32_t i = 0; i < 3; i++) {
                 batch_.vertices.push_back(make(p.vertices[i], last));
                 if (moved) {
@@ -2088,6 +2152,51 @@ private:
     }
 
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
+    // A Z buffer cleared reaches the Z buffers of other widths over the same pages. A depth surface is one width's view
+    // of the GS's memory (depth_surface's key: base, width, format), so a Z buffer the game reads at another width
+    // than it clears it at kept, in its own image, whatever was last written at that width: the Heart of the Forest
+    // (014) draws its water's reflection into a 256-wide target with ZTST GEQUAL and ZMSK over the 640-wide frame's Z
+    // buffer, which the frame's clear has just zeroed; the reflection's own image held Z from frames before, most of
+    // the reflection failed against it, and the water showed the black where it was not drawn (2026-11-11). A clear
+    // here: a batch of sprites writing one Z with ZTST ALWAYS over whole rows of its surface's pages. Every other depth
+    // surface of the format wholly in those pages is cleared to the same Z (any format for Z 0: no bits in any).
+    void clear_depth_aliases(const Batch &b, const Surface &depth) {
+        if (b.native || b.moved || !b.sprites || b.vertices.empty()) {
+            return;
+        }
+        uint32_t z = b.vertices[0].z;
+        for (const Vertex &v : b.vertices) {
+            if (v.z != z) {
+                return;
+            }
+        }
+        uint64_t scissor = b.state.scissor;
+        int32_t x0 = std::max(b.x0, int32_t(bits(scissor, 0, 11))), y0 = std::max(b.y0, int32_t(bits(scissor, 32, 11)));
+        int32_t x1 = std::min(b.x1, int32_t(bits(scissor, 16, 11)) + 1); // (exclusive: a sprite's right edge)
+        int32_t y1 = std::min(b.y1, int32_t(bits(scissor, 48, 11)) + 1);
+        if (x0 > 0 || y0 > 0 || x1 < int32_t(depth.width()) || y1 <= 0) {
+            return;
+        }
+        uint32_t rows = std::min(uint32_t(y1), depth.height) / page_rows(depth.psm);
+        uint32_t end = depth.base_page + std::max(1u, depth.fbw) * rows;
+        for (auto &o : depth_) {
+            if (o.get() == &depth || o->base_page < depth.base_page || o->end_page() > end ||
+                (o->psm != depth.psm && z != 0)) {
+                continue;
+            }
+            uint32_t zmax = o->psm == 0x30 ? 0xFFFFFFFFu : o->psm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
+            float zscale = o->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f; // (pcr_prim.vert's depth)
+            VkClearValue value = {};
+            value.depthStencil.depth = float(std::min(z, zmax)) * zscale;
+            end_pass();
+            CommandBuffer &c = cmd(GpuWork::surface);
+            full_barrier(c);
+            c.clear_image(*o->image, value, VK_IMAGE_ASPECT_DEPTH_BIT);
+            full_barrier(c);
+            counts_depth_aliases_cleared_++;
+        }
+    }
+
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
         counts_.batches++;
@@ -2157,6 +2266,9 @@ private:
         }
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
+        if (zwrite && ztst == 1) {
+            clear_depth_aliases(b, *depth);
+        }
         PixelBox box = {b.x0, b.y0, b.x1, b.y1}; // (GS pixels touched)
         if (b.moved) {
             // (a picture between's corners are where the shader moves them: anywhere in the scissor, within the surface
@@ -2233,7 +2345,8 @@ private:
         uint32_t flags = 0;
         if (tme && b.texture.ok) {
             flags |= F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
-                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT;
+                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT |
+                     (b.texture.src == SRC_SURFACE && is_colour_16(bits(s.tex0, 20, 6)) ? F_SURFACE_CT16 : 0);
         } else if (tme) {
             counts_untextured_++;
         }
@@ -2589,7 +2702,7 @@ private:
     uint32_t kept_page_ = 0;
     size_t fifo_at_ = 0;
     uint64_t counts_unsupported_shape_ = 0, counts_unsupported_upload_ = 0, counts_untextured_ = 0,
-             counts_clut_not_uploads_ = 0, counts_date_by_stencil_ = 0, counts_date_alpha_unknown_ = 0,
+             counts_depth_aliases_cleared_ = 0, counts_clut_not_uploads_ = 0, counts_date_by_stencil_ = 0, counts_date_alpha_unknown_ = 0,
              counts_blends_by_shader_ = 0, counts_native_shader_blends_ = 0;
 
 public:
@@ -2600,14 +2713,15 @@ public:
                 "[stats] pc canvas: %llu primitives (%llu triangles) in %llu batches, %llu passes; %llu native batches in %llu "
                 "draw calls; textures %llu "
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
-                "from uploads; %llu uploads into surfaces, %llu copies between them\n",
+                "from uploads; %llu uploads into surfaces, %llu copies between them; %llu Z buffers cleared by another "
+                "width's clear\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
                 (unsigned long long)c.textures_from_surfaces, (unsigned long long)c.textures_missing,
                 (unsigned long long)counts_untextured_, (unsigned long long)c.surfaces_made,
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
-                (unsigned long long)c.copies_between_surfaces);
+                (unsigned long long)c.copies_between_surfaces, (unsigned long long)counts_depth_aliases_cleared_);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler; by the GS's read: %llu (a region "
                 "mode), %llu (decoded in part)\n",
