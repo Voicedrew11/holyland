@@ -122,7 +122,10 @@ uvec4 read_level(vec2 uv, uint level, bool linear) {
 // The texture's colour at this pixel: the level from Q (TEX1's LCM, L, K), the filter MMAG or MMIN picks
 uvec4 sample_texture() {
     vec2 size = vec2(float(pc.tex_size & 0xFFFFu), float(pc.tex_size >> 16));
-    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    // (UV, FST: the GS's 1/16 texel at the corners, often a whole texel at a pixel, as a frame drawn back 1:1. The GPU's
+    // interpolation lands a little either side of it, which side by vendor (NVIDIA's below, so floor took the texel
+    // before on whole triangles of a frame drawn back); rounded to 1/256 texel it lands on it, 2026-11-11)
+    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? round(v_stq.xy * 256.0) / 256.0 : v_stq.xy / v_stq.z * size;
     float lod = pc.lod_k;
     if ((pc.tex1 & 0x80u) == 0u) {
         lod += log2(1.0 / abs(v_stq.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
