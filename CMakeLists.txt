@@ -170,6 +170,7 @@ add_library(kf4_port STATIC
     port/sdk/mpeg2.c
     port/sdk/libpad.c
     port/sdk/controls.c
+    port/sdk/twin_stick.c
     port/sdk/libsdr.c
     port/platform/savestate.c
     port/platform/quicksave.c
@@ -623,6 +624,17 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
+endif()
+
+# Twin-stick controls: the sticks as the game's buttons and the speeds they set (port/sdk/twin_stick.c)
+add_executable(twin_stick_test tests/twin_stick_test.c port/sdk/twin_stick.c)
+target_include_directories(twin_stick_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(twin_stick_test PRIVATE m)
+    target_compile_options(twin_stick_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME twin_stick COMMAND twin_stick_test)
 endif()
 
 # --frame-rate unlocked: which pictures the PC renderer's pump leaves out as too late (port/gs/pc/pcr_late.h)

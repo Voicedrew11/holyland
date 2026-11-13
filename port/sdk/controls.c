@@ -28,6 +28,9 @@
    controller's left stick press run while held, and the action button (cross; F in Verdite) only
    uses things. Off, Run is not used and the action button runs, as on the PS2.
 
+   In both, twin-stick controls (port/include/port/twin_stick.h, on by default) make the left stick
+   (W A S D in the PS2 layout) walk and step sideways and the right stick (I J K L) turn and look.
+
    In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
    shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c),
    F5 / F7 save and load the quick slot's save state, and F3 shows or hides the frame-rate counter.
