@@ -37,6 +37,9 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 #include "vu1_280_maths.h"
 
 void main() {
+#ifdef PCR_RECORDS
+    v_record = PCR_RECORD; // (the fragment stage's record: pcr_common.h)
+#endif
     uvec4 tri = tris[gl_VertexIndex / 3];
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;

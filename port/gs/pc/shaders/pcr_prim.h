@@ -26,6 +26,12 @@ layout(location = 2) PCR_IN float v_fog;
 layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.vert's a_rect)
 
 layout(location = 0) out vec4 o_color;
+#ifdef PCR_RECORDS
+// (a run's draw, pc.factors' top bit: the blend's colour factors, the source's in rgb and one minus the destination's in
+// alpha (the blend's SRC1_COLOR and ONE_MINUS_SRC1_ALPHA); the colour out's alpha then the alpha the blend would have
+// written)
+layout(location = 0, index = 1) out vec4 o_factor;
+#endif
 
 layout(set = 1, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
 layout(set = 1, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
@@ -493,4 +499,25 @@ void main() {
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
     o_color = vec4((high ? clamp(hc, 0.0, 255.0) : vec3(rgb)) / 255.0, alpha_out);
+#ifdef PCR_RECORDS
+    o_factor = vec4(0.0);
+    if ((pc.factors & 0x80000000u) != 0u) {
+        // Vulkan's factors as its blend has them: the source alpha and the constant (FIX / 128) clamped to [0, 1]
+        // (a fixed-point target's), the constant alpha 128 / 255 (pcr_canvas.cpp's blend constants)
+        float as = clamp(alpha_out, 0.0, 1.0);
+        float fix = clamp(float(pc.clamp_hi >> 24) / 128.0, 0.0, 1.0);
+        // (the source's factor as it is, f[]; the destination's as one minus it, g[], the blend taking it from one itself
+        // (ONE_MINUS_SRC1_ALPHA). Where a one minus is made here, it is one minus the factor as the blend holds it: NVIDIA's
+        // blend cuts a factor down to the target's precision, 8 or 16 bits (a source alpha or constant of k / 128 is
+        // floor(255 k / 128) / 255 to it in an 8-bit target); given as 1 - As, its pictures came out a value or two off)
+        float held = high ? 65535.0 : 255.0;
+        float qa = floor(as * held) / held, qfix = floor(fix * held) / held;
+        float f[6] = float[6](0.0, 1.0, as, 1.0 - qa, fix, 1.0 - qfix);
+        float g[6] = float[6](1.0, 0.0, 1.0 - qa, as, 1.0 - qfix, fix);
+        o_factor = vec4(vec3(f[pc.factors & 7u]), g[(pc.factors >> 4) & 7u]);
+        if ((pc.flags & PCR_F_ALPHA_FACTOR) != 0u) {
+            o_color.a = as * (128.0 / 255.0);
+        }
+    }
+#endif
 }

@@ -1,5 +1,6 @@
 // What every GS primitive the PC renderer draws passes its shaders (port/gs/pc/pcr_canvas.cpp, PrimPush: the two
 // must agree). Colours are the GS's integers, 0-255, and alpha 0x80 is 1.0.
+#ifndef PCR_RECORDS
 layout(push_constant, std430) uniform Push {
     vec2 inv_size;   // 1 / the target's size in GS pixels
     float zscale;    // Z to depth: 1 / 2^24, or 1 / 2^32 for a 32-bit Z buffer
@@ -25,7 +26,39 @@ layout(push_constant, std430) uniform Push {
                        // u_walk_cluts); PCR_NO_WALK_CLUT: set 1's u_clut
     uint table;        // (a kept walk's batch) its texture's place in the walk's table, u_table (bits 0-15; PCR_NO_TABLE:
                        // set 1's u_texels and u_sampled), and its sampler's in u_samplers (16-19)
+    uint record;       // (PCR_RECORDS) the run's first record in u_records: its draw's is this + gl_DrawID
+    uint factors;      // (PCR_RECORDS) the blend's colour factors given by the shader (pcr_prim.h's o_factor)
+    uint unused;
 } pc;
+#else
+// (PCR_RECORDS: the programs a kept walk's runs are drawn with, pcr_canvas.cpp's draw_runs) The same fields, a draw's
+// in a record of the picture's (u_records), one an indirect draw: its run's first (the push constants' record) plus
+// gl_DrawID; the fragment stage has it from the vertex stage. The push constants as above, so that the layouts agree.
+#define PCR_PUSH_FIELDS \
+    vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
+    uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
+    ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
+    uint factors; uint unused;
+struct PcrRecord {
+    PCR_PUSH_FIELDS
+};
+layout(push_constant, std430) uniform Push {
+    PCR_PUSH_FIELDS
+} pcr_push;
+layout(set = 1, binding = 6, std430) readonly buffer Records {
+    PcrRecord r[];
+} u_records;
+#ifdef PCR_STAGE_VERTEX
+#extension GL_ARB_shader_draw_parameters : require
+#define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB))
+layout(location = 4) flat out uint v_record;
+#else
+// (the push constants read here too, so that both stages have them, as the other programs' do)
+#define PCR_RECORD (v_record + (pcr_push.record & 0u))
+layout(location = 4) flat in uint v_record;
+#endif
+#define pc u_records.r[PCR_RECORD]
+#endif
 
 #define PCR_NO_TABLE 0xFFFFu
 

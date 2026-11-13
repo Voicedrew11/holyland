@@ -1,5 +1,6 @@
 # Granite (third_party/parallel-gs/Granite) with the depth bounds test: a pipeline state bit, depth_bounds_test, that turns the test on with its bounds dynamic (set
-# with vkCmdSetDepthBounds before each draw), and the device feature turned on where the GPU has it.
+# with vkCmdSetDepthBounds before each draw), and the device feature turned on where the GPU has it; and two more device
+# features the PC renderer's runs use where the GPU has them (an indirect draw's first instance, dual-source blending).
 # Granite is a submodule of a submodule, so the change is made here, at configure, in its checkout: each
 # edit is a line added beside one of Granite's, made once (a checkout that has it is left alone), with the
 # file's own line endings. A fresh clone and `git submodule update` get it at the next configure; the
@@ -56,4 +57,10 @@ function(kf4_granite_depth_bounds granite)
     # the device feature
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
         "\t\tif (pdf2.features.depthBounds) enabled_features.depthBounds = VK_TRUE; // (holyland)" TRUE)
+    # and an indirect draw's first instance (the PC renderer's runs of native batches: pcr_canvas.cpp's Runs)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.drawIndirectFirstInstance) enabled_features.drawIndirectFirstInstance = VK_TRUE; // (holyland)" TRUE)
+    # and dual-source blending (the runs' blend: the colour's factors from the fragment shader)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.dualSrcBlend) enabled_features.dualSrcBlend = VK_TRUE; // (holyland)" TRUE)
 endfunction()
