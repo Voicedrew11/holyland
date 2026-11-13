@@ -21,7 +21,7 @@ PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
 # fragment shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
-# the barycentric extension), as <name>_xz and <name>_rec_xz
+# depth clamp), as <name>_xz and <name>_rec_xz
 EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec

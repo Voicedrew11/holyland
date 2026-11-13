@@ -200,8 +200,10 @@ are made as drawn). `KF4_SET_AT` takes `colour=` and `native_2d=`.
 
 **Exact Z (2026-11-13).** The PC renderer tests and writes each pixel's Z as the GS does: a whole number,
 interpolated from the triangle's three corners' Z and rounded (paraLLEl-GS's formula), clamped to what the Z buffer
-holds. The fragment shader works it out from each corner's Z (the barycentric extension, `pervertexEXT`) and writes it
-as its depth (`pcr_prim.h`'s `pcr_exact_depth`; `pcr_common.h` says why). A decal drawn over its surface as a mesh of
+holds. Each corner hands down a whole Z its triangle shares (`zref`: the first corner's in the frame; `Vertex::zref`
+from the canvas's `link_corners`, worked out by each corner of a native draw) and its own Z less that, with its
+fraction, interpolated; the fragment shader rounds that at the pixel's middle, adds the shared Z and writes it as its
+depth (`pcr_prim.h`'s `pcr_exact_depth`; `pcr_common.h` says why). A decal drawn over its surface as a mesh of
 its own (the moss on map 063's low wall, map 028's puddle, map 099's rock shading, map 024's lava) then ties with it as
 on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to anything, no draw order counted.
 - In a picture between a corner's Z is moved (`gif_moves.h`, `vu1_*_maths.h`) and keeps its fraction (`zfrac`), so
@@ -212,8 +214,14 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   clamp, `cmake/granite_depth_bounds.cmake`). Early-Z programs drop `early_fragment_tests` with exact Z.
 - At a scale above 1 each of a GS pixel's pixels rounds its own Z: where two meshes' Z differ by a fraction near a
   half, one loses along a thin line (at 1x the GS has the same, as single pixels).
-- Needs `fragmentShaderBarycentric` (RDNA2 and later, NVIDIA Turing and later) and `depthClamp`; without them, or with
-  `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth (decals lose to their surface here and there), and the log says so.
+- Read at the pixel's middle even in the shaders run once a sample (the cut-outs' SSAA): read at each sample, a
+  sample's Z rounded apart from the pixel's Z that other draws gave it, and the moss over a cut-out lost there.
+- Any GPU with `depthClamp` (every desktop one); without it, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
+  (decals lose to their surface here and there), and the log says so. The first version (same day) read the corners'
+  Z with the barycentric extension (`pervertexEXT`), which older GPUs (NVIDIA before Turing, AMD before RDNA2, older
+  Intel) lack. The shared Z gives the same pictures (map 063 walk at the owner's settings: 903 pixels over 157
+  pictures; a 9-map tour at 4x, 104 views: 0.004% of a view at most) and less GPU time: on the RX 9070 XT at 063,
+  1.96 ms a picture against the extension's 2.05 and 1.88 with exact Z off.
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.

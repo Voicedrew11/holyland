@@ -5,18 +5,7 @@
 // Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it; a blend
 // with no Vulkan form is the GS's here, from a copy of the destination (PCR_F_SHADER_BLEND).
 #extension GL_EXT_nonuniform_qualifier : require
-#ifdef PCR_EXACT_Z
-#extension GL_EXT_fragment_shader_barycentric : require
-#endif
 #include "pcr_common.h"
-
-// (PCR_EXACT_Z, the programs' fragment shaders where the GPU has the barycentric extension: pcr_common.h's exact Z) the
-// triangle's corners' Z, each its own; the depth written never past the corners' bound (the GPU's early tests keep)
-#ifdef PCR_EXACT_Z
-layout(location = 10) pervertexEXT in uint v_z[];
-layout(location = 11) pervertexEXT in float v_zfrac[];
-layout(depth_less) out float gl_FragDepth;
-#endif
 
 // (pcr_prim_sample.frag, PCR_SAMPLE: shaded once a sample of a multisampled target, its inputs taken at each sample:
 // the cut-outs with cut-out AA, pcr_canvas.cpp)
@@ -24,6 +13,14 @@ layout(depth_less) out float gl_FragDepth;
 #define PCR_IN sample noperspective in
 #else
 #define PCR_IN noperspective in
+#endif
+// (PCR_EXACT_Z, the programs' fragment shaders with exact Z: pcr_common.h) the triangle's whole Z shared by its corners
+// and the pixel's Z less it (read at the pixel's middle: pcr_exact_depth); the depth written never past the corners'
+// bound (the GPU's early tests keep)
+#ifdef PCR_EXACT_Z
+layout(location = 10) flat in uint v_zref;
+layout(location = 11) noperspective in float v_zrel;
+layout(depth_less) out float gl_FragDepth;
 #endif
 // (pcr_prim_early.frag, PCR_EARLY: the draws that discard nothing, no alpha test's pass and no DATE from a copy:
 // without a discard in the shader the depth test and write are made before it (the GPU's early Z), which a shader
@@ -481,15 +478,14 @@ bool alpha_passes(uint a) {
 }
 
 #ifdef PCR_EXACT_Z
-// The pixel's whole Z (pcr_common.h's exact Z), as paraLLEl-GS works it out: the first corner's Z plus the rounded
-// share of the two others' differences from it at the pixel (or the sample; with a moved corner's fraction), clamped
-// to the Z buffer's largest
+// The pixel's whole Z (pcr_common.h's exact Z), as paraLLEl-GS works it out: the triangle's shared whole Z plus the
+// rounded interpolation of the corners' differences from it at the pixel's middle (with a moved corner's fraction),
+// clamped to the Z buffer's largest. At the middle even where the shader runs once a sample (PCR_SAMPLE, the cut-outs):
+// every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
+// samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there)
 void pcr_exact_depth() {
-    vec3 b = gl_BaryCoordNoPerspEXT;
-    uint z0 = v_z[0];
-    float f0 = v_zfrac[0];
-    float dz = f0 + b.y * (float(int(v_z[1] - z0)) + v_zfrac[1] - f0) + b.z * (float(int(v_z[2] - z0)) + v_zfrac[2] - f0);
-    int r = int(roundEven(dz));
+    uint z0 = v_zref;
+    int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
     uint z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
     gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
