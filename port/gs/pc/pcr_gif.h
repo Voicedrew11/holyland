@@ -68,6 +68,13 @@ struct GsRegisterFile {
     bool operator==(const GsRegisterFile &) const = default;
 };
 
+// A GS capture's KF4GS_GS_REGS record (port/include/port/gs_capture_format.h: Kf4GsReg's, by GS address) of a register
+// file: every address and the Q (KF4GS_REG_INTERNAL_Q)
+std::vector<uint8_t> capture_registers(const GsRegisterFile &file);
+// Such a record's registers set over file (an address it does not hold left as it is; the CLUT addresses passed over:
+// the CLUT buffer is not in a capture). False, file unchanged, when the record is not whole entries.
+bool take_capture_registers(std::span<const uint8_t> record, GsRegisterFile &file);
+
 // A kick not numbered (gsn.h's GSN_IM_NONE): outside a picture between's walk, or not of the packets fed
 constexpr uint32_t no_kick = 0xFFFFFFFFu;
 

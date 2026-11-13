@@ -11,6 +11,7 @@
 | `motion_compare.py` | the PC renderer against paraLLEl-GS in motion (below): menus, a pick-up, combat, spells, creatures' effects, fades, under water, each played by a pad script (`tests/motion/`) by both renderers and compared vblank by vblank (as `tour_compare.py` measures), at 1x and at 4x with native widescreen; the PC renderer's pictures between at 240 checked with `flash_find.py --frames` and its game frames there against the 30 run's |
 | `tour_compare.py` | two map tours (`map_tour.py`, `--renderer pc` and `--renderer gs`, same maps and views) compared picture by picture, ranked by what is drawn differently (a blurred difference, so filtering and edges count little); `report.md`, `report.html` with the worst views as PC / reference / difference |
 | `gsreplay/` | `kf4-gsreplay` (below) |
+| `replay_compare.py` | a GS capture of many frames drawn by the PC renderer (at a player's settings) and by paraLLEl-GS, compared frame by frame (`kf4-gsreplay`, below): the frames where the PC renderer's picture differs most, and with `--decal-losses` where decals lost a near tie (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
@@ -98,6 +99,11 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--compare OTHER` | another capture's draws against these, one by one: the GS state, and the vertices (the first that differs, and the largest Z difference) |
 | `--compare-mode gif\|vif` | compare this capture with itself in that mode (with `--vu-round`: the VU1 variant against the recorded packets, draw by draw) |
 | `--limit N` | how many differing draws `--compare` prints (50) |
+| `--renderer gs\|pc` | who draws: paraLLEl-GS (the default) or the PC renderer, the one players get. A capture holds no settings of the PC renderer's: give the player's with `--scale X[xY]` (`native_scale`; with `native_widescreen` and `widescreen` X is `(4 * scale + 2) / 3`: 6x4 at 4), `--msaa N`, `--aniso N`, `--lod ps2\|scale\|full`, `--cutout-aa off\|ssaa`, `--2d ps2\|smooth`, `--colour exact\|high`. The replay waits until the scale and MSAA are in effect (MSAA waits for its pipelines) before the capture's first draw. `--draw`/`--draws` read the GS's memory, which the PC renderer does not keep at the PS2's size: use `--frames` |
+| `--end-picture` | `--frames`, and at the end `frame_end.png`: the buffer the last draw drew into, shown as the last vblank shows its buffer. A capture at 30 frames a second ends before the frame it drew is shown (its own vblanks show the frame before) |
+| `--repeat N` | the stream drawn N times over by the same renderer, its state kept between (with `--end-picture`, `frame_end_NNN.png` after each): whether what the renderer carries from frame to frame changes the picture |
+| `--pixel X,Y` with `--renderer pc` | the PC renderer's trace of one surface pixel of GS pixel (X,Y) of the frame buffer at page `--fbp N` (0 by default); `--sub SX,SY` picks the surface pixel in the GS pixel's block of the scale (its middle by default). For each draw whose box covers it: every fragment shaded there (its primitive, its Z and slope, the samples it covers, its colour, whether the alpha test or DATE discarded it, whether it was drawn as a decal), each covered sample's Z against the Z stored before (from the draw's ZTST: `passes` or `FAILS`), and the samples' Z and colour after the draw, read back on the GPU. Its draws are depth tested after their shaders (the picture is the same), and each read-back is a pass of its own |
+| `--decal-losses` | (pc) each decal (a blended draw tested GEQUAL: `pcr_canvas.cpp`'s `is_decal`) drawn again where it lost its depth test by less than 16 Z, adding 16 of red and blue there per decal: the picture less the same replay without the option shows where |
 
 A **draw** is a run of vertices in one GIF packet with no GS register written between them other than
 a vertex's own (RGBAQ, ST, UV, FOG). `--list` gives, for each:
@@ -127,6 +133,20 @@ kf4-gsreplay gs_a.kf4gs --pixel 300,260 --fbp 0       # which draws write a pixe
 kf4-gsreplay gs_a.kf4gs --draws 600-640 --zbuf --out a    # the picture and Z after each of them
 kf4-gsreplay gs_a.kf4gs --vertices 612                # the two passes' vertices: is Z the same?
 kf4-gsreplay gs_a.kf4gs --compare-mode vif --vu-round nearest   # does VU rounding move their Z?
+```
+
+### Example: the PC renderer against paraLLEl-GS
+
+For something the PC renderer draws and paraLLEl-GS does not (a flicker that shows in some frames only), F9 can
+record more than one frame: start the game with `KF4_GS_CAPTURE_VBLANKS=240` (4 seconds; 1 to 600, about 5 MB of
+memory a vblank while it records), press F9 just before doing what shows it, and keep doing it. A capture made with
+the PC renderer holds its GS memory and registers at its start, so its first frames are drawn from where the game
+was. Then, at the player's settings (here 4x with native widescreen, MSAA 2):
+
+```sh
+python3 tools/replay_compare.py gs_b.kf4gs --out b --pc "--scale 6x4 --msaa 2 --aniso 16 --lod scale --cutout-aa ssaa --2d smooth --colour high" --decal-losses
+# b/report.txt: each frame's difference and decal losses; b/worst_*.png: PC | paraLLEl-GS | difference
+kf4-gsreplay gs_b.kf4gs --renderer pc --scale 6x4 --msaa 2 --pixel 300,242 --sub 3,0   # one pixel of a bad frame
 ```
 
 ## map_tour.py

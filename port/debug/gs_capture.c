@@ -6,7 +6,8 @@
    transfers started before the vblank are through, so VU1 is between programs and VIF1 between
    commands. Not while a GIF packet or an image transfer is half sent, or VIF1 is in the middle of a
    command: then it waits for the next scanout. It records the next two vblanks (both fields of the
-   game's 30 Hz frame; --gs-capture-at VBLANK:N for N) and writes the file after the last scanout.
+   game's 30 Hz frame; --gs-capture-at VBLANK:N for N, KF4_GS_CAPTURE_VBLANKS=N for F9's) and writes the
+   file after the last scanout.
 
    Cost. Unused, the hooks in port/platform/gs.c and vif1.c test a flag and nothing else. While it
    records, every GIF packet and VIF1 word is copied into memory; the file is compressed and written on
@@ -376,8 +377,22 @@ static void finish(void) {
     }
 }
 
+/* F9's vblanks: 2 (a frame of the game's), or KF4_GS_CAPTURE_VBLANKS (1 to 600: ten seconds; about 5 MB a vblank in
+   memory while it records, 3 GB at 600) to catch something that shows in some frames only */
+static int f9_vblanks(void) {
+    static int vblanks = 0;
+
+    if (vblanks == 0) {
+        const char *v = getenv("KF4_GS_CAPTURE_VBLANKS");
+        long n = v ? strtol(v, NULL, 0) : 2;
+
+        vblanks = n < 1 ? 1 : n > 600 ? 600 : (int)n;
+    }
+    return vblanks;
+}
+
 void port_gs_capture_vsync(const uint64_t *privileged, int field, uint64_t vblank) {
-    int vblanks = 2;
+    int vblanks = f9_vblanks();
     const char *why;
 
     if (port_gs_capture_recording) {
