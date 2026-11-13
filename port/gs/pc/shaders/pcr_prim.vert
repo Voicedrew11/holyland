@@ -80,6 +80,7 @@ bool dropped(uint k) {
 struct Corner {
     vec2 pos;
     uint z;
+    float zfrac; // (the moved Z's fraction: pcr_common.h's exact Z)
     uvec4 rgba;
     vec3 stq;
     float fog;
@@ -94,6 +95,7 @@ Corner sprite_corner(uint ka, uint kb, uint corner, bool fst) {
     Corner c;
     c.pos = vec2(ax ? pa.x : pb.x, ay ? pa.y : pb.y);
     c.z = b.z;
+    c.zfrac = b.zfrac;
     c.rgba = colour_of(b.rgba);
     c.fog = float(K(kb, 7u));
     vec3 sa = stq_of(a, fst), sb = stq_of(b, fst);
@@ -114,6 +116,7 @@ Corner triangle_corner(uint k, uint colour, uint last, bool fst, out bool gone) 
     Corner c;
     c.pos = place_of(r, k);
     c.z = r.z;
+    c.zfrac = r.zfrac;
     c.rgba = colour_of(colour == k ? r.rgba : kick_now(colour).rgba);
     c.stq = stq_of(r, fst);
     c.fog = float(K(k, 7u));
@@ -129,6 +132,7 @@ void main() {
     vec2 at = a_pos + vec2(pc.place); // (a vertex's place in the surface: the frame's place in it added, as place_of's)
     vec2 pos = at;
     uint z = a_z;
+    float zfrac = 0.0;
     vec4 colour = vec4(a_color);
     vec3 stq = a_stq;
     float fog = a_fog;
@@ -141,17 +145,18 @@ void main() {
         } else if (a_kicks.z < pic.counts.x) {
             c = triangle_corner(a_kicks.x, a_kicks.y, a_kicks.z, fst, gone);
         } else {
-            c = Corner(at, a_z, a_color, a_stq, a_fog);
+            c = Corner(at, a_z, 0.0, a_color, a_stq, a_fog);
         }
         pos = gone ? vec2(1.0e9) : c.pos; // (far past the target's right edge, as are its two other corners: not drawn)
         z = c.z;
+        zfrac = c.zfrac;
         colour = vec4(c.rgba);
         stq = c.stq;
         fog = c.fog;
     }
     vec2 ndc = gs_to_clip(pos);
     // (the GS keeps Z within what the Z buffer's format holds; taken in at the corners)
-    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
     v_color = colour;
     v_stq = stq;
     v_fog = fog;

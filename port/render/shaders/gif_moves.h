@@ -45,6 +45,7 @@ struct Moved {
     bool drop; // behind the camera, past the guard band or the far plane: its triangles are not drawn
     float f;   // its depth / the new one: its own S and T scaled by it
     float qn;  // its new Q, 1 / w
+    float zfrac; // the moved Z less z: about -0.5 to 0.5, its fraction (pcr_common.h's exact Z rounds a pixel's Z once)
 };
 
 Moved moved(uint k) {
@@ -57,6 +58,7 @@ Moved moved(uint k) {
     r.drop = false;
     r.f = 1.0;
     r.qn = 0.0;
+    r.zfrac = 0.0;
     uint w = M(k, 0u);
     if ((w & 3u) == IM_FLAT) {
         if ((w & IM_XY) != 0u) {
@@ -105,7 +107,8 @@ Moved moved(uint k) {
     float nx = float(xy & 0xFFFFu) / 16.0 + s.x * (dm.x * v.z - v.x * dm.z) / den;
     float ny = float(xy >> 16) / 16.0 + s.y * (dm.y * v.z - v.y * dm.z) / den;
     // Z = cz + (z - cz) depth / m.z (k / w, k the vertex's own), as the kick's Z less (z - cz) dm.z / m.z
-    float nz = float(r.z) - MF(k, 14u) * dm.z / mz;
+    float dz = MF(k, 14u) * dm.z / mz;
+    float nz = float(r.z) - dz;
     if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
         r.drop = true;
         return r;
@@ -113,7 +116,10 @@ Moved moved(uint k) {
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
     nz = floor(nz + 0.5);
+    uint z = r.z;
     r.z = (w & IM_XYZF) != 0u ? uint(min(nz, 16777215.0)) : nz >= 4294967040.0 ? 0xFFFFFFFFu : uint(nz);
+    // (from the move alone, small: nz's own float holds a Z near 2^24 to a whole one at best)
+    r.zfrac = float(int(z - r.z)) - dz;
     r.f = depth / mz;
     r.qn = 1.0 / mz;
     return r;
@@ -131,6 +137,7 @@ struct KickNow {
     float s, t, q;
     uint uv;
     bool proc, drop;
+    float zfrac; // (Moved's)
 };
 
 KickNow kick_now(uint k) {
@@ -216,6 +223,7 @@ KickNow kick_now(uint k) {
     r.x = m.x;
     r.y = m.y;
     r.z = m.z;
+    r.zfrac = m.zfrac;
     r.rgba = rgba;
     r.s = s;
     r.t = t;

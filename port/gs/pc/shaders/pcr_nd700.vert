@@ -53,6 +53,7 @@ void main() {
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
     uint z = gs_z(p);
+    float zfrac = 0.0;
     int xi = p.x, yi = p.y;
     bool gone = false;
     if ((d.info.w & ND_C_MOVING) != 0) {
@@ -62,6 +63,7 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
+        zfrac = m.zfrac;
         stq *= m.f;
         for (uint i = 0u; i < 3u && !gone; i++) {
             uint k = kick - i;
@@ -77,7 +79,7 @@ void main() {
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

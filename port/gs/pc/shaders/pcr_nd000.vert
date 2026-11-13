@@ -72,11 +72,13 @@ void main() {
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
     int xi = p.x, yi = p.y;
     uint z = gs_z(p);
+    float zfrac = 0.0;
     if ((d.info.w & ND_C_MOVING) != 0) {
         Moved m = moved(at, p);
         xi = m.x;
         yi = m.y;
         z = m.z;
+        zfrac = m.zfrac;
         stq *= m.f;
         for (uint i = 0u; i <= befores && !gone; i++) {
             uint k = kick - i;
@@ -84,6 +86,7 @@ void main() {
         }
     }
     z = (d.info.w & ND_C_FAR) != 0 ? 0u : z; // (at the far plane: the modern sky)
+    zfrac = (d.info.w & ND_C_FAR) != 0 ? 0.0 : zfrac;
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
     vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
     xy += vec2(pc.place);
@@ -93,7 +96,7 @@ void main() {
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

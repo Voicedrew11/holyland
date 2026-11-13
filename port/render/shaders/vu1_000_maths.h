@@ -144,6 +144,7 @@ struct Moved {
     uint z;
     float f;
     bool drop;
+    float zfrac; // the moved Z less z: about -0.5 to 0.5, its fraction (pcr_common.h's exact Z rounds a pixel's Z once)
 #ifdef ND_STANDALONE
     float zf; // (the shader) Z unrounded
 #endif
@@ -156,6 +157,7 @@ Moved moved(uint at, Place p) {
     r.z = gs_z(p);
     r.f = 1.0;
     r.drop = false;
+    r.zfrac = 0.0;
 #ifdef ND_STANDALONE
     r.zf = p.zf;
 #endif
@@ -192,14 +194,17 @@ Moved moved(uint at, Place p) {
     float den = mz * v.z;
     float nx = float(r.x) / 16.0 + d.screen[0].x * (dm.x * v.z - v.x * dm.z) / den;
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
-    float nz = float(r.z) - (float(r.z) - d.screen[2].z) * dm.z / mz;
+    float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
+    float nz = float(r.z) - dz;
     if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
         r.drop = true;
         return r;
     }
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
+    uint z = r.z;
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
+    r.zfrac = float(int(z - r.z)) - dz; // (from the move alone: small, exact to its float)
 #ifdef ND_STANDALONE
     // (the scene's depth moved from its own unrounded Z, as the frame has it: from the GS's Z, FTOI4 and the
     // shift down to whole Z, a picture between's corners lay up to a Z farther than the frame's; at a distance a Z

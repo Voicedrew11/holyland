@@ -1,6 +1,7 @@
 # Granite (third_party/parallel-gs/Granite) with the depth bounds test: a pipeline state bit, depth_bounds_test, that turns the test on with its bounds dynamic (set
 # with vkCmdSetDepthBounds before each draw), and the device feature turned on where the GPU has it; and two more device
-# features the PC renderer's runs use where the GPU has them (an indirect draw's first instance, dual-source blending).
+# features the PC renderer's runs use where the GPU has them (an indirect draw's first instance, dual-source blending)
+# and depth clamp (its exact Z).
 # Granite is a submodule of a submodule, so the change is made here, at configure, in its checkout: each
 # edit is a line added beside one of Granite's, made once (a checkout that has it is left alone), with the
 # file's own line endings. A fresh clone and `git submodule update` get it at the next configure; the
@@ -63,4 +64,10 @@ function(kf4_granite_depth_bounds granite)
     # and dual-source blending (the runs' blend: the colour's factors from the fragment shader)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
         "\t\tif (pdf2.features.dualSrcBlend) enabled_features.dualSrcBlend = VK_TRUE; // (holyland)" TRUE)
+    # and depth clamp, on in every pipeline where the GPU has it (the PC renderer's exact Z: a triangle's corners' depth
+    # a bound a little nearer than its pixels' Z, which near the Z buffer's largest Z is past 1: clamped, not clipped)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.depthClamp) enabled_features.depthClamp = VK_TRUE; // (holyland)" TRUE)
+    kf4_granite_edit(${cpp} "\traster.depthBiasEnable = compile.static_state.state.depth_bias_enable != 0;"
+        "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (holyland)" FALSE)
 endfunction()

@@ -153,6 +153,7 @@ struct Moved {
     int x, y;
     uint z;
     bool drop;
+    float zfrac; // the moved Z less z: about -0.5 to 0.5, its fraction (pcr_common.h's exact Z rounds a pixel's Z once)
 };
 
 Moved moved(Place p, uint z) {
@@ -161,6 +162,7 @@ Moved moved(Place p, uint z) {
     r.y = p.y & 0xFFFF;
     r.z = z;
     r.drop = false;
+    r.zfrac = 0.0;
     float depth = div_nearest(1.0, p.q, 0.0);
     if (!(depth > 0.0) || isinf(depth)) {
         return r; // (as it is)
@@ -177,14 +179,17 @@ Moved moved(Place p, uint z) {
     float den = mz * v.z;
     float nx = float(r.x) / 16.0 + d.screen[0].x * (dm.x * v.z - v.x * dm.z) / den;
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
-    float nz = float(r.z) - (float(r.z) - d.screen[2].z) * dm.z / mz;
+    float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
+    float nz = float(r.z) - dz;
     if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
         r.drop = true;
         return r;
     }
     r.x = int(floor(nx * 16.0 + 0.5));
     r.y = int(floor(ny * 16.0 + 0.5));
+    uint z_was = r.z;
     r.z = uint(min(floor(nz + 0.5), 4294967040.0));
+    r.zfrac = float(int(z_was - r.z)) - dz; // (from the move alone: small, exact to its float)
     return r;
 }
 

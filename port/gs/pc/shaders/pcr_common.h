@@ -31,8 +31,7 @@ layout(push_constant, std430) uniform Push {
     uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
-    float ztie;        // Z added to a GEQUAL draw's: its place among its Z buffer's since its clear (pcr_canvas.cpp's
-                       // number_tie), so that a later draw wins a tie, as the GS's whole Z has it
+    uint unused;       // (a record's size a multiple of 8 bytes: pcr_canvas.cpp's PrimPush)
 } pc;
 #else
 // (PCR_RECORDS: the programs a kept walk's runs are drawn with, pcr_canvas.cpp's draw_runs) The same fields, a draw's
@@ -42,7 +41,7 @@ layout(push_constant, std430) uniform Push {
     vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
     uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
     ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
-    uint factors; uint trace_xy; uint trace_draw; float ztie;
+    uint factors; uint trace_xy; uint trace_draw; uint unused;
 struct PcrRecord {
     PCR_PUSH_FIELDS
 };
@@ -65,7 +64,7 @@ void pcr_pass_record() {
     v_record[2] = uvec4(floatBitsToUint(pc.lod_k), pc.levels, pc.alpha, pc.clut_at);
     v_record[3] = uvec4(pc.table, pc.factors, uvec2(pc.src_offset));
     v_record[4] = uvec4(uvec2(pc.src_scale), uvec2(pc.dest_offset));
-    v_record[5] = uvec4(pc.trace_xy, pc.trace_draw, floatBitsToUint(pc.zscale), floatBitsToUint(pc.ztie));
+    v_record[5] = uvec4(pc.trace_xy, pc.trace_draw, floatBitsToUint(pc.zscale), pc.zmax);
 }
 #else
 layout(location = 4) flat in uvec4 v_record[6];
@@ -91,7 +90,7 @@ void pcr_take_record() {
     pcr_record.trace_xy = v_record[5].x;
     pcr_record.trace_draw = v_record[5].y;
     pcr_record.zscale = uintBitsToFloat(v_record[5].z);
-    pcr_record.ztie = uintBitsToFloat(v_record[5].w);
+    pcr_record.zmax = v_record[5].w;
     pcr_record.record = pcr_push.record; // (the push constants read here too, so that both stages have them, as the
                                          // other programs' do)
 }
@@ -124,14 +123,42 @@ void pcr_take_record() {
 #define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
-#define PCR_DECAL_LOSS_MARGIN 16.0
+#define PCR_F_EXACT_Z 0x2000000u   // the GS's whole Z at each pixel (pcr_prim.h's PCR_EXACT_Z): the corners' depth a bound
+#define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
-// The depth of Z (clamped to the Z buffer's largest), pc.ztie nearer
-float pcr_depth(uint z) {
-    return (float(min(z, pc.zmax)) + pc.ztie +
-            ((pc.flags & PCR_F_DECAL_LOSS_FAR) != 0u ? PCR_DECAL_LOSS_MARGIN : 0.0)) *
-           pc.zscale;
+// (the developers' decal losses: Z PCR_DECAL_LOSS_MARGIN nearer)
+uint pcr_loss_margin() {
+    return (pc.flags & PCR_F_DECAL_LOSS_FAR) != 0u ? PCR_DECAL_LOSS_MARGIN : 0u;
+}
+
+// Exact Z (PCR_F_EXACT_Z). The GS tests and writes Z as a whole number at each pixel, interpolated from its corners' Z
+// and clamped to what the Z buffer holds:
+// a mesh drawn over another (a decal: moss on a wall, a puddle on a floor, Z tested GEQUAL) has the same Z as it at
+// most pixels, a tie, which the later draw wins. The GPU's depth, interpolated with its fraction, puts two meshes cut into
+// different triangles a hair apart, and one of them loses over whole triangles. So the fragment stage (pcr_prim.h's
+// pcr_exact_depth) works out the pixel's whole Z from the triangle's three corners' Z (v_z and v_zfrac, each corner's:
+// the barycentric extension) as the GS (and paraLLEl-GS) does, and writes it as its depth; ties are then ties, and the
+// depth test's GEQUAL lets the later draw win, as on the GS. In a picture between a corner's Z is moved (gif_moves.h,
+// vu1_*_maths.h) and keeps its fraction (zfrac): rounded at each corner, the moss's corners and the wall's under it
+// moved a Z apart here and there, and the moss lost over whole triangles. The depth the corners give the GPU is only a
+// bound, a little nearer than any whole Z the triangle's pixels have (4 of 2^24 of the depth: more than the half Z of
+// rounding and the interpolation's error), for the GPU's early tests (pcr_prim.h's layout(depth_less)); past 1 near the
+// Z buffer's largest Z, clamped there (Granite's depth clamp: cmake/granite_depth_bounds.cmake). Without exact Z, the
+// corners' Z clamped and interpolated by the GPU, its fraction kept.
+#ifdef PCR_STAGE_VERTEX
+layout(location = 10) flat out uint v_z;
+layout(location = 11) flat out float v_zfrac;
+#endif
+float pcr_depth(uint z, float zfrac) {
+#ifdef PCR_STAGE_VERTEX
+    v_z = z;
+    v_zfrac = zfrac;
+#endif
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
+        return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
+    }
+    return float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
 
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)

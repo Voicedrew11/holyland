@@ -198,10 +198,30 @@ made again by a blit; the kept frame let go); a GPU without 16-bit colour attach
 pipelines made ahead for an MSAA change are made against the format of the run's first change (the other precision's
 are made as drawn). `KF4_SET_AT` takes `colour=` and `native_2d=`.
 
+**Exact Z (2026-11-13).** The PC renderer tests and writes each pixel's Z as the GS does: a whole number,
+interpolated from the triangle's three corners' Z and rounded (paraLLEl-GS's formula), clamped to what the Z buffer
+holds. The fragment shader works it out from each corner's Z (the barycentric extension, `pervertexEXT`) and writes it
+as its depth (`pcr_prim.h`'s `pcr_exact_depth`; `pcr_common.h` says why). A decal drawn over its surface as a mesh of
+its own (the moss on map 063's low wall, map 028's puddle, map 099's rock shading, map 024's lava) then ties with it as
+on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to anything, no draw order counted.
+- In a picture between a corner's Z is moved (`gif_moves.h`, `vu1_*_maths.h`) and keeps its fraction (`zfrac`), so
+  the pixel's Z is rounded once. Rounded at each corner, the moss's corners and the wall's moved a Z apart here and
+  there and the moss lost over whole triangles in the pictures between alone.
+- The corners give the GPU a depth a little nearer than any of their pixels' (4 of 2^24), and the shader declares
+  `depth_less`, so the GPU's early tests still reject what is behind; past 1 near the largest Z it is clamped (depth
+  clamp, `cmake/granite_depth_bounds.cmake`). Early-Z programs drop `early_fragment_tests` with exact Z.
+- At a scale above 1 each of a GS pixel's pixels rounds its own Z: where two meshes' Z differ by a fraction near a
+  half, one loses along a thin line (at 1x the GS has the same, as single pixels).
+- Needs `fragmentShaderBarycentric` (RDNA2 and later, NVIDIA Turing and later) and `depthClamp`; without them, or with
+  `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth (decals lose to their surface here and there), and the log says so.
+- Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
+  buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
+  in play; and before it a decal nudge of half a Z.
+
 **Layer Z (`--native-layer-z`; #105): not applied, proposed for removal.** The native GS rounded each pixel's Z to a
 whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
-meshes' Z rounded apart, and tolerant was its way out. The PC renderer keeps the GPU's Z with its fraction and no
-rounding, and its layers are not seen fighting:
+meshes' Z rounded apart, and tolerant was its way out. (The PC renderer now rounds as the GS does, exact Z above; what
+follows was measured before, with the GPU's Z with its fraction.) Its layers were not seen fighting:
 - A tolerant mode built the GPU's way (a `gl_FragDepth` variant of `pcr_prim.frag` testing the colour pass a half Z,
   or a layer's pixel one Z and half its slope, nearer; ties in two phases, everything else blended Z first) changed
   the 4x tour views (maps 002, 004, 009, 016, 020, 026, 035, 040, 099, 102, 112, 115, 96 views) by at most 0.05% of
