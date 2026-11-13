@@ -79,6 +79,7 @@ enum : uint32_t {
     F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
     F_HIGH = 0x200000,
+    F_DECAL = 0x400000,
 };
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
@@ -2700,6 +2701,19 @@ private:
         }
     }
 
+    // A decal: a blended draw Z tested GEQUAL. The game draws its decals (moss and grime on a wall, the dark shading
+    // on a rock, the lava over its bed) as meshes of their own over a surface drawn before them, cut into triangles
+    // differently; the GS's whole Z ties the two and the decal is drawn. The GPU's depth keeps the fraction, and the
+    // two meshes' depths differ by a hair (a thousandth of a Z on map 000's rocks): the decal lost to its surface over
+    // whole triangles, a different set each frame, and flickered (2026-11-12, the low wall before map 063's keep).
+    // A decal is drawn a sixteenth of a Z nearer (pcr_nd*.vert, pcr_prim.vert: PCR_F_DECAL), far less than the GS's
+    // step between two things it keeps apart. (Its Z made whole for every draw, as the GS's, tied the decals but drew
+    // lines over the lava of map 024 wherever a whole Z fell between it and its bed. A share of the distance nearer,
+    // writing that Z, let one rock show through a nearer one; both 2026-11-12.)
+    static bool is_decal(const DrawState &s) {
+        return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0;
+    }
+
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
@@ -2900,6 +2914,7 @@ private:
                      ? F_SMOOTH_2D
                      : 0;
         flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
+        flags |= is_decal(s) ? F_DECAL : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
