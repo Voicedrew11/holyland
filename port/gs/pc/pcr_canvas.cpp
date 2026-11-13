@@ -59,6 +59,7 @@ struct PrimPush {
     uint32_t alpha;
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
+    float ztie;          // Z added to a GEQUAL batch's (number_tie)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
@@ -362,6 +363,7 @@ public:
     void set_between(const Between *between) {
         flush_batch();
         between_ = between;
+        walk_ties_.fill(0); // (a picture between's walk numbers its batches from its own start: number_tie)
         if (!between) {
             stop_keeping();
         }
@@ -2008,6 +2010,9 @@ private:
         // the GPU at each draw)
         static constexpr uint32_t no_gpu_vertices = UINT32_MAX;
         uint32_t gpu_first = no_gpu_vertices;
+        // (a GEQUAL batch's) Z added for its place among those drawn into its Z buffer since the buffer was cleared
+        // (number_tie)
+        float ztie = 0.0f;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -2726,6 +2731,7 @@ private:
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            number_tie(batch_);
             draw_batch(batch_);
             if (keeping_) {
                 kept_->keep(take_kept_batch());
@@ -2839,26 +2845,71 @@ private:
         }
     }
 
-    // A decal: a blended draw Z tested GEQUAL whose blend shows what is under it somewhere. The game draws its decals
-    // (moss and grime on a wall, the dark shading on a rock, the lava over its bed) as meshes of their own over a
-    // surface drawn before them, cut into triangles differently; the GS's whole Z ties the two and the decal is drawn.
-    // The GPU's depth keeps the fraction, and the two meshes' depths differ by a hair (a thousandth of a Z on map 000's
-    // rocks): the decal lost to its surface over whole triangles, a different set each frame, and flickered (2026-11-12,
-    // the low wall before map 063's keep). A decal is drawn half a Z nearer (pcr_common.h's PCR_DECAL_NEARER), less than
-    // the GS's step between two things it keeps apart: far away a Z is a long way, and two meshes cut differently differ
-    // by more than a sixteenth there.
-    // The surface under a decal is often blended too (that wall: ALPHA (Cs - Cd) * As + Cd, alpha 0x80 in its vertices
-    // and its texture). Taken for a decal as well until 2026-11-13, it was drawn half a Z nearer too, the two tied
-    // again, and the moss lost to the wall by its cutting's hair (0.005 Z) over whole triangles, a different set each
-    // frame (found with kf4-gsreplay --renderer pc --pixel and --decal-losses). So a blend that writes the source colour
-    // alone at every pixel (blend_covers) is a surface's, whatever its ALPHA.
-    // (Tried 2026-11-12 and dropped: only batches with a see-through corner nudged, the rest of a blended draw taken for
-    // the surface, the texture's alpha not looked at: a nudged decal's Z, written, beat a surface drawn after it, which
-    // the GS's tie gives the later draw (a puddle on map 028, map 014's water lost). Decals writing no Z, or their Z
-    // written by a second pass at their own depth: a fifth of some views wrong, where a decal draw's own triangles
-    // overlap. Its Z made whole for every draw, as the GS's, tied the decals but drew lines over the lava of map 024
-    // wherever a whole Z fell between it and its bed. A share of the distance nearer, writing that Z, let one rock show
-    // through a nearer one.)
+    // Ties. The game draws decals (moss and grime on a wall, the dark shading on a rock, the lava over its bed, a
+    // puddle on a floor) as meshes of their own, cut into triangles differently from the surface they lie on, Z tested
+    // GEQUAL: the GS's whole Z ties the two, and the one drawn later is seen. The GPU's depth keeps the fraction, and
+    // two meshes cut differently differ by a hair (a few thousandths of a Z): the later one lost over whole triangles,
+    // a different set each frame, and flickered (the moss on the low wall before map 063's keep). So each GEQUAL batch
+    // is drawn nearer by its place among the batches drawn into its Z buffer since the buffer was cleared: ties_most
+    // at most (less than the GS's step between two things it keeps apart) shared out over as many places as the
+    // buffer's last frame had, tie_step a place at most. A later batch wins a tie by a little more than a hair,
+    // whichever of the two is the decal. The Z is worked out as the batch is made (number_tie) and kept with it, so
+    // that a picture between draws it with the same.
+    // (Before 2026-11-13 the decals alone, blended draws tested GEQUAL, were drawn half a Z nearer. A surface under a
+    // decal that is blended too (that wall: alpha 0x80) tied with it again and the moss lost by its cutting's 0.005 Z;
+    // and a decal drawn before its surface (map 028's puddle, under the floor drawn after it) won where the GS's later
+    // floor does. A place of a fixed 1/2048 Z ran out on busy frames (1450 GEQUAL batches before map 063's keep; map
+    // 099's rock and its dark shading both at the half Z, tied again). Steps measured on 063 with --decal-losses: from
+    // 1/512 to 1/2048 the same, smaller ones lose more. Tried 2026-11-12 and dropped: decals writing no Z, or their Z
+    // by a second pass: a fifth of some views wrong where a decal draw's own triangles overlap; Z made whole for every
+    // draw: lines over map 024's lava wherever a whole Z fell between it and its bed; nearer by a share of the
+    // distance: a rock showed through a nearer one.)
+    static constexpr float tie_step = 1.0f / 2048.0f;
+    static constexpr float ties_most = 0.5f;
+
+    // A GEQUAL batch's Z added (Batch::ztie), by its place among its Z buffer's GEQUAL batches: counted as the frame's
+    // stream makes them, from 0 at the Z buffer's clear (a batch of sprites of one Z written ZTST ALWAYS from its
+    // scissor's top left corner over its whole height or width, every pixel passing the alpha test); in a picture
+    // between's walk from 0 at the walk's start
+    void number_tie(Batch &b) {
+        const DrawState &s = b.state;
+        bool zte = bits(s.test, 16, 1) != 0, zwrite = zte && bits(s.zbuf, 32, 1) == 0;
+        uint32_t ztst = bits(s.test, 17, 2), zbp = bits(s.zbuf, 0, 9);
+        // (every pixel's Z written: not a sprite whose alpha test keeps its Z, as map 099's screen tints have, ATST
+        // NEVER drawing the frame only, which had the decals after it lose to the rock under them)
+        bool ate = bits(s.test, 0, 1) != 0, all_pass = !ate || bits(s.test, 1, 3) == 1;
+        uint32_t &count = (between_ ? walk_ties_ : ties_)[zbp];
+        if (zwrite && ztst == 1 && all_pass && clears_scissor(b)) {
+            if (!between_ && count != 0) { // (the game clears twice running, a context each)
+                last_ties_[zbp] = count;
+            }
+            count = 0;
+        }
+        b.ztie = 0.0f;
+        if (zte && ztst == 2) {
+            float step = std::min(tie_step, ties_most / float(std::max(last_ties_[zbp], 1u)));
+            b.ztie = std::min(float(count++) * step, ties_most);
+        }
+    }
+
+    static bool clears_scissor(const Batch &b) {
+        if (b.native || !b.sprites || b.vertices.empty()) {
+            return false;
+        }
+        for (const Vertex &v : b.vertices) {
+            if (v.z != b.vertices[0].z) {
+                return false;
+            }
+        }
+        uint64_t scissor = b.state.scissor;
+        // (from the scissor's top left corner its whole height or width: a clear's first column or row, as map 099
+        // clears in columns 64 pixels wide, a batch each)
+        bool corner = b.x0 <= int32_t(bits(scissor, 0, 11)) && b.y0 <= int32_t(bits(scissor, 32, 11));
+        return corner && (b.x1 >= int32_t(bits(scissor, 16, 11)) || b.y1 >= int32_t(bits(scissor, 48, 11)));
+    }
+
+    // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
+    // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
     static bool is_decal(const Batch &b) {
         const DrawState &s = b.state;
         return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0 && !blend_covers(b);
@@ -3080,6 +3131,7 @@ private:
         flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         push.flags = flags;
+        push.ztie = b.ztie;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
         uint32_t fix = (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8);
@@ -3762,6 +3814,9 @@ private:
     BufferHandle trace_buf_;
     Program *probe_program_ = nullptr, *probe_ms_program_ = nullptr;
     bool decal_losses_ = false;
+    // number_tie's counts, by the Z buffer's base page: the frame's stream's, a picture between's walk's, and the
+    // frame's stream's at the buffer's last clear
+    std::array<uint32_t, 512> ties_{}, walk_ties_{}, last_ties_{};
     const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;

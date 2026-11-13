@@ -25,7 +25,7 @@ typedef struct {
     int32_t sample;     /* shaded once a sample: which (cut-out AA), else -1 */
     uint32_t rgba;      /* the colour it outputs, the GS's integers before the blend (0 when DATE discarded it) */
     /* bits 0-3: the pass (0 every pixel, 1 the alpha test's passing pixels, 2 its failing ones); 4-7: PCR_TRACE_*;
-       8: drawn as a decal (pcr_common.h's PCR_DECAL_NEARER nearer) */
+       8: a decal (pcr_canvas.cpp's is_decal) */
     uint32_t how;
     uint32_t reserved[3];
 } PcrTraceFragment;

@@ -67,7 +67,7 @@ void trace(uint outcome, uvec4 c) {
 #endif
     uint rgba = min(c.r, 255u) | min(c.g, 255u) << 8 | min(c.b, 255u) << 16 | min(c.a, 255u) << 24;
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
-    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u;
+    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked, not moved: pc.ztie)
     u_trace.rec[i * 3u] = uvec4(pc.trace_draw, uint(gl_PrimitiveID), floatBitsToUint(gl_FragCoord.z / pc.zscale),
                                 floatBitsToUint(trace_dz.x));
     u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), uint(gl_SampleMaskIn[0]), uint(sample_id), rgba);

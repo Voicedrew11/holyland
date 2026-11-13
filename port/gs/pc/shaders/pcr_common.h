@@ -24,6 +24,8 @@ layout(push_constant, std430) uniform Push {
     uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
+    float ztie;        // Z added to a GEQUAL draw's: its place among its Z buffer's since its clear (pcr_canvas.cpp's
+                       // number_tie), so that a later draw wins a tie, as the GS's whole Z has it
 } pc;
 
 #define PCR_F_TME 0x1u
@@ -44,16 +46,15 @@ layout(push_constant, std430) uniform Push {
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
 #define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
-#define PCR_F_DECAL 0x400000u      // a decal over a surface: drawn half a Z nearer (pcr_canvas.cpp's is_decal)
+#define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
 #define PCR_DECAL_LOSS_MARGIN 16.0
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
-// The depth of Z (clamped to the Z buffer's largest): a decal's nearer by PCR_DECAL_NEARER (PCR_F_DECAL)
-#define PCR_DECAL_NEARER 0.5
+// The depth of Z (clamped to the Z buffer's largest), pc.ztie nearer
 float pcr_depth(uint z) {
-    return (float(min(z, pc.zmax)) + ((pc.flags & PCR_F_DECAL) != 0u ? PCR_DECAL_NEARER : 0.0) +
+    return (float(min(z, pc.zmax)) + pc.ztie +
             ((pc.flags & PCR_F_DECAL_LOSS_FAR) != 0u ? PCR_DECAL_LOSS_MARGIN : 0.0)) *
            pc.zscale;
 }
