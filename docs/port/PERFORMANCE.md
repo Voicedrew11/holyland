@@ -242,7 +242,8 @@ spot), and at the swing the trail's pictures between are main's exactly (132 pic
 difference there that is not the trail: 11 pixels at the ends of the HUD's weapon gauge arc in the pictures between
 while it refills (2010-2064), which the frame's own walk draws otherwise than the stream's walk does; the same with
 the trail left unmoved, so it is the own walk's (an older difference, shown now because these frames take it), not
-followed.
+followed. The validation layer with synchronization validation: no messages at the swing and at the four spots
+(the owner's settings, 240). The unit tests pass (`pcr_gif_test` checks the native kicks' numbering).
 
 ## Found 2026-11-12: the game's 57-58 vblanks a second uncapped were vblanks left off the screen (#107)
 
