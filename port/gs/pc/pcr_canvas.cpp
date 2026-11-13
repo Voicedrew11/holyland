@@ -3220,7 +3220,7 @@ private:
         // not end where the blend changes: native 280 changes it about every batch)
         uint32_t cs = factor_code(blend.src), cd = factor_code(blend.dst);
         bool dual = in_run && dual_ok_ && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
-                    (!blend.enable || blend.src_alpha == VK_BLEND_FACTOR_ONE ||
+                    ((!blend.enable && dual_unblended_) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
                      (blend.src_alpha == VK_BLEND_FACTOR_CONSTANT_ALPHA && (blend.flags & F_ALPHA_FACTOR)));
         push.factors = dual ? F_DUAL | cs | cd << 4 : 0;
         RunKey key = {};
@@ -4011,6 +4011,9 @@ private:
     const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
     bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;
     uint32_t max_run_draws_ = 1;
+    // (KF4_PC_INDIRECT=unblended: an unblended batch in a dual-source run too, blended with one and zero: it then reads
+    // its target, which costs the GPU more than the runs it joins save)
+    const bool dual_unblended_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "unblended") == 0;
     Table no_table_;                        // (bound outside a kept walk: one dummy)
     bool table_on_ = false;                 // (no table where the device has none: set 1's textures, as before)
     VkDescriptorSet table_bound_ = VK_NULL_HANDLE; // (bind_table: set 2 as bound in the command buffer)

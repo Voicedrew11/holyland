@@ -51,13 +51,43 @@ layout(set = 1, binding = 6, std430) readonly buffer Records {
 #ifdef PCR_STAGE_VERTEX
 #extension GL_ARB_shader_draw_parameters : require
 #define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB))
-layout(location = 4) flat out uint v_record;
-#else
-// (the push constants read here too, so that both stages have them, as the other programs' do)
-#define PCR_RECORD (v_record + (pcr_push.record & 0u))
-layout(location = 4) flat in uint v_record;
-#endif
 #define pc u_records.r[PCR_RECORD]
+// (the fields the fragment stage reads, flat: read there from the record, each a load a pixel, the pictures between
+// took the GPU 6% longer)
+layout(location = 4) flat out uvec4 v_record[5];
+void pcr_pass_record() {
+    v_record[0] = uvec4(pc.flags, pc.tex_size, pc.clamp_lo, pc.clamp_hi);
+    v_record[1] = uvec4(pc.test, pc.fogcol, pc.texa, pc.tex1);
+    v_record[2] = uvec4(floatBitsToUint(pc.lod_k), pc.levels, pc.alpha, pc.clut_at);
+    v_record[3] = uvec4(pc.table, pc.factors, uvec2(pc.src_offset));
+    v_record[4] = uvec4(uvec2(pc.src_scale), uvec2(pc.dest_offset));
+}
+#else
+layout(location = 4) flat in uvec4 v_record[5];
+PcrRecord pcr_record;
+void pcr_take_record() {
+    pcr_record.flags = v_record[0].x;
+    pcr_record.tex_size = v_record[0].y;
+    pcr_record.clamp_lo = v_record[0].z;
+    pcr_record.clamp_hi = v_record[0].w;
+    pcr_record.test = v_record[1].x;
+    pcr_record.fogcol = v_record[1].y;
+    pcr_record.texa = v_record[1].z;
+    pcr_record.tex1 = v_record[1].w;
+    pcr_record.lod_k = uintBitsToFloat(v_record[2].x);
+    pcr_record.levels = v_record[2].y;
+    pcr_record.alpha = v_record[2].z;
+    pcr_record.clut_at = v_record[2].w;
+    pcr_record.table = v_record[3].x;
+    pcr_record.factors = v_record[3].y;
+    pcr_record.src_offset = ivec2(v_record[3].zw);
+    pcr_record.src_scale = ivec2(v_record[4].xy);
+    pcr_record.dest_offset = ivec2(v_record[4].zw);
+    pcr_record.record = pcr_push.record; // (the push constants read here too, so that both stages have them, as the
+                                         // other programs' do)
+}
+#define pc pcr_record
+#endif
 #endif
 
 #define PCR_NO_TABLE 0xFFFFu

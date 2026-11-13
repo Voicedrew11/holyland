@@ -429,6 +429,9 @@ bool alpha_passes(uint a) {
 }
 
 void main() {
+#ifdef PCR_RECORDS
+    pcr_take_record();
+#endif
     if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
