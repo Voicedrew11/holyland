@@ -1,0 +1,27 @@
+# New Game, then each stick in the first map (099.map) with twin-stick controls: for checks of the speeds
+# the sticks give. Twin-stick is off under a pad script unless KF4_TWIN_STICK_SCRIPTED=1:
+#   KF4_TWIN_STICK_SCRIPTED=1 kf4 --disc ... --headless --input tests/twin_stick.pad --frames 3000 --log FILE
+# <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward
+100 CROSS 4     # the memory card notice ("no card")
+300 START 4     # skip the logos
+400 START 4     # Press Start
+500 CROSS 4     # New Game (the cursor starts on it)
+740 START 4     # skip the opening movie
+700 CROSS 4
+800 CROSS 4
+900 CROSS 4
+1000 CROSS 4
+1100 CROSS 4
+1200 CROSS 4
+1300 CROSS 4
+1400 CROSS 4
+# the player has control from about vblank 1500; 60 vblanks of rest between, for the game's own slowing
+1700 rx=255 60          # right stick full right: turn right at the top turn
+1820 rx=192 60          # right stick half right: slower
+1940 rx=0 60            # right stick full left: turn left
+2060 lx=0 30            # left stick full left: step left, no turn
+2150 ly=0 30            # left stick full forward: walk at the top speed
+2240 ly=191 30          # left stick half back: slower
+2330 lx=255 ly=0 30     # left stick forward and right: the top speed on the diagonal
+2420 ly=0 CROSS 30      # forward with the action button: run
+2510 ry=0 30            # right stick up: look up

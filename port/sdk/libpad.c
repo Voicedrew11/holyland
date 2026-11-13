@@ -29,6 +29,7 @@
 #endif
 
 #include "libpad.h"
+#include "port/twin_stick.h"
 #include "port/controls.h"
 #include "port/host.h"
 #include "port/overlay.h"
@@ -584,4 +585,5 @@ int scePadExitPressMode(int port, int slot) {
 void port_pad_state(PortStateIo *io) {
     PORT_STATE(io, analog);
     PORT_STATE(io, pressure);
+    port_twin_stick_state(io);
 }

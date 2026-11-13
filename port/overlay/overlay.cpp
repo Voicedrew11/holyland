@@ -39,6 +39,7 @@ extern "C" {
 #include "port/weapon_sets.h"
 #include "port/cheats.h"
 #include "port/controls.h"
+#include "port/twin_stick.h"
 #include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
@@ -649,6 +650,15 @@ void controls_page() {
     tooltip("The layout of Verdite, the KF2/KF3 ports: W A S D to walk and side-step,\nthe mouse to turn and "
             "look (Escape captures it), Space to attack. (--controls verdite)");
     layout = port_controls_layout();
+
+    bool twin_stick = port_twin_stick_setting() != 0;
+    if (ImGui::Checkbox("Twin-stick controls", &twin_stick)) {
+        port_twin_stick_set(twin_stick);
+        changed();
+    }
+    tooltip("The left stick walks and steps sideways, the right stick turns and looks, each as far as it\n"
+            "is pushed, up to the game's own speeds. Off, the sticks are the PS2's: the left one is the\n"
+            "d-pad (walk and turn), the right one only looks up and down.");
 
     if (layout == CONTROLS_VERDITE) {
         float sensitivity = (float)port_controls_mouse_sensitivity();

@@ -13,7 +13,7 @@
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
-                    "instant_mouse_look": true,
+                    "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"], "menu_side_keys": true,
                     "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
        "mods":     {"myus_necklace": false, "separate_run": false},
@@ -52,6 +52,7 @@
 #include "port/automap.h"
 #include "port/weapon_sets.h"
 #include "port/controls.h"
+#include "port/twin_stick.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -205,6 +206,7 @@ static void read_controls(const cJSON *controls) {
     port_controls_set_mouse(read_number(controls, "mouse_sensitivity", 1.0, 0.05, 10.0),
                             read_bool(controls, "invert_y", 0));
     port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 1));
+    port_twin_stick_set(read_bool(controls, "twin_stick", 1));
     port_controls_set_menu_side_keys(read_bool(controls, "menu_side_keys", 1));
     for (i = 0; i < 3 && cJSON_IsArray(menu); i++) {
         const cJSON *item = cJSON_GetArrayItem(menu, i);
@@ -585,6 +587,7 @@ static void write_controls(cJSON *controls) {
     put(controls, "mouse_sensitivity", cJSON_CreateNumber(port_controls_mouse_sensitivity()));
     put(controls, "invert_y", cJSON_CreateBool(port_controls_mouse_invert()));
     put(controls, "instant_mouse_look", cJSON_CreateBool(port_controls_mouse_lead()));
+    put(controls, "twin_stick", cJSON_CreateBool(port_twin_stick_setting()));
     for (i = 0; i < 3; i++) {
         int action = port_controls_menu_mouse(i);
 
