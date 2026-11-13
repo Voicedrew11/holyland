@@ -73,6 +73,8 @@ void main() {
     int xi = p.x, yi = p.y;
     uint z = gs_z(p);
     float zfrac = 0.0;
+    // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
+    uint zref = which == 0u ? z : gs_z(vu_place(tri.x));
     if ((d.info.w & ND_C_MOVING) != 0) {
         Moved m = moved(at, p);
         xi = m.x;
@@ -87,6 +89,7 @@ void main() {
     }
     z = (d.info.w & ND_C_FAR) != 0 ? 0u : z; // (at the far plane: the modern sky)
     zfrac = (d.info.w & ND_C_FAR) != 0 ? 0.0 : zfrac;
+    zref = (d.info.w & ND_C_FAR) != 0 ? 0u : zref;
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
     vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
     xy += vec2(pc.place);
@@ -96,7 +99,7 @@ void main() {
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

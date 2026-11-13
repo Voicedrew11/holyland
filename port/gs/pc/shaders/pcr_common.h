@@ -137,23 +137,29 @@ uint pcr_loss_margin() {
 // a mesh drawn over another (a decal: moss on a wall, a puddle on a floor, Z tested GEQUAL) has the same Z as it at
 // most pixels, a tie, which the later draw wins. The GPU's depth, interpolated with its fraction, puts two meshes cut into
 // different triangles a hair apart, and one of them loses over whole triangles. So the fragment stage (pcr_prim.h's
-// pcr_exact_depth) works out the pixel's whole Z from the triangle's three corners' Z (v_z and v_zfrac, each corner's:
-// the barycentric extension) as the GS (and paraLLEl-GS) does, and writes it as its depth; ties are then ties, and the
-// depth test's GEQUAL lets the later draw win, as on the GS. In a picture between a corner's Z is moved (gif_moves.h,
-// vu1_*_maths.h) and keeps its fraction (zfrac): rounded at each corner, the moss's corners and the wall's under it
-// moved a Z apart here and there, and the moss lost over whole triangles. The depth the corners give the GPU is only a
-// bound, a little nearer than any whole Z the triangle's pixels have (4 of 2^24 of the depth: more than the half Z of
-// rounding and the interpolation's error), for the GPU's early tests (pcr_prim.h's layout(depth_less)); past 1 near the
-// Z buffer's largest Z, clamped there (Granite's depth clamp: cmake/granite_depth_bounds.cmake). Without exact Z, the
-// corners' Z clamped and interpolated by the GPU, its fraction kept.
+// pcr_exact_depth) works out the pixel's whole Z as the GS (and paraLLEl-GS) does, and writes it as its depth; ties are
+// then ties, and the depth test's GEQUAL lets the later draw win, as on the GS.
+// The GS's Z at a pixel is a corner's whole Z plus the rounded interpolation of the corners' differences from it. Each
+// corner hands down a whole Z its triangle shares (zref: the first corner's as the frame has it, given to every corner
+// by the canvas, or worked out by each corner of a native draw), flat, and its own Z less that, with its fraction
+// (v_zrel), interpolated: small numbers, so the float keeps them as exactly as the GS's own differences. Any whole Z
+// the corners share gives the same rounding, so a corner moved in a picture between needs no other corner's move.
+// That is the barycentric extension's result without it: every GPU draws exact Z.
+// In a picture between a corner's Z is moved (gif_moves.h, vu1_*_maths.h) and keeps its fraction (zfrac): rounded at
+// each corner, the moss's corners and the wall's under it moved a Z apart here and there, and the moss lost over whole
+// triangles. The depth the corners give the GPU is only a bound, a little nearer than any whole Z the triangle's pixels
+// have (4 of 2^24 of the depth: more than the half Z of rounding and the interpolation's error), for the GPU's early
+// tests (pcr_prim.h's layout(depth_less)); past 1 near the Z buffer's largest Z, clamped there (Granite's depth clamp:
+// cmake/granite_depth_bounds.cmake). Without exact Z, the corners' Z clamped and interpolated by the GPU, its fraction
+// kept.
 #ifdef PCR_STAGE_VERTEX
-layout(location = 10) flat out uint v_z;
-layout(location = 11) flat out float v_zfrac;
+layout(location = 10) flat out uint v_zref;
+layout(location = 11) noperspective out float v_zrel;
 #endif
-float pcr_depth(uint z, float zfrac) {
+float pcr_depth(uint z, float zfrac, uint zref) {
 #ifdef PCR_STAGE_VERTEX
-    v_z = z;
-    v_zfrac = zfrac;
+    v_zref = zref;
+    v_zrel = float(int(z - zref)) + zfrac;
 #endif
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;

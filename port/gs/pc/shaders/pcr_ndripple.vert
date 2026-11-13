@@ -50,6 +50,11 @@ void main() {
     uint z;
     float zfrac = 0.0;
     Place p = vertex_place(at, z);
+    // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
+    uint zref = z;
+    if (which != 0u) {
+        vertex_place(tri.x, zref);
+    }
     Place w = lifted_place(P);
     int xi = p.x, yi = p.y, wx = w.x, wy = w.y;
     bool gone = false;
@@ -84,7 +89,7 @@ void main() {
     uint rgba = uint(d.info.w);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
     v_color = vec4(float(rgba & 0xFFu), float((rgba >> 8) & 0xFFu), float((rgba >> 16) & 0xFFu), float(rgba >> 24));
     v_stq = vec3(screen_st(wx, wy), 1.0);
     v_fog = d.fog.x;

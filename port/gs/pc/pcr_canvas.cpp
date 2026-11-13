@@ -140,8 +140,19 @@ struct Vertex {
     // (the 2D mode's smooth: the texels its primitive covers across, rect[0], and down, rect[1], each first | last << 16,
     // of a sprite's or a 2D triangle's corners (FST, or one Z and Q); no_rect for the rest: texel_rect)
     uint32_t rect[2] = {no_rect, no_rect};
+    // (exact Z, pcr_common.h) a whole Z its triangle's three corners share: the first corner's (link_corners)
+    uint32_t zref = 0;
 };
-static_assert(sizeof(Vertex) == 56, "Vertex: the vertex shader's inputs, packed");
+static_assert(sizeof(Vertex) == 60, "Vertex: the vertex shader's inputs, packed");
+
+// Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref; vertices three a triangle)
+void link_corners(std::span<Vertex> triangles) {
+    for (size_t i = 0; i + 3 <= triangles.size(); i += 3) {
+        for (size_t k = 0; k < 3; k++) {
+            triangles[i + k].zref = triangles[i].z;
+        }
+    }
+}
 // Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
 enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
 
@@ -382,7 +393,7 @@ public:
         max_run_draws_ = std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u);
         if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
-                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no fragment shader barycentrics or depth clamp");
+                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no depth clamp");
         }
     }
 
@@ -2745,6 +2756,7 @@ private:
         for (const auto &[polygon, n] : {std::pair<const std::array<Vertex, 4> &, uint32_t>{under, nu}, {over, no}}) {
             for (uint32_t i = 2; i < n; i++) {
                 batch_.vertices.insert(batch_.vertices.end(), {polygon[0], polygon[i - 1], polygon[i]});
+                link_corners(std::span(batch_.vertices).last(3));
                 counts_.triangles++;
             }
         }
@@ -2856,6 +2868,7 @@ private:
                 }
                 touch(batch_.vertices.back());
             }
+            link_corners(std::span(batch_.vertices).subspan(first_vertex, 3));
             if (bits(batch_.state.prim, 4, 1)) {
                 // (an FST triangle, or one of the 2D the menus draw with S, T and Q: one Z and one Q at its corners)
                 const Vertex *t = &batch_.vertices[first_vertex];
@@ -2907,6 +2920,7 @@ private:
             }
         }
         batch_.vertices.insert(batch_.vertices.end(), {va, c, d, c, vb, d});
+        link_corners(std::span(batch_.vertices).last(6));
         touch(va);
         touch(vb);
         counts_.triangles += 2;
@@ -3870,6 +3884,7 @@ private:
         c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
         c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
         c.set_vertex_attrib(6, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect));
+        c.set_vertex_attrib(7, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, zref));
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -4227,11 +4242,10 @@ private:
     bool cutout_aa_ = false;
     const bool sample_shading_ = device_.get_device_features().enabled_features.sampleRateShading != VK_FALSE;
     // Exact Z (pcr_common.h): the GS's whole Z at each pixel, so that a decal ties with the surface under it as on the GS
-    // and the later draw wins. Needs the barycentric extension (each corner's Z in the fragment shader) and depth clamp
-    // (the corners' bound past 1). Without them, or with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn
-    // over a surface cut into other triangles lose to it here and there.
-    const bool exact_z_ = device_.get_device_features().barycentric_features.fragmentShaderBarycentric &&
-                          device_.get_device_features().enabled_features.depthClamp &&
+    // and the later draw wins. Needs depth clamp (the corners' bound past 1), which every desktop GPU has. Without it, or
+    // with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn over a surface cut into other triangles lose to
+    // it here and there.
+    const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
     struct MsaaCounts {
         uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;

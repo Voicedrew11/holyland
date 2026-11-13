@@ -21,6 +21,8 @@ layout(location = 4) in float a_fog;
 layout(location = 5) in uvec4 a_kicks;
 // (the 2D mode's smooth) the texels the primitive covers, across and down: first | last << 16 (PCR_NO_RECT: none)
 layout(location = 6) in uvec2 a_rect;
+// (exact Z, pcr_common.h) a whole Z the triangle's corners share: its first corner's in the frame
+layout(location = 7) in uint a_zref;
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
@@ -156,7 +158,7 @@ void main() {
     }
     vec2 ndc = gs_to_clip(pos);
     // (the GS keeps Z within what the Z buffer's format holds; taken in at the corners)
-    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, a_zref), 1.0);
     v_color = colour;
     v_stq = stq;
     v_fog = fog;

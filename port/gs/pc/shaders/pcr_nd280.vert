@@ -55,6 +55,8 @@ void main() {
     float q = pl.q;
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
     float zfrac = 0.0;
+    // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
+    uint zref = which == 0u ? z : uint(vu_place(tri.x).z >> 4) & 0xFFFFFFu;
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
     // a picture between's (ND_C_MOVING): moved, S, T and Q by the change of depth; dropped with its kick or one of the
@@ -96,7 +98,7 @@ void main() {
     }
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);
