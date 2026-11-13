@@ -643,7 +643,7 @@ public:
         drop_stretch();
         frame_taken_at_ = vblanks_;
         const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0};
+                                           frame->shown_kept != 0, frame->kicks};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -903,7 +903,8 @@ private:
     // native draws' records for the pictures made beside the frame's
     struct Stretch {
         std::shared_ptr<const pcr::KeptWalk> walk; // (nullptr: not kept whole)
-        pcr::Between::KickList kicks;
+        pcr::Between::LiveKicks kicks;
+        std::vector<GsnInterpMove> trail_moves; // (its native kicks', NativeDraws::take_trail_moves)
         uint64_t bytes = 0;
         bool trail_paired = false;
     };
@@ -926,6 +927,7 @@ private:
         s.kicks = between_->end_live_kicks();
         natives_->end_frame_kept();
         s.trail_paired = natives_->trail_paired();
+        s.trail_moves = natives_->take_trail_moves();
         s.bytes = stretch_bytes_;
         stretch_open_ = false;
         return s;
@@ -955,7 +957,7 @@ private:
         if (!picture.walk) {
             return picture.refused;
         }
-        if (!between_->adopt_live_kicks(std::move(s.kicks))) {
+        if (!between_->adopt_live_kicks(std::move(s.kicks), std::move(s.trail_moves))) {
             return pcr::FrameWalkRefused::not_the_frame; // (its kicks not the frame's count)
         }
         kept_walk_ = std::move(picture.walk);

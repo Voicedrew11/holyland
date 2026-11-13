@@ -1,6 +1,7 @@
 // The PC renderer's native draws (pcr_native.h)
 #include "pcr_native.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -89,6 +90,7 @@ public:
     void begin_frame_kept() {
         frame_kept_ = true;
         trail_paired_ = false;
+        trail_moves_.clear();
         if (walk_ != PartWalk::picture) {
             walk_ = PartWalk::frame_kept;
         }
@@ -103,6 +105,10 @@ public:
 
     bool trail_paired() const {
         return trail_paired_;
+    }
+
+    std::vector<GsnInterpMove> take_trail_moves() {
+        return std::move(trail_moves_);
     }
 
     bool moved_on_cpu() const {
@@ -353,13 +359,29 @@ private:
                 bool untextured = !((front.prim_in_effect() >> 4) & 1);
                 bool lerp = before && walk_ == PartWalk::picture && untextured;
                 moved_on_cpu_ |= lerp;
-                if (before && untextured && walk_ == PartWalk::frame_kept) {
+                // (the frame's own walk kept: its pictures move the trail by its kicks, numbered here, each with the
+                // move the CPU's lerp makes; KF4_PC_TRAIL_KICKS=0, or a kick count off: the frame's pictures walk)
+                bool by_kicks = before && untextured && walk_ == PartWalk::frame_kept && trail_kicks_ && !trail_paired_;
+                uint32_t first_kick = native_kick_base + uint32_t(trail_moves_.size());
+                if (by_kicks) {
+                    front.number_native_kicks(first_kick);
+                } else if (before && untextured && walk_ == PartWalk::frame_kept) {
                     trail_paired_ = true; // (its picture between would move it on the CPU)
                 }
                 for (uint32_t k = 0; k < b.count; k++, at++) {
                     const int32_t *v = &mesh->vertices[size_t(b.first + k) * 8];
                     int32_t q[8];
                     memcpy(q, v, sizeof(q));
+                    if (by_kicks) {
+                        GsnInterpMove m = {};
+                        m.w[0] = GSN_IM_FLAT | GSN_IM_XY | GSN_IM_RGBA;
+                        m.w[1] = before->rgba[from[at]];
+                        m.w[2] = (uint32_t(v[0]) & 0xFF) | (uint32_t(v[1]) & 0xFF) << 8 |
+                                 (uint32_t(v[2]) & 0xFF) << 16 | (uint32_t(v[3]) & 0xFF) << 24;
+                        m.w[3] = before->xy[from[at]];
+                        m.w[4] = (uint32_t(v[4]) & 0xFFFF) | (uint32_t(v[5]) & 0xFFFF) << 16;
+                        trail_moves_.push_back(m);
+                    }
                     if (lerp) {
                         uint32_t was_xy = before->xy[from[at]], was_rgba = before->rgba[from[at]];
                         q[4] = int32_t(lerped(uint32_t(v[4]) & 0xFFFF, was_xy & 0xFFFF));
@@ -372,6 +394,12 @@ private:
                                              uint32_t(q[2]) | uint64_t(uint32_t(q[3])) << 32); // RGBAQ
                     front.write_packed_qword(0x5, uint32_t(q[4]) | uint64_t(uint32_t(q[5])) << 32,
                                              uint32_t(q[6]) | uint64_t(uint32_t(q[7])) << 32); // XYZ2 (XYZ3: ADC)
+                }
+                if (by_kicks) {
+                    if (front.native_kick_next() != native_kick_base + uint32_t(trail_moves_.size())) {
+                        trail_paired_ = true; // (a kick count off: never)
+                    }
+                    front.stop_native_kicks();
                 }
                 counts_.batches++;
             }
@@ -729,6 +757,14 @@ private:
     PartMoves parts_;
     PartWalk walk_ = PartWalk::frame;
     bool frame_kept_ = false, trail_paired_ = false, moved_on_cpu_ = false;
+    // (the frame's own walk kept) the trails' kicks' moves (take_trail_moves), and KF4_PC_TRAIL_KICKS (0: a trail
+    // paired refuses the frame's own walk, its pictures walked, as before)
+    std::vector<GsnInterpMove> trail_moves_;
+    bool trail_kicks_ = trail_kicks_wanted();
+    static bool trail_kicks_wanted() {
+        const char *v = getenv("KF4_PC_TRAIL_KICKS");
+        return !(v && strcmp(v, "0") == 0);
+    }
     float picture_u_ = 0.0f; // (1 - the picture's t)
 
 public:
@@ -770,6 +806,10 @@ void NativeDraws::end_frame_kept() {
 
 bool NativeDraws::trail_paired() const {
     return impl_->trail_paired();
+}
+
+std::vector<GsnInterpMove> NativeDraws::take_trail_moves() {
+    return impl_->take_trail_moves();
 }
 
 NativeCounts NativeDraws::counts() const {

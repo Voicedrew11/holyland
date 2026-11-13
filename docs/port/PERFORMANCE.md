@@ -206,6 +206,44 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
+
+Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to
+about 30, with game frames cut, whenever he swung the Moonlight Sword. Reproduced headless on origin/main 391e27cf
+(and on #133's build alike: not #133's): the owner's quick save (`--quick-load`), a pad script pressing SQUARE every 60
+vblanks from 2000 to 2900, the owner's picture settings (3x, native widescreen, MSAA 2, lod full, aniso 2, cut-out AA
+ssaa, colour exact, 2D smooth), `--frame-rate unlocked`, `KF4_PRESENT_SIM=240`.
+
+**Cause.** A trail paired with the frame before (`RD_PROGRAM_GS_STRIP`, the weapon's swing) was moved t of the way on
+the CPU in each picture between (`draw_gs_strip`), so a frame with one refused its own walk ("trail paired": 259 of
+1587 frames) and every picture between of it walked the frame's packets again on kf4-pc, none of those walks kept
+(3116 "walks not kept"): kf4-pc's sampled time during the swing was 75% `take_picture_between` (`draw_280`, the
+uploads made again, `vu1_record_000`). At 240 that keeps up (239.7 a second in the swing); uncapped, with ~13 pictures
+asked a frame, kf4-pc fell behind, the game slowed and the cut cut.
+
+**Fix.** The frame's own walk numbers the trail's kicks apart (from `native_kick_base`) with a FLAT move each (X, Y and
+RGBA t of the way from the partner point: the same sums as the CPU's lerp), numbered on from the stream's kicks when
+the walk is made the pictures' (PC_RENDERER.md, "A frame walked once"); the pump draws those frames again as any
+other. `KF4_PC_TRAIL_KICKS=0` restores the refusal. Left: 27 frames of the run still refuse (screen passes that move,
+counted under the same name).
+
+**Numbers** (Windows, RTX 5080, owner's settings, runs alternated, 2 rounds; seconds of play wholly before, during and
+after the swings; the display on, the GPU at 0.7-2.9 GHz and 2-25% busy just before each run, no other game running):
+
+| | pictures a second before / swing (lowest second) / after | game vblanks a second in the swing |
+|---|---|---|
+| main, unlocked | 864, 853 / 298.5 (185), 298.4 (161) / 446, 624 | 46.1, 45.5 |
+| fixed, unlocked | 849, 855 / 850.3 (831), 850.3 (833) / 861, 844 | 60.8, 60.9 |
+| main, 240 | 239.7 / 239.7 / 239.8 | 60.7 |
+| fixed, 240 | 239.8 / 239.8 / 239.8 | 60.8 |
+
+Pictures: byte for byte main's at 000, 009, 009:2 and 099 (240, `KF4_INTERP_DRAW_ALL=1`, the owner's settings, 204 a
+spot), and at the swing the trail's pictures between are main's exactly (132 pictures, vblanks 2004-2100). One
+difference there that is not the trail: 11 pixels on the HUD frame sprite's alpha-tested diagonal edges in the
+pictures between (2010-2064). These frames are now drawn by the pump, whose canvas missed the 2D mode (2D smooth),
+an older difference in main shown now because these frames take the pump; fixed separately in #137. The validation layer with synchronization validation: no messages at the swing and at the four spots
+(the owner's settings, 240). The unit tests pass (`pcr_gif_test` checks the native kicks' numbering).
+
 ## Found 2026-11-12: the game's 57-58 vblanks a second uncapped were vblanks left off the screen (#107)
 
 Windows, RTX 5080, ae9a9097, Andrew's profile (`pace_test.py`'s OWNER) at map 000, `--hz 500`. A per-vblank log (a

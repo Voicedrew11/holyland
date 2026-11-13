@@ -2000,6 +2000,7 @@ private:
         bool native = false;
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
+        bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         bool sprites = true;          // (every primitive a sprite: clear_depth_aliases)
         std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
@@ -2351,6 +2352,16 @@ private:
             }
         } else {
             b.moved = b.numbered;
+            if (b.native_kicks) {
+                // (a native draw's kicks, the trail's: numbered on from the stream's, Between::adopt_live_kicks)
+                for (Vertex &v : b.vertices) {
+                    for (int i = 0; i < 3; i++) {
+                        if (v.kicks[i] != no_kick && v.kicks[i] >= native_kick_base) {
+                            v.kicks[i] = v.kicks[i] - native_kick_base + t.kicks;
+                        }
+                    }
+                }
+            }
         }
         bool kept_read = textured && tex0_reads_kept(kept.state.tex0, t);
         if (kept_read) {
@@ -2492,6 +2503,7 @@ private:
         batch_.native = false;
         batch_.moved = false;
         batch_.numbered = false;
+        batch_.native_kicks = false;
         batch_.arena.reset();
         batch_.records.reset();
         batch_.triangles.reset();
@@ -2632,6 +2644,9 @@ private:
             moved = moved && p.vertices[i].kick != no_kick;
         }
         batch_.numbered |= moved;
+        for (uint32_t i = 0; moved && i < corners; i++) {
+            batch_.native_kicks |= p.vertices[i].kick >= native_kick_base;
+        }
         batch_.moved |= moved && between_ && between_->active();
         uint32_t fst_bit = fst ? K_FST : 0;
         batch_.sprites = batch_.sprites && p.shape != PrimitiveShape::triangle;

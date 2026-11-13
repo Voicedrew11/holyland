@@ -1000,7 +1000,12 @@ as a walk leaves them. `KF4_PC_KEPT_WALK=0`: every picture walks (5a).
   kept draws are made, so they need no check.
 - **Not kept** (the pictures walk, counted): a walk that read back from the GS's memory, or whose kicks were not the
   frame's count, or that met a trail paired with the frame before (its points are moved t of the way on the CPU,
-  `NativeDraws::moved_on_cpu`; moving that into the shader is to come).
+  `NativeDraws::moved_on_cpu`; moving that into the shader is to come). **2026-11-12**: the frame's own walk no
+  longer refuses a paired trail: it numbers the trail's kicks apart (`GifFrontEnd::number_native_kicks`, from
+  `native_kick_base`), each with a FLAT move (X, Y and RGBA t of the way from its partner, gif_moves.h's, the same
+  sums as `draw_gs_strip`'s lerp), numbered on from the stream's kicks when the walk is made the pictures'
+  (`as_picture_walk`, `Between::adopt_live_kicks`). A picture that walks still moves it on the CPU and is not kept.
+  `KF4_PC_TRAIL_KICKS=0` restores the refusal (PERFORMANCE.md, "the sword's swing").
 - `[stats] pc pictures between` now says how many were drawn again, and why the others walked.
 - The texture store's chunk ids are no longer used again after a state is loaded (`forget`), so that a signature
   cannot match a new chunk (the random seeds' counts move by one or two uploads found again).
