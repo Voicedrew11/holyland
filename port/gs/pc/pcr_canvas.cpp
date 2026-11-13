@@ -63,7 +63,7 @@ struct PrimPush {
     uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
-    float ztie;          // Z added to a GEQUAL batch's (number_tie)
+    uint32_t unused;     // (a record's size a multiple of 8 bytes)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
@@ -99,6 +99,7 @@ enum : uint32_t {
     F_DECAL = 0x400000,
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
+    F_EXACT_Z = 0x2000000, // (pcr_common.h's exact Z)
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -379,6 +380,10 @@ public:
         dual_ok_ = runs_ok_ && f.enabled_features.dualSrcBlend && !runs_plain_ &&
                    device_.get_gpu_properties().vendorID == 0x10DE;
         max_run_draws_ = std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u);
+        if (!exact_z_) {
+            fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
+                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no fragment shader barycentrics or depth clamp");
+        }
     }
 
     ~Impl() {
@@ -402,7 +407,6 @@ public:
     void set_between(const Between *between) {
         flush_batch();
         between_ = between;
-        walk_ties_.fill(0); // (a picture between's walk numbers its batches from its own start: number_tie)
         if (!between) {
             stop_keeping();
         }
@@ -2062,9 +2066,6 @@ private:
         // (a kept walk's batch: its texture's place in the walk's table, Kept::table, and its sampler's in Kept::samplers;
         // no_table: set 1's)
         uint32_t table_at = no_table, sampler_at = 0;
-        // (a GEQUAL batch's) Z added for its place among those drawn into its Z buffer since the buffer was cleared
-        // (number_tie)
-        float ztie = 0.0f;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -2929,7 +2930,6 @@ private:
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
-            number_tie(batch_);
             draw_batch(batch_);
             if (keeping_) {
                 kept_->keep(take_kept_batch());
@@ -3168,69 +3168,6 @@ private:
         return *cmd_;
     }
 
-    // Ties. The game draws decals (moss and grime on a wall, the dark shading on a rock, the lava over its bed, a
-    // puddle on a floor) as meshes of their own, cut into triangles differently from the surface they lie on, Z tested
-    // GEQUAL: the GS's whole Z ties the two, and the one drawn later is seen. The GPU's depth keeps the fraction, and
-    // two meshes cut differently differ by a hair (a few thousandths of a Z): the later one lost over whole triangles,
-    // a different set each frame, and flickered (the moss on the low wall before map 063's keep). So each GEQUAL batch
-    // is drawn nearer by its place among the batches drawn into its Z buffer since the buffer was cleared: ties_most
-    // at most (less than the GS's step between two things it keeps apart) shared out over as many places as the
-    // buffer's last frame had, tie_step a place at most. A later batch wins a tie by a little more than a hair,
-    // whichever of the two is the decal. The Z is worked out as the batch is made (number_tie) and kept with it, so
-    // that a picture between draws it with the same.
-    // (Before 2026-11-13 the decals alone, blended draws tested GEQUAL, were drawn half a Z nearer. A surface under a
-    // decal that is blended too (that wall: alpha 0x80) tied with it again and the moss lost by its cutting's 0.005 Z;
-    // and a decal drawn before its surface (map 028's puddle, under the floor drawn after it) won where the GS's later
-    // floor does. A place of a fixed 1/2048 Z ran out on busy frames (1450 GEQUAL batches before map 063's keep; map
-    // 099's rock and its dark shading both at the half Z, tied again). Steps measured on 063 with --decal-losses: from
-    // 1/512 to 1/2048 the same, smaller ones lose more. Tried 2026-11-12 and dropped: decals writing no Z, or their Z
-    // by a second pass: a fifth of some views wrong where a decal draw's own triangles overlap; Z made whole for every
-    // draw: lines over map 024's lava wherever a whole Z fell between it and its bed; nearer by a share of the
-    // distance: a rock showed through a nearer one.)
-    static constexpr float tie_step = 1.0f / 2048.0f;
-    static constexpr float ties_most = 0.5f;
-
-    // A GEQUAL batch's Z added (Batch::ztie), by its place among its Z buffer's GEQUAL batches: counted as the frame's
-    // stream makes them, from 0 at the Z buffer's clear (a batch of sprites of one Z written ZTST ALWAYS from its
-    // scissor's top left corner over its whole height or width, every pixel passing the alpha test); in a picture
-    // between's walk from 0 at the walk's start
-    void number_tie(Batch &b) {
-        const DrawState &s = b.state;
-        bool zte = bits(s.test, 16, 1) != 0, zwrite = zte && bits(s.zbuf, 32, 1) == 0;
-        uint32_t ztst = bits(s.test, 17, 2), zbp = bits(s.zbuf, 0, 9);
-        // (every pixel's Z written: not a sprite whose alpha test keeps its Z, as map 099's screen tints have, ATST
-        // NEVER drawing the frame only, which had the decals after it lose to the rock under them)
-        bool ate = bits(s.test, 0, 1) != 0, all_pass = !ate || bits(s.test, 1, 3) == 1;
-        uint32_t &count = (between_ ? walk_ties_ : ties_)[zbp];
-        if (zwrite && ztst == 1 && all_pass && clears_scissor(b)) {
-            if (!between_ && count != 0) { // (the game clears twice running, a context each)
-                last_ties_[zbp] = count;
-            }
-            count = 0;
-        }
-        b.ztie = 0.0f;
-        if (zte && ztst == 2) {
-            float step = std::min(tie_step, ties_most / float(std::max(last_ties_[zbp], 1u)));
-            b.ztie = std::min(float(count++) * step, ties_most);
-        }
-    }
-
-    static bool clears_scissor(const Batch &b) {
-        if (b.native || !b.sprites || b.vertices.empty()) {
-            return false;
-        }
-        for (const Vertex &v : b.vertices) {
-            if (v.z != b.vertices[0].z) {
-                return false;
-            }
-        }
-        uint64_t scissor = b.state.scissor;
-        // (from the scissor's top left corner its whole height or width: a clear's first column or row, as map 099
-        // clears in columns 64 pixels wide, a batch each)
-        bool corner = b.x0 <= int32_t(bits(scissor, 0, 11)) && b.y0 <= int32_t(bits(scissor, 32, 11));
-        return corner && (b.x1 >= int32_t(bits(scissor, 16, 11)) || b.y1 >= int32_t(bits(scissor, 48, 11)));
-    }
-
     // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
     // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
     static bool is_decal(const Batch &b) {
@@ -3416,8 +3353,8 @@ private:
                      : 0;
         flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
+        flags |= exact_z_ ? F_EXACT_Z : 0;
         push.flags = flags;
-        push.ztie = b.ztie;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
         uint32_t fix = (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8);
@@ -4152,11 +4089,16 @@ private:
         frag.sets[2].meta[0].array_size = DescriptorSetLayout::UNSIZED_ARRAY;
         frag.bindless_set_mask = 1u << 2;
         Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
-        Shader *fs = device_.request_shader(pcr_spv_pcr_prim_frag, sizeof(pcr_spv_pcr_prim_frag), &frag);
-        Shader *sfs = device_.request_shader(pcr_spv_pcr_prim_sample_frag, sizeof(pcr_spv_pcr_prim_sample_frag), &frag);
-        Shader *efs = device_.request_shader(pcr_spv_pcr_prim_early_frag, sizeof(pcr_spv_pcr_prim_early_frag), &frag);
-        Shader *esfs = device_.request_shader(pcr_spv_pcr_prim_sample_early_frag,
-                                              sizeof(pcr_spv_pcr_prim_sample_early_frag), &frag);
+        // (the fragment shaders with exact Z, _xz, where it is on: pcr_common.h)
+        auto shader = [&](const uint32_t *code, size_t size, const uint32_t *exact, size_t exact_size,
+                          const ResourceLayout *layout) {
+            return exact_z_ ? device_.request_shader(exact, exact_size, layout) : device_.request_shader(code, size, layout);
+        };
+#define PCR_SHADER(name, layout) \
+    shader(pcr_spv_##name, sizeof(pcr_spv_##name), pcr_spv_##name##_xz, sizeof(pcr_spv_##name##_xz), layout)
+        Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
+        Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
+#define PCR_VERTEX_SHADER(name, layout) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
         // (each vertex shader with the four fragment shaders: draw_batch's choice)
         auto programs_for = [&](int v, Shader *vertex) {
             programs_[v] = device_.request_program(vertex, fs);
@@ -4166,10 +4108,6 @@ private:
         };
         programs_for(0, vs);
         // (the same programs reading their fields from the picture's records: a kept walk's runs, draw_batch)
-        auto shader = [&](const uint32_t *code, size_t size, const ResourceLayout *layout) {
-            return device_.request_shader(code, size, layout);
-        };
-#define PCR_SHADER(name, layout) shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
         Shader *rfs = PCR_SHADER(pcr_prim_frag_rec, &frag), *rsfs = PCR_SHADER(pcr_prim_sample_frag_rec, &frag);
         Shader *refs = PCR_SHADER(pcr_prim_early_frag_rec, &frag);
         Shader *resfs = PCR_SHADER(pcr_prim_sample_early_frag_rec, &frag);
@@ -4179,7 +4117,7 @@ private:
             run_early_programs_[v] = device_.request_program(vertex, refs);
             run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
         };
-        run_programs_for(0, PCR_SHADER(pcr_prim_vert_rec, &vert));
+        run_programs_for(0, PCR_VERTEX_SHADER(pcr_prim_vert_rec, &vert));
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0] = frag.sets[0];
@@ -4214,11 +4152,12 @@ private:
         programs_for(3, nvs700);
         Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
         programs_for(4, nvsripple);
-        run_programs_for(1, PCR_SHADER(pcr_nd000_vert_rec, &nd));
-        run_programs_for(2, PCR_SHADER(pcr_nd280_vert_rec, &nd));
-        run_programs_for(3, PCR_SHADER(pcr_nd700_vert_rec, &nd));
-        run_programs_for(4, PCR_SHADER(pcr_ndripple_vert_rec, &nd));
+        run_programs_for(1, PCR_VERTEX_SHADER(pcr_nd000_vert_rec, &nd));
+        run_programs_for(2, PCR_VERTEX_SHADER(pcr_nd280_vert_rec, &nd));
+        run_programs_for(3, PCR_VERTEX_SHADER(pcr_nd700_vert_rec, &nd));
+        run_programs_for(4, PCR_VERTEX_SHADER(pcr_ndripple_vert_rec, &nd));
 #undef PCR_SHADER
+#undef PCR_VERTEX_SHADER
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -4287,6 +4226,13 @@ private:
     uint32_t samples_ = 1, pending_samples_ = 1;
     bool cutout_aa_ = false;
     const bool sample_shading_ = device_.get_device_features().enabled_features.sampleRateShading != VK_FALSE;
+    // Exact Z (pcr_common.h): the GS's whole Z at each pixel, so that a decal ties with the surface under it as on the GS
+    // and the later draw wins. Needs the barycentric extension (each corner's Z in the fragment shader) and depth clamp
+    // (the corners' bound past 1). Without them, or with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn
+    // over a surface cut into other triangles lose to it here and there.
+    const bool exact_z_ = device_.get_device_features().barycentric_features.fragmentShaderBarycentric &&
+                          device_.get_device_features().enabled_features.depthClamp &&
+                          !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
     struct MsaaCounts {
         uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;
     } counts_msaa_;
@@ -4310,9 +4256,6 @@ private:
     BufferHandle trace_buf_;
     Program *probe_program_ = nullptr, *probe_ms_program_ = nullptr;
     bool decal_losses_ = false;
-    // number_tie's counts, by the Z buffer's base page: the frame's stream's, a picture between's walk's, and the
-    // frame's stream's at the buffer's last clear
-    std::array<uint32_t, 512> ties_{}, walk_ties_{}, last_ties_{};
     const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;

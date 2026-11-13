@@ -48,6 +48,7 @@ void main() {
     d = draws[uint(gl_InstanceIndex) & 0x3FFFFFFFu];
     ivec4 P = mesh.q[at * 4u];
     uint z;
+    float zfrac = 0.0;
     Place p = vertex_place(at, z);
     Place w = lifted_place(P);
     int xi = p.x, yi = p.y, wx = w.x, wy = w.y;
@@ -57,6 +58,7 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
+        zfrac = m.zfrac;
         Moved mw = moved(w, 0u);
         // (a moved place off the 16 bits keeps the frame's S and T: moved() starts from the GS's 16 bits)
         if (!mw.drop && ((w.x | w.y) & int(0xFFFF0000u)) == 0) {
@@ -82,7 +84,7 @@ void main() {
     uint rgba = uint(d.info.w);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac), 1.0);
     v_color = vec4(float(rgba & 0xFFu), float((rgba >> 8) & 0xFFu), float((rgba >> 16) & 0xFFu), float(rgba >> 24));
     v_stq = vec3(screen_st(wx, wy), 1.0);
     v_fog = d.fog.x;

@@ -20,6 +20,9 @@ PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
+# fragment shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
+# the barycentric extension), as <name>_xz and <name>_rec_xz
+EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec
 RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
@@ -54,9 +57,11 @@ def build(glslang, folder, target, prefix, what, where):
     with tempfile.TemporaryDirectory() as tmp:
         made = [(name, name.replace(".", "_"), []) for name in sources]
         made += [(name, name.replace(".", "_") + "_rec", ["-DPCR_RECORDS"]) for name in sources if name in RECORDS]
+        made += [(name, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for name, symbol, defines in list(made)
+                 if name in EXACT_Z]
         for name, symbol, defines in made:
             out = os.path.join(tmp, symbol + ".spv")
-            if defines and name.endswith(".vert"):
+            if name.endswith(".vert"):
                 defines = defines + ["-DPCR_STAGE_VERTEX"]
             cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED] + defines + [
                 "-o", out, os.path.join(folder, name)]

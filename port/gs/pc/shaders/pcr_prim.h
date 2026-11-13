@@ -5,7 +5,18 @@
 // Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it; a blend
 // with no Vulkan form is the GS's here, from a copy of the destination (PCR_F_SHADER_BLEND).
 #extension GL_EXT_nonuniform_qualifier : require
+#ifdef PCR_EXACT_Z
+#extension GL_EXT_fragment_shader_barycentric : require
+#endif
 #include "pcr_common.h"
+
+// (PCR_EXACT_Z, the programs' fragment shaders where the GPU has the barycentric extension: pcr_common.h's exact Z) the
+// triangle's corners' Z, each its own; the depth written never past the corners' bound (the GPU's early tests keep)
+#ifdef PCR_EXACT_Z
+layout(location = 10) pervertexEXT in uint v_z[];
+layout(location = 11) pervertexEXT in float v_zfrac[];
+layout(depth_less) out float gl_FragDepth;
+#endif
 
 // (pcr_prim_sample.frag, PCR_SAMPLE: shaded once a sample of a multisampled target, its inputs taken at each sample:
 // the cut-outs with cut-out AA, pcr_canvas.cpp)
@@ -17,7 +28,9 @@
 // (pcr_prim_early.frag, PCR_EARLY: the draws that discard nothing, no alpha test's pass and no DATE from a copy:
 // without a discard in the shader the depth test and write are made before it (the GPU's early Z), which a shader
 // that may discard keeps until after it; the same pixels either way)
-#ifdef PCR_EARLY
+// With exact Z the depth is the shader's, so the test can't be made before it: the GPU's own early tests on the corners'
+// bound (depth_less above) stand in.
+#if defined(PCR_EARLY) && !defined(PCR_EXACT_Z)
 layout(early_fragment_tests) in;
 #endif
 layout(location = 0) PCR_IN vec4 v_color;
@@ -124,7 +137,7 @@ void trace(uint outcome, uvec4 c) {
 #endif
     uint rgba = min(c.r, 255u) | min(c.g, 255u) << 8 | min(c.b, 255u) << 16 | min(c.a, 255u) << 24;
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
-    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked, not moved: pc.ztie)
+    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked)
     u_trace.rec[i * 3u] = uvec4(pc.trace_draw, uint(gl_PrimitiveID), floatBitsToUint(gl_FragCoord.z / pc.zscale),
                                 floatBitsToUint(trace_dz.x));
     u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), uint(gl_SampleMaskIn[0]), uint(sample_id), rgba);
@@ -467,9 +480,27 @@ bool alpha_passes(uint a) {
     }
 }
 
+#ifdef PCR_EXACT_Z
+// The pixel's whole Z (pcr_common.h's exact Z), as paraLLEl-GS works it out: the first corner's Z plus the rounded
+// share of the two others' differences from it at the pixel (or the sample; with a moved corner's fraction), clamped
+// to the Z buffer's largest
+void pcr_exact_depth() {
+    vec3 b = gl_BaryCoordNoPerspEXT;
+    uint z0 = v_z[0];
+    float f0 = v_zfrac[0];
+    float dz = f0 + b.y * (float(int(v_z[1] - z0)) + v_zfrac[1] - f0) + b.z * (float(int(v_z[2] - z0)) + v_zfrac[2] - f0);
+    int r = int(roundEven(dz));
+    uint z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
+    gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
+}
+#endif
+
 void main() {
 #ifdef PCR_RECORDS
     pcr_take_record();
+#endif
+#ifdef PCR_EXACT_Z
+    pcr_exact_depth();
 #endif
     if (pc.trace_xy != PCR_NO_TRACE) {
         trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;
