@@ -1,0 +1,5 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The pixel trace's probe of a multisampled surface (pcr_probe.h)
+#define PCR_PROBE_MS
+#include "pcr_probe.h"

@@ -20,6 +20,10 @@ PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
+# shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
+# kept walks' runs drawn indirect), as <name>_rec
+RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
+           "pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 
 
 def find_glslang(given):
@@ -48,23 +52,27 @@ def build(glslang, folder, target, prefix, what, where):
         "",
     ]
     with tempfile.TemporaryDirectory() as tmp:
-        for name in sources:
-            out = os.path.join(tmp, name + ".spv")
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED, "-o", out,
-                   os.path.join(folder, name)]
+        made = [(name, name.replace(".", "_"), []) for name in sources]
+        made += [(name, name.replace(".", "_") + "_rec", ["-DPCR_RECORDS"]) for name in sources if name in RECORDS]
+        for name, symbol, defines in made:
+            out = os.path.join(tmp, symbol + ".spv")
+            if defines and name.endswith(".vert"):
+                defines = defines + ["-DPCR_STAGE_VERTEX"]
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED] + defines + [
+                "-o", out, os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                sys.exit("%s failed:\n%s%s" % (name, result.stdout, result.stderr))
+                sys.exit("%s failed:\n%s%s" % (symbol, result.stdout, result.stderr))
             data = open(out, "rb").read()
             words = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
-            lines.append("static const uint32_t %s%s[%d] = {" % (prefix, name.replace(".", "_"), len(words)))
+            lines.append("static const uint32_t %s%s[%d] = {" % (prefix, symbol, len(words)))
             for i in range(0, len(words), 8):
                 lines.append("    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + ",")
             lines.append("};")
             lines.append("")
     with open(target, "w", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %s (%d shaders)" % (os.path.relpath(target, ROOT), len(sources)))
+    print("wrote %s (%d shaders)" % (os.path.relpath(target, ROOT), len(made)))
 
 
 if __name__ == "__main__":

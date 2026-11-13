@@ -21,6 +21,8 @@ struct FrameTargets {
     uint32_t draw_fbp = 0, shown_fbp = 0; // (FBP: in pages of 32 blocks)
     bool uploads_asked_again = false;     // the uploads into anything but draw_fbp asked for again (0x7C)
     bool shown_kept = false;              // the frame shown kept (0xF2): a draw whose TEX0 names it reads the copy
+    uint32_t kicks = 0;                   // the stream's kicks: a native draw's numbered kicks (native_kick_base on)
+                                          // are numbered on from it in the pictures' walk
 };
 
 // Why a frame's own walk was not made its pictures' walk (and the frame's stream was walked)

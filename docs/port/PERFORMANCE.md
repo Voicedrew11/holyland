@@ -206,6 +206,44 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
+
+Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to
+about 30, with game frames cut, whenever he swung the Moonlight Sword. Reproduced headless on origin/main 391e27cf
+(and on #133's build alike: not #133's): the owner's quick save (`--quick-load`), a pad script pressing SQUARE every 60
+vblanks from 2000 to 2900, the owner's picture settings (3x, native widescreen, MSAA 2, lod full, aniso 2, cut-out AA
+ssaa, colour exact, 2D smooth), `--frame-rate unlocked`, `KF4_PRESENT_SIM=240`.
+
+**Cause.** A trail paired with the frame before (`RD_PROGRAM_GS_STRIP`, the weapon's swing) was moved t of the way on
+the CPU in each picture between (`draw_gs_strip`), so a frame with one refused its own walk ("trail paired": 259 of
+1587 frames) and every picture between of it walked the frame's packets again on kf4-pc, none of those walks kept
+(3116 "walks not kept"): kf4-pc's sampled time during the swing was 75% `take_picture_between` (`draw_280`, the
+uploads made again, `vu1_record_000`). At 240 that keeps up (239.7 a second in the swing); uncapped, with ~13 pictures
+asked a frame, kf4-pc fell behind, the game slowed and the cut cut.
+
+**Fix.** The frame's own walk numbers the trail's kicks apart (from `native_kick_base`) with a FLAT move each (X, Y and
+RGBA t of the way from the partner point: the same sums as the CPU's lerp), numbered on from the stream's kicks when
+the walk is made the pictures' (PC_RENDERER.md, "A frame walked once"); the pump draws those frames again as any
+other. `KF4_PC_TRAIL_KICKS=0` restores the refusal. Left: 27 frames of the run still refuse (screen passes that move,
+counted under the same name).
+
+**Numbers** (Windows, RTX 5080, owner's settings, runs alternated, 2 rounds; seconds of play wholly before, during and
+after the swings; the display on, the GPU at 0.7-2.9 GHz and 2-25% busy just before each run, no other game running):
+
+| | pictures a second before / swing (lowest second) / after | game vblanks a second in the swing |
+|---|---|---|
+| main, unlocked | 864, 853 / 298.5 (185), 298.4 (161) / 446, 624 | 46.1, 45.5 |
+| fixed, unlocked | 849, 855 / 850.3 (831), 850.3 (833) / 861, 844 | 60.8, 60.9 |
+| main, 240 | 239.7 / 239.7 / 239.8 | 60.7 |
+| fixed, 240 | 239.8 / 239.8 / 239.8 | 60.8 |
+
+Pictures: byte for byte main's at 000, 009, 009:2 and 099 (240, `KF4_INTERP_DRAW_ALL=1`, the owner's settings, 204 a
+spot), and at the swing the trail's pictures between are main's exactly (132 pictures, vblanks 2004-2100). One
+difference there that is not the trail: 11 pixels on the HUD frame sprite's alpha-tested diagonal edges in the
+pictures between (2010-2064). These frames are now drawn by the pump, whose canvas missed the 2D mode (2D smooth),
+an older difference in main shown now because these frames take the pump; fixed separately in #137. The validation layer with synchronization validation: no messages at the swing and at the four spots
+(the owner's settings, 240). The unit tests pass (`pcr_gif_test` checks the native kicks' numbering).
+
 ## Found 2026-11-12: the game's 57-58 vblanks a second uncapped were vblanks left off the screen (#107)
 
 Windows, RTX 5080, ae9a9097, Andrew's profile (`pace_test.py`'s OWNER) at map 000, `--hz 500`. A per-vblank log (a
@@ -253,6 +291,160 @@ low: judging on pictures left out too, as `--frame-rate unlocked` does, would ma
 a few pictures a second). The backlog at a vblank's start is 1 most of the time: the pictures of a game frame wait
 for kf4-pc's intake before the pump starts them (2026-11-06), so the next step is the timeline of a frame's
 pictures between (asked → pump start → GPU done), not the vblank.
+
+## Built 2026-11-12 (afternoon): a kept walk's CLUTs and textures bound once (#110, steps 1-2 of the design below)
+
+Branch `perf/bindless`, two commits, the design's first two steps ("Designed, not built" below):
+1. **A walk's CLUTs in one buffer of the walk's** (`put_cluts_on_gpu`): its batches' CLUTs (the same CLUT once) are put
+   in a storage buffer when the walk is handed out, as its vertices are; its pictures between read them there (set 0,
+   binding 15, `u_walk_cluts`, at `PrimPush::clut_at`) instead of a 1 KB copy into a set 1 of its own at each draw.
+   **Worth almost nothing at the measured spots**: a CLUT is read by the shader only for a texture the GPU's sampler
+   cannot read (a region mode, a texture decoded in part), and at 009 there are none (`--stats`: 514,208 of 547,112
+   batches sampled, 0 by the GS's read); the sampler's textures have their CLUT applied when decoded. Kept because
+   step 2 needs a CLUT that is not in set 1, and other maps do read by the GS.
+2. **A walk's textures in one descriptor table of the walk's** (`put_table_on_gpu`, `make_table`): every image its
+   batches read that the walk holds (decoded and sampled textures) gets a place in a bindless table (Granite's
+   bindless set: set 2, binding 0, an unsized array of sampled images; `u_table` and `u_table_uint` alias it, colours
+   and integer texels), written once when the walk is handed out; its pool is the walk's and goes with it. The
+   samplers go in a 16-entry array in set 0 (bindings 16-31, `u_samplers`, the stock nearest one first, 15 of the
+   walk's; a batch whose sampler finds no room keeps set 1's). A batch's places are in `PrimPush::table`. Its
+   pictures between leave set 1 as it is (the dummies) and bind the table once: **no descriptor set is allocated or
+   written a batch** (set 0 still at each render pass, as before). A surface's texture and the destination copies
+   (shader blends, DATE by a copy) stay on set 1, made at the draw. kf4-pc's own frame draws bind a one-dummy table
+   and read set 1 as before. Granite needed no patch. The device must have `descriptorIndexing` (Vulkan 1.2's; every
+   desktop driver): without it the batch programs' layout fails, as no fallback was built.
+
+`KF4_PC_BINDLESS=0` undoes both (to compare). `--stats`' pump line counts the walks' textured batches and how many
+read the table (Andrew's 009 at 500, 2470 vblanks: 3,746,274 textured batches, all from the table, none with a walk's CLUT).
+
+**Checks.** Pictures byte for byte origin/main's (391e27cf) at 000, 009, 009:2, 099 at 240 with every picture between
+(`KF4_INTERP_DRAW_ALL=1`, vblanks 2400-2403 and 2460, 20 pictures a spot), 1x and 4x MSAA 2, after each step (160
+each); the title and menus (`tests/newgame.pad`, vblanks 300-1800) byte for byte. The validation layer with sync
+validation silent at the four spots, 1x and 4x MSAA 2, and with `KF4_PC_PUSH_DESCRIPTORS=1` at 000 and 009 (1x).
+Unit tests 16/16 (Windows). Not run: Linux/RADV, `KF4_PC_PUMP=0` (kf4-pc drawing the walks itself: the same code
+path, `draw_again`).
+
+**A/B** (origin/main 391e27cf against the branch; Windows, RTX 5080, **display off** in every round (owner at work),
+builds alternated). Pump CPU (`build_cost.py`, 009, the owner's settings, 15 s, 3 runs, ms of CPU a second of play):
+
+| rate | main | bindless | kf4-pc main → bindless |
+|---|---|---|---|
+| `--hz 500` | 494 +-18 | **363 +-7 (-27%)** | 379 → 369 |
+| 240 | 200 +-6 | **167 +-4 (-17%)** | 365 → 365 |
+
+Pace (`pace_cut.py`: `pace_test` 25 s at `--hz 500`, plus the gaps between pictures handed to the window, the
+pictures between left out as behind and those the window showed late; 3 rounds 15:26-15:55, the order swapped each
+round, GPU 2167-2175 MHz at each round's end). Median [min-max] of 3:
+
+| profile | spot | build | pictures/s | game vblanks/s | gap p99 / sd ms | left out | shown late |
+|---|---|---|---|---|---|---|---|
+| andrew | 000 | main | 355.0 [341.4-358.5] | 60.7 | 14.0 / 2.43 | 471 [369-495] | 2274 |
+| | | bindless | **370.1** [361.3-380.7] | 60.6 | 13.8 / 2.23 | 496 [478-500] | 1965 |
+| andrew | 009 | main | 331.6 [323.2-334.2] | 60.7 | 13.2 / 2.14 | 613 [574-629] | 2158 |
+| | | bindless | 335.4 [329.8-345.2] | 60.6 | 13.9 / 2.16 | 606 [583-629] | 1658 |
+| sean | 000 | main | 498.1 [496.6-498.4] | 60.8 | 2.4 / 0.41 | 32 [25-32] | 73 |
+| | | bindless | 496.1 [495.3-499.2] | 60.9 | 2.5 / 0.51 | 47 [32-79] | 75 |
+| sean | 009 | main | 474.8 [474.0-486.6] | 60.8 | 7.3 / 0.94 | 143 [143-148] | 536 |
+| | | bindless | **493.8** [493.7-498.5] | 60.9 | **2.3 / 0.59** | 150 [149-186] | **206** |
+
+Less pump CPU did **not** cost Andrew's uncapped rate this time (the worry in "Before building it" below: #131's push
+descriptors lowered it): Andrew's 000 +4%, 009 +1%, the game at 60.6-60.9 vblanks a second in every cell. The owner's
+009 now reaches the cap (+4%, the gaps' p99 7.3 → 2.3 ms, shown late 536 → 206); 000 was at the cap already. Left-outs
+are the same within the spread. The rate is still bounded by latency, not the pump (the timeline above).
+Push descriptors (`KF4_PC_PUSH_DESCRIPTORS=1`) were not measured again: with the table, a kept walk's set 1 does not
+change from batch to batch, so pushing it matters only for kf4-pc's own draws.
+
+**What was left** (the design's steps 3-4) was built the night after: below.
+
+## Built 2026-11-13: a kept walk's batches drawn in runs, one indirect draw each (#110, steps 3-4)
+
+Branch `perf/indirect-draws` (on `perf/bindless`). Drawn again, consecutive batches of a kept walk whose set 1 is the
+dummies (texture from the walk's table, CLUT the walk's, no copy made at the draw) and whose state is the same (the
+pass, viewport, scissor, program, depth, blend, write mask, blend constant, a native program's buffers) are one
+**run**: each batch's push constants (`PrimPush`, now 112 bytes with `record` and `factors`) go into a record of the
+picture's, its draws (a GIF batch's one, a native batch's one a run of triangles) into an indirect draw's commands, and
+the run is one `vkCmdDrawIndirect`. The records and commands are one host-visible buffer a picture between (`Runs`,
+sized for every batch's draws when the walk is drawn again, set 1 binding 6 `u_records`); the runs' programs are the
+batch programs built a second time with `PCR_RECORDS` (`tools/build_shaders.py`'s `_rec` shaders: `pc` is then the
+record at the push constants' `record` + `gl_DrawID` in the vertex stage, which hands the twenty words the fragment
+stage reads on as flat varyings: read from the record at every pixel, the GPU took about 6% longer a picture
+between). Every batch program declares the records binding, so a change between a run's program and the others binds nothing again.
+A run ends before anything else is recorded (`cmd()`, `end_pass`, `submit`) and before a batch of other state sets its
+state: `draw_batch` now works out everything first (the clear, the textures, the blend, the run's key, the first pass's
+program) and sets state after (the first build set the batch's depth compare and opaque state before ending the run
+before it, and drew most of the scene black: the run's draws took the next batch's state). Granite needed two device
+features turned on (`cmake/granite_depth_bounds.cmake`): `drawIndirectFirstInstance` (a native run's commands keep
+its `firstInstance`) and `dualSrcBlend` (below). `--stats`' pump line counts the runs and their draws.
+
+**The blend.** With the blend in the key, the runs at 009 were 1.2 draws long: native 280 alternates two blends about
+every batch (Cs + Cd·As, `ONE`/`SRC_ALPHA`, and Cs·As + Cd·(1 - As), `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`; 938k of
+1.16M run ends at 009 were the blend). So a run's batch whose blend is ADD with colour factors among zero, one, As,
+FIX/128 and their one minus takes its factors from the fragment shader (dual-source blending: `SRC1_COLOR` for the source, `ONE_MINUS_SRC1_ALPHA` for the destination, alpha one and zero, the
+alpha out then the alpha the blend would have written, As·128/255 where it was As/128 by `CONSTANT_ALPHA`): every such
+batch has one blend state. An unblended batch could join them too (blended with one and zero), but it then reads its
+target: Andrew's 000 uncapped lost 10% of its pictures, so it ends a dual-source run (`KF4_PC_INDIRECT=unblended`
+puts it in, to compare). The runs at 009 are now 5-10 draws long (1x: 1.93M draws in 194k runs at 009, 1.33M in
+144k at 000). The pictures are byte for byte the same only with the factors given as NVIDIA's blend holds them, found by A/B at the spots:
+- a source factor as it is (As, FIX/128: the blend cuts it as it cuts its own `SRC_ALPHA` or constant);
+- a destination factor as one minus it, the blend taking it from one itself (`ONE_MINUS_SRC1_ALPHA`): given as
+  1 - As, Cs·As + Cd·(1 - As) came out a value or two darker (009);
+- a one minus made in the shader as one minus the factor as the blend holds it: NVIDIA's blend cuts a factor down to
+  the target's precision, floor(255·f)/255 into an 8-bit target and floor(65535·f)/65535 into colour high's 16-bit
+  one (Cs + Cd·As as 1 - (1 - As): pixels a value or two lighter at 000 and 009:2 until then; rounding, 10 or 12 bits
+  did not match, floor to 8 and 16 bits did).
+
+That is NVIDIA's blend, not Vulkan's (the spec leaves the blend's precision to the implementation), so the dual-source
+blend is used on NVIDIA only (`vendorID` 0x10DE); elsewhere a blend change ends a run, which is what
+`KF4_PC_INDIRECT=plain` gives everywhere (byte for byte at the spots too). `KF4_PC_INDIRECT=0`: a draw a batch, as
+before.
+
+What still ends a run: a GIF batch after a native one or the other way, a native batch of another program, an
+unblended batch among blended ones, a change of scissor, depth state or program (early Z or not, a cut-out's
+per-sample shader: the owner's settings have the most), a pass change, a batch outside runs (a surface's texture, a
+destination copy, DATE), the pump's submit every 128 batches.
+
+**Checks** (the final build). Pictures byte for byte `perf/bindless`'s (89a89dc6, itself byte for byte origin/main's)
+at 000, 009, 009:2, 099 at 240 with every picture between (`KF4_INTERP_DRAW_ALL=1`, vblanks 2400-2403 and 2460, 20
+pictures a spot), 1x, 4x MSAA 2 and colour high (4x MSAA 2), and the owner's settings at 009; the title and menus
+(`tests/newgame.pad`, vblanks 400-1800) byte for byte; `KF4_PC_INDIRECT=0` and `=plain` byte for byte at 009 and 000.
+One colour-high run at 009 that overlapped a timing run drew half the pictures between and had 10 of its 20 pictures
+differ; four more runs there (one beside it, three after) were byte for byte. The validation layer with sync validation
+silent at the four spots, 1x and 4x MSAA 2. Unit tests 16/16 (Windows). Not run: Linux/RADV (where the runs are plain),
+`KF4_PC_PUMP=0`.
+
+**A/B** (`perf/bindless` 89a89dc6 against the branch; Windows, RTX 5080, display on, builds alternated; another agent
+timing in turns under the same lock). Pump CPU (`build_cost.py`, 009, the owner's settings, 15 s, 3 runs,
+ms of CPU a second of play):
+
+| rate | bindless | runs | kf4-pc bindless → runs |
+|---|---|---|---|
+| `--hz 500` | 342 +-12 | **276 +-1 (-19%)** | 367 → 352 |
+| 240 | 163 +-9 | **120 +-2 (-26%)** | 369 → 372 |
+
+(The first build, with unblended batches in the dual-source runs too: 361 → 287 at 500, about the same.)
+
+Pace (`pace_cut.py`: `pace_test` 25 s, the gaps between pictures handed to the window, the pictures between left out as
+behind; 3 rounds at `--hz 500` 07:04-07:31, 2 at 240, the order swapped each round, GPU at 2880 MHz). Median [min-max]:
+
+| profile | spot | build | pictures/s at 500 | GPU ms a picture | gap p99 ms | left out | pictures/s at 240 | GPU ms at 240 |
+|---|---|---|---|---|---|---|---|---|
+| andrew | 000 | bindless | 474.4 [474.0-482.6] | 1.466 | 5.3 | 175 | 239.8 | 1.359 |
+| | | runs | 477.7 [470.8-482.4] | 1.499 (+2.3%) | 4.0 | 405 | 239.4 | 1.385 (+1.9%) |
+| andrew | 009 | bindless | 386.4 [380.8-387.1] | 1.570 | 13.6 | 441 | 239.5 | 1.451 |
+| | | runs | 388.8 [379.0-392.8] | 1.599 (+1.8%) | 14.4 | 715 | 239.6 | 1.478 (+1.9%) |
+| sean | 000 | bindless | 499.0 [498.2-499.0] | 1.121 | 2.4 | 33 | 239.8 | 1.067 |
+| | | runs | 499.1 [498.5-499.1] | 1.129 (+0.7%) | 2.4 | 231 | 239.8 | 1.093 (+2.4%) |
+| sean | 009 | bindless | 497.5 [497.5-498.4] | 1.136 | 2.4 | 113 | 239.4 | 1.076 |
+| | | runs | 498.9 [495.8-499.0] | 1.111 (-2.2%) | 2.5 | 299 | 239.6 | 1.062 (-1.3%) |
+
+The game at 60.5-60.9 vblanks a second in every cell. So: the pump's CPU a picture down a fifth to a quarter, the
+pictures a second the same (Andrew's within the spread, the owner's at the cap), **the GPU about 2% longer a picture**
+at Andrew's settings (the runs' programs, the dual-source blend). Before the fragment fields went flat and unblended
+batches left the dual-source runs, the GPU was 6% longer and Andrew's 000 uncapped lost 10% (434.8 against 480.4 in
+an earlier round). **More pictures left out as behind at 500** (2-7 times as many, the rate the same): the pump
+finishing sooner leaves the cut and the latency to decide (as with #131's push descriptors); not looked into. At 240
+nothing changes but the pump's CPU. A pace round at 500 that overlapped the correctness runs (06:11-06:39) was thrown
+away (the bindless build's GPU time 1.47-1.89 ms in it).
 
 ## Built 2026-11-12 (later): the cut judges on pictures left out, and a frame's pictures between followed
 
@@ -467,7 +659,7 @@ descriptors at 000 and 009): only VUID-RuntimeSpirv-OpEntryPoint-08743 at 009, t
 missing `v_rect`, fixed on `perf/gpu-picture`). Unit tests 16/16 (Windows). Not run: Linux/RADV, `KF4_PC_PUMP=0`,
 `--renderer gs` (its Granite gets the same patch, which only skips identical rebinds).
 
-### Designed, not built: bindless textures and merged draws on the kept walks
+### Designed: bindless textures and merged draws on the kept walks (steps 1-2 built 2026-11-12, 3-4 2026-11-13, above)
 
 **What a kept walk is to the GPU.** The pump draws the same walk (`Kept`: its batches, uploads, copies, marks) for every
 picture between of a game frame: three times a frame at 240, seven at 500. Only set 0's picture buffer (the time and
@@ -528,7 +720,8 @@ are made as they go.
 1. CLUTs into the walk's buffer (smallest; a storage buffer in set 0; no bindless yet).
 2. The bindless table for held textures + a sampler array; per-draw textures stay on set 1 (a flag picks the source).
 3. Records instead of push constants for kept batches.
-4. Runs as indirect draws; `KF4_PC_RUNS=0` keeps one call a batch to compare.
+4. Runs as indirect draws; `KF4_PC_INDIRECT=0` keeps one call a batch to compare (built: records by `gl_DrawID`, not
+   `firstInstance`, which native batches already use).
 Granite needs nothing patched for 1-3 (its bindless and indirect paths exist; the device must be made with
 `descriptorIndexing`, which Granite enables when present). Not considered: Granite's descriptor buffer / descriptor
 heap paths (`CONTEXT_CREATION_ENABLE_DESCRIPTOR_BUFFER_BIT`): they change every Granite user in the process
@@ -673,7 +866,10 @@ pictures sooner, so the backlog the cut judges falls differently?).
      (uncapped), below. The pump's other submits (every 128 batches) are left.
    - **Descriptor sets: done 2026-11-12** (#110, above: the pump 28% less CPU at 009 uncapped; Andrew's uncapped rate
      5% lower, not yet explained). Left of the old item 2: **merged draws and bindless textures** for the per-draw
-     cost that remains (the driver's draw, set 1 and dynamic state, about 60% of the pump): designed above, not built.
+     cost that remains (the driver's draw, set 1 and dynamic state, about 60% of the pump): designed above. **Bindless
+     textures built 2026-11-12** (steps 1-2, above: no descriptor set a batch in a kept walk; the pump -27% CPU at 009
+     uncapped); **merged draws built 2026-11-13** (steps 3-4, above: runs of a kept walk's batches, one indirect draw
+     each; the pump -19% CPU at 009 uncapped, -26% at 240; 2-3% more GPU time a picture).
 2. **`kf4-pc`'s intake**: **done 2026-11-12** (#108, above: the VU maths, uploads found without hashing, copies
    and CLUT colours kept; kf4-pc -24 to -26% CPU at 009, a frame's intake -28 to -34%). Kept steps out of the variant were done 2026-11-07. Left of it (009, 240):
    - **An upload owned again block by block** (`own` → `take_nibbles`, ~11%): mostly cache misses on each block's

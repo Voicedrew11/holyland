@@ -4,6 +4,7 @@
 // test, in its integers. The blend is
 // Vulkan's (the factors pcr_canvas.cpp picks for ALPHA), with the colour premultiplied here where it needs it; a blend
 // with no Vulkan form is the GS's here, from a copy of the destination (PCR_F_SHADER_BLEND).
+#extension GL_EXT_nonuniform_qualifier : require
 #include "pcr_common.h"
 
 // (pcr_prim_sample.frag, PCR_SAMPLE: shaded once a sample of a multisampled target, its inputs taken at each sample:
@@ -25,6 +26,12 @@ layout(location = 2) PCR_IN float v_fog;
 layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.vert's a_rect)
 
 layout(location = 0) out vec4 o_color;
+#ifdef PCR_RECORDS
+// (a run's draw, pc.factors' top bit: the blend's colour factors, the source's in rgb and one minus the destination's in
+// alpha (the blend's SRC1_COLOR and ONE_MINUS_SRC1_ALPHA); the colour out's alpha then the alpha the blend would have
+// written)
+layout(location = 0, index = 1) out vec4 o_factor;
+#endif
 
 layout(set = 1, binding = 0) uniform usampler2D u_texels;  // RGBA8 raw (R8G8B8A8_UINT) or indices (R8_UINT)
 layout(set = 1, binding = 1) uniform sampler2D u_surface;  // a texture that is a drawn surface (its copy)
@@ -34,6 +41,95 @@ layout(set = 1, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) 
 layout(set = 1, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
 } u_clut;
+// (pc.clut_at) a kept walk's CLUTs, 256 colours each, put on the GPU once when the walk is handed out (pcr_canvas.cpp's
+// put_cluts_on_gpu): its pictures between bind no CLUT a batch
+layout(set = 0, binding = 15, std430) readonly buffer WalkCluts {
+    uint colours[];
+} u_walk_cluts;
+// (pc.table) a kept walk's textures, written once when the walk is handed out (pcr_canvas.cpp's put_table_on_gpu): its
+// pictures between bind no texture a batch. One binding, the images alone (Granite's bindless set), read as integers
+// (the texels: R8_UINT, R8G8B8A8_UINT) or as colours (a sampled texture's: RGBA8), with the samplers beside them; every
+// draw's index is the same across it (a push constant), so no nonuniformEXT
+layout(set = 2, binding = 0) uniform texture2D u_table[];
+layout(set = 2, binding = 0) uniform utexture2D u_table_uint[];
+layout(set = 0, binding = 16) uniform sampler u_samplers[16]; // (0: nearest, clamped: the texels' texelFetch)
+
+bool from_table() {
+    return (pc.table & 0xFFFFu) != PCR_NO_TABLE;
+}
+
+// The texels (u_texels or the table's)
+uvec4 fetch_texels(ivec2 at, int level) {
+    if (from_table()) {
+        return texelFetch(usampler2D(u_table_uint[pc.table & 0xFFFFu], u_samplers[0]), at, level);
+    }
+    return texelFetch(u_texels, at, level);
+}
+
+// The sampled texture (u_sampled or the table's with its sampler)
+ivec2 sampled_size() {
+    if (from_table()) {
+        return textureSize(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), 0);
+    }
+    return textureSize(u_sampled, 0);
+}
+vec4 sampled_lod(vec2 uv, float lod) {
+    if (from_table()) {
+        return textureLod(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, lod);
+    }
+    return textureLod(u_sampled, uv, lod);
+}
+vec4 sampled_grad(vec2 uv, vec2 dx, vec2 dy) {
+    if (from_table()) {
+        return textureGrad(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, dx, dy);
+    }
+    return textureGrad(u_sampled, uv, dx, dy);
+}
+vec4 sampled_fetch(ivec2 at) {
+    if (from_table()) {
+        return texelFetch(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), at, 0);
+    }
+    return texelFetch(u_sampled, at, 0);
+}
+
+// ---- Developers' pixel trace (pcr_canvas.cpp's trace_pixel; pcr.h's PcrTraceFragment) ----
+// Each fragment shaded at the target's pixel pc.trace_xy, as it ends: shaded (its colour out) or discarded. Records of
+// three uvec4 after a head whose x counts them (past PCR_TRACE_FRAGMENTS: counted, not kept).
+#define PCR_TRACE_FRAGMENTS 4096u
+#define PCR_TRACE_SHADED 0u
+#define PCR_TRACE_DATE_DISCARD 1u
+#define PCR_TRACE_ALPHA_DISCARD 2u
+layout(set = 1, binding = 6, std430) buffer Trace {
+    uvec4 head;
+    uvec4 rec[];
+} u_trace;
+vec2 trace_dz; // (main, where tracing: Z's change a pixel across and down, from uniform control flow)
+
+bool traced() {
+    return pc.trace_xy != PCR_NO_TRACE && uvec2(gl_FragCoord.xy) == uvec2(pc.trace_xy & 0xFFFFu, pc.trace_xy >> 16);
+}
+
+void trace(uint outcome, uvec4 c) {
+    if (!traced()) {
+        return;
+    }
+    uint i = atomicAdd(u_trace.head.x, 1u);
+    if (i >= PCR_TRACE_FRAGMENTS) {
+        return;
+    }
+#ifdef PCR_SAMPLE
+    int sample_id = gl_SampleID;
+#else
+    int sample_id = -1;
+#endif
+    uint rgba = min(c.r, 255u) | min(c.g, 255u) << 8 | min(c.b, 255u) << 16 | min(c.a, 255u) << 24;
+    uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
+    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked, not moved: pc.ztie)
+    u_trace.rec[i * 3u] = uvec4(pc.trace_draw, uint(gl_PrimitiveID), floatBitsToUint(gl_FragCoord.z / pc.zscale),
+                                floatBitsToUint(trace_dz.x));
+    u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), uint(gl_SampleMaskIn[0]), uint(sample_id), rgba);
+    u_trace.rec[i * 3u + 2u] = uvec4(pass | outcome << 4 | decal << 8, 0u, 0u, 0u);
+}
 
 uint src_kind() {
     return (pc.flags >> PCR_F_SRC_SHIFT) & 7u;
@@ -63,10 +159,11 @@ uvec4 texel(ivec2 at, uint level, ivec2 size) {
     at.y = wrap(at.y, size.y, (pc.clamp_lo >> 2) & 3u, pc.clamp_hi & 0x3FFu, (pc.clamp_hi >> 10) & 0x3FFu, level);
     uint kind = src_kind();
     if (kind == PCR_SRC_INDEX) {
-        uint i = texelFetch(u_texels, at, int(level)).r;
-        return unpack_rgba(u_clut.entries[i >> 2][i & 3u]);
+        uint i = fetch_texels(at, int(level)).r;
+        return unpack_rgba(pc.clut_at != PCR_NO_WALK_CLUT ? u_walk_cluts.colours[pc.clut_at + i]
+                                                          : u_clut.entries[i >> 2][i & 3u]);
     }
-    uvec4 c = texelFetch(u_texels, at, int(level));
+    uvec4 c = fetch_texels(at, int(level));
     if (kind == PCR_SRC_CT32) {
         return c;
     }
@@ -175,8 +272,8 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     if (n < 2.0 || alod >= lod - 1.0 / 16.0) {
         return false;
     }
-    vec2 size = vec2(textureSize(u_sampled, 0));
-    t = textureGrad(u_sampled, uv / size, uv_dx / size, uv_dy / size);
+    vec2 size = vec2(sampled_size());
+    t = sampled_grad(uv / size, uv_dx / size, uv_dy / size);
     return true;
 }
 
@@ -204,7 +301,7 @@ bool smooth_2d_applies(float lod) {
 
 vec4 tap_2d(ivec2 at, ivec2 size) {
     if (src_kind() == PCR_SRC_SAMPLED) {
-        return texelFetch(u_sampled, min(at, textureSize(u_sampled, 0) - 1), 0) * 255.0;
+        return sampled_fetch(min(at, sampled_size() - 1)) * 255.0;
     }
     return vec4(texel(at, 0u, size));
 }
@@ -256,7 +353,7 @@ uvec4 sample_texture() {
         }
         vec4 t;
         if (lod <= 0.0 || aniso_log2() == 0u || !sampled_anisotropic(uv, lod, t)) {
-            t = textureLod(u_sampled, uv / vec2(textureSize(u_sampled, 0)), lod);
+            t = sampled_lod(uv / vec2(sampled_size()), lod);
         }
         texture_f = t * 255.0;
         texture_f_kept = true;
@@ -371,6 +468,12 @@ bool alpha_passes(uint a) {
 }
 
 void main() {
+#ifdef PCR_RECORDS
+    pcr_take_record();
+#endif
+    if (pc.trace_xy != PCR_NO_TRACE) {
+        trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;
+    }
     if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
@@ -380,6 +483,7 @@ void main() {
     if ((pc.flags & PCR_F_DATE) != 0u) {
         uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
+            trace(PCR_TRACE_DATE_DISCARD, uvec4(0u));
             discard;
         }
     }
@@ -425,6 +529,7 @@ void main() {
 #ifndef PCR_EARLY
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
+        trace(PCR_TRACE_ALPHA_DISCARD, c);
         discard;
     }
 #endif
@@ -441,4 +546,29 @@ void main() {
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
     o_color = vec4((high ? clamp(hc, 0.0, 255.0) : vec3(rgb)) / 255.0, alpha_out);
+#ifdef PCR_RECORDS
+    o_factor = vec4(0.0);
+    if ((pc.factors & 0x80000000u) != 0u) {
+        // Vulkan's factors as its blend has them: the source alpha and the constant (FIX / 128) clamped to [0, 1]
+        // (a fixed-point target's), the constant alpha 128 / 255 (pcr_canvas.cpp's blend constants)
+        float as = clamp(alpha_out, 0.0, 1.0);
+        float fix = clamp(float(pc.clamp_hi >> 24) / 128.0, 0.0, 1.0);
+        // (the source's factor as it is, f[]; the destination's as one minus it, g[], the blend taking it from one itself
+        // (ONE_MINUS_SRC1_ALPHA). Where a one minus is made here, it is one minus the factor as the blend holds it: NVIDIA's
+        // blend cuts a factor down to the target's precision, 8 or 16 bits (a source alpha or constant of k / 128 is
+        // floor(255 k / 128) / 255 to it in an 8-bit target); given as 1 - As, its pictures came out a value or two off)
+        float held = high ? 65535.0 : 255.0;
+        float qa = floor(as * held) / held, qfix = floor(fix * held) / held;
+        float f[6] = float[6](0.0, 1.0, as, 1.0 - qa, fix, 1.0 - qfix);
+        float g[6] = float[6](1.0, 0.0, 1.0 - qa, as, 1.0 - qfix, fix);
+        o_factor = vec4(vec3(f[pc.factors & 7u]), g[(pc.factors >> 4) & 7u]);
+        if ((pc.flags & PCR_F_ALPHA_FACTOR) != 0u) {
+            o_color.a = as * (128.0 / 255.0);
+        }
+    }
+#endif
+    trace(PCR_TRACE_SHADED, uvec4(rgb, c.a));
+    if ((pc.flags & PCR_F_DECAL_LOSS) != 0u) {
+        o_color = vec4(16.0 / 255.0, 0.0, 16.0 / 255.0, 1.0);
+    }
 }

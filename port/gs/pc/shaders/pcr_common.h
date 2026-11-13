@@ -1,5 +1,6 @@
 // What every GS primitive the PC renderer draws passes its shaders (port/gs/pc/pcr_canvas.cpp, PrimPush: the two
 // must agree). Colours are the GS's integers, 0-255, and alpha 0x80 is 1.0.
+#ifndef PCR_RECORDS
 layout(push_constant, std430) uniform Push {
     vec2 inv_size;   // 1 / the target's size in GS pixels
     float zscale;    // Z to depth: 1 / 2^24, or 1 / 2^32 for a 32-bit Z buffer
@@ -21,7 +22,86 @@ layout(push_constant, std430) uniform Push {
     ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
     uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
                        // a 24-bit frame 18
+    uint clut_at;      // (PCR_SRC_INDEX, a kept walk's batch) the CLUT's first colour in the walk's CLUTs (pcr_prim.h's
+                       // u_walk_cluts); PCR_NO_WALK_CLUT: set 1's u_clut
+    uint table;        // (a kept walk's batch) its texture's place in the walk's table, u_table (bits 0-15; PCR_NO_TABLE:
+                       // set 1's u_texels and u_sampled), and its sampler's in u_samplers (16-19)
+    uint record;       // (PCR_RECORDS) the run's first record in u_records: its draw's is this + gl_DrawID
+    uint factors;      // (PCR_RECORDS) the blend's colour factors given by the shader (pcr_prim.h's o_factor)
+    uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
+                       // PCR_NO_TRACE none
+    uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
+    float ztie;        // Z added to a GEQUAL draw's: its place among its Z buffer's since its clear (pcr_canvas.cpp's
+                       // number_tie), so that a later draw wins a tie, as the GS's whole Z has it
 } pc;
+#else
+// (PCR_RECORDS: the programs a kept walk's runs are drawn with, pcr_canvas.cpp's draw_runs) The same fields, a draw's
+// in a record of the picture's (u_records), one an indirect draw: its run's first (the push constants' record) plus
+// gl_DrawID; the fragment stage has it from the vertex stage. The push constants as above, so that the layouts agree.
+#define PCR_PUSH_FIELDS \
+    vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
+    uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
+    ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
+    uint factors; uint trace_xy; uint trace_draw; float ztie;
+struct PcrRecord {
+    PCR_PUSH_FIELDS
+};
+layout(push_constant, std430) uniform Push {
+    PCR_PUSH_FIELDS
+} pcr_push;
+layout(set = 1, binding = 7, std430) readonly buffer Records {
+    PcrRecord r[];
+} u_records;
+#ifdef PCR_STAGE_VERTEX
+#extension GL_ARB_shader_draw_parameters : require
+#define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB))
+#define pc u_records.r[PCR_RECORD]
+// (the fields the fragment stage reads, flat: read there from the record, each a load a pixel, the pictures between
+// took the GPU 6% longer)
+layout(location = 4) flat out uvec4 v_record[6];
+void pcr_pass_record() {
+    v_record[0] = uvec4(pc.flags, pc.tex_size, pc.clamp_lo, pc.clamp_hi);
+    v_record[1] = uvec4(pc.test, pc.fogcol, pc.texa, pc.tex1);
+    v_record[2] = uvec4(floatBitsToUint(pc.lod_k), pc.levels, pc.alpha, pc.clut_at);
+    v_record[3] = uvec4(pc.table, pc.factors, uvec2(pc.src_offset));
+    v_record[4] = uvec4(uvec2(pc.src_scale), uvec2(pc.dest_offset));
+    v_record[5] = uvec4(pc.trace_xy, pc.trace_draw, floatBitsToUint(pc.zscale), floatBitsToUint(pc.ztie));
+}
+#else
+layout(location = 4) flat in uvec4 v_record[6];
+PcrRecord pcr_record;
+void pcr_take_record() {
+    pcr_record.flags = v_record[0].x;
+    pcr_record.tex_size = v_record[0].y;
+    pcr_record.clamp_lo = v_record[0].z;
+    pcr_record.clamp_hi = v_record[0].w;
+    pcr_record.test = v_record[1].x;
+    pcr_record.fogcol = v_record[1].y;
+    pcr_record.texa = v_record[1].z;
+    pcr_record.tex1 = v_record[1].w;
+    pcr_record.lod_k = uintBitsToFloat(v_record[2].x);
+    pcr_record.levels = v_record[2].y;
+    pcr_record.alpha = v_record[2].z;
+    pcr_record.clut_at = v_record[2].w;
+    pcr_record.table = v_record[3].x;
+    pcr_record.factors = v_record[3].y;
+    pcr_record.src_offset = ivec2(v_record[3].zw);
+    pcr_record.src_scale = ivec2(v_record[4].xy);
+    pcr_record.dest_offset = ivec2(v_record[4].zw);
+    pcr_record.trace_xy = v_record[5].x;
+    pcr_record.trace_draw = v_record[5].y;
+    pcr_record.zscale = uintBitsToFloat(v_record[5].z);
+    pcr_record.ztie = uintBitsToFloat(v_record[5].w);
+    pcr_record.record = pcr_push.record; // (the push constants read here too, so that both stages have them, as the
+                                         // other programs' do)
+}
+#define pc pcr_record
+#endif
+#endif
+
+#define PCR_NO_TABLE 0xFFFFu
+
+#define PCR_NO_WALK_CLUT 0xFFFFFFFFu
 
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u
@@ -41,6 +121,18 @@ layout(push_constant, std430) uniform Push {
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
 #define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
+#define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
+#define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
+#define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
+#define PCR_DECAL_LOSS_MARGIN 16.0
+#define PCR_NO_TRACE 0xFFFFFFFFu
+
+// The depth of Z (clamped to the Z buffer's largest), pc.ztie nearer
+float pcr_depth(uint z) {
+    return (float(min(z, pc.zmax)) + pc.ztie +
+            ((pc.flags & PCR_F_DECAL_LOSS_FAR) != 0u ? PCR_DECAL_LOSS_MARGIN : 0.0)) *
+           pc.zscale;
+}
 
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)
 

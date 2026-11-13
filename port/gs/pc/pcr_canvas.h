@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "device.hpp"
 #include "pcr_between.h"
@@ -35,6 +36,7 @@
 #include "pcr_gif.h"
 #include "pcr_gpu_time.h"
 #include "pcr_textures.h"
+#include "pcr_trace.h"
 
 namespace pcr {
 
@@ -50,6 +52,10 @@ struct CanvasCounts {
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
     uint64_t uploads_made_again = 0, uploads_again_missed = 0, kept_frame_reads = 0;
     uint64_t surfaces_copied = 0; // (for the pump: copy_surfaces)
+    // (a kept walk's textured batches drawn again: those with a table, those read from it, those with the walk's CLUT)
+    uint64_t walk_texture_draws = 0, table_draws = 0, walk_clut_draws = 0;
+    // (a kept walk's runs: the indirect draws, and the draws they made)
+    uint64_t runs = 0, run_draws = 0;
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
@@ -203,6 +209,17 @@ public:
     void submit();
     // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken
     void vblank();
+
+    // Developers' views (pcr.h's pcr_debug_*, which say what each does; kf4-gsreplay --renderer pc), never a player's:
+    // the pixel trace (trace_pixel to start it: false when the spot is not one or there is no memory for it; take_trace
+    // submits, waits for the GPU and returns the fragments counted, kept or not) and the decal losses
+    bool trace_pixel(const PcrTraceSpot &spot);
+    void trace_draw(uint32_t draw);
+    void trace_probe();
+    size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes);
+    void show_decal_losses(bool on);
+    // whether the scale and MSAA's samples last set are drawn with (MSAA's wait for their pipelines: pcr_pipelines.h)
+    bool settled() const;
 
     CanvasCounts counts() const;
     // --stats: the "[stats] pc canvas" lines, and the texture store's

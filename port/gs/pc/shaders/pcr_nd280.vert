@@ -37,6 +37,9 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 #include "vu1_280_maths.h"
 
 void main() {
+#ifdef PCR_RECORDS
+    pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
+#endif
     uvec4 tri = tris[gl_VertexIndex / 3];
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
@@ -91,7 +94,7 @@ void main() {
     }
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, float(min(z, pc.zmax)) * pc.zscale, 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

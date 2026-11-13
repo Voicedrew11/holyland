@@ -19,6 +19,22 @@ the 2D mode are applied since 2026-11-11 (below) and offered again. The settings
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
 
+**2026-11-12: a kept walk's textures in a descriptor table** (issue #110, PERFORMANCE.md "a kept walk's CLUTs and
+textures bound once"). When a walk is handed out, its held textures go into one bindless table (set 2, `u_table` /
+`u_table_uint`), its samplers into set 0's `u_samplers` (bindings 16-31) and its CLUTs into a storage buffer (set 0,
+binding 15, `u_walk_cluts`); a batch finds them by `PrimPush::table` and `clut_at`. The pump's pictures between then
+bind no textures a batch. Set 1 stays for kf4-pc's own frame draws, a surface's texture and the destination copies.
+The batch programs' layout: set 0 the vertex stage's buffers and these, set 1 the per-draw textures (the set Granite
+pushes with `KF4_PC_PUSH_DESCRIPTORS=1`), set 2 the table. `KF4_PC_BINDLESS=0` reads everything from set 1 again.
+
+**2026-11-13: a kept walk's batches drawn in runs** (issue #110, PERFORMANCE.md "drawn in runs"). Drawn again,
+consecutive batches of a kept walk with set 1 the dummies and the same state are one `vkCmdDrawIndirect`: their
+push constants are records of the picture's (set 1, binding 6, `u_records`, declared by every batch program), read by
+the batch programs' `PCR_RECORDS` variants (`pcr_*_rec` in `pcr_shaders.h`: the vertex stage reads the record at
+`PrimPush::record` + `gl_DrawID` and hands the fragment stage its fields flat). On NVIDIA a run's blended batches take
+their colour factors from the shader (dual-source, `pcr_prim.h`'s `o_factor`), so native 280's two blends do not end
+runs. `KF4_PC_INDIRECT=0` draws a batch at a time; `=plain` keeps runs but not the dual-source blend.
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)
@@ -811,6 +827,11 @@ docs/port/PERFORMANCE.md's item 1. At 009 pc's thread was 97% busy: 45% drawing 
   picture between as before (`fits`, or walk the stream); a picture it would draw again from the kept walk it hands to
   the pump instead, with, the first time for that walk, the frame (`PumpFrame`: the walk, `Between::hand_over`'s
   frame as walked, and `Canvas::copy_surfaces`: every colour and depth surface copied on the GPU, the kept frame shown).
+  The copies carry what the canvas reads as each batch is drawn and the pump's canvas has no setter for: the scale,
+  MSAA and cut-out AA, colour precision and (2026-11-13) the 2D mode. Without the 2D mode the pump drew every picture
+  between with `ps2` 2D: with `smooth` at a scale above 1, the HUD's alpha-tested edges (its frame's diagonals, 11
+  pixels at the owner's settings) differed from the frame's own pictures and from a walked picture. Texture detail
+  and anisotropy need nothing: they are in each batch's bound texture.
 - The pump's canvas draws the walk on those copies (`Canvas::draw_again_alone`): the draws, uploads and copies only
   as far as they fall on its surfaces, none of the texture store's changes (CLUT loads passed over): what the draws
   read of the store is held in the walk. So kf4-pc's store and surfaces now see only the game's packets and the walks
@@ -995,7 +1016,12 @@ as a walk leaves them. `KF4_PC_KEPT_WALK=0`: every picture walks (5a).
   kept draws are made, so they need no check.
 - **Not kept** (the pictures walk, counted): a walk that read back from the GS's memory, or whose kicks were not the
   frame's count, or that met a trail paired with the frame before (its points are moved t of the way on the CPU,
-  `NativeDraws::moved_on_cpu`; moving that into the shader is to come).
+  `NativeDraws::moved_on_cpu`; moving that into the shader is to come). **2026-11-12**: the frame's own walk no
+  longer refuses a paired trail: it numbers the trail's kicks apart (`GifFrontEnd::number_native_kicks`, from
+  `native_kick_base`), each with a FLAT move (X, Y and RGBA t of the way from its partner, gif_moves.h's, the same
+  sums as `draw_gs_strip`'s lerp), numbered on from the stream's kicks when the walk is made the pictures'
+  (`as_picture_walk`, `Between::adopt_live_kicks`). A picture that walks still moves it on the CPU and is not kept.
+  `KF4_PC_TRAIL_KICKS=0` restores the refusal (PERFORMANCE.md, "the sword's swing").
 - `[stats] pc pictures between` now says how many were drawn again, and why the others walked.
 - The texture store's chunk ids are no longer used again after a state is loaded (`forget`), so that a signature
   cannot match a new chunk (the random seeds' counts move by one or two uploads found again).
