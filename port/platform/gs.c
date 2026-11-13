@@ -108,6 +108,27 @@ int port_interp_cut(void) {
     return __atomic_load_n(&interp_cut_now, __ATOMIC_RELAXED);
 }
 
+/* The last vblank whose pictures between were cut or left out as behind (port_interp_behind_lately) */
+static uint64_t interp_behind_at;
+
+/* Any thread: the renderer behind the game lately (the cut lowering the count now, or a picture between left out as
+   behind in the last half second): the PC renderer's latency levers engage only then (pcr.cpp), so that a rate it
+   keeps up with (240 on the machines measured) draws as before them. KF4_PC_LATENCY_GATE=0: always. */
+int port_interp_behind_lately(void) {
+    static int gate = -1;
+    uint64_t at;
+
+    if (gate < 0) {
+        const char *e = getenv("KF4_PC_LATENCY_GATE");
+        gate = e == NULL || strcmp(e, "0") != 0;
+    }
+    if (!gate || port_interp_cut() > 0) {
+        return 1;
+    }
+    at = __atomic_load_n(&interp_behind_at, __ATOMIC_RELAXED);
+    return at != 0 && port_vblank_count() < at + 30;
+}
+
 /* --dump-frames: the vblanks whose picture is written, sorted */
 static uint64_t *dump_at;
 static int dump_count;
@@ -1200,6 +1221,7 @@ void port_gs_run_vsync(void) {
             if (!dump && !port_options.fast && shown &&
                 (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
                 interp_behind++;
+                __atomic_store_n(&interp_behind_at, request->vblank, __ATOMIC_RELAXED);
                 interp_left_last++;
                 last_left_out = i;
                 continue;

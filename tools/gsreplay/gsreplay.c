@@ -168,6 +168,11 @@ int port_whole_frame(void) {
     return port_options.whole_frame;
 }
 
+/* (pcr.cpp's latency levers: a replay draws no pictures between, so never behind) */
+int port_interp_behind_lately(void) {
+    return 0;
+}
+
 static uint32_t current_program = 0xFFFFFFFEu; /* the VU1 program last started (KF4GS_MSCNT: MSCNT) */
 static uint32_t current_kick;
 

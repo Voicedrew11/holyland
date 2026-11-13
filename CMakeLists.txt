@@ -341,6 +341,9 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # and with a buffer bound again unchanged keeping its descriptor set (cmake/granite_descriptor_reuse.cmake)
     include(cmake/granite_descriptor_reuse.cmake)
     kf4_granite_descriptor_reuse(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with a frame context moved on only when no command buffer is open (cmake/granite_try_frame_context.cmake)
+    include(cmake/granite_try_frame_context.cmake)
+    kf4_granite_try_frame_context(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
