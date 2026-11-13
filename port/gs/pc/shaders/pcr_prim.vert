@@ -123,6 +123,9 @@ Corner triangle_corner(uint k, uint colour, uint last, bool fst, out bool gone) 
 }
 
 void main() {
+#ifdef PCR_RECORDS
+    pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
+#endif
     vec2 at = a_pos + vec2(pc.place); // (a vertex's place in the surface: the frame's place in it added, as place_of's)
     vec2 pos = at;
     uint z = a_z;

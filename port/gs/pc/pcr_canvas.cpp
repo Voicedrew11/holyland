@@ -59,11 +59,14 @@ struct PrimPush {
     uint32_t alpha;
     uint32_t clut_at;
     uint32_t table;
+    uint32_t record; // (a run's programs, PCR_RECORDS: its first record in the picture's records, Impl::Runs)
+    uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
     float ztie;          // Z added to a GEQUAL batch's (number_tie)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
+static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
 
 // The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
@@ -97,6 +100,21 @@ enum : uint32_t {
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
 };
+// PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
+// the shader gives them (FACTOR_*), the alpha written as the blend would have made it
+constexpr uint32_t F_DUAL = 0x80000000u;
+enum : uint32_t { FACTOR_ZERO, FACTOR_ONE, FACTOR_AS, FACTOR_ONE_MINUS_AS, FACTOR_FIX, FACTOR_ONE_MINUS_FIX, FACTOR_NONE };
+uint32_t factor_code(VkBlendFactor f) {
+    switch (f) {
+    case VK_BLEND_FACTOR_ZERO: return FACTOR_ZERO;
+    case VK_BLEND_FACTOR_ONE: return FACTOR_ONE;
+    case VK_BLEND_FACTOR_SRC_ALPHA: return FACTOR_AS;
+    case VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA: return FACTOR_ONE_MINUS_AS;
+    case VK_BLEND_FACTOR_CONSTANT_COLOR: return FACTOR_FIX;
+    case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR: return FACTOR_ONE_MINUS_FIX;
+    default: return FACTOR_NONE;
+    }
+}
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
 // (PrimPush::clut_at, Batch::clut_at: the CLUT is set 1's, not the kept walk's)
@@ -353,6 +371,14 @@ public:
         table_on_ = bool(no_table_.set);
         no_samplers_.fill(nullptr);
         no_samplers_[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
+        const auto &f = device_.get_device_features();
+        runs_ok_ = runs_asked_ && table_on_ && f.enabled_features.multiDrawIndirect && f.vk11_features.shaderDrawParameters;
+        native_runs_ok_ = runs_ok_ && f.enabled_features.drawIndirectFirstInstance;
+        // (the dual-source blend's pictures are the same as the blend's only where it holds a factor as the shader
+        // assumes, pcr_prim.h: checked on NVIDIA; elsewhere the runs end where the blend changes, KF4_PC_INDIRECT=plain)
+        dual_ok_ = runs_ok_ && f.enabled_features.dualSrcBlend && !runs_plain_ &&
+                   device_.get_gpu_properties().vendorID == 0x10DE;
+        max_run_draws_ = std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u);
     }
 
     ~Impl() {
@@ -822,7 +848,11 @@ public:
     // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture).
     // flush false: handed to Granite but left for the next submit that flushes (one the caller makes at once).
     void submit(bool flush = true) {
+        flush_run();
         end_pass();
+        if (runs_.buffer) {
+            device_.unmap_host_buffer(*runs_.buffer, MEMORY_ACCESS_WRITE_BIT); // (the records so far seen by the GPU)
+        }
         if (cmd_) {
             times_.end(*cmd_);
             device_.submit(cmd_);
@@ -845,6 +875,7 @@ public:
 private:
     // ---- The command buffer and its render pass ----
     CommandBuffer &cmd() {
+        flush_run(); // (what the caller records follows the run's draws)
         if (!cmd_) {
             cmd_ = device_.request_command_buffer();
             set0_fresh_ = false;
@@ -895,6 +926,7 @@ private:
     // 009 a picture has about ten pass changes: the reflection's target, DATE's set-up, the pump's submits).
     // KF4_PC_PASS_BARRIER=full: the full barrier after every pass and before every pass, as before (to compare).
     void end_pass() {
+        flush_run();
         if (pass_colour_) {
             cmd().end_render_pass();
             if (full_pass_barriers_) {
@@ -2185,10 +2217,12 @@ private:
         walk_vertices_ = walk.vertices.get();
         walk_cluts_ = walk.cluts.get();
         walk_table_ = walk.table.set ? &walk : nullptr;
+        start_runs(walk);
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again(walk, kept); }, step);
         }
         flush_batch();
+        end_runs();
         between_ = nullptr;
         walk_vertices_ = nullptr;
         walk_cluts_ = nullptr;
@@ -2414,6 +2448,7 @@ private:
         walk_vertices_ = walk.vertices.get();
         walk_cluts_ = walk.cluts.get();
         walk_table_ = walk.table.set ? &walk : nullptr;
+        start_runs(walk);
         uint32_t batches = 0;
         for (const KeptStep &step : walk.steps) {
             std::visit([&](const auto &kept) { make_again_alone(walk, kept); }, step);
@@ -2422,6 +2457,7 @@ private:
             }
         }
         flush_batch();
+        end_runs();
         between_ = nullptr;
         walk_vertices_ = nullptr;
         walk_cluts_ = nullptr;
@@ -3007,6 +3043,131 @@ private:
         }
     }
 
+    // ---- A kept walk's runs (#110, PERFORMANCE.md: merged draws) ----
+    // A picture between draws its kept walk's batches again with the same state, batch after batch, as the frame did:
+    // the driver's draw, Granite's state flush and the push constants a batch were most of the pump's time. Drawn
+    // again, consecutive batches whose set 1 is the dummies (texture from the walk's table, CLUT the walk's) and whose
+    // state is the same (the pass, scissor, program, depth, blend, write mask, blend constant, a native program's
+    // buffers) are one run: their fields go in records of the picture's (Runs::buffer, set 1's u_records), their draws
+    // in an indirect draw's commands after them, and the run is one vkCmdDrawIndirect with the runs' programs
+    // (PCR_RECORDS: a draw's record is the push constants' first + gl_DrawID). Vulkan keeps the order of the
+    // primitives across an indirect draw's draws, as across draws, so the pictures are the same. A run ends before
+    // anything else is recorded (cmd(), end_pass, submit) and before a batch of other state sets its state.
+    // KF4_PC_INDIRECT=0: a draw a batch, as before (to compare).
+    struct RunKey {
+        const void *colour = nullptr, *depth = nullptr;
+        uint32_t width = 0, height = 0;
+        int32_t scissor[4] = {};
+        uint32_t fix = 0;
+        int v = 0;
+        const void *native[3] = {};
+        // (a pass's)
+        const Program *program = nullptr;
+        uint32_t depth_state = 0, blend = 0, mask = 0;
+        bool operator==(const RunKey &) const = default;
+    };
+    struct Runs {
+        BufferHandle buffer;     // (the picture's records, then its commands)
+        uint8_t *map = nullptr;  // (written as the batches are drawn)
+        uint32_t capacity = 0, used = 0;
+        VkDeviceSize commands_at = 0;
+        bool open = false;       // (a run whose draws are not yet recorded: the command buffer's state is its)
+        RunKey key;
+        uint32_t first = 0, count = 0;
+    };
+
+    // A kept walk drawn again: room for its batches' draws, a pass at a time (two at most), as records and commands
+    void start_runs(const Kept &walk) {
+        end_runs();
+        if (!runs_ok_ || !walk_table_ || !between_ || !between_->active()) {
+            return;
+        }
+        uint64_t n = 0;
+        for (const Batch &b : walk.batches) {
+            n += b.native ? b.runs.size() : 1;
+        }
+        n *= 2;
+        if (n == 0 || n > (1u << 20)) {
+            return;
+        }
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand));
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        runs_.buffer = device_.create_buffer(info, nullptr);
+        runs_.map = runs_.buffer ? static_cast<uint8_t *>(device_.map_host_buffer(*runs_.buffer, MEMORY_ACCESS_WRITE_BIT))
+                                 : nullptr;
+        if (!runs_.map) {
+            runs_.buffer.reset();
+            return;
+        }
+        runs_.capacity = uint32_t(n);
+        runs_.used = 0;
+        runs_.commands_at = n * sizeof(PrimPush);
+    }
+
+    void end_runs() {
+        flush_run();
+        if (runs_.buffer) {
+            device_.unmap_host_buffer(*runs_.buffer, MEMORY_ACCESS_WRITE_BIT);
+        }
+        runs_ = Runs();
+    }
+
+    // A batch's pass in the open run (one is opened, with this state, if none is): a record and a command a draw
+    void add_to_run(CommandBuffer &c, const Batch &b, PrimPush &push, const RunKey &key) {
+        uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
+        if (runs_.open && runs_.count + draws > max_run_draws_) {
+            flush_run(); // (the device's most an indirect draw; the state is the run's, the same key)
+        }
+        uint32_t at = runs_.used;
+        if (!runs_.open) {
+            runs_.open = true;
+            runs_.key = key;
+            runs_.first = at;
+            runs_.count = 0;
+            push.record = at;
+            c.push_constants(&push, 0, sizeof(push)); // (the record field only is read: the run's first)
+            push.record = 0;
+        }
+        auto *records = reinterpret_cast<PrimPush *>(runs_.map);
+        auto *commands = reinterpret_cast<VkDrawIndirectCommand *>(runs_.map + runs_.commands_at);
+        if (b.native) {
+            for (const Batch::Run &r : b.runs) {
+                memcpy(&records[at], &push, sizeof(push));
+                commands[at] = {r.count * 3, 1, r.first * 3, r.instance};
+                at++;
+            }
+            counts_.native_draw_calls += b.runs.size();
+        } else {
+            memcpy(&records[at], &push, sizeof(push));
+            commands[at] = {uint32_t(b.vertices.size()), 1, b.gpu_first, 0};
+            at++;
+        }
+        runs_.count += at - runs_.used;
+        runs_.used = at;
+    }
+
+    // The open run's draws recorded: the command buffer's state is still the run's
+    void flush_run() {
+        if (!runs_.open) {
+            return;
+        }
+        runs_.open = false;
+        cmd_->draw_indirect(*runs_.buffer, runs_.commands_at + VkDeviceSize(runs_.first) * sizeof(VkDrawIndirectCommand),
+                            runs_.count, sizeof(VkDrawIndirectCommand));
+        counts_.runs++;
+        counts_.run_draws += runs_.count;
+    }
+
+    // The command buffer, to set state or record what does not end a run (draw_batch's)
+    CommandBuffer &cmd_keeping_run() {
+        if (!cmd_) {
+            return cmd();
+        }
+        return *cmd_;
+    }
+
     // Ties. The game draws decals (moss and grime on a wall, the dark shading on a rock, the lava over its bed, a
     // puddle on a floor) as meshes of their own, cut into triangles differently from the surface they lie on, Z tested
     // GEQUAL: the GS's whole Z ties the two, and the one drawn later is seen. The GPU's depth keeps the fraction, and
@@ -3199,11 +3360,13 @@ private:
                 dest_offset = rect.offset;
             }
         }
-        times_.begin_draw(cmd(), batch_work(b), batch_state_key(b, zte, zwrite, ztst, date, date_stencil, pass_count));
+        // (a run open, Runs: these calls record nothing, so it is left open; the GPU's timing of it may land in this
+        // batch's)
+        times_.begin_draw(cmd_keeping_run(), batch_work(b),
+                          batch_state_key(b, zte, zwrite, ztst, date, date_stencil, pass_count));
         begin_pass(*colour, depth, date_stencil ? PassReads::target : PassReads::nothing);
-        CommandBuffer &c = cmd();
+        CommandBuffer &c = cmd_keeping_run(); // (begin_pass made it; a pass begun ended any run)
         VkViewport vp = {0, 0, float(colour->image->get_width()), float(colour->image->get_height()), 0, 1};
-        c.set_viewport(vp);
         int32_t sx0 = int32_t((scax0 + placed.x) * scale_[0]), sy0 = int32_t((scay0 + placed.y) * scale_[1]);
         int32_t sx1 = std::min(int32_t((scax1 + 1 + placed.x) * scale_[0]), int32_t(colour->image->get_width()));
         int32_t sy1 = std::min(int32_t((scay1 + 1 + placed.y) * scale_[1]), int32_t(colour->image->get_height()));
@@ -3211,58 +3374,21 @@ private:
             return;
         }
         VkRect2D scissor_px = {{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}};
-        if (date_stencil) {
-            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0, ms);
-        }
-        c.set_scissor(scissor_px);
         // (a clear drawn as a rectangle: cleared, vkCmdClearAttachments, the same pixels without the draw's shader)
         VkClearRect clear_rect;
-        if (as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect)) {
-            const Vertex &v = b.vertices[0];
-            VkClearAttachment att[2] = {};
-            att[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            att[0].colorAttachment = 0;
-            uint8_t a = bits(s.fba, 0, 1) ? uint8_t(v.rgba[3] | 0x80u) : v.rgba[3];
-            for (int k = 0; k < 3; k++) {
-                att[0].clearValue.color.float32[k] = float(v.rgba[k]) / 255.0f;
-            }
-            att[0].clearValue.color.float32[3] = float(a) / 255.0f;
-            uint32_t count = 1;
-            if (zwrite) {
-                // (pcr_prim.vert's depth: Z within the format's, by its scale)
-                uint32_t zp = z_psm(s.zbuf);
-                uint32_t zmax = zp == 0x30 ? 0xFFFFFFFFu : zp == 0x31 ? 0xFFFFFFu : 0xFFFFu;
-                float zscale = zp == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
-                att[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                att[1].clearValue.depthStencil.depth = float(std::min(v.z, zmax)) * zscale;
-                count = 2;
-            }
-            c.clear_quad(clear_rect, att, count);
-            counts_clears_++;
-            drawn_over(b, *colour, ms, box, zte && zwrite);
-            return;
-        }
+        bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect);
         // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
         bool per_sample = ms && is_cutout(b);
-        counts_msaa_.cutout_batches += per_sample ? 1 : 0;
         int v = !b.native                              ? 0
                 : b.program == NativeProgram::vu1_280 ? 2
                 : b.program == NativeProgram::vu1_700 ? 3
                 : b.program == NativeProgram::ripple  ? 4
                                                        : 1;
-        c.set_opaque_state();
-        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        c.set_cull_mode(VK_CULL_MODE_NONE);
-        c.set_depth_compare(ztst == 0 ? VK_COMPARE_OP_NEVER
-                            : ztst == 1 ? VK_COMPARE_OP_ALWAYS
-                            : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
-                                        : VK_COMPARE_OP_GREATER);
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
+        bool blend_supported = blend.supported;
         if (b.shader_blend) {
             blend = BlendChoice();
             blend.flags = F_SHADER_BLEND;
-        } else if (!blend.supported) {
-            counts_.unsupported_blends++;
         }
         PrimPush push = {};
         push.inv_size[0] = 1.0f / float(colour->width());
@@ -3276,8 +3402,6 @@ private:
             flags |= F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
                      (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT |
                      (b.texture.src == SRC_SURFACE && is_colour_16(bits(s.tex0, 20, 6)) ? F_SURFACE_CT16 : 0);
-        } else if (tme) {
-            counts_untextured_++;
         }
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
@@ -3322,8 +3446,7 @@ private:
         // dummies)
         bool from_table = walk_table_ && b.table_at != no_table && (texels || sampled);
         push.table = from_table ? b.table_at | b.sampler_at << 16 : no_table;
-        counts_.table_draws += from_table ? 1 : 0;
-        counts_.walk_texture_draws += walk_table_ && (texels || sampled) ? 1 : 0;
+        bool walk_texture = walk_table_ && (texels || sampled);
         texels = texels && !from_table;
         sampled = sampled && !from_table;
         // (developers' pixel trace: the traced pixel in this batch's target, where its frame buffer is the spot's)
@@ -3340,7 +3463,123 @@ private:
                 trace_.zscale = push.zscale;
             }
         }
-        c.set_storage_buffer(1, 6, *trace_buf_);
+        // (a kept walk's batch: its CLUT in the walk's buffer, set 0's, bind_between)
+        bool indexed = (texels || from_table) && bt.src == SRC_INDEX;
+        bool walk_clut = indexed && walk_cluts_ && b.clut_at != no_walk_clut;
+        push.clut_at = walk_clut ? b.clut_at : no_walk_clut;
+        float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
+                              float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
+        // A kept walk's batch whose set 1 is the dummies (its texture from the table, its CLUT the walk's, no copy at
+        // the draw) drawn in its picture's run (Runs): its fields a record, its draws an indirect draw's, with the
+        // batches before it of the same state. Anything else ends the run first, before the state is set.
+        uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
+        // (a traced batch drawn alone: its fragments that fail the test are recorded, so it is not tested early)
+        bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !b.shader_blend && !texels &&
+                      !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
+                      (b.native ? native_runs_ok_ : walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
+                      runs_.used + draws * uint32_t(pass_count) <= runs_.capacity;
+        // (a run's blend: its factors from the shader, dual-source, where they are ones it can give: Vulkan's blend of
+        // the same values, so the same pixels; a batch unblended is one with factors one and zero. Its runs then do
+        // not end where the blend changes: native 280 changes it about every batch)
+        uint32_t cs = factor_code(blend.src), cd = factor_code(blend.dst);
+        bool dual = in_run && dual_ok_ && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
+                    ((!blend.enable && dual_unblended_) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
+                     (blend.src_alpha == VK_BLEND_FACTOR_CONSTANT_ALPHA && (blend.flags & F_ALPHA_FACTOR)));
+        push.factors = dual ? F_DUAL | cs | cd << 4 : 0;
+        RunKey key = {};
+        if (in_run) {
+            key.colour = colour;
+            key.depth = depth;
+            key.width = colour->image->get_width();
+            key.height = colour->image->get_height();
+            key.scissor[0] = scissor_px.offset.x;
+            key.scissor[1] = scissor_px.offset.y;
+            key.scissor[2] = int32_t(scissor_px.extent.width);
+            key.scissor[3] = int32_t(scissor_px.extent.height);
+            key.fix = dual ? 0 : bits(s.alpha, 32, 8); // (the blend constant: read by no dual-source blend)
+            key.v = v;
+            if (b.native) {
+                key.native[0] = b.arena.get();
+                key.native[1] = b.records.get();
+                key.native[2] = b.triangles.get();
+            }
+        }
+        // (a pass's program, write mask and, in a run, its part of the run's state)
+        auto pass_state = [&](int i, uint32_t &mask) {
+            const Pass &pass = passes[i];
+            // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
+            // (not where traced, whose fragments that fail the test are recorded too)
+            bool early = pass.mode == 0 && !(flags & F_DATE) && !traced;
+            Program *program = in_run ? (early ? (per_sample ? run_early_sample_programs_[v] : run_early_programs_[v])
+                                               : (per_sample ? run_sample_programs_[v] : run_programs_[v]))
+                                      : (early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
+                                               : (per_sample ? sample_programs_[v] : programs_[v]));
+            mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
+            if (in_run) {
+                key.program = program;
+                key.depth_state = (zte ? 1u : 0u) | (pass.z ? 2u : 0u) | ztst << 2;
+                key.blend = dual         ? F_DUAL
+                            : blend.enable ? 1u | uint32_t(blend.src) << 1 | uint32_t(blend.src_alpha) << 6 |
+                                                 uint32_t(blend.dst) << 11 | uint32_t(blend.op) << 16
+                                           : 0u;
+                key.mask = mask;
+            }
+            return program;
+        };
+        uint32_t first_mask = 0;
+        pass_state(0, first_mask);
+        // (the run open ended here unless this batch's first pass continues it: the state set below is this batch's)
+        if (runs_.open && (!in_run || !(runs_.key == key))) {
+            flush_run();
+        }
+        if (!blend_supported && !b.shader_blend) {
+            counts_.unsupported_blends++;
+        }
+        if (tme && !b.texture.ok) {
+            counts_untextured_++;
+        }
+        counts_.table_draws += from_table ? 1 : 0;
+        counts_.walk_texture_draws += walk_texture ? 1 : 0;
+        c.set_viewport(vp);
+        if (date_stencil) {
+            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0, ms);
+        }
+        c.set_scissor(scissor_px);
+        if (clear) {
+            const Vertex &v0 = b.vertices[0];
+            VkClearAttachment att[2] = {};
+            att[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            att[0].colorAttachment = 0;
+            uint8_t a = bits(s.fba, 0, 1) ? uint8_t(v0.rgba[3] | 0x80u) : v0.rgba[3];
+            for (int i = 0; i < 3; i++) {
+                att[0].clearValue.color.float32[i] = float(v0.rgba[i]) / 255.0f;
+            }
+            att[0].clearValue.color.float32[3] = float(a) / 255.0f;
+            uint32_t count = 1;
+            if (zwrite) {
+                // (pcr_prim.vert's depth: Z within the format's, by its scale)
+                uint32_t zp = z_psm(s.zbuf);
+                uint32_t zmax = zp == 0x30 ? 0xFFFFFFFFu : zp == 0x31 ? 0xFFFFFFu : 0xFFFFu;
+                float zscale = zp == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
+                att[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                att[1].clearValue.depthStencil.depth = float(std::min(v0.z, zmax)) * zscale;
+                count = 2;
+            }
+            c.clear_quad(clear_rect, att, count);
+            counts_clears_++;
+            drawn_over(b, *colour, ms, box, zte && zwrite);
+            return;
+        }
+        counts_msaa_.cutout_batches += per_sample ? 1 : 0;
+        counts_.walk_clut_draws += walk_clut ? 1 : 0;
+        c.set_opaque_state();
+        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        c.set_cull_mode(VK_CULL_MODE_NONE);
+        c.set_depth_compare(ztst == 0 ? VK_COMPARE_OP_NEVER
+                            : ztst == 1 ? VK_COMPARE_OP_ALWAYS
+                            : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
+                                        : VK_COMPARE_OP_GREATER);
+        c.set_storage_buffer(1, 6, *trace_buf_); // (pcr_prim.h's u_trace)
         // (set 1, the batch's textures and CLUT: the last set, so Granite pushes it, vkCmdPushDescriptorSet, rather
         // than allocating and writing a set each batch)
         c.set_texture(1, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -3351,46 +3590,57 @@ private:
             c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
         }
         c.set_texture(1, 3, dest_copy ? dest_copy->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
-        // (a kept walk's batch: its CLUT in the walk's buffer, set 0's, bind_between)
-        bool indexed = (texels || from_table) && bt.src == SRC_INDEX;
-        bool walk_clut = indexed && walk_cluts_ && b.clut_at != no_walk_clut;
-        push.clut_at = walk_clut ? b.clut_at : no_walk_clut;
-        counts_.walk_clut_draws += walk_clut ? 1 : 0;
         if (indexed && !walk_clut) {
             void *clut = c.allocate_constant_data(1, 2, sizeof(b.clut));
             memcpy(clut, b.clut.data(), sizeof(b.clut));
         } else {
             c.set_uniform_buffer(1, 2, *no_clut_); // (read only for SRC_INDEX: one buffer, not a 1 KB copy a batch)
         }
-        float constants[4] = {float(bits(s.alpha, 32, 8)) / 128.0f, float(bits(s.alpha, 32, 8)) / 128.0f,
-                              float(bits(s.alpha, 32, 8)) / 128.0f, 128.0f / 255.0f};
         c.set_blend_constants(constants);
         bind_between(c, b.native ? &b : nullptr);
-        if (!b.native) {
+        if (in_run && !b.native) {
+            // (a run's GIF batches: the walk's vertices from its start, each draw's first vertex its batch's place)
+            c.set_vertex_binding(0, *walk_vertices_, 0, sizeof(Vertex));
+        } else if (!b.native) {
             bind_vertices(c, b);
         }
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
-            // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader; not
-            // where traced, whose fragments that fail the test are recorded too)
-            bool early = pass.mode == 0 && !(flags & F_DATE) && !traced;
-            c.set_program(early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
-                                : (per_sample ? sample_programs_[v] : programs_[v]));
-            c.push_constants(&push, 0, sizeof(push));
+            uint32_t mask = 0;
+            Program *program = pass_state(i, mask);
+            // (a later pass: the run ends unless it continues it, before its state is set)
+            if (in_run && i > 0 && runs_.open && !(runs_.key == key)) {
+                flush_run();
+            }
+            c.set_program(program);
             c.set_depth_test(zte, pass.z);
             if (date_stencil) {
                 draw_where_date_passes(c, pass.alpha, bits(s.fba, 0, 1) != 0, bits(s.test, 15, 1) != 0);
             }
-            if (blend.enable) {
+            if (dual) {
+                // (the colour's factors the shader's second output, the alpha its first as written: every such batch
+                // of a run with one blend state)
+                c.set_blend_enable(true);
+                c.set_blend_factors(VK_BLEND_FACTOR_SRC1_COLOR, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA,
+                                    VK_BLEND_FACTOR_ZERO);
+                c.set_blend_op(VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+            } else if (blend.enable) {
                 c.set_blend_enable(true);
                 c.set_blend_factors(blend.src, blend.src_alpha, blend.dst, VK_BLEND_FACTOR_ZERO);
                 c.set_blend_op(blend.op, VK_BLEND_OP_ADD);
             } else {
                 c.set_blend_enable(false);
             }
-            uint32_t mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
             c.set_color_write_mask(mask);
+            if (in_run) {
+                if (!b.native) {
+                    set_vertex_attribs(c);
+                }
+                add_to_run(c, b, push, key);
+                continue;
+            }
+            c.push_constants(&push, 0, sizeof(push));
             if (b.native) {
                 for (const Batch::Run &r : b.runs) {
                     c.draw(r.count * 3, 1, r.first * 3, r.instance);
@@ -3622,6 +3872,7 @@ private:
     static constexpr uint32_t native_slots = 4;
     static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
+    static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -3634,6 +3885,7 @@ private:
         c.set_storage_buffer(0, 1, on ? between_->kicks() : *picture_);
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
+        c.set_storage_buffer(1, records_binding, runs_.buffer ? *runs_.buffer : *picture_); // (pcr_common.h's u_records)
         if (native) {
             uint32_t at = 3 * native_slot(native->program);
             const BufferHandle *mine[3] = {&native->arena, &native->records, &native->triangles};
@@ -3871,6 +4123,10 @@ private:
         for (uint32_t b = 0; b < 3 + 3 * native_slots; b++) {
             batch_vert.sets[0].meta[b].array_size = 1;
         }
+        // (set 1's records of the picture's runs, u_records: read by the runs' programs, PCR_RECORDS, in both stages;
+        // declared in every batch program, so that one and a run's have the same layout and a change binds nothing)
+        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding;
+        batch_vert.sets[1].meta[records_binding].array_size = 1;
         ResourceLayout vert = batch_vert;
         vert.input_mask = 0x7F;
         ResourceLayout frag = {};
@@ -3883,6 +4139,8 @@ private:
         for (int b : {0, 1, 2, 3, 4, 6}) {
             frag.sets[1].meta[b].array_size = 1;
         }
+        frag.sets[1].storage_buffer_mask |= 1u << records_binding;
+        frag.sets[1].meta[records_binding].array_size = 1;
         // (set 0's one binding of the fragment stage: a kept walk's CLUTs, u_walk_cluts; the DATE programs declare it
         // too, so that set 0's layout is the same in every program a batch draws with)
         frag.sets[0].storage_buffer_mask = 1u << walk_clut_binding;
@@ -3907,6 +4165,21 @@ private:
             early_sample_programs_[v] = device_.request_program(vertex, esfs);
         };
         programs_for(0, vs);
+        // (the same programs reading their fields from the picture's records: a kept walk's runs, draw_batch)
+        auto shader = [&](const uint32_t *code, size_t size, const ResourceLayout *layout) {
+            return device_.request_shader(code, size, layout);
+        };
+#define PCR_SHADER(name, layout) shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
+        Shader *rfs = PCR_SHADER(pcr_prim_frag_rec, &frag), *rsfs = PCR_SHADER(pcr_prim_sample_frag_rec, &frag);
+        Shader *refs = PCR_SHADER(pcr_prim_early_frag_rec, &frag);
+        Shader *resfs = PCR_SHADER(pcr_prim_sample_early_frag_rec, &frag);
+        auto run_programs_for = [&](int v, Shader *vertex) {
+            run_programs_[v] = device_.request_program(vertex, rfs);
+            run_sample_programs_[v] = device_.request_program(vertex, rsfs);
+            run_early_programs_[v] = device_.request_program(vertex, refs);
+            run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
+        };
+        run_programs_for(0, PCR_SHADER(pcr_prim_vert_rec, &vert));
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0] = frag.sets[0];
@@ -3941,6 +4214,11 @@ private:
         programs_for(3, nvs700);
         Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
         programs_for(4, nvsripple);
+        run_programs_for(1, PCR_SHADER(pcr_nd000_vert_rec, &nd));
+        run_programs_for(2, PCR_SHADER(pcr_nd280_vert_rec, &nd));
+        run_programs_for(3, PCR_SHADER(pcr_nd700_vert_rec, &nd));
+        run_programs_for(4, PCR_SHADER(pcr_ndripple_vert_rec, &nd));
+#undef PCR_SHADER
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -3974,13 +4252,17 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[11];
+        WarmProgram warmed[21];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
         }
         warmed[10] = {date_program_, date_ms_program_};
-        warm_watch(device_, warmed, 11, expand_program_);
+        for (int v = 0; v < 5; v++) {
+            warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
+            warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
+        }
+        warm_watch(device_, warmed, 21, expand_program_);
     }
 
     Device &device_;
@@ -3991,6 +4273,8 @@ private:
     std::array<Program *, 5> programs_{}, sample_programs_{};
     // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
     std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
+    // ... and each of them reading a draw's fields from the picture's records (PCR_RECORDS): a kept walk's runs
+    std::array<Program *, 5> run_programs_{}, run_sample_programs_{}, run_early_programs_{}, run_early_sample_programs_{};
     // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
     bool pass_ended_ = false;
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
@@ -4069,6 +4353,17 @@ private:
     const Buffer *walk_vertices_ = nullptr; // (the kept walk's vertices while one is drawn again: draw_again)
     const Buffer *walk_cluts_ = nullptr;    // (... and its CLUTs)
     const Kept *walk_table_ = nullptr;      // (... and the walk, when it has a table: its table and samplers)
+    Runs runs_;                             // (... and its picture's runs)
+    // KF4_PC_INDIRECT=0: a kept walk's batches a draw each, as before (to compare); off where the device has no
+    // multi-draw indirect or draw parameters; a native batch's in runs only where an indirect draw has a first instance
+    const bool runs_asked_ = !getenv("KF4_PC_INDIRECT") || strcmp(getenv("KF4_PC_INDIRECT"), "0") != 0;
+    // KF4_PC_INDIRECT=plain: runs without the dual-source blend (a blend change ends a run: to compare)
+    const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
+    bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;
+    uint32_t max_run_draws_ = 1;
+    // (KF4_PC_INDIRECT=unblended: an unblended batch in a dual-source run too, blended with one and zero: it then reads
+    // its target, which costs the GPU more than the runs it joins save)
+    const bool dual_unblended_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "unblended") == 0;
     Table no_table_;                        // (bound outside a kept walk: one dummy)
     bool table_on_ = false;                 // (no table where the device has none: set 1's textures, as before)
     VkDescriptorSet table_bound_ = VK_NULL_HANDLE; // (bind_table: set 2 as bound in the command buffer)
