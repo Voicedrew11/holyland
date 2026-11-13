@@ -27,6 +27,14 @@ bind no textures a batch. Set 1 stays for kf4-pc's own frame draws, a surface's 
 The batch programs' layout: set 0 the vertex stage's buffers and these, set 1 the per-draw textures (the set Granite
 pushes with `KF4_PC_PUSH_DESCRIPTORS=1`), set 2 the table. `KF4_PC_BINDLESS=0` reads everything from set 1 again.
 
+**2026-11-13: a kept walk's batches drawn in runs** (issue #110, PERFORMANCE.md "drawn in runs"). Drawn again,
+consecutive batches of a kept walk with set 1 the dummies and the same state are one `vkCmdDrawIndirect`: their
+push constants are records of the picture's (set 1, binding 6, `u_records`, declared by every batch program), read by
+the batch programs' `PCR_RECORDS` variants (`pcr_*_rec` in `pcr_shaders.h`: the vertex stage reads the record at
+`PrimPush::record` + `gl_DrawID` and hands the fragment stage its fields flat). On NVIDIA a run's blended batches take
+their colour factors from the shader (dual-source, `pcr_prim.h`'s `o_factor`), so native 280's two blends do not end
+runs. `KF4_PC_INDIRECT=0` draws a batch at a time; `=plain` keeps runs but not the dual-source blend.
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)
