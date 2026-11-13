@@ -52,6 +52,8 @@ struct CanvasCounts {
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
     uint64_t uploads_made_again = 0, uploads_again_missed = 0, kept_frame_reads = 0;
     uint64_t surfaces_copied = 0; // (for the pump: copy_surfaces)
+    // (a kept walk's textured batches drawn again: those with a table, those read from it, those with the walk's CLUT)
+    uint64_t walk_texture_draws = 0, table_draws = 0, walk_clut_draws = 0;
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),

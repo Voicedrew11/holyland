@@ -21,12 +21,20 @@ layout(push_constant, std430) uniform Push {
     ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
     uint alpha;        // (PCR_F_SHADER_BLEND) ALPHA: A 0-1, B 2-3, C 4-5, D 6-7, FIX 8-15; COLCLAMP 16, PABE 17,
                        // a 24-bit frame 18
+    uint clut_at;      // (PCR_SRC_INDEX, a kept walk's batch) the CLUT's first colour in the walk's CLUTs (pcr_prim.h's
+                       // u_walk_cluts); PCR_NO_WALK_CLUT: set 1's u_clut
+    uint table;        // (a kept walk's batch) its texture's place in the walk's table, u_table (bits 0-15; PCR_NO_TABLE:
+                       // set 1's u_texels and u_sampled), and its sampler's in u_samplers (16-19)
     uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
     float ztie;        // Z added to a GEQUAL draw's: its place among its Z buffer's since its clear (pcr_canvas.cpp's
                        // number_tie), so that a later draw wins a tie, as the GS's whole Z has it
 } pc;
+
+#define PCR_NO_TABLE 0xFFFFu
+
+#define PCR_NO_WALK_CLUT 0xFFFFFFFFu
 
 #define PCR_F_TME 0x1u
 #define PCR_F_FST 0x2u
