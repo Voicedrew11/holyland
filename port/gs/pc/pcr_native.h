@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <vector>
 
 #include "device.hpp"
 #include "gsn.h"
@@ -69,6 +70,10 @@ public:
     void end_frame_kept();
     // Since begin_frame_kept: a trail that a picture between moves on the CPU (its walk cannot be made from this one)
     bool trail_paired() const;
+    // Since begin_frame_kept: the moves of the trails' kicks numbered from native_kick_base (GifFrontEnd::
+    // number_native_kicks), one a kick in their order: t of the way from the frame before's point (FLAT, X and Y and
+    // RGBA: what draw_gs_strip does on the CPU in a picture between's walk). Handed out once.
+    std::vector<GsnInterpMove> take_trail_moves();
 
     NativeCounts counts() const;
     // --stats: the "[stats] pc native draws" line

@@ -379,6 +379,45 @@ void test_kick_numbers() {
     CHECK(events.numbered.size() == 5 && events.numbered.back().kick == 0 && events.numbered.back().rgba_owner == no_kick);
 }
 
+// A native draw's own kicks numbered apart (the trail in the frame's own walk kept, number_native_kicks): from the
+// number given, each its own RGBAQ's owner, the packets' numbering and stretches as they were
+void test_native_kick_numbers() {
+    struct NativeKicks : Recorder {
+        GifFrontEnd *gif = nullptr;
+        std::vector<uint32_t> next;
+        void native_draw(uint64_t) override {
+            gif->number_native_kicks(native_kick_base + 5);
+            gif->write_packed_qword(0x1, 7, 0); // RGBAQ
+            gif->write_packed_qword(0x5, 0, 0); // XYZ2
+            gif->write_packed_qword(0x1, 8, 0);
+            gif->write_packed_qword(0x5, 0, 0);
+            next.push_back(gif->native_kick_next());
+            gif->stop_native_kicks();
+            gif->write_packed_qword(0x5, 0, 0); // (after: not numbered)
+        }
+    };
+    NativeKicks events;
+    GifFrontEnd gif(events);
+    events.front_end = &gif;
+    events.gif = &gif;
+    gif.number_kicks();
+    gif.feed(1, Packet::writes({{gs_reg::prim, 4}, {gs_reg::xyz2, 0}, {gs_reg::native_draw, 1}, {gs_reg::xyz2, 0}}).bytes);
+    CHECK(gif.kicks_numbered() == 2);
+    CHECK(events.next.size() == 1 && events.next[0] == native_kick_base + 7);
+    CHECK(events.numbered.size() == 4);
+    if (events.numbered.size() == 4) {
+        const auto &n = events.numbered;
+        CHECK(n[0].kick == 0 && n[3].kick == 1);
+        CHECK(n[1].kick == native_kick_base + 5 && n[1].rgba_owner == native_kick_base + 5 && n[1].rgba == 7);
+        CHECK(n[2].kick == native_kick_base + 6 && n[2].rgba_owner == native_kick_base + 6 && n[2].rgba == 8);
+        CHECK(n[1].st_owner == no_kick && n[1].uv_owner == no_kick && n[1].q_owner == no_kick);
+    }
+    // outside a numbering, a native draw's kicks are not numbered either
+    gif.stop_numbering();
+    gif.feed(1, Packet::writes({{gs_reg::native_draw, 1}}).bytes);
+    CHECK(events.numbered.size() == 4);
+}
+
 // A new numbering clears the vertices still queued: a strip's first two vertices kicked numbered, the third kicked in
 // the next numbering (from 0) draws the triangle, and its first two corners carry no number
 void test_renumber_clears_queue() {
@@ -1206,6 +1245,7 @@ int main() {
     test_q_latching();
     test_uv_and_fog_packed();
     test_kick_numbers();
+    test_native_kick_numbers();
     test_renumber_clears_queue();
     test_tex2_merge();
     test_mip_addresses();

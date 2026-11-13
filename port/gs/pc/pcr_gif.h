@@ -70,6 +70,10 @@ struct GsRegisterFile {
 
 // A kick not numbered (gsn.h's GSN_IM_NONE): outside a picture between's walk, or not of the packets fed
 constexpr uint32_t no_kick = 0xFFFFFFFFu;
+// (a frame walked once) The first number of a native draw's kicks numbered (GifFrontEnd::number_native_kicks): far
+// above any frame's packets' kicks, made the frame's kicks' count on when the frame's own walk is made its pictures'
+// (pcr_canvas.h's as_picture_walk, Between::adopt_live_kicks)
+constexpr uint32_t native_kick_base = 0x40000000u;
 
 // A vertex: what the GS latched at its kick
 struct GifVertex {
@@ -182,6 +186,12 @@ public:
     void number_kicks();
     void stop_numbering();
     uint32_t kicks_numbered() const { return kicks_; }
+    // While kicks are numbered: a native draw's own kicks numbered from first on (native_kick_base and up), each the
+    // owner of its own RGBAQ (the weapon's trail in the frame's own walk kept: pcr_native.cpp's draw_gs_strip, whose
+    // pictures between move it by these kicks), until stop_native_kicks; the next number they would take
+    void number_native_kicks(uint32_t first) { native_kick_ = first; }
+    void stop_native_kicks() { native_kick_ = no_kick; }
+    uint32_t native_kick_next() const { return native_kick_; }
 
     // A state loaded: its register file taken, every path between packets, no vertex queued, no transfer begun
     void restore(const GsRegisterFile &file);
@@ -225,6 +235,7 @@ private:
     // and the stretches the vertex registers were written in
     bool numbering_ = false, feeding_ = false;
     uint32_t kicks_ = 0;
+    uint32_t native_kick_ = no_kick; // (number_native_kicks)
     uint32_t st_src_ = no_kick, rgba_src_ = no_kick, q_src_ = no_kick, rgba_q_src_ = no_kick, uv_src_ = no_kick;
 };
 

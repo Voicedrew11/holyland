@@ -359,6 +359,10 @@ void GifFrontEnd::kick(uint32_t address, uint64_t value) {
         v.q_owner = rgba_q_src_;
         v.uv_owner = uv_src_;
         events_.kick_numbered(v, prim);
+    } else if (numbering_ && native_kick_ != no_kick) {
+        v.kick = native_kick_++;
+        v.rgba_owner = v.kick;
+        events_.kick_numbered(v, prim);
     }
     switch (prim & 7) {
     case 0: // points
@@ -442,6 +446,7 @@ void GifFrontEnd::emit(PrimitiveShape shape, uint32_t prim, uint32_t vertex_coun
 void GifFrontEnd::number_kicks() {
     numbering_ = true;
     kicks_ = 0;
+    native_kick_ = no_kick;
     st_src_ = rgba_src_ = q_src_ = rgba_q_src_ = uv_src_ = no_kick;
     for (GifVertex &v : queue_) {
         v.kick = v.st_owner = v.rgba_owner = v.q_owner = v.uv_owner = no_kick;
