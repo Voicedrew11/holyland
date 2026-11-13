@@ -811,6 +811,11 @@ docs/port/PERFORMANCE.md's item 1. At 009 pc's thread was 97% busy: 45% drawing 
   picture between as before (`fits`, or walk the stream); a picture it would draw again from the kept walk it hands to
   the pump instead, with, the first time for that walk, the frame (`PumpFrame`: the walk, `Between::hand_over`'s
   frame as walked, and `Canvas::copy_surfaces`: every colour and depth surface copied on the GPU, the kept frame shown).
+  The copies carry what the canvas reads as each batch is drawn and the pump's canvas has no setter for: the scale,
+  MSAA and cut-out AA, colour precision and (2026-11-13) the 2D mode. Without the 2D mode the pump drew every picture
+  between with `ps2` 2D: with `smooth` at a scale above 1, the HUD's alpha-tested edges (its frame's diagonals, 11
+  pixels at the owner's settings) differed from the frame's own pictures and from a walked picture. Texture detail
+  and anisotropy need nothing: they are in each batch's bound texture.
 - The pump's canvas draws the walk on those copies (`Canvas::draw_again_alone`): the draws, uploads and copies only
   as far as they fall on its surfaces, none of the texture store's changes (CLUT loads passed over): what the draws
   read of the store is held in the walk. So kf4-pc's store and surfaces now see only the game's packets and the walks
