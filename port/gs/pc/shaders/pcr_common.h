@@ -41,11 +41,12 @@ layout(push_constant, std430) uniform Push {
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
 #define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
-#define PCR_F_DECAL 0x400000u      // a decal over a surface: drawn a sixteenth of a Z nearer (pcr_canvas.cpp's is_decal)
+#define PCR_F_DECAL 0x400000u      // a decal over a surface: drawn half a Z nearer (pcr_canvas.cpp's is_decal)
 
-// The depth of Z (clamped to the Z buffer's largest): a decal's a sixteenth of a Z nearer (PCR_F_DECAL)
+// The depth of Z (clamped to the Z buffer's largest): a decal's nearer by PCR_DECAL_NEARER (PCR_F_DECAL)
+#define PCR_DECAL_NEARER 0.5
 float pcr_depth(uint z) {
-    return (float(min(z, pc.zmax)) + ((pc.flags & PCR_F_DECAL) != 0u ? 1.0 / 16.0 : 0.0)) * pc.zscale;
+    return (float(min(z, pc.zmax)) + ((pc.flags & PCR_F_DECAL) != 0u ? PCR_DECAL_NEARER : 0.0)) * pc.zscale;
 }
 
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)

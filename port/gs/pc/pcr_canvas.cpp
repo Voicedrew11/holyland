@@ -2706,8 +2706,12 @@ private:
     // differently; the GS's whole Z ties the two and the decal is drawn. The GPU's depth keeps the fraction, and the
     // two meshes' depths differ by a hair (a thousandth of a Z on map 000's rocks): the decal lost to its surface over
     // whole triangles, a different set each frame, and flickered (2026-11-12, the low wall before map 063's keep).
-    // A decal is drawn a sixteenth of a Z nearer (pcr_nd*.vert, pcr_prim.vert: PCR_F_DECAL), far less than the GS's
-    // step between two things it keeps apart. (Its Z made whole for every draw, as the GS's, tied the decals but drew
+    // A decal is drawn half a Z nearer (pcr_common.h's PCR_DECAL_NEARER), less than the GS's step between two things it
+    // keeps apart: far away a Z is a long way, and two meshes cut differently differ by more than a sixteenth there.
+    // (Tried 2026-11-12 and dropped: only batches with a see-through corner nudged, the rest of a blended draw taken
+    // for the surface: a nudged decal's Z, written, beat a surface drawn after it, which the GS's tie gives the later
+    // draw (a puddle on map 028, map 014's water lost). Decals writing no Z, or their Z written by a second pass at
+    // their own depth: a fifth of some views wrong, where a decal draw's own triangles overlap.) (Its Z made whole for every draw, as the GS's, tied the decals but drew
     // lines over the lava of map 024 wherever a whole Z fell between it and its bed. A share of the distance nearer,
     // writing that Z, let one rock show through a nearer one; both 2026-11-12.)
     static bool is_decal(const DrawState &s) {
