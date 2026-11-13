@@ -2063,6 +2063,7 @@ private:
         uint32_t samples = 1;
         bool cutout_aa = false;
         int precision = GSN_COLOUR_EXACT; // (colour_mode_)
+        int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -2075,6 +2076,7 @@ private:
         copies->samples = samples_;
         copies->cutout_aa = cutout_aa_;
         copies->precision = colour_mode_;
+        copies->mode_2d = mode_2d_;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
@@ -2126,6 +2128,7 @@ private:
         samples_ = pending_samples_ = copies.samples;
         cutout_aa_ = copies.cutout_aa;
         colour_mode_ = pending_colour_ = copies.precision;
+        mode_2d_ = copies.mode_2d;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
         // textures are bound already, and its store is never read; so what it draws over is not marked in it)
