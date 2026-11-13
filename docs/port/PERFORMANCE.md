@@ -239,10 +239,9 @@ after the swings; the display on, the GPU at 0.7-2.9 GHz and 2-25% busy just bef
 
 Pictures: byte for byte main's at 000, 009, 009:2 and 099 (240, `KF4_INTERP_DRAW_ALL=1`, the owner's settings, 204 a
 spot), and at the swing the trail's pictures between are main's exactly (132 pictures, vblanks 2004-2100). One
-difference there that is not the trail: 11 pixels at the ends of the HUD's weapon gauge arc in the pictures between
-while it refills (2010-2064), which the frame's own walk draws otherwise than the stream's walk does; the same with
-the trail left unmoved, so it is the own walk's (an older difference, shown now because these frames take it), not
-followed. The validation layer with synchronization validation: no messages at the swing and at the four spots
+difference there that is not the trail: 11 pixels on the HUD frame sprite's alpha-tested diagonal edges in the
+pictures between (2010-2064). These frames are now drawn by the pump, whose canvas missed the 2D mode (2D smooth),
+an older difference in main shown now because these frames take the pump; fixed separately in #137. The validation layer with synchronization validation: no messages at the swing and at the four spots
 (the owner's settings, 240). The unit tests pass (`pcr_gif_test` checks the native kicks' numbering).
 
 ## Found 2026-11-12: the game's 57-58 vblanks a second uncapped were vblanks left off the screen (#107)
