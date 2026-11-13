@@ -78,12 +78,17 @@ public:
 
     // A frame walked once (pcr_frame_walk.h): the frame's own walk's kicks kept from keep_live_kicks until
     // end_live_kicks, which hands them out (Kick's bytes by kick number), outside a picture between
+    // (and the kicks of native draws numbered from native_kick_base, the trail's: kept apart, by their number less it)
     using KickList = std::vector<uint8_t>;
+    struct LiveKicks {
+        KickList kicks, native;
+    };
     void keep_live_kicks();
-    KickList end_live_kicks();
+    LiveKicks end_live_kicks();
     // After take_frame: kicks made the frame's walked kicks, as a first walk's (begin_picture_again draws with them),
-    // when they are the frame's count. False otherwise (nothing changed).
-    bool adopt_live_kicks(KickList kicks);
+    // when they are the frame's count. The native draws' kicks after them, numbered on from the frame's count, with
+    // native_moves (NativeDraws::take_trail_moves, one each) after the frame's moves. False otherwise (nothing changed).
+    bool adopt_live_kicks(LiveKicks kicks, std::vector<GsnInterpMove> native_moves);
     // A frame's own walk made its pictures' (adopted), or why not (counted)
     void frame_from_own_walk(FrameWalkRefused refused);
     // The walk's end, after its draws: false (counted) when its kicks were not the frame's count (moves taken by kicks
@@ -143,7 +148,7 @@ private:
     uint64_t walked_serial_ = 0; // (the frame whose kicks kicks_ holds)
     bool walked_ = false;
     // the frame's own walk's kicks (keep_live_kicks), and whether they are kept
-    KickList live_kicks_;
+    KickList live_kicks_, live_native_;
     bool live_on_ = false;
     BetweenCounts counts_;
 };

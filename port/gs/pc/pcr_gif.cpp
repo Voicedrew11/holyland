@@ -7,6 +7,8 @@
 #include <cstring>
 #include <utility>
 
+#include "port/gs_capture_format.h"
+
 namespace pcr {
 
 namespace {
@@ -359,6 +361,10 @@ void GifFrontEnd::kick(uint32_t address, uint64_t value) {
         v.q_owner = rgba_q_src_;
         v.uv_owner = uv_src_;
         events_.kick_numbered(v, prim);
+    } else if (numbering_ && native_kick_ != no_kick) {
+        v.kick = native_kick_++;
+        v.rgba_owner = v.kick;
+        events_.kick_numbered(v, prim);
     }
     switch (prim & 7) {
     case 0: // points
@@ -442,6 +448,7 @@ void GifFrontEnd::emit(PrimitiveShape shape, uint32_t prim, uint32_t vertex_coun
 void GifFrontEnd::number_kicks() {
     numbering_ = true;
     kicks_ = 0;
+    native_kick_ = no_kick;
     st_src_ = rgba_src_ = q_src_ = rgba_q_src_ = uv_src_ = no_kick;
     for (GifVertex &v : queue_) {
         v.kick = v.st_owner = v.rgba_owner = v.q_owner = v.uv_owner = no_kick;
@@ -450,6 +457,32 @@ void GifFrontEnd::number_kicks() {
 
 void GifFrontEnd::stop_numbering() {
     numbering_ = false;
+}
+
+std::vector<uint8_t> capture_registers(const GsRegisterFile &file) {
+    std::vector<uint8_t> bytes((file.reg.size() + 1) * sizeof(Kf4GsReg));
+    for (uint32_t address = 0; address <= file.reg.size(); address++) {
+        bool q = address == file.reg.size();
+        Kf4GsReg r = {q ? uint32_t(KF4GS_REG_INTERNAL_Q) : address, 0, q ? file.internal_q : file.reg[address]};
+        std::memcpy(bytes.data() + size_t(address) * sizeof(r), &r, sizeof(r));
+    }
+    return bytes;
+}
+
+bool take_capture_registers(std::span<const uint8_t> record, GsRegisterFile &file) {
+    if (record.size() % sizeof(Kf4GsReg) != 0) {
+        return false;
+    }
+    for (size_t at = 0; at < record.size(); at += sizeof(Kf4GsReg)) {
+        Kf4GsReg r;
+        std::memcpy(&r, record.data() + at, sizeof(r));
+        if (r.address < file.reg.size()) {
+            file.reg[r.address] = r.value;
+        } else if (r.address == KF4GS_REG_INTERNAL_Q) {
+            file.internal_q = uint32_t(r.value);
+        }
+    }
+    return true;
 }
 
 void GifFrontEnd::restore(const GsRegisterFile &file) {

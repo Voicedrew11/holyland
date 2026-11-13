@@ -92,6 +92,45 @@ vec4 sampled_fetch(ivec2 at) {
     return texelFetch(u_sampled, at, 0);
 }
 
+// ---- Developers' pixel trace (pcr_canvas.cpp's trace_pixel; pcr.h's PcrTraceFragment) ----
+// Each fragment shaded at the target's pixel pc.trace_xy, as it ends: shaded (its colour out) or discarded. Records of
+// three uvec4 after a head whose x counts them (past PCR_TRACE_FRAGMENTS: counted, not kept).
+#define PCR_TRACE_FRAGMENTS 4096u
+#define PCR_TRACE_SHADED 0u
+#define PCR_TRACE_DATE_DISCARD 1u
+#define PCR_TRACE_ALPHA_DISCARD 2u
+layout(set = 1, binding = 6, std430) buffer Trace {
+    uvec4 head;
+    uvec4 rec[];
+} u_trace;
+vec2 trace_dz; // (main, where tracing: Z's change a pixel across and down, from uniform control flow)
+
+bool traced() {
+    return pc.trace_xy != PCR_NO_TRACE && uvec2(gl_FragCoord.xy) == uvec2(pc.trace_xy & 0xFFFFu, pc.trace_xy >> 16);
+}
+
+void trace(uint outcome, uvec4 c) {
+    if (!traced()) {
+        return;
+    }
+    uint i = atomicAdd(u_trace.head.x, 1u);
+    if (i >= PCR_TRACE_FRAGMENTS) {
+        return;
+    }
+#ifdef PCR_SAMPLE
+    int sample_id = gl_SampleID;
+#else
+    int sample_id = -1;
+#endif
+    uint rgba = min(c.r, 255u) | min(c.g, 255u) << 8 | min(c.b, 255u) << 16 | min(c.a, 255u) << 24;
+    uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
+    uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked, not moved: pc.ztie)
+    u_trace.rec[i * 3u] = uvec4(pc.trace_draw, uint(gl_PrimitiveID), floatBitsToUint(gl_FragCoord.z / pc.zscale),
+                                floatBitsToUint(trace_dz.x));
+    u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), uint(gl_SampleMaskIn[0]), uint(sample_id), rgba);
+    u_trace.rec[i * 3u + 2u] = uvec4(pass | outcome << 4 | decal << 8, 0u, 0u, 0u);
+}
+
 uint src_kind() {
     return (pc.flags >> PCR_F_SRC_SHIFT) & 7u;
 }
@@ -432,6 +471,9 @@ void main() {
 #ifdef PCR_RECORDS
     pcr_take_record();
 #endif
+    if (pc.trace_xy != PCR_NO_TRACE) {
+        trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;
+    }
     if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
@@ -441,6 +483,7 @@ void main() {
     if ((pc.flags & PCR_F_DATE) != 0u) {
         uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
+            trace(PCR_TRACE_DATE_DISCARD, uvec4(0u));
             discard;
         }
     }
@@ -486,6 +529,7 @@ void main() {
 #ifndef PCR_EARLY
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
+        trace(PCR_TRACE_ALPHA_DISCARD, c);
         discard;
     }
 #endif
@@ -523,4 +567,8 @@ void main() {
         }
     }
 #endif
+    trace(PCR_TRACE_SHADED, uvec4(rgb, c.a));
+    if ((pc.flags & PCR_F_DECAL_LOSS) != 0u) {
+        o_color = vec4(16.0 / 255.0, 0.0, 16.0 / 255.0, 1.0);
+    }
 }

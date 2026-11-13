@@ -61,10 +61,21 @@ struct PrimPush {
     uint32_t table;
     uint32_t record; // (a run's programs, PCR_RECORDS: its first record in the picture's records, Impl::Runs)
     uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
-    uint32_t unused;
+    uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
+    uint32_t trace_draw; // ... the draw its fragments are recorded as
+    float ztie;          // Z added to a GEQUAL batch's (number_tie)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
+constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
+
+// The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
+// recorded), the fragments' records (pcr.h's PcrTraceFragment), then the probes' (PcrTraceProbe)
+constexpr size_t trace_fragments = 4096, trace_probes = 1024;
+constexpr size_t trace_probe_offset = 16 + trace_fragments * sizeof(PcrTraceFragment);
+constexpr size_t trace_bytes = trace_probe_offset + trace_probes * sizeof(PcrTraceProbe);
+static_assert(sizeof(PcrTraceFragment) == 48 && sizeof(PcrTraceProbe) == 80, "pcr_prim.h's and pcr_probe.h's records");
+static_assert(trace_probe_offset == (1 + 4096 * 3) * 16, "pcr_probe.h's PCR_PROBE_FIRST");
 
 enum : uint32_t {
     F_TME = 0x1,
@@ -85,6 +96,9 @@ enum : uint32_t {
     F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
     F_HIGH = 0x200000,
+    F_DECAL = 0x400000,
+    F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
+    F_DECAL_LOSS_FAR = 0x1000000,
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -388,6 +402,7 @@ public:
     void set_between(const Between *between) {
         flush_batch();
         between_ = between;
+        walk_ties_.fill(0); // (a picture between's walk numbers its batches from its own start: number_tie)
         if (!between) {
             stop_keeping();
         }
@@ -475,6 +490,111 @@ public:
             // (the frame's uploads: what its pictures between ask for again)
             uploads_now_.push_back({t, kept_bytes, chunk});
         }
+    }
+
+    // ---- Developers' views (pcr.h's pcr_debug_*) ----
+    bool trace_pixel(const PcrTraceSpot &spot) {
+        if (spot.x < 0 || spot.y < 0 || spot.sub_x < 0 || spot.sub_y < 0) {
+            return false;
+        }
+        if (!trace_.on) {
+            BufferCreateInfo info = {};
+            info.domain = BufferDomain::CachedHost;
+            info.size = trace_bytes;
+            info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            std::vector<uint8_t> zeros(trace_bytes);
+            BufferHandle buffer = device_.create_buffer(info, zeros.data());
+            if (!buffer) {
+                return false;
+            }
+            trace_buf_ = buffer;
+        }
+        flush_batch();
+        trace_ = Trace();
+        trace_.on = true;
+        trace_.spot = spot;
+        return true;
+    }
+
+    void trace_draw(uint32_t draw) {
+        flush_batch();
+        trace_.draw = draw;
+    }
+
+    // In a pass of its own: the traced pixel's samples in the surfaces its last draw drew into
+    void trace_probe() {
+        flush_batch();
+        if (!trace_.on || !trace_.colour || trace_.probes >= trace_probes || !holds(colour_, trace_.colour)) {
+            return;
+        }
+        Surface &colour = *trace_.colour;
+        Surface *depth = trace_.depth && holds(depth_, trace_.depth) ? trace_.depth : nullptr;
+        const Image &cimage = colour.ms && !colour.ms_behind ? *colour.ms : *colour.image;
+        uint32_t samples = uint32_t(depth ? depth->image->get_create_info().samples : cimage.get_create_info().samples);
+        bool colour_read = uint32_t(cimage.get_create_info().samples) == samples;
+        end_pass();
+        CommandBuffer &c = cmd(GpuWork::surface);
+        full_barrier(c);
+        c.set_program(samples > 1 ? probe_ms_program_ : probe_program_);
+        // (a depth surface's view: Granite samples its depth alone, the float view)
+        c.set_texture(0, 0, depth ? depth->image->get_view() : cimage.get_view(), StockSampler::NearestClamp);
+        c.set_texture(0, 1, colour_read ? cimage.get_view() : depth->image->get_view(),
+                      StockSampler::NearestClamp);
+        c.set_storage_buffer(0, 2, *trace_buf_);
+        struct {
+            int32_t xy[2];
+            uint32_t draw, slot, samples, has_depth; // (has_depth: 1 a depth surface read, 2 the colour not read)
+            float zscale;
+        } push = {};
+        push.xy[0] = trace_.x;
+        push.xy[1] = trace_.y;
+        push.draw = trace_.draw;
+        push.slot = trace_.probes;
+        push.samples = samples;
+        push.has_depth = (depth ? 1u : 0u) | (colour_read ? 0u : 2u);
+        push.zscale = trace_.zscale;
+        c.push_constants(&push, 0, sizeof(push));
+        c.dispatch(1, 1, 1);
+        full_barrier(c);
+        trace_.probes++;
+        set0_fresh_ = false; // (a compute program's set 0 bound over the draws')
+    }
+
+    // Everything recorded so far done on the GPU, and the trace's records since the last take moved out
+    size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes) {
+        fragments.clear();
+        probes.clear();
+        if (!trace_.on) {
+            return 0;
+        }
+        flush_batch();
+        submit();
+        device_.wait_idle();
+        auto *bytes = static_cast<uint8_t *>(
+            device_.map_host_buffer(*trace_buf_, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
+        if (!bytes) {
+            return 0;
+        }
+        uint32_t count = 0;
+        memcpy(&count, bytes, sizeof(count));
+        size_t kept = std::min<size_t>(count, trace_fragments);
+        fragments.resize(kept);
+        memcpy(fragments.data(), bytes + 16, kept * sizeof(PcrTraceFragment));
+        probes.resize(trace_.probes);
+        memcpy(probes.data(), bytes + trace_probe_offset, probes.size() * sizeof(PcrTraceProbe));
+        memset(bytes, 0, 16);
+        device_.unmap_host_buffer(*trace_buf_, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT);
+        trace_.probes = 0;
+        return count;
+    }
+
+    void show_decal_losses(bool on) {
+        flush_batch();
+        decal_losses_ = on;
+    }
+
+    bool settled() const {
+        return pending_samples_ == samples_ && pending_scale_ == scale_;
     }
 
     void frame_mark(uint64_t value) {
@@ -906,6 +1026,9 @@ private:
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT); // (DATE's set-up reads it: begin_pass)
+        if (trace_.on) {
+            info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; // (the trace's probe reads the depth surfaces)
+        }
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         if (depth && samples_ > 1) {
@@ -922,7 +1045,8 @@ private:
     ImageHandle make_ms_image(uint32_t width, uint32_t height) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                     (trace_.on ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u); // (the trace's probe reads it)
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         info.samples = VkSampleCountFlagBits(samples_);
@@ -1922,6 +2046,7 @@ private:
         bool native = false;
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
+        bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         bool sprites = true;          // (every primitive a sprite: clear_depth_aliases)
         std::vector<PixelBox> boxes;  // (shader_blend: its primitives' pixels, none of them overlapping)
@@ -1937,6 +2062,9 @@ private:
         // (a kept walk's batch: its texture's place in the walk's table, Kept::table, and its sampler's in Kept::samplers;
         // no_table: set 1's)
         uint32_t table_at = no_table, sampler_at = 0;
+        // (a GEQUAL batch's) Z added for its place among those drawn into its Z buffer since the buffer was cleared
+        // (number_tie)
+        float ztie = 0.0f;
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -2238,6 +2366,7 @@ private:
         uint32_t samples = 1;
         bool cutout_aa = false;
         int precision = GSN_COLOUR_EXACT; // (colour_mode_)
+        int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -2250,6 +2379,7 @@ private:
         copies->samples = samples_;
         copies->cutout_aa = cutout_aa_;
         copies->precision = colour_mode_;
+        copies->mode_2d = mode_2d_;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
@@ -2301,6 +2431,7 @@ private:
         samples_ = pending_samples_ = copies.samples;
         cutout_aa_ = copies.cutout_aa;
         colour_mode_ = pending_colour_ = copies.precision;
+        mode_2d_ = copies.mode_2d;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
         // textures are bound already, and its store is never read; so what it draws over is not marked in it)
@@ -2401,6 +2532,16 @@ private:
             }
         } else {
             b.moved = b.numbered;
+            if (b.native_kicks) {
+                // (a native draw's kicks, the trail's: numbered on from the stream's, Between::adopt_live_kicks)
+                for (Vertex &v : b.vertices) {
+                    for (int i = 0; i < 3; i++) {
+                        if (v.kicks[i] != no_kick && v.kicks[i] >= native_kick_base) {
+                            v.kicks[i] = v.kicks[i] - native_kick_base + t.kicks;
+                        }
+                    }
+                }
+            }
         }
         bool kept_read = textured && tex0_reads_kept(kept.state.tex0, t);
         if (kept_read) {
@@ -2542,6 +2683,7 @@ private:
         batch_.native = false;
         batch_.moved = false;
         batch_.numbered = false;
+        batch_.native_kicks = false;
         batch_.arena.reset();
         batch_.records.reset();
         batch_.triangles.reset();
@@ -2682,6 +2824,9 @@ private:
             moved = moved && p.vertices[i].kick != no_kick;
         }
         batch_.numbered |= moved;
+        for (uint32_t i = 0; moved && i < corners; i++) {
+            batch_.native_kicks |= p.vertices[i].kick >= native_kick_base;
+        }
         batch_.moved |= moved && between_ && between_->active();
         uint32_t fst_bit = fst ? K_FST : 0;
         batch_.sprites = batch_.sprites && p.shape != PrimitiveShape::triangle;
@@ -2784,6 +2929,7 @@ private:
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            number_tie(batch_);
             draw_batch(batch_);
             if (keeping_) {
                 kept_->keep(take_kept_batch());
@@ -2808,18 +2954,7 @@ private:
             !bits(s.test, 0, 1)) {
             return false;
         }
-        uint32_t vlo = 0x80, vhi = 0x80;
-        if (!b.native && !b.vertices.empty()) {
-            vlo = 255;
-            vhi = 0;
-            for (const Vertex &v : b.vertices) {
-                vlo = std::min<uint32_t>(vlo, v.rgba[3]);
-                vhi = std::max<uint32_t>(vhi, v.rgba[3]);
-            }
-        }
-        uint32_t tlo = b.texture.alpha_lo, thi = b.texture.alpha_hi, tfx = bits(s.tex0, 35, 2);
-        uint32_t lo = tfx == 0 ? (vlo * tlo) >> 7 : tfx == 2 ? std::min(255u, vlo + tlo) : tlo;
-        uint32_t hi = tfx == 0 ? std::min(255u, (vhi * thi) >> 7) : tfx == 2 ? std::min(255u, vhi + thi) : thi;
+        auto [lo, hi] = alpha_range(b);
         uint32_t atst = bits(s.test, 1, 3), ref = bits(s.test, 4, 8);
         switch (atst) {
         case 2: // LESS
@@ -2834,6 +2969,33 @@ private:
         default: // NEVER, ALWAYS
             return false;
         }
+    }
+
+    // The least and most alpha a batch's pixels can have, before the alpha test: its vertices' (a native batch's taken as
+    // 0x80), through the texture function with the texture's where it is read with TCC (any alpha, 0 to 255, where the
+    // texture's are not known)
+    struct AlphaRange {
+        uint32_t lo, hi;
+    };
+    static AlphaRange alpha_range(const Batch &b) {
+        const DrawState &s = b.state;
+        uint32_t vlo = 0x80, vhi = 0x80;
+        if (!b.native && !b.vertices.empty()) {
+            vlo = 255;
+            vhi = 0;
+            for (const Vertex &v : b.vertices) {
+                vlo = std::min<uint32_t>(vlo, v.rgba[3]);
+                vhi = std::max<uint32_t>(vhi, v.rgba[3]);
+            }
+        }
+        if (!bits(s.prim, 4, 1) || !bits(s.tex0, 34, 1)) {
+            return {vlo, vhi}; // (untextured, or the texture's alpha not taken: the vertices')
+        }
+        uint32_t tlo = b.texture.ok ? b.texture.alpha_lo : 0, thi = b.texture.ok ? b.texture.alpha_hi : 255;
+        uint32_t tfx = bits(s.tex0, 35, 2);
+        uint32_t lo = tfx == 0 ? (vlo * tlo) >> 7 : tfx == 2 ? std::min(255u, vlo + tlo) : tlo;
+        uint32_t hi = tfx == 0 ? std::min(255u, (vhi * thi) >> 7) : tfx == 2 ? std::min(255u, vhi + thi) : thi;
+        return {lo, hi};
     }
 
     // A Z buffer cleared reaches the Z buffers of other widths over the same pages. A depth surface is one width's view
@@ -3006,6 +3168,90 @@ private:
         return *cmd_;
     }
 
+    // Ties. The game draws decals (moss and grime on a wall, the dark shading on a rock, the lava over its bed, a
+    // puddle on a floor) as meshes of their own, cut into triangles differently from the surface they lie on, Z tested
+    // GEQUAL: the GS's whole Z ties the two, and the one drawn later is seen. The GPU's depth keeps the fraction, and
+    // two meshes cut differently differ by a hair (a few thousandths of a Z): the later one lost over whole triangles,
+    // a different set each frame, and flickered (the moss on the low wall before map 063's keep). So each GEQUAL batch
+    // is drawn nearer by its place among the batches drawn into its Z buffer since the buffer was cleared: ties_most
+    // at most (less than the GS's step between two things it keeps apart) shared out over as many places as the
+    // buffer's last frame had, tie_step a place at most. A later batch wins a tie by a little more than a hair,
+    // whichever of the two is the decal. The Z is worked out as the batch is made (number_tie) and kept with it, so
+    // that a picture between draws it with the same.
+    // (Before 2026-11-13 the decals alone, blended draws tested GEQUAL, were drawn half a Z nearer. A surface under a
+    // decal that is blended too (that wall: alpha 0x80) tied with it again and the moss lost by its cutting's 0.005 Z;
+    // and a decal drawn before its surface (map 028's puddle, under the floor drawn after it) won where the GS's later
+    // floor does. A place of a fixed 1/2048 Z ran out on busy frames (1450 GEQUAL batches before map 063's keep; map
+    // 099's rock and its dark shading both at the half Z, tied again). Steps measured on 063 with --decal-losses: from
+    // 1/512 to 1/2048 the same, smaller ones lose more. Tried 2026-11-12 and dropped: decals writing no Z, or their Z
+    // by a second pass: a fifth of some views wrong where a decal draw's own triangles overlap; Z made whole for every
+    // draw: lines over map 024's lava wherever a whole Z fell between it and its bed; nearer by a share of the
+    // distance: a rock showed through a nearer one.)
+    static constexpr float tie_step = 1.0f / 2048.0f;
+    static constexpr float ties_most = 0.5f;
+
+    // A GEQUAL batch's Z added (Batch::ztie), by its place among its Z buffer's GEQUAL batches: counted as the frame's
+    // stream makes them, from 0 at the Z buffer's clear (a batch of sprites of one Z written ZTST ALWAYS from its
+    // scissor's top left corner over its whole height or width, every pixel passing the alpha test); in a picture
+    // between's walk from 0 at the walk's start
+    void number_tie(Batch &b) {
+        const DrawState &s = b.state;
+        bool zte = bits(s.test, 16, 1) != 0, zwrite = zte && bits(s.zbuf, 32, 1) == 0;
+        uint32_t ztst = bits(s.test, 17, 2), zbp = bits(s.zbuf, 0, 9);
+        // (every pixel's Z written: not a sprite whose alpha test keeps its Z, as map 099's screen tints have, ATST
+        // NEVER drawing the frame only, which had the decals after it lose to the rock under them)
+        bool ate = bits(s.test, 0, 1) != 0, all_pass = !ate || bits(s.test, 1, 3) == 1;
+        uint32_t &count = (between_ ? walk_ties_ : ties_)[zbp];
+        if (zwrite && ztst == 1 && all_pass && clears_scissor(b)) {
+            if (!between_ && count != 0) { // (the game clears twice running, a context each)
+                last_ties_[zbp] = count;
+            }
+            count = 0;
+        }
+        b.ztie = 0.0f;
+        if (zte && ztst == 2) {
+            float step = std::min(tie_step, ties_most / float(std::max(last_ties_[zbp], 1u)));
+            b.ztie = std::min(float(count++) * step, ties_most);
+        }
+    }
+
+    static bool clears_scissor(const Batch &b) {
+        if (b.native || !b.sprites || b.vertices.empty()) {
+            return false;
+        }
+        for (const Vertex &v : b.vertices) {
+            if (v.z != b.vertices[0].z) {
+                return false;
+            }
+        }
+        uint64_t scissor = b.state.scissor;
+        // (from the scissor's top left corner its whole height or width: a clear's first column or row, as map 099
+        // clears in columns 64 pixels wide, a batch each)
+        bool corner = b.x0 <= int32_t(bits(scissor, 0, 11)) && b.y0 <= int32_t(bits(scissor, 32, 11));
+        return corner && (b.x1 >= int32_t(bits(scissor, 16, 11)) || b.y1 >= int32_t(bits(scissor, 48, 11)));
+    }
+
+    // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
+    // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
+    static bool is_decal(const Batch &b) {
+        const DrawState &s = b.state;
+        return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0 && !blend_covers(b);
+    }
+
+    // Whether a blended batch's blend writes its source colour alone at every pixel: ALPHA's (Cs - Cd) * C + Cd with C
+    // 0x80 or more there (FIX, or As over its whole alpha_range), so that nothing under it shows
+    static bool blend_covers(const Batch &b) {
+        const DrawState &s = b.state;
+        uint32_t a = bits(s.alpha, 0, 2), bb = bits(s.alpha, 2, 2), c = bits(s.alpha, 4, 2), d = bits(s.alpha, 6, 2);
+        if (a != 0 || bb != 1 || d != 1) {
+            return false;
+        }
+        if (c == 2) {
+            return bits(s.alpha, 32, 8) >= 0x80;
+        }
+        return c == 0 && alpha_range(b).lo >= 0x80;
+    }
+
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
@@ -3169,7 +3415,9 @@ private:
                      ? F_SMOOTH_2D
                      : 0;
         flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
+        flags |= is_decal(b) ? F_DECAL : 0;
         push.flags = flags;
+        push.ztie = b.ztie;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
         uint32_t fix = (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8);
@@ -3201,6 +3449,20 @@ private:
         bool walk_texture = walk_table_ && (texels || sampled);
         texels = texels && !from_table;
         sampled = sampled && !from_table;
+        // (developers' pixel trace: the traced pixel in this batch's target, where its frame buffer is the spot's)
+        bool traced = trace_.on && fbp == trace_.spot.fbp;
+        push.trace_xy = no_trace;
+        push.trace_draw = trace_.draw;
+        if (traced) {
+            trace_.x = (trace_.spot.x + int32_t(placed.x)) * int32_t(scale_[0]) + trace_.spot.sub_x;
+            trace_.y = (trace_.spot.y + int32_t(placed.y)) * int32_t(scale_[1]) + trace_.spot.sub_y;
+            push.trace_xy = uint32_t(trace_.x) | uint32_t(trace_.y) << 16;
+            trace_.colour = colour;
+            if (depth) {
+                trace_.depth = depth;
+                trace_.zscale = push.zscale;
+            }
+        }
         // (a kept walk's batch: its CLUT in the walk's buffer, set 0's, bind_between)
         bool indexed = (texels || from_table) && bt.src == SRC_INDEX;
         bool walk_clut = indexed && walk_cluts_ && b.clut_at != no_walk_clut;
@@ -3211,7 +3473,8 @@ private:
         // the draw) drawn in its picture's run (Runs): its fields a record, its draws an indirect draw's, with the
         // batches before it of the same state. Anything else ends the run first, before the state is set.
         uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
-        bool in_run = runs_.map && between_ && between_->active() && !clear && !date && !b.shader_blend && !texels &&
+        // (a traced batch drawn alone: its fragments that fail the test are recorded, so it is not tested early)
+        bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !b.shader_blend && !texels &&
                       !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
                       (b.native ? native_runs_ok_ : walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
                       runs_.used + draws * uint32_t(pass_count) <= runs_.capacity;
@@ -3245,7 +3508,8 @@ private:
         auto pass_state = [&](int i, uint32_t &mask) {
             const Pass &pass = passes[i];
             // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
-            bool early = pass.mode == 0 && !(flags & F_DATE);
+            // (not where traced, whose fragments that fail the test are recorded too)
+            bool early = pass.mode == 0 && !(flags & F_DATE) && !traced;
             Program *program = in_run ? (early ? (per_sample ? run_early_sample_programs_[v] : run_early_programs_[v])
                                                : (per_sample ? run_sample_programs_[v] : run_programs_[v]))
                                       : (early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
@@ -3315,6 +3579,7 @@ private:
                             : ztst == 1 ? VK_COMPARE_OP_ALWAYS
                             : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                         : VK_COMPARE_OP_GREATER);
+        c.set_storage_buffer(1, 6, *trace_buf_); // (pcr_prim.h's u_trace)
         // (set 1, the batch's textures and CLUT: the last set, so Granite pushes it, vkCmdPushDescriptorSet, rather
         // than allocating and writing a set each batch)
         c.set_texture(1, 0, texels ? *bt.view : dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -3386,7 +3651,55 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
+        if (decal_losses_ && zte && (flags & F_DECAL)) {
+            draw_decal_losses(c, b, push, passes, pass_count, ztst, per_sample, v);
+        }
         drawn_over(b, *colour, ms, box, zte && zwrite);
+    }
+
+    // (developers' decal losses) The decal batch b drawn again where it lost its depth test by less than
+    // PCR_DECAL_LOSS_MARGIN: the test turned round, no Z written, each pass that writes colour with its alpha test. A
+    // little magenta added where it lost, and taken away again where it lost by more than the margin (behind a nearer
+    // surface): small, so that the decals over each other add up short of white (else the sum is clamped there, and
+    // taking it away again leaves the colour short)
+    template <typename Passes>
+    void draw_decal_losses(CommandBuffer &c, const Batch &b, PrimPush push, const Passes &passes, int pass_count,
+                           uint32_t ztst, bool per_sample, int v) {
+        c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_LESS : VK_COMPARE_OP_LESS_OR_EQUAL);
+        c.set_blend_enable(true);
+        c.set_blend_factors(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE);
+        c.set_color_write_mask(0x7u);
+        uint32_t flags = push.flags & ~(3u << F_PASS_SHIFT);
+        push.trace_xy = no_trace;
+        for (int i = 0; i < pass_count; i++) {
+            if (!passes[i].rgb) {
+                continue;
+            }
+            for (uint32_t far : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
+                push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far;
+                c.set_blend_op(far ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+                c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
+                c.push_constants(&push, 0, sizeof(push));
+                c.set_depth_test(true, false);
+                if (b.native) {
+                    for (const Batch::Run &r : b.runs) {
+                        c.draw(r.count * 3, 1, r.first * 3, r.instance);
+                    }
+                    continue;
+                }
+                set_vertex_attribs(c);
+                c.draw(uint32_t(b.vertices.size()));
+            }
+        }
+    }
+
+    static bool holds(const std::vector<std::unique_ptr<Surface>> &list, const Surface *s) {
+        for (const auto &o : list) {
+            if (o.get() == s) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // After a batch: its multisampled image ahead of its image, and what was drawn over told to the texture store (its
@@ -3559,7 +3872,7 @@ private:
     static constexpr uint32_t native_slots = 4;
     static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
-    static constexpr uint32_t records_binding = 6; // (set 1's: the picture's records, Runs)
+    static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -3822,10 +4135,11 @@ private:
         frag.sets[1].sampled_image_mask = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4);
         frag.sets[1].fp_mask = (1u << 1) | (1u << 3) | (1u << 4);
         frag.sets[1].uniform_buffer_mask = 1u << 2;
-        for (int b : {0, 1, 2, 3, 4}) {
+        frag.sets[1].storage_buffer_mask = 1u << 6; // (the developers' pixel trace)
+        for (int b : {0, 1, 2, 3, 4, 6}) {
             frag.sets[1].meta[b].array_size = 1;
         }
-        frag.sets[1].storage_buffer_mask = 1u << records_binding;
+        frag.sets[1].storage_buffer_mask |= 1u << records_binding;
         frag.sets[1].meta[records_binding].array_size = 1;
         // (set 0's one binding of the fragment stage: a kept walk's CLUTs, u_walk_cluts; the DATE programs declare it
         // too, so that set 0's layout is the same in every program a batch draws with)
@@ -3918,6 +4232,25 @@ private:
         clut.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         std::array<uint8_t, sizeof(Batch::clut)> no_colours{};
         no_clut_ = device_.create_buffer(clut, no_colours.data());
+        // (the developers' pixel trace: bound to every draw, written by none until trace_pixel makes its own)
+        BufferCreateInfo trace = {};
+        trace.domain = BufferDomain::Device;
+        trace.size = 64;
+        trace.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        std::array<uint8_t, 64> no_trace_bytes{};
+        trace_buf_ = device_.create_buffer(trace, no_trace_bytes.data());
+        ResourceLayout probe = {};
+        probe.push_constant_size = 7 * sizeof(uint32_t);
+        probe.sets[0].sampled_image_mask = 3u;
+        probe.sets[0].fp_mask = 3u;
+        probe.sets[0].storage_buffer_mask = 4u;
+        for (int b : {0, 1, 2}) {
+            probe.sets[0].meta[b].array_size = 1;
+        }
+        Shader *pcs = device_.request_shader(pcr_spv_pcr_probe_comp, sizeof(pcr_spv_pcr_probe_comp), &probe);
+        probe_program_ = device_.request_program(pcs);
+        Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
+        probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
         WarmProgram warmed[21];
         for (int v = 0; v < 5; v++) {
@@ -3963,6 +4296,23 @@ private:
     PassReads pass_reads_ = PassReads::nothing;
     BufferHandle picture_;
     BufferHandle no_clut_; // (bound as the CLUT of a batch that reads none)
+    // ---- Developers' views (pcr.h's pcr_debug_*) ----
+    struct Trace {
+        bool on = false;
+        PcrTraceSpot spot = {};
+        uint32_t draw = 0;
+        uint32_t probes = 0; // probe records since the last take
+        // the traced pixel's surfaces as its last draw had them (the last depth surface of its draws), and its pixel
+        Surface *colour = nullptr, *depth = nullptr;
+        int32_t x = 0, y = 0;
+        float zscale = 1.0f / 16777216.0f;
+    } trace_;
+    BufferHandle trace_buf_;
+    Program *probe_program_ = nullptr, *probe_ms_program_ = nullptr;
+    bool decal_losses_ = false;
+    // number_tie's counts, by the Z buffer's base page: the frame's stream's, a picture between's walk's, and the
+    // frame's stream's at the buffer's last clear
+    std::array<uint32_t, 512> ties_{}, walk_ties_{}, last_ties_{};
     const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
     CommandBufferHandle cmd_;
@@ -4206,6 +4556,24 @@ void Canvas::native_batch(const GsRegisterFile &file, uint32_t prim, const Nativ
 }
 void Canvas::frame_mark(uint64_t value) {
     impl_->frame_mark(value);
+}
+bool Canvas::trace_pixel(const PcrTraceSpot &spot) {
+    return impl_->trace_pixel(spot);
+}
+void Canvas::trace_draw(uint32_t draw) {
+    impl_->trace_draw(draw);
+}
+void Canvas::trace_probe() {
+    impl_->trace_probe();
+}
+size_t Canvas::take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes) {
+    return impl_->take_trace(fragments, probes);
+}
+void Canvas::show_decal_losses(bool on) {
+    impl_->show_decal_losses(on);
+}
+bool Canvas::settled() const {
+    return impl_->settled();
 }
 void Canvas::upload_again(const GsRegisterFile &file, uint64_t value) {
     impl_->upload_again(file, value);

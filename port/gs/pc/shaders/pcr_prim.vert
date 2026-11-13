@@ -151,7 +151,7 @@ void main() {
     }
     vec2 ndc = gs_to_clip(pos);
     // (the GS keeps Z within what the Z buffer's format holds; taken in at the corners)
-    gl_Position = vec4(ndc, float(min(z, pc.zmax)) * pc.zscale, 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
     v_color = colour;
     v_stq = stq;
     v_fog = fog;
