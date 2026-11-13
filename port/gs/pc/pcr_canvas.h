@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "device.hpp"
 #include "pcr_between.h"
@@ -35,6 +36,7 @@
 #include "pcr_gif.h"
 #include "pcr_gpu_time.h"
 #include "pcr_textures.h"
+#include "pcr_trace.h"
 
 namespace pcr {
 
@@ -203,6 +205,17 @@ public:
     void submit();
     // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken
     void vblank();
+
+    // Developers' views (pcr.h's pcr_debug_*, which say what each does; kf4-gsreplay --renderer pc), never a player's:
+    // the pixel trace (trace_pixel to start it: false when the spot is not one or there is no memory for it; take_trace
+    // submits, waits for the GPU and returns the fragments counted, kept or not) and the decal losses
+    bool trace_pixel(const PcrTraceSpot &spot);
+    void trace_draw(uint32_t draw);
+    void trace_probe();
+    size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes);
+    void show_decal_losses(bool on);
+    // whether the scale and MSAA's samples last set are drawn with (MSAA's wait for their pipelines: pcr_pipelines.h)
+    bool settled() const;
 
     CanvasCounts counts() const;
     // --stats: the "[stats] pc canvas" lines, and the texture store's

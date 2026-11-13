@@ -638,6 +638,45 @@ void feed_continuation(GifFrontEnd &gif) {
 
 // state(), set_state(): a state taken mid-stream, loaded into the front end that went on past it and into a fresh one,
 // makes the same packets give the same events as the front end that was never disturbed
+// A capture's GS_REGS record (gs_capture_format.h) made of a register file and taken back: every address and the Q;
+// a record of some addresses sets those only; a record cut inside an entry is refused and changes nothing
+void test_capture_registers() {
+    GsRegisterFile file;
+    for (size_t a = 0; a < file.reg.size(); a++) {
+        file.reg[a] = 0x0123456789ABCDEFull ^ (uint64_t(a) * 0x9E3779B97F4A7C15ull);
+    }
+    file.internal_q = float_bits(0.25f);
+    std::vector<uint8_t> record = capture_registers(file);
+    CHECK(record.size() == 257 * 16);
+    GsRegisterFile back;
+    CHECK(take_capture_registers(record, back));
+    CHECK(back == file);
+    // two entries: FRAME_1 (0x4C) and the Q (0x1000); the rest kept
+    GsRegisterFile some = file;
+    uint8_t two[32] = {};
+    uint32_t frame_1 = gs_reg::frame_1, q_address = 0x1000;
+    uint64_t frame_value = 0x1122334455667788ull, q_value = float_bits(2.0f);
+    std::memcpy(two, &frame_1, 4);
+    std::memcpy(two + 8, &frame_value, 8);
+    std::memcpy(two + 16, &q_address, 4);
+    std::memcpy(two + 24, &q_value, 8);
+    CHECK(take_capture_registers(two, some));
+    CHECK(some.reg[gs_reg::frame_1] == frame_value && some.internal_q == float_bits(2.0f));
+    some.reg[gs_reg::frame_1] = file.reg[gs_reg::frame_1];
+    some.internal_q = file.internal_q;
+    CHECK(some == file);
+    // an address past the file's (the CLUT's 0x1001) passed over
+    uint32_t clut_address = 0x1001;
+    std::memcpy(two, &clut_address, 4);
+    GsRegisterFile clut = file;
+    CHECK(take_capture_registers(std::span<const uint8_t>(two, 16), clut));
+    CHECK(clut == file);
+    // cut short
+    GsRegisterFile cut = file;
+    CHECK(!take_capture_registers(std::span<const uint8_t>(record.data(), 20), cut));
+    CHECK(cut == file);
+}
+
 void test_state_round_trip() {
     Rig before;
     feed_prelude(before.gif);
@@ -1214,6 +1253,7 @@ int main() {
     test_truncated_and_malformed();
     test_splits();
     test_state_round_trip();
+    test_capture_registers();
     test_random_streams();
     test_random_bytes();
     if (failures) {

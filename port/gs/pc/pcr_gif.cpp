@@ -7,6 +7,8 @@
 #include <cstring>
 #include <utility>
 
+#include "port/gs_capture_format.h"
+
 namespace pcr {
 
 namespace {
@@ -450,6 +452,32 @@ void GifFrontEnd::number_kicks() {
 
 void GifFrontEnd::stop_numbering() {
     numbering_ = false;
+}
+
+std::vector<uint8_t> capture_registers(const GsRegisterFile &file) {
+    std::vector<uint8_t> bytes((file.reg.size() + 1) * sizeof(Kf4GsReg));
+    for (uint32_t address = 0; address <= file.reg.size(); address++) {
+        bool q = address == file.reg.size();
+        Kf4GsReg r = {q ? uint32_t(KF4GS_REG_INTERNAL_Q) : address, 0, q ? file.internal_q : file.reg[address]};
+        std::memcpy(bytes.data() + size_t(address) * sizeof(r), &r, sizeof(r));
+    }
+    return bytes;
+}
+
+bool take_capture_registers(std::span<const uint8_t> record, GsRegisterFile &file) {
+    if (record.size() % sizeof(Kf4GsReg) != 0) {
+        return false;
+    }
+    for (size_t at = 0; at < record.size(); at += sizeof(Kf4GsReg)) {
+        Kf4GsReg r;
+        std::memcpy(&r, record.data() + at, sizeof(r));
+        if (r.address < file.reg.size()) {
+            file.reg[r.address] = r.value;
+        } else if (r.address == KF4GS_REG_INTERNAL_Q) {
+            file.internal_q = uint32_t(r.value);
+        }
+    }
+    return true;
 }
 
 void GifFrontEnd::restore(const GsRegisterFile &file) {
