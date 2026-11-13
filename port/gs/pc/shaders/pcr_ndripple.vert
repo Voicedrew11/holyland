@@ -79,7 +79,7 @@ void main() {
     uint rgba = uint(d.info.w);
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
-    gl_Position = vec4(ndc, float(min(z, pc.zmax)) * pc.zscale, 1.0);
+    gl_Position = vec4(ndc, pcr_depth(z), 1.0);
     v_color = vec4(float(rgba & 0xFFu), float((rgba >> 8) & 0xFFu), float((rgba >> 16) & 0xFFu), float(rgba >> 24));
     v_stq = vec3(screen_st(wx, wy), 1.0);
     v_fog = d.fog.x;

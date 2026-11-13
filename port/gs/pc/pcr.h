@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "gsn.h" /* (port/gs/shared: the plain types and constants only) */
+#include "pcr_trace.h"
 #include "port/platform.h"
 #include "port/savestate.h"
 
@@ -79,7 +80,9 @@ void pcr_pipeline_cache(const char *path);
 int pcr_pipelines_running(void);
 int pcr_pipelines_building(int *done, int *total);
 
-/* Captures and save states: nothing of the PC renderer's yet (sizes 0; a record or state given is not taken) */
+/* GS captures (F9): pcr_capture emits the GS's memory (KF4GS_VRAM) and registers (KF4GS_GS_REGS) of
+   port/include/port/gs_capture_format.h; pcr_restore takes those two back (kf4-gsreplay --renderer pc), 0 for any
+   other record. Save states: pcr_state (the GS's memory, registers and CLUT buffer). */
 void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t size));
 int pcr_restore(uint32_t type, const void *data, size_t size);
 size_t pcr_state_size(void);
@@ -89,6 +92,34 @@ void pcr_table_state(PortStateIo *io, size_t size);
 
 /* --stats: the "[stats] pc renderer:" line (packets, bytes, vblanks, pictures) */
 void pcr_print_stats(void);
+
+/* ---- Developers' views (kf4-gsreplay --renderer pc), never a player's ----
+   Each waits until the PC renderer has done everything sent before it, and acts there.
+
+   The pixel trace: every fragment the draws shade at one pixel of the surfaces, and the pixel's samples where asked.
+   The pixel: GS pixel (x, y) of the frame buffer at base page fbp (FRAME's FBP), and of the scale's block of surface
+   pixels that GS pixel is, the one sub_x across and sub_y down. Its draws are drawn with their depth test after their
+   shaders (as the draws that may discard are), so that the trace sees the fragments that fail it too; the picture is
+   the same. pcr_debug_trace_draw numbers the draws from there (the batch open is drawn first: a batch is one draw's).
+   pcr_debug_trace_probe records the pixel's samples now, as the draws so far left them: in a pass of its own, which
+   ends the render pass open. pcr_debug_trace_take: what was recorded since the last take (fragments past room are
+   counted in the return, not kept). */
+/* (the records: pcr_trace.h) */
+int pcr_debug_trace(const PcrTraceSpot *spot);
+void pcr_debug_trace_draw(uint32_t draw);
+void pcr_debug_trace_probe(void);
+size_t pcr_debug_trace_take(PcrTraceFragment *fragments, size_t room, PcrTraceProbe *probes, size_t probe_room,
+                            size_t *probes_taken);
+
+/* Decal losses: each decal (pcr_canvas.cpp's is_decal) drawn again where it lost its depth test by less than
+   pcr_common.h's PCR_DECAL_LOSS_MARGIN (16 Z), 16 (of 255) of red and blue added to the picture there for each decal
+   that lost (its alpha test as it has it, its Z not written): the picture less the same one drawn without them shows
+   where. A decal behind a nearer surface by more is left as it is. */
+void pcr_debug_decal_losses(int on);
+
+/* 1 once the scale and MSAA's samples last set are what the PC renderer draws with: each is taken at a vblank, and
+   MSAA's only once its pipelines are made (pcr_pipelines.h), which takes some vblanks after it is set */
+int pcr_debug_settled(void);
 
 #ifdef __cplusplus
 }

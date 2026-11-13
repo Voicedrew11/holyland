@@ -14,6 +14,12 @@
    What it can write (tools/README.md has examples):
      --info             the capture's metadata and what is in it
      --frames           each scanout's picture, frame_NNNNNN.png, as --dump-frames writes it
+     --repeat N         the capture's stream drawn N times over by the same renderer, its state kept between
+                        (the state at the capture's start taken again each time); with --end-picture,
+                        frame_end_NNN.png after each: whether what the renderer carries from frame to frame
+                        changes the picture
+     --end-picture      --frames, and at the end frame_end.png: the buffer the last draw drew into, shown as the
+                        last vblank shows its buffer (a capture at 30 frames a second ends before its frame shows)
      --out DIR          where the pictures go (the current directory by default)
      --list             every draw: a run of vertices with no GS state written between them, in one
                         packet. Its path, the VU1 program and XGKICK that made it, PRIM, the vertex count,
@@ -33,8 +39,21 @@
                         (port/platform/vu1_hle*.c) or check (both, compared run by run: memory,
                         packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
-     --renderer gs      who draws: paraLLEl-GS, the GS the game draws with (the only one here, and the
-                        default)
+     --renderer gs|pc   who draws: paraLLEl-GS, the accurate GS (the default), or the PC renderer
+                        (port/gs/pc/), the one players get. With pc, --frames are at its scale, and
+                        these set it up as a player's settings.json does (the PC renderer's defaults
+                        otherwise):
+       --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
+                        native_widescreen with widescreen makes X (4 * scale + 2) / 3: 6x4 at 4)
+       --msaa N --aniso N --lod ps2|scale|full --cutout-aa off|ssaa --2d ps2|smooth --colour exact|high
+                        A capture holds no settings of the PC renderer's: give the player's.
+                        With pc, --pixel X,Y traces one surface pixel of GS pixel (X,Y) of the frame buffer at
+                        page --fbp N (0 by default): --sub SX,SY picks it in the GS pixel's block of the
+                        scale (its middle by default). For each draw whose box covers it: every fragment
+                        shaded there (its Z, its slope, the samples it covers, its colour, whether the alpha
+                        test discarded it, a decal), each sample's Z against the Z stored before, and the
+                        samples' Z and colour after the draw (read back by the GPU in a pass of its own)
+       --decal-losses   (pc) each decal drawn again in magenta where it lost its depth test
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -47,8 +66,10 @@
 #include "port/gs_capture_format.h"
 #include "port/host.h"
 #include "port/lz4_block.h"
+#include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/render.h"
+#include "pcr.h"
 
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
@@ -123,6 +144,30 @@ void port_gs_capture_read_fifo(uint32_t qwords) {
     (void)qwords;
 }
 
+/* What the PC renderer needs of the program: no pictures between here, so no mouse; whole frames as captured */
+MouseTurn port_mouse_lead_since(MouseTurn hand, double at_vblanks) {
+    MouseTurn none;
+
+    (void)hand;
+    (void)at_vblanks;
+    memset(&none, 0, sizeof(none));
+    return none;
+}
+
+double port_mouse_lead_newest_vblanks(void) {
+    return -1.0;
+}
+
+void mouse_lead_turn_picture(float move[12], float mid[12], MouseTurn turn) {
+    (void)move;
+    (void)mid;
+    (void)turn;
+}
+
+int port_whole_frame(void) {
+    return port_options.whole_frame;
+}
+
 static uint32_t current_program = 0xFFFFFFFEu; /* the VU1 program last started (KF4GS_MSCNT: MSCNT) */
 static uint32_t current_kick;
 
@@ -145,6 +190,96 @@ static void die(const char *fmt, ...) {
     fputc('\n', stderr);
     exit(1);
 }
+
+/* ---- Who draws ---------------------------------------------------------------------------------- */
+/* The PC renderer's settings (--renderer pc): what pcr.h's setters take; 0 leaves the renderer's default */
+typedef struct {
+    int scale_x, scale_y, msaa, aniso;
+    int lod, cutout_aa, mode_2d, colour; /* GSN_* + 1 (0: the default) */
+} PcSettings;
+
+/* paraLLEl-GS or the PC renderer, as the run calls them */
+typedef struct {
+    const char *name;
+    int (*open)(const PcSettings *settings);
+    void (*gif)(int path, const void *data, size_t bytes);
+    void (*read_fifo)(void *dst, uint32_t qwords);
+    int (*vsync)(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
+    /* a record of the capture's GS state at its start: 0 when it does not fit */
+    int (*restore)(uint32_t type, const void *data, size_t size);
+    /* the GS's 4 MB as the GS lays it out, after everything sent (NULL: the renderer has none at the PS2's size) */
+    const void *(*vram)(void);
+} Drawer;
+
+static int gs_open(const PcSettings *settings) {
+    (void)settings;
+    return port_gs_backend_open();
+}
+
+static const Drawer gs_drawer = {"paraLLEl-GS",      gs_open,        port_gs_backend_gif, port_gs_backend_read_fifo,
+                                 port_gs_backend_vsync, port_gs_backend_restore, port_gs_backend_vram};
+
+static int pc_open(const PcSettings *s) {
+    if (!pcr_open(NULL)) {
+        return 0;
+    }
+    pcr_set_native_draw(GSN_NATIVE_DRAW_PS2); /* (a capture's native draws are not fed to the PC renderer) */
+    if (s->scale_x > 0) {
+        pcr_set_scale(s->scale_x, s->scale_y > 0 ? s->scale_y : s->scale_x);
+    }
+    if (s->msaa > 0 && pcr_set_msaa(s->msaa) != s->msaa) {
+        fprintf(stderr, "kf4-gsreplay: this GPU draws at most %d samples here\n", pcr_set_msaa(s->msaa));
+    }
+    if (s->aniso > 0) {
+        pcr_set_aniso(s->aniso);
+    }
+    if (s->lod > 0) {
+        pcr_set_lod(s->lod - 1);
+    }
+    if (s->cutout_aa > 0) {
+        pcr_set_cutout_aa(s->cutout_aa - 1);
+    }
+    if (s->mode_2d > 0) {
+        pcr_set_2d(s->mode_2d - 1);
+    }
+    if (s->colour > 0) {
+        pcr_set_colour(s->colour - 1);
+    }
+    {
+        /* vblanks showing nothing first, until the settings are drawn with: the PC renderer takes its scale and MSAA at
+           a vblank (MSAA once its pipelines are made), and the capture's draws before would be drawn at 1x */
+        static const uint64_t no_display[0xF0 / 8];
+        struct timespec pause = {0, 20 * 1000 * 1000};
+        int k;
+
+        for (k = 0; k < 1500; k++) {
+            pcr_vsync(no_display, 0, 0, NULL);
+            if (pcr_debug_settled()) {
+                break;
+            }
+            nanosleep(&pause, NULL);
+        }
+        if (k == 1500) {
+            fprintf(stderr, "kf4-gsreplay: the PC renderer's settings were not in effect after 30 s\n");
+        }
+    }
+    return 1;
+}
+
+static int pc_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
+    return pcr_vsync(privileged, field, want_pixels ? GSN_WANT_PIXELS : 0, want_pixels ? frame : NULL);
+}
+
+/* The PC renderer takes the GS's memory and its registers; paraLLEl-GS's own records (its privileged
+   registers' copy, its scanout history) are not its: the vblanks bring the display registers */
+static int pc_restore(uint32_t type, const void *data, size_t size) {
+    if (type == KF4GS_GS_PRIV || type == KF4GS_GS_HISTORY) {
+        return 1;
+    }
+    return pcr_restore(type, data, size);
+}
+
+static const Drawer pc_drawer = {"the PC renderer", pc_open, pcr_gif, pcr_read_fifo, pc_vsync, pc_restore, NULL};
 
 /* ---- The file ------------------------------------------------------------------------------------ */
 typedef struct {
@@ -629,7 +764,8 @@ enum { MODE_GIF, MODE_VIF };
 typedef struct {
     const Capture *capture;
     int mode;
-    int render;           /* 1: paraLLEl-GS draws the packets (and the pictures asked for) */
+    int render;           /* 1: drawer draws the packets (and the pictures asked for) */
+    const Drawer *drawer;
     Gif gif;
     size_t cursor;        /* --mode vif: the next record not yet matched */
     /* --mode vif's comparison */
@@ -642,6 +778,11 @@ typedef struct {
     long fbp_filter;
     const char *out;
     int frames;
+    int end_picture;           /* --end-picture */
+    int sub_x, sub_y;          /* --pixel with the PC renderer: the surface pixel in the GS pixel's block (--sub) */
+    PcrTraceProbe last_probe;  /* ... the traced pixel's samples after the last draw over it */
+    int have_probe;
+    const Record *last_vsync;  /* the last VSYNC record gone through */
     PortGsFrame frame;
     uint32_t last_pixel_colour, last_pixel_z;
     int pixel_seen;
@@ -660,7 +801,7 @@ static void dump_draw_buffers(Run *r, long index) {
     const Draw *d = &r->gif.draws[index];
     const uint8_t *vram;
 
-    vram = port_gs_backend_vram();
+    vram = r->drawer->vram();
     uint32_t fbp = (uint32_t)(d->frame & 0x1FF) * 1, fbw = (uint32_t)((d->frame >> 16) & 0x3F);
     uint32_t psm = (uint32_t)((d->frame >> 24) & 0x3F);
     uint32_t w = fbw * 64, h = (uint32_t)((d->scissor >> 48) & 0x7FF) + 1;
@@ -715,16 +856,154 @@ static int box_covers(const Draw *d, int x, int y) {
            y >= sy0 && y <= sy1;
 }
 
+/* ---- The PC renderer's pixel trace (pcr.h's pcr_debug_trace*) ---- */
+static const char *prim_names[8] = {"point", "line", "lstrip", "tri", "tstrip", "tfan", "sprite", "?"};
+/* Vulkan's standard sample places in a pixel, by the samples (1, 2, 4, 8) */
+static void sample_place(uint32_t samples, uint32_t s, double *x, double *y) {
+    static const double two[2][2] = {{0.75, 0.75}, {0.25, 0.25}};
+    static const double four[4][2] = {{0.375, 0.125}, {0.875, 0.375}, {0.125, 0.625}, {0.625, 0.875}};
+    static const double eight[8][2] = {{0.5625, 0.3125}, {0.4375, 0.6875}, {0.8125, 0.5625}, {0.3125, 0.1875},
+                                       {0.1875, 0.8125}, {0.0625, 0.4375}, {0.6875, 0.9375}, {0.9375, 0.0625}};
+    const double *p = samples == 2 ? two[s & 1] : samples == 4 ? four[s & 3] : samples == 8 ? eight[s & 7] : NULL;
+
+    *x = p ? p[0] : 0.5;
+    *y = p ? p[1] : 0.5;
+}
+
+static int by_draw(const void *a, const void *b) {
+    const PcrTraceFragment *x = a, *y = b;
+
+    if (x->draw != y->draw) {
+        return x->draw < y->draw ? -1 : 1;
+    }
+    if (x->primitive != y->primitive) {
+        return x->primitive < y->primitive ? -1 : 1;
+    }
+    return x->sample < y->sample ? -1 : x->sample > y->sample;
+}
+
+static const char *const ztst_names[4] = {"NEVER", "ALWAYS", "GEQUAL", "GREATER"};
+
+/* a fragment's Z at sample s: its own when shaded at it, else from the pixel's centre along its slope */
+static double fragment_z_at(const PcrTraceFragment *f, uint32_t samples, uint32_t s) {
+    double x, y;
+
+    if (f->sample >= 0) {
+        return f->z;
+    }
+    sample_place(samples, s, &x, &y);
+    return (double)f->z + (double)f->dz_dx * (x - 0.5) + (double)f->dz_dy * (y - 0.5);
+}
+
+static void print_samples(const char *what, const PcrTraceProbe *p) {
+    uint32_t s;
+
+    printf("      %s:", what);
+    for (s = 0; s < p->samples && s < 8; s++) {
+        if (p->has_depth & 1) {
+            printf(" s%u Z %.4f", s, (double)p->z[s]);
+        }
+        if (!(p->has_depth & 2)) {
+            printf(" %08X", p->rgba[s]);
+        }
+        printf(s + 1 < p->samples ? " |" : "");
+    }
+    printf("\n");
+}
+
+/* One draw's fragments at the traced pixel, each sample's Z against the Z there before (the draw's ZTST), and the
+   samples after it */
+static void report_draw(Run *r, const PcrTraceProbe *after, const PcrTraceFragment *f, size_t n) {
+    const Draw *d = after->draw < r->gif.count ? &r->gif.draws[after->draw] : NULL;
+    uint32_t ztst = d ? (uint32_t)((d->test >> 17) & 3) : 1;
+    int zte = d ? (int)((d->test >> 16) & 1) : 0;
+    size_t i;
+
+    if (d != NULL) {
+        printf("draw %6u prog %03X kick %3u %s%s%s v%u Z %s%s ATST %u AREF %02X ZRANGE %08X-%08X TEX0 %016llX\n",
+               after->draw, d->program & 0xFFF, d->kick, prim_names[d->prim & 7], (d->prim & 0x40) ? " abe" : "",
+               n && PCR_TRACE_DECAL(f[0].how) ? " DECAL" : "", d->vertices, zte ? ztst_names[ztst] : "off",
+               (d->zbuf >> 32) & 1 ? " (not written)" : "", (unsigned)((d->test >> 1) & 7),
+               (unsigned)((d->test >> 4) & 0xFF), d->zmin, d->zmax, (unsigned long long)d->tex0);
+    } else {
+        printf("draw %6u\n", after->draw);
+    }
+    for (i = 0; i < n; i++) {
+        static const char *const outcome[3] = {"shaded", "DATE discarded", "alpha test discarded"};
+        uint32_t s;
+
+        printf("    prim %5u%s pass %u Z %.4f (a pixel across %+.4f, down %+.4f) %08X %s:", f[i].primitive,
+               f[i].sample >= 0 ? " (a sample)" : "", PCR_TRACE_PASS(f[i].how), (double)f[i].z, (double)f[i].dz_dx,
+               (double)f[i].dz_dy, f[i].rgba, PCR_TRACE_OUTCOME(f[i].how) < 3 ? outcome[PCR_TRACE_OUTCOME(f[i].how)] : "?");
+        for (s = 0; s < after->samples && s < 8; s++) {
+            double z;
+
+            if (!(f[i].coverage & (1u << s))) {
+                continue;
+            }
+            z = fragment_z_at(&f[i], after->samples, s);
+            printf(" s%u %.4f", s, z);
+            if (zte && r->have_probe && (r->last_probe.has_depth & 1) && r->last_probe.samples == after->samples) {
+                double before = r->last_probe.z[s];
+                int pass = ztst == 1 || (ztst == 2 && z >= before) || (ztst == 3 && z > before);
+
+                printf(" vs %.4f (%+.4f) %s", before, z - before, pass ? "passes" : "FAILS");
+            }
+            printf(s + 1 < after->samples ? ";" : "");
+        }
+        printf("\n");
+    }
+    print_samples("after", after);
+    r->last_probe = *after;
+    r->have_probe = 1;
+}
+
+/* What the trace recorded since the last take, draw by draw (at each vblank and at the end) */
+static void trace_report(Run *r) {
+    static PcrTraceFragment fragments[4096];
+    static PcrTraceProbe probes[1024];
+    size_t probe_count = 0, counted, kept, at = 0, k;
+
+    counted = pcr_debug_trace_take(fragments, 4096, probes, 1024, &probe_count);
+    kept = counted < 4096 ? counted : 4096;
+    qsort(fragments, kept, sizeof(fragments[0]), by_draw);
+    for (k = 0; k < probe_count; k++) {
+        size_t first;
+
+        while (at < kept && fragments[at].draw < probes[k].draw) {
+            at++; /* (a draw with no probe: its box did not cover the pixel, which cannot be) */
+        }
+        first = at;
+        while (at < kept && fragments[at].draw == probes[k].draw) {
+            at++;
+        }
+        report_draw(r, &probes[k], fragments + first, at - first);
+    }
+    if (counted > kept) {
+        printf("(%zu fragments more were not kept)\n", counted - kept);
+    }
+    fflush(stdout);
+}
+
 static void pixel_after(Run *r, long index) {
     const Draw *d = &r->gif.draws[index];
     const uint8_t *vram;
+
+    if (r->drawer->vram == NULL) {
+        /* the PC renderer: the pixel's samples after a draw whose box covers it, and the next draw numbered */
+        if (box_covers(d, r->pixel_x, r->pixel_y) && (r->fbp_filter < 0 || (long)(d->frame & 0x1FF) == r->fbp_filter)) {
+            pcr_debug_trace_probe();
+        }
+        pcr_debug_trace_draw((uint32_t)index + 1);
+        return;
+    }
     uint32_t fbw = (uint32_t)((d->frame >> 16) & 0x3F), psm = (uint32_t)((d->frame >> 24) & 0x3F);
     uint32_t colour, z;
 
     if (!box_covers(d, r->pixel_x, r->pixel_y) || (r->fbp_filter >= 0 && (long)(d->frame & 0x1FF) != r->fbp_filter)) {
         return;
     }
-    vram = port_gs_backend_vram();
+    vram = r->drawer->vram();
     colour = vram_pixel(vram, (uint32_t)(d->frame & 0x1FF), fbw, psm, (uint32_t)r->pixel_x, (uint32_t)r->pixel_y);
     z = vram_pixel(vram, (uint32_t)(d->zbuf & 0x1FF), fbw, 0x30 | (uint32_t)((d->zbuf >> 24) & 0xF),
                    (uint32_t)r->pixel_x, (uint32_t)r->pixel_y);
@@ -754,10 +1033,10 @@ static void draw_ended(Run *r, long index) {
     }
 }
 
-/* paraLLEl-GS, as the run has it */
+/* the drawer, as the run has it */
 static void gs_gif(Run *r, int path, const void *data, size_t bytes) {
     if (r->render) {
-        port_gs_backend_gif(path, data, bytes);
+        r->drawer->gif(path, data, bytes);
     }
 }
 
@@ -797,11 +1076,47 @@ static void vsync(Run *r, const Record *rec) {
 
     memcpy(&vblank, rec->data, 8);
     memcpy(&field, rec->data + 8, 4);
+    r->last_vsync = rec;
     if (!r->render) {
         return;
     }
-    if (port_gs_backend_vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
+    if (r->pixel && r->drawer->vram == NULL) {
+        trace_report(r);
+    }
+    if (r->drawer->vsync((const uint64_t *)(rec->data + 16), (int)field, r->frames, &r->frame) && r->frames) {
         port_video_dump(&r->frame, vblank);
+    }
+}
+
+/* --end-picture: the buffer the last draw drew into, shown as the last vblank's display registers show their buffer.
+   A capture of whole frames at 30 a second ends before the frame it drew is shown, so its own vblanks show the frame
+   before (black: a capture from the PC renderer before it kept the GS's memory has none of it). */
+static void end_picture(Run *r, int repeat) {
+    enum { DISPFB1 = 0x70 / 8, DISPFB2 = 0x90 / 8 }; /* (the register page: a register every 16 bytes) */
+    uint64_t privileged[0xF0 / 8];
+    uint32_t field;
+    const Draw *d;
+    int k;
+
+    if (r->last_vsync == NULL || r->gif.count == 0) {
+        die("--end-picture: the capture has no vblank, or no draw");
+    }
+    memcpy(privileged, r->last_vsync->data + 16, sizeof(privileged));
+    memcpy(&field, r->last_vsync->data + 8, 4);
+    d = &r->gif.draws[r->gif.count - 1];
+    for (k = 0; k < 2; k++) {
+        uint64_t *dispfb = &privileged[k == 0 ? DISPFB1 : DISPFB2];
+
+        fprintf(stderr, "--end-picture: DISPFB%d FBP %u FBW %u DBX %u DBY %u -> FBP %u\n", k + 1,
+                (unsigned)(*dispfb & 0x1FF), (unsigned)((*dispfb >> 9) & 0x3F), (unsigned)((*dispfb >> 32) & 0x7FF),
+                (unsigned)((*dispfb >> 43) & 0x7FF), (unsigned)(d->frame & 0x1FF));
+        *dispfb = (*dispfb & ~(uint64_t)0x1FF) | (d->frame & 0x1FF);
+    }
+    if (r->drawer->vsync(privileged, (int)field, 1, &r->frame)) {
+        char name[64];
+
+        snprintf(name, sizeof(name), repeat < 0 ? "frame_end.png" : "frame_end_%03d.png", repeat);
+        port_video_dump_named(&r->frame, name);
     }
 }
 
@@ -814,7 +1129,7 @@ static void read_fifo(Run *r, const Record *rec) {
         return;
     }
     sink = malloc((size_t)qwords * 16 + 16);
-    port_gs_backend_read_fifo(sink, qwords);
+    r->drawer->read_fifo(sink, qwords);
     free(sink);
 }
 
@@ -966,8 +1281,8 @@ static size_t start_state(Run *r) {
         case KF4GS_GS_REGS:
         case KF4GS_GS_PRIV:
         case KF4GS_GS_HISTORY:
-            if (r->render && !port_gs_backend_restore(rec->type, rec->data, rec->size)) {
-                die("the capture's GS state (record %u) does not fit this GS", rec->type);
+            if (r->render && !r->drawer->restore(rec->type, rec->data, rec->size)) {
+                die("the capture's GS state (record %u) does not fit %s", rec->type, r->drawer->name);
             }
             break;
         case KF4GS_VU1: {
@@ -1051,7 +1366,6 @@ static void run_capture(Run *r) {
 }
 
 /* ---- Listings ------------------------------------------------------------------------------------ */
-static const char *prim_names[8] = {"point", "line", "lstrip", "tri", "tstrip", "tfan", "sprite", "?"};
 
 static void list_draw(const Run *r, long i) {
     const Draw *d = &r->gif.draws[i];
@@ -1182,10 +1496,13 @@ static void info(const Capture *c) {
 
 static void usage(void) {
     fprintf(stderr,
-            "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--out DIR] [--list]\n"
+            "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--end-picture] [--out DIR] [--list]\n"
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
-            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--renderer gs]\n"
+            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
+            "                    [--scale X[xY]] [--msaa N] [--aniso N] [--lod ps2|scale|full]\n"
+            "                    [--cutout-aa off|ssaa] [--2d ps2|smooth] [--colour exact|high]\n"
+            "                    [--sub SX,SY] [--decal-losses]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1195,6 +1512,8 @@ int main(int argc, char **argv) {
     Run run;
     const char *file = NULL, *compare_file = NULL;
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
+    PcSettings pc = {0};
+    int repeat = 1, decal_losses = 0;
     long vertices = -1;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
@@ -1202,6 +1521,8 @@ int main(int argc, char **argv) {
     run.draw_from = run.draw_to = -1;
     run.fbp_filter = -1;
     run.diff_vertices = 8;
+    run.drawer = &gs_drawer;
+    run.sub_x = run.sub_y = -1;
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -1212,15 +1533,53 @@ int main(int argc, char **argv) {
             list = 1;
         } else if (strcmp(a, "--frames") == 0) {
             run.frames = 1;
+        } else if (strcmp(a, "--decal-losses") == 0) {
+            decal_losses = 1;
+        } else if (strcmp(a, "--end-picture") == 0) {
+            run.frames = 1;
+            run.end_picture = 1;
         } else if (strcmp(a, "--zbuf") == 0) {
             run.zbuf = 1;
         } else if (strcmp(a, "--renderer") == 0 && v != NULL) {
-            if (strcmp(v, "gs") != 0) {
+            if (strcmp(v, "gs") == 0) {
+                run.drawer = &gs_drawer;
+            } else if (strcmp(v, "pc") == 0) {
+                run.drawer = &pc_drawer;
+            } else {
                 usage();
             }
             i++;
         } else if (a[0] == '-' && v == NULL) {
             usage();
+        } else if (strcmp(a, "--scale") == 0) {
+            int n = sscanf(v, "%dx%d", &pc.scale_x, &pc.scale_y);
+
+            if (n < 1 || pc.scale_x < 1 || (n == 2 && pc.scale_y < 1)) {
+                usage();
+            }
+            i++;
+        } else if (strcmp(a, "--msaa") == 0 || strcmp(a, "--aniso") == 0) {
+            *(a[2] == 'm' ? &pc.msaa : &pc.aniso) = (int)strtol(v, NULL, 0);
+            i++;
+        } else if (strcmp(a, "--lod") == 0 || strcmp(a, "--cutout-aa") == 0 || strcmp(a, "--2d") == 0 ||
+                   strcmp(a, "--colour") == 0) {
+            /* each setting's names, in its GSN_ constants' order */
+            static const char *const names[4][3] = {
+                {"ps2", "scale", "full"}, {"off", "ssaa", NULL}, {"ps2", "smooth", NULL}, {"exact", "high", NULL}};
+            int which = a[2] == 'l' ? 0 : a[2] == 'c' && a[3] == 'u' ? 1 : a[2] == '2' ? 2 : 3;
+            int *field = which == 0 ? &pc.lod : which == 1 ? &pc.cutout_aa : which == 2 ? &pc.mode_2d : &pc.colour;
+            int k;
+
+            *field = 0;
+            for (k = 0; k < 3; k++) {
+                if (names[which][k] != NULL && strcmp(v, names[which][k]) == 0) {
+                    *field = k + 1;
+                }
+            }
+            if (*field == 0) {
+                usage();
+            }
+            i++;
         } else if (strcmp(a, "--mode") == 0 || strcmp(a, "--compare-mode") == 0) {
             int m = strcmp(v, "vif") == 0 ? MODE_VIF : strcmp(v, "gif") == 0 ? MODE_GIF : -1;
 
@@ -1249,6 +1608,11 @@ int main(int argc, char **argv) {
                 usage();
             }
             run.pixel = 1;
+            i++;
+        } else if (strcmp(a, "--sub") == 0) {
+            if (sscanf(v, "%d,%d", &run.sub_x, &run.sub_y) != 2 || run.sub_x < 0 || run.sub_y < 0) {
+                usage();
+            }
             i++;
         } else if (strcmp(a, "--fbp") == 0) {
             run.fbp_filter = strtol(v, NULL, 0);
@@ -1280,6 +1644,12 @@ int main(int argc, char **argv) {
         } else if (strcmp(a, "--diff") == 0) {
             run.diff_vertices = (int)strtol(v, NULL, 0);
             i++;
+        } else if (strcmp(a, "--repeat") == 0) {
+            repeat = (int)strtol(v, NULL, 0);
+            if (repeat < 1) {
+                usage();
+            }
+            i++;
         } else if (strcmp(a, "--limit") == 0) {
             limit = (int)strtol(v, NULL, 0);
             i++;
@@ -1305,15 +1675,51 @@ int main(int argc, char **argv) {
     port_options.dump_dir = run.out;
     run.render = run.frames || run.draw_from >= 0 || run.pixel;
     if (run.render) {
-        if (!port_gs_backend_open()) {
-            die("no paraLLEl-GS: pictures need a Vulkan GPU");
+        if (run.drawer->vram == NULL && run.draw_from >= 0) {
+            die("--draw and --draws read the GS's memory, which %s does not keep: use --frames", run.drawer->name);
+        }
+        if (!run.drawer->open(&pc)) {
+            die("no %s: pictures need a Vulkan GPU", run.drawer->name);
+        }
+        if (run.drawer->vram == NULL && decal_losses) {
+            pcr_debug_decal_losses(1);
+        }
+        if (run.drawer->vram == NULL && run.pixel) {
+            PcrTraceSpot spot;
+
+            spot.fbp = run.fbp_filter >= 0 ? (uint32_t)run.fbp_filter : 0;
+            spot.x = run.pixel_x;
+            spot.y = run.pixel_y;
+            spot.sub_x = run.sub_x >= 0 ? run.sub_x : (pc.scale_x > 0 ? pc.scale_x : 1) / 2;
+            spot.sub_y = run.sub_y >= 0 ? run.sub_y : (pc.scale_y > 0 ? pc.scale_y : pc.scale_x > 0 ? pc.scale_x : 1) / 2;
+            run.fbp_filter = spot.fbp;
+            if (!pcr_debug_trace(&spot)) {
+                die("--pixel: the PC renderer cannot trace that pixel");
+            }
+            printf("tracing FBP %u's GS pixel %d,%d, its surface pixel %d,%d in it\n", spot.fbp, spot.x, spot.y,
+                   spot.sub_x, spot.sub_y);
         }
         run.frame.rgba = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
     }
     if (show_info && !list && !run.render && vertices < 0 && compare_file == NULL && run.mode == MODE_GIF) {
         return 0;
     }
-    run_capture(&run);
+    for (i = 0; i < repeat; i++) {
+        if (i > 0) {
+            free(run.gif.draws);
+            free(run.gif.vertices);
+        }
+        if (run.pixel && run.drawer->vram == NULL) {
+            pcr_debug_trace_draw(0);
+        }
+        run_capture(&run);
+        if (run.pixel && run.drawer->vram == NULL) {
+            trace_report(&run);
+        }
+        if (run.end_picture) {
+            end_picture(&run, repeat > 1 ? i : -1);
+        }
+    }
     printf("%zu draws, %zu vertices\n", run.gif.count, run.gif.vertex_count);
     if (list) {
         long d;

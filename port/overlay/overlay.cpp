@@ -958,6 +958,7 @@ void native_draw_kinds() {
             "(--native-draw on|off|KINDS)");
     int kinds_on = port_options.native_draw;
     int shown = 0;
+    ImGui::PushID("native_draw"); // (the kinds' labels, "Map" above all, also name widgets elsewhere in the window)
     for (const auto &k : kinds) {
         if ((drawable & k.bits) == 0)
             continue;
@@ -968,6 +969,7 @@ void native_draw_kinds() {
             kinds_on = on ? kinds_on | k.bits : kinds_on & ~k.bits;
         tooltip(k.what);
     }
+    ImGui::PopID();
     if (ImGui::Button("All (the default)"))
         kinds_on = drawable;
     ImGui::SameLine();

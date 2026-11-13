@@ -643,7 +643,7 @@ public:
         drop_stretch();
         frame_taken_at_ = vblanks_;
         const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0};
+                                           frame->shown_kept != 0, frame->kicks};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -903,7 +903,8 @@ private:
     // native draws' records for the pictures made beside the frame's
     struct Stretch {
         std::shared_ptr<const pcr::KeptWalk> walk; // (nullptr: not kept whole)
-        pcr::Between::KickList kicks;
+        pcr::Between::LiveKicks kicks;
+        std::vector<GsnInterpMove> trail_moves; // (its native kicks', NativeDraws::take_trail_moves)
         uint64_t bytes = 0;
         bool trail_paired = false;
     };
@@ -926,6 +927,7 @@ private:
         s.kicks = between_->end_live_kicks();
         natives_->end_frame_kept();
         s.trail_paired = natives_->trail_paired();
+        s.trail_moves = natives_->take_trail_moves();
         s.bytes = stretch_bytes_;
         stretch_open_ = false;
         return s;
@@ -955,7 +957,7 @@ private:
         if (!picture.walk) {
             return picture.refused;
         }
-        if (!between_->adopt_live_kicks(std::move(s.kicks))) {
+        if (!between_->adopt_live_kicks(std::move(s.kicks), std::move(s.trail_moves))) {
             return pcr::FrameWalkRefused::not_the_frame; // (its kicks not the frame's count)
         }
         kept_walk_ = std::move(picture.walk);
@@ -2224,9 +2226,6 @@ extern "C" int pcr_pipelines_building(int *done, int *total) {
     return 0;
 }
 
-extern "C" void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t size)) {
-    (void)emit; // (no state of its own yet)
-}
 
 // ---- Save states --------------------------------------------------------------------------------------
 // The PC renderer's state: the GS's 4 MB first (so that paraLLEl-GS takes it by its VRAM, as the PC renderer takes
@@ -2242,12 +2241,47 @@ size_t state_bytes() {
 
 } // namespace
 
+// A GS capture's state (F9, port/debug/gs_capture.c): the GS's 4 MB as the save states' and the registers
+extern "C" void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t size)) {
+    if (!renderer()) {
+        return;
+    }
+    Renderer &r = *renderer();
+    std::vector<uint8_t> vram;
+    pcr::GsRegisterFile file;
+    r.run_job([&] {
+        pcr::Canvas *canvas = r.intake().canvas();
+        vram = canvas ? canvas->vram_image() : std::vector<uint8_t>(STATE_VRAM_BYTES);
+        file = r.intake().front().registers();
+    });
+    vram.resize(STATE_VRAM_BYTES);
+    emit(KF4GS_VRAM, vram.data(), vram.size());
+    std::vector<uint8_t> regs = pcr::capture_registers(file);
+    emit(KF4GS_GS_REGS, regs.data(), regs.size());
+}
+
+// A capture's state record (kf4-gsreplay --renderer pc), or a state's VRAM from paraLLEl-GS (gs.c's take_other_vram):
+// the GS's memory, or its registers
 extern "C" int pcr_restore(uint32_t type, const void *data, size_t size) {
-    if (!renderer() || type != KF4GS_VRAM || size != STATE_VRAM_BYTES) {
+    if (!renderer()) {
+        return 0;
+    }
+    Renderer &r = *renderer();
+    if (type == KF4GS_GS_REGS) {
+        bool fits = true;
+        bool done = r.run_job([&] {
+            pcr::GsRegisterFile file = r.intake().front().registers();
+            fits = pcr::take_capture_registers({static_cast<const uint8_t *>(data), size}, file);
+            if (fits) {
+                r.intake().front().restore(file);
+            }
+        });
+        return done && fits ? 1 : 0;
+    }
+    if (type != KF4GS_VRAM || size != STATE_VRAM_BYTES) {
         return 0;
     }
     std::vector<uint8_t> vram(static_cast<const uint8_t *>(data), static_cast<const uint8_t *>(data) + size);
-    Renderer &r = *renderer();
     return r.run_job([&] {
         pcr::TextureStore::ClutState clut;
         clut.unloaded.fill(1);
@@ -2329,4 +2363,60 @@ extern "C" void pcr_print_stats(void) {
         }
         times->print();
     }
+}
+
+// ---- Developers' views (pcr.h) --------------------------------------------------------------------------
+namespace {
+// The canvas's call, on the PC renderer's thread after everything sent before; false without a canvas
+bool on_canvas(const std::function<void(pcr::Canvas &)> &call) {
+    if (!renderer()) {
+        return false;
+    }
+    Renderer &r = *renderer();
+    bool done = false;
+    r.run_job([&] {
+        if (pcr::Canvas *canvas = r.intake().canvas()) {
+            call(*canvas);
+            done = true;
+        }
+    });
+    return done;
+}
+} // namespace
+
+extern "C" int pcr_debug_trace(const PcrTraceSpot *spot) {
+    bool started = false;
+    on_canvas([&](pcr::Canvas &canvas) { started = canvas.trace_pixel(*spot); });
+    return started ? 1 : 0;
+}
+
+extern "C" void pcr_debug_trace_draw(uint32_t draw) {
+    on_canvas([&](pcr::Canvas &canvas) { canvas.trace_draw(draw); });
+}
+
+extern "C" void pcr_debug_trace_probe(void) {
+    on_canvas([](pcr::Canvas &canvas) { canvas.trace_probe(); });
+}
+
+extern "C" size_t pcr_debug_trace_take(PcrTraceFragment *fragments, size_t room, PcrTraceProbe *probes,
+                                       size_t probe_room, size_t *probes_taken) {
+    std::vector<PcrTraceFragment> f;
+    std::vector<PcrTraceProbe> p;
+    size_t counted = 0;
+    on_canvas([&](pcr::Canvas &canvas) { counted = canvas.take_trace(f, p); });
+    size_t nf = std::min(room, f.size()), np = std::min(probe_room, p.size());
+    std::copy_n(f.begin(), nf, fragments);
+    std::copy_n(p.begin(), np, probes);
+    *probes_taken = np;
+    return counted;
+}
+
+extern "C" void pcr_debug_decal_losses(int on) {
+    on_canvas([&](pcr::Canvas &canvas) { canvas.show_decal_losses(on != 0); });
+}
+
+extern "C" int pcr_debug_settled(void) {
+    bool settled = false;
+    on_canvas([&](pcr::Canvas &canvas) { settled = canvas.settled(); });
+    return settled ? 1 : 0;
 }

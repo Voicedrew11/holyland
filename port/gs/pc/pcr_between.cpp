@@ -129,6 +129,14 @@ std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
         counts_.missed++;
         return {};
     }
+    if (shape_->kicks != frame_->kicks) {
+        // (a walk after an own walk with native kicks adopted: the frame's kicks and moves only)
+        shape_->kicks = frame_->kicks;
+        moves_.reset();
+        if (frame_->kicks != 0 && frame_->moves) {
+            moves_ = make(frame_->moves, size_t(frame_->kicks) * sizeof(GsnInterpMove), false);
+        }
+    }
     make_picture(p);
     // the walk's kicks: a buffer of the picture's own (the last picture's draws may still read theirs)
     if (kicks_ && kick_map_) {
@@ -218,6 +226,18 @@ void Between::kicked(const GifVertex &v, uint64_t xyoffset) {
     if (!live_on_ || v.kick == no_kick) {
         return;
     }
+    if (v.kick >= native_kick_base) {
+        // (a native draw's: kept apart, its number and its RGBAQ's owner less native_kick_base)
+        const size_t at = size_t(v.kick - native_kick_base) * sizeof(Kick);
+        if (live_native_.size() < at + sizeof(Kick)) {
+            live_native_.resize(at + sizeof(Kick), 0);
+        }
+        Kick k = kick_of(v, xyoffset);
+        k.rgba_owner = v.rgba_owner >= native_kick_base && v.rgba_owner != no_kick ? v.rgba_owner - native_kick_base
+                                                                                  : no_kick;
+        memcpy(live_native_.data() + at, &k, sizeof(k));
+        return;
+    }
     const size_t bytes = (size_t(v.kick) + 1) * sizeof(Kick);
     if (live_kicks_.size() < bytes) {
         live_kicks_.resize(bytes, 0);
@@ -228,21 +248,44 @@ void Between::kicked(const GifVertex &v, uint64_t xyoffset) {
 
 void Between::keep_live_kicks() {
     live_kicks_.clear();
+    live_native_.clear();
     live_on_ = true;
 }
 
-Between::KickList Between::end_live_kicks() {
+Between::LiveKicks Between::end_live_kicks() {
     live_on_ = false;
-    return std::move(live_kicks_);
+    return LiveKicks{std::move(live_kicks_), std::move(live_native_)};
 }
 
-bool Between::adopt_live_kicks(KickList kicks) {
-    if (!frame_ || kicks.size() != size_t(frame_->kicks) * sizeof(Kick)) {
+bool Between::adopt_live_kicks(LiveKicks live, std::vector<GsnInterpMove> native_moves) {
+    KickList &kicks = live.kicks;
+    if (!frame_ || kicks.size() != size_t(frame_->kicks) * sizeof(Kick) ||
+        live.native.size() != native_moves.size() * sizeof(Kick)) {
         return false;
     }
     if (kicks_ && kick_map_) {
         device_.unmap_host_buffer(*kicks_, MEMORY_ACCESS_WRITE_BIT);
         kick_map_ = nullptr;
+    }
+    if (!native_moves.empty()) {
+        // (the native draws' kicks after the frame's, their moves after its moves; the pictures' header counts both)
+        const uint32_t n = frame_->kicks, extra = uint32_t(native_moves.size());
+        for (uint32_t i = 0; i < extra; i++) {
+            Kick k;
+            memcpy(&k, live.native.data() + size_t(i) * sizeof(Kick), sizeof(k));
+            if (k.rgba_owner != no_kick) {
+                k.rgba_owner += n;
+            }
+            kicks.insert(kicks.end(), reinterpret_cast<const uint8_t *>(&k),
+                         reinterpret_cast<const uint8_t *>(&k) + sizeof(k));
+        }
+        std::vector<GsnInterpMove> moves(size_t(n) + extra);
+        if (n != 0 && frame_->moves) {
+            memcpy(moves.data(), frame_->moves, size_t(n) * sizeof(GsnInterpMove));
+        }
+        memcpy(moves.data() + n, native_moves.data(), size_t(extra) * sizeof(GsnInterpMove));
+        moves_ = make(moves.data(), moves.size() * sizeof(GsnInterpMove), false);
+        shape_->kicks = n + extra;
     }
     kicks.resize(std::max(kicks.size(), sizeof(Kick)), 0); // (no kicks: one zeroed)
     kicks_ = make(kicks.data(), kicks.size(), false);
