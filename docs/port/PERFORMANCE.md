@@ -293,7 +293,10 @@ Andrew's four runs had a picture held 30-43 ms, none on.
 
 So with Andrew's settings uncapped the game itself fell to 53-54 vblanks a second under water, off: the pump took
 6-7 ms a picture making the images (its CPU, not the GPU's work: 1.65 ms), kf4-pc waited for it to take each frame
-(`wait_for_room_for_frame`), and the game's thread for kf4-pc. On, 60. What is left (Andrew's, on): from vblank 700
+(`wait_for_room_for_frame`), and the game's thread for kf4-pc. On, 60. Sampled (kf4-sampler, 8 s pressed to
+the wall, Andrew's, unlocked): off, the pump's thread busy in nearly every sample, 73% of it in the driver
+(nvoglv64), `create_image` 25%, `surface_texture` 35%, and the game's thread 52% of its busy samples waiting in
+`port_dmac_wait` (the GS behind); on, `create_image` gone from the pump's list and the pump idle in its wait 9%. What is left (Andrew's, on): from vblank 700
 to about 850, just in the water, a hold of 13-20 ms every few vblanks; none pressed to the wall, none with the
 owner's settings.
 
