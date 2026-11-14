@@ -46,6 +46,7 @@
        --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
                         native_widescreen with widescreen makes X (4 * scale + 2) / 3: 6x4 at 4)
        --msaa N --aniso N --lod ps2|scale|full --cutout-aa off|ssaa --2d ps2|smooth --colour exact|high
+       --layer-z ps2|tolerant (the PC renderer's default here: ps2)
                         A capture holds no settings of the PC renderer's: give the player's.
                         With pc, --pixel X,Y traces one surface pixel of GS pixel (X,Y) of the frame buffer at
                         page --fbp N (0 by default): --sub SX,SY picks it in the GS pixel's block of the
@@ -200,7 +201,7 @@ static void die(const char *fmt, ...) {
 /* The PC renderer's settings (--renderer pc): what pcr.h's setters take; 0 leaves the renderer's default */
 typedef struct {
     int scale_x, scale_y, msaa, aniso;
-    int lod, cutout_aa, mode_2d, colour; /* GSN_* + 1 (0: the default) */
+    int lod, cutout_aa, mode_2d, colour, layer_z; /* GSN_* + 1 (0: the default) */
 } PcSettings;
 
 /* paraLLEl-GS or the PC renderer, as the run calls them */
@@ -249,6 +250,9 @@ static int pc_open(const PcSettings *s) {
     }
     if (s->colour > 0) {
         pcr_set_colour(s->colour - 1);
+    }
+    if (s->layer_z > 0) {
+        pcr_set_layer_z(s->layer_z - 1);
     }
     {
         /* vblanks showing nothing first, until the settings are drawn with: the PC renderer takes its scale and MSAA at
@@ -1507,6 +1511,7 @@ static void usage(void) {
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
             "                    [--scale X[xY]] [--msaa N] [--aniso N] [--lod ps2|scale|full]\n"
             "                    [--cutout-aa off|ssaa] [--2d ps2|smooth] [--colour exact|high]\n"
+            "                    [--layer-z ps2|tolerant]\n"
             "                    [--sub SX,SY] [--decal-losses]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
@@ -1567,12 +1572,19 @@ int main(int argc, char **argv) {
             *(a[2] == 'm' ? &pc.msaa : &pc.aniso) = (int)strtol(v, NULL, 0);
             i++;
         } else if (strcmp(a, "--lod") == 0 || strcmp(a, "--cutout-aa") == 0 || strcmp(a, "--2d") == 0 ||
-                   strcmp(a, "--colour") == 0) {
+                   strcmp(a, "--colour") == 0 || strcmp(a, "--layer-z") == 0) {
             /* each setting's names, in its GSN_ constants' order */
-            static const char *const names[4][3] = {
-                {"ps2", "scale", "full"}, {"off", "ssaa", NULL}, {"ps2", "smooth", NULL}, {"exact", "high", NULL}};
-            int which = a[2] == 'l' ? 0 : a[2] == 'c' && a[3] == 'u' ? 1 : a[2] == '2' ? 2 : 3;
-            int *field = which == 0 ? &pc.lod : which == 1 ? &pc.cutout_aa : which == 2 ? &pc.mode_2d : &pc.colour;
+            static const char *const names[5][3] = {{"ps2", "scale", "full"},
+                                                    {"off", "ssaa", NULL},
+                                                    {"ps2", "smooth", NULL},
+                                                    {"exact", "high", NULL},
+                                                    {"ps2", "tolerant", NULL}};
+            int which = a[2] == 'l' && a[3] == 'a' ? 4 : a[2] == 'l' ? 0 : a[2] == 'c' && a[3] == 'u' ? 1 : a[2] == '2' ? 2 : 3;
+            int *field = which == 4   ? &pc.layer_z
+                         : which == 0 ? &pc.lod
+                         : which == 1 ? &pc.cutout_aa
+                         : which == 2 ? &pc.mode_2d
+                                      : &pc.colour;
             int k;
 
             *field = 0;

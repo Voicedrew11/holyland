@@ -46,7 +46,7 @@
    colour arithmetic (the picture dithered to 8 bits as it is scanned out) */
 #define GSN_COLOUR_EXACT 0
 #define GSN_COLOUR_HIGH 1
-/* How Z is kept and tested (pcr_set_layer_z): the GS's whole number per pixel, or its fraction kept (tolerant layers) */
+/* How a layer blended over a surface is Z tested (pcr_set_layer_z): as the GS, or within one Z (tolerant layers) */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1
 /* Which of the two the frame has for the draws the game makes natively (pcr_set_native_draw): the native draws, or the

@@ -10,9 +10,8 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: layer Z (`--native-layer-z`) only, which the PC renderer keeps but does not apply and the overlay
-does not offer: it has no layers fighting to fix, and its removal is proposed ("Colour high, the 2D mode and layer Z",
-below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
+from item 7 below: nothing; layer Z (`--native-layer-z`) is applied again since 2026-11-13, with exact Z ("Tolerant
+layers", below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
 the 2D mode are applied since 2026-11-11 (below) and offered again. The settings that change live go through
 `port/overlay/live_settings.c`, which `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g.
 `2400:native_widescreen=0`). Pictures are now
@@ -226,7 +225,33 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
 
-**Layer Z (`--native-layer-z`; #105): not applied, proposed for removal.** The native GS rounded each pixel's Z to a
+**Tolerant layers (`--native-layer-z tolerant`, the default; 2026-11-13).** Exact Z (above) brought the GS's own
+fault back with the GS's ties: two surfaces that nearly coincide round apart wherever a whole Z falls between them,
+and the later one loses there, a fringe of thin teeth or hatching along each whole Z. Seen in play at map 000 (the
+owner's saves): a rock's layer against the wall left of the bridge (dark teeth along the wall's edge), the face of a
+rock pillar (dark diagonal hatching where a second rock layer overlaps it), the rope bridge's planks and ropes (bright
+specks and stitches). paraLLEl-GS draws all three the same (the PS2's picture); with the GPU's depth before exact Z
+(`KF4_PC_EXACT_Z=0`) and in the native GS's tolerant mode (main 8efb77ac) they were clean, which is why they looked
+like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws the wall and the pillar clean), not
+#138's decal depth, which exact Z replaced.
+- The PC renderer now does as the native GS's tolerant mode did (4af1dbd6, 669bee01): the fragment shader keeps Z's
+  fraction (`pcr_prim.h`'s `pcr_exact_depth`, `PCR_F_LAYERS`), and a batch Z tested GEQUAL is drawn in two phases
+  (`pcr_canvas.cpp`'s tolerant passes): its colour tested half a Z nearer, no Z written (`PCR_F_LAYER_TEST`), and its
+  Z exactly. A surface drawn in one pass whose colour comes out the same drawn twice draws its colour first (within
+  half a Z of what was there before it), then itself as the GS draws it: among its own triangles the nearer is kept
+  (the bridge's planks, strips a Z apart far off, otherwise come out as light and dark blocks). Anything else (a decal,
+  a pass that reads the target, an alpha test's two passes) writes its Z first, then its colour within half a Z (drawn
+  twice it would blend twice). So the GS's tie is kept on average (a decal wins over its surface, map 028's floor
+  still over its puddle), and where surfaces cross the line is straight.
+- Cut-outs (foliage, netting: `cuts_out`) take a sixteenth of a Z (`PCR_F_LAYER_FINE`): with half a Z the leaf cards
+  of map 004's tree behind each other showed through, light lace at their edges.
+- Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
+- `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
+  with `KF4_INTERP_DRAW_ALL=1`, 48 pictures each, against main 482ec65b). `kf4-gsreplay --layer-z` takes it too.
+- Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
+  behind it (the GS hides it); map 004's tree a little busier than the PS2's. Costs a second draw for each GEQUAL batch.
+
+**Layer Z before exact Z (#105, 2026-11-11): not applied then, proposed for removal.** The native GS rounded each pixel's Z to a
 whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
 meshes' Z rounded apart, and tolerant was its way out. (The PC renderer now rounds as the GS does, exact Z above; what
 follows was measured before, with the GPU's Z with its fraction.) Its layers were not seen fighting:

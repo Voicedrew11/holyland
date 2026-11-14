@@ -100,6 +100,9 @@ enum : uint32_t {
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
     F_EXACT_Z = 0x2000000, // (pcr_common.h's exact Z)
+    F_LAYERS = 0x4000000,  // (pcr_common.h) tolerant layers: Z's fraction kept
+    F_LAYER_TEST = 0x8000000, // ... a draw's colour tested half a Z nearer
+    F_LAYER_FINE = 0x10000000, // ... a sixteenth of a Z
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -1850,6 +1853,12 @@ private:
         mode_2d_ = mode;
     }
 
+    // Layer Z (GSN_LAYER_Z_*): with tolerant, Z's fraction kept and the GS's ties kept on average (draw_batch's
+    // tolerant passes, pcr_prim.h's pcr_exact_depth), for the batches from the next vblank
+    void set_layer_z(int mode) {
+        layers_ = mode == GSN_LAYER_Z_TOLERANT;
+    }
+
     void set_sampling(int lod, uint32_t aniso) {
         lod_mode_ = lod;
         aniso_ = std::clamp(aniso, 1u, 16u);
@@ -2379,6 +2388,7 @@ private:
         bool cutout_aa = false;
         int precision = GSN_COLOUR_EXACT; // (colour_mode_)
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
+        bool layers = false;              // (layers_, the same: set_layer_z's)
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -2392,6 +2402,7 @@ private:
         copies->cutout_aa = cutout_aa_;
         copies->precision = colour_mode_;
         copies->mode_2d = mode_2d_;
+        copies->layers = layers_;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
@@ -2444,6 +2455,7 @@ private:
         cutout_aa_ = copies.cutout_aa;
         colour_mode_ = pending_colour_ = copies.precision;
         mode_2d_ = copies.mode_2d;
+        layers_ = copies.layers;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
         // textures are bound already, and its store is never read; so what it draws over is not marked in it)
@@ -2963,8 +2975,13 @@ private:
     // else any), by the texture function with the vertices' alphas (a GIF batch's; a native batch's taken as 0x80).
     // Not the 2D (FST: sprites, the HUD, the menus), which covers whole pixels.
     bool is_cutout(const Batch &b) const {
+        return cutout_aa_ && cuts_out(b);
+    }
+
+    // (is_cutout's, whatever the setting) the batch's alpha test keeps some of its pixels and drops others
+    static bool cuts_out(const Batch &b) {
         const DrawState &s = b.state;
-        if (!cutout_aa_ || !bits(s.prim, 4, 1) || !b.texture.ok || !bits(s.tex0, 34, 1) || bits(s.prim, 8, 1) ||
+        if (!bits(s.prim, 4, 1) || !b.texture.ok || !bits(s.tex0, 34, 1) || bits(s.prim, 8, 1) ||
             !bits(s.test, 0, 1)) {
             return false;
         }
@@ -3223,8 +3240,10 @@ private:
         struct Pass {
             uint32_t mode;
             bool rgb, alpha, z;
+            bool layers = false; // (tolerant layers: the pass's colour tested half a Z nearer; PCR_F_LAYER_TEST)
+            bool fine = false;   // (... a sixteenth of a Z: a cut-out's, PCR_F_LAYER_FINE)
         };
-        std::array<Pass, 2> passes{};
+        std::array<Pass, 4> passes{};
         int pass_count = 0;
         if (!ate || atst == 1) {
             passes[pass_count++] = {0, true, true, zwrite};
@@ -3244,6 +3263,44 @@ private:
         }
         if (pass_count == 0) {
             return;
+        }
+        // Tolerant layers (set_layer_z; pcr_prim.h's pcr_exact_depth): Z's fraction kept, and a draw Z tested GEQUAL
+        // drawn in two phases, so that it keeps the GS's tie on average: it wins over what lies within half a Z behind
+        // it, and where surfaces cross the line is straight. A draw whose colour comes out the same drawn twice, in one
+        // pass that writes Z (a surface): its colour within half a Z of what was there before it, no Z written, then
+        // itself as the GS draws it, Z tested and written exactly; so among its own triangles the nearer is kept (a
+        // rope bridge's plank, strips a Z apart far off). Any other (a decal, a pass that reads the target, an alpha
+        // test's two passes): its Z written exactly first, without colour, then its colour within half a Z, no Z
+        // written (drawn twice it would blend twice). Each phase with the pass's alpha test. (The native GS's
+        // tolerant layers, 2026-10: 4af1dbd6, 669bee01.)
+        if (exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2) {
+            bool fine = cuts_out(b);
+            std::array<Pass, 4> zs{}, colours{};
+            int nz = 0, nc = 0;
+            for (int i = 0; i < pass_count; i++) {
+                if (passes[i].z) {
+                    zs[nz++] = {passes[i].mode, false, false, true, false};
+                }
+                if (passes[i].rgb || passes[i].alpha) {
+                    colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine};
+                }
+            }
+            bool once = !is_decal(b) && !b.shader_blend && pass_count == 1 && passes[0].z;
+            if (once) {
+                // (drawn twice it comes out the same: its colour within half a Z, then itself as the GS draws it)
+                Pass exact = passes[0];
+                passes[0] = colours[0];
+                passes[1] = exact;
+                pass_count = 2;
+            } else {
+                pass_count = 0;
+                for (int i = 0; i < nz; i++) {
+                    passes[pass_count++] = zs[i];
+                }
+                for (int i = 0; i < nc; i++) {
+                    passes[pass_count++] = colours[i];
+                }
+            }
         }
         // (a surface as tall as what is drawn in it, not its scissor: the game's scissors run past small targets, onto
         // the targets below them)
@@ -3368,6 +3425,8 @@ private:
         flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         flags |= exact_z_ ? F_EXACT_Z : 0;
+        // (tolerant layers: not in a Z32 buffer, the menus', whose Zs a float does not keep whole)
+        flags |= exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 ? F_LAYERS : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -3557,7 +3616,8 @@ private:
         }
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
-            push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT;
+            push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT | (pass.layers ? F_LAYER_TEST : 0) |
+                         (pass.fine ? F_LAYER_FINE : 0);
             uint32_t mask = 0;
             Program *program = pass_state(i, mask);
             // (a later pass: the run ends unless it continues it, before its state is set)
@@ -4277,6 +4337,7 @@ private:
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = GSN_LOD_SCALE; // (set_sampling)
     int mode_2d_ = GSN_2D_PS2;     // (set_2d)
+    bool layers_ = false;          // (set_layer_z) tolerant layers
     int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
     bool colour_refused_ = false;
     int high_ok_ = -1; // (high_colour_ok's answer, asked once)
@@ -4418,6 +4479,9 @@ void Canvas::set_colour(int mode) {
 }
 void Canvas::set_2d(int mode) {
     impl_->set_2d(mode);
+}
+void Canvas::set_layer_z(int mode) {
+    impl_->set_layer_z(mode);
 }
 void Canvas::set_sampling(int lod, uint32_t aniso) {
     impl_->set_sampling(lod, aniso);
