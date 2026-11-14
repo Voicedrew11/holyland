@@ -269,6 +269,45 @@ against `--renderer gs`.
 - **The brightness pass** (0.2 ms and its copy 0.16): the screen drawn over itself times 136/128, not an identity, so
   it cannot be left out; it could be folded into the scanout, not byte for byte.
 
+## What a picture's layers are at 009, and what a modern renderer's tricks give (2026-11-14, afternoon)
+
+Asked: is the cost the PS2's way of drawing, which a modern renderer would not pay? Measured, not built (the
+experiments' code is not kept). Real window, the owner's settings, 009:0, 15 s each; 3.34 ms a picture as it is.
+
+**The layers.** One frame captured (`--gs-capture-at`), every fragment at 176 pixels of a grid traced
+(`kf4-gsreplay --renderer pc --scale 1 --pixel X,Y`). Fragments a pixel, on average:
+
+| Kind | Drawn | Failed the Z test |
+|---|---|---|
+| full-screen sprites, not blended (the clear, the same clear again, the brightness pass) | 3.0 | |
+| full-screen sprites, blended (the destination alpha's reset, the HUD) | 1.2 | |
+| the fire (native 700; all on the right of the picture) | 3.2 | 0.6 |
+| the map (native 000) | 1.5 | 0.3 |
+| native 280 | 0.02 | |
+
+About 10 fragments a pixel, and **only one in ten is hidden**. A wall's pixel is one map fragment and four full-screen
+passes. The destination alpha's reset is for the shadows after it (352 strips of program 0x5A0 with DATE and FBA: each
+pixel darkened once).
+
+**What was tried.**
+
+| Experiment | ms a picture | Says |
+|---|---|---|
+| every native batch's Z drawn first, then the scene (exact Z on, and off so that the early test rejects) | 3.41 to 3.48, 3.35 to 3.32 | nothing hidden to leave out: a depth pre-pass or a sort front to back gives nothing here |
+| DATE's stencil set without reading the target's alpha (as if it were known from the reset) | 3.34 to 3.28 | 0.06 |
+| the untextured GIF batches left out (`KF4_PC_KNOCK=fills`) | 3.00 | the clears, the alpha's reset, the fade: 0.33 |
+| and the brightness pass's draw (`fills,surface`) | 2.89 | 0.45 together; with its texture copy (0.16) about 0.6 |
+
+So the PS2's way costs, at most, the full-screen passes: **about 0.6 to 0.75 ms of 3.34** if every one of them went
+(Phase 2 whole, and the alpha's reset kept in the stencil alone). The rest is the scene's own visible layers at 13.8
+million samples of 8 bytes and their depth: about 1 to 2 GB moved a picture, at about 300 pictures a second half or
+more of what the card's memory moves (640 GB a second). Fewer samples or fewer bytes a sample is all that is left
+(round 3's table).
+
+**The machine went down** at 14:56 as the third run in a row started (`KF4_PC_KNOCK=n700`, in the opening): no ring
+timeout in the kernel's log, the log just stops. Twelve real-window runs before it in an hour and a half without a
+hang.
+
 ## Not known
 
 - Any map but 009, and any place with creatures on screen.
