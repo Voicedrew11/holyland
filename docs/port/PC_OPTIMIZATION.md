@@ -308,6 +308,41 @@ more of what the card's memory moves (640 GB a second). Fewer samples or fewer b
 timeout in the kernel's log, the log just stops. Twelve real-window runs before it in an hour and a half without a
 hang.
 
+## What a layer costs on this card: `kf4-layerbench` (2026-11-14, later)
+
+`tools/layer_bench` (built as `kf4-layerbench` where `glslangValidator` is): plain full-screen layers on a target of the
+renderer's size and formats, no game in it, one state changed at a time, timed by the clock over 200 pictures of 8
+layers. RX 9070 XT, RADV 26.2.3, 3840x1792. ms a layer:
+
+| A layer that is | 8 bit, 1 sample | 8 bit, 2 | 8 bit, 4 | 16 bit, 1 | 16 bit, 2 (the owner's) | 16 bit, 4 |
+|---|---|---|---|---|---|---|
+| two triangles, textured, depth, blended | 0.039 | 0.052 | | 0.137 | 0.166 | |
+| 45000 triangles (about 300 pixels each: the map's are about 500), textured, depth | 0.043 | 0.128 | | 0.087 | 0.428 | |
+| 45000 triangles, textured, depth, blended | 0.055 | 0.210 | 0.565 | 0.191 | 0.565 | 0.955 |
+| one colour, no depth, no blend | 0.012 | 0.023 | | 0.021 | 0.042 | |
+| hidden (fails the early depth test) | 0.011 | 0.012 | | 0.011 | 0.020 | |
+
+What it says:
+
+- **A layer of many triangles under MSAA costs three to four times the same layer at one sample**, in either colour
+  format, where a layer of two triangles costs a quarter more. The cost is the triangles' edges under MSAA, not the
+  bytes: 8 bits with 2 samples (0.210) is dearer than 16 bits with 1 (0.191) at half the memory.
+- **The owner's pair, 16 bits and 2 samples, is ten times 8 bits and 1 sample** for a map-like layer (0.565 against
+  0.055); either setting alone is about 0.2.
+- 16-bit floats cost what 16-bit UNORM does with MSAA; 10 bits a channel what 8 does (but has 2 bits of alpha).
+- The driver's switches: `RADV_PERFTEST=dccmsaa` and `RADV_DEBUG=nohiz` change nothing; `RADV_DEBUG=nodcc` makes 8 bits
+  with 2 samples cost what 16 bits with 2 does with it on (0.448 against 0.429): the colour compression is what makes
+  8-bit MSAA cheap, and it does little for the 16-bit one.
+- An image twice as tall as what is drawn (the renderer's frame buffers' surface) costs nothing more. A render pass a
+  layer, a shader that may discard, one that writes its own depth: nothing to speak of.
+- **The renderer is not far off the card**: the map's 1.5 layers at about 0.56 ms is 0.85 ms, its knock-out 1.2 with
+  the fragments that fail. There is no hidden factor of several in how the renderer draws; there is one in what MSAA
+  costs here.
+
+So the lever is anti-aliasing that is not MSAA. Supersampling is cheaper for the same count of samples: twice the
+pixels at 1 sample is about 0.11 ms (8 bit) or 0.38 (16 bit) a map-like layer, against MSAA 2's 0.21 and 0.565. Not
+yet measured in the game: 4x with MSAA 1 and colour exact together, and a higher scale without MSAA.
+
 ## Not known
 
 - Any map but 009, and any place with creatures on screen.

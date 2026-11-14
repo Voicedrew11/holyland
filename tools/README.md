@@ -227,3 +227,10 @@ Into `--out`: `report.md` (a line a case and profile, then each one's worst vbla
 vblank), `evidence/` (the worst `--top` pairs of each, 640 wide: PC | GS | the difference x4, red over 24; and
 flash_find's sheet of flagged pictures between). The runs' pictures (about 20 MB each at 4x) are deleted as it goes
 (`--keep` keeps them). A full run (12 cases, both profiles, 240) is about an hour and a half; one game at a time.
+
+## kf4-layerbench: what a full-screen layer costs on this GPU
+
+`out/<preset>/kf4-layerbench [--size WxH] [--pictures N] [--layers N] [--only NAME]` (tools/layer_bench; built where
+`glslangValidator` is). No game and no disc: plain layers on targets of the PC renderer's size and formats (8 and 16
+bits a channel, 1 to 8 samples), one state changed at a time, ms a layer by the clock. For telling the card's limit
+from the renderer's doing; the results of 2026-11-14 are in `docs/port/PC_OPTIMIZATION.md`.

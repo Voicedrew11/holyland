@@ -571,6 +571,33 @@ if(TARGET kf4_gs)
     if(NOT WIN32)
         target_link_libraries(kf4-gsreplay PRIVATE m)
     endif()
+    # kf4-layerbench (tools/layer_bench): what a full-screen layer costs on this GPU, with no game in it. Built where
+    # glslangValidator is (its shaders are compiled here, not committed).
+    find_program(KF4_GLSLANG glslangValidator)
+    if(KF4_GLSLANG)
+        set(KF4_LB ${CMAKE_SOURCE_DIR}/tools/layer_bench)
+        set(KF4_LB_OUT ${CMAKE_BINARY_DIR}/layer_bench)
+        file(MAKE_DIRECTORY ${KF4_LB_OUT})
+        set(KF4_LB_PARTS)
+        macro(kf4_layer_shader name source)
+            add_custom_command(OUTPUT ${KF4_LB_OUT}/${name}.inc
+                COMMAND ${KF4_GLSLANG} -V ${ARGN} --vn ${name} -o ${KF4_LB_OUT}/${name}.inc ${KF4_LB}/${source}
+                DEPENDS ${KF4_LB}/${source} VERBATIM)
+            list(APPEND KF4_LB_PARTS ${KF4_LB_OUT}/${name}.inc)
+        endmacro()
+        kf4_layer_shader(layer_vert layer.vert)
+        kf4_layer_shader(layer_frag_fill layer.frag)
+        kf4_layer_shader(layer_frag_textured layer.frag -DTEXTURED)
+        kf4_layer_shader(layer_frag_discards layer.frag -DTEXTURED -DDISCARDS)
+        kf4_layer_shader(layer_frag_own_depth layer.frag -DTEXTURED -DDISCARDS -DOWN_DEPTH)
+        file(WRITE ${KF4_LB_OUT}/layer_bench_shaders.h
+            "#include <stdint.h>\n#include \"layer_vert.inc\"\n#include \"layer_frag_fill.inc\"\n#include \"layer_frag_textured.inc\"\n#include \"layer_frag_discards.inc\"\n#include \"layer_frag_own_depth.inc\"\n")
+        add_executable(kf4-layerbench tools/layer_bench/layer_bench.cpp ${KF4_LB_PARTS})
+        target_include_directories(kf4-layerbench PRIVATE ${KF4_LB_OUT})
+        target_link_libraries(kf4-layerbench PRIVATE parallel-gs Threads::Threads)
+        target_compile_options(kf4-layerbench PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+        set_target_properties(kf4-layerbench PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    endif()
     # The CPU model of the GS's memory (port/gs/shared/gsn_vram.c) against paraLLEl-GS
     add_executable(gsn_vram_test tests/gsn_vram_test.c port/gs/shared/gsn_vram.c)
     target_include_directories(gsn_vram_test PRIVATE port/include port/gs/shared)
