@@ -112,6 +112,14 @@ void main() {
             gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
         }
     }
+    // (tolerant layers: the corner's Z keeps the sixteenths VU1's FTOI4 leaves it, which the GS drops. Cut to a whole
+    // Z, a corner far off lies up to a Z from where it is, each corner by its own amount and another as the camera
+    // moves: two surfaces less than a Z apart there, a sign on its wall, the bands on a chest's lid, swapped corner
+    // by corner. On the GS they tie and the later wins; with the fraction kept at the pixel they need it at the
+    // corner too.)
+    if ((pc.flags & PCR_F_LAYERS) != 0u) {
+        zfrac += float(p.z & 15) / 16.0;
+    }
     z = (d.info.w & ND_C_FAR) != 0 ? 0u : z; // (at the far plane: the modern sky)
     zfrac = (d.info.w & ND_C_FAR) != 0 ? 0.0 : zfrac;
     zref = (d.info.w & ND_C_FAR) != 0 ? 0u : zref;

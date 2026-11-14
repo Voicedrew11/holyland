@@ -53,7 +53,9 @@ void main() {
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
     vec3 stq = vec3(vu_mul(st.x, p.q), vu_mul(st.y, p.q), vu_mul(st.z, p.q));
     uint z = gs_z(p);
-    float zfrac = 0.0;
+    // (tolerant layers: the corner's Z keeps the sixteenths FTOI4 leaves it, pcr_nd000.vert)
+    float zkept = (pc.flags & PCR_F_LAYERS) != 0u ? float(p.z & 15) / 16.0 : 0.0;
+    float zfrac = zkept;
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
     uint zref = which == 0u ? z : gs_z(vu_place(tri.x));
     int xi = p.x, yi = p.y;
@@ -65,7 +67,7 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
-        zfrac = m.zfrac;
+        zfrac = m.zfrac + zkept;
         stq *= m.f;
         for (uint i = 0u; i < 3u && !gone; i++) {
             uint k = kick - i;

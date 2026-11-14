@@ -54,7 +54,9 @@ void main() {
     Place pl = vu_place(slot);
     float q = pl.q;
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
-    float zfrac = 0.0;
+    // (tolerant layers: the corner's Z keeps the sixteenths FTOI4 leaves it, pcr_nd000.vert)
+    float zkept = (pc.flags & PCR_F_LAYERS) != 0u ? float(pl.z & 15) / 16.0 : 0.0;
+    float zfrac = zkept;
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
     uint zref = which == 0u ? z : uint(vu_place(tri.x).z >> 4) & 0xFFFFFFu;
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, q)), 255.0), 0.0);
@@ -69,7 +71,7 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
-        zfrac = m.zfrac;
+        zfrac = m.zfrac + zkept;
         f = m.f;
         int kk = mesh.q[kick * 4u + 4u].x; // (the kick's number in the batch)
         for (int i = 0; i < 3 && i <= kk && !gone; i++) {

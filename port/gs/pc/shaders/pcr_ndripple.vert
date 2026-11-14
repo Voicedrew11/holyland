@@ -50,6 +50,9 @@ void main() {
     uint z;
     float zfrac = 0.0;
     Place p = vertex_place(at, z);
+    // (tolerant layers: the corner's Z keeps the sixteenths FTOI4 leaves it, pcr_nd000.vert)
+    float zkept = (pc.flags & PCR_F_LAYERS) != 0u ? float(p.z & 15) / 16.0 : 0.0;
+    zfrac = zkept;
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
     uint zref = z;
     if (which != 0u) {
@@ -63,7 +66,7 @@ void main() {
         xi = m.x;
         yi = m.y;
         z = m.z;
-        zfrac = m.zfrac;
+        zfrac = m.zfrac + zkept;
         Moved mw = moved(w, 0u);
         // (a moved place off the 16 bits keeps the frame's S and T: moved() starts from the GS's 16 bits)
         if (!mw.drop && ((w.x | w.y) & int(0xFFFF0000u)) == 0) {
