@@ -151,14 +151,18 @@ a vblank, and the overlay offers them again (Display, Picture). Built the GPU's 
   data folder drew, so a first start, or the first after a driver update or a new GPU (the cache refused), still
   stood still at each new pipeline. Now the repository carries a seed, `port/gs/pc/pipeline_seed.bin` (made by
   `tools/pipeline_seed.py`: a map tour of every map and `motion_compare.py`'s cases, at 1x and at MSAA 4 with the
-  cut-outs shaded a sample at a time, the native draws on and off, `--frame-rate 240`), compiled into the program
+  cut-outs shaded a sample at a time, the native draws on and off, `--frame-rate 240`; the cases with colour high;
+  344 records, 202 KB), compiled into the program
   (`cmake/pipeline_seed.cmake`). Each record is what the list keeps: the canvas's program by index, Granite's pipeline
   state, the attachments' formats and samples; renderer state, none of the game's data. It is drawn with
   `KF4_PC_DYNAMIC=0`, so that every state a draw had is a record of its own; the device's dynamic state is put in as
   the seed is read, and records that then differ only in dynamic state are one pipeline (Granite's hash). So one
   seed serves every GPU: the depth format (D32S8 or D24S8), colour high's 16-bit format and MSAA's count (2, 4 or 8:
   the records of the MSAA runs) are put in too. Settings that change no pipeline (scale, anisotropy, draw distance,
-  sky, layer Z, frame rate) need nothing. At every start, once gs.c has set the settings and the canvas has made its
+  sky, layer Z, frame rate) need nothing. The canvas's programs listed are its 21 batch and DATE programs, the expand pass and (22nd,
+  added last so that the others keep their index) colour high's narrowed scanout; with colour high a record's 8-bit
+  target is made at both 16 and 8 bits. Known gap: with colour high one pass of the narrowed scanout still compiles at
+  its first draw (5 ms here): its target is not an attachment like the records' (`images_for`'s General layout). At every start, once gs.c has set the settings and the canvas has made its
   programs, the seed's records for those settings and the list's are made on every core but one, through the cache;
   the game waits at its first vblank, the window black with "Preparing shaders... N%" (the overlay). With the cache
   good they are cache hits, a fraction of a second. A pipeline that fails to make is left out (its draw makes it, or
