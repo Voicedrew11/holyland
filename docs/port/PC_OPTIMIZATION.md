@@ -330,9 +330,14 @@ What it says:
 - **The owner's pair, 16 bits and 2 samples, is ten times 8 bits and 1 sample** for a map-like layer (0.565 against
   0.055); either setting alone is about 0.2.
 - 16-bit floats cost what 16-bit UNORM does with MSAA; 10 bits a channel what 8 does (but has 2 bits of alpha).
-- The driver's switches: `RADV_PERFTEST=dccmsaa` and `RADV_DEBUG=nohiz` change nothing; `RADV_DEBUG=nodcc` makes 8 bits
-  with 2 samples cost what 16 bits with 2 does with it on (0.448 against 0.429): the colour compression is what makes
-  8-bit MSAA cheap, and it does little for the 16-bit one.
+- The driver's switches: `RADV_PERFTEST=dccmsaa` and `RADV_DEBUG=nohiz` change nothing (`dccmsaa` is for GFX8-9
+  only). `RADV_DEBUG=nodcc` (a layer of 45000 triangles, textured, depth): 8 bits with 2 samples 0.129 to 0.448, 16
+  bits with 2 samples 0.429 to 0.653. The colour compression works under MSAA for both; it saves more at 8 bits.
+- **This card does compress MSAA colour**: Mesa 26.2.3's `ac_surface.c` (`gfx12_compute_surface`) turns DCC on for
+  every multisampled colour image ("Always enable compression for Z/S and MSAA color by default"). What it no longer
+  has is FMASK, the older cards' own MSAA scheme (`ac_gpu_info.c`: `has_fmask = gfx_level <= GFX10_3`, RDNA 2 and
+  before). Why many small triangles make MSAA three to four times dearer here is not known: that FMASK's absence is the
+  cause is a guess, not measured.
 - An image twice as tall as what is drawn (the renderer's frame buffers' surface) costs nothing more. A render pass a
   layer, a shader that may discard, one that writes its own depth: nothing to speak of.
 - **The renderer is not far off the card**: the map's 1.5 layers at about 0.56 ms is 0.85 ms, its knock-out 1.2 with
