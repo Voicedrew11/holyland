@@ -649,8 +649,10 @@ public:
         }
         drop_stretch();
         frame_taken_at_ = vblanks_;
-        const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0, frame->kicks};
+        const pcr::FrameTargets targets = {frame->draw_fbp,       frame->shown_fbp,
+                                           frame->uploads_asked_again != 0, frame->shown_kept != 0,
+                                           frame->kicks,          frame_copies_ ? frame->frame_copies : 0,
+                                           frame->copies_between};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -778,6 +780,8 @@ public:
         pump_on_ = pump_wanted();
         const char *own = getenv("KF4_PC_LIVE_WALK");
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
+        const char *copies = getenv("KF4_PC_FRAME_COPIES");
+        frame_copies_ = !(copies && strcmp(copies, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -1007,6 +1011,9 @@ private:
     uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
     std::optional<Stretch> last_stretch_;
     bool own_walks_ = true;
+    // KF4_PC_FRAME_COPIES (0: a frame that copies the buffer drawn walks its pictures, as before; else its own walk
+    // makes the copies the stream makes, from the buffer shown: pcr_frame_walk.h's frame_copy_in_picture)
+    bool frame_copies_ = true;
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
@@ -1472,13 +1479,15 @@ public:
                 "[stats] pc pump: %llu frames (%llu surfaces copied for them), %llu pictures between drawn again "
                 "(%llu not of its frame), %llu pictures showing them, %llu left out as too late and %llu not shown as made "
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
-                "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
+                "passes, %llu surfaces made (%llu of them with images used again), %llu uploads into surfaces, %llu "
+                "textures' copies of surfaces in images used again; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
                 (unsigned long long)left_out_, (unsigned long long)late_, cost_.mean_s() * 1e3,
                 (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
-                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces,
+                (unsigned long long)c.surfaces_made, (unsigned long long)c.surface_images_reused,
+                (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.texture_copies_reused,
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws);
     }

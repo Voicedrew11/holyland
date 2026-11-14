@@ -235,6 +235,7 @@ void Between::kicked(const GifVertex &v, uint64_t xyoffset) {
         Kick k = kick_of(v, xyoffset);
         k.rgba_owner = v.rgba_owner >= native_kick_base && v.rgba_owner != no_kick ? v.rgba_owner - native_kick_base
                                                                                   : no_kick;
+        k.uv_owner = v.uv_owner >= native_kick_base && v.uv_owner != no_kick ? v.uv_owner - native_kick_base : no_kick;
         memcpy(live_native_.data() + at, &k, sizeof(k));
         return;
     }
@@ -275,6 +276,9 @@ bool Between::adopt_live_kicks(LiveKicks live, std::vector<GsnInterpMove> native
             memcpy(&k, live.native.data() + size_t(i) * sizeof(Kick), sizeof(k));
             if (k.rgba_owner != no_kick) {
                 k.rgba_owner += n;
+            }
+            if (k.uv_owner != no_kick) {
+                k.uv_owner += n;
             }
             kicks.insert(kicks.end(), reinterpret_cast<const uint8_t *>(&k),
                          reinterpret_cast<const uint8_t *>(&k) + sizeof(k));

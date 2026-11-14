@@ -152,6 +152,10 @@ typedef struct {
     uint32_t uploads_asked_again;   /* 1: its uploads into anything but draw_fbp are asked for again (0x7C) */
     uint32_t shown_kept;            /* 1: the frame shown is kept (0xF2), and the stream's records that set TEX0 to
                                        shown_fbp read that copy (between 0xF4 and 0xF5) */
+    uint32_t frame_copies;          /* the frame's local copies from draw_fbp into another buffer, in order, and */
+    uint64_t copies_between;        /* bit c: copy c is made again in the stream, from shown_fbp (the wobble's copy of
+                                       the frame under water: frame_interp.c's COPY_BETWEEN); else left out (only
+                                       the first 64 told) */
 } GsnInterpFrame;
 typedef struct {
     uint64_t serial;   /* the frame's */
