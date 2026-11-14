@@ -2131,6 +2131,8 @@ private:
         bool native = false;
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
+        bool still = false;           // (a pictures' walk's: every kick of its corners stays as the frame has it,
+                                      // kick_stays, so its sprites are where and what the vertices say: as_clear)
         bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         bool sprites = true;          // (every primitive a sprite: clear_depth_aliases)
@@ -2636,6 +2638,10 @@ private:
             }
         } else {
             b.moved = b.numbered;
+            b.still = b.numbered && b.sprites && !b.native_kicks &&
+                      std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+                          return kick_stays(t, v.kicks[0]) && kick_stays(t, v.kicks[1]);
+                      });
             if (b.native_kicks) {
                 // (a native draw's kicks, the trail's: numbered on from the stream's, Between::adopt_live_kicks)
                 for (Vertex &v : b.vertices) {
@@ -3330,6 +3336,21 @@ private:
         return *cmd_;
     }
 
+    // KF4_PC_KNOCK's kinds, comma separated: clears (a batch as_clear clears), 2d (every GIF batch), fills (a GIF batch
+    // untextured), surface (a batch textured from a surface: the brightness pass), n000, n280, n700 (a native program's
+    // batches), blended (a native batch blended)
+    bool knocked_out(const Batch &b, bool clear, bool from_surface) const {
+        auto has = [&](const char *kind) { return strstr(knock_, kind) != nullptr; };
+        if (!b.native) {
+            return has("2d") || (clear && has("clears")) || (from_surface && has("surface")) ||
+                   (bits(b.state.prim, 4, 1) == 0 && has("fills"));
+        }
+        if (bits(b.state.prim, 6, 1) != 0 && has("blended")) {
+            return true;
+        }
+        return has(b.program == NativeProgram::vu1_280 ? "n280" : b.program == NativeProgram::vu1_700 ? "n700" : "n000");
+    }
+
     // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
     // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
     static bool is_decal(const Batch &b) {
@@ -3476,6 +3497,12 @@ private:
         // (a clear drawn as a rectangle: cleared, vkCmdClearAttachments, the same pixels without the draw's shader)
         VkClearRect clear_rect;
         bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect);
+        // (developers' knock-outs, KF4_PC_KNOCK: one kind of work left out of the pictures between, to time the rest:
+        // the picture is wrong, the GPU time a picture less is what that work costs)
+        if (knock_ && between_ && between_->active() &&
+            knocked_out(b, clear, bits(s.prim, 4, 1) != 0 && b.texture.ok && b.texture.src == SRC_SURFACE)) {
+            return;
+        }
         // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
         bool per_sample = ms && is_cutout(b);
         int v = !b.native                              ? 0
@@ -3683,6 +3710,7 @@ private:
             }
             c.clear_quad(clear_rect, att, count);
             counts_clears_++;
+            counts_.clears++;
             drawn_over(b, *colour, ms, box, zte && zwrite);
             return;
         }
@@ -3846,7 +3874,9 @@ private:
     bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
                   bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
         const DrawState &s = b.state;
-        if (!clears_on_ || b.native || b.shader_blend || b.moved || (between_ && between_->active()) || !b.sprites ||
+        // (a picture between's: only a batch whose kicks all stay, Batch::still: the shader gives the vertices' own)
+        bool as_the_frame = b.still || (!b.moved && !(between_ && between_->active()));
+        if (!clears_on_ || b.native || b.shader_blend || !as_the_frame || !b.sprites ||
             b.vertices.size() != 6 || bits(s.prim, 4, 3) != 0 || date || pass_count != 1 || pass.mode != 0 ||
             !pass.rgb || !pass.alpha || (zte && ztst != 1) || (zwrite && !zte)) {
             return false;
@@ -4503,6 +4533,7 @@ private:
     // KF4_PC_MERGED=0: no merged runs (a kept walk's native batches a draw call a run of triangles, as before); =1:
     // merged runs where the indirect ones are drawn too (the native batches' then merged); =plain: without the
     // dual-source blend (a blend change ends a run: to compare)
+    const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
     const char *const merged_env_ = getenv("KF4_PC_MERGED");
     const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
     const bool merged_forced_ = merged_env_ && strcmp(merged_env_, "1") == 0;

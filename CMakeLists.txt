@@ -683,7 +683,7 @@ endif()
 
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
 add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
-target_include_directories(kf4_pc_gif PUBLIC port/gs/pc PRIVATE port/include)
+target_include_directories(kf4_pc_gif PUBLIC port/gs/pc port/gs/shared PRIVATE port/include)
 set_target_properties(kf4_pc_gif PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_executable(pcr_gif_test tests/pcr_gif_test.cpp)
 target_link_libraries(pcr_gif_test PRIVATE kf4_pc_gif)

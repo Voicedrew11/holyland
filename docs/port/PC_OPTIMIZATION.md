@@ -453,3 +453,67 @@ builds, NVIDIA, a map tour against `--renderer gs`.
 
 Next, from this: the pump still walks every batch for every picture (`draw_batch`, about 900 a picture) to make the
 same records and entries each time; they could be made once a walk (30 a second). And the GIF batches end runs.
+
+## What changed on 2026-11-14 (round 2): what 4x costs, and the scaling in two passes
+
+### Knock-outs (`KF4_PC_KNOCK`)
+
+`KF4_PC_KNOCK=kind[,kind]` leaves one kind of work out of the pictures between (`knocked_out`, pcr_canvas.cpp:
+clears, fills, surface, 2d, n000, n280, n700, blended). The picture is wrong; the GPU time a picture less is what that
+work costs. The game's own frames (one picture in four here) are still drawn whole, so the numbers are low by about
+a quarter. Real window, the owner's settings, 009, uncapped, 15 s of play; with nothing knocked out 3.60 ms:
+
+| Left out | ms a picture | Less |
+|---|---|---|
+| native 000 (the map) | 2.40 | 1.20 |
+| every GIF batch (2d) | 2.81 | 0.79 |
+| native 700 | 3.10 | 0.50 |
+| the untextured GIF batches (fills: the clears and the full-screen blends) | 3.15 | 0.45 |
+| native 280 | 3.44 | 0.16 |
+| the batches textured from a surface (the brightness pass) | 3.51 | 0.09 |
+| the clears | 3.55 | 0.05 |
+| all four kinds | 0.81 | 2.79 |
+
+And one setting changed (15 s each):
+
+| Setting | ms a picture |
+|---|---|
+| the owner's | 3.60 |
+| anisotropic 1, not 16 | 3.58 |
+| exact Z off (`KF4_PC_EXACT_Z=0`) | 3.63 |
+| cut-out AA off | 3.43 |
+| MSAA 1 | 3.05 |
+| colour exact | 3.02 |
+| scaling smooth, no sharpening (the presenter's own) | 3.10 |
+| `RADV_DEBUG=nodcc` (the driver's colour compression off) | 6.12 |
+| `RADV_DEBUG=nohiz` | 3.59 |
+
+What this says:
+
+- **4x is bandwidth.** No shader feature costs anything to speak of (anisotropy, exact Z); the samples and the bytes a
+  sample do (MSAA 2 and 16 bits a channel: 0.55 ms each). A full-screen layer at 3840x1792, two samples, 8 bytes a
+  sample is 110 MB written, and read too when blended. The map (native 000) is 1.2 ms of it.
+- **The clears are worth 0.05 ms, not the 0.32 the profiler's row said.** They are cleared now in the pictures between
+  too (below): `vkCmdClearAttachments` inside a pass is a rectangle drawn by the driver, the same bytes. Only a pass's
+  load op clears for nothing, and that needs a surface that is one buffer, not both (Phase 3).
+- **The profiler's kinds cannot be trusted at 4x** for what a kind costs: the timestamps sit between draws and the pixel
+  work ends later. The knock-outs can.
+- HiZ does nothing here (with the stencil never used, `KF4_PC_STENCIL=0`, too). The driver's colour compression does a
+  great deal: whatever is done to the surfaces must keep it.
+- With everything of the scene left out 0.8 ms stays: present 0.49, the texture copy 0.11, the picture 0.06.
+
+### Built
+
+- **The scaling in two passes** (`pcr_present_scale_1d.frag`, `PresentScaler`): across into an image as wide as the
+  window and as tall as the picture (linear light, RGBA16F), then down. Present 0.477 to 0.206 ms a picture, the
+  picture **3.60 to 3.30 ms**. The window's picture is not the one pass's bit for bit: each pass clamps the cubic's
+  overshoot along its own direction, the one pass clamped once over both. Against the one pass (`--dump-present
+  2560x1440`, 52 pictures each at 009 and 020): 95% of the values the same, 3.5% one off, 1% three or more off (hard
+  diagonal edges, 41 at most), nothing to see side by side. `KF4_PC_SCALE_PASSES=1`: the one pass. It holds 37 MB more
+  for each thread that makes pictures.
+- **Clears in the pictures between** (`Batch::still`, `kick_stays` in pcr_frame_walk.h with a unit test): a batch of
+  the pictures' walk whose kicks' moves are all "as it is" is where the frame put it, so `as_clear` may clear it.
+  About 2.6 a picture at 009; worth 0.05 ms (above).
+
+Checks: the game's own picture byte for byte against round 1's (52 pictures each at 009:0, 009:2, 020:0); all 20 unit
+tests; ASan and UBSan in a real window (the known reports); no GPU hang. Not run: TSan, gcc and Windows builds, NVIDIA.

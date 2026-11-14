@@ -649,7 +649,8 @@ public:
         drop_stretch();
         frame_taken_at_ = vblanks_;
         const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0, frame->kicks};
+                                           frame->shown_kept != 0, frame->kicks,
+                                           frame->moves}; // (the moves live in between_ until the next frame's)
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -1060,7 +1061,21 @@ public:
             int32_t linear;
         } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
         bool sharpened = sharpen > 0 && work;
-        pass(cmd, sharpened ? *work : scaled, scale_, picture.get_view(), &scaling, sizeof(scaling));
+        const Image &to = sharpened ? *work : scaled;
+        // (two passes, across then down, pcr_present_scale_1d.frag: far fewer reads than the one pass. The one pass
+        // where the image between them cannot be made, or with KF4_PC_SCALE_PASSES=1, to compare)
+        if (two_passes_ && across_image(w, ph)) {
+            struct {
+                int32_t src[2], along[2];
+                float ratio;
+                int32_t decode, encode;
+            } across = {{int32_t(pw), int32_t(ph)}, {1, 0}, float(pw) / float(w), 1, 0},
+              down = {{int32_t(w), int32_t(ph)}, {0, 1}, float(ph) / float(h), 0, 1};
+            pass(cmd, *across_, scale_1d_, picture.get_view(), &across, sizeof(across));
+            pass(cmd, to, scale_1d_, across_->get_view(), &down, sizeof(down));
+        } else {
+            pass(cmd, to, scale_, picture.get_view(), &scaling, sizeof(scaling));
+        }
         if (sharpened) {
             struct {
                 int32_t size[2];
@@ -1082,6 +1097,9 @@ private:
         frag.push_constant_size = 5 * sizeof(int32_t);
         scale_ = device_.request_program(
             vs, device_.request_shader(pcr_spv_pcr_present_scale_frag, sizeof(pcr_spv_pcr_present_scale_frag), &frag));
+        frag.push_constant_size = 7 * sizeof(int32_t);
+        scale_1d_ = device_.request_program(vs, device_.request_shader(pcr_spv_pcr_present_scale_1d_frag,
+                                                                       sizeof(pcr_spv_pcr_present_scale_1d_frag), &frag));
         frag.push_constant_size = 3 * sizeof(int32_t);
         sharpen_ = device_.request_program(
             vs, device_.request_shader(pcr_spv_pcr_present_sharpen_frag, sizeof(pcr_spv_pcr_present_sharpen_frag), &frag));
@@ -1110,8 +1128,24 @@ private:
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
+    // The image between the two passes: the output's width, the picture's height, linear light in floats (the
+    // cubic's sums before the second pass clamps them). Kept while the sizes stay; false when it cannot be made.
+    bool across_image(uint32_t width, uint32_t height) {
+        if (across_ && across_->get_width() == width && across_->get_height() == height) {
+            return true;
+        }
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R16G16B16A16_SFLOAT);
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        across_ = device_.create_image(info, nullptr);
+        return bool(across_);
+    }
+
     Device &device_;
-    Program *scale_ = nullptr, *sharpen_ = nullptr;
+    Program *scale_ = nullptr, *scale_1d_ = nullptr, *sharpen_ = nullptr;
+    ImageHandle across_;
+    const bool two_passes_ = !(getenv("KF4_PC_SCALE_PASSES") && strcmp(getenv("KF4_PC_SCALE_PASSES"), "1") == 0);
 };
 
 Settings &settings(); // (below)
@@ -1489,7 +1523,7 @@ public:
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
                 "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws; %llu merged runs, %llu "
-                "triangles\n",
+                "triangles; %llu batches cleared\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)intake.surface_copies_into_spares,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
@@ -1498,7 +1532,8 @@ public:
                 (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces,
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws,
-                (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles);
+                (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles,
+                (unsigned long long)c.clears);
     }
 
 private:

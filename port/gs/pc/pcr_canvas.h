@@ -59,6 +59,7 @@ struct CanvasCounts {
     uint64_t runs = 0, run_draws = 0;
     // (a kept walk's merged runs: the draw calls, and the native batches' triangles they drew)
     uint64_t merged_runs = 0, merged_triangles = 0;
+    uint64_t clears = 0; // (batches cleared, vkCmdClearAttachments, not drawn: as_clear)
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
