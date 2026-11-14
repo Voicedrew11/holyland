@@ -105,8 +105,10 @@
                          unlocked no faster than N pictures a second (a few under a VRR screen's
                          rate keeps it in its range); 0, no cap, by default
        --tearing         unlocked's pictures shown at once, tearing (the swapchain immediate:
-                         the least latency, and a VRR screen's), not the newest at each
-                         refresh (mailbox, by default)
+                         the least latency), not the newest at each refresh (mailbox, by default)
+       --adaptive-sync   for a VRR screen (FreeSync, G-Sync): each picture shown when it comes, the
+                         screen waiting for it (the swapchain FIFO at every rate), and every rate
+                         kept a little under the screen's (161 at 170 Hz); off by default
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -444,6 +446,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--tearing") == 0) {
             port_options.tearing = port_options.tearing_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--adaptive-sync") == 0) {
+            port_options.adaptive_sync = port_options.adaptive_sync_forced = 1;
             continue;
         }
         if (strcmp(option, "--stats") == 0) {

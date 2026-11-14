@@ -34,6 +34,7 @@
 #include "profiler.h"     // Shift+P
 
 extern "C" {
+#include "port/adaptive_sync.h"
 #include "port/audio.h"
 #include "port/automap.h"
 #include "port/weapon_sets.h"
@@ -433,15 +434,40 @@ void display_page() {
         }
         tooltip("Unlocked no faster than this. With a VRR screen (FreeSync, G-Sync), a few under its refresh\n"
                 "rate keeps it in its range. 0: none. (--frame-rate-cap N)");
+        ImGui::BeginDisabled(port_options.adaptive_sync != 0);
         bool tearing = port_options.tearing != 0;
         if (ImGui::Checkbox("Unlocked: tearing allowed", &tearing)) {
             s.tearing = port_options.tearing = tearing;
             changed();
         }
+        ImGui::EndDisabled();
         tooltip("Each picture shown at once, part way down the screen if need be (the swapchain immediate):\n"
-                "the least latency, and what a VRR screen wants. Off: the screen shows the newest picture at\n"
-                "each refresh, no tearing (mailbox). Vulkan presenter only. (--tearing)");
+                "the least latency. Off: the screen shows the newest picture at each refresh, no tearing\n"
+                "(mailbox). Not with adaptive sync, which shows every picture whole. Vulkan presenter only.\n"
+                "(--tearing)");
     }
+    {
+        bool adaptive = port_options.adaptive_sync != 0;
+        if (ImGui::Checkbox("Adaptive sync (VRR)", &adaptive)) {
+            s.adaptive_sync = port_options.adaptive_sync = adaptive;
+            port_video_apply_settings();
+            changed();
+        }
+        if (port_options.adaptive_sync && port_video_refresh_rate() > 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(up to %d a second)", adaptive_sync_cap_hz(port_video_refresh_rate()));
+        }
+        if (port_options.adaptive_sync != s.adaptive_sync) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+    }
+    tooltip("For a FreeSync, G-Sync or other VRR screen: the screen refreshes when each picture comes,\n"
+            "so any rate here is shown evenly, without tearing and without judder. Each picture waits\n"
+            "for the screen (as VSync), and every rate is kept a little under the screen's own so it\n"
+            "never has to. VRR must be on for the screen and the system too (on Linux the desktop's\n"
+            "display settings; most only for a full-screen window). Without it: as VSync.\n"
+            "(--adaptive-sync)");
 
     ImGui::SeparatorText("World");
     static const char *const distances[PORT_DRAW_DISTANCE_COUNT] = {"1x (PS2)", "1.5x", "2x", "4x", "Max (no distance fog)"};

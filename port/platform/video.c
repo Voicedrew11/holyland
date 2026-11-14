@@ -29,6 +29,7 @@
 #include <SDL.h>
 #endif
 
+#include "port/adaptive_sync.h"
 #include "port/controls.h"
 #include "port/host.h"
 #include "port/overlay.h"
@@ -229,7 +230,9 @@ void port_video_refresh_seen(double seen_s) {
    frame waits for the frame: several milliseconds), the READY_PERCENTILE of the last READY_KEPT, and half a
    refresh more for the screen's own lead (a compositor takes its picture before the refresh) and the
    refresh clock's error: the latency the pictures need, and no more. It goes up at once and down slowly,
-   so that a picture's refresh moves seldom. */
+   so that a picture's refresh moves seldom.
+   Not with adaptive sync: a VRR screen's refreshes follow the pictures, so timing the pictures by them would be
+   timing them by themselves (port/include/port/adaptive_sync.h). */
 #define READY_KEPT 256
 #define READY_PERCENTILE 0.98
 #define AHEAD_MOST 0.05            /* seconds: a hitch does not hold every picture back after it */
@@ -243,8 +246,8 @@ static double ahead_s; /* 0: not measured yet */
 /* (under the lock) the pictures are timed by the screen's refreshes now (monitor's rate is the screen's:
    port_frame_rate_hz, which kf4-gsreplay does not link) */
 static int by_refresh(void) {
-    return port_options.frame_rate == PORT_FRAME_RATE_MONITOR && port_video_refresh_rate() > 60 && !port_options.fast &&
-           times_set && refresh_clock_locked(&refresh_clock);
+    return port_options.frame_rate == PORT_FRAME_RATE_MONITOR && !port_options.adaptive_sync &&
+           port_video_refresh_rate() > 60 && !port_options.fast && times_set && refresh_clock_locked(&refresh_clock);
 }
 
 static double refresh_ahead_s(void) {
@@ -433,7 +436,7 @@ void port_video_apply_settings(void) {
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (renderer != NULL) {
-        SDL_RenderSetVSync(renderer, port_settings.vsync);
+        SDL_RenderSetVSync(renderer, port_settings.vsync || port_options.adaptive_sync);
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     if (presenter == PORT_PRESENTER_VULKAN) {
@@ -531,7 +534,8 @@ void port_video_init(void) {
         return;
     }
     renderer = SDL_CreateRenderer(window, -1,
-                                  SDL_RENDERER_ACCELERATED | (port_settings.vsync ? SDL_RENDERER_PRESENTVSYNC : 0));
+                                  SDL_RENDERER_ACCELERATED |
+                                      (port_settings.vsync || port_options.adaptive_sync ? SDL_RENDERER_PRESENTVSYNC : 0));
     if (renderer == NULL) {
         renderer = SDL_CreateRenderer(window, -1, 0);
     }
@@ -828,7 +832,7 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         }
         stat_last = now;
     }
-    if (fresh && !sim && port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
+    if (fresh && !sim && port_options.frame_rate == PORT_FRAME_RATE_MONITOR && !port_options.adaptive_sync) {
         /* the screen's last vblank, to the refresh clock (each once) */
         static double fed;
         double vblank;
@@ -1333,6 +1337,10 @@ void port_video_print_stats(void) {
             (unsigned long long)stat_between, mean * 1e3, sd * 1e3, stat_max * 1e3, (unsigned long long)stat_late);
     fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second, %.1f game frames a second\n",
             port_video_pictures_per_second(), port_video_frames_per_second());
+    if (port_options.adaptive_sync) {
+        fprintf(stderr, "[stats] window: adaptive sync, up to %d pictures a second (the screen named %d Hz)\n",
+                adaptive_sync_cap_hz(port_video_refresh_rate()), port_video_refresh_rate());
+    }
     LOCK();
     if (refresh_clock_named < 0) {
         fprintf(stderr, "[stats] window: no vblanks of the screen known (the refresh clock not started)\n");

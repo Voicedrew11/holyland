@@ -38,6 +38,7 @@ typedef struct {
                               PORT_FRAME_RATE_MONITOR or _UNLOCKED (port_options.frame_rate) */
     int frame_rate_cap;    /* unlocked no faster than this many a second; 0: no cap (port_options.frame_rate_cap) */
     int tearing;           /* unlocked's swapchain immediate, not mailbox (port_options.tearing; off) */
+    int adaptive_sync;     /* for a VRR screen: FIFO, rates under its own (port_options.adaptive_sync; off) */
     int draw_distance;     /* the opt-in longer view: PORT_DRAW_DISTANCE_ (port_options.draw_distance) */
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
     int native_scale;      /* the renderer's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
