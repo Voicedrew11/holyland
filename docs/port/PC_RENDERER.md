@@ -262,7 +262,10 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   (headless, where the GPU sets the rate): ps2 578 and 626 pictures a second, 536324a1 490 and 509 (15% and 19%
   under), now 532 and 562 (8% and 10% under); the GPU's time a picture 1.54 and 1.37 ms, 1.81 and 1.68, now 1.65 and
   1.52. The pictures are 536324a1's: not a pixel off at the owner's six saves walked or at the owner's capture, 15
-  pixels over a 144-view tour of 12 maps.
+  pixels over a 144-view tour of 12 maps. At 240 (`tools/pace_test.py`, the GPU's ms a picture; ps2, 536324a1, now):
+  Andrew's profile at 009 2.04, 2.72, 2.10 and at 099 1.73, 2.95, 1.78; the owner's at 009 1.42, 1.98, 1.46 and at
+  099 1.22, 2.30, 1.23. Those maps have batches textured from surfaces, so 536324a1 lost the most there (the first
+  cut below).
   - *The batch is not cut where its meshes change between layers and not* (`Batch::Run::layer`, `Pass::runs`,
     `draw_batch`'s steps): its runs are drawn stretch by stretch in the game's order, the others' passes for a stretch
     of the others, the layers' Z pass and colour pass for a stretch of layers. 536324a1 cut it. A batch textured from
@@ -291,6 +294,10 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
     as under tolerant (13 and 13, 15 and 15, 11 and 11 at three saves); the layers' passes change dynamic state, not
     pipelines. Headless at 240 every version holds 240 at these saves, so the owner's 160-165 was not reproduced
     there: 240 times two thirds is 160, which is what a picture a little over a refresh long gives with vsync.
+  - Not understood yet: a picture 13 to 35 ms long about every 245 vblanks (4.1 s) in some headless runs at 240 at
+    maps 009 and 099. In every mode, ps2 too, but oftener with tolerant, with or without native layers
+    (`KF4_PC_LAYERS=none`): over 8 runs of 15 s each, ps2 2 such pictures in 1 run, 536324a1 9 in 4, `none` 6 in 3,
+    now 12 in 4. So it is not the layers' Z pass.
 - A draw that writes no Z is tested within half a Z (a cut-out's a sixteenth, `PCR_F_LAYER_FINE`: foliage cards near
   each other otherwise show the ones behind through). Everything else is drawn once.
 - Not done: the native GS's ties between surfaces (every surface drawn twice, colour within half a Z). Here that was
