@@ -127,6 +127,7 @@ void pcr_take_record() {
 #define PCR_F_LAYERS 0x4000000u    // (with PCR_F_EXACT_Z) tolerant layers: Z's fraction kept (pcr_prim.h's pcr_exact_depth)
 #define PCR_F_LAYER_TEST 0x8000000u // ... and a draw's colour tested half a Z nearer
 #define PCR_F_LAYER_FINE 0x10000000u // ... a sixteenth of a Z (a cut-out's)
+#define PCR_F_LAYER_WIDE 0x20000000u // ... a Z and half its slope across a GS pixel, up to a Z more (a decal's)
 #define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 

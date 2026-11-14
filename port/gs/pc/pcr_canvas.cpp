@@ -103,6 +103,7 @@ enum : uint32_t {
     F_LAYERS = 0x4000000,  // (pcr_common.h) tolerant layers: Z's fraction kept
     F_LAYER_TEST = 0x8000000, // ... a draw's colour tested half a Z nearer
     F_LAYER_FINE = 0x10000000, // ... a sixteenth of a Z
+    F_LAYER_WIDE = 0x20000000, // ... a Z and half its slope (a decal's)
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -2978,6 +2979,19 @@ private:
         return cutout_aa_ && cuts_out(b);
     }
 
+    // (tolerant layers) a GIF batch with a corner's alpha below 0x80
+    static bool fades(const Batch &b) {
+        if (b.native) {
+            return false;
+        }
+        for (const Vertex &v : b.vertices) {
+            if (v.rgba[3] < 0x80) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // (is_cutout's, whatever the setting) the batch's alpha test keeps some of its pixels and drops others
     static bool cuts_out(const Batch &b) {
         const DrawState &s = b.state;
@@ -3242,6 +3256,7 @@ private:
             bool rgb, alpha, z;
             bool layers = false; // (tolerant layers: the pass's colour tested half a Z nearer; PCR_F_LAYER_TEST)
             bool fine = false;   // (... a sixteenth of a Z: a cut-out's, PCR_F_LAYER_FINE)
+            bool wide = false;   // (... a Z and half its slope: a decal's, PCR_F_LAYER_WIDE)
         };
         std::array<Pass, 4> passes{};
         int pass_count = 0;
@@ -3274,7 +3289,9 @@ private:
         // written (drawn twice it would blend twice). Each phase with the pass's alpha test. (The native GS's
         // tolerant layers, 2026-10: 4af1dbd6, 669bee01.)
         if (exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2) {
-            bool fine = cuts_out(b);
+            // (a layer, as the native GS took it: a decal with a corner's alpha below 0x80, a wall's shading or grime
+            // fading out; a cut-out otherwise, foliage at 0x80, a sixteenth)
+            bool wide = is_decal(b) && fades(b), fine = !wide && cuts_out(b);
             std::array<Pass, 4> zs{}, colours{};
             int nz = 0, nc = 0;
             for (int i = 0; i < pass_count; i++) {
@@ -3282,7 +3299,7 @@ private:
                     zs[nz++] = {passes[i].mode, false, false, true, false};
                 }
                 if (passes[i].rgb || passes[i].alpha) {
-                    colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine};
+                    colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine, wide};
                 }
             }
             bool once = !is_decal(b) && !b.shader_blend && pass_count == 1 && passes[0].z;
@@ -3617,7 +3634,7 @@ private:
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT | (pass.layers ? F_LAYER_TEST : 0) |
-                         (pass.fine ? F_LAYER_FINE : 0);
+                         (pass.fine ? F_LAYER_FINE : 0) | (pass.wide ? F_LAYER_WIDE : 0);
             uint32_t mask = 0;
             Program *program = pass_state(i, mask);
             // (a later pass: the run ends unless it continues it, before its state is set)

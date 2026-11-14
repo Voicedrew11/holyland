@@ -484,23 +484,30 @@ bool alpha_passes(uint a) {
 // every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
 // samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there)
 // Tolerant layers (PCR_F_LAYERS, --native-layer-z tolerant, the default): Z's fraction kept, not rounded, and a draw's
-// colour tested half a Z nearer in one of its two phases (PCR_F_LAYER_TEST: pcr_canvas.cpp's tolerant passes), a
-// sixteenth for a cut-out's (PCR_F_LAYER_FINE). Rounded as the GS rounds, two surfaces that nearly coincide (a layer
+// colour tested half a Z nearer in one of its two phases (PCR_F_LAYER_TEST: pcr_canvas.cpp's tolerant passes); a
+// layer's (a decal fading out, a corner's alpha below 0x80) a Z and half its change across a GS pixel, up to a Z more
+// (PCR_F_LAYER_WIDE: two meshes a fraction of a pixel apart are further apart in Z at a grazing angle, and a rock
+// pillar's layer swapped with the brick under it as the camera moved); a cut-out's a sixteenth (PCR_F_LAYER_FINE). Rounded as the GS rounds, two surfaces that nearly coincide (a layer
 // over the surface it lies on, cut into triangles otherwise; two meshes crossing at a shallow angle) round apart
 // wherever a whole Z falls between them, and the later loses there: thin teeth or hatching along each whole Z (a
 // rock's layer against map 000's wall by the bridge, a rock pillar's face, the rope bridge's planks; paraLLEl-GS draws
 // the same). With the fraction the line where two surfaces cross is straight, and the slack keeps the GS's tie on
-// average: what is drawn later wins over what lies within half a Z behind it. Cut-outs (foliage, netting) take only
-// a sixteenth: their cards, near each other, otherwise show the ones behind through the ones in front. A float keeps
+// average: what is drawn later wins over what lies within its slack behind it. Cut-outs (foliage, netting, at alpha
+// 0x80) take only a sixteenth: their cards, near each other, otherwise show the ones behind through the ones in front.
+// (The native GS's tolerant layers, the same slacks.) A float keeps
 // the fraction below 2^23 (a Z32 buffer, the menus', stays rounded: pcr_canvas.cpp).
 const float PCR_LAYER_SLACK = 0.5;
 const float PCR_LAYER_SLACK_FINE = 0.0625;
 void pcr_exact_depth() {
     uint z0 = v_zref;
     float rel = interpolateAtOffset(v_zrel, vec2(0.0));
+    // (a GS pixel's change of Z: the slope across one of the target's pixels, by the canvas's scale; out of the branch
+    // below, where the quad's pixels all take it)
+    float slope = length(vec2(dFdx(rel), dFdy(rel)) * vec2(pc.src_scale));
     if ((pc.flags & PCR_F_LAYERS) != 0u) {
         float slack = (pc.flags & PCR_F_LAYER_TEST) == 0u       ? 0.0
                       : (pc.flags & PCR_F_LAYER_FINE) != 0u ? PCR_LAYER_SLACK_FINE
+                      : (pc.flags & PCR_F_LAYER_WIDE) != 0u ? 1.0 + min(0.5 * slope, 1.0)
                                                             : PCR_LAYER_SLACK;
         float z = clamp(float(z0) + rel, 0.0, float(pc.zmax)) + slack;
         gl_FragDepth = (z + float(pcr_loss_margin())) * pc.zscale;

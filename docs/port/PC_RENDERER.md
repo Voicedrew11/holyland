@@ -243,8 +243,11 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   a pass that reads the target, an alpha test's two passes) writes its Z first, then its colour within half a Z (drawn
   twice it would blend twice). So the GS's tie is kept on average (a decal wins over its surface, map 028's floor
   still over its puddle), and where surfaces cross the line is straight.
-- Cut-outs (foliage, netting: `cuts_out`) take a sixteenth of a Z (`PCR_F_LAYER_FINE`): with half a Z the leaf cards
-  of map 004's tree behind each other showed through, light lace at their edges.
+- A layer (a decal with a corner's alpha below 0x80, `fades`: a rock's face, a wall's shading fading out) is tested
+  a Z and half its change across a GS pixel nearer, up to a Z more (`PCR_F_LAYER_WIDE`, the native GS's rule): with
+  half a Z the rock pillar's layer and the brick under it swapped in large blocks as the camera moved. Other cut-outs
+  (foliage at alpha 0x80, netting: `cuts_out`) take a sixteenth of a Z (`PCR_F_LAYER_FINE`): with half a Z the leaf
+  cards of map 004's tree behind each other showed through, light lace at their edges.
 - Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
 - `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
   with `KF4_INTERP_DRAW_ALL=1`, 48 pictures each, against main 482ec65b). `kf4-gsreplay --layer-z` takes it too.
