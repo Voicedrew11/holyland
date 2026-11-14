@@ -1184,7 +1184,7 @@ index 96836aaddc6a6e0c72785357643b2c0d1c2851c3..5891f8d9a776cd0b4b6885acea7595a7
 -asm(".globl player_status_bits\nplayer_status_bits = player_previous + 0x1C8\n");  /* unk1C8 status bits */
 -asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* fade_area: the map record byte 0x4C under the player, the frame before */
 diff --git a/src/game/player/player_status.c b/src/game/player/player_status.c
-index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360649ee520 100644
+index bf8c6b33fb9766311b354add70cb34a9460d0813..7488481f1e4929c4459b49710bf21d5e2acd2c20 100644
 --- a/src/game/player/player_status.c
 +++ b/src/game/player/player_status.c
 @@ -21,13 +21,12 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
@@ -1223,7 +1223,13 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
          if (amount < player_state.hp_now) {
              player_state.hp_now -= amount;
          } else {
-@@ -253,7 +255,10 @@ void Player_TiltViewFromHit(int damage) {
+@@ -250,10 +252,16 @@ void Player_TiltViewFromHit(int damage) {
+     PlayerState *player;
+     int frames;
+ 
++    if (port_no_hit_jolt()) {
++        return; /* PC: the opt-in mod (--no-hit-jolt): the view stays where it is aimed */
++    }
      if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
          player = &player_state;
          if (!((float)damage * 100.0f / (float)player->hp_max < 10.0f)) {
@@ -1235,7 +1241,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
              if (player->view_tilt_frames < frames) {
                  float angle = player->view_tilt_pitch;
  
-@@ -265,7 +270,7 @@ void Player_TiltViewFromHit(int damage) {
+@@ -265,7 +273,7 @@ void Player_TiltViewFromHit(int damage) {
      }
  }
  
@@ -1244,7 +1250,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
  
  /* Stops the last footstep sound (footstep_voice), if one plays. */
  void Player_StopFootstepSound(void) {
-@@ -277,7 +282,7 @@ void Player_StopFootstepSound(void) {
+@@ -277,7 +285,7 @@ void Player_StopFootstepSound(void) {
  
  /* Kills the player: HP and the drawn bar to 0, and the dying starts. */
  void Player_Kill(void) {
@@ -1253,7 +1259,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
          player_state.hp_now = 0;
          player_state.hp_bar_level = 0;
          Player_UpdateDying();
-@@ -368,9 +373,9 @@ void Player_UpdateScreenFade(void) {
+@@ -368,9 +376,9 @@ void Player_UpdateScreenFade(void) {
  
      slot = &map_slots[current_map_slot];
      player = &player_state;
@@ -1265,7 +1271,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
          player->screen_fade_step = -0x30;
      }
      step = player->screen_fade_step;
-@@ -401,7 +406,7 @@ void Player_DrawScreenFade(void) {
+@@ -401,7 +409,7 @@ void Player_DrawScreenFade(void) {
      if (player_state.screen_fade != 0.0f) {
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_TEST_1, 0x30000);
@@ -1274,7 +1280,7 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..d2451ff774aff2872da744ff6dbdc360
          Packet_EndGsRegisters();
          if (player_state.screen_fade > 0.0f) {
              GsDraw_FillScreen(0xFF, 0xFF, 0xFF, (int)player_state.screen_fade, 0x48);
-@@ -409,7 +414,7 @@ void Player_DrawScreenFade(void) {
+@@ -409,7 +417,7 @@ void Player_DrawScreenFade(void) {
              GsDraw_FillScreen(0, 0, 0, (int)-player_state.screen_fade, 0x44);
          }
          Packet_BeginGsRegisters();

@@ -116,6 +116,7 @@
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
+       --no-hit-jolt     the opt-in mod: a hard hit from an enemy does not throw the view down
        --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
        --automap         the opt-in mod: the automap, a map of where you have been (M; docs/port/AUTOMAP.md)
        --automap-cheats  the automap with all its cheats on (the whole map, items, enemies, secrets, hints)
@@ -265,7 +266,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
@@ -434,6 +435,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--separate-run") == 0) {
             port_options.separate_run = port_options.separate_run_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--no-hit-jolt") == 0) {
+            port_options.no_hit_jolt = port_options.no_hit_jolt_forced = 1;
             continue;
         }
         if (strcmp(option, "--extended-stats") == 0) { /* the extended stats mod (port/include/port/stats.h) */
@@ -748,6 +753,10 @@ float port_draw_distance_far(void) {
 
 int port_myus_necklace(void) {
     return port_options.myus_necklace != 0;
+}
+
+int port_no_hit_jolt(void) {
+    return port_options.no_hit_jolt != 0;
 }
 
 /* --cheats spells,equipment,items,magic or all: 0 for a word it does not know */

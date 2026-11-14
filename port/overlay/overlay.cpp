@@ -1212,6 +1212,17 @@ void mods_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
+    bool no_hit_jolt = port_options.no_hit_jolt != 0;
+    if (ImGui::Checkbox("No camera jolt when enemies hit you", &no_hit_jolt)) {
+        s.no_hit_jolt = port_options.no_hit_jolt = no_hit_jolt;
+        changed();
+    }
+    tooltip("A hard hit no longer throws the view down: the camera stays where you aimed it. The hit\n"
+            "still flashes red, rumbles and knocks you back. Applies at once. (--no-hit-jolt)");
+    if (port_options.no_hit_jolt != s.no_hit_jolt) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(on for this run: command line)");
+    }
     port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
     automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
     weapon_sets_view_mods_section(); // the weapon sets mod (port/overlay/weapon_sets_view.cpp)
