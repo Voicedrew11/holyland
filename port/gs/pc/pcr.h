@@ -75,8 +75,10 @@ void pcr_set_layer_z(int mode);
 int pcr_native_kinds(void);
 void pcr_set_native_draw(int mode);
 
-/* Pipelines: none made ahead yet */
+/* Pipelines (pcr_pipelines.h): kept between runs at path (before pcr_open); made before play (pcr_precompile, after
+   the settings), the game waiting while pcr_pipelines_running ("Building shaders", pcr_pipelines_building) */
 void pcr_pipeline_cache(const char *path);
+void pcr_precompile(void);
 int pcr_pipelines_running(void);
 int pcr_pipelines_building(int *done, int *total);
 

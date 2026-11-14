@@ -19,6 +19,9 @@ static inline void gsr_gif(int path, const void *data, size_t bytes) {
 static inline void gsr_pipeline_cache(const char *path) {
     pcr_pipeline_cache(path);
 }
+static inline void gsr_precompile(void) {
+    pcr_precompile();
+}
 static inline int gsr_pipelines_running(void) {
     return pcr_pipelines_running();
 }

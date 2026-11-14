@@ -536,6 +536,7 @@ void port_video_dump_named(const PortGsFrame *frame, const char *name);
 int port_png_write(const char *path, const uint32_t *rgba, uint32_t width, uint32_t height);
 /* (the game thread, at vblank) shows the newest picture due and keeps the window alive */
 void port_video_present(void);
+void port_video_show_blank(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);
 /* The new pictures presented to the window a second (by the game's thread or the pictures' own), and

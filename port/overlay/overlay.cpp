@@ -1405,7 +1405,7 @@ void draw_toast() {
     draw->AddText(font, size, at, IM_COL32(255, 235, 170, (int)(255 * alpha)), text);
 }
 
-// "Building shaders": the renderer's pipelines not in the pipeline cache, made at the start (port_gs_shaders_building)
+// "Preparing shaders": the renderer's pipelines made before play (port_gs_shaders_building), the game waiting
 bool building_shown() {
     int done, total;
     return port_gs_shaders_building(&done, &total) != 0 && total > 0;
@@ -1416,12 +1416,12 @@ void draw_building() {
     if (!port_gs_shaders_building(&done, &total) || total <= 0)
         return;
     char text[64];
-    std::snprintf(text, sizeof(text), "Building shaders... %d/%d", done, total);
+    std::snprintf(text, sizeof(text), "Preparing shaders... %d%%", done * 100 / total);
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImFont *font = ImGui::GetFont();
-    float size = viewport->Size.y / 40.0f > 16.0f ? viewport->Size.y / 40.0f : 16.0f;
+    float size = viewport->Size.y / 30.0f > 18.0f ? viewport->Size.y / 30.0f : 18.0f;
     ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
-    ImVec2 at(viewport->Size.x - extent.x - size * 1.2f, viewport->Size.y - extent.y - size * 1.0f);
+    ImVec2 at((viewport->Size.x - extent.x) * 0.5f, (viewport->Size.y - extent.y) * 0.5f);
     ImDrawList *draw = ImGui::GetForegroundDrawList();
     draw->AddRectFilled(ImVec2(at.x - size * 0.5f, at.y - size * 0.25f),
                         ImVec2(at.x + extent.x + size * 0.5f, at.y + extent.y + size * 0.25f), IM_COL32(0, 0, 0, 150),
