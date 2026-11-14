@@ -4431,10 +4431,10 @@ private:
     // let each other go every picture, and the tint and the wobble read the frame through a copy of 1024 x 512 texels.
     const bool reuse_on_ = !getenv("KF4_PC_SURFACE_REUSE") || strcmp(getenv("KF4_PC_SURFACE_REUSE"), "0") != 0;
     // (colour surfaces let go: their images, and their multisampled images, for one of the same size made again)
-    struct SpareImages {
+    struct SpareSurface {
         ImageHandle image, ms;
     };
-    std::vector<SpareImages> spare_surfaces_;
+    std::vector<SpareSurface> spare_surfaces_;
     uint64_t counts_clears_ = 0;
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
