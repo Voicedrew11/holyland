@@ -10,9 +10,8 @@ whole stands.
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
-from item 7 below: layer Z (`--native-layer-z`) only, which the PC renderer keeps but does not apply and the overlay
-does not offer: it has no layers fighting to fix, and its removal is proposed ("Colour high, the 2D mode and layer Z",
-below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
+from item 7 below: nothing; layer Z (`--native-layer-z`) is applied again since 2026-11-13, with exact Z ("Tolerant
+layers", below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
 the 2D mode are applied since 2026-11-11 (below) and offered again. The settings that change live go through
 `port/overlay/live_settings.c`, which `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g.
 `2400:native_widescreen=0`). Pictures are now
@@ -226,7 +225,103 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
 
-**Layer Z (`--native-layer-z`; #105): not applied, proposed for removal.** The native GS rounded each pixel's Z to a
+**Tolerant layers (`--native-layer-z tolerant`, the default; 2026-11-13).** Exact Z (above) brought the GS's own
+fault back with the GS's ties: two surfaces that nearly coincide round apart wherever a whole Z falls between them,
+and the later one loses there, a fringe of thin teeth or hatching along each whole Z. Seen in play at map 000 (the
+owner's saves): a rock's layer against the wall left of the bridge (dark teeth along the wall's edge), the face of a
+rock pillar (dark diagonal hatching where a second rock layer overlaps it), the rope bridge's planks and ropes (bright
+specks and stitches). paraLLEl-GS draws all three the same (the PS2's picture); with the GPU's depth before exact Z
+(`KF4_PC_EXACT_Z=0`) and in the native GS's tolerant mode (main 8efb77ac) they were clean, which is why they looked
+like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws the wall and the pillar clean), not
+#138's decal depth, which exact Z replaced.
+- Z keeps its fraction (`pcr_prim.h`'s `pcr_exact_depth`, `PCR_F_LAYERS`): where surfaces cross the line is straight,
+  and among a batch's own triangles the nearer is kept (the rope bridge's planks: strips a Z apart far off).
+- **Ties stay ties, at no cost.** With the fraction, two draws of the same triangles tie only if their Z is the same
+  to the bit. The game draws a surface's second texture (and third) as the surface's own strips again, in a draw of
+  its own by the same matrix: most of what is drawn over a surface is this. The corners of every triangle are now
+  drawn in the order of their places (`pcr_native.cpp`'s `place_triangles` puts the order in the triangle's record and
+  `pcr_nd000.vert` takes it; the canvas sorts a GIF triangle's corners), so the two triangles give the GPU the same
+  corners in the same order: the same shared Z (`zref`), the same differences, the same interpolation at the pixel's
+  middle, the same depth. GEQUAL then lets the later draw win, as on the GS, in one pass.
+- **A layer cut into triangles of its own** does not tie with what it lies on (its corners' whole Zs put it up to a Z
+  or two off, more at a grazing angle), and gets a slack, as the native GS's tolerant mode gave it (4af1dbd6,
+  669bee01). A layer (`is_layer`) is blended over what is there by its alpha ((Cs - Cd) As + Cd) with a corner's
+  alpha below 0x80: a rock's face or a wall's shading fading out. It is drawn in two phases (`pcr_canvas.cpp`'s
+  tolerant passes): its Z written exactly first, without colour (`pcr_prim_zonly.frag` where nothing is discarded),
+  then its colour tested a Z and half its change across a GS pixel nearer, up to a Z more, no Z written
+  (`PCR_F_LAYER_TEST`, `PCR_F_LAYER_WIDE`): it wins over the surface it lies on, and what is drawn after it meets its
+  Z as on the GS (map 028's floor still over its puddle).
+  - A native batch's corners are the GPU's, so its mesh says whether it fades (`RdBatch::alpha_lo`, with PRIM's ABE)
+    and whether it is a twin (`pcr_native.cpp`'s `twin`): each of its triangles has the three places of a triangle of
+    a batch that does not fade, of any mesh placed. A twin ties (above) and is drawn once; the others are the layers.
+  - `KF4_PC_LAYERS=all` takes every batch that fades for a layer, twins too; `none` takes no native batch (for
+    measuring; the pictures of `all` and the default differ by 0 to 51 pixels a picture at the owner's saves).
+- **What the two phases cost, and what was cut (2026-11-14).** The owner's playtest of 536324a1: the best Z so far,
+  but 160-165 pictures a second where 240 was held, and uneven. About a third of the map's batches are layers.
+  Measured walking from the owner's tower and cave saves at the owner's settings with the frame rate unlocked
+  (headless, where the GPU sets the rate): ps2 578 and 626 pictures a second, 536324a1 490 and 509 (15% and 19%
+  under), now 532 and 562 (8% and 10% under); the GPU's time a picture 1.54 and 1.37 ms, 1.81 and 1.68, now 1.65 and
+  1.52. The pictures are 536324a1's: not a pixel off at the owner's six saves walked or at the owner's capture, 15
+  pixels over a 144-view tour of 12 maps. At 240 (`tools/pace_test.py`, the GPU's ms a picture; ps2, 536324a1, now):
+  Andrew's profile at 009 2.04, 2.72, 2.10 and at 099 1.73, 2.95, 1.78; the owner's at 009 1.42, 1.98, 1.46 and at
+  099 1.22, 2.30, 1.23. Those maps have batches textured from surfaces, so 536324a1 lost the most there (the first
+  cut below).
+  - *The batch is not cut where its meshes change between layers and not* (`Batch::Run::layer`, `Pass::runs`,
+    `draw_batch`'s steps): its runs are drawn stretch by stretch in the game's order, the others' passes for a stretch
+    of the others, the layers' Z pass and colour pass for a stretch of layers. 536324a1 cut it. A batch textured from
+    a surface copies the surface once a piece, each copy a render pass ended: at the pillar 25,038 render passes a
+    run against ps2's 6,958 (107,854 against 29,178 in the pictures between), and in the pictures between nearly
+    every draw was a run of its own (1,263,490 runs for 1,742,291 draws at the tower). The order matters: with the
+    others' runs all drawn first, map 035's lava showed a wedge, a layer blended over a piece of its own sheet that
+    the GS draws over it.
+  - *A layer's Z pass leaves out the triangles that are a surface's own again* (bit 30 of the triangle's record,
+    `place_triangles`; `pcr_nd000.vert` throws them away before any of VU1's maths): their Z is the surface's to the
+    bit, written already. 44% of the fading batches' triangles at the tower.
+  - *A layer's Z pass is drawn without its texture* (`PCR_F_LAYER_PLAIN`, a flag of the pass's own program: a
+    program of its own changed the pipeline at every stretch and gave the gain back) where its alpha test turns away
+    an alpha of 0 alone and the alpha is 0 only where the corner's is: the test is then made from the corner's alpha,
+    the same pixels. Most of the layers' Z passes. (Left out altogether, the test's pixels wrote Z where the GS
+    writes none: a dark seam a pixel wide at a pillar's edge on map 026.)
+  - *A cut-out layer's Z pass is shaded once a pixel* (its colour pass still at every sample). Few layers.
+  - What is left is the Z pass itself: the vertex work of the layers' other triangles and their depth. Without it
+    (measured only: the layers' colour within their slack and no Z written gives wrong pictures, a rock ridge that
+    fades is the only surface there) the rate was ps2's, 570 and 615 against 568 and 619 in those rounds, and so it
+    was with no native layers at all (571 and 622): the corners' order, the slack and the colour pass's change of
+    state cost nothing that shows.
+  - `KF4_PC_LAYER_TWINS=0`, `KF4_PC_LAYER_Z_PLAIN=0` and `KF4_PC_LAYER_Z_SAMPLES=1` turn the last three off, each
+    alone.
+  - The unevenness is not compiles: with an empty pipeline cache the logs name as many stalled compiles under ps2
+    as under tolerant (13 and 13, 15 and 15, 11 and 11 at three saves); the layers' passes change dynamic state, not
+    pipelines. Headless at 240 every version holds 240 at these saves, so the owner's 160-165 was not reproduced
+    there: 240 times two thirds is 160, which is what a picture a little over a refresh long gives with vsync.
+  - Not understood yet: a picture 13 to 35 ms long about every 245 vblanks (4.1 s) in some headless runs at 240 at
+    maps 009 and 099. In every mode, ps2 too, but oftener with tolerant, with or without native layers
+    (`KF4_PC_LAYERS=none`): over 8 runs of 15 s each, ps2 2 such pictures in 1 run, 536324a1 9 in 4, `none` 6 in 3,
+    now 12 in 4. So it is not the layers' Z pass.
+- A draw that writes no Z is tested within half a Z (a cut-out's a sixteenth, `PCR_F_LAYER_FINE`: foliage cards near
+  each other otherwise show the ones behind through). Everything else is drawn once.
+- Not done: the native GS's ties between surfaces (every surface drawn twice, colour within half a Z). Here that was
+  a second pass of every batch: +35-45% GPU time a picture, and Andrew's profile no longer held 240 at 009. With the
+  corners' order the ties it was for are exact; against it (`KF4_PC_TOL=8` in the experiments' build) the pictures
+  at the owner's saves differ by 0 to 123 pixels a picture, none seen.
+- **What 646df6d0 (this PR's version before) got wrong**, found from the owner's playtest (lace on cave walls, stair
+  blocks, a pale shard on a cave's ceiling): it kept the fraction but drew every surface once with no order of
+  corners, and took no native batch for a layer (their corners' alphas are not the CPU's; its checks ran headless at
+  240 without `--native-draw on`, so on VU1's packets, where the layers were found). In play the map is native
+  draws: an overlay of the same triangles came out a bit of a float behind its surface at about half the pixels
+  (-0.0001 Z at the traced pixel: lace, scratches), and a layer of its own triangles lost over whole triangles (the
+  pale shard: the ceiling's dark shading gone from one). Measured at 240 with every picture drawn, pixels far from
+  both neighbouring pictures while those agree (z-fighting flickers): 259 a picture at the cave save and 172 at the
+  pillar's with 646df6d0's rules, 12 and 4 now, 18 and 33 with `ps2`.
+- Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
+- `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
+  with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b): the corners' order
+  is taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
+- Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
+  behind it (the GS hides it); map 004's tree close to the PS2's. A layer's Z pass does not light its corners
+  (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and alphas only).
+
+**Layer Z before exact Z (#105, 2026-11-11): not applied then, proposed for removal.** The native GS rounded each pixel's Z to a
 whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
 meshes' Z rounded apart, and tolerant was its way out. (The PC renderer now rounds as the GS does, exact Z above; what
 follows was measured before, with the GPU's Z with its fraction.) Its layers were not seen fighting:

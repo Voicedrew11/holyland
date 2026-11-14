@@ -50,10 +50,10 @@
                          colours' arithmetic in floats, the picture dithered to 8 bits: smooth
                          gradients in the dark instead of steps)
        --native-layer-z MODE
-                         how the renderer keeps and tests the 3D's Z: tolerant (the default: Z's
-                         fraction kept, straight seams where surfaces meet, and the layers the game
-                         blends over its surfaces Z tested within one Z: no hatching, teeth or lace)
-                         or ps2 (the GS's whole numbers)
+                         how the renderer tests the layers the game blends over its surfaces:
+                         tolerant (the default: they win within one Z, no teeth or scratches where
+                         they meet a wall) or ps2 (the GS's test: they lose wherever their Z rounds
+                         apart from the surface's)
        --native-draw off|on|KINDS
                          draw these kinds of the game's 3D at the game's level (docs/port/NATIVE_DRAW.md):
                          the patched draw code hands them to the renderer core, and the renderer draws

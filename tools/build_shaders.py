@@ -22,11 +22,13 @@ PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
 # fragment shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
 # depth clamp), as <name>_xz and <name>_rec_xz
-EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
+EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag",
+           "pcr_prim_zonly.frag"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec
 RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
-           "pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
+           "pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag",
+           "pcr_prim_zonly.frag"]
 
 
 def find_glslang(given):

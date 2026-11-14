@@ -73,10 +73,11 @@ typedef struct {
        colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
     int native_colour;
     int native_colour_forced;
-    /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
-       0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
-       surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
-       within one Z, clean layers and seams). Live from the overlay. */
+    /* --native-layer-z: how the renderer tests the layers blended over a surface (GSN_LAYER_Z_*, gsn.h:
+       0 ps2, the GS's whole numbers, a layer failing the test wherever its Z rounds apart from its
+       surface's; 1 tolerant, the default: Z's fraction kept, what is drawn over a surface as its own
+       triangles again tying with it to the bit, a layer cut into triangles of its own winning within a Z
+       or two; pcr_canvas.cpp's tolerant passes). Live from the overlay. */
     int native_layer_z;
     int native_layer_z_forced;
     /* --vu1: who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through;

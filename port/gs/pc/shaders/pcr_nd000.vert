@@ -11,7 +11,8 @@
 #include "pcr_common.h"
 
 // the batch's triangles: x, y, z the arena's numbers of its corners; w the kick's (bits 0-27) and how many of the two
-// kicks before it are the batch's (bits 28-29)
+// kicks before it are the batch's (bits 28-29); bit 30: a surface's triangle again (tolerant layers, below). x's top
+// three bits: the order of its corners by their places
 layout(set = 0, binding = 5, std430) readonly buffer Tris {
     uvec4 tris[];
 };
@@ -45,6 +46,30 @@ void main() {
 #endif
     uvec4 tri = tris[gl_VertexIndex / 3];
     uint which = uint(gl_VertexIndex) % 3u;
+    // (tolerant layers: its corners in the order of their places in the mesh, the first corner's top bits saying which
+    // (pcr_native.cpp's place_triangles): two triangles of the same three places, an overlay's and its surface's, are
+    // then drawn corner for corner alike, share the first corner's Z (zref below) and come out with the same Z at
+    // every pixel, to the bit)
+    uint order = tri.x >> 29;
+    tri.x &= 0x1FFFFFFFu;
+    // (tolerant layers, a layer's pass that writes its Z alone: a triangle that is its surface's own again (w's bit 30,
+    // pcr_native.cpp's place_triangles) has the surface's Z to the bit, written already: not drawn)
+    if ((pc.flags & PCR_F_LAYER_Z) != 0u && (tri.w & 0x40000000u) != 0u) {
+        gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+        v_zref = 0u;
+        v_zrel = 0.0;
+        v_color = vec4(0.0);
+        v_stq = vec3(0.0);
+        v_fog = 0.0;
+        v_rect = uvec2(PCR_NO_RECT);
+        return;
+    }
+    if ((pc.flags & PCR_F_LAYERS) != 0u) {
+        uvec3 c = tri.xyz;
+        uint a = order >> 1;
+        uvec2 rest = a == 0u ? c.yz : a == 1u ? c.xz : c.xy;
+        tri.xyz = uvec3(c[a], (order & 1u) != 0u ? rest.yx : rest.xy);
+    }
     uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     uint kick = tri.w & 0x0FFFFFFFu;
     uint befores = (tri.w >> 28) & 3u;
@@ -96,7 +121,14 @@ void main() {
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
-    uvec4 rgba = lit_colour(gouraud ? at : kick);
+    // (tolerant layers, a layer's pass that writes its Z alone: no colour is written, so the corner is not lit; its alpha
+    // as lit_colour leaves it, for the alpha test)
+    uvec4 rgba;
+    if ((pc.flags & PCR_F_LAYER_Z) != 0u) {
+        rgba = uvec4(0u, 0u, 0u, uint(int(min(float(mesh.q[(gouraud ? at : kick) * 4u + 3u].w), 255.0))) & 0xFFu);
+    } else {
+        rgba = lit_colour(gouraud ? at : kick);
+    }
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);

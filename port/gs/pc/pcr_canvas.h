@@ -90,6 +90,9 @@ struct NativeBatch {
     // (the frame's own walk kept: NativeDraws::begin_frame_kept) the instance its pictures between draw it with, the
     // record with its move; no_instance: none
     uint32_t picture_instance = no_instance;
+    // (tolerant layers) a layer where it is blended over what is there by its alpha: a corner's alpha is below 0x80
+    // (it fades out somewhere) and it is not its surface's own triangles again (pcr_native.cpp's twin)
+    bool layer = false;
 };
 
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
@@ -118,6 +121,8 @@ public:
     // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
     // at a scale above 1
     void set_2d(int mode);
+    // Layer Z (GSN_LAYER_Z_*): tolerant, Z's fraction kept and the GS's ties kept on average (with exact Z)
+    void set_layer_z(int mode);
     // Colour precision (GSN_COLOUR_*) from the next vblank, as the scale: high keeps the colour surfaces at 16 bits a
     // channel and the colours' arithmetic in floats, the picture dithered to 8 bits as it is scanned out
     void set_colour(int mode);

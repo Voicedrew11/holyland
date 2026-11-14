@@ -483,9 +483,40 @@ bool alpha_passes(uint a) {
 // clamped to the Z buffer's largest. At the middle even where the shader runs once a sample (PCR_SAMPLE, the cut-outs):
 // every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
 // samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there)
+// Tolerant layers (PCR_F_LAYERS, --native-layer-z tolerant, the default; pcr_canvas.cpp's tolerant passes): Z's fraction
+// kept, not rounded. Rounded as the GS rounds, two surfaces that nearly coincide (a layer over the surface it lies on,
+// cut into triangles otherwise; two meshes crossing at a shallow angle) round apart wherever a whole Z falls between
+// them, and the later loses there: thin teeth or hatching along each whole Z (a rock's layer against map 000's wall by
+// the bridge, a rock pillar's face, the rope bridge's planks; paraLLEl-GS draws the same). With the fraction the line
+// where two surfaces cross is straight, and among a batch's own triangles the nearer is kept.
+// - Two draws of the same triangle then tie only if their Z is the same to the bit: it is, where their corners come in
+//   the same order (the canvas's and pcr_native.cpp's order of a triangle's corners), since the corners' Z, the Z they
+//   share and the GPU's interpolation at the pixel's middle are then the same numbers. No slack, no second pass.
+// - A pass with a slack (PCR_F_LAYER_TEST: a colour pass that writes no Z) is tested that much nearer: a layer's (blended
+//   by its alpha and fading out, cut into triangles of its own) a Z and half its change across a GS pixel, up to a Z
+//   more (PCR_F_LAYER_WIDE: two meshes a fraction of a pixel apart are further apart in Z at a grazing angle, and a
+//   rock pillar's layer swapped with the brick under it as the camera moved); a draw's that writes no Z half a Z; a
+//   cut-out's a sixteenth (PCR_F_LAYER_FINE: foliage and netting cards, near each other, otherwise show the ones
+//   behind through the ones in front). (The native GS's tolerant layers, the same slacks.)
+// A float keeps the fraction below 2^23 (a Z32 buffer, the menus', stays rounded: pcr_canvas.cpp).
+const float PCR_LAYER_SLACK = 0.5;
+const float PCR_LAYER_SLACK_FINE = 0.0625;
 void pcr_exact_depth() {
     uint z0 = v_zref;
-    int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
+    float rel = interpolateAtOffset(v_zrel, vec2(0.0));
+    // (a GS pixel's change of Z: the slope across one of the target's pixels, by the canvas's scale; out of the branch
+    // below, where the quad's pixels all take it)
+    float slope = length(vec2(dFdx(rel), dFdy(rel)) * vec2(pc.src_scale));
+    if ((pc.flags & PCR_F_LAYERS) != 0u) {
+        float slack = (pc.flags & PCR_F_LAYER_TEST) == 0u       ? 0.0
+                      : (pc.flags & PCR_F_LAYER_FINE) != 0u ? PCR_LAYER_SLACK_FINE
+                      : (pc.flags & PCR_F_LAYER_WIDE) != 0u ? 1.0 + min(0.5 * slope, 1.0)
+                                                            : PCR_LAYER_SLACK;
+        float z = clamp(float(z0) + rel, 0.0, float(pc.zmax)) + slack;
+        gl_FragDepth = (z + float(pcr_loss_margin())) * pc.zscale;
+        return;
+    }
+    int r = int(roundEven(rel));
     uint z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
     gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
@@ -497,6 +528,24 @@ void main() {
 #endif
 #ifdef PCR_EXACT_Z
     pcr_exact_depth();
+#endif
+#ifdef PCR_ZONLY
+    return; // (pcr_prim_zonly.frag: the pixel's Z alone, the one every other pass gives it)
+#endif
+#if defined(PCR_EXACT_Z) && !defined(PCR_EARLY)
+    // (tolerant layers, PCR_F_LAYER_PLAIN: a layer's Z pass whose alpha test turns away an alpha of 0, which is 0 only
+    // where the corner's alpha is (pcr_canvas.cpp's pass_state): the test from the corner's alpha, no texture read,
+    // no colour: the pass writes none)
+    if ((pc.flags & PCR_F_LAYER_PLAIN) != 0u) {
+        if (uint(v_color.a + 0.001) == 0u) {
+            discard;
+        }
+        o_color = vec4(0.0);
+#ifdef PCR_RECORDS
+        o_factor = vec4(0.0);
+#endif
+        return;
+    }
 #endif
     if (pc.trace_xy != PCR_NO_TRACE) {
         trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;

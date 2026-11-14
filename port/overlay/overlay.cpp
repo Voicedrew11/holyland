@@ -382,6 +382,17 @@ void display_page() {
                 "the game reads a texel a pixel, are read smoothly where they are magnified: letters with even,\n"
                 "smooth edges. Off, each texel is a block, as the PS2's picture at 1x blown up. Nothing at 1x.\n"
                 "On by default. (--native-2d smooth|ps2)");
+        bool tolerant = port_options.native_layer_z != 0;
+        if (ImGui::Checkbox("Tolerant layers", &tolerant)) {
+            port_gs_set_native_layer_z(tolerant ? 1 : 0);
+            port_settings.native_layer_z = tolerant ? 1 : 0;
+            port_settings_changed();
+        }
+        tooltip("Surfaces that nearly coincide (a rock's layer over a wall, a wall's shading, a rope bridge's\n"
+                "planks) are drawn as the PS2 means them: a layer wins within a step or two of the PS2's depth\n"
+                "over what it lies on, and where surfaces cross the line is straight. Off is the PS2's own\n"
+                "test, where they round apart: thin teeth, hatching or specks. On by default.\n"
+                "(--native-layer-z tolerant|ps2)");
         static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
         int colour = port_options.native_colour;
         if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {
@@ -1023,12 +1034,6 @@ void renderer_section() {
             "the window without leaving the GPU (faster, most of all at higher resolutions). Vulkan needs\n"
             "the PC renderer (not --renderer gs); without it, or if it fails, the window is\n"
             "SDL_Renderer's. --presenter on the command line wins over this.");
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-    ImGui::TextWrapped("Not offered: depth tolerance (--native-layer-z, kept in settings.json and on the command line). "
-                       "The PC renderer keeps the GPU's depth, and its layers do not fight as the native GS's did "
-                       "(docs/port/PC_RENDERER.md, \"Layer Z\").");
-    ImGui::PopStyleColor();
 }
 
 // The debugging tools (port/include/port/debug.h): files for a bug report, in the captures folder
