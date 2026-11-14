@@ -1,7 +1,7 @@
 /* The weapon sets mod (docs/port/WEAPON_SETS.md): a second weapon and shield kept beside the ones in hand,
    swapped with them on one key (R, a controller's right stick press; rebindable), through the game's own
    equipping, and chosen on the equipment screen as two more rows, "Weapon 2" and "Shield 2", above the
-   weapon's. Off by default, like every mod (the Mods page, settings.json's "mods" "weapon_sets",
+   weapon's. Off by default, like every mod (the Gameplay page, settings.json's "mods" "weapon_sets",
    --weapon-sets); with it off the game runs exactly as without it.
 
    Three parts:
@@ -11,7 +11,7 @@
    - port/platform/weapon_sets.c: the switch, the command line, the key's press, and set 2 kept per save
      (as the automap keeps its explored maps: a live file, a copy per quick save and per memory card save);
    - port/overlay/weapon_sets_view.cpp: the rows' "2", set 2's names on the equipment screen and the swap's
-     message, drawn in the menus' style (Dear ImGui), and the Mods page's section.
+     message, drawn in the menus' style (Dear ImGui), and the Gameplay page's section.
    Everything runs on the game's thread (the overlay draws at the vblank). */
 #ifndef PORT_WEAPON_SETS_H
 #define PORT_WEAPON_SETS_H
@@ -30,7 +30,7 @@ extern PortWeaponSetsOptions port_weapon_sets;
 int port_weapon_sets_option(int argc, char **argv, int *i); /* --weapon-sets */
 void port_weapon_sets_settings_read(const void *mods);       /* settings.json's "mods" (a cJSON *) */
 void port_weapon_sets_settings_write(void *mods);
-void port_weapon_sets_set_enabled(int on);                   /* the Mods page */
+void port_weapon_sets_set_enabled(int on);                   /* the Gameplay page */
 
 /* ---- Set 2 (port/platform/weapon_sets.c keeps it, game/weapon_sets.c uses it) ------------------- */
 typedef struct {

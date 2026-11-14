@@ -7,7 +7,7 @@
 //     equipment's wear; shown and hidden by its key (F6);
 //   - the hit log (bottom left: each hit dealt and taken, the real damage) and the health bar of the
 //     creature last hit (top middle);
-//   - its section of the Mods page.
+//   - its section of the Gameplay page.
 // Everything runs on the game's thread at the vblank. The panel never takes the keyboard, mouse or
 // controller from the game: it takes input only while the overlay is open (to move it).
 //
@@ -427,6 +427,7 @@ extern "C" void port_stats_overlay_mods(void) {
     ImGui::SeparatorText("Extended stats");
     if (ImGui::Checkbox("Extended stats in the game's menus", &on)) {
         port_stats_set_on(on);
+        o.menus = 1; // the menus' lines are what the mod is (extended_stats_menus stays in settings.json)
         port_settings_changed();
     }
     ImGui::SetItemTooltip("What the game keeps about you and never shows, in its own menus. It only reads the game.\n"
@@ -443,14 +444,7 @@ extern "C" void port_stats_overlay_mods(void) {
                        "the item under the cursor does.");
     ImGui::PopStyleColor();
     ImGui::BeginDisabled(!o.on);
-    bool menus = o.menus != 0, panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0,
-         timers = o.timers != 0;
-    if (ImGui::Checkbox("In the menus", &menus)) {
-        o.menus = menus;
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("The lines in the game's own menu screens (on with the mod).");
-    ImGui::SameLine();
+    bool panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0, timers = o.timers != 0;
     if (ImGui::Checkbox("Equipment durability", &durability)) {
         o.durability = durability;
         port_settings_changed();
@@ -473,8 +467,8 @@ extern "C" void port_stats_overlay_mods(void) {
         o.panel = panel;
         port_settings_changed();
     }
-    ImGui::SetItemTooltip("Everything in one free-floating panel, shown and hidden by its key (F6, the Controls page:\n"
-                          "\"Show / hide the stats panel\"); it can be moved while the overlay is open.");
+    ImGui::SetItemTooltip("Everything in one free-floating panel, shown and hidden by its key (F6, rebind it on the Controls\n"
+                          "page: \"Show / hide the stats panel\"); it can be moved while the overlay is open.");
     ImGui::SameLine();
     bool open = port_stats_panel_open() != 0;
     ImGui::BeginDisabled(!o.panel);

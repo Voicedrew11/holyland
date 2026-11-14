@@ -193,7 +193,7 @@ int port_draw_distance_sky(void);
 #define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
 
 /* port_native_draw(kind): 1 while that kind of draw goes to the renderer core (docs/port/NATIVE_DRAW.md):
-   --native-draw on or a list of kinds, the overlay's Debug page, or settings.json's display.native_draw
+   --native-draw on or a list of kinds, the overlay's Developer page, or settings.json's display.native_draw
    (PORT_ND_ACCEPTED); off by default. The patched draw
    code then queues, where it would have queued a model part's packets, a GS register write to
    PORT_GS_REG_NATIVE_DRAW (another address the GS does not have) naming a draw in the core's side
@@ -243,7 +243,7 @@ int port_native_draw(int kind);
 #define PORT_WAVE_UVS_PS2 3
 int port_native_wave_uvs(void);
 /* port_native_sky(): how the sky is drawn when it is drawn natively (--native-draw sky; --sky, settings.json
-   display.native_sky, the overlay's Debug page, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
+   display.native_sky, the overlay's Developer page, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
    PORT_SKY_MODERN (the default, `modern`): where the sky is the frame's first draw, the dome centred on the
      eye and at the far plane (Z 0: it hides nothing drawn after it), its fog and colour the game's; where
      other records are drawn before it (maps 000 and 004), the PS2's (game/native_draw/nd_sky.c).
@@ -271,7 +271,7 @@ int port_no_hit_jolt(void);
 /* The separate run key (--separate-run, or the Mods page) is read through port_controls_run_held()
    (port/include/port/controls.h). */
 
-/* port_invincible(): 1 while the debug option is on (--invincible, or the overlay's Debug page; never
+/* port_invincible(): 1 while the debug option is on (--invincible, or the overlay's Developer page; never
    saved). The player then loses no HP: hits still land, flash and knock back, but take nothing
    (Player_LoseHp), and falls, deadly ground and scripted kills or damage do not kill. For testing
    areas a new character could not survive; it is not a mod. */

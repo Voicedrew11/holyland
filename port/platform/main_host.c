@@ -58,7 +58,7 @@
                          (objects and picked), skinned (or entities), arm, sky, effects, shadows,
                          reflection, water, passes, items, objects, picked, gold. off is
                          the game as without it. The default is on, unless settings.json says "native_draw":
-                         "off". The overlay's Debug page changes the kinds live
+                         "off". The overlay's Developer page changes the kinds live
        --native-wave-uvs ps2|gpu|cpu|late
                          with --native-draw map, the wave UVs of the water records: ps2 (the default: the
                          PS2 path's picture, late, or gpu with the test wait), gpu (the frame's offsets
@@ -122,9 +122,9 @@
        --automap-cheats  the automap with all its cheats on (the whole map, items, enemies, secrets, hints)
        --weapon-sets     the opt-in mod: a second weapon and shield, swapped in on R (docs/port/WEAPON_SETS.md)
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
-       --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
+       --invincible      debugging: the player loses no HP and does not die (the overlay's Developer page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
-                         or all), as the Debug page's buttons do; spells1, spells2 or spells3 for the
+                         or all), as the Developer page's buttons do; spells1, spells2 or spells3 for the
                          spells at that level (3 otherwise) (port/include/port/cheats.h)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
@@ -151,7 +151,7 @@
        --teleport [VBLANK:]MAP[:PLACE]
                          once in play (from VBLANK), put the player in that map at its PLACE-th place
                          (0, the map's start, when left out; VBLANK:MAP:PLACE with a vblank), keeping
-                         the game's progress, as the overlay's Debug page does (port/platform/teleport.c)
+                         the game's progress, as the overlay's Developer page does (port/platform/teleport.c)
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
