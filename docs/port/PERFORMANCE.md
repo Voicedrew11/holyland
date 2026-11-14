@@ -206,6 +206,84 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Built 2026-11-14 (2): pipelines made before play (no stand-still on a first start either)
+
+The owner, after the pipelines kept between runs: it works, but the first run still stood still about ten times
+(3.6 s in all), and asked why the game could not make them all at the start, as PC games do ("loading shaders"). Now
+it does (`pcr_pipelines.cpp`, "Made before play"; PC_RENDERER.md has the design): the seed in the repository
+(`port/gs/pc/pipeline_seed.bin`, `tools/pipeline_seed.py`) with the data folder's list, made on every core but one
+through the cache while the game waits at its first vblank, "Preparing shaders... N%" in the window.
+
+The seed: 344 records, 202 KB (a map tour of all 64 maps and motion_compare's 12 cases, at 1x and MSAA 4 with the
+native draws on and off, and the 12 cases with colour high at 1x and MSAA 4; 328 lists). Recorded without dynamic
+state, they are 10 pipelines on this GPU at 1x, 26 at the owner's settings (MSAA 2, cut-outs shaded a sample at a
+time), 89 with Vulkan 1.3's dynamic state but no VK_EXT_extended_dynamic_state3 (`KF4_PC_DYNAMIC=1`), 181 with no
+dynamic state at all (`KF4_PC_DYNAMIC=0`).
+
+Measured headless on this machine (RTX 5080, 24 threads; a new game, the title, map 099, teleport at vblank 1900, to
+vblank 2700, `--frame-rate 240`); every run "cold" from a new data folder (no cache, no list: a first start, or the
+first after a driver update), "warm" the same folder again. A stand-still is a draw that waited for its pipeline
+(`KF4_PC_WARM_LOG=1`'s "draw sync"); the precompile is the wait at the first vblank:
+
+| Settings | Run | Draws that waited | Their time | Longest | Wait before play |
+|---|---|---|---|---|---|
+| defaults (1x), to 009, 016:2, 002, 102, 025 | cold, `KF4_PC_PRECOMPILE=0` (as before) | 10 each (5 slow) | 2.3-2.5 s | 0.61-0.68 s | - |
+| | cold | 0 | 0 | 0 | 0.69-0.73 s (10 made) |
+| | warm | 0 | 0 | 0 | 0.03 s |
+| owner's (MSAA 2, ssaa cut-outs, scale 3, widescreen), to 009, 016:2, 102 | cold, as before | 14-15 (7 slow) | 3.1-3.3 s | 0.59-0.65 s | - |
+| | cold | 0 | 0 | 0 | 0.73-0.79 s (24-26 made) |
+| | warm | 0 | 0 | 0 | 0.03 s |
+| owner's, `KF4_PC_DYNAMIC=1` (a GPU without extended dynamic state 3), to 009 | cold, as before | 40 (16 slow) | 6.5 s | 0.61 s | - |
+| | cold | 0 | 0 | 0 | 1.6 s (89 made) |
+| owner's, `KF4_PC_DYNAMIC=0` (no dynamic state), to 009 | cold, as before | 60 (21 slow) | 8.1 s | 0.60 s | - |
+| | cold | 1 (0.0 ms) | 0 | 0 | 2.4 s (181 made) |
+
+Settings changed between runs, the cache made at the owner's settings: the next start at MSAA 4 waited 0.03 s and
+no draw waited (this driver made the new count's pipelines from its cached code at once); at 1x, the same; with
+colour high (cold, from a new folder) 1.1 s for 52 pipelines and one draw waited 5 ms (the narrowed scanout's pass:
+its target is not an attachment the seed's records name, see PC_RENDERER.md). MSAA changed in play (`KF4_SET_AT=2300:msaa=4`, from 2): no draw waited; the 47 pipelines
+were made again in 0.41 s on half the cores (3 rounds) while the canvas drew 49 vblanks at the old count.
+
+AMD and Intel drivers compile more slowly than NVIDIA's (often 2-5 times), and a GPU without
+VK_EXT_extended_dynamic_state3 (AMD's Windows driver for some years) makes 89 pipelines, not 26: a first start there
+may wait several seconds, once; every later start is the cache's 0.03 s. The `[pcr] pipelines made ahead: ...` line
+on the console says how long it took. Not measured on those GPUs.
+
+Pictures: byte for byte the same as with `KF4_PC_PRECOMPILE=0 KF4_PC_PIPELINE_CACHE=0` (main's way: no cache, no
+list) at 000, 009, 009:2 and 099, the owner's settings at 240, two vblanks and their pictures between (32 of 32, and
+32 of 32 again with the final seed). The unit tests pass.
+
+## Built 2026-11-14: pipelines kept between runs (the stand-stills at the start and at a map's first draws)
+
+The owner's report: the picture stands still for about a second as the game opens, and now and then on entering an
+area; the console names it (`Stalled compile (graphics, ...): thread 0 - 638909 us (mode: sync)`). Each is a Vulkan
+pipeline compiled by the driver at the draw that first needs it, 0.25-1 s each for the canvas's programs. Granite's
+pipeline cache was never made: Granite reads and writes one only through its file system, which paraLLEl-GS's build
+leaves out (`GRANITE_VULKAN_SYSTEM_HANDLES` off), so every pipeline was compiled with no cache, in every run, and the
+driver's own disk cache did not catch them either (a second run stood still as long as the first). The old native GS
+had a pipeline set and its files; the PC renderer only made its pipelines again ahead of an MSAA change.
+
+What it does now (`pcr_pipelines.cpp`, "Between runs"; PC_RENDERER.md has the design): the pipeline cache read from the
+data folder before anything draws and written again as new pipelines are made, and the list of the canvas's pipelines
+drawn with, made ahead on up to four threads as the canvas's programs are made. Nothing waits for them.
+
+Measured headless (new game, the title, teleport at vblank 1900, to vblank 2600; the owner's settings; the stand-stills
+are the draws' own compiles, `KF4_PC_WARM_LOG=1`'s "draw sync", which each hold the canvas's thread):
+
+| Run | Compiles at the draw | Standing still in all | Longest |
+|---|---|---|---|
+| main, to 009 (any run: first or tenth) | 10 (5 slow) | 3.6-3.8 s | 1.0 s |
+| this, to 009, first run (no files) | 10 (5 slow) | 3.6 s | 0.97 s |
+| this, to 009, second run | 0 (10 made ahead in 15 ms) | 0 | 0 |
+| this, to 009, a new build's first run (the list kept, the cache not: shaders changed) | 1 (the title's first, made ahead too but wanted first) | 0.82 s | 0.82 s |
+| this, MSAA 2 to 099, first run | 14 | 5.1 s | 1.0 s |
+| this, MSAA 2 to 099, second run | 1 (0.1 ms, a program not the canvas's) | 0.1 ms | 0.1 ms |
+
+The ahead threads' own compiles in a second run are cache hits of 3-8 ms each; with a new build's shaders (no cache)
+they took 1.7 s for the ten on four threads, while the title showed. Pictures: byte for byte main's at 000, 009, 009:2
+and 099 (two each, with the list made ahead). The unit tests pass; the validation layer (sync on, 009) gives what main
+gives.
+
 ## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
 
 Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to

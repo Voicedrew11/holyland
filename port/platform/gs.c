@@ -164,6 +164,9 @@ static int open_pc_renderer(void) {
     if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
         gsr_enable_present();
     }
+    /* (before it opens: its pipelines are made through the kept cache from the first draw on) */
+    snprintf(path, sizeof(path), "%s/pc_pipelines.bin", port_data_dir());
+    gsr_pipeline_cache(path);
     if (!gsr_open(NULL)) {
         fprintf(stderr, "[gs] the PC renderer did not start (no Vulkan device it can use)\n");
         return 0;
@@ -180,8 +183,9 @@ static int open_pc_renderer(void) {
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
     gsr_set_presenter(port_video_submit, port_video_submit_image);
-    snprintf(path, sizeof(path), "%s/native_gs_pipelines.bin", port_data_dir());
-    gsr_pipeline_cache(path);
+    /* the pipelines made before play, for these settings (port/gs/pc/pcr_pipelines.h): the game waits for them at its
+       first vblank (port/platform/kernel.c), "Building shaders" in the window */
+    gsr_precompile();
     return 1;
 }
 #endif

@@ -303,6 +303,7 @@ static int bad_cause(int cause) {
 /* ---- Time ------------------------------------------------------------------------------------ */
 static double pace_start_wall;
 static int play_started; /* (the first native draw has been made: vblank_start) */
+static int precompile_waited; /* (the first vblank waited for the pipelines made before play) */
 
 static void wake_vsync_waiters(void);
 static void frame_end(void);
@@ -443,6 +444,26 @@ static void vblank_start(void) {
     /* the renderer's pipelines made ahead (docs/port/RENDERER.md, "Pipelines made ahead"): when play starts (the
        first native draw) the game waits for the rest, "Building shaders" in the window, rather than for each as a draw
        first needs it */
+    /* the pipelines made before play (port/gs/pc/pcr_pipelines.h): at the first vblank, before the game has drawn
+       anything, the game waits until they are made, "Building shaders" in the window (as a PC game's "loading
+       shaders" on its first start), so that no draw waits for one later */
+    if (!precompile_waited) {
+        precompile_waited = 1;
+        if (port_gs_shaders_running()) {
+            double t0 = port_wall_seconds();
+
+            mode = port_host_float_begin();
+            port_video_show_blank();
+            while (port_gs_shaders_running()) {
+                port_sleep(1.0 / 60.0);
+                port_pad_poll();
+                port_video_present();
+            }
+            port_host_float_end(mode);
+            pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+            fprintf(stderr, "[gs] the game waited %.2f s for the pipelines made before play\n", port_wall_seconds() - t0);
+        }
+    }
     if (!play_started && rd_stats.draws > 0) {
         play_started = 1;
         if (port_gs_shaders_running()) {
