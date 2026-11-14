@@ -388,10 +388,11 @@ void display_page() {
             port_settings.native_layer_z = tolerant ? 1 : 0;
             port_settings_changed();
         }
-        tooltip("Surfaces that nearly coincide (a rock's layer over a wall, a rope bridge's planks, moss) are\n"
-                "drawn as the PS2 means them: what is drawn later wins within half a step of the PS2's depth,\n"
-                "and where surfaces cross the line is straight. Off is the PS2's own test, where they round\n"
-                "apart: thin teeth, hatching or specks. On by default. (--native-layer-z tolerant|ps2)");
+        tooltip("Surfaces that nearly coincide (a rock's layer over a wall, a wall's shading, a rope bridge's\n"
+                "planks) are drawn as the PS2 means them: a layer wins within a step or two of the PS2's depth\n"
+                "over what it lies on, and where surfaces cross the line is straight. Off is the PS2's own\n"
+                "test, where they round apart: thin teeth, hatching or specks. On by default.\n"
+                "(--native-layer-z tolerant|ps2)");
         static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
         int colour = port_options.native_colour;
         if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {

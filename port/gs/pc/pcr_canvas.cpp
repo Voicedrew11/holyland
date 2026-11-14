@@ -15,6 +15,7 @@
 #include <span>
 #include <list>
 #include <unordered_map>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -104,6 +105,7 @@ enum : uint32_t {
     F_LAYER_TEST = 0x8000000, // ... a draw's colour tested half a Z nearer
     F_LAYER_FINE = 0x10000000, // ... a sixteenth of a Z
     F_LAYER_WIDE = 0x20000000, // ... a Z and half its slope (a decal's)
+    F_LAYER_Z = 0x40000000,    // ... a layer's pass that writes its Z alone
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -459,11 +461,13 @@ public:
         DrawState s = state_of(file, prim);
         bool same = batch_open_ && batch_.native && batch_.program == nb.program && s == batch_.state &&
                     batch_.arena == nb.arena &&
-                    batch_.records == nb.records && batch_.triangles == nb.triangles;
+                    batch_.records == nb.records && batch_.triangles == nb.triangles &&
+                    (!layers_ || batch_.layer == nb.layer); // (tolerant layers: a layer's passes are its own)
         if (!same) {
             flush_batch();
             open_native_batch(s, nb);
         }
+        batch_.layer |= nb.layer;
         // (a run of triangles by one record: the next batch of the same draw's mesh goes on from where it ends)
         if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance &&
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
@@ -2069,6 +2073,7 @@ private:
             uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
         };
         bool native = false;
+        bool layer = false;           // (a native batch's: it fades out and is no twin, NativeBatch::layer; is_layer)
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
         bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
@@ -2706,6 +2711,7 @@ private:
         batch_.texture = BoundTexture();
         batch_.vertices.clear();
         batch_.native = false;
+        batch_.layer = false;
         batch_.moved = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
@@ -2881,6 +2887,15 @@ private:
                 }
                 touch(batch_.vertices.back());
             }
+            if (layers_) {
+                // (tolerant layers: the corners in the order of their places, so that two triangles of the same three
+                // corners, an overlay's and its surface's, come out with the same Z at every pixel, to the bit: the
+                // native draws' triangles the same way, pcr_native.cpp's place_triangles)
+                std::sort(batch_.vertices.begin() + ptrdiff_t(first_vertex), batch_.vertices.end(),
+                          [](const Vertex &a, const Vertex &c) {
+                              return std::tie(a.x, a.y, a.z) < std::tie(c.x, c.y, c.z);
+                          });
+            }
             link_corners(std::span(batch_.vertices).subspan(first_vertex, 3));
             if (bits(batch_.state.prim, 4, 1)) {
                 // (an FST triangle, or one of the 2D the menus draw with S, T and Q: one Z and one Q at its corners)
@@ -2979,11 +2994,19 @@ private:
         return cutout_aa_ && cuts_out(b);
     }
 
-    // (tolerant layers) a layer, as the native GS took it: a decal (is_decal) with a corner's alpha below 0x80, a rock's
-    // face or a wall's shading fading out
+    // (tolerant layers) a layer, as the native GS took it: blended over what is there by its alpha ((Cs - Cd) As + Cd)
+    // with a corner's alpha below 0x80, a rock's face or a wall's shading fading out. A native batch's corners are the
+    // GPU's: its mesh's alphas say, and whether it is its surface's own triangles again, which tie with it to the bit and
+    // need none of this (NativeBatch::layer). Not the glows and flames, added: quads of their own through the things they
+    // light.
     static bool is_layer(const Batch &b) {
-        if (b.native || !is_decal(b)) {
+        const DrawState &s = b.state;
+        if (!bits(s.prim, 6, 1) || bits(s.alpha, 0, 2) != 0 || bits(s.alpha, 2, 2) != 1 || bits(s.alpha, 4, 2) != 0 ||
+            bits(s.alpha, 6, 2) != 1) {
             return false;
+        }
+        if (b.native) {
+            return b.layer;
         }
         for (const Vertex &v : b.vertices) {
             if (v.rgba[3] < 0x80) {
@@ -3281,22 +3304,30 @@ private:
             return;
         }
         // Tolerant layers (set_layer_z; pcr_prim.h's pcr_exact_depth): Z's fraction kept, so that where surfaces cross
-        // the line is straight and among a batch's own triangles the nearer is kept. A layer (is_layer: a decal fading
-        // out, a rock's face or a wall's shading) is drawn in two phases, the GS's tie kept on average: its Z written
-        // exactly first, without colour (pcr_prim_zonly.frag, the GPU's own depth, where nothing is discarded; else the
+        // the line is straight and among a batch's own triangles the nearer is kept. With the fraction two draws of
+        // the same triangles tie only if their Z is the same to the bit: the corners of every triangle are drawn in the
+        // order of their places (add_primitive; pcr_native.cpp's place_triangles for the native draws'), so the GS's
+        // ties between a surface and what is drawn over it as its own triangles again stay ties, at no cost. A layer
+        // cut into triangles of its own (is_layer: blended by its alpha and fading out, a rock's face or a wall's
+        // shading; a native batch's not its surface's twin) does not tie with what it lies on: it is drawn in two
+        // phases, its Z written exactly first, without colour (pcr_prim_zonly.frag where nothing is discarded; else the
         // pass with its alpha test), then its colour tested a Z and half its change across a GS pixel nearer (up to a
         // Z more), no Z written. A draw that writes no Z is tested within half a Z (a cut-out's a sixteenth: foliage
-        // cards near each other). Everything else is drawn once, as the GS draws it with the fraction kept. (The native
-        // GS's tolerant layers, 2026-10, 4af1dbd6 and 669bee01, drew every surface twice as well, for the GS's ties
-        // between surfaces: here that was a second pass of every batch, +35-45% GPU time a picture and Andrew's profile
-        // under 240 at 009, the vertex work of the native draws twice and the runs cut at every pass.)
+        // cards near each other). Everything else is drawn once. (The native GS's tolerant layers, 2026-10, 4af1dbd6
+        // and 669bee01, gave every surface a slack of half a Z as well, in a second pass of every batch: here that was
+        // +35-45% GPU time a picture and Andrew's profile under 240 at 009. 646df6d0 dropped that pass and kept the
+        // fraction without the corners' order, and took no native batch for a layer: an overlay then lost to its
+        // surface wherever its Z came out a bit of a float behind, lace and shards all over the caves.)
         bool writes_z = false;
         for (int i = 0; i < pass_count; i++) {
             writes_z |= passes[i].z;
         }
-        if (exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2 && (!writes_z || is_layer(b))) {
+        bool tolerant = exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2;
+        bool layer = tolerant && writes_z && is_layer(b);
+        counts_layers_ += layer;
+        if (tolerant && (!writes_z || layer)) {
             // (tolerant layers: a layer in two phases, a draw that writes no Z tested within its slack)
-            bool wide = is_layer(b), fine = !wide && cuts_out(b);
+            bool wide = layer, fine = !wide && cuts_out(b);
             std::array<Pass, 4> zs{}, colours{};
             int nz = 0, nc = 0;
             for (int i = 0; i < pass_count; i++) {
@@ -3634,7 +3665,8 @@ private:
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT | (pass.layers ? F_LAYER_TEST : 0) |
-                         (pass.fine ? F_LAYER_FINE : 0) | (pass.wide ? F_LAYER_WIDE : 0);
+                         (pass.fine ? F_LAYER_FINE : 0) | (pass.wide ? F_LAYER_WIDE : 0) |
+                         ((flags & F_LAYERS) && pass.z && !pass.rgb && !pass.alpha ? F_LAYER_Z : 0);
             uint32_t mask = 0;
             Program *program = pass_state(i, mask);
             // (a later pass: the run ends unless it continues it, before its state is set)
@@ -4426,6 +4458,7 @@ private:
     uint64_t counts_unsupported_shape_ = 0, counts_unsupported_upload_ = 0, counts_untextured_ = 0,
              counts_depth_aliases_cleared_ = 0, counts_clut_not_uploads_ = 0, counts_date_by_stencil_ = 0, counts_date_alpha_unknown_ = 0,
              counts_blends_by_shader_ = 0, counts_native_shader_blends_ = 0;
+    uint64_t counts_layers_ = 0; // (tolerant layers: the batches drawn in two phases)
 
 public:
     void print(FILE *out) const {
@@ -4464,6 +4497,10 @@ public:
                 (unsigned long long)c.unsupported_texture_on_surface, (unsigned long long)c.unsupported_copies,
                 (unsigned long long)counts_unsupported_upload_, (unsigned long long)counts_unsupported_shape_,
                 (unsigned long long)counts_clut_not_uploads_);
+        if (counts_layers_) {
+            fprintf(out, "[stats] pc canvas tolerant layers: %llu batches drawn in two phases\n",
+                    (unsigned long long)counts_layers_);
+        }
         if (samples_ > 1 || counts_msaa_.resolves || counts_msaa_.cutout_batches) {
             fprintf(out,
                     "[stats] pc canvas MSAA: %u samples, cut-out AA %s; %llu batches shaded at every sample; %llu "

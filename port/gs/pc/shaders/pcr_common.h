@@ -124,10 +124,12 @@ void pcr_take_record() {
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
 #define PCR_F_EXACT_Z 0x2000000u   // the GS's whole Z at each pixel (pcr_prim.h's PCR_EXACT_Z): the corners' depth a bound
-#define PCR_F_LAYERS 0x4000000u    // (with PCR_F_EXACT_Z) tolerant layers: Z's fraction kept (pcr_prim.h's pcr_exact_depth)
+#define PCR_F_LAYERS 0x4000000u    // (with PCR_F_EXACT_Z) tolerant layers: Z's fraction kept (pcr_prim.h's pcr_exact_depth),
+                                   // a native draw's corners in the order of their places (pcr_nd000.vert)
 #define PCR_F_LAYER_TEST 0x8000000u // ... and a draw's colour tested half a Z nearer
 #define PCR_F_LAYER_FINE 0x10000000u // ... a sixteenth of a Z (a cut-out's)
 #define PCR_F_LAYER_WIDE 0x20000000u // ... a Z and half its slope across a GS pixel, up to a Z more (a decal's)
+#define PCR_F_LAYER_Z 0x40000000u    // ... a layer's pass that writes its Z alone: a native draw's corners unlit
 #define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
@@ -165,11 +167,6 @@ float pcr_depth(uint z, float zfrac, uint zref) {
     v_zref = zref;
     v_zrel = float(int(z - zref)) + zfrac;
 #endif
-    if ((pc.flags & (PCR_F_EXACT_Z | PCR_F_LAYERS | PCR_F_LAYER_TEST)) == (PCR_F_EXACT_Z | PCR_F_LAYERS)) {
-        // (tolerant layers, a pass with no slack: Z with its fraction is what the GPU interpolates, the bound not
-        // needed; pcr_prim_zonly.frag leaves its depth to the GPU, so its pass keeps the early and hierarchical tests)
-        return (min(float(z) + zfrac, float(pc.zmax)) + float(pcr_loss_margin())) * pc.zscale;
-    }
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
     }

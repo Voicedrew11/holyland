@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../../render/part_moves.hpp"
@@ -242,6 +243,10 @@ private:
                 nb.records = records_.buffer;
                 nb.triangle_count = n;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
+                // (tolerant layers: KF4_PC_LAYERS=all, every batch that fades a layer, its twins too; none: none)
+                static const char *const layers = getenv("KF4_PC_LAYERS");
+                bool every = layers && strcmp(layers, "all") == 0, none = layers && strcmp(layers, "none") == 0;
+                nb.layer = !shadow && !none && fades(b) && (every || !twin(*mesh, b));
                 name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += n;
@@ -704,14 +709,67 @@ private:
             make(arena_, room, VERTEX_BYTES);
             placed_.clear();
             triangles_placed_.clear();
+            solid_.clear();
+            twins_.clear();
             counts_.arenas++;
         }
         uint32_t at = arena_.used;
         memcpy(arena_.map + size_t(at) * VERTEX_BYTES, m.vertices.data(), size_t(n) * VERTEX_BYTES);
         arena_.used += n;
         placed_[m.id] = at;
+        note_solid(m);
         counts_.meshes_placed++;
         return at;
+    }
+
+    // (tolerant layers) A batch that fades: blended (PRIM's ABE, in its tag) with a corner's alpha below 0x80
+    static bool fades(const RdBatch &b) {
+        return ((b.tag[0] >> 53) & 1) != 0 && b.alpha_lo < 0x80;
+    }
+    // A triangle by the places of its three corners in its mesh (before its draw's matrix), whatever their order; 0: two
+    // of them at one place (nothing drawn)
+    static uint64_t triangle_of(const RdMeshData &m, const RdBatch &b, size_t t) {
+        uint64_t c[3];
+        for (int i = 0; i < 3; i++) {
+            const int32_t *p = &m.vertices[size_t(b.first + b.triangles[t * 3 + i]) * rd_vertex_words(m.format)];
+            c[i] = uint64_t(uint16_t(p[0])) | uint64_t(uint16_t(p[1])) << 16 | uint64_t(uint16_t(p[2])) << 32;
+        }
+        std::sort(c, c + 3);
+        if (c[0] == c[1] || c[1] == c[2]) {
+            return 0;
+        }
+        return ((c[0] * 0x9E3779B97F4A7C15ull ^ c[1]) * 0x9E3779B97F4A7C15ull ^ c[2]) * 0x9E3779B97F4A7C15ull | 1;
+    }
+    // (a mesh placed: the triangles of its batches that do not fade)
+    void note_solid(const RdMeshData &m) {
+        if (m.format != RD_VF_PACKED16) {
+            return;
+        }
+        for (const RdBatch &b : m.batches) {
+            for (size_t t = 0; !fades(b) && t < b.triangles.size() / 3; t++) {
+                solid_.insert(triangle_of(m, b, t));
+            }
+        }
+        solid_generation_++;
+    }
+    // Whether a batch that fades is a twin: each of its triangles has the three places of a triangle of a batch that
+    // does not fade, of any mesh placed. The game draws a surface's second texture as the surface's own strips again,
+    // in a draw of its own by the same matrix, the vertices' alphas saying how much of it shows. Drawn corner for corner
+    // alike (place_triangles' order) the two have the same Z at every pixel, to the bit: a tie, which the later wins as
+    // on the GS, with no slack and no second pass (pcr_canvas.cpp's tolerant passes). (Two meshes that share three
+    // places by chance, drawn by other matrices, are no twins: the batch then goes without a slack only.) Asked again
+    // when more meshes have been placed since it was not one: its surface may be met after it.
+    bool twin(const RdMeshData &m, const RdBatch &b) {
+        Twin &known = twins_[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
+        if (!known.yes && known.generation != solid_generation_) {
+            known.generation = solid_generation_;
+            known.yes = !b.triangles.empty();
+            for (size_t t = 0; known.yes && t < b.triangles.size() / 3; t++) {
+                uint64_t triangle = triangle_of(m, b, t);
+                known.yes = triangle == 0 || solid_.count(triangle) != 0;
+            }
+        }
+        return known.yes;
     }
 
     // The batch's first triangle in the triangles' buffer (placed there the first time it is drawn into this arena): a
@@ -731,10 +789,22 @@ private:
         uint32_t at = triangles_.used;
         uint32_t *out = reinterpret_cast<uint32_t *>(triangles_.map) + size_t(at) * 4;
         uint32_t first = base + b.first;
+        // (tolerant layers: the order of its corners by their places in the mesh, in the first corner's top bits, so
+        // that two triangles of the same three places, an overlay's and its surface's, are drawn corner for corner
+        // alike and their Z comes out the same to the bit: pcr_nd000.vert)
+        uint32_t words = rd_vertex_words(m.format);
+        auto before = [&](uint32_t a, uint32_t c) {
+            const int32_t *p = &m.vertices[size_t(b.first + a) * words], *q = &m.vertices[size_t(b.first + c) * words];
+            return std::lexicographical_compare(p, p + 3, q, q + 3);
+        };
         for (uint32_t t = 0; t < n; t++) {
             uint32_t kick = b.triangles[t * 3 + 2];
-            out[t * 4 + 0] = first + b.triangles[t * 3 + 0];
-            out[t * 4 + 1] = first + b.triangles[t * 3 + 1];
+            uint32_t c[3] = {b.triangles[t * 3 + 0], b.triangles[t * 3 + 1], kick};
+            uint32_t o[3] = {0, 1, 2};
+            std::stable_sort(o, o + 3, [&](uint32_t i, uint32_t j) { return before(c[i], c[j]); });
+            uint32_t order = o[0] * 2 + (o[1] > o[2] ? 1 : 0); // (0-5: which corner first, then whether the others swap)
+            out[t * 4 + 0] = (first + c[0]) | order << 29;
+            out[t * 4 + 1] = first + c[1];
             out[t * 4 + 2] = first + kick;
             out[t * 4 + 3] = (first + kick) | std::min(kick, 2u) << 28;
         }
@@ -753,6 +823,15 @@ private:
     float picture_t_ = 1.0f;
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
+    // (tolerant layers: twin) the triangles of the placed meshes' batches that do not fade, by their three places; how
+    // many times meshes were noted; and each fading batch's answer, with the count it was worked out at
+    std::unordered_set<uint64_t> solid_;
+    uint32_t solid_generation_ = 1;
+    struct Twin {
+        bool yes = false;
+        uint32_t generation = 0;
+    };
+    std::unordered_map<uint64_t, Twin> twins_;
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
     PartMoves parts_;
     PartWalk walk_ = PartWalk::frame;
