@@ -17,7 +17,7 @@
                     "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"], "menu_side_keys": true,
                     "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
-       "mods":     {"myus_necklace": false, "separate_run": false},
+       "mods":     {"myus_necklace": false, "separate_run": false, "no_hit_jolt": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -439,6 +439,7 @@ void port_settings_load(void) {
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
+    s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_weapon_sets_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the weapon sets mod */
@@ -480,6 +481,9 @@ void port_settings_load(void) {
     }
     if (!port_options.separate_run_forced) {
         port_options.separate_run = s->separate_run;
+    }
+    if (!port_options.no_hit_jolt_forced) {
+        port_options.no_hit_jolt = s->no_hit_jolt;
     }
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
@@ -681,6 +685,7 @@ void port_settings_save(void) {
     write_controls(section("controls"));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
+    put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_weapon_sets_settings_write(section("mods")); /* the weapon sets mod */

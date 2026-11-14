@@ -138,6 +138,8 @@ typedef struct {
     int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
     int separate_run;        /* running on a key of its own, not the action button (port_controls_run_held()) */
     int separate_run_forced; /* --separate-run: on for this run whatever settings.json says */
+    int no_hit_jolt;         /* a hard hit does not throw the view down (port_no_hit_jolt()) */
+    int no_hit_jolt_forced;  /* --no-hit-jolt: on for this run whatever settings.json says */
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
     int show_fps;

@@ -263,6 +263,11 @@ int port_test_dma_wait(void);
    the amulet slot holds. */
 int port_myus_necklace(void);
 
+/* port_no_hit_jolt(): 1 while the steady view mod is on (--no-hit-jolt, or the overlay's Mods page). A hard
+   hit then no longer throws the view down (Player_TiltViewFromHit starts no tilt); the hit still flashes,
+   rumbles and knocks back. */
+int port_no_hit_jolt(void);
+
 /* The separate run key (--separate-run, or the Mods page) is read through port_controls_run_held()
    (port/include/port/controls.h). */
 
