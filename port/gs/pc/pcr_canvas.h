@@ -60,6 +60,7 @@ struct CanvasCounts {
     // (a kept walk's merged runs: the draw calls, and the native batches' triangles they drew)
     uint64_t merged_runs = 0, merged_triangles = 0;
     uint64_t clears = 0; // (batches cleared, vkCmdClearAttachments, not drawn: as_clear)
+    uint64_t blends_left_out = 0; // (blended batches drawn without the blend: blend_is_source)
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
@@ -94,6 +95,10 @@ struct NativeBatch {
     // (the frame's own walk kept: NativeDraws::begin_frame_kept) the instance its pictures between draw it with, the
     // record with its move; no_instance: none
     uint32_t picture_instance = no_instance;
+    // Every corner's alpha is 0x80 exactly as the program leaves it in RGBAQ (program 0x000: its mesh's colours' alpha,
+    // which the lights do not touch). False when not known. A blend by As that is then the source alone is drawn
+    // without the blend (pcr_canvas.cpp's blend_is_source).
+    bool alpha_is_one = false;
 };
 
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks

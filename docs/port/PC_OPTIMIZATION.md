@@ -517,3 +517,58 @@ What this says:
 
 Checks: the game's own picture byte for byte against round 1's (52 pictures each at 009:0, 009:2, 020:0); all 20 unit
 tests; ASan and UBSan in a real window (the known reports); no GPU hang. Not run: TSan, gcc and Windows builds, NVIDIA.
+
+## What changed on 2026-11-14 (round 3): 4x is the card's fill rate
+
+More knock-outs and experiments at the owner's settings (009, real window, 15 s each), after round 2's 3.30 ms:
+
+| Experiment | ms a picture | Says |
+|---|---|---|
+| the surface copies for the pump left out (`KF4_PC_KNOCK=copies`) | 3.24 | the copies cost 0.07 ms, not the profiler's 0.27 |
+| every native draw with a trivial fragment shader (no texture, no fog, no tests) | 2.94 | all the shading is 0.33 ms of the natives' 1.9 |
+| blends that are their source drawn without the blend (kept, below) | 3.25 | reading the destination is little of it |
+| a depth-only pass before the map | no change | the map is mostly drawn blended: nothing qualifies |
+| HiZ off, exact Z off, anisotropy off (round 2) | no change | |
+
+So at 4x with two samples and 16 bits a channel the time is **rasterising and writing that many samples**: 13.8 million
+samples a layer, about 26 bytes each with depth, about three layers deep. No shader or state change gets it back;
+fewer samples do:
+
+| Setting (009, the same build) | ms a picture | The game's GPU memory |
+|---|---|---|
+| the owner's: 4x, MSAA 2, colour high | 3.24 | 3.8 GB |
+| 4x, MSAA 2, colour exact | 2.58 | 3.1 GB |
+| 4x, MSAA 1, colour high | 2.65 | 2.7 GB |
+| 3x, MSAA 2, colour high | 1.74 | 2.8 GB |
+| 2x, MSAA 2, colour high | 1.05 | 2.4 GB |
+
+4x draws 3840x1792 for a 2560x1440 window; 3x draws 2880x1344, about the window's own size, in a little over half the
+time. That is the owner's choice to make, not a default changed here.
+
+Built:
+
+- **Blends that are their source are not blended** (`blend_is_source`, `KF4_PC_UNBLEND=0` to compare): (Cs - Cd) * C +
+  Cd with FIX 0x80, or As 0x80 at every pixel: the vertices' alpha all 0x80 (a GIF batch's own; program 0x000's from
+  its strips' colours, `RdBatch::alpha_lo/hi`, as `NativeBatch::alpha_is_one`) and the texture's too where TCC takes
+  it. Half of 009's blended map triangles have alpha 0x80 throughout; about a third of the blended batches qualify
+  (the others take a texture's alpha that is not 0x80 everywhere). 0.05 ms. Pictures byte for byte (below).
+- `KF4_PC_KNOCK=copies`.
+
+Checks: pictures byte for byte against round 1's at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the unit tests (the
+`sampler` test failed once under load and passed again: it times threads); ASan and UBSan in a real window (the known
+reports).
+
+### Two more GPU hangs (06:58:44 and 09:26:16)
+
+Both `ring gfx_0.0.0 timeout`, thread **kf4-pc**, in the **opening** (24 s and about 15 s into the run, before the
+teleport at vblank 1900), both runs with `--frame-rate-cap 0`: one the committed build with `KF4_PC_UNBLEND=0`, one at
+3x with MSAA 4 (pipelines compiling). 2 hangs in about 60 real-window runs this morning. So: not the pump, not play,
+not the memory. The opening uncapped runs at the schedule's most (959 pictures a second) on the GPU's simplest
+pictures. Test runs here no longer pass `--frame-rate-cap 0` (a picture's GPU time does not need it).
+
+What would find it, and needs the owner (root, or a package):
+
+- **The kernel's dump of the hung job**: for five minutes after a hang, `sudo cat /sys/class/devcoredump/devcd*/data
+  > ~/hang.txt` (root only). It names the ring's last commands.
+- **The validation layer**: `sudo dnf install vulkan-validation-layers`. The copies on this machine (Steam's, 1.3.224;
+  Flatpak's) are too old: the game crashes under them at start.

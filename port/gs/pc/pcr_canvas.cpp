@@ -477,6 +477,7 @@ public:
             flush_batch();
             open_native_batch(s, nb);
         }
+        batch_.native_alpha_is_one = batch_.native_alpha_is_one && nb.alpha_is_one;
         // (a run of triangles by one record: the next batch of the same draw's mesh goes on from where it ends)
         if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance &&
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
@@ -2129,6 +2130,7 @@ private:
             uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
         };
         bool native = false;
+        bool native_alpha_is_one = false; // (a native batch: every one of its NativeBatch's alpha_is_one)
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
         bool still = false;           // (a pictures' walk's: every kick of its corners stays as the frame has it,
@@ -2490,11 +2492,11 @@ private:
                     if (!ms) {
                         continue;
                     }
-                    if (!s->ms_behind) {
+                    if (!s->ms_behind && !(knock_ && strstr(knock_, "copies"))) {
                         c.copy_image(*ms, *s->ms, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
                     }
                 }
-                if (!s->ms || !s->ms_ahead) {
+                if ((!s->ms || !s->ms_ahead) && !(knock_ && strstr(knock_, "copies"))) {
                     c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
                 }
                 auto copy = std::make_unique<Surface>(*s);
@@ -2777,6 +2779,7 @@ private:
     void open_native_batch(const DrawState &s, const NativeBatch &nb) {
         begin_batch(s, 1u << std::min(bits(s.tex0, 26, 4), 10u), 1u << std::min(bits(s.tex0, 30, 4), 10u));
         batch_.native = true;
+        batch_.native_alpha_is_one = true; // (until a native batch of it is not: native_batch)
         batch_.program = nb.program;
         batch_.arena = nb.arena;
         batch_.records = nb.records;
@@ -2792,6 +2795,7 @@ private:
         batch_.texture = BoundTexture();
         batch_.vertices.clear();
         batch_.native = false;
+        batch_.native_alpha_is_one = false;
         batch_.moved = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
@@ -3338,7 +3342,7 @@ private:
 
     // KF4_PC_KNOCK's kinds, comma separated: clears (a batch as_clear clears), 2d (every GIF batch), fills (a GIF batch
     // untextured), surface (a batch textured from a surface: the brightness pass), n000, n280, n700 (a native program's
-    // batches), blended (a native batch blended)
+    // batches), blended (a native batch blended); and copies (copy_surfaces' copies for the pump: not a batch's)
     bool knocked_out(const Batch &b, bool clear, bool from_surface) const {
         auto has = [&](const char *kind) { return strstr(knock_, kind) != nullptr; };
         if (!b.native) {
@@ -3349,6 +3353,46 @@ private:
             return true;
         }
         return has(b.program == NativeProgram::vu1_280 ? "n280" : b.program == NativeProgram::vu1_700 ? "n700" : "n000");
+    }
+
+    // Whether a blended batch's blend gives exactly its source, colour and alpha, at every pixel, so that drawing it
+    // without the blend writes the same: (Cs - Cd) * C + Cd with C exactly 1.0, that is FIX 0x80, or As 0x80 at every
+    // pixel (the vertices' alpha all 0x80, and the texture's too where it is taken with TCC). Not As above 0x80: the
+    // blend then writes Cs as well (its factor clamped to 1), but its alpha comes out 0x80, not As.
+    // KF4_PC_UNBLEND=0: every blend kept (to compare).
+    static bool blend_is_source(const Batch &b) {
+        const DrawState &s = b.state;
+        if (bits(s.alpha, 0, 2) != 0 || bits(s.alpha, 2, 2) != 1 || bits(s.alpha, 6, 2) != 1 || b.shader_blend) {
+            return false;
+        }
+        uint32_t c = bits(s.alpha, 4, 2);
+        if (c == 2) {
+            return bits(s.alpha, 32, 8) == 0x80;
+        }
+        if (c != 0) {
+            return false;
+        }
+        // the vertices' alpha: a GIF batch's own; a native batch's where its program leaves the mesh's (0x000)
+        if (b.native) {
+            if (b.program != NativeProgram::vu1_000 || !b.native_alpha_is_one) {
+                return false;
+            }
+        } else {
+            if (b.vertices.empty()) {
+                return false;
+            }
+            for (const Vertex &v : b.vertices) {
+                if (v.rgba[3] != 0x80) {
+                    return false;
+                }
+            }
+        }
+        if (!bits(s.prim, 4, 1) || !bits(s.tex0, 34, 1)) {
+            return true; // (untextured, or the texture's alpha not taken: As the vertices')
+        }
+        // TCC: modulate (Av * At >> 7) and decal (At) give 0x80 from a texture whose alpha is 0x80 everywhere
+        uint32_t tfx = bits(s.tex0, 35, 2);
+        return tfx <= 1 && b.texture.ok && b.texture.alpha_lo == 0x80 && b.texture.alpha_hi == 0x80;
     }
 
     // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
@@ -3512,6 +3556,13 @@ private:
                                                        : 1;
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
         bool blend_supported = blend.supported;
+        if (blend.enable && unblend_on_ && blend_is_source(b)) {
+            // (the blend's result is its source at every pixel, and the alpha written the same: drawn without the
+            // blend, which reads every pixel it writes: at 4x with two samples and 16 bits a channel that read is most
+            // of what the map costs)
+            blend = BlendChoice();
+            counts_.blends_left_out++;
+        }
         if (b.shader_blend) {
             blend = BlendChoice();
             blend.flags = F_SHADER_BLEND;
@@ -4534,6 +4585,7 @@ private:
     // merged runs where the indirect ones are drawn too (the native batches' then merged); =plain: without the
     // dual-source blend (a blend change ends a run: to compare)
     const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
+    const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     const char *const merged_env_ = getenv("KF4_PC_MERGED");
     const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
     const bool merged_forced_ = merged_env_ && strcmp(merged_env_, "1") == 0;
