@@ -187,6 +187,69 @@ Added to the same PR after it:
 Checks on those: the linux-clang build, all 19 unit tests, and `flash_ring_test` under ASan and UBSan. Not run on
 them: the game under the sanitizers, a picture comparison, the Windows and gcc builds.
 
+## What changed on 2026-11-14: GPU memory
+
+Measured as above (a real full-screen window, the owner's settings, the old and the new build one after the other).
+
+| | before | after |
+|---|---|---|
+| GPU memory at 009, most / typical | 6.1 GB / 5.2 GB | 4.0 GB / 3.8 GB |
+| GPU memory at 020, most / typical | 5.8 GB / 5.0 GB | 4.0 GB / 3.8 GB |
+| GPU memory at 105, most / typical | 5.7 GB / 5.0 GB | 4.0 GB / 3.8 GB |
+| GPU ms a picture at 009 (45 s runs) | 3.85 | 3.71 |
+| GPU ms a picture at 020 | 2.53 | 2.46 |
+| GPU ms a picture at 105 | 2.42 | 2.35 |
+
+The speed is nearly as it was: this was memory work. What the memory was (a count of every live image by size, a
+temporary patch in Granite's `Image` and `Buffer`, not kept):
+
+1. **A new 96 MB image for every picture.** The frame's last pass draws the screen over itself (the game's
+   brightness: colour 136 on a 128 scale), reading a copy of the buffer. `surface_texture` made that copy's image new
+   each time, the texture's size (1024x512 at 6x4: 6144x2048 at 16 bits a channel), cleared it whole, used it once and
+   let it go: about 300 a second, 1.2 TB made in a 45 s run, and the game's memory swinging by 0.8 GB as Granite's
+   frame contexts freed them. Now `pcr_copy_pool.h`: the copies' images are used again, and cleared only when the
+   rectangle copied does not cover what the image held. Unit test `pcr_copy_pool`. `KF4_PC_COPY_POOL=0`: as before.
+2. **The scanout ring: 1 GB in 16 slots.** Each slot held the picture whole (3840x1792, 28 MB), the picture at the
+   window's size and a work image for the sharpening (16 MB each). The presenter only ever read the window-size one.
+   A slot now holds one picture (the window-size one when the presenter asks for it, else the whole one), and the
+   work image is one for all (`PictureOut`). The copy of the whole picture into the slot is gone too (picture 0.077
+   to 0.056 ms).
+3. **Z buffers from the boot and the menus kept for the whole of play.** A depth surface at page 140 (Z32) and one at
+   page 280 of another width stayed after the last draw that used them: 141 MB each at 4x with MSAA 2, in each of the
+   three sets, and copied for the pump every game frame. A depth surface not drawn with for 600 vblanks is now let go
+   (`let_go_of_idle_depth`).
+
+`--stats` now lists each surface (`[stats] pc canvas surface: ...`) and the depth surfaces let go.
+
+What the 3.8 GB left is: the three sets of surfaces, 1.55 GB (the frame buffers' surface is still both buffers in one
+image, 928 rows, with a depth surface as tall: twice what a 448-row buffer needs); the flash recorder's ring, 0.5 GB;
+the scanout ring, 0.3 GB; the two surface texture copies, 0.2 GB (6144x2048 each though 3840x1792 of it is used: the
+shader reads zeros past the copy, so the image is the texture's size); Granite's allocator's free blocks and slack,
+0.5 GB; the rest the presenter's and the driver's.
+
+Checks: the linux-clang build and all 20 unit tests; pictures byte for byte against the build before (52 pictures each
+at 009:0, 009:2 and 020:0, headless at 240, with the pictures between); the game under ASan and UBSan in a real
+window (the known reports only: `SoundDriver_Remote`, the decomp's casts, Granite's `render_pass.cpp:52`); real-window
+runs of 150 s at 009 and 45 s at 020 and 105, no GPU hang. Not run: TSan, the gcc and Windows builds, a map tour
+against `--renderer gs`.
+
+### Found and not done (the speed)
+
+- **Every map pays about 1.7 ms a picture for full-screen work** whatever is on screen (020: 2d 0.77, present 0.46,
+  copy 0.26, texture copy 0.13 of 2.46 ms). At 4x with MSAA 2 and 16 bits a channel a full-screen pass touches about
+  110 MB.
+- **The pictures between draw the frame's clears as rectangles through the shader**: `as_clear` refuses inside a
+  picture between, so three in four pictures do not use `vkCmdClearAttachments` (the "2d, untextured, Z always write"
+  row, 0.32 ms).
+- **The scaling shader reads about 49 picture pixels for each of the window's** (a cubic 7 x 7 at 4x into 1440 rows):
+  0.43 of present's 0.47 ms. Decoding sRGB by the sampler in place of `pow()` saved only 0.05 ms (tried, taken out: a
+  window's picture cannot be compared between runs to prove it exact). Two passes, across then down, would read 14.
+- **The surfaces copied for the pump** (0.26 to 0.31 ms): the walk's first draw clears the buffer drawn and its Z, so
+  those rows and the Z buffer need not be copied; only what the walk reads does. Needs the walk looked at before the
+  copy.
+- **The brightness pass** (0.2 ms and its copy 0.16): the screen drawn over itself times 136/128, not an identity, so
+  it cannot be left out; it could be folded into the scanout, not byte for byte.
+
 ## Not known
 
 - Any map but 009, and any place with creatures on screen.
