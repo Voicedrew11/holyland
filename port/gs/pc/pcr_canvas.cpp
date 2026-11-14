@@ -1230,17 +1230,28 @@ private:
                 taken.emplace_back(o.get(), y);
             }
         }
-        made->image = make_surface_image(made->width(), made->height, false);
+        if (reuse_on_) {
+            made->image = reuse_image(made->width() * scale_[0], made->height * scale_[1], made->ms);
+            made->ms_ahead = false;
+            made->ms_behind = bool(made->ms); // (expanded from the image before it is drawn into, as one made)
+        }
+        if (!made->image) {
+            made->image = make_surface_image(made->width(), made->height, false);
+        }
         if (!made->image) {
             return {};
         }
         counts_.surfaces_made++;
         end_pass();
         CommandBuffer &c = cmd(GpuWork::surface);
-        VkClearValue zero = {};
-        c.clear_image(*made->image, zero);
+        // (covered: written whole before it is read, so not cleared either)
+        const bool whole = covered && taken.empty() && made->height == height;
+        if (!(whole && reuse_on_)) {
+            VkClearValue zero = {};
+            c.clear_image(*made->image, zero);
+        }
         full_barrier(c);
-        if (covered && taken.empty() && made->height == height) {
+        if (whole) {
             let_go_overlapping(colour_, made->base_page, made->end_page());
             colour_.push_back(std::move(made));
             return {colour_.back().get(), 0, 0};
@@ -1291,11 +1302,42 @@ private:
         return depth_.back().get();
     }
 
+    // A colour surface's images kept when it is let go, the oldest dropped past a few: a surface of the same size made
+    // again takes them (reuse_image). The GPU is done with them by then as with any image the queue used before: the
+    // canvas records into one command buffer at a time, everything outside a pass between full barriers.
+    void keep_spare(ImageHandle image, ImageHandle ms) {
+        constexpr size_t SPARE_SURFACES = 6;
+        if (spare_surfaces_.size() == SPARE_SURFACES) {
+            spare_surfaces_.erase(spare_surfaces_.begin());
+        }
+        spare_surfaces_.push_back({std::move(image), std::move(ms)});
+    }
+    // A kept image of this size (in pixels at the canvas's scale) and the colour's format for a surface made, and its
+    // multisampled image if it had one at the samples drawn now (as made: drawn from the image, expanded, before it is
+    // drawn into). (apply_samples and apply_colour drop the kept ones too: a live change of MSAA or precision)
+    ImageHandle reuse_image(uint32_t width, uint32_t height, ImageHandle &ms) {
+        for (auto it = spare_surfaces_.begin(); it != spare_surfaces_.end(); ++it) {
+            if (it->image->get_width() == width && it->image->get_height() == height &&
+                it->image->get_format() == colour_format()) {
+                ImageHandle image = std::move(it->image);
+                ms = it->ms && it->ms->get_create_info().samples == VkSampleCountFlagBits(samples_) ? std::move(it->ms)
+                                                                                                    : ImageHandle{};
+                spare_surfaces_.erase(it);
+                counts_.surface_images_reused++;
+                return image;
+            }
+        }
+        return {};
+    }
+
     void let_go_overlapping(std::vector<std::unique_ptr<Surface>> &list, uint32_t first, uint32_t end) {
         for (auto it = list.begin(); it != list.end();) {
             if ((*it)->overlaps(first, end)) {
                 if (pass_colour_ == it->get() || pass_depth_ == it->get()) {
                     end_pass();
+                }
+                if (reuse_on_ && !(*it)->depth && (*it)->image) {
+                    keep_spare(std::move((*it)->image), std::move((*it)->ms));
                 }
                 it = list.erase(it);
             } else {
@@ -1932,6 +1974,35 @@ private:
         return *samplers_.emplace(key, made).first->second;
     }
 
+    // (surface_texture) An image of this size for a texture's copy of a surface, kept to be used again: the GPU has
+    // drawn with the copy before (the batch that read it was recorded, and its run flushed by end_pass, before another
+    // copy is made). clear: whether it must be cleared first: made new, or written last outside the w x h from 0, 0
+    // about to be written (what a texture reads past the surface is 0, as in one made new)
+    ImageHandle copy_image_for(uint32_t width, uint32_t height, VkFormat format, uint32_t w, uint32_t h, bool &clear) {
+        for (SpareCopy &k : spare_copies_) {
+            if (k.image->get_width() == width && k.image->get_height() == height && k.image->get_format() == format) {
+                clear = k.written_w > w || k.written_h > h;
+                k.written_w = w, k.written_h = h;
+                counts_.texture_copies_reused++;
+                return k.image;
+            }
+        }
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, format);
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        ImageHandle image = device_.create_image(info, nullptr);
+        clear = true;
+        if (image) {
+            constexpr size_t SPARE_COPIES = 8;
+            if (spare_copies_.size() == SPARE_COPIES) {
+                spare_copies_.erase(spare_copies_.begin());
+            }
+            spare_copies_.push_back({image, w, h});
+        }
+        return image;
+    }
+
     // A texture where a surface was drawn: the surface's part copied (so the surface can be drawn into while read)
     BoundTexture surface_texture(uint64_t tex0, uint32_t cols, uint32_t rows) {
         BoundTexture b;
@@ -1956,20 +2027,29 @@ private:
             counts_.unsupported_texture_on_surface++;
             return b;
         }
-        ImageCreateInfo info = ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
-        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        b.surface_copy = device_.create_image(info, nullptr);
+        bool clear = true;
+        if (reuse_on_) {
+            b.surface_copy = copy_image_for(cols * scale_[0], rows * scale_[1], from->image->get_format(),
+                                            w * scale_[0], h * scale_[1], clear);
+        } else {
+            ImageCreateInfo info =
+                ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
+            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            info.layout = ImageLayout::General;
+            info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+            b.surface_copy = device_.create_image(info, nullptr);
+        }
         if (!b.surface_copy) {
             return b;
         }
         end_pass();
         CommandBuffer &c = cmd(GpuWork::texture_copy);
         full_barrier(c);
-        VkClearValue zero = {};
-        c.clear_image(*b.surface_copy, zero);
-        full_barrier(c);
+        if (clear) {
+            VkClearValue zero = {};
+            c.clear_image(*b.surface_copy, zero);
+            full_barrier(c);
+        }
         // (between 0xF4 and 0xF5 of a picture between, the frame shown kept at 0xF2 in place of its buffer)
         bool kept = replaying_ && kept_reads_ && kept_frame_ && from->base_page == kept_page_ &&
                     kept_frame_->get_width() == from->image->get_width() &&
@@ -3989,6 +4069,7 @@ private:
             s->ms_ahead = s->ms_behind = false;
         }
         colour_mode_ = pending_colour_;
+        spare_surfaces_.clear(); // (the old format's)
         for (auto &s : colour_) {
             ImageHandle image = make_surface_image(s->width(), s->height, false);
             if (!image) {
@@ -4089,6 +4170,7 @@ private:
             s->ms_ahead = s->ms_behind = false;
         }
         samples_ = pending_samples_;
+        spare_surfaces_.clear(); // (their multisampled images at the old count)
         for (auto &s : depth_) {
             ImageHandle image = make_surface_image(s->width(), s->height, true);
             if (!image) {
@@ -4272,6 +4354,21 @@ private:
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
     // (as_clear) KF4_PC_CLEARS=0: clears drawn as the rectangles they are; and the batches cleared
     const bool clears_on_ = !getenv("KF4_PC_CLEARS") || strcmp(getenv("KF4_PC_CLEARS"), "0") != 0;
+    // KF4_PC_SURFACE_REUSE=0: a surface's image and a texture's copy of a surface made new each time (as before); else
+    // kept to be used again (reuse_image, copy_image_for). Under water the copy of the frame and the water's targets
+    // let each other go every picture, and the tint and the wobble read the frame through a copy of 1024 x 512 texels.
+    const bool reuse_on_ = !getenv("KF4_PC_SURFACE_REUSE") || strcmp(getenv("KF4_PC_SURFACE_REUSE"), "0") != 0;
+    // (colour surfaces let go: their images, and their multisampled images, for one of the same size made again)
+    struct SpareImages {
+        ImageHandle image, ms;
+    };
+    std::vector<SpareImages> spare_surfaces_;
+    // (a texture's copy of a surface, by its size: the part last written, which a copy within it need not clear)
+    struct SpareCopy {
+        ImageHandle image;
+        uint32_t written_w = 0, written_h = 0; // (from 0, 0; the rest of it zero)
+    };
+    std::vector<SpareCopy> spare_copies_;
     uint64_t counts_clears_ = 0;
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
@@ -4386,15 +4483,17 @@ public:
                 "[stats] pc canvas: %llu primitives (%llu triangles) in %llu batches, %llu passes; %llu native batches in %llu "
                 "draw calls; textures %llu "
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
-                "from uploads; %llu uploads into surfaces, %llu copies between them; %llu Z buffers cleared by another "
-                "width's clear; %llu clears drawn as rectangles cleared\n",
+                "from uploads, %llu with images used again; %llu uploads into surfaces, %llu copies between them; %llu "
+                "textures' copies of surfaces in images used again; %llu Z buffers cleared by another width's clear; "
+                "%llu clears drawn as rectangles cleared\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
                 (unsigned long long)c.textures_from_surfaces, (unsigned long long)c.textures_missing,
                 (unsigned long long)counts_untextured_, (unsigned long long)c.surfaces_made,
-                (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
-                (unsigned long long)c.copies_between_surfaces, (unsigned long long)counts_depth_aliases_cleared_,
+                (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.surface_images_reused,
+                (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.copies_between_surfaces,
+                (unsigned long long)c.texture_copies_reused, (unsigned long long)counts_depth_aliases_cleared_,
                 (unsigned long long)counts_clears_);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
