@@ -33,6 +33,20 @@ out/linux-clang/kf4 --help                 # every option
 - Many `KF4_*` environment variables switch debug paths and alternatives on and off (grep `getenv("KF4_`).
 - No `.clang-format` or `.clang-tidy` in the project.
 
+## Testing graphics: open a real window
+
+When testing graphics (speed, GPU memory, GPU hangs, pacing), run in a real window with the owner's settings, not
+only `--headless`. A headless run or one with a pad script (`--input`) does not read `settings.json`, simulates the
+screen, and sizes things for 60 pictures a second: on 2026-11-13 headless runs at a simulated 240 Hz showed 3.7 GB of
+GPU memory and no hang where the owner's real play (unlocked, cap 500) held 8 GB and hung the card.
+
+- A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.config/holyland`
+  so the owner's files are not written. Not `KF4_OVERLAY_SHOT`: it reads settings too but hides the window.
+- The window must be on the screen: the owner should be able to see the run.
+- Leave out `--headless`; keep `--input tests/newgame.pad --teleport ... --invincible --no-audio --memcard none`.
+- Check the run's `[stats]` lines show what you meant to test (pictures between drawn, native draws not 0).
+- Headless runs are still right for comparing pictures byte for byte (`--dump-frames`).
+
 Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py`, `pace_test.py`
 (pictures a second at a few maps), `map_tour.py` (every map pictured), `screen_fx_test.py`,
 `flash_find.py`. `kf4-gsreplay` (built with the game) replays a GS capture (`.kf4gs`, F9 in game).

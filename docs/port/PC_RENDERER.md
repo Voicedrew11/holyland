@@ -35,6 +35,32 @@ the batch programs' `PCR_RECORDS` variants (`pcr_*_rec` in `pcr_shaders.h`: the 
 their colour factors from the shader (dual-source, `pcr_prim.h`'s `o_factor`), so native 280's two blends do not end
 runs. `KF4_PC_INDIRECT=0` draws a batch at a time; `=plain` keeps runs but not the dual-source blend.
 
+**2026-11-13: the runs off on RADV.** With the runs the GPU hung on RADV (Mesa 26.2.3, RX 9070 XT): `ring gfx_0.0.0
+timeout`, then a reset of the whole card, within a minute at 009 at a simulated 240 Hz in 4 of 6 runs (3 of 5 the
+session before); none in 8 runs without them, which also held 238 pictures in every second where the runs fell to 145
+and 210. It needs `vkCmdDrawIndirect` itself: the same runs, records and programs drawn a `vkCmdDraw` each did not hang
+in 5 runs; GIF batches' runs alone hung; so did the runs' buffer in host memory, and the buffers kept for 512 pictures.
+`RADV_DEBUG=hang` slows the game until no picture between is drawn, so it showed nothing. Cause not found: the driver
+or what is under it is suspected. `Canvas::Impl::runs_hang_here` keeps the runs off there; `KF4_PC_INDIRECT=1` turns
+them on (expect the hang).
+
+**The same day, 20:33: not the whole cause.** With the runs off the owner's real play still hung the card (thread
+kf4-pc), 9 minutes in, 3 minutes after native draw's kinds were turned from all off to all on in the overlay: a real
+window, the frame rate unlocked with a cap of 500, vsync off. The runs off made only the short headless runs at a
+simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
+before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
+
+**2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
+frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
+The pump's canvas now hands the images it lets go back, and the next copies are made into them
+(`KF4_PC_SPARES=0`: as before). The game's own GPU memory at 009 with those settings (amdgpu fdinfo, each 0.25 s): its
+most 4.4 to 4.9 GB before, 4.1 to 4.3 GB now; its median up from 3.2-3.4 to 3.7-3.8 GB, since the third set of images
+is now held, not made and let go. What it is made of: a set of surfaces is about 700 MB there (the frame buffers'
+surface 3840x3712 at 16 bits a channel with its two-sample image, 342 MB; two depth surfaces of that size with two
+samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the spare); without the pump the game
+holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
+draws on).
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)

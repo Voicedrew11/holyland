@@ -165,7 +165,8 @@
        --flash-recorder off|on|SECONDS[,HEIGHT]
                          the flash recorder (F8, docs/port/README.md "Debugging"): the last SECONDS of
                          presented pictures (2 for on, the default) kept on the GPU at HEIGHT rows (540),
-                         written out as PNGs by the key; Vulkan presenter only
+                         written out as PNGs by the key; Vulkan presenter only. Held to 512 MB: at a
+                         high frame rate the pictures are kept smaller (270 rows at least), then fewer
        --fpu-round zero|nearest
                          how the game's float maths rounds: as the EE's FPU (zero, the default:
                          toward zero, no denormals) or as the PC's IEEE floats (nearest), to compare
