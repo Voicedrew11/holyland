@@ -277,8 +277,9 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   is taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
   behind it (the GS hides it); map 004's tree close to the PS2's. A layer's two phases cost a pass each (timing in
-  #143); if that is too much, the Z pass can leave out the lights (it needs the corners' places and alphas only) and
-  the triangles that are twins (most of a layer's, even where the batch is not one).
+  #143); its Z pass does not light its corners (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and
+  alphas only). If that is still too much, the Z pass can leave out the triangles that are twins (about half of a
+  fading batch's, even where the batch is not one).
 
 **Layer Z before exact Z (#105, 2026-11-11): not applied then, proposed for removal.** The native GS rounded each pixel's Z to a
 whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two
