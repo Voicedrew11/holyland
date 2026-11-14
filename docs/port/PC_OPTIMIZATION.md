@@ -572,3 +572,46 @@ What would find it, and needs the owner (root, or a package):
   > ~/hang.txt` (root only). It names the ring's last commands.
 - **The validation layer**: `sudo dnf install vulkan-validation-layers`. The copies on this machine (Steam's, 1.3.224;
   Flatpak's) are too old: the game crashes under them at start.
+
+## What changed on 2026-11-14 (round 4): unlocked follows the window (Phase 1b)
+
+Unlocked asked for a picture every 1 / the cap of a second (500 for the owner) whatever the renderer made. At 4x it
+makes about 300, so most of the schedule's pictures were left out as too late and those made came in bursts. Now the
+asked rate is **a quarter more than the window showed in the last half second** (`unlocked_asked_hz`,
+frame_interp.c), never under 120 nor over the cap or the schedule's most. `KF4_UNLOCKED_FOLLOW=0`: as before.
+
+Real window, the owner's settings (cap 500), 20 s of play, fixed and following from one build:
+
+| | pictures between shown | between new pictures | shown late |
+|---|---|---|---|
+| 4x, 009: fixed | 7489 | 7.08 ms (sd 13.3) | 806 |
+| 4x, 009: following (three runs) | 10405 to 10595 | 5.2 ms (sd 6.1 to 7.3) | 113 to 129 |
+| 4x, 020: fixed | 15775 | 3.52 ms (sd 9.1) | 183 |
+| 4x, 020: following | 16055 to 16157 | 3.47 ms (sd 5.4) | 64 to 67 |
+| 4x, 105: fixed | 15958 | 3.50 ms (sd 9.1) | 194 |
+| 4x, 105: following | 16209 | 3.45 ms (sd 5.5) | 77 |
+| 3x, 009: fixed | 20545 | 2.73 ms (sd 4.1 to 4.9) | 39 to 42 |
+| 3x, 009: following | 19440 | 2.90 ms (sd 3.5) | 37 |
+| 1x, 009: fixed | 21762 | 2.60 ms (sd 3.7) | 37 |
+| 1x, 009: following | 20712 | 2.73 ms (sd 3.2) | 37 |
+
+- **Where the GPU is the limit (the owner's 4x) 40% more pictures between reach the window at 009, half as unevenly,
+  and a seventh as many late.** At the lighter maps a little more, and much more evenly.
+- **Where the cap is reached (1x, 3x) 5% fewer in a run**: after the menus' 60 and after a load the rate climbs a
+  quarter each half second, about three seconds from 120 to 500. In play it sits at the cap as before.
+- Tried and left out: the top at once (or twice as many) where the window showed all that was asked for, and one
+  answer for each of the window's counts. Each made play worse than the plain rule (4x at 009: 9300 pictures between,
+  sd 9; the rate overshoots after any dip and the bursts are back).
+- **The cap's slider stays** (the owner asked for it gone): it is no longer needed to make unlocked smooth, and 0 (no
+  cap) is now safe, but a VRR screen still wants a rate held under its refresh. The owner's to take out.
+
+Also: `vu1_280_maths.h`'s `colour_u` walked a strip's colour back k steps, **k read from the mesh with no bound**: a
+wrong number there is a loop of up to two thousand million steps a vertex, which is a GPU ring timeout. Bounded at
+256 (a VU1 batch's most vertices); pictures byte for byte at 009:0 and 009:2. Not shown to be the hang's cause: the
+only loop in the shaders whose length comes from data.
+
+A third hang, 10:10:10: thread kf4-pc, about 42 s into a capped 4x run at 009 (10 s of play), before the bound above
+was in. A 20-run test of the opening alone, uncapped, did not hang: the opening is not a trigger by itself.
+
+Checks: the 20 unit tests; pictures (the shader's bound) byte for byte at two spots. Not run on this round: the
+sanitizers (a C function of arithmetic and one atomic), TSan, gcc and Windows builds.
