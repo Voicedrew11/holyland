@@ -691,7 +691,7 @@ std::vector<Record> seed_for(uint32_t samples, bool high) {
         if ((e.run_samples > 1 && samples <= 1) || (r.per_sample && samples <= 1)) {
             continue;
         }
-        if (samples > 1 && r.samples == e.run_samples) {
+        if (samples > 1 && e.run_samples > 1 && r.samples == e.run_samples) {
             r.samples = samples;
         }
         if (r.colours && is_colour_format(r.colour_format)) {

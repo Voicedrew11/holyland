@@ -147,6 +147,24 @@ a vblank, and the overlay offers them again (Display, Picture). Built the GPU's 
   MSAA's samples as drawn ones are. Plain Vulkan (a `VkPipelineCache`), no extension: the same on every GPU.
   `KF4_PC_PIPELINE_CACHE=0`: neither file (as before); `KF4_PC_WARM_AHEAD=0`: the list not made ahead;
   `KF4_PC_PIPELINE_LOG=1`: what was read. Measured in PERFORMANCE.md, "Built 2026-11-14".
+- **Pipelines made before play** (`pcr_pipelines.cpp`, "Made before play"; 2026-11-14). The list holds only what the
+  data folder drew, so a first start, or the first after a driver update or a new GPU (the cache refused), still
+  stood still at each new pipeline. Now the repository carries a seed, `port/gs/pc/pipeline_seed.bin` (made by
+  `tools/pipeline_seed.py`: a map tour of every map and `motion_compare.py`'s cases, at 1x and at MSAA 4 with the
+  cut-outs shaded a sample at a time, the native draws on and off, `--frame-rate 240`), compiled into the program
+  (`cmake/pipeline_seed.cmake`). Each record is what the list keeps: the canvas's program by index, Granite's pipeline
+  state, the attachments' formats and samples; renderer state, none of the game's data. It is drawn with
+  `KF4_PC_DYNAMIC=0`, so that every state a draw had is a record of its own; the device's dynamic state is put in as
+  the seed is read, and records that then differ only in dynamic state are one pipeline (Granite's hash). So one
+  seed serves every GPU: the depth format (D32S8 or D24S8), colour high's 16-bit format and MSAA's count (2, 4 or 8:
+  the records of the MSAA runs) are put in too. Settings that change no pipeline (scale, anisotropy, draw distance,
+  sky, layer Z, frame rate) need nothing. At every start, once gs.c has set the settings and the canvas has made its
+  programs, the seed's records for those settings and the list's are made on every core but one, through the cache;
+  the game waits at its first vblank, the window black with "Preparing shaders... N%" (the overlay). With the cache
+  good they are cache hits, a fraction of a second. A pipeline that fails to make is left out (its draw makes it, or
+  fails, as before). A change of MSAA in play makes every pipeline kept again at the new count (now on half
+  the cores) before the canvas draws at it, as before. `KF4_PC_PRECOMPILE=0`: nothing made before play (the list
+  made ahead while the game runs, as before). Measured in PERFORMANCE.md, "Built 2026-11-14 (2)".
 - **Granite** hashed a render pass by its formats, not its samples: a multisampled pass was given the single-sampled
   one of the same formats. `cmake/granite_msaa.cmake` adds the samples.
 
