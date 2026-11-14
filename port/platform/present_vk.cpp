@@ -34,6 +34,7 @@
 
 #include "backends/imgui_impl_vulkan.h"
 #include "imgui.h"
+#include "flash_ring.h"
 
 extern "C" {
 #include "gs_api.h"
@@ -588,11 +589,9 @@ bool flash_ring(int w, int h) {
         fl.failed = false;
         return false;
     }
-    int rate = port_frame_rate_hz();
-    uint32_t layers = uint32_t(std::ceil(double(seconds) * double(rate < 60 ? 60 : rate)));
-    uint32_t height = uint32_t(rows > h ? h : rows);
-    uint32_t width = (uint32_t(std::lround(double(height) * w / h)) + 1u) & ~1u;
-    layers = layers < 2 ? 2 : layers > 2048 ? 2048 : layers;
+    // (held to FLASH_RING_MOST_BYTES: smaller pictures, then fewer, at a high frame rate)
+    const FlashRingSize size = flash_ring_size(seconds, port_frame_rate_hz(), rows, w, h);
+    const uint32_t layers = size.layers, width = size.width, height = size.height;
     if (fl.image != VK_NULL_HANDLE && fl.layers == layers && fl.width == width && fl.height == height) {
         return true;
     }

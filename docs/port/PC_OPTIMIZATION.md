@@ -1,0 +1,198 @@
+# PC renderer: where the time and the GPU memory go (2026-11-13)
+
+A profile of the PC renderer as the owner plays it, written for whoever takes the speed work next. The owner's aim:
+this game should run at about 800 pictures a second on this machine and hold little GPU memory. It reaches about 215
+and holds 6 GB.
+
+Read with `PC_RENDERER.md` (the renderer and its history), `PROFILING.md` (the tools) and `HANDOFF_2026-11-13.md` (the
+GPU hang, not in the repo: ask the owner).
+
+## The short of it
+
+- At the owner's settings the **GPU is the limit**: 3.8 ms a picture, a ceiling near 260 pictures a second; about 215
+  reached.
+- About 2.3 of the 3.8 ms is **pixel work at 4x** (it goes away at 1x). The surfaces are 3840x3712.
+- 0.6 ms of **"native 280" draws does not shrink at any resolution**: about 1000 tiny draws a picture, alternating
+  between two blend states.
+- **Presenting costs 0.4 ms** whatever the resolution.
+- Even at 1x the floor is 1.5 ms: about 670 a second. 800 is out of reach at any setting until the two fixed costs
+  above come down.
+- The **CPU would cap it near 620 a second** once the GPU did not: the pump thread spends 1.6 ms a picture, most of
+  it issuing one draw call a batch.
+- **GPU memory is 6 GB** at most in play, three quarters of it screen-sized surfaces held three times over.
+- The **GPU hang is open**. It was not reproduced in any run here.
+
+## How this was measured
+
+Machine: Linux, RX 9070 XT (RADV, Mesa 26.2.3), kernel 7.2.7, a 2560x1440 170 Hz screen.
+
+Settings (the owner's `settings.json`): 4x native scale, native widescreen, MSAA 2, colour high, anisotropic 16,
+cut-out AA ssaa, native draw on, frame rate unlocked with a cap of 500, vsync off, tearing on, full screen, scaling
+best, sharpen 1.
+
+Place: map 009, place 0, standing where the teleport puts the player. One map, and each setup run once: treat
+differences under about 5% as noise.
+
+Each run is a real full-screen window on the screen, with the owner's settings read from a copy of the data folder:
+
+```sh
+D=~/.cache/kf4hang/data    # a copy of ~/.config/holyland: settings.json and the pipeline cache
+KF4_DATA_DIR=$D KF4_READ_SETTINGS=1 KF4_GSN_GPU_TIME=1 out/linux-clang/kf4 --disc <image> --no-audio --memcard none \
+    --input tests/newgame.pad --teleport 1900:9:0 --invincible --frames 4700 --stats \
+    [--profile-at 2700:20:FILE]        # with KF4_GPU_DETAIL=1 for the split by shader state
+```
+
+- `KF4_READ_SETTINGS=1` is new (below): a run with a pad script otherwise ignores `settings.json`.
+- GPU time: the `[stats] pc renderer GPU time` line, and `tools/sampler/stacks.py FILE out/linux-clang/kf4 --gpu`.
+- CPU time: `stacks.py FILE EXE --threads` and `--thread kf4-pc-pump`.
+- GPU memory: the process's own, from amdgpu's fdinfo (`drm-memory-vram`), read each 0.25 s.
+- Run a watchdog that kills the game when the card's memory passes 9 GB, and check `journalctl -k` for
+  `ring gfx_0.0.0 timeout` after every run.
+
+**Headless runs mislead here.** Headless at a simulated 240 Hz showed 3.4 ms a picture and 3.7 GB; they size the
+flash recorder for 60 pictures a second and do not run unlocked. A hidden window (`KF4_OVERLAY_SHOT`) gives the same
+GPU times as a visible one (3.799 against 3.800 ms), but the owner cannot see the run.
+
+## The GPU's time a picture
+
+By kind of work, at the owner's settings and with only the scale changed to 1x:
+
+| Kind | ms at 4x | ms at 1x | What it is |
+|---|---|---|---|
+| 2d | 0.89 | 0.14 | the GS's own sprites and triangles: screen fills, fades, tints, copies |
+| native 000 | 0.79 | 0.25 | native draw's program 000: mostly the map |
+| native 280 | 0.59 | 0.61 | native draw's program 280 |
+| native 700 | 0.45 | 0.06 | native draw's program 700: two blended layers |
+| present | 0.47 | 0.36 | scaling to the window, sharpening, the flash recorder's blit |
+| copy | 0.30 | 0.02 | the surfaces copied each game frame for the pump (`Canvas::copy_surfaces`) |
+| texture copy | 0.20 | 0.03 | textures made from surfaces |
+| picture, surface, upload | 0.10 | 0.03 | |
+| **all** | **3.80** | **1.50** | |
+
+By shader state (a 20 s profile, 4295 pictures, 4.2 ms a picture with the timing's own cost; the rows over 0.05 ms):
+
+| ms a picture | Timed intervals | State |
+|---|---|---|
+| 0.535 | 2159489 | native 280, sampled modulate rgb, fog, blend (Cs-Cd)*As+Cd, Z >= write |
+| 0.350 | 47170 | native 700, sampled modulate rgba, blend (Cs-0)*As+Cd, Z >= |
+| 0.349 | 87809 | native 000, sampled modulate rgb, fog, blend (Cs-Cd)*As+Cd, Z >= write |
+| 0.339 | 49271 | native 700, sampled modulate rgba, blend (0-Cs)*As+Cd, Z >= |
+| 0.330 | 2223249 | native 280, sampled modulate rgba, fog, blend (Cd-0)*As+Cs, Z >= write |
+| 0.319 | 15234 | 2d, untextured, Z always write |
+| 0.197 | 4879 | 2d, untextured, blend (Cs-0)*FIX+Cd, Z always write |
+| 0.196 | 4879 | 2d, surface copy modulate rgb, Z always |
+| 0.118 | 4879 | native 000, untextured, blend (Cs-Cd)*FIX+Cd, DATE stencil, Z >= write |
+| 0.106 | 4879 | 2d, sampled modulate rgba, blend (Cs-Cd)*As+Cd, DATE stencil, Z always write |
+| 0.099 | 72637 | native 000, sampled modulate rgb, fog, Z >= write |
+| 0.098 | 290942 | native 280, sampled modulate rgba, fog, blend (Cs-Cd)*As+Cd, Z >= write |
+
+An interval is one stretch of draws in one state, so the two native 280 rows with 2.2 million intervals each are about
+500 switches each a picture between the two states.
+
+What each setting costs (one setting changed from the owner's; the two middle rows are from hidden-window runs):
+
+| Setup | ms a picture | Most GPU memory |
+|---|---|---|
+| the owner's | 3.80 | 6.0 GB |
+| MSAA off | 3.24 | 4.8 GB |
+| colour exact, not high | 3.24 | 5.1 GB |
+| scale 1x | 1.50 (reached the cap of 500) | 2.5 GB |
+
+## The CPU
+
+20 s of play, by thread:
+
+| Thread | CPU time | What it does there |
+|---|---|---|
+| kf4-pc-pump | 6.9 s (34% of a core; 1.6 ms a picture) | draws the pictures between from the kept walk |
+| kf4-pc | 6.3 s (32%) | reads the game's GIF packets, draws the game's frames, uploads textures |
+| kf4-dma | 3.9 s (19%) | DMA, VIF1, VU1 |
+| kf4 | 3.7 s (18%) | the game |
+| kf4-between | 1.8 s (9%) | paces the pictures between |
+
+The pump thread's time: 72% in `draw_batch` (34% of the thread inside `radv_CmdDraw`, 23% in
+`radv_emit_all_graphics_states`), 15% in the submit's ioctl. About 1000 batches and 1200 native draw calls a picture.
+
+No thread is the limit today. At 1.6 ms a picture the pump thread alone would cap the game near 620 pictures a second.
+
+Of the pictures between, about 1 in 10 drawn is not shown (made too late): 1636 of 16850 in one run. Far more are left
+out before being drawn (19072), which costs little.
+
+## The bottlenecks, largest first
+
+1. **Pixel work at 4x: about 2.3 ms.** Everything that fills or copies whole surfaces. The frame buffers' surface is
+   3840x3712 (both of the game's buffers in one, at 16 bits a channel, with a two-sample image). The full-screen 2d
+   passes are about 0.9 ms by themselves (the fill with Z write 0.32, the FIX blend 0.20, the surface copy 0.20, the
+   DATE passes 0.22), the same passes `HANDOFF_2026-11-13.md` item 4 names. The surface copies for the pump add 0.30
+   and the texture copies 0.20. To look at: whether each pass needs the whole surface or only the buffer shown, and
+   whether the pictures between need them drawn again at all.
+2. **Native 280: 0.6 ms that no setting lowers.** Not pixel work: the same at 1x. The draws alternate between two blend
+   states about 500 times each a picture, so each draw is tiny. To look at: why two states interleave (two materials
+   of one model drawn piece by piece?), and whether they can be sorted or drawn as one state. Indirect draws (#139)
+   were made for this and are off on RADV since they hung the card there.
+3. **Present: 0.4 ms, fixed.** Scaling "best" and sharpening to 2560x1440, and the flash recorder's blit, every
+   picture. A third of an 800-a-second budget (1.25 ms) alone.
+4. **Native 700: 0.45 ms** for about 11 draws a picture in two blend states: blended layers covering much of the
+   screen. Pixel work (0.06 ms at 1x).
+5. **The CPU's draw calls: 1.6 ms a picture on the pump thread.** Not the limit yet; the next one after the GPU.
+6. **Pictures drawn and not shown: about 10%** of the pictures between.
+
+What 800 a second needs: 1.25 ms a picture on the GPU and on the pump thread both. Today's floor with every pixel cost
+gone (1x) is 1.5 ms on the GPU, of which native 280 and present are 1.0 ms.
+
+## GPU memory
+
+| | Most held |
+|---|---|
+| the owner's settings, in play at 009 | 6.0 GB (typically 5.3 GB) |
+| the same before the flash recorder was held to 512 MB | past 5.5 GB in the opening; the owner's frozen game held 8 GB |
+| scale 1x | 2.5 GB |
+
+What it is made of at the owner's settings:
+
+- **Surfaces, three sets of about 700 MB**: kf4-pc's, the pump's copy, and a spare. One set: the frame buffers'
+  surface 3840x3712 RGBA16 with its two-sample image, 342 MB; two depth surfaces of that size with two samples, about
+  140 MB each; small ones.
+- **The flash recorder's ring** (F8: the last 2 seconds of pictures): 0.55 GB now. It was sized by the pictures a
+  second: 225 MB at 60, 2.5 GB at the cap of 500.
+- The rest (textures, pipelines, the swapchain, Granite's buffers) was not split up.
+
+To look at: copying only the rows of the buffer shown, or only the surfaces the kept walk draws on; a frame buffer
+surface that does not hold both of the game's buffers at full size.
+
+## The GPU hang
+
+Open. `ring gfx_0.0.0 timeout`, then a reset of the whole card, the game frozen after it (Granite waits forever).
+
+- Indirect draws (#139) made it frequent in short headless runs at a simulated 240 Hz: 4 of 6 runs with them, none of
+  11 without. They are off on RADV now (`KF4_PC_INDIRECT=1` turns them on).
+- That is not the whole cause: at 20:33 the owner's real play hung with them off, 9 minutes in, thread kf4-pc, 3 minutes
+  after native draw's kinds were turned from all off to all on in the overlay.
+- None of the real-window runs here hung, but the longest was 150 s.
+- The hangs have come with the GPU flat out. Lowering the work a picture may make them rarer without being a fix.
+
+## What changed on 2026-11-13
+
+In PR #144 (draft): indirect draws off on RADV; the surface copies' images kept and used again (`pcr_spares.h`), which
+lowers the most memory held and raises the typical.
+
+Added to the same PR after it:
+
+- `port/platform/flash_ring.h`: the flash recorder's ring held to 512 MB (smaller pictures first, 270 rows at least,
+  then fewer). Unit test `flash_ring`.
+- `KF4_READ_SETTINGS=1` (`port/overlay/settings.c`): a run with a pad script reads `settings.json`, in a window on
+  the screen.
+- `CLAUDE.md`: graphics are tested in a real window.
+
+Checks on those: the linux-clang build, all 19 unit tests, and `flash_ring_test` under ASan and UBSan. Not run on
+them: the game under the sanitizers, a picture comparison, the Windows and gcc builds.
+
+## Not known
+
+- Any map but 009, and any place with creatures on screen.
+- Why native 280's two states interleave.
+- What present's 0.4 ms is made of (scaling, sharpening, the recorder's blit).
+- What the 1.5 GB of GPU memory outside the surfaces and the recorder is.
+- Whether the GPU hang needs the GPU flat out.
+- The profiles are in `~/.cache/kf4hang/` on the owner's machine (`prof1.txt`, `prof2.txt` with shader states); they
+  are tied to the build that made them.
