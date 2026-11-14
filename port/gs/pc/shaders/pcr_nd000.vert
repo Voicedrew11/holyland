@@ -11,7 +11,8 @@
 #include "pcr_common.h"
 
 // the batch's triangles: x, y, z the arena's numbers of its corners; w the kick's (bits 0-27) and how many of the two
-// kicks before it are the batch's (bits 28-29)
+// kicks before it are the batch's (bits 28-29); bit 30: a surface's triangle again (tolerant layers, below). x's top
+// three bits: the order of its corners by their places
 layout(set = 0, binding = 5, std430) readonly buffer Tris {
     uvec4 tris[];
 };
@@ -51,6 +52,18 @@ void main() {
     // every pixel, to the bit)
     uint order = tri.x >> 29;
     tri.x &= 0x1FFFFFFFu;
+    // (tolerant layers, a layer's pass that writes its Z alone: a triangle that is its surface's own again (w's bit 30,
+    // pcr_native.cpp's place_triangles) has the surface's Z to the bit, written already: not drawn)
+    if ((pc.flags & PCR_F_LAYER_Z) != 0u && (tri.w & 0x40000000u) != 0u) {
+        gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+        v_zref = 0u;
+        v_zrel = 0.0;
+        v_color = vec4(0.0);
+        v_stq = vec3(0.0);
+        v_fog = 0.0;
+        v_rect = uvec2(PCR_NO_RECT);
+        return;
+    }
     if ((pc.flags & PCR_F_LAYERS) != 0u) {
         uvec3 c = tri.xyz;
         uint a = order >> 1;

@@ -807,6 +807,15 @@ private:
             out[t * 4 + 1] = first + c[1];
             out[t * 4 + 2] = first + kick;
             out[t * 4 + 3] = (first + kick) | std::min(kick, 2u) << 28;
+            // (tolerant layers: bit 30, a triangle of a batch that fades that is a surface's own again, among the
+            // meshes placed so far: its Z is the surface's to the bit, and a layer's Z pass leaves it out,
+            // pcr_nd000.vert. KF4_PC_LAYER_TWINS=0: none marked.)
+            static const bool mark = !getenv("KF4_PC_LAYER_TWINS") || strcmp(getenv("KF4_PC_LAYER_TWINS"), "0") != 0;
+            uint64_t triangle = mark && fades(b) ? triangle_of(m, b, t) : 0;
+            bool twin_triangle = triangle != 0 && solid_.count(triangle) != 0;
+            out[t * 4 + 3] |= twin_triangle ? 1u << 30 : 0;
+            counts_.fading_triangles += fades(b) ? 1 : 0;
+            counts_.twin_triangles += twin_triangle ? 1 : 0;
         }
         triangles_.used += n;
         triangles_placed_[key] = at;
@@ -903,6 +912,11 @@ void NativeDraws::print_counts(FILE *out) const {
             (unsigned long long)c.draws, (unsigned long long)c.batches, (unsigned long long)c.triangles,
             (unsigned long long)c.lost, (unsigned long long)c.unsupported, (unsigned long long)c.meshes_placed,
             (unsigned long long)c.arenas);
+    if (c.fading_triangles) {
+        fprintf(out, "[stats] pc native draws, tolerant layers: %llu triangles placed of batches that fade, %llu of them "
+                     "a surface's own again (left out of a layer's Z pass)\n",
+                (unsigned long long)c.fading_triangles, (unsigned long long)c.twin_triangles);
+    }
     fprintf(out, "[stats] pc native draws in pictures between: %llu moved by their own matrices, %llu trails paired\n",
             (unsigned long long)c.moved_models, (unsigned long long)c.paired_strips);
     for (const auto &[program, n] : impl_->unsupported_) {

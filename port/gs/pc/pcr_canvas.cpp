@@ -110,6 +110,8 @@ enum : uint32_t {
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
 constexpr uint32_t F_DUAL = 0x80000000u;
+// (draw_batch's Pass::runs: which of a native batch's runs a pass draws)
+enum : uint8_t { RUNS_ALL = 0, RUNS_LAYERS = 1, RUNS_OTHERS = 2 };
 enum : uint32_t { FACTOR_ZERO, FACTOR_ONE, FACTOR_AS, FACTOR_ONE_MINUS_AS, FACTOR_FIX, FACTOR_ONE_MINUS_FIX, FACTOR_NONE };
 uint32_t factor_code(VkBlendFactor f) {
     switch (f) {
@@ -461,19 +463,22 @@ public:
         DrawState s = state_of(file, prim);
         bool same = batch_open_ && batch_.native && batch_.program == nb.program && s == batch_.state &&
                     batch_.arena == nb.arena &&
-                    batch_.records == nb.records && batch_.triangles == nb.triangles &&
-                    (!layers_ || batch_.layer == nb.layer); // (tolerant layers: a layer's passes are its own)
+                    batch_.records == nb.records && batch_.triangles == nb.triangles;
         if (!same) {
             flush_batch();
             open_native_batch(s, nb);
         }
-        batch_.layer |= nb.layer;
+        // (tolerant layers: a layer's runs are drawn in passes of their own, draw_batch; the batch is not cut for them:
+        // cut, a batch textured from a surface copied it once a piece, each copy a render pass ended)
+        bool layer = layers_ && nb.layer;
+        batch_.layer |= layer;
+        batch_.other |= !layer;
         // (a run of triangles by one record: the next batch of the same draw's mesh goes on from where it ends)
-        if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance &&
+        if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance && batch_.runs.back().layer == layer &&
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
             batch_.runs.back().count += nb.triangle_count;
         } else {
-            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance});
+            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance, layer});
         }
     }
 
@@ -2071,9 +2076,11 @@ private:
         struct Run {
             uint32_t first, count, instance;
             uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
+            bool layer = false;        // (tolerant layers: NativeBatch::layer, drawn in the layers' passes)
         };
         bool native = false;
-        bool layer = false;           // (a native batch's: it fades out and is no twin, NativeBatch::layer; is_layer)
+        bool layer = false;           // (a native batch's: some run of it a layer, Run::layer; is_layer)
+        bool other = false;           // (... and some run of it not)
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
         bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
@@ -2712,6 +2719,7 @@ private:
         batch_.vertices.clear();
         batch_.native = false;
         batch_.layer = false;
+        batch_.other = false;
         batch_.moved = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
@@ -3184,8 +3192,10 @@ private:
     }
 
     // A batch's pass in the open run (one is opened, with this state, if none is): a record and a command a draw
-    void add_to_run(CommandBuffer &c, const Batch &b, PrimPush &push, const RunKey &key) {
-        uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
+    // (first_run, run_count: a native batch's runs drawn, draw_batch's steps)
+    void add_to_run(CommandBuffer &c, const Batch &b, PrimPush &push, const RunKey &key, uint32_t first_run,
+                    uint32_t run_count) {
+        uint32_t draws = b.native ? run_count : 1;
         if (runs_.open && runs_.count + draws > max_run_draws_) {
             flush_run(); // (the device's most an indirect draw; the state is the run's, the same key)
         }
@@ -3202,12 +3212,14 @@ private:
         auto *records = reinterpret_cast<PrimPush *>(runs_.map);
         auto *commands = reinterpret_cast<VkDrawIndirectCommand *>(runs_.map + runs_.commands_at);
         if (b.native) {
-            for (const Batch::Run &r : b.runs) {
+            for (uint32_t k = first_run; k < first_run + run_count; k++) {
+                const Batch::Run &r = b.runs[k];
                 memcpy(&records[at], &push, sizeof(push));
                 commands[at] = {r.count * 3, 1, r.first * 3, r.instance};
                 at++;
+                counts_layer_triangles_ += (push.flags & F_LAYER_Z) ? r.count : 0;
             }
-            counts_.native_draw_calls += b.runs.size();
+            counts_.native_draw_calls += run_count;
         } else {
             memcpy(&records[at], &push, sizeof(push));
             commands[at] = {uint32_t(b.vertices.size()), 1, b.gpu_first, 0};
@@ -3281,8 +3293,10 @@ private:
             bool layers = false; // (tolerant layers: the pass's colour tested half a Z nearer; PCR_F_LAYER_TEST)
             bool fine = false;   // (... a sixteenth of a Z: a cut-out's, PCR_F_LAYER_FINE)
             bool wide = false;   // (... a Z and half its slope: a decal's, PCR_F_LAYER_WIDE)
+            uint8_t runs = RUNS_ALL; // (... a native batch's runs it draws: all, the layers, or the others)
+            bool layer_z = false;    // (... a layer's pass that writes its Z alone, PCR_F_LAYER_Z)
         };
-        std::array<Pass, 4> passes{};
+        std::array<Pass, 8> passes{};
         int pass_count = 0;
         if (!ate || atst == 1) {
             passes[pass_count++] = {0, true, true, zwrite};
@@ -3326,19 +3340,31 @@ private:
         bool layer = tolerant && writes_z && is_layer(b);
         counts_layers_ += layer;
         if (tolerant && (!writes_z || layer)) {
-            // (tolerant layers: a layer in two phases, a draw that writes no Z tested within its slack)
+            // (tolerant layers: a layer in two phases, a draw that writes no Z tested within its slack. A native batch
+            // with runs that are layers and runs that are not: the others' passes as they are and the layers', each for
+            // its runs, stretch by stretch in the game's order: the steps below)
             bool wide = layer, fine = !wide && cuts_out(b);
-            std::array<Pass, 4> zs{}, colours{};
-            int nz = 0, nc = 0;
+            bool mixed = layer && b.native && b.other;
+            std::array<Pass, 8> zs{}, colours{}, others{};
+            int nz = 0, nc = 0, no = 0;
             for (int i = 0; i < pass_count; i++) {
+                if (mixed) {
+                    others[no] = passes[i];
+                    others[no++].runs = RUNS_OTHERS;
+                }
                 if (passes[i].z) {
-                    zs[nz++] = {passes[i].mode, false, false, true, false};
+                    zs[nz++] = {passes[i].mode, false, false, true, false, false, false, mixed ? RUNS_LAYERS : RUNS_ALL,
+                                layer};
                 }
                 if (passes[i].rgb || passes[i].alpha) {
-                    colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine, wide};
+                    colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine, wide,
+                                     mixed ? RUNS_LAYERS : RUNS_ALL};
                 }
             }
             pass_count = 0;
+            for (int i = 0; i < no; i++) {
+                passes[pass_count++] = others[i];
+            }
             for (int i = 0; i < nz; i++) {
                 passes[pass_count++] = zs[i];
             }
@@ -3559,17 +3585,31 @@ private:
             }
         }
         // (a pass's program, write mask and, in a run, its part of the run's state)
+        bool plain_pass = false; // (pass_state's: the pass a layer's Z pass drawn without its texture)
         auto pass_state = [&](int i, uint32_t &mask) {
             const Pass &pass = passes[i];
             // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
             // (not where traced, whose fragments that fail the test are recorded too)
             bool early = pass.mode == 0 && !(flags & F_DATE) && !traced;
-            Program *program = in_run ? (early ? (per_sample ? run_early_sample_programs_[v] : run_early_programs_[v])
-                                               : (per_sample ? run_sample_programs_[v] : run_programs_[v]))
-                                      : (early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
-                                               : (per_sample ? sample_programs_[v] : programs_[v]));
-            // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone)
-            if (early && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
+            // (tolerant layers: a cut-out layer's pass that writes its Z alone is shaded once a pixel, its alpha test
+            // the pixel's: the colour pass after it is still shaded at every sample. KF4_PC_LAYER_Z_SAMPLES=1: at
+            // every sample, as the colour.)
+            bool samples = per_sample && !(pass.layer_z && layer_z_by_pixel_);
+            Program *program = in_run ? (early ? (samples ? run_early_sample_programs_[v] : run_early_programs_[v])
+                                               : (samples ? run_sample_programs_[v] : run_programs_[v]))
+                                      : (early ? (samples ? early_sample_programs_[v] : early_programs_[v])
+                                               : (samples ? sample_programs_[v] : programs_[v]));
+            // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone. A layer's Z pass so too
+            // where its alpha test only turns away an alpha of 0 (ATST GREATER or GEQUAL than at most 1) and its
+            // texture's least alpha is 0x40 or more: the test then fails only where a corner's alpha is under 2, the
+            // last sliver of its fade, and the pass needs neither the texture nor the test: most of the layers.
+            // KF4_PC_LAYER_Z_PLAIN=0: with the texture and the test, as its colour pass.)
+            uint32_t aref = bits(s.test, 4, 8);
+            bool plain = layer_z_plain_ && pass.layer_z && !(flags & F_DATE) && !traced &&
+                         (atst == 1 || (atst == 6 && aref <= 1) || (atst == 5 && aref <= 1)) &&
+                         (!(flags & F_TME) || !bits(s.tex0, 34, 1) || (b.texture.ok && b.texture.alpha_lo >= 0x40));
+            plain_pass = plain;
+            if ((early || plain) && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
                 program = in_run ? run_zonly_programs_[v] : zonly_programs_[v];
             }
             mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
@@ -3584,8 +3624,39 @@ private:
             }
             return program;
         };
+        // (the passes in the order they are drawn, each with the runs it draws. A native batch with runs that are layers
+        // and runs that are not: run by run in the order the game sent them, the layers' two passes for a stretch of
+        // layers, the others' passes for a stretch of the others. Drawn out of that order (the others first), map
+        // 035's lava showed a wedge: a layer blended over a piece of its own sheet that the GS draws over it.)
+        steps_.clear();
+        uint32_t run_count = b.native ? uint32_t(b.runs.size()) : 0;
+        bool by_stretch = false;
+        for (int i = 0; i < pass_count; i++) {
+            by_stretch |= passes[i].runs != RUNS_ALL;
+        }
+        if (!by_stretch) {
+            for (int i = 0; i < pass_count; i++) {
+                steps_.push_back({i, 0, run_count});
+            }
+        } else {
+            for (uint32_t first = 0; first < run_count;) {
+                uint32_t end = first + 1;
+                while (end < run_count && b.runs[end].layer == b.runs[first].layer) {
+                    end++;
+                }
+                for (int i = 0; i < pass_count; i++) {
+                    if ((passes[i].runs == RUNS_LAYERS) == b.runs[first].layer) {
+                        steps_.push_back({i, first, end - first});
+                    }
+                }
+                first = end;
+            }
+        }
+        if (steps_.empty()) {
+            return;
+        }
         uint32_t first_mask = 0;
-        pass_state(0, first_mask);
+        pass_state(steps_[0].pass, first_mask);
         // (the run open ended here unless this batch's first pass continues it: the state set below is this batch's)
         if (runs_.open && (!in_run || !(runs_.key == key))) {
             flush_run();
@@ -3662,15 +3733,19 @@ private:
         } else if (!b.native) {
             bind_vertices(c, b);
         }
-        for (int i = 0; i < pass_count; i++) {
+        for (size_t step = 0; step < steps_.size(); step++) {
+            int i = steps_[step].pass;
+            uint32_t first_run = steps_[step].first, runs_drawn = steps_[step].count;
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT | (pass.layers ? F_LAYER_TEST : 0) |
                          (pass.fine ? F_LAYER_FINE : 0) | (pass.wide ? F_LAYER_WIDE : 0) |
-                         ((flags & F_LAYERS) && pass.z && !pass.rgb && !pass.alpha ? F_LAYER_Z : 0);
+                         (pass.layer_z ? F_LAYER_Z : 0);
             uint32_t mask = 0;
             Program *program = pass_state(i, mask);
+            counts_layer_z_by_pixel_ += per_sample && pass.layer_z && layer_z_by_pixel_;
+            counts_layer_z_plain_ += plain_pass;
             // (a later pass: the run ends unless it continues it, before its state is set)
-            if (in_run && i > 0 && runs_.open && !(runs_.key == key)) {
+            if (in_run && step > 0 && runs_.open && !(runs_.key == key)) {
                 flush_run();
             }
             c.set_program(program);
@@ -3697,14 +3772,16 @@ private:
                 if (!b.native) {
                     set_vertex_attribs(c);
                 }
-                add_to_run(c, b, push, key);
+                add_to_run(c, b, push, key, first_run, runs_drawn);
                 continue;
             }
             c.push_constants(&push, 0, sizeof(push));
             if (b.native) {
-                for (const Batch::Run &r : b.runs) {
+                for (uint32_t k = first_run; k < first_run + runs_drawn; k++) {
+                    const Batch::Run &r = b.runs[k];
                     c.draw(r.count * 3, 1, r.first * 3, r.instance);
                     counts_.native_draw_calls++;
+                    counts_layer_triangles_ += pass.layer_z ? r.count : 0;
                 }
                 continue;
             }
@@ -4413,6 +4490,11 @@ private:
     // KF4_PC_SAMPLER=0: every texture by the GS's read (to compare with)
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
+    // (tolerant layers) a cut-out layer's Z pass shaded once a pixel (pass_state)
+    const bool layer_z_by_pixel_ = !getenv("KF4_PC_LAYER_Z_SAMPLES") || strcmp(getenv("KF4_PC_LAYER_Z_SAMPLES"), "1") != 0;
+    // (tolerant layers) a layer's Z pass drawn without its texture where its alpha test can only fail at an alpha of 0
+    // (pass_state)
+    const bool layer_z_plain_ = !getenv("KF4_PC_LAYER_Z_PLAIN") || strcmp(getenv("KF4_PC_LAYER_Z_PLAIN"), "0") != 0;
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
     Batch batch_;
@@ -4458,7 +4540,14 @@ private:
     uint64_t counts_unsupported_shape_ = 0, counts_unsupported_upload_ = 0, counts_untextured_ = 0,
              counts_depth_aliases_cleared_ = 0, counts_clut_not_uploads_ = 0, counts_date_by_stencil_ = 0, counts_date_alpha_unknown_ = 0,
              counts_blends_by_shader_ = 0, counts_native_shader_blends_ = 0;
-    uint64_t counts_layers_ = 0; // (tolerant layers: the batches drawn in two phases)
+    // (tolerant layers: the batches with runs drawn in two phases, and the triangles their Z passes drew)
+    uint64_t counts_layers_ = 0, counts_layer_triangles_ = 0, counts_layer_z_by_pixel_ = 0, counts_layer_z_plain_ = 0;
+    // (draw_batch's steps: a pass and the runs of a native batch it draws, in the order drawn)
+    struct Step {
+        int pass;
+        uint32_t first, count;
+    };
+    std::vector<Step> steps_;
 
 public:
     void print(FILE *out) const {
@@ -4498,8 +4587,10 @@ public:
                 (unsigned long long)counts_unsupported_upload_, (unsigned long long)counts_unsupported_shape_,
                 (unsigned long long)counts_clut_not_uploads_);
         if (counts_layers_) {
-            fprintf(out, "[stats] pc canvas tolerant layers: %llu batches drawn in two phases\n",
-                    (unsigned long long)counts_layers_);
+            fprintf(out, "[stats] pc canvas tolerant layers: %llu batches with layers in two phases, %llu triangles in "
+                         "their Z passes; %llu Z passes of cut-outs shaded once a pixel, %llu without their texture\n",
+                    (unsigned long long)counts_layers_, (unsigned long long)counts_layer_triangles_,
+                    (unsigned long long)counts_layer_z_by_pixel_, (unsigned long long)counts_layer_z_plain_);
         }
         if (samples_ > 1 || counts_msaa_.resolves || counts_msaa_.cutout_batches) {
             fprintf(out,
