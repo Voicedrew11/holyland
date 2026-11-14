@@ -544,7 +544,7 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
     std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, msaa{1}, cutout_aa{GSN_CUTOUT_AA_OFF}, mode_2d{GSN_2D_PS2},
-        colour{GSN_COLOUR_EXACT}, layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
+        layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
 
@@ -802,9 +802,9 @@ public:
     }
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
-    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d and colour: Canvas::set_2d's and set_colour's
+    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d: Canvas::set_2d's
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
-                int mode_2d, int colour) {
+                int mode_2d) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
@@ -814,7 +814,6 @@ public:
             canvas_->set_sampling(lod, uint32_t(aniso));
             canvas_->set_msaa(samples, cutout_aa);
             canvas_->set_2d(mode_2d);
-            canvas_->set_colour(colour);
             canvas_->vblank();
             times_->collect();
         }
@@ -2091,7 +2090,7 @@ private:
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
                            uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
-                           settings.mode_2d.load(), settings.colour.load());
+                           settings.mode_2d.load());
         }
         uint32_t scale = picture_scale_;
         if (!extra) {
@@ -2428,10 +2427,6 @@ extern "C" void pcr_set_cutout_aa(int mode) {
 
 extern "C" void pcr_set_2d(int mode) {
     settings().mode_2d.store(mode);
-}
-
-extern "C" void pcr_set_colour(int mode) {
-    settings().colour.store(mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT);
 }
 
 extern "C" void pcr_set_layer_z(int mode) {

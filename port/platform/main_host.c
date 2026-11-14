@@ -44,11 +44,6 @@
        --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
                          default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
                          and walls at a grazing angle (gs_frag.h, sample_texture)
-       --native-colour MODE
-                         how precisely the renderer keeps colours: exact (the default: the GS's 8
-                         bits a channel, rounded as the GS rounds) or high (16 bits a channel, the
-                         colours' arithmetic in floats, the picture dithered to 8 bits: smooth
-                         gradients in the dark instead of steps)
        --native-layer-z MODE
                          how the renderer keeps and tests the 3D's Z: tolerant (the default: Z's
                          fraction kept, straight seams where surfaces meet, and the layers the game
@@ -273,7 +268,7 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2] [--native-colour exact|high]\n"
+            "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor|unlocked]\n"
@@ -595,16 +590,6 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_2d_forced = 1;
-        } else if (strcmp(option, "--native-colour") == 0) {
-            if (strcmp(value, "exact") == 0) {
-                port_options.native_colour = 0;
-            } else if (strcmp(value, "high") == 0) {
-                port_options.native_colour = 1;
-            } else {
-                fprintf(stderr, "--native-colour wants exact or high, not %s\n", value);
-                exit(2);
-            }
-            port_options.native_colour_forced = 1;
         } else if (strcmp(option, "--native-draw") == 0) {
             int bits = port_native_draw_parse(value);
 

@@ -336,8 +336,7 @@ What it says:
 - **This card does compress MSAA colour**: Mesa 26.2.3's `ac_surface.c` (`gfx12_compute_surface`) turns DCC on for
   every multisampled colour image ("Always enable compression for Z/S and MSAA color by default"). What it no longer
   has is FMASK, the older cards' own MSAA scheme (`ac_gpu_info.c`: `has_fmask = gfx_level <= GFX10_3`, RDNA 2 and
-  before). Why many small triangles make MSAA three to four times dearer here is not known: that FMASK's absence is the
-  cause is a guess, not measured.
+  before). Why many small triangles make MSAA three to four times dearer: the next section.
 - An image twice as tall as what is drawn (the renderer's frame buffers' surface) costs nothing more. A render pass a
   layer, a shader that may discard, one that writes its own depth: nothing to speak of.
 - **The renderer is not far off the card**: the map's 1.5 layers at about 0.56 ms is 0.85 ms, its knock-out 1.2 with
@@ -347,6 +346,57 @@ What it says:
 So the lever is anti-aliasing that is not MSAA. Supersampling is cheaper for the same count of samples: twice the
 pixels at 1 sample is about 0.11 ms (8 bit) or 0.38 (16 bit) a map-like layer, against MSAA 2's 0.21 and 0.565. Not
 yet measured in the game: 4x with MSAA 1 and colour exact together, and a higher scale without MSAA.
+
+## Why MSAA costs so much here: pixels written in part (2026-11-14, later still)
+
+New cases in `kf4-layerbench` (`edges:`, `split:`, `part:`) take the map-like layer apart. RX 9070 XT, RADV 26.2.3,
+3840x1792, ms a layer, textured with depth unless said:
+
+| | 8 bit, 1 sample | 8 bit, 2 | 16 bit, 1 | 16 bit, 2 (the owner's) |
+|---|---|---|---|---|
+| 2 triangles | 0.025 | 0.036 | 0.043 | 0.087 |
+| 1250 triangles (quads 128x60 pixels) | 0.027 | 0.042 | 0.047 | 0.175 |
+| 5000 | 0.031 | 0.056 | 0.057 | 0.237 |
+| 45000 | 0.044 | 0.132 | 0.090 | 0.426 |
+| 180000 | 0.057 | 0.179 | 0.105 | 0.465 |
+| 45000, colour alone (no depth) | 0.035 | 0.054 | 0.058 | 0.262 |
+| 45000, depth alone (colour masked off) | 0.035 | 0.059 | 0.037 | 0.090 |
+| 2 triangles, the shader's sample mask all samples | 0.072 | 0.072 | 0.072 | 0.147 |
+| 2 triangles, the sample mask only sample 0 | 0.070 | 0.116 | 0.072 | 0.230 |
+| 45000, `RADV_DEBUG=nodcc` | | 0.444 | | 0.650 |
+| 45000, `RADV_DEBUG=nobinning` | | 0.129 | | 0.434 |
+
+What it says:
+
+- **The cost is pixels whose samples are written at different times**, not the triangles. A triangle's edge leaves the
+  pixels it crosses part-covered, and the triangle beside it writes their other samples later. Two triangles with a
+  sample mask of one sample (every pixel part-written, no edges at all) cost what 5000 to 45000 triangles do. At one
+  sample no pixel is ever written in part, and the triangles cost little.
+- **It levels off**: 180000 triangles cost a tenth more than 45000. Once every block of memory holds a part-written
+  pixel, more edges add nothing. That is the shape of writes that no longer fill whole blocks, which the memory side
+  must read, merge and write back (and recompress). It is the same with the colour compression off (2 triangles 0.245,
+  45000 0.650 at the owner's), so it is not only DCC giving up; DCC still saves a third.
+- **It is the colour, and the bytes a pixel holds**: colour alone with edges is 0.054 ms at 8 bytes a pixel (8 bit, 2
+  samples; or 16 bit, 1 sample: 0.058) and 0.19 to 0.26 at 16 (16 bit and 2 samples, or 8 bit and 4). The depth adds
+  0.06 to 0.09 at 2 samples. The owner's pair is past the step between 8 and 16 bytes a pixel.
+- Edges in new places each layer (as the game's are) cost the same as edges in the same places. Binning off changes
+  nothing. The renderer's image twice as tall: nothing.
+- Writing `gl_SampleMask` itself costs (0.07 even at one sample), so the `part:` rows compare with each other, not with
+  the `edges:` rows.
+- Why this card has the step: the hardware's own documents would say. FMASK is still a fair guess (with it, a
+  part-covered pixel's samples were written as one colour and a mask; without it each sample is its own write), but
+  nothing here proves it.
+
+**The game does nothing wrong here.** It draws the PS2's triangles as the PS2 did, and its MSAA cost at 009 (0.55 ms,
+round 3) is what this table says 1.5 map layers cost. Its own MSAA extras are small: cut-out AA 0.17 ms, resolves and
+expands within the knock-outs' noise. What it could change:
+
+- At 4x on a window smaller than 3840x1792, the scale is already supersampling: MSAA 2 on top buys little for its
+  0.55 ms. MSAA's price is lowest at 1x or 2x, where it is worth most.
+- The step is at 8 bytes a pixel: colour high with MSAA 2 was the one combination past it. **Colour high is removed**
+  (2026-11-14): it showed no difference to see, and the colour surfaces are now always 8 bits a channel.
+- The depth with stencil (`D32_SFLOAT_S8_UINT`) is a fifth of it; `D32_SFLOAT` where the stencil is unused would save
+  part of that (not measured).
 
 ## Not known
 

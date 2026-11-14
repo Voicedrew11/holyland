@@ -77,9 +77,6 @@ static inline void gsr_set_cutout_aa(int mode) {
 static inline void gsr_set_2d(int mode) {
     pcr_set_2d(mode);
 }
-static inline void gsr_set_colour(int mode) {
-    pcr_set_colour(mode);
-}
 static inline void gsr_set_layer_z(int mode) {
     pcr_set_layer_z(mode);
 }

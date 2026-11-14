@@ -299,11 +299,6 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     return true;
 }
 
-// (colour high: the texture's colour with its fraction where the read keeps one: the sampler's filter, the 2D mode's
-// cubic; texture_f_kept says it was set, else the colour is sample_texture's whole numbers)
-vec4 texture_f;
-bool texture_f_kept = false;
-
 // The 2D mode's smooth (pcr_canvas.cpp, PCR_F_SMOOTH_2D: at a scale above 1, a sprite's or a 2D triangle's texture
 // read nearest): where the texture is magnified on the target (a texel at least a pixel across), it is read with a
 // Catmull-Rom cubic (16 texels) at this pixel's own place, not nearest: the same picture at every scale, the texels'
@@ -350,9 +345,7 @@ uvec4 smooth_2d(vec2 uv) {
             }
         }
     }
-    texture_f = clamp(sum, lo, hi);
-    texture_f_kept = true;
-    return uvec4(floor(texture_f + 0.5));
+    return uvec4(floor(clamp(sum, lo, hi) + 0.5));
 }
 
 // The texture's colour at this pixel: the level from Q (TEX1's LCM, L, K), the filter MMAG or MMIN picks; above 0 the
@@ -377,8 +370,6 @@ uvec4 sample_texture() {
         if (lod <= 0.0 || aniso_log2() == 0u || !sampled_anisotropic(uv, lod, t)) {
             t = sampled_lod(uv / vec2(sampled_size()), lod);
         }
-        texture_f = t * 255.0;
-        texture_f_kept = true;
         return uvec4(round(t * 255.0));
     }
     uint mmin = (pc.tex1 >> 1) & 7u;
@@ -409,55 +400,6 @@ uvec4 destination() {
 
 // ALPHA's (A - B) * C + D in the GS's integers (as gs_frag.h's), COLCLAMP's clamp or wrap; with PABE, Cs where As's
 // bit 7 is clear
-// Colour high (PCR_F_HIGH, pcr_canvas.cpp's set_colour: the colour surfaces 16 bits a channel): the colours' arithmetic
-// in floats, without the GS's roundings, alpha still the GS's integers (the alpha test, DATE and the blend's factors as
-// exact); the picture is dithered to 8 bits as it is scanned out (pcr_narrow.frag). As the native GS's --native-colour
-// high: the fractions the GS's shifts drop are kept, but not the level. Along a gradient the GS's floor takes half a
-// step on average, and the picture's level is the PS2's when that is taken too (else a dark scene comes out about a
-// step brighter). Whole numbers (to 1/128) are taken as whole.
-bvec3 whole(vec3 x) {
-    return lessThan(abs(x - round(x)), vec3(1.0 / 128.0));
-}
-
-// The GS's floor of a colour interpolated across a primitive: exact where it is a whole number, else less half a step
-vec3 gs_floor(vec3 x) {
-    return mix(x - 0.5, round(x), whole(x));
-}
-
-// What the GS's p * k >> 7 drops on average, for p along a gradient: half a step, less what k's factors of two keep
-// exact (k 128 drops nothing; 64 a quarter); for a k that is itself along a gradient, the mean over k
-float shift_loss(float k) {
-    if (abs(k - round(k)) >= 1.0 / 128.0) {
-        return 0.5 - 4.5 / 256.0;
-    }
-    int ki = int(round(k));
-    return ki == 0 ? 0.0 : 0.5 - float(1 << min(findLSB(ki), 7)) / 256.0;
-}
-
-// p * k >> 7 as the GS has it where both are whole numbers; else p * k / 128 less what the shift drops on average
-vec3 gs_shift7(vec3 p, vec3 k) {
-    vec3 x = p * k / 128.0;
-    vec3 loss = vec3(shift_loss(k.r), shift_loss(k.g), shift_loss(k.b));
-    bvec3 exact = bvec3(uvec3(whole(p)) & uvec3(whole(k)));
-    return mix(x - loss, floor(x + 1.0 / 256.0), exact);
-}
-
-// blended() in floats, from the destination's colours with their fraction (COLCLAMP's clamp; its wrap stays the GS's
-// integers, blended()'s)
-vec3 blended_high(uvec4 cs, vec3 hc) {
-    if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
-        return hc;
-    }
-    vec4 dh = texelFetch(u_dest, ivec2(gl_FragCoord.xy) - pc.dest_offset, 0) * 255.0;
-    uint sel_a = pc.alpha & 3u, sel_b = (pc.alpha >> 2) & 3u, sel_c = (pc.alpha >> 4) & 3u, sel_d = (pc.alpha >> 6) & 3u;
-    vec3 a = sel_a == 0u ? hc : sel_a == 1u ? dh.rgb : vec3(0.0);
-    vec3 b = sel_b == 0u ? hc : sel_b == 1u ? dh.rgb : vec3(0.0);
-    vec3 dd = sel_d == 0u ? hc : sel_d == 1u ? dh.rgb : vec3(0.0);
-    float ad = (pc.alpha & 0x40000u) != 0u ? 128.0 : round(dh.a);
-    float c = sel_c == 0u ? float(cs.a) : sel_c == 1u ? ad : float((pc.alpha >> 8) & 0xFFu);
-    return clamp(gs_shift7(a - b, vec3(c)) + dd, 0.0, 255.0);
-}
-
 uvec3 blended(uvec4 cs) {
     if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
         return cs.rgb;
@@ -529,32 +471,25 @@ void main() {
 #endif
     uvec4 vc = uvec4(v_color + 0.001);
     uvec4 c = vc;
-    bool high = (pc.flags & PCR_F_HIGH) != 0u;
-    vec3 hc = high ? gs_floor(v_color.rgb) : vec3(0.0); // (colour high: c's colour in floats; c's alpha still used)
     if ((pc.flags & PCR_F_TME) != 0u) {
         uvec4 t = sample_texture();
-        vec3 tf = texture_f_kept ? texture_f.rgb : vec3(t.rgb);
         bool tcc = (pc.flags & PCR_F_TCC) != 0u;
         switch ((pc.flags >> PCR_F_TFX_SHIFT) & 3u) {
         case 0u: // MODULATE
             c.rgb = min((t.rgb * vc.rgb) >> 7, uvec3(255u));
             c.a = tcc ? min((t.a * vc.a) >> 7, 255u) : vc.a;
-            hc = min(gs_shift7(tf, hc), vec3(255.0));
             break;
         case 1u: // DECAL
             c.rgb = t.rgb;
             c.a = tcc ? t.a : vc.a;
-            hc = tf;
             break;
         case 2u: // HIGHLIGHT
             c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
             c.a = tcc ? min(t.a + vc.a, 255u) : vc.a;
-            hc = min(gs_shift7(tf, hc) + float(vc.a), vec3(255.0));
             break;
         default: // HIGHLIGHT2
             c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
             c.a = tcc ? t.a : vc.a;
-            hc = min(gs_shift7(tf, hc) + float(vc.a), vec3(255.0));
             break;
         }
     }
@@ -562,8 +497,6 @@ void main() {
         uint f = uint(clamp(v_fog, 0.0, 255.0));
         uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu);
         c.rgb = (f * c.rgb + (255u - f) * fog) >> 8;
-        float ff = clamp(v_fog, 0.0, 255.0);
-        hc = (ff * hc + (255.0 - ff) * vec3(fog)) / 256.0;
     }
 #ifndef PCR_EARLY
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
@@ -573,18 +506,13 @@ void main() {
     }
 #endif
     uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
-    if (high && (pc.flags & PCR_F_SHADER_BLEND) != 0u) {
-        // (COLCLAMP's wrap: the GS's integers)
-        hc = (pc.alpha & 0x10000u) != 0u ? blended_high(c, hc) : vec3(rgb);
-    }
     if ((pc.flags & PCR_F_PREMUL) != 0u) {
         uint k = (pc.flags & PCR_F_C_FIX) != 0u ? pc.clamp_hi >> 24 : c.a;
         rgb = min((rgb * k) >> 7, uvec3(255u));
-        hc = min(gs_shift7(hc, vec3(float(k))), vec3(255.0));
     }
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
-    o_color = vec4((high ? clamp(hc, 0.0, 255.0) : vec3(rgb)) / 255.0, alpha_out);
+    o_color = vec4(vec3(rgb) / 255.0, alpha_out);
 #ifdef PCR_RECORDS
     o_factor = vec4(0.0);
     if ((pc.factors & 0x80000000u) != 0u) {
@@ -594,11 +522,11 @@ void main() {
         float fix = clamp(float(pc.clamp_hi >> 24) / 128.0, 0.0, 1.0);
         // (the source's factor as it is, f[]; the destination's as one minus it, g[], the blend taking it from one itself
         // (ONE_MINUS_SRC1_ALPHA). Where a one minus is made here, it is one minus the factor as the blend holds it: NVIDIA's
-        // blend cuts a factor down to the target's precision, 8 or 16 bits (a source alpha or constant of k / 128 is
+        // blend cuts a factor down to the target's precision, 8 bits (a source alpha or constant of k / 128 is
         // floor(255 k / 128) / 255 to it in an 8-bit target); given as 1 - As, its pictures came out a value or two off)
         // (pc.factors' bit 8, the canvas's by the GPU's maker: RADV on AMD holds the factor whole, so the one minus is
         // of the factor as given: with NVIDIA's cut its pictures came out a value darker here and there, 2026-11-14)
-        float held = high ? 65535.0 : 255.0;
+        const float held = 255.0;
         bool cut = (pc.factors & 0x100u) != 0u;
         float qa = cut ? floor(as * held) / held : as, qfix = cut ? floor(fix * held) / held : fix;
         float f[6] = float[6](0.0, 1.0, as, 1.0 - qa, fix, 1.0 - qfix);

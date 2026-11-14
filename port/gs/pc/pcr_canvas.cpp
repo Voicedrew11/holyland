@@ -100,7 +100,6 @@ enum : uint32_t {
     F_SURFACE_CT16 = 0x40000,
     F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
-    F_HIGH = 0x200000,
     F_DECAL = 0x400000,
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
@@ -817,11 +816,6 @@ public:
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
         }
-        if (s->image->get_format() != dst.get_format()) {
-            scanout_narrow(out, *s->image, {x0, y0, x1 - x0, y1 - y0},
-                           {0, 0, int32_t(dst.get_width()), int32_t(dst.get_height())}, dst);
-            return true;
-        }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
             const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             out.copy_image(dst, *s->image, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour,
@@ -831,37 +825,6 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
-    }
-
-    // Colour high: a rectangle of a 16-bit surface (x, y, width, height) stretched over a rectangle of the 8-bit picture
-    // dst, dithered (pcr_narrow.frag); what dst has outside that rectangle is kept
-    void scanout_narrow(CommandBuffer &out, const Image &src, std::array<int32_t, 4> from, std::array<int32_t, 4> to,
-                        const Image &dst) {
-        RenderPassInfo rp;
-        rp.num_color_attachments = 1;
-        rp.color_attachments[0] = &dst.get_view();
-        rp.store_attachments = 1;
-        rp.load_attachments = 1;
-        rp.render_area = {{to[0], to[1]}, {uint32_t(to[2]), uint32_t(to[3])}};
-        out.begin_render_pass(rp);
-        out.set_program(narrow_program_);
-        out.set_opaque_state();
-        out.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        out.set_cull_mode(VK_CULL_MODE_NONE);
-        out.set_depth_test(false, false);
-        out.set_stencil_test(false);
-        out.set_blend_enable(false);
-        out.set_color_write_mask(0xF);
-        VkViewport vp = {0, 0, float(dst.get_width()), float(dst.get_height()), 0, 1};
-        out.set_viewport(vp);
-        out.set_scissor(rp.render_area);
-        out.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
-        int32_t push[8] = {from[0], from[1], from[2], from[3], to[2], to[3], to[0], to[1]};
-        out.push_constants(push, 0, sizeof(push));
-        out.draw(3);
-        out.end_render_pass();
-        out.barrier(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
     // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
@@ -877,14 +840,6 @@ public:
         out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
         if (src_rows <= 0 || y0 + src_rows > y1) {
-            return;
-        }
-        if (src.get_format() != dst.get_format()) {
-            out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            scanout_narrow(out, src, {x0, y0, x1 - x0, src_rows}, {0, down_rows, int32_t(dst.get_width()), 2 * src_rows},
-                           dst); // (colour high)
             return;
         }
         out.blit_image(dst, src, {0, down_rows, 0}, {int32_t(dst.get_width()), 2 * src_rows, 1}, {x0, y0, 0},
@@ -1087,7 +1042,7 @@ private:
     // ---- Surfaces ----
     ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
-                                                              depth ? depth_format_ : colour_format());
+                                                              depth ? depth_format_ : colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -1124,7 +1079,7 @@ private:
 
     // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
     ImageHandle make_ms_image(uint32_t width, uint32_t height) {
-        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format());
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                      (trace_.on ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u); // (the trace's probe reads it)
@@ -2490,7 +2445,6 @@ private:
         std::array<uint32_t, 2> scale = {1, 1};
         uint32_t samples = 1;
         bool cutout_aa = false;
-        int precision = GSN_COLOUR_EXACT; // (colour_mode_)
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
         // (where the canvas that takes the copies puts the images it lets go for them: the copying canvas's spares)
         std::shared_ptr<SpareImages<ImageHandle>> spares;
@@ -2505,7 +2459,6 @@ private:
         copies->scale = scale_;
         copies->samples = samples_;
         copies->cutout_aa = cutout_aa_;
-        copies->precision = colour_mode_;
         copies->mode_2d = mode_2d_;
         copies->spares = spares_on_ ? spares_ : nullptr;
         CommandBuffer &c = cmd(GpuWork::copy);
@@ -2577,7 +2530,6 @@ private:
         scale_ = pending_scale_ = copies.scale;
         samples_ = pending_samples_ = copies.samples;
         cutout_aa_ = copies.cutout_aa;
-        colour_mode_ = pending_colour_ = copies.precision;
         mode_2d_ = copies.mode_2d;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
@@ -3790,7 +3742,6 @@ private:
                          b.texture.src != SRC_SURFACE
                      ? F_SMOOTH_2D
                      : 0;
-        flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         flags |= exact_z_ ? F_EXACT_Z : 0;
         push.flags = flags;
@@ -4356,73 +4307,13 @@ private:
         }
     }
 
-    // ---- Colour precision ----
-    // Colour high (GSN_COLOUR_HIGH): the colour surfaces 16 bits a channel (16-bit UNORM holds every 8-bit value exactly,
-    // v * 257, so what the GS's arithmetic writes reads back as it is), the colours' arithmetic in floats (pcr_prim.h,
-    // F_HIGH), the picture dithered to 8 bits as it is scanned out (pcr_narrow.frag). Where the GPU cannot draw into the
-    // format, exact.
-    VkFormat colour_format() const {
-        return colour_mode_ == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
-    }
-
-    bool high_colour_ok() {
-        const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
-                                           VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT |
-                                           VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
-                                           VK_FORMAT_FEATURE_2_BLIT_DST_BIT | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
-                                           VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
-        if (high_ok_ < 0) {
-            high_ok_ = device_.image_format_is_supported(VK_FORMAT_R16G16B16A16_UNORM, need) ? 1 : 0;
-        }
-        return high_ok_ == 1;
-    }
-
-    void set_colour(int mode) {
-        if (mode == GSN_COLOUR_HIGH && !high_colour_ok()) {
-            if (!colour_refused_) {
-                fprintf(stderr, "[pcr] colour high: this GPU cannot draw 16-bit colour surfaces, so exact\n");
-                colour_refused_ = true;
-            }
-            mode = GSN_COLOUR_EXACT;
-        }
-        pending_colour_ = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
-    }
-
-    // The precision changed (from a vblank, as the scale): every colour surface made again in the new format from its
-    // pixels (a blit converts), its samples made again from it (ensure_ms). (The pipelines made ahead for a change of
-    // MSAA are made against the format of the run's first change of samples, so the other precision's are made as
-    // drawn: warm_images_ is read by the warming thread and not made again here.)
-    void apply_colour() {
-        if (pending_colour_ == colour_mode_) {
-            return;
-        }
-        end_pass();
-        for (auto &s : colour_) {
-            resolve(*s);
-            s->ms.reset();
-            s->ms_ahead = s->ms_behind = false;
-        }
-        colour_mode_ = pending_colour_;
-        for (auto &s : colour_) {
-            ImageHandle image = make_surface_image(s->width(), s->height, false);
-            if (!image) {
-                continue;
-            }
-            CommandBuffer &c = cmd(GpuWork::surface);
-            full_barrier(c);
-            c.blit_image(*image, *s->image, {0, 0, 0}, {int32_t(image->get_width()), int32_t(image->get_height()), 1},
-                         {0, 0, 0}, {int32_t(s->image->get_width()), int32_t(s->image->get_height()), 1}, 0, 0, 0, 0, 1,
-                         VK_FILTER_NEAREST);
-            full_barrier(c);
-            s->image = image;
-        }
-        kept_frame_.reset(); // (of the old format: a picture between reads its buffer until the next 0xF2)
-    }
+    // The colour surfaces' format: the GS's 8 bits a channel. (A 16-bit "colour high" was removed 2026-11-14: no
+    // difference to see, and with MSAA it cost three times as much a layer on RDNA 4: docs/port/PC_OPTIMIZATION.md.)
+    static constexpr VkFormat colour_format = VK_FORMAT_R8G8B8A8_UNORM;
 
     // ---- Scale ----
     void apply_scale() {
         apply_samples();
-        apply_colour();
         if (pending_scale_ == scale_) {
             return;
         }
@@ -4465,7 +4356,7 @@ private:
     };
     WarmImages make_warm_images(uint32_t samples) {
         WarmImages w;
-        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format());
+        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format);
         info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4607,10 +4498,6 @@ private:
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
         Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, xfs);
-        ResourceLayout narrow = expand;
-        narrow.push_constant_size = 8 * sizeof(int32_t);
-        Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
-        narrow_program_ = device_.request_program(cvs, nfs);
         ResourceLayout nd = batch_vert;
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
         programs_for(1, nvs);
@@ -4730,12 +4617,8 @@ private:
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = GSN_LOD_SCALE; // (set_sampling)
     int mode_2d_ = GSN_2D_PS2;     // (set_2d)
-    int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
-    bool colour_refused_ = false;
-    int high_ok_ = -1; // (high_colour_ok's answer, asked once)
     std::array<BufferHandle, 12> last_native_; // (bind_between) each native program's last arena, records, triangles
     bool set0_fresh_ = false; // (bind_between) set 0's native bindings made since the command buffer's last render pass
-    Program *narrow_program_ = nullptr; // (colour high's scanout: pcr_narrow.frag)
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
@@ -4907,9 +4790,6 @@ void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
 }
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
-}
-void Canvas::set_colour(int mode) {
-    impl_->set_colour(mode);
 }
 void Canvas::set_2d(int mode) {
     impl_->set_2d(mode);

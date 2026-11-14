@@ -72,7 +72,6 @@ int pcr_set_aniso(int taps);
 int pcr_set_msaa(int samples);
 void pcr_set_cutout_aa(int mode);
 void pcr_set_2d(int mode);
-void pcr_set_colour(int mode);
 void pcr_set_layer_z(int mode);
 /* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
 int pcr_native_kinds(void);

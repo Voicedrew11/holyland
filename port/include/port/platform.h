@@ -68,11 +68,6 @@ typedef struct {
        gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
     int native_2d;
     int native_2d_forced;
-    /* --native-colour: how precisely the renderer keeps colours (GSN_COLOUR_*, gsn.h: 0
-       exact, the default, the GS's 8 bits a channel and its roundings; 1 high, 16 bits a channel and the
-       colours' arithmetic in floats, dithered to 8 bits on the way out). Live from the overlay. */
-    int native_colour;
-    int native_colour_forced;
     /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
        0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
        surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
@@ -384,8 +379,6 @@ void port_gs_set_native_aniso(int taps);
 void port_gs_set_native_cutout_aa(int mode);
 /* The renderer's 2D at a larger scale (port_options.native_2d), from the next draw */
 void port_gs_set_native_2d(int mode);
-/* The renderer's colour precision (port_options.native_colour), from the next vblank */
-void port_gs_set_native_colour(int mode);
 /* The renderer's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
 /* --native-draw (port_options.native_draw), from the next frame */
