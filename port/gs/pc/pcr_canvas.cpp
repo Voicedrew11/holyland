@@ -66,7 +66,7 @@ struct PrimPush {
     uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
-    uint32_t unused;     // (a record's size a multiple of 8 bytes)
+    uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
@@ -107,6 +107,8 @@ enum : uint32_t {
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
 constexpr uint32_t F_DUAL = 0x80000000u;
+// (... the blend holds a factor cut down to the target's precision, NVIDIA's: pcr_prim.h makes its one minus of that)
+constexpr uint32_t F_DUAL_CUT = 0x100u;
 enum : uint32_t { FACTOR_ZERO, FACTOR_ONE, FACTOR_AS, FACTOR_ONE_MINUS_AS, FACTOR_FIX, FACTOR_ONE_MINUS_FIX, FACTOR_NONE };
 uint32_t factor_code(VkBlendFactor f) {
     switch (f) {
@@ -398,6 +400,14 @@ public:
         dual_ok_ = runs_ok_ && f.enabled_features.dualSrcBlend && !runs_plain_ &&
                    device_.get_gpu_properties().vendorID == 0x10DE;
         max_run_draws_ = std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u);
+        // (merged runs, Runs: where the indirect ones are not drawn, or asked for; their dual-source blend where the
+        // GPU's maker's blend is known: its pictures checked against the blend's on RADV, 2026-11-14)
+        merged_ok_ = merged_asked_ && table_on_ && (!runs_ok_ || merged_forced_);
+        // (the makers whose blend's way with a factor is known: pcr_prim.h's o_factor)
+        uint32_t maker = device_.get_gpu_properties().vendorID;
+        dual_cut_ = maker == 0x10DE;
+        merged_dual_ok_ = merged_ok_ && f.enabled_features.dualSrcBlend && !merged_plain_ &&
+                          (maker == 0x10DE || maker == 0x1002);
         if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
                     getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no depth clamp");
@@ -3171,13 +3181,23 @@ private:
         // (a pass's)
         const Program *program = nullptr;
         uint32_t depth_state = 0, blend = 0, mask = 0;
+        bool merged = false; // (one vkCmdDraw of the picture's entries, not an indirect draw)
         bool operator==(const RunKey &) const = default;
     };
+    // A merged run's triangle (pcr_common.h's u_merged): several native batches' triangles are one vkCmdDraw, each
+    // triangle naming its own in the program's triangles, its instance and its batch's record. Not an indirect draw
+    // (runs_hang_here), and one draw call however many batches.
+    struct MergedTriangle {
+        uint32_t triangle, instance, record, unused;
+    };
     struct Runs {
-        BufferHandle buffer;     // (the picture's records, then its commands)
+        BufferHandle buffer;     // (the picture's records, then its commands, then its merged runs' triangles)
         uint8_t *map = nullptr;  // (written as the batches are drawn)
         uint32_t capacity = 0, used = 0;
         VkDeviceSize commands_at = 0;
+        VkDeviceSize merged_at = 0;
+        uint32_t merged_capacity = 0, merged_used = 0; // (triangles)
+        uint32_t merged_first = 0;                     // (the open run's first triangle, where it is a merged one)
         bool open = false;       // (a run whose draws are not yet recorded: the command buffer's state is its)
         RunKey key;
         uint32_t first = 0, count = 0;
@@ -3186,20 +3206,26 @@ private:
     // A kept walk drawn again: room for its batches' draws, a pass at a time (two at most), as records and commands
     void start_runs(const Kept &walk) {
         end_runs();
-        if (!runs_ok_ || !walk_table_ || !between_ || !between_->active()) {
+        if ((!runs_ok_ && !merged_ok_) || !walk_table_ || !between_ || !between_->active()) {
             return;
         }
-        uint64_t n = 0;
+        uint64_t n = 0, triangles = 0;
         for (const Batch &b : walk.batches) {
             n += b.native ? b.runs.size() : 1;
+            if (b.native && merged_ok_) {
+                for (const Batch::Run &r : b.runs) {
+                    triangles += r.count;
+                }
+            }
         }
         n *= 2;
-        if (n == 0 || n > (1u << 20)) {
+        triangles *= 2;
+        if (n == 0 || n > (1u << 20) || triangles > (1u << 24)) {
             return;
         }
         BufferCreateInfo info = {};
         info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
-        info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand));
+        info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand)) + triangles * sizeof(MergedTriangle);
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         runs_.buffer = device_.create_buffer(info, nullptr);
         runs_.map = runs_.buffer ? static_cast<uint8_t *>(device_.map_host_buffer(*runs_.buffer, MEMORY_ACCESS_WRITE_BIT))
@@ -3211,6 +3237,8 @@ private:
         runs_.capacity = uint32_t(n);
         runs_.used = 0;
         runs_.commands_at = n * sizeof(PrimPush);
+        runs_.merged_at = runs_.commands_at + n * sizeof(VkDrawIndirectCommand);
+        runs_.merged_capacity = uint32_t(triangles);
     }
 
     void end_runs() {
@@ -3224,7 +3252,7 @@ private:
     // A batch's pass in the open run (one is opened, with this state, if none is): a record and a command a draw
     void add_to_run(CommandBuffer &c, const Batch &b, PrimPush &push, const RunKey &key) {
         uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
-        if (runs_.open && runs_.count + draws > max_run_draws_) {
+        if (runs_.open && !key.merged && runs_.count + draws > max_run_draws_) {
             flush_run(); // (the device's most an indirect draw; the state is the run's, the same key)
         }
         uint32_t at = runs_.used;
@@ -3233,11 +3261,32 @@ private:
             runs_.key = key;
             runs_.first = at;
             runs_.count = 0;
-            push.record = at;
-            c.push_constants(&push, 0, sizeof(push)); // (the record field only is read: the run's first)
+            runs_.merged_first = runs_.merged_used;
+            // (the record and merged fields only are read: the run's first record; a merged run's triangles name
+            // theirs whole)
+            push.record = key.merged ? 0 : at;
+            push.merged = key.merged ? 1 : 0;
+            c.push_constants(&push, 0, sizeof(push));
             push.record = 0;
+            push.merged = 0;
         }
         auto *records = reinterpret_cast<PrimPush *>(runs_.map);
+        if (key.merged) {
+            // (one record the batch's pass, and an entry a triangle, in the order drawn)
+            auto *entries = reinterpret_cast<MergedTriangle *>(runs_.map + runs_.merged_at);
+            memcpy(&records[at], &push, sizeof(push));
+            uint32_t to = runs_.merged_used;
+            for (const Batch::Run &r : b.runs) {
+                for (uint32_t i = 0; i < r.count; i++) {
+                    entries[to++] = {r.first + i, r.instance, at, 0};
+                }
+            }
+            counts_.merged_triangles += to - runs_.merged_used;
+            runs_.count += to - runs_.merged_used;
+            runs_.merged_used = to;
+            runs_.used = at + 1;
+            return;
+        }
         auto *commands = reinterpret_cast<VkDrawIndirectCommand *>(runs_.map + runs_.commands_at);
         if (b.native) {
             for (const Batch::Run &r : b.runs) {
@@ -3261,6 +3310,12 @@ private:
             return;
         }
         runs_.open = false;
+        if (runs_.key.merged) {
+            cmd_->draw(runs_.count * 3, 1, runs_.merged_first * 3, 0);
+            counts_.merged_runs++;
+            counts_.native_draw_calls++;
+            return;
+        }
         cmd_->draw_indirect(*runs_.buffer, runs_.commands_at + VkDeviceSize(runs_.first) * sizeof(VkDrawIndirectCommand),
                             runs_.count, sizeof(VkDrawIndirectCommand));
         counts_.runs++;
@@ -3490,6 +3545,11 @@ private:
         // dummies)
         bool from_table = walk_table_ && b.table_at != no_table && (texels || sampled);
         push.table = from_table ? b.table_at | b.sampler_at << 16 : no_table;
+        if (from_table && sampled) {
+            // (pcr_prim.h's sampled_size: the table's texture's size, which the shader does not ask the GPU for)
+            push.src_offset[0] = int32_t(bt.view->get_view_width());
+            push.src_offset[1] = int32_t(bt.view->get_view_height());
+        }
         bool walk_texture = walk_table_ && (texels || sampled);
         texels = texels && !from_table;
         sampled = sampled && !from_table;
@@ -3518,18 +3578,29 @@ private:
         // batches before it of the same state. Anything else ends the run first, before the state is set.
         uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
         // (a traced batch drawn alone: its fragments that fail the test are recorded, so it is not tested early)
+        // (a native batch's in a merged run, Runs, where those are drawn: an entry a triangle and a pass)
+        bool merged = b.native && merged_ok_;
+        uint32_t batch_triangles = 0;
+        if (merged) {
+            for (const Batch::Run &r : b.runs) {
+                batch_triangles += r.count;
+            }
+        }
         bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !b.shader_blend && !texels &&
                       !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
-                      (b.native ? native_runs_ok_ : walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
+                      (merged     ? runs_.merged_used + batch_triangles * uint32_t(pass_count) <= runs_.merged_capacity
+                       : b.native ? native_runs_ok_
+                                  : runs_ok_ && walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
                       runs_.used + draws * uint32_t(pass_count) <= runs_.capacity;
+        merged = merged && in_run;
         // (a run's blend: its factors from the shader, dual-source, where they are ones it can give: Vulkan's blend of
         // the same values, so the same pixels; a batch unblended is one with factors one and zero. Its runs then do
         // not end where the blend changes: native 280 changes it about every batch)
         uint32_t cs = factor_code(blend.src), cd = factor_code(blend.dst);
-        bool dual = in_run && dual_ok_ && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
-                    ((!blend.enable && dual_unblended_) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
+        bool dual = in_run && (merged ? merged_dual_ok_ : dual_ok_) && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
+                    ((!blend.enable && (merged ? merged_unblended_ : dual_unblended_)) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
                      (blend.src_alpha == VK_BLEND_FACTOR_CONSTANT_ALPHA && (blend.flags & F_ALPHA_FACTOR)));
-        push.factors = dual ? F_DUAL | cs | cd << 4 : 0;
+        push.factors = dual ? F_DUAL | (dual_cut_ ? F_DUAL_CUT : 0) | cs | cd << 4 : 0;
         RunKey key = {};
         if (in_run) {
             key.colour = colour;
@@ -3542,6 +3613,7 @@ private:
             key.scissor[3] = int32_t(scissor_px.extent.height);
             key.fix = dual ? 0 : bits(s.alpha, 32, 8); // (the blend constant: read by no dual-source blend)
             key.v = v;
+            key.merged = merged;
             if (b.native) {
                 key.native[0] = b.arena.get();
                 key.native[1] = b.records.get();
@@ -3917,6 +3989,7 @@ private:
     static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
     static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
+    static constexpr uint32_t merged_binding = 8;  // (set 1's: the picture's merged runs' triangles, Runs)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -3930,6 +4003,12 @@ private:
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
         c.set_storage_buffer(1, records_binding, runs_.buffer ? *runs_.buffer : *picture_); // (pcr_common.h's u_records)
+        if (runs_.buffer && runs_.merged_capacity != 0) {
+            c.set_storage_buffer(1, merged_binding, *runs_.buffer, runs_.merged_at,
+                                 VkDeviceSize(runs_.merged_capacity) * sizeof(MergedTriangle)); // (u_merged)
+        } else {
+            c.set_storage_buffer(1, merged_binding, *picture_);
+        }
         if (native) {
             uint32_t at = 3 * native_slot(native->program);
             const BufferHandle *mine[3] = {&native->arena, &native->records, &native->triangles};
@@ -4170,8 +4249,9 @@ private:
         }
         // (set 1's records of the picture's runs, u_records: read by the runs' programs, PCR_RECORDS, in both stages;
         // declared in every batch program, so that one and a run's have the same layout and a change binds nothing)
-        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding;
+        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding;
         batch_vert.sets[1].meta[records_binding].array_size = 1;
+        batch_vert.sets[1].meta[merged_binding].array_size = 1;
         ResourceLayout vert = batch_vert;
         vert.input_mask = 0x7F;
         ResourceLayout frag = {};
@@ -4420,6 +4500,16 @@ private:
     // KF4_PC_INDIRECT=plain: runs without the dual-source blend (a blend change ends a run: to compare)
     const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
     bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;
+    // KF4_PC_MERGED=0: no merged runs (a kept walk's native batches a draw call a run of triangles, as before); =1:
+    // merged runs where the indirect ones are drawn too (the native batches' then merged); =plain: without the
+    // dual-source blend (a blend change ends a run: to compare)
+    const char *const merged_env_ = getenv("KF4_PC_MERGED");
+    const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
+    const bool merged_forced_ = merged_env_ && strcmp(merged_env_, "1") == 0;
+    const bool merged_plain_ = merged_env_ && strcmp(merged_env_, "plain") == 0;
+    const bool merged_unblended_ = merged_env_ && strcmp(merged_env_, "unblended") == 0;
+    bool merged_ok_ = false, merged_dual_ok_ = false;
+    bool dual_cut_ = false; // (F_DUAL_CUT)
     uint32_t max_run_draws_ = 1;
     // (KF4_PC_INDIRECT=unblended: an unblended batch in a dual-source run too, blended with one and zero: it then reads
     // its target, which costs the GPU more than the runs it joins save)

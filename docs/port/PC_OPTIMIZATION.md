@@ -401,3 +401,55 @@ To the plan: **Phase 1b, unlocked without a schedule's rate.** The asked rate fo
 are made as fast as they can be, each for the time it reaches the screen), the cap's setting, slider and option go,
 and the schedule's 16 a vblank with them. Measured with the replay bench and in a real window against the table
 above.
+
+## What changed on 2026-11-14 (morning): Phase 1, merged draws
+
+Branch `perf/speed-plan`. A kept walk's native batches are drawn as **merged runs** in the pictures between: one
+`vkCmdDraw` for every stretch of batches with the same pass, program, depth state and write mask, however many batches
+and whatever their blends and textures. Not an indirect draw (those stay off on RADV).
+
+How: each triangle of a merged draw has an entry in a buffer of the picture's (`MergedTriangle`, `u_merged`): its
+triangle in the program's triangles, its instance and its batch's record. The native vertex shaders read their
+triangle through it (`pcr_triangle`, pcr_common.h). The two blends of native 280 are one state: the factors come from
+the shader (the dual-source blend #139 built). `KF4_PC_MERGED=0` turns them off, `=plain` leaves the dual-source blend
+out, `=1` uses them where the indirect runs are on too (NVIDIA: not tried there; the indirect runs stay as they were).
+
+Real window, the owner's settings, 009, `--frame-rate-cap 0`, 30 s of play, off and on from one build:
+
+| | off | merged |
+|---|---|---|
+| 1x: GPU ms a picture | 1.174 | 0.825 |
+| 1x: native 280 | 0.478 | 0.135 |
+| 1x: pictures in the run | 38669 | 48936 |
+| 1x: the pump, ms a picture at the end | 1.47 | 0.74 |
+| 1x: left out as too late | 13903 | 3300 |
+| 1x: native draw calls a picture | 961 | 284 |
+| 4x: GPU ms a picture | 3.703 | 3.691 |
+
+- **At 1x the game is no longer held by the pump**: it drew nearly every picture the schedule asked for (51475 asked,
+  the schedule's own most of 959 a second: Phase 1b).
+- **At 4x nothing changed**: the GPU's time there is pixel work. The kinds' shares moved (native 280 0.58 to 0.22, 2d
+  0.90 to 1.27) but their sum did not: the timestamps sit between draws, and the pixel work of a draw ends later. So the
+  "native 280: 0.6 ms that no setting lowers" above was the draw calls only at 1x; at 4x it is pixels under another
+  name. Phases 2 and 3 are what 4x needs.
+- About 150 merged runs and 284 draw calls a picture are left of 961. What ends a run now: a change of program (000,
+  280, 700), of depth state or write mask, a GIF batch, a batch not from the walk's table.
+
+Three things the pictures needed, each found by comparing byte for byte:
+
+1. **`nonuniformEXT` on the table's texture and sampler index** in the runs' fragment shaders: a merged draw reads
+   several textures, and pixels of two batches in one quad's wave read one or the other's.
+2. **No `textureSize` of a table's texture**: on RADV (Mesa 26.2.3) it gave another batch's texture's size here and
+   there, `nonuniformEXT` or not (about 150 pixels a picture, changing run to run). The size now comes with the
+   record (`PrimPush::src_offset`, pcr_prim.h's `sampled_size`). A driver bug, it seems: not reported yet.
+3. **The dual-source blend's one minus by the GPU's maker**: NVIDIA's blend cuts a factor to the target's precision
+   and RADV's on AMD does not (`F_DUAL_CUT`); with NVIDIA's cut, 9:2 and 0:0 came out a value darker at about 850
+   pixels a picture. Other makers get merged runs without the dual-source blend until their pictures are compared.
+
+Checks: pictures byte for byte against `KF4_PC_MERGED=0` (52 pictures each, headless at 240 with the pictures between,
+the owner's settings: 000:0, 009:0, 009:2, 020:0, 105:0; and 009:0 at 1x without MSAA, colour exact); all 20 unit
+tests; the game under ASan and UBSan in a real window; no GPU hang in any run. Not run: TSan, the gcc and Windows
+builds, NVIDIA, a map tour against `--renderer gs`.
+
+Next, from this: the pump still walks every batch for every picture (`draw_batch`, about 900 a picture) to make the
+same records and entries each time; they could be made once a walk (30 a second). And the GIF batches end runs.

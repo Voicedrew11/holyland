@@ -630,7 +630,9 @@ static void objects_finish(Objects *o) {
         o->by_key[i] = (uint32_t)i;
     }
     sorting = o;
-    qsort(o->by_key, o->nruns, sizeof(*o->by_key), by_key);
+    if (o->nruns != 0) { /* (no runs: by_key may be null, which qsort must not be given) */
+        qsort(o->by_key, o->nruns, sizeof(*o->by_key), by_key);
+    }
 }
 
 /* The run of the frame before that is this one (cur, of this frame), or NULL */

@@ -60,6 +60,16 @@ layout(set = 0, binding = 15, std430) readonly buffer WalkCluts {
 // pictures between bind no texture a batch. One binding, the images alone (Granite's bindless set), read as integers
 // (the texels: R8_UINT, R8G8B8A8_UINT) or as colours (a sampled texture's: RGBA8), with the samplers beside them; every
 // draw's index is the same across it (a push constant), so no nonuniformEXT
+// (PCR_RECORDS: a merged run's draw, pcr_canvas.cpp's Runs, is several batches' triangles, each with its own texture
+// and sampler: the index differs within the draw, so it is nonuniformEXT there. Without it the pixels of two batches
+// that share a quad at an edge read one or the other's texture, found on RADV 2026-11-14)
+#ifdef PCR_RECORDS
+#define PCR_TABLE_AT nonuniformEXT(pc.table & 0xFFFFu)
+#define PCR_SAMPLER_AT nonuniformEXT((pc.table >> 16) & 15u)
+#else
+#define PCR_TABLE_AT (pc.table & 0xFFFFu)
+#define PCR_SAMPLER_AT ((pc.table >> 16) & 15u)
+#endif
 layout(set = 2, binding = 0) uniform texture2D u_table[];
 layout(set = 2, binding = 0) uniform utexture2D u_table_uint[];
 layout(set = 0, binding = 16) uniform sampler u_samplers[16]; // (0: nearest, clamped: the texels' texelFetch)
@@ -71,7 +81,7 @@ bool from_table() {
 // The texels (u_texels or the table's)
 uvec4 fetch_texels(ivec2 at, int level) {
     if (from_table()) {
-        return texelFetch(usampler2D(u_table_uint[pc.table & 0xFFFFu], u_samplers[0]), at, level);
+        return texelFetch(usampler2D(u_table_uint[PCR_TABLE_AT], u_samplers[0]), at, level);
     }
     return texelFetch(u_texels, at, level);
 }
@@ -79,25 +89,27 @@ uvec4 fetch_texels(ivec2 at, int level) {
 // The sampled texture (u_sampled or the table's with its sampler)
 ivec2 sampled_size() {
     if (from_table()) {
-        return textureSize(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), 0);
+        // (its size from the canvas, not textureSize: RADV, Mesa 26.2.3, gave another batch's texture's size here and
+        // there in a merged run's draw, whose index differs within the draw, nonuniformEXT or not)
+        return pc.src_offset;
     }
     return textureSize(u_sampled, 0);
 }
 vec4 sampled_lod(vec2 uv, float lod) {
     if (from_table()) {
-        return textureLod(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, lod);
+        return textureLod(sampler2D(u_table[PCR_TABLE_AT], u_samplers[PCR_SAMPLER_AT]), uv, lod);
     }
     return textureLod(u_sampled, uv, lod);
 }
 vec4 sampled_grad(vec2 uv, vec2 dx, vec2 dy) {
     if (from_table()) {
-        return textureGrad(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), uv, dx, dy);
+        return textureGrad(sampler2D(u_table[PCR_TABLE_AT], u_samplers[PCR_SAMPLER_AT]), uv, dx, dy);
     }
     return textureGrad(u_sampled, uv, dx, dy);
 }
 vec4 sampled_fetch(ivec2 at) {
     if (from_table()) {
-        return texelFetch(sampler2D(u_table[pc.table & 0xFFFFu], u_samplers[(pc.table >> 16) & 15u]), at, 0);
+        return texelFetch(sampler2D(u_table[PCR_TABLE_AT], u_samplers[PCR_SAMPLER_AT]), at, 0);
     }
     return texelFetch(u_sampled, at, 0);
 }
@@ -584,8 +596,11 @@ void main() {
         // (ONE_MINUS_SRC1_ALPHA). Where a one minus is made here, it is one minus the factor as the blend holds it: NVIDIA's
         // blend cuts a factor down to the target's precision, 8 or 16 bits (a source alpha or constant of k / 128 is
         // floor(255 k / 128) / 255 to it in an 8-bit target); given as 1 - As, its pictures came out a value or two off)
+        // (pc.factors' bit 8, the canvas's by the GPU's maker: RADV on AMD holds the factor whole, so the one minus is
+        // of the factor as given: with NVIDIA's cut its pictures came out a value darker here and there, 2026-11-14)
         float held = high ? 65535.0 : 255.0;
-        float qa = floor(as * held) / held, qfix = floor(fix * held) / held;
+        bool cut = (pc.factors & 0x100u) != 0u;
+        float qa = cut ? floor(as * held) / held : as, qfix = cut ? floor(fix * held) / held : fix;
         float f[6] = float[6](0.0, 1.0, as, 1.0 - qa, fix, 1.0 - qfix);
         float g[6] = float[6](1.0, 0.0, 1.0 - qa, as, 1.0 - qfix, fix);
         o_factor = vec4(vec3(f[pc.factors & 7u]), g[(pc.factors >> 4) & 7u]);
