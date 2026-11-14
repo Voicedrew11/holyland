@@ -530,13 +530,22 @@ void main() {
     pcr_exact_depth();
 #endif
 #ifdef PCR_ZONLY
-    // (pcr_prim_zonly.frag: the pixel's Z alone, the one every other pass gives it. A layer's Z pass drawn with it
-    // though it has an alpha test, PCR_F_LAYER_Z with the pass of the pixels that pass (pcr_canvas.cpp's pass_state):
-    // the test turns away an alpha of 0, which is 0 only where the corner's alpha is)
-    if ((pc.flags & PCR_F_LAYER_Z) != 0u && ((pc.flags >> PCR_F_PASS_SHIFT) & 3u) == 1u && uint(v_color.a + 0.001) == 0u) {
-        discard;
+    return; // (pcr_prim_zonly.frag: the pixel's Z alone, the one every other pass gives it)
+#endif
+#if defined(PCR_EXACT_Z) && !defined(PCR_EARLY)
+    // (tolerant layers, PCR_F_LAYER_PLAIN: a layer's Z pass whose alpha test turns away an alpha of 0, which is 0 only
+    // where the corner's alpha is (pcr_canvas.cpp's pass_state): the test from the corner's alpha, no texture read,
+    // no colour: the pass writes none)
+    if ((pc.flags & PCR_F_LAYER_PLAIN) != 0u) {
+        if (uint(v_color.a + 0.001) == 0u) {
+            discard;
+        }
+        o_color = vec4(0.0);
+#ifdef PCR_RECORDS
+        o_factor = vec4(0.0);
+#endif
+        return;
     }
-    return;
 #endif
     if (pc.trace_xy != PCR_NO_TRACE) {
         trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;

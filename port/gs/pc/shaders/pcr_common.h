@@ -130,6 +130,7 @@ void pcr_take_record() {
 #define PCR_F_LAYER_FINE 0x10000000u // ... a sixteenth of a Z (a cut-out's)
 #define PCR_F_LAYER_WIDE 0x20000000u // ... a Z and half its slope across a GS pixel, up to a Z more (a decal's)
 #define PCR_F_LAYER_Z 0x40000000u    // ... a layer's pass that writes its Z alone: a native draw's corners unlit
+#define PCR_F_LAYER_PLAIN 0x80000000u // ... and its alpha test the corner's alpha's: no texture read (pcr_prim.h)
 #define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 

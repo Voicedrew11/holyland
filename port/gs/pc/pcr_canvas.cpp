@@ -106,6 +106,7 @@ enum : uint32_t {
     F_LAYER_FINE = 0x10000000, // ... a sixteenth of a Z
     F_LAYER_WIDE = 0x20000000, // ... a Z and half its slope (a decal's)
     F_LAYER_Z = 0x40000000,    // ... a layer's pass that writes its Z alone
+    F_LAYER_PLAIN = 0x80000000, // ... and without its texture, its alpha test the corner's alpha's
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -3599,20 +3600,20 @@ private:
                                                : (samples ? run_sample_programs_[v] : run_programs_[v]))
                                       : (early ? (samples ? early_sample_programs_[v] : early_programs_[v])
                                                : (samples ? sample_programs_[v] : programs_[v]));
-            // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone. A layer's Z pass so too
-            // where its alpha test turns away an alpha of 0 alone (GREATER than 0, or GEQUAL 1) and the alpha is 0
-            // only where the corner's is: the texture modulates and its alpha is not taken, or is 0x80 or more
-            // everywhere. pcr_prim_zonly.frag then makes the test from the corner's alpha, the same pixels as the
-            // colour pass's, with no texture read: most of the layers. KF4_PC_LAYER_Z_PLAIN=0: with the texture, as
-            // its colour pass.)
+            // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone)
+            // A layer's Z pass is drawn without its texture (PCR_F_LAYER_PLAIN: the pass's own program, so no change
+            // of pipeline between it and the colour pass, a stretch of layers after a stretch of others) where its
+            // alpha test turns away an alpha of 0 alone (GREATER than 0, or GEQUAL 1) and the alpha is 0 only where
+            // the corner's is: the texture modulates and its alpha is not taken, or is 0x80 or more everywhere. The
+            // shader then makes the test from the corner's alpha: the same pixels as the colour pass's. Most of the
+            // layers. KF4_PC_LAYER_Z_PLAIN=0: with the texture, as its colour pass.
             uint32_t aref = bits(s.test, 4, 8);
-            bool plain = layer_z_plain_ && pass.layer_z && pass.mode == 1 && !(flags & F_DATE) && !traced &&
+            plain_pass = layer_z_plain_ && pass.layer_z && pass.mode == 1 && !(flags & F_DATE) && !traced && !samples &&
                          ((atst == 6 && aref == 0) || (atst == 5 && aref == 1)) &&
                          (!(flags & F_TME) ||
                           (bits(s.tex0, 35, 2) == 0 &&
                            (!bits(s.tex0, 34, 1) || (b.texture.ok && b.texture.alpha_lo >= 0x80))));
-            plain_pass = plain;
-            if ((early || plain) && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
+            if (early && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
                 program = in_run ? run_zonly_programs_[v] : zonly_programs_[v];
             }
             mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
@@ -3745,6 +3746,7 @@ private:
                          (pass.layer_z ? F_LAYER_Z : 0);
             uint32_t mask = 0;
             Program *program = pass_state(i, mask);
+            push.flags |= plain_pass ? F_LAYER_PLAIN : 0;
             counts_layer_z_by_pixel_ += per_sample && pass.layer_z && layer_z_by_pixel_;
             counts_layer_z_plain_ += plain_pass;
             // (a later pass: the run ends unless it continues it, before its state is set)
