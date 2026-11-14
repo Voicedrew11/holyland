@@ -194,8 +194,9 @@ public:
     void stop_numbering();
     uint32_t kicks_numbered() const { return kicks_; }
     // While kicks are numbered: a native draw's own kicks numbered from first on (native_kick_base and up), each the
-    // owner of its own RGBAQ (the weapon's trail in the frame's own walk kept: pcr_native.cpp's draw_gs_strip, whose
-    // pictures between move it by these kicks), until stop_native_kicks; the next number they would take
+    // owner of its own RGBAQ and UV (in the frame's own walk kept, the weapon's trail and the screen passes that move:
+    // pcr_native.cpp's draw_gs_strip and walk_pass_by_kicks, whose pictures between move them by these kicks), until
+    // stop_native_kicks; the next number they would take
     void number_native_kicks(uint32_t first) { native_kick_ = first; }
     void stop_native_kicks() { native_kick_ = no_kick; }
     uint32_t native_kick_next() const { return native_kick_; }

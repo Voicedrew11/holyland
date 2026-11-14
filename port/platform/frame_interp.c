@@ -3246,6 +3246,16 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
         f->shown_fbp = pending.shown;
         f->uploads_asked_again = port_gs_replay_uploads() != 0;
         f->shown_kept = pending.reads_prev && port_gs_replay_uploads();
+        if (pending.flat != NULL) {
+            size_t c;
+
+            f->frame_copies = (uint32_t)pending.flat->ncopies;
+            for (c = 0; c < pending.flat->ncopies && c < 64; c++) {
+                if (pending.flat->copy_ok[c] == COPY_BETWEEN) {
+                    f->copies_between |= (uint64_t)1 << c;
+                }
+            }
+        }
     }
     /* (the camera did not move: the same fields the game wrote, so every camera between is this one) */
     f->still = memcmp(pending.before.r, pending.scan.camera.r, sizeof(pending.before.r)) == 0 &&
