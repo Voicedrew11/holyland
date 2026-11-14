@@ -662,8 +662,8 @@ bool is_depth_format(VkFormat f) {
     return f == VK_FORMAT_D32_SFLOAT_S8_UINT || f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT;
 }
 
-// (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, or of the runs
-// with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
+// (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, and with MSAA
+// those of the runs with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
 // build's layout (Granite's state changed: tools/pipeline_seed.py makes it again).
 std::vector<Record> seed_for(uint32_t samples, bool high) {
     std::vector<Record> out;
@@ -686,7 +686,9 @@ std::vector<Record> seed_for(uint32_t samples, bool high) {
         SeedEntry e;
         memcpy(&e, pcr_pipeline_seed + sizeof(got) + size_t(i) * sizeof(SeedEntry), sizeof(e));
         Record &r = e.record;
-        if ((e.run_samples > 1) != (samples > 1) || (r.per_sample && samples <= 1)) {
+        // (the runs at 1x: their passes drawn at 1x, which a run with MSAA draws some of too (Z-only and 2D ones); the
+        // runs with MSAA only with MSAA)
+        if ((e.run_samples > 1 && samples <= 1) || (r.per_sample && samples <= 1)) {
             continue;
         }
         if (samples > 1 && r.samples == e.run_samples) {
