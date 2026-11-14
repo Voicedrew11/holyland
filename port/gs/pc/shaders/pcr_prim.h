@@ -530,7 +530,13 @@ void main() {
     pcr_exact_depth();
 #endif
 #ifdef PCR_ZONLY
-    return; // (pcr_prim_zonly.frag: the pixel's Z alone, the one every other pass gives it)
+    // (pcr_prim_zonly.frag: the pixel's Z alone, the one every other pass gives it. A layer's Z pass drawn with it
+    // though it has an alpha test, PCR_F_LAYER_Z with the pass of the pixels that pass (pcr_canvas.cpp's pass_state):
+    // the test turns away an alpha of 0, which is 0 only where the corner's alpha is)
+    if ((pc.flags & PCR_F_LAYER_Z) != 0u && ((pc.flags >> PCR_F_PASS_SHIFT) & 3u) == 1u && uint(v_color.a + 0.001) == 0u) {
+        discard;
+    }
+    return;
 #endif
     if (pc.trace_xy != PCR_NO_TRACE) {
         trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;

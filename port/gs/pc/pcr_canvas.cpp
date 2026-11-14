@@ -3600,14 +3600,17 @@ private:
                                       : (early ? (samples ? early_sample_programs_[v] : early_programs_[v])
                                                : (samples ? sample_programs_[v] : programs_[v]));
             // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone. A layer's Z pass so too
-            // where its alpha test only turns away an alpha of 0 (ATST GREATER or GEQUAL than at most 1) and its
-            // texture's least alpha is 0x40 or more: the test then fails only where a corner's alpha is under 2, the
-            // last sliver of its fade, and the pass needs neither the texture nor the test: most of the layers.
-            // KF4_PC_LAYER_Z_PLAIN=0: with the texture and the test, as its colour pass.)
+            // where its alpha test turns away an alpha of 0 alone (GREATER than 0, or GEQUAL 1) and the alpha is 0
+            // only where the corner's is: the texture modulates and its alpha is not taken, or is 0x80 or more
+            // everywhere. pcr_prim_zonly.frag then makes the test from the corner's alpha, the same pixels as the
+            // colour pass's, with no texture read: most of the layers. KF4_PC_LAYER_Z_PLAIN=0: with the texture, as
+            // its colour pass.)
             uint32_t aref = bits(s.test, 4, 8);
-            bool plain = layer_z_plain_ && pass.layer_z && !(flags & F_DATE) && !traced &&
-                         (atst == 1 || (atst == 6 && aref <= 1) || (atst == 5 && aref <= 1)) &&
-                         (!(flags & F_TME) || !bits(s.tex0, 34, 1) || (b.texture.ok && b.texture.alpha_lo >= 0x40));
+            bool plain = layer_z_plain_ && pass.layer_z && pass.mode == 1 && !(flags & F_DATE) && !traced &&
+                         ((atst == 6 && aref == 0) || (atst == 5 && aref == 1)) &&
+                         (!(flags & F_TME) ||
+                          (bits(s.tex0, 35, 2) == 0 &&
+                           (!bits(s.tex0, 34, 1) || (b.texture.ok && b.texture.alpha_lo >= 0x80))));
             plain_pass = plain;
             if ((early || plain) && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
                 program = in_run ? run_zonly_programs_[v] : zonly_programs_[v];
