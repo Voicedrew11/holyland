@@ -4216,7 +4216,12 @@ private:
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
         }
-        warm_watch(device_, warmed, 21, expand_program_);
+        WarmDevice traits;
+        traits.depth_format = depth_format_;
+        traits.dynamic_ds = dynamic_.ds;
+        traits.dynamic_blend = dynamic_.blend;
+        traits.high_colour = high_colour_ok();
+        warm_watch(device_, warmed, 21, expand_program_, traits);
     }
 
     Device &device_;

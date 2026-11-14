@@ -1,6 +1,8 @@
 # --- Never commit game data: disc images, executables, extracted files ---
 *.iso
 *.bin
+# (the PC renderer's pipeline seed: renderer state, none of the game's data, tools/pipeline_seed.py)
+!port/gs/pc/pipeline_seed.bin
 *.cue
 *.chd
 *.elf

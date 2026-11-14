@@ -183,6 +183,9 @@ static int open_pc_renderer(void) {
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
     gsr_set_presenter(port_video_submit, port_video_submit_image);
+    /* the pipelines made before play, for these settings (port/gs/pc/pcr_pipelines.h): the game waits for them at its
+       first vblank (port/platform/kernel.c), "Building shaders" in the window */
+    gsr_precompile();
     return 1;
 }
 #endif

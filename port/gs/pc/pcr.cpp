@@ -2383,13 +2383,20 @@ extern "C" void pcr_pipeline_cache(const char *path) {
     }
 }
 
-extern "C" int pcr_pipelines_running(void) {
-    return 0;
+// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
+// settings now
+extern "C" void pcr_precompile(void) {
+    pcr::precompile(uint32_t(settings().msaa.load()), settings().colour.load() == GSN_COLOUR_HIGH);
 }
 
+// The game waits while they are made (port/platform/kernel.c)
+extern "C" int pcr_pipelines_running(void) {
+    return pcr::precompile_running() ? 1 : 0;
+}
+
+// "Building shaders... done/total" (the overlay)
 extern "C" int pcr_pipelines_building(int *done, int *total) {
-    *done = *total = 0;
-    return 0;
+    return pcr::precompile_progress(done, total) ? 1 : 0;
 }
 
 
