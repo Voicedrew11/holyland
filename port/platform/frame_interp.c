@@ -63,6 +63,7 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "port/adaptive_sync.h"
 #include "port/host.h"
 #include "port/mouse_lead.h"
 #include "port/platform.h"
@@ -109,7 +110,9 @@ int port_frame_interp(void) {
    1 / the cap of a second (UNLOCKED_MOST_A_VBLANK a vblank without one), timed as a fixed rate is; the renderer draws
    the next one it can still have ready at its time and leaves out those it would be late for (port/gs/pc/pcr.cpp's
    Pump), so how many are drawn follows what it can do, picture by picture, with no rate to find. The swapchain is
-   mailbox, so that each refresh shows the newest, or immediate with --tearing. */
+   mailbox, so that each refresh shows the newest, or immediate with --tearing.
+   With adaptive sync (port/include/port/adaptive_sync.h) every rate over 30 is kept under its cap, the screen's
+   rate too, and is timed as a fixed rate is: the screen refreshes at each picture's time. */
 #define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
 
 /* Unlocked's pictures asked for a second. They follow what the window shows: a quarter more than it showed in the
@@ -123,12 +126,20 @@ int port_frame_interp(void) {
    for. The rate overshot and the pictures came in bursts again, in play too.) Before the window has shown anything,
    and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before. */
 #define UNLOCKED_LEAST_HZ 120
+
+/* hz, no more than adaptive sync's cap under the screen's rate (port/include/port/adaptive_sync.h) where it is on */
+static int under_adaptive_sync_cap(int hz) {
+    int cap = port_options.adaptive_sync ? adaptive_sync_cap_hz(port_video_refresh_rate()) : 0;
+
+    return cap > 0 && hz > cap ? cap : hz;
+}
+
 static int unlocked_asked_hz(void) {
     static int follow = -1;
     static _Atomic int asked_now;
     double most = UNLOCKED_MOST_A_VBLANK * 60000.0 / 1001.0;
     int cap = port_options.frame_rate_cap;
-    int top = cap > 0 && cap < most ? cap : (int)most;
+    int top = under_adaptive_sync_cap(cap > 0 && cap < most ? cap : (int)most);
     int asked, last = asked_now;
     double shown = port_video_pictures_per_second();
 
@@ -159,6 +170,7 @@ int port_frame_rate_hz(void) {
     } else if (hz == PORT_FRAME_RATE_UNLOCKED) {
         hz = unlocked_asked_hz();
     }
+    hz = hz > 30 ? under_adaptive_sync_cap(hz) : hz; /* (the PS2's 30 is a second vblank's, as it was) */
     return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
 }
 

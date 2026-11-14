@@ -152,6 +152,7 @@ add_library(kf4_port STATIC
     port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
     port/platform/gs.c
     port/platform/frame_interp.c
+    port/platform/adaptive_sync.c
     port/platform/field_frames.c
     port/platform/video.c
     port/platform/refresh_clock.c
@@ -572,7 +573,7 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 # through VU1 (vif1.c and vu1.c, built in), on paraLLEl-GS
 if(TARGET kf4_gs)
     add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
-        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/lz4_block.c)
+        port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/adaptive_sync.c port/platform/lz4_block.c)
     target_include_directories(kf4-gsreplay PRIVATE port/include port/gs/shared port/gs/pc)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
     target_link_libraries(kf4-gsreplay PRIVATE kf4_gs kf4_pc Threads::Threads)
@@ -651,6 +652,13 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME refresh_clock COMMAND refresh_clock_test)
+endif()
+
+# Adaptive sync's cap under a VRR screen's rate (port/platform/adaptive_sync.c)
+add_executable(adaptive_sync_test tests/adaptive_sync_test.c port/platform/adaptive_sync.c)
+target_include_directories(adaptive_sync_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME adaptive_sync COMMAND adaptive_sync_test)
 endif()
 
 # Instant mouse look's turn of the pictures between (port/platform/mouse_lead.c)

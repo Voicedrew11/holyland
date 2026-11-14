@@ -114,6 +114,10 @@ typedef struct {
        mailbox (port/platform/present_vk.cpp) */
     int tearing;
     int tearing_forced;
+    /* --adaptive-sync or settings.json: a VRR screen's (port/include/port/adaptive_sync.h): the swapchain FIFO at
+       every rate, no rate over adaptive_sync_cap_hz, the screen's rate not timed by its refreshes; off by default */
+    int adaptive_sync;
+    int adaptive_sync_forced;
     /* --present-scaling, --present-sharpen: how the picture is scaled to the window (port_video_scaling,
        port/platform/video.c), this run's whatever settings.json says (-1: the settings'); --dump-present
        WxH: dumps write the picture as a window of that size shows it */

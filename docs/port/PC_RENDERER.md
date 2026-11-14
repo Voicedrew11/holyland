@@ -2399,6 +2399,14 @@ vblank) and shown at their times, at a rate that follows the renderer.
   so no vblank leaves the screen: PERFORMANCE.md, "the game's 57-58 vblanks a second uncapped" (#107).
 - **The swapchain** (present_vk.cpp): unlocked is mailbox whatever VSync says (the owner's choice), FIFO where
   there is no mailbox; with `--tearing` immediate, then mailbox. SDL_Renderer's presenter keeps VSync as set.
+- **Adaptive sync** (2026-11-14; `--adaptive-sync`, `settings.json` `display.adaptive_sync`, off; the Display page's
+  "Adaptive sync (VRR)"; `port/include/port/adaptive_sync.h`): for a FreeSync/G-Sync screen. The swapchain FIFO at
+  every rate (over VSync and `--tearing`; the SDL presenter's VSync on), every rate over 30 no more than the screen's
+  rate less rate²/3600 (161 at 170 Hz, 116 at 120: `adaptive_sync_cap_hz`, ctest `adaptive_sync`), and `monitor` not
+  timed by the screen's refreshes (they follow the pictures under VRR), so fixed rates are timed by the game's clock
+  and shown when they come. VRR itself is the screen's and the desktop's (KWin: full-screen windows by default).
+  Measured at 009:0 with the owner's settings: FIFO made, 115.9 a second shown at the 120 Hz screen's cap of 116
+  (without it, 404, immediate).
 
 **Measured** (map 000, the owner's settings, `pace_test.py --mode pace`, 169.83 Hz simulated screen, real time;
 `--renderer fast --native-msaa 2 --native-colour high`):

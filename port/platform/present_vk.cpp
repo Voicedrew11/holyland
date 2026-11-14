@@ -165,8 +165,10 @@ struct Presenter {
     bool stale = true;     // the swapchain is to be made again (a new size, vsync, or out of date)
     int vsync_made = -1;
     int vsync_wanted = 0;
-    int unlocked_made = -1; // --frame-rate unlocked: 0 off, 1 mailbox, 2 --tearing (immediate)
-    int unlocked_wanted = 0;
+    // the mode chosen over vsync's (wanted_mode): 0 none, 1 mailbox (unlocked), 2 immediate (unlocked --tearing),
+    // 3 FIFO (--adaptive-sync)
+    int mode_made = -1;
+    int mode_wanted = 0;
 
     VkRenderPass pass = VK_NULL_HANDLE;
     VkCommandPool pool = VK_NULL_HANDLE;
@@ -316,6 +318,17 @@ void wait_queue() {
     gsr_queue_unlock();
 }
 
+// The swapchain mode asked for over vsync's (Presenter::mode_wanted), from the options as they are now
+int wanted_mode() {
+    if (port_options.adaptive_sync) {
+        return 3;
+    }
+    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED) {
+        return 0;
+    }
+    return port_options.tearing ? 2 : 1;
+}
+
 // The swapchain for the window's size and the vsync setting: false if there is none now (the window
 // is minimised, or it failed)
 bool make_swapchain() {
@@ -340,16 +353,19 @@ bool make_swapchain() {
 
     // vsync: FIFO; without: immediate, else mailbox (no tearing, never waits), else FIFO after all.
     // --frame-rate unlocked, whatever vsync: mailbox (each refresh shows the newest picture, no tearing), else FIFO;
-    // with --tearing, immediate first (the owner's choice: PC_RENDERER.md, smooth play step 3)
+    // with --tearing, immediate first (the owner's choice: PC_RENDERER.md, smooth play step 3).
+    // --adaptive-sync, whatever the rest: FIFO (a VRR screen waits for each picture; port/include/port/adaptive_sync.h)
     uint32_t count = 0;
     vk.vkGetPhysicalDeviceSurfacePresentModesKHR(pr.gpu, pr.surface, &count, nullptr);
     std::vector<VkPresentModeKHR> modes(count);
     vk.vkGetPhysicalDeviceSurfacePresentModesKHR(pr.gpu, pr.surface, &count, modes.data());
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
     std::vector<VkPresentModeKHR> wants;
-    if (pr.unlocked_wanted == 1) {
+    if (pr.mode_wanted == 3) {
+        wants = {}; // FIFO, which every surface has
+    } else if (pr.mode_wanted == 1) {
         wants = {VK_PRESENT_MODE_MAILBOX_KHR};
-    } else if (pr.unlocked_wanted == 2) {
+    } else if (pr.mode_wanted == 2) {
         wants = {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
     } else if (!pr.vsync_wanted) {
         wants = {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
@@ -444,7 +460,7 @@ bool make_swapchain() {
         pr.images.push_back(s);
     }
     pr.vsync_made = pr.vsync_wanted;
-    pr.unlocked_made = pr.unlocked_wanted;
+    pr.mode_made = pr.mode_wanted;
     pr.stale = false;
     static const char *const mode_names[] = {"immediate", "mailbox", "FIFO", "relaxed FIFO"};
     std::fprintf(stderr, "[present] swapchain %ux%u, %u images, %s\n", extent.width, extent.height, count,
@@ -1006,6 +1022,7 @@ extern "C" int port_vk_open(void *sdl_window) {
         return 0;
     }
     pr.vsync_wanted = port_settings.vsync;
+    pr.mode_wanted = wanted_mode(); // (the first swapchain the one wanted, not made twice)
     if (!make_render_pass() || !make_frames() || !make_swapchain()) {
         std::fprintf(stderr, "[present] the swapchain could not be made\n");
         close_all();
@@ -1076,8 +1093,8 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     if (drawable_w <= 0 || drawable_h <= 0) {
         return;
     }
-    pr.unlocked_wanted = port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED ? 0 : port_options.tearing ? 2 : 1;
-    if (pr.stale || pr.vsync_made != pr.vsync_wanted || pr.unlocked_made != pr.unlocked_wanted ||
+    pr.mode_wanted = wanted_mode();
+    if (pr.stale || pr.vsync_made != pr.vsync_wanted || pr.mode_made != pr.mode_wanted ||
         pr.extent.width != uint32_t(drawable_w) ||
         pr.extent.height != uint32_t(drawable_h)) {
         if (!make_swapchain()) {
