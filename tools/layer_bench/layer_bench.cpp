@@ -5,7 +5,9 @@
 // target of the renderer's size and formats, one state changed at a time, and times them by the clock: pictures are
 // submitted one after another and waited for, so the time a picture is the GPU's (it is the limit here).
 //
-//   kf4-layerbench [--size WxH] [--pictures N] [--layers N] [--only NAME]
+//   kf4-layerbench [--size WxH] [--pictures N] [--layers N] [--only CASE] [--target TARGET]
+//
+// --only and --target keep the cases and targets whose names hold the text given.
 //
 // One thread. Prints a table: the case, ms a layer, and megabytes a layer the colour and depth targets hold.
 #include <chrono>
@@ -24,7 +26,9 @@ using namespace Vulkan;
 
 namespace {
 
-enum class Shade { fill, textured, discards, own_depth };
+// mask_one: the shader keeps only sample 0 of what it covers (every pixel written in part, as an edge's are);
+// mask_all: it keeps them all (what writing the mask costs by itself)
+enum class Shade { fill, textured, discards, own_depth, mask_one, mask_all };
 
 struct Case {
     const char *name;
@@ -34,6 +38,8 @@ struct Case {
     bool blend;        // source alpha over the target
     int grid;          // quads across and down
     bool pass_a_layer; // a render pass for each layer, not one for the picture
+    bool no_colour = false; // colour writes masked off: the depth alone
+    bool shifted = false;   // each layer's grid moved a fraction of a quad, so its edges are not the last layer's
 };
 
 const Case cases[] = {
@@ -52,6 +58,20 @@ const Case cases[] = {
     {"hidden: textured, depth (early test)", Shade::textured, true, true, false, 1, false},
     {"hidden: a shader that may discard", Shade::discards, true, true, true, 1, false},
     {"hidden: a shader with its own depth", Shade::own_depth, true, true, true, 1, false},
+    // Where MSAA's cost for many triangles is (2026-11-14): the edges' count, the depth or the colour, part-covered
+    // pixels with no edges at all, edges in new places each layer
+    {"edges: 2 triangles: textured, depth", Shade::textured, true, false, false, 1, false},
+    {"edges: 1250 triangles: textured, depth", Shade::textured, true, false, false, 25, false},
+    {"edges: 5000 triangles: textured, depth", Shade::textured, true, false, false, 50, false},
+    {"edges: 45000 triangles: textured, depth", Shade::textured, true, false, false, 150, false},
+    {"edges: 180000 triangles: textured, depth", Shade::textured, true, false, false, 300, false},
+    {"edges: 45000 triangles, moved each layer", Shade::textured, true, false, false, 150, false, false, true},
+    {"split: 45000 triangles, textured, no depth", Shade::textured, false, false, false, 150, false},
+    {"split: 45000 triangles, depth, no colour", Shade::textured, true, false, false, 150, false, true},
+    {"split: 2 triangles, depth, no colour", Shade::textured, true, false, false, 1, false, true},
+    {"part: 2 triangles, sample mask all", Shade::mask_all, true, false, false, 1, false},
+    {"part: 2 triangles, sample mask 1 of 2+", Shade::mask_one, true, false, false, 1, false},
+    {"part: 2 triangles, mask 1, no depth", Shade::mask_one, false, false, false, 1, false},
 };
 
 struct Target {
@@ -66,6 +86,7 @@ struct Push {
     float z;
     int32_t grid;
     float tile_x, tile_y;
+    float shift; // the grid moved by this much of a quad, across and down
 };
 
 class Bench {
@@ -83,10 +104,11 @@ public:
         frag.sets[0].fp_mask = 1;
         frag.sets[0].meta[0].array_size = 1;
         frag.push_constant_size = sizeof(Push);
-        const uint32_t *code[4] = {layer_frag_fill, layer_frag_textured, layer_frag_discards, layer_frag_own_depth};
-        const size_t sizes[4] = {sizeof(layer_frag_fill), sizeof(layer_frag_textured), sizeof(layer_frag_discards),
-                                 sizeof(layer_frag_own_depth)};
-        for (int i = 0; i < 4; i++) {
+        const uint32_t *code[6] = {layer_frag_fill,     layer_frag_textured, layer_frag_discards,
+                                   layer_frag_own_depth, layer_frag_mask_one, layer_frag_mask_all};
+        const size_t sizes[6] = {sizeof(layer_frag_fill),     sizeof(layer_frag_textured), sizeof(layer_frag_discards),
+                                 sizeof(layer_frag_own_depth), sizeof(layer_frag_mask_one), sizeof(layer_frag_mask_all)};
+        for (int i = 0; i < 6; i++) {
             programs_[i] = device_.request_program(vs, device_.request_shader(code[i], sizes[i], &frag));
             if (!programs_[i]) {
                 return false;
@@ -156,6 +178,7 @@ private:
         cmd.set_cull_mode(VK_CULL_MODE_NONE);
         cmd.set_depth_test(c.depth, c.depth);
         cmd.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL);
+        cmd.set_color_write_mask(c.no_colour ? 0u : 0xFu);
         cmd.set_blend_enable(c.blend);
         if (c.blend) {
             cmd.set_blend_factors(VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
@@ -178,7 +201,8 @@ private:
             }
             float step = 1.0f / float(layers_ + 1);
             Push push = {c.hidden ? 1.0f - step * float(i + 1) : step * float(i + 1), c.grid,
-                         float(t.drawn_w) / float(noise_size), float(t.drawn_h) / float(noise_size)};
+                         float(t.drawn_w) / float(noise_size), float(t.drawn_h) / float(noise_size),
+                         c.shifted ? float(i) * 0.37f : 0.0f};
             cmd->push_constants(&push, 0, sizeof(push));
             cmd->draw(uint32_t(c.grid * c.grid * 6));
         }
@@ -189,7 +213,7 @@ private:
 
     Device &device_;
     const int pictures_, layers_;
-    Program *programs_[4] = {};
+    Program *programs_[6] = {};
     ImageHandle noise_;
 };
 
@@ -198,7 +222,7 @@ private:
 int main(int argc, char **argv) {
     uint32_t width = 3840, height = 1792;
     int pictures = 200, layers = 8;
-    const char *only = nullptr;
+    const char *only = nullptr, *only_target = nullptr;
     for (int i = 1; i < argc; i++) {
         const char *value = i + 1 < argc ? argv[i + 1] : nullptr;
         if (strcmp(argv[i], "--size") == 0 && value && sscanf(value, "%ux%u", &width, &height) == 2) {
@@ -209,8 +233,10 @@ int main(int argc, char **argv) {
             layers = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--only") == 0 && value) {
             only = argv[++i];
+        } else if (strcmp(argv[i], "--target") == 0 && value) {
+            only_target = argv[++i];
         } else {
-            fprintf(stderr, "usage: kf4-layerbench [--size WxH] [--pictures N] [--layers N] [--only NAME]\n");
+            fprintf(stderr, "usage: kf4-layerbench [--size WxH] [--pictures N] [--layers N] [--only CASE] [--target TARGET]\n");
             return 2;
         }
     }
@@ -253,6 +279,9 @@ int main(int argc, char **argv) {
     printf("%s, %ux%u drawn, %d layers a picture, %d pictures a case\n", device.get_gpu_properties().deviceName, width,
            height, layers, pictures);
     for (const Target &t : targets) {
+        if (only_target && !strstr(t.name, only_target)) {
+            continue;
+        }
         double mb = double(t.drawn_w) * t.drawn_h * t.samples * (t.colour == VK_FORMAT_R8G8B8A8_UNORM || t.colour == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? 4 : 8) / 1e6;
         printf("\n%s: a layer's colour is %.0f MB, its depth %.0f MB\n", t.name, mb,
                double(t.drawn_w) * t.drawn_h * t.samples * 4 / 1e6);

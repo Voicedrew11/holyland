@@ -1,6 +1,7 @@
 #version 450
 // A layer's fragment: a texel of noise at half alpha (TEXTURED), or one colour. DISCARDS: a discard that never
 // happens (the depth test then waits for the shader). OWN_DEPTH: the shader writes the depth (as exact Z does).
+// MASK_ONE: only sample 0 kept of those covered; MASK_ALL: the mask written, all kept.
 layout(set = 0, binding = 0) uniform sampler2D u_tex;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_colour;
@@ -20,6 +21,12 @@ void main() {
 #endif
 #ifdef OWN_DEPTH
     gl_FragDepth = gl_FragCoord.z;
+#endif
+#ifdef MASK_ONE
+    gl_SampleMask[0] = 1;
+#endif
+#ifdef MASK_ALL
+    gl_SampleMask[0] = -1;
 #endif
     o_colour = vec4(c.rgb, 0.5);
 }
