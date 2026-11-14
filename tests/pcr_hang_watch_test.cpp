@@ -127,10 +127,13 @@ int child(const char *folder, double wait_s) {
 }
 
 int exit_code_of(const std::string &command) {
-    int status = std::system(command.c_str());
 #ifdef _WIN32
+    // (cmd /c drops the first and the last quote of a line that starts with one and has more: the whole line quoted
+    // once more keeps the program's path and the folder's quoted)
+    int status = std::system(("\"" + command + "\"").c_str());
     return status;
 #else
+    int status = std::system(command.c_str());
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
 }
