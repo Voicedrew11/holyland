@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-/* The game's state for the Debug page (game/state_log.c) */
+/* The game's state for the Developer page (game/state_log.c) */
 typedef struct {
     unsigned frame;     /* the game's frame counter */
     int menu;           /* main_menu_state */

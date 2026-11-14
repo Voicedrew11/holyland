@@ -1,4 +1,4 @@
-/* Debug cheats for testing (the overlay's Debug page, "Cheats for testing"; game/cheats.c): things a new
+/* Debug cheats for testing (the overlay's Developer page, "Cheats"; game/cheats.c): things a new
    character does not have yet, for testing the menus, the magic and later areas. Each is a one-off
    change to the game's state: it lasts as any progress does, and is kept by a save made after it.
 

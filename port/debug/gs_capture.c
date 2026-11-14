@@ -1,4 +1,4 @@
-/* The GS frame capture (F9, the overlay's Debug page, --gs-capture-at): the GS's and VU1's state at
+/* The GS frame capture (F9, the overlay's Developer page, --gs-capture-at): the GS's and VU1's state at
    the start of a frame, then everything that reaches them until it ends, in a file that any build
    reads (port/include/port/gs_capture_format.h), for tools/gsreplay (kf4-gsreplay) to draw again.
 

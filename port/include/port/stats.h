@@ -2,13 +2,13 @@
    shows, read from the game's own state, and the real numbers of the hits dealt and taken.
 
    It only reads: it changes nothing in the game, on or off. Off by default; settings.json's "mods"
-   ("extended_stats" and its parts), --extended-stats, or the overlay's Mods page turn it on.
+   ("extended_stats" and its parts), --extended-stats, or the overlay's Gameplay page turn it on.
 
    - game/stats.c (built with the game code) reads the game's state into a PortStatsSnapshot and
      watches the hits (port_stats_track, once a vblank, on the game's thread);
    - port/overlay/stats_mod.c keeps the switches and their settings.json keys;
    - port/overlay/stats_panel.cpp draws the lines it adds to the game's own menus, the panel, the hit
-     log and the target's health bar with Dear ImGui, and the section of the Mods page;
+     log and the target's health bar with Dear ImGui, and the section of the Gameplay page;
      port/overlay/stats_timers.cpp the ailments and timed effects running, by the minimap. */
 #ifndef PORT_STATS_H
 #define PORT_STATS_H
@@ -30,7 +30,7 @@ typedef struct {
 } PortStatsOptions;
 extern PortStatsOptions port_stats_options;
 
-/* The Mods page's switch: on for this run and in settings.json */
+/* The Gameplay page's switch: on for this run and in settings.json */
 void port_stats_set_on(int on);
 /* The panel's key (ACTION_STATS_PANEL, F6) shows or hides it */
 void port_stats_toggle_panel(void);
@@ -46,7 +46,7 @@ int port_stats_overlay_wants(void);              /* something of it is drawn thi
 /* draws it, inside the overlay's ImGui frame; x, y, width, height: the game's picture in the window */
 void port_stats_overlay_draw(int overlay_open, int x, int y, int width, int height);
 void port_stats_overlay_fonts(void);             /* adds its font to the overlay's, once at start */
-void port_stats_overlay_mods(void);              /* its section of the Mods page */
+void port_stats_overlay_mods(void);              /* its section of the Gameplay page */
 
 /* ---- The game's side (game/stats.c) ---------------------------------------------------------- */
 #define PORT_STATS_NAME 48

@@ -549,7 +549,7 @@ void port_settings_load(void) {
     if (migrated && active == 1) {
         dirty = 1;
         fprintf(stderr, "[settings] from an older version: presenter \"%s\" "
-                        "(the overlay's Debug page, or --presenter sdl, go back)\n",
+                        "(the overlay's Developer page, or --presenter sdl, go back)\n",
                 s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl");
     }
     fprintf(stderr, "[settings] %s%s\n", port_settings_path(), file == NULL ? " (new)" : "");

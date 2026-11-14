@@ -144,17 +144,17 @@ typedef struct {
        default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
     int show_fps;
     int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
-    int invincible;          /* --invincible, or the Debug page: no HP lost (port_invincible()); never saved */
+    int invincible;          /* --invincible, or the Developer page: no HP lost (port_invincible()); never saved */
     /* --flash-recorder (port/platform/present_vk.cpp, docs/port/README.md "Debugging"): the Vulkan presenter
        keeps the last flash_seconds of presented pictures in a ring on the GPU, each flash_height rows high
        (its width the picture's shape), for the flash recorder's key (F8); 0 seconds: off. Live from the
-       overlay's Debug page; never saved */
+       overlay's Developer page; never saved */
     float flash_seconds;
     int flash_height;
     /* --native-draw (port_native_draw(), port/include/port/host.h; docs/port/NATIVE_DRAW.md): which kinds
        of the game's draws go to the renderer core instead of VU1 and the GS's packets, PORT_ND_* bits (0,
        off, by default: the PS2 path, the game byte for byte as without it). Live from the overlay's
-       Debug page. Of the kinds only the switch for the whole path is saved: settings.json's "native_draw",
+       Developer page. Of the kinds only the switch for the whole path is saved: settings.json's "native_draw",
        on (PORT_ND_ACCEPTED, the default) or off. */
     int native_draw;
     int native_draw_forced; /* --native-draw: this run's, whatever settings.json says */
@@ -164,7 +164,7 @@ typedef struct {
     int native_wave_uvs;
     int test_dma_wait;
     /* --sky (port_native_sky(), port/include/port/host.h): how the native sky is drawn, PORT_SKY_*; settings.json
-       display.native_sky, live from the overlay's Debug page */
+       display.native_sky, live from the overlay's Developer page */
     int native_sky;
     int native_sky_forced; /* --sky: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
