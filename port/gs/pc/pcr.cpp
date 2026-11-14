@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -42,6 +43,7 @@
 #include "pcr_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
+#include "pcr_pipelines.h"
 #include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
 #include "device.hpp"
@@ -1638,6 +1640,8 @@ private:
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
+std::string &pipeline_cache_path_before_open(); // (below)
+
 class Renderer {
 public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
@@ -1655,6 +1659,11 @@ public:
         device_->set_context(*context_);
         // a frame context a picture: with four, the thread waits at a picture for the GPU's work of four before
         device_->init_frame_contexts(4);
+        // the pipelines kept between runs (pcr_pipelines.h): before anything draws, so that every pipeline is made
+        // through the cache
+        if (!pipeline_cache_path_before_open().empty()) {
+            pcr::store_open(*device_, pipeline_cache_path_before_open().c_str());
+        }
         const VkPhysicalDeviceProperties &props = device_->get_gpu_properties();
         gpu_kind_ = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GSN_GPU_DISCRETE
                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GSN_GPU_INTEGRATED
@@ -2182,6 +2191,12 @@ std::unique_ptr<Renderer> &renderer() {
 }
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
+
+// pcr_pipeline_cache's path, before pcr_open
+std::string &pipeline_cache_path_before_open() {
+    static std::string path;
+    return path;
+}
 Settings settings_before_open; // (the setters called before pcr_open: taken by it)
 
 Settings &settings() {
@@ -2204,7 +2219,10 @@ extern "C" int pcr_open(void *shared_context) {
         return 0;
     }
     renderer() = std::move(made);
-    atexit([] { renderer()->stop(); });
+    atexit([] {
+        renderer()->stop();
+        pcr::store_close();
+    });
     return 1;
 }
 
@@ -2358,8 +2376,11 @@ extern "C" void pcr_set_native_draw(int mode) {
     settings().native_draw.store(mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
 }
 
+// (before pcr_open) Where the pipelines are kept between runs (pcr_pipelines.h); after it, too late: nothing
 extern "C" void pcr_pipeline_cache(const char *path) {
-    (void)path; // (no pipelines yet)
+    if (!renderer() && path) {
+        pipeline_cache_path_before_open() = path;
+    }
 }
 
 extern "C" int pcr_pipelines_running(void) {

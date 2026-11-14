@@ -206,6 +206,37 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Built 2026-11-14: pipelines kept between runs (the stand-stills at the start and at a map's first draws)
+
+The owner's report: the picture stands still for about a second as the game opens, and now and then on entering an
+area; the console names it (`Stalled compile (graphics, ...): thread 0 - 638909 us (mode: sync)`). Each is a Vulkan
+pipeline compiled by the driver at the draw that first needs it, 0.25-1 s each for the canvas's programs. Granite's
+pipeline cache was never made: Granite reads and writes one only through its file system, which paraLLEl-GS's build
+leaves out (`GRANITE_VULKAN_SYSTEM_HANDLES` off), so every pipeline was compiled with no cache, in every run, and the
+driver's own disk cache did not catch them either (a second run stood still as long as the first). The old native GS
+had a pipeline set and its files; the PC renderer only made its pipelines again ahead of an MSAA change.
+
+What it does now (`pcr_pipelines.cpp`, "Between runs"; PC_RENDERER.md has the design): the pipeline cache read from the
+data folder before anything draws and written again as new pipelines are made, and the list of the canvas's pipelines
+drawn with, made ahead on up to four threads as the canvas's programs are made. Nothing waits for them.
+
+Measured headless (new game, the title, teleport at vblank 1900, to vblank 2600; the owner's settings; the stand-stills
+are the draws' own compiles, `KF4_PC_WARM_LOG=1`'s "draw sync", which each hold the canvas's thread):
+
+| Run | Compiles at the draw | Standing still in all | Longest |
+|---|---|---|---|
+| main, to 009 (any run: first or tenth) | 10 (5 slow) | 3.6-3.8 s | 1.0 s |
+| this, to 009, first run (no files) | 10 (5 slow) | 3.6 s | 0.97 s |
+| this, to 009, second run | 0 (10 made ahead in 15 ms) | 0 | 0 |
+| this, to 009, a new build's first run (the list kept, the cache not: shaders changed) | 1 (the title's first, made ahead too but wanted first) | 0.82 s | 0.82 s |
+| this, MSAA 2 to 099, first run | 14 | 5.1 s | 1.0 s |
+| this, MSAA 2 to 099, second run | 1 (0.1 ms, a program not the canvas's) | 0.1 ms | 0.1 ms |
+
+The ahead threads' own compiles in a second run are cache hits of 3-8 ms each; with a new build's shaders (no cache)
+they took 1.7 s for the ten on four threads, while the title showed. Pictures: byte for byte main's at 000, 009, 009:2
+and 099 (two each, with the list made ahead). The unit tests pass; the validation layer (sync on, 009) gives what main
+gives.
+
 ## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
 
 Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to

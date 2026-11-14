@@ -10,6 +10,19 @@
 //
 // Only what was drawn before is known: the first draws at a count never drawn at (a run started with MSAA) make their
 // pipelines as before.
+//
+// Between runs: a pipeline is made from the GPU's own code for it, which the driver compiles (0.2 to 1 s each for the
+// canvas's programs on this machine), at the first draw that needs it: as a run starts and as a map first draws with a
+// state not drawn yet, the picture stands still that long. So (store_open) Granite's Vulkan pipeline cache is kept in the
+// data folder (pc_pipelines.bin: read at the start, written again every ten seconds when new pipelines were made, and at
+// the end), and with it the list of the canvas's pipelines drawn with (pc_pipeline_list.bin: each named by the canvas's
+// program index, its state and its attachments' formats and samples, so that it holds across builds where the shaders
+// changed and the cache does not). As the canvas's programs are made (warm_watch), the list's pipelines are made on threads
+// of their own, through the cache, so that the draws find them made. Nothing waits for them: a draw that wants one not made
+// yet makes it, as without them. Plain Vulkan 1.0 (a VkPipelineCache), no extension: on every GPU the same. The files are
+// only read when they are this GPU's, this driver's and this build's layout (else started afresh, silently); the cache
+// is checked by its UUID and hash besides (Granite), and is never read past 256 MB. KF4_PC_PIPELINE_CACHE=0: neither file
+// read nor written (as before: no cache); KF4_PC_WARM_AHEAD=0: the list's pipelines not made ahead.
 #pragma once
 
 #include <cstdint>
@@ -35,6 +48,12 @@ bool warm_ready(uint32_t samples, const Vulkan::ImageView &colour, const Vulkan:
 
 // (at the end) the thread joined
 void warm_stop();
+
+// (before the device draws) The pipeline cache read from cache_path (and the list beside it), the saver started
+void store_open(Vulkan::Device &device, const char *cache_path);
+
+// (at the end, the device still there) The threads stopped, the files written
+void store_close();
 
 // --stats: the pipelines made ahead
 void warm_print_counts();
