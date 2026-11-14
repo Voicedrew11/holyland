@@ -321,6 +321,26 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
     a batch that does not fade, of any mesh placed. A twin ties (above) and is drawn once; the others are the layers.
   - `KF4_PC_LAYERS=all` takes every batch that fades for a layer, twins too; `none` takes no native batch (for
     measuring; the pictures of `all` and the default differ by 0 to 51 pixels a picture at the owner's saves).
+- **A native corner keeps the sixteenths of its Z** (2026-11-14; `pcr_nd000.vert` and its three siblings, with
+  `PCR_F_LAYERS` only). VU1's FTOI4 leaves a corner's Z in sixteenths and the GS drops them. Cut to a whole Z, a
+  corner far off lies up to a Z from where it is (a Z is many world units there), each corner by its own amount and
+  by another the next game frame; a picture between moves the frame's whole Z (`vu1_*_maths.h`'s `moved`), so the
+  error lasts the game frame. Two surfaces less than a Z apart then swap corner by corner. The owner's playtest of
+  23d96016: a chest seen from far off at map 000 (Z about 300, widescreen), "shadowy flickering bands" across it.
+  Walked at 240 with every picture drawn, the dark layer on its panel came out as a band across it for a whole game
+  frame (8 pictures) twice in 64 vblanks, where ps2 has specks in the same frames; and in the tour one view of map
+  024 had a wedge of rock through the lava's glow. With the sixteenths kept both are clean: on the GS such surfaces
+  tie and the later wins, and with the fraction kept at the pixel it has to be kept at the corner too.
+  - Nothing else moved that was looked for: the flicker counts at the owner's other saves without and with it are
+    tower 46 and 44, bridge 11 and 10, cave 12 and 12, pillar 4 and 4, wall 31 and 32, brazier cave 6 and 5; the
+    144-view tour differs by 4,334 pixels in all (the most 1,132, map 004's tree, its trunk through the
+    leaves as ps2 has it; tolerant against ps2 over the tour 20,445 pixels, 19,377 before). Where surfaces cross far
+    off the line moves a pixel or two (the lava's far shore, a rock's edge on a wall). No pass or draw is added.
+  - The frames' flicker count (pictures far from both neighbours) does not see these: a band lasts eight pictures.
+    They were found by walking with every vblank's pictures dumped and comparing builds picture by picture.
+  - Not walked yet: the owner's two other spots (a sign's corner against the wall under it near a door, and a
+    rock block's edge that flickers while moving; one save holds both). A board less than a sixteenth of a Z off its
+    wall would still swap: the next step then is the corner's whole fraction, from its Z before FTOI4.
 - **What the two phases cost, and what was cut (2026-11-14).** The owner's playtest of 536324a1: the best Z so far,
   but 160-165 pictures a second where 240 was held, and uneven. About a third of the map's batches are layers.
   Measured walking from the owner's tower and cave saves at the owner's settings with the frame rate unlocked
@@ -355,6 +375,14 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
     state cost nothing that shows.
   - `KF4_PC_LAYER_TWINS=0`, `KF4_PC_LAYER_Z_PLAIN=0` and `KF4_PC_LAYER_Z_SAMPLES=1` turn the last three off, each
     alone.
+  - *Not cut, and not timed yet: the stretches' draw calls.* A stretch of layers is two changes of state and a
+    stretch of the others one, each ending the pump's indirect run. Counted in the pictures between (`--stats`),
+    native draw calls a picture, ps2 and tolerant: 137 and 573 at the owner's chest spot (map 000 outdoors,
+    widescreen; 61 and 542 indirect runs), 337 and 657 at the cave save. That is the pump thread's time, which the
+    GPU's ms above do not hold. The owner's window at the chest spot: 240 held on main, 200-220 with 23d96016 (which
+    was also built on main before its warm-up and speed work, #145-#149). To time: the pump's ms a picture there,
+    ps2, tolerant, `KF4_PC_LAYERS=none` (no stretches) and `all` (every fading batch a layer: fewer changes between
+    layers and not).
   - The unevenness is not compiles: with an empty pipeline cache the logs name as many stalled compiles under ps2
     as under tolerant (13 and 13, 15 and 15, 11 and 11 at three saves); the layers' passes change dynamic state, not
     pipelines. Headless at 240 every version holds 240 at these saves, so the owner's 160-165 was not reproduced
@@ -380,8 +408,9 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   pillar's with 646df6d0's rules, 12 and 4 now, 18 and 33 with `ps2`.
 - Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
 - `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
-  with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b): the corners' order
-  is taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
+  with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b, and
+  again against 9f027e49 and d8780b9a as each was merged): the corners' order and the corners' sixteenths are taken
+  only with tolerant. `kf4-gsreplay --layer-z` takes it too.
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
   behind it (the GS hides it); map 004's tree close to the PS2's. A layer's Z pass does not light its corners
   (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and alphas only).
