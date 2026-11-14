@@ -708,6 +708,17 @@ if(KF4_TESTS)
     add_test(NAME pcr_frame_walk COMMAND pcr_frame_walk_test)
 endif()
 
+# Dead writes in a walk drawn again (port/gs/pc/pcr_dead_writes.h, header only)
+add_executable(pcr_dead_writes_test tests/pcr_dead_writes_test.cpp)
+target_include_directories(pcr_dead_writes_test PRIVATE port/gs/pc)
+set_target_properties(pcr_dead_writes_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_dead_writes_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
+endif()
+
 # The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
 # (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
 add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)

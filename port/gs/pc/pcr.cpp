@@ -1523,7 +1523,7 @@ public:
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
                 "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws; %llu merged runs, %llu "
-                "triangles; %llu batches cleared, %llu blends left out\n",
+                "triangles; %llu batches cleared, %llu blends left out, %llu dead\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)intake.surface_copies_into_spares,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
@@ -1533,7 +1533,8 @@ public:
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws,
                 (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles,
-                (unsigned long long)c.clears, (unsigned long long)c.blends_left_out);
+                (unsigned long long)c.clears, (unsigned long long)c.blends_left_out,
+                (unsigned long long)c.dead_batches);
     }
 
 private:

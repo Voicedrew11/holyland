@@ -60,6 +60,7 @@ struct CanvasCounts {
     // (a kept walk's merged runs: the draw calls, and the native batches' triangles they drew)
     uint64_t merged_runs = 0, merged_triangles = 0;
     uint64_t clears = 0; // (batches cleared, vkCmdClearAttachments, not drawn: as_clear)
+    uint64_t dead_batches = 0; // (a pictures' walk's batches not drawn: what they write is never read, pcr_dead_writes.h)
     uint64_t blends_left_out = 0; // (blended batches drawn without the blend: blend_is_source)
 };
 

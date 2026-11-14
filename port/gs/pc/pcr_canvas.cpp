@@ -22,6 +22,7 @@
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
 #include "pcr_pipelines.h"
+#include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
 #include "pcr_textures.h"
@@ -2133,6 +2134,9 @@ private:
         bool native_alpha_is_one = false; // (a native batch: every one of its NativeBatch's alpha_is_one)
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
+        // (a pictures' walk's: every kick of its corners keeps its place, kick_keeps_place: its sprites cover the pixels
+        // the vertices say, walk_step's kills; and what it writes is never read, pcr_dead_writes.h: the pump leaves it out)
+        bool placed = false, dead = false;
         bool still = false;           // (a pictures' walk's: every kick of its corners stays as the frame has it,
                                       // kick_stays, so its sprites are where and what the vertices say: as_clear)
         bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
@@ -2574,6 +2578,11 @@ private:
     }
 
     void make_again_alone(const Kept &walk, const KeptBatch &kept) {
+        // (what it writes is never read, pcr_dead_writes.h: not drawn. KF4_PC_DEAD=0: drawn, to compare)
+        if (walk.batches[kept.index].dead && dead_on_) {
+            counts_.dead_batches++;
+            return;
+        }
         make_again(walk, kept);
     }
     void make_again_alone(const Kept &, const KeptUpload &kept) {
@@ -2615,7 +2624,158 @@ private:
             }
         }
         picture.steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
+        mark_dead_writes(picture);
         return out;
+    }
+
+    // ---- Dead writes (pcr_dead_writes.h): a pictures' walk's batches the pump need not draw ----
+    // What a batch may read and write of its buffers, and what it writes at every pixel of its scissor (kills): by its
+    // registers alone, every doubt a read. Kills only from a batch of sprites that keep their place and cover its
+    // scissor (Batch::placed), whose every pixel is written: no alpha test that the pixels decide, no DATE, no Z test
+    // but ALWAYS, the channel's FBMSK bits clear.
+    static WalkStep walk_step(const Batch &b) {
+        const DrawState &s = b.state;
+        WalkStep w;
+        uint32_t fbw = bits(s.frame, 16, 6);
+        bool zte = bits(s.test, 16, 1) != 0, date = bits(s.test, 14, 1) != 0;
+        uint32_t ztst = bits(s.test, 17, 2);
+        bool zwrite = zte && bits(s.zbuf, 32, 1) == 0;
+        w.colour = bits(s.frame, 0, 9) | fbw << 16;
+        w.depth = zte || date ? bits(s.zbuf, 0, 9) | fbw << 16 | z_psm(s.zbuf) << 24 : WalkStep::no_buffer;
+        w.x0 = int32_t(bits(s.scissor, 0, 11));
+        w.x1 = int32_t(bits(s.scissor, 16, 11));
+        w.y0 = int32_t(bits(s.scissor, 32, 11));
+        w.y1 = int32_t(bits(s.scissor, 48, 11));
+        if (w.x1 < w.x0 || w.y1 < w.y0 || (zte && ztst == 0)) {
+            return w; // (nothing drawn)
+        }
+        bool abe = bits(s.prim, 6, 1) != 0;
+        uint32_t a = bits(s.alpha, 0, 2), bb = bits(s.alpha, 2, 2), c = bits(s.alpha, 4, 2), d = bits(s.alpha, 6, 2);
+        // reads: the colour under a blend (or a shader's blend, with the alpha), the alpha for DATE or a blend by Ad,
+        // Z for a test that looks at it; a texture from a surface the colour and alpha of any buffer
+        if (b.shader_blend) {
+            w.reads |= DEAD_RGB | DEAD_ALPHA;
+        }
+        if (abe && (a == 1 || bb == 1 || d == 1)) {
+            w.reads |= DEAD_RGB;
+        }
+        if (date || (abe && c == 1)) {
+            w.reads |= DEAD_ALPHA;
+        }
+        if (zte && ztst >= 2) {
+            w.reads |= DEAD_Z;
+        }
+        if (bits(s.prim, 4, 1) != 0 && (!b.texture.ok || b.texture.src == SRC_SURFACE)) {
+            w.reads_anywhere |= DEAD_RGB | DEAD_ALPHA;
+        }
+        // writes, by the alpha test's passes (draw_batch's): every pixel the same way only when the test is off,
+        // ALWAYS or NEVER
+        bool ate = bits(s.test, 0, 1) != 0;
+        uint32_t atst = bits(s.test, 1, 3), afail = bits(s.test, 12, 2);
+        uint8_t writes = DEAD_RGB | DEAD_ALPHA | (zwrite ? DEAD_Z : 0);
+        bool decided = !ate || atst == 1;
+        if (ate && atst == 0) {
+            writes = afail == 1 ? DEAD_RGB | DEAD_ALPHA : afail == 2 ? (zwrite ? DEAD_Z : 0) : afail == 3 ? DEAD_RGB : 0;
+            decided = true;
+        }
+        // (a blend that leaves the colour as it is: (A - B) * FIX + Cd with FIX 0, or A the same as B with D Cd)
+        if (abe && !b.shader_blend && d == 1 && ((c == 2 && bits(s.alpha, 32, 8) == 0) || a == bb)) {
+            writes &= uint8_t(~DEAD_RGB);
+        }
+        w.writes = writes;
+        uint64_t fbmsk = s.frame >> 32;
+        if (decided && !date && (!zte || ztst == 1) && !b.native && !b.shader_blend && b.placed && covers_scissor(b)) {
+            w.kills = writes;
+            if ((fbmsk & 0x00FFFFFFu) != 0) {
+                w.kills &= uint8_t(~DEAD_RGB);
+            }
+            if ((fbmsk & 0xFF000000u) != 0) {
+                w.kills &= uint8_t(~DEAD_ALPHA);
+            }
+        }
+        return w;
+    }
+
+    // Whether a batch of sprites covers every pixel of its scissor (the sprites as the vertices have them: six a
+    // sprite, its two corners among them). A sprite covers the pixels from its first edge to before its last; an edge
+    // off a whole pixel is taken a pixel in.
+    static bool covers_scissor(const Batch &b) {
+        const DrawState &s = b.state;
+        if (!b.sprites || b.vertices.empty() || b.vertices.size() % 6 != 0 || b.vertices.size() > 6 * 64) {
+            return false;
+        }
+        int32_t sx0 = int32_t(bits(s.scissor, 0, 11)), sx1 = int32_t(bits(s.scissor, 16, 11)) + 1;
+        int32_t sy0 = int32_t(bits(s.scissor, 32, 11)), sy1 = int32_t(bits(s.scissor, 48, 11)) + 1;
+        struct Rect {
+            int32_t x0, y0, x1, y1; // (pixels x0 to x1 - 1)
+        };
+        std::vector<Rect> rects;
+        std::vector<int32_t> xs = {sx0, sx1}, ys = {sy0, sy1};
+        for (size_t i = 0; i < b.vertices.size(); i += 6) {
+            float x0 = b.vertices[i].x, y0 = b.vertices[i].y, x1 = x0, y1 = y0;
+            for (size_t k = 1; k < 6; k++) {
+                x0 = std::min(x0, b.vertices[i + k].x);
+                y0 = std::min(y0, b.vertices[i + k].y);
+                x1 = std::max(x1, b.vertices[i + k].x);
+                y1 = std::max(y1, b.vertices[i + k].y);
+            }
+            Rect r = {std::clamp(int32_t(std::ceil(x0)), sx0, sx1), std::clamp(int32_t(std::ceil(y0)), sy0, sy1),
+                      std::clamp(int32_t(std::floor(x1)), sx0, sx1), std::clamp(int32_t(std::floor(y1)), sy0, sy1)};
+            if (r.x1 > r.x0 && r.y1 > r.y0) {
+                rects.push_back(r);
+                xs.insert(xs.end(), {r.x0, r.x1});
+                ys.insert(ys.end(), {r.y0, r.y1});
+            }
+        }
+        std::sort(xs.begin(), xs.end());
+        xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+        std::sort(ys.begin(), ys.end());
+        ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+        // (each cell between two edges next to each other is inside or outside every sprite whole)
+        for (size_t yi = 0; yi + 1 < ys.size(); yi++) {
+            for (size_t xi = 0; xi + 1 < xs.size(); xi++) {
+                bool in = false;
+                for (const Rect &r : rects) {
+                    in = in || (r.x0 <= xs[xi] && xs[xi + 1] <= r.x1 && r.y0 <= ys[yi] && ys[yi + 1] <= r.y1);
+                }
+                if (!in) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and a
+    // mark that does something (0xF2 keeps the frame shown) read everything anywhere; an upload writes (into the
+    // texture store, and into a surface where it lands on one) and reads no surface, a CLUT load reads the store, and
+    // the marks 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is.
+    static void mark_dead_writes(Kept &walk) {
+        std::vector<WalkStep> steps;
+        std::vector<uint32_t> batch_of;
+        steps.reserve(walk.steps.size());
+        batch_of.reserve(walk.steps.size());
+        for (const KeptStep &step : walk.steps) {
+            WalkStep w;
+            uint32_t batch = UINT32_MAX;
+            if (const KeptBatch *kept = std::get_if<KeptBatch>(&step)) {
+                w = walk_step(walk.batches[kept->index]);
+                batch = kept->index;
+            } else if (const KeptMark *mark = std::get_if<KeptMark>(&step)) {
+                uint32_t what = bits(mark->value, 32, 8);
+                w.reads_anywhere = what == 0xF0 || what == 0xF1 || what == 0xF4 || what == 0xF5 ? 0 : DEAD_ALL;
+            } else if (std::holds_alternative<KeptCopy>(step)) {
+                w.reads_anywhere = DEAD_ALL; // (a copy from one place of the GS's memory to another reads its source)
+            }
+            steps.push_back(w);
+            batch_of.push_back(batch);
+        }
+        std::vector<bool> dead = dead_writes(steps);
+        for (size_t i = 0; i < steps.size(); i++) {
+            if (dead[i] && batch_of[i] != UINT32_MAX) {
+                walk.batches[batch_of[i]].dead = true;
+            }
+        }
     }
 
     // A draw into the buffer shown where it drew into the buffer drawn, and reading it there where it read the buffer
@@ -2644,6 +2804,10 @@ private:
                       std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
                           return kick_stays(t, v.kicks[0]) && kick_stays(t, v.kicks[1]);
                       });
+            b.placed = b.numbered && b.sprites && !b.native_kicks &&
+                       std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+                           return kick_keeps_place(t, v.kicks[0]) && kick_keeps_place(t, v.kicks[1]);
+                       });
             if (b.native_kicks) {
                 // (a native draw's kicks, the trail's: numbered on from the stream's, Between::adopt_live_kicks)
                 for (Vertex &v : b.vertices) {
@@ -4585,6 +4749,7 @@ private:
     // merged runs where the indirect ones are drawn too (the native batches' then merged); =plain: without the
     // dual-source blend (a blend change ends a run: to compare)
     const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
+    const bool dead_on_ = !(getenv("KF4_PC_DEAD") && strcmp(getenv("KF4_PC_DEAD"), "0") == 0);
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     const char *const merged_env_ = getenv("KF4_PC_MERGED");
     const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;

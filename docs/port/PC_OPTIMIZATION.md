@@ -615,3 +615,28 @@ was in. A 20-run test of the opening alone, uncapped, did not hang: the opening 
 
 Checks: the 20 unit tests; pictures (the shader's bound) byte for byte at two spots. Not run on this round: the
 sanitizers (a C function of arithmetic and one atomic), TSan, gcc and Windows builds.
+
+## What changed on 2026-11-14 (round 5): dead writes left out of the pictures between
+
+What the game's full-screen passes are at 009 (a dump of the pictures' walk; 640x448 each, in order): the clear,
+**the same clear again** in the other context, the scene, the destination alpha set to 0 (ten sprites, a blend by FIX
+0 that leaves the colour), later a Z-only clear, and when a fade is on a black blend over everything, then the
+brightness pass, and **Z cleared once more** after the last draw that tests it.
+
+`pcr_dead_writes.h` (header only, unit test `pcr_dead_writes`): a batch whose every write is written over at every
+pixel, or never looked at, before anything reads it is not drawn by the pump. A pictures' walk is summarised a step
+at a time (`walk_step`: what it may read, write, and writes at every pixel, by its registers; sprites that keep their
+place, `kick_keeps_place`, and cover their scissor), the walk taken as drawn round and round on the pump's surfaces,
+the picture taken at its end reading the colour. Every doubt is a read. Only the pump leaves them out (kf4-pc's
+surfaces are the game's own). `KF4_PC_DEAD=0`: all drawn.
+
+At 009: the first clear and the last Z clear, 1.7 batches a picture: **3.46 to 3.38 ms a picture** (two runs each,
+15 s). The alpha's pass is not dead in play (draws that test the destination alpha follow it).
+
+Checks: pictures byte for byte at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the 21 unit tests, the two new ones
+under ASan and UBSan too; the game under ASan and UBSan in a real window (the known reports); no hang.
+
+Looked at and left: **GPU memory.** What is left is the three sets of surfaces (1.5 GB), and getting one back means
+the pump keeping surfaces of its own, which needs to know that a walk reads nothing it has not drawn (the brightness
+pass's copy takes 512 rows where the clear covers 448: a rule would refuse it at once), for 0.5 GB. The flash
+recorder's ring is 0.55 GB while it is on (the owner's setting; off, it is nothing), and 3x in place of 4x is 1.0 GB.

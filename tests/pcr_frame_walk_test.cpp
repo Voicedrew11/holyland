@@ -177,6 +177,14 @@ void test_kick_stays() {
     CHECK(!kick_stays(t, 3));
     CHECK(!kick_stays(t, 4));           // (past the stream's)
     CHECK(!kick_stays(t, 0xFFFFFFFFu)); // (not numbered)
+    // its place kept: staying, or a 2D kick whose X and Y do not move
+    CHECK(kick_keeps_place(t, 0));
+    CHECK(!kick_keeps_place(t, 1));
+    CHECK(!kick_keeps_place(t, 2));
+    CHECK(kick_keeps_place(t, 3));
+    moves[3].w[0] = GSN_IM_FLAT | GSN_IM_RGBA;
+    CHECK(kick_keeps_place(t, 3));
+    CHECK(!kick_keeps_place(t, 4));
 }
 
 } // namespace

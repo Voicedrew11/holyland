@@ -34,6 +34,15 @@ constexpr bool kick_stays(const FrameTargets &t, uint32_t kick) {
     return t.moves != nullptr && kick < t.kicks && (t.moves[kick].w[0] & 3u) == 0;
 }
 
+// Whether a kick of the stream keeps its place (X and Y) in every picture between: it stays, or it is a 2D kick
+// (GSN_IM_FLAT) whose place does not move (no GSN_IM_XY): its colour or texture may. A sprite of such kicks covers the
+// pixels the frame's vertices say (pcr_dead_writes.h's kills).
+constexpr bool kick_keeps_place(const FrameTargets &t, uint32_t kick) {
+    return t.moves != nullptr && kick < t.kicks &&
+           ((t.moves[kick].w[0] & 3u) == 0 ||
+            ((t.moves[kick].w[0] & 3u) == GSN_IM_FLAT && (t.moves[kick].w[0] & GSN_IM_XY) == 0));
+}
+
 // Why a frame's own walk was not made its pictures' walk (and the frame's stream was walked)
 enum class FrameWalkRefused : uint8_t {
     none,
