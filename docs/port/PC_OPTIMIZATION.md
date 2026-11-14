@@ -259,3 +259,113 @@ against `--renderer gs`.
 - Whether the GPU hang needs the GPU flat out.
 - The profiles are in `~/.cache/kf4hang/` on the owner's machine (`prof1.txt`, `prof2.txt` with shader states); they
   are tied to the build that made them.
+
+## Appendix: the plan for the speed (2026-11-14)
+
+The owner's aim stands: this game should reach very high frame rates on this machine with the settings fully up. The
+work so far trims the design; this plan changes it. The owner agreed to it on 2026-11-14, including that the final
+brightness step need no longer be byte for byte the reference renderer's (Phase 2).
+
+### What the uncapped runs showed
+
+Real full-screen window, the owner's settings, `--frame-rate-cap 0` (the cap of 500 hides the ceiling at 1x), 30 s of
+play each, the scale the only setting changed. Pictures a second are from the run's totals over about 37 s, not a
+counter: treat them as within 10%.
+
+| Setup | Pictures a second | GPU ms a picture | The limit |
+|---|---|---|---|
+| 4x, 009 | about 300 | 3.69 | the GPU |
+| 4x, 020 | about 490 | 2.52 | the GPU |
+| 1x, 009 | about 790 | 1.21 | the CPU: the pump thread, 1.46 ms a picture |
+| 1x, 020 | about 1150 (955 in the last half second) | 0.75 | the GPU |
+
+By kind, GPU ms a picture:
+
+| Kind | 4x 009 | 4x 020 | 1x 009 | 1x 020 |
+|---|---|---|---|---|
+| 2d | 0.90 | 0.78 | 0.12 | 0.10 |
+| native 000 | 0.83 | 0.66 | 0.21 | 0.17 |
+| native 280 | 0.57 | 0.14 | 0.49 | 0.12 |
+| native 700 | 0.40 | 0.01 | 0.05 | 0.01 |
+| present | 0.47 | 0.46 | 0.30 | 0.31 |
+| copy | 0.28 | 0.26 | 0.02 | 0.01 |
+| texture copy | 0.16 | 0.13 | 0.02 | 0.02 |
+| picture, surface, upload | 0.08 | 0.07 | 0.02 | 0.02 |
+
+Two separate problems:
+
+- **About 1000 draw calls a picture at 009** (the pump's canvas: 27.2 million native draw calls for 28021 pictures at
+  1x). They cost the GPU 0.5 ms at any resolution and the pump thread 1.46 ms, which is the limit at 1x.
+- **About 1.7 ms of full-screen work a picture at 4x** on every map (020: 2d, present, copy, texture copy, picture),
+  before anything of the scene is drawn.
+
+### Phase 0: tools
+
+Built first: each later phase is then measured before it is built, not guessed.
+
+- **Knock-out switches.** One kind of work left out of the pictures between (the clears, the brightness pass, the
+  scaling, the surface copies, native 280's draws), the rest timed. The picture is wrong; the time is what that work
+  costs, and so the most its removal can give.
+- **A frame ledger.** Every pass of one picture in order: its kind and state, its target, the draws, the pixels
+  touched, the GPU time. The profiler has the time by state, without the order, the pixels or the draws. On
+  2026-11-14 this was a temporary print in `draw_batch`.
+- **GPU memory by image in `--stats`.** Every live image and buffer by size and kind, and what was made in all (the
+  churn). On 2026-11-14 a temporary patch in Granite's `Image` and `Buffer`; it found the 96 MB image made for every
+  picture.
+- **A replay bench.** A recorded stretch of play through the renderer alone, pictures between and pump included,
+  uncapped and repeatable: two builds compared in seconds, and the window's picture compared byte for byte (a window's
+  screenshot is not the same between two runs of one build). To find out first: whether `kf4-gsreplay` drives the
+  pictures between.
+- **Test runs uncapped** (`--frame-rate-cap 0`), with pictures a second over the run in the stats, not the last half
+  second.
+
+### Phase 1: a thousand draws to a few dozen
+
+A native batch's runs are a draw call each because each has its own record (the instance), and native 280's
+alternate between two blends. Two changes, neither an indirect draw:
+
+- The record's number goes with the triangle (a buffer beside `tris`, read by `gl_VertexIndex / 3`, or the kept walk's
+  triangles written with it), and to the fragment stage flat, so consecutive runs of one state are one `vkCmdDraw`.
+  Built when the walk is kept, 30 times a second, not for each picture.
+- Both blends from one state: the factors from the shader with dual-source blending, as the kept walks' runs of #139
+  have them (`PrimPush::factors`).
+
+This is what #139's indirect draws were for, without `vkCmdDrawIndirect`, which hung the card on RADV. Not known: why
+those runs drawn one `vkCmdDraw` each were slower (4.85 against 3.45 ms headless on 2026-11-13); the knock-out
+switch for native 280 says what there is to gain before this is built.
+
+Aim: native 280 from 0.5 ms to under 0.1 ms, the pump thread from 1.46 ms a picture to a few tenths.
+
+### Phase 2: one pass from the surface to the window
+
+Today a picture's last steps are separate full-screen passes: the buffer resolved and copied for the brightness pass
+(texture copy), the brightness pass drawn over the buffer (2d), the scanout into the picture (picture), the scaling
+with about 49 reads a pixel, the sharpening (present). They become one pass that reads the surface's samples and
+writes the window's pixels: resolve, brightness, scale and sharpen together, with the scaling across then down if it
+is still two.
+
+- The brightness pass is found as the frame's last draw of the buffer over itself (texture the buffer drawn, colour
+  the same at every corner: 136 of 128 at 009) and left out of the pictures between; its factor goes to the pass.
+- The clears in the pictures between become real clears (`as_clear` refuses inside a picture between today).
+- The game's own picture before the brightness step stays byte for byte; the brightness step and the window's picture
+  do not (agreed). The replay bench compares the window's picture with the one before, with a tolerance to choose.
+
+Aim at 4x: texture copy, picture and most of 2d and present, about 1 ms of 020's 1.7 ms.
+
+### Phase 3: one set of surfaces
+
+kf4-pc draws each frame, then the pump draws it again for every picture on copies of kf4-pc's surfaces: three sets of
+surfaces (1.55 GB) and 0.26 ms a picture of copies. With the frame's draws made by the pump's canvas only, kf4-pc
+keeps the walk and what the texture store needs, and the copies and one or two sets go. What kf4-pc must still draw
+itself is the question to answer first: the surfaces the game reads back or reads as textures in a later frame.
+
+### Where it could land
+
+A guess, to be replaced by Phase 0's measurements: about 800 pictures a second at 4x at a light map like 020 (the
+scene 0.8 ms and about 0.4 ms of the rest), about 500 at 009 (the scene's own pixel work, native 000 and 700, is 1.2
+ms there at 4x). Past that the cost is the scene drawn at 4x with MSAA 2 and 16 bits a channel.
+
+### The order
+
+Phase 0, then Phase 1 (the same gain at every resolution, and the pump thread's limit with it), then Phase 2, then
+Phase 3. The GPU hang stays open beside this; none of the phases needs indirect draws.
