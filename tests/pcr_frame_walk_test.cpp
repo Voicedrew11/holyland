@@ -75,6 +75,22 @@ static_assert(transfer_in_picture(2, TransferRegisters{.bitbltbuf = bitbltbuf_re
 static_assert(transfer_in_picture(2, TransferRegisters{.bitbltbuf = bitbltbuf_reg(0x40, 0x80)}, kTargets) ==
               TransferInPicture::left_out);
 
+// a copy of the frame (from the buffer drawn into another): the stream's choice for copy c, made again from the buffer
+// shown (COPY_BETWEEN) or left out; past what GsnInterpFrame told, refused
+constexpr FrameTargets kTargetsCopies{.draw_fbp = kDrawFbp, .shown_fbp = kShownFbp, .frame_copies = 3,
+                                      .copies_between = 0b101};
+static_assert(copy_of_frame(TransferRegisters{.bitbltbuf = bitbltbuf_reg(kDrawnBlocks, 0x40)}, kTargets));
+static_assert(!copy_of_frame(TransferRegisters{.bitbltbuf = bitbltbuf_reg(0x40, kDrawnBlocks)}, kTargets));
+static_assert(!copy_of_frame(TransferRegisters{.bitbltbuf = bitbltbuf_reg(kDrawnBlocks, kDrawnBlocks)}, kTargets));
+static_assert(!copy_of_frame(TransferRegisters{.bitbltbuf = bitbltbuf_reg(0x40, 0x80)}, kTargets));
+static_assert(frame_copy_in_picture(0, kTargetsCopies) == TransferInPicture::as_is);
+static_assert(frame_copy_in_picture(1, kTargetsCopies) == TransferInPicture::left_out);
+static_assert(frame_copy_in_picture(2, kTargetsCopies) == TransferInPicture::as_is);
+static_assert(frame_copy_in_picture(3, kTargetsCopies) == TransferInPicture::refused);
+static_assert(frame_copy_in_picture(0, kTargets) == TransferInPicture::refused);
+static_assert(bitbltbuf_in_picture(bitbltbuf_reg(kDrawnBlocks, 0x40), kTargets) == bitbltbuf_reg(kShownBlocks, 0x40));
+static_assert(bitbltbuf_in_picture(bitbltbuf_reg(0x40, 0x80), kTargets) == bitbltbuf_reg(0x40, 0x80));
+
 // ---- Run time: whole register values ------------------------------------------------------------------------------
 
 void test_frame_in_picture() {

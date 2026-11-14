@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -43,6 +44,7 @@
 #include "pcr_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
+#include "pcr_pipelines.h"
 #include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
 #include "device.hpp"
@@ -650,9 +652,14 @@ public:
         }
         drop_stretch();
         frame_taken_at_ = vblanks_;
-        const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0, frame->kicks,
-                                           frame->moves}; // (the moves live in between_ until the next frame's)
+        const pcr::FrameTargets targets = {frame->draw_fbp,
+                                           frame->shown_fbp,
+                                           frame->uploads_asked_again != 0,
+                                           frame->shown_kept != 0,
+                                           frame->kicks,
+                                           frame->moves, // (the moves live in between_ until the next frame's)
+                                           frame_copies_ ? frame->frame_copies : 0,
+                                           frame->copies_between};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -780,6 +787,8 @@ public:
         pump_on_ = pump_wanted();
         const char *own = getenv("KF4_PC_LIVE_WALK");
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
+        const char *copies = getenv("KF4_PC_FRAME_COPIES");
+        frame_copies_ = !(copies && strcmp(copies, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -1008,6 +1017,9 @@ private:
     uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
     std::optional<Stretch> last_stretch_;
     bool own_walks_ = true;
+    // KF4_PC_FRAME_COPIES (0: a frame that copies the buffer drawn walks its pictures, as before; else its own walk
+    // makes the copies the stream makes, from the buffer shown: pcr_frame_walk.h's frame_copy_in_picture)
+    bool frame_copies_ = true;
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
@@ -1533,7 +1545,8 @@ public:
                 "[stats] pc pump: %llu frames (%llu surfaces copied for them, %llu images of theirs spares), %llu pictures between drawn again "
                 "(%llu not of its frame), %llu pictures showing them, %llu left out as too late and %llu not shown as made "
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
-                "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
+                "passes, %llu surfaces made (%llu of them with images used again), %llu uploads into surfaces, %llu "
+                "textures' copies of surfaces in images used again; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws; %llu merged runs, %llu "
                 "triangles; %llu batches cleared, %llu blends left out, %llu dead\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
@@ -1541,7 +1554,8 @@ public:
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
                 (unsigned long long)left_out_, (unsigned long long)late_, cost_.mean_s() * 1e3,
                 (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
-                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces,
+                (unsigned long long)c.surfaces_made, (unsigned long long)c.surface_images_reused,
+                (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.texture_copies_reused,
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws,
                 (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles,
@@ -1706,6 +1720,8 @@ private:
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
+std::string &pipeline_cache_path_before_open(); // (below)
+
 class Renderer {
 public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
@@ -1724,6 +1740,11 @@ public:
         device_->set_context(*context_);
         // a frame context a picture: with four, the thread waits at a picture for the GPU's work of four before
         device_->init_frame_contexts(4);
+        // the pipelines kept between runs (pcr_pipelines.h): before anything draws, so that every pipeline is made
+        // through the cache
+        if (!pipeline_cache_path_before_open().empty()) {
+            pcr::store_open(*device_, pipeline_cache_path_before_open().c_str());
+        }
         const VkPhysicalDeviceProperties &props = device_->get_gpu_properties();
         gpu_kind_ = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GSN_GPU_DISCRETE
                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GSN_GPU_INTEGRATED
@@ -2265,6 +2286,12 @@ std::unique_ptr<Renderer> &renderer() {
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
 std::string hang_folder_asked; // pcr_hang_reports_in, likewise
+
+// pcr_pipeline_cache's path, before pcr_open
+std::string &pipeline_cache_path_before_open() {
+    static std::string path;
+    return path;
+}
 Settings settings_before_open; // (the setters called before pcr_open: taken by it)
 
 Settings &settings() {
@@ -2287,7 +2314,10 @@ extern "C" int pcr_open(void *shared_context) {
         return 0;
     }
     renderer() = std::move(made);
-    atexit([] { renderer()->stop(); });
+    atexit([] {
+        renderer()->stop();
+        pcr::store_close();
+    });
     return 1;
 }
 
@@ -2441,17 +2471,27 @@ extern "C" void pcr_set_native_draw(int mode) {
     settings().native_draw.store(mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
 }
 
+// (before pcr_open) Where the pipelines are kept between runs (pcr_pipelines.h); after it, too late: nothing
 extern "C" void pcr_pipeline_cache(const char *path) {
-    (void)path; // (no pipelines yet)
+    if (!renderer() && path) {
+        pipeline_cache_path_before_open() = path;
+    }
 }
 
+// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
+// settings now
+extern "C" void pcr_precompile(void) {
+    pcr::precompile(uint32_t(settings().msaa.load()), settings().colour.load() == GSN_COLOUR_HIGH);
+}
+
+// The game waits while they are made (port/platform/kernel.c)
 extern "C" int pcr_pipelines_running(void) {
-    return 0;
+    return pcr::precompile_running() ? 1 : 0;
 }
 
+// "Building shaders... done/total" (the overlay)
 extern "C" int pcr_pipelines_building(int *done, int *total) {
-    *done = *total = 0;
-    return 0;
+    return pcr::precompile_progress(done, total) ? 1 : 0;
 }
 
 

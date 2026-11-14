@@ -46,6 +46,7 @@ struct CanvasCounts {
     uint64_t textures_sampled = 0, exact_textures_region = 0, exact_textures_part = 0;
     uint64_t textures_mipmapped = 0, textures_anisotropic = 0; // (of textures_sampled)
     uint64_t surfaces_made = 0, surfaces_filled_from_uploads = 0, uploads_into_surfaces = 0, copies_between_surfaces = 0;
+    uint64_t surface_images_reused = 0, texture_copies_reused = 0; // (KF4_PC_SURFACE_REUSE)
     uint64_t date_draws = 0, native_batches = 0, native_draw_calls = 0;
     uint64_t unsupported_blends = 0, unsupported_texture_on_surface = 0;
     uint64_t unsupported_copies = 0;

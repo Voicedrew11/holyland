@@ -360,6 +360,14 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
     file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
     list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
+    # (the pipeline seed, port/gs/pc/pipeline_seed.bin, as an array: cmake/pipeline_seed.cmake)
+    set(KF4_PIPELINE_SEED ${CMAKE_SOURCE_DIR}/port/gs/pc/pipeline_seed.bin)
+    add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp
+        COMMAND ${CMAKE_COMMAND} -DSEED=${KF4_PIPELINE_SEED} -DOUT=${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp
+                -P ${CMAKE_SOURCE_DIR}/cmake/pipeline_seed.cmake
+        DEPENDS ${KF4_PIPELINE_SEED} ${CMAKE_SOURCE_DIR}/cmake/pipeline_seed.cmake
+        COMMENT "The PC renderer's pipeline seed" VERBATIM)
+    list(APPEND KF4_PC_SOURCES ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp)
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
     target_include_directories(kf4_pc PRIVATE port/include port/gs/shared PUBLIC port/gs/pc)
     target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)

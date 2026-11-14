@@ -2,12 +2,13 @@
 """How fast the game draws in play at a few places: the pictures a second a window would show.
 
     tools/pace_test.py [--disc ISO] [--exe PATH] [--maps 0,9,9:2] [--hz 170] [--screen-hz 169.83] [--frame-rate monitor]
-                       [--runs N] [--keep DIR]
+                       [--runs N] [--keep DIR] [--quick-load FILE --input PAD --from VBLANK]
                        [-- extra program arguments]
 
 Each run plays tests/newgame.pad and teleports to the map (MAP, or MAP:PLACE) at vblank 1900 (--teleport, with
 --invincible: at 009:2 creatures kill the player), headless, with the owner's picture settings (4x with native
-widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz.
+widescreen, anisotropic 16, cut-out AA, native draw: OWNER below) at --hz. With --quick-load, one run (--maps is not
+read) loads that quick save instead (no teleport), plays --input, and counts from vblank --from.
 
 pace: real time with KF4_PRESENT_SIM=HZ (the Vulkan presenter's pacing without a window): the pictures handed over
       each second of play (KF4_PRESENT_LOG), the game's vblanks shown each second (60: the game keeps its speed),
@@ -53,6 +54,8 @@ def place_of(spot):
 
 def label_of(spot):
     """A spot as a name for its files and lines: 009, or 009_2 for a place other than 0."""
+    if spot == "save":
+        return spot
     map_index, place = place_of(spot).split(":")
     return "%03d" % int(map_index) + ("" if place == "0" else "_" + place)
 
@@ -73,12 +76,20 @@ def data_folder(keep, name):
     return folder
 
 
+def start_of(args):
+    """The first vblank counted: 400 after the teleport, or --from with a quick save."""
+    return args.start if getattr(args, "quick_load", None) else TELEPORT + 400
+
+
 def command(args, folder, map_index, frames, flags):
     """A run's command line (args.exe, .disc, .hz, .extra; tools/sampler/profile.py's too). It dumps the last frame:
     a --headless run that dumps none starts none of the GS's threads, and draws nothing."""
+    if getattr(args, "quick_load", None):
+        where = ["--input", args.input or PAD, "--quick-load", args.quick_load]
+    else:
+        where = ["--input", PAD, "--teleport", "%d:%s" % (TELEPORT, place_of(map_index)), "--invincible"]
     return [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
-            "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%s" % (TELEPORT, place_of(map_index)),
-            "--invincible", "--frames", str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
+            "2026-01-01T12:00:00"] + where + ["--frames", str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
             args.frame_rate or str(args.hz)] + flags + OWNER + args.extra
 
 
@@ -101,7 +112,8 @@ def number(pattern, text, default=0.0):
 
 
 def pace(args, map_index, n):
-    frames = TELEPORT + 400 + args.seconds * 60
+    start = start_of(args)
+    frames = start + args.seconds * 60
     folder, out = run(args, "pace_%s_%d" % (label_of(map_index), n), map_index, frames,
                       {"KF4_PRESENT_SIM": str(args.screen_hz or args.hz), "KF4_GSN_GPU_TIME": "1",
                        "KF4_PRESENT_LOG": os.path.join(args.keep, "pace_%s_%d.present" % (label_of(map_index), n))}, [])
@@ -117,7 +129,7 @@ def pace(args, map_index, n):
                 continue
             # (pictures shown after the teleport's load: 400 vblanks on; not the last vblank's, whose pictures are
             # written out as the run's --dump-frames, 0.4 s of this thread: it was every run's lowest second)
-            if p[0] == "S" or int(p[1]) < TELEPORT + 400 or int(p[1]) >= frames - 1:
+            if p[0] == "S" or int(p[1]) < start or int(p[1]) >= frames - 1:
                 continue
             s = int(float(p[0]))
             seconds[s] = seconds.get(s, 0) + 1
@@ -127,7 +139,7 @@ def pace(args, map_index, n):
     whole = [seconds[s] for s in sorted(seconds)][1:-1]  # (the first and last seconds are partial)
     game = [len(vblanks[s]) for s in sorted(vblanks)][1:-1]  # (the game's vblanks shown each second: 60 keeps up)
     return {
-        "uneven refreshes a second": uneven_refreshes(shown, screen) * 60.0 / (frames - TELEPORT - 400),
+        "uneven refreshes a second": uneven_refreshes(shown, screen) * 60.0 / (frames - start),
         "pictures a second": statistics.mean(whole) if whole else 0.0,
         "lowest second": min(whole) if whole else 0,
         "game vblanks a second": statistics.mean(game) if game else 0.0,
@@ -166,6 +178,9 @@ def main():
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--seconds", type=int, default=25, help="seconds of play measured (at 60 vblanks a second)")
     parser.add_argument("--keep")
+    parser.add_argument("--quick-load", help="a quick save loaded in place of the teleport (one place: --maps unread)")
+    parser.add_argument("--input", help="with --quick-load: the pad script played (default tests/newgame.pad)")
+    parser.add_argument("--from", dest="start", type=int, default=0, help="with --quick-load: the first vblank counted")
     parser.add_argument("extra", nargs="*")
     args = parser.parse_args()
     if not args.disc:
@@ -176,7 +191,7 @@ def main():
     args.keep = args.keep or tempfile.mkdtemp(prefix="kf4_pace_")
     os.makedirs(args.keep, exist_ok=True)
     try:
-        for map_index in args.maps.split(","):
+        for map_index in (["save"] if args.quick_load else args.maps.split(",")):
             for n in range(args.runs):
                 result = pace(args, map_index, n)
                 print("map %s run %d: %s" % (label_of(map_index), n, ", ".join(

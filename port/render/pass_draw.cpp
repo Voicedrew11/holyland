@@ -38,9 +38,11 @@ void textured_sprite(PassStream &out, uint32_t prim, uint64_t tex0, uint64_t tex
     out.words(uint32_t(a.s), uint32_t(a.t), 0, 0);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(a.x, a.y, a.z, 1);
+    out.kicked(0);
     out.words(uint32_t(b.s), uint32_t(b.t), 0, 0);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(b.x, b.y, b.z, 0);
+    out.kicked(1);
 }
 
 // GsDraw_QueueFlatSprite's packet: PRIM by PRE (texture, fog and ST off, the sprite type), then each corner's RGBAQ and
@@ -49,8 +51,10 @@ void flat_sprite(PassStream &out, uint32_t prim, const uint32_t rgba[4], const C
     out.tag((uint64_t((prim & 0xFFFFFFE9u) | 6) << 47) | 0x4000400000008001ull, 0x5151);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(a.x, a.y, a.z, 1);
+    out.kicked(0);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(b.x, b.y, b.z, 0);
+    out.kicked(1);
 }
 
 // The 13-qword sprite packet Game_BlendPreviousFrame and Game_DrawHazeLayers build themselves (tag 0x80AF400000008001: a
@@ -62,9 +66,11 @@ void own_sprite(PassStream &out, uint64_t tex0, uint64_t tex1, const uint32_t rg
     out.words(uint32_t(a.s), uint32_t(a.t), 0, 0);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(a.x, a.y, a.z, 0);
+    out.kicked(0);
     out.words(uint32_t(b.s), uint32_t(b.t), 0, 0);
     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
     out.words(b.x, b.y, b.z, 0);
+    out.kicked(1);
 }
 
 // The frame (640 x 448 of a 1024 x 512 CT32 texture) as the passes read it
@@ -105,7 +111,19 @@ uint32_t prev_alpha(uint32_t a_now, const PassMove &m, float u) {
     return uint32_t(int32_t(floorf(a * 128.0f + 0.5f))) & 0xFF;
 }
 
+// (pass_stream_moves) the next sprite's corners' colour moved t of the way from the frame before's
+void colour_moves(PassStream &out, const PassMove &m, const uint32_t rgba[4]) {
+    if (out.moves && (m.mode & PASS_MOVE_RGBA)) {
+        for (PassKickMove &k : out.next) {
+            k.flags |= PASS_KICK_RGBA;
+            k.rgba_was = m.prev_rgba;
+            k.rgba_now = rgba_of(rgba);
+        }
+    }
+}
+
 // ---- The passes ----
+// (with out.moves, pass_stream_moves: each drawn at the frame's own time, and each vertex kick's move recorded)
 
 // Game_ApplyBrightness and Game_TintScreen: the frame times RGB / 128, in the game's ten strips (each reads its own
 // pixels, one texel a pixel, nearest; as one sprite the PC renderer's GPU puts the texel at a GS pixel's point a little
@@ -115,12 +133,13 @@ void scale(PassStream &out, const RdPass &p, const PassMove &m, float u) {
     regs(out, {{TEXFLUSH, 0xFFFFFFFFull}}); // (GsDraw_QueueTexFlush; GsDraw_QueueFlush is the VIF's)
     regs(out, {{ALPHA_1, 10}, {TEST_1, 0x30000}, {ZBUF_1, 0x10A000118ull}});
     uint32_t rgba[4] = {p.arg[0], p.arg[1], p.arg[2], 0x80};
-    if (m.mode & PASS_MOVE_RGBA) {
+    if ((m.mode & PASS_MOVE_RGBA) && !out.moves) {
         lerp_rgba(rgba, m.prev_rgba, u);
     }
     uint64_t tex0 = frame_tex0(p.frame_tbp);
     Corner a = {0x6C00, 0x7200, 0xFFFFFFFFu, 0, 0}, b = {0x7000, 0x8DF8, 0xFFFFFFFFu, 0x400, 0x1C00};
     for (int i = 0; i < 10; i++) {
+        colour_moves(out, m, rgba);
         textured_sprite(out, 0x116, tex0, 0, rgba, a, b);
         a.x += 0x400, b.x += 0x400, a.s += 0x400, b.s += 0x400;
     }
@@ -132,9 +151,10 @@ void scale(PassStream &out, const RdPass &p, const PassMove &m, float u) {
 void fill(PassStream &out, const uint32_t colour[4], uint64_t blend, const PassMove &m, float u) {
     regs(out, {{ALPHA_1, blend}, {TEST_1, 0x31001}});
     uint32_t rgba[4] = {colour[0], colour[1], colour[2], colour[3]};
-    if (m.mode & PASS_MOVE_RGBA) {
+    if ((m.mode & PASS_MOVE_RGBA) && !out.moves) {
         lerp_rgba(rgba, m.prev_rgba, u);
     }
+    colour_moves(out, m, rgba);
     flat_sprite(out, 0x46, rgba, {0x6C00, 0x7200, 0, 0, 0}, {0x9400, 0x8E00, 0, 0, 0});
 }
 
@@ -175,7 +195,7 @@ void previous(PassStream &out, const RdPass &p, const PassMove &m, float u) {
     int32_t r[8];
     memcpy(r, &p.arg[1], sizeof(r)); // (the screen's, then the texels' rectangle)
     uint32_t rgba[4] = {0x80, 0x80, 0x80, p.arg[0]};
-    if (m.mode & PASS_MOVE_PREV) {
+    if ((m.mode & PASS_MOVE_PREV) && !out.moves) {
         rgba[3] = prev_alpha(p.arg[0], m, u);
     }
     own_sprite(out, frame_tex0(p.frame_tbp), 0, rgba,
@@ -214,7 +234,17 @@ void view_shift(PassStream &out, const RdPass &p, const PassMove &m, float u) {
         for (int k = 0; k < 2; k++) {
             c[k] = {uint32_t(s.x[k]), uint32_t(s.y[k]), w[8 + k * 4 + 1], s.u[k], s.v[k]};
         }
-        if ((m.mode & PASS_MOVE_SHIFT) && ((m.strips >> i) & 1)) {
+        if ((m.mode & PASS_MOVE_SHIFT) && ((m.strips >> i) & 1) && out.moves) {
+            ShiftStrip a = shift_strip(m.before, i);
+            for (int k = 0; k < 2; k++) {
+                PassKickMove &n = out.next[k];
+                n.flags = PASS_KICK_XY | PASS_KICK_UV;
+                n.xy_was = (uint32_t(a.x[k]) & 0xFFFF) | (uint32_t(a.y[k]) & 0xFFFF) << 16;
+                n.xy_now = (uint32_t(s.x[k]) & 0xFFFF) | (uint32_t(s.y[k]) & 0xFFFF) << 16;
+                n.uv_was = (uint32_t(a.u[k]) & 0x3FFF) | (uint32_t(a.v[k]) & 0x3FFF) << 16;
+                n.uv_now = (uint32_t(s.u[k]) & 0x3FFF) | (uint32_t(s.v[k]) & 0x3FFF) << 16;
+            }
+        } else if ((m.mode & PASS_MOVE_SHIFT) && ((m.strips >> i) & 1)) {
             ShiftStrip a = shift_strip(m.before, i);
             for (int k = 0; k < 2; k++) {
                 c[k].x = uint32_t(lerped(s.x[k], a.x[k], u)) & 0xFFFF;
@@ -248,7 +278,7 @@ void wobble(PassStream &out, const RdPass &p, const PassMove &m, float u) {
             int cell = i * 10 + j;
             bool moves = (m.mode & PASS_MOVE_GRID) && ((m.cells[cell >> 5] >> (cell & 31)) & 1);
             uint32_t rgba[4] = {p.arg[0], p.arg[1], p.arg[2], p.arg[3]};
-            if (moves && (m.mode & PASS_MOVE_RGBA)) {
+            if (moves && (m.mode & PASS_MOVE_RGBA) && !out.moves) {
                 lerp_rgba(rgba, m.prev_rgba, u);
             }
             out.tag(0xC0AE400000008001ull, 0x513513513513ull);
@@ -257,7 +287,18 @@ void wobble(PassStream &out, const RdPass &p, const PassMove &m, float u) {
                     uint32_t g = uint32_t((i + k) * 11 + j + c);
                     uint32_t uv = p.data[g];
                     uint32_t us = uv & 0x3FFF, vs = uv >> 16;
-                    if (moves) {
+                    if (moves && out.moves) {
+                        uint32_t was = m.before.data[g];
+                        PassKickMove &n = out.next[0];
+                        n.flags = PASS_KICK_UV;
+                        n.uv_was = (was & 0x3FFF) | ((was >> 16) & 0x3FFF) << 16;
+                        n.uv_now = (us & 0x3FFF) | (vs & 0x3FFF) << 16;
+                        if (m.mode & PASS_MOVE_RGBA) {
+                            n.flags |= PASS_KICK_RGBA;
+                            n.rgba_was = m.prev_rgba;
+                            n.rgba_now = rgba_of(rgba);
+                        }
+                    } else if (moves) {
                         uint32_t was = m.before.data[g];
                         us = lerp_texel(us, was & 0x3FFF, u);
                         vs = lerp_texel(vs, (was >> 16) & 0x3FFF, u);
@@ -265,6 +306,7 @@ void wobble(PassStream &out, const RdPass &p, const PassMove &m, float u) {
                     out.words(us, vs, 0, 0);
                     out.words(rgba[0], rgba[1], rgba[2], rgba[3]);
                     out.words(uint32_t((((j + c) << 6) + 0x6C0) << 4), uint32_t((((i + k) << 6) + 0x720) << 4), 0, 0);
+                    out.kicked(0);
                 }
             }
         }
@@ -388,6 +430,17 @@ void pass_stream(const RdPass &p, const PassMove &m, PassStream &out) {
     default:
         break;
     }
+}
+
+bool pass_stream_moves(const RdPass &p, const PassMove &move, PassStream &out, std::vector<PassKickMove> &moves) {
+    if (move.mode & PASS_MOVE_PREV) {
+        return false;
+    }
+    out.moves = &moves;
+    out.next[0] = out.next[1] = PassKickMove();
+    pass_stream(p, move, out);
+    out.moves = nullptr;
+    return true;
 }
 
 void PassMoves::frame(uint32_t serial, PartWalk walk) {

@@ -206,6 +206,183 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Built 2026-11-14 (2): pipelines made before play (no stand-still on a first start either)
+
+The owner, after the pipelines kept between runs: it works, but the first run still stood still about ten times
+(3.6 s in all), and asked why the game could not make them all at the start, as PC games do ("loading shaders"). Now
+it does (`pcr_pipelines.cpp`, "Made before play"; PC_RENDERER.md has the design): the seed in the repository
+(`port/gs/pc/pipeline_seed.bin`, `tools/pipeline_seed.py`) with the data folder's list, made on every core but one
+through the cache while the game waits at its first vblank, "Preparing shaders... N%" in the window.
+
+The seed: 344 records, 202 KB (a map tour of all 64 maps and motion_compare's 12 cases, at 1x and MSAA 4 with the
+native draws on and off, and the 12 cases with colour high at 1x and MSAA 4; 328 lists). Recorded without dynamic
+state, they are 10 pipelines on this GPU at 1x, 26 at the owner's settings (MSAA 2, cut-outs shaded a sample at a
+time), 89 with Vulkan 1.3's dynamic state but no VK_EXT_extended_dynamic_state3 (`KF4_PC_DYNAMIC=1`), 181 with no
+dynamic state at all (`KF4_PC_DYNAMIC=0`).
+
+Measured headless on this machine (RTX 5080, 24 threads; a new game, the title, map 099, teleport at vblank 1900, to
+vblank 2700, `--frame-rate 240`); every run "cold" from a new data folder (no cache, no list: a first start, or the
+first after a driver update), "warm" the same folder again. A stand-still is a draw that waited for its pipeline
+(`KF4_PC_WARM_LOG=1`'s "draw sync"); the precompile is the wait at the first vblank:
+
+| Settings | Run | Draws that waited | Their time | Longest | Wait before play |
+|---|---|---|---|---|---|
+| defaults (1x), to 009, 016:2, 002, 102, 025 | cold, `KF4_PC_PRECOMPILE=0` (as before) | 10 each (5 slow) | 2.3-2.5 s | 0.61-0.68 s | - |
+| | cold | 0 | 0 | 0 | 0.69-0.73 s (10 made) |
+| | warm | 0 | 0 | 0 | 0.03 s |
+| owner's (MSAA 2, ssaa cut-outs, scale 3, widescreen), to 009, 016:2, 102 | cold, as before | 14-15 (7 slow) | 3.1-3.3 s | 0.59-0.65 s | - |
+| | cold | 0 | 0 | 0 | 0.73-0.79 s (24-26 made) |
+| | warm | 0 | 0 | 0 | 0.03 s |
+| owner's, `KF4_PC_DYNAMIC=1` (a GPU without extended dynamic state 3), to 009 | cold, as before | 40 (16 slow) | 6.5 s | 0.61 s | - |
+| | cold | 0 | 0 | 0 | 1.6 s (89 made) |
+| owner's, `KF4_PC_DYNAMIC=0` (no dynamic state), to 009 | cold, as before | 60 (21 slow) | 8.1 s | 0.60 s | - |
+| | cold | 1 (0.0 ms) | 0 | 0 | 2.4 s (181 made) |
+
+Settings changed between runs, the cache made at the owner's settings: the next start at MSAA 4 waited 0.03 s and
+no draw waited (this driver made the new count's pipelines from its cached code at once); at 1x, the same; with
+colour high (cold, from a new folder) 1.1 s for 52 pipelines and one draw waited 5 ms (the narrowed scanout's pass:
+its target is not an attachment the seed's records name, see PC_RENDERER.md). MSAA changed in play (`KF4_SET_AT=2300:msaa=4`, from 2): no draw waited; the 47 pipelines
+were made again in 0.41 s on half the cores (3 rounds) while the canvas drew 49 vblanks at the old count.
+
+AMD and Intel drivers compile more slowly than NVIDIA's (often 2-5 times), and a GPU without
+VK_EXT_extended_dynamic_state3 (AMD's Windows driver for some years) makes 89 pipelines, not 26: a first start there
+may wait several seconds, once; every later start is the cache's 0.03 s. The `[pcr] pipelines made ahead: ...` line
+on the console says how long it took. Not measured on those GPUs.
+
+Pictures: byte for byte the same as with `KF4_PC_PRECOMPILE=0 KF4_PC_PIPELINE_CACHE=0` (main's way: no cache, no
+list) at 000, 009, 009:2 and 099, the owner's settings at 240, two vblanks and their pictures between (32 of 32, and
+32 of 32 again with the final seed). The unit tests pass.
+
+## Built 2026-11-14: pipelines kept between runs (the stand-stills at the start and at a map's first draws)
+
+The owner's report: the picture stands still for about a second as the game opens, and now and then on entering an
+area; the console names it (`Stalled compile (graphics, ...): thread 0 - 638909 us (mode: sync)`). Each is a Vulkan
+pipeline compiled by the driver at the draw that first needs it, 0.25-1 s each for the canvas's programs. Granite's
+pipeline cache was never made: Granite reads and writes one only through its file system, which paraLLEl-GS's build
+leaves out (`GRANITE_VULKAN_SYSTEM_HANDLES` off), so every pipeline was compiled with no cache, in every run, and the
+driver's own disk cache did not catch them either (a second run stood still as long as the first). The old native GS
+had a pipeline set and its files; the PC renderer only made its pipelines again ahead of an MSAA change.
+
+What it does now (`pcr_pipelines.cpp`, "Between runs"; PC_RENDERER.md has the design): the pipeline cache read from the
+data folder before anything draws and written again as new pipelines are made, and the list of the canvas's pipelines
+drawn with, made ahead on up to four threads as the canvas's programs are made. Nothing waits for them.
+
+Measured headless (new game, the title, teleport at vblank 1900, to vblank 2600; the owner's settings; the stand-stills
+are the draws' own compiles, `KF4_PC_WARM_LOG=1`'s "draw sync", which each hold the canvas's thread):
+
+| Run | Compiles at the draw | Standing still in all | Longest |
+|---|---|---|---|
+| main, to 009 (any run: first or tenth) | 10 (5 slow) | 3.6-3.8 s | 1.0 s |
+| this, to 009, first run (no files) | 10 (5 slow) | 3.6 s | 0.97 s |
+| this, to 009, second run | 0 (10 made ahead in 15 ms) | 0 | 0 |
+| this, to 009, a new build's first run (the list kept, the cache not: shaders changed) | 1 (the title's first, made ahead too but wanted first) | 0.82 s | 0.82 s |
+| this, MSAA 2 to 099, first run | 14 | 5.1 s | 1.0 s |
+| this, MSAA 2 to 099, second run | 1 (0.1 ms, a program not the canvas's) | 0.1 ms | 0.1 ms |
+
+The ahead threads' own compiles in a second run are cache hits of 3-8 ms each; with a new build's shaders (no cache)
+they took 1.7 s for the ten on four threads, while the title showed. Pictures: byte for byte main's at 000, 009, 009:2
+and 099 (two each, with the list made ahead). The unit tests pass; the validation layer (sync on, 009) gives what main
+gives.
+
+## Fixed 2026-11-13: under water uncapped (the wobble refused the frame's own walk)
+
+Reported by the owner: under water the overlay read "0 FPS / 30 GAME CUT 6" (uncapped, 240 Hz screen). Reproduced
+headless on main 482ec65b: the owner's quick save beside the water (`--quick-load`), a pad script walking forward
+into it from vblank 600, the owner's picture settings (3x, native widescreen, MSAA 2, lod full, aniso 2, cut-out AA
+ssaa, colour exact, 2D smooth), `--frame-rate unlocked`, `KF4_PRESENT_SIM=240`; under water from about vblank 650.
+
+**Cause.** Two refusals of the frame's own walk, one behind the other, so every picture between under water walked
+the frame's packets again on kf4-pc (main: 451 of 687 frames refused, 4600-6300 walks not kept a run, 25 GB of
+uploads made again in 25 seconds):
+1. The wobble (`RD_PASS_WOBBLE`) pairs with the frame before's every frame (its springs move its texels), and a
+   pass a picture moves was moved on the CPU: "trail paired" (also the fade-in's fill: 343 frames at 009's start).
+2. Behind it, the wobble reads a copy of the frame (to 0x2BC0, `Game_DrawWobblingScreen`'s grab): a copy from the
+   buffer drawn, refused ("copies it", 425 frames once 1 was fixed).
+
+**Fix.**
+1. The frame's own walk kept draws a pass that its pictures move at the frame's time with its kicks numbered
+   (`NativeDraws::walk_pass_by_kicks`, pass_draw.cpp's `pass_stream_moves`), each with the FLAT move gif_moves.h
+   makes on the GPU: the wobble's texels and colour, a fill's or the tint's colour, the view-turn shift's places and
+   texels t of the way, the same sums as pass_draw.cpp's CPU moves (`pass_draw_test` checks every kick against the
+   picture's packets). A native kick now owns its UV as well as its RGBAQ. Not the frame shown before blended in
+   (it reads the frame shown kept): that frame still walks. `KF4_PC_PASS_KICKS=0` restores the refusal.
+2. `GsnInterpFrame` tells the frame's copies of the frame and the stream's choice for each (frame_interp.c's
+   `COPY_BETWEEN`: made again from the picture's frame; else left out); `as_picture_walk` makes the same choice,
+   the copy's source moved to the buffer shown (pcr_frame_walk.h's `frame_copy_in_picture`, `bitbltbuf_in_picture`,
+   `pcr_frame_walk_test`). `KF4_PC_FRAME_COPIES=0` restores the refusal.
+3. A colour surface a copy is about to cover whole (the copy of the frame) is not filled from the uploads first: under
+   water it and the water's targets (128 wide, inside it) let each other go every picture, and each time 140 pages
+   were read from the store and written for nothing.
+
+**Numbers** (Windows, RTX 5080, owner's settings, unlocked with `KF4_PRESENT_SIM=240`, main and fixed alternated, 3
+rounds; vblanks 300-620 before the water, 700-1100 and 1100-1500 under it; no other kf4 running as each run began):
+
+| | pictures a second before / under / under (later) | game vblanks a second under | frames refused, walks not kept |
+|---|---|---|---|
+| main | 614, 586, 628 / 219, 178, 171 / 276, 203, 199 | 33-40 | 451, 4639-6301 |
+| fixed | 621, 590, 600 / 490, 465, 460 / 497, 480, 468 | 53-60 | 0, 18 |
+
+At 240 both hold 240 a second under water (60 game vblanks; 1100-1500: 233 and 234, the wall); the fixed run's
+lowest second under water 150 (main's 20), and its walks not kept 10 (main's 3152).
+
+(Corrected 2026-11-14: the "53-54 a second" this paragraph gave for vblanks 1100-1500, pressed to a wall, and the
+53 in the table's "53-60", were the measurement's. That window ended at the run's last vblank, 1499, the one
+`--dump-frames` writes out: its 16 pictures handed over 45 ms apart while each is written, 0.8 s for one vblank.
+Without it the fixed build keeps 60 there. `pace_test.py` leaves that vblank out; the ad hoc script did not.)
+
+Left: the pump now makes the surfaces the copy and the water's targets churn (22,890 made in a run, 3 a picture), and
+under water it leaves more pictures out as too late (8,878 of 21,500). Fixed below.
+
+Pictures: byte for byte main's under water (64 pictures, 16 vblanks from 700 to 1450, 240, `KF4_INTERP_DRAW_ALL=1`,
+the owner's settings; the pictures between now drawn by the pump from the kept walk, main's walked) and at 000, 009,
+009:2 and 099 through the fade-in (25 pictures a spot, vblanks 1905-2700). The validation layer with synchronization validation under water (240, vblanks to 1010): no synchronization hazards; the same two messages as main at pipeline creation (VUID-...-pCode-08740, -Input-07904), nothing else. The unit tests pass (17).
+
+### 2026-11-14: the let-go surfaces' images used again
+
+Under water each picture between makes again, in the pump's canvas, the copy of the frame (1024 x 512 at the scale)
+and the water's targets inside it, which let each other go (8,700 surfaces made a run), and the tint and the wobble
+read the frame through a texture's copy of a surface, made new each time (about 21,000 a run). Each was a new Vulkan
+image (and its multisampled one) with its memory, cleared, every picture. Now (`KF4_PC_SURFACE_REUSE`, on unless 0):
+- a colour surface let go keeps its images among the last 6 kept; a surface made at the same size, in the same
+  colour format, takes them (its multisampled image too if it has the samples drawn now: else made, as for a new
+  one). One that a copy is about to cover whole is not cleared first. A change of MSAA or of the colour's precision
+  drops the kept ones.
+- a texture's copy of a surface takes a kept image of its size and format (the last 8), cleared only when the part
+  last written there reaches past the part about to be written (the rest stays 0, as in one made new).
+The GPU is done with a kept image as with any the queue used before: the canvas records into one command buffer at a
+time, and the copy and the surface are written behind a full barrier.
+
+**Numbers** (Windows, RTX 5080, headless, `tools/pace_test.py --hz 240 --quick-load` with the save beside the water
+and a pad walking in from vblank 600, counting vblanks 700-1479 (under water; pressed to a wall from about 1100),
+reuse off and on alternated in the same build, 3 rounds; Andrew's profile is `pace_test.py`'s OWNER, 4x, MSAA 1,
+aniso 16; the owner's adds `--native-scale 3 --native-msaa 2 --native-aniso 2`):
+
+| | pictures a second | game vblanks a second | gaps over 12.5 ms (700-1100 / 1100-1479) | left out as too late | pump ms a picture | GPU ms a picture |
+|---|---|---|---|---|---|---|
+| unlocked, Andrew's, off | 282, 283, 288 | 54, 53.8, 53 | 162-167 / 161-166 (to 49 ms) | 12,821-12,882 | 6.2-7.0 | 1.64-1.65 |
+| unlocked, Andrew's, on | 630, 635, 626 | 60.8-60.9 | 26-28 / 0-1 | 6,858-6,961 | 2.4-2.5 | 1.42 |
+| unlocked, owner's, off | 730, 723, 726 | 60.7-60.8 | 0-2 / 0-1 | 4,411-4,565 | 2.3-2.4 | 1.01 |
+| unlocked, owner's, on | 885, 888, 886 | 60.8-61 | 0 / 0 | 2,173-2,290 | 1.3-1.7 | 0.92 |
+
+Uneven refreshes a second (of 240): Andrew's 175-178 off, 86-91 on; the owner's 50-53 off, 7-12 on. At 240 (capped,
+4 rounds) both hold 239-240 pictures and 60 vblanks a second; the GPU's time a picture 1.53-1.64 ms off, 1.35-1.42
+on (Andrew's), 0.98-1.01 and 0.91-0.94 (the owner's), the pump's 5.2-5.7 and 3.0-3.3 ms (Andrew's); off, two of
+Andrew's four runs had a picture held 30-43 ms, none on.
+
+So with Andrew's settings uncapped the game itself fell to 53-54 vblanks a second under water, off: the pump took
+6-7 ms a picture making the images (its CPU, not the GPU's work: 1.65 ms), kf4-pc waited for it to take each frame
+(`wait_for_room_for_frame`), and the game's thread for kf4-pc. On, 60. Sampled (kf4-sampler, 8 s pressed to
+the wall, Andrew's, unlocked): off, the pump's thread busy in nearly every sample, 73% of it in the driver
+(nvoglv64), `create_image` 25%, `surface_texture` 35%, and the game's thread 52% of its busy samples waiting in
+`port_dmac_wait` (the GS behind); on, `create_image` gone from the pump's list and the pump idle in its wait 9%. What is left (Andrew's, on): from vblank 700
+to about 850, just in the water, a hold of 13-20 ms every few vblanks; none pressed to the wall, none with the
+owner's settings.
+
+Pictures: byte for byte off and on under water, both profiles (64 pictures each, 16 vblanks from 700 to 1450, 240,
+`KF4_INTERP_DRAW_ALL=1`), and the owner's on against a20876e2's (the branch before this). The unit tests pass (17).
+
+`tools/pace_test.py --quick-load FILE --input PAD --from VBLANK` times a quick save's place in place of the teleport.
+
 ## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
 
 Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to
