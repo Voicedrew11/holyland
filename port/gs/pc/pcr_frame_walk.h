@@ -12,6 +12,7 @@
 
 #include <cstdint>
 
+#include "gsn.h"
 #include "pcr_gif.h"
 
 namespace pcr {
@@ -23,9 +24,26 @@ struct FrameTargets {
     bool shown_kept = false;              // the frame shown kept (0xF2): a draw whose TEX0 names it reads the copy
     uint32_t kicks = 0;                   // the stream's kicks: a native draw's numbered kicks (native_kick_base on)
                                           // are numbered on from it in the pictures' walk
+    const GsnInterpMove *moves = nullptr; // the frame's moves, one a kick of the stream (kicks of them), or none known
     uint32_t frame_copies = 0;            // the frame's copies from draw_fbp into another buffer (GsnInterpFrame's),
     uint64_t copies_between = 0;          // and those the stream makes again from shown_fbp (bit c: copy c)
 };
+
+// Whether a kick of the stream stays as the frame has it in every picture between: its move's kind is "as it is"
+// (gsn.h's GsnInterpMove: neither GSN_IM_3D nor GSN_IM_FLAT), so the shaders give its place, Z and colour unchanged.
+// False where the moves are not known or the kick is not the stream's (a native draw's, numbered on from the count).
+constexpr bool kick_stays(const FrameTargets &t, uint32_t kick) {
+    return t.moves != nullptr && kick < t.kicks && (t.moves[kick].w[0] & 3u) == 0;
+}
+
+// Whether a kick of the stream keeps its place (X and Y) in every picture between: it stays, or it is a 2D kick
+// (GSN_IM_FLAT) whose place does not move (no GSN_IM_XY): its colour or texture may. A sprite of such kicks covers the
+// pixels the frame's vertices say (pcr_dead_writes.h's kills).
+constexpr bool kick_keeps_place(const FrameTargets &t, uint32_t kick) {
+    return t.moves != nullptr && kick < t.kicks &&
+           ((t.moves[kick].w[0] & 3u) == 0 ||
+            ((t.moves[kick].w[0] & 3u) == GSN_IM_FLAT && (t.moves[kick].w[0] & GSN_IM_XY) == 0));
+}
 
 // Why a frame's own walk was not made its pictures' walk (and the frame's stream was walked)
 enum class FrameWalkRefused : uint8_t {

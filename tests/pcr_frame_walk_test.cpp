@@ -177,9 +177,36 @@ void test_transfer_read_back_and_copy() {
     CHECK(transfer_in_picture(3, elsewhere, kTargetsAsked) == TransferInPicture::as_is);
 }
 
+// A kick that stays as the frame has it: its move "as it is", known, and of the stream
+void test_kick_stays() {
+    GsnInterpMove moves[4] = {};
+    moves[1].w[0] = GSN_IM_3D | GSN_IM_VIEW;
+    moves[2].w[0] = GSN_IM_FLAT | GSN_IM_XY;
+    moves[3].w[0] = GSN_IM_FLAT; // (a 2D kick with nothing to move is still a FLAT one: not taken as staying)
+    FrameTargets t = kTargets;
+    t.kicks = 4;
+    CHECK(!kick_stays(t, 0)); // (the moves not known)
+    t.moves = moves;
+    CHECK(kick_stays(t, 0));
+    CHECK(!kick_stays(t, 1));
+    CHECK(!kick_stays(t, 2));
+    CHECK(!kick_stays(t, 3));
+    CHECK(!kick_stays(t, 4));           // (past the stream's)
+    CHECK(!kick_stays(t, 0xFFFFFFFFu)); // (not numbered)
+    // its place kept: staying, or a 2D kick whose X and Y do not move
+    CHECK(kick_keeps_place(t, 0));
+    CHECK(!kick_keeps_place(t, 1));
+    CHECK(!kick_keeps_place(t, 2));
+    CHECK(kick_keeps_place(t, 3));
+    moves[3].w[0] = GSN_IM_FLAT | GSN_IM_RGBA;
+    CHECK(kick_keeps_place(t, 3));
+    CHECK(!kick_keeps_place(t, 4));
+}
+
 } // namespace
 
 int main() {
+    test_kick_stays();
     test_frame_in_picture();
     test_tex0_in_picture();
     test_tex0_reads();

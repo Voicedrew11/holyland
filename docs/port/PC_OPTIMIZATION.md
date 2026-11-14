@@ -171,6 +171,25 @@ Open. `ring gfx_0.0.0 timeout`, then a reset of the whole card, the game frozen 
 - None of the real-window runs here hung, but the longest was 150 s.
 - The hangs have come with the GPU flat out. Lowering the work a picture may make them rarer without being a fix.
 
+### The hang watch (2026-11-14)
+
+Not a fix: what a hang leaves behind. Until now the game stayed on the screen frozen and had to be killed, and
+nothing on our side said what the GPU had been given.
+
+- `pcr_hang_notes.h`: each submit to the GPU's queue leaves a note (the thread, and for a canvas what it recorded
+  since its last note: batches, native batches, passes, merged and indirect runs, surface copies, clears), the last 64
+  kept. Each call that waits for the GPU says so while it waits: kf4-pc's `next_frame_context` (where the frozen runs
+  sat), the vblank's, the read-backs' fences.
+- `pcr_hang_watch.h`: a thread ("kf4-pc-watch") looks once a second. A wait that has lasted 15 of its looks is a hang:
+  the notes go to `<data folder>/gpu_hang_<date>_<time>.txt` and stderr, and the game ends (exit code 70).
+  `KF4_PC_HANG_WATCH=0`: no watch. The folder comes in by `pcr_hang_reports_in` (pcr.h), before `pcr_open`.
+- After a hang: send the report, and the kernel's lines (`journalctl -k | grep -A3 'ring gfx'`).
+
+Checks: unit tests `pcr_hang_notes` and `pcr_hang_watch` (a wait that never ends ends a child process with the report
+written; waits that end in time do not), under ASan with UBSan and under TSan too; 20 s at 009 in a real window with
+the owner's settings: no report, 3.32 ms a picture (3.38 before: no cost). Not run: a real hang (none came), the game
+whole under the sanitizers, the gcc and Windows builds.
+
 ## What changed on 2026-11-13
 
 In PR #144 (draft): indirect draws off on RADV; the surface copies' images kept and used again (`pcr_spares.h`), which
@@ -249,6 +268,135 @@ against `--renderer gs`.
   copy.
 - **The brightness pass** (0.2 ms and its copy 0.16): the screen drawn over itself times 136/128, not an identity, so
   it cannot be left out; it could be folded into the scanout, not byte for byte.
+
+## What a picture's layers are at 009, and what a modern renderer's tricks give (2026-11-14, afternoon)
+
+Asked: is the cost the PS2's way of drawing, which a modern renderer would not pay? Measured, not built (the
+experiments' code is not kept). Real window, the owner's settings, 009:0, 15 s each; 3.34 ms a picture as it is.
+
+**The layers.** One frame captured (`--gs-capture-at`), every fragment at 176 pixels of a grid traced
+(`kf4-gsreplay --renderer pc --scale 1 --pixel X,Y`). Fragments a pixel, on average:
+
+| Kind | Drawn | Failed the Z test |
+|---|---|---|
+| full-screen sprites, not blended (the clear, the same clear again, the brightness pass) | 3.0 | |
+| full-screen sprites, blended (the destination alpha's reset, the HUD) | 1.2 | |
+| the fire (native 700; all on the right of the picture) | 3.2 | 0.6 |
+| the map (native 000) | 1.5 | 0.3 |
+| native 280 | 0.02 | |
+
+About 10 fragments a pixel, and **only one in ten is hidden**. A wall's pixel is one map fragment and four full-screen
+passes. The destination alpha's reset is for the shadows after it (352 strips of program 0x5A0 with DATE and FBA: each
+pixel darkened once).
+
+**What was tried.**
+
+| Experiment | ms a picture | Says |
+|---|---|---|
+| every native batch's Z drawn first, then the scene (exact Z on, and off so that the early test rejects) | 3.41 to 3.48, 3.35 to 3.32 | nothing hidden to leave out: a depth pre-pass or a sort front to back gives nothing here |
+| DATE's stencil set without reading the target's alpha (as if it were known from the reset) | 3.34 to 3.28 | 0.06 |
+| the untextured GIF batches left out (`KF4_PC_KNOCK=fills`) | 3.00 | the clears, the alpha's reset, the fade: 0.33 |
+| and the brightness pass's draw (`fills,surface`) | 2.89 | 0.45 together; with its texture copy (0.16) about 0.6 |
+
+So the PS2's way costs, at most, the full-screen passes: **about 0.6 to 0.75 ms of 3.34** if every one of them went
+(Phase 2 whole, and the alpha's reset kept in the stencil alone). The rest is the scene's own visible layers at 13.8
+million samples of 8 bytes and their depth: about 1 to 2 GB moved a picture, at about 300 pictures a second half or
+more of what the card's memory moves (640 GB a second). Fewer samples or fewer bytes a sample is all that is left
+(round 3's table).
+
+**The machine went down** at 14:56 as the third run in a row started (`KF4_PC_KNOCK=n700`, in the opening): no ring
+timeout in the kernel's log, the log just stops. Twelve real-window runs before it in an hour and a half without a
+hang.
+
+## What a layer costs on this card: `kf4-layerbench` (2026-11-14, later)
+
+`tools/layer_bench` (built as `kf4-layerbench` where `glslangValidator` is): plain full-screen layers on a target of the
+renderer's size and formats, no game in it, one state changed at a time, timed by the clock over 200 pictures of 8
+layers. RX 9070 XT, RADV 26.2.3, 3840x1792. ms a layer:
+
+| A layer that is | 8 bit, 1 sample | 8 bit, 2 | 8 bit, 4 | 16 bit, 1 | 16 bit, 2 (the owner's) | 16 bit, 4 |
+|---|---|---|---|---|---|---|
+| two triangles, textured, depth, blended | 0.039 | 0.052 | | 0.137 | 0.166 | |
+| 45000 triangles (about 300 pixels each: the map's are about 500), textured, depth | 0.043 | 0.128 | | 0.087 | 0.428 | |
+| 45000 triangles, textured, depth, blended | 0.055 | 0.210 | 0.565 | 0.191 | 0.565 | 0.955 |
+| one colour, no depth, no blend | 0.012 | 0.023 | | 0.021 | 0.042 | |
+| hidden (fails the early depth test) | 0.011 | 0.012 | | 0.011 | 0.020 | |
+
+What it says:
+
+- **A layer of many triangles under MSAA costs three to four times the same layer at one sample**, in either colour
+  format, where a layer of two triangles costs a quarter more. The cost is the triangles' edges under MSAA, not the
+  bytes: 8 bits with 2 samples (0.210) is dearer than 16 bits with 1 (0.191) at half the memory.
+- **The owner's pair, 16 bits and 2 samples, is ten times 8 bits and 1 sample** for a map-like layer (0.565 against
+  0.055); either setting alone is about 0.2.
+- 16-bit floats cost what 16-bit UNORM does with MSAA; 10 bits a channel what 8 does (but has 2 bits of alpha).
+- The driver's switches: `RADV_PERFTEST=dccmsaa` and `RADV_DEBUG=nohiz` change nothing (`dccmsaa` is for GFX8-9
+  only). `RADV_DEBUG=nodcc` (a layer of 45000 triangles, textured, depth): 8 bits with 2 samples 0.129 to 0.448, 16
+  bits with 2 samples 0.429 to 0.653. The colour compression works under MSAA for both; it saves more at 8 bits.
+- **This card does compress MSAA colour**: Mesa 26.2.3's `ac_surface.c` (`gfx12_compute_surface`) turns DCC on for
+  every multisampled colour image ("Always enable compression for Z/S and MSAA color by default"). What it no longer
+  has is FMASK, the older cards' own MSAA scheme (`ac_gpu_info.c`: `has_fmask = gfx_level <= GFX10_3`, RDNA 2 and
+  before). Why many small triangles make MSAA three to four times dearer: the next section.
+- An image twice as tall as what is drawn (the renderer's frame buffers' surface) costs nothing more. A render pass a
+  layer, a shader that may discard, one that writes its own depth: nothing to speak of.
+- **The renderer is not far off the card**: the map's 1.5 layers at about 0.56 ms is 0.85 ms, its knock-out 1.2 with
+  the fragments that fail. There is no hidden factor of several in how the renderer draws; there is one in what MSAA
+  costs here.
+
+So the lever is anti-aliasing that is not MSAA. Supersampling is cheaper for the same count of samples: twice the
+pixels at 1 sample is about 0.11 ms (8 bit) or 0.38 (16 bit) a map-like layer, against MSAA 2's 0.21 and 0.565. Not
+yet measured in the game: 4x with MSAA 1 and colour exact together, and a higher scale without MSAA.
+
+## Why MSAA costs so much here: pixels written in part (2026-11-14, later still)
+
+New cases in `kf4-layerbench` (`edges:`, `split:`, `part:`) take the map-like layer apart. RX 9070 XT, RADV 26.2.3,
+3840x1792, ms a layer, textured with depth unless said:
+
+| | 8 bit, 1 sample | 8 bit, 2 | 16 bit, 1 | 16 bit, 2 (the owner's) |
+|---|---|---|---|---|
+| 2 triangles | 0.025 | 0.036 | 0.043 | 0.087 |
+| 1250 triangles (quads 128x60 pixels) | 0.027 | 0.042 | 0.047 | 0.175 |
+| 5000 | 0.031 | 0.056 | 0.057 | 0.237 |
+| 45000 | 0.044 | 0.132 | 0.090 | 0.426 |
+| 180000 | 0.057 | 0.179 | 0.105 | 0.465 |
+| 45000, colour alone (no depth) | 0.035 | 0.054 | 0.058 | 0.262 |
+| 45000, depth alone (colour masked off) | 0.035 | 0.059 | 0.037 | 0.090 |
+| 2 triangles, the shader's sample mask all samples | 0.072 | 0.072 | 0.072 | 0.147 |
+| 2 triangles, the sample mask only sample 0 | 0.070 | 0.116 | 0.072 | 0.230 |
+| 45000, `RADV_DEBUG=nodcc` | | 0.444 | | 0.650 |
+| 45000, `RADV_DEBUG=nobinning` | | 0.129 | | 0.434 |
+
+What it says:
+
+- **The cost is pixels whose samples are written at different times**, not the triangles. A triangle's edge leaves the
+  pixels it crosses part-covered, and the triangle beside it writes their other samples later. Two triangles with a
+  sample mask of one sample (every pixel part-written, no edges at all) cost what 5000 to 45000 triangles do. At one
+  sample no pixel is ever written in part, and the triangles cost little.
+- **It levels off**: 180000 triangles cost a tenth more than 45000. Once every block of memory holds a part-written
+  pixel, more edges add nothing. That is the shape of writes that no longer fill whole blocks, which the memory side
+  must read, merge and write back (and recompress). It is the same with the colour compression off (2 triangles 0.245,
+  45000 0.650 at the owner's), so it is not only DCC giving up; DCC still saves a third.
+- **It is the colour, and the bytes a pixel holds**: colour alone with edges is 0.054 ms at 8 bytes a pixel (8 bit, 2
+  samples; or 16 bit, 1 sample: 0.058) and 0.19 to 0.26 at 16 (16 bit and 2 samples, or 8 bit and 4). The depth adds
+  0.06 to 0.09 at 2 samples. The owner's pair is past the step between 8 and 16 bytes a pixel.
+- Edges in new places each layer (as the game's are) cost the same as edges in the same places. Binning off changes
+  nothing. The renderer's image twice as tall: nothing.
+- Writing `gl_SampleMask` itself costs (0.07 even at one sample), so the `part:` rows compare with each other, not with
+  the `edges:` rows.
+- Why this card has the step: the hardware's own documents would say. FMASK is still a fair guess (with it, a
+  part-covered pixel's samples were written as one colour and a mask; without it each sample is its own write), but
+  nothing here proves it.
+
+**The game does nothing wrong here.** It draws the PS2's triangles as the PS2 did, and its MSAA cost at 009 (0.55 ms,
+round 3) is what this table says 1.5 map layers cost. Its own MSAA extras are small: cut-out AA 0.17 ms, resolves and
+expands within the knock-outs' noise. What it could change:
+
+- At 4x on a window smaller than 3840x1792, the scale is already supersampling: MSAA 2 on top buys little for its
+  0.55 ms. MSAA's price is lowest at 1x or 2x, where it is worth most.
+- The step is at 8 bytes a pixel: colour high with MSAA 2 was the one combination past it. **Colour high is removed**
+  (2026-11-14): it showed no difference to see, and the colour surfaces are now always 8 bits a channel.
+- The depth with stencil (`D32_SFLOAT_S8_UINT`) is a fifth of it; `D32_SFLOAT` where the stencil is unused would save
+  part of that (not measured).
 
 ## Not known
 
@@ -401,3 +549,242 @@ To the plan: **Phase 1b, unlocked without a schedule's rate.** The asked rate fo
 are made as fast as they can be, each for the time it reaches the screen), the cap's setting, slider and option go,
 and the schedule's 16 a vblank with them. Measured with the replay bench and in a real window against the table
 above.
+
+## What changed on 2026-11-14 (morning): Phase 1, merged draws
+
+Branch `perf/speed-plan`. A kept walk's native batches are drawn as **merged runs** in the pictures between: one
+`vkCmdDraw` for every stretch of batches with the same pass, program, depth state and write mask, however many batches
+and whatever their blends and textures. Not an indirect draw (those stay off on RADV).
+
+How: each triangle of a merged draw has an entry in a buffer of the picture's (`MergedTriangle`, `u_merged`): its
+triangle in the program's triangles, its instance and its batch's record. The native vertex shaders read their
+triangle through it (`pcr_triangle`, pcr_common.h). The two blends of native 280 are one state: the factors come from
+the shader (the dual-source blend #139 built). `KF4_PC_MERGED=0` turns them off, `=plain` leaves the dual-source blend
+out, `=1` uses them where the indirect runs are on too (NVIDIA: not tried there; the indirect runs stay as they were).
+
+Real window, the owner's settings, 009, `--frame-rate-cap 0`, 30 s of play, off and on from one build:
+
+| | off | merged |
+|---|---|---|
+| 1x: GPU ms a picture | 1.174 | 0.825 |
+| 1x: native 280 | 0.478 | 0.135 |
+| 1x: pictures in the run | 38669 | 48936 |
+| 1x: the pump, ms a picture at the end | 1.47 | 0.74 |
+| 1x: left out as too late | 13903 | 3300 |
+| 1x: native draw calls a picture | 961 | 284 |
+| 4x: GPU ms a picture | 3.703 | 3.691 |
+
+- **At 1x the game is no longer held by the pump**: it drew nearly every picture the schedule asked for (51475 asked,
+  the schedule's own most of 959 a second: Phase 1b).
+- **At 4x nothing changed**: the GPU's time there is pixel work. The kinds' shares moved (native 280 0.58 to 0.22, 2d
+  0.90 to 1.27) but their sum did not: the timestamps sit between draws, and the pixel work of a draw ends later. So the
+  "native 280: 0.6 ms that no setting lowers" above was the draw calls only at 1x; at 4x it is pixels under another
+  name. Phases 2 and 3 are what 4x needs.
+- About 150 merged runs and 284 draw calls a picture are left of 961. What ends a run now: a change of program (000,
+  280, 700), of depth state or write mask, a GIF batch, a batch not from the walk's table.
+
+Three things the pictures needed, each found by comparing byte for byte:
+
+1. **`nonuniformEXT` on the table's texture and sampler index** in the runs' fragment shaders: a merged draw reads
+   several textures, and pixels of two batches in one quad's wave read one or the other's.
+2. **No `textureSize` of a table's texture**: on RADV (Mesa 26.2.3) it gave another batch's texture's size here and
+   there, `nonuniformEXT` or not (about 150 pixels a picture, changing run to run). The size now comes with the
+   record (`PrimPush::src_offset`, pcr_prim.h's `sampled_size`). A driver bug, it seems: not reported yet.
+3. **The dual-source blend's one minus by the GPU's maker**: NVIDIA's blend cuts a factor to the target's precision
+   and RADV's on AMD does not (`F_DUAL_CUT`); with NVIDIA's cut, 9:2 and 0:0 came out a value darker at about 850
+   pixels a picture. Other makers get merged runs without the dual-source blend until their pictures are compared.
+
+Checks: pictures byte for byte against `KF4_PC_MERGED=0` (52 pictures each, headless at 240 with the pictures between,
+the owner's settings: 000:0, 009:0, 009:2, 020:0, 105:0; and 009:0 at 1x without MSAA, colour exact); all 20 unit
+tests; the game under ASan and UBSan in a real window; no GPU hang in any run. Not run: TSan, the gcc and Windows
+builds, NVIDIA, a map tour against `--renderer gs`.
+
+Next, from this: the pump still walks every batch for every picture (`draw_batch`, about 900 a picture) to make the
+same records and entries each time; they could be made once a walk (30 a second). And the GIF batches end runs.
+
+## What changed on 2026-11-14 (round 2): what 4x costs, and the scaling in two passes
+
+### Knock-outs (`KF4_PC_KNOCK`)
+
+`KF4_PC_KNOCK=kind[,kind]` leaves one kind of work out of the pictures between (`knocked_out`, pcr_canvas.cpp:
+clears, fills, surface, 2d, n000, n280, n700, blended). The picture is wrong; the GPU time a picture less is what that
+work costs. The game's own frames (one picture in four here) are still drawn whole, so the numbers are low by about
+a quarter. Real window, the owner's settings, 009, uncapped, 15 s of play; with nothing knocked out 3.60 ms:
+
+| Left out | ms a picture | Less |
+|---|---|---|
+| native 000 (the map) | 2.40 | 1.20 |
+| every GIF batch (2d) | 2.81 | 0.79 |
+| native 700 | 3.10 | 0.50 |
+| the untextured GIF batches (fills: the clears and the full-screen blends) | 3.15 | 0.45 |
+| native 280 | 3.44 | 0.16 |
+| the batches textured from a surface (the brightness pass) | 3.51 | 0.09 |
+| the clears | 3.55 | 0.05 |
+| all four kinds | 0.81 | 2.79 |
+
+And one setting changed (15 s each):
+
+| Setting | ms a picture |
+|---|---|
+| the owner's | 3.60 |
+| anisotropic 1, not 16 | 3.58 |
+| exact Z off (`KF4_PC_EXACT_Z=0`) | 3.63 |
+| cut-out AA off | 3.43 |
+| MSAA 1 | 3.05 |
+| colour exact | 3.02 |
+| scaling smooth, no sharpening (the presenter's own) | 3.10 |
+| `RADV_DEBUG=nodcc` (the driver's colour compression off) | 6.12 |
+| `RADV_DEBUG=nohiz` | 3.59 |
+
+What this says:
+
+- **4x is bandwidth.** No shader feature costs anything to speak of (anisotropy, exact Z); the samples and the bytes a
+  sample do (MSAA 2 and 16 bits a channel: 0.55 ms each). A full-screen layer at 3840x1792, two samples, 8 bytes a
+  sample is 110 MB written, and read too when blended. The map (native 000) is 1.2 ms of it.
+- **The clears are worth 0.05 ms, not the 0.32 the profiler's row said.** They are cleared now in the pictures between
+  too (below): `vkCmdClearAttachments` inside a pass is a rectangle drawn by the driver, the same bytes. Only a pass's
+  load op clears for nothing, and that needs a surface that is one buffer, not both (Phase 3).
+- **The profiler's kinds cannot be trusted at 4x** for what a kind costs: the timestamps sit between draws and the pixel
+  work ends later. The knock-outs can.
+- HiZ does nothing here (with the stencil never used, `KF4_PC_STENCIL=0`, too). The driver's colour compression does a
+  great deal: whatever is done to the surfaces must keep it.
+- With everything of the scene left out 0.8 ms stays: present 0.49, the texture copy 0.11, the picture 0.06.
+
+### Built
+
+- **The scaling in two passes** (`pcr_present_scale_1d.frag`, `PresentScaler`): across into an image as wide as the
+  window and as tall as the picture (linear light, RGBA16F), then down. Present 0.477 to 0.206 ms a picture, the
+  picture **3.60 to 3.30 ms**. The window's picture is not the one pass's bit for bit: each pass clamps the cubic's
+  overshoot along its own direction, the one pass clamped once over both. Against the one pass (`--dump-present
+  2560x1440`, 52 pictures each at 009 and 020): 95% of the values the same, 3.5% one off, 1% three or more off (hard
+  diagonal edges, 41 at most), nothing to see side by side. `KF4_PC_SCALE_PASSES=1`: the one pass. It holds 37 MB more
+  for each thread that makes pictures.
+- **Clears in the pictures between** (`Batch::still`, `kick_stays` in pcr_frame_walk.h with a unit test): a batch of
+  the pictures' walk whose kicks' moves are all "as it is" is where the frame put it, so `as_clear` may clear it.
+  About 2.6 a picture at 009; worth 0.05 ms (above).
+
+Checks: the game's own picture byte for byte against round 1's (52 pictures each at 009:0, 009:2, 020:0); all 20 unit
+tests; ASan and UBSan in a real window (the known reports); no GPU hang. Not run: TSan, gcc and Windows builds, NVIDIA.
+
+## What changed on 2026-11-14 (round 3): 4x is the card's fill rate
+
+More knock-outs and experiments at the owner's settings (009, real window, 15 s each), after round 2's 3.30 ms:
+
+| Experiment | ms a picture | Says |
+|---|---|---|
+| the surface copies for the pump left out (`KF4_PC_KNOCK=copies`) | 3.24 | the copies cost 0.07 ms, not the profiler's 0.27 |
+| every native draw with a trivial fragment shader (no texture, no fog, no tests) | 2.94 | all the shading is 0.33 ms of the natives' 1.9 |
+| blends that are their source drawn without the blend (kept, below) | 3.25 | reading the destination is little of it |
+| a depth-only pass before the map | no change | the map is mostly drawn blended: nothing qualifies |
+| HiZ off, exact Z off, anisotropy off (round 2) | no change | |
+
+So at 4x with two samples and 16 bits a channel the time is **rasterising and writing that many samples**: 13.8 million
+samples a layer, about 26 bytes each with depth, about three layers deep. No shader or state change gets it back;
+fewer samples do:
+
+| Setting (009, the same build) | ms a picture | The game's GPU memory |
+|---|---|---|
+| the owner's: 4x, MSAA 2, colour high | 3.24 | 3.8 GB |
+| 4x, MSAA 2, colour exact | 2.58 | 3.1 GB |
+| 4x, MSAA 1, colour high | 2.65 | 2.7 GB |
+| 3x, MSAA 2, colour high | 1.74 | 2.8 GB |
+| 2x, MSAA 2, colour high | 1.05 | 2.4 GB |
+
+4x draws 3840x1792 for a 2560x1440 window; 3x draws 2880x1344, about the window's own size, in a little over half the
+time. That is the owner's choice to make, not a default changed here.
+
+Built:
+
+- **Blends that are their source are not blended** (`blend_is_source`, `KF4_PC_UNBLEND=0` to compare): (Cs - Cd) * C +
+  Cd with FIX 0x80, or As 0x80 at every pixel: the vertices' alpha all 0x80 (a GIF batch's own; program 0x000's from
+  its strips' colours, `RdBatch::alpha_lo/hi`, as `NativeBatch::alpha_is_one`) and the texture's too where TCC takes
+  it. Half of 009's blended map triangles have alpha 0x80 throughout; about a third of the blended batches qualify
+  (the others take a texture's alpha that is not 0x80 everywhere). 0.05 ms. Pictures byte for byte (below).
+- `KF4_PC_KNOCK=copies`.
+
+Checks: pictures byte for byte against round 1's at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the unit tests (the
+`sampler` test failed once under load and passed again: it times threads); ASan and UBSan in a real window (the known
+reports).
+
+### Two more GPU hangs (06:58:44 and 09:26:16)
+
+Both `ring gfx_0.0.0 timeout`, thread **kf4-pc**, in the **opening** (24 s and about 15 s into the run, before the
+teleport at vblank 1900), both runs with `--frame-rate-cap 0`: one the committed build with `KF4_PC_UNBLEND=0`, one at
+3x with MSAA 4 (pipelines compiling). 2 hangs in about 60 real-window runs this morning. So: not the pump, not play,
+not the memory. The opening uncapped runs at the schedule's most (959 pictures a second) on the GPU's simplest
+pictures. Test runs here no longer pass `--frame-rate-cap 0` (a picture's GPU time does not need it).
+
+What would find it, and needs the owner (root, or a package):
+
+- **The kernel's dump of the hung job**: for five minutes after a hang, `sudo cat /sys/class/devcoredump/devcd*/data
+  > ~/hang.txt` (root only). It names the ring's last commands.
+- **The validation layer**: `sudo dnf install vulkan-validation-layers`. The copies on this machine (Steam's, 1.3.224;
+  Flatpak's) are too old: the game crashes under them at start.
+
+## What changed on 2026-11-14 (round 4): unlocked follows the window (Phase 1b)
+
+Unlocked asked for a picture every 1 / the cap of a second (500 for the owner) whatever the renderer made. At 4x it
+makes about 300, so most of the schedule's pictures were left out as too late and those made came in bursts. Now the
+asked rate is **a quarter more than the window showed in the last half second** (`unlocked_asked_hz`,
+frame_interp.c), never under 120 nor over the cap or the schedule's most. `KF4_UNLOCKED_FOLLOW=0`: as before.
+
+Real window, the owner's settings (cap 500), 20 s of play, fixed and following from one build:
+
+| | pictures between shown | between new pictures | shown late |
+|---|---|---|---|
+| 4x, 009: fixed | 7489 | 7.08 ms (sd 13.3) | 806 |
+| 4x, 009: following (three runs) | 10405 to 10595 | 5.2 ms (sd 6.1 to 7.3) | 113 to 129 |
+| 4x, 020: fixed | 15775 | 3.52 ms (sd 9.1) | 183 |
+| 4x, 020: following | 16055 to 16157 | 3.47 ms (sd 5.4) | 64 to 67 |
+| 4x, 105: fixed | 15958 | 3.50 ms (sd 9.1) | 194 |
+| 4x, 105: following | 16209 | 3.45 ms (sd 5.5) | 77 |
+| 3x, 009: fixed | 20545 | 2.73 ms (sd 4.1 to 4.9) | 39 to 42 |
+| 3x, 009: following | 19440 | 2.90 ms (sd 3.5) | 37 |
+| 1x, 009: fixed | 21762 | 2.60 ms (sd 3.7) | 37 |
+| 1x, 009: following | 20712 | 2.73 ms (sd 3.2) | 37 |
+
+- **Where the GPU is the limit (the owner's 4x) 40% more pictures between reach the window at 009, half as unevenly,
+  and a seventh as many late.** At the lighter maps a little more, and much more evenly.
+- **Where the cap is reached (1x, 3x) 5% fewer in a run**: after the menus' 60 and after a load the rate climbs a
+  quarter each half second, about three seconds from 120 to 500. In play it sits at the cap as before.
+- Tried and left out: the top at once (or twice as many) where the window showed all that was asked for, and one
+  answer for each of the window's counts. Each made play worse than the plain rule (4x at 009: 9300 pictures between,
+  sd 9; the rate overshoots after any dip and the bursts are back).
+- **The cap's slider stays** (the owner asked for it gone): it is no longer needed to make unlocked smooth, and 0 (no
+  cap) is now safe, but a VRR screen still wants a rate held under its refresh. The owner's to take out.
+
+Also: `vu1_280_maths.h`'s `colour_u` walked a strip's colour back k steps, **k read from the mesh with no bound**: a
+wrong number there is a loop of up to two thousand million steps a vertex, which is a GPU ring timeout. Bounded at
+256 (a VU1 batch's most vertices); pictures byte for byte at 009:0 and 009:2. Not shown to be the hang's cause: the
+only loop in the shaders whose length comes from data.
+
+A third hang, 10:10:10: thread kf4-pc, about 42 s into a capped 4x run at 009 (10 s of play), before the bound above
+was in. A 20-run test of the opening alone, uncapped, did not hang: the opening is not a trigger by itself.
+
+Checks: the 20 unit tests; pictures (the shader's bound) byte for byte at two spots. Not run on this round: the
+sanitizers (a C function of arithmetic and one atomic), TSan, gcc and Windows builds.
+
+## What changed on 2026-11-14 (round 5): dead writes left out of the pictures between
+
+What the game's full-screen passes are at 009 (a dump of the pictures' walk; 640x448 each, in order): the clear,
+**the same clear again** in the other context, the scene, the destination alpha set to 0 (ten sprites, a blend by FIX
+0 that leaves the colour), later a Z-only clear, and when a fade is on a black blend over everything, then the
+brightness pass, and **Z cleared once more** after the last draw that tests it.
+
+`pcr_dead_writes.h` (header only, unit test `pcr_dead_writes`): a batch whose every write is written over at every
+pixel, or never looked at, before anything reads it is not drawn by the pump. A pictures' walk is summarised a step
+at a time (`walk_step`: what it may read, write, and writes at every pixel, by its registers; sprites that keep their
+place, `kick_keeps_place`, and cover their scissor), the walk taken as drawn round and round on the pump's surfaces,
+the picture taken at its end reading the colour. Every doubt is a read. Only the pump leaves them out (kf4-pc's
+surfaces are the game's own). `KF4_PC_DEAD=0`: all drawn.
+
+At 009: the first clear and the last Z clear, 1.7 batches a picture: **3.46 to 3.38 ms a picture** (two runs each,
+15 s). The alpha's pass is not dead in play (draws that test the destination alpha follow it).
+
+Checks: pictures byte for byte at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the 21 unit tests, the two new ones
+under ASan and UBSan too; the game under ASan and UBSan in a real window (the known reports); no hang.
+
+Looked at and left: **GPU memory.** What is left is the three sets of surfaces (1.5 GB), and getting one back means
+the pump keeping surfaces of its own, which needs to know that a walk reads nothing it has not drawn (the brightness
+pass's copy takes 512 rows where the clear covers 448: a rule would refuse it at once), for 0.5 GB. The flash
+recorder's ring is 0.55 GB while it is on (the owner's setting; off, it is nothing), and 3x in place of 4x is 1.0 GB.

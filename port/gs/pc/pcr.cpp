@@ -39,6 +39,7 @@
 #include "pcr_between.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
+#include "pcr_hang_watch.h"
 #include "pcr_native.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
@@ -545,7 +546,7 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
     std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, msaa{1}, cutout_aa{GSN_CUTOUT_AA_OFF}, mode_2d{GSN_2D_PS2},
-        colour{GSN_COLOUR_EXACT}, layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
+        layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
 
@@ -632,9 +633,10 @@ bool pump_wanted() {
 class Intake final : public pcr::GifEvents {
 public:
     // (on the thread, once the device is there)
-    void attach(Device &device) {
+    void attach(Device &device, pcr::HangNotes &hang_notes) {
         times_ = std::make_unique<pcr::GpuTimes>(device);
         canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
+        canvas_->watch_hangs(hang_notes, "kf4-pc");
         natives_ = std::make_unique<pcr::NativeDraws>(device);
         between_ = std::make_unique<pcr::Between>(device);
     }
@@ -650,9 +652,13 @@ public:
         }
         drop_stretch();
         frame_taken_at_ = vblanks_;
-        const pcr::FrameTargets targets = {frame->draw_fbp,       frame->shown_fbp,
-                                           frame->uploads_asked_again != 0, frame->shown_kept != 0,
-                                           frame->kicks,          frame_copies_ ? frame->frame_copies : 0,
+        const pcr::FrameTargets targets = {frame->draw_fbp,
+                                           frame->shown_fbp,
+                                           frame->uploads_asked_again != 0,
+                                           frame->shown_kept != 0,
+                                           frame->kicks,
+                                           frame->moves, // (the moves live in between_ until the next frame's)
+                                           frame_copies_ ? frame->frame_copies : 0,
                                            frame->copies_between};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
@@ -805,9 +811,9 @@ public:
     }
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
-    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d and colour: Canvas::set_2d's and set_colour's
+    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d: Canvas::set_2d's
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
-                int mode_2d, int colour) {
+                int mode_2d) {
         vblanks_++;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
@@ -817,7 +823,6 @@ public:
             canvas_->set_sampling(lod, uint32_t(aniso));
             canvas_->set_msaa(samples, cutout_aa);
             canvas_->set_2d(mode_2d);
-            canvas_->set_colour(colour);
             canvas_->vblank();
             times_->collect();
         }
@@ -1069,7 +1074,21 @@ public:
             int32_t linear;
         } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
         bool sharpened = sharpen > 0 && work;
-        pass(cmd, sharpened ? *work : scaled, scale_, picture.get_view(), &scaling, sizeof(scaling));
+        const Image &to = sharpened ? *work : scaled;
+        // (two passes, across then down, pcr_present_scale_1d.frag: far fewer reads than the one pass. The one pass
+        // where the image between them cannot be made, or with KF4_PC_SCALE_PASSES=1, to compare)
+        if (two_passes_ && across_image(w, ph)) {
+            struct {
+                int32_t src[2], along[2];
+                float ratio;
+                int32_t decode, encode;
+            } across = {{int32_t(pw), int32_t(ph)}, {1, 0}, float(pw) / float(w), 1, 0},
+              down = {{int32_t(w), int32_t(ph)}, {0, 1}, float(ph) / float(h), 0, 1};
+            pass(cmd, *across_, scale_1d_, picture.get_view(), &across, sizeof(across));
+            pass(cmd, to, scale_1d_, across_->get_view(), &down, sizeof(down));
+        } else {
+            pass(cmd, to, scale_, picture.get_view(), &scaling, sizeof(scaling));
+        }
         if (sharpened) {
             struct {
                 int32_t size[2];
@@ -1091,6 +1110,9 @@ private:
         frag.push_constant_size = 5 * sizeof(int32_t);
         scale_ = device_.request_program(
             vs, device_.request_shader(pcr_spv_pcr_present_scale_frag, sizeof(pcr_spv_pcr_present_scale_frag), &frag));
+        frag.push_constant_size = 7 * sizeof(int32_t);
+        scale_1d_ = device_.request_program(vs, device_.request_shader(pcr_spv_pcr_present_scale_1d_frag,
+                                                                       sizeof(pcr_spv_pcr_present_scale_1d_frag), &frag));
         frag.push_constant_size = 3 * sizeof(int32_t);
         sharpen_ = device_.request_program(
             vs, device_.request_shader(pcr_spv_pcr_present_sharpen_frag, sizeof(pcr_spv_pcr_present_sharpen_frag), &frag));
@@ -1119,8 +1141,24 @@ private:
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
+    // The image between the two passes: the output's width, the picture's height, linear light in floats (the
+    // cubic's sums before the second pass clamps them). Kept while the sizes stay; false when it cannot be made.
+    bool across_image(uint32_t width, uint32_t height) {
+        if (across_ && across_->get_width() == width && across_->get_height() == height) {
+            return true;
+        }
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R16G16B16A16_SFLOAT);
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.layout = ImageLayout::General;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        across_ = device_.create_image(info, nullptr);
+        return bool(across_);
+    }
+
     Device &device_;
-    Program *scale_ = nullptr, *sharpen_ = nullptr;
+    Program *scale_ = nullptr, *scale_1d_ = nullptr, *sharpen_ = nullptr;
+    ImageHandle across_;
+    const bool two_passes_ = !(getenv("KF4_PC_SCALE_PASSES") && strcmp(getenv("KF4_PC_SCALE_PASSES"), "1") == 0);
 };
 
 Settings &settings(); // (below)
@@ -1158,8 +1196,11 @@ int not_shown_when_late(MadePicture &made, const GsnInterpPicture &between) {
 // ring has it, GSN_WANT_PIXELS when frame has it, and with GSN_PRESENT to the presenter once it is there
 class PictureOut {
 public:
-    PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear)
-        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device) {}
+    // hang_notes: its submits' notes and waits (pcr_hang_notes.h); who: its thread, a name that outlives this
+    PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
+               pcr::HangNotes &hang_notes, const char *who)
+        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device),
+          hang_notes_(hang_notes), who_(who) {}
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
@@ -1256,6 +1297,7 @@ private:
     // until the next frame context, which only kf4-pc moves on (the pump's pictures would be shown before they are
     // drawn, and drawn up to a vblank late)
     void submit_now(CommandBufferHandle &cmd) {
+        hang_notes_.submitted(who_, "a picture", pcr::hang_clock_s());
         device_.submit(cmd);
         device_.flush_frame();
     }
@@ -1354,8 +1396,12 @@ private:
                      VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times.end(*cmd);
+        hang_notes_.submitted(who_, "a picture read back", pcr::hang_clock_s());
         device_.submit(cmd, &fence);
-        fence->wait();
+        {
+            pcr::GpuWait wait(&hang_notes_, "a picture's read-back fence", pcr::hang_clock_s());
+            fence->wait();
+        }
         if (&frame == &presented_ && presented_pixels_.size() < size_t(width) * height) {
             presented_pixels_.resize(size_t(width) * height);
             presented_.rgba = presented_pixels_.data();
@@ -1395,6 +1441,8 @@ private:
     Stats &stats_;
     const ClearColour &clear_;
     PresentScaler scaler_;
+    pcr::HangNotes &hang_notes_;
+    const char *who_;
     ImageHandle picture_;
     ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
     BufferHandle readback_;
@@ -1424,8 +1472,9 @@ using PumpMessage = std::variant<PumpFrame, InterpPicture, PumpPicture, MadePict
 class Pump {
 public:
     Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
-         Inbox &inbox, SharedTurnLead &turn_lead)
-        : device_(device), inbox_(inbox), turn_lead_(turn_lead), out_(device, scanout, presenter, stats, clear) {}
+         Inbox &inbox, SharedTurnLead &turn_lead, pcr::HangNotes &hang_notes)
+        : device_(device), inbox_(inbox), turn_lead_(turn_lead), hang_notes_(hang_notes),
+          out_(device, scanout, presenter, stats, clear, hang_notes, "kf4-pc-pump") {}
 
     ~Pump() {
         stop();
@@ -1498,7 +1547,8 @@ public:
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
                 "passes, %llu surfaces made (%llu of them with images used again), %llu uploads into surfaces, %llu "
                 "textures' copies of surfaces in images used again; kept walks' textured batches %llu, %llu from "
-                "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws\n",
+                "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws; %llu merged runs, %llu "
+                "triangles; %llu batches cleared, %llu blends left out, %llu dead\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)intake.surface_copies_into_spares,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
@@ -1507,7 +1557,10 @@ public:
                 (unsigned long long)c.surfaces_made, (unsigned long long)c.surface_images_reused,
                 (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.texture_copies_reused,
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
-                (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws);
+                (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws,
+                (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles,
+                (unsigned long long)c.clears, (unsigned long long)c.blends_left_out,
+                (unsigned long long)c.dead_batches);
     }
 
 private:
@@ -1519,6 +1572,7 @@ private:
 #endif
         times_ = std::make_unique<pcr::GpuTimes>(device_);
         canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
+        canvas_->watch_hangs(hang_notes_, "kf4-pc-pump");
         between_ = std::make_unique<pcr::Between>(device_);
         while (std::optional<PumpMessage> message = take()) {
             std::visit([this](auto &m) { work(m); }, *message);
@@ -1645,6 +1699,7 @@ private:
     Device &device_;
     Inbox &inbox_;
     SharedTurnLead &turn_lead_;
+    pcr::HangNotes &hang_notes_;
     PictureOut out_;
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
@@ -1670,7 +1725,8 @@ std::string &pipeline_cache_path_before_open(); // (below)
 class Renderer {
 public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
-    bool open(bool present_wanted) {
+    // hang_folder: where a GPU hang's report goes (pcr_hang_reports_in)
+    bool open(bool present_wanted, const std::string &hang_folder) {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[pcr] no Vulkan loader\n");
             return false;
@@ -1695,9 +1751,14 @@ public:
                                                                                  : GSN_GPU_OTHER;
         msaa_samples_have_ = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
                              props.limits.sampledImageDepthSampleCounts;
-        out_.emplace(*device_, scanout_, presenter_, stats, clear_);
+        out_.emplace(*device_, scanout_, presenter_, stats, clear_, hang_notes_, "kf4-pc");
+        const char *watch = getenv("KF4_PC_HANG_WATCH");
+        if (!(watch && strcmp(watch, "0") == 0)) {
+            hang_watch_ = std::make_unique<pcr::HangWatch>(hang_notes_, hang_folder, pcr::HANG_SECONDS);
+        }
         if (pump_wanted()) {
-            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_);
+            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_,
+                                           hang_notes_);
             pump_->start();
             const char *direct = getenv("KF4_PC_DIRECT");
             direct_on_ = !(direct && strcmp(direct, "0") == 0);
@@ -1999,7 +2060,7 @@ private:
     // (the PC renderer's thread, "kf4-pc") The messages, in the order sent, until the program ends
     void run() {
         Util::register_thread_index(0); // (Granite's command pools: this thread's)
-        intake_.attach(*device_);
+        intake_.attach(*device_, hang_notes_);
 #ifdef __linux__
         pthread_setname_np(pthread_self(), "kf4-pc");
 #endif
@@ -2050,7 +2111,7 @@ private:
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
                            uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
-                           settings.mode_2d.load(), settings.colour.load());
+                           settings.mode_2d.load());
         }
         uint32_t scale = picture_scale_;
         if (!extra) {
@@ -2083,9 +2144,15 @@ private:
         }
         last_between_ = {}; // (shown by this picture, or not one's: not again)
         if (made.drawn) {
-            device_->next_frame_context();
+            next_frame_context();
         }
         hand_out_in_order(made);
+    }
+
+    // (kf4-pc) Granite's frame context moved on: waits for the GPU's work of the context it comes round to
+    void next_frame_context() {
+        pcr::GpuWait wait(&hang_notes_, "kf4-pc's next_frame_context", pcr::hang_clock_s());
+        device_->next_frame_context();
     }
 
     // (kf4-pc) A picture the pump drew: a frame context moved on for it (above), now when that waits for nobody's open
@@ -2096,13 +2163,13 @@ private:
         if (!try_contexts_ || !port_interp_behind_lately()) {
             // (and those owed paid when that waits for nobody: kept up, as before the owing)
             pay_frame_contexts();
-            device_->next_frame_context();
+            next_frame_context();
             return;
         }
         contexts_owed_++;
         pay_frame_contexts();
         if (contexts_owed_ > FRAME_CONTEXTS_OWED_MOST) {
-            device_->next_frame_context();
+            next_frame_context();
             contexts_owed_--;
         } else if (contexts_owed_ > 0) {
             device_->flush_frame();
@@ -2173,6 +2240,8 @@ public:
 
 private:
     bool present_wanted_ = false;
+    pcr::HangNotes hang_notes_; // (before everything that leaves notes, and the watch)
+    std::unique_ptr<pcr::HangWatch> hang_watch_; // (nullptr: KF4_PC_HANG_WATCH=0)
     std::unique_ptr<Context> context_; // (before the device: destroyed after it)
     std::unique_ptr<Device> device_;
     int gpu_kind_ = GSN_GPU_OTHER;
@@ -2216,6 +2285,7 @@ std::unique_ptr<Renderer> &renderer() {
 }
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
+std::string hang_folder_asked; // pcr_hang_reports_in, likewise
 
 // pcr_pipeline_cache's path, before pcr_open
 std::string &pipeline_cache_path_before_open() {
@@ -2240,7 +2310,7 @@ extern "C" int pcr_open(void *shared_context) {
         return 1;
     }
     auto made = std::make_unique<Renderer>();
-    if (!made->open(present_asked)) {
+    if (!made->open(present_asked, hang_folder_asked)) {
         return 0;
     }
     renderer() = std::move(made);
@@ -2253,6 +2323,10 @@ extern "C" int pcr_open(void *shared_context) {
 
 extern "C" void pcr_enable_present(void) {
     present_asked = true;
+}
+
+extern "C" void pcr_hang_reports_in(const char *folder) {
+    hang_folder_asked = folder ? folder : "";
 }
 
 extern "C" int pcr_gpu_kind(void) {
@@ -2385,10 +2459,6 @@ extern "C" void pcr_set_2d(int mode) {
     settings().mode_2d.store(mode);
 }
 
-extern "C" void pcr_set_colour(int mode) {
-    settings().colour.store(mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT);
-}
-
 extern "C" void pcr_set_layer_z(int mode) {
     settings().layer_z.store(mode == GSN_LAYER_Z_TOLERANT ? GSN_LAYER_Z_TOLERANT : GSN_LAYER_Z_PS2);
 }
@@ -2411,7 +2481,7 @@ extern "C" void pcr_pipeline_cache(const char *path) {
 // (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
 // settings now
 extern "C" void pcr_precompile(void) {
-    pcr::precompile(uint32_t(settings().msaa.load()), settings().colour.load() == GSN_COLOUR_HIGH);
+    pcr::precompile(uint32_t(settings().msaa.load()));
 }
 
 // The game waits while they are made (port/platform/kernel.c)

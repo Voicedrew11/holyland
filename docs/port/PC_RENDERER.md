@@ -248,7 +248,10 @@ where nearest puts a texel's middle (none with MSAA: no vertex move there). Not 
 read from drawn surfaces, not native draws. Nothing at 1x. In a picture between the rectangle is the frame's (the
 primitive's texels do not move with it).
 
-**Colour high (`--native-colour high`, opt-in; #102): applied, default as it was.** The colour surfaces are made
+**Colour high (`--native-colour high`, opt-in; #102): applied, default as it was. Removed 2026-11-14** (the option,
+the setting, `KF4_SET_AT colour=`, kf4-gsreplay's `--colour`, `pcr_narrow.frag` and the shader's float path): no
+difference anyone could see, and with MSAA it put a pixel past 8 bytes, where RDNA 4's MSAA costs three times as much
+a layer (PC_OPTIMIZATION.md, "Why MSAA costs so much here"). What follows is how it was. The colour surfaces are made
 R16G16B16A16_UNORM (`colour_format`; their multisampled images, copies, the pump's copies too), the colours'
 arithmetic in floats in the shader (`PCR_F_HIGH`: texture function, fog, premultiply, the shader's blend from the
 destination with its fraction; the sampler's filter and the 2D cubic keep their fraction), with the native GS's

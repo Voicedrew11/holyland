@@ -21,7 +21,9 @@
 
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
+#include "pcr_hang_watch.h"
 #include "pcr_pipelines.h"
+#include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
 #include "pcr_textures.h"
@@ -66,7 +68,7 @@ struct PrimPush {
     uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
-    uint32_t unused;     // (a record's size a multiple of 8 bytes)
+    uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
@@ -98,7 +100,6 @@ enum : uint32_t {
     F_SURFACE_CT16 = 0x40000,
     F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
-    F_HIGH = 0x200000,
     F_DECAL = 0x400000,
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
@@ -107,6 +108,8 @@ enum : uint32_t {
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
 constexpr uint32_t F_DUAL = 0x80000000u;
+// (... the blend holds a factor cut down to the target's precision, NVIDIA's: pcr_prim.h makes its one minus of that)
+constexpr uint32_t F_DUAL_CUT = 0x100u;
 enum : uint32_t { FACTOR_ZERO, FACTOR_ONE, FACTOR_AS, FACTOR_ONE_MINUS_AS, FACTOR_FIX, FACTOR_ONE_MINUS_FIX, FACTOR_NONE };
 uint32_t factor_code(VkBlendFactor f) {
     switch (f) {
@@ -398,6 +401,14 @@ public:
         dual_ok_ = runs_ok_ && f.enabled_features.dualSrcBlend && !runs_plain_ &&
                    device_.get_gpu_properties().vendorID == 0x10DE;
         max_run_draws_ = std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u);
+        // (merged runs, Runs: where the indirect ones are not drawn, or asked for; their dual-source blend where the
+        // GPU's maker's blend is known: its pictures checked against the blend's on RADV, 2026-11-14)
+        merged_ok_ = merged_asked_ && table_on_ && (!runs_ok_ || merged_forced_);
+        // (the makers whose blend's way with a factor is known: pcr_prim.h's o_factor)
+        uint32_t maker = device_.get_gpu_properties().vendorID;
+        dual_cut_ = maker == 0x10DE;
+        merged_dual_ok_ = merged_ok_ && f.enabled_features.dualSrcBlend && !merged_plain_ &&
+                          (maker == 0x10DE || maker == 0x1002);
         if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
                     getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no depth clamp");
@@ -411,6 +422,11 @@ public:
             times_.end(*cmd_);
             device_.submit(cmd_);
         }
+    }
+
+    void watch_hangs(HangNotes &notes, const char *who) {
+        hang_notes_ = &notes;
+        hang_who_ = who;
     }
 
     void set_scale(uint32_t x, uint32_t y) {
@@ -467,6 +483,7 @@ public:
             flush_batch();
             open_native_batch(s, nb);
         }
+        batch_.native_alpha_is_one = batch_.native_alpha_is_one && nb.alpha_is_one;
         // (a run of triangles by one record: the next batch of the same draw's mesh goes on from where it ends)
         if (!batch_.runs.empty() && batch_.runs.back().instance == nb.instance &&
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
@@ -591,7 +608,10 @@ public:
         }
         flush_batch();
         submit();
-        device_.wait_idle();
+        {
+            GpuWait wait(hang_notes_, "the trace's wait_idle", hang_clock_s());
+            device_.wait_idle();
+        }
         auto *bytes = static_cast<uint8_t *>(
             device_.map_host_buffer(*trace_buf_, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
         if (!bytes) {
@@ -719,7 +739,10 @@ public:
         submit();
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
-        device_.next_frame_context();
+        {
+            GpuWait wait(hang_notes_, "the vblank's next_frame_context", hang_clock_s());
+            device_.next_frame_context();
+        }
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
@@ -793,11 +816,6 @@ public:
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
         }
-        if (s->image->get_format() != dst.get_format()) {
-            scanout_narrow(out, *s->image, {x0, y0, x1 - x0, y1 - y0},
-                           {0, 0, int32_t(dst.get_width()), int32_t(dst.get_height())}, dst);
-            return true;
-        }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
             const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             out.copy_image(dst, *s->image, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour,
@@ -807,37 +825,6 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
-    }
-
-    // Colour high: a rectangle of a 16-bit surface (x, y, width, height) stretched over a rectangle of the 8-bit picture
-    // dst, dithered (pcr_narrow.frag); what dst has outside that rectangle is kept
-    void scanout_narrow(CommandBuffer &out, const Image &src, std::array<int32_t, 4> from, std::array<int32_t, 4> to,
-                        const Image &dst) {
-        RenderPassInfo rp;
-        rp.num_color_attachments = 1;
-        rp.color_attachments[0] = &dst.get_view();
-        rp.store_attachments = 1;
-        rp.load_attachments = 1;
-        rp.render_area = {{to[0], to[1]}, {uint32_t(to[2]), uint32_t(to[3])}};
-        out.begin_render_pass(rp);
-        out.set_program(narrow_program_);
-        out.set_opaque_state();
-        out.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        out.set_cull_mode(VK_CULL_MODE_NONE);
-        out.set_depth_test(false, false);
-        out.set_stencil_test(false);
-        out.set_blend_enable(false);
-        out.set_color_write_mask(0xF);
-        VkViewport vp = {0, 0, float(dst.get_width()), float(dst.get_height()), 0, 1};
-        out.set_viewport(vp);
-        out.set_scissor(rp.render_area);
-        out.set_texture(0, 0, src.get_view(), StockSampler::NearestClamp);
-        int32_t push[8] = {from[0], from[1], from[2], from[3], to[2], to[3], to[0], to[1]};
-        out.push_constants(push, 0, sizeof(push));
-        out.draw(3);
-        out.end_render_pass();
-        out.barrier(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     }
 
     // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
@@ -855,16 +842,26 @@ public:
         if (src_rows <= 0 || y0 + src_rows > y1) {
             return;
         }
-        if (src.get_format() != dst.get_format()) {
-            out.barrier(VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            scanout_narrow(out, src, {x0, y0, x1 - x0, src_rows}, {0, down_rows, int32_t(dst.get_width()), 2 * src_rows},
-                           dst); // (colour high)
-            return;
-        }
         out.blit_image(dst, src, {0, down_rows, 0}, {int32_t(dst.get_width()), 2 * src_rows, 1}, {x0, y0, 0},
                        {x1 - x0, src_rows, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
+    }
+
+    // The note of the command buffer about to be submitted: what the canvas recorded since its last note
+    void note_submit() {
+        if (!hang_notes_) {
+            return;
+        }
+        const CanvasCounts &c = counts_, &b = hang_noted_;
+        char what[200];
+        snprintf(what, sizeof(what),
+                 "canvas, vblank %llu: %llu batches (%llu native), %llu passes, %llu merged runs, %llu indirect runs, "
+                 "%llu surface copies, %llu clears",
+                 (unsigned long long)frame_, (unsigned long long)(c.batches - b.batches),
+                 (unsigned long long)(c.native_batches - b.native_batches), (unsigned long long)(c.passes - b.passes),
+                 (unsigned long long)(c.merged_runs - b.merged_runs), (unsigned long long)(c.runs - b.runs),
+                 (unsigned long long)(c.surfaces_copied - b.surfaces_copied), (unsigned long long)(c.clears - b.clears));
+        hang_notes_->submitted(hang_who_, what, hang_clock_s());
+        hang_noted_ = c;
     }
 
     // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
@@ -878,6 +875,7 @@ public:
         }
         if (cmd_) {
             times_.end(*cmd_);
+            note_submit();
             device_.submit(cmd_);
             if (flush) {
                 device_.flush_frame();
@@ -1044,7 +1042,7 @@ private:
     // ---- Surfaces ----
     ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
-                                                              depth ? depth_format_ : colour_format());
+                                                              depth ? depth_format_ : colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -1081,7 +1079,7 @@ private:
 
     // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
     ImageHandle make_ms_image(uint32_t width, uint32_t height) {
-        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format());
+        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                      (trace_.on ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u); // (the trace's probe reads it)
@@ -1362,7 +1360,7 @@ private:
     ImageHandle reuse_image(uint32_t width, uint32_t height, ImageHandle &ms) {
         for (auto it = spare_surfaces_.begin(); it != spare_surfaces_.end(); ++it) {
             if (it->image->get_width() == width && it->image->get_height() == height &&
-                it->image->get_format() == colour_format()) {
+                it->image->get_format() == colour_format) {
                 ImageHandle image = std::move(it->image);
                 ms = it->ms && it->ms->get_create_info().samples == VkSampleCountFlagBits(samples_) ? std::move(it->ms)
                                                                                                     : ImageHandle{};
@@ -1661,9 +1659,13 @@ private:
                   VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times_.end(*cmd_);
+        note_submit();
         device_.submit(cmd_, &fence);
         cmd_.reset();
-        fence->wait();
+        {
+            GpuWait wait(hang_notes_, "a read-back's fence", hang_clock_s());
+            fence->wait();
+        }
         const uint8_t *mapped = static_cast<const uint8_t *>(device_.map_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT));
         if (!mapped) {
             return false;
@@ -2179,8 +2181,14 @@ private:
             uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
         };
         bool native = false;
+        bool native_alpha_is_one = false; // (a native batch: every one of its NativeBatch's alpha_is_one)
         bool moved = false;           // (a picture between's: corners the shader moves, anywhere in its scissor)
         bool numbered = false;        // (corners naming their kicks: moved in a picture between's walk)
+        // (a pictures' walk's: every kick of its corners keeps its place, kick_keeps_place: its sprites cover the pixels
+        // the vertices say, walk_step's kills; and what it writes is never read, pcr_dead_writes.h: the pump leaves it out)
+        bool placed = false, dead = false;
+        bool still = false;           // (a pictures' walk's: every kick of its corners stays as the frame has it,
+                                      // kick_stays, so its sprites are where and what the vertices say: as_clear)
         bool native_kicks = false;    // (numbered, some of them a native draw's: native_kick_base on, as_picture_walk)
         bool shader_blend = false;    // (a blend with no Vulkan form: the GS's in the shader, from a copy)
         bool sprites = true;          // (every primitive a sprite: clear_depth_aliases)
@@ -2497,7 +2505,6 @@ private:
         std::array<uint32_t, 2> scale = {1, 1};
         uint32_t samples = 1;
         bool cutout_aa = false;
-        int precision = GSN_COLOUR_EXACT; // (colour_mode_)
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
         // (where the canvas that takes the copies puts the images it lets go for them: the copying canvas's spares)
         std::shared_ptr<SpareImages<ImageHandle>> spares;
@@ -2512,7 +2519,6 @@ private:
         copies->scale = scale_;
         copies->samples = samples_;
         copies->cutout_aa = cutout_aa_;
-        copies->precision = colour_mode_;
         copies->mode_2d = mode_2d_;
         copies->spares = spares_on_ ? spares_ : nullptr;
         CommandBuffer &c = cmd(GpuWork::copy);
@@ -2538,11 +2544,11 @@ private:
                     if (!ms) {
                         continue;
                     }
-                    if (!s->ms_behind) {
+                    if (!s->ms_behind && !(knock_ && strstr(knock_, "copies"))) {
                         c.copy_image(*ms, *s->ms, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
                     }
                 }
-                if (!s->ms || !s->ms_ahead) {
+                if ((!s->ms || !s->ms_ahead) && !(knock_ && strstr(knock_, "copies"))) {
                     c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
                 }
                 auto copy = std::make_unique<Surface>(*s);
@@ -2584,7 +2590,6 @@ private:
         scale_ = pending_scale_ = copies.scale;
         samples_ = pending_samples_ = copies.samples;
         cutout_aa_ = copies.cutout_aa;
-        colour_mode_ = pending_colour_ = copies.precision;
         mode_2d_ = copies.mode_2d;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
@@ -2620,6 +2625,11 @@ private:
     }
 
     void make_again_alone(const Kept &walk, const KeptBatch &kept) {
+        // (what it writes is never read, pcr_dead_writes.h: not drawn. KF4_PC_DEAD=0: drawn, to compare)
+        if (walk.batches[kept.index].dead && dead_on_) {
+            counts_.dead_batches++;
+            return;
+        }
         make_again(walk, kept);
     }
     void make_again_alone(const Kept &, const KeptUpload &kept) {
@@ -2671,7 +2681,158 @@ private:
             return out;
         }
         picture.steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
+        mark_dead_writes(picture);
         return out;
+    }
+
+    // ---- Dead writes (pcr_dead_writes.h): a pictures' walk's batches the pump need not draw ----
+    // What a batch may read and write of its buffers, and what it writes at every pixel of its scissor (kills): by its
+    // registers alone, every doubt a read. Kills only from a batch of sprites that keep their place and cover its
+    // scissor (Batch::placed), whose every pixel is written: no alpha test that the pixels decide, no DATE, no Z test
+    // but ALWAYS, the channel's FBMSK bits clear.
+    static WalkStep walk_step(const Batch &b) {
+        const DrawState &s = b.state;
+        WalkStep w;
+        uint32_t fbw = bits(s.frame, 16, 6);
+        bool zte = bits(s.test, 16, 1) != 0, date = bits(s.test, 14, 1) != 0;
+        uint32_t ztst = bits(s.test, 17, 2);
+        bool zwrite = zte && bits(s.zbuf, 32, 1) == 0;
+        w.colour = bits(s.frame, 0, 9) | fbw << 16;
+        w.depth = zte || date ? bits(s.zbuf, 0, 9) | fbw << 16 | z_psm(s.zbuf) << 24 : WalkStep::no_buffer;
+        w.x0 = int32_t(bits(s.scissor, 0, 11));
+        w.x1 = int32_t(bits(s.scissor, 16, 11));
+        w.y0 = int32_t(bits(s.scissor, 32, 11));
+        w.y1 = int32_t(bits(s.scissor, 48, 11));
+        if (w.x1 < w.x0 || w.y1 < w.y0 || (zte && ztst == 0)) {
+            return w; // (nothing drawn)
+        }
+        bool abe = bits(s.prim, 6, 1) != 0;
+        uint32_t a = bits(s.alpha, 0, 2), bb = bits(s.alpha, 2, 2), c = bits(s.alpha, 4, 2), d = bits(s.alpha, 6, 2);
+        // reads: the colour under a blend (or a shader's blend, with the alpha), the alpha for DATE or a blend by Ad,
+        // Z for a test that looks at it; a texture from a surface the colour and alpha of any buffer
+        if (b.shader_blend) {
+            w.reads |= DEAD_RGB | DEAD_ALPHA;
+        }
+        if (abe && (a == 1 || bb == 1 || d == 1)) {
+            w.reads |= DEAD_RGB;
+        }
+        if (date || (abe && c == 1)) {
+            w.reads |= DEAD_ALPHA;
+        }
+        if (zte && ztst >= 2) {
+            w.reads |= DEAD_Z;
+        }
+        if (bits(s.prim, 4, 1) != 0 && (!b.texture.ok || b.texture.src == SRC_SURFACE)) {
+            w.reads_anywhere |= DEAD_RGB | DEAD_ALPHA;
+        }
+        // writes, by the alpha test's passes (draw_batch's): every pixel the same way only when the test is off,
+        // ALWAYS or NEVER
+        bool ate = bits(s.test, 0, 1) != 0;
+        uint32_t atst = bits(s.test, 1, 3), afail = bits(s.test, 12, 2);
+        uint8_t writes = DEAD_RGB | DEAD_ALPHA | (zwrite ? DEAD_Z : 0);
+        bool decided = !ate || atst == 1;
+        if (ate && atst == 0) {
+            writes = afail == 1 ? DEAD_RGB | DEAD_ALPHA : afail == 2 ? (zwrite ? DEAD_Z : 0) : afail == 3 ? DEAD_RGB : 0;
+            decided = true;
+        }
+        // (a blend that leaves the colour as it is: (A - B) * FIX + Cd with FIX 0, or A the same as B with D Cd)
+        if (abe && !b.shader_blend && d == 1 && ((c == 2 && bits(s.alpha, 32, 8) == 0) || a == bb)) {
+            writes &= uint8_t(~DEAD_RGB);
+        }
+        w.writes = writes;
+        uint64_t fbmsk = s.frame >> 32;
+        if (decided && !date && (!zte || ztst == 1) && !b.native && !b.shader_blend && b.placed && covers_scissor(b)) {
+            w.kills = writes;
+            if ((fbmsk & 0x00FFFFFFu) != 0) {
+                w.kills &= uint8_t(~DEAD_RGB);
+            }
+            if ((fbmsk & 0xFF000000u) != 0) {
+                w.kills &= uint8_t(~DEAD_ALPHA);
+            }
+        }
+        return w;
+    }
+
+    // Whether a batch of sprites covers every pixel of its scissor (the sprites as the vertices have them: six a
+    // sprite, its two corners among them). A sprite covers the pixels from its first edge to before its last; an edge
+    // off a whole pixel is taken a pixel in.
+    static bool covers_scissor(const Batch &b) {
+        const DrawState &s = b.state;
+        if (!b.sprites || b.vertices.empty() || b.vertices.size() % 6 != 0 || b.vertices.size() > 6 * 64) {
+            return false;
+        }
+        int32_t sx0 = int32_t(bits(s.scissor, 0, 11)), sx1 = int32_t(bits(s.scissor, 16, 11)) + 1;
+        int32_t sy0 = int32_t(bits(s.scissor, 32, 11)), sy1 = int32_t(bits(s.scissor, 48, 11)) + 1;
+        struct Rect {
+            int32_t x0, y0, x1, y1; // (pixels x0 to x1 - 1)
+        };
+        std::vector<Rect> rects;
+        std::vector<int32_t> xs = {sx0, sx1}, ys = {sy0, sy1};
+        for (size_t i = 0; i < b.vertices.size(); i += 6) {
+            float x0 = b.vertices[i].x, y0 = b.vertices[i].y, x1 = x0, y1 = y0;
+            for (size_t k = 1; k < 6; k++) {
+                x0 = std::min(x0, b.vertices[i + k].x);
+                y0 = std::min(y0, b.vertices[i + k].y);
+                x1 = std::max(x1, b.vertices[i + k].x);
+                y1 = std::max(y1, b.vertices[i + k].y);
+            }
+            Rect r = {std::clamp(int32_t(std::ceil(x0)), sx0, sx1), std::clamp(int32_t(std::ceil(y0)), sy0, sy1),
+                      std::clamp(int32_t(std::floor(x1)), sx0, sx1), std::clamp(int32_t(std::floor(y1)), sy0, sy1)};
+            if (r.x1 > r.x0 && r.y1 > r.y0) {
+                rects.push_back(r);
+                xs.insert(xs.end(), {r.x0, r.x1});
+                ys.insert(ys.end(), {r.y0, r.y1});
+            }
+        }
+        std::sort(xs.begin(), xs.end());
+        xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+        std::sort(ys.begin(), ys.end());
+        ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+        // (each cell between two edges next to each other is inside or outside every sprite whole)
+        for (size_t yi = 0; yi + 1 < ys.size(); yi++) {
+            for (size_t xi = 0; xi + 1 < xs.size(); xi++) {
+                bool in = false;
+                for (const Rect &r : rects) {
+                    in = in || (r.x0 <= xs[xi] && xs[xi + 1] <= r.x1 && r.y0 <= ys[yi] && ys[yi + 1] <= r.y1);
+                }
+                if (!in) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and a
+    // mark that does something (0xF2 keeps the frame shown) read everything anywhere; an upload writes (into the
+    // texture store, and into a surface where it lands on one) and reads no surface, a CLUT load reads the store, and
+    // the marks 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is.
+    static void mark_dead_writes(Kept &walk) {
+        std::vector<WalkStep> steps;
+        std::vector<uint32_t> batch_of;
+        steps.reserve(walk.steps.size());
+        batch_of.reserve(walk.steps.size());
+        for (const KeptStep &step : walk.steps) {
+            WalkStep w;
+            uint32_t batch = UINT32_MAX;
+            if (const KeptBatch *kept = std::get_if<KeptBatch>(&step)) {
+                w = walk_step(walk.batches[kept->index]);
+                batch = kept->index;
+            } else if (const KeptMark *mark = std::get_if<KeptMark>(&step)) {
+                uint32_t what = bits(mark->value, 32, 8);
+                w.reads_anywhere = what == 0xF0 || what == 0xF1 || what == 0xF4 || what == 0xF5 ? 0 : DEAD_ALL;
+            } else if (std::holds_alternative<KeptCopy>(step)) {
+                w.reads_anywhere = DEAD_ALL; // (a copy from one place of the GS's memory to another reads its source)
+            }
+            steps.push_back(w);
+            batch_of.push_back(batch);
+        }
+        std::vector<bool> dead = dead_writes(steps);
+        for (size_t i = 0; i < steps.size(); i++) {
+            if (dead[i] && batch_of[i] != UINT32_MAX) {
+                walk.batches[batch_of[i]].dead = true;
+            }
+        }
     }
 
     // A draw into the buffer shown where it drew into the buffer drawn, and reading it there where it read the buffer
@@ -2696,6 +2857,14 @@ private:
             }
         } else {
             b.moved = b.numbered;
+            b.still = b.numbered && b.sprites && !b.native_kicks &&
+                      std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+                          return kick_stays(t, v.kicks[0]) && kick_stays(t, v.kicks[1]);
+                      });
+            b.placed = b.numbered && b.sprites && !b.native_kicks &&
+                       std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+                           return kick_keeps_place(t, v.kicks[0]) && kick_keeps_place(t, v.kicks[1]);
+                       });
             if (b.native_kicks) {
                 // (a native draw's kicks, the trail's: numbered on from the stream's, Between::adopt_live_kicks)
                 for (Vertex &v : b.vertices) {
@@ -2848,6 +3017,7 @@ private:
     void open_native_batch(const DrawState &s, const NativeBatch &nb) {
         begin_batch(s, 1u << std::min(bits(s.tex0, 26, 4), 10u), 1u << std::min(bits(s.tex0, 30, 4), 10u));
         batch_.native = true;
+        batch_.native_alpha_is_one = true; // (until a native batch of it is not: native_batch)
         batch_.program = nb.program;
         batch_.arena = nb.arena;
         batch_.records = nb.records;
@@ -2863,6 +3033,7 @@ private:
         batch_.texture = BoundTexture();
         batch_.vertices.clear();
         batch_.native = false;
+        batch_.native_alpha_is_one = false;
         batch_.moved = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
@@ -3258,13 +3429,23 @@ private:
         // (a pass's)
         const Program *program = nullptr;
         uint32_t depth_state = 0, blend = 0, mask = 0;
+        bool merged = false; // (one vkCmdDraw of the picture's entries, not an indirect draw)
         bool operator==(const RunKey &) const = default;
     };
+    // A merged run's triangle (pcr_common.h's u_merged): several native batches' triangles are one vkCmdDraw, each
+    // triangle naming its own in the program's triangles, its instance and its batch's record. Not an indirect draw
+    // (runs_hang_here), and one draw call however many batches.
+    struct MergedTriangle {
+        uint32_t triangle, instance, record, unused;
+    };
     struct Runs {
-        BufferHandle buffer;     // (the picture's records, then its commands)
+        BufferHandle buffer;     // (the picture's records, then its commands, then its merged runs' triangles)
         uint8_t *map = nullptr;  // (written as the batches are drawn)
         uint32_t capacity = 0, used = 0;
         VkDeviceSize commands_at = 0;
+        VkDeviceSize merged_at = 0;
+        uint32_t merged_capacity = 0, merged_used = 0; // (triangles)
+        uint32_t merged_first = 0;                     // (the open run's first triangle, where it is a merged one)
         bool open = false;       // (a run whose draws are not yet recorded: the command buffer's state is its)
         RunKey key;
         uint32_t first = 0, count = 0;
@@ -3273,20 +3454,26 @@ private:
     // A kept walk drawn again: room for its batches' draws, a pass at a time (two at most), as records and commands
     void start_runs(const Kept &walk) {
         end_runs();
-        if (!runs_ok_ || !walk_table_ || !between_ || !between_->active()) {
+        if ((!runs_ok_ && !merged_ok_) || !walk_table_ || !between_ || !between_->active()) {
             return;
         }
-        uint64_t n = 0;
+        uint64_t n = 0, triangles = 0;
         for (const Batch &b : walk.batches) {
             n += b.native ? b.runs.size() : 1;
+            if (b.native && merged_ok_) {
+                for (const Batch::Run &r : b.runs) {
+                    triangles += r.count;
+                }
+            }
         }
         n *= 2;
-        if (n == 0 || n > (1u << 20)) {
+        triangles *= 2;
+        if (n == 0 || n > (1u << 20) || triangles > (1u << 24)) {
             return;
         }
         BufferCreateInfo info = {};
         info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
-        info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand));
+        info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand)) + triangles * sizeof(MergedTriangle);
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         runs_.buffer = device_.create_buffer(info, nullptr);
         runs_.map = runs_.buffer ? static_cast<uint8_t *>(device_.map_host_buffer(*runs_.buffer, MEMORY_ACCESS_WRITE_BIT))
@@ -3298,6 +3485,8 @@ private:
         runs_.capacity = uint32_t(n);
         runs_.used = 0;
         runs_.commands_at = n * sizeof(PrimPush);
+        runs_.merged_at = runs_.commands_at + n * sizeof(VkDrawIndirectCommand);
+        runs_.merged_capacity = uint32_t(triangles);
     }
 
     void end_runs() {
@@ -3311,7 +3500,7 @@ private:
     // A batch's pass in the open run (one is opened, with this state, if none is): a record and a command a draw
     void add_to_run(CommandBuffer &c, const Batch &b, PrimPush &push, const RunKey &key) {
         uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
-        if (runs_.open && runs_.count + draws > max_run_draws_) {
+        if (runs_.open && !key.merged && runs_.count + draws > max_run_draws_) {
             flush_run(); // (the device's most an indirect draw; the state is the run's, the same key)
         }
         uint32_t at = runs_.used;
@@ -3320,11 +3509,32 @@ private:
             runs_.key = key;
             runs_.first = at;
             runs_.count = 0;
-            push.record = at;
-            c.push_constants(&push, 0, sizeof(push)); // (the record field only is read: the run's first)
+            runs_.merged_first = runs_.merged_used;
+            // (the record and merged fields only are read: the run's first record; a merged run's triangles name
+            // theirs whole)
+            push.record = key.merged ? 0 : at;
+            push.merged = key.merged ? 1 : 0;
+            c.push_constants(&push, 0, sizeof(push));
             push.record = 0;
+            push.merged = 0;
         }
         auto *records = reinterpret_cast<PrimPush *>(runs_.map);
+        if (key.merged) {
+            // (one record the batch's pass, and an entry a triangle, in the order drawn)
+            auto *entries = reinterpret_cast<MergedTriangle *>(runs_.map + runs_.merged_at);
+            memcpy(&records[at], &push, sizeof(push));
+            uint32_t to = runs_.merged_used;
+            for (const Batch::Run &r : b.runs) {
+                for (uint32_t i = 0; i < r.count; i++) {
+                    entries[to++] = {r.first + i, r.instance, at, 0};
+                }
+            }
+            counts_.merged_triangles += to - runs_.merged_used;
+            runs_.count += to - runs_.merged_used;
+            runs_.merged_used = to;
+            runs_.used = at + 1;
+            return;
+        }
         auto *commands = reinterpret_cast<VkDrawIndirectCommand *>(runs_.map + runs_.commands_at);
         if (b.native) {
             for (const Batch::Run &r : b.runs) {
@@ -3348,6 +3558,12 @@ private:
             return;
         }
         runs_.open = false;
+        if (runs_.key.merged) {
+            cmd_->draw(runs_.count * 3, 1, runs_.merged_first * 3, 0);
+            counts_.merged_runs++;
+            counts_.native_draw_calls++;
+            return;
+        }
         cmd_->draw_indirect(*runs_.buffer, runs_.commands_at + VkDeviceSize(runs_.first) * sizeof(VkDrawIndirectCommand),
                             runs_.count, sizeof(VkDrawIndirectCommand));
         counts_.runs++;
@@ -3360,6 +3576,61 @@ private:
             return cmd();
         }
         return *cmd_;
+    }
+
+    // KF4_PC_KNOCK's kinds, comma separated: clears (a batch as_clear clears), 2d (every GIF batch), fills (a GIF batch
+    // untextured), surface (a batch textured from a surface: the brightness pass), n000, n280, n700 (a native program's
+    // batches), blended (a native batch blended); and copies (copy_surfaces' copies for the pump: not a batch's)
+    bool knocked_out(const Batch &b, bool clear, bool from_surface) const {
+        auto has = [&](const char *kind) { return strstr(knock_, kind) != nullptr; };
+        if (!b.native) {
+            return has("2d") || (clear && has("clears")) || (from_surface && has("surface")) ||
+                   (bits(b.state.prim, 4, 1) == 0 && has("fills"));
+        }
+        if (bits(b.state.prim, 6, 1) != 0 && has("blended")) {
+            return true;
+        }
+        return has(b.program == NativeProgram::vu1_280 ? "n280" : b.program == NativeProgram::vu1_700 ? "n700" : "n000");
+    }
+
+    // Whether a blended batch's blend gives exactly its source, colour and alpha, at every pixel, so that drawing it
+    // without the blend writes the same: (Cs - Cd) * C + Cd with C exactly 1.0, that is FIX 0x80, or As 0x80 at every
+    // pixel (the vertices' alpha all 0x80, and the texture's too where it is taken with TCC). Not As above 0x80: the
+    // blend then writes Cs as well (its factor clamped to 1), but its alpha comes out 0x80, not As.
+    // KF4_PC_UNBLEND=0: every blend kept (to compare).
+    static bool blend_is_source(const Batch &b) {
+        const DrawState &s = b.state;
+        if (bits(s.alpha, 0, 2) != 0 || bits(s.alpha, 2, 2) != 1 || bits(s.alpha, 6, 2) != 1 || b.shader_blend) {
+            return false;
+        }
+        uint32_t c = bits(s.alpha, 4, 2);
+        if (c == 2) {
+            return bits(s.alpha, 32, 8) == 0x80;
+        }
+        if (c != 0) {
+            return false;
+        }
+        // the vertices' alpha: a GIF batch's own; a native batch's where its program leaves the mesh's (0x000)
+        if (b.native) {
+            if (b.program != NativeProgram::vu1_000 || !b.native_alpha_is_one) {
+                return false;
+            }
+        } else {
+            if (b.vertices.empty()) {
+                return false;
+            }
+            for (const Vertex &v : b.vertices) {
+                if (v.rgba[3] != 0x80) {
+                    return false;
+                }
+            }
+        }
+        if (!bits(s.prim, 4, 1) || !bits(s.tex0, 34, 1)) {
+            return true; // (untextured, or the texture's alpha not taken: As the vertices')
+        }
+        // TCC: modulate (Av * At >> 7) and decal (At) give 0x80 from a texture whose alpha is 0x80 everywhere
+        uint32_t tfx = bits(s.tex0, 35, 2);
+        return tfx <= 1 && b.texture.ok && b.texture.alpha_lo == 0x80 && b.texture.alpha_hi == 0x80;
     }
 
     // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
@@ -3508,6 +3779,12 @@ private:
         // (a clear drawn as a rectangle: cleared, vkCmdClearAttachments, the same pixels without the draw's shader)
         VkClearRect clear_rect;
         bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect);
+        // (developers' knock-outs, KF4_PC_KNOCK: one kind of work left out of the pictures between, to time the rest:
+        // the picture is wrong, the GPU time a picture less is what that work costs)
+        if (knock_ && between_ && between_->active() &&
+            knocked_out(b, clear, bits(s.prim, 4, 1) != 0 && b.texture.ok && b.texture.src == SRC_SURFACE)) {
+            return;
+        }
         // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
         bool per_sample = ms && is_cutout(b);
         int v = !b.native                              ? 0
@@ -3517,6 +3794,13 @@ private:
                                                        : 1;
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
         bool blend_supported = blend.supported;
+        if (blend.enable && unblend_on_ && blend_is_source(b)) {
+            // (the blend's result is its source at every pixel, and the alpha written the same: drawn without the
+            // blend, which reads every pixel it writes: at 4x with two samples and 16 bits a channel that read is most
+            // of what the map costs)
+            blend = BlendChoice();
+            counts_.blends_left_out++;
+        }
         if (b.shader_blend) {
             blend = BlendChoice();
             blend.flags = F_SHADER_BLEND;
@@ -3545,7 +3829,6 @@ private:
                          b.texture.src != SRC_SURFACE
                      ? F_SMOOTH_2D
                      : 0;
-        flags |= colour->image->get_format() == VK_FORMAT_R16G16B16A16_UNORM ? F_HIGH : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         flags |= exact_z_ ? F_EXACT_Z : 0;
         push.flags = flags;
@@ -3577,6 +3860,11 @@ private:
         // dummies)
         bool from_table = walk_table_ && b.table_at != no_table && (texels || sampled);
         push.table = from_table ? b.table_at | b.sampler_at << 16 : no_table;
+        if (from_table && sampled) {
+            // (pcr_prim.h's sampled_size: the table's texture's size, which the shader does not ask the GPU for)
+            push.src_offset[0] = int32_t(bt.view->get_view_width());
+            push.src_offset[1] = int32_t(bt.view->get_view_height());
+        }
         bool walk_texture = walk_table_ && (texels || sampled);
         texels = texels && !from_table;
         sampled = sampled && !from_table;
@@ -3605,18 +3893,29 @@ private:
         // batches before it of the same state. Anything else ends the run first, before the state is set.
         uint32_t draws = b.native ? uint32_t(b.runs.size()) : 1;
         // (a traced batch drawn alone: its fragments that fail the test are recorded, so it is not tested early)
+        // (a native batch's in a merged run, Runs, where those are drawn: an entry a triangle and a pass)
+        bool merged = b.native && merged_ok_;
+        uint32_t batch_triangles = 0;
+        if (merged) {
+            for (const Batch::Run &r : b.runs) {
+                batch_triangles += r.count;
+            }
+        }
         bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !b.shader_blend && !texels &&
                       !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
-                      (b.native ? native_runs_ok_ : walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
+                      (merged     ? runs_.merged_used + batch_triangles * uint32_t(pass_count) <= runs_.merged_capacity
+                       : b.native ? native_runs_ok_
+                                  : runs_ok_ && walk_vertices_ && b.gpu_first != Batch::no_gpu_vertices) &&
                       runs_.used + draws * uint32_t(pass_count) <= runs_.capacity;
+        merged = merged && in_run;
         // (a run's blend: its factors from the shader, dual-source, where they are ones it can give: Vulkan's blend of
         // the same values, so the same pixels; a batch unblended is one with factors one and zero. Its runs then do
         // not end where the blend changes: native 280 changes it about every batch)
         uint32_t cs = factor_code(blend.src), cd = factor_code(blend.dst);
-        bool dual = in_run && dual_ok_ && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
-                    ((!blend.enable && dual_unblended_) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
+        bool dual = in_run && (merged ? merged_dual_ok_ : dual_ok_) && blend.op == VK_BLEND_OP_ADD && cs != FACTOR_NONE && cd != FACTOR_NONE &&
+                    ((!blend.enable && (merged ? merged_unblended_ : dual_unblended_)) || (blend.enable && blend.src_alpha == VK_BLEND_FACTOR_ONE) ||
                      (blend.src_alpha == VK_BLEND_FACTOR_CONSTANT_ALPHA && (blend.flags & F_ALPHA_FACTOR)));
-        push.factors = dual ? F_DUAL | cs | cd << 4 : 0;
+        push.factors = dual ? F_DUAL | (dual_cut_ ? F_DUAL_CUT : 0) | cs | cd << 4 : 0;
         RunKey key = {};
         if (in_run) {
             key.colour = colour;
@@ -3629,6 +3928,7 @@ private:
             key.scissor[3] = int32_t(scissor_px.extent.height);
             key.fix = dual ? 0 : bits(s.alpha, 32, 8); // (the blend constant: read by no dual-source blend)
             key.v = v;
+            key.merged = merged;
             if (b.native) {
                 key.native[0] = b.arena.get();
                 key.native[1] = b.records.get();
@@ -3698,6 +3998,7 @@ private:
             }
             c.clear_quad(clear_rect, att, count);
             counts_clears_++;
+            counts_.clears++;
             drawn_over(b, *colour, ms, box, zte && zwrite);
             return;
         }
@@ -3871,7 +4172,9 @@ private:
     bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
                   bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
         const DrawState &s = b.state;
-        if (!clears_on_ || b.native || b.shader_blend || b.moved || (between_ && between_->active()) || !b.sprites ||
+        // (a picture between's: only a batch whose kicks all stay, Batch::still: the shader gives the vertices' own)
+        bool as_the_frame = b.still || (!b.moved && !(between_ && between_->active()));
+        if (!clears_on_ || b.native || b.shader_blend || !as_the_frame || !b.sprites ||
             b.vertices.size() != 6 || bits(s.prim, 4, 3) != 0 || date || pass_count != 1 || pass.mode != 0 ||
             !pass.rgb || !pass.alpha || (zte && ztst != 1) || (zwrite && !zte)) {
             return false;
@@ -4014,6 +4317,7 @@ private:
     static constexpr uint32_t walk_clut_binding = 3 + 3 * native_slots; // (the fragment stage's, 15)
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
     static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
+    static constexpr uint32_t merged_binding = 8;  // (set 1's: the picture's merged runs' triangles, Runs)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -4027,6 +4331,12 @@ private:
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
         c.set_storage_buffer(1, records_binding, runs_.buffer ? *runs_.buffer : *picture_); // (pcr_common.h's u_records)
+        if (runs_.buffer && runs_.merged_capacity != 0) {
+            c.set_storage_buffer(1, merged_binding, *runs_.buffer, runs_.merged_at,
+                                 VkDeviceSize(runs_.merged_capacity) * sizeof(MergedTriangle)); // (u_merged)
+        } else {
+            c.set_storage_buffer(1, merged_binding, *picture_);
+        }
         if (native) {
             uint32_t at = 3 * native_slot(native->program);
             const BufferHandle *mine[3] = {&native->arena, &native->records, &native->triangles};
@@ -4094,74 +4404,13 @@ private:
         }
     }
 
-    // ---- Colour precision ----
-    // Colour high (GSN_COLOUR_HIGH): the colour surfaces 16 bits a channel (16-bit UNORM holds every 8-bit value exactly,
-    // v * 257, so what the GS's arithmetic writes reads back as it is), the colours' arithmetic in floats (pcr_prim.h,
-    // F_HIGH), the picture dithered to 8 bits as it is scanned out (pcr_narrow.frag). Where the GPU cannot draw into the
-    // format, exact.
-    VkFormat colour_format() const {
-        return colour_mode_ == GSN_COLOUR_HIGH ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
-    }
-
-    bool high_colour_ok() {
-        const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
-                                           VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT |
-                                           VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_BLIT_SRC_BIT |
-                                           VK_FORMAT_FEATURE_2_BLIT_DST_BIT | VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
-                                           VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
-        if (high_ok_ < 0) {
-            high_ok_ = device_.image_format_is_supported(VK_FORMAT_R16G16B16A16_UNORM, need) ? 1 : 0;
-        }
-        return high_ok_ == 1;
-    }
-
-    void set_colour(int mode) {
-        if (mode == GSN_COLOUR_HIGH && !high_colour_ok()) {
-            if (!colour_refused_) {
-                fprintf(stderr, "[pcr] colour high: this GPU cannot draw 16-bit colour surfaces, so exact\n");
-                colour_refused_ = true;
-            }
-            mode = GSN_COLOUR_EXACT;
-        }
-        pending_colour_ = mode == GSN_COLOUR_HIGH ? GSN_COLOUR_HIGH : GSN_COLOUR_EXACT;
-    }
-
-    // The precision changed (from a vblank, as the scale): every colour surface made again in the new format from its
-    // pixels (a blit converts), its samples made again from it (ensure_ms). (The pipelines made ahead for a change of
-    // MSAA are made against the format of the run's first change of samples, so the other precision's are made as
-    // drawn: warm_images_ is read by the warming thread and not made again here.)
-    void apply_colour() {
-        if (pending_colour_ == colour_mode_) {
-            return;
-        }
-        end_pass();
-        for (auto &s : colour_) {
-            resolve(*s);
-            s->ms.reset();
-            s->ms_ahead = s->ms_behind = false;
-        }
-        colour_mode_ = pending_colour_;
-        spare_surfaces_.clear(); // (the old format's)
-        for (auto &s : colour_) {
-            ImageHandle image = make_surface_image(s->width(), s->height, false);
-            if (!image) {
-                continue;
-            }
-            CommandBuffer &c = cmd(GpuWork::surface);
-            full_barrier(c);
-            c.blit_image(*image, *s->image, {0, 0, 0}, {int32_t(image->get_width()), int32_t(image->get_height()), 1},
-                         {0, 0, 0}, {int32_t(s->image->get_width()), int32_t(s->image->get_height()), 1}, 0, 0, 0, 0, 1,
-                         VK_FILTER_NEAREST);
-            full_barrier(c);
-            s->image = image;
-        }
-        kept_frame_.reset(); // (of the old format: a picture between reads its buffer until the next 0xF2)
-    }
+    // The colour surfaces' format: the GS's 8 bits a channel. (A 16-bit "colour high" was removed 2026-11-14: no
+    // difference to see, and with MSAA it cost three times as much a layer on RDNA 4: docs/port/PC_OPTIMIZATION.md.)
+    static constexpr VkFormat colour_format = VK_FORMAT_R8G8B8A8_UNORM;
 
     // ---- Scale ----
     void apply_scale() {
         apply_samples();
-        apply_colour();
         if (pending_scale_ == scale_) {
             return;
         }
@@ -4204,7 +4453,7 @@ private:
     };
     WarmImages make_warm_images(uint32_t samples) {
         WarmImages w;
-        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format());
+        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format);
         info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4269,8 +4518,9 @@ private:
         }
         // (set 1's records of the picture's runs, u_records: read by the runs' programs, PCR_RECORDS, in both stages;
         // declared in every batch program, so that one and a run's have the same layout and a change binds nothing)
-        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding;
+        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding;
         batch_vert.sets[1].meta[records_binding].array_size = 1;
+        batch_vert.sets[1].meta[merged_binding].array_size = 1;
         ResourceLayout vert = batch_vert;
         vert.input_mask = 0x7F;
         ResourceLayout frag = {};
@@ -4346,10 +4596,6 @@ private:
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
         Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, xfs);
-        ResourceLayout narrow = expand;
-        narrow.push_constant_size = 8 * sizeof(int32_t);
-        Shader *nfs = device_.request_shader(pcr_spv_pcr_narrow_frag, sizeof(pcr_spv_pcr_narrow_frag), &narrow);
-        narrow_program_ = device_.request_program(cvs, nfs);
         ResourceLayout nd = batch_vert;
         Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
         programs_for(1, nvs);
@@ -4398,7 +4644,7 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[22];
+        WarmProgram warmed[21];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
@@ -4408,13 +4654,11 @@ private:
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
         }
-        warmed[21] = {narrow_program_, nullptr}; // (colour high's scanout: added last, the others' indices kept)
         WarmDevice traits;
         traits.depth_format = depth_format_;
         traits.dynamic_ds = dynamic_.ds;
         traits.dynamic_blend = dynamic_.blend;
-        traits.high_colour = high_colour_ok();
-        warm_watch(device_, warmed, 22, expand_program_, traits);
+        warm_watch(device_, warmed, 21, expand_program_, traits);
     }
 
     Device &device_;
@@ -4484,12 +4728,8 @@ private:
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = GSN_LOD_SCALE; // (set_sampling)
     int mode_2d_ = GSN_2D_PS2;     // (set_2d)
-    int colour_mode_ = GSN_COLOUR_EXACT, pending_colour_ = GSN_COLOUR_EXACT; // (set_colour, from the next vblank)
-    bool colour_refused_ = false;
-    int high_ok_ = -1; // (high_colour_ok's answer, asked once)
     std::array<BufferHandle, 12> last_native_; // (bind_between) each native program's last arena, records, triangles
     bool set0_fresh_ = false; // (bind_between) set 0's native bindings made since the command buffer's last render pass
-    Program *narrow_program_ = nullptr; // (colour high's scanout: pcr_narrow.frag)
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
@@ -4503,6 +4743,9 @@ private:
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
+    HangNotes *hang_notes_ = nullptr; // (watch_hangs)
+    const char *hang_who_ = "";
+    CanvasCounts hang_noted_; // (counts_ at the last note)
     uint64_t counts_idle_depth_let_go_ = 0;
     Batch batch_;
     bool batch_open_ = false;
@@ -4534,6 +4777,19 @@ private:
     // KF4_PC_INDIRECT=plain: runs without the dual-source blend (a blend change ends a run: to compare)
     const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
     bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;
+    // KF4_PC_MERGED=0: no merged runs (a kept walk's native batches a draw call a run of triangles, as before); =1:
+    // merged runs where the indirect ones are drawn too (the native batches' then merged); =plain: without the
+    // dual-source blend (a blend change ends a run: to compare)
+    const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
+    const bool dead_on_ = !(getenv("KF4_PC_DEAD") && strcmp(getenv("KF4_PC_DEAD"), "0") == 0);
+    const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
+    const char *const merged_env_ = getenv("KF4_PC_MERGED");
+    const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
+    const bool merged_forced_ = merged_env_ && strcmp(merged_env_, "1") == 0;
+    const bool merged_plain_ = merged_env_ && strcmp(merged_env_, "plain") == 0;
+    const bool merged_unblended_ = merged_env_ && strcmp(merged_env_, "unblended") == 0;
+    bool merged_ok_ = false, merged_dual_ok_ = false;
+    bool dual_cut_ = false; // (F_DUAL_CUT)
     uint32_t max_run_draws_ = 1;
     // (KF4_PC_INDIRECT=unblended: an unblended batch in a dual-source run too, blended with one and zero: it then reads
     // its target, which costs the GPU more than the runs it joins save)
@@ -4638,14 +4894,15 @@ public:
 Canvas::Canvas(Device &device, GpuTimes &times) : impl_(std::make_unique<Impl>(device, times)) {}
 Canvas::~Canvas() = default;
 
+void Canvas::watch_hangs(HangNotes &notes, const char *who) {
+    impl_->watch_hangs(notes, who);
+}
+
 void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
     impl_->set_msaa(samples, cutout_aa);
 }
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
-}
-void Canvas::set_colour(int mode) {
-    impl_->set_colour(mode);
 }
 void Canvas::set_2d(int mode) {
     impl_->set_2d(mode);

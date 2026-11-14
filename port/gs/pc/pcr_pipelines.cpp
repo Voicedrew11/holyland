@@ -123,7 +123,6 @@ struct Store {
     bool pre_on = true, pre_asked = false;
     std::atomic<bool> pre_wanted{false}, pre_gave_up{false};
     uint32_t pre_samples = 1;
-    bool pre_high = false;
     std::chrono::steady_clock::time_point pre_asked_at;
     size_t pre_seed = 0, pre_list = 0; // (the pipelines asked for: from the seed for these settings, from the list)
     // attachments of the formats and samples the list's passes have (made by the threads making ahead)
@@ -654,6 +653,7 @@ struct SeedHeader {
     uint32_t reserved = 0;
 };
 
+// (R16G16B16A16: a seed record of colour high's, removed 2026-11-14; made at 8 bits)
 bool is_colour_format(VkFormat f) {
     return f == VK_FORMAT_R8G8B8A8_UNORM || f == VK_FORMAT_R16G16B16A16_UNORM;
 }
@@ -665,7 +665,7 @@ bool is_depth_format(VkFormat f) {
 // (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, and with MSAA
 // those of the runs with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
 // build's layout (Granite's state changed: tools/pipeline_seed.py makes it again).
-std::vector<Record> seed_for(uint32_t samples, bool high) {
+std::vector<Record> seed_for(uint32_t samples) {
     std::vector<Record> out;
     if (pcr_pipeline_seed_size < sizeof(SeedHeader)) {
         return out;
@@ -680,7 +680,6 @@ std::vector<Record> seed_for(uint32_t samples, bool high) {
         return out;
     }
     const WarmDevice &t = warm.traits;
-    VkFormat colour = high && t.high_colour ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
     std::unordered_set<uint64_t> keys;
     for (uint32_t i = 0; i < got.count; i++) {
         SeedEntry e;
@@ -699,14 +698,11 @@ std::vector<Record> seed_for(uint32_t samples, bool high) {
         }
         r.static_state.state.dynamic_ds = t.dynamic_ds ? 1 : 0;
         r.static_state.state.dynamic_blend = t.dynamic_ds && t.dynamic_blend ? 1 : 0;
-        // (the colour surfaces' format; with colour high also as drawn, 8 bits: some targets stay 8-bit)
-        for (int pass = 0; pass < (colour == VK_FORMAT_R8G8B8A8_UNORM ? 1 : 2); pass++) {
-            if (r.colours && is_colour_format(r.colour_format)) {
-                r.colour_format = pass == 0 ? colour : VK_FORMAT_R8G8B8A8_UNORM;
-            }
-            if (keys.insert(record_key(r)).second) {
-                out.push_back(r);
-            }
+        if (r.colours && is_colour_format(r.colour_format)) {
+            r.colour_format = VK_FORMAT_R8G8B8A8_UNORM; // (the colour surfaces' format)
+        }
+        if (keys.insert(record_key(r)).second) {
+            out.push_back(r);
         }
     }
     return out;
@@ -718,14 +714,14 @@ void start_precompile() {
     if (!store.pre_asked || store.ahead_started || !warm.device) {
         return;
     }
-    std::vector<Record> list = seed_for(store.pre_samples, store.pre_high);
+    std::vector<Record> list = seed_for(store.pre_samples);
     store.pre_seed = list.size();
     store.pre_list = store.records.size();
     list.insert(list.end(), store.records.begin(), store.records.end());
     unsigned cores = std::thread::hardware_concurrency();
     {
-        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed (samples %u, colour %s), %zu from the list\n",
-                store.pre_seed, store.pre_samples, store.pre_high ? "high" : "exact", store.pre_list);
+        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed (samples %u), %zu from the list\n",
+                store.pre_seed, store.pre_samples, store.pre_list);
     }
     start_ahead(std::move(list), cores > 2 ? cores - 1 : 1);
     if (!store.ahead_started) {
@@ -764,7 +760,7 @@ void warm_watch(Device &device, const WarmProgram *programs, uint32_t count, Pro
     }
 }
 
-void precompile(uint32_t samples, bool colour_high) {
+void precompile(uint32_t samples) {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     if (!store.open || !store.pre_on || store.pre_asked) {
@@ -773,7 +769,6 @@ void precompile(uint32_t samples, bool colour_high) {
     store.pre_asked = true;
     store.pre_wanted = true;
     store.pre_samples = samples;
-    store.pre_high = colour_high;
     store.pre_asked_at = std::chrono::steady_clock::now();
     start_precompile(); // (when the programs came first)
 }

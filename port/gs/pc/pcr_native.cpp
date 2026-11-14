@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 #include "../../render/part_moves.hpp"
@@ -242,6 +243,9 @@ private:
                 nb.records = records_.buffer;
                 nb.triangle_count = n;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
+                // (program 0x000 leaves the mesh's colours' alpha in RGBAQ as it is: vu1_000_maths.h's lit_colour, the
+                // lights' w 1; the batch's least and most are render.cpp's)
+                nb.alpha_is_one = !shadow && b.alpha_lo == 0x80 && b.alpha_hi == 0x80;
                 name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += n;
@@ -755,6 +759,7 @@ private:
         memcpy(arena_.map + size_t(at) * VERTEX_BYTES, m.vertices.data(), size_t(n) * VERTEX_BYTES);
         arena_.used += n;
         placed_[m.id] = at;
+
         counts_.meshes_placed++;
         return at;
     }

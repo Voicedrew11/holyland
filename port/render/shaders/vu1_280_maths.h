@@ -192,7 +192,10 @@ vec4 colour_u(uint slot, int k) {
     // (each step a function of u alone: once a step leaves u as it is, bit for bit, every step after does too, and
     // the loop ends there with the same u. A scale of 1 and a bias of 0, as most draws have, ends it at once: before,
     // a strip's vertices each walked back to its first, the GPU's time growing with the square of its length)
-    for (int j = 1; j <= k; j++) {
+    // (k is read from the mesh: never more steps than a VU1 batch has vertices, 1024 qwords of memory at four a
+    // vertex, whatever the number says. A wrong number here was a loop of up to two thousand million steps a vertex:
+    // the GPU's ring timing out, the whole card reset)
+    for (int j = 1; j <= min(k, 256); j++) {
         vec3 next = vec3(vu_add(vu_mul(u.x, d.scale.x), d.bias.x), vu_add(vu_mul(u.y, d.scale.y), d.bias.y),
                          vu_add(vu_mul(u.z, d.scale.z), d.bias.z));
         if (floatBitsToUint(next) == floatBitsToUint(u.xyz)) {

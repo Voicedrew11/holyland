@@ -17,6 +17,7 @@ layout(push_constant, std430) uniform Push {
     float lod_k;     // TEX1's K
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts
+                      // (a kept walk's batch read from its table by the sampler: the texture's size in texels)
     ivec2 src_scale;  // ... the surface's pixels a GS pixel is, across and down (the canvas's scale: gs_to_clip's too)
     ivec2 place;      // (native draws, pcr_nd000.vert) the frame's place in its surface, GS pixels
     ivec2 dest_offset; // (u_dest) the target's pixel the copy of the destination starts at
@@ -31,8 +32,15 @@ layout(push_constant, std430) uniform Push {
     uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
-    uint unused;       // (a record's size a multiple of 8 bytes: pcr_canvas.cpp's PrimPush)
+    uint merged;       // (PCR_RECORDS, a native program's) not 0: the draw's triangles from u_merged (below)
 } pc;
+#if defined(PCR_ND) && defined(PCR_STAGE_VERTEX)
+// This corner's triangle in the program's tris and its draw's instance (PCR_RECORDS: a merged run's, below)
+void pcr_triangle(out uint triangle, out uint instance) {
+    triangle = uint(gl_VertexIndex) / 3u;
+    instance = uint(gl_InstanceIndex);
+}
+#endif
 #else
 // (PCR_RECORDS: the programs a kept walk's runs are drawn with, pcr_canvas.cpp's draw_runs) The same fields, a draw's
 // in a record of the picture's (u_records), one an indirect draw: its run's first (the push constants' record) plus
@@ -41,7 +49,7 @@ layout(push_constant, std430) uniform Push {
     vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
     uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
     ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
-    uint factors; uint trace_xy; uint trace_draw; uint unused;
+    uint factors; uint trace_xy; uint trace_draw; uint merged;
 struct PcrRecord {
     PCR_PUSH_FIELDS
 };
@@ -53,7 +61,27 @@ layout(set = 1, binding = 7, std430) readonly buffer Records {
 } u_records;
 #ifdef PCR_STAGE_VERTEX
 #extension GL_ARB_shader_draw_parameters : require
-#define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB))
+// (a merged run's draw, pcr_canvas.cpp's Runs: several native batches' triangles as one vkCmdDraw. Each triangle of
+// the draw has an entry in u_merged, at its number in the draw: its triangle in the program's tris, its instance (what
+// gl_InstanceIndex is to a batch drawn alone) and its batch's record in u_records)
+uint pcr_merged_record = 0u;
+#define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB) + pcr_merged_record)
+#ifdef PCR_ND
+layout(set = 1, binding = 8, std430) readonly buffer Merged {
+    uvec4 m[]; // (the triangle in tris, the instance, the record, unused)
+} u_merged;
+// This corner's triangle in the program's tris and its draw's instance. Called first: the record is known after it.
+void pcr_triangle(out uint triangle, out uint instance) {
+    triangle = uint(gl_VertexIndex) / 3u;
+    instance = uint(gl_InstanceIndex);
+    if (pcr_push.merged != 0u) {
+        uvec4 m = u_merged.m[triangle];
+        triangle = m.x;
+        instance = m.y;
+        pcr_merged_record = m.z;
+    }
+}
+#endif
 #define pc u_records.r[PCR_RECORD]
 // (the fields the fragment stage reads, flat: read there from the record, each a load a pixel, the pictures between
 // took the GPU 6% longer)
@@ -119,7 +147,6 @@ void pcr_take_record() {
 #define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
-#define PCR_F_HIGH 0x200000u       // colour high: the colours' arithmetic in floats (pcr_prim.h), 16-bit surfaces
 #define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more

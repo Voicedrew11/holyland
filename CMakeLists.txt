@@ -579,6 +579,35 @@ if(TARGET kf4_gs)
     if(NOT WIN32)
         target_link_libraries(kf4-gsreplay PRIVATE m)
     endif()
+    # kf4-layerbench (tools/layer_bench): what a full-screen layer costs on this GPU, with no game in it. Built where
+    # glslangValidator is (its shaders are compiled here, not committed).
+    find_program(KF4_GLSLANG glslangValidator)
+    if(KF4_GLSLANG)
+        set(KF4_LB ${CMAKE_SOURCE_DIR}/tools/layer_bench)
+        set(KF4_LB_OUT ${CMAKE_BINARY_DIR}/layer_bench)
+        file(MAKE_DIRECTORY ${KF4_LB_OUT})
+        set(KF4_LB_PARTS)
+        macro(kf4_layer_shader name source)
+            add_custom_command(OUTPUT ${KF4_LB_OUT}/${name}.inc
+                COMMAND ${KF4_GLSLANG} -V ${ARGN} --vn ${name} -o ${KF4_LB_OUT}/${name}.inc ${KF4_LB}/${source}
+                DEPENDS ${KF4_LB}/${source} VERBATIM)
+            list(APPEND KF4_LB_PARTS ${KF4_LB_OUT}/${name}.inc)
+        endmacro()
+        kf4_layer_shader(layer_vert layer.vert)
+        kf4_layer_shader(layer_frag_fill layer.frag)
+        kf4_layer_shader(layer_frag_textured layer.frag -DTEXTURED)
+        kf4_layer_shader(layer_frag_discards layer.frag -DTEXTURED -DDISCARDS)
+        kf4_layer_shader(layer_frag_own_depth layer.frag -DTEXTURED -DDISCARDS -DOWN_DEPTH)
+        kf4_layer_shader(layer_frag_mask_one layer.frag -DTEXTURED -DMASK_ONE)
+        kf4_layer_shader(layer_frag_mask_all layer.frag -DTEXTURED -DMASK_ALL)
+        file(WRITE ${KF4_LB_OUT}/layer_bench_shaders.h
+            "#include <stdint.h>\n#include \"layer_vert.inc\"\n#include \"layer_frag_fill.inc\"\n#include \"layer_frag_textured.inc\"\n#include \"layer_frag_discards.inc\"\n#include \"layer_frag_own_depth.inc\"\n#include \"layer_frag_mask_one.inc\"\n#include \"layer_frag_mask_all.inc\"\n")
+        add_executable(kf4-layerbench tools/layer_bench/layer_bench.cpp ${KF4_LB_PARTS})
+        target_include_directories(kf4-layerbench PRIVATE ${KF4_LB_OUT})
+        target_link_libraries(kf4-layerbench PRIVATE parallel-gs Threads::Threads)
+        target_compile_options(kf4-layerbench PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+        set_target_properties(kf4-layerbench PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    endif()
     # The CPU model of the GS's memory (port/gs/shared/gsn_vram.c) against paraLLEl-GS
     add_executable(gsn_vram_test tests/gsn_vram_test.c port/gs/shared/gsn_vram.c)
     target_include_directories(gsn_vram_test PRIVATE port/include port/gs/shared)
@@ -691,7 +720,7 @@ endif()
 
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
 add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
-target_include_directories(kf4_pc_gif PUBLIC port/gs/pc PRIVATE port/include)
+target_include_directories(kf4_pc_gif PUBLIC port/gs/pc port/gs/shared PRIVATE port/include)
 set_target_properties(kf4_pc_gif PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_executable(pcr_gif_test tests/pcr_gif_test.cpp)
 target_link_libraries(pcr_gif_test PRIVATE kf4_pc_gif)
@@ -714,6 +743,33 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME pcr_frame_walk COMMAND pcr_frame_walk_test)
+endif()
+
+# Dead writes in a walk drawn again (port/gs/pc/pcr_dead_writes.h, header only)
+add_executable(pcr_dead_writes_test tests/pcr_dead_writes_test.cpp)
+target_include_directories(pcr_dead_writes_test PRIVATE port/gs/pc)
+set_target_properties(pcr_dead_writes_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_dead_writes_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
+endif()
+
+# The watch for a GPU that has stopped answering (port/gs/pc/pcr_hang_notes.h, pcr_hang_watch.h): the notes kept, the
+# report, and (pcr_hang_watch, about 4 s) a wait that never ends ending the process with the report written
+add_executable(pcr_hang_watch_test tests/pcr_hang_watch_test.cpp port/gs/pc/pcr_hang_watch.cpp)
+target_include_directories(pcr_hang_watch_test PRIVATE port/gs/pc)
+set_target_properties(pcr_hang_watch_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+find_package(Threads REQUIRED)
+target_link_libraries(pcr_hang_watch_test PRIVATE Threads::Threads)
+if(NOT MSVC)
+    target_compile_options(pcr_hang_watch_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_hang_notes COMMAND pcr_hang_watch_test)
+    add_test(NAME pcr_hang_watch COMMAND pcr_hang_watch_test hang $<TARGET_FILE:pcr_hang_watch_test>
+             ${CMAKE_CURRENT_BINARY_DIR}/pcr_hang_watch_out)
 endif()
 
 # The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model

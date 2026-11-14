@@ -164,6 +164,7 @@ static int open_pc_renderer(void) {
     if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
         gsr_enable_present();
     }
+    gsr_hang_reports_in(port_data_dir());
     /* (before it opens: its pipelines are made through the kept cache from the first draw on) */
     snprintf(path, sizeof(path), "%s/pc_pipelines.bin", port_data_dir());
     gsr_pipeline_cache(path);
@@ -179,7 +180,6 @@ static int open_pc_renderer(void) {
     port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
     gsr_set_cutout_aa(port_options.native_cutout_aa);
     gsr_set_2d(port_options.native_2d);
-    gsr_set_colour(port_options.native_colour);
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
     gsr_set_presenter(port_video_submit, port_video_submit_image);
@@ -862,15 +862,6 @@ void port_gs_set_native_cutout_aa(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_pc) {
         gsr_set_cutout_aa(mode);
-    }
-#endif
-}
-
-void port_gs_set_native_colour(int mode) {
-    port_options.native_colour = mode;
-#ifdef KF4_HAVE_PARALLEL_GS
-    if (have_pc) {
-        gsr_set_colour(mode);
     }
 #endif
 }
