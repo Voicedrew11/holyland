@@ -304,6 +304,76 @@ RdPass pass_of(uint32_t kind, uint32_t site, uint32_t base) {
     return p;
 }
 
+// The vertex kicks a stream makes, in order (as the frame's own walk kept numbers a native draw's)
+struct KickRecorder : Recorder {
+    std::vector<GifVertex> kicks;
+    void kick_numbered(const GifVertex &v, uint32_t) override { kicks.push_back(v); }
+};
+
+std::vector<GifVertex> kicks_of(const PassStream &s) {
+    KickRecorder r;
+    GifFrontEnd front(r);
+    r.front = &front;
+    front.number_kicks();
+    std::vector<uint8_t> bytes(s.q.size() * 8);
+    memcpy(bytes.data(), s.q.data(), bytes.size());
+    front.feed(3, bytes);
+    return r.kicks;
+}
+
+// A kick of the frame's own pass moved as gif_moves.h's kick_now moves it by its FLAT move (pcr_native.cpp's
+// walk_pass_by_kicks makes the move from the PassKickMove: U and V in texels, and what is added at t 0)
+GifVertex moved_on_gpu(GifVertex v, const PassKickMove &k, float u) {
+    if (k.flags & PASS_KICK_XY) {
+        int ax = int(k.xy_was & 0xFFFF), ay = int(k.xy_was >> 16), bx = int(k.xy_now & 0xFFFF), by = int(k.xy_now >> 16);
+        v.x = uint16_t(bx + int(floorf(float(ax - bx) * u + 0.5f)));
+        v.y = uint16_t(by + int(floorf(float(ay - by) * u + 0.5f)));
+    }
+    if (k.flags & PASS_KICK_RGBA) {
+        uint32_t rgba = 0;
+        for (uint32_t i = 0; i < 32; i += 8) {
+            int ac = int((k.rgba_was >> i) & 0xFF), bc = int((k.rgba_now >> i) & 0xFF);
+            rgba |= (uint32_t(bc + int(floorf(float(ac - bc) * u + 0.5f))) & 0xFF) << i;
+        }
+        v.rgba = rgba;
+    }
+    if (k.flags & PASS_KICK_UV) {
+        float bu = float(k.uv_now & 0x3FFF) / 16.0f, bv = float((k.uv_now >> 16) & 0x3FFF) / 16.0f;
+        float du = float(k.uv_was & 0x3FFF) / 16.0f - bu, dv = float((k.uv_was >> 16) & 0x3FFF) / 16.0f - bv;
+        v.u = uint16_t(int(floorf((bu + du * u) * 16.0f + 0.5f)) & 0x3FFF);
+        v.v = uint16_t(int(floorf((bv + dv * u) * 16.0f + 0.5f)) & 0x3FFF);
+    }
+    return v;
+}
+
+// pass_stream_moves against pass_stream: the frame's own packets, one move a kick, and each kick moved by its move at
+// t as the picture's packets have it
+void check_moves(const char *what, const RdPass &p, const PassMove &m, float t) {
+    char text[160];
+    PassStream own, with, picture;
+    pass_stream(p, PassMove(), own);
+    std::vector<PassKickMove> moves;
+    bool ok = pass_stream_moves(p, m, with, moves);
+    snprintf(text, sizeof(text), "%s: moved by its kicks", what);
+    check(ok, text);
+    snprintf(text, sizeof(text), "%s: the frame's own packets", what);
+    check(with.q == own.q, text);
+    PassMove at = m;
+    at.t = t;
+    pass_stream(p, at, picture);
+    std::vector<GifVertex> a = kicks_of(with), b = kicks_of(picture);
+    snprintf(text, sizeof(text), "%s: a move a kick (%zu kicks, %zu moves)", what, a.size(), moves.size());
+    check(a.size() == moves.size() && a.size() == b.size() && !a.empty(), text);
+    int moved = 0, wrong = 0;
+    for (size_t i = 0; i < a.size() && i < moves.size() && i < b.size(); i++) {
+        GifVertex v = moved_on_gpu(a[i], moves[i], 1.0f - t);
+        moved += moves[i].flags != 0;
+        wrong += v.x != b[i].x || v.y != b[i].y || v.rgba != b[i].rgba || v.u != b[i].u || v.v != b[i].v;
+    }
+    snprintf(text, sizeof(text), "%s: kicks moved as the picture's (%d moved, %d wrong)", what, moved, wrong);
+    check(moved > 0 && wrong == 0, text);
+}
+
 uint32_t rng_state = 0x9E3779B9u;
 uint32_t rng() {
     rng_state ^= rng_state << 13;
@@ -557,6 +627,68 @@ int main() {
             }
         }
         check(found, "the wobble's point drawn");
+    }
+    {
+        // the frame's own walk kept: a pass that its pictures move drawn at the frame's time, each kick with the move
+        // the GPU makes (pass_stream_moves): the wobble (texels and colour), the view-turn shift (places and texels),
+        // a fill's colour and the tint's; the frame shown before (it reads the frame shown kept) is not
+        for (float t : {0.25f, 0.5f, 0.8125f}) {
+            PassMoves moves;
+            RdPass was = pass_of(RD_PASS_WOBBLE, RD_PASS_SITE_WOBBLE, 0), now = was;
+            for (int i = 0; i < 4; i++) {
+                was.arg[i] = 0x80;
+                now.arg[i] = 0x60 + uint32_t(i) * 8;
+            }
+            for (int i = 0; i < 8; i++) {
+                for (int j = 0; j < 11; j++) {
+                    uint32_t uu = uint32_t(j * 64 * 16 + 100), vv = uint32_t(i * 64 * 16 + 100);
+                    was.data[i * 11 + j] = uu | vv << 16;
+                    now.data[i * 11 + j] = (uu + uint32_t((i + j) % 3 * 8)) | (vv + uint32_t((i * j) % 5 * 3)) << 16;
+                }
+            }
+            uint64_t tex0 = (10ull << 26) | (9ull << 30);
+            RdPass fill_was = pass_of(RD_PASS_FILL, RD_PASS_SITE_FILL, 0), fill_now = fill_was;
+            uint32_t fw[6] = {0x10, 0x40, 0x30, 0x20, 0x44, 0}, fn[6] = {0x30, 0x20, 0x31, 0x70, 0x44, 0};
+            memcpy(fill_was.arg, fw, sizeof(fw));
+            memcpy(fill_now.arg, fn, sizeof(fn));
+            RdPass tint_was = pass_of(RD_PASS_SCALE, RD_PASS_SITE_TINT, 0x1180), tint_now = tint_was;
+            tint_was.arg[0] = 0x5E, tint_was.arg[1] = 0x87, tint_was.arg[2] = 0x92;
+            tint_now.arg[0] = 0x60, tint_now.arg[1] = 0x80, tint_now.arg[2] = 0x99;
+            RdPass shift_was = pass_of(RD_PASS_VIEW_SHIFT, RD_PASS_SITE_VIEW_SHIFT, 0), shift_now;
+            uint64_t shift_tex0 = 0x1180 | (10ull << 26) | (9ull << 30);
+            shift_was.data[0] = uint32_t(shift_tex0), shift_was.data[1] = uint32_t(shift_tex0 >> 32);
+            shift_was.data[4] = 0x156, shift_was.data[5] = 0x80808080u;
+            uint32_t corners[8] = {0x6C00u | 0x7200u << 16, 0, 0, 0, 0x6E00u | 0x8E00u << 16, 0, 32 * 16, 448 * 16};
+            memcpy(shift_was.data + 8, corners, sizeof(corners));
+            shift_was.arg[0] = 32 * 16;
+            shift_now = shift_was;
+            shift_now.data[8] += 3 * 16, shift_now.data[12] += 3 * 16; // (the strips 3 pixels on, their texels too)
+            shift_now.data[10] += 3 * 16, shift_now.data[14] += 3 * 16;
+            moves.frame(1, PartWalk::frame);
+            moves.pass(was, tex0, false, PartWalk::frame, 1.0f);
+            moves.pass(fill_was, 0, false, PartWalk::frame, 1.0f);
+            moves.pass(tint_was, 0, false, PartWalk::frame, 1.0f);
+            moves.pass(shift_was, 0, false, PartWalk::frame, 1.0f);
+            moves.frame(2, PartWalk::frame_kept);
+            PassMove wobble = moves.pass(now, tex0, false, PartWalk::frame_kept, t);
+            PassMove fill = moves.pass(fill_now, 0, false, PartWalk::frame_kept, t);
+            PassMove tint = moves.pass(tint_now, 0, false, PartWalk::frame_kept, t);
+            PassMove shift = moves.pass(shift_now, 0, false, PartWalk::frame_kept, t);
+            check((wobble.mode & PASS_MOVE_GRID) && (wobble.mode & PASS_MOVE_RGBA), "the wobble pairs, colour too");
+            check(fill.mode == PASS_MOVE_RGBA && tint.mode == PASS_MOVE_RGBA, "a fill's colour and the tint's pair");
+            check(shift.mode == PASS_MOVE_SHIFT && shift.strips == 0xFFFFF, "the view-turn shift's strips pair");
+            check_moves("the wobble", now, wobble, t);
+            check_moves("a fill", fill_now, fill, t);
+            check_moves("the tint", tint_now, tint, t);
+            check_moves("the view-turn shift", shift_now, shift, t);
+            RdPass prev = pass_of(RD_PASS_PREVIOUS, RD_PASS_SITE_PREVIOUS, 0x1180);
+            PassMove prev_move;
+            prev_move.mode = PASS_MOVE_PREV;
+            PassStream s;
+            std::vector<PassKickMove> none;
+            check(!pass_stream_moves(prev, prev_move, s, none) && s.q.empty() && none.empty(),
+                  "the frame shown before blended in: not moved by its kicks");
+        }
     }
     printf("pass_draw_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

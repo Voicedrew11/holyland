@@ -363,7 +363,7 @@ void GifFrontEnd::kick(uint32_t address, uint64_t value) {
         events_.kick_numbered(v, prim);
     } else if (numbering_ && native_kick_ != no_kick) {
         v.kick = native_kick_++;
-        v.rgba_owner = v.kick;
+        v.rgba_owner = v.uv_owner = v.kick; // (a native draw's kick is the owner of its own RGBAQ and UV)
         events_.kick_numbered(v, prim);
     }
     switch (prim & 7) {

@@ -475,6 +475,13 @@ private:
         bool kept = walk_ == PartWalk::frame_kept || (shown_kept_ && shown_kept_fbp_ * 32 == p.frame_tbp);
         PassMove move = passes_.pass(p, file.reg[gs_reg::tex0_1], kept, walk_, picture_t_);
         if (move.mode != 0 && walk_ == PartWalk::frame_kept) {
+            // (the frame's own walk kept: its pictures move the pass by its kicks, numbered here, each with the move
+            // pass_stream makes on the CPU at the picture's time (under water, the wobble's texels: every frame);
+            // KF4_PC_PASS_KICKS=0, the frame shown before blended in, or a kick count off: the frame's pictures walk)
+            if (pass_kicks_ && !trail_paired_ && walk_pass_by_kicks(p, move, front)) {
+                counts_.batches++;
+                return;
+            }
             trail_paired_ = true; // (its picture between would move it on the CPU)
         }
         if (walk_ != PartWalk::picture) {
@@ -501,6 +508,44 @@ private:
             canvas.frame_mark(uint64_t(0xF5) << 32);
         }
         counts_.batches++;
+    }
+
+    // (draw_pass, the frame's own walk kept) A pass that its pictures move, drawn at the frame's time with its kicks
+    // numbered (as draw_gs_strip numbers a trail's), each with the move pass_stream would make on the CPU (a FLAT move:
+    // gif_moves.h's kick_now, the same numbers). False: a move the GPU does not make (nothing drawn: the caller walks it)
+    bool walk_pass_by_kicks(const RdPass &p, const PassMove &move, GifFrontEnd &front) {
+        stream_.q.clear();
+        pass_kick_moves_.clear();
+        if (!pass_stream_moves(p, move, stream_, pass_kick_moves_) || stream_.q.empty()) {
+            return false;
+        }
+        const uint32_t first = native_kick_base + uint32_t(trail_moves_.size());
+        front.number_native_kicks(first);
+        walk_packets(stream_, front, 0xFFFFFFFFu, 0);
+        const uint32_t next = front.native_kick_next();
+        front.stop_native_kicks();
+        if (next != first + uint32_t(pass_kick_moves_.size())) {
+            trail_paired_ = true; // (a kick count off: never; drawn, the frame's pictures walk)
+            return true;
+        }
+        for (const PassKickMove &k : pass_kick_moves_) {
+            GsnInterpMove m = {};
+            if (k.flags != 0) {
+                m.w[0] = GSN_IM_FLAT | ((k.flags & PASS_KICK_XY) ? GSN_IM_XY : 0u) |
+                         ((k.flags & PASS_KICK_RGBA) ? GSN_IM_RGBA : 0u) | ((k.flags & PASS_KICK_UV) ? GSN_IM_UV : 0u);
+                m.w[1] = k.rgba_was;
+                m.w[2] = k.rgba_now;
+                m.w[3] = k.xy_was;
+                m.w[4] = k.xy_now;
+                // (U and V in texels, and what is added at t 0: pass_draw.cpp's lerp_texel, b + (a - b) u)
+                const float bu = float(k.uv_now & 0x3FFF) / 16.0f, bv = float((k.uv_now >> 16) & 0x3FFF) / 16.0f;
+                const float au = float(k.uv_was & 0x3FFF) / 16.0f, av = float((k.uv_was >> 16) & 0x3FFF) / 16.0f;
+                const float f[4] = {bu, bv, au - bu, av - bv};
+                memcpy(&m.w[5], f, sizeof(f));
+            }
+            trail_moves_.push_back(m);
+        }
+        return true;
     }
 
     // GIF packets built on the CPU (PACKED tags and their qwords), written as the GS takes them; a TEX0 write whose TBP0
@@ -763,6 +808,14 @@ private:
     bool trail_kicks_ = trail_kicks_wanted();
     static bool trail_kicks_wanted() {
         const char *v = getenv("KF4_PC_TRAIL_KICKS");
+        return !(v && strcmp(v, "0") == 0);
+    }
+    // (likewise the screen passes' kicks: walk_pass_by_kicks; KF4_PC_PASS_KICKS=0: a pass that moves refuses the frame's
+    // own walk, as before)
+    std::vector<PassKickMove> pass_kick_moves_;
+    bool pass_kicks_ = pass_kicks_wanted();
+    static bool pass_kicks_wanted() {
+        const char *v = getenv("KF4_PC_PASS_KICKS");
         return !(v && strcmp(v, "0") == 0);
     }
     float picture_u_ = 0.0f; // (1 - the picture's t)

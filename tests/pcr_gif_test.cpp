@@ -410,7 +410,7 @@ void test_native_kick_numbers() {
         CHECK(n[0].kick == 0 && n[3].kick == 1);
         CHECK(n[1].kick == native_kick_base + 5 && n[1].rgba_owner == native_kick_base + 5 && n[1].rgba == 7);
         CHECK(n[2].kick == native_kick_base + 6 && n[2].rgba_owner == native_kick_base + 6 && n[2].rgba == 8);
-        CHECK(n[1].st_owner == no_kick && n[1].uv_owner == no_kick && n[1].q_owner == no_kick);
+        CHECK(n[1].st_owner == no_kick && n[1].uv_owner == native_kick_base + 5 && n[1].q_owner == no_kick);
     }
     // outside a numbering, a native draw's kicks are not numbered either
     gif.stop_numbering();
