@@ -36,14 +36,15 @@ layout(set = 0, binding = 10, std430) readonly buffer Draws {
 #include "vu1_700_maths.h"
 
 void main() {
+    uint triangle, instance;
+    pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
     pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
 #endif
-    uvec4 tri = tris[gl_VertexIndex / 3];
+    uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
     uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     uint kick = tri.w;
-    uint instance = uint(gl_InstanceIndex);
     d = draws[instance & 0x3FFFFFFFu];
     bool gouraud = ((instance >> 30) & 1u) != 0u;
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];

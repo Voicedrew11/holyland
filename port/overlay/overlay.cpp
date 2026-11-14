@@ -393,18 +393,6 @@ void display_page() {
                 "over what it lies on, and where surfaces cross the line is straight. Off is the PS2's own\n"
                 "test, where they round apart: thin teeth, hatching or specks. On by default.\n"
                 "(--native-layer-z tolerant|ps2)");
-        static const char *const colour_names[] = {"PS2's 8 bits (exact, the default)", "High (16 bits, dithered)"};
-        int colour = port_options.native_colour;
-        if (ImGui::Combo("Colour precision", &colour, colour_names, 2)) {
-            port_gs_set_native_colour(colour);
-            port_settings.native_colour = colour;
-            port_settings_changed();
-        }
-        tooltip("How precisely the renderer keeps colours. The PS2's: 8 bits a channel, every step rounded as\n"
-                "the GS rounds it, which can show as steps in smooth dark gradients (fog, dim walls, glows).\n"
-                "High: 16 bits a channel and the arithmetic without the roundings, the picture dithered to the\n"
-                "screen's 8 bits. Alpha, and what the game reads back, stay the PS2's. Costs GPU time (twice\n"
-                "the memory for the targets). Applies from the next picture. (--native-colour exact|high)");
     }
 
     ImGui::SeparatorText("Motion");

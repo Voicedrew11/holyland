@@ -13,6 +13,9 @@ extern "C" {
 static inline int gsr_open(void *shared_context) {
     return pcr_open(shared_context);
 }
+static inline void gsr_hang_reports_in(const char *folder) {
+    pcr_hang_reports_in(folder);
+}
 static inline void gsr_gif(int path, const void *data, size_t bytes) {
     pcr_gif(path, data, bytes);
 }
@@ -76,9 +79,6 @@ static inline void gsr_set_cutout_aa(int mode) {
 }
 static inline void gsr_set_2d(int mode) {
     pcr_set_2d(mode);
-}
-static inline void gsr_set_colour(int mode) {
-    pcr_set_colour(mode);
 }
 static inline void gsr_set_layer_z(int mode) {
     pcr_set_layer_z(mode);

@@ -37,6 +37,9 @@ extern "C" {
    device it can use. pcr_enable_present, before: the presenter's surface and swapchain extensions. */
 int pcr_open(void *shared_context);
 void pcr_enable_present(void);
+/* Before pcr_open: the folder a GPU hang's report is written into (pcr_hang_watch.h). Not called: the folder the
+   program runs in. */
+void pcr_hang_reports_in(const char *folder);
 int pcr_gpu_kind(void);
 
 /* The GS's input, worked on by the PC renderer's thread in the order sent; pcr_wait returns once it has
@@ -69,7 +72,6 @@ int pcr_set_aniso(int taps);
 int pcr_set_msaa(int samples);
 void pcr_set_cutout_aa(int mode);
 void pcr_set_2d(int mode);
-void pcr_set_colour(int mode);
 void pcr_set_layer_z(int mode);
 /* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
 int pcr_native_kinds(void);

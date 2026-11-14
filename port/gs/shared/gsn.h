@@ -42,10 +42,6 @@
 /* 2D textured from VRAM at a scale above 1 (pcr_set_2d): read nearest at the PS2's pixels, or bilinear (smooth) */
 #define GSN_2D_PS2 0
 #define GSN_2D_SMOOTH 1
-/* How precisely colours are kept (pcr_set_colour): the GS's 8 bits and rounding, or 16 bits and floats in the
-   colour arithmetic (the picture dithered to 8 bits as it is scanned out) */
-#define GSN_COLOUR_EXACT 0
-#define GSN_COLOUR_HIGH 1
 /* How a layer blended over a surface is Z tested (pcr_set_layer_z): as the GS, or within one Z (tolerant layers) */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1

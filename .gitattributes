@@ -1,2 +1,5 @@
 # The patches must keep LF endings on every platform: they are applied to the decomp as committed.
 *.patch -text
+
+# Made by tools/build_shaders.py from the shaders: collapsed in GitHub's diffs.
+port/gs/pc/pcr_shaders.h linguist-generated

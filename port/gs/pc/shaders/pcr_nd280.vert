@@ -37,15 +37,16 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 #include "vu1_280_maths.h"
 
 void main() {
+    uint triangle, instance;
+    pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
     pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
 #endif
-    uvec4 tri = tris[gl_VertexIndex / 3];
+    uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     uint kick = tri.w;
     // the instance: the record (bits 0-27), the context whose XYOFFSET (28), the pass (29), IIP (30)
-    uint instance = uint(gl_InstanceIndex);
     d = draws[instance & 0x0FFFFFFFu];
     bool sphere = ((instance >> 29) & 1u) != 0u, gouraud = ((instance >> 30) & 1u) != 0u;
     ivec2 offset = ((instance >> 28) & 1u) != 0u ? d.offset.zw : d.offset.xy;

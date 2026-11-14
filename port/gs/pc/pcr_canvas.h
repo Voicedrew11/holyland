@@ -58,6 +58,11 @@ struct CanvasCounts {
     uint64_t walk_texture_draws = 0, table_draws = 0, walk_clut_draws = 0;
     // (a kept walk's runs: the indirect draws, and the draws they made)
     uint64_t runs = 0, run_draws = 0;
+    // (a kept walk's merged runs: the draw calls, and the native batches' triangles they drew)
+    uint64_t merged_runs = 0, merged_triangles = 0;
+    uint64_t clears = 0; // (batches cleared, vkCmdClearAttachments, not drawn: as_clear)
+    uint64_t dead_batches = 0; // (a pictures' walk's batches not drawn: what they write is never read, pcr_dead_writes.h)
+    uint64_t blends_left_out = 0; // (blended batches drawn without the blend: blend_is_source)
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
@@ -95,11 +100,18 @@ struct NativeBatch {
     // (tolerant layers) a layer where it is blended over what is there by its alpha: a corner's alpha is below 0x80
     // (it fades out somewhere) and it is not its surface's own triangles again (pcr_native.cpp's twin)
     bool layer = false;
+    // Every corner's alpha is 0x80 exactly as the program leaves it in RGBAQ (program 0x000: its mesh's colours' alpha,
+    // which the lights do not touch). False when not known. A blend by As that is then the source alone is drawn
+    // without the blend (pcr_canvas.cpp's blend_is_source).
+    bool alpha_is_one = false;
 };
 
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
 // in order, every image and buffer they use held, and what it read of the texture store from before it
 class KeptWalk;
+
+// (pcr_hang_notes.h)
+class HangNotes;
 
 // A canvas's surfaces as they were (Canvas::copy_surfaces): each colour and depth surface's image copied on the GPU, the
 // frame shown kept (0xF2), and the scale; for a canvas on another thread to draw on from there (Canvas::start_from)
@@ -116,6 +128,10 @@ public:
     Canvas(const Canvas &) = delete;
     Canvas &operator=(const Canvas &) = delete;
 
+    // Each submit leaves a note of what it held, and each wait for the GPU says so (pcr_hang_notes.h). who: the
+    // canvas's thread, a name that outlives the canvas. notes outlive the canvas.
+    void watch_hangs(HangNotes &notes, const char *who);
+
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);
     // Texture detail (GSN_LOD_*) and anisotropy (1 to 16) for the batches from the next vblank
@@ -123,11 +139,8 @@ public:
     // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
     // at a scale above 1
     void set_2d(int mode);
-    // Layer Z (GSN_LAYER_Z_*): tolerant, Z's fraction kept and the GS's ties kept on average (with exact Z)
+    // Layer Z (GSN_LAYER_Z_*): tolerant, Z's fraction kept and the layers tested within a Z or two (with exact Z)
     void set_layer_z(int mode);
-    // Colour precision (GSN_COLOUR_*) from the next vblank, as the scale: high keeps the colour surfaces at 16 bits a
-    // channel and the colours' arithmetic in floats, the picture dithered to 8 bits as it is scanned out
-    void set_colour(int mode);
     // MSAA: the samples a pixel of the surfaces drawn into has (1, 2, 4 or 8; 1 none), from the next vblank as the
     // scale; with cutout_aa the cut-outs shaded at every sample (from the next draw)
     void set_msaa(uint32_t samples, bool cutout_aa);

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <map>
 #include <unordered_map>
+#include <span>
 #include <unordered_set>
 #include <vector>
 
@@ -247,6 +248,9 @@ private:
                 static const char *const layers = getenv("KF4_PC_LAYERS");
                 bool every = layers && strcmp(layers, "all") == 0, none = layers && strcmp(layers, "none") == 0;
                 nb.layer = !shadow && !none && fades(b) && (every || !twin(*mesh, b));
+                // (program 0x000 leaves the mesh's colours' alpha in RGBAQ as it is: vu1_000_maths.h's lit_colour, the
+                // lights' w 1; the batch's least and most are render.cpp's)
+                nb.alpha_is_one = !shadow && b.alpha_lo == 0x80 && b.alpha_hi == 0x80;
                 name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += n;

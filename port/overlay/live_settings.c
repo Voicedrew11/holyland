@@ -57,11 +57,6 @@ static void set_cutout_aa(int on) {
     port_gs_set_native_cutout_aa(on != 0);
 }
 
-static void set_colour(int high) {
-    port_settings.native_colour = high != 0;
-    port_gs_set_native_colour(high != 0);
-}
-
 static void set_native_2d(int smooth) {
     port_settings.native_2d = smooth != 0;
     port_gs_set_native_2d(smooth != 0);
@@ -82,7 +77,6 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_SKY] = {"sky", set_sky},
     [PORT_LIVE_MSAA] = {"msaa", set_msaa},
     [PORT_LIVE_CUTOUT_AA] = {"cutout_aa", set_cutout_aa},
-    [PORT_LIVE_COLOUR] = {"colour", set_colour},
     [PORT_LIVE_NATIVE_2D] = {"native_2d", set_native_2d},
 };
 

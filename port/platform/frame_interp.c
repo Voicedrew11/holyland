@@ -112,12 +112,42 @@ int port_frame_interp(void) {
    mailbox, so that each refresh shows the newest, or immediate with --tearing. */
 #define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
 
-/* Unlocked's pictures asked for a second: the cap, and the schedule's most */
+/* Unlocked's pictures asked for a second. They follow what the window shows: a quarter more than it showed in the
+   last half second (port_video_pictures_per_second), so the renderer always has a picture to make next and few are
+   asked for that it must leave out. Asked for at a fixed rate far above what it makes (the cap of 500 at 4x, where it
+   makes about 300), most of the schedule's pictures were left out as too late and those made came in bursts: a third
+   fewer pictures between reached the window, three times as unevenly (PC_OPTIMIZATION.md, 2026-11-14). Never under
+   UNLOCKED_LEAST_HZ, never over the cap, where one is set, or the schedule's most; a change under a twentieth is not
+   followed (the schedule's times stay put). After the menus' 60 or a load the rate climbs a quarter each half second,
+   about three seconds from the least to 500. (Tried and left out: the top at once where it showed all that was asked
+   for. The rate overshot and the pictures came in bursts again, in play too.) Before the window has shown anything,
+   and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before. */
+#define UNLOCKED_LEAST_HZ 120
 static int unlocked_asked_hz(void) {
+    static int follow = -1;
+    static _Atomic int asked_now;
     double most = UNLOCKED_MOST_A_VBLANK * 60000.0 / 1001.0;
     int cap = port_options.frame_rate_cap;
+    int top = cap > 0 && cap < most ? cap : (int)most;
+    int asked, last = asked_now;
+    double shown = port_video_pictures_per_second();
 
-    return cap > 0 && cap < most ? cap : (int)most;
+    if (follow < 0) {
+        const char *e = getenv("KF4_UNLOCKED_FOLLOW");
+
+        follow = !(e != NULL && strcmp(e, "0") == 0);
+    }
+    if (!follow || shown <= 0) {
+        return top;
+    }
+    asked = (int)(shown * 1.25);
+    asked = asked < UNLOCKED_LEAST_HZ ? UNLOCKED_LEAST_HZ : asked;
+    asked = asked > top ? top : asked;
+    if (asked != top && last != 0 && last <= top && abs(asked - last) * 20 < last) {
+        return last;
+    }
+    asked_now = asked;
+    return asked;
 }
 
 int port_frame_rate_hz(void) {
@@ -630,7 +660,9 @@ static void objects_finish(Objects *o) {
         o->by_key[i] = (uint32_t)i;
     }
     sorting = o;
-    qsort(o->by_key, o->nruns, sizeof(*o->by_key), by_key);
+    if (o->nruns != 0) { /* (no runs: by_key may be null, which qsort must not be given) */
+        qsort(o->by_key, o->nruns, sizeof(*o->by_key), by_key);
+    }
 }
 
 /* The run of the frame before that is this one (cur, of this frame), or NULL */
