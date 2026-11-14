@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <list>
+#include <memory>
 #include <unordered_map>
 #include <tuple>
 #include <variant>
@@ -22,6 +23,8 @@
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
 #include "pcr_pipelines.h"
+#include "pcr_copy_pool.h"
+#include "pcr_spares.h"
 #include "pcr_textures.h"
 
 extern "C" {
@@ -308,6 +311,9 @@ struct Surface {
     // ms_behind: image written since ms was (ms made again from it, expanded, before it is drawn into). Never both.
     ImageHandle ms;
     bool ms_ahead = false, ms_behind = false;
+    // (a depth surface: the canvas's vblank it was last drawn with; one not drawn with for long is let go,
+    // let_go_of_idle_depth)
+    uint64_t used = 0;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -393,7 +399,8 @@ public:
         no_samplers_.fill(nullptr);
         no_samplers_[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
         const auto &f = device_.get_device_features();
-        runs_ok_ = runs_asked_ && table_on_ && f.enabled_features.multiDrawIndirect && f.vk11_features.shaderDrawParameters;
+        runs_ok_ = runs_asked_ && (runs_env_ || !runs_hang_here(f.driver_id)) && table_on_ &&
+                   f.enabled_features.multiDrawIndirect && f.vk11_features.shaderDrawParameters;
         native_runs_ok_ = runs_ok_ && f.enabled_features.drawIndirectFirstInstance;
         // (the dual-source blend's pictures are the same as the blend's only where it holds a factor as the shader
         // assumes, pcr_prim.h: checked on NVIDIA; elsewhere the runs end where the blend changes, KF4_PC_INDIRECT=plain)
@@ -729,6 +736,7 @@ public:
         device_.next_frame_context();
         frame_++;
         evict_textures();
+        let_go_of_idle_depth();
     }
 
     std::vector<uint8_t> vram_image() {
@@ -1070,6 +1078,21 @@ private:
         return image;
     }
 
+    // What a spare image must be to stand for this one (pcr_spares.h)
+    static ImageKind kind_of(const Image &image) {
+        const ImageCreateInfo &info = image.get_create_info();
+        return {info.width, info.height, uint32_t(info.format), uint32_t(info.samples), uint32_t(info.usage)};
+    }
+
+    // An image for a copy of a surface's `like` (copy_surfaces): a spare of its kind, else made as like was
+    ImageHandle copy_image_like(const Image &like, const Surface &s, bool ms) {
+        if (ImageHandle spare = spares_on_ ? spares_->take(kind_of(like)) : ImageHandle()) {
+            counts_.surface_copies_into_spares++;
+            return spare;
+        }
+        return ms ? make_ms_image(like.get_width(), like.get_height()) : make_surface_image(s.width(), s.height, s.depth);
+    }
+
     // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
     ImageHandle make_ms_image(uint32_t width, uint32_t height) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format());
@@ -1207,8 +1230,11 @@ private:
     // game draws into buffers that overlap (two 128-wide targets a page row apart): a base inside a surface of the
     // same width, at the start of a row of its pages, is that surface at an offset. A surface made takes in those of
     // its width it overlaps from its base on (their pixels copied to their place in it); every other colour surface
-    // it overlaps is let go (the GS's memory there is this one's now). It starts as the uploads left its pages.
-    Placed colour_surface(uint32_t base_page, uint32_t fbw, uint32_t psm, uint32_t height) {
+    // it overlaps is let go (the GS's memory there is this one's now). It starts as the uploads left its pages, unless
+    // covered: what is about to be written covers rows 0 to height of it whole (a copy of the whole frame), when one
+    // made no taller starts cleared (under water the copy of the frame and the water's targets let each other go
+    // every picture: filled from the uploads each time, 140 pages read and written for nothing)
+    Placed colour_surface(uint32_t base_page, uint32_t fbw, uint32_t psm, uint32_t height, bool covered = false) {
         for (auto &s : colour_) {
             uint32_t x, y;
             if (s->fbw == fbw && s->page_place(base_page, x, y) && x == 0) {
@@ -1241,16 +1267,32 @@ private:
                 taken.emplace_back(o.get(), y);
             }
         }
-        made->image = make_surface_image(made->width(), made->height, false);
+        if (reuse_on_) {
+            made->image = reuse_image(made->width() * scale_[0], made->height * scale_[1], made->ms);
+            made->ms_ahead = false;
+            made->ms_behind = bool(made->ms); // (expanded from the image before it is drawn into, as one made)
+        }
+        if (!made->image) {
+            made->image = make_surface_image(made->width(), made->height, false);
+        }
         if (!made->image) {
             return {};
         }
         counts_.surfaces_made++;
         end_pass();
         CommandBuffer &c = cmd(GpuWork::surface);
-        VkClearValue zero = {};
-        c.clear_image(*made->image, zero);
+        // (covered: written whole before it is read, so not cleared either)
+        const bool whole = covered && taken.empty() && made->height == height;
+        if (!(whole && reuse_on_)) {
+            VkClearValue zero = {};
+            c.clear_image(*made->image, zero);
+        }
         full_barrier(c);
+        if (whole) {
+            let_go_overlapping(colour_, made->base_page, made->end_page());
+            colour_.push_back(std::move(made));
+            return {colour_.back().get(), 0, 0};
+        }
         fill_from_uploads(*made);
         // (as much of each as fits: a surface is at most 2048 rows, and one taken in a few rows down may be that tall
         // already; copied whole, the copy ran past the image's end and NVIDIA lost the device: the under-water screen,
@@ -1275,6 +1317,7 @@ private:
                 if (s->height < height) {
                     grow(*s, height);
                 }
+                s->used = frame_;
                 return s.get();
             }
         }
@@ -1284,6 +1327,7 @@ private:
         made->psm = zpsm;
         made->height = height;
         made->depth = true;
+        made->used = frame_;
         made->image = make_surface_image(made->width(), height, true);
         if (!made->image) {
             return nullptr;
@@ -1297,11 +1341,61 @@ private:
         return depth_.back().get();
     }
 
+    // A depth surface nothing was drawn with for IDLE_DEPTH_VBLANKS vblanks is let go (each vblank, on kf4-pc's canvas:
+    // the pump's surfaces are copies of these). The game clears its Z buffer and draws it anew every frame, so a Z
+    // buffer left alone that long holds nothing a later frame reads; drawn with again, it is made new, zeros, as a Z
+    // buffer first drawn with is. The boot's and the menus' Z buffers otherwise stayed for the whole of play: at 4x with
+    // MSAA 2 one the screen's size is 141 MB, held three times (this canvas, the pump's, the spares) and copied for the
+    // pump every game frame (PC_OPTIMIZATION.md, 2026-11-14).
+    static constexpr uint64_t IDLE_DEPTH_VBLANKS = 600;
+    void let_go_of_idle_depth() {
+        for (auto it = depth_.begin(); it != depth_.end();) {
+            Surface *s = it->get();
+            if (frame_ > s->used && frame_ - s->used > IDLE_DEPTH_VBLANKS && pass_depth_ != s) {
+                it = depth_.erase(it);
+                counts_idle_depth_let_go_++;
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // A colour surface's images kept when it is let go, the oldest dropped past a few: a surface of the same size made
+    // again takes them (reuse_image). The GPU is done with them by then as with any image the queue used before: the
+    // canvas records into one command buffer at a time, everything outside a pass between full barriers.
+    void keep_spare(ImageHandle image, ImageHandle ms) {
+        constexpr size_t SPARE_SURFACES = 6;
+        if (spare_surfaces_.size() == SPARE_SURFACES) {
+            spare_surfaces_.erase(spare_surfaces_.begin());
+        }
+        spare_surfaces_.push_back({std::move(image), std::move(ms)});
+    }
+    // A kept image of this size (in pixels at the canvas's scale) and the colour's format for a surface made, and its
+    // multisampled image if it had one at the samples drawn now (as made: drawn from the image, expanded, before it is
+    // drawn into). (apply_samples and apply_colour drop the kept ones too: a live change of MSAA or precision)
+    ImageHandle reuse_image(uint32_t width, uint32_t height, ImageHandle &ms) {
+        for (auto it = spare_surfaces_.begin(); it != spare_surfaces_.end(); ++it) {
+            if (it->image->get_width() == width && it->image->get_height() == height &&
+                it->image->get_format() == colour_format()) {
+                ImageHandle image = std::move(it->image);
+                ms = it->ms && it->ms->get_create_info().samples == VkSampleCountFlagBits(samples_) ? std::move(it->ms)
+                                                                                                    : ImageHandle{};
+                spare_surfaces_.erase(it);
+                counts_.surface_images_reused++;
+                return image;
+            }
+        }
+        return {};
+    }
+
     void let_go_overlapping(std::vector<std::unique_ptr<Surface>> &list, uint32_t first, uint32_t end) {
         for (auto it = list.begin(); it != list.end();) {
             if ((*it)->overlaps(first, end)) {
                 if (pass_colour_ == it->get() || pass_depth_ == it->get()) {
                     end_pass();
+                }
+                if (reuse_on_ && !(*it)->depth && (*it)->image) {
+                    keep_spare(std::move((*it)->image), std::move((*it)->ms));
                 }
                 it = list.erase(it);
             } else {
@@ -1522,7 +1616,10 @@ private:
             counts_.unsupported_copies++;
             return;
         }
-        Placed placed = colour_surface(dbp / 32, dbw, GSN_PSMCT32, dy + h);
+        // (a copy into the whole of a buffer from its first row: what was there before is not read)
+        bool covered = dx == 0 && dy == 0 && w >= std::max(1u, dbw) * 64 && fx + sx + w <= from->width() &&
+                       fy + sy + h <= from->height;
+        Placed placed = colour_surface(dbp / 32, dbw, GSN_PSMCT32, dy + h, covered);
         Surface *to = placed.surface;
         find_from(); // (the destination made or grown may have taken the source in and let it go)
         if (!to || !from) {
@@ -1643,6 +1740,8 @@ private:
         uint32_t levels = 1;
         uint32_t cols = 0, rows = 0; // the part of level 0 the batch may read
         ImageHandle surface_copy;     // (a surface's copy: kept until the batch is drawn)
+        // (the copy's lease, pcr_copy_pool.h: its image is given to another draw once every copy of this is gone)
+        CopyPool<ImageHandle>::Lease surface_copy_lease;
         ImageHandle held;             // (a decoded texture's image: held while a kept walk may draw with it)
         uint32_t sampling = 0;        // the pushes' tex1 bits 10-31 (pcr_common.h): texture detail and anisotropy
         bool ok = false;
@@ -1969,16 +2068,37 @@ private:
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        b.surface_copy = device_.create_image(info, nullptr);
+        // (an image used before where one is free, cleared only where the rectangle copied leaves some of what it
+        // held: pcr_copy_pool.h)
+        bool clear_first = true;
+        if (copy_pool_on_) {
+            bool made_new = false;
+            const ImageKind kind = {info.width, info.height, uint32_t(info.format), 1, uint32_t(info.usage)};
+            auto copy = surface_copies_.take(kind, w * scale_[0], h * scale_[1],
+                                             [&] {
+                                                 made_new = true;
+                                                 return device_.create_image(info, nullptr);
+                                             });
+            if (!made_new) {
+                counts_.texture_copies_reused++;
+            }
+            b.surface_copy = std::move(copy.image);
+            b.surface_copy_lease = std::move(copy.lease);
+            clear_first = copy.clear_first;
+        } else {
+            b.surface_copy = device_.create_image(info, nullptr);
+        }
         if (!b.surface_copy) {
             return b;
         }
         end_pass();
         CommandBuffer &c = cmd(GpuWork::texture_copy);
         full_barrier(c);
-        VkClearValue zero = {};
-        c.clear_image(*b.surface_copy, zero);
-        full_barrier(c);
+        if (clear_first) {
+            VkClearValue zero = {};
+            c.clear_image(*b.surface_copy, zero);
+            full_barrier(c);
+        }
         // (between 0xF4 and 0xF5 of a picture between, the frame shown kept at 0xF2 in place of its buffer)
         bool kept = replaying_ && kept_reads_ && kept_frame_ && from->base_page == kept_page_ &&
                     kept_frame_->get_width() == from->image->get_width() &&
@@ -2403,6 +2523,8 @@ private:
         int precision = GSN_COLOUR_EXACT; // (colour_mode_)
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
         bool layers = false;              // (layers_, the same: set_layer_z's)
+        // (where the canvas that takes the copies puts the images it lets go for them: the copying canvas's spares)
+        std::shared_ptr<SpareImages<ImageHandle>> spares;
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -2417,11 +2539,14 @@ private:
         copies->precision = colour_mode_;
         copies->mode_2d = mode_2d_;
         copies->layers = layers_;
+        copies->spares = spares_on_ ? spares_ : nullptr;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
             for (const auto &s : *list) {
-                ImageHandle image = make_surface_image(s->width(), s->height, s->depth);
+                // (into the images the pump's canvas let go at its last frame, where they are of the same kind: what a
+                // spare held is written over, or made again from the other image before it is read, as a new image's)
+                ImageHandle image = copy_image_like(*s->image, *s, false);
                 if (!image) {
                     continue; // (the pump makes it again, as a surface it never had)
                 }
@@ -2434,7 +2559,7 @@ private:
                 // other: an image behind its samples is resolved before it is read, samples behind expanded)
                 ImageHandle ms;
                 if (s->ms) {
-                    ms = make_ms_image(s->ms->get_width(), s->ms->get_height());
+                    ms = copy_image_like(*s->ms, *s, true);
                     if (!ms) {
                         continue;
                     }
@@ -2460,6 +2585,23 @@ private:
     void start_from(Copies &copies) {
         flush_batch();
         end_pass();
+        if (copies.spares) {
+            // (the surfaces let go kept for the copying canvas's next copies. Submitted first: what this canvas drew
+            // on them is then before the copies into them in the order the GPU is given the commands)
+            submit(false);
+            std::vector<std::pair<ImageKind, ImageHandle>> let_go;
+            for (auto *list : {&colour_, &depth_}) {
+                for (auto &s : *list) {
+                    for (ImageHandle *image : {&s->image, &s->ms}) {
+                        if (*image) {
+                            ImageKind kind = kind_of(**image);
+                            let_go.emplace_back(kind, std::move(*image));
+                        }
+                    }
+                }
+            }
+            copies.spares->keep(std::move(let_go));
+        }
         colour_ = std::move(copies.colour);
         depth_ = std::move(copies.depth);
         kept_frame_ = std::move(copies.kept_frame);
@@ -2537,12 +2679,22 @@ private:
         picture.steps.reserve(frame.steps.size() + 2);
         picture.batches.reserve(frame.batches.size());
         picture.steps.emplace_back(KeptMark{uint64_t(0xF0) << 32});
+        uint32_t frame_copies = 0; // (the frame's copies of the frame met: GsnInterpFrame's count them likewise)
         for (const KeptStep &step : frame.steps) {
-            out.refused = std::visit([&](const auto &kept) { return in_picture(frame, kept, t, picture); }, step);
+            if (const KeptCopy *copy = std::get_if<KeptCopy>(&step); copy && copy_of_frame(copy->transfer, t)) {
+                out.refused = copy_of_frame_in_picture(frame_copies++, *copy, t, picture);
+            } else {
+                out.refused = std::visit([&](const auto &kept) { return in_picture(frame, kept, t, picture); }, step);
+            }
             if (out.refused != FrameWalkRefused::none) {
                 out.walk.reset();
                 return out;
             }
+        }
+        if (frame_copies != t.frame_copies) {
+            out.refused = FrameWalkRefused::copies_drawn; // (not the copies the stream counted: never)
+            out.walk.reset();
+            return out;
         }
         picture.steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
         return out;
@@ -2606,6 +2758,23 @@ private:
     static FrameWalkRefused in_picture(const Kept &, const KeptUploadAgain &, const FrameTargets &, Kept &) {
         return FrameWalkRefused::marks; // (0x7C: not the game's own packets)
     }
+    // A copy of the frame (copy_of_frame), the frame's c-th: made again from the buffer shown as the stream makes it
+    // (the frame reads it after: the wobble's under water), or left out
+    static FrameWalkRefused copy_of_frame_in_picture(uint32_t c, const KeptCopy &kept, const FrameTargets &t,
+                                                     Kept &picture) {
+        switch (frame_copy_in_picture(c, t)) {
+        case TransferInPicture::as_is: {
+            KeptCopy again = kept;
+            again.transfer.bitbltbuf = bitbltbuf_in_picture(kept.transfer.bitbltbuf, t);
+            picture.steps.emplace_back(again);
+            return FrameWalkRefused::none;
+        }
+        case TransferInPicture::left_out:
+            return FrameWalkRefused::none;
+        default:
+            return FrameWalkRefused::copies_drawn;
+        }
+    }
     static FrameWalkRefused in_picture(const Kept &, const KeptCopy &kept, const FrameTargets &t, Kept &) {
         return transfer_in_picture(2, kept.transfer, t) == TransferInPicture::left_out ? FrameWalkRefused::none
                                                                                        : FrameWalkRefused::copies_drawn;
@@ -2646,6 +2815,7 @@ private:
     }
     static void let_go_of_surface_copy(Batch &b) {
         b.texture.surface_copy.reset();
+        b.texture.surface_copy_lease.reset();
         if (b.texture.src == SRC_SURFACE) {
             b.texture.view = nullptr;
         }
@@ -3132,6 +3302,16 @@ private:
     // primitives across an indirect draw's draws, as across draws, so the pictures are the same. A run ends before
     // anything else is recorded (cmd(), end_pass, submit) and before a batch of other state sets its state.
     // KF4_PC_INDIRECT=0: a draw a batch, as before (to compare).
+    // Whether the runs hang the GPU with this driver. RADV (Mesa 26.2.3, RX 9070 XT, 2026-11-13): a ring gfx timeout
+    // and a reset of the whole card within a minute at 009 at 240 pictures a second in 4 of 6 runs with the runs (3 of 5
+    // the session before), none in 8 without them. It needs vkCmdDrawIndirect itself: the same runs with the same records and programs drawn a
+    // vkCmdDraw each (the record by the push constant) did not hang in 5 runs; GIF batches' runs alone hung, as did
+    // the runs' buffer in host memory and their buffers kept for 512 pictures (so not the buffer let go early). The
+    // commands are written before they are recorded, so the driver or what is under it is suspected, not shown.
+    static bool runs_hang_here(VkDriverId driver) {
+        return driver == VK_DRIVER_ID_MESA_RADV;
+    }
+
     struct RunKey {
         const void *colour = nullptr, *depth = nullptr;
         uint32_t width = 0, height = 0;
@@ -3846,8 +4026,18 @@ private:
 
     // After a batch: its multisampled image ahead of its image, and what was drawn over told to the texture store (its
     // pages are a surface's now, not the uploads')
-    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &box, bool wrote_z) {
+    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &touched, bool wrote_z) {
         const DrawState &s = b.state;
+        // The batch's box is its corners' ceil (touch), one past a right or bottom edge on a whole pixel: the GS covers
+        // up to before it. The pages told drawn are the pixels covered, so not that extra column and row: the game's
+        // scissor is often one past its buffer (0-640, 0-224), and the row past a 224-row Z buffer is where the
+        // equipment menu's model textures are uploaded (taken for drawn over, the armour sampled the Z buffer: flat grey).
+        // (Native batches' and moved ones' boxes are the scissor's, inclusive already.)
+        PixelBox box = touched;
+        if (!b.native && !b.moved) {
+            box.x1 -= 1;
+            box.y1 -= 1;
+        }
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
         uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
         uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
@@ -4142,6 +4332,7 @@ private:
             s->ms_ahead = s->ms_behind = false;
         }
         colour_mode_ = pending_colour_;
+        spare_surfaces_.clear(); // (the old format's)
         for (auto &s : colour_) {
             ImageHandle image = make_surface_image(s->width(), s->height, false);
             if (!image) {
@@ -4242,6 +4433,7 @@ private:
             s->ms_ahead = s->ms_behind = false;
         }
         samples_ = pending_samples_;
+        spare_surfaces_.clear(); // (their multisampled images at the old count)
         for (auto &s : depth_) {
             ImageHandle image = make_surface_image(s->width(), s->height, true);
             if (!image) {
@@ -4401,7 +4593,7 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[23];
+        WarmProgram warmed[24];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
@@ -4411,10 +4603,17 @@ private:
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
         }
-        // (the Z alone: the GIF batches' and a kept walk's, the native draws' made as first drawn)
-        warmed[21] = {zonly_programs_[0], zonly_programs_[0]};
-        warmed[22] = {run_zonly_programs_[0], run_zonly_programs_[0]};
-        warm_watch(device_, warmed, 23, expand_program_);
+        warmed[21] = {narrow_program_, nullptr}; // (colour high's scanout: added last, the others' indices kept)
+        // (tolerant layers, the Z alone: the GIF batches' and a kept walk's, the native draws' made as first drawn; after
+        // the others, whose indices are kept)
+        warmed[22] = {zonly_programs_[0], zonly_programs_[0]};
+        warmed[23] = {run_zonly_programs_[0], run_zonly_programs_[0]};
+        WarmDevice traits;
+        traits.depth_format = depth_format_;
+        traits.dynamic_ds = dynamic_.ds;
+        traits.dynamic_blend = dynamic_.blend;
+        traits.high_colour = high_colour_ok();
+        warm_watch(device_, warmed, 24, expand_program_, traits);
     }
 
     Device &device_;
@@ -4434,6 +4633,15 @@ private:
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
     // (as_clear) KF4_PC_CLEARS=0: clears drawn as the rectangles they are; and the batches cleared
     const bool clears_on_ = !getenv("KF4_PC_CLEARS") || strcmp(getenv("KF4_PC_CLEARS"), "0") != 0;
+    // KF4_PC_SURFACE_REUSE=0: a colour surface's images made new each time (as before); else kept to be used again
+    // (reuse_image; a texture's copy of a surface is used again by surface_copies_, KF4_PC_COPY_POOL). Under water the copy of the frame and the water's targets
+    // let each other go every picture, and the tint and the wobble read the frame through a copy of 1024 x 512 texels.
+    const bool reuse_on_ = !getenv("KF4_PC_SURFACE_REUSE") || strcmp(getenv("KF4_PC_SURFACE_REUSE"), "0") != 0;
+    // (colour surfaces let go: their images, and their multisampled images, for one of the same size made again)
+    struct SpareSurface {
+        ImageHandle image, ms;
+    };
+    std::vector<SpareSurface> spare_surfaces_;
     uint64_t counts_clears_ = 0;
     Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
     // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
@@ -4502,6 +4710,7 @@ private:
     const bool layer_z_plain_ = !getenv("KF4_PC_LAYER_Z_PLAIN") || strcmp(getenv("KF4_PC_LAYER_Z_PLAIN"), "0") != 0;
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
+    uint64_t counts_idle_depth_let_go_ = 0;
     Batch batch_;
     bool batch_open_ = false;
     CanvasCounts counts_;
@@ -4517,9 +4726,18 @@ private:
     const Buffer *walk_cluts_ = nullptr;    // (... and its CLUTs)
     const Kept *walk_table_ = nullptr;      // (... and the walk, when it has a table: its table and samplers)
     Runs runs_;                             // (... and its picture's runs)
+    // (the images the canvas that took this one's copies let go: copy_surfaces' next copies are made into them)
+    const std::shared_ptr<SpareImages<ImageHandle>> spares_ = std::make_shared<SpareImages<ImageHandle>>();
+    // KF4_PC_SPARES=0: every copy's images made new and let go, as before (to compare the GPU memory)
+    const bool spares_on_ = !getenv("KF4_PC_SPARES") || strcmp(getenv("KF4_PC_SPARES"), "0") != 0;
+    // (the copies of surfaces read as textures, used again: pcr_copy_pool.h. KF4_PC_COPY_POOL=0: each made new.)
+    CopyPool<ImageHandle> surface_copies_;
+    const bool copy_pool_on_ = !getenv("KF4_PC_COPY_POOL") || strcmp(getenv("KF4_PC_COPY_POOL"), "0") != 0;
     // KF4_PC_INDIRECT=0: a kept walk's batches a draw each, as before (to compare); off where the device has no
-    // multi-draw indirect or draw parameters; a native batch's in runs only where an indirect draw has a first instance
-    const bool runs_asked_ = !getenv("KF4_PC_INDIRECT") || strcmp(getenv("KF4_PC_INDIRECT"), "0") != 0;
+    // multi-draw indirect or draw parameters; a native batch's in runs only where an indirect draw has a first instance.
+    // Off on RADV unless asked for (KF4_PC_INDIRECT=1, plain, unblended: runs_hang_here)
+    const char *const runs_env_ = getenv("KF4_PC_INDIRECT");
+    const bool runs_asked_ = !runs_env_ || strcmp(runs_env_, "0") != 0;
     // KF4_PC_INDIRECT=plain: runs without the dual-source blend (a blend change ends a run: to compare)
     const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
     bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;
@@ -4562,15 +4780,17 @@ public:
                 "[stats] pc canvas: %llu primitives (%llu triangles) in %llu batches, %llu passes; %llu native batches in %llu "
                 "draw calls; textures %llu "
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
-                "from uploads; %llu uploads into surfaces, %llu copies between them; %llu Z buffers cleared by another "
-                "width's clear; %llu clears drawn as rectangles cleared\n",
+                "from uploads, %llu with images used again; %llu uploads into surfaces, %llu copies between them; %llu "
+                "textures' copies of surfaces in images used again; %llu Z buffers cleared by another width's clear; "
+                "%llu clears drawn as rectangles cleared\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
                 (unsigned long long)c.textures_from_surfaces, (unsigned long long)c.textures_missing,
                 (unsigned long long)counts_untextured_, (unsigned long long)c.surfaces_made,
-                (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.uploads_into_surfaces,
-                (unsigned long long)c.copies_between_surfaces, (unsigned long long)counts_depth_aliases_cleared_,
+                (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.surface_images_reused,
+                (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.copies_between_surfaces,
+                (unsigned long long)c.texture_copies_reused, (unsigned long long)counts_depth_aliases_cleared_,
                 (unsigned long long)counts_clears_);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
@@ -4607,6 +4827,18 @@ public:
                     (unsigned long long)counts_msaa_.resolves, (unsigned long long)counts_msaa_.rect_resolves,
                     (unsigned long long)counts_msaa_.expands, (unsigned long long)counts_msaa_.rect_expands,
                     (unsigned long long)counts_msaa_.vblanks_waited);
+        }
+        fprintf(out, "[stats] pc canvas: %llu depth surfaces let go, not drawn with for %llu vblanks\n",
+                (unsigned long long)counts_idle_depth_let_go_, (unsigned long long)IDLE_DEPTH_VBLANKS);
+        // (what the GPU memory of the surfaces is made of: each surface's place in the GS's memory and its images)
+        for (const auto *list : {&colour_, &depth_}) {
+            for (const auto &sf : *list) {
+                const ImageCreateInfo &info = sf->image->get_create_info();
+                fprintf(out, "[stats] pc canvas surface: %s, page %u, %u pixels wide (FBW %u), %u rows, PSM 0x%02X; image %ux%u, %u "
+                             "samples%s\n",
+                        sf->depth ? "depth" : "colour", sf->base_page, sf->width(), sf->fbw, sf->height, sf->psm, info.width,
+                        info.height, unsigned(info.samples), sf->ms ? ", and a multisampled image" : "");
+            }
         }
         warm_print_counts();
         fprintf(out,

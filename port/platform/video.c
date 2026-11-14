@@ -976,6 +976,26 @@ void port_video_present(void) {
 #endif
 }
 
+/* A black picture shown before the game has drawn anything (the wait for the pipelines made before play,
+   port/platform/kernel.c), so that the window has a picture to draw the overlay's "Building shaders" over */
+void port_video_show_blank(void) {
+#ifdef KF4_HAVE_SDL
+    uint32_t i;
+
+    if (window == NULL || shown == NULL) {
+        return;
+    }
+    PRESENT_LOCK();
+    shown_width = 640;
+    shown_height = 448;
+    for (i = 0; i < shown_width * shown_height; i++) {
+        shown[i] = 0xFF000000u;
+    }
+    draw_window(1, 0, 0, 1);
+    PRESENT_UNLOCK();
+#endif
+}
+
 #ifdef KF4_HAVE_SDL
 /* --frame-rate above 60: the pictures between two vblanks, each shown at its time. With the Vulkan
    presenter a thread of their own shows them, so that the game's own work between two vblanks (a few

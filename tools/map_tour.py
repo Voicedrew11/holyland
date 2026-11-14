@@ -3,7 +3,7 @@
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
                       [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc]
-                      [--extra "ARGS"] [--turn]
+                      [--extra "ARGS"] [--turn] [--keep-lists DIR]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
 game's card-load path (docs/port/README.md, "Quick saves"). This makes one for any map and any place:
@@ -535,6 +535,12 @@ def run_map(args, base, number, name, places, folder):
             out["vif_replay"] = {"same": int(m.group(1)), "differ": int(m.group(2)), "missing": int(m.group(3)),
                                  "extra": int(m.group(4))}
     shutil.rmtree(saves, ignore_errors=True)  # game state; made again each run
+    if args.keep_lists:
+        # the PC renderer's list of the pipelines it drew with (renderer state only: tools/pipeline_seed.py)
+        made = os.path.join(data_dir, "pc_pipeline_list.bin")
+        if os.path.isfile(made):
+            os.makedirs(args.keep_lists, exist_ok=True)
+            shutil.copyfile(made, os.path.join(args.keep_lists, "%03d.bin" % number))
     shutil.rmtree(data_dir, ignore_errors=True)
     return out
 
@@ -633,6 +639,8 @@ def main():
     parser.add_argument("--renderer", default="pc", choices=("gs", "pc"),
                         help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS)")
     parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --native-msaa 2\"")
+    parser.add_argument("--keep-lists", help="a folder for each map's pc_pipeline_list.bin (NNN.bin), the pipelines "
+                        "the PC renderer drew with (tools/pipeline_seed.py)")
     parser.add_argument("--turn", action="store_true", help="turn right all along (the views are then not the same "
                              "each tour, and the pictures between are drawn moving)")
     args = parser.parse_args()

@@ -360,6 +360,14 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
     file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
     list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
+    # (the pipeline seed, port/gs/pc/pipeline_seed.bin, as an array: cmake/pipeline_seed.cmake)
+    set(KF4_PIPELINE_SEED ${CMAKE_SOURCE_DIR}/port/gs/pc/pipeline_seed.bin)
+    add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp
+        COMMAND ${CMAKE_COMMAND} -DSEED=${KF4_PIPELINE_SEED} -DOUT=${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp
+                -P ${CMAKE_SOURCE_DIR}/cmake/pipeline_seed.cmake
+        DEPENDS ${KF4_PIPELINE_SEED} ${CMAKE_SOURCE_DIR}/cmake/pipeline_seed.cmake
+        COMMENT "The PC renderer's pipeline seed" VERBATIM)
+    list(APPEND KF4_PC_SOURCES ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp)
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
     target_include_directories(kf4_pc PRIVATE port/include port/gs/shared PUBLIC port/gs/pc)
     target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)
@@ -646,6 +654,39 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME pcr_late COMMAND pcr_late_test)
+endif()
+
+# The PC renderer's spare surface images (port/gs/pc/pcr_spares.h): which image a copy is made into, which are let go
+add_executable(pcr_spares_test tests/pcr_spares_test.cpp)
+target_include_directories(pcr_spares_test PRIVATE port/gs/pc)
+set_target_properties(pcr_spares_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_spares_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_spares COMMAND pcr_spares_test)
+endif()
+
+# The PC renderer's surface texture copies (port/gs/pc/pcr_copy_pool.h): which image a copy is made into, when cleared
+add_executable(pcr_copy_pool_test tests/pcr_copy_pool_test.cpp)
+target_include_directories(pcr_copy_pool_test PRIVATE port/gs/pc)
+set_target_properties(pcr_copy_pool_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_copy_pool_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_copy_pool COMMAND pcr_copy_pool_test)
+endif()
+
+# The flash recorder's ring size (port/platform/flash_ring.h): held to its most bytes at any frame rate
+add_executable(flash_ring_test tests/flash_ring_test.cpp)
+target_include_directories(flash_ring_test PRIVATE port/platform)
+set_target_properties(flash_ring_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(flash_ring_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME flash_ring COMMAND flash_ring_test)
 endif()
 
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing

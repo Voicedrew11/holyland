@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -42,6 +43,7 @@
 #include "pcr_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
+#include "pcr_pipelines.h"
 #include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
 #include "device.hpp"
@@ -282,88 +284,85 @@ constexpr int SCANOUT_SLOTS = 16;
 
 class ScanoutRing {
 public:
-    // (the PC renderer's thread) The slot the next picture is written into (-1: none), with an image of that size: made
-    // here when the slot has none of it (outside the lock: Granite's device lock, which the presenter holds while
-    // it releases a slot, comes before it)
-    int claim(Device &device, uint32_t width, uint32_t height) {
-        int slot;
+    // (the PC renderer's thread) The slot the next picture is written into. It has no picture until one of
+    // whole_image and scaled gives it one; with neither it is never taken.
+    int claim() {
+        std::lock_guard<std::mutex> hold(lock_);
+        int slot = (written_ + 1) % SCANOUT_SLOTS;
+        if (slot == taken_) {
+            slot = (slot + 1) % SCANOUT_SLOTS;
+        }
+        Slot &s = slots_[slot];
+        s.serial = 0; // (not to be taken while it is written)
+        s.scaled_valid = false;
+        s.whole_valid = false;
+        written_ = slot;
+        return slot;
+    }
+
+    // (the PC renderer's thread, between claim and publish) The slot's image for the picture whole, at the picture's
+    // own size: made here when the slot has none of that size (outside the lock: Granite's device lock, which the
+    // presenter holds while it releases a slot, comes before it). Null when it cannot be made.
+    // Only for a picture the window does not get at its own size (scaled): a slot holds one or the other, since at 4x
+    // the whole picture is 28 MB a slot that the presenter never read (PC_OPTIMIZATION.md, 2026-11-14).
+    const Image *whole_image(Device &device, int slot, uint32_t width, uint32_t height) {
         bool fresh;
         {
             std::lock_guard<std::mutex> hold(lock_);
-            slot = (written_ + 1) % SCANOUT_SLOTS;
-            if (slot == taken_) {
-                slot = (slot + 1) % SCANOUT_SLOTS;
-            }
-            Slot &s = slots_[slot];
-            s.serial = 0; // (not to be taken while it is written)
-            s.scaled_valid = false;
+            const Slot &s = slots_[slot];
             fresh = !s.image || s.width != width || s.height != height;
-            written_ = slot;
         }
-        if (!fresh) {
-            return slot;
+        ImageHandle made, old;
+        if (fresh) {
+            made = make_picture_image(device, width, height);
+            if (!made) {
+                fprintf(stderr, "[pcr] no image for a %ux%u scanout\n", width, height);
+                return nullptr;
+            }
         }
-        ImageHandle made = make_picture_image(device, width, height);
-        if (!made) {
-            fprintf(stderr, "[pcr] no image for a %ux%u scanout\n", width, height);
-            return -1; // (the slot keeps its serial 0: never taken)
-        }
-        ImageHandle old;
-        {
-            std::lock_guard<std::mutex> hold(lock_);
-            Slot &s = slots_[slot];
-            old = std::move(s.image); // (never the slot taken: passed over above)
+        std::lock_guard<std::mutex> hold(lock_);
+        Slot &s = slots_[slot];
+        if (fresh) {
+            old = std::move(s.image); // (never the slot taken: claim passed over it)
             s.image = std::move(made);
             s.width = width;
             s.height = height;
         }
-        return slot; // (old let go here, on this thread: Granite destroys it once the GPU is past it)
+        s.whole_valid = true;
+        return s.image.get(); // (old let go here, on this thread: Granite destroys it once the GPU is past it)
     }
 
-    const Image &image(int slot) {
-        std::lock_guard<std::mutex> hold(lock_);
-        return *slots_[slot].image;
-    }
-
-    // (the PC renderer's thread, between claim and publish) The slot's picture at the window's size, and with work the
-    // image the scaling writes before the sharpening: made here when the slot has none of that size (outside the lock,
-    // as claim's). Taken with the slot's picture once published. Both null when they cannot be made.
-    struct Scaled {
-        const Image *scaled = nullptr, *work = nullptr;
-    };
-    Scaled scaled(Device &device, int slot, uint32_t width, uint32_t height, bool work) {
-        bool fresh, fresh_work;
+    // (the PC renderer's thread, between claim and publish) The slot's picture at the window's size: made here when the
+    // slot has none of that size (outside the lock, as whole_image's). The slot's whole image is let go: the presenter
+    // is given this one. Null when it cannot be made.
+    const Image *scaled(Device &device, int slot, uint32_t width, uint32_t height) {
+        bool fresh;
         {
             std::lock_guard<std::mutex> hold(lock_);
             const Slot &s = slots_[slot];
             fresh = !s.scaled || s.scaled_width != width || s.scaled_height != height;
-            fresh_work = work && (fresh || !s.scaled_work);
         }
-        ImageHandle made, made_work, old, old_work;
+        ImageHandle made, old, old_whole;
         if (fresh) {
             made = make_picture_image(device, width, height);
-        }
-        if (fresh_work) {
-            made_work = make_picture_image(device, width, height);
-        }
-        if ((fresh && !made) || (fresh_work && !made_work)) {
-            fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", width, height);
-            return {};
+            if (!made) {
+                fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", width, height);
+                return nullptr;
+            }
         }
         std::lock_guard<std::mutex> hold(lock_);
         Slot &s = slots_[slot];
         if (fresh) {
             old = std::move(s.scaled);
-            old_work = std::move(s.scaled_work);
             s.scaled = std::move(made);
             s.scaled_width = width;
             s.scaled_height = height;
         }
-        if (fresh_work) {
-            s.scaled_work = std::move(made_work);
+        if (!s.whole_valid) {
+            old_whole = std::move(s.image); // (never the slot taken: claim passed over it)
         }
         s.scaled_valid = true;
-        return {s.scaled.get(), work ? s.scaled_work.get() : nullptr};
+        return s.scaled.get();
     }
 
     // (the PC renderer's thread) Once the commands writing the slot are on the queue: the presenter may take it
@@ -385,14 +384,11 @@ public:
                 pick = i;
             }
         }
-        if (pick < 0 || !slots_[pick].image || slots_[pick].serial == 0) {
+        if (pick < 0 || slots_[pick].serial == 0 || !(slots_[pick].whole_valid || slots_[pick].scaled_valid)) {
             return false;
         }
         const Slot &s = slots_[pick];
         out = {};
-        out.image = uint64_t(s.image->get_image());
-        out.width = s.width;
-        out.height = s.height;
         out.serial = s.serial;
         out.tag = s.tag;
         if (s.scaled_valid) {
@@ -400,6 +396,10 @@ public:
             out.scaled_width = s.scaled_width;
             out.scaled_height = s.scaled_height;
         }
+        // (a slot with the scaled picture alone: that is its picture too, for a window whose size has changed since)
+        out.image = s.whole_valid ? uint64_t(s.image->get_image()) : out.scaled;
+        out.width = s.whole_valid ? s.width : s.scaled_width;
+        out.height = s.whole_valid ? s.height : s.scaled_height;
         taken_ = pick;
         return true;
     }
@@ -432,9 +432,10 @@ private:
     struct Slot {
         ImageHandle image;
         uint32_t width = 0, height = 0;
-        ImageHandle scaled, scaled_work; // (scaled: the picture at the window's size; work: before the sharpening)
+        ImageHandle scaled; // (the picture at the window's size)
         uint32_t scaled_width = 0, scaled_height = 0;
         bool scaled_valid = false; // (scaled is this picture's)
+        bool whole_valid = false;  // (image is this picture's)
         uint64_t serial = 0; // 0: none published in it (or it is being written)
         uint64_t tag = 0;
     };
@@ -649,8 +650,10 @@ public:
         }
         drop_stretch();
         frame_taken_at_ = vblanks_;
-        const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0, frame->kicks};
+        const pcr::FrameTargets targets = {frame->draw_fbp,       frame->shown_fbp,
+                                           frame->uploads_asked_again != 0, frame->shown_kept != 0,
+                                           frame->kicks,          frame_copies_ ? frame->frame_copies : 0,
+                                           frame->copies_between};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -778,6 +781,8 @@ public:
         pump_on_ = pump_wanted();
         const char *own = getenv("KF4_PC_LIVE_WALK");
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
+        const char *copies = getenv("KF4_PC_FRAME_COPIES");
+        frame_copies_ = !(copies && strcmp(copies, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -1009,6 +1014,9 @@ private:
     uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
     std::optional<Stretch> last_stretch_;
     bool own_walks_ = true;
+    // KF4_PC_FRAME_COPIES (0: a frame that copies the buffer drawn walks its pictures, as before; else its own walk
+    // makes the copies the stream makes, from the buffer shown: pcr_frame_walk.h's frame_copy_in_picture)
+    bool frame_copies_ = true;
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
@@ -1199,11 +1207,17 @@ public:
         port_profile_picture(); // (a picture drawn: the profiler's GPU time a picture divides by these)
         const Image *scaled = nullptr;
         if (want & GSN_WANT_IMAGE) {
-            m.slot = scanout_.claim(device_, picture_->get_width(), picture_->get_height());
-            if (m.slot >= 0) {
-                copy_to_scanout(*cmd, scanout_.image(m.slot));
+            // (the slot holds the picture at the window's size when the presenter asks for that, else the picture whole)
+            int slot = scanout_.claim();
+            scaled = scale_for_window(*cmd, slot, times);
+            const Image *whole = scaled ? nullptr
+                                        : scanout_.whole_image(device_, slot, picture_->get_width(), picture_->get_height());
+            if (whole) {
+                copy_to_scanout(*cmd, *whole);
+            }
+            if (scaled || whole) {
+                m.slot = slot;
                 m.ok |= GSN_WANT_IMAGE;
-                scaled = scale_for_window(*cmd, m.slot, times);
             }
         }
         if (frame && ((want & GSN_WANT_PIXELS) || present_pixels)) {
@@ -1287,14 +1301,23 @@ private:
             return nullptr;
         }
         float sharpen = float(settings().present_sharpen.load(std::memory_order_relaxed)) / 1000.0f;
-        ScanoutRing::Scaled images = scanout_.scaled(device_, slot, w, h, sharpen > 0);
-        if (!images.scaled) {
+        // (the image the scaling writes before the sharpening: one for every slot, written and read within a picture's
+        // commands)
+        if (sharpen > 0 && (!scaled_work_ || scaled_work_->get_width() != w || scaled_work_->get_height() != h)) {
+            scaled_work_ = ScanoutRing::make_picture_image(device_, w, h);
+            if (!scaled_work_) {
+                fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", w, h);
+                return nullptr;
+            }
+        }
+        const Image *scaled = scanout_.scaled(device_, slot, w, h);
+        if (!scaled) {
             return nullptr;
         }
         times.begin(cmd, pcr::GpuWork::present);
-        scaler_.scale(cmd, *picture_, *images.scaled, images.work, sharpen);
+        scaler_.scale(cmd, *picture_, *scaled, sharpen > 0 ? scaled_work_.get() : nullptr, sharpen);
         times.begin(cmd, pcr::GpuWork::picture);
-        return images.scaled;
+        return scaled;
     }
 
     // The picture into a slot of the scanout ring, after whatever the presenter submitted before (it reads the
@@ -1375,6 +1398,7 @@ private:
     const ClearColour &clear_;
     PresentScaler scaler_;
     ImageHandle picture_;
+    ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
     BufferHandle readback_;
     std::vector<uint32_t> presented_pixels_;
     PortGsFrame presented_ = {0, 0, nullptr};
@@ -1471,16 +1495,19 @@ public:
         pcr::BetweenCounts b = between_->counts();
         pcr::CanvasCounts c = canvas_->counts();
         fprintf(stderr,
-                "[stats] pc pump: %llu frames (%llu surfaces copied for them), %llu pictures between drawn again "
+                "[stats] pc pump: %llu frames (%llu surfaces copied for them, %llu images of theirs spares), %llu pictures between drawn again "
                 "(%llu not of its frame), %llu pictures showing them, %llu left out as too late and %llu not shown as made "
                 "too late (%.2f ms a picture at the end); its canvas: %llu batches, %llu native draw calls, %llu "
-                "passes, %llu surfaces made, %llu uploads into surfaces; kept walks' textured batches %llu, %llu from "
+                "passes, %llu surfaces made (%llu of them with images used again), %llu uploads into surfaces, %llu "
+                "textures' copies of surfaces in images used again; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
+                (unsigned long long)intake.surface_copies_into_spares,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
                 (unsigned long long)left_out_, (unsigned long long)late_, cost_.mean_s() * 1e3,
                 (unsigned long long)c.batches, (unsigned long long)c.native_draw_calls, (unsigned long long)c.passes,
-                (unsigned long long)c.surfaces_made, (unsigned long long)c.uploads_into_surfaces,
+                (unsigned long long)c.surfaces_made, (unsigned long long)c.surface_images_reused,
+                (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.texture_copies_reused,
                 (unsigned long long)c.walk_texture_draws, (unsigned long long)c.table_draws,
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws);
     }
@@ -1640,6 +1667,8 @@ private:
 };
 
 // ---- The renderer ------------------------------------------------------------------------------------
+std::string &pipeline_cache_path_before_open(); // (below)
+
 class Renderer {
 public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
@@ -1657,6 +1686,11 @@ public:
         device_->set_context(*context_);
         // a frame context a picture: with four, the thread waits at a picture for the GPU's work of four before
         device_->init_frame_contexts(4);
+        // the pipelines kept between runs (pcr_pipelines.h): before anything draws, so that every pipeline is made
+        // through the cache
+        if (!pipeline_cache_path_before_open().empty()) {
+            pcr::store_open(*device_, pipeline_cache_path_before_open().c_str());
+        }
         const VkPhysicalDeviceProperties &props = device_->get_gpu_properties();
         gpu_kind_ = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GSN_GPU_DISCRETE
                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GSN_GPU_INTEGRATED
@@ -2184,6 +2218,12 @@ std::unique_ptr<Renderer> &renderer() {
 }
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
+
+// pcr_pipeline_cache's path, before pcr_open
+std::string &pipeline_cache_path_before_open() {
+    static std::string path;
+    return path;
+}
 Settings settings_before_open; // (the setters called before pcr_open: taken by it)
 
 Settings &settings() {
@@ -2206,7 +2246,10 @@ extern "C" int pcr_open(void *shared_context) {
         return 0;
     }
     renderer() = std::move(made);
-    atexit([] { renderer()->stop(); });
+    atexit([] {
+        renderer()->stop();
+        pcr::store_close();
+    });
     return 1;
 }
 
@@ -2360,17 +2403,27 @@ extern "C" void pcr_set_native_draw(int mode) {
     settings().native_draw.store(mode == GSN_NATIVE_DRAW_PS2 ? GSN_NATIVE_DRAW_PS2 : GSN_NATIVE_DRAW_NATIVE);
 }
 
+// (before pcr_open) Where the pipelines are kept between runs (pcr_pipelines.h); after it, too late: nothing
 extern "C" void pcr_pipeline_cache(const char *path) {
-    (void)path; // (no pipelines yet)
+    if (!renderer() && path) {
+        pipeline_cache_path_before_open() = path;
+    }
 }
 
+// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
+// settings now
+extern "C" void pcr_precompile(void) {
+    pcr::precompile(uint32_t(settings().msaa.load()), settings().colour.load() == GSN_COLOUR_HIGH);
+}
+
+// The game waits while they are made (port/platform/kernel.c)
 extern "C" int pcr_pipelines_running(void) {
-    return 0;
+    return pcr::precompile_running() ? 1 : 0;
 }
 
+// "Building shaders... done/total" (the overlay)
 extern "C" int pcr_pipelines_building(int *done, int *total) {
-    *done = *total = 0;
-    return 0;
+    return pcr::precompile_progress(done, total) ? 1 : 0;
 }
 
 

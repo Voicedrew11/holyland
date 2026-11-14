@@ -34,6 +34,32 @@ the batch programs' `PCR_RECORDS` variants (`pcr_*_rec` in `pcr_shaders.h`: the 
 their colour factors from the shader (dual-source, `pcr_prim.h`'s `o_factor`), so native 280's two blends do not end
 runs. `KF4_PC_INDIRECT=0` draws a batch at a time; `=plain` keeps runs but not the dual-source blend.
 
+**2026-11-13: the runs off on RADV.** With the runs the GPU hung on RADV (Mesa 26.2.3, RX 9070 XT): `ring gfx_0.0.0
+timeout`, then a reset of the whole card, within a minute at 009 at a simulated 240 Hz in 4 of 6 runs (3 of 5 the
+session before); none in 8 runs without them, which also held 238 pictures in every second where the runs fell to 145
+and 210. It needs `vkCmdDrawIndirect` itself: the same runs, records and programs drawn a `vkCmdDraw` each did not hang
+in 5 runs; GIF batches' runs alone hung; so did the runs' buffer in host memory, and the buffers kept for 512 pictures.
+`RADV_DEBUG=hang` slows the game until no picture between is drawn, so it showed nothing. Cause not found: the driver
+or what is under it is suspected. `Canvas::Impl::runs_hang_here` keeps the runs off there; `KF4_PC_INDIRECT=1` turns
+them on (expect the hang).
+
+**The same day, 20:33: not the whole cause.** With the runs off the owner's real play still hung the card (thread
+kf4-pc), 9 minutes in, 3 minutes after native draw's kinds were turned from all off to all on in the overlay: a real
+window, the frame rate unlocked with a cap of 500, vsync off. The runs off made only the short headless runs at a
+simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
+before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
+
+**2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
+frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
+The pump's canvas now hands the images it lets go back, and the next copies are made into them
+(`KF4_PC_SPARES=0`: as before). The game's own GPU memory at 009 with those settings (amdgpu fdinfo, each 0.25 s): its
+most 4.4 to 4.9 GB before, 4.1 to 4.3 GB now; its median up from 3.2-3.4 to 3.7-3.8 GB, since the third set of images
+is now held, not made and let go. What it is made of: a set of surfaces is about 700 MB there (the frame buffers'
+surface 3840x3712 at 16 bits a channel with its two-sample image, 342 MB; two depth surfaces of that size with two
+samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the spare); without the pump the game
+holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
+draws on).
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)
@@ -132,6 +158,42 @@ a vblank, and the overlay offers them again (Display, Picture). Built the GPU's 
   009 at 240: 42 pipelines in 1.2 s on that thread, 57 vblanks at the old count, no draw waiting). Only what was drawn
   is known: a run started with MSAA makes its first pipelines as at 1x (the PC renderer has no pipeline list yet).
   `KF4_PC_WARM_LOG=1` names each pipeline made.
+- **Pipelines kept between runs** (`pcr_pipelines.cpp`, "Between runs"; 2026-11-14). Granite's Vulkan pipeline cache
+  was never made (it reads and writes one only through Granite's file system, which paraLLEl-GS's build leaves out), so
+  every run compiled every pipeline again at the draw that first needed it: 5-7 of 0.25-1 s each from the title to
+  009 (3.6 s in all; 5.1 s at MSAA 2 to 099), the picture standing still each time. Now the cache is kept in the data
+  folder (`pc_pipelines.bin`: read before anything draws, written again every ten seconds when new pipelines were made
+  and at the end; only read when its header names this GPU, driver and Vulkan version, and Granite's own check of its
+  UUID and hash passes; never read past 256 MB), with the list of the canvas's pipelines drawn with
+  (`pc_pipeline_list.bin`: each by the canvas's program index, its state and its attachments' formats and samples, so
+  it holds across builds whose shaders changed, where the cache does not; 4096 at most). As the canvas's programs are
+  made the list's pipelines are made on up to four threads, through the cache, in the order first drawn; nothing
+  waits for them (a draw that wants one not made yet makes it, as before), and those made are kept for a change of
+  MSAA's samples as drawn ones are. Plain Vulkan (a `VkPipelineCache`), no extension: the same on every GPU.
+  `KF4_PC_PIPELINE_CACHE=0`: neither file (as before); `KF4_PC_WARM_AHEAD=0`: the list not made ahead;
+  `KF4_PC_PIPELINE_LOG=1`: what was read. Measured in PERFORMANCE.md, "Built 2026-11-14".
+- **Pipelines made before play** (`pcr_pipelines.cpp`, "Made before play"; 2026-11-14). The list holds only what the
+  data folder drew, so a first start, or the first after a driver update or a new GPU (the cache refused), still
+  stood still at each new pipeline. Now the repository carries a seed, `port/gs/pc/pipeline_seed.bin` (made by
+  `tools/pipeline_seed.py`: a map tour of every map and `motion_compare.py`'s cases, at 1x and at MSAA 4 with the
+  cut-outs shaded a sample at a time, the native draws on and off, `--frame-rate 240`; the cases with colour high;
+  344 records, 202 KB), compiled into the program
+  (`cmake/pipeline_seed.cmake`). Each record is what the list keeps: the canvas's program by index, Granite's pipeline
+  state, the attachments' formats and samples; renderer state, none of the game's data. It is drawn with
+  `KF4_PC_DYNAMIC=0`, so that every state a draw had is a record of its own; the device's dynamic state is put in as
+  the seed is read, and records that then differ only in dynamic state are one pipeline (Granite's hash). So one
+  seed serves every GPU: the depth format (D32S8 or D24S8), colour high's 16-bit format and MSAA's count (2, 4 or 8:
+  the records of the MSAA runs) are put in too. Settings that change no pipeline (scale, anisotropy, draw distance,
+  sky, layer Z, frame rate) need nothing. The canvas's programs listed are its 21 batch and DATE programs, the expand pass and (22nd,
+  added last so that the others keep their index) colour high's narrowed scanout; with colour high a record's 8-bit
+  target is made at both 16 and 8 bits. Known gap: with colour high one pass of the narrowed scanout still compiles at
+  its first draw (5 ms here): its target is not an attachment like the records' (`images_for`'s General layout). At every start, once gs.c has set the settings and the canvas has made its
+  programs, the seed's records for those settings and the list's are made on every core but one, through the cache;
+  the game waits at its first vblank, the window black with "Preparing shaders... N%" (the overlay). With the cache
+  good they are cache hits, a fraction of a second. A pipeline that fails to make is left out (its draw makes it, or
+  fails, as before). A change of MSAA in play makes every pipeline kept again at the new count (now on half
+  the cores) before the canvas draws at it, as before. `KF4_PC_PRECOMPILE=0`: nothing made before play (the list
+  made ahead while the game runs, as before). Measured in PERFORMANCE.md, "Built 2026-11-14 (2)".
 - **Granite** hashed a render pass by its formats, not its samples: a multisampled pass was given the single-sampled
   one of the same formats. `cmake/granite_msaa.cmake` adds the samples.
 
@@ -681,10 +743,13 @@ top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target
   `pass_draw_test` puts each pass and the game's own packets for it (written out from game.c and gs_draw.c) through
   the front end: the same register file after, the same pixels with the same colour and texel; and checks the moves.
 - **The cost.** A pass that moves in a picture between (a fade, a fill whose alpha ramps, the wobble under water, the
-  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again, and the frame's own walk is not
-  made its pictures' (counted as "trail paired"). At 009's start after the teleport, 343 of 972 frames (the fill of
-  the fade-in). Moving them on the GPU from a record of the pass (as the native GS's `nd_pass.vert` did) would take
-  that away; not done.
+  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again. Since 2026-11-13 the frame's
+  own walk kept draws such a pass at the frame's time with its kicks numbered (`walk_pass_by_kicks`,
+  `pass_stream_moves`), each with the FLAT move gif_moves.h makes on the GPU (a colour, a place, a texel t of the way:
+  the same sums as pass_draw.cpp's), as the weapon's trail is: the frame's own walk is its pictures' and the pump
+  draws them. Not the frame shown before blended in (it reads the frame shown kept, between marks the frame's walk
+  does not have): that frame still refuses ("trail paired"). `KF4_PC_PASS_KICKS=0` restores the refusal for all.
+  Before, 343 of 972 frames at 009's start (the fade-in's fill) and every frame under water refused.
 
 Checked (1x unless said; on = `--native-draw on`, off = the same kinds but `water` and `passes`, so the packets):
 - **The four spots** (000, 009, 009:2, and 099 for "063", which the teleport reads as map 63, a map with no places;
@@ -1042,15 +1107,18 @@ the frame's own walk, kept, can be made the stream's walk by those rules, and th
   Stretches are kept only while frames are taken (none at 30, in the menus).
 - **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
   it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
-  the frame shown is kept. A stretch whose bytes are not the frame's, or whose kicks are not its count, is not it.
+  the frame shown is kept, and its copies of the frame (from the buffer drawn into another) with the stream's choice
+  for each (frame_interp.c's COPY_BETWEEN: made again from the picture's frame; else left out). A stretch whose bytes
+  are not the frame's, or whose kicks are not its count, is not it.
 - **The rules** (`pcr_frame_walk.h`, plain functions, `pcr_frame_walk_test`): a draw's FRAME and TEX0 moved to the
   buffer shown; an upload into anything but the buffer drawn asked for again (its chunk the frame's), a read-back and
-  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5. Refused
-  (the frame walks its stream, counted): a copy from or into the buffer drawn, an upload into it, a draw textured from
-  it other than from its surface's pixels (a full-screen pass that reads the frame it draws: looked up again in the
-  buffer shown, as the stream has it), a trail its pictures move on the CPU, a native batch without its picture's
-  record, a mark or upload asked again of a picture's. The stream's own choices for those (frame_interp.c's table of
-  copies) are not handed over: none was met at the four spots.
+  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5; a copy
+  of the frame made again from the buffer shown or left out, as the stream chose (2026-11-13: under water the wobble
+  reads a copy of the frame at 0x2BC0, every frame). Refused (the frame walks its stream, counted): a copy into the
+  buffer drawn, an upload into it, a draw textured from it other than from its surface's pixels (a full-screen pass
+  that reads the frame it draws: looked up again in the buffer shown, as the stream has it), a trail or pass its
+  pictures move on the CPU, a native batch without its picture's record, a mark or upload asked again of a
+  picture's.
 - **`Canvas::as_picture_walk`** makes the kept walk from the stretch's: the batches' FRAME and TEX0 moved, a GIF
   batch's numbered corners moved (`Batch::numbered`: the corners name their kicks in the stretch, which nothing moves
   outside a picture), a native batch's runs drawn by their pictures' records, the uploads as uploads asked again, 0xF0
