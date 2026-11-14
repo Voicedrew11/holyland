@@ -648,6 +648,39 @@ if(KF4_TESTS)
     add_test(NAME pcr_late COMMAND pcr_late_test)
 endif()
 
+# The PC renderer's spare surface images (port/gs/pc/pcr_spares.h): which image a copy is made into, which are let go
+add_executable(pcr_spares_test tests/pcr_spares_test.cpp)
+target_include_directories(pcr_spares_test PRIVATE port/gs/pc)
+set_target_properties(pcr_spares_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_spares_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_spares COMMAND pcr_spares_test)
+endif()
+
+# The PC renderer's surface texture copies (port/gs/pc/pcr_copy_pool.h): which image a copy is made into, when cleared
+add_executable(pcr_copy_pool_test tests/pcr_copy_pool_test.cpp)
+target_include_directories(pcr_copy_pool_test PRIVATE port/gs/pc)
+set_target_properties(pcr_copy_pool_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_copy_pool_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_copy_pool COMMAND pcr_copy_pool_test)
+endif()
+
+# The flash recorder's ring size (port/platform/flash_ring.h): held to its most bytes at any frame rate
+add_executable(flash_ring_test tests/flash_ring_test.cpp)
+target_include_directories(flash_ring_test PRIVATE port/platform)
+set_target_properties(flash_ring_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(flash_ring_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME flash_ring COMMAND flash_ring_test)
+endif()
+
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
 add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
 target_include_directories(kf4_pc_gif PUBLIC port/gs/pc PRIVATE port/include)

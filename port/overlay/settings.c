@@ -259,7 +259,10 @@ void port_settings_load(void) {
     FILE *file;
 
 #ifdef KF4_HAVE_SDL
-    active = (!port_options.headless && port_options.input == NULL) || getenv("KF4_OVERLAY_SHOT") != NULL;
+    /* KF4_READ_SETTINGS=1: a run with a pad script reads settings.json too, in its window on the screen (tests of
+       speed and GPU memory as the owner plays; CLAUDE.md, "Testing graphics") */
+    active = (!port_options.headless && port_options.input == NULL) || getenv("KF4_OVERLAY_SHOT") != NULL ||
+             (!port_options.headless && getenv("KF4_READ_SETTINGS") != NULL);
 #endif
     if (!active) {
         return;
