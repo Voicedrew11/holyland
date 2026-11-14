@@ -4206,7 +4206,7 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[21];
+        WarmProgram warmed[22];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
@@ -4216,12 +4216,13 @@ private:
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
         }
+        warmed[21] = {narrow_program_, nullptr}; // (colour high's scanout: added last, the others' indices kept)
         WarmDevice traits;
         traits.depth_format = depth_format_;
         traits.dynamic_ds = dynamic_.ds;
         traits.dynamic_blend = dynamic_.blend;
         traits.high_colour = high_colour_ok();
-        warm_watch(device_, warmed, 21, expand_program_, traits);
+        warm_watch(device_, warmed, 22, expand_program_, traits);
     }
 
     Device &device_;

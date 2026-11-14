@@ -694,16 +694,19 @@ std::vector<Record> seed_for(uint32_t samples, bool high) {
         if (samples > 1 && e.run_samples > 1 && r.samples == e.run_samples) {
             r.samples = samples;
         }
-        if (r.colours && is_colour_format(r.colour_format)) {
-            r.colour_format = colour;
-        }
         if (r.depth && is_depth_format(r.depth_format) && t.depth_format != VK_FORMAT_UNDEFINED) {
             r.depth_format = t.depth_format;
         }
         r.static_state.state.dynamic_ds = t.dynamic_ds ? 1 : 0;
         r.static_state.state.dynamic_blend = t.dynamic_ds && t.dynamic_blend ? 1 : 0;
-        if (keys.insert(record_key(r)).second) {
-            out.push_back(r);
+        // (the colour surfaces' format; with colour high also as drawn, 8 bits: some targets stay 8-bit)
+        for (int pass = 0; pass < (colour == VK_FORMAT_R8G8B8A8_UNORM ? 1 : 2); pass++) {
+            if (r.colours && is_colour_format(r.colour_format)) {
+                r.colour_format = pass == 0 ? colour : VK_FORMAT_R8G8B8A8_UNORM;
+            }
+            if (keys.insert(record_key(r)).second) {
+                out.push_back(r);
+            }
         }
     }
     return out;
@@ -748,6 +751,7 @@ void warm_watch(Device &device, const WarmProgram *programs, uint32_t count, Pro
     }
     if (extra) {
         warm.extra = extra;
+        warm.programs[extra] = {extra, nullptr}; // (kept and listed as the others are)
         warm.roles[EXTRA_ROLE] = {extra, nullptr};
         warm.role_of[extra] = {EXTRA_ROLE, false};
     }

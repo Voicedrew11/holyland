@@ -16,7 +16,8 @@ between and their runs):
 each run's pc_pipeline_list.bin kept in DIR/<profile>/. Then every list is merged into the seed: each record with
 the MSAA samples of its run (1, or the profile's), the same ones once, in a fixed order.
 
-Colour high is not toured: it changes only the colour surfaces' format, which the renderer puts in. The records
+Colour high is only run through the cases (profiles high, highmsaa): it changes the colour surfaces' format, which
+the renderer puts in, and adds its own full-screen passes (the scanout narrowed to 8 bits), drawn the same anywhere. The records
 are the renderer's state only (programs by the canvas's index, Granite's pipeline state, attachment formats):
 none of the game's data, so the seed may be in the repository. A record's layout is Granite's: when Granite's
 pipeline state changes, the seed's header no longer matches and it is not used ("[pcr] the pipeline seed is not of
@@ -40,7 +41,11 @@ PROFILES = {
     "msaa": (4, ["--native-msaa", "4", "--native-cutout-aa", "ssaa"]),
     "ps2": (1, ["--native-draw", "off"]),
     "ps2msaa": (4, ["--native-draw", "off", "--native-msaa", "4", "--native-cutout-aa", "ssaa"]),
+    # colour high: only its own passes (the scanout narrowed to 8 bits, the expand at 16): the cases suffice
+    "high": (1, ["--native-colour", "high"]),
+    "highmsaa": (4, ["--native-colour", "high", "--native-msaa", "4", "--native-cutout-aa", "ssaa"]),
 }
+NO_TOUR = {"high", "highmsaa"}
 COMMON = ["--frame-rate", "240"]
 
 LIST_MAGIC = b"KF4PCPL1"
@@ -175,7 +180,7 @@ def main():
             sys.exit("pipeline_seed: pass --disc or set KF4_DISC")
         for name in a.profiles:
             opts = PROFILES[name][1]
-            if not a.no_tour:
+            if not a.no_tour and name not in NO_TOUR:
                 tour(a, name, opts)
             if not a.no_cases:
                 cases(a, name, opts)
