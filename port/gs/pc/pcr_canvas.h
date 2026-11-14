@@ -106,6 +106,9 @@ struct NativeBatch {
 // in order, every image and buffer they use held, and what it read of the texture store from before it
 class KeptWalk;
 
+// (pcr_hang_notes.h)
+class HangNotes;
+
 // A canvas's surfaces as they were (Canvas::copy_surfaces): each colour and depth surface's image copied on the GPU, the
 // frame shown kept (0xF2), and the scale; for a canvas on another thread to draw on from there (Canvas::start_from)
 class SurfaceCopies;
@@ -120,6 +123,10 @@ public:
     ~Canvas();
     Canvas(const Canvas &) = delete;
     Canvas &operator=(const Canvas &) = delete;
+
+    // Each submit leaves a note of what it held, and each wait for the GPU says so (pcr_hang_notes.h). who: the
+    // canvas's thread, a name that outlives the canvas. notes outlive the canvas.
+    void watch_hangs(HangNotes &notes, const char *who);
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
     void set_scale(uint32_t x_scale, uint32_t y_scale);

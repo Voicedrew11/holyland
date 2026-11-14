@@ -38,6 +38,7 @@
 #include "pcr_between.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
+#include "pcr_hang_watch.h"
 #include "pcr_native.h"
 #include "pcr_census.h"
 #include "pcr_gif.h"
@@ -630,9 +631,10 @@ bool pump_wanted() {
 class Intake final : public pcr::GifEvents {
 public:
     // (on the thread, once the device is there)
-    void attach(Device &device) {
+    void attach(Device &device, pcr::HangNotes &hang_notes) {
         times_ = std::make_unique<pcr::GpuTimes>(device);
         canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
+        canvas_->watch_hangs(hang_notes, "kf4-pc");
         natives_ = std::make_unique<pcr::NativeDraws>(device);
         between_ = std::make_unique<pcr::Between>(device);
     }
@@ -1183,8 +1185,11 @@ int not_shown_when_late(MadePicture &made, const GsnInterpPicture &between) {
 // ring has it, GSN_WANT_PIXELS when frame has it, and with GSN_PRESENT to the presenter once it is there
 class PictureOut {
 public:
-    PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear)
-        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device) {}
+    // hang_notes: its submits' notes and waits (pcr_hang_notes.h); who: its thread, a name that outlives this
+    PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
+               pcr::HangNotes &hang_notes, const char *who)
+        : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device),
+          hang_notes_(hang_notes), who_(who) {}
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
@@ -1281,6 +1286,7 @@ private:
     // until the next frame context, which only kf4-pc moves on (the pump's pictures would be shown before they are
     // drawn, and drawn up to a vblank late)
     void submit_now(CommandBufferHandle &cmd) {
+        hang_notes_.submitted(who_, "a picture", pcr::hang_clock_s());
         device_.submit(cmd);
         device_.flush_frame();
     }
@@ -1379,8 +1385,12 @@ private:
                      VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times.end(*cmd);
+        hang_notes_.submitted(who_, "a picture read back", pcr::hang_clock_s());
         device_.submit(cmd, &fence);
-        fence->wait();
+        {
+            pcr::GpuWait wait(&hang_notes_, "a picture's read-back fence", pcr::hang_clock_s());
+            fence->wait();
+        }
         if (&frame == &presented_ && presented_pixels_.size() < size_t(width) * height) {
             presented_pixels_.resize(size_t(width) * height);
             presented_.rgba = presented_pixels_.data();
@@ -1420,6 +1430,8 @@ private:
     Stats &stats_;
     const ClearColour &clear_;
     PresentScaler scaler_;
+    pcr::HangNotes &hang_notes_;
+    const char *who_;
     ImageHandle picture_;
     ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
     BufferHandle readback_;
@@ -1449,8 +1461,9 @@ using PumpMessage = std::variant<PumpFrame, InterpPicture, PumpPicture, MadePict
 class Pump {
 public:
     Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
-         Inbox &inbox, SharedTurnLead &turn_lead)
-        : device_(device), inbox_(inbox), turn_lead_(turn_lead), out_(device, scanout, presenter, stats, clear) {}
+         Inbox &inbox, SharedTurnLead &turn_lead, pcr::HangNotes &hang_notes)
+        : device_(device), inbox_(inbox), turn_lead_(turn_lead), hang_notes_(hang_notes),
+          out_(device, scanout, presenter, stats, clear, hang_notes, "kf4-pc-pump") {}
 
     ~Pump() {
         stop();
@@ -1546,6 +1559,7 @@ private:
 #endif
         times_ = std::make_unique<pcr::GpuTimes>(device_);
         canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
+        canvas_->watch_hangs(hang_notes_, "kf4-pc-pump");
         between_ = std::make_unique<pcr::Between>(device_);
         while (std::optional<PumpMessage> message = take()) {
             std::visit([this](auto &m) { work(m); }, *message);
@@ -1672,6 +1686,7 @@ private:
     Device &device_;
     Inbox &inbox_;
     SharedTurnLead &turn_lead_;
+    pcr::HangNotes &hang_notes_;
     PictureOut out_;
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
@@ -1695,7 +1710,8 @@ private:
 class Renderer {
 public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
-    bool open(bool present_wanted) {
+    // hang_folder: where a GPU hang's report goes (pcr_hang_reports_in)
+    bool open(bool present_wanted, const std::string &hang_folder) {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[pcr] no Vulkan loader\n");
             return false;
@@ -1715,9 +1731,14 @@ public:
                                                                                  : GSN_GPU_OTHER;
         msaa_samples_have_ = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
                              props.limits.sampledImageDepthSampleCounts;
-        out_.emplace(*device_, scanout_, presenter_, stats, clear_);
+        out_.emplace(*device_, scanout_, presenter_, stats, clear_, hang_notes_, "kf4-pc");
+        const char *watch = getenv("KF4_PC_HANG_WATCH");
+        if (!(watch && strcmp(watch, "0") == 0)) {
+            hang_watch_ = std::make_unique<pcr::HangWatch>(hang_notes_, hang_folder, pcr::HANG_SECONDS);
+        }
         if (pump_wanted()) {
-            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_);
+            pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_,
+                                           hang_notes_);
             pump_->start();
             const char *direct = getenv("KF4_PC_DIRECT");
             direct_on_ = !(direct && strcmp(direct, "0") == 0);
@@ -2019,7 +2040,7 @@ private:
     // (the PC renderer's thread, "kf4-pc") The messages, in the order sent, until the program ends
     void run() {
         Util::register_thread_index(0); // (Granite's command pools: this thread's)
-        intake_.attach(*device_);
+        intake_.attach(*device_, hang_notes_);
 #ifdef __linux__
         pthread_setname_np(pthread_self(), "kf4-pc");
 #endif
@@ -2103,9 +2124,15 @@ private:
         }
         last_between_ = {}; // (shown by this picture, or not one's: not again)
         if (made.drawn) {
-            device_->next_frame_context();
+            next_frame_context();
         }
         hand_out_in_order(made);
+    }
+
+    // (kf4-pc) Granite's frame context moved on: waits for the GPU's work of the context it comes round to
+    void next_frame_context() {
+        pcr::GpuWait wait(&hang_notes_, "kf4-pc's next_frame_context", pcr::hang_clock_s());
+        device_->next_frame_context();
     }
 
     // (kf4-pc) A picture the pump drew: a frame context moved on for it (above), now when that waits for nobody's open
@@ -2116,13 +2143,13 @@ private:
         if (!try_contexts_ || !port_interp_behind_lately()) {
             // (and those owed paid when that waits for nobody: kept up, as before the owing)
             pay_frame_contexts();
-            device_->next_frame_context();
+            next_frame_context();
             return;
         }
         contexts_owed_++;
         pay_frame_contexts();
         if (contexts_owed_ > FRAME_CONTEXTS_OWED_MOST) {
-            device_->next_frame_context();
+            next_frame_context();
             contexts_owed_--;
         } else if (contexts_owed_ > 0) {
             device_->flush_frame();
@@ -2193,6 +2220,8 @@ public:
 
 private:
     bool present_wanted_ = false;
+    pcr::HangNotes hang_notes_; // (before everything that leaves notes, and the watch)
+    std::unique_ptr<pcr::HangWatch> hang_watch_; // (nullptr: KF4_PC_HANG_WATCH=0)
     std::unique_ptr<Context> context_; // (before the device: destroyed after it)
     std::unique_ptr<Device> device_;
     int gpu_kind_ = GSN_GPU_OTHER;
@@ -2236,6 +2265,7 @@ std::unique_ptr<Renderer> &renderer() {
 }
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
+std::string hang_folder_asked; // pcr_hang_reports_in, likewise
 Settings settings_before_open; // (the setters called before pcr_open: taken by it)
 
 Settings &settings() {
@@ -2254,7 +2284,7 @@ extern "C" int pcr_open(void *shared_context) {
         return 1;
     }
     auto made = std::make_unique<Renderer>();
-    if (!made->open(present_asked)) {
+    if (!made->open(present_asked, hang_folder_asked)) {
         return 0;
     }
     renderer() = std::move(made);
@@ -2264,6 +2294,10 @@ extern "C" int pcr_open(void *shared_context) {
 
 extern "C" void pcr_enable_present(void) {
     present_asked = true;
+}
+
+extern "C" void pcr_hang_reports_in(const char *folder) {
+    hang_folder_asked = folder ? folder : "";
 }
 
 extern "C" int pcr_gpu_kind(void) {

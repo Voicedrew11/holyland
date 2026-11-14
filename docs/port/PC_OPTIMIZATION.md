@@ -171,6 +171,25 @@ Open. `ring gfx_0.0.0 timeout`, then a reset of the whole card, the game frozen 
 - None of the real-window runs here hung, but the longest was 150 s.
 - The hangs have come with the GPU flat out. Lowering the work a picture may make them rarer without being a fix.
 
+### The hang watch (2026-11-14)
+
+Not a fix: what a hang leaves behind. Until now the game stayed on the screen frozen and had to be killed, and
+nothing on our side said what the GPU had been given.
+
+- `pcr_hang_notes.h`: each submit to the GPU's queue leaves a note (the thread, and for a canvas what it recorded
+  since its last note: batches, native batches, passes, merged and indirect runs, surface copies, clears), the last 64
+  kept. Each call that waits for the GPU says so while it waits: kf4-pc's `next_frame_context` (where the frozen runs
+  sat), the vblank's, the read-backs' fences.
+- `pcr_hang_watch.h`: a thread ("kf4-pc-watch") looks once a second. A wait that has lasted 15 of its looks is a hang:
+  the notes go to `<data folder>/gpu_hang_<date>_<time>.txt` and stderr, and the game ends (exit code 70).
+  `KF4_PC_HANG_WATCH=0`: no watch. The folder comes in by `pcr_hang_reports_in` (pcr.h), before `pcr_open`.
+- After a hang: send the report, and the kernel's lines (`journalctl -k | grep -A3 'ring gfx'`).
+
+Checks: unit tests `pcr_hang_notes` and `pcr_hang_watch` (a wait that never ends ends a child process with the report
+written; waits that end in time do not), under ASan with UBSan and under TSan too; 20 s at 009 in a real window with
+the owner's settings: no report, 3.32 ms a picture (3.38 before: no cost). Not run: a real hang (none came), the game
+whole under the sanitizers, the gcc and Windows builds.
+
 ## What changed on 2026-11-13
 
 In PR #144 (draft): indirect draws off on RADV; the surface copies' images kept and used again (`pcr_spares.h`), which

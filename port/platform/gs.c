@@ -164,6 +164,7 @@ static int open_pc_renderer(void) {
     if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
         gsr_enable_present();
     }
+    gsr_hang_reports_in(port_data_dir());
     if (!gsr_open(NULL)) {
         fprintf(stderr, "[gs] the PC renderer did not start (no Vulkan device it can use)\n");
         return 0;

@@ -13,6 +13,9 @@ extern "C" {
 static inline int gsr_open(void *shared_context) {
     return pcr_open(shared_context);
 }
+static inline void gsr_hang_reports_in(const char *folder) {
+    pcr_hang_reports_in(folder);
+}
 static inline void gsr_gif(int path, const void *data, size_t bytes) {
     pcr_gif(path, data, bytes);
 }

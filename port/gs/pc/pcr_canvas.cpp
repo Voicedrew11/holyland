@@ -21,6 +21,7 @@
 
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
+#include "pcr_hang_watch.h"
 #include "pcr_pipelines.h"
 #include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
@@ -424,6 +425,11 @@ public:
         }
     }
 
+    void watch_hangs(HangNotes &notes, const char *who) {
+        hang_notes_ = &notes;
+        hang_who_ = who;
+    }
+
     void set_scale(uint32_t x, uint32_t y) {
         pending_scale_ = {std::clamp(x, 1u, 8u), std::clamp(y, 1u, 8u)};
     }
@@ -603,7 +609,10 @@ public:
         }
         flush_batch();
         submit();
-        device_.wait_idle();
+        {
+            GpuWait wait(hang_notes_, "the trace's wait_idle", hang_clock_s());
+            device_.wait_idle();
+        }
         auto *bytes = static_cast<uint8_t *>(
             device_.map_host_buffer(*trace_buf_, MEMORY_ACCESS_READ_BIT | MEMORY_ACCESS_WRITE_BIT));
         if (!bytes) {
@@ -731,7 +740,10 @@ public:
         submit();
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
-        device_.next_frame_context();
+        {
+            GpuWait wait(hang_notes_, "the vblank's next_frame_context", hang_clock_s());
+            device_.next_frame_context();
+        }
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
@@ -879,6 +891,24 @@ public:
                        {x1 - x0, src_rows, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
     }
 
+    // The note of the command buffer about to be submitted: what the canvas recorded since its last note
+    void note_submit() {
+        if (!hang_notes_) {
+            return;
+        }
+        const CanvasCounts &c = counts_, &b = hang_noted_;
+        char what[200];
+        snprintf(what, sizeof(what),
+                 "canvas, vblank %llu: %llu batches (%llu native), %llu passes, %llu merged runs, %llu indirect runs, "
+                 "%llu surface copies, %llu clears",
+                 (unsigned long long)frame_, (unsigned long long)(c.batches - b.batches),
+                 (unsigned long long)(c.native_batches - b.native_batches), (unsigned long long)(c.passes - b.passes),
+                 (unsigned long long)(c.merged_runs - b.merged_runs), (unsigned long long)(c.runs - b.runs),
+                 (unsigned long long)(c.surfaces_copied - b.surfaces_copied), (unsigned long long)(c.clears - b.clears));
+        hang_notes_->submitted(hang_who_, what, hang_clock_s());
+        hang_noted_ = c;
+    }
+
     // What is recorded, on the GPU's queue now: Granite holds a submit without a fence until the next frame context,
     // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture).
     // flush false: handed to Granite but left for the next submit that flushes (one the caller makes at once).
@@ -890,6 +920,7 @@ public:
         }
         if (cmd_) {
             times_.end(*cmd_);
+            note_submit();
             device_.submit(cmd_);
             if (flush) {
                 device_.flush_frame();
@@ -1620,9 +1651,13 @@ private:
                   VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times_.end(*cmd_);
+        note_submit();
         device_.submit(cmd_, &fence);
         cmd_.reset();
-        fence->wait();
+        {
+            GpuWait wait(hang_notes_, "a read-back's fence", hang_clock_s());
+            fence->wait();
+        }
         const uint8_t *mapped = static_cast<const uint8_t *>(device_.map_host_buffer(*buffer, MEMORY_ACCESS_READ_BIT));
         if (!mapped) {
             return false;
@@ -4714,6 +4749,9 @@ private:
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
+    HangNotes *hang_notes_ = nullptr; // (watch_hangs)
+    const char *hang_who_ = "";
+    CanvasCounts hang_noted_; // (counts_ at the last note)
     uint64_t counts_idle_depth_let_go_ = 0;
     Batch batch_;
     bool batch_open_ = false;
@@ -4859,6 +4897,10 @@ public:
 
 Canvas::Canvas(Device &device, GpuTimes &times) : impl_(std::make_unique<Impl>(device, times)) {}
 Canvas::~Canvas() = default;
+
+void Canvas::watch_hangs(HangNotes &notes, const char *who) {
+    impl_->watch_hangs(notes, who);
+}
 
 void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
     impl_->set_msaa(samples, cutout_aa);

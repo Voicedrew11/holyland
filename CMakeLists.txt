@@ -719,6 +719,22 @@ if(KF4_TESTS)
     add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
 endif()
 
+# The watch for a GPU that has stopped answering (port/gs/pc/pcr_hang_notes.h, pcr_hang_watch.h): the notes kept, the
+# report, and (pcr_hang_watch, about 4 s) a wait that never ends ending the process with the report written
+add_executable(pcr_hang_watch_test tests/pcr_hang_watch_test.cpp port/gs/pc/pcr_hang_watch.cpp)
+target_include_directories(pcr_hang_watch_test PRIVATE port/gs/pc)
+set_target_properties(pcr_hang_watch_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+find_package(Threads REQUIRED)
+target_link_libraries(pcr_hang_watch_test PRIVATE Threads::Threads)
+if(NOT MSVC)
+    target_compile_options(pcr_hang_watch_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_hang_notes COMMAND pcr_hang_watch_test)
+    add_test(NAME pcr_hang_watch COMMAND pcr_hang_watch_test hang $<TARGET_FILE:pcr_hang_watch_test>
+             ${CMAKE_CURRENT_BINARY_DIR}/pcr_hang_watch_out)
+endif()
+
 # The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
 # (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
 add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)
