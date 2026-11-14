@@ -369,3 +369,35 @@ ms there at 4x). Past that the cost is the scene drawn at 4x with MSAA 2 and 16 
 
 Phase 0, then Phase 1 (the same gain at every resolution, and the pump thread's limit with it), then Phase 2, then
 Phase 3. The GPU hang stays open beside this; none of the phases needs indirect draws.
+
+### Unlocked's cap, and a GPU hang (2026-11-14, later)
+
+The owner asked for unlocked's cap to be removed altogether. It is not removed yet: with today's pacing, asking for
+more pictures than the renderer makes shows fewer. The slider at 0 (`"frame_rate_cap": 0`) is no cap already.
+
+Real window, the owner's settings, 4x at 009, 30 s of play; "asked" is the pictures a second the schedule asks for:
+
+| Asked | Pictures handed to the window | Pictures between shown | Between new pictures |
+|---|---|---|---|
+| 500 (the owner's cap), two runs | 12008, 12095 | 8394, 8484 | 7.4 ms (sd 14) |
+| 959 (no cap: the schedule's most), two runs | 9453, 10260 | 5989, 6541 | 9.4 to 10.2 ms (sd 18) |
+| a quarter more than the window showed in the last half second, one run | 12912 | 12054 | 5.35 ms (sd 5.9) |
+
+- **No cap costs about a fifth of the pictures shown at 4x**: the pump leaves most of what is asked for out and makes
+  more too late.
+- **The schedule has a most of its own, 16 a vblank (959 a second)**, which 1x at 020 reaches (`UNLOCKED_MOST_A_VBLANK`,
+  and `INTERP_ALL` in gs.c, which must go with it). Raised to 64 (3836 a second), with the cut's steps an eighth of
+  the count: at 1x at 020 more pictures were drawn (56825 for 41429) and fewer shown between vblanks (28992 for
+  46450); at 4x at 009 a quarter fewer reached the window (7558 for 10035). Taken out.
+- **An asked rate that follows the window** (a quarter more than `port_video_pictures_per_second()`, between 120 and
+  the schedule's most) showed 43% more pictures between than the cap of 500 and far more evenly, in its one run. This
+  is the way to no cap: nothing to set, and no pictures made for nothing. Not built: one run, and the next run hung
+  the card.
+- **The GPU hang again**: 01:30:43, `ring gfx_0.0.0 timeout`, thread kf4-pc-pump, then a reset of the card. A real
+  window, 4x at 009, 68 s into the run (about 30 s of play), the asked rate one and a half times what the window
+  showed, indirect draws off, the game holding 3.9 GB. So it does not need the memory high, nor minutes of play.
+
+To the plan: **Phase 1b, unlocked without a schedule's rate.** The asked rate follows what is shown (or the pictures
+are made as fast as they can be, each for the time it reaches the screen), the cap's setting, slider and option go,
+and the schedule's 16 a vblank with them. Measured with the replay bench and in a real window against the table
+above.
