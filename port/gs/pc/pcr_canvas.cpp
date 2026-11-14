@@ -3655,8 +3655,18 @@ private:
 
     // After a batch: its multisampled image ahead of its image, and what was drawn over told to the texture store (its
     // pages are a surface's now, not the uploads')
-    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &box, bool wrote_z) {
+    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &touched, bool wrote_z) {
         const DrawState &s = b.state;
+        // The batch's box is its corners' ceil (touch), one past a right or bottom edge on a whole pixel: the GS covers
+        // up to before it. The pages told drawn are the pixels covered, so not that extra column and row: the game's
+        // scissor is often one past its buffer (0-640, 0-224), and the row past a 224-row Z buffer is where the
+        // equipment menu's model textures are uploaded (taken for drawn over, the armour sampled the Z buffer: flat grey).
+        // (Native batches' and moved ones' boxes are the scissor's, inclusive already.)
+        PixelBox box = touched;
+        if (!b.native && !b.moved) {
+            box.x1 -= 1;
+            box.y1 -= 1;
+        }
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
         uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
         uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
