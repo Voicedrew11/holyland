@@ -127,6 +127,7 @@ void GifFrontEnd::read_tag(PathTag &tag, uint64_t low, uint64_t high) {
     tag.registers = high;
     tag.next_register = 0;
     file_.internal_q = 0x3F800000u; // a tag sets Q to 1
+    q_src_ = no_kick;               // (that 1 is the tag's, no PACKED ST's: an RGBAQ before the tag's first ST takes it)
     if (flg == 0) {
         tag.mode = TagMode::packed;
         tag.qwords_left = nloop * tag.register_count;
