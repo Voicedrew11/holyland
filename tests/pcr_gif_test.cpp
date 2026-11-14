@@ -361,6 +361,19 @@ void test_kick_numbers() {
         CHECK(n[2].kick == 2 && n[2].st_owner == 0 && n[2].rgba_owner == 2 && n[2].q_owner == no_kick);
         CHECK(n[3].kick == 3 && n[3].uv_owner == 3 && n[3].rgba_owner == 2 && n[3].u == 0x12 && n[3].v == 0x34);
     }
+    // A new PACKED tag sets Q to 1: an RGBAQ before the tag's first ST takes that Q, no earlier ST's (kick 4: no Q
+    // owner; the game's message text is such a tag, its first letter's Q once taken from a model's moved vertex)
+    Packet t;
+    t.tag(1, packed, 2, 0x51, 0);
+    t.qword(6 | uint64_t(7) << 32, 8 | uint64_t(9) << 32); // RGBAQ: Q the tag's 1
+    packed_xyz(t, 0x12, 0x22, 0x32);
+    gif.feed(1, t.bytes);
+    CHECK(events.numbered.size() == 5);
+    if (events.numbered.size() == 5) {
+        CHECK(events.numbered[4].kick == 4 && events.numbered[4].q_owner == no_kick && events.numbered[4].q == 1.0f);
+    }
+    events.numbered.pop_back(); // (the checks below count the four above)
+    CHECK(gif.kicks_numbered() == 5);
     // the primitives carry their vertices' numbers; the native draw's kick has none
     bool native_unnumbered = false;
     for (const GifPrimitive &g : events.primitives) {
@@ -372,7 +385,7 @@ void test_kick_numbers() {
 
     gif.stop_numbering();
     gif.feed(1, Packet::writes({{gs_reg::xyz2, 0}}).bytes);
-    CHECK(events.numbered.size() == 4 && gif.kicks_numbered() == 4);
+    CHECK(events.numbered.size() == 4 && gif.kicks_numbered() == 5);
     // a new walk numbers from 0, the stretches forgotten
     gif.number_kicks();
     gif.feed(1, Packet::writes({{gs_reg::xyz2, 0}}).bytes);
