@@ -206,6 +206,55 @@ configuration).
 `pace_test.py` now deletes its temporary folder at the end (about 400 MB a run in /tmp; 25 runs filled its quota)
 unless `--keep` names one.
 
+## Fixed 2026-11-13: under water uncapped (the wobble refused the frame's own walk)
+
+Reported by the owner: under water the overlay read "0 FPS / 30 GAME CUT 6" (uncapped, 240 Hz screen). Reproduced
+headless on main 482ec65b: the owner's quick save beside the water (`--quick-load`), a pad script walking forward
+into it from vblank 600, the owner's picture settings (3x, native widescreen, MSAA 2, lod full, aniso 2, cut-out AA
+ssaa, colour exact, 2D smooth), `--frame-rate unlocked`, `KF4_PRESENT_SIM=240`; under water from about vblank 650.
+
+**Cause.** Two refusals of the frame's own walk, one behind the other, so every picture between under water walked
+the frame's packets again on kf4-pc (main: 451 of 687 frames refused, 4600-6300 walks not kept a run, 25 GB of
+uploads made again in 25 seconds):
+1. The wobble (`RD_PASS_WOBBLE`) pairs with the frame before's every frame (its springs move its texels), and a
+   pass a picture moves was moved on the CPU: "trail paired" (also the fade-in's fill: 343 frames at 009's start).
+2. Behind it, the wobble reads a copy of the frame (to 0x2BC0, `Game_DrawWobblingScreen`'s grab): a copy from the
+   buffer drawn, refused ("copies it", 425 frames once 1 was fixed).
+
+**Fix.**
+1. The frame's own walk kept draws a pass that its pictures move at the frame's time with its kicks numbered
+   (`NativeDraws::walk_pass_by_kicks`, pass_draw.cpp's `pass_stream_moves`), each with the FLAT move gif_moves.h
+   makes on the GPU: the wobble's texels and colour, a fill's or the tint's colour, the view-turn shift's places and
+   texels t of the way, the same sums as pass_draw.cpp's CPU moves (`pass_draw_test` checks every kick against the
+   picture's packets). A native kick now owns its UV as well as its RGBAQ. Not the frame shown before blended in
+   (it reads the frame shown kept): that frame still walks. `KF4_PC_PASS_KICKS=0` restores the refusal.
+2. `GsnInterpFrame` tells the frame's copies of the frame and the stream's choice for each (frame_interp.c's
+   `COPY_BETWEEN`: made again from the picture's frame; else left out); `as_picture_walk` makes the same choice,
+   the copy's source moved to the buffer shown (pcr_frame_walk.h's `frame_copy_in_picture`, `bitbltbuf_in_picture`,
+   `pcr_frame_walk_test`). `KF4_PC_FRAME_COPIES=0` restores the refusal.
+3. A colour surface a copy is about to cover whole (the copy of the frame) is not filled from the uploads first: under
+   water it and the water's targets (128 wide, inside it) let each other go every picture, and each time 140 pages
+   were read from the store and written for nothing.
+
+**Numbers** (Windows, RTX 5080, owner's settings, unlocked with `KF4_PRESENT_SIM=240`, main and fixed alternated, 3
+rounds; vblanks 300-620 before the water, 700-1100 and 1100-1500 under it; no other kf4 running as each run began):
+
+| | pictures a second before / under / under (later) | game vblanks a second under | frames refused, walks not kept |
+|---|---|---|---|
+| main | 614, 586, 628 / 219, 178, 171 / 276, 203, 199 | 33-40 | 451, 4639-6301 |
+| fixed | 621, 590, 600 / 490, 465, 460 / 497, 480, 468 | 53-60 | 0, 18 |
+
+At 240 both hold 240 a second under water (60 game vblanks; 1100-1500: 233 and 234, the wall); the fixed run's
+lowest second under water 150 (main's 20), and its walks not kept 10 (main's 3152).
+
+Left: the pump now makes the surfaces the copy and the water's targets churn (22,890 made in a run, 3 a picture), and
+under water it leaves more pictures out as too late (8,878 of 21,500); vblanks 1100-1500 (pressed to a wall) hold
+53-54 a second. Keeping the let-go surfaces' images to make them again is the next step there.
+
+Pictures: byte for byte main's under water (64 pictures, 16 vblanks from 700 to 1450, 240, `KF4_INTERP_DRAW_ALL=1`,
+the owner's settings; the pictures between now drawn by the pump from the kept walk, main's walked) and at 000, 009,
+009:2 and 099 through the fade-in (25 pictures a spot, vblanks 1905-2700). The validation layer with synchronization validation under water (240, vblanks to 1010): no synchronization hazards; the same two messages as main at pipeline creation (VUID-...-pCode-08740, -Input-07904), nothing else. The unit tests pass (17).
+
 ## Fixed 2026-11-12: the sword's swing uncapped (the trail refused the frame's own walk)
 
 Reported by the owner: uncapped (`frame_rate` unlocked, cap 0, 240 Hz screen), about 400 pictures a second fell to

@@ -586,10 +586,13 @@ top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target
   `pass_draw_test` puts each pass and the game's own packets for it (written out from game.c and gs_draw.c) through
   the front end: the same register file after, the same pixels with the same colour and texel; and checks the moves.
 - **The cost.** A pass that moves in a picture between (a fade, a fill whose alpha ramps, the wobble under water, the
-  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again, and the frame's own walk is not
-  made its pictures' (counted as "trail paired"). At 009's start after the teleport, 343 of 972 frames (the fill of
-  the fade-in). Moving them on the GPU from a record of the pass (as the native GS's `nd_pass.vert` did) would take
-  that away; not done.
+  frame shown before) is moved on the CPU, so that walk is not kept to be drawn again. Since 2026-11-13 the frame's
+  own walk kept draws such a pass at the frame's time with its kicks numbered (`walk_pass_by_kicks`,
+  `pass_stream_moves`), each with the FLAT move gif_moves.h makes on the GPU (a colour, a place, a texel t of the way:
+  the same sums as pass_draw.cpp's), as the weapon's trail is: the frame's own walk is its pictures' and the pump
+  draws them. Not the frame shown before blended in (it reads the frame shown kept, between marks the frame's walk
+  does not have): that frame still refuses ("trail paired"). `KF4_PC_PASS_KICKS=0` restores the refusal for all.
+  Before, 343 of 972 frames at 009's start (the fade-in's fill) and every frame under water refused.
 
 Checked (1x unless said; on = `--native-draw on`, off = the same kinds but `water` and `passes`, so the packets):
 - **The four spots** (000, 009, 009:2, and 099 for "063", which the teleport reads as map 63, a map with no places;
@@ -947,15 +950,18 @@ the frame's own walk, kept, can be made the stream's walk by those rules, and th
   Stretches are kept only while frames are taken (none at 30, in the menus).
 - **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
   it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
-  the frame shown is kept. A stretch whose bytes are not the frame's, or whose kicks are not its count, is not it.
+  the frame shown is kept, and its copies of the frame (from the buffer drawn into another) with the stream's choice
+  for each (frame_interp.c's COPY_BETWEEN: made again from the picture's frame; else left out). A stretch whose bytes
+  are not the frame's, or whose kicks are not its count, is not it.
 - **The rules** (`pcr_frame_walk.h`, plain functions, `pcr_frame_walk_test`): a draw's FRAME and TEX0 moved to the
   buffer shown; an upload into anything but the buffer drawn asked for again (its chunk the frame's), a read-back and
-  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5. Refused
-  (the frame walks its stream, counted): a copy from or into the buffer drawn, an upload into it, a draw textured from
-  it other than from its surface's pixels (a full-screen pass that reads the frame it draws: looked up again in the
-  buffer shown, as the stream has it), a trail its pictures move on the CPU, a native batch without its picture's
-  record, a mark or upload asked again of a picture's. The stream's own choices for those (frame_interp.c's table of
-  copies) are not handed over: none was met at the four spots.
+  a copy into anything but the frame left out; a textured draw reading the frame shown between 0xF4 and 0xF5; a copy
+  of the frame made again from the buffer shown or left out, as the stream chose (2026-11-13: under water the wobble
+  reads a copy of the frame at 0x2BC0, every frame). Refused (the frame walks its stream, counted): a copy into the
+  buffer drawn, an upload into it, a draw textured from it other than from its surface's pixels (a full-screen pass
+  that reads the frame it draws: looked up again in the buffer shown, as the stream has it), a trail or pass its
+  pictures move on the CPU, a native batch without its picture's record, a mark or upload asked again of a
+  picture's.
 - **`Canvas::as_picture_walk`** makes the kept walk from the stretch's: the batches' FRAME and TEX0 moved, a GIF
   batch's numbered corners moved (`Batch::numbered`: the corners name their kicks in the stretch, which nothing moves
   outside a picture), a native batch's runs drawn by their pictures' records, the uploads as uploads asked again, 0xF0
