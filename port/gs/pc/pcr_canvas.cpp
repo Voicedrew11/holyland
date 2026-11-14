@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <list>
+#include <memory>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
 #include "pcr_pipelines.h"
+#include "pcr_spares.h"
 #include "pcr_textures.h"
 
 extern "C" {
@@ -384,7 +386,8 @@ public:
         no_samplers_.fill(nullptr);
         no_samplers_[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
         const auto &f = device_.get_device_features();
-        runs_ok_ = runs_asked_ && table_on_ && f.enabled_features.multiDrawIndirect && f.vk11_features.shaderDrawParameters;
+        runs_ok_ = runs_asked_ && (runs_env_ || !runs_hang_here(f.driver_id)) && table_on_ &&
+                   f.enabled_features.multiDrawIndirect && f.vk11_features.shaderDrawParameters;
         native_runs_ok_ = runs_ok_ && f.enabled_features.drawIndirectFirstInstance;
         // (the dual-source blend's pictures are the same as the blend's only where it holds a factor as the shader
         // assumes, pcr_prim.h: checked on NVIDIA; elsewhere the runs end where the blend changes, KF4_PC_INDIRECT=plain)
@@ -1054,6 +1057,21 @@ private:
             fprintf(stderr, "[pcr] no image for a %ux%u surface\n", width, height);
         }
         return image;
+    }
+
+    // What a spare image must be to stand for this one (pcr_spares.h)
+    static ImageKind kind_of(const Image &image) {
+        const ImageCreateInfo &info = image.get_create_info();
+        return {info.width, info.height, uint32_t(info.format), uint32_t(info.samples), uint32_t(info.usage)};
+    }
+
+    // An image for a copy of a surface's `like` (copy_surfaces): a spare of its kind, else made as like was
+    ImageHandle copy_image_like(const Image &like, const Surface &s, bool ms) {
+        if (ImageHandle spare = spares_on_ ? spares_->take(kind_of(like)) : ImageHandle()) {
+            counts_.surface_copies_into_spares++;
+            return spare;
+        }
+        return ms ? make_ms_image(like.get_width(), like.get_height()) : make_surface_image(s.width(), s.height, s.depth);
     }
 
     // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
@@ -2379,6 +2397,8 @@ private:
         bool cutout_aa = false;
         int precision = GSN_COLOUR_EXACT; // (colour_mode_)
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
+        // (where the canvas that takes the copies puts the images it lets go for them: the copying canvas's spares)
+        std::shared_ptr<SpareImages<ImageHandle>> spares;
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
@@ -2392,11 +2412,14 @@ private:
         copies->cutout_aa = cutout_aa_;
         copies->precision = colour_mode_;
         copies->mode_2d = mode_2d_;
+        copies->spares = spares_on_ ? spares_ : nullptr;
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
         for (auto *list : {&colour_, &depth_}) {
             for (const auto &s : *list) {
-                ImageHandle image = make_surface_image(s->width(), s->height, s->depth);
+                // (into the images the pump's canvas let go at its last frame, where they are of the same kind: what a
+                // spare held is written over, or made again from the other image before it is read, as a new image's)
+                ImageHandle image = copy_image_like(*s->image, *s, false);
                 if (!image) {
                     continue; // (the pump makes it again, as a surface it never had)
                 }
@@ -2409,7 +2432,7 @@ private:
                 // other: an image behind its samples is resolved before it is read, samples behind expanded)
                 ImageHandle ms;
                 if (s->ms) {
-                    ms = make_ms_image(s->ms->get_width(), s->ms->get_height());
+                    ms = copy_image_like(*s->ms, *s, true);
                     if (!ms) {
                         continue;
                     }
@@ -2435,6 +2458,23 @@ private:
     void start_from(Copies &copies) {
         flush_batch();
         end_pass();
+        if (copies.spares) {
+            // (the surfaces let go kept for the copying canvas's next copies. Submitted first: what this canvas drew
+            // on them is then before the copies into them in the order the GPU is given the commands)
+            submit(false);
+            std::vector<std::pair<ImageKind, ImageHandle>> let_go;
+            for (auto *list : {&colour_, &depth_}) {
+                for (auto &s : *list) {
+                    for (ImageHandle *image : {&s->image, &s->ms}) {
+                        if (*image) {
+                            ImageKind kind = kind_of(**image);
+                            let_go.emplace_back(kind, std::move(*image));
+                        }
+                    }
+                }
+            }
+            copies.spares->keep(std::move(let_go));
+        }
         colour_ = std::move(copies.colour);
         depth_ = std::move(copies.depth);
         kept_frame_ = std::move(copies.kept_frame);
@@ -3068,6 +3108,16 @@ private:
     // primitives across an indirect draw's draws, as across draws, so the pictures are the same. A run ends before
     // anything else is recorded (cmd(), end_pass, submit) and before a batch of other state sets its state.
     // KF4_PC_INDIRECT=0: a draw a batch, as before (to compare).
+    // Whether the runs hang the GPU with this driver. RADV (Mesa 26.2.3, RX 9070 XT, 2026-11-13): a ring gfx timeout
+    // and a reset of the whole card within a minute at 009 at 240 pictures a second in 4 of 6 runs with the runs (3 of 5
+    // the session before), none in 8 without them. It needs vkCmdDrawIndirect itself: the same runs with the same records and programs drawn a
+    // vkCmdDraw each (the record by the push constant) did not hang in 5 runs; GIF batches' runs alone hung, as did
+    // the runs' buffer in host memory and their buffers kept for 512 pictures (so not the buffer let go early). The
+    // commands are written before they are recorded, so the driver or what is under it is suspected, not shown.
+    static bool runs_hang_here(VkDriverId driver) {
+        return driver == VK_DRIVER_ID_MESA_RADV;
+    }
+
     struct RunKey {
         const void *colour = nullptr, *depth = nullptr;
         uint32_t width = 0, height = 0;
@@ -4311,9 +4361,15 @@ private:
     const Buffer *walk_cluts_ = nullptr;    // (... and its CLUTs)
     const Kept *walk_table_ = nullptr;      // (... and the walk, when it has a table: its table and samplers)
     Runs runs_;                             // (... and its picture's runs)
+    // (the images the canvas that took this one's copies let go: copy_surfaces' next copies are made into them)
+    const std::shared_ptr<SpareImages<ImageHandle>> spares_ = std::make_shared<SpareImages<ImageHandle>>();
+    // KF4_PC_SPARES=0: every copy's images made new and let go, as before (to compare the GPU memory)
+    const bool spares_on_ = !getenv("KF4_PC_SPARES") || strcmp(getenv("KF4_PC_SPARES"), "0") != 0;
     // KF4_PC_INDIRECT=0: a kept walk's batches a draw each, as before (to compare); off where the device has no
-    // multi-draw indirect or draw parameters; a native batch's in runs only where an indirect draw has a first instance
-    const bool runs_asked_ = !getenv("KF4_PC_INDIRECT") || strcmp(getenv("KF4_PC_INDIRECT"), "0") != 0;
+    // multi-draw indirect or draw parameters; a native batch's in runs only where an indirect draw has a first instance.
+    // Off on RADV unless asked for (KF4_PC_INDIRECT=1, plain, unblended: runs_hang_here)
+    const char *const runs_env_ = getenv("KF4_PC_INDIRECT");
+    const bool runs_asked_ = !runs_env_ || strcmp(runs_env_, "0") != 0;
     // KF4_PC_INDIRECT=plain: runs without the dual-source blend (a blend change ends a run: to compare)
     const bool runs_plain_ = getenv("KF4_PC_INDIRECT") && strcmp(getenv("KF4_PC_INDIRECT"), "plain") == 0;
     bool runs_ok_ = false, native_runs_ok_ = false, dual_ok_ = false;

@@ -52,6 +52,7 @@ struct CanvasCounts {
     uint64_t read_backs_from_uploads = 0, read_backs_from_surfaces = 0, unsupported_read_backs = 0;
     uint64_t uploads_made_again = 0, uploads_again_missed = 0, kept_frame_reads = 0;
     uint64_t surfaces_copied = 0; // (for the pump: copy_surfaces)
+    uint64_t surface_copies_into_spares = 0; // (its images, a surface's and its multisampled one, not made new)
     // (a kept walk's textured batches drawn again: those with a table, those read from it, those with the walk's CLUT)
     uint64_t walk_texture_draws = 0, table_draws = 0, walk_clut_draws = 0;
     // (a kept walk's runs: the indirect draws, and the draws they made)

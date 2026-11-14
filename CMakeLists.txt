@@ -648,6 +648,17 @@ if(KF4_TESTS)
     add_test(NAME pcr_late COMMAND pcr_late_test)
 endif()
 
+# The PC renderer's spare surface images (port/gs/pc/pcr_spares.h): which image a copy is made into, which are let go
+add_executable(pcr_spares_test tests/pcr_spares_test.cpp)
+target_include_directories(pcr_spares_test PRIVATE port/gs/pc)
+set_target_properties(pcr_spares_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_spares_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_spares COMMAND pcr_spares_test)
+endif()
+
 # The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
 add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
 target_include_directories(kf4_pc_gif PUBLIC port/gs/pc PRIVATE port/include)
