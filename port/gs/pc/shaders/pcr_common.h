@@ -165,6 +165,11 @@ float pcr_depth(uint z, float zfrac, uint zref) {
     v_zref = zref;
     v_zrel = float(int(z - zref)) + zfrac;
 #endif
+    if ((pc.flags & (PCR_F_EXACT_Z | PCR_F_LAYERS | PCR_F_LAYER_TEST)) == (PCR_F_EXACT_Z | PCR_F_LAYERS)) {
+        // (tolerant layers, a pass with no slack: Z with its fraction is what the GPU interpolates, the bound not
+        // needed; pcr_prim_zonly.frag leaves its depth to the GPU, so its pass keeps the early and hierarchical tests)
+        return (min(float(z) + zfrac, float(pc.zmax)) + float(pcr_loss_margin())) * pc.zscale;
+    }
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
     }

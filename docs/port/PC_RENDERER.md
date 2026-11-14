@@ -234,25 +234,25 @@ specks and stitches). paraLLEl-GS draws all three the same (the PS2's picture); 
 (`KF4_PC_EXACT_Z=0`) and in the native GS's tolerant mode (main 8efb77ac) they were clean, which is why they looked
 like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws the wall and the pillar clean), not
 #138's decal depth, which exact Z replaced.
-- The PC renderer now does as the native GS's tolerant mode did (4af1dbd6, 669bee01): the fragment shader keeps Z's
-  fraction (`pcr_prim.h`'s `pcr_exact_depth`, `PCR_F_LAYERS`), and a batch Z tested GEQUAL is drawn in two phases
-  (`pcr_canvas.cpp`'s tolerant passes): its colour tested half a Z nearer, no Z written (`PCR_F_LAYER_TEST`), and its
-  Z exactly. A surface drawn in one pass whose colour comes out the same drawn twice draws its colour first (within
-  half a Z of what was there before it), then itself as the GS draws it: among its own triangles the nearer is kept
-  (the bridge's planks, strips a Z apart far off, otherwise come out as light and dark blocks). Anything else (a decal,
-  a pass that reads the target, an alpha test's two passes) writes its Z first, then its colour within half a Z (drawn
-  twice it would blend twice). So the GS's tie is kept on average (a decal wins over its surface, map 028's floor
-  still over its puddle), and where surfaces cross the line is straight.
-- A layer (a decal with a corner's alpha below 0x80, `fades`: a rock's face, a wall's shading fading out) is tested
-  a Z and half its change across a GS pixel nearer, up to a Z more (`PCR_F_LAYER_WIDE`, the native GS's rule): with
-  half a Z the rock pillar's layer and the brick under it swapped in large blocks as the camera moved. Other cut-outs
-  (foliage at alpha 0x80, netting: `cuts_out`) take a sixteenth of a Z (`PCR_F_LAYER_FINE`): with half a Z the leaf
-  cards of map 004's tree behind each other showed through, light lace at their edges.
+- The PC renderer now does as the native GS's tolerant mode did (4af1dbd6, 669bee01), for its layers: the fragment
+  shader keeps Z's fraction (`pcr_prim.h`'s `pcr_exact_depth`, `PCR_F_LAYERS`), so where surfaces cross the line is
+  straight and among a batch's own triangles the nearer is kept (the rope bridge's planks: strips a Z apart far off).
+  A layer (`is_layer`: a decal with a corner's alpha below 0x80, a rock's face or a wall's shading fading out) is drawn
+  in two phases (`pcr_canvas.cpp`'s tolerant passes): its Z written exactly first, without colour
+  (`pcr_prim_zonly.frag`, the GPU's own depth, where nothing is discarded), then its colour tested a Z and half its
+  change across a GS pixel nearer, up to a Z more, no Z written (`PCR_F_LAYER_TEST`, `PCR_F_LAYER_WIDE`): it wins over
+  the surface it lies on, and what is drawn after it meets it as before (map 028's floor still over its puddle). A
+  draw that writes no Z is tested within half a Z (a cut-out's a sixteenth, `PCR_F_LAYER_FINE`: foliage cards near
+  each other otherwise show the ones behind through). Everything else is drawn once.
+- Not done: the native GS's ties between surfaces (every surface drawn twice, colour within half a Z). Here that was
+  a second pass of every batch: +35-45% GPU time a picture, and Andrew's profile no longer held 240 at 009 (the native
+  draws' vertex work twice, the kept walks' runs cut at every pass; a Z-only shader and the GPU's own depth for the Z
+  pass did not help). Two meshes of one plane that are not layers now meet by their fraction, not by draw order.
 - Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
 - `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
   with `KF4_INTERP_DRAW_ALL=1`, 48 pictures each, against main 482ec65b). `kf4-gsreplay --layer-z` takes it too.
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
-  behind it (the GS hides it); map 004's tree a little busier than the PS2's. Costs a second draw for each GEQUAL batch.
+  behind it (the GS hides it); map 004's tree close to the PS2's. Costs a Z pass for each layer (timing in #143).
 
 **Layer Z before exact Z (#105, 2026-11-11): not applied then, proposed for removal.** The native GS rounded each pixel's Z to a
 whole number as the GS does, so a layer blended over its surface (a second mesh, GEQUAL) failed where the two

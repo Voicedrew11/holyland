@@ -2979,9 +2979,10 @@ private:
         return cutout_aa_ && cuts_out(b);
     }
 
-    // (tolerant layers) a GIF batch with a corner's alpha below 0x80
-    static bool fades(const Batch &b) {
-        if (b.native) {
+    // (tolerant layers) a layer, as the native GS took it: a decal (is_decal) with a corner's alpha below 0x80, a rock's
+    // face or a wall's shading fading out
+    static bool is_layer(const Batch &b) {
+        if (b.native || !is_decal(b)) {
             return false;
         }
         for (const Vertex &v : b.vertices) {
@@ -3279,19 +3280,23 @@ private:
         if (pass_count == 0) {
             return;
         }
-        // Tolerant layers (set_layer_z; pcr_prim.h's pcr_exact_depth): Z's fraction kept, and a draw Z tested GEQUAL
-        // drawn in two phases, so that it keeps the GS's tie on average: it wins over what lies within half a Z behind
-        // it, and where surfaces cross the line is straight. A draw whose colour comes out the same drawn twice, in one
-        // pass that writes Z (a surface): its colour within half a Z of what was there before it, no Z written, then
-        // itself as the GS draws it, Z tested and written exactly; so among its own triangles the nearer is kept (a
-        // rope bridge's plank, strips a Z apart far off). Any other (a decal, a pass that reads the target, an alpha
-        // test's two passes): its Z written exactly first, without colour, then its colour within half a Z, no Z
-        // written (drawn twice it would blend twice). Each phase with the pass's alpha test. (The native GS's
-        // tolerant layers, 2026-10: 4af1dbd6, 669bee01.)
-        if (exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2) {
-            // (a layer, as the native GS took it: a decal with a corner's alpha below 0x80, a wall's shading or grime
-            // fading out; a cut-out otherwise, foliage at 0x80, a sixteenth)
-            bool wide = is_decal(b) && fades(b), fine = !wide && cuts_out(b);
+        // Tolerant layers (set_layer_z; pcr_prim.h's pcr_exact_depth): Z's fraction kept, so that where surfaces cross
+        // the line is straight and among a batch's own triangles the nearer is kept. A layer (is_layer: a decal fading
+        // out, a rock's face or a wall's shading) is drawn in two phases, the GS's tie kept on average: its Z written
+        // exactly first, without colour (pcr_prim_zonly.frag, the GPU's own depth, where nothing is discarded; else the
+        // pass with its alpha test), then its colour tested a Z and half its change across a GS pixel nearer (up to a
+        // Z more), no Z written. A draw that writes no Z is tested within half a Z (a cut-out's a sixteenth: foliage
+        // cards near each other). Everything else is drawn once, as the GS draws it with the fraction kept. (The native
+        // GS's tolerant layers, 2026-10, 4af1dbd6 and 669bee01, drew every surface twice as well, for the GS's ties
+        // between surfaces: here that was a second pass of every batch, +35-45% GPU time a picture and Andrew's profile
+        // under 240 at 009, the vertex work of the native draws twice and the runs cut at every pass.)
+        bool writes_z = false;
+        for (int i = 0; i < pass_count; i++) {
+            writes_z |= passes[i].z;
+        }
+        if (exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 && zte && ztst == 2 && (!writes_z || is_layer(b))) {
+            // (tolerant layers: a layer in two phases, a draw that writes no Z tested within its slack)
+            bool wide = is_layer(b), fine = !wide && cuts_out(b);
             std::array<Pass, 4> zs{}, colours{};
             int nz = 0, nc = 0;
             for (int i = 0; i < pass_count; i++) {
@@ -3302,21 +3307,12 @@ private:
                     colours[nc++] = {passes[i].mode, passes[i].rgb, passes[i].alpha, false, true, fine, wide};
                 }
             }
-            bool once = !is_decal(b) && !b.shader_blend && pass_count == 1 && passes[0].z;
-            if (once) {
-                // (drawn twice it comes out the same: its colour within half a Z, then itself as the GS draws it)
-                Pass exact = passes[0];
-                passes[0] = colours[0];
-                passes[1] = exact;
-                pass_count = 2;
-            } else {
-                pass_count = 0;
-                for (int i = 0; i < nz; i++) {
-                    passes[pass_count++] = zs[i];
-                }
-                for (int i = 0; i < nc; i++) {
-                    passes[pass_count++] = colours[i];
-                }
+            pass_count = 0;
+            for (int i = 0; i < nz; i++) {
+                passes[pass_count++] = zs[i];
+            }
+            for (int i = 0; i < nc; i++) {
+                passes[pass_count++] = colours[i];
             }
         }
         // (a surface as tall as what is drawn in it, not its scissor: the game's scissors run past small targets, onto
@@ -3541,6 +3537,10 @@ private:
                                                : (per_sample ? run_sample_programs_[v] : run_programs_[v]))
                                       : (early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
                                                : (per_sample ? sample_programs_[v] : programs_[v]));
+            // (tolerant layers: a pass writing Z alone where nothing is discarded, the Z alone)
+            if (early && pass.z && !pass.rgb && !pass.alpha && exact_z_) {
+                program = in_run ? run_zonly_programs_[v] : zonly_programs_[v];
+            }
             mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
             if (in_run) {
                 key.program = program;
@@ -4190,6 +4190,7 @@ private:
     shader(pcr_spv_##name, sizeof(pcr_spv_##name), pcr_spv_##name##_xz, sizeof(pcr_spv_##name##_xz), layout)
         Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
         Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
+        Shader *zfs = PCR_SHADER(pcr_prim_zonly_frag, &frag);
 #define PCR_VERTEX_SHADER(name, layout) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
         // (each vertex shader with the four fragment shaders: draw_batch's choice)
         auto programs_for = [&](int v, Shader *vertex) {
@@ -4197,17 +4198,20 @@ private:
             sample_programs_[v] = device_.request_program(vertex, sfs);
             early_programs_[v] = device_.request_program(vertex, efs);
             early_sample_programs_[v] = device_.request_program(vertex, esfs);
+            zonly_programs_[v] = device_.request_program(vertex, zfs);
         };
         programs_for(0, vs);
         // (the same programs reading their fields from the picture's records: a kept walk's runs, draw_batch)
         Shader *rfs = PCR_SHADER(pcr_prim_frag_rec, &frag), *rsfs = PCR_SHADER(pcr_prim_sample_frag_rec, &frag);
         Shader *refs = PCR_SHADER(pcr_prim_early_frag_rec, &frag);
         Shader *resfs = PCR_SHADER(pcr_prim_sample_early_frag_rec, &frag);
+        Shader *rzfs = PCR_SHADER(pcr_prim_zonly_frag_rec, &frag);
         auto run_programs_for = [&](int v, Shader *vertex) {
             run_programs_[v] = device_.request_program(vertex, rfs);
             run_sample_programs_[v] = device_.request_program(vertex, rsfs);
             run_early_programs_[v] = device_.request_program(vertex, refs);
             run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
+            run_zonly_programs_[v] = device_.request_program(vertex, rzfs);
         };
         run_programs_for(0, PCR_VERTEX_SHADER(pcr_prim_vert_rec, &vert));
         ResourceLayout date = {};
@@ -4283,7 +4287,7 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[21];
+        WarmProgram warmed[23];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
@@ -4293,7 +4297,10 @@ private:
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
         }
-        warm_watch(device_, warmed, 21, expand_program_);
+        // (the Z alone: the GIF batches' and a kept walk's, the native draws' made as first drawn)
+        warmed[21] = {zonly_programs_[0], zonly_programs_[0]};
+        warmed[22] = {run_zonly_programs_[0], run_zonly_programs_[0]};
+        warm_watch(device_, warmed, 23, expand_program_);
     }
 
     Device &device_;
@@ -4306,6 +4313,8 @@ private:
     std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
     // ... and each of them reading a draw's fields from the picture's records (PCR_RECORDS): a kept walk's runs
     std::array<Program *, 5> run_programs_{}, run_sample_programs_{}, run_early_programs_{}, run_early_sample_programs_{};
+    // (tolerant layers: a pass writing Z alone that discards nothing, pcr_prim_zonly.frag; a kept walk's runs')
+    std::array<Program *, 5> zonly_programs_{}, run_zonly_programs_{};
     // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
     bool pass_ended_ = false;
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;

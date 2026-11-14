@@ -523,6 +523,9 @@ void main() {
 #ifdef PCR_RECORDS
     pcr_take_record();
 #endif
+#ifdef PCR_ZONLY
+    return; // (pcr_prim_zonly.frag: its Z the GPU's, interpolated with its fraction: pcr_common.h's pcr_depth)
+#endif
 #ifdef PCR_EXACT_Z
     pcr_exact_depth();
 #endif
