@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "command_buffer.hpp"
+#include "thread_id.hpp"
 
 namespace Vulkan {
 // (cmake/granite_pipeline_warm.inc)
@@ -449,12 +450,19 @@ void saver() {
     }
 }
 
+bool format_ok(Device &device, VkFormat format, VkFormatFeatureFlags2 need);
+
 // Attachments of a record's formats and samples, made as the canvas makes its own for the pipelines made ahead
-// (make_warm_images): the render passes made from them are the canvas's
-std::pair<ImageHandle, ImageHandle> &images_for(Device &device, const Record &r) {
+// (make_warm_images): the render passes made from them are the canvas's. Made only by start_ahead, on the canvas's
+// thread (making an image records its layout's change in a command buffer of the thread's own); the threads making
+// ahead only find them (make false)
+std::pair<ImageHandle, ImageHandle> &images_for(Device &device, const Record &r, bool make) {
     std::lock_guard<std::mutex> hold(store.images_lock);
     auto &slot = store.images[{r.colour_format, r.depth_format, r.samples}];
-    if (!slot.first && r.colours && r.colour_format != VK_FORMAT_UNDEFINED) {
+    if (!make) {
+        return slot;
+    }
+    if (!slot.first && r.colours && format_ok(device, r.colour_format, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT)) {
         ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, r.colour_format);
         info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
@@ -462,7 +470,7 @@ std::pair<ImageHandle, ImageHandle> &images_for(Device &device, const Record &r)
         info.samples = VkSampleCountFlagBits(r.samples);
         slot.first = device.create_image(info, nullptr);
     }
-    if (!slot.second && r.depth && r.depth_format != VK_FORMAT_UNDEFINED) {
+    if (!slot.second && r.depth && format_ok(device, r.depth_format, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, r.depth_format);
         info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
@@ -489,7 +497,7 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
         store.ahead_skipped++;
         return;
     }
-    auto &images = images_for(device, r);
+    auto &images = images_for(device, r, false);
     if ((r.colours && !images.first) || (r.depth && !images.second)) {
         store.ahead_skipped++;
         return;
@@ -547,11 +555,20 @@ void start_ahead() {
     auto next = std::make_shared<std::atomic<size_t>>(0);
     store.ahead_total = records->size();
     store.ahead_start = std::chrono::steady_clock::now();
+    for (const Record &r : *records) {
+        const VkPhysicalDeviceLimits &limits = warm.device->get_gpu_properties().limits;
+        if (r.samples & limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts) {
+            images_for(*warm.device, r, true);
+        }
+    }
     unsigned threads = std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4));
     Device *device = warm.device;
     for (unsigned t = 0; t < threads; t++) {
         store.ahead.emplace_back([=] {
             on_warm_thread = true;
+            // (Granite's compile log names a thread by its index: these threads request no command buffer, the only
+            // other use of it, so the canvas thread's index stands in, as an unregistered thread's would)
+            Util::register_thread_index(0);
             for (size_t i = (*next)++; i < records->size() && !store.ahead_stop; i = (*next)++) {
                 make_ahead(*device, (*records)[i], *roles);
                 if (++store.ahead_done == records->size()) {
