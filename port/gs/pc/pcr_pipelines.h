@@ -52,7 +52,6 @@ struct WarmProgram {
 struct WarmDevice {
     VkFormat depth_format = VK_FORMAT_UNDEFINED; // (the depth surfaces')
     bool dynamic_ds = false, dynamic_blend = false; // (its dynamic state: Canvas::Impl::choose_dynamic)
-    bool high_colour = false;                       // (colour high can draw: 16-bit colour surfaces)
 };
 
 // (any thread) The canvas's programs: those whose pipelines are kept. extra: a program drawn only into a
@@ -64,7 +63,7 @@ void warm_watch(Vulkan::Device &device, const WarmProgram *programs, uint32_t co
 // pipeline the canvas draws with in a tour of the game, for these settings) and the list's, on every core but one,
 // through the cache; precompile_running is true until they are made (the game waits, "Building shaders"). Not with
 // KF4_PC_PRECOMPILE=0 (the list made ahead while the game runs, as before) or without the cache.
-void precompile(uint32_t samples, bool colour_high);
+void precompile(uint32_t samples);
 bool precompile_running();
 bool precompile_progress(int *done, int *total);
 

@@ -2481,7 +2481,7 @@ extern "C" void pcr_pipeline_cache(const char *path) {
 // (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
 // settings now
 extern "C" void pcr_precompile(void) {
-    pcr::precompile(uint32_t(settings().msaa.load()), settings().colour.load() == GSN_COLOUR_HIGH);
+    pcr::precompile(uint32_t(settings().msaa.load()));
 }
 
 // The game waits while they are made (port/platform/kernel.c)
