@@ -23,6 +23,8 @@ struct FrameTargets {
     bool shown_kept = false;              // the frame shown kept (0xF2): a draw whose TEX0 names it reads the copy
     uint32_t kicks = 0;                   // the stream's kicks: a native draw's numbered kicks (native_kick_base on)
                                           // are numbered on from it in the pictures' walk
+    uint32_t frame_copies = 0;            // the frame's copies from draw_fbp into another buffer (GsnInterpFrame's),
+    uint64_t copies_between = 0;          // and those the stream makes again from shown_fbp (bit c: copy c)
 };
 
 // Why a frame's own walk was not made its pictures' walk (and the frame's stream was walked)
@@ -64,6 +66,27 @@ inline constexpr bool tex0_reads_drawn(uint64_t tex0, const FrameTargets &t) {
 // A draw with this TEX0 reads the kept frame shown in the stream (between 0xF4 and 0xF5), when textured
 inline constexpr bool tex0_reads_kept(uint64_t tex0, const FrameTargets &t) {
     return t.shown_kept && frame_walk_bits(tex0, 0, 14) == t.shown_fbp * 32;
+}
+
+// A local copy from the buffer drawn into another (frame_interp.c's frame copy: GsnInterpFrame's frame_copies)
+inline constexpr bool copy_of_frame(const TransferRegisters &r, const FrameTargets &t) {
+    return frame_walk_bits(r.bitbltbuf, 0, 14) == t.draw_fbp * 32 &&
+           frame_walk_bits(r.bitbltbuf, 32, 14) != t.draw_fbp * 32;
+}
+
+// The stream's way with the frame's copy c of the frame (copy_of_frame): made again from the buffer shown
+// (COPY_BETWEEN: the frame reads it after), or left out; refused past the 64 GsnInterpFrame tells of
+inline constexpr TransferInPicture frame_copy_in_picture(uint32_t c, const FrameTargets &t) {
+    if (c >= t.frame_copies || c >= 64) {
+        return TransferInPicture::refused;
+    }
+    return ((t.copies_between >> c) & 1) ? TransferInPicture::as_is : TransferInPicture::left_out;
+}
+
+// BITBLTBUF: its source the buffer shown where it is the buffer drawn (frame_interp.c's GS_BITBLTBUF)
+inline constexpr uint64_t bitbltbuf_in_picture(uint64_t bitbltbuf, const FrameTargets &t) {
+    return frame_walk_bits(bitbltbuf, 0, 14) == t.draw_fbp * 32 ? (bitbltbuf & ~uint64_t(0x3FFF)) | (t.shown_fbp * 32)
+                                                                : bitbltbuf;
 }
 
 // A transfer of TRXDIR direction (0 upload, 1 read-back, 2 local copy) as the stream has it (ad_write's GS_TRXDIR,

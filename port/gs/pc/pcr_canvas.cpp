@@ -1193,8 +1193,11 @@ private:
     // game draws into buffers that overlap (two 128-wide targets a page row apart): a base inside a surface of the
     // same width, at the start of a row of its pages, is that surface at an offset. A surface made takes in those of
     // its width it overlaps from its base on (their pixels copied to their place in it); every other colour surface
-    // it overlaps is let go (the GS's memory there is this one's now). It starts as the uploads left its pages.
-    Placed colour_surface(uint32_t base_page, uint32_t fbw, uint32_t psm, uint32_t height) {
+    // it overlaps is let go (the GS's memory there is this one's now). It starts as the uploads left its pages, unless
+    // covered: what is about to be written covers rows 0 to height of it whole (a copy of the whole frame), when one
+    // made no taller starts cleared (under water the copy of the frame and the water's targets let each other go
+    // every picture: filled from the uploads each time, 140 pages read and written for nothing)
+    Placed colour_surface(uint32_t base_page, uint32_t fbw, uint32_t psm, uint32_t height, bool covered = false) {
         for (auto &s : colour_) {
             uint32_t x, y;
             if (s->fbw == fbw && s->page_place(base_page, x, y) && x == 0) {
@@ -1237,6 +1240,11 @@ private:
         VkClearValue zero = {};
         c.clear_image(*made->image, zero);
         full_barrier(c);
+        if (covered && taken.empty() && made->height == height) {
+            let_go_overlapping(colour_, made->base_page, made->end_page());
+            colour_.push_back(std::move(made));
+            return {colour_.back().get(), 0, 0};
+        }
         fill_from_uploads(*made);
         // (as much of each as fits: a surface is at most 2048 rows, and one taken in a few rows down may be that tall
         // already; copied whole, the copy ran past the image's end and NVIDIA lost the device: the under-water screen,
@@ -1508,7 +1516,10 @@ private:
             counts_.unsupported_copies++;
             return;
         }
-        Placed placed = colour_surface(dbp / 32, dbw, GSN_PSMCT32, dy + h);
+        // (a copy into the whole of a buffer from its first row: what was there before is not read)
+        bool covered = dx == 0 && dy == 0 && w >= std::max(1u, dbw) * 64 && fx + sx + w <= from->width() &&
+                       fy + sy + h <= from->height;
+        Placed placed = colour_surface(dbp / 32, dbw, GSN_PSMCT32, dy + h, covered);
         Surface *to = placed.surface;
         find_from(); // (the destination made or grown may have taken the source in and let it go)
         if (!to || !from) {
@@ -2511,12 +2522,22 @@ private:
         picture.steps.reserve(frame.steps.size() + 2);
         picture.batches.reserve(frame.batches.size());
         picture.steps.emplace_back(KeptMark{uint64_t(0xF0) << 32});
+        uint32_t frame_copies = 0; // (the frame's copies of the frame met: GsnInterpFrame's count them likewise)
         for (const KeptStep &step : frame.steps) {
-            out.refused = std::visit([&](const auto &kept) { return in_picture(frame, kept, t, picture); }, step);
+            if (const KeptCopy *copy = std::get_if<KeptCopy>(&step); copy && copy_of_frame(copy->transfer, t)) {
+                out.refused = copy_of_frame_in_picture(frame_copies++, *copy, t, picture);
+            } else {
+                out.refused = std::visit([&](const auto &kept) { return in_picture(frame, kept, t, picture); }, step);
+            }
             if (out.refused != FrameWalkRefused::none) {
                 out.walk.reset();
                 return out;
             }
+        }
+        if (frame_copies != t.frame_copies) {
+            out.refused = FrameWalkRefused::copies_drawn; // (not the copies the stream counted: never)
+            out.walk.reset();
+            return out;
         }
         picture.steps.emplace_back(KeptMark{uint64_t(0xF1) << 32});
         return out;
@@ -2579,6 +2600,23 @@ private:
     }
     static FrameWalkRefused in_picture(const Kept &, const KeptUploadAgain &, const FrameTargets &, Kept &) {
         return FrameWalkRefused::marks; // (0x7C: not the game's own packets)
+    }
+    // A copy of the frame (copy_of_frame), the frame's c-th: made again from the buffer shown as the stream makes it
+    // (the frame reads it after: the wobble's under water), or left out
+    static FrameWalkRefused copy_of_frame_in_picture(uint32_t c, const KeptCopy &kept, const FrameTargets &t,
+                                                     Kept &picture) {
+        switch (frame_copy_in_picture(c, t)) {
+        case TransferInPicture::as_is: {
+            KeptCopy again = kept;
+            again.transfer.bitbltbuf = bitbltbuf_in_picture(kept.transfer.bitbltbuf, t);
+            picture.steps.emplace_back(again);
+            return FrameWalkRefused::none;
+        }
+        case TransferInPicture::left_out:
+            return FrameWalkRefused::none;
+        default:
+            return FrameWalkRefused::copies_drawn;
+        }
     }
     static FrameWalkRefused in_picture(const Kept &, const KeptCopy &kept, const FrameTargets &t, Kept &) {
         return transfer_in_picture(2, kept.transfer, t) == TransferInPicture::left_out ? FrameWalkRefused::none

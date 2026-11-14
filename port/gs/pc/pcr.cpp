@@ -649,8 +649,10 @@ public:
         }
         drop_stretch();
         frame_taken_at_ = vblanks_;
-        const pcr::FrameTargets targets = {frame->draw_fbp, frame->shown_fbp, frame->uploads_asked_again != 0,
-                                           frame->shown_kept != 0, frame->kicks};
+        const pcr::FrameTargets targets = {frame->draw_fbp,       frame->shown_fbp,
+                                           frame->uploads_asked_again != 0, frame->shown_kept != 0,
+                                           frame->kicks,          frame_copies_ ? frame->frame_copies : 0,
+                                           frame->copies_between};
         const uint64_t packet_bytes = frame->packet_bytes;
         between_->take_frame(std::move(frame));
         walk_start_ = front_.state();
@@ -778,6 +780,8 @@ public:
         pump_on_ = pump_wanted();
         const char *own = getenv("KF4_PC_LIVE_WALK");
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
+        const char *copies = getenv("KF4_PC_FRAME_COPIES");
+        frame_copies_ = !(copies && strcmp(copies, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -1007,6 +1011,9 @@ private:
     uint64_t stretch_bytes_ = 0, vblanks_ = 0, frame_taken_at_ = 0;
     std::optional<Stretch> last_stretch_;
     bool own_walks_ = true;
+    // KF4_PC_FRAME_COPIES (0: a frame that copies the buffer drawn walks its pictures, as before; else its own walk
+    // makes the copies the stream makes, from the buffer shown: pcr_frame_walk.h's frame_copy_in_picture)
+    bool frame_copies_ = true;
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
