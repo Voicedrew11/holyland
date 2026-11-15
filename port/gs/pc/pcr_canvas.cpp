@@ -4379,9 +4379,9 @@ private:
             if (!passes[i].rgb) {
                 continue;
             }
-            for (uint32_t far : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
-                push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far;
-                c.set_blend_op(far ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+            for (uint32_t far_pass : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
+                push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far_pass;
+                c.set_blend_op(far_pass ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
                 c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
                 c.push_constants(&push, 0, sizeof(push));
                 c.set_depth_test(true, false);
