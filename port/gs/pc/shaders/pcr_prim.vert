@@ -10,6 +10,7 @@
 // them in the frame: a triangle's corner of its own kick (its colour the third's when flat), a sprite's of its two;
 // a triangle whose third kick, or one of the two before it with a place, is dropped there is not drawn.
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 layout(location = 0) in vec2 a_pos;
 layout(location = 1) in uint a_z;
@@ -23,10 +24,19 @@ layout(location = 5) in uvec4 a_kicks;
 layout(location = 6) in uvec2 a_rect;
 // (exact Z, pcr_common.h) a whole Z the triangle's corners share: its first corner's in the frame
 layout(location = 7) in uint a_zref;
+// (exact Z by the plane, pcr_exact_z.h) the triangle's two other corners: X and Y (as a_pos), Z, and in a picture
+// between what each is made of: a triangle's corner its kick, a sprite's its corner (PCR_K_CORNER; the sprite's kicks
+// are this corner's a_kicks.x and .y)
+layout(location = 8) in vec4 a_other_xy;
+layout(location = 9) in uvec2 a_other_z;
+layout(location = 10) in uvec2 a_other_kick;
 
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect;
 
 // the picture's (the picture's header; zeros outside a picture between)
@@ -127,7 +137,29 @@ Corner triangle_corner(uint k, uint colour, uint last, bool fst, out bool gone) 
     return c;
 }
 
+// (exact Z, pcr_exact_z.h) A place (gs_to_clip's) and Z as the plane takes them
+GsCorner gs_corner(vec2 pos, uint z, float zfrac) {
+    return GsCorner(ivec2(roundEven(pos * 16.0)), z, zfrac);
+}
+
+// Another corner of this vertex's triangle (j: 0 or 1), as main() makes its own: in a picture between of the kicks
+// it names, else the frame's
+GsCorner other_corner(uint j, bool moved, bool fst) {
+    uint k = a_other_kick[j];
+    if (moved && (a_kicks.w & PCR_K_SPRITE) != 0u) {
+        Corner c = sprite_corner(a_kicks.x, a_kicks.y, k & PCR_K_CORNER, fst);
+        return gs_corner(c.pos, c.z, c.zfrac);
+    }
+    if (moved) {
+        KickNow r = kick_now(k);
+        return gs_corner(place_of(r, k), r.z, r.zfrac);
+    }
+    return gs_corner(vec2(a_other_xy[2u * j], a_other_xy[2u * j + 1u]) + vec2(pc.place), a_other_z[j], 0.0);
+}
+
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
 #ifdef PCR_RECORDS
     pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
 #endif
@@ -138,10 +170,11 @@ void main() {
     vec4 colour = vec4(a_color);
     vec3 stq = a_stq;
     float fog = a_fog;
-    if (a_kicks.x != NONE && a_kicks.x < pic.counts.x && a_kicks.y < pic.counts.x) {
-        bool fst = (a_kicks.w & PCR_K_FST) != 0u;
+    bool moved = a_kicks.x != NONE && a_kicks.x < pic.counts.x && a_kicks.y < pic.counts.x;
+    bool fst = (a_kicks.w & PCR_K_FST) != 0u;
+    bool gone = false;
+    if (moved) {
         Corner c;
-        bool gone = false;
         if ((a_kicks.w & PCR_K_SPRITE) != 0u) {
             c = sprite_corner(a_kicks.x, a_kicks.y, a_kicks.w & PCR_K_CORNER, fst);
         } else if (a_kicks.z < pic.counts.x) {
@@ -155,6 +188,15 @@ void main() {
         colour = vec4(c.rgba);
         stq = c.stq;
         fog = c.fog;
+    }
+    // (not with tolerant layers, whose Z is the interpolated one with its fraction and reads no plane: pcr_prim.h;
+    // but with the developers' PCR_F_LAYER_PLANE)
+    bool planes = (pc.flags & PCR_F_EXACT_Z) != 0u &&
+                  ((pc.flags & PCR_F_LAYERS) == 0u || (pc.flags & PCR_F_LAYER_PLANE) != 0u);
+    if (planes && !gone) {
+        // (exact Z: pcr_exact_z.h; a moved sprite's or a moved triangle's corners all made of kicks, or none)
+        bool others_moved = moved && ((a_kicks.w & PCR_K_SPRITE) != 0u || a_kicks.z < pic.counts.x);
+        pcr_plane(gs_corner(pos, z, zfrac), other_corner(0u, others_moved, fst), other_corner(1u, others_moved, fst));
     }
     vec2 ndc = gs_to_clip(pos);
     // (the GS keeps Z within what the Z buffer's format holds; taken in at the corners)

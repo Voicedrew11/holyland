@@ -18,6 +18,7 @@
 // and the pixel's Z less it (read at the pixel's middle: pcr_exact_depth); the depth written never past the corners'
 // bound (the GPU's early tests keep)
 #ifdef PCR_EXACT_Z
+#include "pcr_exact_z.h"
 layout(location = 10) flat in uint v_zref;
 layout(location = 11) noperspective in float v_zrel;
 layout(depth_less) out float gl_FragDepth;
@@ -34,6 +35,9 @@ layout(location = 0) PCR_IN vec4 v_color;
 layout(location = 1) PCR_IN vec3 v_stq;
 layout(location = 2) PCR_IN float v_fog;
 layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.vert's a_rect)
+// v_color's divisor: Q for a native draw's whole triangle in a picture between (its colour given times Q:
+// whole_triangle.h, pcr_nd000.vert's draw_whole), else 0 (the colour as is)
+layout(location = 12) PCR_IN float v_color_q;
 
 layout(location = 0) out vec4 o_color;
 #ifdef PCR_RECORDS
@@ -446,6 +450,8 @@ bool alpha_passes(uint a) {
 // - Two draws of the same triangle then tie only if their Z is the same to the bit: it is, where their corners come in
 //   the same order (the canvas's and pcr_native.cpp's order of a triangle's corners), since the corners' Z, the Z they
 //   share and the GPU's interpolation at the pixel's middle are then the same numbers. No slack, no second pass.
+// - Its Z is not the plane's (pcr_exact_z.h: that is the GS's whole Z, --native-layer-z ps2's, and is not worked out
+//   for a tolerant draw): the plane was made for the ties that the corners' order already makes exact here.
 // - A pass with a slack (PCR_F_LAYER_TEST: a colour pass that writes no Z) is tested that much nearer: a layer's (blended
 //   by its alpha and fading out, cut into triangles of its own) a Z and half its change across a GS pixel, up to a Z
 //   more (PCR_F_LAYER_WIDE: two meshes a fraction of a pixel apart are further apart in Z at a grazing angle, and a
@@ -466,12 +472,22 @@ void pcr_exact_depth() {
                       : (pc.flags & PCR_F_LAYER_FINE) != 0u ? PCR_LAYER_SLACK_FINE
                       : (pc.flags & PCR_F_LAYER_WIDE) != 0u ? 1.0 + min(0.5 * slope, 1.0)
                                                             : PCR_LAYER_SLACK;
-        float z = clamp(float(z0) + rel, 0.0, float(pc.zmax)) + slack;
+        // (the Z with its fraction: the corners' interpolated, as before the plane. Developers' KF4_PC_TOL_PLANE=1,
+        // PCR_F_LAYER_PLANE: the plane's own value with its fraction where the triangle has one, pcr_exact_z.h)
+        float zf = float(z0) + rel;
+        if ((pc.flags & PCR_F_LAYER_PLANE) != 0u) {
+            pcr_plane_zf(zf);
+        }
+        float z = clamp(zf, 0.0, float(pc.zmax)) + slack;
         gl_FragDepth = (z + float(pcr_loss_margin())) * pc.zscale;
         return;
     }
-    int r = int(roundEven(rel));
-    uint z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
+    // (the GS's whole Z: the plane's, pcr_exact_z.h; a triangle with none, the corners' interpolated and rounded)
+    uint z;
+    if (!pcr_plane_z(z)) {
+        int r = int(roundEven(rel));
+        z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
+    }
     gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
 #endif
@@ -518,7 +534,7 @@ void main() {
         }
     }
 #endif
-    uvec4 vc = uvec4(v_color + 0.001);
+    uvec4 vc = uvec4((v_color_q > 0.0 ? v_color / v_color_q : v_color) + 0.001);
     uvec4 c = vc;
     if ((pc.flags & PCR_F_TME) != 0u) {
         uvec4 t = sample_texture();

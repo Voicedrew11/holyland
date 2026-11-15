@@ -24,6 +24,8 @@
 #include "pcr_gpu_time.h"
 #include "pcr_hang_watch.h"
 #include "pcr_pipelines.h"
+#include "pcr_plane_pass.h"
+#include "pcr_blend.h"
 #include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
@@ -70,10 +72,14 @@ struct PrimPush {
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
     uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
+    uint32_t plane_at = 0xFFFFFFFFu; // (a native draw's, exact Z: its triangle n's plane the planes buffer's n + this,
+                                     // n gl_VertexIndex / 3; no_plane none: pcr_exact_z.h's pcr_plane_of_draw)
+    uint32_t unused = 0;
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
+constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
 
 // The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
 // recorded), the fragments' records (pcr.h's PcrTraceFragment), then the probes' (PcrTraceProbe)
@@ -92,15 +98,13 @@ enum : uint32_t {
     F_SRC_SHIFT = 6,
     F_PASS_SHIFT = 9,
     F_FBA = 0x800,
-    F_PREMUL = 0x1000,
-    F_C_FIX = 0x2000,
-    F_ALPHA_FACTOR = 0x4000,
     F_DATE = 0x8000,
     F_DATM = 0x10000,
     F_SHADER_BLEND = 0x20000,
     F_SURFACE_CT16 = 0x40000,
     F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
+    F_LAYER_PLANE = 0x200000, // (pcr_common.h, developers' KF4_PC_TOL_PLANE=1) tolerant layers' Z the plane's
     F_DECAL = 0x400000,
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
     F_DECAL_LOSS_FAR = 0x1000000,
@@ -140,6 +144,9 @@ constexpr uint32_t no_table = 0xFFFFu;
 // (a kept walk's samplers, u_samplers: the stock nearest one and 15 of the walk's)
 constexpr uint32_t walk_samplers = 16;
 
+// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
+enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
+
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
 
@@ -157,19 +164,47 @@ struct Vertex {
     uint32_t rect[2] = {no_rect, no_rect};
     // (exact Z, pcr_common.h) a whole Z its triangle's three corners share: the first corner's (link_corners)
     uint32_t zref = 0;
+    // (exact Z by the plane, port/gs/pc/shaders/pcr_exact_z.h) its triangle's two other corners (link_corners): their
+    // X and Y and Z as this corner's are, and in a picture between what each is made of: a triangle's corner its own
+    // kick (kicks[0]), a sprite's its corner (kicks[3]'s K_CORNER bits; the sprite's two kicks are this corner's)
+    float other_xy[2][2] = {};
+    uint32_t other_z[2] = {};
+    uint32_t other_kick[2] = {no_kick, no_kick};
 };
-static_assert(sizeof(Vertex) == 60, "Vertex: the vertex shader's inputs, packed");
+static_assert(sizeof(Vertex) == 92, "Vertex: the vertex shader's inputs, packed");
 
-// Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref; vertices three a triangle)
+// pcr_prim.vert's inputs, a location each (0-10): Vertex's fields, binding 0
+struct VertexInput {
+    VkFormat format;
+    uint32_t offset;
+};
+constexpr VertexInput vertex_inputs[] = {
+    {VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x)},           {VK_FORMAT_R32_UINT, offsetof(Vertex, z)},
+    {VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba)},        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s)},
+    {VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog)},            {VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks)},
+    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect)},          {VK_FORMAT_R32_UINT, offsetof(Vertex, zref)},
+    {VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, other_xy)}, {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_z)},
+    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_kick)},
+};
+constexpr uint32_t vertex_input_count = sizeof(vertex_inputs) / sizeof(vertex_inputs[0]);
+
+// Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref) and its two other corners
+// (Vertex::other_*: the triangle's plane, the same from each corner); vertices three a triangle
 void link_corners(std::span<Vertex> triangles) {
     for (size_t i = 0; i + 3 <= triangles.size(); i += 3) {
         for (size_t k = 0; k < 3; k++) {
-            triangles[i + k].zref = triangles[i].z;
+            Vertex &v = triangles[i + k];
+            v.zref = triangles[i].z;
+            for (size_t j = 0; j < 2; j++) {
+                const Vertex &o = triangles[i + (k + 1 + j) % 3];
+                v.other_xy[j][0] = o.x;
+                v.other_xy[j][1] = o.y;
+                v.other_z[j] = o.z;
+                v.other_kick[j] = (o.kicks[3] & K_SPRITE) != 0 ? o.kicks[3] & K_CORNER : o.kicks[0];
+            }
         }
     }
 }
-// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
-enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
 
 // The GS pixels a primitive may draw (those whose integer points are in its box), less XYOFFSET, inclusive
 struct PixelBox {
@@ -205,102 +240,6 @@ uint32_t z_psm(uint64_t zbuf) {
     return 0x30 | bits(zbuf, 24, 4);
 }
 
-// The blend: Vulkan's factors for ALPHA's (A - B) * C + D, with the shader's part (pcr_prim.frag's flags)
-struct BlendChoice {
-    bool enable = false;
-    VkBlendFactor src = VK_BLEND_FACTOR_ONE, dst = VK_BLEND_FACTOR_ZERO, src_alpha = VK_BLEND_FACTOR_ONE;
-    VkBlendOp op = VK_BLEND_OP_ADD;
-    uint32_t flags = 0;
-    bool write_rgb = true;
-    bool supported = true;
-};
-
-BlendChoice choose_blend(uint64_t alpha, bool abe) {
-    BlendChoice b;
-    if (!abe) {
-        return b;
-    }
-    uint32_t a = bits(alpha, 0, 2), bb = bits(alpha, 2, 2), c = bits(alpha, 4, 2), d = bits(alpha, 6, 2);
-    bool fix = c == 2;
-    if (c == 1) {
-        b.supported = false; // (C = Ad: by As)
-    }
-    uint32_t c_flag = fix ? F_C_FIX : 0;
-    // the factor C as Vulkan reads it: the alpha out (As / 128, put back by the constant) or the constant (FIX / 128)
-    VkBlendFactor by_c = fix ? VK_BLEND_FACTOR_CONSTANT_COLOR : VK_BLEND_FACTOR_SRC_ALPHA;
-    VkBlendFactor by_one_minus_c = fix ? VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    uint32_t c_out = fix ? 0 : F_ALPHA_FACTOR;
-    VkBlendFactor alpha_src = fix ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_CONSTANT_ALPHA;
-    if (a == bb) {
-        // (A - B) is 0: D alone
-        if (d == 0) {
-            return b; // Cs
-        }
-        if (d == 1) {
-            b.write_rgb = false; // Cd: the colour kept, the alpha written
-            return b;
-        }
-        b.flags = F_PREMUL | F_C_FIX; // 0: Cs * 0 (FIX read as 0 by the caller's push)
-        b.flags |= 0x80000000u;      // (the caller gives FIX 0)
-        return b;
-    }
-    if (a == 0 && bb == 1 && d == 1) { // Cs * C + Cd * (1 - C)
-        b.enable = true;
-        b.src = by_c;
-        b.dst = by_one_minus_c;
-        b.src_alpha = alpha_src;
-        b.flags = c_out;
-        return b;
-    }
-    if (a == 1 && bb == 0 && d == 0) { // Cd * C + Cs * (1 - C)
-        b.enable = true;
-        b.src = by_one_minus_c;
-        b.dst = by_c;
-        b.src_alpha = alpha_src;
-        b.flags = c_out;
-        return b;
-    }
-    if (a == 0 && bb == 2) { // Cs * C + D
-        b.flags = F_PREMUL | c_flag;
-        if (d == 1) {
-            b.enable = true;
-            b.dst = VK_BLEND_FACTOR_ONE;
-        } else if (d == 0) {
-            b.enable = true; // Cs * C + Cs: as Cs * (C + 1), not had: Cs * C (counted)
-            b.supported = false;
-        }
-        return b;
-    }
-    if (a == 2 && bb == 0) { // D - Cs * C
-        b.flags = F_PREMUL | c_flag;
-        if (d == 1) {
-            b.enable = true;
-            b.dst = VK_BLEND_FACTOR_ONE;
-            b.op = VK_BLEND_OP_REVERSE_SUBTRACT;
-        } else {
-            b.supported = false; // (0 or Cs less Cs * C: drawn as 0 - nothing)
-            b.flags = F_PREMUL | F_C_FIX | 0x80000000u;
-        }
-        return b;
-    }
-    if (a == 1 && bb == 2) { // Cd * C + D
-        b.enable = true;
-        b.src = d == 0 ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO;
-        b.dst = by_c;
-        b.src_alpha = alpha_src;
-        b.flags = c_out;
-        b.supported = d != 1; // (Cd * (1 + C): drawn as Cd * C)
-        return b;
-    }
-    // the rest ((Cs - Cd) * C + 0 or + Cs, (Cd - Cs) * C + Cd or + 0, 0 - Cd ...): drawn as Cs * C + Cd * (1 - C)
-    b.supported = false;
-    b.enable = true;
-    b.src = by_c;
-    b.dst = by_one_minus_c;
-    b.src_alpha = alpha_src;
-    b.flags = c_out;
-    return b;
-}
 
 // ---- Surfaces --------------------------------------------------------------------------------------------------
 // A buffer the game draws into: its pages from the base, fbw wide, as many rows of pages as height needs
@@ -317,6 +256,10 @@ struct Surface {
     // (a depth surface: the canvas's vblank it was last drawn with; one not drawn with for long is let go,
     // let_go_of_idle_depth)
     uint64_t used = 0;
+    // (a depth surface: cleared whole to cleared_z by another width's clear, clear_depth_aliases, and no Z written into
+    // it since: the same clear again, the frame's second context's, need not clear it again)
+    bool cleared = false;
+    uint32_t cleared_z = 0;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -420,7 +363,9 @@ public:
                           (maker == 0x10DE || maker == 0x1002);
         if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
-                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no depth clamp");
+                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0"
+                    : !f.enabled_features.depthClamp ? "this GPU has no depth clamp"
+                                                     : "this GPU has no 64-bit integers in shaders");
         }
     }
 
@@ -429,6 +374,7 @@ public:
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
+            submit_planes();
             device_.submit(cmd_);
         }
     }
@@ -740,6 +686,20 @@ public:
         clut_serial_++;
     }
 
+    // (Intake::take_frame) The uploads since the last vblank are the frame's: a frame is taken at the vblank after its
+    // packets, and with the mouse turned its first picture between comes before that vblank's own (frame_interp.c's
+    // phase 0), so before vblank() below made the frame's uploads the ones asked for again. That picture's uploads asked
+    // again then found the frame before's: the same place, another texture's texels where the two frames' uploads
+    // differ (the HUD's and the torches' textures go up again every frame, into places they share), a rectangle of
+    // static for one picture at any fixed rate over 30 (2026-11-14, the owner's playtest).
+    void frame_taken() {
+        flush_batch();
+        if (!uploads_now_.empty()) {
+            uploads_frame_.swap(uploads_now_);
+            uploads_now_.clear();
+        }
+    }
+
     void vblank() {
         flush_batch();
         if (!uploads_now_.empty()) {
@@ -889,6 +849,7 @@ public:
         }
         if (cmd_) {
             times_.end(*cmd_);
+            submit_planes();
             note_submit();
             device_.submit(cmd_);
             if (flush) {
@@ -896,6 +857,21 @@ public:
             }
             cmd_.reset();
         }
+    }
+
+    // (exact Z) The plane pass for the command buffer about to be submitted, submitted before it
+    void submit_planes() {
+        if (planes_) {
+            PlanePass::Submitted done = planes_->submit(times_);
+            if (done.dispatches != 0 && hang_notes_) {
+                // (in the hang notes too: its own command buffer, on the queue just before the canvas's)
+                char what[96];
+                snprintf(what, sizeof(what), "plane pass, vblank %llu: %u triangles, %u dispatches",
+                         (unsigned long long)frame_, done.triangles, done.dispatches);
+                hang_notes_->submitted(hang_who_, what, hang_clock_s());
+            }
+        }
+        planes_bound_ = nullptr; // (its chunks let go: the next batch's room is in a new one)
     }
 
     CanvasCounts counts() const {
@@ -1440,6 +1416,7 @@ private:
         }
         full_barrier(c);
         s.image = bigger;
+        s.cleared = false;
         s.ms = bigger_ms;
         if (!s.ms) {
             s.ms_ahead = s.ms_behind = false;
@@ -1673,6 +1650,7 @@ private:
                   VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times_.end(*cmd_);
+        submit_planes();
         note_submit();
         device_.submit(cmd_, &fence);
         cmd_.reset();
@@ -2829,10 +2807,11 @@ private:
         return true;
     }
 
-    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and a
-    // mark that does something (0xF2 keeps the frame shown) read everything anywhere; an upload writes (into the
-    // texture store, and into a surface where it lands on one) and reads no surface, a CLUT load reads the store, and
-    // the marks 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is.
+    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and the
+    // mark 0xF2 (the frame shown kept) read everything anywhere; an upload writes (into the texture store, and into a
+    // surface where it lands on one) and reads no surface, a CLUT load reads the store, and every other mark reads
+    // nothing: 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is, and the rest (frame_interp.c's cameras and
+    // parts, which the native draws took when the frame was drawn) the canvas does nothing with (frame_mark).
     static void mark_dead_writes(Kept &walk) {
         std::vector<WalkStep> steps;
         std::vector<uint32_t> batch_of;
@@ -2845,8 +2824,7 @@ private:
                 w = walk_step(walk.batches[kept->index]);
                 batch = kept->index;
             } else if (const KeptMark *mark = std::get_if<KeptMark>(&step)) {
-                uint32_t what = bits(mark->value, 32, 8);
-                w.reads_anywhere = what == 0xF0 || what == 0xF1 || what == 0xF4 || what == 0xF5 ? 0 : DEAD_ALL;
+                w.reads_anywhere = bits(mark->value, 32, 8) == 0xF2 ? DEAD_ALL : 0;
             } else if (std::holds_alternative<KeptCopy>(step)) {
                 w.reads_anywhere = DEAD_ALL; // (a copy from one place of the GS's memory to another reads its source)
             }
@@ -3063,6 +3041,7 @@ private:
         batch_.other = false;
         batch_.native_alpha_is_one = false;
         batch_.moved = false;
+        batch_.still = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
         batch_.arena.reset();
@@ -3216,7 +3195,10 @@ private:
             const GifVertex &last = p.vertices[2];
             uint32_t zpsm = z_psm(batch_.state.zbuf);
             uint32_t zmax = zpsm == 0x31 ? 0xFFFFFFu : zpsm == 0x30 ? 0xFFFFFFFFu : 0xFFFFu;
-            if (!moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
+            // (with exact Z the fragment stage clamps each pixel's Z itself, from the triangle's plane: no cut. With
+            // tolerant layers, whose Z is not the plane's, cut as before the plane)
+            bool cut = !exact_z_ || (layers_ && !tolerant_planes_);
+            if (cut && !moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
                 std::array<Vertex, 3> v = {make(p.vertices[0], last), make(p.vertices[1], last), make(p.vertices[2], last)};
                 add_cut_at_zmax(v, zmax);
                 for (const Vertex &corner : v) {
@@ -3316,12 +3298,29 @@ private:
         return false;
     }
 
+    // A picture between walked from the frame's packets (the frame's own walk refused, or what its kept walk read of
+    // the store changed): a batch of sprites whose every kick stays as the frame has it is still, as the frame's own
+    // walk's is when it is made the pictures' (in_picture), by the same moves. Without it the frame's clear, moved like
+    // every batch of such a walk, was passed over by clear_depth_aliases in that picture and, the walk kept, in every
+    // picture drawn again from it: the reflection's Z buffer kept the Z of the picture before, and the water showed dark
+    // triangles and squares as the camera turned (2026-11-14, the owner's playtest of #153: a little better, not gone).
+    // KF4_PC_WALKED_STILL=0: never (as before).
+    void tell_still(Batch &b) const {
+        if (!walked_still_on_ || b.native || !b.moved || !b.sprites || !between_ || !between_->active()) {
+            return;
+        }
+        b.still = std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+            return between_->kick_stays(v.kicks[0]) && between_->kick_stays(v.kicks[1]);
+        });
+    }
+
     void flush_batch() {
         if (!batch_open_) {
             return;
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            tell_still(batch_);
             draw_batch(batch_);
             if (keeping_) {
                 kept_->keep(take_kept_batch());
@@ -3425,8 +3424,13 @@ private:
     // the reflection failed against it, and the water showed the black where it was not drawn (2026-11-11). A clear
     // here: a batch of sprites writing one Z with ZTST ALWAYS over whole rows of its surface's pages. Every other depth
     // surface of the format wholly in those pages is cleared to the same Z (any format for Z 0: no bits in any).
+    // In a picture between too, where every GIF batch is one the shader may move (moved): the clear's sprites stay as
+    // the frame has them (still), so they are where and what the vertices say. Left out there, the reflection's Z
+    // buffer kept the Z of the frame's own picture through all the pictures between: its triangles, moved by the
+    // picture's camera, failed wherever the move took them farther, and the water showed black triangles in its
+    // reflection whenever the camera turned (map 009's swamp, 2026-11-14).
     void clear_depth_aliases(const Batch &b, const Surface &depth) {
-        if (b.native || b.moved || !b.sprites || b.vertices.empty()) {
+        if (b.native || (b.moved && !b.still) || !b.sprites || b.vertices.empty()) {
             return;
         }
         uint32_t z = b.vertices[0].z;
@@ -3451,6 +3455,9 @@ private:
             }
             uint32_t zmax = o->psm == 0x30 ? 0xFFFFFFFFu : o->psm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
             float zscale = o->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f; // (pcr_prim.vert's depth)
+            if (o->cleared && o->cleared_z == std::min(z, zmax)) {
+                continue; // (as the clear before left it: the frame's two contexts clear one after the other)
+            }
             VkClearValue value = {};
             value.depthStencil.depth = float(std::min(z, zmax)) * zscale;
             end_pass();
@@ -3458,6 +3465,8 @@ private:
             full_barrier(c);
             c.clear_image(*o->image, value, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
+            o->cleared = true;
+            o->cleared_z = std::min(z, zmax);
             counts_depth_aliases_cleared_++;
         }
     }
@@ -3589,6 +3598,12 @@ private:
             // (one record the batch's pass, and an entry a triangle, in the order drawn)
             auto *entries = reinterpret_cast<MergedTriangle *>(runs_.map + runs_.merged_at);
             memcpy(&records[at], &push, sizeof(push));
+            // (the batch's planes in the order of its runs' triangles, and this pass's entries those of its runs
+            // from first_run on (draw_batch's steps): its draw's triangle n, n from merged_used, is the plane of
+            // first_run's first triangle + n - merged_used)
+            records[at].plane_at = batch_planes_ == no_plane || first_run >= run_plane_at_.size()
+                                       ? no_plane
+                                       : run_plane_at_[first_run] + b.runs[first_run].first - runs_.merged_used;
             uint32_t to = runs_.merged_used;
             for (uint32_t k = first_run; k < first_run + run_count; k++) {
                 const Batch::Run &r = b.runs[k];
@@ -3608,6 +3623,7 @@ private:
             for (uint32_t k = first_run; k < first_run + run_count; k++) {
                 const Batch::Run &r = b.runs[k];
                 memcpy(&records[at], &push, sizeof(push));
+                records[at].plane_at = planes_ && k < run_plane_at_.size() ? run_plane_at_[k] : no_plane;
                 commands[at] = {r.count * 3, 1, r.first * 3, r.instance};
                 at++;
                 counts_layer_triangles_ += (push.flags & F_LAYER_Z) ? r.count : 0;
@@ -3725,6 +3741,54 @@ private:
     }
 
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
+    // (exact Z, a native batch) Room for its triangles' planes in the plane pass, an entry a triangle written:
+    // run_plane_at_ each of its runs' plane_at and batch_planes_ its first plane (no_plane: none). True: a new chunk
+    // of planes (a run bound to the last ends before this batch binds it)
+    // (kept: tolerant layers' corners, their Z with FTOI4's sixteenths: pcr_planes.h's PCR_PLANES_KEPT)
+    bool room_for_planes(const Batch &b, uint32_t place_x, uint32_t place_y, bool ms, bool kept) {
+        run_plane_at_.assign(b.runs.size(), no_plane);
+        batch_planes_ = no_plane;
+        uint32_t n = 0;
+        for (const Batch::Run &r : b.runs) {
+            n += r.count;
+        }
+        bool between = between_ && between_->active();
+        PlaneSources sources = {native_slot(b.program), between ? &between_->picture() : picture_.get(), b.arena,
+                                b.records, b.triangles};
+        PlaneRoom room = planes_->reserve(sources, n);
+        if (!room.entries) {
+            return false;
+        }
+        uint32_t place = (place_x & 0xFFFFu) | place_y << 16;
+        uint32_t scale = scale_[0] | scale_[1] << 8 | (ms ? plane_entry_msaa : 0u) | (kept ? plane_entry_kept : 0u);
+        PlaneEntry *e = room.entries;
+        uint32_t at = room.first;
+        for (size_t i = 0; i < b.runs.size(); i++) {
+            const Batch::Run &r = b.runs[i];
+            run_plane_at_[i] = at - r.first; // (wraps: the vertex shader's triangle r.first + k is plane at + k)
+            for (uint32_t k = 0; k < r.count; k++) {
+                *e++ = {r.first + k, r.instance, place, scale};
+            }
+            at += r.count;
+        }
+        batch_planes_ = room.first;
+        planes_bound_ = room.planes;
+        return room.new_chunk;
+    }
+
+    // A native batch's runs drawn (count of them from first: draw_batch's steps), each with its plane_at
+    // (run_plane_at_: the push constants' others as they are)
+    void draw_native_runs(CommandBuffer &c, const Batch &b, uint32_t first, uint32_t count) {
+        for (uint32_t i = first; i < first + count; i++) {
+            const Batch::Run &r = b.runs[i];
+            if (planes_) {
+                uint32_t at = i < run_plane_at_.size() ? run_plane_at_[i] : no_plane;
+                c.push_constants(&at, offsetof(PrimPush, plane_at), sizeof(at));
+            }
+            c.draw(r.count * 3, 1, r.first * 3, r.instance);
+        }
+    }
+
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
         counts_.batches++;
@@ -3860,6 +3924,9 @@ private:
         if (zwrite && ztst == 1) {
             clear_depth_aliases(b, *depth);
         }
+        if (zwrite) {
+            depth->cleared = false; // (clear_depth_aliases')
+        }
         PixelBox box = {b.x0, b.y0, b.x1, b.y1}; // (GS pixels touched)
         if (b.moved) {
             // (a picture between's corners are where the shader moves them: anywhere in the scissor, within the surface
@@ -3963,6 +4030,7 @@ private:
         flags |= exact_z_ ? F_EXACT_Z : 0;
         // (tolerant layers: not in a Z32 buffer, the menus', whose Zs a float does not keep whole)
         flags |= exact_z_ && layers_ && z_psm(s.zbuf) != 0x30 ? F_LAYERS : 0;
+        flags |= (flags & F_LAYERS) && tolerant_planes_ ? F_LAYER_PLANE : 0;
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -4143,6 +4211,18 @@ private:
         }
         uint32_t first_mask = 0;
         pass_state(steps_[0].pass, first_mask);
+        // (exact Z: the batch's planes worked out by the plane pass before its draws; a run bound to another chunk of
+        // planes ends first. Not with tolerant layers (F_LAYERS): their Z is the interpolated one with its fraction,
+        // pcr_prim.h's pcr_exact_depth, and reads no plane, so none is worked out; but with the developers'
+        // KF4_PC_TOL_PLANE=1, where it is the plane's value with its fraction, from the corners with their sixteenths)
+        if (b.native && planes_) {
+            if ((flags & F_LAYERS) && !(flags & F_LAYER_PLANE)) {
+                run_plane_at_.assign(b.runs.size(), no_plane);
+                batch_planes_ = no_plane;
+            } else if (room_for_planes(b, placed.x, placed.y, ms, (flags & F_LAYERS) != 0)) {
+                flush_run();
+            }
+        }
         // (the run open ended here unless this batch's first pass continues it: the state set below is this batch's)
         if (runs_.open && (!in_run || !(runs_.key == key))) {
             flush_run();
@@ -4265,11 +4345,10 @@ private:
             }
             c.push_constants(&push, 0, sizeof(push));
             if (b.native) {
+                draw_native_runs(c, b, first_run, runs_drawn);
+                counts_.native_draw_calls += runs_drawn;
                 for (uint32_t k = first_run; k < first_run + runs_drawn; k++) {
-                    const Batch::Run &r = b.runs[k];
-                    c.draw(r.count * 3, 1, r.first * 3, r.instance);
-                    counts_.native_draw_calls++;
-                    counts_layer_triangles_ += pass.layer_z ? r.count : 0;
+                    counts_layer_triangles_ += pass.layer_z ? b.runs[k].count : 0;
                 }
                 continue;
             }
@@ -4307,9 +4386,7 @@ private:
                 c.push_constants(&push, 0, sizeof(push));
                 c.set_depth_test(true, false);
                 if (b.native) {
-                    for (const Batch::Run &r : b.runs) {
-                        c.draw(r.count * 3, 1, r.first * 3, r.instance);
-                    }
+                    draw_native_runs(c, b, 0, uint32_t(b.runs.size()));
                     continue;
                 }
                 set_vertex_attribs(c);
@@ -4511,6 +4588,7 @@ private:
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
     static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
     static constexpr uint32_t merged_binding = 8;  // (set 1's: the picture's merged runs' triangles, Runs)
+    static constexpr uint32_t planes_binding = 9;  // (set 1's: the native draws' planes, exact Z: PlanePass)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -4524,6 +4602,7 @@ private:
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
         c.set_storage_buffer(1, records_binding, runs_.buffer ? *runs_.buffer : *picture_); // (pcr_common.h's u_records)
+        c.set_storage_buffer(1, planes_binding, planes_bound_ ? *planes_bound_ : *picture_); // (pcr_exact_z.h's u_planes)
         if (runs_.buffer && runs_.merged_capacity != 0) {
             c.set_storage_buffer(1, merged_binding, *runs_.buffer, runs_.merged_at,
                                  VkDeviceSize(runs_.merged_capacity) * sizeof(MergedTriangle)); // (u_merged)
@@ -4570,14 +4649,9 @@ private:
     }
 
     void set_vertex_attribs(CommandBuffer &c) {
-        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
-        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, z));
-        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba));
-        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
-        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
-        c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
-        c.set_vertex_attrib(6, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect));
-        c.set_vertex_attrib(7, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, zref));
+        for (uint32_t i = 0; i < vertex_input_count; i++) {
+            c.set_vertex_attrib(i, 0, vertex_inputs[i].format, vertex_inputs[i].offset);
+        }
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -4696,6 +4770,7 @@ private:
             c.clear_image(*image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
             s->image = image;
+            s->cleared = false;
         }
     }
 
@@ -4711,11 +4786,16 @@ private:
         }
         // (set 1's records of the picture's runs, u_records: read by the runs' programs, PCR_RECORDS, in both stages;
         // declared in every batch program, so that one and a run's have the same layout and a change binds nothing)
-        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding;
+        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding | 1u << planes_binding;
         batch_vert.sets[1].meta[records_binding].array_size = 1;
         batch_vert.sets[1].meta[merged_binding].array_size = 1;
+        batch_vert.sets[1].meta[planes_binding].array_size = 1; // (u_planes: the native programs', exact Z)
         ResourceLayout vert = batch_vert;
-        vert.input_mask = 0x7F;
+        // (every input pcr_prim.vert reads, locations 0-10, set_vertex_attribs': Granite builds a pipeline's vertex input
+        // from the layout's mask, so an input left out of it was read undefined. Was 0x7F from 2026-11-13 to 11-15: the
+        // GS primitives' shared Z (a_zref) and plane corners (a_other_*) were whatever the GPU read there; the Vulkan
+        // validation layer's VUID-VkGraphicsPipelineCreateInfo-Input-07904)
+        vert.input_mask = (1u << vertex_input_count) - 1;
         ResourceLayout frag = {};
         frag.output_mask = 1;
         frag.push_constant_size = sizeof(PrimPush);
@@ -4738,18 +4818,18 @@ private:
         frag.sets[2].separate_image_mask = 1u;
         frag.sets[2].meta[0].array_size = DescriptorSetLayout::UNSIZED_ARRAY;
         frag.bindless_set_mask = 1u << 2;
-        Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
-        // (the fragment shaders with exact Z, _xz, where it is on: pcr_common.h)
+        // (the shaders with exact Z, _xz, where it is on: pcr_common.h; the vertex shaders work out each triangle's
+        // plane, pcr_exact_z.h)
         auto shader = [&](const uint32_t *code, size_t size, const uint32_t *exact, size_t exact_size,
                           const ResourceLayout *layout) {
             return exact_z_ ? device_.request_shader(exact, exact_size, layout) : device_.request_shader(code, size, layout);
         };
 #define PCR_SHADER(name, layout) \
     shader(pcr_spv_##name, sizeof(pcr_spv_##name), pcr_spv_##name##_xz, sizeof(pcr_spv_##name##_xz), layout)
+        Shader *vs = PCR_SHADER(pcr_prim_vert, &vert);
         Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
         Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
         Shader *zfs = PCR_SHADER(pcr_prim_zonly_frag, &frag);
-#define PCR_VERTEX_SHADER(name, layout) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
         // (each vertex shader with the four fragment shaders: draw_batch's choice)
         auto programs_for = [&](int v, Shader *vertex) {
             programs_[v] = device_.request_program(vertex, fs);
@@ -4771,7 +4851,7 @@ private:
             run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
             run_zonly_programs_[v] = device_.request_program(vertex, rzfs);
         };
-        run_programs_for(0, PCR_VERTEX_SHADER(pcr_prim_vert_rec, &vert));
+        run_programs_for(0, PCR_SHADER(pcr_prim_vert_rec, &vert));
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0] = frag.sets[0];
@@ -4793,21 +4873,19 @@ private:
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
         Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, xfs);
+        // (the native programs' vertex shaders one variant with exact Z or without: their planes are the plane pass's)
         ResourceLayout nd = batch_vert;
-        Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
-        programs_for(1, nvs);
-        Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
-        programs_for(2, nvs280);
-        Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
-        programs_for(3, nvs700);
-        Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
-        programs_for(4, nvsripple);
-        run_programs_for(1, PCR_VERTEX_SHADER(pcr_nd000_vert_rec, &nd));
-        run_programs_for(2, PCR_VERTEX_SHADER(pcr_nd280_vert_rec, &nd));
-        run_programs_for(3, PCR_VERTEX_SHADER(pcr_nd700_vert_rec, &nd));
-        run_programs_for(4, PCR_VERTEX_SHADER(pcr_ndripple_vert_rec, &nd));
+#define PCR_ND_SHADER(name) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), &nd)
+        programs_for(1, PCR_ND_SHADER(pcr_nd000_vert));
+        programs_for(2, PCR_ND_SHADER(pcr_nd280_vert));
+        programs_for(3, PCR_ND_SHADER(pcr_nd700_vert));
+        programs_for(4, PCR_ND_SHADER(pcr_ndripple_vert));
+        run_programs_for(1, PCR_ND_SHADER(pcr_nd000_vert_rec));
+        run_programs_for(2, PCR_ND_SHADER(pcr_nd280_vert_rec));
+        run_programs_for(3, PCR_ND_SHADER(pcr_nd700_vert_rec));
+        run_programs_for(4, PCR_ND_SHADER(pcr_ndripple_vert_rec));
+#undef PCR_ND_SHADER
 #undef PCR_SHADER
-#undef PCR_VERTEX_SHADER
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;
@@ -4859,6 +4937,10 @@ private:
         traits.depth_format = depth_format_;
         traits.dynamic_ds = dynamic_.ds;
         traits.dynamic_blend = dynamic_.blend;
+        for (uint32_t i = 0; i < vertex_input_count; i++) {
+            traits.attribs[i] = {0, vertex_inputs[i].format, vertex_inputs[i].offset};
+        }
+        traits.vertex_stride = sizeof(Vertex);
         warm_watch(device_, warmed, 23, expand_program_, traits);
     }
 
@@ -4899,8 +4981,22 @@ private:
     // and the later draw wins. Needs depth clamp (the corners' bound past 1), which every desktop GPU has. Without it, or
     // with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn over a surface cut into other triangles lose to
     // it here and there.
+    // (and 64-bit integers: the plane's exact arithmetic, pcr_exact_z.h)
     const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
+                          device_.get_device_features().enabled_features.shaderInt64 &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
+    // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
+    // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
+    const std::unique_ptr<PlanePass> planes_ =
+        exact_z_ && !(getenv("KF4_PC_PLANES") && strcmp(getenv("KF4_PC_PLANES"), "0") == 0)
+            ? std::make_unique<PlanePass>(device_)
+            : nullptr;
+    // (developers' KF4_PC_TOL_PLANE=1: tolerant layers' Z the plane's value with its fraction, not the corners'
+    // interpolated: to compare the two, pcr_prim.h's pcr_exact_depth)
+    const bool tolerant_planes_ = planes_ && getenv("KF4_PC_TOL_PLANE") && strcmp(getenv("KF4_PC_TOL_PLANE"), "1") == 0;
+    const Buffer *planes_bound_ = nullptr; // (the planes buffer of the last batch's room: set 1's, bind_between)
+    std::vector<uint32_t> run_plane_at_;   // (the batch drawn: each of its runs' plane_at, or no_plane)
+    uint32_t batch_planes_ = no_plane;     // (... its first plane in planes_bound_)
     struct MsaaCounts {
         uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;
     } counts_msaa_;
@@ -4991,6 +5087,7 @@ private:
     // dual-source blend (a blend change ends a run: to compare)
     const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
     const bool dead_on_ = !(getenv("KF4_PC_DEAD") && strcmp(getenv("KF4_PC_DEAD"), "0") == 0);
+    const bool walked_still_on_ = !(getenv("KF4_PC_WALKED_STILL") && strcmp(getenv("KF4_PC_WALKED_STILL"), "0") == 0);
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     const char *const merged_env_ = getenv("KF4_PC_MERGED");
     const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
@@ -5266,6 +5363,9 @@ void Canvas::submit() {
 }
 void Canvas::vblank() {
     impl_->vblank();
+}
+void Canvas::frame_taken() {
+    impl_->frame_taken();
 }
 CanvasCounts Canvas::counts() const {
     return impl_->counts();

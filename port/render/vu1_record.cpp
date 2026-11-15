@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 extern "C" {
@@ -264,6 +265,96 @@ Vu1Record vu1_record_5a0(const RdDraw &d, const RdCamera &cam) {
     memset(k.point_col, 0, sizeof(k.point_col));
     k.info[0] = 0;
     return k;
+}
+
+namespace {
+
+// a = b x c, matrices VU layout (m[col * 4 + row]), in doubles
+void mat_mul(double *a, const double *b, const double *c) {
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            double s = 0.0;
+            for (int i = 0; i < 4; i++) {
+                s += b[i * 4 + row] * c[col * 4 + i];
+            }
+            a[col * 4 + row] = s;
+        }
+    }
+}
+
+// The inverse of m (Gauss-Jordan, the largest pivot); false if m has none
+bool mat_inverse(double *inv, const double *m) {
+    double a[4][8];
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            a[r][c] = m[c * 4 + r];
+            a[r][c + 4] = r == c ? 1.0 : 0.0;
+        }
+    }
+    for (int c = 0; c < 4; c++) {
+        int p = c;
+        for (int r = c + 1; r < 4; r++) {
+            p = std::fabs(a[r][c]) > std::fabs(a[p][c]) ? r : p;
+        }
+        if (!(std::fabs(a[p][c]) > 1e-30)) {
+            return false;
+        }
+        std::swap(a[p], a[c]);
+        double k = 1.0 / a[c][c];
+        for (int j = 0; j < 8; j++) {
+            a[c][j] *= k;
+        }
+        for (int r = 0; r < 4; r++) {
+            if (r != c && a[r][c] != 0.0) {
+                double f = a[r][c];
+                for (int j = 0; j < 8; j++) {
+                    a[r][j] -= f * a[c][j];
+                }
+            }
+        }
+    }
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            inv[c * 4 + r] = a[r][c + 4];
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool vu1_mirror_plane(const RdCamera &cam, float plane[4]) {
+    if (cam.mode != 1) {
+        return false;
+    }
+    double ws[16], view[16], screen[16], sv[16], sv_inv[16], mirror[16], ws_inv[16], view_inv[16];
+    for (int i = 0; i < 16; i++) {
+        ws[i] = (&cam.world_screen[0][0])[i];
+        view[i] = (&cam.view[0][0])[i];
+        screen[i] = (&cam.screen[0][0])[i];
+    }
+    mat_mul(sv, screen, view);
+    if (!mat_inverse(sv_inv, sv) || !mat_inverse(ws_inv, ws) || !mat_inverse(view_inv, view)) {
+        return false;
+    }
+    // the mirror (GameLoop_SetCameraMatrices: up h, y turned, down h): y' = 2h - y, all else as it was
+    mat_mul(mirror, sv_inv, ws);
+    if (std::fabs(mirror[5] + 1.0) > 1e-3 || std::fabs(mirror[0] - 1.0) > 1e-3 || std::fabs(mirror[10] - 1.0) > 1e-3) {
+        return false;
+    }
+    double h = mirror[13] * 0.5;
+    // the eye (view's inverse's translation); world y is down, the water's surface y = h. The plane in the world:
+    // (0, s, 0, -s h), s so that the eye's side is more than 0; in the screen's space: that by world_screen's inverse
+    double s = view_inv[13] >= h ? 1.0 : -1.0;
+    double world[4] = {0.0, s, 0.0, -s * h};
+    for (int col = 0; col < 4; col++) {
+        double v = 0.0;
+        for (int row = 0; row < 4; row++) {
+            v += world[row] * ws_inv[col * 4 + row];
+        }
+        plane[col] = float(v);
+    }
+    return true;
 }
 
 Vu1Record280 vu1_record_280(const RdDraw &d, const RdCamera &cam) {

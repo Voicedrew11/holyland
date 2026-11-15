@@ -168,6 +168,10 @@ typedef struct {
        display.native_sky, live from the overlay's Developer page */
     int native_sky;
     int native_sky_forced; /* --sky: this run's, whatever settings.json says */
+    /* --reflection-clip (port_reflection_clip(), port/include/port/host.h): the mirror image cut at its water, on by
+       default; settings.json display.reflection_clip, live from the overlay's Display page */
+    int reflection_clip;
+    int reflection_clip_forced; /* --reflection-clip: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */

@@ -100,6 +100,8 @@ struct Place {
 #endif
 };
 
+#include "past_band.h"
+#include "whole_triangle.h"
 struct Moved {
     int x, y;
     uint z;
@@ -111,10 +113,25 @@ struct Moved {
 #endif
 };
 
+// How far a picture between moves a place v in the frame's view (s the vertex's set): with the camera, and by the
+// part's own matrices t of the way from the frame before (in the eye's space, the arm's, alone)
+vec3 picture_move(uint slot, int s, vec3 v) {
+    vec3 dm = vec3(0.0);
+    if ((d.info.y & ND_C_EYE) == 0) {
+        dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                  dot(pic.move[2].xyz, v) + pic.move[2].w);
+    }
+    if ((d.info.y & ND_C_MODEL) != 0) {
+        vec3 e = between_move(d.bt[s], qf(slot, 0u), pic.zt.w);
+        dm = (d.info.y & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    return dm;
+}
+
 Moved moved(uint slot, int s, Place p) {
     Moved r;
-    r.x = p.x & 0xFFFF;
-    r.y = p.y & 0xFFFF;
+    r.x = p.x; // (not wrapped to the GS's 16 bits: within the band the same, past it its place, past_band.h)
+    r.y = p.y;
     r.z = uint(p.z >> 4) & 0xFFFFFFu;
     r.f = 1.0;
     r.drop = false;
@@ -128,15 +145,7 @@ Moved moved(uint slot, int s, Place p) {
     }
     vec3 v = vec3(view_place(float(r.x) / 16.0 - d.screen[2].x, p.q, d.screen[0].x),
                   view_place(float(r.y) / 16.0 - d.screen[2].y, p.q, d.screen[1].y), depth);
-    vec3 dm = vec3(0.0);
-    if ((d.info.y & ND_C_EYE) == 0) {
-        dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
-                  dot(pic.move[2].xyz, v) + pic.move[2].w);
-    }
-    if ((d.info.y & ND_C_MODEL) != 0) {
-        vec3 e = between_move(d.bt[s], qf(slot, 0u), pic.zt.w);
-        dm = (d.info.y & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
-    }
+    vec3 dm = picture_move(slot, s, v);
     float mz = v.z + dm.z;
     if (!(mz > 0.0)) {
         r.drop = true;
@@ -147,12 +156,14 @@ Moved moved(uint slot, int s, Place p) {
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
     float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
     float nz = float(r.z) - dz;
-    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+    // (past the guard band: kept, past_band.h)
+    vec2 n = vec2(nx, ny);
+    if (!(nz >= 0.0) || !past_band_place(n)) {
         r.drop = true;
         return r;
     }
-    r.x = int(floor(nx * 16.0 + 0.5));
-    r.y = int(floor(ny * 16.0 + 0.5));
+    r.x = int(floor(n.x * 16.0 + 0.5));
+    r.y = int(floor(n.y * 16.0 + 0.5));
     uint z = r.z;
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
     r.zfrac = float(int(z - r.z)) - dz; // (from the move alone: small, exact to its float)
@@ -169,6 +180,15 @@ Moved moved(uint slot, int s, Place p) {
 // The vertex's set: its ST's w (the low 16 bits, as ILW loads them)
 int vertex_set(uint slot) {
     return (uint(mesh.q[slot * 4u + 2u].w) & 0xFFFFu) != 0u ? 1 : 0;
+}
+
+// (a fast turn: pcr_nd280.vert's whole triangles, whole_triangle.h) A vertex at a picture between's time, from VU1's
+// own place times w
+Whole whole_place(uint slot) {
+    int s = vertex_set(slot);
+    vec4 c = vu_transform(d.vertex[s], qf(slot, 0u));
+    vec3 v = whole_frame_view(c, 1.0);
+    return whole_corner(c, 1.0, v, picture_move(slot, s, v));
 }
 
 // The vertex's place as VU1 leaves it (its set's vertex matrix)

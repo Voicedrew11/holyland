@@ -38,6 +38,7 @@ enum class GpuWork : uint8_t {
     copy,         // local copies between surfaces, read-backs
     picture,      // the picture: the scanout, its copy into the ring, read back
     present,      // the picture scaled to the window and sharpened (pcr.cpp's PresentScaler)
+    planes,       // the native draws' planes worked out (exact Z: pcr_plane_pass.h)
     count,
 };
 

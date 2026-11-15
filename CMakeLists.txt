@@ -152,6 +152,7 @@ add_library(kf4_port STATIC
     port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
     port/platform/gs.c
     port/platform/frame_interp.c
+    port/platform/interp_camera.c
     port/platform/adaptive_sync.c
     port/platform/field_frames.c
     port/platform/video.c
@@ -661,6 +662,13 @@ if(KF4_TESTS)
     add_test(NAME adaptive_sync COMMAND adaptive_sync_test)
 endif()
 
+# Whole frames: which vblanks are drawn again for the other field (port/platform/field_frames.c)
+add_executable(field_frames_test tests/field_frames_test.c port/platform/field_frames.c)
+target_include_directories(field_frames_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME field_frames COMMAND field_frames_test)
+endif()
+
 # Instant mouse look's turn of the pictures between (port/platform/mouse_lead.c)
 add_executable(mouse_lead_test tests/mouse_lead_test.c port/platform/mouse_lead.c port/math/libvu0.c)
 target_include_directories(mouse_lead_test PRIVATE port/include)
@@ -669,6 +677,17 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
+endif()
+
+# The pictures between's cameras: cuts, and the camera between (port/platform/interp_camera.c)
+add_executable(interp_camera_test tests/interp_camera_test.c port/platform/interp_camera.c port/platform/mouse_lead.c
+    port/math/libvu0.c)
+target_include_directories(interp_camera_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(interp_camera_test PRIVATE m pthread)
+endif()
+if(KF4_TESTS)
+    add_test(NAME interp_camera COMMAND interp_camera_test)
 endif()
 
 # Twin-stick controls: the sticks as the game's buttons and the speeds they set (port/sdk/twin_stick.c)
@@ -764,6 +783,18 @@ if(KF4_TESTS)
     add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
 endif()
 
+# The GS's blend as Vulkan's (port/gs/pc/pcr_blend.h, header only)
+add_executable(pcr_blend_test tests/pcr_blend_test.cpp)
+target_include_directories(pcr_blend_test PRIVATE port/gs/pc
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
+set_target_properties(pcr_blend_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_blend_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_blend COMMAND pcr_blend_test)
+endif()
+
 # The watch for a GPU that has stopped answering (port/gs/pc/pcr_hang_notes.h, pcr_hang_watch.h): the notes kept, the
 # report, and (pcr_hang_watch, about 4 s) a wait that never ends ending the process with the report written
 add_executable(pcr_hang_watch_test tests/pcr_hang_watch_test.cpp port/gs/pc/pcr_hang_watch.cpp)
@@ -843,6 +874,15 @@ if(NOT WIN32)
     target_link_libraries(ripple_test PRIVATE m)
 endif()
 add_test(NAME ripple COMMAND ripple_test)
+
+# Exact Z's plane (port/render/shaders/plane_z.h, the PC renderer's fragment stage's arithmetic, compiled as C++)
+# against 128-bit integers
+add_executable(plane_z_test tests/plane_z_test.cpp)
+set_target_properties(plane_z_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(plane_z_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME plane_z COMMAND plane_z_test)
 
 # The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
 # at t 0 and 1, the sections, the pairing by identity, the trail's pairs

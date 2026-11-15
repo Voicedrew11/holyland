@@ -38,8 +38,9 @@ struct Vu1Record {
     int32_t info[4];     // the point lights; XYOFFSET's X and Y (12.4); VU1_MOVE_* and VU1_* flags below
     Vu1Between bt;       // (VU1_MOVE_MODEL) the part's own move from the frame before
     uint32_t wave[16];   // (VU1_WAVE) the 16 waves' offsets to S (low 16 bits) and T (high): RdDraw.parent's
+    float clip[4];       // (the renderer's) the mirror image's cut at the water (vu1_mirror_plane); 0s: no cut
 };
-static_assert(sizeof(Vu1Record) == 50 * 16, "Vu1Record is the shaders' Draw");
+static_assert(sizeof(Vu1Record) == 51 * 16, "Vu1Record is the shaders' Draw");
 
 // Vu1Record.info[3] (vu1_000_draw.h's ND_C_*)
 enum : int32_t {
@@ -61,6 +62,15 @@ Vu1Record vu1_record_000(const RdDraw &draw, const RdCamera &camera);
 // point lights and no fog, so that the colour and fog come out 0 as 0x5A0 makes them
 Vu1Record vu1_record_5a0(const RdDraw &draw, const RdCamera &camera);
 
+// The mirror image (RdCamera.mode 1: the reflection on the water of maps 008, 009 and 014, map 041's mirror) cut at
+// its water. The game mirrors the whole scene about the water line (GameLoop_SetCameraMatrices' mode 1) and cuts
+// nothing off, so what is under the water (a zombie's feet in a pond) showed in the reflection above it, behind what
+// is over the water. plane: in the screen's homogeneous space (VU1's X w, Y w, Z w, w: the vertex matrix's product),
+// its dot with a vertex's the distance of the vertex's own place from the water, more than 0 on the eye's side; the
+// native draws' shaders cut there (gl_ClipDistance). The water's height and the eye come from the camera's matrices
+// (world_screen is screen x view x the mirror about y = h). False, plane untouched, for any other camera.
+bool vu1_mirror_plane(const RdCamera &camera, float plane[4]);
+
 // vu1_280_draw.h's Draw (program 0x280, the skinned models): two matrix sets, A the part's (VU1 0x04) and B its
 // parent's (0x08), each vertex taking one by its ST's w
 struct Vu1Record280 {
@@ -76,8 +86,9 @@ struct Vu1Record280 {
     int32_t offset[4];      // XYOFFSET_1's X and Y, XYOFFSET_2's (12.4): the renderer's
     float screen[16];       // view to screen
     Vu1Between bt[2];       // (VU1_MOVE_MODEL) set A's and set B's moves from the frame before
+    float clip[4];          // (the renderer's) the mirror image's cut at the water (vu1_mirror_plane); 0s: no cut
 };
-static_assert(sizeof(Vu1Record280) == 71 * 16, "Vu1Record280 is the shaders' Draw");
+static_assert(sizeof(Vu1Record280) == 72 * 16, "Vu1Record280 is the shaders' Draw");
 
 // The draw's record for program 0x280: VU1's set-up for each matrix set (vu1_record_000's maths), the light colours,
 // fog, sphere matrices, colour scale and bias as they are. XYOFFSET and the moves are left 0: the renderer's.

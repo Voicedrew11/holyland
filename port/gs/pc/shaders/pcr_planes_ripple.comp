@@ -1,0 +1,52 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The plane pass of native program the ripple (pcr_planes.h): each triangle's corners as pcr_ndripple.vert draws them, its
+// plane worked out once (pcr_exact_z.h)
+#define PCR_PLANES
+#define PCR_EXACT_Z
+#include "pcr_exact_z.h"
+
+// (as pcr_ndripple.vert's)
+layout(set = 0, binding = 14, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
+    vec4 move[3];
+    vec4 mid[3];
+    vec4 screen[2];
+    vec4 zt;
+} pic;
+layout(set = 0, binding = 12, std430) readonly buffer Mesh {
+    ivec4 q[];
+} mesh;
+#include "ripple_draw.h"
+layout(set = 0, binding = 13, std430) readonly buffer Draws {
+    Draw draws[];
+};
+#include "ripple_maths.h"
+#include "pcr_planes.h"
+
+// Corner k: its place (in a picture between moved, Z with its fraction), X and Y in the GS's 16 bits as the ripple
+// keeps them
+GsCorner corner(uint k, ivec2 place, bool kept) {
+    uint z;
+    Place p = vertex_place(k, z);
+    GsCorner c = GsCorner(ivec2(p.x, p.y), z, 0.0);
+    if ((d.info.z & RIPPLE_C_MOVING) != 0) {
+        Moved m = moved(p, z);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+    }
+    // (tolerant layers: the sixteenths FTOI4 leaves the corner's Z kept, as the vertex shader's)
+    c.zfrac += kept ? float(p.z & 15) / 16.0 : 0.0;
+    c.xy = ivec2(int(uint(c.xy.x) & 0xFFFFu), int(uint(c.xy.y) & 0xFFFFu)) + 16 * place - d.info.xy;
+    return c;
+}
+
+// (tri.x's top three bits: the order of its corners by their places, the vertex shader's with tolerant layers; the
+// plane is the same in any order)
+void plane_corners(uvec4 tri, uint instance, ivec2 place, bool kept, out GsCorner c0, out GsCorner c1, out GsCorner c2) {
+    d = draws[instance & 0x3FFFFFFFu];
+    c0 = corner(tri.x & 0x1FFFFFFFu, place, kept);
+    c1 = corner(tri.y, place, kept);
+    c2 = corner(tri.z, place, kept);
+}

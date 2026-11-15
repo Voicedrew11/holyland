@@ -128,6 +128,14 @@ public:
     NativeCounts counts_;
 
 private:
+    // A draw of the mirror image cut at the water (port_reflection_clip(), on by default): the plane its record carries
+    // to the shaders (vu1_mirror_plane), else 0s, nothing cut
+    static void mirror_cut(float clip[4], const RdCamera &cam) {
+        if (!port_reflection_clip() || !vu1_mirror_plane(cam, clip)) {
+            memset(clip, 0, 16);
+        }
+    }
+
     // A move on a draw's record (the frame's walk's is none: its place kept for the next frame's pictures)
     static void apply_move(Vu1Record &k, const PartMove &m) {
         k.info[3] |= m.flags;
@@ -163,6 +171,11 @@ private:
         apply_move(k, PartMove());
         apply_move(picture, m);
         return put_pair(list, RECORDS_ROOM, &k, &picture, sizeof(k));
+    }
+
+    // Pictures between will draw this walk's draws (the frame's walk kept for them, or a picture's own walk)
+    bool pictures_draw() const {
+        return walk_ != PartWalk::frame;
     }
 
     // A batch of a draw whose record is put twice in the frame's walk kept: the instance its picture between draws
@@ -209,6 +222,7 @@ private:
         // (program 0x5A0, the shadows: 0x000's maths from the silhouette meshes, no lights and no fog)
         bool shadow = d.program == 0x5A0;
         Vu1Record k = shadow ? vu1_record_5a0(d, cam) : vu1_record_000(d, cam);
+        mirror_cut(k.clip, cam);
         // (the XYOFFSET of the context the draw's PRIM picks, before its batches write PRIM: the game's draws keep both
         // contexts' the same)
         const GsRegisterFile &file = front.registers();
@@ -296,6 +310,7 @@ private:
     void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record k = vu1_record_700(d, cam);
+        mirror_cut(k.clip, cam);
         const GsRegisterFile &file = front.registers();
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
@@ -326,13 +341,16 @@ private:
                     continue;
                 }
                 if (!plan.kick) {
+                    if (pictures_draw()) {
+                        draw_left_out(b, base, 1, NativeProgram::vu1_700, records_.buffer, record, front, canvas);
+                    }
                     continue;
                 }
                 front.write(gs_reg::prim, (b.tag[0] >> 47) & 0x7FF);
                 uint32_t prim = front.prim_in_effect();
                 NativeBatch nb;
                 nb.program = NativeProgram::vu1_700;
-                nb.first_triangle = list_kicked(b, plan.adc, base, 1, nb.triangle_count);
+                nb.first_triangle = list_kicked(b, plan.adc, base, 1, pictures_draw(), nb.triangle_count);
                 if (nb.triangle_count == 0) {
                     continue;
                 }
@@ -598,7 +616,9 @@ private:
 
     // A water draw's record with its move (in the frame's walk kept, the frame's and then its picture's, as put_pair)
     uint32_t put_ripple(RippleRecord &k, const PartMove &m) {
-        int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA : 0;
+        // (RIPPLE_LIFT_WHOLE: the pictures' S and T from the lifted place moved whole, ripple_maths.h's moved_lift;
+        // KF4_PC_RIPPLE_LIFT=0: by moved(), as before)
+        int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA | (ripple_lift_ ? RIPPLE_LIFT_WHOLE : 0) : 0;
         if (walk_ != PartWalk::frame_kept) {
             k.info[2] |= moving;
             return put(records_ripple_, RECORDS_ROOM, &k, sizeof(k));
@@ -683,6 +703,7 @@ private:
     void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record280 k = vu1_record_280(d, cam);
+        mirror_cut(k.clip, cam);
         const GsRegisterFile &file = front.registers();
         for (int c = 0; c < 2; c++) {
             uint64_t offset = file.reg[gs_reg::xyoffset_1 + c];
@@ -712,6 +733,9 @@ private:
                     continue;
                 }
                 if (plan.all_clipped) {
+                    if (pictures_draw()) {
+                        draw_left_out(b, base, 2, NativeProgram::vu1_280, records_280_.buffer, record, front, canvas);
+                    }
                     continue;
                 }
                 for (uint32_t pass = 0; pass < 1u + b.sphere; pass++) {
@@ -724,7 +748,7 @@ private:
                     uint32_t prim = front.prim_in_effect();
                     NativeBatch nb;
                     nb.program = NativeProgram::vu1_280;
-                    nb.first_triangle = list_kicked(b, plan.adc, base, 2, nb.triangle_count);
+                    nb.first_triangle = list_kicked(b, plan.adc, base, 2, pictures_draw(), nb.triangle_count);
                     if (nb.triangle_count == 0) {
                         continue;
                     }
@@ -741,12 +765,46 @@ private:
         fetched_.clear();
     }
 
+    // A batch VU1 kicks nothing of (every vertex clipped: a character or an effect wholly out of the frame's view), its
+    // triangles listed for the pictures between only (list_kicked's left out). Its first pass alone (a 0x280 batch's
+    // sphere-mapped shine is not drawn: its registers are another A+D packet), and PRIM from its tag given to the canvas
+    // without writing it: VU1 kicks neither, so the GS's registers stay as the frame leaves them.
+    void draw_left_out(const RdBatch &b, uint32_t base, uint32_t slots, NativeProgram program, const BufferHandle &records,
+                       uint32_t record, GifFrontEnd &front, Canvas &canvas) {
+        NativeBatch nb;
+        nb.program = program;
+        nb.first_triangle = list_kicked(b, nullptr, base, slots, true, nb.triangle_count);
+        if (nb.triangle_count == 0) {
+            return;
+        }
+        GsRegisterFile file = front.registers();
+        file.reg[gs_reg::prim] = (b.tag[0] >> 47) & 0x7FF;
+        uint32_t prim = uint32_t(file.reg[gs_reg::prim]);
+        if (!(file.reg[gs_reg::prmodecont] & 1)) {
+            prim = (prim & 7) | (uint32_t(file.reg[gs_reg::prmode]) & 0x7F8); // (GifFrontEnd::prim_in_effect's)
+        }
+        nb.arena = arena_.buffer;
+        nb.records = records;
+        nb.triangles = kicked_.buffer;
+        nb.instance = program == NativeProgram::vu1_280 ? (record | ((prim >> 9) & 1) << 28 | ((prim >> 3) & 1) << 30)
+                                                        : (record | ((prim >> 3) & 1) << 30);
+        name_picture(nb);
+        canvas.native_batch(file, prim, nb);
+        counts_.triangles += nb.triangle_count;
+    }
+
     // The triangles VU1 kicks of a batch (those whose kick has no ADC), listed for one pass: each the arena's slots of its
     // corners and of its kick (slots a vertex takes: 1 for 0x700's, 2 for 0x280's). Their first's place; n their count.
-    uint32_t list_kicked(const RdBatch &b, const bool *adc, uint32_t base, uint32_t slots, uint32_t &n) {
+    // With pictures between to draw (left_out_too), the triangles VU1 left out too, their kick's slot with bit 31 set:
+    // the frame does not draw them, a picture between draws them whole (port/render/shaders/whole_triangle.h): in a
+    // fast turn of the mouse the pictures turn far past the frame, to the characters and effects VU1 left out of it.
+    // adc null: VU1 kicks none of the batch (every triangle left out).
+    uint32_t list_kicked(const RdBatch &b, const bool *adc, uint32_t base, uint32_t slots, bool left_out_too,
+                         uint32_t &n) {
         n = 0;
         for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
-            n += !adc[b.triangles[i + 2]];
+            bool out = adc == nullptr || adc[b.triangles[i + 2]];
+            n += !out || left_out_too;
         }
         if (n == 0) {
             return 0;
@@ -759,13 +817,14 @@ private:
         uint32_t slot0 = base + slots * b.first;
         for (size_t i = 0; i + 2 < b.triangles.size(); i += 3) {
             uint32_t kick = b.triangles[i + 2];
-            if (adc[kick]) {
+            bool left_out = adc == nullptr || adc[kick];
+            if (left_out && !left_out_too) {
                 continue;
             }
             out[0] = slot0 + slots * b.triangles[i];
             out[1] = slot0 + slots * b.triangles[i + 1];
             out[2] = slot0 + slots * kick;
-            out[3] = slot0 + slots * kick;
+            out[3] = (slot0 + slots * kick) | (left_out ? 0x80000000u : 0u);
             out += 4;
         }
         kicked_.used += n;
@@ -1026,6 +1085,7 @@ private:
     // paired refuses the frame's own walk, its pictures walked, as before)
     std::vector<GsnInterpMove> trail_moves_;
     bool trail_kicks_ = trail_kicks_wanted();
+    const bool ripple_lift_ = !(getenv("KF4_PC_RIPPLE_LIFT") && strcmp(getenv("KF4_PC_RIPPLE_LIFT"), "0") == 0);
     static bool trail_kicks_wanted() {
         const char *v = getenv("KF4_PC_TRAIL_KICKS");
         return !(v && strcmp(v, "0") == 0);

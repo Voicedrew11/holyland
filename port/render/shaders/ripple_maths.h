@@ -193,6 +193,43 @@ Moved moved(Place p, uint z) {
     return r;
 }
 
+// The lifted place at a picture between's time, for S and T alone: the place the picture's camera moves it to, as
+// moved() moves a vertex, but whole. S and T are a texture's coordinates, linear in the screen's X and Y, so none of
+// the GS's limits on a vertex hold for them: the place is taken as it is (not its 16 bits), may land past the guard
+// band, and has no Z to keep within the far plane. False only where it has no place on the picture's screen (behind
+// the picture's eye, or the frame's).
+//
+// moved() itself was used for it, with a Z of 0: its far-plane test then failed for every corner the move brought
+// nearer (or took farther, by the projection's sign), and such a corner kept the frame's S and T. Half the water, by
+// which side of the turn it lay on, looked its reflection up where the frame had it and the other half where the
+// picture has it: the reflection lagged the camera on one side, with a sharp line and zigzags where the two met and
+// a darker band where the frame's place fell on an unlit part (2026-11-15, the owner's playtest with the mouse).
+bool moved_lift(Place p, out int x, out int y) {
+    x = p.x;
+    y = p.y;
+    float depth = div_nearest(1.0, p.q, 0.0);
+    if (!(depth > 0.0) || isinf(depth)) {
+        return false;
+    }
+    vec3 v = vec3(view_place(float(p.x) / 16.0 - d.screen[2].x, p.q, d.screen[0].x),
+                  view_place(float(p.y) / 16.0 - d.screen[2].y, p.q, d.screen[1].y), depth);
+    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                   dot(pic.move[2].xyz, v) + pic.move[2].w);
+    float mz = v.z + dm.z;
+    if (!(mz > 0.0)) {
+        return false;
+    }
+    float den = mz * v.z;
+    float nx = float(p.x) / 16.0 + d.screen[0].x * (dm.x * v.z - v.x * dm.z) / den;
+    float ny = float(p.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
+    if (!(abs(nx) < 1.0e8 && abs(ny) < 1.0e8)) {
+        return false; // (past what 12.4 in an int holds)
+    }
+    x = int(floor(nx * 16.0 + 0.5));
+    y = int(floor(ny * 16.0 + 0.5));
+    return true;
+}
+
 // A vertex's place in the frame (the unmoved), its Z as XYZ2 takes it
 Place vertex_place(uint at, out uint z) {
     ivec4 P = mesh.q[at * 4u];

@@ -128,6 +128,8 @@ float view_place(float n, float q, float s) {
 }
 
 // A picture between's place (the moved()): X and Y 12.4, Z, the depth's change (f), dropped
+#include "past_band.h"
+#include "whole_triangle.h"
 struct Moved {
     int x, y;
     uint z;
@@ -139,12 +141,38 @@ struct Moved {
 #endif
 };
 
+// How far a picture between moves a place v in the frame's view: (R - I) v + T, and with its model t of the way from
+// its place in the frame before (seen from the camera between); pw the position's own w
+vec3 picture_move(uint at, vec3 v, float pw) {
+    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                   dot(pic.move[2].xyz, v) + pic.move[2].w);
+    if ((d.info.w & ND_C_OBJ) != 0) {
+        vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
+        dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    if ((d.info.w & ND_C_MODEL) != 0) {
+        // (the models': by the part's own matrices, nd_between.h; in the eye's space, the arm's, alone)
+        vec3 e = between_move(d.bt, vec4(mesh.q[at * 4u]), pic.zt.w) / pw; // (the position's w: the move of p / w)
+        dm = (d.info.w & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    return dm;
+}
+
+// (a fast turn: pcr_nd700.vert's whole triangles, whole_triangle.h) A vertex at a picture between's time, from VU1's
+// own place times w (its position's w: 16 in the game's effects; c.w is that times the depth)
+Whole whole_place(uint at) {
+    float pw = float(mesh.q[at * 4u].w);
+    vec4 c = vu_transform(d.vertex, vec4(mesh.q[at * 4u]));
+    vec3 v = whole_frame_view(c, pw);
+    return whole_corner(c, pw, v, picture_move(at, v, pw));
+}
+
 Moved moved(uint at, Place p) {
     Moved r;
     // (the position's own w: 16 in the game's effects; c.w is that times the depth)
     float pw = float(mesh.q[at * 4u].w);
-    r.x = p.x & 0xFFFF;
-    r.y = p.y & 0xFFFF;
+    r.x = p.x; // (not wrapped to the GS's 16 bits: within the band the same, past it its place, past_band.h)
+    r.y = p.y;
     r.z = gs_z(p);
     r.f = 1.0;
     r.drop = false;
@@ -165,17 +193,7 @@ Moved moved(uint at, Place p) {
     }
     vec3 v = vec3(view_place(float(r.x) / 16.0 - d.screen[2].x, qt, d.screen[0].x),
                   view_place(float(r.y) / 16.0 - d.screen[2].y, qt, d.screen[1].y), depth);
-    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
-                   dot(pic.move[2].xyz, v) + pic.move[2].w);
-    if ((d.info.w & ND_C_OBJ) != 0) {
-        vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
-        dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
-    }
-    if ((d.info.w & ND_C_MODEL) != 0) {
-        // (the models': by the part's own matrices, nd_between.h; in the eye's space, the arm's, alone)
-        vec3 e = between_move(d.bt, vec4(mesh.q[at * 4u]), pic.zt.w) / pw; // (the position's w: the move of p / w)
-        dm = (d.info.w & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
-    }
+    vec3 dm = picture_move(at, v, pw);
     float mz = v.z + dm.z;
     if (!(mz > 0.0)) {
         r.drop = true;
@@ -188,12 +206,14 @@ Moved moved(uint at, Place p) {
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
     float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
     float nz = float(r.z) - dz;
-    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+    // (past the guard band: kept, past_band.h)
+    vec2 n = vec2(nx, ny);
+    if (!(nz >= 0.0) || !past_band_place(n)) {
         r.drop = true;
         return r;
     }
-    r.x = int(floor(nx * 16.0 + 0.5));
-    r.y = int(floor(ny * 16.0 + 0.5));
+    r.x = int(floor(n.x * 16.0 + 0.5));
+    r.y = int(floor(n.y * 16.0 + 0.5));
     uint z = r.z;
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
     r.zfrac = float(int(z - r.z)) - dz; // (from the move alone: small, exact to its float)

@@ -7,6 +7,7 @@
 // matrices and the normal, Q 1, white with vertex 1's alpha.
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the pass's triangles: x, y, z the arena's slots of its corners (two a vertex), w its kick's
 layout(set = 0, binding = 8, std430) readonly buffer Tris {
@@ -16,7 +17,11 @@ layout(set = 0, binding = 8, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
+out float gl_ClipDistance[1]; // the mirror image's cut at the water (pcr_nd000.vert's mirror_cut)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 0, binding = 0, std430) readonly buffer Picture {
@@ -37,6 +42,8 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 #include "vu1_280_maths.h"
 
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -45,7 +52,8 @@ void main() {
     uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
-    uint kick = tri.w;
+    uint kick = tri.w & 0x7FFFFFFFu;
+    bool left_out = (tri.w & 0x80000000u) != 0u; // (VU1 left it out of the frame: drawn in pictures between only)
     // the instance: the record (bits 0-27), the context whose XYOFFSET (28), the pass (29), IIP (30)
     d = draws[instance & 0x0FFFFFFFu];
     bool sphere = ((instance >> 29) & 1u) != 0u, gouraud = ((instance >> 30) & 1u) != 0u;
@@ -54,6 +62,9 @@ void main() {
     int s = vertex_set(slot);
     Place pl = vu_place(slot);
     float q = pl.q;
+    // the mirror image's cut at the water (pcr_nd000.vert's): drawn whole, as it is; on the screen, by q
+    float cut = d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex[s] * qf(slot, 0u));
+    gl_ClipDistance[0] = cut;
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
     // (tolerant layers: the corner's Z keeps the sixteenths FTOI4 leaves it, pcr_nd000.vert)
     float zkept = (pc.flags & PCR_F_LAYERS) != 0u ? float(pl.z & 15) / 16.0 : 0.0;
@@ -66,7 +77,45 @@ void main() {
     // two before it in the batch, the same for all three corners
     int xi = pl.x, yi = pl.y;
     float f = 1.0;
-    bool gone = false;
+    bool gone = left_out;
+    bool whole = false;
+    Whole w0, w1, w2;
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        // left out of the frame, or with a corner behind the picture's eye: drawn whole (whole_triangle.h)
+        w0 = whole_place(tri.x);
+        w1 = whole_place(tri.y);
+        w2 = whole_place(tri.z);
+        whole = left_out || whole_behind(w0, w1, w2);
+    }
+    if (whole) {
+        Whole c = which == 0u ? w0 : which == 1u ? w1 : w2;
+        v_rect = uvec2(PCR_NO_RECT);
+        if (whole_outside(w0, w1, w2)) {
+            whole_not_drawn();
+            v_color = vec4(0.0);
+            v_stq = vec3(0.0);
+            v_fog = 0.0;
+            return;
+        }
+        whole_position(c, w0, w1, w2, offset, false);
+        float qn = 1.0 / c.w;
+        if (!sphere) {
+            vec4 st = qf(slot, 2u);
+            v_stq = st.xyz * qn;
+            // (the colour times Q, as in 3D: pcr_nd000.vert's draw_whole)
+            v_color = vec4(lit_colour(gouraud ? slot : kick)) * qn;
+            v_color_q = qn;
+        } else {
+            // (as below: the sphere's ST from the normal, Q 1)
+            vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
+            v_stq = vec3(vu_mul(vu_add(acc.x, 1.0), 0.5), vu_mul(vu_add(acc.y, 1.0), 0.5), 1.0);
+            uint one = slot - 2u * uint(X.x) + 2u;
+            float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
+            v_color = vec4(255.0, 255.0, 255.0, float(uint(ftoi(a1)) & 0xFFu));
+        }
+        v_fog = d.fog.z + d.fog.w * qn; // (the fragment stage clamps it to 0..255)
+        return;
+    }
     if ((d.info.y & ND_C_MOVING) != 0) {
         Moved m = moved(slot, s, pl);
         xi = m.x;
@@ -80,10 +129,15 @@ void main() {
             gone = k == slot ? m.drop : moved(k, vertex_set(k), vu_place(k)).drop;
         }
     }
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - offset.x), float(int(uint(yi) & 0xFFFFu) - offset.y)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.y & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - offset.x), float(g.y - offset.y)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     vec3 stq;
     uvec4 rgba;
@@ -102,6 +156,7 @@ void main() {
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = cut * q * f;
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

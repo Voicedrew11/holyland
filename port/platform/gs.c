@@ -348,7 +348,9 @@ static void image_data(size_t qwords) {
 
 /* ---- Widescreen ------------------------------------------------------------------------------
    With port_widescreen() on, the game draws its 3D world with a 16:9 field of view into the same
-   640x448 frame, and the window shows that frame at 16:9. Its 2D was laid out for 4:3, so it is
+   640x448 frame, and the window shows that frame at 16:9 (GameLoop_SetCameraMatrices, patched: the
+   frame's projection three quarters as wide, and the water's reflection's with it, which the water
+   looks up by the place on the screen). Its 2D was laid out for 4:3, so it is
    squeezed here to three quarters of its width, as the vertices go by, which keeps its shape:
    - into the middle of the frame (PORT_WIDESCREEN_2D): the menus, the title, the message boxes;
    - or, for the HUD of the top left, against the frame's left edge, unless the player wants it

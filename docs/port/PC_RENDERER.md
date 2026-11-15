@@ -49,6 +49,31 @@ window, the frame rate unlocked with a cap of 500, vsync off. The runs off made 
 simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
 before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
 
+**2026-11-15: where it stops; HiZ not ruled in.** Five full resets on 2026-11-15 (03:31, 04:01, 06:10, 08:00, 08:02).
+The last three, with Granite's post-mortem on (`GRANITE_VULKAN_POST_MORTEM=1`), all stop at the same place: the
+6-vertex sprites the game draws each frame into its 128x128 surface (pcr_prim_vert_xz with pcr_prim_early_frag_xz:
+exact Z, gl_FragDepth with layout(depth_less); a 2-sample target and Z buffer), or the barrier after them that waits
+for that work. The devcoredumps of the earlier two: the depth block, the rasteriser and the pixel launch busy, no fault.
+Sync validation and GPU-AV on that path: clean. Mesa says GFX12's HiZ/HiS "is buggy and can cause random GPU hangs";
+Mesa 26.2.3 applies its "full" workaround by default (`radv_gfx12_hiz_wa`: HiZ turned off around draws that use depth
+and stencil together), and the 08:00 and 08:02 hangs came with it. (A setting of `radv_disable_hiz_his_gfx12`, Mesa 25's
+name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) **HiZ is not the cause**: with
+HiZ off altogether (`RADV_DEBUG=nohiz`, read by RADV: it then warns it is not conformant) the card reset again at
+08:44, at 035 (1 in about 17 runs; the post-mortem file came out empty). Nor can exact Z be all of it: main hung on
+2026-11-13 and 11-14, before exact Z.
+
+**2026-11-15, later: no repro.** GS captures of 063 and 035 (each with those sprites) replayed about 150,000 times at
+6x4 with MSAA 2 (`kf4-gsreplay --repeat`): no hang. The replay draws on one thread, without the pump; in the game both
+kf4-pc and kf4-pc-pump submit right up to a hang. Then 19 real-window runs of 5 minutes each with the owner's settings
+(about 95 minutes of play: exact Z off 8, on 3, and 8 with the flat batches below): no hang either. Every hang that
+day came in runs of 20 seconds, within about a minute of the game starting, which points at the start (the opening,
+the teleport, the map's load, pipelines built ahead) more than at play; at that day's rate the long runs would have
+hung once or twice, so this is a lead, not a finding. A test that may decide it: many short runs, A/B, with
+`KF4_PC_PRECOMPILE=0 KF4_PC_WARM_AHEAD=0`, and with `KF4_PC_PUMP=0`.
+In the long runs exact Z cost far more than short runs showed: 063 2.364 against 2.035 ms a picture, 009 3.031
+against 2.375. Drawing the GIF batches whose primitives each have one Z without exact Z (the depth is the same; 9,425
+batches at 063, pictures byte-identical) saved nothing measurable; kept out of the tree as a patch.
+
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
 The pump's canvas now hands the images it lets go back, and the next copies are made into them
@@ -59,6 +84,49 @@ surface 3840x3712 at 16 bits a channel with its two-sample image, 342 MB; two de
 samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the spare); without the pump the game
 holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
 draws on).
+
+## The reflection cut at the water (2026-11-14; `--reflection-clip`)
+
+A zombie standing in a pond had its feet in the water's reflection, sticking up behind its legs. The PS2 does the
+same, and paraLLEl-GS shows it: GameLoop_SetCameraMatrices' mode 1 mirrors the whole scene about the water line
+(`world_screen` = screen x view x the mirror about y = `mirror_height`) and cuts nothing off, so what lies under the
+water (the feet, the pond's floor) is mirrored to above it, into the 256 x 256 reflection the water then reads by the
+place on the screen; the parts of it over the water show through behind the real legs. Now, by default, the native
+draws of a mirror camera are cut at the water's plane; `--reflection-clip off` (settings.json `display.reflection_clip`,
+the overlay's Display page, live) is the PS2's picture.
+
+- **The plane.** `vu1_mirror_plane` (port/render/vu1_record.cpp) takes a camera of mode 1 (the reflection of maps 008,
+  009 and 014, and map 041's mirror drawn into the frame) and works out the water's height from its own matrices
+  (screen x view's inverse by world_screen is the mirror; h is half its y translation) and the eye's side (view's
+  inverse). It returns the plane in the screen's homogeneous space (VU1's X w, Y w, Z w, w), world_screen's inverse
+  applied, so that its dot with a vertex's product by the record's vertex matrix is the vertex's own place's distance
+  from the water, more than 0 on the eye's side. One plane serves every draw of the camera, whatever its model matrix.
+  pcr_native.cpp puts it in each record (`Vu1Record::clip`, `Vu1Record280::clip`, a qword at the end), or 0s.
+- **The shaders.** pcr_nd000.vert (the map, objects, items, shadows), pcr_nd280.vert (the skinned models) and
+  pcr_nd700.vert (the effects) write `gl_ClipDistance[0]`: on the screen (gl_Position's w 1) the distance by the
+  corner's q (and by a picture between's change of q), which is affine on the screen, so the cut lies exactly where the
+  triangle crosses the water; a triangle drawn whole in a picture between (in clip space, w its depth) takes the
+  distance as it is (0x700's by its position's w). A record of 0s writes 0: nothing is cut, and the picture is main's
+  to the byte. No fragment shader changes. The device feature `shaderClipDistance` is turned on in Granite
+  (cmake/granite_depth_bounds.cmake). The enemies' draws now carry the camera's mode as the others' do
+  (nd_entities.c's camera was the world's, mode 0, so their reflection was not cut).
+- **Not cut**: the PS2 path's draws (VU1's packets: `--native-draw off` or a kind it leaves out; the CPU's near cut of
+  close map triangles, which stays the PS2 path) and `--renderer gs`. kf4-gsreplay cuts (the default).
+
+Checked at the owner's settings (scale 3, MSAA 2, aniso 2, SSAA cut-outs, native widescreen, texture detail full,
+`--native-draw on`), headless and silent:
+- **The owner's zombie save** (map 009's pond, vblanks 500-1100): off is main's to the byte. On, only the reflection
+  of the feet changes (5,000-19,000 pixels a picture, round the zombie's shins, by up to 58 levels): the pale feet
+  behind the legs are gone, the reflection of the legs and arm over the water stays. At 240 the pictures between the
+  same.
+- **The owner's reflection save** (009): 8 pixels by 2 levels at one of four vblanks, where a log meets the water;
+  the reflection of everything over the water whole.
+- **The spots** (0:0, 9:0, 9:2, 99:0 at 240, vblanks 2400 and 2700 with their pictures between, 32 pictures): on, off
+  and main byte for byte.
+- **The tour** (`map_tour.py`, all maps, 508 views, 30 Hz): on and off byte for byte but one view of 014, 1,681 pixels
+  by up to 5 levels along the bank under its water.
+- **The validation layer** (the zombie save at 240): the two messages main has, nothing more.
+- `vu1_record_test` checks the plane: cameras built as the game builds the mirror's, the eye over and under the water.
 
 ## GPU time a picture (2026-11-12; issue #109)
 
@@ -280,12 +348,33 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   half, one loses along a thin line (at 1x the GS has the same, as single pixels).
 - Read at the pixel's middle even in the shaders run once a sample (the cut-outs' SSAA): read at each sample, a
   sample's Z rounded apart from the pixel's Z that other draws gave it, and the moss over a cut-out lost there.
-- Any GPU with `depthClamp` (every desktop one); without it, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
+- Any GPU with `depthClamp` and `shaderInt64` (every desktop one); without them, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
   (decals lose to their surface here and there), and the log says so. The first version (same day) read the corners'
   Z with the barycentric extension (`pervertexEXT`), which older GPUs (NVIDIA before Turing, AMD before RDNA2, older
   Intel) lack. The shared Z gives the same pictures (map 063 walk at the owner's settings: 903 pixels over 157
   pictures; a 9-map tour at 4x, 104 views: 0.004% of a view at most) and less GPU time: on the RX 9070 XT at 063,
   1.96 ms a picture against the extension's 2.05 and 1.88 with exact Z off.
+- **The plane, in integers (2026-11-15).** The shared Z's difference was still interpolated in floats: near the eye a
+  triangle's corners span millions of Z, the float's error passed half a Z, and over whole triangles which of two
+  coinciding surfaces won turned with the camera. At map 063 (the owner's quick save 2) two map records both hold a
+  see-through wall where they meet, and patches of it lit about 1.45 times as bright at one angle and not the next.
+  Now each triangle's plane through its three corners as the GS gets them (12.4 X and Y in the target, Z with a
+  moved corner's fraction in 256ths) is worked out once, in 64- and 128-bit integers (`port/render/shaders/plane_z.h`,
+  tested against 128-bit C in `tests/plane_z_test.cpp`), as three fixed-point numbers of the plane alone: its Z at the
+  target's pixel (0, 0) and its steps a pixel across and down, each the exact value rounded to 2^-26 of a Z. The
+  fragment stage adds them up at its pixel in 32-bit words and rounds half to even (`pz_pixels_z`, within 2^-12 of a
+  Z of the exact): the same value whichever corner is first and whichever path drew the triangle, so two meshes on one
+  plane always tie. Who works the plane out: a GS primitive's provoking vertex (`pcr_exact_z.h`'s `pcr_plane`); for
+  the native draws, the plane pass (`pcr_plane_pass.h`, `shaders/pcr_planes_*.comp`), a compute dispatch a native
+  program's run of triangles, recorded in a command buffer of its own and submitted just before each of the canvas's,
+  from an entry a triangle the canvas writes as it draws the batch; the native vertex shaders' provoking vertex reads
+  its triangle's plane (`pcr_plane_of_draw`: `plane_at` in the push constants or record, plus `gl_VertexIndex / 3`).
+  (Worked out at each pixel the GPU took 2.6 times as long at 063, 5.69 ms a picture against 2.21; by each native
+  draw's provoking vertex, in a vertex shader that already spilled, about 10% longer, 2.44-2.52 ms.) The canvas's
+  `Vertex` carries the other two corners (`other_xy`, `other_z`, `other_kick`: moved with the vertex in a picture
+  between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
+  Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between
+  (`PCR_PLANE_MOST`), or drawn from the eye's space (`whole_triangle.h`), keeps the interpolated Z.
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
@@ -446,6 +535,37 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b, and
   again against 9f027e49, d8780b9a and 5ce213e5 as each was merged, the last also walking from the owner's
   reflection save, 32 pictures): the corners' order and the corners' sixteenths are taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
+- **Tolerant layers and the plane (2026-11-15; the local merge of #157's plane with these, `local/play-all-157`, not
+  pushed).** `--native-layer-z ps2` is the plane's exact Z (above). A tolerant draw (`PCR_F_LAYERS`) keeps the Z of
+  this section, the corners' interpolated Z with its fraction, the corners in the order of their places, the layers'
+  slack and two passes, and works out no plane: the canvas writes no plane-pass entry for a tolerant native batch
+  (`draw_batch`: `plane_at` none, so no dispatch), `pcr_prim.vert` hands down none for a GS primitive, a GS triangle
+  past the Z buffer's largest is still cut there, and `pcr_exact_depth` takes the plane only without `PCR_F_LAYERS`.
+  A Z32 buffer's draws (the menus') are not tolerant and take the plane.
+  - Why not the plane's value as tolerant's Z too: built to compare (developers' `KF4_PC_TOL_PLANE=1`,
+    `PCR_F_LAYER_PLANE`: the plane's sum before its rounding, with its fraction, `pcr_plane_zf`; the plane pass's
+    corners with FTOI4's sixteenths, `PCR_PLANES_KEPT`). With it the corners' order is not needed (the plane is the
+    same in any order), but nothing shows: at the owner's ten saves walked at 240 with every picture drawn the two
+    differ by 0 to 2 pixels a picture and the flicker counts are the same (bridge 19 and 19, pillar 6 and 6, tower 77
+    and 77, cave 36 and 36, wall 198 and 198, the two near-wall saves 29 and 29, 294 and 294, lacing 16 and 16, chest 45 and 45,
+    sign 30 and 30; the owner's widescreen and modern sky, so not the counts above), with the same batches, draw calls
+    and passes. The ties the plane was made for are already exact here by the corners' order, and the plane costs
+    the plane pass and the fragment's sum (#157: about a tenth more GPU time a picture at 063), in the default mode,
+    where the two passes already cost. So the default stays the interpolated Z, whose pictures the owner has played.
+  - With the default the tolerant pictures are play-all ffb8463c's to the byte (bridge, pillar, tower, cave, wall,
+    lacing 56 of 56 pictures each, chest and sign 256 of 256, the reflection save turning 264 of 264, the zombie's
+    water 136 of 136, the moss capture 64 of 64, map 028's tour not a pixel off) but where #157's other change shows,
+    a whole triangle's colour by its Q in a picture between: at the two near-wall saves 21 and 9 pictures between of
+    56 differ, by 2 to 4 levels, and in two of them the wall beside the player is no longer a flat colour for those
+    pictures (16 levels brighter over 15,000 pixels in play-all; now the frame's shade).
+  - `ps2` is #157's own build (bd476334) to the byte: the four spots at 240 with every picture drawn (48 of 48
+    each), a turn on map 063 from close to a tree's trunk (252 of 252), the moss capture (64 of 64, decal losses
+    15,428 to 17,212 a frame as before the plane); map 028's tour not a pixel off. Not checked at #157's own spot
+    (its see-through wall at 063: that quick save and recording are not here, and a 64-view tour of the map and the
+    places tried did not find it).
+  - The plane pass's entries are the batch's runs in order, once a batch, whichever of #143's steps draws a run
+    (`run_plane_at_`; a merged run's `plane_at` from its first run's); `pcr_planes_000.comp` and the ripple's mask
+    the corners' order out of the triangle's first index.
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
   behind it (the GS hides it); map 004's tree close to the PS2's. A layer's Z pass does not light its corners
   (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and alphas only).
@@ -631,6 +751,23 @@ GIF path (the tour's 60 Hz runs draw no native draws: `port_gs_native_draws_now`
   widths' depth surfaces lying wholly in those pages (`clear_depth_aliases`; the stats line counts them: about two
   a frame at every map). Partial overlaps (the 128 x 128 water targets write Z = max through ZBUF 280 at width 2,
   mid-frame too) are still not carried between widths.
+  - In the pictures between too (2026-11-14). There every GIF batch is one the shader may move (`moved`), and the
+    clear was passed over: the reflection's Z buffer kept the Z of the frame's own picture through the frame's
+    pictures between, and the reflection's triangles, moved by each picture's camera, failed wherever the move took
+    them farther. Standing still nothing showed; with the camera turning the water at map 009's swamp had dark
+    triangular patches in its reflection (and, with the GS's whole Z, hatching), worst in the first picture after a
+    frame. The frame's clear stays where and what the frame has it (`still`), and is now taken there as well.
+    Walking and turning from the owner's save at 240 with every picture drawn: the patches and the hatching are
+    gone, and nothing above the water changes.
+  - In a picture walked from the frame's packets too (2026-11-14, later). `still` was told only where the frame's
+    own walk is made its pictures' (`in_picture`). A picture between whose kept walk no longer fits the texture store
+    (the next frame's uploads changed what it read: new textures as the view turns) walks the frame's packets
+    instead, and there the clear was moved and not still, so it was passed over as before; that walk is then kept,
+    so every later picture of the frame lost the clear too. The owner still saw dark triangles and squares on the
+    water while turning: in a 13 s turn at the same save 10 pictures walked this way, and 36 of the 2,016 pictures
+    (runs of 2 to 6 in a row, up to 25 ms at 240) were missing large parts of the reflection, at any frame rate
+    over 30 and with every picture drawn. `flush_batch` now tells a walked batch of sprites still by the frame's
+    moves (`Canvas::tell_still`, `Between::kick_stays`), as `in_picture` does. `KF4_PC_WALKED_STILL=0`: as before.
 - **112's rock.** Its near triangles have corners' Z up to 0xF39C0F over a Z16S buffer. The GS (and paraLLEl-GS:
   `ubershader.comp`) clamps each pixel's interpolated Z; the vertex shader clamped the corners, lowering Z across
   the triangle, and it failed Z tests gs's passed. Such a triangle is now cut on the CPU where its Z reaches the
@@ -792,7 +929,16 @@ top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target
   sines) and the strips' ADC, which needs the places (`port/render/ripple.cpp`); the GPU makes each corner's place,
   S and T (`shaders/pcr_ndripple.vert`, the maths in `port/render/shaders/ripple_maths.h`, a new `NativeProgram`).
   In a picture between the places are moved by the picture's camera and S and T made again from the moved ones, as
-  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). `ripple_test`
+  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). Until 2026-11-15 that held
+  for only half the water: the lifted place (the one S and T are made from) was moved by the vertex's `moved()` with a
+  Z of 0, whose far-plane test then failed for every corner the picture's move brought nearer, and such a corner kept
+  the frame's S and T. With the camera turning, the water on one side of the turn looked its reflection up where the
+  frame had it and the other side where the picture has it: the reflection lagged on one side, with a sharp line,
+  streaks and zigzags where the two met, and a darker band where the frame's place fell on an unlit part of the
+  target (the owner's playtest with the mouse at a fixed rate, where the mouse's lead turns the pictures furthest
+  from the frame). The lifted place is now moved whole by `moved_lift` (ripple_maths.h): S and T are linear in the
+  screen's X and Y, so none of the GS's limits on a vertex apply to it. `KF4_PC_RIPPLE_LIFT=0`: as before.
+  `ripple_test`
   checks the record and the ADC against Wobble_DrawRippledModel's maths as nd_water.c's KF4_ND_WATER_CHECK writes it,
   and the shader's S and T arithmetic (copied to C++) against the game's floats for every X and Y of 16 bits, toward
   zero and to nearest.
@@ -1172,6 +1318,19 @@ the frame's own walk, kept, can be made the stream's walk by those rules, and th
   made twice). A picture between, a frame taken or a state loaded in a stretch drops it (the 0xF2 mark after the
   vblank), and frame_interp.c's replays sent as packets (the exact restore, between 0xF0 and 0xF1) are kept out.
   Stretches are kept only while frames are taken (none at 30, in the menus).
+  - A frame taken in its stretch keeps it (2026-11-14). A frame is taken at the vblank after its packets, and
+    mostly after that vblank's own picture, which closes the stretch and makes the frame's uploads the ones its
+    pictures ask for again (`Canvas::vblank`). At a fixed rate with the mouse turned, the vblank's first picture
+    between (phase 0: the frame shown, turned to the hand) comes before the vblank's own picture, and the frame
+    with it. The stretch still open was dropped, so with the mouse turning no frame kept its own walk (0 of 337 at
+    240, 120 and 60 from the owner's save: every frame walked its packets), and that first picture's uploads asked
+    again found the frame before's list. The game sends the HUD's and the torches' textures up again every frame,
+    into places they share; where the two frames' lists differed, a sprite got another texture's texels: the HUD and
+    the torch flames as rectangles of static for one picture (the owner's playtest: only at a set rate over 30,
+    never unlocked, whose pictures are not at phase 0, nor at 30). Where the packets since the last vblank are the
+    frame's (their bytes its own), `Intake::take_frame` now closes the stretch as
+    the frame's (`own_walk` still checks its bytes) and `Canvas::frame_taken` makes the uploads since the last
+    vblank the frame's. `KF4_PC_FRAME_STRETCH=0`: dropped, as before.
 - **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
   it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
   the frame shown is kept, and its copies of the frame (from the buffer drawn into another) with the stream's choice

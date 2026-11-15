@@ -33,6 +33,9 @@ layout(push_constant, std430) uniform Push {
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
     uint merged;       // (PCR_RECORDS, a native program's) not 0: the draw's triangles from u_merged (below)
+    uint plane_at;     // (a native draw's, exact Z) its triangle n's plane is u_planes' n + this (n gl_VertexIndex / 3:
+                       // pcr_exact_z.h's pcr_plane_of_draw); PCR_NO_PLANE: none
+    uint unused;
 } pc;
 #if defined(PCR_ND) && defined(PCR_STAGE_VERTEX)
 // This corner's triangle in the program's tris and its draw's instance (PCR_RECORDS: a merged run's, below)
@@ -49,7 +52,7 @@ void pcr_triangle(out uint triangle, out uint instance) {
     vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
     uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
     ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
-    uint factors; uint trace_xy; uint trace_draw; uint merged;
+    uint factors; uint trace_xy; uint trace_draw; uint merged; uint plane_at; uint unused;
 struct PcrRecord {
     PCR_PUSH_FIELDS
 };
@@ -147,6 +150,8 @@ void pcr_take_record() {
 #define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
+#define PCR_F_LAYER_PLANE 0x200000u // (with PCR_F_LAYERS, developers' KF4_PC_TOL_PLANE=1) tolerant layers' Z the plane's
+                                    // value with its fraction (pcr_exact_z.h), not the corners' interpolated
 #define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
@@ -173,10 +178,14 @@ uint pcr_loss_margin() {
 // different triangles a hair apart, and one of them loses over whole triangles. So the fragment stage (pcr_prim.h's
 // pcr_exact_depth) works out the pixel's whole Z as the GS (and paraLLEl-GS) does, and writes it as its depth; ties are
 // then ties, and the depth test's GEQUAL lets the later draw win, as on the GS.
-// The GS's Z at a pixel is a corner's whole Z plus the rounded interpolation of the corners' differences from it. Each
+// The pixel's Z is the triangle's plane at its point, worked out exactly in integers (pcr_exact_z.h, plane_z.h), from
+// its three corners (a GS primitive's vertex stage, or the plane pass for a native draw). Where a triangle has none
+// (pcr_plane_none), the older way below:
+// the GS's Z at a pixel is a corner's whole Z plus the rounded interpolation of the corners' differences from it. Each
 // corner hands down a whole Z its triangle shares (zref: the first corner's as the frame has it, given to every corner
 // by the canvas, or worked out by each corner of a native draw), flat, and its own Z less that, with its fraction
-// (v_zrel), interpolated: small numbers, so the float keeps them as exactly as the GS's own differences. Any whole Z
+// (v_zrel), interpolated: small numbers for a small triangle (near the eye, millions: the float's error passes half a
+// Z, why the plane replaced it, 2026-11-15). Any whole Z
 // the corners share gives the same rounding, so a corner moved in a picture between needs no other corner's move.
 // That is the barycentric extension's result without it: every GPU draws exact Z.
 // In a picture between a corner's Z is moved (gif_moves.h, vu1_*_maths.h) and keeps its fraction (zfrac): rounded at
@@ -199,6 +208,21 @@ float pcr_depth(uint z, float zfrac, uint zref) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
     }
     return float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
+}
+
+// pcr_depth for a corner given as Z times w (pcr_nd000.vert's whole triangles, vu1_000_maths.h's Whole): the depth times
+// w, for gl_Position.z; Z itself (zh / w) is affine on the screen, so v_zrel is right on the part of the triangle drawn
+// even where a corner is behind the eye
+float pcr_depth_h(float zh, float w, uint zref) {
+#ifdef PCR_STAGE_VERTEX
+    v_zref = zref;
+    v_zrel = zh / w - float(zref);
+#endif
+    float margin = float(pcr_loss_margin());
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
+        return (zh + margin * w) * pc.zscale + w * (4.0 / 16777216.0);
+    }
+    return (zh + margin * w) * pc.zscale;
 }
 
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)
@@ -224,4 +248,12 @@ vec2 gs_to_clip(vec2 xy) {
         return xy * pc.inv_size * 2.0 - 1.0;
     }
     return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+}
+
+// gs_to_clip for a place given times w (xy_h = xy w): Vulkan's clip x and y (its w is w)
+vec2 gs_to_clip_h(vec2 xy_h, float w) {
+    if ((pc.flags & PCR_F_MSAA) != 0u) {
+        return xy_h * pc.inv_size * 2.0 - w;
+    }
+    return (xy_h + w * (0.5 / vec2(pc.src_scale))) * pc.inv_size * 2.0 - w;
 }

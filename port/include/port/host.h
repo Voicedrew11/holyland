@@ -177,6 +177,9 @@ int port_frame_interp(void);
                                        player: flags bit 31), all moved by one move; 0: no longer */
 #define PORT_FRAME_INTERP_MOUSE_YAW 20   /* 20-21: the mouse turn spent when this camera was built (a float, radians, */
 #define PORT_FRAME_INTERP_MOUSE_PITCH 21 /* wrapped: port_mouse_lead_spent_total), for instant mouse look */
+#define PORT_FRAME_INTERP_FRAME_ONLY 22  /* 1: the world's vertices from here are drawn in the frame only, not in the
+                                            pictures between (the near cut's pieces of a natively drawn map record,
+                                            whose triangles the pictures draw whole); 0: no longer */
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
    default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max
@@ -252,6 +255,14 @@ int port_native_wave_uvs(void);
 #define PORT_SKY_PS2 0
 #define PORT_SKY_MODERN 1
 int port_native_sky(void);
+/* port_reflection_clip(): 1 while the mirror image is cut at its water (--reflection-clip, settings.json
+   display.reflection_clip, the overlay's Display page, live; on by default). The game draws the water's reflection
+   (maps 008, 009, 014) and map 041's mirror by mirroring the whole scene about the water line and cuts nothing off,
+   so what is under the water, a zombie's feet in a pond, shows in the reflection above it, behind its legs.
+   paraLLEl-GS shows it too. On, the native draws of the mirror camera are cut at the water's plane on the GPU
+   (vu1_mirror_plane, port/render/vu1_record.hpp); the PS2 path's draws (VU1's packets, the CPU's near cut) are
+   not. Off: the PS2's picture. */
+int port_reflection_clip(void);
 int port_test_dma_wait(void);
 
 /* ---- Opt-in mods the game code reads ---------------------------------------------------------
