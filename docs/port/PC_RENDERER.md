@@ -58,8 +58,12 @@ for that work. The devcoredumps of the earlier two: the depth block, the rasteri
 Sync validation and GPU-AV on that path: clean. Mesa says GFX12's HiZ/HiS "is buggy and can cause random GPU hangs";
 Mesa 26.2.3 applies its "full" workaround by default (`radv_gfx12_hiz_wa`: HiZ turned off around draws that use depth
 and stencil together), and the 08:00 and 08:02 hangs came with it. (A setting of `radv_disable_hiz_his_gfx12`, Mesa 25's
-name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) Not tried yet: HiZ off
-altogether (`RADV_DEBUG=nohiz`), and that draw without the shader's depth.
+name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) **HiZ is not the cause**: with
+HiZ off altogether (`RADV_DEBUG=nohiz`, read by RADV: it then warns it is not conformant) the card reset again at
+08:44, at 035 (1 in about 17 runs; the post-mortem file came out empty). Nor can exact Z be all of it: main hung on
+2026-11-13 and 11-14, before exact Z. Not tried yet (each try may reset the card): a GS capture of 063 replayed again
+and again (`kf4-gsreplay --repeat`) as a quick repro, then that draw without the shader's depth (`KF4_PC_EXACT_Z=0`)
+or without MSAA.
 
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
