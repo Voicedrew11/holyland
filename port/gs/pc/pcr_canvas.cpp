@@ -3644,8 +3644,9 @@ private:
         return tfx <= 1 && b.texture.ok && b.texture.alpha_lo == 0x80 && b.texture.alpha_hi == 0x80;
     }
 
-    // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
-    // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
+    // A decal: a blended draw Z tested GEQUAL whose blend shows what is under it somewhere (not blend_covers). With
+    // exact Z it ties with a surface of its whole Z under it whatever their fine parts (pcr_prim.h's pcr_exact_depth),
+    // as on the GS; the trace marks its fragments, --decal-losses draws where it lost.
     static bool is_decal(const Batch &b) {
         const DrawState &s = b.state;
         return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0 && !blend_covers(b);
@@ -3662,7 +3663,11 @@ private:
         if (c == 2) {
             return bits(s.alpha, 32, 8) >= 0x80;
         }
-        return c == 0 && alpha_range(b).lo >= 0x80;
+        // (a native batch's vertices are the GPU's: their alpha is known only where its program leaves the mesh's and
+        // the mesh's is 0x80 throughout, native_alpha_is_one; alpha_range takes it as 0x80. Taken as covering, the
+        // see-through rock shading over map 000's floors drew with its fine part and lost to the floor in patches)
+        bool vertices_known = !b.native || (b.program == NativeProgram::vu1_000 && b.native_alpha_is_one);
+        return c == 0 && vertices_known && alpha_range(b).lo >= 0x80;
     }
 
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed

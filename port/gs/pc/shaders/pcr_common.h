@@ -150,7 +150,7 @@ void pcr_take_record() {
 #define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
 #define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
-#define PCR_F_DECAL 0x400000u      // (developers' views: the trace, the decal losses) a decal (pcr_canvas.cpp's is_decal)
+#define PCR_F_DECAL 0x400000u      // a decal (pcr_canvas.cpp's is_decal): exact Z's top fine part (pcr_prim.h), the trace's mark, the decal losses
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
 #define PCR_F_EXACT_Z 0x2000000u   // the GS's whole Z at each pixel (pcr_prim.h's PCR_EXACT_Z): the corners' depth a bound

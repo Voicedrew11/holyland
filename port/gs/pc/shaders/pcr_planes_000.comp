@@ -30,10 +30,11 @@ layout(set = 0, binding = 4, std430) readonly buffer Draws {
 // with its fraction); at the far plane (the modern sky) Z 0
 GsCorner corner(uint k, ivec2 place) {
     Place p = vu_place(k);
-    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), gs_z(p), 0.0);
+    float own = pcr_frame_zfrac(p.zf, gs_z(p));
+    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), gs_z(p), own);
     if ((d.info.w & ND_C_MOVING) != 0) {
         Moved m = moved(k, p);
-        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac + own);
     }
     c.xy += 16 * place - ivec2(d.info.y, d.info.z);
     if ((d.info.w & ND_C_FAR) != 0) {

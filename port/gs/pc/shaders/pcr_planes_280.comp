@@ -30,10 +30,12 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 // picture between moved (moved(): unwrapped, Z with its fraction)
 GsCorner corner(uint k, ivec2 place, ivec2 offset) {
     Place p = vu_place(k);
-    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), uint(p.z >> 4) & 0xFFFFFFu, 0.0);
+    uint z = uint(p.z >> 4) & 0xFFFFFFu;
+    float own = pcr_frame_zfrac(p.zf, z);
+    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), z, own);
     if ((d.info.y & ND_C_MOVING) != 0) {
         Moved m = moved(k, vertex_set(k), p);
-        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac + own);
     }
     c.xy += 16 * place - offset;
     return c;

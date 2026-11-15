@@ -285,14 +285,15 @@ static void fixed_planes() {
             least_y = std::min<int>(least_y, int(ky));
             for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu, 0xFFFFu}) {
                 PzPixels pixels_of = pz_pixels(f, least_x, least_y);
-                int64_t pixels = pz_pixels_z(pixels_of, int(kx), int(ky), most);
-                // (the quick way: where it can tell, the same Z)
-                pz_u32 quick = 0;
-                if (pz_pixels_quick(pixels_of, float(kx), float(ky), most, quick)) {
+                pz_u32 fine = 0;
+                int64_t pixels = pz_pixels_z(pixels_of, int(kx), int(ky), most, fine);
+                // (the quick way: where it can tell, the same Z and fine part)
+                pz_u32 quick = 0, quick_fine = 0;
+                if (pz_pixels_quick(pixels_of, float(kx), float(ky), most, quick, quick_fine)) {
                     quick_told++;
-                    if (int64_t(quick) != pixels && failures++ < 20) {
-                        printf("fixed: pz_pixels_quick %u, pz_pixels_z %lld (most %u)\n", quick, (long long)pixels,
-                               most);
+                    if ((int64_t(quick) != pixels || quick_fine != fine) && failures++ < 20) {
+                        printf("fixed: pz_pixels_quick %u fine %u, pz_pixels_z %lld fine %u (most %u)\n", quick,
+                               quick_fine, (long long)pixels, fine, most);
                     }
                 } else {
                     quick_not_told++;
@@ -319,6 +320,33 @@ static void fixed_planes() {
     }
 }
 
+// The fine part pz_pixels_z gave at pixel (kx, ky) (whole Z z) against the plane's fixed-point value worked out here:
+// below it by less than a step of the fine part, the steps it keeps at z (pz_fine_bits), none where z is clamped; the
+// depth's float holds z and it exactly (z under 2^24), and z with the decal's top fine part (pz_fine_top), at least it
+static void check_fine(PzFixed f, int kx, int ky, pz_u32 most, pz_u32 z, pz_u32 fine) {
+    __int128 v = __int128(f.base) + __int128(f.step_x) * kx + __int128(f.step_y) * ky +
+                 (__int128(1) << (PLANE_FIXED_BITS - 1)); // (2^-PLANE_FIXED_BITS, half a Z added)
+    __int128 whole = v >> PLANE_FIXED_BITS;
+    if (whole < 0 || whole >= __int128(most)) {
+        if (fine != 0 && failures++ < 20) {
+            printf("fine: %u where Z is clamped to %u\n", fine, z);
+        }
+        return;
+    }
+    int bits = pz_fine_bits(z);
+    __int128 kept = (v - (whole << PLANE_FIXED_BITS)) >> (PLANE_FIXED_BITS - bits); // (the fraction's steps)
+    pz_u32 want = pz_u32(kept) << (PLANE_Z_FINE_BITS - bits);
+    pz_u32 top = pz_fine_top(z);
+    // (from Z 2^24 up the float holds no whole Z exactly either: a 32-bit Z buffer's far end, as before fine parts)
+    double depth = double(float(z) + float(fine) * (1.0f / 256.0f));
+    double top_depth = double(float(z) + float(top) * (1.0f / 256.0f));
+    bool held = z >= (1u << 24) || (depth == double(z) + fine / 256.0 && top_depth == double(z) + top / 256.0);
+    if ((fine != want || !held || top < fine || top >= 256u) &&
+        failures++ < 20) {
+        printf("fine: Z %u fine %u (want %u, %d bits), top %u\n", z, fine, want, bits, top);
+    }
+}
+
 // pz_pixels_quick against pz_pixels_z on planes made directly (not from corners), many of them with first's value a
 // hair from a whole Z (where the quick way must say it cannot tell), steps of every size
 static void quick_planes() {
@@ -338,17 +366,19 @@ static void quick_planes() {
             int kx = std::min(least_x + int(rng() % uint64_t(reach)), 32766);
             int ky = std::min(least_y + int(rng() % uint64_t(reach)), 32766);
             for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu}) {
-                pz_u32 exact = pz_pixels_z(p, kx, ky, most), quick = 0;
+                pz_u32 fine = 0, quick = 0, quick_fine = 0;
+                pz_u32 exact = pz_pixels_z(p, kx, ky, most, fine);
                 checked++;
-                if (!pz_pixels_quick(p, float(kx), float(ky), most, quick)) {
+                check_fine(f, kx, ky, most, exact, fine);
+                if (!pz_pixels_quick(p, float(kx), float(ky), most, quick, quick_fine)) {
                     quick_not_told++;
                     continue;
                 }
                 quick_told++;
-                if (quick != exact && failures++ < 20) {
-                    printf("quick: base %lld steps %lld %lld first (%d %d) pixel (%d %d): %u, exact %u\n",
+                if ((quick != exact || quick_fine != fine) && failures++ < 20) {
+                    printf("quick: base %lld steps %lld %lld first (%d %d) pixel (%d %d): %u fine %u, exact %u fine %u\n",
                            (long long)f.base, (long long)f.step_x, (long long)f.step_y, least_x, least_y, kx, ky, quick,
-                           exact);
+                           quick_fine, exact, fine);
                 }
             }
         }
@@ -387,7 +417,20 @@ static void fixed_two_meshes() {
     }
 }
 
+// pz_fine_bits: the steps the depth holds beside each whole Z
+static void fine_bits() {
+    const pz_u32 zs[] = {0u, 1u, 0xFFu, 0xFFFFu, 0x10000u, 0x7FFFFFu, 0x800000u, 0xFFFFFFu, 0xFFFFFFFFu};
+    const int want[] = {8, 8, 8, 8, 7, 1, 0, 0, 0};
+    for (int i = 0; i < 9; i++) {
+        checked++;
+        if (pz_fine_bits(zs[i]) != want[i] && failures++ < 20) {
+            printf("fine bits: Z %u gave %d, want %d\n", zs[i], pz_fine_bits(zs[i]), want[i]);
+        }
+    }
+}
+
 int main() {
+    fine_bits();
     random_triangles();
     halves();
     two_meshes();
