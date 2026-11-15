@@ -271,6 +271,12 @@ BlendChoice choose_blend(uint64_t alpha, bool abe) {
         b.flags |= 0x80000000u;      // (the caller gives FIX 0)
         return b;
     }
+    if (fix && bits(alpha, 32, 8) == 0 && d == 1 && ((a == 0 && bb == 2) || (a == 2 && bb == 0))) {
+        // Cs * 0 + Cd, Cd - Cs * 0: Cd, as A the same as B. (Drawn as a blend, every pixel's colour was read to write
+        // it back: the game's pass that sets the alpha to 0 over the whole screen, 0.08 ms a picture at 063.)
+        b.write_rgb = false;
+        return b;
+    }
     if (a == 0 && bb == 1 && d == 1) { // Cs * C + Cd * (1 - C)
         b.enable = true;
         b.src = by_c;

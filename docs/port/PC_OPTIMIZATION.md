@@ -787,6 +787,9 @@ the two clears and between the alpha's pass and the fade. Now only 0xF2 (the fra
 out at 063 twice as many (12.6k to 25.5k a 20 s run), 2.584 to 2.567 ms a picture (2-3 runs each: about the noise).
 The alpha's pass at 063 (0.08 ms when left out) is still drawn: the fade after it, which writes the alpha everywhere,
 has its corners from a native draw's kicks (the trail's), so it is not known to keep its place.
+The pass is cheaper drawn instead: its blend is Cs * FIX + Cd with FIX 0, which leaves the colour, so `choose_blend`
+now draws it (and D - Cs * FIX with FIX 0) without the blend, the alpha alone written, as it did A = B with D Cd:
+no read of every pixel's colour. 063: 2.611 to 2.557 ms a picture (two runs each).
 
 Checks: pictures byte for byte at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the 21 unit tests, the two new ones
 under ASan and UBSan too; the game under ASan and UBSan in a real window (the known reports); no hang.
