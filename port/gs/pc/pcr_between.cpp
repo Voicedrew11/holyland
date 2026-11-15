@@ -200,6 +200,10 @@ void Between::end_picture_again() {
     active_ = false;
 }
 
+bool Between::kick_stays(uint32_t kick) const {
+    return frame_ && frame_->moves != nullptr && kick < frame_->kicks && (frame_->moves[kick].w[0] & 3u) == 0;
+}
+
 void Between::walked(WalkReason why) {
     switch (why) {
     case WalkReason::none_kept:

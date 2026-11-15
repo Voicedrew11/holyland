@@ -103,6 +103,9 @@ public:
 
     // Between begin_picture and end_picture (or the _again pair)
     bool active() const { return active_; }
+    // Whether a kick of the frame taken stays as the frame has it in every picture between (pcr_frame_walk.h's
+    // kick_stays, by the frame's moves); false where the frame's moves are not here (the pump's Between)
+    bool kick_stays(uint32_t kick) const;
 
     // A frame as walked, for the pump's Between: its serial, its projections and kick count, its walked kicks and its
     // moves (buffers nothing writes again once walked)

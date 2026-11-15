@@ -3040,6 +3040,7 @@ private:
         batch_.native = false;
         batch_.native_alpha_is_one = false;
         batch_.moved = false;
+        batch_.still = false;
         batch_.numbered = false;
         batch_.native_kicks = false;
         batch_.arena.reset();
@@ -3284,12 +3285,29 @@ private:
         return false;
     }
 
+    // A picture between walked from the frame's packets (the frame's own walk refused, or what its kept walk read of
+    // the store changed): a batch of sprites whose every kick stays as the frame has it is still, as the frame's own
+    // walk's is when it is made the pictures' (in_picture), by the same moves. Without it the frame's clear, moved like
+    // every batch of such a walk, was passed over by clear_depth_aliases in that picture and, the walk kept, in every
+    // picture drawn again from it: the reflection's Z buffer kept the Z of the picture before, and the water showed dark
+    // triangles and squares as the camera turned (2026-11-14, the owner's playtest of #153: a little better, not gone).
+    // KF4_PC_WALKED_STILL=0: never (as before).
+    void tell_still(Batch &b) const {
+        if (!walked_still_on_ || b.native || !b.moved || !b.sprites || !between_ || !between_->active()) {
+            return;
+        }
+        b.still = std::all_of(b.vertices.begin(), b.vertices.end(), [&](const Vertex &v) {
+            return between_->kick_stays(v.kicks[0]) && between_->kick_stays(v.kicks[1]);
+        });
+    }
+
     void flush_batch() {
         if (!batch_open_) {
             return;
         }
         batch_open_ = false;
         if (!batch_.vertices.empty() || !batch_.runs.empty()) {
+            tell_still(batch_);
             draw_batch(batch_);
             if (keeping_) {
                 kept_->keep(take_kept_batch());
@@ -4801,6 +4819,7 @@ private:
     // dual-source blend (a blend change ends a run: to compare)
     const char *const knock_ = getenv("KF4_PC_KNOCK"); // (developers' knock-outs: knocked_out)
     const bool dead_on_ = !(getenv("KF4_PC_DEAD") && strcmp(getenv("KF4_PC_DEAD"), "0") == 0);
+    const bool walked_still_on_ = !(getenv("KF4_PC_WALKED_STILL") && strcmp(getenv("KF4_PC_WALKED_STILL"), "0") == 0);
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     const char *const merged_env_ = getenv("KF4_PC_MERGED");
     const bool merged_asked_ = !merged_env_ || strcmp(merged_env_, "0") != 0;
