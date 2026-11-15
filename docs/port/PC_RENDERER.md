@@ -523,6 +523,15 @@ GIF path (the tour's 60 Hz runs draw no native draws: `port_gs_native_draws_now`
     frame. The frame's clear stays where and what the frame has it (`still`), and is now taken there as well.
     Walking and turning from the owner's save at 240 with every picture drawn: the patches and the hatching are
     gone, and nothing above the water changes.
+  - In a picture walked from the frame's packets too (2026-11-14, later). `still` was told only where the frame's
+    own walk is made its pictures' (`in_picture`). A picture between whose kept walk no longer fits the texture store
+    (the next frame's uploads changed what it read: new textures as the view turns) walks the frame's packets
+    instead, and there the clear was moved and not still, so it was passed over as before; that walk is then kept,
+    so every later picture of the frame lost the clear too. The owner still saw dark triangles and squares on the
+    water while turning: in a 13 s turn at the same save 10 pictures walked this way, and 36 of the 2,016 pictures
+    (runs of 2 to 6 in a row, up to 25 ms at 240) were missing large parts of the reflection, at any frame rate
+    over 30 and with every picture drawn. `flush_batch` now tells a walked batch of sprites still by the frame's
+    moves (`Canvas::tell_still`, `Between::kick_stays`), as `in_picture` does. `KF4_PC_WALKED_STILL=0`: as before.
 - **112's rock.** Its near triangles have corners' Z up to 0xF39C0F over a Z16S buffer. The GS (and paraLLEl-GS:
   `ubershader.comp`) clamps each pixel's interpolated Z; the vertex shader clamped the corners, lowering Z across
   the triangle, and it failed Z tests gs's passed. Such a triangle is now cut on the CPU where its Z reaches the
