@@ -551,6 +551,19 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
     memcpy(compile.attribs, r.attribs, sizeof(r.attribs));
     memcpy(compile.strides, r.strides, sizeof(r.strides));
     memcpy(compile.input_rates, r.input_rates, sizeof(r.input_rates));
+    // (a record of an older build's vertex input: the inputs its program reads and it has none for, the canvas's)
+    uint32_t inputs = program->get_pipeline_layout()->get_resource_layout().attribute_mask;
+    bool filled = false;
+    for (uint32_t i = 0; i < VULKAN_NUM_VERTEX_ATTRIBS; i++) {
+        if ((inputs & (1u << i)) && compile.attribs[i].format == VK_FORMAT_UNDEFINED &&
+            warm.traits.attribs[i].format != VK_FORMAT_UNDEFINED) {
+            compile.attribs[i] = warm.traits.attribs[i];
+            filled = true;
+        }
+    }
+    if (filled && warm.traits.vertex_stride != 0) {
+        compile.strides[0] = warm.traits.vertex_stride;
+    }
     compile.subpass_index = r.subpass_index;
     compile.subgroup_size_tag = r.subgroup_size_tag;
     {

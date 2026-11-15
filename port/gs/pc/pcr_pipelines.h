@@ -52,6 +52,11 @@ struct WarmProgram {
 struct WarmDevice {
     VkFormat depth_format = VK_FORMAT_UNDEFINED; // (the depth surfaces')
     bool dynamic_ds = false, dynamic_blend = false; // (its dynamic state: Canvas::Impl::choose_dynamic)
+    // The canvas's vertex input (pcr_canvas.cpp's set_vertex_attribs, binding 0's stride): put into a pipeline kept
+    // from an older build whose vertex shader reads an input the record has none for (the seed's and list's records
+    // made before pcr_prim.vert read locations 7-10: their pipelines had no format there, invalid, and matched no draw)
+    Vulkan::VertexAttribState attribs[Vulkan::VULKAN_NUM_VERTEX_ATTRIBS] = {};
+    uint32_t vertex_stride = 0;
 };
 
 // (any thread) The canvas's programs: those whose pipelines are kept. extra: a program drawn only into a

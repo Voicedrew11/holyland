@@ -165,6 +165,21 @@ struct Vertex {
 };
 static_assert(sizeof(Vertex) == 92, "Vertex: the vertex shader's inputs, packed");
 
+// pcr_prim.vert's inputs, a location each (0-10): Vertex's fields, binding 0
+struct VertexInput {
+    VkFormat format;
+    uint32_t offset;
+};
+constexpr VertexInput vertex_inputs[] = {
+    {VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x)},           {VK_FORMAT_R32_UINT, offsetof(Vertex, z)},
+    {VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba)},        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s)},
+    {VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog)},            {VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks)},
+    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect)},          {VK_FORMAT_R32_UINT, offsetof(Vertex, zref)},
+    {VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, other_xy)}, {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_z)},
+    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_kick)},
+};
+constexpr uint32_t vertex_input_count = sizeof(vertex_inputs) / sizeof(vertex_inputs[0]);
+
 // Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref) and its two other corners
 // (Vertex::other_*: the triangle's plane, the same from each corner); vertices three a triangle
 void link_corners(std::span<Vertex> triangles) {
@@ -4491,17 +4506,9 @@ private:
     }
 
     void set_vertex_attribs(CommandBuffer &c) {
-        c.set_vertex_attrib(0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x));
-        c.set_vertex_attrib(1, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, z));
-        c.set_vertex_attrib(2, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba));
-        c.set_vertex_attrib(3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s));
-        c.set_vertex_attrib(4, 0, VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog));
-        c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
-        c.set_vertex_attrib(6, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect));
-        c.set_vertex_attrib(7, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, zref));
-        c.set_vertex_attrib(8, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, other_xy));
-        c.set_vertex_attrib(9, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_z));
-        c.set_vertex_attrib(10, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_kick));
+        for (uint32_t i = 0; i < vertex_input_count; i++) {
+            c.set_vertex_attrib(i, 0, vertex_inputs[i].format, vertex_inputs[i].offset);
+        }
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -4641,7 +4648,11 @@ private:
         batch_vert.sets[1].meta[merged_binding].array_size = 1;
         batch_vert.sets[1].meta[planes_binding].array_size = 1; // (u_planes: the native programs', exact Z)
         ResourceLayout vert = batch_vert;
-        vert.input_mask = 0x7F;
+        // (every input pcr_prim.vert reads, locations 0-10, set_vertex_attribs': Granite builds a pipeline's vertex input
+        // from the layout's mask, so an input left out of it was read undefined. Was 0x7F from 2026-11-13 to 11-15: the
+        // GS primitives' shared Z (a_zref) and plane corners (a_other_*) were whatever the GPU read there; the Vulkan
+        // validation layer's VUID-VkGraphicsPipelineCreateInfo-Input-07904)
+        vert.input_mask = (1u << vertex_input_count) - 1;
         ResourceLayout frag = {};
         frag.output_mask = 1;
         frag.push_constant_size = sizeof(PrimPush);
@@ -4775,6 +4786,10 @@ private:
         traits.depth_format = depth_format_;
         traits.dynamic_ds = dynamic_.ds;
         traits.dynamic_blend = dynamic_.blend;
+        for (uint32_t i = 0; i < vertex_input_count; i++) {
+            traits.attribs[i] = {0, vertex_inputs[i].format, vertex_inputs[i].offset};
+        }
+        traits.vertex_stride = sizeof(Vertex);
         warm_watch(device_, warmed, 21, expand_program_, traits);
     }
 

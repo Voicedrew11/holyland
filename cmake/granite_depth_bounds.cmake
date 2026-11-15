@@ -68,6 +68,10 @@ function(kf4_granite_depth_bounds granite)
     # a bound a little nearer than its pixels' Z, which near the Z buffer's largest Z is past 1: clamped, not clipped)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
         "\t\tif (pdf2.features.depthClamp) enabled_features.depthClamp = VK_TRUE; // (holyland)" TRUE)
+    # and geometry shaders' feature: no geometry shader, but the fragment shaders read gl_PrimitiveID (the developers'
+    # pixel trace, pcr_prim.h), which needs it (the Vulkan validation layer's VUID-VkShaderModuleCreateInfo-pCode-08740)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.geometryShader) enabled_features.geometryShader = VK_TRUE; // (holyland)" TRUE)
     kf4_granite_edit(${cpp} "\traster.depthBiasEnable = compile.static_state.state.depth_bias_enable != 0;"
         "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (holyland)" FALSE)
 endfunction()
