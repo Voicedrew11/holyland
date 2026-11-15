@@ -535,8 +535,8 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b, and
   again against 9f027e49, d8780b9a and 5ce213e5 as each was merged, the last also walking from the owner's
   reflection save, 32 pictures): the corners' order and the corners' sixteenths are taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
-- **Tolerant layers and the plane (2026-11-15; the local merge of #157's plane with these, `local/play-all-157`, not
-  pushed).** `--native-layer-z ps2` is the plane's exact Z (above). A tolerant draw (`PCR_F_LAYERS`) keeps the Z of
+- **Tolerant layers and the plane (2026-11-15; #157's plane merged from main bd4735dd, as first tried in a local
+  merge).** `--native-layer-z ps2` is the plane's exact Z (above). A tolerant draw (`PCR_F_LAYERS`) keeps the Z of
   this section, the corners' interpolated Z with its fraction, the corners in the order of their places, the layers'
   slack and two passes, and works out no plane: the canvas writes no plane-pass entry for a tolerant native batch
   (`draw_batch`: `plane_at` none, so no dispatch), `pcr_prim.vert` hands down none for a GS primitive, a GS triangle
@@ -566,6 +566,11 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   - The plane pass's entries are the batch's runs in order, once a batch, whichever of #143's steps draws a run
     (`run_plane_at_`; a merged run's `plane_at` from its first run's); `pcr_planes_000.comp` and the ripple's mask
     the corners' order out of the triangle's first index.
+  - With main bd4735dd merged (#157's later commits: the plane's sum mostly in floats, 01a3ddf7, and the validation
+    layer's fixes, among them every vertex input in the pipelines, dd34a42b): `KF4_PC_TOL_PLANE=1`'s `pcr_plane_zf`
+    reads the plane's new words (the on bit in `v_plane0.z`, half a Z in first, taken back). The tolerant pictures
+    are the local merge's (play-all157 c1a45c2c) to the byte, and ps2's main's: at the ten saves (56 pictures each, the
+    chest and the sign 256), the reflection save turning (264) and the zombie's water (136).
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
   behind it (the GS hides it); map 004's tree close to the PS2's. A layer's Z pass does not light its corners
   (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and alphas only).
