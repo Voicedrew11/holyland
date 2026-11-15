@@ -66,11 +66,20 @@ void main() {
         yi = m.y;
         z = m.z;
         zfrac = m.zfrac;
-        Moved mw = moved(w, 0u);
-        // (a moved place off the 16 bits keeps the frame's S and T: moved() starts from the GS's 16 bits)
-        if (!mw.drop && ((w.x | w.y) & int(0xFFFF0000u)) == 0) {
-            wx = mw.x;
-            wy = mw.y;
+        if ((d.info.z & RIPPLE_C_LIFT_WHOLE) != 0) {
+            // (the lifted place moved whole, ripple_maths.h; with no place on the picture's screen, the corner's own)
+            if (!moved_lift(w, wx, wy)) {
+                wx = xi;
+                wy = yi;
+            }
+        } else {
+            // (as before, KF4_PC_RIPPLE_LIFT=0: by moved() with a Z of 0, which drops half the corners)
+            Moved mw = moved(w, 0u);
+            // (a moved place off the 16 bits keeps the frame's S and T: moved() starts from the GS's 16 bits)
+            if (!mw.drop && ((w.x | w.y) & int(0xFFFF0000u)) == 0) {
+                wx = mw.x;
+                wy = mw.y;
+            }
         }
         for (uint i = 0u; i < 3u && !gone; i++) {
             uint k = i == 0u ? tri.x : i == 1u ? tri.y : tri.z;

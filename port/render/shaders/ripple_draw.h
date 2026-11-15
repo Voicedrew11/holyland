@@ -9,4 +9,5 @@ struct Draw {
     vec4 fog;      // FOG's fog, in x
 };
 #define RIPPLE_C_MOVING 1
+#define RIPPLE_C_LIFT_WHOLE 2 // (a picture between) S and T from the lifted place moved whole (ripple_maths.h's moved_lift)
 #define RIPPLE_C_NEAREST 0x100 // the game's floats round to nearest (--fpu-round nearest), not toward zero
