@@ -400,9 +400,10 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
     native draw calls a picture, ps2 and tolerant: 137 and 573 at the owner's chest spot (map 000 outdoors,
     widescreen; 61 and 542 indirect runs), 337 and 657 at the cave save. That is the pump thread's time, which the
     GPU's ms above do not hold. The owner's window at the chest spot: 240 held on main, 200-220 with 23d96016 (which
-    was also built on main before its warm-up and speed work, #145-#149). To time: the pump's ms a picture there,
-    ps2, tolerant, `KF4_PC_LAYERS=none` (no stretches) and `all` (every fading batch a layer: fewer changes between
-    layers and not).
+    was also built on main before its warm-up and speed work, #145-#149; with aefbe8a0, on that main, the owner had
+    almost 500 a second at the tower). `KF4_PC_LAYERS=none` there is ps2's 137 and `all` (every fading batch a
+    layer) 457, at 256 pixels a picture's difference: the stretches are mostly between layers and batches that do
+    not fade, so `all` is no way out. To time: the pump's ms a picture there, ps2, tolerant, `none` and `all`.
   - The unevenness is not compiles: with an empty pipeline cache the logs name as many stalled compiles under ps2
     as under tolerant (13 and 13, 15 and 15, 11 and 11 at three saves); the layers' passes change dynamic state, not
     pipelines. Headless at 240 every version holds 240 at these saves, so the owner's 160-165 was not reproduced
@@ -429,8 +430,8 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
 - Not in a Z32 buffer (the menus'): a float keeps Z's fraction below 2^23 only, so those stay the GS's whole Z.
 - `--native-layer-z ps2` (the overlay's "Tolerant layers" off) is exact Z as before, byte for byte (four spots at 240
   with `KF4_INTERP_DRAW_ALL=1` and `--native-draw on`, 48 pictures each, against main 482ec65b, and
-  again against 9f027e49 and d8780b9a as each was merged): the corners' order and the corners' sixteenths are taken
-  only with tolerant. `kf4-gsreplay --layer-z` takes it too.
+  again against 9f027e49, d8780b9a and 5ce213e5 as each was merged, the last also walking from the owner's
+  reflection save, 32 pictures): the corners' order and the corners' sixteenths are taken only with tolerant. `kf4-gsreplay --layer-z` takes it too.
 - Left: map 035 at a doorway step, a thin light seam where the lava's layer meets the floor's edge a fraction of a Z
   behind it (the GS hides it); map 004's tree close to the PS2's. A layer's Z pass does not light its corners
   (`PCR_F_LAYER_Z`: it writes no colour, and needs their places and alphas only).
