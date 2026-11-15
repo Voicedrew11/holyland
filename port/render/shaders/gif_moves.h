@@ -15,6 +15,7 @@
 #define IM_SCALE_ST 0x80u
 #define IM_XYZF 0x100u
 #define IM_SCREEN_ST 0x200u
+#define IM_FRAME_ONLY 0x400u
 #define IM_XY 0x4u
 #define IM_RGBA 0x8u
 #define IM_ST 0x10u
@@ -80,6 +81,10 @@ Moved moved(uint k) {
         return r; // (before the eye or the arm, its model not moving: as it is)
     }
     r.proc = true;
+    if ((w & IM_FRAME_ONLY) != 0u) {
+        r.drop = true; // (the near cut's pieces of a triangle the picture draws whole: pcr_nd000.vert)
+        return r;
+    }
     // Its place in the picture's view, m = v + dm, from v its place in the frame's (whose X, Y and Z the
     // kick has exactly): so that the floats' rounding is that of the move, and no move is no change
     vec3 v = vec3(MF(k, 4u), MF(k, 5u), MF(k, 6u));

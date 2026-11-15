@@ -62,6 +62,19 @@ void FrameInterp_MarkSky(int on) {
     Packet_EndGsRegisters();
 }
 
+/* Around the near cut of a map record (ModelScreen_CutClippedTriangles): when the record was drawn natively, its
+   pieces are the frame's only. A picture between draws the record's triangles VU1 left out whole from their mesh
+   (port/gs/pc/shaders/pcr_nd000.vert), so it leaves the pieces out (PORT_FRAME_INTERP_FRAME_ONLY), else they were
+   drawn twice. A record drawn the PS2 way keeps its pieces: it has nothing else. */
+void FrameInterp_MarkFrameOnly(int on) {
+    if (!marking || !port_frame_interp()) {
+        return;
+    }
+    Packet_BeginGsRegisters();
+    add_field(PORT_FRAME_INTERP_FRAME_ONLY, (u32)(on != 0));
+    Packet_EndGsRegisters();
+}
+
 /* After GameLoop_SetCameraMatrices(projection, mode) has built world_screen_matrix: in modes 0 and 1
    (the world, or its mirror image) the camera's matrices, then the header that says what follows;
    mode 2 (models at a fixed place before the eye) the header only. Two lists: Packet_EndGsRegisters'

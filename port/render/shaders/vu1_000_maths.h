@@ -140,6 +140,7 @@ float view_place(float n, float q, float s) {
 
 // A picture between's place (the moved()): X and Y 12.4, Z, the depth's change (f), dropped
 #include "past_band.h"
+#include "whole_triangle.h"
 struct Moved {
     int x, y;
     uint z;
@@ -150,6 +151,23 @@ struct Moved {
     float zf; // (the shader) Z unrounded
 #endif
 };
+
+// How far a picture between moves a place v in the frame's view: (R - I) v + T, and with its model t of the way from its
+// place in the frame before (seen from the camera between)
+vec3 picture_move(uint at, vec3 v) {
+    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
+                   dot(pic.move[2].xyz, v) + pic.move[2].w);
+    if ((d.info.w & ND_C_OBJ) != 0) {
+        vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
+        dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    if ((d.info.w & ND_C_MODEL) != 0) {
+        // (the models': by the part's own matrices, nd_between.h; in the eye's space, the arm's, alone)
+        vec3 e = between_move(d.bt, vec4(mesh.q[at * 4u]), pic.zt.w);
+        dm = (d.info.w & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
+    }
+    return dm;
+}
 
 Moved moved(uint at, Place p) {
     Moved r;
@@ -174,17 +192,7 @@ Moved moved(uint at, Place p) {
     }
     vec3 v = vec3(view_place(float(r.x) / 16.0 - d.screen[2].x, p.q, d.screen[0].x),
                   view_place(float(r.y) / 16.0 - d.screen[2].y, p.q, d.screen[1].y), depth);
-    vec3 dm = vec3(dot(pic.move[0].xyz, v) + pic.move[0].w, dot(pic.move[1].xyz, v) + pic.move[1].w,
-                   dot(pic.move[2].xyz, v) + pic.move[2].w);
-    if ((d.info.w & ND_C_OBJ) != 0) {
-        vec3 e = -d.obj.xyz + d.obj.xyz * pic.zt.z;
-        dm += vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
-    }
-    if ((d.info.w & ND_C_MODEL) != 0) {
-        // (the models': by the part's own matrices, nd_between.h; in the eye's space, the arm's, alone)
-        vec3 e = between_move(d.bt, vec4(mesh.q[at * 4u]), pic.zt.w);
-        dm = (d.info.w & ND_C_EYE) != 0 ? e : dm + vec3(dot(pic.mid[0].xyz, e), dot(pic.mid[1].xyz, e), dot(pic.mid[2].xyz, e));
-    }
+    vec3 dm = picture_move(at, v);
     float mz = v.z + dm.z;
     if (!(mz > 0.0)) {
         r.drop = true;
@@ -229,29 +237,11 @@ bool vu_clipped(uint at) {
     return !(abs(rx) <= 2047.0 && abs(ry) <= 2047.0) || ((floatBitsToUint(z) & 0x80000000u) != 0u && (floatBitsToUint(z) & 0x7F800000u) != 0u);
 }
 
-// (a fast turn: pcr_nd000.vert) The sides of the frame's screen (640 x 448 from XYOFFSET, a pixel's margin) a place lies
-// beyond, as model_screen.c's CLIP_SIDES: 1 left, 2 right, 4 above, 8 below; 16 when it is behind the eye, or its Z
-// below 0 or past the GS's 24 bits
-uint frame_sides(uint at) {
+// (a fast turn: pcr_nd000.vert's whole triangles, whole_triangle.h) A vertex at a picture between's time, from VU1's
+// own place times w: so a vertex behind the frame's eye or past its guard band, which VU1 left out, has one too
+Whole whole_place(uint at) {
     vec4 c = vu_transform(d.vertex, vec4(mesh.q[at * 4u]));
-    if (!(c.w > 0.0)) {
-        return 16u;
-    }
-    float q = vu_recip(c.w);
-    float x = vu_mul(c.x, q), y = vu_mul(c.y, q), z = vu_mul(c.z, q);
-    if (!(z >= 0.0 && z < 16777216.0)) {
-        return 16u;
-    }
-    float x0 = float(d.info.y) / 16.0 - 1.0, y0 = float(d.info.z) / 16.0 - 1.0;
-    return (x < x0 ? 1u : 0u) | (x > x0 + 642.0 ? 2u : 0u) | (y < y0 ? 4u : 0u) | (y > y0 + 450.0 ? 8u : 0u);
-}
-
-// A triangle (its corners' arena numbers) the frame does not show: in front of the eye, and all three corners beyond
-// the same side of the screen. VU1 may have left it out (past the guard band) and the game's near cut leaves such a
-// one alone (ModelScreen_CutClippedTriangles cuts only a triangle not wholly beyond a side), so drawing it in a
-// picture between draws nothing twice, and the frame shown is as it was
-bool wholly_off_frame(uvec3 corners) {
-    uint a = frame_sides(corners.x), b = frame_sides(corners.y), c = frame_sides(corners.z);
-    return ((a | b | c) & 16u) == 0u && (a & b & c) != 0u;
+    vec3 v = whole_frame_view(c, 1.0);
+    return whole_corner(c, 1.0, v, picture_move(at, v));
 }
 #endif

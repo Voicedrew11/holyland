@@ -45,7 +45,8 @@ void main() {
     uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
-    uint kick = tri.w;
+    uint kick = tri.w & 0x7FFFFFFFu;
+    bool left_out = (tri.w & 0x80000000u) != 0u; // (VU1 left it out of the frame: drawn in pictures between only)
     // the instance: the record (bits 0-27), the context whose XYOFFSET (28), the pass (29), IIP (30)
     d = draws[instance & 0x0FFFFFFFu];
     bool sphere = ((instance >> 29) & 1u) != 0u, gouraud = ((instance >> 30) & 1u) != 0u;
@@ -64,7 +65,43 @@ void main() {
     // two before it in the batch, the same for all three corners
     int xi = pl.x, yi = pl.y;
     float f = 1.0;
-    bool gone = false;
+    bool gone = left_out;
+    bool whole = false;
+    Whole w0, w1, w2;
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        // left out of the frame, or with a corner behind the picture's eye: drawn whole (whole_triangle.h)
+        w0 = whole_place(tri.x);
+        w1 = whole_place(tri.y);
+        w2 = whole_place(tri.z);
+        whole = left_out || whole_behind(w0, w1, w2);
+    }
+    if (whole) {
+        Whole c = which == 0u ? w0 : which == 1u ? w1 : w2;
+        v_rect = uvec2(PCR_NO_RECT);
+        if (whole_outside(w0, w1, w2)) {
+            whole_not_drawn();
+            v_color = vec4(0.0);
+            v_stq = vec3(0.0);
+            v_fog = 0.0;
+            return;
+        }
+        whole_position(c, w0, w1, w2, offset, false);
+        float qn = 1.0 / c.w;
+        if (!sphere) {
+            vec4 st = qf(slot, 2u);
+            v_stq = st.xyz * qn;
+            v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? slot : kick));
+        } else {
+            // (as below: the sphere's ST from the normal, Q 1)
+            vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
+            v_stq = vec3(vu_mul(vu_add(acc.x, 1.0), 0.5), vu_mul(vu_add(acc.y, 1.0), 0.5), 1.0);
+            uint one = slot - 2u * uint(X.x) + 2u;
+            float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
+            v_color = vec4(255.0, 255.0, 255.0, float(uint(ftoi(a1)) & 0xFFu));
+        }
+        v_fog = d.fog.z + d.fog.w * qn; // (the fragment stage clamps it to 0..255)
+        return;
+    }
     if ((d.info.y & ND_C_MOVING) != 0) {
         Moved m = moved(slot, s, pl);
         xi = m.x;

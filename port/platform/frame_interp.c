@@ -1189,6 +1189,7 @@ typedef struct {
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
+    int frame_only;   /* the vertices from here are the frame's only (PORT_FRAME_INTERP_FRAME_ONLY) */
     Camera camera;    /* SCAN: the first world mark's camera */
     MouseTurn mouse_spent; /* SCAN: and the mouse turn the game had spent then (instant mouse look) */
     Screen screen;
@@ -1306,12 +1307,17 @@ static void mark(Walk *w, uint64_t value) {
         w->sky = bits != 0;
         return;
     }
+    if (index == PORT_FRAME_INTERP_FRAME_ONLY) {
+        w->frame_only = bits != 0;
+        return;
+    }
     if (index != PORT_FRAME_INTERP_HEADER) {
         return;
     }
     if (bits == PORT_FRAME_INTERP_END) {
         w->section = SECTION_NONE;
         w->sky = 0;
+        w->frame_only = 0;
         return;
     }
     if (bits == PORT_FRAME_INTERP_ARM) {
@@ -2317,7 +2323,7 @@ static void gpu_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, int sect
     e->w[0] = GSN_IM_3D | GSN_IM_VIEW | (perspective_q(p) ? GSN_IM_SCALE_ST : 0) | (xyzf ? GSN_IM_XYZF : 0) |
               (section == SECTION_REFLECT ? GSN_IM_REFLECT : 0) |
               (section == SECTION_WORLD || section == SECTION_REFLECT ? GSN_IM_WORLD : 0) |
-              (section == SECTION_EYE ? GSN_IM_EYE : 0);
+              (section == SECTION_EYE ? GSN_IM_EYE : 0) | (w->frame_only ? GSN_IM_FRAME_ONLY : 0);
     e->w[1] = (uint32_t)w->run;
     e->w[4] = float_bits(v[0]);
     e->w[5] = float_bits(v[1]);

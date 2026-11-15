@@ -402,21 +402,20 @@ static double diag_spin_rad_s(void) {
     return rad_s;
 }
 
-/* (KF4_DIAG_SPIN) the spin's turn since the last call added to what is waiting, by the vblanks (so that a run is
-   the same each time); 1 when it is on */
+/* (KF4_DIAG_SPIN) the spin's turn since the last call added to what is waiting, by the time the readings go by
+   (reading_time: as a mouse read then would have moved); 1 when it is on */
 static int diag_spin_add(void) {
-    static uint64_t last_vblank;
-    double rad_s = diag_spin_rad_s();
-    uint64_t now;
+    static double last_v = -1;
+    double rad_s = diag_spin_rad_s(), now_v;
 
     if (rad_s == 0.0) {
         return 0;
     }
-    now = port_vblank_count();
-    if (last_vblank != 0 && now > last_vblank && now - last_vblank < 8) {
-        pc.yaw += rad_s * (double)(now - last_vblank) * (1001.0 / 60000.0);
+    now_v = reading_time();
+    if (last_v >= 0 && now_v > last_v && now_v - last_v < 8) {
+        pc.yaw += rad_s * (now_v - last_v) * (1001.0 / 60000.0);
     }
-    last_vblank = now;
+    last_v = now_v;
     return 1;
 }
 
@@ -892,7 +891,10 @@ void port_controls_sample_mouse(void) {
     int dx = 0, dy = 0;
 
     if (diag_spin_rad_s() != 0.0) {
-        return; /* (the spin is added by the vblank: diag_spin_add) */
+        if (mouse_lead && in_gameplay() && diag_spin_add()) {
+            lead_waiting();
+        }
+        return;
     }
     if (pc.layout != CONTROLS_VERDITE || port_options.input != NULL || port_options.headless || !mouse_lead ||
         pc.blocked || !pc.captured || !in_gameplay()) {
