@@ -46,6 +46,17 @@ void main() {
 #endif
     uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
+    // (tolerant layers: its corners in the order of their places in the mesh, the first corner's top bits saying which
+    // (pcr_native.cpp's list_ripple), as pcr_nd000.vert's: the map's water drawn over the reflection by program 0x000
+    // is these triangles again, and ties with them only corner for corner alike)
+    uint order = tri.x >> 29;
+    tri.x &= 0x1FFFFFFFu;
+    if ((pc.flags & PCR_F_LAYERS) != 0u) {
+        uvec3 c = tri.xyz;
+        uint a = order >> 1;
+        uvec2 rest = a == 0u ? c.yz : a == 1u ? c.xz : c.xy;
+        tri.xyz = uvec3(c[a], (order & 1u) != 0u ? rest.yx : rest.xy);
+    }
     uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     d = draws[instance & 0x3FFFFFFFu];
     ivec4 P = mesh.q[at * 4u];

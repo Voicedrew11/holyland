@@ -308,6 +308,14 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   `pcr_nd000.vert` takes it; the canvas sorts a GIF triangle's corners), so the two triangles give the GPU the same
   corners in the same order: the same shared Z (`zref`), the same differences, the same interpolation at the pixel's
   middle, the same depth. GEQUAL then lets the later draw win, as on the GS, in one pass.
+  - The reflection's rippled water too (2026-11-14; `list_ripple`, `pcr_ndripple.vert`). The game draws the
+    reflection as a strip of the water's mesh (`Wobble_DrawRippledModel`), then the map draws that mesh again over
+    it by program 0x000, blended: the same triangles, by two programs. The ripple's had no order, so the water lost
+    at about half the pixels of every other triangle: the owner's dark hatching in triangles over map 009's swamp,
+    and textures flashing while moving. With the order, tolerant standing there is 23 pixels a picture from ps2
+    (53,085 before; the two programs' corners come out the same to the sixteenth), and walking it is clean where
+    ps2 itself shows curved bands in the pictures between (its corners' Z rounded after the move). On VU1's
+    packets it never showed: the canvas sorts every GIF triangle's corners.
 - **A layer cut into triangles of its own** does not tie with what it lies on (its corners' whole Zs put it up to a Z
   or two off, more at a grazing angle), and gets a slack, as the native GS's tolerant mode gave it (4af1dbd6,
   669bee01). A layer (`is_layer`) is blended over what is there by its alpha ((Cs - Cd) As + Cd) with a corner's

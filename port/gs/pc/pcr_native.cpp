@@ -454,7 +454,7 @@ private:
             counts_.batches++;
             NativeBatch nb;
             nb.program = NativeProgram::ripple;
-            nb.first_triangle = list_ripple(adc_, base, nb.triangle_count);
+            nb.first_triangle = list_ripple(*mesh, adc_, base, nb.triangle_count);
             if (nb.triangle_count == 0) {
                 continue;
             }
@@ -597,7 +597,12 @@ private:
 
     // A water strip's triangles (kicks 2 to n - 1 without ADC), listed: each the arena's numbers of its three corners
     // (and the kick's again). Their first's place; n their count.
-    uint32_t list_ripple(const std::vector<uint8_t> &adc, uint32_t base, uint32_t &n) {
+    // (tolerant layers: the order of each triangle's corners by their places in the mesh in the first corner's top
+    // bits, as place_triangles puts it for program 0x000's. The map draws the water's own mesh again over the
+    // reflection, by program 0x000, blended: the same triangles, which tie with these on the GS. With Z's fraction
+    // kept they tie only corner for corner alike, pcr_ndripple.vert: else the water lost at about half the pixels of
+    // every other triangle, a dark hatching in triangles over the reflection.)
+    uint32_t list_ripple(const RdMeshData &m, const std::vector<uint8_t> &adc, uint32_t base, uint32_t &n) {
         n = 0;
         for (size_t kick = 2; kick < adc.size(); kick++) {
             n += !adc[kick];
@@ -610,11 +615,20 @@ private:
         }
         uint32_t first = kicked_.used;
         uint32_t *out = reinterpret_cast<uint32_t *>(kicked_.map) + size_t(first) * 4;
+        uint32_t words = rd_vertex_words(m.format);
+        auto before = [&](uint32_t a, uint32_t c) {
+            const int32_t *p = &m.vertices[size_t(a) * words], *q = &m.vertices[size_t(c) * words];
+            return std::lexicographical_compare(p, p + 3, q, q + 3);
+        };
         for (uint32_t kick = 2; kick < uint32_t(adc.size()); kick++) {
             if (adc[kick]) {
                 continue;
             }
-            out[0] = base + kick - 2;
+            uint32_t c[3] = {kick - 2, kick - 1, kick};
+            uint32_t o[3] = {0, 1, 2};
+            std::stable_sort(o, o + 3, [&](uint32_t i, uint32_t j) { return before(c[i], c[j]); });
+            uint32_t order = o[0] * 2 + (o[1] > o[2] ? 1 : 0); // (as place_triangles')
+            out[0] = (base + kick - 2) | order << 29;
             out[1] = base + kick - 1;
             out[2] = base + kick;
             out[3] = base + kick;
