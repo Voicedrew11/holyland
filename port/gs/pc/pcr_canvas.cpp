@@ -308,6 +308,10 @@ struct Surface {
     // (a depth surface: the canvas's vblank it was last drawn with; one not drawn with for long is let go,
     // let_go_of_idle_depth)
     uint64_t used = 0;
+    // (a depth surface: cleared whole to cleared_z by another width's clear, clear_depth_aliases, and no Z written into
+    // it since: the same clear again, the frame's second context's, need not clear it again)
+    bool cleared = false;
+    uint32_t cleared_z = 0;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -1426,6 +1430,7 @@ private:
         }
         full_barrier(c);
         s.image = bigger;
+        s.cleared = false;
         s.ms = bigger_ms;
         if (!s.ms) {
             s.ms_ahead = s.ms_behind = false;
@@ -3392,6 +3397,9 @@ private:
             }
             uint32_t zmax = o->psm == 0x30 ? 0xFFFFFFFFu : o->psm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
             float zscale = o->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f; // (pcr_prim.vert's depth)
+            if (o->cleared && o->cleared_z == std::min(z, zmax)) {
+                continue; // (as the clear before left it: the frame's two contexts clear one after the other)
+            }
             VkClearValue value = {};
             value.depthStencil.depth = float(std::min(z, zmax)) * zscale;
             end_pass();
@@ -3399,6 +3407,8 @@ private:
             full_barrier(c);
             c.clear_image(*o->image, value, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
+            o->cleared = true;
+            o->cleared_z = std::min(z, zmax);
             counts_depth_aliases_cleared_++;
         }
     }
@@ -3734,6 +3744,9 @@ private:
         zwrite = zwrite && zte;
         if (zwrite && ztst == 1) {
             clear_depth_aliases(b, *depth);
+        }
+        if (zwrite) {
+            depth->cleared = false; // (clear_depth_aliases')
         }
         PixelBox box = {b.x0, b.y0, b.x1, b.y1}; // (GS pixels touched)
         if (b.moved) {
@@ -4508,6 +4521,7 @@ private:
             c.clear_image(*image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
             s->image = image;
+            s->cleared = false;
         }
     }
 
