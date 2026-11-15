@@ -100,6 +100,7 @@ struct Place {
 #endif
 };
 
+#include "past_band.h"
 struct Moved {
     int x, y;
     uint z;
@@ -113,8 +114,8 @@ struct Moved {
 
 Moved moved(uint slot, int s, Place p) {
     Moved r;
-    r.x = p.x & 0xFFFF;
-    r.y = p.y & 0xFFFF;
+    r.x = p.x; // (not wrapped to the GS's 16 bits: within the band the same, past it its place, past_band.h)
+    r.y = p.y;
     r.z = uint(p.z >> 4) & 0xFFFFFFu;
     r.f = 1.0;
     r.drop = false;
@@ -147,12 +148,14 @@ Moved moved(uint slot, int s, Place p) {
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
     float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
     float nz = float(r.z) - dz;
-    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+    // (past the guard band: kept, past_band.h)
+    vec2 n = vec2(nx, ny);
+    if (!(nz >= 0.0) || !past_band_place(n)) {
         r.drop = true;
         return r;
     }
-    r.x = int(floor(nx * 16.0 + 0.5));
-    r.y = int(floor(ny * 16.0 + 0.5));
+    r.x = int(floor(n.x * 16.0 + 0.5));
+    r.y = int(floor(n.y * 16.0 + 0.5));
     uint z = r.z;
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
     r.zfrac = float(int(z - r.z)) - dz; // (from the move alone: small, exact to its float)

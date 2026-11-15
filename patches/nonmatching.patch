@@ -1,5 +1,5 @@
 diff --git a/src/nonmatching/func_00112BD0.c b/src/nonmatching/func_00112BD0.c
-index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d61796d8defe0 100644
+index c5329dc8615d1f5b33de160f05d966c8d8febfa2..b2cf08a7c5a5fef9e3930aba27b466e521f8253d 100644
 --- a/src/nonmatching/func_00112BD0.c
 +++ b/src/nonmatching/func_00112BD0.c
 @@ -1,4 +1,5 @@
@@ -118,7 +118,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
  extern CameraState camera_state;
  extern f32 identity_matrix[16];
  extern f32 world_screen_matrix[16];
-@@ -121,17 +148,19 @@ extern MapDrawRecord *record_draw_lists[2];
+@@ -121,17 +148,20 @@ extern MapDrawRecord *record_draw_lists[2];
  extern MapDrawRecord *late_record_draw_lists[2];
  extern int current_map_slot;
  
@@ -139,6 +139,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
 +void MapScroll_PrepareCopy(void);
 +void MapScroll_PrepareDraw(void);
 +void DrawDistance_ScaleFog(void *, int);
++int DrawDistance_KeepBehind(s32 flags);
 +int Map_TestFlagBlockBit(int, int, int, int);
 +void Wobble_ApplyWaveUvs(ModelInstance *);
 +void Vector_Copy(void *, void *);
@@ -147,7 +148,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
  void sceVu0CopyMatrix(void *, void *);
  void sceVu0RotMatrixX(float *, float *, float);
  void sceVu0RotMatrixY(float *, float *, float);
-@@ -139,7 +168,7 @@ void sceVu0RotMatrixZ(float *, float *, float);
+@@ -139,7 +169,7 @@ void sceVu0RotMatrixZ(float *, float *, float);
  void sceVu0TransMatrix(float *, float *, float *);
  
  #define BOUNDS(record) ((MapRecordBounds *)(record))
@@ -156,7 +157,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
  
  #define CLAMP_UNIT(value) \
      if ((value) < 0.0f) { \
-@@ -171,7 +200,26 @@ void sceVu0TransMatrix(float *, float *, float *);
+@@ -171,7 +201,26 @@ void sceVu0TransMatrix(float *, float *, float *);
          distance = delta_z * 0.9604f + delta_x * 0.3978f; \
      }
  
@@ -184,7 +185,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
  
  typedef struct {
      u8 red;
-@@ -182,11 +230,10 @@ typedef struct {
+@@ -182,14 +231,14 @@ typedef struct {
  
  void func_00112BD0(void) {
      f32 unused_vector[4];
@@ -198,7 +199,11 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
      u8 *fog;
      f32 cos_heading;
      f32 sin_heading;
-@@ -213,45 +260,47 @@ void func_00112BD0(void) {
++    int behind; /* PC */
+     f32 player_x;
+     f32 player_z;
+     f32 fade_out;
+@@ -213,45 +262,47 @@ void func_00112BD0(void) {
  
      memset(unused_vector, 0, sizeof(unused_vector));
      unused_vector[2] = -1.0f;
@@ -274,7 +279,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
              for (j = 0; j < 0x20; j++, lights++) {
                  switch (slot->tag) {
                  case 0:
-@@ -282,9 +331,9 @@ void func_00112BD0(void) {
+@@ -282,9 +333,9 @@ void func_00112BD0(void) {
                  case 99:
                      break;
                  default:
@@ -287,7 +292,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
                      break;
                  }
                  CLAMP_UNIT(lights->unk40[3][0]);
-@@ -294,17 +343,17 @@ void func_00112BD0(void) {
+@@ -294,17 +345,17 @@ void func_00112BD0(void) {
          }
      }
  
@@ -315,7 +320,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
              { /* fog blend: the 31 instructions that differ come from here */
                  f32 blend_sum;
                  f32 green_from;
-@@ -312,76 +361,74 @@ void func_00112BD0(void) {
+@@ -312,76 +363,74 @@ void func_00112BD0(void) {
                  f32 blue_from;
                  f32 blue_to;
                  f32 far_to;
@@ -429,7 +434,7 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
              record = (MapDrawRecord *)slot->records + (slot->header->record_count - 1);
              for (j = slot->header->record_count - 1; j >= 0; j--, record--) {
                  if (record->flags & 0x10000000) {
-@@ -391,17 +438,17 @@ void func_00112BD0(void) {
+@@ -391,17 +440,17 @@ void func_00112BD0(void) {
                  if (record->flags & 0x40000000) {
                      continue;
                  }
@@ -452,12 +457,13 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
                                  if (distance > ((MapHeaderFog *)slot->header)->draw_distance) {
                                      continue;
                                  }
-@@ -409,12 +456,12 @@ void func_00112BD0(void) {
+@@ -409,47 +458,52 @@ void func_00112BD0(void) {
                          }
                      }
                  }
 -                side_x0 = (BOUNDS(record)->unk40[0] - player_x) * sin_heading;
 -                side_z0 = (BOUNDS(record)->unk40[2] - player_z) * cos_heading;
++                behind = FALSE; /* PC */
 +                side_x0 = (BOUNDS(record)->box_lowest[0] - player_x) * sin_heading;
 +                side_z0 = (BOUNDS(record)->box_lowest[2] - player_z) * cos_heading;
                  if (!(side_x0 + side_z0 >= 0.0f)) {
@@ -468,8 +474,13 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
 +                        side_z1 = (BOUNDS(record)->box_highest[2] - player_z) * cos_heading;
                          if (!(side_x1 + side_z1 >= 0.0f)) {
                              if (!(side_x0 + side_z1 >= 0.0f)) {
-                                 continue;
-@@ -422,34 +469,34 @@ void func_00112BD0(void) {
+-                                continue;
++                                /* PC: behind the player, drawn for the pictures between (game/draw_distance.c) */
++                                if (!DrawDistance_KeepBehind(record->flags)) {
++                                    continue;
++                                }
++                                behind = TRUE;
+                             }
                          }
                      }
                  }
@@ -477,9 +488,10 @@ index c5329dc8615d1f5b33de160f05d966c8d8febfa2..5c399b62aa4b75c882246faee35d6179
 +                if (Map_TestFlagBlockBit(current_map_slot, player_state.record_flag_block, i, BOUNDS(record)->flag_block_bit) == 0) {
                      continue;
                  }
-                 BITS2(record)->in_view = TRUE;
+-                BITS2(record)->in_view = TRUE;
 -                if (D_0038A1B0.mode == 0) {
-+                if (DRAW_STATE.mode == 0) {
++                BITS2(record)->in_view = !behind; /* PC: (a record behind is drawn only: not in view) */
++                if (DRAW_STATE.mode == 0 && !behind) {
                      if (record->flags & 2) {
 -                        D_0038A1B0.mode = 1;
 -                        D_0038A1B0.mirror_height = BOUNDS(record)->position[1];

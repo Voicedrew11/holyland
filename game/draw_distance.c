@@ -18,7 +18,15 @@
 
    The sky: the map records that follow the player (flags bit 31: a dome or backdrop at a fixed distance
    around the player) keep the PS2's fog unless port_draw_distance_sky(): pushing their fog out does not
-   show anything further away, it only lightens the sky (map 000's dark sky shows its clouds). */
+   show anything further away, it only lightens the sky (map 000's dark sky shows its clouds).
+
+   Behind the player: func_00112BD0 also leaves out the records wholly behind a line through the player across their
+   heading. The frame never shows them, but the pictures between (--frame-rate over 30) are the frame turned on to the
+   camera between and the mouse's turn (port/include/port/mouse_lead.h), in a fast spin 50 degrees and more past the
+   frame's view: there the records left out were missing until the game's next frame (the world popping in at the
+   screen's edge). With pictures between they are drawn too (DrawDistance_KeepBehind), but not marked in view: what
+   in view decides (the map objects drawn and aimed at, their appear effects) is the PS2's, and so is the mirror mode
+   (a mirror or rippled water behind is still left out). Behind the eye in the frame, VU1 clips all they send. */
 #include "common.h"
 #include "map/map.h"
 
@@ -50,4 +58,10 @@ f32 DrawDistance_FarZ(f32 farz) {
     f32 factor = port_draw_distance_far();
 
     return factor == 1.0f ? farz : farz * factor;
+}
+
+/* a map record wholly behind the player, its flags (MapDrawRecord.flags): drawn too (into the draw lists, not in
+   view), for the pictures between; never a mirror (flags 2) or rippled water (0x200) */
+int DrawDistance_KeepBehind(s32 flags) {
+    return port_frame_interp() && !(flags & 0x202);
 }

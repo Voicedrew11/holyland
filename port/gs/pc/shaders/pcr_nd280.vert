@@ -78,7 +78,9 @@ void main() {
             gone = k == slot ? m.drop : moved(k, vertex_set(k), vu_place(k)).drop;
         }
     }
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - offset.x), float(int(uint(yi) & 0xFFFFu) - offset.y)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.y & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - offset.x), float(g.y - offset.y)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)

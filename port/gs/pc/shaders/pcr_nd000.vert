@@ -6,7 +6,8 @@
 // off, the surface's place added), the GS's integer Z, RGBA, S T Q and fog. A triangle VU1's clipping would leave out
 // (the ADC of its kick or of the two kicks before it) is not drawn. In a picture between (ND_C_MOVING) each corner is
 // moved to the picture's time (moved()), S, T and Q by its change of depth, and the triangle dropped with its kick or one
-// of the two before it in the batch.
+// of the two before it in the batch; one VU1 left out that lies wholly off the frame's screen is drawn there when its
+// corners are in front of the eye (a fast turn: wholly_off_frame).
 #define PCR_ND
 #include "pcr_common.h"
 
@@ -83,6 +84,15 @@ void main() {
         z = m.z;
         zfrac = m.zfrac;
         stq *= m.f;
+        if (gone && wholly_off_frame(tri.xyz)) {
+            // (a fast turn) left out of the frame by VU1's clipping, and not on the frame's screen: drawn in the
+            // picture as far as its corners are in front of the eye (vu1_000_maths.h's wholly_off_frame, past_band.h)
+            gone = false;
+            for (uint i = 0u; i < 3u && !gone; i++) {
+                uint k = i == 0u ? tri.x : i == 1u ? tri.y : tri.z;
+                gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
+            }
+        }
         for (uint i = 0u; i <= befores && !gone; i++) {
             uint k = kick - i;
             gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
@@ -92,7 +102,9 @@ void main() {
     zfrac = (d.info.w & ND_C_FAR) != 0 ? 0.0 : zfrac;
     zref = (d.info.w & ND_C_FAR) != 0 ? 0u : zref;
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.w & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - d.info.y), float(g.y - d.info.z)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)

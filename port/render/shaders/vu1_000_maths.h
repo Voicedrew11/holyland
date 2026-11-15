@@ -139,6 +139,7 @@ float view_place(float n, float q, float s) {
 }
 
 // A picture between's place (the moved()): X and Y 12.4, Z, the depth's change (f), dropped
+#include "past_band.h"
 struct Moved {
     int x, y;
     uint z;
@@ -152,8 +153,8 @@ struct Moved {
 
 Moved moved(uint at, Place p) {
     Moved r;
-    r.x = p.x & 0xFFFF;
-    r.y = p.y & 0xFFFF;
+    r.x = p.x; // (not wrapped to the GS's 16 bits: within the band the same, past it its place, past_band.h)
+    r.y = p.y;
     r.z = gs_z(p);
     r.f = 1.0;
     r.drop = false;
@@ -196,12 +197,14 @@ Moved moved(uint at, Place p) {
     float ny = float(r.y) / 16.0 + d.screen[1].y * (dm.y * v.z - v.y * dm.z) / den;
     float dz = (float(r.z) - d.screen[2].z) * dm.z / mz;
     float nz = float(r.z) - dz;
-    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+    // (past the guard band: kept, past_band.h)
+    vec2 n = vec2(nx, ny);
+    if (!(nz >= 0.0) || !past_band_place(n)) {
         r.drop = true;
         return r;
     }
-    r.x = int(floor(nx * 16.0 + 0.5));
-    r.y = int(floor(ny * 16.0 + 0.5));
+    r.x = int(floor(n.x * 16.0 + 0.5));
+    r.y = int(floor(n.y * 16.0 + 0.5));
     uint z = r.z;
     r.z = uint(min(floor(nz + 0.5), 16777215.0));
     r.zfrac = float(int(z - r.z)) - dz; // (from the move alone: small, exact to its float)
@@ -224,5 +227,31 @@ bool vu_clipped(uint at) {
     float x = vu_mul(c.x, q), y = vu_mul(c.y, q), z = vu_mul(c.z, q);
     float rx = vu_add(x, -2048.0), ry = vu_add(y, -2048.0);
     return !(abs(rx) <= 2047.0 && abs(ry) <= 2047.0) || ((floatBitsToUint(z) & 0x80000000u) != 0u && (floatBitsToUint(z) & 0x7F800000u) != 0u);
+}
+
+// (a fast turn: pcr_nd000.vert) The sides of the frame's screen (640 x 448 from XYOFFSET, a pixel's margin) a place lies
+// beyond, as model_screen.c's CLIP_SIDES: 1 left, 2 right, 4 above, 8 below; 16 when it is behind the eye, or its Z
+// below 0 or past the GS's 24 bits
+uint frame_sides(uint at) {
+    vec4 c = vu_transform(d.vertex, vec4(mesh.q[at * 4u]));
+    if (!(c.w > 0.0)) {
+        return 16u;
+    }
+    float q = vu_recip(c.w);
+    float x = vu_mul(c.x, q), y = vu_mul(c.y, q), z = vu_mul(c.z, q);
+    if (!(z >= 0.0 && z < 16777216.0)) {
+        return 16u;
+    }
+    float x0 = float(d.info.y) / 16.0 - 1.0, y0 = float(d.info.z) / 16.0 - 1.0;
+    return (x < x0 ? 1u : 0u) | (x > x0 + 642.0 ? 2u : 0u) | (y < y0 ? 4u : 0u) | (y > y0 + 450.0 ? 8u : 0u);
+}
+
+// A triangle (its corners' arena numbers) the frame does not show: in front of the eye, and all three corners beyond
+// the same side of the screen. VU1 may have left it out (past the guard band) and the game's near cut leaves such a
+// one alone (ModelScreen_CutClippedTriangles cuts only a triangle not wholly beyond a side), so drawing it in a
+// picture between draws nothing twice, and the frame shown is as it was
+bool wholly_off_frame(uvec3 corners) {
+    uint a = frame_sides(corners.x), b = frame_sides(corners.y), c = frame_sides(corners.z);
+    return ((a | b | c) & 16u) == 0u && (a & b & c) != 0u;
 }
 #endif

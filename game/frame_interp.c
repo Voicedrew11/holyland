@@ -122,3 +122,20 @@ void FrameInterp_EndWorld(void) {
     add_field(PORT_FRAME_INTERP_HEADER, PORT_FRAME_INTERP_END);
     Packet_EndGsRegisters();
 }
+
+/* The window the near cut (ModelScreen_CutClippedTriangles) cuts for, 12.4: left, right, top, bottom. The PS2's is the
+   screen (0x6C00 to 0x9400 across, 0x7200 to 0x8E00 down). With pictures between, a screen more each side: a picture is
+   the frame turned on (in a fast turn of the mouse, by more than the screen's half), and a close wall's triangle that
+   crosses the eye's plane is drawn only as the near cut's pieces; cut for the screen alone, the pieces stopped at its
+   edge, and the picture showed nothing past it (the world popping in at the edge it turned toward, or left open at
+   the other). Triangles cut for the wider window and not for the screen are wholly beyond one side of the screen, so
+   the frame shown is the PS2's. */
+void ModelScreen_CutWindow(s32 window[4]) {
+    s32 more_x = port_frame_interp() ? 0x2800 : 0; /* 640 pixels */
+    s32 more_y = port_frame_interp() ? 0x1C00 : 0; /* 448 */
+
+    window[0] = 0x6C00 - more_x;
+    window[1] = 0x9400 + more_x;
+    window[2] = 0x7200 - more_y;
+    window[3] = 0x8E00 + more_y;
+}

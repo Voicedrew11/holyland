@@ -74,7 +74,9 @@ void main() {
         }
     }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.w & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - d.info.y), float(g.y - d.info.z)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
