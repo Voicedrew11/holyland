@@ -338,9 +338,21 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
     off the line moves a pixel or two (the lava's far shore, a rock's edge on a wall). No pass or draw is added.
   - The frames' flicker count (pictures far from both neighbours) does not see these: a band lasts eight pictures.
     They were found by walking with every vblank's pictures dumped and comparing builds picture by picture.
-  - Not walked yet: the owner's two other spots (a sign's corner against the wall under it near a door, and a
-    rock block's edge that flickers while moving; one save holds both). A board less than a sixteenth of a Z off its
-    wall would still swap: the next step then is the corner's whole fraction, from its Z before FTOI4.
+  - The owner's sign (a board on a rock wall near a door, seen from far off: its bottom-left corner flicking back
+    and forth with the wall under it) is the same thing. Walked away from at the owner's widescreen, 64 vblanks with
+    every picture dumped: without the sixteenths the corner comes and goes at a game frame's first picture 12 times
+    (over 100 pixels of the board's 160 by 100 box changing from one picture to the next, against 26 between the
+    others); with them never (77 at most), the corner the shape the board has from near, its lower plank set in a
+    little. ps2 has no such steps but a ragged lower edge that changes every picture.
+  - The corner's whole fraction (its Z before FTOI4 less the whole Z, in place of the sixteenths) was built and
+    walked at the sign too: the same pictures within 12 pixels a picture, nothing the sixteenths leave that it
+    takes away. Not taken.
+  - The owner's third spot in that save, a rock block's edge that "flickers a lot when moving", is not this and is
+    not tolerant's. At the block's corner ps2 flickers three times as much as tolerant (pixels far from both
+    neighbouring pictures, a picture: 64, against 22 without the sixteenths and 23 with): the rock layer's teeth
+    over the corner. What is left with tolerant is a fine speckle over the block's whole faces, the same in ps2:
+    the texture, read without mipmaps at a grazing angle (`--stats`: no batch here is mipmapped, and
+    `--native-aniso 16` and `--native-lod scale` draw the same pictures).
 - **What the two phases cost, and what was cut (2026-11-14).** The owner's playtest of 536324a1: the best Z so far,
   but 160-165 pictures a second where 240 was held, and uneven. About a third of the map's batches are layers.
   Measured walking from the owner's tower and cave saves at the owner's settings with the frame rate unlocked
