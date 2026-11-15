@@ -31,6 +31,7 @@ static_assert(sizeof(RippleRecord) == 18 * 16, "RippleRecord is ripple_draw.h's 
 // RippleRecord.info[2] (ripple_draw.h's RIPPLE_C_*)
 enum : int32_t {
     RIPPLE_MOVE_CAMERA = 0x1, // a picture between: moved by the picture's camera
+    RIPPLE_LIFT_WHOLE = 0x2,  // and its S and T made from the lifted place moved whole (ripple_draw.h)
     RIPPLE_NEAREST = 0x100,   // the game's floats round to nearest (--fpu-round nearest), not toward zero
 };
 

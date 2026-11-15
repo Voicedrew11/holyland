@@ -641,7 +641,16 @@ top of #118 (fix/tour-water-rock: the water reads the reflection's 16-bit target
   sines) and the strips' ADC, which needs the places (`port/render/ripple.cpp`); the GPU makes each corner's place,
   S and T (`shaders/pcr_ndripple.vert`, the maths in `port/render/shaders/ripple_maths.h`, a new `NativeProgram`).
   In a picture between the places are moved by the picture's camera and S and T made again from the moved ones, as
-  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). `ripple_test`
+  the native GS did (the owner's decision 3 of 2026-10-23: the reflection stays under the water). Until 2026-11-15 that held
+  for only half the water: the lifted place (the one S and T are made from) was moved by the vertex's `moved()` with a
+  Z of 0, whose far-plane test then failed for every corner the picture's move brought nearer, and such a corner kept
+  the frame's S and T. With the camera turning, the water on one side of the turn looked its reflection up where the
+  frame had it and the other side where the picture has it: the reflection lagged on one side, with a sharp line,
+  streaks and zigzags where the two met, and a darker band where the frame's place fell on an unlit part of the
+  target (the owner's playtest with the mouse at a fixed rate, where the mouse's lead turns the pictures furthest
+  from the frame). The lifted place is now moved whole by `moved_lift` (ripple_maths.h): S and T are linear in the
+  screen's X and Y, so none of the GS's limits on a vertex apply to it. `KF4_PC_RIPPLE_LIFT=0`: as before.
+  `ripple_test`
   checks the record and the ADC against Wobble_DrawRippledModel's maths as nd_water.c's KF4_ND_WATER_CHECK writes it,
   and the shader's S and T arithmetic (copied to C++) against the game's floats for every X and Y of 16 bits, toward
   zero and to nearest.

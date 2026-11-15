@@ -588,7 +588,9 @@ private:
 
     // A water draw's record with its move (in the frame's walk kept, the frame's and then its picture's, as put_pair)
     uint32_t put_ripple(RippleRecord &k, const PartMove &m) {
-        int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA : 0;
+        // (RIPPLE_LIFT_WHOLE: the pictures' S and T from the lifted place moved whole, ripple_maths.h's moved_lift;
+        // KF4_PC_RIPPLE_LIFT=0: by moved(), as before)
+        int32_t moving = (m.flags & VU1_MOVE_CAMERA) ? RIPPLE_MOVE_CAMERA | (ripple_lift_ ? RIPPLE_LIFT_WHOLE : 0) : 0;
         if (walk_ != PartWalk::frame_kept) {
             k.info[2] |= moving;
             return put(records_ripple_, RECORDS_ROOM, &k, sizeof(k));
@@ -857,6 +859,7 @@ private:
     // paired refuses the frame's own walk, its pictures walked, as before)
     std::vector<GsnInterpMove> trail_moves_;
     bool trail_kicks_ = trail_kicks_wanted();
+    const bool ripple_lift_ = !(getenv("KF4_PC_RIPPLE_LIFT") && strcmp(getenv("KF4_PC_RIPPLE_LIFT"), "0") == 0);
     static bool trail_kicks_wanted() {
         const char *v = getenv("KF4_PC_TRAIL_KICKS");
         return !(v && strcmp(v, "0") == 0);
