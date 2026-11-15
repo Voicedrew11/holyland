@@ -308,6 +308,10 @@ struct Surface {
     // (a depth surface: the canvas's vblank it was last drawn with; one not drawn with for long is let go,
     // let_go_of_idle_depth)
     uint64_t used = 0;
+    // (a depth surface: cleared whole to cleared_z by another width's clear, clear_depth_aliases, and no Z written into
+    // it since: the same clear again, the frame's second context's, need not clear it again)
+    bool cleared = false;
+    uint32_t cleared_z = 0;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -1426,6 +1430,7 @@ private:
         }
         full_barrier(c);
         s.image = bigger;
+        s.cleared = false;
         s.ms = bigger_ms;
         if (!s.ms) {
             s.ms_ahead = s.ms_behind = false;
@@ -3361,8 +3366,13 @@ private:
     // the reflection failed against it, and the water showed the black where it was not drawn (2026-11-11). A clear
     // here: a batch of sprites writing one Z with ZTST ALWAYS over whole rows of its surface's pages. Every other depth
     // surface of the format wholly in those pages is cleared to the same Z (any format for Z 0: no bits in any).
+    // In a picture between too, where every GIF batch is one the shader may move (moved): the clear's sprites stay as
+    // the frame has them (still), so they are where and what the vertices say. Left out there, the reflection's Z
+    // buffer kept the Z of the frame's own picture through all the pictures between: its triangles, moved by the
+    // picture's camera, failed wherever the move took them farther, and the water showed black triangles in its
+    // reflection whenever the camera turned (map 009's swamp, 2026-11-14).
     void clear_depth_aliases(const Batch &b, const Surface &depth) {
-        if (b.native || b.moved || !b.sprites || b.vertices.empty()) {
+        if (b.native || (b.moved && !b.still) || !b.sprites || b.vertices.empty()) {
             return;
         }
         uint32_t z = b.vertices[0].z;
@@ -3387,6 +3397,9 @@ private:
             }
             uint32_t zmax = o->psm == 0x30 ? 0xFFFFFFFFu : o->psm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
             float zscale = o->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f; // (pcr_prim.vert's depth)
+            if (o->cleared && o->cleared_z == std::min(z, zmax)) {
+                continue; // (as the clear before left it: the frame's two contexts clear one after the other)
+            }
             VkClearValue value = {};
             value.depthStencil.depth = float(std::min(z, zmax)) * zscale;
             end_pass();
@@ -3394,6 +3407,8 @@ private:
             full_barrier(c);
             c.clear_image(*o->image, value, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
+            o->cleared = true;
+            o->cleared_z = std::min(z, zmax);
             counts_depth_aliases_cleared_++;
         }
     }
@@ -3729,6 +3744,9 @@ private:
         zwrite = zwrite && zte;
         if (zwrite && ztst == 1) {
             clear_depth_aliases(b, *depth);
+        }
+        if (zwrite) {
+            depth->cleared = false; // (clear_depth_aliases')
         }
         PixelBox box = {b.x0, b.y0, b.x1, b.y1}; // (GS pixels touched)
         if (b.moved) {
@@ -4503,6 +4521,7 @@ private:
             c.clear_image(*image, zero, VK_IMAGE_ASPECT_DEPTH_BIT);
             full_barrier(c);
             s->image = image;
+            s->cleared = false;
         }
     }
 
