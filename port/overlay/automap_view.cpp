@@ -1419,7 +1419,14 @@ void automap_view_mods_section() {
     }
     ImGui::SetNextItemWidth(200 * ImGui::GetFontSize() / 18.0f);
     changed |= ImGui::SliderInt("Full map background", &s.full_opacity, 40, 100, "%d%%");
-    ImGui::TextDisabled("Cheats (they stand in for a guide):");
+    bool cheats_open = ImGui::TreeNode("Map cheats");
+    ImGui::SetItemTooltip("Reveal the map, items, enemies, secrets and hints: they stand in for a guide.");
+    if (!cheats_open) {
+        ImGui::Unindent();
+        if (changed)
+            port_automap_settings_changed();
+        return;
+    }
     check("Reveal the whole map", &s.reveal, "Every floor of the map, explored or not (what you explore is still kept).");
     check("Show items", &s.items, "Items lying on the ground, and what chests, containers and bones hold,\nthrough the fog; "
                                   "what enemies may drop.");
@@ -1427,6 +1434,7 @@ void automap_view_mods_section() {
     check("Show secrets and traps", &s.secrets, "Traps (shooters, pitfalls) and walls that appear or fade away, through the fog.");
     check("Show locks and hints", &s.hints, "What each lock needs (and whether you have it), and the guide's notes\n"
                                             "for locks and puzzles (a blue ? on the map).");
+    ImGui::TreePop();
     ImGui::Unindent();
     if (changed)
         port_automap_settings_changed();

@@ -58,7 +58,7 @@
                          (objects and picked), skinned (or entities), arm, sky, effects, shadows,
                          reflection, water, passes, items, objects, picked, gold. off is
                          the game as without it. The default is on, unless settings.json says "native_draw":
-                         "off". The overlay's Debug page changes the kinds live
+                         "off". The overlay's Developer page changes the kinds live
        --native-wave-uvs ps2|gpu|cpu|late
                          with --native-draw map, the wave UVs of the water records: ps2 (the default: the
                          PS2 path's picture, late, or gpu with the test wait), gpu (the frame's offsets
@@ -105,8 +105,10 @@
                          unlocked no faster than N pictures a second (a few under a VRR screen's
                          rate keeps it in its range); 0, no cap, by default
        --tearing         unlocked's pictures shown at once, tearing (the swapchain immediate:
-                         the least latency, and a VRR screen's), not the newest at each
-                         refresh (mailbox, by default)
+                         the least latency), not the newest at each refresh (mailbox, by default)
+       --adaptive-sync   for a VRR screen (FreeSync, G-Sync): each picture shown when it comes, the
+                         screen waiting for it (the swapchain FIFO at every rate), and every rate
+                         kept a little under the screen's (161 at 170 Hz); off by default
        --draw-distance N the opt-in longer view: the fog and the far plane N times as far (1, the
                          PS2's, by default; 1.5, 2, 4, or max: no distance fog) (game/draw_distance.c)
        --draw-distance-sky ps2|push
@@ -114,14 +116,15 @@
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
        --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
+       --no-hit-jolt     the opt-in mod: a hard hit from an enemy does not throw the view down
        --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
        --automap         the opt-in mod: the automap, a map of where you have been (M; docs/port/AUTOMAP.md)
        --automap-cheats  the automap with all its cheats on (the whole map, items, enemies, secrets, hints)
        --weapon-sets     the opt-in mod: a second weapon and shield, swapped in on R (docs/port/WEAPON_SETS.md)
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
-       --invincible      debugging: the player loses no HP and does not die (the overlay's Debug page)
+       --invincible      debugging: the player loses no HP and does not die (the overlay's Developer page)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
-                         or all), as the Debug page's buttons do; spells1, spells2 or spells3 for the
+                         or all), as the Developer page's buttons do; spells1, spells2 or spells3 for the
                          spells at that level (3 otherwise) (port/include/port/cheats.h)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
@@ -148,7 +151,7 @@
        --teleport [VBLANK:]MAP[:PLACE]
                          once in play (from VBLANK), put the player in that map at its PLACE-th place
                          (0, the map's start, when left out; VBLANK:MAP:PLACE with a vblank), keeping
-                         the game's progress, as the overlay's Debug page does (port/platform/teleport.c)
+                         the game's progress, as the overlay's Developer page does (port/platform/teleport.c)
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)
@@ -263,7 +266,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
@@ -434,6 +437,10 @@ static void parse_options(int argc, char **argv) {
             port_options.separate_run = port_options.separate_run_forced = 1;
             continue;
         }
+        if (strcmp(option, "--no-hit-jolt") == 0) {
+            port_options.no_hit_jolt = port_options.no_hit_jolt_forced = 1;
+            continue;
+        }
         if (strcmp(option, "--extended-stats") == 0) { /* the extended stats mod (port/include/port/stats.h) */
             port_stats_options.on = port_stats_options.forced = 1;
             continue;
@@ -444,6 +451,10 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--tearing") == 0) {
             port_options.tearing = port_options.tearing_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--adaptive-sync") == 0) {
+            port_options.adaptive_sync = port_options.adaptive_sync_forced = 1;
             continue;
         }
         if (strcmp(option, "--stats") == 0) {
@@ -742,6 +753,10 @@ float port_draw_distance_far(void) {
 
 int port_myus_necklace(void) {
     return port_options.myus_necklace != 0;
+}
+
+int port_no_hit_jolt(void) {
+    return port_options.no_hit_jolt != 0;
 }
 
 /* --cheats spells,equipment,items,magic or all: 0 for a word it does not know */

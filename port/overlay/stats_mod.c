@@ -20,7 +20,7 @@
 PortStatsOptions port_stats_options = {0, 0, 1, 1, 1, 1, 1}; /* on, forced, menus, panel, damage, durability, timers */
 
 static int panel_open;
-/* What the player chose (settings.json, the Mods page); --extended-stats leaves it as it was */
+/* What the player chose (settings.json, the Gameplay page); --extended-stats leaves it as it was */
 static int saved_on;
 
 void port_stats_set_on(int on) {
