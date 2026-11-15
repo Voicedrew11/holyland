@@ -45,9 +45,6 @@ float asinf(float);
 float atan2f(float, float);
 
 extern f32 identity_matrix[16];
-extern f32 world_screen_matrix[16];
-extern f32 world_view_matrix[16];
-extern f32 view_screen_matrix[16];
 
 /* a part's data blocks at most (ModelPart.data_count's 11 bits), as native_draw.c's */
 #define ND_MAX_MESHES 2048
@@ -87,16 +84,13 @@ static int skinned_part_meshes(ModelPart *part, RdMesh *meshes) {
     return part->data_count == 0 || rd_mesh_program(meshes[0]) == 0x280;
 }
 
-/* the camera the world is drawn by now. (native_draw.c's current_camera also fills the mirror's mode and
-   projection; nothing reads them yet, and the pictures between of models are P2-5's.) */
-static u32 skinned_camera(void) {
-    RdCamera c;
+u32 NativeDraw_CurrentCamera(void);
 
-    memset(&c, 0, sizeof(c));
-    memcpy(c.world_screen, world_screen_matrix, sizeof(c.world_screen));
-    memcpy(c.view, world_view_matrix, sizeof(c.view));
-    memcpy(c.screen, view_screen_matrix, sizeof(c.screen));
-    return rd_camera(&c);
+/* the camera the world is drawn by now, with its mirror's mode and projection (native_draw.c's current_camera):
+   the renderer cuts the mirror image at its water (port_reflection_clip()), the reflection of an enemy in a pond
+   too */
+static u32 skinned_camera(void) {
+    return NativeDraw_CurrentCamera();
 }
 
 /* What Model_DrawSkinned leaves in VU1's memory, without the parts' data (VU1 runs nothing for it): its

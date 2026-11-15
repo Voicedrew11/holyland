@@ -11,6 +11,7 @@
                     "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
                     "native_cutout_aa": "ssaa", "native_2d": "smooth",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
+                    "reflection_clip": true,
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
@@ -84,6 +85,7 @@ PortSettings port_settings = {
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
     .native_sky = PORT_SKY_MODERN,
+    .reflection_clip = 1,
 };
 
 static int active;
@@ -424,6 +426,7 @@ void port_settings_load(void) {
             s->native_sky = strcmp(sky, "ps2") == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
         }
     }
+    s->reflection_clip = read_bool(display, "reflection_clip", s->reflection_clip);
     {
         const char *presenter = read_string(display, "presenter");
 
@@ -532,6 +535,9 @@ void port_settings_load(void) {
     }
     if (!port_options.native_sky_forced) {
         port_options.native_sky = s->native_sky;
+    }
+    if (!port_options.reflection_clip_forced) {
+        port_options.reflection_clip = s->reflection_clip;
     }
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
@@ -678,6 +684,7 @@ void port_settings_save(void) {
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
+    put(display, "reflection_clip", cJSON_CreateBool(s->reflection_clip));
     put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));

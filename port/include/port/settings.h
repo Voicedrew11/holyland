@@ -52,6 +52,7 @@ typedef struct {
     int native_draw;       /* native draw, the whole path: 0 off (the PS2 path), 1 every accepted kind
                               (port_options.native_draw = PORT_ND_ACCEPTED; docs/port/NATIVE_DRAW.md) */
     int native_sky;        /* the native sky: PORT_SKY_PS2 or PORT_SKY_MODERN (port_options.native_sky) */
+    int reflection_clip;   /* the water's reflection cut at the water: 1 on, 0 the PS2's (port_options.reflection_clip) */
     int presenter;         /* how the picture reaches the window, from the next start: PORT_PRESENTER_ */
     /* Audio */
     int volume;            /* 0 to 100 */

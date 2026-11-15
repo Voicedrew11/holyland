@@ -11,6 +11,7 @@
 //
 //     out/<preset>/vu1_record_test     prints the failures, and exits 1 if any
 #include <fenv.h>
+#include <math.h>
 #include <stdarg.h>
 #include <xmmintrin.h>
 #include <stdio.h>
@@ -265,6 +266,76 @@ static void check_fast_against_exact() {
     }
 }
 
+// 0 to 1, evenly
+static float unit() {
+    return float(rng() % 1000000u) / 1000000.0f;
+}
+
+// a = b x c, VU layout (a[col][row])
+static void mat_mul4(float a[4][4], const float b[4][4], const float c[4][4]) {
+    float r[4][4];
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            r[col][row] = b[0][row] * c[col][0] + b[1][row] * c[col][1] + b[2][row] * c[col][2] + b[3][row] * c[col][3];
+        }
+    }
+    memcpy(a, r, sizeof(r));
+}
+
+// vu1_mirror_plane: cameras built as GameLoop_SetCameraMatrices builds the mirror's (screen x view x the mirror about
+// y = h, y down), the eye above the water or under it; a point's dot with the plane by world_screen is more than 0 on
+// the eye's side of the water, less on the other, and about its distance from the water. A camera of mode 0: no plane.
+static void check_mirror_plane() {
+    for (int trial = 0; trial < 200; trial++) {
+        float h = (unit() - 0.5f) * 4000.0f, yaw = unit() * 6.2831853f;
+        float pitch = (unit() - 0.5f) * 1.2f;
+        float eye[3] = {(unit() - 0.5f) * 8000.0f, h + ((trial & 1) ? 1.0f : -1.0f) * (50.0f + 500.0f * unit()),
+                        (unit() - 0.5f) * 8000.0f};
+        float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+        // world to view: less the eye, turned by yaw about y, then by pitch about x
+        float rot[4][4] = {{cy, sp * sy, -cp * sy, 0}, {0, cp, sp, 0}, {sy, -sp * cy, cp * cy, 0}, {0, 0, 0, 1}};
+        float move[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {-eye[0], -eye[1], -eye[2], 1}};
+        // a projection as sceVu0ViewScreenMatrix's: X = 512 x + 2048 z, Y = 512 y + 2048 z, Z = a z + b, w = z
+        float screen[4][4] = {{512, 0, 0, 0}, {0, 512, 0, 0}, {2048, 2048, -32767.5f, 1}, {0, 0, 1048560.0f, 0}};
+        float mirror[4][4] = {{1, 0, 0, 0}, {0, -1, 0, 0}, {0, 0, 1, 0}, {0, 2 * h, 0, 1}};
+        RdCamera cam;
+        memset(&cam, 0, sizeof(cam));
+        mat_mul4(cam.view, rot, move);
+        memcpy(cam.screen, screen, sizeof(screen));
+        mat_mul4(cam.world_screen, screen, cam.view);
+        mat_mul4(cam.world_screen, cam.world_screen, mirror);
+        float plane[4] = {};
+        checks++;
+        if (vu1_mirror_plane(cam, plane)) {
+            printf("FAIL mirror plane trial %d: a plane for camera mode 0\n", trial);
+            failures++;
+        }
+        cam.mode = 1;
+        checks++;
+        if (!vu1_mirror_plane(cam, plane)) {
+            printf("FAIL mirror plane trial %d: no plane\n", trial);
+            failures++;
+            continue;
+        }
+        for (int i = 0; i < 8; i++) {
+            float d = (unit() - 0.5f) * 1000.0f; // (y down: d more than 0 is under the water)
+            float p[4] = {eye[0] + (unit() - 0.5f) * 3000.0f, h + d, eye[2] + (unit() - 0.5f) * 3000.0f, 1};
+            float c[4];
+            for (int r = 0; r < 4; r++) {
+                c[r] = cam.world_screen[0][r] * p[0] + cam.world_screen[1][r] * p[1] + cam.world_screen[2][r] * p[2] +
+                       cam.world_screen[3][r];
+            }
+            float got = plane[0] * c[0] + plane[1] * c[1] + plane[2] * c[2] + plane[3] * c[3];
+            float want = eye[1] < h ? -d : d; // (the eye's side more than 0)
+            checks++;
+            if (fabsf(got - want) > 0.01f * fabsf(want) + 0.5f) {
+                printf("FAIL mirror plane trial %d: %g from the water, the plane says %g\n", trial, want, got);
+                failures++;
+            }
+        }
+    }
+}
+
 static void start_vu1() {
     const uint32_t unop = 0x2Fu >> 2 << 6 | 0x3C | (0x2F & 3), lnop = 0x80000000u | 0x30u >> 2 << 6 | 0x3C;
     const uint32_t pairs[4] = {lnop, unop | 0x40000000u, lnop, unop};
@@ -363,6 +434,7 @@ int main() {
         }
     }
     check_fast_against_exact();
+    check_mirror_plane();
     printf("%d of %d checks failed\n", failures, checks);
     return failures ? 1 : 0;
 }

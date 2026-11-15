@@ -18,6 +18,7 @@ struct Draw {
     ivec4 offset;       // XYOFFSET_1's X and Y, XYOFFSET_2's (12.4)
     mat4 screen;        // view to screen (pictures between: sx, sy, cx, cy, cz)
     Between bt[2];      // (ND_C_MODEL) set A's and set B's moves from the frame before
+    vec4 clip;          // the mirror image's cut at the water, in the screen's space (vu1_mirror_plane); 0: none
 };
 
 #define ND_C_MOVING 1

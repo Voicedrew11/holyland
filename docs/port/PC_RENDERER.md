@@ -61,6 +61,49 @@ samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the
 holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
 draws on).
 
+## The reflection cut at the water (2026-11-14; `--reflection-clip`)
+
+A zombie standing in a pond had its feet in the water's reflection, sticking up behind its legs. The PS2 does the
+same, and paraLLEl-GS shows it: GameLoop_SetCameraMatrices' mode 1 mirrors the whole scene about the water line
+(`world_screen` = screen x view x the mirror about y = `mirror_height`) and cuts nothing off, so what lies under the
+water (the feet, the pond's floor) is mirrored to above it, into the 256 x 256 reflection the water then reads by the
+place on the screen; the parts of it over the water show through behind the real legs. Now, by default, the native
+draws of a mirror camera are cut at the water's plane; `--reflection-clip off` (settings.json `display.reflection_clip`,
+the overlay's Display page, live) is the PS2's picture.
+
+- **The plane.** `vu1_mirror_plane` (port/render/vu1_record.cpp) takes a camera of mode 1 (the reflection of maps 008,
+  009 and 014, and map 041's mirror drawn into the frame) and works out the water's height from its own matrices
+  (screen x view's inverse by world_screen is the mirror; h is half its y translation) and the eye's side (view's
+  inverse). It returns the plane in the screen's homogeneous space (VU1's X w, Y w, Z w, w), world_screen's inverse
+  applied, so that its dot with a vertex's product by the record's vertex matrix is the vertex's own place's distance
+  from the water, more than 0 on the eye's side. One plane serves every draw of the camera, whatever its model matrix.
+  pcr_native.cpp puts it in each record (`Vu1Record::clip`, `Vu1Record280::clip`, a qword at the end), or 0s.
+- **The shaders.** pcr_nd000.vert (the map, objects, items, shadows), pcr_nd280.vert (the skinned models) and
+  pcr_nd700.vert (the effects) write `gl_ClipDistance[0]`: on the screen (gl_Position's w 1) the distance by the
+  corner's q (and by a picture between's change of q), which is affine on the screen, so the cut lies exactly where the
+  triangle crosses the water; a triangle drawn whole in a picture between (in clip space, w its depth) takes the
+  distance as it is (0x700's by its position's w). A record of 0s writes 0: nothing is cut, and the picture is main's
+  to the byte. No fragment shader changes. The device feature `shaderClipDistance` is turned on in Granite
+  (cmake/granite_depth_bounds.cmake). The enemies' draws now carry the camera's mode as the others' do
+  (nd_entities.c's camera was the world's, mode 0, so their reflection was not cut).
+- **Not cut**: the PS2 path's draws (VU1's packets: `--native-draw off` or a kind it leaves out; the CPU's near cut of
+  close map triangles, which stays the PS2 path) and `--renderer gs`. kf4-gsreplay cuts (the default).
+
+Checked at the owner's settings (scale 3, MSAA 2, aniso 2, SSAA cut-outs, native widescreen, texture detail full,
+`--native-draw on`), headless and silent:
+- **The owner's zombie save** (map 009's pond, vblanks 500-1100): off is main's to the byte. On, only the reflection
+  of the feet changes (5,000-19,000 pixels a picture, round the zombie's shins, by up to 58 levels): the pale feet
+  behind the legs are gone, the reflection of the legs and arm over the water stays. At 240 the pictures between the
+  same.
+- **The owner's reflection save** (009): 8 pixels by 2 levels at one of four vblanks, where a log meets the water;
+  the reflection of everything over the water whole.
+- **The spots** (0:0, 9:0, 9:2, 99:0 at 240, vblanks 2400 and 2700 with their pictures between, 32 pictures): on, off
+  and main byte for byte.
+- **The tour** (`map_tour.py`, all maps, 508 views, 30 Hz): on and off byte for byte but one view of 014, 1,681 pixels
+  by up to 5 levels along the bank under its water.
+- **The validation layer** (the zombie save at 240): the two messages main has, nothing more.
+- `vu1_record_test` checks the plane: cameras built as the game builds the mirror's, the eye over and under the water.
+
 ## GPU time a picture (2026-11-12; issue #109)
 
 Re-profiled on the clean baseline of 2026-11-12 (`ae9a9097`, Windows, RTX 5080; C:\code\kf4-tools\perf-baseline-1112.md)

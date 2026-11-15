@@ -18,6 +18,7 @@ struct Draw {
     ivec4 info;        // the point lights, XYOFFSET X and Y (12.4), ND_C_*
     Between bt;        // (ND_C_MODEL) the part's own move from the frame before (nd_between.h)
     uvec4 wave[4];     // (ND_C_WAVE) the 16 waves' offsets to S (low 16 bits) and T (high)
+    vec4 clip;         // the mirror image's cut at the water, in the screen's space (vu1_mirror_plane); 0: none
 };
 #define ND_C_MOVING 1
 #define ND_C_OBJ 2

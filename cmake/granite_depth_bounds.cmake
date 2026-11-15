@@ -68,6 +68,9 @@ function(kf4_granite_depth_bounds granite)
     # a bound a little nearer than its pixels' Z, which near the Z buffer's largest Z is past 1: clamped, not clipped)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
         "\t\tif (pdf2.features.depthClamp) enabled_features.depthClamp = VK_TRUE; // (holyland)" TRUE)
+    # and clip distances (the native draws' cut of the mirror image at its water: pcr_nd000.vert's mirror_cut)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.shaderClipDistance) enabled_features.shaderClipDistance = VK_TRUE; // (holyland)" TRUE)
     kf4_granite_edit(${cpp} "\traster.depthBiasEnable = compile.static_state.state.depth_bias_enable != 0;"
         "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (holyland)" FALSE)
 endfunction()
