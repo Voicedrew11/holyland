@@ -1064,6 +1064,19 @@ the frame's own walk, kept, can be made the stream's walk by those rules, and th
   made twice). A picture between, a frame taken or a state loaded in a stretch drops it (the 0xF2 mark after the
   vblank), and frame_interp.c's replays sent as packets (the exact restore, between 0xF0 and 0xF1) are kept out.
   Stretches are kept only while frames are taken (none at 30, in the menus).
+  - A frame taken in its stretch keeps it (2026-11-14). A frame is taken at the vblank after its packets, and
+    mostly after that vblank's own picture, which closes the stretch and makes the frame's uploads the ones its
+    pictures ask for again (`Canvas::vblank`). At a fixed rate with the mouse turned, the vblank's first picture
+    between (phase 0: the frame shown, turned to the hand) comes before the vblank's own picture, and the frame
+    with it. The stretch still open was dropped, so with the mouse turning no frame kept its own walk (0 of 337 at
+    240, 120 and 60 from the owner's save: every frame walked its packets), and that first picture's uploads asked
+    again found the frame before's list. The game sends the HUD's and the torches' textures up again every frame,
+    into places they share; where the two frames' lists differed, a sprite got another texture's texels: the HUD and
+    the torch flames as rectangles of static for one picture (the owner's playtest: only at a set rate over 30,
+    never unlocked, whose pictures are not at phase 0, nor at 30). Where the packets since the last vblank are the
+    frame's (their bytes its own), `Intake::take_frame` now closes the stretch as
+    the frame's (`own_walk` still checks its bytes) and `Canvas::frame_taken` makes the uploads since the last
+    vblank the frame's. `KF4_PC_FRAME_STRETCH=0`: dropped, as before.
 - **The frame's account** (`GsnInterpFrame`, gsn.h, filled by frame_interp.c's gpu_frame; the native GS reads none of
   it): the frame's packets' bytes, the buffer drawn and the one shown, whether uploads are asked for again, whether
   the frame shown is kept, and its copies of the frame (from the buffer drawn into another) with the stream's choice

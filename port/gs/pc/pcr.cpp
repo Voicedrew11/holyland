@@ -650,7 +650,22 @@ public:
         if (!between_) {
             return;
         }
-        drop_stretch();
+        // A frame is taken at the vblank after its packets, mostly after that vblank's own picture, which closed the
+        // stretch and made the frame's uploads the ones asked for again (vblank). With the mouse turned, at a fixed
+        // rate, the vblank's first picture between (phase 0) comes before the vblank's own, and the frame with it: the
+        // packets since the last vblank are then the frame's (their bytes its own), the stretch still open is its own
+        // walk, closed here as the vblank would have, and the uploads since that vblank are the frame's. Dropped
+        // instead, every frame taken so walked its packets for its pictures, the first of them with the frame before's
+        // uploads (the HUD and the torches as rectangles of static for a picture). KF4_PC_FRAME_STRETCH=0: dropped, as
+        // before.
+        if (frame_stretch_ && since_vblank_bytes_ != 0 && since_vblank_bytes_ == frame->packet_bytes) {
+            if (stretch_open_) {
+                last_stretch_ = close_stretch();
+            }
+            canvas_->frame_taken();
+        } else {
+            drop_stretch();
+        }
         frame_taken_at_ = vblanks_;
         const pcr::FrameTargets targets = {frame->draw_fbp,
                                            frame->shown_fbp,
@@ -789,6 +804,8 @@ public:
         own_walks_ = keep_walks_ && !(own && strcmp(own, "0") == 0);
         const char *copies = getenv("KF4_PC_FRAME_COPIES");
         frame_copies_ = !(copies && strcmp(copies, "0") == 0);
+        const char *stretch = getenv("KF4_PC_FRAME_STRETCH");
+        frame_stretch_ = !(stretch && strcmp(stretch, "0") == 0);
         const char *census = getenv("KF4_PC_CENSUS");
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
@@ -800,6 +817,7 @@ public:
             open_stretch();
         }
         stretch_bytes_ += bytes.size();
+        since_vblank_bytes_ += bytes.size();
         front_.feed(path, bytes);
     }
 
@@ -808,6 +826,7 @@ public:
         drop_stretch();
         last_stretch_.reset();
         in_replay_ = false;
+        since_vblank_bytes_ = 0;
     }
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
@@ -815,6 +834,7 @@ public:
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
                 int mode_2d) {
         vblanks_++;
+        since_vblank_bytes_ = 0;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
         }
@@ -1020,6 +1040,10 @@ private:
     // KF4_PC_FRAME_COPIES (0: a frame that copies the buffer drawn walks its pictures, as before; else its own walk
     // makes the copies the stream makes, from the buffer shown: pcr_frame_walk.h's frame_copy_in_picture)
     bool frame_copies_ = true;
+    // KF4_PC_FRAME_STRETCH (0: a frame taken in a stretch drops it, as before; else the stretch is the frame's own walk
+    // and its uploads the frame's: take_frame), and the bytes of the packets taken in since the last vblank
+    bool frame_stretch_ = true;
+    uint64_t since_vblank_bytes_ = 0;
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------

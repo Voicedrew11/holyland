@@ -224,6 +224,9 @@ public:
     void submit();
     // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken
     void vblank();
+    // A frame taken for its pictures between, with its packets the last taken in: the uploads since the last vblank
+    // are the frame's, what its pictures ask for again (upload_again), as the vblank after them would have made them
+    void frame_taken();
 
     // Developers' views (pcr.h's pcr_debug_*, which say what each does; kf4-gsreplay --renderer pc), never a player's:
     // the pixel trace (trace_pixel to start it: false when the spot is not one or there is no memory for it; take_trace
