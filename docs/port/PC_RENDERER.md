@@ -325,8 +325,22 @@ like a regression: it is #140/#141's exact Z (main with `KF4_PC_EXACT_Z=0` draws
   (`PCR_F_LAYER_TEST`, `PCR_F_LAYER_WIDE`): it wins over the surface it lies on, and what is drawn after it meets its
   Z as on the GS (map 028's floor still over its puddle).
   - A native batch's corners are the GPU's, so its mesh says whether it fades (`RdBatch::alpha_lo`, with PRIM's ABE)
-    and whether it is a twin (`pcr_native.cpp`'s `twin`): each of its triangles has the three places of a triangle of
-    a batch that does not fade, of any mesh placed. A twin ties (above) and is drawn once; the others are the layers.
+    and whether it is a twin (`pcr_native.cpp`'s `twin_marks`): each of its triangles has the three places of a
+    triangle of a batch that does not fade, of a mesh drawn before it in the same walk by the same matrix (the draw's
+    vertex matrix and move). A twin ties (above) and is drawn once; the others are the layers.
+  - *Not by the places alone* (2026-11-15). Until then a triangle was its surface's own again when any mesh placed in
+    the arena had a solid triangle of its three places, and the answer was kept. The arena keeps its meshes across
+    maps, and ground cut on a grid shares places with ground of other maps and other spots. The owner's report: walking
+    from map 000 out to the healing spring's temple (map 063) and back, a dark rectangle on the floor in front of a
+    stone doorway, black fading to brown with a stepped left edge, every picture. Replayed from the owner's recording
+    it shows at the F8 vblank; `KF4_PC_LAYERS=none`, `KF4_PC_LAYER_TWINS=0`, ps2, or a new arena every frame clear it.
+    Four triangles (two quads) of the floor's overlay there (TBP 0x3140) had the places of map 063's ground meshes,
+    not drawn there: marked, the overlay's Z pass left them out, and with no Z written over the floor what the GS
+    hides under it (a darker shape, drawn after) showed through. Of the fading batches drawn in that frame, 32 had
+    such triangles. Now the meshes that share a triangle's places are kept (worked out again as meshes are placed), and
+    which of them were drawn before it in the walk by the same matrix is asked at every draw; a batch whose marks are
+    not the ones its triangles were placed with is listed again with them for that draw (`place_triangles`, in the
+    kicked triangles' buffer; `--stats` counts them).
   - `KF4_PC_LAYERS=all` takes every batch that fades for a layer, twins too; `none` takes no native batch (for
     measuring; the pictures of `all` and the default differ by 0 to 51 pixels a picture at the owner's saves).
 - **A native corner keeps the sixteenths of its Z** (2026-11-14; `pcr_nd000.vert` and its three siblings, with

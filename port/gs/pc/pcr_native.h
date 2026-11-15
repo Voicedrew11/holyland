@@ -42,8 +42,9 @@ struct NativeCounts {
     uint64_t draws = 0, batches = 0, triangles = 0, lost = 0, unsupported = 0;
     uint64_t meshes_placed = 0, arenas = 0;
     uint64_t moved_models = 0, paired_strips = 0; // (pictures between)
-    // (tolerant layers) the triangles placed of batches that fade, and those of them marked a surface's own again
-    uint64_t fading_triangles = 0, twin_triangles = 0;
+    // (tolerant layers) the triangles placed of batches that fade, and those of them marked a surface's own again; the
+    // draws of such a batch listed again, their marks not the ones it was placed with
+    uint64_t fading_triangles = 0, twin_triangles = 0, marks_again = 0;
 };
 
 class NativeDraws {

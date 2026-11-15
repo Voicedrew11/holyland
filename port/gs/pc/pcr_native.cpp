@@ -64,6 +64,7 @@ public:
             rd_consumer_frame(value);
             parts_.frame(uint32_t(value) & 0xFFFFFF, walk_);
             passes_.frame(uint32_t(value) & 0xFFFFFF, walk_);
+            surfaces_drawn_.clear(); // (tolerant layers: a walk's own surfaces, twin_marks)
             if (walk_ != PartWalk::picture) {
                 shown_kept_ = false; // (a new frame: its first picture between keeps the frame shown again, 0xF2)
             }
@@ -214,13 +215,18 @@ private:
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
         k.info[2] = int32_t((offset >> 32) & 0xFFFF);
-        uint32_t record = put_moved(records_, k, parts_.draw(d, cam, walk_));
+        const PartMove move = parts_.draw(d, cam, walk_);
+        uint32_t record = put_moved(records_, k, move);
+        uint64_t matrix = shadow ? 0 : matrix_key(k, move);
         for (const auto &mesh : fetched_) {
             if (mesh->format != (shadow ? RD_VF_SILHOUETTE : RD_VF_PACKED16)) {
                 counts_.unsupported++;
                 continue;
             }
             uint32_t base = place(*mesh);
+            if (!shadow) {
+                note_drawn(*mesh, matrix);
+            }
             for (const RdBatch &b : mesh->batches) {
                 // what the VU1 run kicks before its strip, as the GS gets it (0x5A0's batches have no A+D packet)
                 if (b.start != RD_PROGRAM_CONTINUE) {
@@ -239,15 +245,22 @@ private:
                 NativeBatch nb;
                 nb.program = NativeProgram::vu1_000;
                 nb.arena = arena_.buffer;
-                nb.first_triangle = place_triangles(*mesh, b, base);
-                nb.triangles = triangles_.buffer;
+                // (tolerant layers: which of a fading batch's triangles are a surface's own again in this walk, and
+                // whether all of them are: a twin, drawn once, else a layer)
+                bool twin = false;
+                const std::vector<uint8_t> *marks = nullptr;
+                if (!shadow && fades(b)) {
+                    twin = twin_marks(*mesh, b, matrix, marks_);
+                    marks = &marks_;
+                }
+                nb.first_triangle = place_triangles(*mesh, b, base, marks, nb.triangles);
                 nb.records = records_.buffer;
                 nb.triangle_count = n;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
                 // (tolerant layers: KF4_PC_LAYERS=all, every batch that fades a layer, its twins too; none: none)
                 static const char *const layers = getenv("KF4_PC_LAYERS");
                 bool every = layers && strcmp(layers, "all") == 0, none = layers && strcmp(layers, "none") == 0;
-                nb.layer = !shadow && !none && fades(b) && (every || !twin(*mesh, b));
+                nb.layer = !shadow && !none && fades(b) && (every || !twin);
                 // (program 0x000 leaves the mesh's colours' alpha in RGBAQ as it is: vu1_000_maths.h's lit_colour, the
                 // lights' w 1; the batch's least and most are render.cpp's)
                 nb.alpha_is_one = !shadow && b.alpha_lo == 0x80 && b.alpha_hi == 0x80;
@@ -772,6 +785,7 @@ private:
             make(arena_, room, VERTEX_BYTES);
             placed_.clear();
             triangles_placed_.clear();
+            placed_marks_.clear();
             solid_.clear();
             twins_.clear();
             counts_.arenas++;
@@ -803,54 +817,155 @@ private:
         }
         return ((c[0] * 0x9E3779B97F4A7C15ull ^ c[1]) * 0x9E3779B97F4A7C15ull ^ c[2]) * 0x9E3779B97F4A7C15ull | 1;
     }
-    // (a mesh placed: the triangles of its batches that do not fade)
+    // (a mesh placed: the triangles of its batches that do not fade, each with the mesh)
     void note_solid(const RdMeshData &m) {
         if (m.format != RD_VF_PACKED16) {
             return;
         }
         for (const RdBatch &b : m.batches) {
             for (size_t t = 0; !fades(b) && t < b.triangles.size() / 3; t++) {
-                solid_.insert(triangle_of(m, b, t));
+                solid_.emplace(triangle_of(m, b, t), m.id);
             }
         }
         solid_generation_++;
     }
-    // Whether a batch that fades is a twin: each of its triangles has the three places of a triangle of a batch that
-    // does not fade, of any mesh placed. The game draws a surface's second texture as the surface's own strips again,
-    // in a draw of its own by the same matrix, the vertices' alphas saying how much of it shows. Drawn corner for corner
-    // alike (place_triangles' order) the two have the same Z at every pixel, to the bit: a tie, which the later wins as
-    // on the GS, with no slack and no second pass (pcr_canvas.cpp's tolerant passes). (Two meshes that share three
-    // places by chance, drawn by other matrices, are no twins: the batch then goes without a slack only.) Asked again
-    // when more meshes have been placed since it was not one: its surface may be met after it.
-    bool twin(const RdMeshData &m, const RdBatch &b) {
-        Twin &known = twins_[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
-        if (!known.yes && known.generation != solid_generation_) {
-            known.generation = solid_generation_;
-            known.yes = !b.triangles.empty();
-            for (size_t t = 0; known.yes && t < b.triangles.size() / 3; t++) {
-                uint64_t triangle = triangle_of(m, b, t);
-                known.yes = triangle == 0 || solid_.count(triangle) != 0;
+
+    // (tolerant layers) A draw's matrix as its corners' Z comes out of it: the record's vertex matrix and, in a walk of
+    // the pictures between, the part's move. Two draws by the same matrix give the same corners the same Z to the bit.
+    static uint64_t matrix_key(const Vu1Record &k, const PartMove &m) {
+        uint64_t h = 0xCBF29CE484222325ull;
+        auto mix = [&h](const void *p, size_t bytes) {
+            const uint8_t *c = static_cast<const uint8_t *>(p);
+            for (size_t i = 0; i < bytes; i++) {
+                h = (h ^ c[i]) * 0x100000001B3ull;
+            }
+        };
+        mix(k.vertex, sizeof(k.vertex));
+        mix(&m.flags, sizeof(m.flags));
+        mix(m.obj, sizeof(m.obj));
+        mix(&m.model, sizeof(m.model));
+        return h;
+    }
+    static uint64_t surface_key(RdMesh mesh, uint64_t matrix) {
+        return (matrix ^ mesh) * 0x9E3779B97F4A7C15ull;
+    }
+    // (a mesh drawn in this walk by that matrix, with a batch that does not fade: its surfaces' Z written by it)
+    void note_drawn(const RdMeshData &m, uint64_t matrix) {
+        for (const RdBatch &b : m.batches) {
+            if (!fades(b) && !b.triangles.empty()) {
+                surfaces_drawn_.insert(surface_key(m.id, matrix));
+                return;
             }
         }
-        return known.yes;
     }
 
-    // The batch's first triangle in the triangles' buffer (placed there the first time it is drawn into this arena): a
-    // uvec4 each, the arena's numbers of its corners, and of its kick with how many of the two kicks before it are the
-    // batch's (bits 28-29: VU1's clipping looks at those)
-    uint32_t place_triangles(const RdMeshData &m, const RdBatch &b, uint32_t base) {
+    // Which triangles of a batch that fades are a surface's own again (marks, one a triangle), and whether all of them
+    // are: the batch a twin. The game draws a surface's second texture as the surface's own strips again, in a draw of
+    // its own by the same matrix, the vertices' alphas saying how much of it shows. Drawn corner for corner alike
+    // (place_triangles' order) the two have the same Z at every pixel, to the bit: a tie, which the later wins as on
+    // the GS, with no slack and no second pass (pcr_canvas.cpp's tolerant passes), and a layer's Z pass can leave such
+    // a triangle out (its Z is written already). A triangle is one when a mesh with a triangle of the same three places
+    // in a batch that does not fade was drawn before it in this walk by the same matrix (surfaces_drawn_). Not by its
+    // places alone: the meshes placed stay in the arena for its life, across maps, and ground cut on a grid shares
+    // places with ground elsewhere. Marked for a mesh of another map, or of this one drawn elsewhere or not at all, an
+    // overlay's triangles wrote no Z where nothing else had, and what the GS hides behind them showed through: the
+    // owner's dark rectangle in front of a door at map 000 after walking out to map 063 and back (2026-11-15), four of
+    // the floor overlay's triangles there sharing their places with map 063's ground.
+    // The meshes that share places with each triangle are worked out again when meshes have been placed since (up to
+    // 64 of them a batch; a triangle is not marked for any past those); which of them were drawn, at every draw.
+    bool twin_marks(const RdMeshData &m, const RdBatch &b, uint64_t matrix, std::vector<uint8_t> &marks) {
+        size_t n = b.triangles.size() / 3;
+        Twins &known = twins_[uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data())];
+        if (known.generation != solid_generation_) {
+            known.generation = solid_generation_;
+            known.meshes.clear();
+            known.by.assign(n, 0);
+            known.degenerate.assign(n, 0);
+            for (size_t t = 0; t < n; t++) {
+                uint64_t triangle = triangle_of(m, b, t);
+                known.degenerate[t] = triangle == 0;
+                if (triangle == 0) {
+                    continue;
+                }
+                auto range = solid_.equal_range(triangle);
+                for (auto it = range.first; it != range.second; ++it) {
+                    size_t i = size_t(std::find(known.meshes.begin(), known.meshes.end(), it->second) -
+                                      known.meshes.begin());
+                    if (i == known.meshes.size() && i < 64) {
+                        known.meshes.push_back(it->second);
+                    }
+                    known.by[t] |= i < 64 ? 1ull << i : 0;
+                }
+            }
+        }
+        uint64_t drawn = 0;
+        for (size_t i = 0; i < known.meshes.size(); i++) {
+            drawn |= surfaces_drawn_.count(surface_key(known.meshes[i], matrix)) ? 1ull << i : 0;
+        }
+        marks.assign(n, 0);
+        bool all = n != 0;
+        for (size_t t = 0; t < n; t++) {
+            marks[t] = (known.by[t] & drawn) != 0;
+            all = all && (marks[t] || known.degenerate[t]);
+        }
+        return all;
+    }
+
+    // The batch's first triangle in its list (triangles: the list's buffer): a uvec4 each, the arena's numbers of its
+    // corners, and of its kick with how many of the two kicks before it are the batch's (bits 28-29: VU1's clipping
+    // looks at those). Placed in the triangles' buffer the first time it is drawn into this arena. (tolerant layers)
+    // marks: a fading batch's twin_marks, in bit 30; when they are not the ones it was placed with, the batch is listed
+    // again with them for this draw alone, in the kicked triangles' buffer.
+    uint32_t place_triangles(const RdMeshData &m, const RdBatch &b, uint32_t base, const std::vector<uint8_t> *marks,
+                             BufferHandle &triangles) {
+        // (KF4_PC_LAYER_TWINS=0: none marked)
+        static const bool mark = !getenv("KF4_PC_LAYER_TWINS") || strcmp(getenv("KF4_PC_LAYER_TWINS"), "0") != 0;
+        const std::vector<uint8_t> *placing = mark ? marks : nullptr;
         uint64_t key = uint64_t(m.id) << 20 | uint64_t(&b - m.batches.data());
+        uint32_t n = uint32_t(b.triangles.size() / 3);
         auto it = triangles_placed_.find(key);
         if (it != triangles_placed_.end()) {
-            return it->second;
+            auto was = placed_marks_.find(key);
+            bool same = placing ? was != placed_marks_.end() && was->second == *placing : was == placed_marks_.end();
+            if (same) {
+                triangles = triangles_.buffer;
+                return it->second;
+            }
+            // (marked otherwise in this walk: listed again for this draw)
+            if (!kicked_.buffer || kicked_.used + n > kicked_.room) {
+                make(kicked_, std::max(kicked_.room ? kicked_.room : TRIANGLES_FIRST, n), 16);
+            }
+            uint32_t at = kicked_.used;
+            list_triangles(reinterpret_cast<uint32_t *>(kicked_.map) + size_t(at) * 4, m, b, base, placing);
+            kicked_.used += n;
+            counts_.marks_again++;
+            triangles = kicked_.buffer;
+            return at;
         }
-        uint32_t n = uint32_t(b.triangles.size() / 3);
         if (!triangles_.buffer || triangles_.used + n > triangles_.room) {
             make(triangles_, std::max(triangles_.room ? triangles_.room * 2 : TRIANGLES_FIRST, n), 16);
             triangles_placed_.clear();
+            placed_marks_.clear();
         }
         uint32_t at = triangles_.used;
-        uint32_t *out = reinterpret_cast<uint32_t *>(triangles_.map) + size_t(at) * 4;
+        list_triangles(reinterpret_cast<uint32_t *>(triangles_.map) + size_t(at) * 4, m, b, base, placing);
+        for (uint32_t t = 0; marks && t < n; t++) {
+            counts_.fading_triangles++;
+            counts_.twin_triangles += placing && (*placing)[t] ? 1 : 0;
+        }
+        triangles_.used += n;
+        triangles_placed_[key] = at;
+        if (placing) {
+            placed_marks_[key] = *placing;
+        }
+        triangles = triangles_.buffer;
+        return at;
+    }
+
+    // (place_triangles) the batch's triangles written at out
+    static void list_triangles(uint32_t *out, const RdMeshData &m, const RdBatch &b, uint32_t base,
+                               const std::vector<uint8_t> *marks) {
+        uint32_t n = uint32_t(b.triangles.size() / 3);
         uint32_t first = base + b.first;
         // (tolerant layers: the order of its corners by their places in the mesh, in the first corner's top bits, so
         // that two triangles of the same three places, an overlay's and its surface's, are drawn corner for corner
@@ -870,19 +985,10 @@ private:
             out[t * 4 + 1] = first + c[1];
             out[t * 4 + 2] = first + kick;
             out[t * 4 + 3] = (first + kick) | std::min(kick, 2u) << 28;
-            // (tolerant layers: bit 30, a triangle of a batch that fades that is a surface's own again, among the
-            // meshes placed so far: its Z is the surface's to the bit, and a layer's Z pass leaves it out,
-            // pcr_nd000.vert. KF4_PC_LAYER_TWINS=0: none marked.)
-            static const bool mark = !getenv("KF4_PC_LAYER_TWINS") || strcmp(getenv("KF4_PC_LAYER_TWINS"), "0") != 0;
-            uint64_t triangle = mark && fades(b) ? triangle_of(m, b, t) : 0;
-            bool twin_triangle = triangle != 0 && solid_.count(triangle) != 0;
-            out[t * 4 + 3] |= twin_triangle ? 1u << 30 : 0;
-            counts_.fading_triangles += fades(b) ? 1 : 0;
-            counts_.twin_triangles += twin_triangle ? 1 : 0;
+            // (tolerant layers: bit 30, a triangle that is a surface's own again, twin_marks: its Z is the surface's to
+            // the bit, written already, and a layer's Z pass leaves it out, pcr_nd000.vert)
+            out[t * 4 + 3] |= marks && (*marks)[t] ? 1u << 30 : 0;
         }
-        triangles_.used += n;
-        triangles_placed_[key] = at;
-        return at;
     }
 
     Device &device_;
@@ -895,15 +1001,23 @@ private:
     float picture_t_ = 1.0f;
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
-    // (tolerant layers: twin) the triangles of the placed meshes' batches that do not fade, by their three places; how
-    // many times meshes were noted; and each fading batch's answer, with the count it was worked out at
-    std::unordered_set<uint64_t> solid_;
+    // (tolerant layers: twin_marks) the triangles of the placed meshes' batches that do not fade, by their three places,
+    // each with its mesh; how many times meshes were noted; each fading batch's meshes that share its triangles'
+    // places (by: a triangle's, a bit each; degenerate: two corners at one place), with the count they were worked out
+    // at; the meshes with surfaces drawn in this walk, by their matrices (surface_key); the marks a fading batch's
+    // triangles were placed with (place_triangles); and a draw's marks
+    std::unordered_multimap<uint64_t, RdMesh> solid_;
     uint32_t solid_generation_ = 1;
-    struct Twin {
-        bool yes = false;
+    struct Twins {
         uint32_t generation = 0;
+        std::vector<RdMesh> meshes;
+        std::vector<uint64_t> by;
+        std::vector<uint8_t> degenerate;
     };
-    std::unordered_map<uint64_t, Twin> twins_;
+    std::unordered_map<uint64_t, Twins> twins_;
+    std::unordered_set<uint64_t> surfaces_drawn_;
+    std::unordered_map<uint64_t, std::vector<uint8_t>> placed_marks_;
+    std::vector<uint8_t> marks_;
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
     PartMoves parts_;
     PartWalk walk_ = PartWalk::frame;
@@ -985,8 +1099,10 @@ void NativeDraws::print_counts(FILE *out) const {
             (unsigned long long)c.arenas);
     if (c.fading_triangles) {
         fprintf(out, "[stats] pc native draws, tolerant layers: %llu triangles placed of batches that fade, %llu of them "
-                     "a surface's own again (left out of a layer's Z pass)\n",
-                (unsigned long long)c.fading_triangles, (unsigned long long)c.twin_triangles);
+                     "a surface's own again (left out of a layer's Z pass); %llu draws of them listed again, marked "
+                     "otherwise\n",
+                (unsigned long long)c.fading_triangles, (unsigned long long)c.twin_triangles,
+                (unsigned long long)c.marks_again);
     }
     fprintf(out, "[stats] pc native draws in pictures between: %llu moved by their own matrices, %llu trails paired\n",
             (unsigned long long)c.moved_models, (unsigned long long)c.paired_strips);
