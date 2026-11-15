@@ -863,6 +863,15 @@ if(NOT WIN32)
 endif()
 add_test(NAME ripple COMMAND ripple_test)
 
+# Exact Z's plane (port/render/shaders/plane_z.h, the PC renderer's fragment stage's arithmetic, compiled as C++)
+# against 128-bit integers
+add_executable(plane_z_test tests/plane_z_test.cpp)
+set_target_properties(plane_z_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(plane_z_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME plane_z COMMAND plane_z_test)
+
 # The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
 # at t 0 and 1, the sections, the pairing by identity, the trail's pairs
 add_executable(part_moves_test tests/part_moves_test.cpp)

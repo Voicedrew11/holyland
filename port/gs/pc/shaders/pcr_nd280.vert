@@ -7,6 +7,7 @@
 // matrices and the normal, Q 1, white with vertex 1's alpha.
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the pass's triangles: x, y, z the arena's slots of its corners (two a vertex), w its kick's
 layout(set = 0, binding = 8, std430) readonly buffer Tris {
@@ -16,6 +17,9 @@ layout(set = 0, binding = 8, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
@@ -36,7 +40,24 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 };
 #include "vu1_280_maths.h"
 
+// (exact Z, pcr_exact_z.h) Corner slot k as this shader draws it, less the context's XYOFFSET: in the frame VU1's
+// place (X and Y in the GS's 16 bits), in a picture between moved (moved(): unwrapped, Z with its fraction)
+GsCorner gs_corner(uint k, ivec2 offset) {
+    Place p = vu_place(k);
+    GsCorner c;
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        Moved m = moved(k, vertex_set(k), p);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+    } else {
+        c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), uint(p.z >> 4) & 0xFFFFFFu, 0.0);
+    }
+    c.xy += 16 * pc.place - offset;
+    return c;
+}
+
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -90,7 +111,9 @@ void main() {
         if (!sphere) {
             vec4 st = qf(slot, 2u);
             v_stq = st.xyz * qn;
-            v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? slot : kick));
+            // (the colour times Q, as in 3D: pcr_nd000.vert's draw_whole)
+            v_color = vec4(lit_colour(gouraud ? slot : kick)) * qn;
+            v_color_q = qn;
         } else {
             // (as below: the sphere's ST from the normal, Q 1)
             vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
@@ -121,6 +144,9 @@ void main() {
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane(gs_corner(tri.x, offset), gs_corner(tri.y, offset), gs_corner(tri.z, offset)); // (pcr_exact_z.h)
     }
     vec3 stq;
     uvec4 rgba;

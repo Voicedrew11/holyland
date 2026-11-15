@@ -166,10 +166,13 @@ uint pcr_loss_margin() {
 // different triangles a hair apart, and one of them loses over whole triangles. So the fragment stage (pcr_prim.h's
 // pcr_exact_depth) works out the pixel's whole Z as the GS (and paraLLEl-GS) does, and writes it as its depth; ties are
 // then ties, and the depth test's GEQUAL lets the later draw win, as on the GS.
-// The GS's Z at a pixel is a corner's whole Z plus the rounded interpolation of the corners' differences from it. Each
+// The pixel's Z is the triangle's plane at its point, worked out exactly in integers (pcr_exact_z.h, plane_z.h), from
+// the three corners each vertex hands down. Where a triangle has none (pcr_plane_none), the older way below:
+// the GS's Z at a pixel is a corner's whole Z plus the rounded interpolation of the corners' differences from it. Each
 // corner hands down a whole Z its triangle shares (zref: the first corner's as the frame has it, given to every corner
 // by the canvas, or worked out by each corner of a native draw), flat, and its own Z less that, with its fraction
-// (v_zrel), interpolated: small numbers, so the float keeps them as exactly as the GS's own differences. Any whole Z
+// (v_zrel), interpolated: small numbers for a small triangle (near the eye, millions: the float's error passes half a
+// Z, why the plane replaced it, 2026-11-15). Any whole Z
 // the corners share gives the same rounding, so a corner moved in a picture between needs no other corner's move.
 // That is the barycentric extension's result without it: every GPU draws exact Z.
 // In a picture between a corner's Z is moved (gif_moves.h, vu1_*_maths.h) and keeps its fraction (zfrac): rounded at

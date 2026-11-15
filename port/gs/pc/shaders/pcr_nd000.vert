@@ -10,6 +10,7 @@
 // its mesh and cut to the screen by the GPU (a fast turn: draw_whole).
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the batch's triangles: x, y, z the arena's numbers of its corners; w the kick's (bits 0-27) and how many of the two
 // kicks before it are the batch's (bits 28-29)
@@ -20,6 +21,9 @@ layout(set = 0, binding = 5, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
@@ -41,8 +45,9 @@ layout(set = 0, binding = 4, std430) readonly buffer Draws {
 #include "vu1_000_maths.h"
 
 // (a picture between) A corner c of a triangle drawn whole (whole_triangle.h; w0..w2 its three corners). S T Q and the
-// fog by its new Q; the colour its own, or with a corner behind the eye the kick's for all three (the GS's colour is
-// affine on the screen, which a corner behind the eye has no place on)
+// fog by its new Q; the colour times Q too (v_color_q), so it runs across the triangle as in 3D: the frame drew such a
+// triangle as the near cut's pieces, whose corners' colours are the triangle's in 3D. (Not the kick's alone for a
+// triangle with a corner behind the eye: a wall beside the player turned a flat colour for the pictures it was cut in.)
 void draw_whole(Whole c, Whole w0, Whole w1, Whole w2, vec3 st, bool gouraud, uint at, uint kick) {
     v_rect = uvec2(PCR_NO_RECT);
     if (whole_outside(w0, w1, w2)) {
@@ -54,12 +59,34 @@ void draw_whole(Whole c, Whole w0, Whole w1, Whole w2, vec3 st, bool gouraud, ui
     }
     whole_position(c, w0, w1, w2, ivec2(d.info.y, d.info.z), (d.info.w & ND_C_FAR) != 0);
     float q = 1.0 / c.w;
-    v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? at : kick));
+    v_color = vec4(lit_colour(gouraud ? at : kick)) * q;
+    v_color_q = q;
     v_stq = st * q;
     v_fog = d.fog.z + d.fog.w * q; // (the fragment stage clamps it to 0..255)
 }
 
+// (exact Z, pcr_exact_z.h) Corner k as this shader draws it: in the frame VU1's place (X and Y in the GS's 16 bits),
+// in a picture between moved (moved(): unwrapped, Z with its fraction); at the far plane (the modern sky) Z 0
+GsCorner gs_corner(uint k) {
+    Place p = vu_place(k);
+    GsCorner c;
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        Moved m = moved(k, p);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+    } else {
+        c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), gs_z(p), 0.0);
+    }
+    c.xy += 16 * pc.place - ivec2(d.info.y, d.info.z);
+    if ((d.info.w & ND_C_FAR) != 0) {
+        c.z = 0u;
+        c.zfrac = 0.0;
+    }
+    return c;
+}
+
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -130,6 +157,9 @@ void main() {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
     uvec4 rgba = lit_colour(gouraud ? at : kick);
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane(gs_corner(tri.x), gs_corner(tri.y), gs_corner(tri.z)); // (exact Z: pcr_exact_z.h)
+    }
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);

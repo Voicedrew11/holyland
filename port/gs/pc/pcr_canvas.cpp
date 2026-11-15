@@ -131,6 +131,9 @@ constexpr uint32_t no_table = 0xFFFFu;
 // (a kept walk's samplers, u_samplers: the stock nearest one and 15 of the walk's)
 constexpr uint32_t walk_samplers = 16;
 
+// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
+enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
+
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
 
@@ -148,19 +151,32 @@ struct Vertex {
     uint32_t rect[2] = {no_rect, no_rect};
     // (exact Z, pcr_common.h) a whole Z its triangle's three corners share: the first corner's (link_corners)
     uint32_t zref = 0;
+    // (exact Z by the plane, port/gs/pc/shaders/pcr_exact_z.h) its triangle's two other corners (link_corners): their
+    // X and Y and Z as this corner's are, and in a picture between what each is made of: a triangle's corner its own
+    // kick (kicks[0]), a sprite's its corner (kicks[3]'s K_CORNER bits; the sprite's two kicks are this corner's)
+    float other_xy[2][2] = {};
+    uint32_t other_z[2] = {};
+    uint32_t other_kick[2] = {no_kick, no_kick};
 };
-static_assert(sizeof(Vertex) == 60, "Vertex: the vertex shader's inputs, packed");
+static_assert(sizeof(Vertex) == 92, "Vertex: the vertex shader's inputs, packed");
 
-// Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref; vertices three a triangle)
+// Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref) and its two other corners
+// (Vertex::other_*: the triangle's plane, the same from each corner); vertices three a triangle
 void link_corners(std::span<Vertex> triangles) {
     for (size_t i = 0; i + 3 <= triangles.size(); i += 3) {
         for (size_t k = 0; k < 3; k++) {
-            triangles[i + k].zref = triangles[i].z;
+            Vertex &v = triangles[i + k];
+            v.zref = triangles[i].z;
+            for (size_t j = 0; j < 2; j++) {
+                const Vertex &o = triangles[i + (k + 1 + j) % 3];
+                v.other_xy[j][0] = o.x;
+                v.other_xy[j][1] = o.y;
+                v.other_z[j] = o.z;
+                v.other_kick[j] = (o.kicks[3] & K_SPRITE) != 0 ? o.kicks[3] & K_CORNER : o.kicks[0];
+            }
         }
     }
 }
-// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
-enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
 
 // The GS pixels a primitive may draw (those whose integer points are in its box), less XYOFFSET, inclusive
 struct PixelBox {
@@ -415,7 +431,9 @@ public:
                           (maker == 0x10DE || maker == 0x1002);
         if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
-                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0" : "this GPU has no depth clamp");
+                    getenv("KF4_PC_EXACT_Z") ? "KF4_PC_EXACT_Z=0"
+                    : !f.enabled_features.depthClamp ? "this GPU has no depth clamp"
+                                                     : "this GPU has no 64-bit integers in shaders");
         }
     }
 
@@ -3193,7 +3211,8 @@ private:
             const GifVertex &last = p.vertices[2];
             uint32_t zpsm = z_psm(batch_.state.zbuf);
             uint32_t zmax = zpsm == 0x31 ? 0xFFFFFFu : zpsm == 0x30 ? 0xFFFFFFFFu : 0xFFFFu;
-            if (!moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
+            // (with exact Z the fragment stage clamps each pixel's Z itself, from the triangle's plane: no cut)
+            if (!exact_z_ && !moved && (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax)) {
                 std::array<Vertex, 3> v = {make(p.vertices[0], last), make(p.vertices[1], last), make(p.vertices[2], last)};
                 add_cut_at_zmax(v, zmax);
                 for (const Vertex &corner : v) {
@@ -4403,6 +4422,9 @@ private:
         c.set_vertex_attrib(5, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks));
         c.set_vertex_attrib(6, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect));
         c.set_vertex_attrib(7, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, zref));
+        c.set_vertex_attrib(8, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, other_xy));
+        c.set_vertex_attrib(9, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_z));
+        c.set_vertex_attrib(10, 0, VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_kick));
     }
 
     // The depth surfaces' format: with a stencil (DATE's) where the device has one, else D32F alone and DATE by a copy
@@ -4715,7 +4737,9 @@ private:
     // and the later draw wins. Needs depth clamp (the corners' bound past 1), which every desktop GPU has. Without it, or
     // with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn over a surface cut into other triangles lose to
     // it here and there.
+    // (and 64-bit integers: the plane's exact arithmetic, pcr_exact_z.h)
     const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
+                          device_.get_device_features().enabled_features.shaderInt64 &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
     struct MsaaCounts {
         uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;

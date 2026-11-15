@@ -18,6 +18,7 @@
 // and the pixel's Z less it (read at the pixel's middle: pcr_exact_depth); the depth written never past the corners'
 // bound (the GPU's early tests keep)
 #ifdef PCR_EXACT_Z
+#include "pcr_exact_z.h"
 layout(location = 10) flat in uint v_zref;
 layout(location = 11) noperspective in float v_zrel;
 layout(depth_less) out float gl_FragDepth;
@@ -34,6 +35,9 @@ layout(location = 0) PCR_IN vec4 v_color;
 layout(location = 1) PCR_IN vec3 v_stq;
 layout(location = 2) PCR_IN float v_fog;
 layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.vert's a_rect)
+// v_color's divisor: Q for a native draw's whole triangle in a picture between (its colour given times Q:
+// whole_triangle.h, pcr_nd000.vert's draw_whole), else 0 (the colour as is)
+layout(location = 12) PCR_IN float v_color_q;
 
 layout(location = 0) out vec4 o_color;
 #ifdef PCR_RECORDS
@@ -438,9 +442,12 @@ bool alpha_passes(uint a) {
 // every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
 // samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there)
 void pcr_exact_depth() {
-    uint z0 = v_zref;
-    int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
-    uint z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
+    uint z;
+    if (!pcr_plane_z(z)) {
+        uint z0 = v_zref;
+        int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
+        z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
+    }
     gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
 #endif
@@ -469,7 +476,7 @@ void main() {
         }
     }
 #endif
-    uvec4 vc = uvec4(v_color + 0.001);
+    uvec4 vc = uvec4((v_color_q > 0.0 ? v_color / v_color_q : v_color) + 0.001);
     uvec4 c = vc;
     if ((pc.flags & PCR_F_TME) != 0u) {
         uvec4 t = sample_texture();

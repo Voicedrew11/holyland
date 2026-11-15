@@ -281,12 +281,25 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   half, one loses along a thin line (at 1x the GS has the same, as single pixels).
 - Read at the pixel's middle even in the shaders run once a sample (the cut-outs' SSAA): read at each sample, a
   sample's Z rounded apart from the pixel's Z that other draws gave it, and the moss over a cut-out lost there.
-- Any GPU with `depthClamp` (every desktop one); without it, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
+- Any GPU with `depthClamp` and `shaderInt64` (every desktop one); without them, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
   (decals lose to their surface here and there), and the log says so. The first version (same day) read the corners'
   Z with the barycentric extension (`pervertexEXT`), which older GPUs (NVIDIA before Turing, AMD before RDNA2, older
   Intel) lack. The shared Z gives the same pictures (map 063 walk at the owner's settings: 903 pixels over 157
   pictures; a 9-map tour at 4x, 104 views: 0.004% of a view at most) and less GPU time: on the RX 9070 XT at 063,
   1.96 ms a picture against the extension's 2.05 and 1.88 with exact Z off.
+- **The plane, in integers (2026-11-15).** The shared Z's difference was still interpolated in floats: near the eye a
+  triangle's corners span millions of Z, the float's error passed half a Z, and over whole triangles which of two
+  coinciding surfaces won turned with the camera. At map 063 (the owner's quick save 2) two map records both hold a
+  see-through wall where they meet, and patches of it lit about 1.45 times as bright at one angle and not the next.
+  Now each corner hands down its triangle's three corners as the GS gets them (12.4 X and Y in the target, Z with a
+  moved corner's fraction in 256ths; flat, `pcr_exact_z.h`'s `pcr_plane`), and the fragment stage works out the
+  plane's Z at the pixel's point exactly, in 64- and 128-bit integers, rounded half to even
+  (`port/render/shaders/plane_z.h`, tested against 128-bit C in `tests/plane_z_test.cpp`): the same value whichever
+  corner is first and whichever path drew the triangle, so two meshes on one plane always tie. The canvas's
+  `Vertex` carries the other two corners (`other_xy`, `other_z`, `other_kick`: moved with the vertex in a picture
+  between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
+  Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between
+  (`PCR_PLANE_MOST`), or drawn from the eye's space (`whole_triangle.h`), keeps the interpolated Z.
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
