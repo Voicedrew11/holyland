@@ -65,33 +65,9 @@ void draw_whole(Whole c, Whole w0, Whole w1, Whole w2, vec3 st, bool gouraud, ui
     v_fog = d.fog.z + d.fog.w * q; // (the fragment stage clamps it to 0..255)
 }
 
-// (exact Z, pcr_exact_z.h) A corner as this shader draws it: in the frame VU1's place (X and Y in the GS's 16 bits),
-// in a picture between moved (moved(): unwrapped, Z with its fraction); at the far plane (the modern sky) Z 0
-GsCorner gs_corner_of(GsCorner c) {
-    c.xy += 16 * pc.place - ivec2(d.info.y, d.info.z);
-    if ((d.info.w & ND_C_FAR) != 0) {
-        c.z = 0u;
-        c.zfrac = 0.0;
-    }
-    return c;
-}
-
-// ... in the frame
-GsCorner gs_corner(uint k) {
-    Place p = vu_place(k);
-    return gs_corner_of(GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), gs_z(p), 0.0));
-}
-
-// ... in a picture between, moved
-GsCorner gs_corner_moved(Moved m) {
-    return gs_corner_of(GsCorner(ivec2(m.x, m.y), m.z, m.zfrac));
-}
-
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
-    GsCorner corners[3]; // (exact Z: the triangle's corners, for pcr_plane at the end)
-    bool has_corners = false;
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -145,24 +121,9 @@ void main() {
         z = m.z;
         zfrac = m.zfrac;
         stq *= m.f;
-        // (exact Z: the first corner, whose flat outputs are drawn, hands down the triangle's plane: its other two
-        // corners moved too, and used again for the kicks' drops below)
-        bool plane = (pc.flags & PCR_F_EXACT_Z) != 0u && which == 0u && !gone;
-        Moved my = m, mz = m;
-        if (plane) {
-            my = moved(tri.y, vu_place(tri.y));
-            mz = moved(tri.z, vu_place(tri.z));
-        }
         for (uint i = 0u; i <= befores && !gone; i++) {
             uint k = kick - i;
-            gone = k == at ? m.drop : plane && k == tri.y ? my.drop : plane && k == tri.z ? mz.drop
-                                                                                        : moved(k, vu_place(k)).drop;
-        }
-        if (plane && !gone) {
-            corners[0] = gs_corner_moved(m);
-            corners[1] = gs_corner_moved(my);
-            corners[2] = gs_corner_moved(mz);
-            has_corners = true;
+            gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
         }
     }
     z = (d.info.w & ND_C_FAR) != 0 ? 0u : z; // (at the far plane: the modern sky)
@@ -177,13 +138,6 @@ void main() {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
     uvec4 rgba = lit_colour(gouraud ? at : kick);
-    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone && which == 0u && (d.info.w & ND_C_MOVING) == 0) {
-        // (exact Z: pcr_exact_z.h; the first corner, the provoking vertex, whose flat outputs are drawn)
-        corners[0] = gs_corner(tri.x);
-        corners[1] = gs_corner(tri.y);
-        corners[2] = gs_corner(tri.z);
-        has_corners = true;
-    }
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
@@ -191,8 +145,7 @@ void main() {
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);
     v_rect = uvec2(PCR_NO_RECT);
-    // (last, the other outputs written: the plane's arithmetic needs many registers, and few others are kept now)
-    if (has_corners && !gone) {
-        pcr_plane(corners[0], corners[1], corners[2]);
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
 }

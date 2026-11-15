@@ -291,11 +291,19 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   triangle's corners span millions of Z, the float's error passed half a Z, and over whole triangles which of two
   coinciding surfaces won turned with the camera. At map 063 (the owner's quick save 2) two map records both hold a
   see-through wall where they meet, and patches of it lit about 1.45 times as bright at one angle and not the next.
-  Now each corner hands down its triangle's three corners as the GS gets them (12.4 X and Y in the target, Z with a
-  moved corner's fraction in 256ths; flat, `pcr_exact_z.h`'s `pcr_plane`), and the fragment stage works out the
-  plane's Z at the pixel's point exactly, in 64- and 128-bit integers, rounded half to even
-  (`port/render/shaders/plane_z.h`, tested against 128-bit C in `tests/plane_z_test.cpp`): the same value whichever
-  corner is first and whichever path drew the triangle, so two meshes on one plane always tie. The canvas's
+  Now each triangle's plane through its three corners as the GS gets them (12.4 X and Y in the target, Z with a
+  moved corner's fraction in 256ths) is worked out once, in 64- and 128-bit integers (`port/render/shaders/plane_z.h`,
+  tested against 128-bit C in `tests/plane_z_test.cpp`), as three fixed-point numbers of the plane alone: its Z at the
+  target's pixel (0, 0) and its steps a pixel across and down, each the exact value rounded to 2^-26 of a Z. The
+  fragment stage adds them up at its pixel in 32-bit words and rounds half to even (`pz_pixels_z`, within 2^-12 of a
+  Z of the exact): the same value whichever corner is first and whichever path drew the triangle, so two meshes on one
+  plane always tie. Who works the plane out: a GS primitive's provoking vertex (`pcr_exact_z.h`'s `pcr_plane`); for
+  the native draws, the plane pass (`pcr_plane_pass.h`, `shaders/pcr_planes_*.comp`), a compute dispatch a native
+  program's run of triangles, recorded in a command buffer of its own and submitted just before each of the canvas's,
+  from an entry a triangle the canvas writes as it draws the batch; the native vertex shaders' provoking vertex reads
+  its triangle's plane (`pcr_plane_of_draw`: `plane_at` in the push constants or record, plus `gl_VertexIndex / 3`).
+  (Worked out at each pixel the GPU took 2.6 times as long at 063, 5.69 ms a picture against 2.21; by each native
+  draw's provoking vertex, in a vertex shader that already spilled, about 10% longer, 2.44-2.52 ms.) The canvas's
   `Vertex` carries the other two corners (`other_xy`, `other_z`, `other_kick`: moved with the vertex in a picture
   between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
   Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between

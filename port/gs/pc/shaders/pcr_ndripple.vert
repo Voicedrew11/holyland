@@ -42,20 +42,6 @@ layout(set = 0, binding = 13, std430) readonly buffer Draws {
 };
 #include "ripple_maths.h"
 
-// (exact Z, pcr_exact_z.h) Corner k as this shader draws it: its place (in a picture between moved, Z with its
-// fraction), X and Y in the GS's 16 bits as the ripple keeps them
-GsCorner gs_corner(uint k) {
-    uint z;
-    Place p = vertex_place(k, z);
-    GsCorner c = GsCorner(ivec2(p.x, p.y), z, 0.0);
-    if ((d.info.z & RIPPLE_C_MOVING) != 0) {
-        Moved m = moved(p, z);
-        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
-    }
-    c.xy = ivec2(int(uint(c.xy.x) & 0xFFFFu), int(uint(c.xy.y) & 0xFFFFu)) + 16 * pc.place - d.info.xy;
-    return c;
-}
-
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
@@ -108,8 +94,8 @@ void main() {
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
-    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone && which == 0u) { // (the provoking vertex: its flat outputs drawn)
-        pcr_plane(gs_corner(tri.x), gs_corner(tri.y), gs_corner(tri.z)); // (exact Z: pcr_exact_z.h)
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     uint rgba = uint(d.info.w);
     // as pcr_prim.vert

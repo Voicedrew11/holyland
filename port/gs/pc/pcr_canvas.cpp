@@ -23,6 +23,7 @@
 #include "pcr_gpu_time.h"
 #include "pcr_hang_watch.h"
 #include "pcr_pipelines.h"
+#include "pcr_plane_pass.h"
 #include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
@@ -69,10 +70,14 @@ struct PrimPush {
     uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
     uint32_t trace_draw; // ... the draw its fragments are recorded as
     uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
+    uint32_t plane_at = 0xFFFFFFFFu; // (a native draw's, exact Z: its triangle n's plane the planes buffer's n + this,
+                                     // n gl_VertexIndex / 3; no_plane none: pcr_exact_z.h's pcr_plane_of_draw)
+    uint32_t unused = 0;
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
+constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
 
 // The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
 // recorded), the fragments' records (pcr.h's PcrTraceFragment), then the probes' (PcrTraceProbe)
@@ -442,6 +447,7 @@ public:
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
+            submit_planes();
             device_.submit(cmd_);
         }
     }
@@ -897,6 +903,7 @@ public:
         }
         if (cmd_) {
             times_.end(*cmd_);
+            submit_planes();
             note_submit();
             device_.submit(cmd_);
             if (flush) {
@@ -904,6 +911,14 @@ public:
             }
             cmd_.reset();
         }
+    }
+
+    // (exact Z) The plane pass for the command buffer about to be submitted, submitted before it
+    void submit_planes() {
+        if (planes_) {
+            planes_->submit(times_);
+        }
+        planes_bound_ = nullptr; // (its chunks let go: the next batch's room is in a new one)
     }
 
     CanvasCounts counts() const {
@@ -1682,6 +1697,7 @@ private:
                   VK_ACCESS_2_HOST_READ_BIT);
         Fence fence;
         times_.end(*cmd_);
+        submit_planes();
         note_submit();
         device_.submit(cmd_, &fence);
         cmd_.reset();
@@ -3557,6 +3573,9 @@ private:
             // (one record the batch's pass, and an entry a triangle, in the order drawn)
             auto *entries = reinterpret_cast<MergedTriangle *>(runs_.map + runs_.merged_at);
             memcpy(&records[at], &push, sizeof(push));
+            // (the batch's planes in the order of its entries: its draw's triangle n, n from merged_used, is plane
+            // batch_planes_ + n - merged_used)
+            records[at].plane_at = batch_planes_ == no_plane ? no_plane : batch_planes_ - runs_.merged_used;
             uint32_t to = runs_.merged_used;
             for (const Batch::Run &r : b.runs) {
                 for (uint32_t i = 0; i < r.count; i++) {
@@ -3571,8 +3590,10 @@ private:
         }
         auto *commands = reinterpret_cast<VkDrawIndirectCommand *>(runs_.map + runs_.commands_at);
         if (b.native) {
-            for (const Batch::Run &r : b.runs) {
+            for (size_t i = 0; i < b.runs.size(); i++) {
+                const Batch::Run &r = b.runs[i];
                 memcpy(&records[at], &push, sizeof(push));
+                records[at].plane_at = planes_ && i < run_plane_at_.size() ? run_plane_at_[i] : no_plane;
                 commands[at] = {r.count * 3, 1, r.first * 3, r.instance};
                 at++;
             }
@@ -3689,6 +3710,52 @@ private:
     }
 
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
+    // (exact Z, a native batch) Room for its triangles' planes in the plane pass, an entry a triangle written:
+    // run_plane_at_ each of its runs' plane_at and batch_planes_ its first plane (no_plane: none). True: a new chunk
+    // of planes (a run bound to the last ends before this batch binds it)
+    bool room_for_planes(const Batch &b, uint32_t place_x, uint32_t place_y, bool ms) {
+        run_plane_at_.assign(b.runs.size(), no_plane);
+        batch_planes_ = no_plane;
+        uint32_t n = 0;
+        for (const Batch::Run &r : b.runs) {
+            n += r.count;
+        }
+        bool between = between_ && between_->active();
+        PlaneSources sources = {native_slot(b.program), between ? &between_->picture() : picture_.get(), b.arena,
+                                b.records, b.triangles};
+        PlaneRoom room = planes_->reserve(sources, n);
+        if (!room.entries) {
+            return false;
+        }
+        uint32_t place = (place_x & 0xFFFFu) | place_y << 16;
+        uint32_t scale = scale_[0] | scale_[1] << 8 | (ms ? plane_entry_msaa : 0u);
+        PlaneEntry *e = room.entries;
+        uint32_t at = room.first;
+        for (size_t i = 0; i < b.runs.size(); i++) {
+            const Batch::Run &r = b.runs[i];
+            run_plane_at_[i] = at - r.first; // (wraps: the vertex shader's triangle r.first + k is plane at + k)
+            for (uint32_t k = 0; k < r.count; k++) {
+                *e++ = {r.first + k, r.instance, place, scale};
+            }
+            at += r.count;
+        }
+        batch_planes_ = room.first;
+        planes_bound_ = room.planes;
+        return room.new_chunk;
+    }
+
+    // A native batch's runs drawn, each with its plane_at (run_plane_at_: the push constants' others as they are)
+    void draw_native_runs(CommandBuffer &c, const Batch &b) {
+        for (size_t i = 0; i < b.runs.size(); i++) {
+            const Batch::Run &r = b.runs[i];
+            if (planes_) {
+                uint32_t at = i < run_plane_at_.size() ? run_plane_at_[i] : no_plane;
+                c.push_constants(&at, offsetof(PrimPush, plane_at), sizeof(at));
+            }
+            c.draw(r.count * 3, 1, r.first * 3, r.instance);
+        }
+    }
+
     void draw_batch(const Batch &b) {
         const DrawState &s = b.state;
         counts_.batches++;
@@ -3996,6 +4063,11 @@ private:
         };
         uint32_t first_mask = 0;
         pass_state(0, first_mask);
+        // (exact Z: the batch's planes worked out by the plane pass before its draws; a run bound to another chunk of
+        // planes ends first)
+        if (b.native && planes_ && room_for_planes(b, placed.x, placed.y, ms)) {
+            flush_run();
+        }
         // (the run open ended here unless this batch's first pass continues it: the state set below is this batch's)
         if (runs_.open && (!in_run || !(runs_.key == key))) {
             flush_run();
@@ -4111,10 +4183,8 @@ private:
             }
             c.push_constants(&push, 0, sizeof(push));
             if (b.native) {
-                for (const Batch::Run &r : b.runs) {
-                    c.draw(r.count * 3, 1, r.first * 3, r.instance);
-                    counts_.native_draw_calls++;
-                }
+                draw_native_runs(c, b);
+                counts_.native_draw_calls += b.runs.size();
                 continue;
             }
             set_vertex_attribs(c);
@@ -4151,9 +4221,7 @@ private:
                 c.push_constants(&push, 0, sizeof(push));
                 c.set_depth_test(true, false);
                 if (b.native) {
-                    for (const Batch::Run &r : b.runs) {
-                        c.draw(r.count * 3, 1, r.first * 3, r.instance);
-                    }
+                    draw_native_runs(c, b);
                     continue;
                 }
                 set_vertex_attribs(c);
@@ -4355,6 +4423,7 @@ private:
     static constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1; // (16-31)
     static constexpr uint32_t records_binding = 7; // (set 1's: the picture's records, Runs)
     static constexpr uint32_t merged_binding = 8;  // (set 1's: the picture's merged runs' triangles, Runs)
+    static constexpr uint32_t planes_binding = 9;  // (set 1's: the native draws' planes, exact Z: PlanePass)
     static uint32_t native_slot(NativeProgram program) {
         return program == NativeProgram::vu1_000   ? 0
                : program == NativeProgram::vu1_280 ? 1
@@ -4368,6 +4437,7 @@ private:
         c.set_storage_buffer(0, 2, on ? between_->moves() : *picture_);
         c.set_storage_buffer(0, walk_clut_binding, walk_cluts_ ? *walk_cluts_ : *picture_); // (pcr_prim.h's u_walk_cluts)
         c.set_storage_buffer(1, records_binding, runs_.buffer ? *runs_.buffer : *picture_); // (pcr_common.h's u_records)
+        c.set_storage_buffer(1, planes_binding, planes_bound_ ? *planes_bound_ : *picture_); // (pcr_exact_z.h's u_planes)
         if (runs_.buffer && runs_.merged_capacity != 0) {
             c.set_storage_buffer(1, merged_binding, *runs_.buffer, runs_.merged_at,
                                  VkDeviceSize(runs_.merged_capacity) * sizeof(MergedTriangle)); // (u_merged)
@@ -4559,9 +4629,10 @@ private:
         }
         // (set 1's records of the picture's runs, u_records: read by the runs' programs, PCR_RECORDS, in both stages;
         // declared in every batch program, so that one and a run's have the same layout and a change binds nothing)
-        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding;
+        batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding | 1u << planes_binding;
         batch_vert.sets[1].meta[records_binding].array_size = 1;
         batch_vert.sets[1].meta[merged_binding].array_size = 1;
+        batch_vert.sets[1].meta[planes_binding].array_size = 1; // (u_planes: the native programs', exact Z)
         ResourceLayout vert = batch_vert;
         vert.input_mask = 0x7F;
         ResourceLayout frag = {};
@@ -4637,19 +4708,18 @@ private:
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
         Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, xfs);
+        // (the native programs' vertex shaders one variant with exact Z or without: their planes are the plane pass's)
         ResourceLayout nd = batch_vert;
-        Shader *nvs = PCR_SHADER(pcr_nd000_vert, &nd);
-        programs_for(1, nvs);
-        Shader *nvs280 = PCR_SHADER(pcr_nd280_vert, &nd);
-        programs_for(2, nvs280);
-        Shader *nvs700 = PCR_SHADER(pcr_nd700_vert, &nd);
-        programs_for(3, nvs700);
-        Shader *nvsripple = PCR_SHADER(pcr_ndripple_vert, &nd);
-        programs_for(4, nvsripple);
-        run_programs_for(1, PCR_SHADER(pcr_nd000_vert_rec, &nd));
-        run_programs_for(2, PCR_SHADER(pcr_nd280_vert_rec, &nd));
-        run_programs_for(3, PCR_SHADER(pcr_nd700_vert_rec, &nd));
-        run_programs_for(4, PCR_SHADER(pcr_ndripple_vert_rec, &nd));
+#define PCR_ND_SHADER(name) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), &nd)
+        programs_for(1, PCR_ND_SHADER(pcr_nd000_vert));
+        programs_for(2, PCR_ND_SHADER(pcr_nd280_vert));
+        programs_for(3, PCR_ND_SHADER(pcr_nd700_vert));
+        programs_for(4, PCR_ND_SHADER(pcr_ndripple_vert));
+        run_programs_for(1, PCR_ND_SHADER(pcr_nd000_vert_rec));
+        run_programs_for(2, PCR_ND_SHADER(pcr_nd280_vert_rec));
+        run_programs_for(3, PCR_ND_SHADER(pcr_nd700_vert_rec));
+        run_programs_for(4, PCR_ND_SHADER(pcr_ndripple_vert_rec));
+#undef PCR_ND_SHADER
 #undef PCR_SHADER
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
@@ -4740,6 +4810,15 @@ private:
     const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
                           device_.get_device_features().enabled_features.shaderInt64 &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
+    // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
+    // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
+    const std::unique_ptr<PlanePass> planes_ =
+        exact_z_ && !(getenv("KF4_PC_PLANES") && strcmp(getenv("KF4_PC_PLANES"), "0") == 0)
+            ? std::make_unique<PlanePass>(device_)
+            : nullptr;
+    const Buffer *planes_bound_ = nullptr; // (the planes buffer of the last batch's room: set 1's, bind_between)
+    std::vector<uint32_t> run_plane_at_;   // (the batch drawn: each of its runs' plane_at, or no_plane)
+    uint32_t batch_planes_ = no_plane;     // (... its first plane in planes_bound_)
     struct MsaaCounts {
         uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;
     } counts_msaa_;

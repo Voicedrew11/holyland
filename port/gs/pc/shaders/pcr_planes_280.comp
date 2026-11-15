@@ -1,0 +1,49 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The plane pass of native program 0x280 (pcr_planes.h): each triangle's corners as pcr_nd280.vert draws them, its
+// plane worked out once (pcr_exact_z.h)
+#define PCR_PLANES
+#define PCR_EXACT_Z
+#include "pcr_exact_z.h"
+
+// (as pcr_nd280.vert's)
+layout(set = 0, binding = 8, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
+    vec4 move[3];
+    vec4 mid[3];
+    vec4 screen[2];
+    vec4 zt;
+} pic;
+layout(set = 0, binding = 6, std430) readonly buffer Mesh {
+    ivec4 q[];
+} mesh;
+#include "vu1_280_draw.h"
+layout(set = 0, binding = 7, std430) readonly buffer Draws {
+    Draw draws[];
+};
+#include "vu1_280_maths.h"
+#include "pcr_planes.h"
+
+// Corner slot k less the context's XYOFFSET (offset): in the frame VU1's place (X and Y in the GS's 16 bits), in a
+// picture between moved (moved(): unwrapped, Z with its fraction)
+GsCorner corner(uint k, ivec2 place, ivec2 offset) {
+    Place p = vu_place(k);
+    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), uint(p.z >> 4) & 0xFFFFFFu, 0.0);
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        Moved m = moved(k, vertex_set(k), p);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+    }
+    c.xy += 16 * place - offset;
+    return c;
+}
+
+// (the instance: the record in bits 0-27, the context whose XYOFFSET in bit 28)
+void plane_corners(uvec4 tri, uint instance, ivec2 place, out GsCorner c0, out GsCorner c1, out GsCorner c2) {
+    d = draws[instance & 0x0FFFFFFFu];
+    ivec2 offset = ((instance >> 28) & 1u) != 0u ? d.offset.zw : d.offset.xy;
+    c0 = corner(tri.x, place, offset);
+    c1 = corner(tri.y, place, offset);
+    c2 = corner(tri.z, place, offset);
+}

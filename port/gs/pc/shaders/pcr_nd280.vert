@@ -40,21 +40,6 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 };
 #include "vu1_280_maths.h"
 
-// (exact Z, pcr_exact_z.h) Corner slot k as this shader draws it, less the context's XYOFFSET: in the frame VU1's
-// place (X and Y in the GS's 16 bits), in a picture between moved (moved(): unwrapped, Z with its fraction)
-GsCorner gs_corner(uint k, ivec2 offset) {
-    Place p = vu_place(k);
-    GsCorner c;
-    if ((d.info.y & ND_C_MOVING) != 0) {
-        Moved m = moved(k, vertex_set(k), p);
-        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
-    } else {
-        c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), uint(p.z >> 4) & 0xFFFFFFu, 0.0);
-    }
-    c.xy += 16 * pc.place - offset;
-    return c;
-}
-
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
@@ -145,8 +130,8 @@ void main() {
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
-    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone && which == 0u) { // (the provoking vertex: its flat outputs drawn)
-        pcr_plane(gs_corner(tri.x, offset), gs_corner(tri.y, offset), gs_corner(tri.z, offset)); // (pcr_exact_z.h)
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     vec3 stq;
     uvec4 rgba;

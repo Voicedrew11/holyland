@@ -21,7 +21,8 @@ namespace {
 
 const char *const work_names[size_t(GpuWork::count)] = {"2d",         "native 000",   "native 280", "native 700",
                                                         "DATE copy",  "blend copy",   "texture copy", "surface",
-                                                        "upload",     "copy",         "picture",    "present"};
+                                                        "upload",     "copy",         "picture",    "present",
+                                                        "planes"};
 
 // KF4_GSN_GPU_TIME=N (N >= 1): on
 bool switched_on() {
