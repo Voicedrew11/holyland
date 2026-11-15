@@ -445,7 +445,9 @@ bool alpha_passes(uint a) {
 // of a Z apart, which the GS rounds to one Z far from the eye, are drawn in their order (the strip of a log behind its
 // front no longer shows through it), and two meshes on one plane still tie. A decal (pcr_canvas.cpp's is_decal) takes
 // the top fine part of its whole Z instead, so that it wins against any surface of its whole Z under it, as on the GS:
-// its test is the GS's.
+// its test is the GS's. That top part is only its test's: drawn again where it won (pcr_canvas.cpp's
+// settle_decal_depth), reset and then without PCR_F_DECAL, its pixels keep its own fine part,
+// so that a later draw of the same whole Z on its plane ties with it as on the GS, rather than losing to the top.
 void pcr_exact_depth() {
     uint z, fine;
     if (!pcr_plane_z(z, fine)) {

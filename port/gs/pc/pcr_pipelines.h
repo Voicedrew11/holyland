@@ -57,6 +57,12 @@ struct WarmDevice {
     // made before pcr_prim.vert read locations 7-10: their pipelines had no format there, invalid, and matched no draw)
     Vulkan::VertexAttribState attribs[Vulkan::VULKAN_NUM_VERTEX_ATTRIBS] = {};
     uint32_t vertex_stride = 0;
+    // (exact Z) A decal's batch drawn again where it won (pcr_canvas.cpp's settle_decal_depth), in pipelines no tour of
+    // an older build drew with: the seed's pipelines of the batch programs (roles below decal_roles) that test Z GEQUAL
+    // are made with the decal's states too: its passes marking the stencil, the depth reset (role depth_reset_first +
+    // role % decal_programs) and its passes again with no colour (role % decal_programs). decal_roles 0: none (no
+    // stencil, or no exact Z)
+    uint32_t decal_roles = 0, decal_programs = 1, depth_reset_first = 0;
 };
 
 // (any thread) The canvas's programs: those whose pipelines are kept. extra: a program drawn only into a
