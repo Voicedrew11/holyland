@@ -46,6 +46,7 @@ typedef struct {
 
 /* 1 while twin-stick controls apply: the setting is on and no pad script plays or is recorded */
 int port_twin_stick_on(void);
+void port_twin_stick_replayed(int on); /* (port/sdk/libpad.c) a recording's ts= at this vblank: on, off, or -1 none */
 int port_twin_stick_setting(void);
 void port_twin_stick_set(int on);
 

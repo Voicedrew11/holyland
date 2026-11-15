@@ -476,7 +476,20 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     double p;
 
     *yaw = *pitch = 0.0f;
-    if ((!port_controls_verdite() && diag_spin_rad_s() == 0.0) || port_options.record_input != NULL) {
+    if (port_options.input != NULL) {
+        /* a recording made with mouse look: its turns, call for call */
+        int turned = port_pad_replay_look(yaw, pitch);
+
+        if (turned >= 0) {
+            MouseTurn none = {0, 0};
+
+            /* (no instant mouse look: its readings go by the wall clock, and the pictures between would not
+               repeat) */
+            port_mouse_lead_waiting(none, reading_time());
+            return turned;
+        }
+    }
+    if (!port_controls_verdite() && diag_spin_rad_s() == 0.0) {
         MouseTurn none = {0, 0};
 
         port_mouse_lead_waiting(none, reading_time()); /* (no mouse look: nothing ahead) */
@@ -506,22 +519,33 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     }
     *yaw = (float)y;
     *pitch = (float)p;
+    port_pad_record_look(*yaw, *pitch); /* (--record-input) */
     return 1;
 }
 
-/* Running is Run's with the mod on and Run bound, and no pad script playing or recorded */
-unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit) {
+/* Whether Run is held, with the mod on and Run bound; -1 when the mod does not apply (the action button runs) */
+int port_controls_run_state(void) {
     int slot;
 
-    if (!port_options.separate_run || port_options.input != NULL || port_options.record_input != NULL) {
-        return held;
+    if (!port_options.separate_run || port_options.input != NULL) {
+        return -1;
     }
     for (slot = 0; slot < BINDING_SLOTS; slot++) {
         if (port_controls_binding(pc.layout, ACTION_RUN, slot) != BINDING_NONE) {
-            return pc.run ? held | action_bit : held & ~action_bit;
+            return pc.run;
         }
     }
-    return held;
+    return -1;
+}
+
+/* Running is Run's with the mod on and Run bound; under a pad script, what its recording says (run=) */
+unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit) {
+    int run = port_options.input != NULL ? port_pad_script_run() : port_controls_run_state();
+
+    if (run < 0) {
+        return held;
+    }
+    return run ? held | action_bit : held & ~action_bit;
 }
 
 #ifndef KF4_HAVE_SDL
@@ -864,7 +888,7 @@ static int action_axis(uint64_t held, int low, int high) {
    their d-pad left / right L1 / R1. A side key held when that changes does nothing until it is let go,
    so a side step held as the menu opens does not move its cursor. */
 static void side_keys(uint64_t *held_keys, int outside_play) {
-    int side = outside_play && menu_side_keys && port_options.input == NULL && port_options.record_input == NULL;
+    int side = outside_play && menu_side_keys && port_options.input == NULL;
     uint64_t held = *held_keys;
 
     if (side != pc.previous_side) {
@@ -1017,18 +1041,22 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 
     /* the PC's own keys */
     if (edges >> ACTION_QUICK_SAVE & 1u) {
+        port_pad_record_note("save state (a replay does not take it)");
         port_state_request_save(0);
         port_overlay_notify_state();
     }
     if (edges >> ACTION_QUICK_LOAD & 1u) {
+        port_pad_record_note("load state: a replay goes wrong from here");
         port_state_request_load(0);
         port_overlay_notify_state();
     }
     if (edges >> ACTION_GAME_SAVE & 1u) {
+        port_pad_record_event("game_save", port_quick_slot());
         port_quick_request_save(port_quick_slot());
         port_overlay_notify_quick();
     }
     if (edges >> ACTION_GAME_LOAD & 1u) {
+        port_pad_record_event("game_load", port_quick_slot());
         port_quick_request_load(port_quick_slot());
         port_overlay_notify_quick();
     }
@@ -1042,6 +1070,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         port_debug_write_audio_tail();
     }
     if (edges >> ACTION_FLASH_RECORD & 1u) {
+        port_pad_record_note("F8 (flash record)");
         port_debug_flash_record();
     }
     if (edges >> ACTION_MAP & 1u) {
@@ -1056,6 +1085,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         port_stats_toggle_panel();
     }
     if (edges >> ACTION_WEAPON_SWAP & 1u) {
+        port_pad_record_event("weapon_swap", 0);
         port_weapon_sets_key(); /* the weapon sets mod: taken in play by game/weapon_sets.c */
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {

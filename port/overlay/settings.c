@@ -265,7 +265,7 @@ void port_settings_load(void) {
     /* KF4_READ_SETTINGS=1: a run with a pad script reads settings.json too, in its window on the screen (tests of
        speed and GPU memory as the owner plays; CLAUDE.md, "Testing graphics") */
     active = (!port_options.headless && port_options.input == NULL) || getenv("KF4_OVERLAY_SHOT") != NULL ||
-             (!port_options.headless && getenv("KF4_READ_SETTINGS") != NULL);
+             getenv("KF4_READ_SETTINGS") != NULL; /* (headless too: a recording replayed with the player's settings) */
 #endif
     if (!active) {
         return;
