@@ -662,6 +662,13 @@ if(KF4_TESTS)
     add_test(NAME adaptive_sync COMMAND adaptive_sync_test)
 endif()
 
+# Whole frames: which vblanks are drawn again for the other field (port/platform/field_frames.c)
+add_executable(field_frames_test tests/field_frames_test.c port/platform/field_frames.c)
+target_include_directories(field_frames_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME field_frames COMMAND field_frames_test)
+endif()
+
 # Instant mouse look's turn of the pictures between (port/platform/mouse_lead.c)
 add_executable(mouse_lead_test tests/mouse_lead_test.c port/platform/mouse_lead.c port/math/libvu0.c)
 target_include_directories(mouse_lead_test PRIVATE port/include)

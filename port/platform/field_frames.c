@@ -39,6 +39,8 @@
 #define GS_TEX0_2 0x07
 #define GS_XYOFFSET_1 0x18
 #define GS_XYOFFSET_2 0x19
+#define GS_SCISSOR_1 0x40
+#define GS_SCISSOR_2 0x41
 #define GS_FRAME_1 0x4C
 #define GS_FRAME_2 0x4D
 #define GS_BITBLTBUF 0x50
@@ -107,6 +109,7 @@ typedef struct {
     int offset_set;    /* XYOFFSET_1 was written */
     uint32_t half;     /* its Y's half line (8: the half offset is on) */
     int draws;         /* a vertex was sent */
+    uint32_t scissor_end; /* below the lowest line a SCISSOR write let be drawn (0: none written) */
     /* REPLAY */
     uint32_t shown_fbp;
     /* the registers as the game wrote them */
@@ -200,6 +203,14 @@ static void ad_write(Walk *w, uint32_t *reg, uint64_t *value) {
 
             y = w->half ? y - 8 : y + 8;
             *value = (*value & ~((uint64_t)0xFFFF << 32)) | ((y & 0xFFFF) << 32);
+        }
+        break;
+    case GS_SCISSOR_1:
+    case GS_SCISSOR_2:
+        if (w->mode == SCAN) {
+            uint32_t end = (uint32_t)(*value >> 48 & 0x7FF) + 1; /* SCAY1, the last line, + 1 */
+
+            w->scissor_end = end > w->scissor_end ? end : w->scissor_end;
         }
         break;
     case GS_BITBLTBUF:
@@ -326,6 +337,13 @@ static void walk_init(Walk *w, int mode) {
     w->draw_fbp = 0xFFFFFFFFu;
 }
 
+/* The lines of a field: half of DISPLAY's DH + 1 (read circuit 2's, or 1's when only it is on) */
+static uint32_t field_lines(const uint64_t *privileged, int circuit2) {
+    uint64_t display = circuit2 ? privileged[0xA0 / 8] : privileged[0x80 / 8];
+
+    return ((uint32_t)(display >> 44 & 0x7FF) + 1) / 2;
+}
+
 int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, const void *data, size_t bytes),
                             uint32_t *drawn) {
     static Walk scan, w;
@@ -354,6 +372,14 @@ int port_field_frames_vsync(const uint64_t *privileged, void (*send)(int path, c
     /* one picture, into the buffer not shown, at a draw offset of its own */
     if (!scan.draws || scan.other_fbp || scan.draw_fbp == 0xFFFFFFFFu || scan.draw_fbp == shown ||
         !scan.offset_set || ((uint32_t)(dispfb >> 9) & 0x3F) != ((uint32_t)(scan.frame[0] >> 16) & 0x3F)) {
+        return 0;
+    }
+    /* a field's picture: its scissor nearer a field's height than the whole frame's (the Equipment screen's
+       is a field and a line). As the menu closes, the display still shows the menu's field (page 70) while
+       the game draws its first 448-line frame (into page 140). Replayed into page 70, that frame ran over
+       the buffer at 140: one vblank showed its top half stretched, the two after its bottom half twice
+       (November 2026) */
+    if (scan.scissor_end * 2 > field_lines(privileged, circuit2) * 3) {
         return 0;
     }
     offsets_now.half = scan.half;
