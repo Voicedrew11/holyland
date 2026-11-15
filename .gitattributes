@@ -3,3 +3,6 @@
 
 # Made by tools/build_shaders.py from the shaders: collapsed in GitHub's diffs.
 port/gs/pc/pcr_shaders.h linguist-generated
+
+# cmd reads its labels wrong in a .bat with LF endings
+*.bat text eol=crlf

@@ -21,7 +21,72 @@
 | `build_compare.py` | two builds of the game played the same way at four spots: their pictures byte for byte, their state each vblank and F10's state dump the same (a release build against the developers' one: below) |
 | `pgo_train.py` | a release build with profile-guided optimisation: built to write a profile, trained at four spots, built again with it (below) |
 | `build_cost.py` | each thread's CPU time in play at a map for several builds, alternated, from `sampler/profile.py`'s runs, and the part of it not spent spinning (the game's thread waits for DMA in a spin); below |
+| `record_input.py`, `record_input.bat` | a session recorded as it is played (`--record-input`, the player's settings and PC controls on) and replayed headless, byte for byte: to see what a player saw, and to bisect it (below) |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
+
+## record_input.py: record a session, replay it, bisect
+
+For a bug a player sees in play that no scripted run shows: the player records the session as they play it, and
+a developer replays it headless, as often as needed, with any build.
+
+```sh
+python3 tools/record_input.py record --disc <image>         # the player: plays in the window, presses F8, quits
+python3 tools/record_input.py replay <REC> --disc <image> --check        # in step? the same pictures twice?
+python3 tools/record_input.py replay <REC> --disc <image> --exe <other build>/kf4 --out /tmp/r1   # bisecting
+python3 tools/record_input.py replay <REC> --disc <image> -- --gs-capture-at 3616    # more options for kf4
+```
+
+On Windows without Python the player runs `toolsecord_input.bat [kf4.exe] [disc]` instead (or double-clicks it,
+with `KF4_EXE` and `KF4_DISC` set, or `kf4.exe` beside it): the same recording.
+
+**record** copies what the run starts from out of the data folder into `REC/start` (`settings.json`,
+`overlay.ini`, `quicksaves/`, `automap/`, `weapon_sets/`, `memcard/`; nothing in the data folder is changed), then
+starts the game in its window with the player's settings, `--clock 2026-01-01T12:00:00`, the newest quick save
+loaded by itself (`--quick-load`; `--quick FILE` another, `--quick none` the title and the memory card) and
+`--record-input REC/input.pad`. The player plays as usual, presses F8 when the thing shows (the F8 pictures go
+to `captures/` as always, and the vblank into the recording), and closes the game. `REC` is
+`<data folder>/captures/input-YYYYMMDD-HHMMSS` (`--out`, or `KF4_REC` for the .bat), beside F8's and F9's
+captures, which is what a player is asked to send. `REC/info.txt` names the program, the quick save, the clock and
+the extra options. A recording holds the player's saves and settings: it is never added to the repository.
+
+**replay** copies `REC/start` to `OUT/data` and runs the program headless and silent with `KF4_DATA_DIR` there and
+`KF4_READ_SETTINGS=1` (the player's settings and mods, headless too), the same quick save and clock,
+`--frame-rate 240` (`--frame-rate ''` for none) and `--input REC/input.pad`, to 60 vblanks after the recording
+ends, with `--log OUT/log.txt`. It prints the F8 vblanks and dumps their pictures into `OUT` (`--at` other
+vblanks; at 240 the pictures between too: `frame_NNNNNN_250.png` ...), the maps the player went through, and
+fails if the program says `[pad] the replay is out of step`. `--check` replays twice (`OUT/a`, `OUT/b`) and compares
+the logs (every vblank's state) and the pictures byte for byte. The compiled pipelines are kept between replays
+(in the temporary folder's `kf4_replay_pipelines`): a first run with none compiles them as it goes, and a compile
+that stalls the renderer for seconds can set off its GPU hang watch (exit 70; replay again).
+
+What `--record-input` writes (`port/sdk/libpad.c`), one line per run of vblanks the game read the same:
+
+```
+1 - rx=128 ry=128 lx=128 ly=128 ts=1 run=0 224      <vblank> <buttons> sticks, twin-stick, run key, <vblanks held>
+225 look -0x1.cd1a1e0000000p-4 0x1.015bf80000000p-6  a mouse turn port_mouse_look gave Player_Move (yaw, pitch)
+1200 event weapon_swap 0                             a PC key the game sees: weapon_swap, game_save, game_load <slot>
+# vblank 3616: F8 (flash record)                     F8 and the save-state keys, as comments
+```
+
+What is replayed: the pad's buttons and sticks as the game read them each vblank (the last reading of a vblank,
+when the overlay, the full map or a pipeline wait reads it again), the mouse look's turns call for call as exact
+floats, the separate run key, twin-stick's shaping, Verdite's menu side keys, the weapon swap key, and the quick
+save and quick load keys (against the copy of the quick saves). What is not: save states (F5 / F7: written as
+comments; a loaded one makes the rest go wrong), quick loads and saves made from the overlay's menu, settings
+changed in the overlay mid-run (the replay has the settings of the start), F8 and F9 themselves, the sound, and
+instant mouse look's turns of the pictures between (they go by the wall clock; the replay leaves instant mouse
+look out, so its pictures between repeat but are not exactly the ones the player saw; the game frames are). The
+player should avoid the first three.
+
+Determinism: a recording is the game's input per vblank, so it replays the same headless or in a window and at
+any frame rate, from the same start: the same quick save, clock, memory card and data folder (`REC/start`). A
+build that changes what the game does (game code, input, the mouse look) can go out of step: each recorded turn is
+checked against the vblank it is given back in, and the first that is late is reported. A build that changes
+only the drawing replays in step, which is what makes a recording good for bisecting a renderer bug: replay with
+each build (`--exe`) and look at the pictures at the F8 vblank. Checked 2026-11-15 (Windows, headless, the owner's
+settings, 240): a windowed recording by the owner of map 0 to the temple area and back (0:00 -> 1:63 -> 0:00,
+4191 vblanks) replays in step, twice, logs and the pictures at its F8 vblank byte for byte the same; it found the
+dark rectangle of #143 (twin marks carried across maps) by bisecting.
 
 ## A release build
 
