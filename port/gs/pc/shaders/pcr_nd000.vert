@@ -21,6 +21,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
+out float gl_ClipDistance[1]; // the mirror image's cut at the water (mirror_cut)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 0, binding = 0, std430) readonly buffer Picture {
@@ -39,6 +40,12 @@ layout(set = 0, binding = 4, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "vu1_000_maths.h"
+
+// The mirror image's cut at the water (port/render/vu1_record.hpp's vu1_mirror_plane): the distance of position v's
+// own place from the water, the eye's side more than 0; 0 for a draw without a plane (none cut)
+float mirror_cut(vec4 v) {
+    return d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex * v);
+}
 
 // (a picture between) A corner c of a triangle drawn whole (whole_triangle.h; w0..w2 its three corners). S T Q and the
 // fog by its new Q; the colour its own, or with a corner behind the eye the kick's for all three (the GS's colour is
@@ -79,6 +86,11 @@ void main() {
     }
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
     Place p = vu_place(at);
+    // (a corner drawn whole, in clip space by its w, takes the distance as it is; one on the screen (w 1) it by its
+    // q, which is affine on the screen as the cut is)
+    float cut = mirror_cut(vec4(mesh.q[at * 4u]));
+    gl_ClipDistance[0] = cut;
+    float f = 1.0;
     // the fog: ACC.w = 1 * fog.z, then + fog.w * q; clamped to 0..255
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, p.q)), 255.0), 0.0);
     if ((d.info.w & ND_C_WAVE) != 0) {
@@ -113,6 +125,7 @@ void main() {
         z = m.z;
         zfrac = m.zfrac;
         stq *= m.f;
+        f = m.f;
         for (uint i = 0u; i <= befores && !gone; i++) {
             uint k = kick - i;
             gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
@@ -133,6 +146,7 @@ void main() {
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = cut * p.q * f;
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

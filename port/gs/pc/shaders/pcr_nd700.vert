@@ -16,6 +16,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
+out float gl_ClipDistance[1]; // the mirror image's cut at the water (mirror_cut)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 0, binding = 0, std430) readonly buffer Picture {
@@ -35,6 +36,11 @@ layout(set = 0, binding = 10, std430) readonly buffer Draws {
 };
 #include "vu1_700_maths.h"
 
+// The mirror image's cut at the water (pcr_nd000.vert's): position v's distance from the water, times its own w
+float mirror_cut(vec4 v) {
+    return d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex * v);
+}
+
 void main() {
     uint triangle, instance;
     pcr_triangle(triangle, instance);
@@ -50,6 +56,12 @@ void main() {
     bool gouraud = ((instance >> 30) & 1u) != 0u;
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
     Place p = vu_place(at);
+    // (drawn whole: by the position's own w, as the corner's w is the depth without it; on the screen: by q, which
+    // has it, pcr_nd000.vert)
+    float cut = mirror_cut(vec4(mesh.q[at * 4u]));
+    float pw = float(mesh.q[at * 4u].w);
+    gl_ClipDistance[0] = pw != 0.0 ? cut / pw : 0.0;
+    float f = 1.0;
     // the fog: ACC.w = 1 * fog.z, then + fog.w * q; clamped to 0..255
     float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, p.q)), 255.0), 0.0);
     vec3 st = vec3(T.xyz) / 4096.0; // (ITOF12: exact)
@@ -88,6 +100,7 @@ void main() {
         z = m.z;
         zfrac = m.zfrac;
         stq *= m.f;
+        f = m.f;
         for (uint i = 0u; i < 3u && !gone; i++) {
             uint k = kick - i;
             gone = k == at ? m.drop : moved(k, vu_place(k)).drop;
@@ -105,6 +118,7 @@ void main() {
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = cut * p.q * f;
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

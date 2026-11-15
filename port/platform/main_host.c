@@ -69,6 +69,11 @@
                          centred on the eye and behind everything, so what lies beyond it shows) or ps2
                          (at the feet with its real distance, as the PS2 draws it). modern keeps the
                          PS2's where other records are drawn before the sky (maps 000 and 004)
+       --reflection-clip on|off
+                         with --native-draw, the water's reflection cut at the water: on (the default:
+                         what is under the water, a zombie's feet in a pond, is not reflected) or off
+                         (as the PS2 draws it: the whole scene mirrored, the feet showing above the
+                         water). Not the PS2 path's draws (port_reflection_clip())
        --test-dma-wait   (tests) each frame's packet chain waited for as soon as it is sent: the PS2
                          path then draws the blocks the game changes as the game drew them
        --vu1 NAME        who runs the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes
@@ -273,7 +278,8 @@ static void usage(const char *program) {
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2]\n"
             "          [--native-layer-z tolerant|ps2]\n"
-            "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--test-dma-wait]\n"
+            "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
+            "          [--test-dma-wait]\n"
             "          [--vu1 hle|interp|check] [--frame-rate 30|60|120|144|240|monitor|unlocked]\n"
             "          [--draw-distance 1|1.5|2|4|max] [--draw-distance-sky ps2|push]\n",
             program);
@@ -345,6 +351,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
+    port_options.reflection_clip = 1;
     port_options.renderer = PORT_RENDERER_PC;
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
@@ -634,6 +641,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_sky_forced = 1;
+        } else if (strcmp(option, "--reflection-clip") == 0) {
+            if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
+                fprintf(stderr, "--reflection-clip wants on or off, not %s\n", value);
+                exit(2);
+            }
+            port_options.reflection_clip = strcmp(value, "on") == 0;
+            port_options.reflection_clip_forced = 1;
         } else if (strcmp(option, "--native-layer-z") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_layer_z = 0;
@@ -809,6 +823,10 @@ int port_native_wave_uvs(void) {
 
 int port_native_sky(void) {
     return port_options.native_sky;
+}
+
+int port_reflection_clip(void) {
+    return port_options.reflection_clip;
 }
 
 int port_test_dma_wait(void) {

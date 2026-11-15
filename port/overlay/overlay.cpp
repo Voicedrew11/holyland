@@ -502,6 +502,18 @@ void graphics_page() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
+    bool clip = port_options.reflection_clip != 0;
+    if (ImGui::Checkbox("Cut the water's reflection at the water", &clip)) {
+        s.reflection_clip = port_options.reflection_clip = clip;
+        changed();
+    }
+    tooltip("On (the default): what is under the water, a zombie's feet in a pond, is not in its\nreflection. "
+            "Off: as on the PS2, which mirrors the whole scene, the feet sticking up above\nthe water. With "
+            "native draw only. Applies at once. (--reflection-clip on|off)");
+    if (port_options.reflection_clip != s.reflection_clip) {
+        ImGui::SameLine();
+        ImGui::TextColored(colour_note, "(for this run: command line)");
+    }
 }
 
 // The PS2's TV picture fixes, each on by default (Developer > Renderer): all off shows the picture as the PS2 sent it

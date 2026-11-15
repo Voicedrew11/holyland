@@ -126,6 +126,14 @@ public:
     NativeCounts counts_;
 
 private:
+    // A draw of the mirror image cut at the water (port_reflection_clip(), on by default): the plane its record carries
+    // to the shaders (vu1_mirror_plane), else 0s, nothing cut
+    static void mirror_cut(float clip[4], const RdCamera &cam) {
+        if (!port_reflection_clip() || !vu1_mirror_plane(cam, clip)) {
+            memset(clip, 0, 16);
+        }
+    }
+
     // A move on a draw's record (the frame's walk's is none: its place kept for the next frame's pictures)
     static void apply_move(Vu1Record &k, const PartMove &m) {
         k.info[3] |= m.flags;
@@ -212,6 +220,7 @@ private:
         // (program 0x5A0, the shadows: 0x000's maths from the silhouette meshes, no lights and no fog)
         bool shadow = d.program == 0x5A0;
         Vu1Record k = shadow ? vu1_record_5a0(d, cam) : vu1_record_000(d, cam);
+        mirror_cut(k.clip, cam);
         // (the XYOFFSET of the context the draw's PRIM picks, before its batches write PRIM: the game's draws keep both
         // contexts' the same)
         const GsRegisterFile &file = front.registers();
@@ -283,6 +292,7 @@ private:
     void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record k = vu1_record_700(d, cam);
+        mirror_cut(k.clip, cam);
         const GsRegisterFile &file = front.registers();
         uint64_t offset = file.reg[gs_reg::xyoffset_1 + ((front.prim_in_effect() >> 9) & 1)];
         k.info[1] = int32_t(offset & 0xFFFF);
@@ -659,6 +669,7 @@ private:
     void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
         counts_.draws++;
         Vu1Record280 k = vu1_record_280(d, cam);
+        mirror_cut(k.clip, cam);
         const GsRegisterFile &file = front.registers();
         for (int c = 0; c < 2; c++) {
             uint64_t offset = file.reg[gs_reg::xyoffset_1 + c];

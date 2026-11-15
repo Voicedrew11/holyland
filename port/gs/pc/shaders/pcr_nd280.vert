@@ -17,6 +17,7 @@ layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
+out float gl_ClipDistance[1]; // the mirror image's cut at the water (pcr_nd000.vert's mirror_cut)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 0, binding = 0, std430) readonly buffer Picture {
@@ -55,6 +56,9 @@ void main() {
     int s = vertex_set(slot);
     Place pl = vu_place(slot);
     float q = pl.q;
+    // the mirror image's cut at the water (pcr_nd000.vert's): drawn whole, as it is; on the screen, by q
+    float cut = d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex[s] * qf(slot, 0u));
+    gl_ClipDistance[0] = cut;
     uint z = uint(pl.z >> 4) & 0xFFFFFFu;
     float zfrac = 0.0;
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
@@ -139,6 +143,7 @@ void main() {
     // as pcr_prim.vert
     vec2 ndc = gs_to_clip(xy);
     gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = cut * q * f;
     v_color = vec4(rgba);
     v_stq = stq;
     v_fog = float((w16 >> 4) & 0xFFu);

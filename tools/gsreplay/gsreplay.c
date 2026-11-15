@@ -168,6 +168,11 @@ int port_whole_frame(void) {
     return port_options.whole_frame;
 }
 
+/* (pcr_native.cpp: the mirror image cut at its water, as the game's default) */
+int port_reflection_clip(void) {
+    return 1;
+}
+
 /* (pcr.cpp's latency levers: a replay draws no pictures between, so never behind) */
 int port_interp_behind_lately(void) {
     return 0;
