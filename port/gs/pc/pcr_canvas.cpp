@@ -916,7 +916,14 @@ public:
     // (exact Z) The plane pass for the command buffer about to be submitted, submitted before it
     void submit_planes() {
         if (planes_) {
-            planes_->submit(times_);
+            PlanePass::Submitted done = planes_->submit(times_);
+            if (done.dispatches != 0 && hang_notes_) {
+                // (in the hang notes too: its own command buffer, on the queue just before the canvas's)
+                char what[96];
+                snprintf(what, sizeof(what), "plane pass, vblank %llu: %u triangles, %u dispatches",
+                         (unsigned long long)frame_, done.triangles, done.dispatches);
+                hang_notes_->submitted(hang_who_, what, hang_clock_s());
+            }
         }
         planes_bound_ = nullptr; // (its chunks let go: the next batch's room is in a new one)
     }

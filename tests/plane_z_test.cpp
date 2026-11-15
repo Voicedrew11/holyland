@@ -233,7 +233,7 @@ static bool same_fixed(PzFixed a, PzFixed b) {
     return a.on == b.on && (!a.on || (a.base == b.base && a.step_x == b.step_x && a.step_y == b.step_y));
 }
 
-static long fixed_off = 0, fixed_near_half = 0;
+static long fixed_off = 0, fixed_near_half = 0, quick_told = 0, quick_not_told = 0;
 
 static void fixed_planes() {
     const int64_t z_most = (int64_t(1) << 40) - 1;
@@ -284,7 +284,19 @@ static void fixed_planes() {
             least_x = std::min<int>(least_x, int(kx));
             least_y = std::min<int>(least_y, int(ky));
             for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu, 0xFFFFu}) {
-                int64_t pixels = pz_pixels_z(pz_pixels(f, least_x, least_y), int(kx), int(ky), most);
+                PzPixels pixels_of = pz_pixels(f, least_x, least_y);
+                int64_t pixels = pz_pixels_z(pixels_of, int(kx), int(ky), most);
+                // (the quick way: where it can tell, the same Z)
+                pz_u32 quick = 0;
+                if (pz_pixels_quick(pixels_of, float(kx), float(ky), most, quick)) {
+                    quick_told++;
+                    if (int64_t(quick) != pixels && failures++ < 20) {
+                        printf("fixed: pz_pixels_quick %u, pz_pixels_z %lld (most %u)\n", quick, (long long)pixels,
+                               most);
+                    }
+                } else {
+                    quick_not_told++;
+                }
                 if (pixels != std::clamp<int64_t>(got, 0, most) && failures++ < 20) {
                     printf("fixed: pz_pixels_z %lld, plane_fixed_z %lld (most %u)\n", (long long)pixels, (long long)got,
                            most);
@@ -302,6 +314,42 @@ static void fixed_planes() {
                        (long long)c[0][0], (long long)c[0][1], (long long)c[0][2], (long long)c[1][0], (long long)c[1][1],
                        (long long)c[1][2], (long long)c[2][0], (long long)c[2][1], (long long)c[2][2], (long long)kx,
                        (long long)ky, (long long)got, (long long)want);
+            }
+        }
+    }
+}
+
+// pz_pixels_quick against pz_pixels_z on planes made directly (not from corners), many of them with first's value a
+// hair from a whole Z (where the quick way must say it cannot tell), steps of every size
+static void quick_planes() {
+    for (int t = 0; t < 300000; t++) {
+        PzFixed f;
+        f.on = true;
+        int64_t z = int64_t(rng() % (uint64_t(1) << 25));
+        int64_t near = random_in(int64_t(1) << (rng() % 27));
+        f.base = (z << PLANE_FIXED_BITS) + near - (int64_t(1) << (PLANE_FIXED_BITS - 1));
+        f.step_x = random_in(int64_t(1) << (rng() % 47));
+        f.step_y = random_in(int64_t(1) << (rng() % 47));
+        int least_x = int(rng() % 16384) - 1, least_y = int(rng() % 16384) - 1;
+        f.base -= f.step_x * least_x + f.step_y * least_y; // (so that first's value is the one made above)
+        PzPixels p = pz_pixels(f, least_x, least_y);
+        for (int k = 0; k < 8; k++) {
+            int reach = 1 << (rng() % 15);
+            int kx = std::min(least_x + int(rng() % uint64_t(reach)), 32766);
+            int ky = std::min(least_y + int(rng() % uint64_t(reach)), 32766);
+            for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu}) {
+                pz_u32 exact = pz_pixels_z(p, kx, ky, most), quick = 0;
+                checked++;
+                if (!pz_pixels_quick(p, float(kx), float(ky), most, quick)) {
+                    quick_not_told++;
+                    continue;
+                }
+                quick_told++;
+                if (quick != exact && failures++ < 20) {
+                    printf("quick: base %lld steps %lld %lld first (%d %d) pixel (%d %d): %u, exact %u\n",
+                           (long long)f.base, (long long)f.step_x, (long long)f.step_y, least_x, least_y, kx, ky, quick,
+                           exact);
+                }
             }
         }
     }
@@ -346,7 +394,9 @@ int main() {
     no_area();
     fixed_planes();
     fixed_two_meshes();
-    printf("plane_z: %ld checked, %d failures (plane_fixed: %ld planes off, %ld points near a half)\n", checked, failures,
-           fixed_off, fixed_near_half);
+    quick_planes();
+    printf("plane_z: %ld checked, %d failures (plane_fixed: %ld planes off, %ld points near a half; quick: %ld told, %ld "
+           "not)\n",
+           checked, failures, fixed_off, fixed_near_half, quick_told, quick_not_told);
     return failures != 0;
 }

@@ -31,8 +31,8 @@
 #define PCR_EXACT_Z_H
 // A corner's Z as the plane takes it: whole (x) and 256ths of a Z (y, 0..255) with a picture between's fraction
 #define PCR_Z_FRACTION_BITS 8 // (plane_z.h's PLANE_Z_FRACTION)
-// v_plane1.z's bit: the triangle has a plane (else its Z is the interpolated one)
-#define PCR_PLANE_ON 0x1
+// v_plane0.z's bit: the triangle has a plane (else its Z is the interpolated one)
+#define PCR_PLANE_ON 0x8000
 
 #ifdef PCR_EXACT_Z
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
@@ -90,14 +90,15 @@ void pcr_plane_words(GsCorner c0, GsCorner c1, GsCorner c2, ivec2 scale, bool ms
                     least.y >= 0l ? least.y / step : -((-least.y + step - 1l) / step)) - 1l;
     ivec2 at = ivec2(clamp(least, i64vec2(-1l), i64vec2(32766l)));
     PzPixels px = pz_pixels(f, at.x, at.y);
-    w0 = ivec4(int(px.first_low), int(px.first_high), (at.x + 1) | ((at.y + 1) << 16), int(px.step_x_low));
-    w1 = ivec4(int(px.step_y_low), int(px.steps_high), PCR_PLANE_ON, 0);
+    w0 = ivec4(int(px.first_low), int(px.first_high), (at.x + 1) | ((at.y + 1) << 16) | PCR_PLANE_ON,
+               int(px.step_x_low));
+    w1 = ivec4(int(px.step_y_low), int(px.steps_high), floatBitsToInt(px.step_x_z), floatBitsToInt(px.step_y_z));
 }
 #endif
 
 // The triangle's plane as plane_z.h's PzPixels (first_low and first_high in v_plane0.xy; first_x + 1 and first_y + 1
-// in .z's 16-bit halves; step_x_low in .w, step_y_low and steps_high in v_plane1.xy), and PCR_PLANE_ON in v_plane1.z:
-// the same at all three corners, flat
+// in .z's bits 0-14 and 16-31, with PCR_PLANE_ON; step_x_low in .w; step_y_low, steps_high, step_x_z and step_y_z in
+// v_plane1): the same at all three corners, flat
 #ifdef PCR_STAGE_VERTEX
 layout(location = 13) flat out ivec4 v_plane0;
 layout(location = 14) flat out ivec4 v_plane1;
@@ -151,19 +152,24 @@ layout(location = 14) flat in ivec4 v_plane1;
 // (pcr_plane_none). (The pixel's, even in the shaders run once a sample.)
 bool pcr_plane_z(out uint z) {
     z = 0u;
-    if ((v_plane1.z & PCR_PLANE_ON) == 0) {
+    if ((v_plane0.z & PCR_PLANE_ON) == 0) {
         return false;
     }
     PzPixels p;
     p.first_low = uint(v_plane0.x);
     p.first_high = uint(v_plane0.y);
-    p.first_x = (v_plane0.z & 0xFFFF) - 1;
+    p.first_x = (v_plane0.z & 0x7FFF) - 1;
     p.first_y = (v_plane0.z >> 16) - 1;
     p.step_x_low = uint(v_plane0.w);
     p.step_y_low = uint(v_plane1.x);
     p.steps_high = uint(v_plane1.y);
-    ivec2 k = ivec2(gl_FragCoord.xy); // (floor: not negative)
-    z = pz_pixels_z(p, k.x, k.y, pc.zmax);
+    p.step_x_z = intBitsToFloat(v_plane1.z);
+    p.step_y_z = intBitsToFloat(v_plane1.w);
+    vec2 k = floor(gl_FragCoord.xy); // (not negative)
+    // (the quick way, a few floats; where it cannot tell, the exact sum: the same Z, plane_z.h)
+    if (!pz_pixels_quick(p, k.x, k.y, pc.zmax, z)) {
+        z = pz_pixels_z(p, int(k.x), int(k.y), pc.zmax);
+    }
     return true;
 }
 #endif

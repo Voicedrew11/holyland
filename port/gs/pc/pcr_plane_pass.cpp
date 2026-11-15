@@ -96,9 +96,10 @@ public:
         return room;
     }
 
-    void submit(GpuTimes &times) {
+    PlanePass::Submitted submit(GpuTimes &times) {
+        PlanePass::Submitted done;
         if (chunks_.empty()) {
-            return;
+            return done;
         }
         CommandBufferHandle cmd = device_.request_command_buffer();
         times.begin(*cmd, GpuWork::planes);
@@ -118,6 +119,8 @@ public:
                 cmd->push_constants(&push, 0, sizeof(push));
                 cmd->dispatch((job.count + group_size - 1) / group_size, 1, 1);
                 dispatches_++;
+                done.dispatches++;
+                done.triangles += job.count;
             }
         }
         // (the planes before the canvas's vertex shaders read them, in the command buffer submitted next)
@@ -126,6 +129,7 @@ public:
         times.end(*cmd);
         device_.submit(cmd);
         chunks_.clear(); // (Granite deletes the buffers once the GPU is done with this frame context's work)
+        return done;
     }
 
     uint64_t triangles() const {
@@ -173,8 +177,8 @@ PlaneRoom PlanePass::reserve(const PlaneSources &sources, uint32_t count) {
     return impl_->reserve(sources, count);
 }
 
-void PlanePass::submit(GpuTimes &times) {
-    impl_->submit(times);
+PlanePass::Submitted PlanePass::submit(GpuTimes &times) {
+    return impl_->submit(times);
 }
 
 uint64_t PlanePass::triangles() const {

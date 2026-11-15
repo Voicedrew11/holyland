@@ -56,8 +56,11 @@ public:
     // Room for count triangles read from sources
     PlaneRoom reserve(const PlaneSources &sources, uint32_t count);
     // The canvas's command buffer about to be submitted: the pass for the entries since the last submit recorded and
-    // submitted before it (nothing when there are none). Timed as GpuWork::planes.
-    void submit(GpuTimes &times);
+    // submitted before it (nothing when there are none). Timed as GpuWork::planes. Returns what it submitted.
+    struct Submitted {
+        uint32_t triangles = 0, dispatches = 0;
+    };
+    Submitted submit(GpuTimes &times);
 
     // --stats: triangles worked out, dispatches
     uint64_t triangles() const;

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #define PZ_FN static inline
+#define PZ_OUT(type) type &
 typedef uint32_t pz_u32;
 PZ_FN float pz_floor(float v) {
     return std::floor(v);
@@ -31,6 +32,7 @@ PZ_FN float pz_abs(float v) {
 }
 #else
 #define PZ_FN
+#define PZ_OUT(type) out type
 #define pz_floor floor
 #define pz_clamp clamp
 #define pz_abs abs
@@ -139,8 +141,9 @@ PZ_FN int64_t plane_z(int64_t px, int64_t py, int64_t x0, int64_t y0, int64_t z0
 // base, the Z at pixel (0, 0); step_x and step_y, what a pixel across and down adds. Rounded from the plane's exact
 // values, they depend on the plane alone (not on its triangle, nor on which corner is first): two meshes over one
 // plane get the same three, so the same Z at every pixel. Each pixel's Z is then base + step_x kx + step_y ky
-// (64-bit integers, kx and ky under 2^14), rounded half to even: within 2^-12 of a Z of the plane's exact Z, so it
-// rounds as the exact one does but where that is within 2^-12 of a half.
+// (64-bit integers, kx and ky under 2^14), rounded half up (any rule both meshes share ties them; half up is the
+// fragment stage's cheapest): within 2^-12 of a Z of the plane's exact Z, so it rounds as the exact one does but where
+// that is within 2^-12 of a half.
 // off: the plane's Z at pixel (0, 0) past 2^34 or a step past 2^20 of a Z (a triangle seen edge on, Z changing by more
 // than a sixteenth of a 24-bit Z buffer a pixel), or no area: the caller's interpolated Z.
 #define PLANE_FIXED_BITS 26
@@ -205,32 +208,34 @@ PZ_FN PzFixed plane_fixed(int64_t step, int64_t first, int64_t x0, int64_t y0, i
     return f;
 }
 
-// The plane's Z at pixel (kx, ky) (0 <= kx, ky < 2^14), whole, rounded half to even
+// The plane's Z at pixel (kx, ky) (0 <= kx, ky < 2^14), whole, rounded half up
 PZ_FN int64_t plane_fixed_z(PzFixed f, int64_t kx, int64_t ky) {
     int64_t v = f.base + f.step_x * kx + f.step_y * ky;
-    int64_t q = v >> PLANE_FIXED_BITS;
-    int64_t r = v - (q << PLANE_FIXED_BITS);
-    int64_t half_step = int64_t(1) << (PLANE_FIXED_BITS - 1);
-    if (r > half_step || (r == half_step && (q & int64_t(1)) != int64_t(0))) {
-        q += int64_t(1);
-    }
-    return q;
+    return (v + (int64_t(1) << (PLANE_FIXED_BITS - 1))) >> PLANE_FIXED_BITS;
 }
 
-// plane_fixed_z for the fragment stage in 32-bit operations (the GPU's 64-bit ones are made of several, its 64-bit
-// multiplies of slow ones): the same value, exactly, clamped to 0..most, from what the vertex stage hands down a
-// triangle (pz_pixels): the plane's value at a pixel kept below and left of the triangle's (first), and each step in
-// pieces, bits 0-15 and 16-31 (not negative) and 32 up (signed, under 2^14: a step is under 2^46). A pixel's value is
-// first's plus each piece times the pixel's place from first (under 2^15: each product under 2^31, the GPU's fast
-// 24-bit multiply), summed in two 32-bit words with their carries, then rounded half to even.
+// plane_fixed_z for the fragment stage, from what is handed down a triangle (pz_pixels): the plane's value at a pixel
+// kept below and left of the triangle's (first), half a Z added (the rounding), and its steps. Two ways to the same
+// value, clamped to 0..most:
+// - pz_pixels_z, exactly: first's value plus each step, in pieces (bits 0-15 and 16-31 not negative, 32 up signed and
+//   under 2^14: a step is under 2^46), times the pixel's place from first (under 2^15: each product under 2^31, the
+//   GPU's fast 24-bit multiply), summed in two 32-bit words with their carries.
+// - pz_pixels_quick, in floats: the value less first's whole Z, first's fraction plus each step (as a float, in Z) times
+//   the place, with a bound on its error; where that is nearer a whole Z than the bound, it says it cannot tell (the
+//   caller then takes pz_pixels_z). A few full-rate operations where the exact sum is a long chain of dependent ones:
+//   at map 063 the exact sum at every pixel took the GPU about 0.19 ms a picture, 8% of it (2026-11-15). Where it can
+//   tell, its Z is pz_pixels_z's exactly (plane_z_test checks it), so two meshes on one plane still tie whichever way
+//   each pixel went.
 struct PzPixels {
-    pz_u32 first_low;  // the plane's value (2^-PLANE_FIXED_BITS) at pixel (first_x, first_y): bits 0-31
+    pz_u32 first_low;  // the plane's value (2^-PLANE_FIXED_BITS) at pixel (first_x, first_y), half a Z added: bits 0-31
     pz_u32 first_high; // ... bits 32-63
     int first_x;
     int first_y;
     pz_u32 step_x_low; // step_x: bits 0-31
     pz_u32 step_y_low; // step_y: bits 0-31
     pz_u32 steps_high; // step_x's bits 32 up (bits 0-15, signed) and step_y's (16-31)
+    float step_x_z;    // step_x in Z (within 2^-23 of it)
+    float step_y_z;    // step_y in Z
 };
 
 #ifdef __cplusplus
@@ -253,29 +258,29 @@ PZ_FN PzPixels pz_pixels(PzFixed f, int least_x, int least_y) {
     PzPixels p;
     p.first_x = least_x;
     p.first_y = least_y;
-    uint64_t first = uint64_t(f.base + f.step_x * int64_t(least_x) + f.step_y * int64_t(least_y));
+    uint64_t first = uint64_t(f.base + f.step_x * int64_t(least_x) + f.step_y * int64_t(least_y) +
+                              (int64_t(1) << (PLANE_FIXED_BITS - 1))); // (half a Z: rounded half up)
     p.first_low = pz_u32(first & uint64_t(0xFFFFFFFFu));
     p.first_high = pz_u32(first >> 32);
     p.step_x_low = pz_u32(uint64_t(f.step_x) & uint64_t(0xFFFFFFFFu));
     p.step_y_low = pz_u32(uint64_t(f.step_y) & uint64_t(0xFFFFFFFFu));
     p.steps_high = (pz_u32(f.step_x >> 32) & pz_u32(0xFFFFu)) | (pz_u32(f.step_y >> 32) << 16);
+    p.step_x_z = float(f.step_x) * (1.0f / 67108864.0f); // (2^-PLANE_FIXED_BITS: a power of two, exact)
+    p.step_y_z = float(f.step_y) * (1.0f / 67108864.0f);
     return p;
 }
 
-// The plane's Z at pixel (kx, ky) (from first_x and first_y up, under 2^15 from them), whole, rounded half to even,
+// The plane's Z at pixel (kx, ky) (from first_x and first_y up, under 2^15 from them), whole, rounded half up,
 // clamped to 0..most: plane_fixed_z's
 PZ_FN pz_u32 pz_pixels_z(PzPixels p, int kx, int ky, pz_u32 most) {
     pz_u32 dx = pz_u32(kx - p.first_x) & pz_u32(0x7FFFu), dy = pz_u32(ky - p.first_y) & pz_u32(0x7FFFu);
     pz_u32 s0 = (p.step_x_low & pz_u32(0xFFFFu)) * dx + (p.step_y_low & pz_u32(0xFFFFu)) * dy;
     pz_u32 s1 = (p.step_x_low >> 16) * dx + (p.step_y_low >> 16) * dy;
     int s2 = pz_signed16(p.steps_high) * int(dx) + pz_signed16(p.steps_high >> 16) * int(dy);
-    pz_u32 c0, c1, c2;
+    pz_u32 c0, c1;
     pz_u32 low = uaddCarry(p.first_low, s0, c0);
     low = uaddCarry(low, s1 << 16, c1);
     pz_u32 high = p.first_high + c0 + c1 + (s1 >> 16) + pz_u32(s2);
-    // half to even: add a half less one, and one more where the whole part is odd
-    low = uaddCarry(low, pz_u32((1 << (PLANE_FIXED_BITS - 1)) - 1) + ((low >> PLANE_FIXED_BITS) & 1u), c2);
-    high += c2;
     if (int(high) < 0) {
         return 0u;
     }
@@ -284,6 +289,30 @@ PZ_FN pz_u32 pz_pixels_z(PzPixels p, int kx, int ky, pz_u32 most) {
     }
     pz_u32 z = (low >> PLANE_FIXED_BITS) | (high << (32 - PLANE_FIXED_BITS));
     return z < most ? z : most;
+}
+
+// pz_pixels_z at pixel (kx, ky) given as floats (whole), in floats: true and z where it can tell (see above).
+// Its error: first's fraction as a float within 2^-24; each step within 2^-23 of its value, and each product and sum
+// rounded once (2^-24 of it), so within (|a| + |b| + 1) 2^-21 in all (a and b the steps times the place): within the
+// bound e, twice that. It can tell where the sum is more than e from a whole number (rounding the exact value to a
+// whole Z there is rounding the sum) and first's whole Z is under 2^30 (with the sum, whole in 32-bit integers).
+PZ_FN bool pz_pixels_quick(PzPixels p, float kx, float ky, pz_u32 most, PZ_OUT(pz_u32) z) {
+    float dx = kx - float(p.first_x), dy = ky - float(p.first_y);
+    float a = p.step_x_z * dx, b = p.step_y_z * dy;
+    float fraction = float(p.first_low & pz_u32(0x3FFFFFFu)) * (1.0f / 67108864.0f);
+    float r = (fraction + a) + b;
+    float e = (pz_abs(a) + pz_abs(b) + 1.0f) * (1.0f / 1048576.0f); // (2^-20)
+    float n = pz_floor(r);
+    float part = r - n; // (exact)
+    z = 0u;
+    if (!(part > e && part < 1.0f - e && dx >= 0.0f && dy >= 0.0f && dx < 32768.0f && dy < 32768.0f &&
+          p.first_high < pz_u32(0x1000000u))) {
+        return false;
+    }
+    int whole = int((p.first_high << (32 - PLANE_FIXED_BITS)) | (p.first_low >> PLANE_FIXED_BITS)) + int(n);
+    pz_u32 w = pz_u32(whole < 0 ? 0 : whole);
+    z = w < most ? w : most;
+    return true;
 }
 
 #endif
