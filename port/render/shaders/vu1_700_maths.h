@@ -87,7 +87,7 @@ uvec4 lit_colour(uint at) {
 struct Place {
     int x, y, z;
     float q;
-#ifdef ND_STANDALONE
+#if defined(ND_STANDALONE) || defined(PCR_PLANES)
     float zf; // (sa_700.vert) Z before FTOI4: what the scene's depth is made of, unrounded
 #endif
 };
@@ -99,7 +99,7 @@ Place vu_place(uint at) {
     p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
     p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
     p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
-#ifdef ND_STANDALONE
+#if defined(ND_STANDALONE) || defined(PCR_PLANES)
     p.zf = vu_mul(c.z, p.q);
 #endif
     return p;

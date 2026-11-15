@@ -55,12 +55,22 @@ struct GsCorner {
 #ifdef PCR_EXACT_Z
 #include "plane_z.h"
 
-// A corner's Z (z, and a picture between's fraction, about -1/2 to 1/2) in 256ths, within 0 and the largest 32-bit Z
-// (as a moved Z is: a corner past the far plane is dropped, one past the nearest clamped)
+// A corner's Z (z, and its fraction: a native draw's own, 0 to 1, plus a picture between's move, about -1/2 to 1/2)
+// in 256ths, within 0 and the largest 32-bit Z (as a moved Z is: a corner past the far plane is dropped, one past the
+// nearest clamped)
 int64_t pcr_plane_z_of(GsCorner c) {
     int64_t z256 = (int64_t(c.z) << PCR_Z_FRACTION_BITS) +
-                    int64_t(roundEven(clamp(c.zfrac, -1.0, 1.0) * float(1 << PCR_Z_FRACTION_BITS)));
+                    int64_t(roundEven(clamp(c.zfrac, -2.0, 2.0) * float(1 << PCR_Z_FRACTION_BITS)));
     return clamp(z256, int64_t(0), (int64_t(0xFFFFFFFFu) << PCR_Z_FRACTION_BITS) | int64_t(255));
+}
+
+// (a native plane pass's) A corner's own fraction of a Z: VU1's Z before FTOI4 (zf) less the GS's whole Z of it (z),
+// 0 to 1. The GS takes whole Z at the corners; with it rounded off, two surfaces less than a Z apart (a rope bound on
+// a log, map 000) sorted by that rounding, which each game frame made again: the fine part (plane_z.h) flickered
+// between them at the game's rate. Native draws alone: a GS primitive's corners come whole.
+float pcr_frame_zfrac(float zf, uint z) {
+    float f = zf - float(z);
+    return f >= 0.0 && f < 1.0 ? f : 0.0;
 }
 
 // The triangle's plane as the fragment stage takes it (v_plane0 and v_plane1, below), from its three corners, in a
