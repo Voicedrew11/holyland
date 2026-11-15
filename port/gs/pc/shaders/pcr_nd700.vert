@@ -124,7 +124,7 @@ void main() {
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
     }
-    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone && which == 0u) { // (the provoking vertex: its flat outputs drawn)
         pcr_plane(gs_corner(tri.x), gs_corner(tri.y), gs_corner(tri.z)); // (exact Z: pcr_exact_z.h)
     }
     uvec4 rgba = lit_colour(gouraud ? at : kick);

@@ -4586,17 +4586,17 @@ private:
         frag.sets[2].separate_image_mask = 1u;
         frag.sets[2].meta[0].array_size = DescriptorSetLayout::UNSIZED_ARRAY;
         frag.bindless_set_mask = 1u << 2;
-        Shader *vs = device_.request_shader(pcr_spv_pcr_prim_vert, sizeof(pcr_spv_pcr_prim_vert), &vert);
-        // (the fragment shaders with exact Z, _xz, where it is on: pcr_common.h)
+        // (the shaders with exact Z, _xz, where it is on: pcr_common.h; the vertex shaders work out each triangle's
+        // plane, pcr_exact_z.h)
         auto shader = [&](const uint32_t *code, size_t size, const uint32_t *exact, size_t exact_size,
                           const ResourceLayout *layout) {
             return exact_z_ ? device_.request_shader(exact, exact_size, layout) : device_.request_shader(code, size, layout);
         };
 #define PCR_SHADER(name, layout) \
     shader(pcr_spv_##name, sizeof(pcr_spv_##name), pcr_spv_##name##_xz, sizeof(pcr_spv_##name##_xz), layout)
+        Shader *vs = PCR_SHADER(pcr_prim_vert, &vert);
         Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
         Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
-#define PCR_VERTEX_SHADER(name, layout) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
         // (each vertex shader with the four fragment shaders: draw_batch's choice)
         auto programs_for = [&](int v, Shader *vertex) {
             programs_[v] = device_.request_program(vertex, fs);
@@ -4615,7 +4615,7 @@ private:
             run_early_programs_[v] = device_.request_program(vertex, refs);
             run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
         };
-        run_programs_for(0, PCR_VERTEX_SHADER(pcr_prim_vert_rec, &vert));
+        run_programs_for(0, PCR_SHADER(pcr_prim_vert_rec, &vert));
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
         date.sets[0] = frag.sets[0];
@@ -4638,20 +4638,19 @@ private:
         Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
         expand_program_ = device_.request_program(cvs, xfs);
         ResourceLayout nd = batch_vert;
-        Shader *nvs = device_.request_shader(pcr_spv_pcr_nd000_vert, sizeof(pcr_spv_pcr_nd000_vert), &nd);
+        Shader *nvs = PCR_SHADER(pcr_nd000_vert, &nd);
         programs_for(1, nvs);
-        Shader *nvs280 = device_.request_shader(pcr_spv_pcr_nd280_vert, sizeof(pcr_spv_pcr_nd280_vert), &nd);
+        Shader *nvs280 = PCR_SHADER(pcr_nd280_vert, &nd);
         programs_for(2, nvs280);
-        Shader *nvs700 = device_.request_shader(pcr_spv_pcr_nd700_vert, sizeof(pcr_spv_pcr_nd700_vert), &nd);
+        Shader *nvs700 = PCR_SHADER(pcr_nd700_vert, &nd);
         programs_for(3, nvs700);
-        Shader *nvsripple = device_.request_shader(pcr_spv_pcr_ndripple_vert, sizeof(pcr_spv_pcr_ndripple_vert), &nd);
+        Shader *nvsripple = PCR_SHADER(pcr_ndripple_vert, &nd);
         programs_for(4, nvsripple);
-        run_programs_for(1, PCR_VERTEX_SHADER(pcr_nd000_vert_rec, &nd));
-        run_programs_for(2, PCR_VERTEX_SHADER(pcr_nd280_vert_rec, &nd));
-        run_programs_for(3, PCR_VERTEX_SHADER(pcr_nd700_vert_rec, &nd));
-        run_programs_for(4, PCR_VERTEX_SHADER(pcr_ndripple_vert_rec, &nd));
+        run_programs_for(1, PCR_SHADER(pcr_nd000_vert_rec, &nd));
+        run_programs_for(2, PCR_SHADER(pcr_nd280_vert_rec, &nd));
+        run_programs_for(3, PCR_SHADER(pcr_nd700_vert_rec, &nd));
+        run_programs_for(4, PCR_SHADER(pcr_ndripple_vert_rec, &nd));
 #undef PCR_SHADER
-#undef PCR_VERTEX_SHADER
         // (outside a picture between: its picture zeros, and no kicks or moves, read by nothing)
         BufferCreateInfo info = {};
         info.domain = BufferDomain::Device;

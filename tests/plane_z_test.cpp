@@ -7,7 +7,10 @@
 //   - halves rounded to even, built on purpose;
 //   - two meshes over one plane cut into different triangles give the same Z at every point (a decal, or the two map
 //     records holding one wall: the case that showed the float's error at map 063);
-//   - corners with no area give PLANE_Z_NONE.
+//   - corners with no area give PLANE_Z_NONE;
+//   - plane_fixed, the plane as the fragment stage draws it (three fixed-point numbers a triangle): at pixels' points,
+//     the same Z as the exact one but within 2^-12 of a half (and there a Z apart at most), the same three numbers
+//     whichever corner is first and whichever of two meshes over one plane worked them out.
 //
 //     out/<preset>/plane_z_test     prints the failures, and exits 1 if any
 #include <stdio.h>
@@ -201,11 +204,149 @@ static void no_area() {
     }
 }
 
+// The exact Z at (px, py) as reference does, and whether it is within 2^-12 of a Z of a half (where plane_fixed may round
+// the other way)
+static bool reference_near_half(const int64_t c[3][3], int64_t px, int64_t py) {
+    i128 ax = c[1][0] - c[0][0], ay = c[1][1] - c[0][1], bx = c[2][0] - c[0][0], by = c[2][1] - c[0][1];
+    i128 dx = px - c[0][0], dy = py - c[0][1];
+    i128 area = ax * by - ay * bx;
+    i128 n = i128(c[0][2]) * area + i128(c[1][2] - c[0][2]) * (dx * by - dy * bx) +
+             i128(c[2][2] - c[0][2]) * (ax * dy - ay * dx);
+    i128 d = area << PLANE_Z_FRACTION;
+    if (d < 0) {
+        d = -d;
+        n = -n;
+    }
+    i128 r = n - floor_div(n, d) * d;
+    i128 off = 2 * r - d;
+    if (off < 0) {
+        off = -off;
+    }
+    return off <= (d >> 11);
+}
+
+static PzFixed fixed_of(const int64_t c[3][3], int64_t step, int64_t first) {
+    return plane_fixed(step, first, c[0][0], c[0][1], c[0][2], c[1][0], c[1][1], c[1][2], c[2][0], c[2][1], c[2][2]);
+}
+
+static bool same_fixed(PzFixed a, PzFixed b) {
+    return a.on == b.on && (!a.on || (a.base == b.base && a.step_x == b.step_x && a.step_y == b.step_y));
+}
+
+static long fixed_off = 0, fixed_near_half = 0;
+
+static void fixed_planes() {
+    const int64_t z_most = (int64_t(1) << 40) - 1;
+    for (int t = 0; t < 200000; t++) {
+        bool msaa = (rng() & 1) != 0;
+        int64_t step = msaa ? 32 : 16, first = msaa ? 16 : 0;
+        // corners in the pixels' unit, about the target (16384 pixels across at most)
+        int64_t span = int64_t(1) << (rng() % 20);
+        int64_t cx = int64_t(rng() % uint64_t(step << 14)), cy = int64_t(rng() % uint64_t(step << 14));
+        int64_t zspan = int64_t(1) << (rng() % 41);
+        int64_t z0 = int64_t(rng() % uint64_t(z_most + 1));
+        int64_t c[3][3];
+        for (int i = 0; i < 3; i++) {
+            c[i][0] = cx + random_in(span);
+            c[i][1] = cy + random_in(span);
+            c[i][2] = std::clamp<int64_t>(z0 + random_in(zspan), 0, z_most);
+        }
+        PzFixed f = fixed_of(c, step, first);
+        int order[3] = {0, 1, 2};
+        while (std::next_permutation(order, order + 3)) {
+            int64_t p[3][3];
+            for (int i = 0; i < 3; i++) {
+                for (int k = 0; k < 3; k++) {
+                    p[i][k] = c[order[i]][k];
+                }
+            }
+            if (!same_fixed(fixed_of(p, step, first), f) && failures++ < 20) {
+                printf("fixed: the corners in order %d %d %d give another plane\n", order[0], order[1], order[2]);
+            }
+        }
+        if (!f.on) {
+            fixed_off++;
+            continue;
+        }
+        for (int k = 0; k < 4; k++) {
+            int64_t kx = std::clamp<int64_t>((cx + random_in(span + 1)) / step, 0, (1 << 14) - 1);
+            int64_t ky = std::clamp<int64_t>((cy + random_in(span + 1)) / step, 0, (1 << 14) - 1);
+            int64_t px = step * kx + first, py = step * ky + first;
+            int64_t want = 0;
+            if (!reference(c, px, py, want)) {
+                continue;
+            }
+            int64_t got = plane_fixed_z(f, kx, ky);
+            checked++;
+            // (the fragment stage's way: from a least pixel below the triangle's, -1 at least)
+            int least_x = int(std::max<int64_t>(-1, (std::min({c[0][0], c[1][0], c[2][0]}) - first) / step - 1));
+            int least_y = int(std::max<int64_t>(-1, (std::min({c[0][1], c[1][1], c[2][1]}) - first) / step - 1));
+            least_x = std::min<int>(least_x, int(kx));
+            least_y = std::min<int>(least_y, int(ky));
+            for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu, 0xFFFFu}) {
+                int64_t pixels = pz_pixels_z(pz_pixels(f, least_x, least_y), int(kx), int(ky), most);
+                if (pixels != std::clamp<int64_t>(got, 0, most) && failures++ < 20) {
+                    printf("fixed: pz_pixels_z %lld, plane_fixed_z %lld (most %u)\n", (long long)pixels, (long long)got,
+                           most);
+                }
+            }
+            if (reference_near_half(c, px, py)) {
+                fixed_near_half++;
+                if ((got - want > 1 || want - got > 1) && failures++ < 20) {
+                    printf("fixed: near a half at pixel (%lld %lld): %lld, want %lld\n", (long long)kx, (long long)ky,
+                           (long long)got, (long long)want);
+                }
+            } else if (got != want && failures++ < 20) {
+                printf("fixed: corners (%lld %lld %lld) (%lld %lld %lld) (%lld %lld %lld) at pixel (%lld %lld): %lld, "
+                       "want %lld\n",
+                       (long long)c[0][0], (long long)c[0][1], (long long)c[0][2], (long long)c[1][0], (long long)c[1][1],
+                       (long long)c[1][2], (long long)c[2][0], (long long)c[2][1], (long long)c[2][2], (long long)kx,
+                       (long long)ky, (long long)got, (long long)want);
+            }
+        }
+    }
+}
+
+// two_meshes for plane_fixed: both triangles of a quad on one plane give the same three numbers
+static void fixed_two_meshes() {
+    for (int t = 0; t < 20000; t++) {
+        bool msaa = (rng() & 1) != 0;
+        int64_t step = msaa ? 32 : 16, first = msaa ? 16 : 0;
+        int64_t span = int64_t(1) << (4 + rng() % 16);
+        int64_t x0 = int64_t(rng() % uint64_t(step << 14)), y0 = int64_t(rng() % uint64_t(step << 14));
+        int64_t a = int64_t(rng() % (uint64_t(1) << 38)), b = random_in(1 << 12), cc = random_in(1 << 12);
+        auto zof = [&](int64_t x, int64_t y) { return a + b * (x - x0) + cc * (y - y0); };
+        int64_t q[4][2] = {{x0, y0}, {x0 + span, y0}, {x0 + span, y0 + span}, {x0, y0 + span}};
+        bool on_plane = true;
+        for (const auto &corner : q) {
+            int64_t z = zof(corner[0], corner[1]);
+            on_plane = on_plane && z >= 0 && z < (int64_t(1) << 40);
+        }
+        if (!on_plane) {
+            continue;
+        }
+        int64_t first_tri[3][3] = {{q[0][0], q[0][1], zof(q[0][0], q[0][1])},
+                                   {q[1][0], q[1][1], zof(q[1][0], q[1][1])},
+                                   {q[2][0], q[2][1], zof(q[2][0], q[2][1])}};
+        int64_t second_tri[3][3] = {{q[1][0], q[1][1], zof(q[1][0], q[1][1])},
+                                    {q[2][0], q[2][1], zof(q[2][0], q[2][1])},
+                                    {q[3][0], q[3][1], zof(q[3][0], q[3][1])}};
+        checked++;
+        if (!same_fixed(fixed_of(first_tri, step, first), fixed_of(second_tri, step, first)) && failures++ < 20) {
+            printf("fixed two meshes: one plane gave two (quad at %lld %lld, %lld across)\n", (long long)x0,
+                   (long long)y0, (long long)span);
+        }
+    }
+}
+
 int main() {
     random_triangles();
     halves();
     two_meshes();
     no_area();
-    printf("plane_z: %ld checked, %d failures\n", checked, failures);
+    fixed_planes();
+    fixed_two_meshes();
+    printf("plane_z: %ld checked, %d failures (plane_fixed: %ld planes off, %ld points near a half)\n", checked, failures,
+           fixed_off, fixed_near_half);
     return failures != 0;
 }
