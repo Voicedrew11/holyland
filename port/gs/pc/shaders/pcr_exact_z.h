@@ -148,10 +148,12 @@ layout(location = 14) flat in ivec4 v_plane1;
 
 #include "plane_z.h"
 
-// The Z of the triangle's plane at this pixel, whole and clamped to 0..zmax; false: the triangle has no plane
-// (pcr_plane_none). (The pixel's, even in the shaders run once a sample.)
-bool pcr_plane_z(out uint z) {
+// The Z of the triangle's plane at this pixel, whole and clamped to 0..zmax, and its fine part (plane_z.h's
+// pz_fine_bits); false: the triangle has no plane (pcr_plane_none). (The pixel's, even in the shaders run once a
+// sample.)
+bool pcr_plane_z(out uint z, out uint fine) {
     z = 0u;
+    fine = 0u;
     if ((v_plane0.z & PCR_PLANE_ON) == 0) {
         return false;
     }
@@ -167,8 +169,8 @@ bool pcr_plane_z(out uint z) {
     p.step_y_z = intBitsToFloat(v_plane1.w);
     vec2 k = floor(gl_FragCoord.xy); // (not negative)
     // (the quick way, a few floats; where it cannot tell, the exact sum: the same Z, plane_z.h)
-    if (!pz_pixels_quick(p, k.x, k.y, pc.zmax, z)) {
-        z = pz_pixels_z(p, int(k.x), int(k.y), pc.zmax);
+    if (!pz_pixels_quick(p, k.x, k.y, pc.zmax, z, fine)) {
+        z = pz_pixels_z(p, int(k.x), int(k.y), pc.zmax, fine);
     }
     return true;
 }

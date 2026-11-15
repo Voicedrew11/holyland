@@ -3644,8 +3644,9 @@ private:
         return tfx <= 1 && b.texture.ok && b.texture.alpha_lo == 0x80 && b.texture.alpha_hi == 0x80;
     }
 
-    // A decal (developers' views: the trace marks its fragments, --decal-losses draws where it lost): a blended draw Z
-    // tested GEQUAL whose blend shows what is under it somewhere (not blend_covers)
+    // A decal: a blended draw Z tested GEQUAL whose blend shows what is under it somewhere (not blend_covers). With
+    // exact Z it ties with a surface of its whole Z under it whatever their fine parts (pcr_prim.h's pcr_exact_depth),
+    // as on the GS; the trace marks its fragments, --decal-losses draws where it lost.
     static bool is_decal(const Batch &b) {
         const DrawState &s = b.state;
         return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0 && !blend_covers(b);

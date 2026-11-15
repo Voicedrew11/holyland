@@ -440,15 +440,27 @@ bool alpha_passes(uint a) {
 // rounded interpolation of the corners' differences from it at the pixel's middle (with a moved corner's fraction),
 // clamped to the Z buffer's largest. At the middle even where the shader runs once a sample (PCR_SAMPLE, the cut-outs):
 // every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
-// samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there)
+// samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there).
+// Below the whole Z the depth keeps the plane's fine part (plane_z.h's pz_fine_bits), so that two surfaces a fraction
+// of a Z apart, which the GS rounds to one Z far from the eye, are drawn in their order (the strip of a log behind its
+// front no longer shows through it), and two meshes on one plane still tie. A decal (pcr_canvas.cpp's is_decal) takes
+// the top fine part of its whole Z instead, so that it wins against any surface of its whole Z under it, as on the GS:
+// its test is the GS's.
 void pcr_exact_depth() {
-    uint z;
-    if (!pcr_plane_z(z)) {
+    uint z, fine;
+    if (!pcr_plane_z(z, fine)) {
         uint z0 = v_zref;
         int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
         z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
     }
-    gl_FragDepth = float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
+    if (z >= pc.zmax) {
+        z = pc.zmax;
+        fine = 0u;
+    }
+    if ((pc.flags & PCR_F_DECAL) != 0u) {
+        fine = pz_fine_top(z);
+    }
+    gl_FragDepth = (float(z + pcr_loss_margin()) + float(fine) * (1.0 / 256.0)) * pc.zscale;
 }
 #endif
 
