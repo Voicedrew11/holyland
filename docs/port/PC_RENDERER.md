@@ -50,6 +50,19 @@ window, the frame rate unlocked with a cap of 500, vsync off. The runs off made 
 simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
 before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
 
+**2026-11-15: HiZ/HiS off on GFX12, the likely cause.** Three more full resets on 2026-11-15 (03:31, 04:01, 06:10),
+the last in a plain run of the base build with Granite's post-mortem on (`GRANITE_VULKAN_POST_MORTEM=1`): the four
+sprites drawn into the game's 128x128 surface (2-sample depth) had finished; the end of that pass and the full barrier
+after it, which waits for the depth work, never did. The devcoredumps of the earlier two showed the depth block, the
+rasteriser and the pixel launch busy, no fault. Sync validation and GPU-AV on that path are clean. Mesa's RADV
+(radv_cmd_buffer.c) says that on GFX12 "HiZ/HiS is buggy and can cause random GPU hangs": its workaround, an
+end-of-pipe event after each draw packet, comes once for an indirect draw of many draws (the runs' 4 hangs in 6), and
+for some games it turns HiZ/HiS off instead (`radv_disable_hiz_his_gfx12`). The renderer now sets that option before
+the Vulkan instance is made (`avoid_gfx12_hiz_hangs` in pcr.cpp; a value already in the environment is kept, so
+`radv_disable_hiz_his_gfx12=false` has HiZ back). Cost: none at 063 (2.587 against 2.593 ms a picture, four runs each),
+1.3% at 009 (2.909 against 2.947, two each). Pictures byte for byte. Hangs came about once in twenty runs, so a few
+clean runs prove nothing: watch for one with this in. If the runs' hangs were this bug, the runs could be tried again.
+
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
 The pump's canvas now hands the images it lets go back, and the next copies are made into them
