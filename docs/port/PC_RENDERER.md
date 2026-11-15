@@ -472,6 +472,14 @@ GIF path (the tour's 60 Hz runs draw no native draws: `port_gs_native_draws_now`
   widths' depth surfaces lying wholly in those pages (`clear_depth_aliases`; the stats line counts them: about two
   a frame at every map). Partial overlaps (the 128 x 128 water targets write Z = max through ZBUF 280 at width 2,
   mid-frame too) are still not carried between widths.
+  - In the pictures between too (2026-11-14). There every GIF batch is one the shader may move (`moved`), and the
+    clear was passed over: the reflection's Z buffer kept the Z of the frame's own picture through the frame's
+    pictures between, and the reflection's triangles, moved by each picture's camera, failed wherever the move took
+    them farther. Standing still nothing showed; with the camera turning the water at map 009's swamp had dark
+    triangular patches in its reflection (and, with the GS's whole Z, hatching), worst in the first picture after a
+    frame. The frame's clear stays where and what the frame has it (`still`), and is now taken there as well.
+    Walking and turning from the owner's save at 240 with every picture drawn: the patches and the hatching are
+    gone, and nothing above the water changes.
 - **112's rock.** Its near triangles have corners' Z up to 0xF39C0F over a Z16S buffer. The GS (and paraLLEl-GS:
   `ubershader.comp`) clamps each pixel's interpolated Z; the vertex shader clamped the corners, lowering Z across
   the triangle, and it failed Z tests gs's passed. Such a triangle is now cut on the CPU where its Z reaches the

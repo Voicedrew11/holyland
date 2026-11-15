@@ -3361,8 +3361,13 @@ private:
     // the reflection failed against it, and the water showed the black where it was not drawn (2026-11-11). A clear
     // here: a batch of sprites writing one Z with ZTST ALWAYS over whole rows of its surface's pages. Every other depth
     // surface of the format wholly in those pages is cleared to the same Z (any format for Z 0: no bits in any).
+    // In a picture between too, where every GIF batch is one the shader may move (moved): the clear's sprites stay as
+    // the frame has them (still), so they are where and what the vertices say. Left out there, the reflection's Z
+    // buffer kept the Z of the frame's own picture through all the pictures between: its triangles, moved by the
+    // picture's camera, failed wherever the move took them farther, and the water showed black triangles in its
+    // reflection whenever the camera turned (map 009's swamp, 2026-11-14).
     void clear_depth_aliases(const Batch &b, const Surface &depth) {
-        if (b.native || b.moved || !b.sprites || b.vertices.empty()) {
+        if (b.native || (b.moved && !b.still) || !b.sprites || b.vertices.empty()) {
             return;
         }
         uint32_t z = b.vertices[0].z;
