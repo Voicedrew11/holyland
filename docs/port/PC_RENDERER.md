@@ -50,18 +50,16 @@ window, the frame rate unlocked with a cap of 500, vsync off. The runs off made 
 simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
 before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
 
-**2026-11-15: HiZ/HiS off on GFX12, the likely cause.** Three more full resets on 2026-11-15 (03:31, 04:01, 06:10),
-the last in a plain run of the base build with Granite's post-mortem on (`GRANITE_VULKAN_POST_MORTEM=1`): the four
-sprites drawn into the game's 128x128 surface (2-sample depth) had finished; the end of that pass and the full barrier
-after it, which waits for the depth work, never did. The devcoredumps of the earlier two showed the depth block, the
-rasteriser and the pixel launch busy, no fault. Sync validation and GPU-AV on that path are clean. Mesa's RADV
-(radv_cmd_buffer.c) says that on GFX12 "HiZ/HiS is buggy and can cause random GPU hangs": its workaround, an
-end-of-pipe event after each draw packet, comes once for an indirect draw of many draws (the runs' 4 hangs in 6), and
-for some games it turns HiZ/HiS off instead (`radv_disable_hiz_his_gfx12`). The renderer now sets that option before
-the Vulkan instance is made (`avoid_gfx12_hiz_hangs` in pcr.cpp; a value already in the environment is kept, so
-`radv_disable_hiz_his_gfx12=false` has HiZ back). Cost: none at 063 (2.587 against 2.593 ms a picture, four runs each),
-1.3% at 009 (2.909 against 2.947, two each). Pictures byte for byte. Hangs came about once in twenty runs, so a few
-clean runs prove nothing: watch for one with this in. If the runs' hangs were this bug, the runs could be tried again.
+**2026-11-15: where it stops; HiZ not ruled in.** Five full resets on 2026-11-15 (03:31, 04:01, 06:10, 08:00, 08:02).
+The last three, with Granite's post-mortem on (`GRANITE_VULKAN_POST_MORTEM=1`), all stop at the same place: the
+6-vertex sprites the game draws each frame into its 128x128 surface (pcr_prim_vert_xz with pcr_prim_early_frag_xz:
+exact Z, gl_FragDepth with layout(depth_less); a 2-sample target and Z buffer), or the barrier after them that waits
+for that work. The devcoredumps of the earlier two: the depth block, the rasteriser and the pixel launch busy, no fault.
+Sync validation and GPU-AV on that path: clean. Mesa says GFX12's HiZ/HiS "is buggy and can cause random GPU hangs";
+Mesa 26.2.3 applies its "full" workaround by default (`radv_gfx12_hiz_wa`: HiZ turned off around draws that use depth
+and stencil together), and the 08:00 and 08:02 hangs came with it. (A setting of `radv_disable_hiz_his_gfx12`, Mesa 25's
+name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) Not tried yet: HiZ off
+altogether (`RADV_DEBUG=nohiz`), and that draw without the shader's depth.
 
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.

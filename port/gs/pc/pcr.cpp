@@ -622,22 +622,6 @@ private:
     std::vector<Frame> frames_;
 };
 
-// RADV on GFX12 (RDNA4: RX 9060/9070): HiZ/HiS off. Mesa says the hardware's HiZ/HiS "is buggy and can cause random
-// GPU hangs"; its workaround, an end-of-pipe event after each draw packet, covers an indirect draw of many draws once,
-// and does not cover every case (Mesa turns HiZ/HiS off for some games with radv_disable_hiz_his_gfx12). Our hangs
-// match: random, the depth block busy with no fault (2026-11-13 to 15), the last one after a 2-sample depth pass, at
-// the barrier that waited for it (granite-post-mortem, 2026-11-15 06:10); indirect draws hung 4 runs in 6. HiZ gains us
-// nothing (docs/port/PC_OPTIMIZATION.md: RADV_DEBUG=nohiz no faster or slower). Set before the instance is made, as
-// the driver reads its options there; a value already in the environment is kept (radv_disable_hiz_his_gfx12=false
-// to have HiZ back). Other drivers and GPUs ignore it.
-void avoid_gfx12_hiz_hangs() {
-#ifndef _WIN32
-    if (setenv("radv_disable_hiz_his_gfx12", "true", 0) != 0) {
-        fprintf(stderr, "[pcr] could not set radv_disable_hiz_his_gfx12\n");
-    }
-#endif
-}
-
 // KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before)
 bool pump_wanted() {
     const char *v = getenv("KF4_PC_PUMP");
@@ -1743,7 +1727,6 @@ public:
     // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
     // hang_folder: where a GPU hang's report goes (pcr_hang_reports_in)
     bool open(bool present_wanted, const std::string &hang_folder) {
-        avoid_gfx12_hiz_hangs();
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[pcr] no Vulkan loader\n");
             return false;
