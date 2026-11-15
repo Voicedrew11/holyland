@@ -1572,7 +1572,7 @@ public:
                 "passes, %llu surfaces made (%llu of them with images used again), %llu uploads into surfaces, %llu "
                 "textures' copies of surfaces in images used again; kept walks' textured batches %llu, %llu from "
                 "their table, %llu with their CLUT; %llu runs of them drawn indirect, %llu draws; %llu merged runs, %llu "
-                "triangles; %llu batches cleared, %llu blends left out, %llu dead\n",
+                "triangles; %llu batches cleared, %llu blends left out, %llu dead, %llu decals settled\n",
                 (unsigned long long)b.frames, (unsigned long long)intake.surfaces_copied,
                 (unsigned long long)intake.surface_copies_into_spares,
                 (unsigned long long)b.drawn_again, (unsigned long long)b.missed, (unsigned long long)pictures_,
@@ -1584,7 +1584,7 @@ public:
                 (unsigned long long)c.walk_clut_draws, (unsigned long long)c.runs, (unsigned long long)c.run_draws,
                 (unsigned long long)c.merged_runs, (unsigned long long)c.merged_triangles,
                 (unsigned long long)c.clears, (unsigned long long)c.blends_left_out,
-                (unsigned long long)c.dead_batches);
+                (unsigned long long)c.dead_batches, (unsigned long long)c.decals_settled);
     }
 
 private:

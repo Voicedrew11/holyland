@@ -675,6 +675,44 @@ bool is_depth_format(VkFormat f) {
     return f == VK_FORMAT_D32_SFLOAT_S8_UINT || f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT;
 }
 
+// (pcr_pipelines.h's WarmDevice::decal_roles) A seed record of a batch program's that tests Z GEQUAL, as drawn by
+// pcr_canvas.cpp's settle_decal_depth: each state there sets, on the state the record has; none when it is not such a
+// record
+std::vector<Record> decal_states(const Record &r, const WarmDevice &t) {
+    std::vector<Record> out;
+    const auto &st = r.static_state.state;
+    if (r.role >= t.decal_roles || !r.depth || !st.depth_test || st.depth_compare != VK_COMPARE_OP_GREATER_OR_EQUAL) {
+        return out;
+    }
+    auto stencil = [](Record &d, bool on, VkCompareOp compare, VkStencilOp pass) {
+        auto &ds = d.static_state.state;
+        ds.stencil_test = on ? 1 : 0;
+        ds.stencil_front_compare_op = ds.stencil_back_compare_op = compare;
+        ds.stencil_front_pass = ds.stencil_back_pass = pass;
+        ds.stencil_front_fail = ds.stencil_back_fail = VK_STENCIL_OP_KEEP;
+        ds.stencil_front_depth_fail = ds.stencil_back_depth_fail = VK_STENCIL_OP_KEEP;
+    };
+    Record mark = r; // (mark_decal_won: the stencil's test on in the passes that write Z, its ops set in each)
+    stencil(mark, st.depth_write != 0, VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE);
+    out.push_back(mark);
+    Record reset = r; // (the depth reset)
+    reset.role = t.depth_reset_first + r.role % t.decal_programs;
+    reset.per_sample = 0;
+    reset.static_state.state.depth_write = 1;
+    reset.static_state.state.depth_compare = VK_COMPARE_OP_ALWAYS;
+    reset.static_state.state.blend_enable = 0;
+    reset.static_state.state.write_mask = 0;
+    stencil(reset, true, VK_COMPARE_OP_EQUAL, VK_STENCIL_OP_ZERO);
+    out.push_back(reset);
+    Record again = reset; // (the passes again, with the decal's own depth)
+    again.role = r.role % t.decal_programs;
+    again.per_sample = r.per_sample;
+    again.static_state.state.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    again.static_state.state.stencil_test = 0;
+    out.push_back(again);
+    return out;
+}
+
 // (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, and with MSAA
 // those of the runs with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
 // build's layout (Granite's state changed: tools/pipeline_seed.py makes it again).
@@ -716,6 +754,11 @@ std::vector<Record> seed_for(uint32_t samples) {
         }
         if (keys.insert(record_key(r)).second) {
             out.push_back(r);
+        }
+        for (const Record &d : decal_states(r, t)) {
+            if (keys.insert(record_key(d)).second) {
+                out.push_back(d);
+            }
         }
     }
     return out;

@@ -3896,6 +3896,14 @@ private:
                      : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         flags |= exact_z_ ? F_EXACT_Z : 0;
+        // (exact Z: a decal that writes Z keeps its own fine part where it won, settle_decal_depth, by the stencil's
+        // decal_won bit; DATE by the stencil holds the stencil itself, and such a decal keeps the top fine part)
+        VkRect2D settle_rect = {};
+        bool settle = settle_on_ && stencil_on_ && (flags & F_DECAL) && zwrite && !date_stencil;
+        if (settle) {
+            settle_rect = drawn_rect(s.scissor, box, *colour, placed);
+            settle = settle_rect.extent.width != 0 && settle_rect.extent.height != 0;
+        }
         push.flags = flags;
         push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
         push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
@@ -3966,7 +3974,7 @@ private:
                 batch_triangles += r.count;
             }
         }
-        bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !b.shader_blend && !texels &&
+        bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !settle && !b.shader_blend && !texels &&
                       !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
                       (merged     ? runs_.merged_used + batch_triangles * uint32_t(pass_count) <= runs_.merged_capacity
                        : b.native ? native_runs_ok_
@@ -4074,6 +4082,11 @@ private:
         }
         counts_msaa_.cutout_batches += per_sample ? 1 : 0;
         counts_.walk_clut_draws += walk_clut ? 1 : 0;
+        if (settle) {
+            VkClearValue zero = {};
+            c.clear_quad(0, {settle_rect, 0, 1}, zero, VK_IMAGE_ASPECT_STENCIL_BIT);
+            counts_.decals_settled++;
+        }
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -4117,6 +4130,9 @@ private:
             }
             c.set_program(program);
             c.set_depth_test(zte, pass.z);
+            if (settle) {
+                mark_decal_won(c, pass.z);
+            }
             if (date_stencil) {
                 draw_where_date_passes(c, pass.alpha, bits(s.fba, 0, 1) != 0, bits(s.test, 15, 1) != 0);
             }
@@ -4151,10 +4167,81 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
+        if (settle) {
+            c.set_stencil_test(false);
+        }
         if (decal_losses_ && zte && (flags & F_DECAL)) {
             draw_decal_losses(c, b, push, passes, pass_count, ztst, per_sample, v);
         }
+        if (settle) {
+            settle_decal_depth(c, b, push, passes, pass_count, per_sample, v, vp);
+        }
         drawn_over(b, *colour, ms, box, zte && zwrite);
+    }
+
+    // ---- A decal's depth where it won (exact Z) ----
+    // A decal (is_decal) is tested with the top fine part of its whole Z (pcr_prim.h's pcr_exact_depth), so that it wins
+    // against the surface of its whole Z under it as on the GS. Written as its depth, that top part made every later draw
+    // of the same whole Z lose to it, where the GS lets the later draw win: a rock drawn over a see-through mesh on its
+    // own plane (map 063) was not drawn, and the sky showed through. So the decal's passes that write Z also set the
+    // stencil's decal_won bit where they pass (the stencil cleared over the batch's rectangle before), and after them
+    // settle_decal_depth draws the batch twice more with no colour: where the bit is set, the depth reset to the
+    // farthest and the bit cleared (pcr_depth_reset.frag: the stencil tested before it, so that only those pixels are
+    // shaded, by a shader that does nothing); then each pass that wrote Z again with the decal's own fine part, GEQUAL,
+    // so that each of those pixels ends with the nearest of its fragments' own depth (the fragment that won has the
+    // largest whole Z of those there; and a fragment that lost has its own depth below the Z it lost to, so it changes
+    // nothing). The second draw discards what the first discarded (the same shader and flags, without PCR_F_DECAL), so a
+    // pixel reset is a pixel written again. (Measured at 063 with the owner's settings, RX 9070 XT: 4.28 ms of GPU a
+    // picture against 3.99 without. Slower ways: the stencil kept clear by the depth surfaces' clears instead of a clear
+    // a decal, 4.70; the second draw only where the bit is set, 4.75: the stencil's test in a draw that writes its own
+    // depth costs more there than it saves)
+    static constexpr uint8_t decal_won = 0x2; // (bit 0 is DATE's: set_up_date)
+
+    // A decal's pass: decal_won set where it passes, if it writes Z
+    static void mark_decal_won(CommandBuffer &c, bool writes_z) {
+        c.set_stencil_test(writes_z);
+        c.set_stencil_ops(VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(decal_won, decal_won, decal_won);
+    }
+
+    template <typename Passes>
+    void settle_decal_depth(CommandBuffer &c, const Batch &b, PrimPush push, const Passes &passes, int pass_count,
+                            bool per_sample, int v, const VkViewport &vp) {
+        uint32_t flags = push.flags & ~((3u << F_PASS_SHIFT) | F_DECAL);
+        push.trace_xy = no_trace;
+        c.set_blend_enable(false);
+        c.set_color_write_mask(0);
+        auto draw = [&] {
+            c.push_constants(&push, 0, sizeof(push));
+            if (b.native) {
+                draw_native_runs(c, b);
+                return;
+            }
+            set_vertex_attribs(c);
+            c.draw(uint32_t(b.vertices.size()));
+        };
+        // (every fragment, no alpha test and no DATE: each pixel the bit is set at is reached; the depth the viewport's)
+        c.set_program(depth_reset_programs_[v]);
+        VkViewport farthest = vp;
+        farthest.minDepth = farthest.maxDepth = 0.0f;
+        c.set_viewport(farthest);
+        c.set_depth_test(true, true);
+        c.set_depth_compare(VK_COMPARE_OP_ALWAYS);
+        c.set_stencil_test(true);
+        c.set_stencil_ops(VK_COMPARE_OP_EQUAL, VK_STENCIL_OP_ZERO, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(decal_won, decal_won, decal_won);
+        draw();
+        c.set_stencil_test(false);
+        c.set_viewport(vp);
+        c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
+        c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL); // (is_decal's ZTST)
+        for (int i = 0; i < pass_count; i++) {
+            if (!passes[i].z) {
+                continue;
+            }
+            push.flags = flags | passes[i].mode << F_PASS_SHIFT;
+            draw();
+        }
     }
 
     // (developers' decal losses) The decal batch b drawn again where it lost its depth test by less than
@@ -4175,9 +4262,9 @@ private:
             if (!passes[i].rgb) {
                 continue;
             }
-            for (uint32_t far : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
-                push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far;
-                c.set_blend_op(far ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+            for (uint32_t far_side : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
+                push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far_side;
+                c.set_blend_op(far_side ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
                 c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
                 c.push_constants(&push, 0, sizeof(push));
                 c.set_depth_test(true, false);
@@ -4626,7 +4713,9 @@ private:
         Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
         Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
         // (each vertex shader with the four fragment shaders: draw_batch's choice)
+        Shader *resetfs = device_.request_shader(pcr_spv_pcr_depth_reset_frag, sizeof(pcr_spv_pcr_depth_reset_frag), &frag);
         auto programs_for = [&](int v, Shader *vertex) {
+            depth_reset_programs_[v] = device_.request_program(vertex, resetfs);
             programs_[v] = device_.request_program(vertex, fs);
             sample_programs_[v] = device_.request_program(vertex, sfs);
             early_programs_[v] = device_.request_program(vertex, efs);
@@ -4711,7 +4800,7 @@ private:
         Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
         probe_ms_program_ = device_.request_program(pmcs);
         // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        WarmProgram warmed[21];
+        WarmProgram warmed[26];
         for (int v = 0; v < 5; v++) {
             warmed[v] = {programs_[v], sample_programs_[v]};
             warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
@@ -4720,6 +4809,7 @@ private:
         for (int v = 0; v < 5; v++) {
             warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
             warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
+            warmed[21 + v] = {depth_reset_programs_[v], nullptr};
         }
         WarmDevice traits;
         traits.depth_format = depth_format_;
@@ -4729,7 +4819,12 @@ private:
             traits.attribs[i] = {0, vertex_inputs[i].format, vertex_inputs[i].offset};
         }
         traits.vertex_stride = sizeof(Vertex);
-        warm_watch(device_, warmed, 21, expand_program_, traits);
+        if (settle_on_ && stencil_on_) {
+            traits.decal_roles = 10; // (programs_ and early_programs_: a decal's passes, draw_batch)
+            traits.decal_programs = 5;
+            traits.depth_reset_first = 21;
+        }
+        warm_watch(device_, warmed, 26, expand_program_, traits);
     }
 
     Device &device_;
@@ -4740,6 +4835,8 @@ private:
     std::array<Program *, 5> programs_{}, sample_programs_{};
     // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
     std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
+    // ... and the one that resets a decal's pixels to the farthest depth (settle_decal_depth)
+    std::array<Program *, 5> depth_reset_programs_{};
     // ... and each of them reading a draw's fields from the picture's records (PCR_RECORDS): a kept walk's runs
     std::array<Program *, 5> run_programs_{}, run_sample_programs_{}, run_early_programs_{}, run_early_sample_programs_{};
     // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
@@ -4771,6 +4868,10 @@ private:
     const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
                           device_.get_device_features().enabled_features.shaderInt64 &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0);
+    // (exact Z: decals given back their own depth where they won, settle_decal_depth. Developers' KF4_PC_DECAL_SETTLE=0:
+    // not, the top fine part written, to compare)
+    const bool settle_on_ =
+        exact_z_ && !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
     // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
     // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
     const std::unique_ptr<PlanePass> planes_ =
@@ -4906,7 +5007,7 @@ public:
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
                 "from uploads, %llu with images used again; %llu uploads into surfaces, %llu copies between them; %llu "
                 "textures' copies of surfaces in images used again; %llu Z buffers cleared by another width's clear; "
-                "%llu clears drawn as rectangles cleared\n",
+                "%llu clears drawn as rectangles cleared; %llu decals given back their own depth where they won\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
@@ -4915,7 +5016,7 @@ public:
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.surface_images_reused,
                 (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.copies_between_surfaces,
                 (unsigned long long)c.texture_copies_reused, (unsigned long long)counts_depth_aliases_cleared_,
-                (unsigned long long)counts_clears_);
+                (unsigned long long)counts_clears_, (unsigned long long)c.decals_settled);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
                 "by the GS's read: %llu (a region mode), %llu (decoded in part); kept walks' textured batches: %llu, %llu "

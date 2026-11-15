@@ -376,6 +376,22 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
   Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between
   (`PCR_PLANE_MOST`), or drawn from the eye's space (`whole_triangle.h`), keeps the interpolated Z.
+- **The fine part and decals (2026-11-15).** Below the whole Z the depth keeps up to 8 bits of the plane's fraction
+  (`plane_z.h`'s `pz_fine_bits`), so that two surfaces a fraction of a Z apart, which the GS rounds to one Z far from
+  the eye, are drawn in their order (map 000's rope ladder: the PS2 shows the strips fighting too). A decal
+  (`is_decal`: blended, GEQUAL, its blend showing what is under it) is tested with the top fine part of its whole Z, so
+  that it ties with the surface under it as on the GS. Written as its depth, that top part made a later draw of the same
+  whole Z lose to it where the GS lets the later draw win: at map 063 a see-through mesh (some of its vertices' alpha
+  below 0x80, so a decal) and the rock drawn after it on the same plane, and the sky showed through a hole in the rock
+  (the owner's F8 of 2026-11-15). Now a decal's passes that write Z mark the pixels they win in the stencil's
+  `decal_won` bit, and `settle_decal_depth` then draws the batch twice more with no colour: the depth reset to the
+  farthest where the bit is set (and the bit cleared), then each of those passes again with the decal's own fine part,
+  GEQUAL, so that the pixel ends with the depth of the fragment that won. Needs the stencil (`stencil_on_`); a decal
+  with DATE by the stencil keeps the top part. Such a batch is not drawn in a kept walk's run. `KF4_PC_DECAL_SETTLE=0`
+  writes the top part, to compare; the stats line counts the decals settled. The seed's pipelines that test Z GEQUAL
+  are made before play with the decal's states too (`pcr_pipelines.cpp`'s `decal_states`). Cost: at 063 (about 40% of
+  the batches decals) 4.28 ms of GPU a picture against 3.99 at the owner's settings; the whole-game tour (760 views
+  at 1x) changed 3 views, each nearer paraLLEl-GS, none further.
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
