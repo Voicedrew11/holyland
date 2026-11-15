@@ -3663,7 +3663,11 @@ private:
         if (c == 2) {
             return bits(s.alpha, 32, 8) >= 0x80;
         }
-        return c == 0 && alpha_range(b).lo >= 0x80;
+        // (a native batch's vertices are the GPU's: their alpha is known only where its program leaves the mesh's and
+        // the mesh's is 0x80 throughout, native_alpha_is_one; alpha_range takes it as 0x80. Taken as covering, the
+        // see-through rock shading over map 000's floors drew with its fine part and lost to the floor in patches)
+        bool vertices_known = !b.native || (b.program == NativeProgram::vu1_000 && b.native_alpha_is_one);
+        return c == 0 && vertices_known && alpha_range(b).lo >= 0x80;
     }
 
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
