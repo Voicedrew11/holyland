@@ -730,6 +730,20 @@ public:
         clut_serial_++;
     }
 
+    // (Intake::take_frame) The uploads since the last vblank are the frame's: a frame is taken at the vblank after its
+    // packets, and with the mouse turned its first picture between comes before that vblank's own (frame_interp.c's
+    // phase 0), so before vblank() below made the frame's uploads the ones asked for again. That picture's uploads asked
+    // again then found the frame before's: the same place, another texture's texels where the two frames' uploads
+    // differ (the HUD's and the torches' textures go up again every frame, into places they share), a rectangle of
+    // static for one picture at any fixed rate over 30 (2026-11-14, the owner's playtest).
+    void frame_taken() {
+        flush_batch();
+        if (!uploads_now_.empty()) {
+            uploads_frame_.swap(uploads_now_);
+            uploads_now_.clear();
+        }
+    }
+
     void vblank() {
         flush_batch();
         if (!uploads_now_.empty()) {
@@ -5059,6 +5073,9 @@ void Canvas::submit() {
 }
 void Canvas::vblank() {
     impl_->vblank();
+}
+void Canvas::frame_taken() {
+    impl_->frame_taken();
 }
 CanvasCounts Canvas::counts() const {
     return impl_->counts();
