@@ -44,7 +44,8 @@ void main() {
     uvec4 tri = tris[triangle];
     uint which = uint(gl_VertexIndex) % 3u;
     uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
-    uint kick = tri.w;
+    uint kick = tri.w & 0x7FFFFFFFu;
+    bool left_out = (tri.w & 0x80000000u) != 0u; // (VU1 left it out of the frame: drawn in pictures between only)
     d = draws[instance & 0x3FFFFFFFu];
     bool gouraud = ((instance >> 30) & 1u) != 0u;
     ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
@@ -58,8 +59,27 @@ void main() {
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
     uint zref = which == 0u ? z : gs_z(vu_place(tri.x));
     int xi = p.x, yi = p.y;
-    bool gone = false;
+    bool gone = left_out;
     if ((d.info.w & ND_C_MOVING) != 0) {
+        // left out of the frame, or with a corner behind the picture's eye: drawn whole (whole_triangle.h)
+        Whole w0 = whole_place(tri.x), w1 = whole_place(tri.y), w2 = whole_place(tri.z);
+        if (left_out || whole_behind(w0, w1, w2)) {
+            Whole c = which == 0u ? w0 : which == 1u ? w1 : w2;
+            v_rect = uvec2(PCR_NO_RECT);
+            if (whole_outside(w0, w1, w2)) {
+                whole_not_drawn();
+                v_color = vec4(0.0);
+                v_stq = vec3(0.0);
+                v_fog = 0.0;
+                return;
+            }
+            whole_position(c, w0, w1, w2, ivec2(d.info.y, d.info.z), false);
+            float qn = 1.0 / (c.w * float(mesh.q[at * 4u].w)); // (VU1's q: 1 / c.w, c.w the depth times the position's w)
+            v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? at : kick));
+            v_stq = st * qn;
+            v_fog = d.fog.z + d.fog.w * qn; // (the fragment stage clamps it to 0..255)
+            return;
+        }
         // a picture between's: moved, S, T and Q by the change of depth; dropped with its kick or one of the two kicks
         // before it, the same for its three corners
         Moved m = moved(at, p);
@@ -74,7 +94,9 @@ void main() {
         }
     }
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.w & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - d.info.y), float(g.y - d.info.z)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)

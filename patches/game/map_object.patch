@@ -144,7 +144,7 @@ index 9a588f29bf8faf3a2c193f5c5fa8ebf9c4ad7203..7c9aa87feec6b946fb176acd99967e9f
  
  /* Start handler of the light kind: makes a light of the colour in its source at
 diff --git a/src/game/map_object/map_object.c b/src/game/map_object/map_object.c
-index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571609b8355 100644
+index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..bf59aa96a1d1beef91d1180597fa47c61f348071 100644
 --- a/src/game/map_object/map_object.c
 +++ b/src/game/map_object/map_object.c
 @@ -9,8 +9,8 @@
@@ -217,7 +217,16 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
          if (in_use) {
              MapObject_Activate(object);
          } else {
-@@ -455,7 +470,8 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -440,6 +455,8 @@ void MapObject_Signal(MapObject *object, int signal) {
+ #define RECORD_FLAGS(object) (((MapDrawRecord *)(object)->map_record)->flags)
+ #define RECORD_MAP(object) ((u8)(((MapRecord *)(object)->map_record)->record_flags >> 27) & 1)
+ 
++int DrawDistance_ObjectBehind(const MapObject *object); /* PC (game/draw_distance.c) */
++
+ /* Draws the map objects of both maps (or of one, when only_one is set): first
+    the jointed ones, then the plain ones. While the player wears item 0x9D the
+    objects that allow it are lit with their light blocks blended towards
+@@ -455,7 +472,8 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
      MapObject *object;
  
      glow_item_was_worn = glow_item_worn;
@@ -227,7 +236,16 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
      if (glow_item_was_worn != glow_item_worn) {
          glow_frame = 0;
      } else if (glow_item_was_worn != 0) {
-@@ -535,19 +551,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -518,7 +536,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             continue;
+         }
+         for (object = jointed_draw_list[map]; object != NULL; object = object->next_in_draw_list) {
+-            if (!(object->state_flags & MAP_OBJECT_IN_VIEW)) {
++            if (!(object->state_flags & MAP_OBJECT_IN_VIEW) && !DrawDistance_ObjectBehind(object)) { /* PC */
+                 continue;
+             }
+             if (mode != 0 && !(RECORD_FLAGS(object) & 0x20)) {
+@@ -535,19 +553,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
@@ -253,7 +271,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
                  }
              }
              if ((s8)object->source->spawn_flags.bytes[4] != -1) {
-@@ -564,7 +580,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -564,7 +582,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              } else {
                  LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
              }
@@ -262,7 +280,16 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
                  DrawList_Add(object->model, 0, mode);
              } else {
                  ModelTexture_SendForModel(object->model);
-@@ -594,19 +610,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -577,7 +595,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+             continue;
+         }
+         for (object = plain_draw_list[map]; object != NULL; object = object->next_in_draw_list) {
+-            if (!(object->state_flags & MAP_OBJECT_IN_VIEW)) {
++            if (!(object->state_flags & MAP_OBJECT_IN_VIEW) && !DrawDistance_ObjectBehind(object)) { /* PC */
+                 continue;
+             }
+             if (mode != 0 && !(RECORD_FLAGS(object) & 0x20)) {
+@@ -594,19 +612,19 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              }
              if ((MAP_OBJECT_DEF_WORD(object) & 0x4000) && glow_item_worn != 0) {
                  if ((s8)object->source->spawn_flags.bytes[5] != -1) {
@@ -288,7 +315,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
                  }
              }
              if ((s8)object->source->spawn_flags.bytes[4] == -1) {
-@@ -625,7 +641,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
+@@ -625,7 +643,7 @@ void MapObject_DrawAll(int mode, int only_one, int which) {
              } else {
                  LinkedPoint_FindHitsForOwner(object->model, ((MapRecordInfo *)object->map_record)->flag_block_bit);
              }
@@ -297,7 +324,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
                  DrawList_Add(object->model, 0, mode);
              } else {
                  ModelTexture_SendForModel(object->model);
-@@ -719,6 +735,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
+@@ -719,6 +737,7 @@ s16 MapObject_StartAnim(MapObject *object, int anim) {
      channel->frame = 0;
      channel->frame_fixed = 0;
      MapObject_StepAnim(object);
@@ -305,7 +332,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
  }
  
  /* Advances a map object's animation one frame, starting the sounds tied to the
-@@ -740,8 +757,9 @@ int MapObject_StepAnim(MapObject *object) {
+@@ -740,8 +759,9 @@ int MapObject_StepAnim(MapObject *object) {
                      Sound_PlayCommonAt(range, anim->sound, &model->position);
                      break;
                  case 1:
@@ -317,7 +344,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
                      break;
                  case 2:
                      Sound_StartTaggedAt((u8)next_sound_channel + 0x20, anim->sound, object->definition->sound_falloff_mode, range, (Vector4Arg *)&model->position);
-@@ -787,7 +805,7 @@ void MapObject_MarkEmptied(MapObject *object) {
+@@ -787,7 +807,7 @@ void MapObject_MarkEmptied(MapObject *object) {
      u8 kind = object->definition->kind;
  
      if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
@@ -326,7 +353,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
          object->state_flags |= MAP_OBJECT_EMPTIED;
      }
  }
-@@ -800,7 +818,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
+@@ -800,7 +820,7 @@ void MapObject_MarkEmptiedById(int map, int object_id) {
      if (object != NULL) {
          kind = object->definition->kind;
          if ((kind == 3 || kind == MAP_OBJECT_KIND_CHEST || kind == MAP_OBJECT_KIND_CONTAINER) &&
@@ -335,7 +362,7 @@ index 64221aae8f399eaa16b987a25b3ac51dd54b45a6..117a70109bfa12865d1d3ce0ddee3571
              object->state_flags |= MAP_OBJECT_EMPTIED;
          }
      }
-@@ -862,11 +880,11 @@ void MapObject_DrawModel(int *model) {
+@@ -862,11 +882,11 @@ void MapObject_DrawModel(int *model) {
  void MapObject_DrawModelWithAlpha(ModelInstance *model) {
      Packet_BeginGsRegisters();
      if (model->alpha < 128.0f) {

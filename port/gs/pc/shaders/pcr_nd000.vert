@@ -6,7 +6,8 @@
 // off, the surface's place added), the GS's integer Z, RGBA, S T Q and fog. A triangle VU1's clipping would leave out
 // (the ADC of its kick or of the two kicks before it) is not drawn. In a picture between (ND_C_MOVING) each corner is
 // moved to the picture's time (moved()), S, T and Q by its change of depth, and the triangle dropped with its kick or one
-// of the two before it in the batch.
+// of the two before it in the batch; one VU1 left out, or with a corner behind the picture's eye, is drawn whole from
+// its mesh and cut to the screen by the GPU (a fast turn: draw_whole).
 #define PCR_ND
 #include "pcr_common.h"
 
@@ -38,6 +39,25 @@ layout(set = 0, binding = 4, std430) readonly buffer Draws {
     Draw draws[];
 };
 #include "vu1_000_maths.h"
+
+// (a picture between) A corner c of a triangle drawn whole (whole_triangle.h; w0..w2 its three corners). S T Q and the
+// fog by its new Q; the colour its own, or with a corner behind the eye the kick's for all three (the GS's colour is
+// affine on the screen, which a corner behind the eye has no place on)
+void draw_whole(Whole c, Whole w0, Whole w1, Whole w2, vec3 st, bool gouraud, uint at, uint kick) {
+    v_rect = uvec2(PCR_NO_RECT);
+    if (whole_outside(w0, w1, w2)) {
+        whole_not_drawn();
+        v_color = vec4(0.0);
+        v_stq = vec3(0.0);
+        v_fog = 0.0;
+        return;
+    }
+    whole_position(c, w0, w1, w2, ivec2(d.info.y, d.info.z), (d.info.w & ND_C_FAR) != 0);
+    float q = 1.0 / c.w;
+    v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? at : kick));
+    v_stq = st * q;
+    v_fog = d.fog.z + d.fog.w * q; // (the fragment stage clamps it to 0..255)
+}
 
 void main() {
     uint triangle, instance;
@@ -77,6 +97,16 @@ void main() {
     // (exact Z, pcr_common.h: a whole Z the triangle's corners share, its first corner's in the frame)
     uint zref = which == 0u ? z : gs_z(vu_place(tri.x));
     if ((d.info.w & ND_C_MOVING) != 0) {
+        // A triangle VU1 left out of the frame (past the guard band, or a corner behind the frame's eye), or one with
+        // a corner behind the picture's eye: drawn whole from its mesh, the GPU cutting it to the screen (whole_place).
+        // In a fast turn of the mouse the picture is turned far past the frame, and these are what it turns toward:
+        // left out, the world there was missing until the game's next frame. The near cut's pieces of such a triangle
+        // are not drawn in the pictures (FrameInterp_MarkFrameOnly), so each is drawn once.
+        Whole w0 = whole_place(tri.x), w1 = whole_place(tri.y), w2 = whole_place(tri.z);
+        if (gone || whole_behind(w0, w1, w2)) {
+            draw_whole(which == 0u ? w0 : which == 1u ? w1 : w2, w0, w1, w2, st, gouraud, at, kick);
+            return;
+        }
         Moved m = moved(at, p);
         xi = m.x;
         yi = m.y;
@@ -92,7 +122,9 @@ void main() {
     zfrac = (d.info.w & ND_C_FAR) != 0 ? 0.0 : zfrac;
     zref = (d.info.w & ND_C_FAR) != 0 ? 0u : zref;
     uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
-    vec2 xy = vec2(float(int(uint(xi) & 0xFFFFu) - d.info.y), float(int(uint(yi) & 0xFFFFu) - d.info.z)) / 16.0;
+    // (in a picture between not wrapped to the GS's 16 bits: a place past the guard band is kept, past_band.h)
+    ivec2 g = (d.info.w & ND_C_MOVING) != 0 ? ivec2(xi, yi) : ivec2(int(uint(xi) & 0xFFFFu), int(uint(yi) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - d.info.y), float(g.y - d.info.z)) / 16.0;
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)

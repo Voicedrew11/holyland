@@ -15,6 +15,7 @@
 #define IM_SCALE_ST 0x80u
 #define IM_XYZF 0x100u
 #define IM_SCREEN_ST 0x200u
+#define IM_FRAME_ONLY 0x400u
 #define IM_XY 0x4u
 #define IM_RGBA 0x8u
 #define IM_ST 0x10u
@@ -38,11 +39,13 @@ bool run_bit(uint r) {
     return r < pic.counts.y && (pic.run_bits[r >> 5] & (1u << (r & 31u))) != 0u;
 }
 
+#include "past_band.h"
+
 struct Moved {
     int x, y;  // 12.4
     uint z;
     bool proc; // moved as a vertex of the world or a model (it may be dropped, and its ADC then covers the next two)
-    bool drop; // behind the camera, past the guard band or the far plane: its triangles are not drawn
+    bool drop; // behind the camera or past the far plane: its triangles are not drawn (past the guard band: kept)
     float f;   // its depth / the new one: its own S and T scaled by it
     float qn;  // its new Q, 1 / w
     float zfrac; // the moved Z less z: about -0.5 to 0.5, its fraction (pcr_common.h's exact Z rounds a pixel's Z once)
@@ -78,6 +81,10 @@ Moved moved(uint k) {
         return r; // (before the eye or the arm, its model not moving: as it is)
     }
     r.proc = true;
+    if ((w & IM_FRAME_ONLY) != 0u) {
+        r.drop = true; // (the near cut's pieces of a triangle the picture draws whole: pcr_nd000.vert)
+        return r;
+    }
     // Its place in the picture's view, m = v + dm, from v its place in the frame's (whose X, Y and Z the
     // kick has exactly): so that the floats' rounding is that of the move, and no move is no change
     vec3 v = vec3(MF(k, 4u), MF(k, 5u), MF(k, 6u));
@@ -109,12 +116,14 @@ Moved moved(uint k) {
     // Z = cz + (z - cz) depth / m.z (k / w, k the vertex's own), as the kick's Z less (z - cz) dm.z / m.z
     float dz = MF(k, 14u) * dm.z / mz;
     float nz = float(r.z) - dz;
-    if (!(abs(nx - 2048.0) <= 2047.0 && abs(ny - 2048.0) <= 2047.0 && nz >= 0.0)) {
+    // (past the guard band: kept, past_band.h)
+    vec2 n = vec2(nx, ny);
+    if (!(nz >= 0.0) || !past_band_place(n)) {
         r.drop = true;
         return r;
     }
-    r.x = int(floor(nx * 16.0 + 0.5));
-    r.y = int(floor(ny * 16.0 + 0.5));
+    r.x = int(floor(n.x * 16.0 + 0.5));
+    r.y = int(floor(n.y * 16.0 + 0.5));
     nz = floor(nz + 0.5);
     uint z = r.z;
     r.z = (w & IM_XYZF) != 0u ? uint(min(nz, 16777215.0)) : nz >= 4294967040.0 ? 0xFFFFFFFFu : uint(nz);

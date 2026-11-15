@@ -32,8 +32,8 @@
      (mode 2) and the arm move only as they move ("What moves by itself"); the reflection's view
      (projection 1, mode 1) by the camera too, by its own projection; the 2D by its pairs ("The 2D").
    - The camera t of the way: the rotation by quaternion slerp, the position along the line. A
-     cut (a turn of more than INTERP_MAX_TURN, a move of more than INTERP_MAX_MOVE) is not
-     interpolated: the vblank shows the frame before, as on the PS2.
+     cut (a turn of more than INTERP_MAX_TURN besides the mouse's, a move of more than INTERP_MAX_MOVE:
+     port/include/port/interp_camera.h) is not interpolated: the vblank shows the frame before, as on the PS2.
    - Nothing of the replay is left behind. What it draws into the frame goes into the shown buffer,
      which the next frame's clear wipes (FRAME, and TEX0 and BITBLTBUF where they read the frame, point
      there instead). Everything else it draws (the scrolling textures' 128x128 targets, the
@@ -65,13 +65,12 @@
 
 #include "port/adaptive_sync.h"
 #include "port/host.h"
+#include "port/interp_camera.h"
 #include "port/mouse_lead.h"
 #include "port/platform.h"
 #include "port/render.h"
 #include "../gs/shared/gsn.h"
 
-#define INTERP_MAX_TURN 0.8   /* radians between two frames: more is a cut */
-#define INTERP_MAX_MOVE 400.0 /* world units between two frames: more is a cut */
 
 #define GS_PRIM 0x00
 #define GS_XYZF2 0x04
@@ -266,11 +265,7 @@ void port_interp_keep(int path, const void *data, size_t bytes) {
 }
 
 /* ---- Cameras ------------------------------------------------------------------------------------ */
-typedef struct {
-    double r[3][3]; /* world to view: rotation (row, column) */
-    double t[3];    /* and translation */
-    double eye[3];  /* the camera's place in the world */
-} Camera;
+typedef InterpCamera Camera; /* (port/include/port/interp_camera.h) */
 
 typedef struct {
     double sx, sy, cx, cy, cz, az; /* view to screen: X = sx x / w + cx, Y = sy y / w + cy, Z = cz + az / w */
@@ -291,102 +286,6 @@ static void camera_from_fields(Camera *c, const float *view) {
     for (col = 0; col < 3; col++) {
         c->eye[col] = -(c->r[0][col] * c->t[0] + c->r[1][col] * c->t[1] + c->r[2][col] * c->t[2]);
     }
-}
-
-static void quat_from(const double m[3][3], double q[4]) {
-    double tr = m[0][0] + m[1][1] + m[2][2];
-
-    if (tr > 0) {
-        double s = sqrt(tr + 1.0) * 2;
-        q[3] = 0.25 * s;
-        q[0] = (m[2][1] - m[1][2]) / s;
-        q[1] = (m[0][2] - m[2][0]) / s;
-        q[2] = (m[1][0] - m[0][1]) / s;
-    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
-        double s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2;
-        q[3] = (m[2][1] - m[1][2]) / s;
-        q[0] = 0.25 * s;
-        q[1] = (m[0][1] + m[1][0]) / s;
-        q[2] = (m[0][2] + m[2][0]) / s;
-    } else if (m[1][1] > m[2][2]) {
-        double s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2;
-        q[3] = (m[0][2] - m[2][0]) / s;
-        q[0] = (m[0][1] + m[1][0]) / s;
-        q[1] = 0.25 * s;
-        q[2] = (m[1][2] + m[2][1]) / s;
-    } else {
-        double s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2;
-        q[3] = (m[1][0] - m[0][1]) / s;
-        q[0] = (m[0][2] + m[2][0]) / s;
-        q[1] = (m[1][2] + m[2][1]) / s;
-        q[2] = 0.25 * s;
-    }
-}
-
-static void matrix_from(const double q[4], double m[3][3]) {
-    double x = q[0], y = q[1], z = q[2], w = q[3];
-
-    m[0][0] = 1 - 2 * (y * y + z * z);
-    m[0][1] = 2 * (x * y - z * w);
-    m[0][2] = 2 * (x * z + y * w);
-    m[1][0] = 2 * (x * y + z * w);
-    m[1][1] = 1 - 2 * (x * x + z * z);
-    m[1][2] = 2 * (y * z - x * w);
-    m[2][0] = 2 * (x * z - y * w);
-    m[2][1] = 2 * (y * z + x * w);
-    m[2][2] = 1 - 2 * (x * x + y * y);
-}
-
-/* The camera a fraction f of the way from a to b; 0 when the two are a cut apart */
-static int camera_between(const Camera *a, const Camera *b, double f, Camera *out) {
-    double qa[4], qb[4], q[4], dot = 0, angle, move = 0;
-    int i, row;
-
-    quat_from(a->r, qa);
-    quat_from(b->r, qb);
-    for (i = 0; i < 4; i++) {
-        dot += qa[i] * qb[i];
-    }
-    if (dot < 0) {
-        for (i = 0; i < 4; i++) {
-            qb[i] = -qb[i];
-        }
-        dot = -dot;
-    }
-    dot = dot > 1 ? 1 : dot;
-    angle = acos(dot); /* half the turn */
-    for (i = 0; i < 3; i++) {
-        move += (b->eye[i] - a->eye[i]) * (b->eye[i] - a->eye[i]);
-    }
-    if (2 * angle > INTERP_MAX_TURN || move > INTERP_MAX_MOVE * INTERP_MAX_MOVE) {
-        return 0;
-    }
-    if (angle < 1e-6) {
-        for (i = 0; i < 4; i++) {
-            q[i] = qa[i] + (qb[i] - qa[i]) * f;
-        }
-    } else {
-        double wa = sin((1 - f) * angle) / sin(angle), wb = sin(f * angle) / sin(angle);
-
-        for (i = 0; i < 4; i++) {
-            q[i] = qa[i] * wa + qb[i] * wb;
-        }
-    }
-    {
-        double n = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-
-        for (i = 0; i < 4; i++) {
-            q[i] /= n;
-        }
-    }
-    matrix_from(q, out->r);
-    for (i = 0; i < 3; i++) {
-        out->eye[i] = a->eye[i] + (b->eye[i] - a->eye[i]) * f;
-    }
-    for (row = 0; row < 3; row++) {
-        out->t[row] = -(out->r[row][0] * out->eye[0] + out->r[row][1] * out->eye[1] + out->r[row][2] * out->eye[2]);
-    }
-    return 1;
 }
 
 /* view space of camera `from` to view space of camera `to`: rotation and translation */
@@ -1290,6 +1189,7 @@ typedef struct {
     int section;
     int world_seen;   /* a world mark has been seen */
     int sky;          /* the runs from here are the sky's (PORT_FRAME_INTERP_SKY) */
+    int frame_only;   /* the vertices from here are the frame's only (PORT_FRAME_INTERP_FRAME_ONLY) */
     Camera camera;    /* SCAN: the first world mark's camera */
     MouseTurn mouse_spent; /* SCAN: and the mouse turn the game had spent then (instant mouse look) */
     Screen screen;
@@ -1407,12 +1307,17 @@ static void mark(Walk *w, uint64_t value) {
         w->sky = bits != 0;
         return;
     }
+    if (index == PORT_FRAME_INTERP_FRAME_ONLY) {
+        w->frame_only = bits != 0;
+        return;
+    }
     if (index != PORT_FRAME_INTERP_HEADER) {
         return;
     }
     if (bits == PORT_FRAME_INTERP_END) {
         w->section = SECTION_NONE;
         w->sky = 0;
+        w->frame_only = 0;
         return;
     }
     if (bits == PORT_FRAME_INTERP_ARM) {
@@ -2418,7 +2323,7 @@ static void gpu_vertex(Walk *w, GifWalk *p, const uint8_t *q, int xyzf, int sect
     e->w[0] = GSN_IM_3D | GSN_IM_VIEW | (perspective_q(p) ? GSN_IM_SCALE_ST : 0) | (xyzf ? GSN_IM_XYZF : 0) |
               (section == SECTION_REFLECT ? GSN_IM_REFLECT : 0) |
               (section == SECTION_WORLD || section == SECTION_REFLECT ? GSN_IM_WORLD : 0) |
-              (section == SECTION_EYE ? GSN_IM_EYE : 0);
+              (section == SECTION_EYE ? GSN_IM_EYE : 0) | (w->frame_only ? GSN_IM_FRAME_ONLY : 0);
     e->w[1] = (uint32_t)w->run;
     e->w[4] = float_bits(v[0]);
     e->w[5] = float_bits(v[1]);
@@ -3156,12 +3061,8 @@ void port_interp_vsync(const uint64_t *privileged) {
         if (w.have_reflect && read_first(uploads_new, w.reflect_fbp)) {
             flat_last->restore = 1; /* (the reflection drawn from the camera between: as for the 2D) */
         }
-        {
-            Camera between;
-
-            pending.cut = pending.have_before && !camera_between(&pending.before, &w.camera, 0.5, &between);
-            stat_cuts += pending.cut;
-        }
+        pending.cut = pending.have_before && interp_cameras_cut(&pending.before, pending.mouse_before, &w.camera, w.mouse_spent);
+        stat_cuts += pending.cut;
     }
     last_camera = w.camera;
     last_mouse_spent = w.mouse_spent;
@@ -3593,9 +3494,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
     if (t < 0 || t >= 1) {
         return 0;
     }
-    if (!camera_between(&pending.before, &pending.scan.camera, t, &between)) {
-        return 0;
-    }
+    between = interp_camera_between(&pending.before, &pending.scan.camera, t);
     led = camera_lead(&between, t, (double)vblank + phase);
     hand = port_mouse_lead_hand((double)vblank + phase);
     if (t == 0 && !led && !hand_moved_since(hand)) {

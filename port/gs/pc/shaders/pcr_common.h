@@ -194,6 +194,21 @@ float pcr_depth(uint z, float zfrac, uint zref) {
     return float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
 }
 
+// pcr_depth for a corner given as Z times w (pcr_nd000.vert's whole triangles, vu1_000_maths.h's Whole): the depth times
+// w, for gl_Position.z; Z itself (zh / w) is affine on the screen, so v_zrel is right on the part of the triangle drawn
+// even where a corner is behind the eye
+float pcr_depth_h(float zh, float w, uint zref) {
+#ifdef PCR_STAGE_VERTEX
+    v_zref = zref;
+    v_zrel = zh / w - float(zref);
+#endif
+    float margin = float(pcr_loss_margin());
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
+        return (zh + margin * w) * pc.zscale + w * (4.0 / 16777216.0);
+    }
+    return (zh + margin * w) * pc.zscale;
+}
+
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)
 
 #define PCR_SRC_CT32 0u
@@ -217,4 +232,12 @@ vec2 gs_to_clip(vec2 xy) {
         return xy * pc.inv_size * 2.0 - 1.0;
     }
     return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+}
+
+// gs_to_clip for a place given times w (xy_h = xy w): Vulkan's clip x and y (its w is w)
+vec2 gs_to_clip_h(vec2 xy_h, float w) {
+    if ((pc.flags & PCR_F_MSAA) != 0u) {
+        return xy_h * pc.inv_size * 2.0 - w;
+    }
+    return (xy_h + w * (0.5 / vec2(pc.src_scale))) * pc.inv_size * 2.0 - w;
 }

@@ -40,6 +40,7 @@
    as in Verdite; losing the window's focus releases it. A small mouse in the corner shows the change.
    A pad script (--input) turns all of this off, so scripted runs stay the same. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "port/automap.h"
@@ -385,6 +386,39 @@ static void lead_waiting(void) {
     port_mouse_lead_waiting(waiting, reading_time());
 }
 
+/* KF4_DIAG_SPIN=RAD_S (developers): a steady turn of RAD_S radians a second added in play as the mouse's motion
+   would be, with any layout and with a pad script (--input), to test a fast spin of the mouse without one (the
+   pictures between's cuts, the world at the screen's edge: port/include/port/interp_camera.h, past_band.h). 0: off */
+static double diag_spin_rad_s(void) {
+    static int read;
+    static double rad_s;
+
+    if (!read) {
+        const char *e = getenv("KF4_DIAG_SPIN");
+
+        rad_s = e != NULL ? atof(e) : 0.0;
+        read = 1;
+    }
+    return rad_s;
+}
+
+/* (KF4_DIAG_SPIN) the spin's turn since the last call added to what is waiting, by the time the readings go by
+   (reading_time: as a mouse read then would have moved); 1 when it is on */
+static int diag_spin_add(void) {
+    static double last_v = -1;
+    double rad_s = diag_spin_rad_s(), now_v;
+
+    if (rad_s == 0.0) {
+        return 0;
+    }
+    now_v = reading_time();
+    if (last_v >= 0 && now_v > last_v && now_v - last_v < 8) {
+        pc.yaw += rad_s * (now_v - last_v) * (1001.0 / 60000.0);
+    }
+    last_v = now_v;
+    return 1;
+}
+
 /* ---- Layouts ---------------------------------------------------------------------------------- */
 static const char *const layout_names[CONTROLS_LAYOUTS] = {"ps2", "verdite"};
 
@@ -442,7 +476,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     double p;
 
     *yaw = *pitch = 0.0f;
-    if (!port_controls_verdite() || port_options.record_input != NULL) {
+    if ((!port_controls_verdite() && diag_spin_rad_s() == 0.0) || port_options.record_input != NULL) {
         MouseTurn none = {0, 0};
 
         port_mouse_lead_waiting(none, reading_time()); /* (no mouse look: nothing ahead) */
@@ -451,11 +485,12 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     pc.seen_look = 1;
     pc.look_vblank = port_vblank_count();
     pc.look_gameplay = gameplay;
-    if (!gameplay || !pc.captured) {
+    if (!gameplay || (!pc.captured && diag_spin_rad_s() == 0.0)) {
         pc.yaw = pc.pitch = 0.0;
         lead_waiting();
         return 0;
     }
+    diag_spin_add();
     y = held_turn(pc.yaw);
     p = held_turn(pc.pitch);
     pc.yaw = pc.pitch = 0.0;
@@ -855,6 +890,12 @@ void port_controls_sample_mouse(void) {
     double now;
     int dx = 0, dy = 0;
 
+    if (diag_spin_rad_s() != 0.0) {
+        if (mouse_lead && in_gameplay() && diag_spin_add()) {
+            lead_waiting();
+        }
+        return;
+    }
     if (pc.layout != CONTROLS_VERDITE || port_options.input != NULL || port_options.headless || !mouse_lead ||
         pc.blocked || !pc.captured || !in_gameplay()) {
         return;
@@ -1034,7 +1075,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (gameplay && pc.captured) {
         pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
         pc.pitch += (invert_y ? dy : -dy) * RADIANS_PER_PIXEL * sensitivity;
-    } else {
+    } else if (!gameplay || diag_spin_rad_s() == 0.0) {
         pc.yaw = pc.pitch = 0.0;
     }
     lead_waiting();

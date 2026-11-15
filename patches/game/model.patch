@@ -1415,19 +1415,34 @@ index 7b0dbb7560de4032f9a76cae8843975c56e184ba..f24e3165308d2b13c73d05100e430a24
              part->rotation_x += (vectors[key->rotation].x - part->rotation_x) / divisor;
              part->rotation_y += (vectors[key->rotation].y - part->rotation_y) / divisor;
 diff --git a/src/game/model/model_screen.c b/src/game/model/model_screen.c
-index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136dd41da825 100644
+index e7a0a153a5609bb86d4007ce9a267be54eedfed8..2bf33caf51917c37985d1fa55b3835e961aa389e 100644
 --- a/src/game/model/model_screen.c
 +++ b/src/game/model/model_screen.c
-@@ -1,4 +1,7 @@
+@@ -1,6 +1,10 @@
  #include "model/model.h"
 +#include <eekernel.h>
 +#include "libvu0.h"
 +#include "math/vu0.h"
  
- /* which sides of the screen a point is beyond */
+-/* which sides of the screen a point is beyond */
++/* which sides of the screen a point is beyond (bits 0-3); PC: and of the window ModelScreen_CutWindow gives (bits 4-7:
++   the screen, or wider for the pictures between, game/frame_interp.c) */
  #define CLIP_SIDES(point, sides)                                                                   \
-@@ -16,7 +19,7 @@
-     }
+     if ((point)->x < 0x6C00) {                                                                   \
+         (sides) |= 1;                                                                              \
+@@ -13,10 +17,17 @@
+     }                                                                                              \
+     if ((point)->y > 0x8E00) {                                                                   \
+         (sides) |= 8;                                                                              \
+-    }
++    }                                                                                              \
++    (sides) |= ((point)->x < cut_window[0]) << 4 | ((point)->x > cut_window[1]) << 5 |              \
++               ((point)->y < cut_window[2]) << 6 | ((point)->y > cut_window[3]) << 7
++/* PC: a triangle whose corners' sides are a, b and c is cut when, by the screen or by the window, it is not wholly
++   beyond one side and is beyond some side: the PS2's cuts, and with a wider window those of triangles wholly off the
++   screen, which draw nothing in the frame (so it is the PS2's) but are there for the pictures between to turn in */
++#define CUT_BY(a, b, c, shift) (!((((a) & (b) & (c)) >> (shift)) & 15) && ((((a) | (b) | (c)) >> (shift)) & 15))
++void ModelScreen_CutWindow(s32 window[4]); /* PC (game/frame_interp.c) */
  /* whether a point is too deep or outside the range the GS can draw */
  #define OUT_OF_RANGE(point) ((point)->z > 0xFFFF0 || (((point)->x | (point)->y) & 0xFFFF0000))
 -typedef u32 u_long128 __attribute__((mode(TI)));
@@ -1435,7 +1450,7 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
  /* copies a quadword and steps both pointers past it */
  #define COPY_QWORD(to, from)                                                                       \
      *(u_long128 *)(to) = *(u_long128 *)(from);                                                               \
-@@ -42,25 +45,17 @@ typedef u32 u_long128 __attribute__((mode(TI)));
+@@ -42,25 +53,17 @@ typedef u32 u_long128 __attribute__((mode(TI)));
      (to).colour[1] = (from)->colour[1];                                                             \
      (to).colour[2] = (from)->colour[2];                                                             \
      (to).colour[3] = (from)->colour[3]
@@ -1463,7 +1478,17 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
  
  /* Looks for the triangles of a model that the GS could not draw as they are (a corner out of its
     range) but that are partly on the screen, and queues each cut up into smaller ones. */
-@@ -87,7 +82,7 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+@@ -75,7 +78,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+     s32 i = 0;
+     s32 part_count = model->part_count;
+     ModelPart *part = model->parts;
++    s32 cut_window[4]; /* PC */
+ 
++    ModelScreen_CutWindow(cut_window);
+     for (; i < part_count; i++, part++) {
+         s32 j;
+         s32 count;
+@@ -87,7 +92,7 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
          Vu0_LoadMatrix(screen_matrix);
          j = 0;
          count = (s32)(MODEL_PART_WORD(part) >> 53);
@@ -1472,7 +1497,7 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
          for (; j < count; j++) {
              s32 vertex_count = block->vertex_count & 0x7FFF;
              ModelPartVertexWords *vertex = (ModelPartVertexWords *)block->vertices;
-@@ -115,7 +110,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+@@ -115,7 +120,9 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
                  point2[2] = vertex->z;
                  point2[3] = 1.0f;
                  vertex++;
@@ -1483,7 +1508,18 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
              }
              for (k = vertex_count % 3; --k != -1;) {
                  point0[0] = vertex->x;
-@@ -199,16 +196,14 @@ void ModelScreen_QueueCutTriangle(u32 *data, ModelPartVertexWords *vertex, int f
+@@ -147,8 +154,8 @@ void ModelScreen_CutClippedTriangles(ModelInstance *model) {
+                     outside |= 1;
+                 }
+                 if (vertex->cut_flag == 0 && outside != 0 && outside != 7) {
+-                    if (!(clip[0] & clip[1] & clip[2])) {
+-                        if (clip[0] | clip[1] | clip[2]) {
++                    if (CUT_BY(clip[0], clip[1], clip[2], 0) || CUT_BY(clip[0], clip[1], clip[2], 4)) { /* PC */
++                        {
+                             ModelScreen_QueueCutTriangle((u32 *)block, vertex, first, setup, local_matrix);
+                             first = FALSE;
+                             if (setup != 0) {
+@@ -199,16 +206,14 @@ void ModelScreen_QueueCutTriangle(u32 *data, ModelPartVertexWords *vertex, int f
          *packet = 0x10000005;
          packet += 7;
          *packet++ = 0x6C040004;
@@ -1508,7 +1544,7 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
          packet += 0x10;
      }
      *packet = (size - 2) | 0x10000000;
-@@ -424,16 +419,14 @@ void ModelScreen_QueueCutFloatTriangle(u32 *data, ModelPartVertexWords *vertex,
+@@ -424,16 +429,14 @@ void ModelScreen_QueueCutFloatTriangle(u32 *data, ModelPartVertexWords *vertex,
          *packet = 0x10000005;
          packet += 7;
          *packet++ = 0x6C040004;
@@ -1533,7 +1569,7 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
          packet += 0x10;
          *packet = 0x10000003;
          packet += 4;
-@@ -605,7 +598,7 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
+@@ -605,7 +608,7 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
  
      screen_uv_frame_copy = screen_uv_frame = (screen_uv_frame + 1) % 60;
      for (i = 0; i < 60; i++) {
@@ -1542,7 +1578,7 @@ index e7a0a153a5609bb86d4007ce9a267be54eedfed8..39d92381e742731fbe0d990e2625136d
      }
      part = model->parts;
      part_count = model->part_count;
-@@ -613,9 +606,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
+@@ -613,9 +616,9 @@ void ModelScreen_SetUvsFromScreen(ModelInstance *model) {
          FlushCache(0);
          sceVu0MulMatrix(matrix, world_screen_matrix, part);
          Vu0_LoadMatrix(matrix);

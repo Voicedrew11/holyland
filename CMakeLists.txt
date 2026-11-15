@@ -152,6 +152,7 @@ add_library(kf4_port STATIC
     port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
     port/platform/gs.c
     port/platform/frame_interp.c
+    port/platform/interp_camera.c
     port/platform/adaptive_sync.c
     port/platform/field_frames.c
     port/platform/video.c
@@ -669,6 +670,17 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
+endif()
+
+# The pictures between's cameras: cuts, and the camera between (port/platform/interp_camera.c)
+add_executable(interp_camera_test tests/interp_camera_test.c port/platform/interp_camera.c port/platform/mouse_lead.c
+    port/math/libvu0.c)
+target_include_directories(interp_camera_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(interp_camera_test PRIVATE m pthread)
+endif()
+if(KF4_TESTS)
+    add_test(NAME interp_camera COMMAND interp_camera_test)
 endif()
 
 # Twin-stick controls: the sticks as the game's buttons and the speeds they set (port/sdk/twin_stick.c)
