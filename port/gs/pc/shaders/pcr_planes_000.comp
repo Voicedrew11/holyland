@@ -1,0 +1,51 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The plane pass of native program 0x000 (pcr_planes.h): each triangle's corners as pcr_nd000.vert draws them, its
+// plane worked out once (pcr_exact_z.h)
+#define PCR_PLANES
+#define PCR_EXACT_Z
+#include "pcr_exact_z.h"
+
+// (as pcr_nd000.vert's)
+layout(set = 0, binding = 5, std430) readonly buffer Tris {
+    uvec4 tris[];
+};
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
+    vec4 move[3];
+    vec4 mid[3];
+    vec4 screen[2];
+    vec4 zt;
+} pic;
+layout(set = 0, binding = 3, std430) readonly buffer Mesh {
+    ivec4 q[];
+} mesh;
+#include "vu1_000_draw.h"
+layout(set = 0, binding = 4, std430) readonly buffer Draws {
+    Draw draws[];
+};
+#include "vu1_000_maths.h"
+#include "pcr_planes.h"
+
+// Corner k: in the frame VU1's place (X and Y in the GS's 16 bits), in a picture between moved (moved(): unwrapped, Z
+// with its fraction); at the far plane (the modern sky) Z 0
+GsCorner corner(uint k, ivec2 place) {
+    Place p = vu_place(k);
+    GsCorner c = GsCorner(ivec2(int(uint(p.x) & 0xFFFFu), int(uint(p.y) & 0xFFFFu)), gs_z(p), 0.0);
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        Moved m = moved(k, p);
+        c = GsCorner(ivec2(m.x, m.y), m.z, m.zfrac);
+    }
+    c.xy += 16 * place - ivec2(d.info.y, d.info.z);
+    if ((d.info.w & ND_C_FAR) != 0) {
+        c.z = 0u;
+        c.zfrac = 0.0;
+    }
+    return c;
+}
+
+void plane_corners(uvec4 tri, uint instance, ivec2 place, out GsCorner c0, out GsCorner c1, out GsCorner c2) {
+    d = draws[instance & 0x3FFFFFFFu];
+    c0 = corner(tri.x, place);
+    c1 = corner(tri.y, place);
+    c2 = corner(tri.z, place);
+}

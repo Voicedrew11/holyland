@@ -9,6 +9,7 @@
 // camera between), and the triangle dropped with any of its corners.
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the triangles: x, y, z the arena's numbers of its corners (the kick's two before it, then the kick's)
 layout(set = 0, binding = 14, std430) readonly buffer Tris {
@@ -18,6 +19,9 @@ layout(set = 0, binding = 14, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw; pcr_prim.frag reads it)
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
@@ -39,6 +43,8 @@ layout(set = 0, binding = 13, std430) readonly buffer Draws {
 #include "ripple_maths.h"
 
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -96,6 +102,9 @@ void main() {
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     uint rgba = uint(d.info.w);
     // as pcr_prim.vert

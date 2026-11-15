@@ -6,6 +6,7 @@
 // primitive's are (pcr_nd000.vert's sibling).
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the strip's triangles: x, y, z the arena's numbers of its corners, w its kick's
 layout(set = 0, binding = 11, std430) readonly buffer Tris {
@@ -15,6 +16,9 @@ layout(set = 0, binding = 11, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 out float gl_ClipDistance[1]; // the mirror image's cut at the water (mirror_cut)
 
@@ -42,6 +46,8 @@ float mirror_cut(vec4 v) {
 }
 
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -87,7 +93,9 @@ void main() {
             }
             whole_position(c, w0, w1, w2, ivec2(d.info.y, d.info.z), false);
             float qn = 1.0 / (c.w * float(mesh.q[at * 4u].w)); // (VU1's q: 1 / c.w, c.w the depth times the position's w)
-            v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? at : kick));
+            // (the colour times Q, as in 3D: pcr_nd000.vert's draw_whole)
+            v_color = vec4(lit_colour(gouraud ? at : kick)) * qn;
+            v_color_q = qn;
             v_stq = st * qn;
             v_fog = d.fog.z + d.fog.w * qn; // (the fragment stage clamps it to 0..255)
             return;
@@ -113,6 +121,9 @@ void main() {
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     uvec4 rgba = lit_colour(gouraud ? at : kick);
     // as pcr_prim.vert

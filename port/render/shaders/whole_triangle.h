@@ -47,6 +47,7 @@ bool whole_behind(Whole w0, Whole w1, Whole w2) {
     return !(w0.w > 0.0 && w1.w > 0.0 && w2.w > 0.0);
 }
 
+#ifndef PCR_PLANES // (the plane pass, a compute shader, draws nothing)
 // gl_Position of corner c (and the exact Z's fields, pcr_common.h): offset the draw's XYOFFSET (12.4); far: at the far
 // plane (the modern sky). The triangle's whole Z is its first corner in front's, so the others' Z less it are small.
 void whole_position(Whole c, Whole w0, Whole w1, Whole w2, ivec2 offset, bool far) {
@@ -61,5 +62,6 @@ void whole_not_drawn() {
     gl_Position = vec4(0.0, 0.0, 0.0, -1.0);
     pcr_depth(0u, 0.0, 0u);
 }
+#endif
 
 #endif

@@ -1762,6 +1762,12 @@ public:
         }
         device_ = std::make_unique<Device>();
         device_->set_context(*context_);
+        // GRANITE_VULKAN_POST_MORTEM=1: say whether a hang will name its draw (markers) or not
+        const auto &features = device_->get_device_features();
+        if (features.supports_post_mortem) {
+            fprintf(stderr, "[pcr] post-mortem on (AMD buffer markers %s)\n",
+                    features.supports_amd_buffer_marker ? "yes" : "no");
+        }
         // a frame context a picture: with four, the thread waits at a picture for the GPU's work of four before
         device_->init_frame_contexts(4);
         // the pipelines kept between runs (pcr_pipelines.h): before anything draws, so that every pipeline is made

@@ -20,9 +20,11 @@ PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
-# fragment shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
-# depth clamp), as <name>_xz and <name>_rec_xz
-EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
+# shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
+# depth clamp and 64-bit integers), as <name>_xz and <name>_rec_xz. (The native draws' vertex shaders read their planes
+# from the plane pass, pcr_planes_*.comp, which needs 64-bit integers itself and is made with it alone.)
+EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag",
+           "pcr_prim.vert"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec
 RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",

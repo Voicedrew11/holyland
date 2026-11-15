@@ -7,6 +7,7 @@
 // matrices and the normal, Q 1, white with vertex 1's alpha.
 #define PCR_ND
 #include "pcr_common.h"
+#include "pcr_exact_z.h"
 
 // the pass's triangles: x, y, z the arena's slots of its corners (two a vertex), w its kick's
 layout(set = 0, binding = 8, std430) readonly buffer Tris {
@@ -16,6 +17,9 @@ layout(set = 0, binding = 8, std430) readonly buffer Tris {
 layout(location = 0) noperspective out vec4 v_color;
 layout(location = 1) noperspective out vec3 v_stq;
 layout(location = 2) noperspective out float v_fog;
+// (whole_triangle.h's whole triangles) the divisor of v_color: Q (1 / w) for a colour given times Q, so that
+// pcr_prim.frag's colour is the corners' in 3D, as the game's near cut gives its pieces; 0 for a colour as is
+layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 out float gl_ClipDistance[1]; // the mirror image's cut at the water (pcr_nd000.vert's mirror_cut)
 
@@ -38,6 +42,8 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 #include "vu1_280_maths.h"
 
 void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
     uint triangle, instance;
     pcr_triangle(triangle, instance);
 #ifdef PCR_RECORDS
@@ -94,7 +100,9 @@ void main() {
         if (!sphere) {
             vec4 st = qf(slot, 2u);
             v_stq = st.xyz * qn;
-            v_color = vec4(lit_colour(gouraud && !whole_behind(w0, w1, w2) ? slot : kick));
+            // (the colour times Q, as in 3D: pcr_nd000.vert's draw_whole)
+            v_color = vec4(lit_colour(gouraud ? slot : kick)) * qn;
+            v_color_q = qn;
         } else {
             // (as below: the sphere's ST from the normal, Q 1)
             vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
@@ -125,6 +133,9 @@ void main() {
     xy += vec2(pc.place);
     if (gone) {
         xy = vec2(1.0e9); // (far past the target's right edge, as are its two other corners: not drawn)
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
     vec3 stq;
     uvec4 rgba;

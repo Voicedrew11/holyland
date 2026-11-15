@@ -50,6 +50,31 @@ window, the frame rate unlocked with a cap of 500, vsync off. The runs off made 
 simulated 240 Hz clean. The frozen game held 8 GB of GPU memory, against the 3.7 GB measured headless below; whether
 before the hang or because of it is not known. Not reproduced or measured in that mode yet: the hang is open.
 
+**2026-11-15: where it stops; HiZ not ruled in.** Five full resets on 2026-11-15 (03:31, 04:01, 06:10, 08:00, 08:02).
+The last three, with Granite's post-mortem on (`GRANITE_VULKAN_POST_MORTEM=1`), all stop at the same place: the
+6-vertex sprites the game draws each frame into its 128x128 surface (pcr_prim_vert_xz with pcr_prim_early_frag_xz:
+exact Z, gl_FragDepth with layout(depth_less); a 2-sample target and Z buffer), or the barrier after them that waits
+for that work. The devcoredumps of the earlier two: the depth block, the rasteriser and the pixel launch busy, no fault.
+Sync validation and GPU-AV on that path: clean. Mesa says GFX12's HiZ/HiS "is buggy and can cause random GPU hangs";
+Mesa 26.2.3 applies its "full" workaround by default (`radv_gfx12_hiz_wa`: HiZ turned off around draws that use depth
+and stencil together), and the 08:00 and 08:02 hangs came with it. (A setting of `radv_disable_hiz_his_gfx12`, Mesa 25's
+name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) **HiZ is not the cause**: with
+HiZ off altogether (`RADV_DEBUG=nohiz`, read by RADV: it then warns it is not conformant) the card reset again at
+08:44, at 035 (1 in about 17 runs; the post-mortem file came out empty). Nor can exact Z be all of it: main hung on
+2026-11-13 and 11-14, before exact Z.
+
+**2026-11-15, later: no repro.** GS captures of 063 and 035 (each with those sprites) replayed about 150,000 times at
+6x4 with MSAA 2 (`kf4-gsreplay --repeat`): no hang. The replay draws on one thread, without the pump; in the game both
+kf4-pc and kf4-pc-pump submit right up to a hang. Then 19 real-window runs of 5 minutes each with the owner's settings
+(about 95 minutes of play: exact Z off 8, on 3, and 8 with the flat batches below): no hang either. Every hang that
+day came in runs of 20 seconds, within about a minute of the game starting, which points at the start (the opening,
+the teleport, the map's load, pipelines built ahead) more than at play; at that day's rate the long runs would have
+hung once or twice, so this is a lead, not a finding. A test that may decide it: many short runs, A/B, with
+`KF4_PC_PRECOMPILE=0 KF4_PC_WARM_AHEAD=0`, and with `KF4_PC_PUMP=0`.
+In the long runs exact Z cost far more than short runs showed: 063 2.364 against 2.035 ms a picture, 009 3.031
+against 2.375. Drawing the GIF batches whose primitives each have one Z without exact Z (the depth is the same; 9,425
+batches at 063, pictures byte-identical) saved nothing measurable; kept out of the tree as a patch.
+
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
 The pump's canvas now hands the images it lets go back, and the next copies are made into them
@@ -324,12 +349,33 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   half, one loses along a thin line (at 1x the GS has the same, as single pixels).
 - Read at the pixel's middle even in the shaders run once a sample (the cut-outs' SSAA): read at each sample, a
   sample's Z rounded apart from the pixel's Z that other draws gave it, and the moss over a cut-out lost there.
-- Any GPU with `depthClamp` (every desktop one); without it, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
+- Any GPU with `depthClamp` and `shaderInt64` (every desktop one); without them, or with `KF4_PC_EXACT_Z=0`, the GPU's interpolated depth
   (decals lose to their surface here and there), and the log says so. The first version (same day) read the corners'
   Z with the barycentric extension (`pervertexEXT`), which older GPUs (NVIDIA before Turing, AMD before RDNA2, older
   Intel) lack. The shared Z gives the same pictures (map 063 walk at the owner's settings: 903 pixels over 157
   pictures; a 9-map tour at 4x, 104 views: 0.004% of a view at most) and less GPU time: on the RX 9070 XT at 063,
   1.96 ms a picture against the extension's 2.05 and 1.88 with exact Z off.
+- **The plane, in integers (2026-11-15).** The shared Z's difference was still interpolated in floats: near the eye a
+  triangle's corners span millions of Z, the float's error passed half a Z, and over whole triangles which of two
+  coinciding surfaces won turned with the camera. At map 063 (the owner's quick save 2) two map records both hold a
+  see-through wall where they meet, and patches of it lit about 1.45 times as bright at one angle and not the next.
+  Now each triangle's plane through its three corners as the GS gets them (12.4 X and Y in the target, Z with a
+  moved corner's fraction in 256ths) is worked out once, in 64- and 128-bit integers (`port/render/shaders/plane_z.h`,
+  tested against 128-bit C in `tests/plane_z_test.cpp`), as three fixed-point numbers of the plane alone: its Z at the
+  target's pixel (0, 0) and its steps a pixel across and down, each the exact value rounded to 2^-26 of a Z. The
+  fragment stage adds them up at its pixel in 32-bit words and rounds half to even (`pz_pixels_z`, within 2^-12 of a
+  Z of the exact): the same value whichever corner is first and whichever path drew the triangle, so two meshes on one
+  plane always tie. Who works the plane out: a GS primitive's provoking vertex (`pcr_exact_z.h`'s `pcr_plane`); for
+  the native draws, the plane pass (`pcr_plane_pass.h`, `shaders/pcr_planes_*.comp`), a compute dispatch a native
+  program's run of triangles, recorded in a command buffer of its own and submitted just before each of the canvas's,
+  from an entry a triangle the canvas writes as it draws the batch; the native vertex shaders' provoking vertex reads
+  its triangle's plane (`pcr_plane_of_draw`: `plane_at` in the push constants or record, plus `gl_VertexIndex / 3`).
+  (Worked out at each pixel the GPU took 2.6 times as long at 063, 5.69 ms a picture against 2.21; by each native
+  draw's provoking vertex, in a vertex shader that already spilled, about 10% longer, 2.44-2.52 ms.) The canvas's
+  `Vertex` carries the other two corners (`other_xy`, `other_z`, `other_kick`: moved with the vertex in a picture
+  between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
+  Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between
+  (`PCR_PLANE_MOST`), or drawn from the eye's space (`whole_triangle.h`), keeps the interpolated Z.
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.

@@ -783,6 +783,18 @@ if(KF4_TESTS)
     add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
 endif()
 
+# The GS's blend as Vulkan's (port/gs/pc/pcr_blend.h, header only)
+add_executable(pcr_blend_test tests/pcr_blend_test.cpp)
+target_include_directories(pcr_blend_test PRIVATE port/gs/pc
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
+set_target_properties(pcr_blend_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_blend_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_blend COMMAND pcr_blend_test)
+endif()
+
 # The watch for a GPU that has stopped answering (port/gs/pc/pcr_hang_notes.h, pcr_hang_watch.h): the notes kept, the
 # report, and (pcr_hang_watch, about 4 s) a wait that never ends ending the process with the report written
 add_executable(pcr_hang_watch_test tests/pcr_hang_watch_test.cpp port/gs/pc/pcr_hang_watch.cpp)
@@ -862,6 +874,15 @@ if(NOT WIN32)
     target_link_libraries(ripple_test PRIVATE m)
 endif()
 add_test(NAME ripple COMMAND ripple_test)
+
+# Exact Z's plane (port/render/shaders/plane_z.h, the PC renderer's fragment stage's arithmetic, compiled as C++)
+# against 128-bit integers
+add_executable(plane_z_test tests/plane_z_test.cpp)
+set_target_properties(plane_z_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(plane_z_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME plane_z COMMAND plane_z_test)
 
 # The native draws' moves in the pictures between (port/render/part_moves.cpp): the parts' moves against their matrices
 # at t 0 and 1, the sections, the pairing by identity, the trail's pairs
