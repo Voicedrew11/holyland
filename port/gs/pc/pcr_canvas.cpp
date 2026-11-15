@@ -2864,10 +2864,11 @@ private:
         return true;
     }
 
-    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and a
-    // mark that does something (0xF2 keeps the frame shown) read everything anywhere; an upload writes (into the
-    // texture store, and into a surface where it lands on one) and reads no surface, a CLUT load reads the store, and
-    // the marks 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is.
+    // The walk's batches whose writes are never read marked dead. Of the steps that are not batches, a copy and the
+    // mark 0xF2 (the frame shown kept) read everything anywhere; an upload writes (into the texture store, and into a
+    // surface where it lands on one) and reads no surface, a CLUT load reads the store, and every other mark reads
+    // nothing: 0xF0, 0xF1, 0xF4 and 0xF5 only say where the walk is, and the rest (frame_interp.c's cameras and
+    // parts, which the native draws took when the frame was drawn) the canvas does nothing with (frame_mark).
     static void mark_dead_writes(Kept &walk) {
         std::vector<WalkStep> steps;
         std::vector<uint32_t> batch_of;
@@ -2880,8 +2881,7 @@ private:
                 w = walk_step(walk.batches[kept->index]);
                 batch = kept->index;
             } else if (const KeptMark *mark = std::get_if<KeptMark>(&step)) {
-                uint32_t what = bits(mark->value, 32, 8);
-                w.reads_anywhere = what == 0xF0 || what == 0xF1 || what == 0xF4 || what == 0xF5 ? 0 : DEAD_ALL;
+                w.reads_anywhere = bits(mark->value, 32, 8) == 0xF2 ? DEAD_ALL : 0;
             } else if (std::holds_alternative<KeptCopy>(step)) {
                 w.reads_anywhere = DEAD_ALL; // (a copy from one place of the GS's memory to another reads its source)
             }

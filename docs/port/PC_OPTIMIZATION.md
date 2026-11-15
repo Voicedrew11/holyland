@@ -781,6 +781,13 @@ surfaces are the game's own). `KF4_PC_DEAD=0`: all drawn.
 At 009: the first clear and the last Z clear, 1.7 batches a picture: **3.46 to 3.38 ms a picture** (two runs each,
 15 s). The alpha's pass is not dead in play (draws that test the destination alpha follow it).
 
+2026-11-15: at 063 the first clear was kept too: `mark_dead_writes` took every frame mark it did not know as reading
+everything, and frame_interp.c's camera and part marks (0x0D-0x16), which the canvas does nothing with, sit between
+the two clears and between the alpha's pass and the fade. Now only 0xF2 (the frame shown kept) reads. Batches left
+out at 063 twice as many (12.6k to 25.5k a 20 s run), 2.584 to 2.567 ms a picture (2-3 runs each: about the noise).
+The alpha's pass at 063 (0.08 ms when left out) is still drawn: the fade after it, which writes the alpha everywhere,
+has its corners from a native draw's kicks (the trail's), so it is not known to keep its place.
+
 Checks: pictures byte for byte at 000:0, 009:0, 009:2, 020:0, 105:0 (52 each); the 21 unit tests, the two new ones
 under ASan and UBSan too; the game under ASan and UBSan in a real window (the known reports); no hang.
 
