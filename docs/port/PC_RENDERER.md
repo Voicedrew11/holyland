@@ -61,9 +61,19 @@ and stencil together), and the 08:00 and 08:02 hangs came with it. (A setting of
 name, was tried in c4755cfd: 26.2.3 no longer has it, so it changed nothing; reverted.) **HiZ is not the cause**: with
 HiZ off altogether (`RADV_DEBUG=nohiz`, read by RADV: it then warns it is not conformant) the card reset again at
 08:44, at 035 (1 in about 17 runs; the post-mortem file came out empty). Nor can exact Z be all of it: main hung on
-2026-11-13 and 11-14, before exact Z. Not tried yet (each try may reset the card): a GS capture of 063 replayed again
-and again (`kf4-gsreplay --repeat`) as a quick repro, then that draw without the shader's depth (`KF4_PC_EXACT_Z=0`)
-or without MSAA.
+2026-11-13 and 11-14, before exact Z.
+
+**2026-11-15, later: no repro.** GS captures of 063 and 035 (each with those sprites) replayed about 150,000 times at
+6x4 with MSAA 2 (`kf4-gsreplay --repeat`): no hang. The replay draws on one thread, without the pump; in the game both
+kf4-pc and kf4-pc-pump submit right up to a hang. Then 19 real-window runs of 5 minutes each with the owner's settings
+(about 95 minutes of play: exact Z off 8, on 3, and 8 with the flat batches below): no hang either. Every hang that
+day came in runs of 20 seconds, within about a minute of the game starting, which points at the start (the opening,
+the teleport, the map's load, pipelines built ahead) more than at play; at that day's rate the long runs would have
+hung once or twice, so this is a lead, not a finding. A test that may decide it: many short runs, A/B, with
+`KF4_PC_PRECOMPILE=0 KF4_PC_WARM_AHEAD=0`, and with `KF4_PC_PUMP=0`.
+In the long runs exact Z cost far more than short runs showed: 063 2.364 against 2.035 ms a picture, 009 3.031
+against 2.375. Drawing the GIF batches whose primitives each have one Z without exact Z (the depth is the same; 9,425
+batches at 063, pictures byte-identical) saved nothing measurable; kept out of the tree as a patch.
 
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
