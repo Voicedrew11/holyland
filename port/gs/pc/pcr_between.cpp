@@ -6,11 +6,17 @@
 #include <algorithm>
 #include <vector>
 
+#include "port/zone_scope.hpp"
+
 using namespace Vulkan;
 
 namespace pcr {
 
 namespace {
+
+// (the frame profiler's) A buffer made, and the one it replaces let go: both take Granite's device lock, which
+// kf4-pc's next_frame_context holds while it waits for the GPU
+const ZoneId between_buffer_made_zone = port_zone_id("pictures between: buffer made (Granite's lock)", ZONE_WAIT);
 
 // the picture's header, before the runs' bits
 struct PictureHeader {
@@ -120,7 +126,8 @@ void Between::make_picture(const GsnInterpPicture &p) {
     if (words && p.run_bits) {
         memcpy(data.data() + sizeof(h), p.run_bits, words * 4);
     }
-    picture_ = make(data.data(), data.size(), false);
+    ZoneScope zone(between_buffer_made_zone);
+    picture_ = make(data.data(), data.size(), false); // (the last picture's let go here too)
 }
 
 std::span<const uint8_t> Between::begin_picture(const GsnInterpPicture &p) {
