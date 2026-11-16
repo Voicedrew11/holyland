@@ -16,7 +16,9 @@
        Escape        release the mouse (a click in the window takes it back)
    Mouse, captured, while the player is in control: moving turns and looks; left square, right
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
-   cross, right circle, middle cross (the menu mouse), the wheel up / down.
+   cross, right circle, middle cross (the menu mouse), the wheel up / down. On a menu screen that takes
+   pointing (port/include/port/menu_pointer.h) the pointer moves the cursor to the line under it and the
+   left button chooses the line clicked; a click on nothing does nothing.
    Outside play, too, A / D (the keys bound to L1 / R1) press d-pad left / right and Left / Right (the
    keys bound to d-pad left / right) press L1 / R1 (port_controls_menu_side_keys, on by default): A / D
    then move left and right in the menus as W / S move up and down (the equipment screen's items, a
@@ -49,9 +51,11 @@
 #include "port/controls.h"
 #include "port/debug.h"
 #include "port/host.h"
+#include "port/menu_pointer.h"
 #include "port/mouse_lead.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/present_vk.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
 #include "port/settings.h"
@@ -942,6 +946,53 @@ void port_controls_sample_mouse(void) {
     lead_waiting();
 }
 
+/* Where the mouse is over the menus' 4:3 2D, as a fraction (port_menu_pointer_mouse): 0 when it is not over
+   the window. With --widescreen the 2D is squeezed into the middle three quarters (port/platform/gs.c). */
+static int mouse_over_2d(double *x, double *y) {
+    SDL_Window *window = SDL_GetMouseFocus();
+    int mouse_x, mouse_y, out_w, out_h, place_x, place_y, place_w, place_h;
+
+    if (window == NULL) {
+        return 0;
+    }
+    SDL_GetMouseState(&mouse_x, &mouse_y);
+    SDL_GetWindowSize(window, &out_w, &out_h);
+    port_video_fit(out_w, out_h, &place_x, &place_y, &place_w, &place_h);
+    if (place_w <= 0 || place_h <= 0) {
+        return 0;
+    }
+    *x = (mouse_x - place_x + 0.5) / place_w;
+    *y = (mouse_y - place_y + 0.5) / place_h;
+    if (port_options.widescreen) {
+        *x = (*x - 0.125) / 0.75;
+    }
+    return 1;
+}
+
+/* The menus' pointer (port/include/port/menu_pointer.h): the mouse and the left button's new presses, while the
+   mouse is let go outside play; not under a pad script or a recording, whose pad alone must say what happens */
+static void feed_menu_pointer(int pointing, unsigned int mouse) {
+    static unsigned int previous_mouse;
+    static double previous_x = -1.0, previous_y = -1.0;
+    unsigned int left = 1u << SDL_BUTTON_LEFT;
+    double x = -1.0, y = -1.0;
+    int clicks;
+
+    if (port_options.input != NULL || port_options.record_input != NULL) {
+        return;
+    }
+    if (!pointing || !pc.focused || !mouse_over_2d(&x, &y)) {
+        previous_mouse = mouse;
+        port_menu_pointer_mouse(-1.0, -1.0, 0, 0);
+        return;
+    }
+    clicks = (mouse & left) && !(previous_mouse & left);
+    previous_mouse = mouse;
+    port_menu_pointer_mouse(x, y, x != previous_x || y != previous_y, clicks);
+    previous_x = x;
+    previous_y = y;
+}
+
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and the sticks' keys */
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller) {
     SDL_GameController *controller = sdl_controller;
@@ -1004,10 +1055,15 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         /* (let go only after a moment out of play, so a slow frame does not flash the cursor) */
         set_captured(pc.wants_capture && pc.focused &&
                      (gameplay || (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
+        feed_menu_pointer(!gameplay && !pc.captured, mouse);
         if (!gameplay) {
             static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
 
             for (bit = 0; bit < 3; bit++) {
+                /* (where a screen takes pointing the left button is the pointer's: port/include/port/menu_pointer.h) */
+                if (menu_buttons[bit] == SDL_BUTTON_LEFT && port_menu_pointer_active()) {
+                    continue;
+                }
                 if ((mouse >> menu_buttons[bit] & 1u) && menu_mouse[bit] >= 0) {
                     menu |= actions[menu_mouse[bit]].bit;
                 }

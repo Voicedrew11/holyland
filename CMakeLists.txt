@@ -512,7 +512,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/automap.c game/automap_guide.c game/automap_script.c game/screen_fx.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/cheats.c game/automap.c game/automap_guide.c game/automap_script.c game/screen_fx.c game/menu_pointer.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
@@ -719,6 +719,13 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
+endif()
+
+# The menus' pointer: hit-testing lines, stepping the cursor, clicks (game/menu_pointer.c)
+add_executable(menu_pointer_test tests/menu_pointer_test.c game/menu_pointer.c)
+target_include_directories(menu_pointer_test PRIVATE port/include)
+if(KF4_TESTS)
+    add_test(NAME menu_pointer COMMAND menu_pointer_test)
 endif()
 
 # The pictures between's cameras: cuts, and the camera between (port/platform/interp_camera.c)

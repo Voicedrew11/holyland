@@ -39,6 +39,7 @@
 #endif
 
 #include "libpad.h"
+#include "port/menu_pointer.h"
 #include "port/twin_stick.h"
 #include "port/controls.h"
 #include "port/host.h"
@@ -552,6 +553,48 @@ void port_pad_init(void) {
 #endif
 }
 
+/* (debugging, under a pad script) KF4_MENU_POINTER_SCRIPT: the mouse over the menus, to test their pointing in
+   a scripted run (port/include/port/menu_pointer.h): "VBLANK:X,Y[,CLICKS];..." with X, Y in the 640 x 448
+   picture's pixels; from each VBLANK on the mouse is there, and clicks there that many times at that vblank */
+static void menu_pointer_script(uint64_t vblank) {
+    static const char *script;
+    static int checked;
+    static double x = -1.0, y = -1.0;
+    const char *cursor;
+    int moved = 0;
+    int clicks = 0;
+
+    if (!checked) {
+        script = getenv("KF4_MENU_POINTER_SCRIPT");
+        checked = 1;
+    }
+    if (script == NULL) {
+        return;
+    }
+    for (cursor = script; *cursor != '\0';) {
+        unsigned long long at = 0;
+        int px = 0, py = 0, count = 0, read = 0;
+
+        if (sscanf(cursor, "%llu:%d,%d%n", &at, &px, &py, &read) < 3) {
+            break;
+        }
+        cursor += read;
+        if (*cursor == ',' && sscanf(cursor + 1, "%d%n", &count, &read) >= 1) {
+            cursor += 1 + read;
+        }
+        if (at == vblank) {
+            x = px / 640.0;
+            y = py / 448.0;
+            moved = 1;
+            clicks += count;
+        }
+        while (*cursor == ';' || *cursor == ' ') {
+            cursor++;
+        }
+    }
+    port_menu_pointer_mouse(x, y, moved, clicks);
+}
+
 void port_pad_poll(void) {
 #ifdef KF4_HAVE_SDL
     SDL_Event event;
@@ -560,6 +603,7 @@ void port_pad_poll(void) {
     if (port_options.input) {
         replay_events();
         port_twin_stick_replayed(script_input(port_vblank_count()).twin);
+        menu_pointer_script(port_vblank_count());
     }
 #ifdef KF4_HAVE_SDL
     if (!use_sdl) {
