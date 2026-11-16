@@ -32,7 +32,14 @@ layout(depth_less) out float gl_FragDepth;
 // shader's critical section (VK_EXT_fragment_shader_interlock), which runs in the triangles' order at a pixel. The
 // GPU cannot read its depth attachment so (rasterizationOrderDepthAttachmentAccess: neither RADV nor NVIDIA has it)
 #ifdef PCR_DEPTH_RULE
+#ifdef PCR_SAMPLE
+// (shaded at every sample, each invocation reading and writing its own sample's layer alone: ordered with the same
+// sample's only. With the pixel's, a pixel's samples waited for each other: at MSAA 2 the cut-outs at 063 took the
+// GPU four times as long, 2026-11-15)
+layout(sample_interlock_ordered) in;
+#else
 layout(pixel_interlock_ordered) in;
+#endif
 layout(set = 1, binding = 11, r32f) uniform coherent image2DArray u_zstore;
 #endif
 // (pcr_prim_early.frag, PCR_EARLY: the draws that discard nothing, no alpha test's pass and no DATE from a copy:

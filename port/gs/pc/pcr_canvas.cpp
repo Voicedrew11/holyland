@@ -5109,6 +5109,7 @@ private:
     static bool interlock(const Device &device) {
         const auto &f = device.get_device_features();
         return f.interlock_features.fragmentShaderPixelInterlock != VK_FALSE &&
+               f.interlock_features.fragmentShaderSampleInterlock != VK_FALSE &&
                f.enabled_features.fragmentStoresAndAtomics != VK_FALSE &&
                f.enabled_features.shaderStorageImageWriteWithoutFormat != VK_FALSE;
     }

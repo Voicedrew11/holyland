@@ -433,6 +433,12 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
     further from paraLLEl-GS than with the settle or without it by more than 0.05% of its pixels; the few views that
     differ at all differ by 30-50 pixels either way (024's lava edge far off, where the GS's whole Z fights); 028's
     puddle is right, as with the settle. Vulkan validation clean (RADV and llvmpipe), ASan+UBSan nothing new.
+  - **At MSAA 2 (the owner's), measured after the owner saw it slow everywhere:** the shaders run at every sample (the
+    cut-outs' SSAA) took the pixel's interlock, so a pixel's samples waited for each other: 063 8.00 ms against 4.80
+    before the settle, the cut-outs four times as long. They now take the sample's (`sample_interlock_ordered`: each
+    reads and writes its own sample's layer alone; needs `fragmentShaderSampleInterlock` too): 063 4.77-4.79 against
+    4.78-4.80; 009 5.07 against 4.64-4.71, the world draws testing and storing two samples each and the opaque ones no
+    longer rejected before their shader. The figures above are MSAA 1 (the pace settings).
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.
