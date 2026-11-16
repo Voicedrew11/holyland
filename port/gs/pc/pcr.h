@@ -72,6 +72,8 @@ int pcr_set_aniso(int taps);
 void pcr_set_2d(int mode);
 /* The picture's anti-aliasing, PORT_AA_* (port/antialias.h; pcr_antialias.h), from the next picture */
 void pcr_set_antialias(int method);
+/* The temporal anti-aliasing's history dropped at the next picture (any thread): a teleport, a state or quick load */
+void pcr_antialias_cut(void);
 void pcr_set_layer_z(int mode);
 /* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
 int pcr_native_kinds(void);

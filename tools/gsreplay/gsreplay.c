@@ -45,7 +45,7 @@
                         otherwise):
        --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
                         native_widescreen with widescreen makes X (4 * scale + 2) / 3: 6x4 at 4)
-       --aniso N --lod ps2|scale|full --2d ps2|smooth --antialias off|fxaa
+       --aniso N --lod ps2|scale|full --2d ps2|smooth --antialias off|fxaa|smaa|smaa_t2x
                         A capture holds no settings of the PC renderer's: give the player's.
                         With pc, --pixel X,Y traces one surface pixel of GS pixel (X,Y) of the frame buffer at
                         page --fbp N (0 by default): --sub SX,SY picks it in the GS pixel's block of the
@@ -1506,7 +1506,7 @@ static void usage(void) {
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
             "                    [--scale X[xY]] [--aniso N] [--lod ps2|scale|full]\n"
-            "                    [--2d ps2|smooth] [--antialias off|fxaa]\n"
+            "                    [--2d ps2|smooth] [--antialias off|fxaa|smaa|smaa_t2x]\n"
             "                    [--sub SX,SY] [--decal-losses]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);

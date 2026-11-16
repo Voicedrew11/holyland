@@ -74,6 +74,9 @@ static inline int gsr_set_aniso(int taps) {
 static inline void gsr_set_antialias(int method) {
     pcr_set_antialias(method);
 }
+static inline void gsr_antialias_cut(void) {
+    pcr_antialias_cut();
+}
 static inline void gsr_set_2d(int mode) {
     pcr_set_2d(mode);
 }

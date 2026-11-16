@@ -14,6 +14,9 @@ extern "C" {
 enum {
     PORT_AA_OFF,  /* the picture as drawn */
     PORT_AA_FXAA, /* FXAA over the picture at the renderer's resolution (port/gs/pc/shaders/pcr_fxaa.frag) */
+    PORT_AA_SMAA, /* SMAA 1x over the picture at the renderer's resolution (port/gs/pc/shaders/pcr_smaa.h) */
+    PORT_AA_SMAA_T2X, /* SMAA T2x: SMAA 1x of two pictures jittered in turn, the previous reprojected
+                         (pcr_antialias.cpp's SmaaT2x) */
     PORT_AA_COUNT
 };
 
@@ -26,6 +29,8 @@ static inline const PortAntiAlias *port_antialias(int method) {
     static const PortAntiAlias methods[PORT_AA_COUNT] = {
         {"off", "Off"},   /* PORT_AA_OFF (in the enum's order: C++ includes this too) */
         {"fxaa", "FXAA"}, /* PORT_AA_FXAA */
+        {"smaa", "SMAA"}, /* PORT_AA_SMAA */
+        {"smaa_t2x", "SMAA T2x"}, /* PORT_AA_SMAA_T2X */
     };
     return method >= 0 && method < PORT_AA_COUNT ? &methods[method] : NULL;
 }

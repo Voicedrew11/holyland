@@ -28,8 +28,11 @@
        --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
                          half with the row above (port_flicker_filter()); off by default
        --antialias MODE  the picture's anti-aliasing: off (the picture as drawn; the default without
-                         a settings.json) or fxaa (FXAA over the picture at the renderer's resolution,
-                         before it is scaled to the window: edges smoothed, the 2D's too)
+                         a settings.json), fxaa (FXAA over the picture at the renderer's resolution,
+                         before it is scaled to the window: edges smoothed, the 2D's too), smaa
+                         (SMAA 1x there: edges found by their shape, fine detail softened less) or
+                         smaa_t2x (SMAA T2x: the 3D drawn half a pixel apart in turn and two
+                         pictures resolved, for the shimmer of thin edges in motion)
        --native-2d MODE  at a --native-scale above 1, the 2D's textures (the font, the HUD, the menus'
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
@@ -276,7 +279,7 @@ static void usage(const char *program) {
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--antialias off|fxaa] [--flicker-filter]\n"
+            "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
             "          [--native-2d smooth|ps2]\n"
             "          [--native-layer-z tolerant|ps2]\n"
@@ -564,7 +567,7 @@ static void parse_options(int argc, char **argv) {
         } else if (strcmp(option, "--antialias") == 0) {
             port_options.antialias = port_antialias_from_name(value);
             if (port_options.antialias < 0) {
-                fprintf(stderr, "--antialias wants off or fxaa, not %s\n", value);
+                fprintf(stderr, "--antialias wants off, fxaa, smaa or smaa_t2x, not %s\n", value);
                 exit(2);
             }
             port_options.antialias_forced = 1;

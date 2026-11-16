@@ -70,6 +70,7 @@ static volatile int interp_cut_reset_asked; /* (port_gs_interp_cut_reset: the ga
 /* After a quick load or teleport: no cut, and the load's falling behind not judged */
 void port_gs_interp_cut_reset(void) {
     __atomic_store_n(&interp_cut_reset_asked, 1, __ATOMIC_RELEASE);
+    gsr_antialias_cut(); /* (the temporal anti-aliasing's history is of the place left) */
 }
 
 /* KF4_INTERP_CUT=0 (measure): no cut, every picture between drawn however far behind the PC renderer falls (the

@@ -106,12 +106,13 @@ struct PrimPush {
     uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
     uint32_t plane_at = 0xFFFFFFFFu; // (a native draw's, exact Z: its triangle n's plane the planes buffer's n + this,
                                      // n gl_VertexIndex / 3; no_plane none: pcr_exact_z.h's pcr_plane_of_draw)
-    uint32_t unused = 0;
+    uint32_t jitter = 0; // (the frame's 3D with a temporal anti-aliasing method: pcr_jitter.h's jitter_packed)
 };
 static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
 constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
+constexpr uint32_t no_zbuf = 0xFFFFFFFFu;  // (Surface::zbuf_page: none)
 
 // The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
 // recorded), the fragments' records (pcr.h's PcrTraceFragment), then the probes' (PcrTraceProbe)
@@ -287,6 +288,14 @@ struct Surface {
     // it since: the same clear again, the frame's second context's, need not clear it again)
     bool cleared = false;
     uint32_t cleared_z = 0;
+    // (a colour surface: the Z buffer its last draw with a depth test drew with, base page and format; no_zbuf none.
+    // Canvas::scanout_depth's)
+    uint32_t zbuf_page = no_zbuf, zbuf_psm = 0;
+    uint64_t zbuf_xyoffset = 0; // (... and that draw's XYOFFSET, and the drawing it was of: Canvas::begin_drawing)
+    uint64_t drawing = 0;
+    // (a depth surface: the colour page its last draw with a depth test drew into. The game's two frame buffers share
+    // one Z buffer: once the next frame is drawn it holds that frame's, and scanout_depth has none for the one shown.)
+    uint32_t drawn_for_page = no_zbuf;
 
     uint32_t width() const {
         return std::max(1u, fbw) * 64;
@@ -792,6 +801,10 @@ public:
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
         submit(!submit_together());
         times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
+        if (shown_pages_[0] != rect.bp / 32) {
+            shown_pages_[1] = shown_pages_[0];
+            shown_pages_[0] = rect.bp / 32;
+        }
         Surface *s = placed.surface;
         if (!s) {
             return false;
@@ -818,6 +831,72 @@ public:
                            {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         }
         return true;
+    }
+
+    // (Canvas::scanout_depth) The depth aspect copied through a buffer (a depth image copies to no colour format)
+    std::optional<Canvas::ShownDepth> scanout_depth(CommandBuffer &out, const ShownRect &rect, const Image &dst) {
+        if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32 || rect.lower_field ||
+            depth_format_ != VK_FORMAT_D32_SFLOAT_S8_UINT || dst.get_format() != VK_FORMAT_R32_SFLOAT) {
+            return std::nullopt;
+        }
+        Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
+        if (!placed.surface || placed.surface->zbuf_page == no_zbuf) {
+            return std::nullopt;
+        }
+        Canvas::ShownDepth shown; // (zscale 0 until the depth is copied)
+        shown.xyoffset[0] = float(bits(placed.surface->zbuf_xyoffset, 0, 16)) / 16.0f;
+        shown.xyoffset[1] = float(bits(placed.surface->zbuf_xyoffset, 32, 16)) / 16.0f;
+        shown.drawing = placed.surface->drawing;
+        Surface *depth = nullptr;
+        for (auto &d : depth_) {
+            if (d->base_page == placed.surface->zbuf_page && d->fbw == placed.surface->fbw &&
+                d->psm == placed.surface->zbuf_psm) {
+                depth = d.get();
+            }
+        }
+        if (!depth || !depth->image || depth->drawn_for_page != rect.bp / 32) {
+            return shown; // (none, or the next frame's)
+        }
+        uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
+        uint32_t x0 = uint32_t(rx * scale_[0]), y0 = uint32_t(ry * scale_[1]);
+        uint32_t w = dst.get_width(), h = dst.get_height();
+        if (x0 + w > depth->image->get_width() || y0 + h > depth->image->get_height()) {
+            return shown; // (scaled, or the Z buffer shorter than the picture)
+        }
+        VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
+        if (!depth_staging_ || depth_staging_->get_create_info().size < bytes) {
+            BufferCreateInfo info;
+            info.domain = BufferDomain::Device;
+            info.size = bytes;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            depth_staging_ = device_.create_buffer(info, nullptr);
+            if (!depth_staging_) {
+                fprintf(stderr, "[pcr] no buffer for a %ux%u picture's depth\n", w, h);
+                return shown;
+            }
+        }
+        out.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy from = {};
+        from.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+        from.imageOffset = {int32_t(x0), int32_t(y0), 0};
+        from.imageExtent = {w, h, 1};
+        out.copy_image_to_buffer(*depth_staging_, *depth->image, 1, &from);
+        out.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_READ_BIT);
+        VkBufferImageCopy to = {};
+        to.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        to.imageExtent = {w, h, 1};
+        out.copy_buffer_to_image(dst, *depth_staging_, 1, &to);
+        out.barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        shown.zscale = depth->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
+        return shown;
+    }
+
+    void begin_drawing(uint64_t drawing, Jitter jitter) {
+        drawing_ = drawing;
+        jitter_packed_ = jitter_packed(jitter);
     }
 
     // A lower field's rows x0..x1, y0..y1 of src stretched to twice their height into dst, a line of the picture lower
@@ -3873,6 +3952,20 @@ private:
         push.levels = b.texture.levels;
         push.src_scale[0] = int32_t(scale_[0]);
         push.src_scale[1] = int32_t(scale_[1]);
+        // (the temporal anti-aliasing's jitter: the 3D of the frame's buffers, begin_drawing. The game's HUD tests Z
+        // too: the 3D is the native draws and the GIF's triangles and lines read with ST and Q, not sprites nor UV)
+        bool sprite = bits(s.prim, 0, 3) == 6, uv = tme && bits(s.prim, 8, 1) != 0;
+        bool three_d = b.native || (!sprite && !uv);
+        push.jitter = jitter_packed_ != 0 && ztest && three_d && (fbp == shown_pages_[0] || fbp == shown_pages_[1])
+                          ? jitter_packed_
+                          : 0;
+        if (ztest && depth) {
+            colour->zbuf_page = depth->base_page;
+            colour->zbuf_psm = depth->psm;
+            colour->zbuf_xyoffset = s.xyoffset;
+            colour->drawing = drawing_;
+            depth->drawn_for_page = fbp;
+        }
         push.place[0] = int32_t(placed.x);
         push.place[1] = int32_t(placed.y);
         push.dest_offset[0] = dest_offset.x;
@@ -4808,6 +4901,12 @@ private:
     const bool reuse_on_ = !getenv("KF4_PC_SURFACE_REUSE") || strcmp(getenv("KF4_PC_SURFACE_REUSE"), "0") != 0;
     // (colour surfaces let go: their images, for one of the same size made again)
     std::vector<ImageHandle> spare_surfaces_;
+    // (the temporal anti-aliasing) the jitter of what is drawn now, packed (set_jitter); the frame's buffers, the pages
+    // the last two pictures showed (scanout); the buffer scanout_depth copies through
+    uint32_t jitter_packed_ = 0;
+    uint64_t drawing_ = 0; // (begin_drawing's: stamped on the colour surfaces its 3D draws into, Surface::drawing)
+    std::array<uint32_t, 2> shown_pages_ = {no_zbuf, no_zbuf};
+    BufferHandle depth_staging_;
     uint64_t counts_clears_ = 0;
     Program *date_program_ = nullptr;
     Program *zclear_program_ = nullptr; // (the depth rule's own copy cleared in a pass: clear_depth_copy)
@@ -5172,6 +5271,12 @@ void Canvas::restore(std::span<const uint8_t> vram, const TextureStore::ClutStat
 }
 bool Canvas::scanout(CommandBuffer &cmd, const ShownRect &rect, const Image &dst) {
     return impl_->scanout(cmd, rect, dst);
+}
+std::optional<Canvas::ShownDepth> Canvas::scanout_depth(CommandBuffer &cmd, const ShownRect &rect, const Image &dst) {
+    return impl_->scanout_depth(cmd, rect, dst);
+}
+void Canvas::begin_drawing(uint64_t drawing, Jitter jitter) {
+    impl_->begin_drawing(drawing, jitter);
 }
 void Canvas::submit() {
     impl_->submit();

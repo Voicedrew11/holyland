@@ -304,22 +304,100 @@ now a simple FXAA stands in. DLAA-like methods (FSR 4, DLSS's DLAA) may follow.
   the 3 x 3 contrast for a thin feature (0.75). The picture is copied (`Fxaa::copy_`, kept while its size stays) and
   drawn over whole from the copy, bilinear. It covers everything in the picture, so the 2D (text, the HUD) is
   softened a little too.
-- **Settings**: `settings.json`'s display `"antialias": "off" | "fxaa"` (FXAA in a new or older settings file; the old
-  `native_msaa` and `native_cutout_aa` are left, not written again), `--antialias off|fxaa` (off without a settings
-  file: headless and scripted runs, so their pictures are as drawn), the overlay's Display, Picture "Anti-aliasing"
-  (live), `KF4_SET_AT=VBLANK:antialias=N`, `kf4-gsreplay --antialias`.
+- **SMAA 1x** (2026-11-16, `PORT_AA_SMAA`, `shaders/pcr_smaa.h` and `pcr_smaa_edges/weights/blend.frag`): the
+  reference implementation (`third_party/smaa/`, iryoku/smaa at 71c806a, MIT: `SMAA.hlsl` compiled as GLSL, and its
+  AreaTex and SearchTex, uploaded once per thread) at its HIGH preset, luma edges. Three passes over the whole picture
+  with `pcr_present.vert`'s triangle (SMAA's vertex functions called in the fragment stage): a copy of the picture;
+  edges into an RG8 target and weights into an RGBA8 one, both cleared each picture; the blend reads the copy and the
+  weights and writes the picture. SMAA's stencil (weights only where there are edges) is left out until measured. At
+  4x it changed about 3,500 of 4.6 million pixels at 009 by more than 8 levels, smoothing the stair-steps of the
+  fire's and the timbers' edges; on the HUD's orb and 063's torch it keeps more of the texture than FXAA, and at 2x it
+  smooths diagonals FXAA leaves stepped (crops: `~/.cache/kf4smaa/`). GPU time at the owner's settings (009, real
+  window, the run.sh "picture" figure): off 0.026 ms, FXAA 0.125, SMAA 0.198 a picture, so about 0.10 and 0.17 ms
+  of their own; GPU memory about 70 and 210 MB more than off. The default stays FXAA until the owner has seen both.
+- **SMAA T2x** (`PORT_AA_SMAA_T2X`, `"smaa_t2x"`; `SmaaT2x`): the 3D drawn with T2x's two jitters in turn; each
+  picture's SMAA with that jitter's subsample indices, the motion blended with it and its length in alpha
+  (`pcr_smaa_blend_t2x.frag`, SMAA_REPROJECTION), kept as the history; the picture the resolve of it and the previous
+  one reprojected (`pcr_smaa_resolve.frag`: SMAAResolve's velocity weighting, and the previous colour held within this
+  picture's 3 x 3). The hold is there because the motion is the cameras' alone: the HUD and the fire carry the world's
+  motion in both pictures, so the weighting does not reject them; without it the HUD would take in the world under it
+  while turning. Two pictures, no history of histories: nothing trails more than one picture. Turning at 009 and 063
+  (120 a second, 4x) next to SMAA 1x: the stair-steps and crawl of the plank's edges and the torch stand's legs
+  smoother, no ghost seen, the textures as sharp; the HUD's orb a little softer. Cost at the owner's settings at 009:
+  0.47 ms a picture (the run.sh "picture" figure, against 0.026 with none: the depth's copy, the motion, SMAA, the
+  resolve), and about 12% fewer pictures than SMAA 1x unlocked (16,265 against 18,400 in the same 52 s). Not checked
+  yet: a fight (moving creatures have the cameras' motion, not their own: the hold is all that keeps them from
+  ghosting), under water. Cheaper next: the depth copied from the depth rule's R32F copy (one copy, not two through a
+  buffer).
+- **Settings**: `settings.json`'s display `"antialias": "off" | "fxaa" | "smaa"` (FXAA in a new or older settings file;
+  the old `native_msaa` and `native_cutout_aa` are left, not written again), `--antialias off|fxaa|smaa` (off without a
+  settings file: headless and scripted runs, so their pictures are as drawn), the overlay's Display, Picture
+  "Anti-aliasing" (live), `KF4_SET_AT=VBLANK:antialias=N`, `kf4-gsreplay --antialias`.
 - **A new method** is one entry in `port/include/port/antialias.h`'s table (its number, its name and its label: the
   settings, the command line and the overlay take it from there) and one implementation of `pcr::AntiAliasMethod`,
-  made by `AntiAliasing::method_for`. FXAA needs the picture alone. DLAA, FSR 4 and the like are temporal: they also
-  need each pixel's motion, the depth, a camera moved by a sub-pixel jitter every picture, and the frames before. The
-  canvas has none of those to give yet (the depth is the GS's own, per surface; motion would come from the pictures
-  between's moves, `part_moves`, and the native draws), so such a method is a larger step than an entry in the table:
-  the interface takes only the picture now.
-- **The pipeline seed and lists** keep their layout: records of multisampled passes and per-sample programs (the seed's
-  MSAA runs, and older data folders' lists) are skipped, and the canvas's program numbers (roles) are kept, the
-  multisampled ones' left empty, so that the remaining records still name their programs.
-- **Kept**: `cmake/granite_msaa.cmake`, a fix to Granite itself (a render pass's samples in its hash), harmless with
-  every pass at one sample.
+  made by `AntiAliasing::method_for`. A method of one picture uses `AntiAliasFrame::picture` alone; a temporal one
+  names its jitter (`AntiAliasMethod::jitter`) and gets the inputs below.
+
+### Temporal inputs (2026-11-16)
+
+What SMAA T2x, DLAA and FSR 4 need beside the picture, made by the renderer and handed to a method as
+`pcr::AntiAliasFrame` (`pcr_antialias.h`): the depth, the motion to the previous picture, the previous picture's
+history, the jitter. None of it is made unless a temporal method or a debug view is on (`AntiAliasHistory::wanted`):
+with FXAA, SMAA 1x or none, the pictures are byte for byte what they were (checked at 009, 4x, after the jitter's
+shader change and again on the session's last code).
+
+- **One history, in the order pictures are made** (B1). Two threads make pictures, each with its own canvas and
+  `AntiAliasing`; the history is one `AntiAliasHistory`, shared and locked, written by whichever thread makes the
+  picture. Pictures are made in the order they are handed out once kf4-pc, before making its own picture, waits for
+  the pump to finish the pictures before it (`Renderer::take_picture`; only while the history is wanted). Both threads
+  submit to the one queue, so the GPU sees them in that order too. A picture made but left out as too late is still
+  in the history: the motion is to the previous picture made, at its own time, which is what reprojection needs.
+  Chosen over handing images to the pump (option a) because it needs no images to travel; its cost (kf4-pc waiting
+  for the pump) is not measured yet.
+- **The jitter** (B2, `pcr_jitter.h`, unit test `pcr_jitter_test`): one table of sequences (none, SMAA T2x's two,
+  Halton (2, 3) of 8). The draw's offset is the push constants' last word (`PrimPush::jitter`, packSnorm2x16, in the
+  target's pixels), added in `gs_to_clip` / `gs_to_clip_h`; 0 is no move, exactly. Jittered: the 3D, draws with a depth
+  test that are native or GIF triangles and lines not read by UV, into the frame's buffers (the pages the last two
+  pictures showed). Not the 2D: the game's HUD tests Z too (a depth test alone jittered it, seen in the jitter view),
+  but it draws sprites read by UV. The exact Z is not moved (pcr_exact_z.h takes it at the pixel's own point), so the
+  depth stays the GS's. A drawing (a picture between's, or a game frame's from one frame handed over by frame_interp.c
+  to the next) has one offset. The pictures between step the sequence (`next_drawing`); a game frame's drawing takes
+  the offset in step without stepping it (`drawing_in_step`), or the frame's between two pictures between gave those
+  two the same of T2x's two. `KF4_AA_JITTER=t2x|halton8` draws with one whatever the method. Checked with the camera
+  still (009, jitter view): the wall's difference from the previous picture 16.3 against 2.65 without the jitter, the
+  HUD's black.
+- **The depth** (B3, `Canvas::scanout_depth`): the shown rectangle of the Z buffer the buffer's 3D was last drawn
+  with, copied through a buffer into an R32F image: the GS's Z times 1/2^24 (1/2^32 for a 32-bit Z), larger nearer.
+  Only with D32 depth (not D24), unscaled pictures, not a field. The game's two frame buffers share one Z buffer, so
+  the depth is given only while that Z buffer was last drawn for the buffer shown: for the pictures between (drawn
+  into the shown buffer) it is; for a vblank's own picture of the game's frame it is not (the next frame has cleared
+  it). Saving the frame's depth as its drawing ends would give it there too: not done.
+- **The motion** (B4, first stage: from the cameras, `shaders/pcr_aa_motion.frag`): each pixel's depth and the
+  picture's camera give its place in the world, the previous picture's camera where it was then. The GS's projection
+  is X = sx x / z + cx, Y = sy y / z + cy, Z = cz + az / z; the world's az now travels with each picture between
+  (`GsnInterpPicture::screen`) and each frame (`GsnInterpFrame::mid1`, `world_az`: the frame's own camera, for the
+  vblank's pictures). Right for the static world; wrong for moving models, the 2D, the fire and the haze (no vectors
+  of their own; a reactive mask's work). Program 0x700's glows have their own Z scale but write no Z, so the depth
+  under them is the world's. Each colour surface is stamped with the drawing whose 3D last drew into it
+  (`Canvas::begin_drawing`), and the picture looks up that drawing's camera and jitter (`PictureOut::facts_of`): a
+  thread's last drawing was the wrong unit (the vblank's picture of the game's frame got the camera of the picture
+  between before it, and the motion came out twice the real shift, 30 pixels against 15.7 measured).
+- **History and reset** (B5): reset on the first picture, a size change, a picture or its previous one with no camera
+  or place, a gap of more than one game frame, a quick load or teleport (`port_gs_interp_cut_reset` calls
+  `pcr_antialias_cut`) and a state load (`Intake::forget`). Menus and map loads are not told apart yet.
+- **A picture with no camera or place** (a vblank's own picture of the game's frame in a vblank scheduled apart, as a
+  `--dump-frames` vblank is) is shown with no history and leaves the history as it was: the next picture is compared
+  with the last one whose camera was known (the frame gap check still resets after a pause).
+- **Debug views** (B6): `KF4_AA_DEBUG=depth|motion|reproject|jitter` over every picture (`shaders/pcr_aa_debug.frag`;
+  motion's full step 64 pixels); `KF4_AA_TRACE=1` prints what each picture had and its camera. Proven at 009, turning
+  (`lx=255` from vblank 2280, 120 a second, `KF4_INTERP_DRAW_ALL=1`, pad file `~/.cache/kf4smaa/turn.pad`):
+  - depth right in the pictures between (the barrel, the timbers nearer);
+  - motion 32.4 pixels at the fence over a vblank, where the pictures themselves moved 15.7 over half a vblank;
+  - reprojection: the static world black at 4 times the difference; bright only where expected: the fire, the HUD,
+    the thin outlines of the timbers' edges, and the strip coming into view at the side.
+- **Not yet**: per-vertex motion for moving models (the pictures between's moves taken at the previous picture's time
+  too); the depth of a vblank's own picture (save the frame's depth as its drawing ends); a reactive mask for the fire
+  and the haze; menus and map loads as resets; a fight and under water pictured.
 
 ## MSAA and cut-out AA (2026-11-11; removed 2026-11-16)
 

@@ -20,6 +20,8 @@ PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
+# SMAA's reference implementation (third_party/smaa/SMAA.hlsl), included by pcr_smaa.h
+SMAA = os.path.join(ROOT, "third_party", "smaa")
 # shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
 # depth clamp and 64-bit integers), as <name>_xz and <name>_rec_xz. (The native draws' vertex shaders read their planes
 # from the plane pass, pcr_planes_*.comp, which needs 64-bit integers itself and is made with it alone.)
@@ -73,7 +75,7 @@ def build(glslang, folder, target, prefix, what, where):
             out = os.path.join(tmp, symbol + ".spv")
             if name.endswith(".vert"):
                 defines = defines + ["-DPCR_STAGE_VERTEX"]
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED] + defines + [
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED, "-I" + SMAA] + defines + [
                 "-o", out, os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:

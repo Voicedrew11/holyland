@@ -462,10 +462,12 @@ void graphics_page() {
         int aa = port_options.antialias;
         if (ImGui::Combo("Anti-aliasing", &aa, aa_labels, PORT_AA_COUNT))
             port_live_set(PORT_LIVE_ANTIALIAS, aa);
-        tooltip("Smooths the stair-steps along edges. FXAA works on the finished picture at the resolution\n"
-                "above, before it is scaled to the window: cheap, but it softens fine detail and the 2D (text,\n"
-                "the HUD) a little too. Off is the picture as drawn. Applies from the next picture.\n"
-                "(--antialias off|fxaa)");
+        tooltip("Smooths the stair-steps along edges, on the finished picture at the resolution above, before\n"
+                "it is scaled to the window. FXAA: cheap, but it softens fine detail and the 2D (text, the HUD)\n"
+                "a little too. SMAA: finds edges by their shape, softens less, costs a little more.\n"
+                "SMAA T2x: SMAA on two pictures drawn half a pixel apart, the last one moved to where things are\n"
+                "now: steadier thin edges in motion. Off is the picture as drawn. Applies from the next picture.\n"
+                "(--antialias off|fxaa|smaa|smaa_t2x)");
         if (port_options.antialias != s.antialias) {
             ImGui::SameLine();
             ImGui::TextColored(colour_note, "(for this run: command line)");

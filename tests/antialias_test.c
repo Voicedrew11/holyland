@@ -28,6 +28,10 @@ int main(void) {
           "PORT_AA_OFF is not \"off\" (settings.json and --antialias spell it so)");
     check(port_antialias(PORT_AA_FXAA) != NULL && strcmp(port_antialias(PORT_AA_FXAA)->name, "fxaa") == 0,
           "PORT_AA_FXAA is not \"fxaa\"");
+    check(port_antialias(PORT_AA_SMAA) != NULL && strcmp(port_antialias(PORT_AA_SMAA)->name, "smaa") == 0,
+          "PORT_AA_SMAA is not \"smaa\"");
+    check(port_antialias(PORT_AA_SMAA_T2X) != NULL && strcmp(port_antialias(PORT_AA_SMAA_T2X)->name, "smaa_t2x") == 0,
+          "PORT_AA_SMAA_T2X is not \"smaa_t2x\"");
     check(port_antialias(-1) == NULL && port_antialias(PORT_AA_COUNT) == NULL, "a method past the table");
     check(port_antialias_from_name(NULL) == -1, "no name finds a method");
     check(port_antialias_from_name("msaa") == -1 && port_antialias_from_name("") == -1 &&

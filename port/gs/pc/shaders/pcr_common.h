@@ -35,7 +35,8 @@ layout(push_constant, std430) uniform Push {
     uint merged;       // (PCR_RECORDS, a native program's) not 0: the draw's triangles from u_merged (below)
     uint plane_at;     // (a native draw's, exact Z) its triangle n's plane is u_planes' n + this (n gl_VertexIndex / 3:
                        // pcr_exact_z.h's pcr_plane_of_draw); PCR_NO_PLANE: none
-    uint unused;
+    uint jitter;       // the draw moved by this sub-pixel offset, in the target's own pixels: x bits 0-15, y 16-31, each
+                       // packSnorm2x16's (the frame's 3D with a temporal anti-aliasing method, pcr_jitter.h; else 0)
 } pc;
 #if defined(PCR_ND) && defined(PCR_STAGE_VERTEX)
 // This corner's triangle in the program's tris and its draw's instance (PCR_RECORDS: a merged run's, below)
@@ -52,7 +53,7 @@ void pcr_triangle(out uint triangle, out uint instance) {
     vec2 inv_size; float zscale; uint zmax; uint flags; uint tex_size; uint clamp_lo; uint clamp_hi; uint test; \
     uint fogcol; uint texa; uint tex1; float lod_k; uint levels; ivec2 src_offset; ivec2 src_scale; ivec2 place; \
     ivec2 dest_offset; uint alpha; uint clut_at; uint table; uint record; \
-    uint factors; uint trace_xy; uint trace_draw; uint merged; uint plane_at; uint unused;
+    uint factors; uint trace_xy; uint trace_draw; uint merged; uint plane_at; uint jitter;
 struct PcrRecord {
     PCR_PUSH_FIELDS
 };
@@ -237,11 +238,13 @@ float pcr_depth_h(float zh, float w, uint zref) {
 // own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
 // was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
 // 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
+// With a jitter (pc.jitter), moved that much more: the draw's coverage and what is read across it, not its exact Z,
+// which pcr_exact_z.h takes at the pixel's own point.
 vec2 gs_to_clip(vec2 xy) {
-    return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
+    return (xy + (0.5 + unpackSnorm2x16(pc.jitter)) / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
 }
 
 // gs_to_clip for a place given times w (xy_h = xy w): Vulkan's clip x and y (its w is w)
 vec2 gs_to_clip_h(vec2 xy_h, float w) {
-    return (xy_h + w * (0.5 / vec2(pc.src_scale))) * pc.inv_size * 2.0 - w;
+    return (xy_h + w * ((0.5 + unpackSnorm2x16(pc.jitter)) / vec2(pc.src_scale))) * pc.inv_size * 2.0 - w;
 }
