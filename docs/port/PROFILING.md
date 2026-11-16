@@ -1,16 +1,85 @@
 # Profiling: where the time goes
 
-Three tools, from the broadest to the finest:
+Shift+P opens the profiler: one window with the pictures shown against the screen's, the pipelines a draw waited for,
+the frames (below) and, last, the profile run's functions. Three tools, from the broadest to the finest:
 
 | | what it says | where |
 |---|---|---|
-| Shift+P panel, top half | each thread's busy share, the GPU's ms a picture, what bounds the rate, stalls | in game |
+| **Frames** (Shift+P) | picture by picture: every thread's and the GPU's timed zones on one clock, nested; spikes; self and inclusive times | in game, `KF4_PROFILE`, `KF4_PROFILE_OUT`, `tools/sampler/frames_report.py` |
 | **Profile run** (Shift+P, "Functions and GPU") | each thread's **functions** by share of its CPU time; the **GPU's** time a picture by kind of work and by **shader state** | in game, `--profile-at`, `tools/sampler/profile.py` |
 | Radeon GPU Profiler / RenderDoc / Nsight | per-draw, per-instruction GPU detail | outside the game, with `KF4_GPU_LABELS=1` |
 
+## Frames (2026-11-15)
+
+Where each picture's time went, thread by thread and on the GPU, in the order it happened. Built after Verdite 2's
+frame profiler (Verdite Core's `FrameProfiler`, `ProfilerPanel`), with the GPU on the same clock as the threads.
+
+**In game:** Shift+P, and recording runs while the window is open (F1 for the mouse).
+
+- A bar a picture: its length (blue, red past the spike line), the GPU's busy time in it (orange), the screen's
+  budget (green). Click a bar to pick that picture; **Newest** goes back to following the newest.
+- **Spikes**: the pictures over the threshold (auto: twice the median and 2 ms), newest first. Click one to pick it.
+- **Timeline**: the picked picture with a quarter of its length either side, every lane that did something, each
+  zone nested under the one it ran in. Wheel zooms about the mouse, drag moves, double-click shows it whole; hover a
+  zone for its name and length. The green lines are the picture's edges (two presents).
+- **Zones**: the picked picture's zones, or each zone's average a picture over the window; **self** is a zone's own
+  time (the column adds up to its lane's busy time), **incl.** adds the zones inside it, **calls** its begins, **most
+  self** the largest in one picture of the window. Filter by name and by lane; **Copy table** copies it as text.
+- The lane table: each lane's ms a picture working, waiting (a zone of kind wait on top) and, for the GPU's lanes,
+  busy. A lane's time with no zone open is idle and counted nowhere.
+- **GPU** menu: the GPU's lanes by kind of work (as `[stats]`), also by shader state, or each draw (a timestamp at
+  every batch: slows the GPU, so compare its totals with by kind).
+
+**Without playing** (any run, a window or not):
+
+```sh
+KF4_PROFILE=1 KF4_PROFILE_OUT=frames.csv KF4_PROFILE_SPIKE=12 out/linux-clang/kf4 --disc ... # + KF4_GPU_DETAIL=1|2
+python3 tools/sampler/frames_report.py frames.csv --skip 2000 [--lane kf4-pc-pump] [--compare other.csv]
+```
+
+`KF4_PROFILE=1` prints every 5 s the pictures a second, their lengths and the largest zones in ms a picture;
+`KF4_PROFILE_SPIKE=MS` a line for each picture longer than MS; `KF4_PROFILE_OUT` a CSV row for every zone of every
+picture (`frame,start_ms,lane,zone,kind,self_ms,incl_ms,calls`, and a `frame` row with its length).
+`frames_report.py` gives each lane's zones a picture, the slowest pictures and what they spent their time on, and with
+`--compare` a second run's beside it zone by zone.
+
+**How it works.** A zone is a name registered once (`port_zone_id`, `port/include/port/zones.h`) and timed with
+`ZoneScope` (C++, `zone_scope.hpp`) or `port_zone_begin`/`port_zone_end` (C). Each thread writes its begins and ends
+into a ring of its own (one 64-bit word an event: id, end, ns; 8 MB, a million events) without a lock. Each GPU timing
+source (`pcr::GpuTimes`, one per kf4-pc and kf4-pc-pump) has a lane of its own: the timestamps are put on the CPU's
+clock with calibrated timestamps (`VK_KHR_calibrated_timestamps`: `CLOCK_MONOTONIC`, or the performance counter on
+Windows; calibrated again every 240 collects), a run of one kind of work one zone, each shader state (or draw) a zone
+inside it. "kf4-profiler" (`port/platform/frame_profiler.cpp`) reads every ring 20 times a second into frames
+(`zone_record.cpp`): a frame is the span between two presents (`port_zone_picture`, `present_vk.cpp`), a zone still
+open at its edge is cut there. A frame is done once every GPU lane is past its end, or half a second after it. Done
+frames are kept 10 s, the timeline's spans 2 s (the picked picture's for as long as it is picked).
+
+**What it times.** The game's thread (its work between vblanks, its time in the vblank, disc reads), the DMA
+thread (each channel's transfer, each VU1 program by its address, HLE or interpreted), kf4-pc (its inbox wait, GIF
+packets, pictures and pictures between, the canvas's main functions: `draw_batch`, `room_for_planes`,
+`bind_texture`, `flush_batch`, `submit`, `upload` ...), the pump (its waits, pictures between, `draw_again_alone`),
+`next_frame_context` and the other waits for the GPU, pipelines made while a draw waited (Granite's compile hook,
+`port_zone_after`), the presenter (the fence and image wait, the overlay, submit and present) and the profiler's own
+reading. To see inside a function, give it a zone: a `ZoneScope` at its top and its id at namespace scope.
+
+**What it costs.** Closed and with no `KF4_PROFILE*`: one relaxed load a zone. Recording, map 009 at the owner's
+settings, a real window (one run each, 2026-11-15): 9,778 pictures in 54 s against 10,230 not recording (about 4%);
+the pump writes about 2.5 million events a second; "kf4-profiler" spends about 1.1 ms a picture on a core of its own.
+GPU detail by draw costs the GPU more (a timestamp a batch). The panel draws inside the picture it measures (the
+presenter's "overlay drawn" zone). "events lost" in the window or the log names a lane whose ring filled before it was
+read (it should never show); "unmatched" counts ends with no begin.
+
+**What it cannot see.** Threads with no zones (Granite's pipeline threads, the audio): use the sampler below for
+those and for functions without a zone. A GPU without calibrated timestamps has no GPU lanes (the log says so).
+
+Until 2026-11-15 the panel's top half showed each thread's busy share and named what bounded the rate, from counters
+only the removed native GS fed (with the PC renderer most stayed at 0); they and its stalls list were removed when the
+frames took their place.
+
 ## A profile run
 
-**In game:** Shift+P, then F1 for the mouse, open "Functions and GPU (profile run)" and press **Start**. Play the
+**In game:** Shift+P, then F1 for the mouse, open "Functions and GPU (profile run)" (the window's last section) and
+press **Start**. Play the
 part to look at, then **Stop** (or keep it running: the tables update twice a second). The thread list is by CPU
 time; pick one to see its functions:
 
@@ -98,5 +167,6 @@ RenderDoc (`renderdoccmd capture ...`) shows the same labels in its event browse
 
 ## Checking it still works
 
-`ctest -R sampler`: the counts, the ELF reader (on the test's own file, and the file cut short at every few KB),
+`ctest -R zones`: the rings read while written (and losses counted), and the frames' self, inclusive and call
+counts cut at the pictures, GPU lanes that come in late. `ctest -R sampler`: the counts, the ELF reader (on the test's own file, and the file cut short at every few KB),
 and a live run that must find a busy thread's function at 90% self or more. `ctest -R profile`: the GPU table.

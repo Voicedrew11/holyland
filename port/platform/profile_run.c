@@ -91,7 +91,7 @@ void port_profile_run_vblank(uint64_t vblank) {
     if (at_state == 1 && vblank >= at_vblank) {
         const char *detail = getenv("KF4_GPU_DETAIL");
 
-        port_profile_gpu_set_detail(detail != NULL && atoi(detail) >= 1);
+        port_profile_gpu_set_detail(detail != NULL ? atoi(detail) : 0);
         if (!port_profile_run_start()) {
             fprintf(stderr, "profile: no function sampler here; the GPU's times only\n");
         }

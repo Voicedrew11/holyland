@@ -54,6 +54,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/savestate.h"
+#include "port/zones.h"
 #include "vu1_internal.h"
 
 enum {
@@ -1260,6 +1261,19 @@ static uint64_t hle_try(uint32_t pc, uint32_t top) {
     return pairs;
 }
 
+/* (kf4-dma) The frame profiler's zone for the program at pc, run by its HLE or interpreted: named once each */
+static ZoneId program_zone(uint32_t pc, int hle) {
+    static ZoneId ids[2][16384 / 8]; /* (a slot a program start: VU1 has 16 KB of micro memory) */
+    uint32_t slot = (pc / 8) % (16384 / 8);
+    char name[48];
+
+    if (ids[hle != 0][slot] == ZONE_NONE) {
+        snprintf(name, sizeof(name), "VU1 program 0x%03X (%s)", (unsigned)pc, hle ? "HLE" : "interpreted");
+        ids[hle != 0][slot] = port_zone_id(name, ZONE_WORK);
+    }
+    return ids[hle != 0][slot];
+}
+
 static uint64_t check_run(uint32_t pc, uint32_t top, uint32_t itop) {
     uint64_t hle_pairs, pairs;
     int bad = 0, n, f;
@@ -1352,6 +1366,8 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
     int saved_round = fegetround();
     uint64_t start = 0, gif_before = 0, pairs = 0;
     int hle = 0;
+    ZoneId zone;
+    int zone_hle, zoned;
 
     port_vu1_run_pc = pc;
     if (port_options.stats) {
@@ -1373,6 +1389,9 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
 #endif
     /* --vu1 hle: programs 0x000 and 0x280 (their MSCAL, and MSCNT where they ended) without the
        interpreter */
+    zone_hle = port_zones_recording() && port_options.vu1 != PORT_VU1_INTERP && !port_vu1_round_nearest;
+    zone = zone_hle ? program_zone(pc, 1) : ZONE_NONE;
+    zoned = zone != ZONE_NONE && port_zone_begin(zone);
     if (port_options.vu1 != PORT_VU1_INTERP && !port_vu1_round_nearest) {
         if (port_options.vu1 == PORT_VU1_CHECK) {
             pairs = check_run(pc, top, itop);
@@ -1382,7 +1401,15 @@ static void run(uint32_t pc, uint32_t top, uint32_t itop) {
         }
     }
     if (!pairs) {
+        if (zoned) {
+            port_zone_end(zone);
+        }
+        zone = port_zones_recording() ? program_zone(pc, 0) : ZONE_NONE;
+        zoned = zone != ZONE_NONE && port_zone_begin(zone);
         pairs = interpret(pc, top, itop);
+    }
+    if (zoned) {
+        port_zone_end(zone);
     }
 #if VU_DAZ
     _mm_setcsr(run_csr);

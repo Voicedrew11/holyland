@@ -1,4 +1,4 @@
-// The profiler panel's "Functions and GPU" section (port/overlay/profiler.cpp, Shift+P): a profile run's Start/Stop
+// The profiler window's "Functions and GPU" section (port/overlay/frames_view.cpp, Shift+P): a profile run's Start/Stop
 // (port/include/port/profile_run.h), each thread's functions by self and inclusive share of its CPU time, and the
 // GPU's time a picture by kind of work and, with detail on, by shader state. Save writes the run for
 // tools/sampler/stacks.py; Copy puts the tables on the clipboard.

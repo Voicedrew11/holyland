@@ -23,6 +23,11 @@
 #include "command_buffer.hpp"
 #include "thread_id.hpp"
 
+extern "C" {
+#include "port/profile.h"
+#include "port/zones.h"
+}
+
 // (pcr_pipeline_seed.cpp, made by cmake/pipeline_seed.cmake from port/gs/pc/pipeline_seed.bin)
 extern const unsigned char pcr_pipeline_seed[];
 extern const size_t pcr_pipeline_seed_size;
@@ -173,6 +178,13 @@ void remember(const DeferredPipelineCompile &compile, const PassDesc &pass);
 void on_compile(Device *, const DeferredPipelineCompile &compile, bool compute, int64_t ns, bool sync, bool ok) {
     if (ok) {
         store.compiles++;
+    }
+    if (sync && !on_warm_thread && ns > 0) {
+        // (a draw waited for it: Shift+P's count of them, and the frame profiler's zone on the drawing thread)
+        static const ZoneId zone = port_zone_id("pipeline made while a draw waited", ZONE_WAIT);
+        port_profile_compile(uint64_t(ns));
+        uint64_t now = port_profile_now_ns();
+        port_zone_after(zone, now > uint64_t(ns) ? now - uint64_t(ns) : 0);
     }
     if (compute || !ok) {
         return;

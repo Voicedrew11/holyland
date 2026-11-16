@@ -226,9 +226,19 @@ endif()
 target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
 # GS libraries (kf4_gs, built into tests without the port) add to them as well
-add_library(kf4_profile STATIC port/platform/profile.c)
+add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
+# the frame profiler's frames, worked out from the zones' rings (port/include/port/zone_record.hpp) on a thread of
+# their own (port/include/port/frame_profiler.h): Shift+P's "Frames", KF4_PROFILE and its CSV
+add_library(kf4_zone_record STATIC port/platform/zone_record.cpp port/platform/frame_profiler.cpp)
+target_include_directories(kf4_zone_record PUBLIC port/include)
+set_target_properties(kf4_zone_record PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(kf4_zone_record PRIVATE -Wall -Wextra -Wshadow)
+endif()
+target_link_libraries(kf4_zone_record PUBLIC kf4_profile)
+target_link_libraries(kf4_port PUBLIC kf4_zone_record)
 # the function profiler (port/include/port/sampler.h): a library of its own, for its test; with liblzma it names
 # the functions of the system's stripped libraries too (their MiniDebugInfo)
 add_library(kf4_sampler STATIC port/platform/sampler.c port/platform/sample_table.c port/platform/elf_symbols.c)
@@ -308,6 +318,7 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
     target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp
                    port/overlay/profiler.cpp
+                   port/overlay/frames_view.cpp
                    port/overlay/profile_run_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
@@ -637,6 +648,20 @@ if(KF4_TESTS)
     add_test(NAME profile COMMAND profile_test)
 endif()
 
+# The frame profiler: the zones' rings read while written, and the frames, self and inclusive times worked out
+# from them (port/platform/zones.c, zone_record.cpp)
+add_executable(zones_test tests/zones_test.cpp)
+target_link_libraries(zones_test PRIVATE kf4_zone_record)
+set_target_properties(zones_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(zones_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(zones_test PRIVATE Threads::Threads)
+if(KF4_TESTS)
+    add_test(NAME zones COMMAND zones_test)
+endif()
+
 # The function profiler: its counts, the ELF symbols that name them, and a live run on a busy thread
 # (port/platform/sample_table.c, elf_symbols.c, sampler.c)
 add_executable(sampler_test tests/sampler_test.c)
@@ -850,6 +875,7 @@ target_compile_options(libm_test PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS}
 # The VU1 interpreter's self-test: hand-written microcode run on port/platform/vu1.c alone
 add_executable(vu1_test tests/vu1_test.c port/platform/vu1.c port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/math/libvu0.c)
 target_include_directories(vu1_test PRIVATE port/include)
+target_link_libraries(vu1_test PRIVATE kf4_profile) # (vu1.c times its programs as the frame profiler's zones)
 target_compile_options(vu1_test PRIVATE -frounding-math -ffp-contract=off)
 if(NOT WIN32)
     target_link_libraries(vu1_test PRIVATE m)
@@ -860,6 +886,7 @@ add_executable(vu1_record_test tests/vu1_record_test.cpp port/render/vu1_record.
                port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c
                port/math/libvu0.c)
 target_include_directories(vu1_record_test PRIVATE port/include)
+target_link_libraries(vu1_record_test PRIVATE kf4_profile)
 target_compile_options(vu1_record_test PRIVATE -frounding-math -ffp-contract=off)
 set_target_properties(vu1_record_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(NOT WIN32)

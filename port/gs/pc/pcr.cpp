@@ -47,6 +47,7 @@
 #include "pcr_pipelines.h"
 #include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
+#include "port/zone_scope.hpp"
 #include "device.hpp"
 #include "thread_id.hpp"
 
@@ -60,6 +61,26 @@ extern "C" {
 }
 
 using namespace Vulkan;
+
+// The frame profiler's zones (port/include/port/zones.h)
+const ZoneId pc_inbox_waits_for_work_zone = port_zone_id("pc inbox: waits for work", ZONE_WAIT);
+const ZoneId pump_waits_for_work_zone = port_zone_id("pump: waits for work", ZONE_WAIT);
+const ZoneId pump_waits_until_a_picture_s_time_zone = port_zone_id("pump: waits until a picture's time", ZONE_WAIT);
+const ZoneId waits_for_the_pump_zone = port_zone_id("waits for the pump (idle)", ZONE_WAIT);
+const ZoneId gpu_times_collected_zone = port_zone_id("GPU times collected", ZONE_WORK);
+const ZoneId pc_frame_taken_pictures_between_zone = port_zone_id("pc frame taken (pictures between)", ZONE_WORK);
+const ZoneId pc_walk_picture_a_picture_between_zone = port_zone_id("pc walk_picture (a picture between)", ZONE_WORK);
+const ZoneId pc_direct_picture_zone = port_zone_id("pc direct_picture", ZONE_WORK);
+const ZoneId pc_gif_packet_fed_zone = port_zone_id("pc GIF packet fed", ZONE_WORK);
+const ZoneId picture_made_zone = port_zone_id("picture made", ZONE_WORK);
+const ZoneId picture_handed_out_zone = port_zone_id("picture handed out", ZONE_WORK);
+const ZoneId pc_take_picture_zone = port_zone_id("pc take_picture", ZONE_WORK);
+const ZoneId pc_next_frame_context_waits_for_the_gpu_zone = port_zone_id("pc next_frame_context (waits for the GPU)", ZONE_WAIT);
+const ZoneId pc_waits_for_the_pump_room_for_a_frame_zone = port_zone_id("pc waits for the pump (room for a frame)", ZONE_WAIT);
+const ZoneId pump_frame_taken_zone = port_zone_id("pump frame taken", ZONE_WORK);
+const ZoneId pump_picture_between_zone = port_zone_id("pump picture between", ZONE_WORK);
+const ZoneId pump_picture_zone = port_zone_id("pump picture", ZONE_WORK);
+const ZoneId pc_take_picture_between_zone = port_zone_id("pc take_picture_between", ZONE_WORK);
 
 namespace {
 
@@ -183,7 +204,10 @@ public:
     // (the PC renderer's thread) The next message, or none when it is to stop
     std::optional<Message> take() {
         std::unique_lock<std::mutex> hold(lock_);
-        wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+        if (messages_.empty() && !stopping_) {
+            ZoneScope zone(pc_inbox_waits_for_work_zone);
+            wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+        }
         if (stopping_) {
             return std::nullopt;
         }
@@ -647,6 +671,7 @@ public:
     // A frame walked once (pcr_frame_walk.h): the frame's own walk, kept (the last stretch of packets between two
     // vblanks), is made its pictures' walk when the frame is its packets, and the rules make the stream's of it.
     void take_frame(InterpFrame frame) {
+        ZoneScope zone(pc_frame_taken_pictures_between_zone);
         if (!between_) {
             return;
         }
@@ -696,6 +721,7 @@ public:
     // packets walked again from the frame's state, its kicks numbered, the canvas's and the native draws' corners
     // moved by the shaders to the picture's time, and the walk kept. The live state is put back after.
     std::optional<ForPump> walk_picture(const GsnInterpPicture &picture) {
+        ZoneScope zone(pc_walk_picture_a_picture_between_zone);
         if (!between_ || !canvas_) {
             return std::nullopt;
         }
@@ -759,6 +785,7 @@ public:
     // have given it to the pump now (the frame's kept walk no longer fits the store: the next frame's packets before it
     // changed what it read); the pump drew it from the walk all the same.
     bool direct_picture(const GsnInterpPicture &picture) {
+        ZoneScope zone(pc_direct_picture_zone);
         if (!between_ || !canvas_) {
             return false;
         }
@@ -813,6 +840,7 @@ public:
     }
 
     void feed(int path, const std::vector<uint8_t> &bytes) {
+        ZoneScope zone(pc_gif_packet_fed_zone);
         if (own_walks_ && !stretch_open_ && !in_replay_ && vblanks_ <= frame_taken_at_ + STRETCHES_KEPT_VBLANKS) {
             open_stretch();
         }
@@ -844,6 +872,7 @@ public:
             canvas_->set_msaa(samples, cutout_aa);
             canvas_->set_2d(mode_2d);
             canvas_->vblank();
+            ZoneScope collect_zone(gpu_times_collected_zone);
             times_->collect();
         }
         if (census_) {
@@ -1229,6 +1258,7 @@ public:
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
     MadePicture make(const VblankPicture &v, uint32_t scale, pcr::Canvas *canvas, pcr::GpuTimes &times) {
+        ZoneScope zone(picture_made_zone);
         MadePicture m;
         bool extra = (v.want & GSN_EXTRA) != 0;
         m.want = v.want;
@@ -1302,6 +1332,7 @@ public:
 
     // m published, given to the presenter, its sender answered, its vblank done
     void hand_out(const MadePicture &m, Inbox &inbox) {
+        ZoneScope zone(picture_handed_out_zone);
         if (m.slot >= 0) {
             scanout_.publish(m.slot, m.tag);
         }
@@ -1521,6 +1552,7 @@ public:
     // every surface (hundreds of MB at 4x), so a pump behind (a rate above what it draws) must hold kf4-pc back, not
     // queue them: unbounded, they filled the GPU's memory and the system's in seconds at 500 a second (2026-11-07).
     void wait_for_room_for_frame() {
+        ZoneScope zone(pc_waits_for_the_pump_room_for_a_frame_zone);
         std::unique_lock<std::mutex> hold(lock_);
         idle_.wait(hold, [&] { return gone_ || frames_waiting_ == 0; });
     }
@@ -1533,6 +1565,7 @@ public:
 
     // Any thread: everything sent before done, or the thread gone
     void wait_idle() {
+        ZoneScope zone(waits_for_the_pump_zone);
         std::unique_lock<std::mutex> hold(lock_);
         idle_.wait(hold, [&] { return gone_ || (messages_.empty() && !busy_); });
     }
@@ -1612,7 +1645,10 @@ private:
     std::optional<PumpMessage> take() {
         std::unique_lock<std::mutex> hold(lock_);
         for (;;) {
-            wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+            if (messages_.empty() && !stopping_) {
+                ZoneScope zone(pump_waits_for_work_zone);
+                wake_.wait(hold, [&] { return stopping_ || !messages_.empty(); });
+            }
             if (stopping_) {
                 return std::nullopt;
             }
@@ -1621,6 +1657,7 @@ private:
             if (early_s <= 0) {
                 break;
             }
+            ZoneScope zone(pump_waits_until_a_picture_s_time_zone);
             wake_.wait_for(hold, std::chrono::duration<double>(early_s));
         }
         PumpMessage message = std::move(messages_.front());
@@ -1668,12 +1705,14 @@ private:
     }
 
         void work(PumpFrame &frame) {
+            ZoneScope zone(pump_frame_taken_zone);
         canvas_->start_from(*frame.surfaces);
         between_->take_walked(std::move(frame.walked));
         walk_ = std::move(frame.walk);
     }
 
     void work(InterpPicture &p) {
+        ZoneScope zone(pump_picture_between_zone);
         double began_s = port_wall_seconds();
         turned_before(turn_lead_, turn_to_hand(p.picture, turn_lead_));
         last_between_ = p.picture;
@@ -1696,6 +1735,7 @@ private:
     }
 
     void work(PumpPicture &e) {
+        ZoneScope zone(pump_picture_zone);
         pictures_++;
         double began_s = port_wall_seconds();
         MadePicture made = out_.make(e.picture, e.scale, canvas_.get(), *times_);
@@ -1710,6 +1750,7 @@ private:
             between_took_s_ = 0;
         }
         // (under Granite's device lock: kf4-pc's next_frame_context writes the timestamps' results as they come in)
+        ZoneScope collect_zone(gpu_times_collected_zone);
         device_.external_queue_lock();
         times_->collect();
         device_.external_queue_unlock();
@@ -2137,6 +2178,7 @@ private:
     // last picture between taken was the pump's, and no picture has shown it yet: gs.c draws a picture between, then
     // the picture that shows it), else made here and handed out in order
     void take_picture(VblankPicture v) {
+        ZoneScope zone(pc_take_picture_zone);
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
@@ -2181,6 +2223,7 @@ private:
 
     // (kf4-pc) Granite's frame context moved on: waits for the GPU's work of the context it comes round to
     void next_frame_context() {
+        ZoneScope zone(pc_next_frame_context_waits_for_the_gpu_zone);
         pcr::GpuWait wait(&hang_notes_, "kf4-pc's next_frame_context", pcr::hang_clock_s());
         device_->next_frame_context();
     }
@@ -2233,6 +2276,7 @@ private:
     // A picture between the pump was sent directly (Renderer::interp_picture) is only counted here; when the walk no
     // longer fits, the next ones come here again (and are walked again, as walk_picture does).
     void take_picture_between(InterpPicture p) {
+        ZoneScope zone(pc_take_picture_between_zone);
         if (p.direct) {
             last_between_ = p.picture;
             shows_pumped_ = true;

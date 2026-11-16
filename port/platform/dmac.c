@@ -39,12 +39,14 @@
 #include <sched.h>
 #endif
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/savestate.h"
+#include "port/zones.h"
 
 #define CHCR_DIR 0x1 /* from memory */
 #define CHCR_MOD_SHIFT 2
@@ -458,7 +460,40 @@ void port_gif_path3_poll(void) {
     }
 }
 
+static void run_work_kind(const Work *work);
+
+/* (kf4-dma) The frame profiler's zone for a piece of work: a channel's transfer by its name, a call, the GS's vsync */
+static ZoneId work_zone(const Work *work) {
+    static const char *const channels[10] = {"VIF0", "VIF1 (VU1)", "GIF", "from IPU", "to IPU",
+                                             "SIF0", "SIF1",       "SIF2", "from SPR", "to SPR"};
+    static ZoneId ids[12];
+    char name[48];
+    int slot = work->kind == WORK_CHANNEL ? (work->channel >= 0 && work->channel < 10 ? work->channel : 0)
+               : work->kind == WORK_CALL  ? 10
+                                          : 11;
+
+    if (ids[slot] == ZONE_NONE) {
+        if (slot < 10) {
+            snprintf(name, sizeof(name), "dma %s transfer", channels[slot]);
+        } else {
+            snprintf(name, sizeof(name), "%s", slot == 10 ? "dma call from the game" : "dma GS vsync");
+        }
+        ids[slot] = port_zone_id(name, ZONE_WORK);
+    }
+    return ids[slot];
+}
+
 static void run_work(const Work *work) {
+    ZoneId zone = port_zones_recording() ? work_zone(work) : ZONE_NONE;
+    int zoned = zone != ZONE_NONE && port_zone_begin(zone);
+
+    run_work_kind(work);
+    if (zoned) {
+        port_zone_end(zone);
+    }
+}
+
+static void run_work_kind(const Work *work) {
     switch (work->kind) {
     case WORK_CHANNEL:
         run_transfer(work->channel);
@@ -488,14 +523,7 @@ static void *dmac_thread(void *unused)
 
         claim_starts(NULL);
         if (take_work(&work)) {
-            if (port_profile_on()) {
-                uint64_t t0 = port_profile_now_ns();
-
-                run_work(&work);
-                port_profile_add(PROFILE_DMA, port_profile_now_ns() - t0);
-            } else {
-                run_work(&work);
-            }
+            run_work(&work);
             idle = 0;
             continue;
         }

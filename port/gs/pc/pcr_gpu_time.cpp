@@ -1,16 +1,25 @@
 // The PC renderer's GPU time by kind of work (pcr_gpu_time.h)
 #include "pcr_gpu_time.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <string>
 #include <unordered_map>
+#ifdef __linux__
+#include <pthread.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "device.hpp"
 
 extern "C" {
 #include "port/profile.h"
+#include "port/zones.h"
 }
 
 using namespace Vulkan;
@@ -85,17 +94,161 @@ void shader_state_text(uint32_t key, char *text, size_t size) {
              field(key, 23, 2) > 1 ? " | alpha test 2 passes" : "");
 }
 
+// The frame profiler's GPU lane (port/include/port/zones.h): the intervals put on the CPU's clock (calibrated
+// timestamps, VK_KHR_calibrated_timestamps: CLOCK_MONOTONIC or the performance counter, port_profile_now_ns' clock)
+// and written as zones, a kind's run of intervals one zone and each shader state within it one more (detail on).
+// Made on the owner's thread at its first interval while the zones record; nothing without calibrated timestamps.
+class GpuLane {
+public:
+    GpuLane(Device &device, double period_ns) : device_(device), period_ns_(period_ns) {}
+
+    // An interval of work (state 0: none) from ticks t0 to t1
+    void put(GpuWork work, uint32_t state, uint64_t t0, uint64_t t1) {
+        if (!ready()) {
+            return;
+        }
+        uint64_t start = std::max(to_ns(t0), last_end_), end = std::max(to_ns(t1), start);
+        // (a gap: the GPU idle between submits, or another thread's work: the kind's zone closed)
+        if (kind_open_ && (work != kind_ || start > last_end_ + gap_ns)) {
+            close();
+        }
+        if (!kind_open_) {
+            port_zone_lane_begin_at(lane_, kind_id(work), start);
+            kind_open_ = true;
+            kind_ = work;
+        }
+        if (state != 0) {
+            ZoneId id = state_id(work, state);
+            port_zone_lane_begin_at(lane_, id, start);
+            port_zone_lane_end_at(lane_, id, end);
+        }
+        last_end_ = end;
+    }
+
+    // The collect's end: the kind open closed (a run of a kind never spans two collects)
+    void close() {
+        if (kind_open_) {
+            port_zone_lane_end_at(lane_, kind_id(kind_), last_end_);
+            kind_open_ = false;
+        }
+    }
+
+private:
+    static constexpr uint64_t gap_ns = 2000;
+    static constexpr int calibrate_every = 240; // (collects: the clocks drift apart slowly)
+
+    bool ready() {
+        if (lane_ == nullptr) {
+            if (refused_ || !port_zones_recording()) {
+                return false;
+            }
+            if (!calibrate()) {
+                refused_ = true;
+                fprintf(stderr, "[pcr] no calibrated timestamps: the frame profiler has no GPU lane\n");
+                return false;
+            }
+            lane_ = port_zone_lane_make(("GPU " + thread_name()).c_str(), 1);
+            refused_ = lane_ == nullptr;
+            return lane_ != nullptr;
+        }
+        if (++since_calibrated_ >= calibrate_every) {
+            calibrate();
+        }
+        return true;
+    }
+
+    // A pair of the GPU's and the host's clocks read together
+    bool calibrate() {
+        since_calibrated_ = 0;
+        if (!device_.get_device_features().supports_calibrated_timestamps) {
+            return false;
+        }
+        VkCalibratedTimestampInfoKHR infos[2] = {};
+        infos[0].sType = infos[1].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+#ifdef _WIN32
+        infos[0].timeDomain = VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR;
+#else
+        infos[0].timeDomain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
+#endif
+        infos[1].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+        uint64_t stamps[2] = {}, deviation = 0;
+        const VolkDeviceTable &table = device_.get_device_table();
+        if (table.vkGetCalibratedTimestampsKHR == nullptr ||
+            table.vkGetCalibratedTimestampsKHR(device_.get_device(), 2, infos, stamps, &deviation) != VK_SUCCESS) {
+            return false;
+        }
+#ifdef _WIN32
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        host_ns_ = uint64_t(double(stamps[0]) * 1e9 / double(frequency.QuadPart));
+#else
+        host_ns_ = stamps[0];
+#endif
+        device_ticks_ = stamps[1];
+        return true;
+    }
+
+    uint64_t to_ns(uint64_t ticks) const {
+        double ns = double(host_ns_) + double(int64_t(ticks - device_ticks_)) * period_ns_;
+        return ns > 0 ? uint64_t(ns) : 0;
+    }
+
+    static std::string thread_name() {
+        char name[32] = "?";
+#ifdef __linux__
+        pthread_getname_np(pthread_self(), name, sizeof(name));
+#endif
+        return name;
+    }
+
+    ZoneId kind_id(GpuWork work) {
+        ZoneId &id = kind_ids_[size_t(work)];
+        if (id == ZONE_NONE) {
+            id = port_zone_id((std::string("gpu ") + work_names[size_t(work)]).c_str(), ZONE_GPU);
+        }
+        return id;
+    }
+
+    ZoneId state_id(GpuWork work, uint32_t state) {
+        uint64_t key = uint64_t(work) << 32 | state;
+        auto found = state_ids_.find(key);
+        if (found != state_ids_.end()) {
+            return found->second;
+        }
+        char text[PROFILE_GPU_NAME];
+        shader_state_text(state, text, sizeof(text));
+        ZoneId id = port_zone_id(text, ZONE_GPU);
+        state_ids_.emplace(key, id);
+        return id;
+    }
+
+    Device &device_;
+    double period_ns_;
+    ZoneLane *lane_ = nullptr;
+    bool refused_ = false;
+    int since_calibrated_ = 0;
+    uint64_t host_ns_ = 0, device_ticks_ = 0;
+    bool kind_open_ = false;
+    GpuWork kind_ = GpuWork::draws_2d;
+    uint64_t last_end_ = 0;
+    std::array<ZoneId, size_t(GpuWork::count)> kind_ids_{};
+    std::unordered_map<uint64_t, ZoneId> state_ids_;
+};
+
 class GpuTimes::Impl {
 public:
     explicit Impl(Device &device)
         : device_(device), on_(switched_on()), labels_(labels_on()),
-          period_ns_(double(device.get_gpu_properties().limits.timestampPeriod)) {}
+          period_ns_(double(device.get_gpu_properties().limits.timestampPeriod)), lane_(device, period_ns_) {}
 
     void begin(CommandBuffer &cmd, GpuWork work, uint32_t state) {
-        if (!port_profile_gpu_detail()) {
+        int detail = port_profile_gpu_detail();
+        if (!detail) {
             state = 0;
         }
-        if (open_ && open_cmd_ == &cmd && open_work_ == work && open_state_ == state) {
+        // (detail 2: each draw an interval of its own, the same state or not)
+        bool each_draw = detail >= 2 && state != 0;
+        if (open_ && open_cmd_ == &cmd && open_work_ == work && open_state_ == state && !each_draw) {
             return;
         }
         if (open_ && open_cmd_ != &cmd) {
@@ -151,15 +304,14 @@ public:
             if (t1 > t0) {
                 uint64_t ns = uint64_t(double(t1 - t0) * period_ns_);
                 ns_[size_t(i.work)] += ns;
-                if (port_profile_on()) {
-                    port_profile_add(PROFILE_GPU, ns);
-                }
                 if (port_profile_gpu_recording()) {
                     add_to_profile(i, ns);
                 }
+                lane_.put(i.work, i.state, t0, t1);
             }
             pending_.pop_front();
         }
+        lane_.close();
         flush_to_profile();
         while (pending_.size() > pending_most) {
             pending_.pop_front();
@@ -259,7 +411,7 @@ private:
     static constexpr size_t pending_most = size_t(1) << 16;
 
     bool on() const {
-        return on_ || port_profile_on() || port_profile_gpu_recording();
+        return on_ || port_profile_gpu_recording() || port_zones_recording();
     }
 
     Device &device_;
@@ -275,6 +427,7 @@ private:
     std::unordered_map<uint64_t, Totals> profile_rows_; // (collect's, handed over at its end)
     std::array<uint64_t, size_t(GpuWork::count)> ns_{};
     uint64_t pictures_ = 0, dropped_ = 0;
+    GpuLane lane_; // (after period_ns_)
 };
 
 GpuTimes::GpuTimes(Device &device) : impl_(std::make_unique<Impl>(device)) {}

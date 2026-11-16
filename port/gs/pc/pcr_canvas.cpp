@@ -29,6 +29,7 @@
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
 #include "pcr_textures.h"
+#include "port/zone_scope.hpp"
 
 extern "C" {
 #include "gsn_vram.h"
@@ -38,6 +39,39 @@ extern "C" {
 using namespace Vulkan;
 
 namespace pcr {
+
+// The frame profiler's zones (port/include/port/zones.h)
+const ZoneId canvas_upload_zone = port_zone_id("canvas upload", ZONE_WORK);
+const ZoneId canvas_vblank_zone = port_zone_id("canvas vblank", ZONE_WORK);
+const ZoneId canvas_scanout_zone = port_zone_id("canvas scanout", ZONE_WORK);
+const ZoneId canvas_submit_vkqueuesubmit_zone = port_zone_id("canvas submit (vkQueueSubmit)", ZONE_WORK);
+const ZoneId canvas_submit_planes_zone = port_zone_id("canvas submit_planes", ZONE_WORK);
+const ZoneId canvas_end_pass_zone = port_zone_id("canvas end_pass", ZONE_WORK);
+const ZoneId canvas_begin_pass_zone = port_zone_id("canvas begin_pass", ZONE_WORK);
+const ZoneId canvas_resolve_msaa_zone = port_zone_id("canvas resolve (MSAA)", ZONE_WORK);
+const ZoneId canvas_expand_zone = port_zone_id("canvas expand", ZONE_WORK);
+const ZoneId canvas_colour_surface_zone = port_zone_id("canvas colour_surface", ZONE_WORK);
+const ZoneId canvas_grow_zone = port_zone_id("canvas grow", ZONE_WORK);
+const ZoneId canvas_write_upload_into_surfaces_zone = port_zone_id("canvas write_upload_into_surfaces", ZONE_WORK);
+const ZoneId canvas_copy_between_surfaces_zone = port_zone_id("canvas copy_between_surfaces", ZONE_WORK);
+const ZoneId canvas_read_pixels_waits_for_the_gpu_zone = port_zone_id("canvas read_pixels (waits for the GPU)", ZONE_WAIT);
+const ZoneId canvas_bind_texture_zone = port_zone_id("canvas bind_texture", ZONE_WORK);
+const ZoneId canvas_keep_frame_zone = port_zone_id("canvas keep_frame", ZONE_WORK);
+const ZoneId canvas_evict_textures_zone = port_zone_id("canvas evict_textures", ZONE_WORK);
+const ZoneId canvas_draw_again_zone = port_zone_id("canvas draw_again", ZONE_WORK);
+const ZoneId canvas_put_vertices_on_gpu_zone = port_zone_id("canvas put_vertices_on_gpu", ZONE_WORK);
+const ZoneId canvas_put_cluts_on_gpu_zone = port_zone_id("canvas put_cluts_on_gpu", ZONE_WORK);
+const ZoneId canvas_put_table_on_gpu_zone = port_zone_id("canvas put_table_on_gpu", ZONE_WORK);
+const ZoneId canvas_copy_surfaces_for_the_pump_zone = port_zone_id("canvas copy_surfaces (for the pump)", ZONE_WORK);
+const ZoneId canvas_start_from_zone = port_zone_id("canvas start_from", ZONE_WORK);
+const ZoneId canvas_draw_again_alone_zone = port_zone_id("canvas draw_again_alone", ZONE_WORK);
+const ZoneId canvas_flush_batch_zone = port_zone_id("canvas flush_batch", ZONE_WORK);
+const ZoneId canvas_room_for_planes_zone = port_zone_id("canvas room_for_planes", ZONE_WORK);
+const ZoneId canvas_draw_batch_zone = port_zone_id("canvas draw_batch", ZONE_WORK);
+const ZoneId canvas_make_again_zone = port_zone_id("canvas make_again", ZONE_WORK);
+const ZoneId canvas_draw_made_again_zone = port_zone_id("canvas draw_made_again", ZONE_WORK);
+const ZoneId canvas_draw_where_date_passes_zone = port_zone_id("canvas draw_where_date_passes", ZONE_WORK);
+const ZoneId canvas_fill_from_uploads_zone = port_zone_id("canvas fill_from_uploads", ZONE_WORK);
 
 namespace {
 
@@ -468,6 +502,7 @@ public:
     }
 
     void upload(const TransferRegisters &t, std::span<const uint8_t> bytes) {
+        ZoneScope zone(canvas_upload_zone);
         flush_batch();
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
         bool taken = store_.upload(regs, bytes);
@@ -702,6 +737,7 @@ public:
     }
 
     void vblank() {
+        ZoneScope zone(canvas_vblank_zone);
         flush_batch();
         if (!uploads_now_.empty()) {
             uploads_frame_.swap(uploads_now_);
@@ -761,6 +797,7 @@ public:
     }
 
     bool scanout(CommandBuffer &out, const ShownRect &rect, const Image &dst) {
+        ZoneScope zone(canvas_scanout_zone);
         flush_batch();
         // (submitted without a flush: the caller submits out right after, and that puts both on the GPU's queue in
         // one vkQueueSubmit)
@@ -843,6 +880,7 @@ public:
     // so the GPU would start this thread's work only then (the pump's: up to a vblank later, kf4-pc's next picture).
     // flush false: handed to Granite but left for the next submit that flushes (one the caller makes at once).
     void submit(bool flush = true) {
+        ZoneScope zone(canvas_submit_vkqueuesubmit_zone);
         flush_run();
         end_pass();
         if (runs_.buffer) {
@@ -862,6 +900,7 @@ public:
 
     // (exact Z) The plane pass for the command buffer about to be submitted, submitted before it
     void submit_planes() {
+        ZoneScope zone(canvas_submit_planes_zone);
         if (planes_) {
             PlanePass::Submitted done = planes_->submit(times_);
             if (done.dispatches != 0 && hang_notes_) {
@@ -938,6 +977,7 @@ private:
     // 009 a picture has about ten pass changes: the reflection's target, DATE's set-up, the pump's submits).
     // KF4_PC_PASS_BARRIER=full: the full barrier after every pass and before every pass, as before (to compare).
     void end_pass() {
+        ZoneScope zone(canvas_end_pass_zone);
         flush_run();
         if (pass_colour_) {
             cmd().end_render_pass();
@@ -976,6 +1016,7 @@ private:
 
     // The pass drawing into colour (and depth): the open one when it is that, else a new one
     void begin_pass(Surface &colour, Surface *depth, PassReads reads) {
+        ZoneScope zone(canvas_begin_pass_zone);
         if (pass_colour_ == &colour && (depth == nullptr || pass_depth_ == depth) &&
             (reads == PassReads::nothing || pass_reads_ == reads)) {
             return;
@@ -1185,6 +1226,7 @@ private:
     // Before a colour surface's image is read whole (or written where it was drawn): what was drawn into its
     // multisampled image resolved into it
     void resolve(Surface &s) {
+        ZoneScope zone(canvas_resolve_msaa_zone);
         if (!s.ms || !s.ms_ahead) {
             return;
         }
@@ -1234,6 +1276,7 @@ private:
 
     // image's pixels over rect into every sample of ms (a pass of its own, image read by pcr_expand.frag)
     void expand(Surface &s, const VkRect2D &rect) {
+        ZoneScope zone(canvas_expand_zone);
         end_pass();
         CommandBuffer &c = cmd(GpuWork::surface);
         full_barrier(c);
@@ -1282,6 +1325,7 @@ private:
     // made no taller starts cleared (under water the copy of the frame and the water's targets let each other go
     // every picture: filled from the uploads each time, 140 pages read and written for nothing)
     Placed colour_surface(uint32_t base_page, uint32_t fbw, uint32_t psm, uint32_t height, bool covered = false) {
+        ZoneScope zone(canvas_colour_surface_zone);
         for (auto &s : colour_) {
             uint32_t x, y;
             if (s->fbw == fbw && s->page_place(base_page, x, y) && x == 0) {
@@ -1453,6 +1497,7 @@ private:
     // A surface made taller: a new image, the old one's pixels copied in. (The open pass ended whatever it draws
     // into: copies and clears are not allowed in a render pass, and recorded in one, RADV lost the pass's draws.)
     void grow(Surface &s, uint32_t height) {
+        ZoneScope zone(canvas_grow_zone);
         end_pass();
         ImageHandle bigger = make_surface_image(s.width(), height, s.depth);
         if (!bigger) {
@@ -1552,6 +1597,7 @@ private:
     // The surface's pages as the uploads left them (those wholly an upload's): read from the texture store a page
     // at a time, written in at the canvas's scale
     void fill_from_uploads(Surface &s) {
+        ZoneScope zone(canvas_fill_from_uploads_zone);
         if (s.psm != GSN_PSMCT32) {
             return;
         }
@@ -1615,6 +1661,7 @@ private:
 
     // An upload into the GS's memory where a colour surface is: its pixels written into the surface too
     void write_upload_into_surfaces(const TransferRegisters &t, std::span<const uint8_t> bytes) {
+        ZoneScope zone(canvas_write_upload_into_surfaces_zone);
         uint32_t dbp = bits(t.bitbltbuf, 32, 14), dbw = bits(t.bitbltbuf, 48, 6), dpsm = bits(t.bitbltbuf, 56, 6);
         uint32_t x = bits(t.trxpos, 32, 11), y = bits(t.trxpos, 48, 11);
         uint32_t w = bits(t.trxreg, 0, 12), h = bits(t.trxreg, 32, 12);
@@ -1646,6 +1693,7 @@ private:
     // A local copy from a colour surface: into the colour surface at the destination (made when there is none),
     // pixel for pixel at the canvas's scale. Formats other than CT32 to CT32 are counted, not made.
     void copy_between_surfaces(const TransferRegisters &t) {
+        ZoneScope zone(canvas_copy_between_surfaces_zone);
         uint32_t sbp = bits(t.bitbltbuf, 0, 14), sbw = bits(t.bitbltbuf, 16, 6), spsm = bits(t.bitbltbuf, 24, 6);
         uint32_t dbp = bits(t.bitbltbuf, 32, 14), dbw = bits(t.bitbltbuf, 48, 6), dpsm = bits(t.bitbltbuf, 56, 6);
         uint32_t sx = bits(t.trxpos, 0, 11), sy = bits(t.trxpos, 16, 11);
@@ -1703,6 +1751,7 @@ private:
     // A rectangle of a colour surface's GS pixels (the middle of each at the canvas's scale) read from the GPU, as
     // RGBA8 (w x h). Waits for the GPU.
     bool read_pixels(Surface &from, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint32_t> &out) {
+        ZoneScope zone(canvas_read_pixels_waits_for_the_gpu_zone);
         ImageCreateInfo info = ImageCreateInfo::render_target(w, h, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         info.layout = ImageLayout::General;
@@ -1852,6 +1901,7 @@ private:
     }
 
     BoundTexture bind_texture(const DrawState &s, uint32_t cols, uint32_t rows) {
+        ZoneScope zone(canvas_bind_texture_zone);
         BoundTexture b;
         TextureRegs regs = {s.tex0, s.tex1, s.miptbp1, s.miptbp2, s.clamp};
         uint32_t psm = bits(s.tex0, 20, 6);
@@ -2177,6 +2227,7 @@ private:
 
     // 0xF2: the frame shown (the colour surface at that base page), kept before a picture between draws over it
     void keep_frame(uint32_t base_page) {
+        ZoneScope zone(canvas_keep_frame_zone);
         flush_batch();
         kept_frame_.reset();
         for (auto &s : colour_) {
@@ -2227,6 +2278,7 @@ private:
     }
 
     void evict_textures() {
+        ZoneScope zone(canvas_evict_textures_zone);
         if (textures_.size() >= 4096) {
             for (auto it = textures_.begin(); it != textures_.end();) {
                 it = frame_ - it->second.used > 120 ? textures_.erase(it) : std::next(it);
@@ -2423,6 +2475,7 @@ private:
     }
 
     void draw_again(const Kept &walk, const Between &between) {
+        ZoneScope zone(canvas_draw_again_zone);
         flush_batch();
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
@@ -2445,6 +2498,7 @@ private:
     // PERFORMANCE.md). Called once, before the walk is handed out (it is not changed after); without memory the
     // GPU can map, the batches are copied at each draw as before. KF4_PC_WALK_VERTICES=0: never (to compare).
     void put_vertices_on_gpu(Kept &walk) const {
+        ZoneScope zone(canvas_put_vertices_on_gpu_zone);
         // (a batch copied from another walk, drawn again while this one was kept, names its place in that one's)
         size_t count = 0;
         for (Batch &b : walk.batches) {
@@ -2482,6 +2536,7 @@ private:
     // into a set 1 of its own. Called once, before the walk is handed out, as put_vertices_on_gpu.
     // KF4_PC_BINDLESS=0: never (to compare).
     void put_cluts_on_gpu(Kept &walk) const {
+        ZoneScope zone(canvas_put_cluts_on_gpu_zone);
         walk.cluts.reset();
         std::vector<uint32_t> colours;
         std::unordered_map<uint64_t, uint32_t> found; // (a CLUT's hash: its first colour)
@@ -2524,6 +2579,7 @@ private:
     // Called once, before the walk is handed out, as put_vertices_on_gpu. A batch whose sampler finds no room (more
     // than 15 in a walk) keeps set 1's. KF4_PC_BINDLESS=0: never (to compare).
     void put_table_on_gpu(Kept &walk) const {
+        ZoneScope zone(canvas_put_table_on_gpu_zone);
         walk.table = {};
         walk.samplers.fill(nullptr);
         walk.samplers[0] = &device_.get_stock_sampler(StockSampler::NearestClamp);
@@ -2582,6 +2638,7 @@ private:
     };
 
     std::unique_ptr<Copies> copy_surfaces() {
+        ZoneScope zone(canvas_copy_surfaces_for_the_pump_zone);
         flush_batch();
         end_pass();
         auto copies = std::make_unique<Copies>();
@@ -2646,6 +2703,7 @@ private:
     }
 
     void start_from(Copies &copies) {
+        ZoneScope zone(canvas_start_from_zone);
         flush_batch();
         end_pass();
         if (copies.spares) {
@@ -2684,6 +2742,7 @@ private:
     static constexpr uint32_t batches_a_submit = 128;
 
     void draw_again_alone(const Kept &walk, const Between &between, bool picture_follows) {
+        ZoneScope zone(canvas_draw_again_alone_zone);
         flush_batch();
         between_ = &between;
         walk_vertices_ = walk.vertices.get();
@@ -3048,6 +3107,7 @@ private:
 
     // (drawn from where the walk keeps it: a copy only for a surface's texture, made again)
     void make_again(const Kept &walk, const KeptBatch &step) {
+        ZoneScope zone(canvas_make_again_zone);
         flush_batch();
         const Batch &kept = walk.batches[step.index];
         if (kept.texture.src != SRC_SURFACE) {
@@ -3059,6 +3119,7 @@ private:
         draw_made_again(b);
     }
     void draw_made_again(const Batch &b) {
+        ZoneScope zone(canvas_draw_made_again_zone);
         if (b.vertices.empty() && b.runs.empty()) {
             return;
         }
@@ -3380,6 +3441,7 @@ private:
     }
 
     void flush_batch() {
+        ZoneScope zone(canvas_flush_batch_zone);
         if (!batch_open_) {
             return;
         }
@@ -3778,6 +3840,7 @@ private:
     // run_plane_at_ each of its runs' plane_at and batch_planes_ its first plane (no_plane: none). True: a new chunk
     // of planes (a run bound to the last ends before this batch binds it)
     bool room_for_planes(const Batch &b, uint32_t place_x, uint32_t place_y, bool ms) {
+        ZoneScope zone(canvas_room_for_planes_zone);
         run_plane_at_.assign(b.runs.size(), no_plane);
         batch_planes_ = no_plane;
         uint32_t n = 0;
@@ -3821,6 +3884,7 @@ private:
     }
 
     void draw_batch(const Batch &b) {
+        ZoneScope zone(canvas_draw_batch_zone);
         const DrawState &s = b.state;
         counts_.batches++;
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
@@ -4582,6 +4646,7 @@ private:
     // DATM 0 the primitives after it in the batch may no longer draw there: its stencil is cleared. A pixel whose
     // alpha it writes without FBA has the bit the fragment's (not known to the stencil): kept, and counted.
     void draw_where_date_passes(CommandBuffer &c, bool writes_alpha, bool fba, bool datm) {
+        ZoneScope zone(canvas_draw_where_date_passes_zone);
         c.set_stencil_test(true);
         VkStencilOp written = writes_alpha && fba && !datm ? VK_STENCIL_OP_ZERO : VK_STENCIL_OP_KEEP;
         c.set_stencil_ops(VK_COMPARE_OP_EQUAL, written, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
