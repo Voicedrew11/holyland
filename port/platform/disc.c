@@ -30,6 +30,7 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/profile.h"
+#include "port/zones.h"
 
 typedef struct {
     char *path;       /* ISO 9660 path without the version: "\DATA\KF4.DAT" (or KF4.DAT's "\DATA\KF4.DAT:name") */
@@ -417,15 +418,21 @@ uint64_t port_hitch_disc_bytes;
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     int result;
     double t0 = port_wall_seconds();
+    static ZoneId zone;
+    int zoned;
 
+    if (zone == ZONE_NONE) {
+        zone = port_zone_id("disc read", ZONE_WAIT); /* (any thread: the same id each time, a race to name it harmless) */
+    }
+    zoned = port_zone_begin(zone);
     READ_LOCK();
     result = disc_read(lsn, sectors, buffer);
     READ_UNLOCK();
+    if (zoned) {
+        port_zone_end(zone);
+    }
     port_hitch_disc_ms += (port_wall_seconds() - t0) * 1e3;
     port_hitch_disc_bytes += (uint64_t)sectors * 2048;
-    if (port_profile_on()) {
-        port_profile_add(PROFILE_DISC, (uint64_t)((port_wall_seconds() - t0) * 1e9));
-    }
     return result;
 }
 

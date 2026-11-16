@@ -35,6 +35,7 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "imgui.h"
 #include "flash_ring.h"
+#include "port/zone_scope.hpp"
 
 extern "C" {
 #include "gs_api.h"
@@ -1074,11 +1075,18 @@ extern "C" int port_vk_imgui_init(void) {
     return pr.imgui;
 }
 
+// The frame profiler's zones (port/include/port/zones.h)
+static const ZoneId present_zone = port_zone_id("present", ZONE_WORK);
+static const ZoneId present_wait_zone = port_zone_id("present: wait for its frame and a swapchain image", ZONE_WAIT);
+static const ZoneId present_overlay_zone = port_zone_id("present: the overlay drawn (ImGui)", ZONE_WORK);
+static const ZoneId present_queue_zone = port_zone_id("present: submit and vkQueuePresentKHR", ZONE_WAIT);
+
 extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
                                 int overlay) {
     if (!pr.up) {
         return;
     }
+    ZoneScope zone(present_zone);
     flash_start_writer(); // (F8)
     bool fresh = pixels != nullptr || image;
     // with nothing new, the window is drawn again only for the overlay
@@ -1103,13 +1111,13 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
 
     Frame &f = pr.frames[pr.frame];
-    uint64_t wait0 = port_profile_on() ? port_profile_now_ns() : 0;
+    int waiting = port_zone_begin(present_wait_zone);
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
     flash_read_timer(f);
     uint32_t index = 0;
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
-    if (wait0 != 0) {
-        port_profile_add(PROFILE_PRESENT_WAIT, port_profile_now_ns() - wait0); // (Shift+P's profiler)
+    if (waiting) {
+        port_zone_end(present_wait_zone);
     }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         pr.stale = true;
@@ -1168,6 +1176,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     ImDrawData *draw = nullptr;
     bool shot = false;
     if (overlay) {
+        ZoneScope overlay_zone(present_overlay_zone);
         port_overlay_draw(x, y, w, h);
         draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
         shot = port_overlay_shot_due() && pr.can_read;
@@ -1310,6 +1319,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     present.pSwapchains = &pr.swapchain;
     present.pImageIndices = &index;
     vk.vkResetFences(pr.device, 1, &f.done);
+    int queueing = port_zone_begin(present_queue_zone);
     gsr_queue_lock();
     check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done));
     if (have_scanout) {
@@ -1317,6 +1327,10 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
     result = vk.vkQueuePresentKHR(pr.queue, &present);
     gsr_queue_unlock();
+    if (queueing) {
+        port_zone_end(present_queue_zone);
+    }
+    port_zone_picture(); // (the frame profiler's frames end here)
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true;
     } else {

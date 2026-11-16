@@ -44,6 +44,7 @@
 #include "port/quicksave.h"
 #include "port/teleport.h"
 #include "port/render.h"
+#include "port/zones.h"
 
 #define MAX_THREADS 64
 #define MAX_SEMAS 64
@@ -338,35 +339,31 @@ static void hitch_vblank(void) {
     hash0 = (double)rd_stats.hash_bytes;
 }
 
-/* The profiler (Shift+P, port/include/port/profile.h): the game's work since the last vblank was done
-   with, that is not its wait for this one; a vblank's work over two vblanks' time is a hitch */
-static uint64_t profile_resumed_ns, profile_disc_ns;
+/* (the game's thread) The frame profiler's zones: the game's work from one vblank to the next, and its time in
+   the vblank between (the pacing's wait, the picture shown, the window's events) */
+static ZoneId game_work_zone, game_vblank_zone;
+static int game_work_open, game_vblank_open;
 
-static void profile_vblank(void) {
-    uint64_t now, work, disc;
-    char text[PROFILE_HITCH_TEXT];
-
-    port_profile_vblank();
-    if (!port_profile_on()) {
-        profile_resumed_ns = 0;
-        return;
+static void zone_vblank(void) {
+    if (game_work_zone == ZONE_NONE) {
+        game_work_zone = port_zone_id("game: its work between vblanks", ZONE_WORK);
+        game_vblank_zone = port_zone_id("game: in the vblank (pacing, the picture shown)", ZONE_WAIT);
     }
-    now = port_profile_now_ns();
-    disc = port_profile_read().ns[PROFILE_DISC];
-    if (profile_resumed_ns != 0) {
-        work = now - profile_resumed_ns;
-        port_profile_add(PROFILE_GAME, work);
-        if (work > 2 * 16683000u) {
-            snprintf(text, sizeof(text), "vblank %llu: the game's thread %.1f ms (disc reads %.1f ms)",
-                     (unsigned long long)vblank_count, (double)work / 1e6, (double)(disc - profile_disc_ns) / 1e6);
-            port_profile_hitch(text);
-        }
+    if (game_work_open) {
+        port_zone_end(game_work_zone);
+        game_work_open = 0;
     }
-    profile_disc_ns = disc;
+    game_vblank_open = port_zone_begin(game_vblank_zone);
 }
 
-static void profile_resume(void) {
-    profile_resumed_ns = port_profile_on() ? port_profile_now_ns() : 0;
+static void zone_resume(void) {
+    if (game_vblank_open) {
+        port_zone_end(game_vblank_zone);
+        game_vblank_open = 0;
+    }
+    if (game_work_zone != ZONE_NONE) {
+        game_work_open = port_zone_begin(game_work_zone);
+    }
 }
 
 /* Until `until` (the wall time): asleep, the mouse read every half millisecond meanwhile with --frame-rate above 30
@@ -391,7 +388,7 @@ static void vblank_start(void) {
     uint32_t mode;
 
     hitch_vblank();
-    profile_vblank();
+    zone_vblank();
     vblank_count++;
     port_profile_run_vblank(vblank_count);
     /* the GS scans out the field the display registers say, alongside the game. It is the field
@@ -490,7 +487,7 @@ static void vblank_start(void) {
         port_host_float_end(mode);
         pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
     }
-    profile_resume();
+    zone_resume();
     /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
        thread takes it while this one waits (port_kernel_run), and a state loaded later goes on from
        this point. */

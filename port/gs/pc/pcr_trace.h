@@ -10,7 +10,7 @@ typedef struct {
     int32_t x, y, sub_x, sub_y;
 } PcrTraceSpot;
 
-enum { PCR_TRACE_SHADED = 0, PCR_TRACE_DATE_DISCARD = 1, PCR_TRACE_ALPHA_DISCARD = 2 };
+enum { PCR_TRACE_SHADED = 0, PCR_TRACE_DATE_DISCARD = 1, PCR_TRACE_ALPHA_DISCARD = 2, PCR_TRACE_DEPTH_DISCARD = 3 };
 #define PCR_TRACE_PASS(how) ((how) & 0xFu)
 #define PCR_TRACE_OUTCOME(how) (((how) >> 4) & 0xFu)
 #define PCR_TRACE_DECAL(how) (((how) >> 8) & 1u)

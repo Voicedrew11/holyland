@@ -55,12 +55,22 @@ struct GsCorner {
 #ifdef PCR_EXACT_Z
 #include "plane_z.h"
 
-// A corner's Z (z, and a picture between's fraction, about -1/2 to 1/2) in 256ths, within 0 and the largest 32-bit Z
-// (as a moved Z is: a corner past the far plane is dropped, one past the nearest clamped)
+// A corner's Z (z, and its fraction: a native draw's own, 0 to 1, plus a picture between's move, about -1/2 to 1/2)
+// in 256ths, within 0 and the largest 32-bit Z (as a moved Z is: a corner past the far plane is dropped, one past the
+// nearest clamped)
 int64_t pcr_plane_z_of(GsCorner c) {
     int64_t z256 = (int64_t(c.z) << PCR_Z_FRACTION_BITS) +
-                    int64_t(roundEven(clamp(c.zfrac, -1.0, 1.0) * float(1 << PCR_Z_FRACTION_BITS)));
+                    int64_t(roundEven(clamp(c.zfrac, -2.0, 2.0) * float(1 << PCR_Z_FRACTION_BITS)));
     return clamp(z256, int64_t(0), (int64_t(0xFFFFFFFFu) << PCR_Z_FRACTION_BITS) | int64_t(255));
+}
+
+// (a native plane pass's) A corner's own fraction of a Z: VU1's Z before FTOI4 (zf) less the GS's whole Z of it (z),
+// 0 to 1. The GS takes whole Z at the corners; with it rounded off, two surfaces less than a Z apart (a rope bound on
+// a log, map 000) sorted by that rounding, which each game frame made again: the fine part (plane_z.h) flickered
+// between them at the game's rate. Native draws alone: a GS primitive's corners come whole.
+float pcr_frame_zfrac(float zf, uint z) {
+    float f = zf - float(z);
+    return f >= 0.0 && f < 1.0 ? f : 0.0;
 }
 
 // The triangle's plane as the fragment stage takes it (v_plane0 and v_plane1, below), from its three corners, in a
@@ -148,10 +158,12 @@ layout(location = 14) flat in ivec4 v_plane1;
 
 #include "plane_z.h"
 
-// The Z of the triangle's plane at this pixel, whole and clamped to 0..zmax; false: the triangle has no plane
-// (pcr_plane_none). (The pixel's, even in the shaders run once a sample.)
-bool pcr_plane_z(out uint z) {
+// The Z of the triangle's plane at this pixel, whole and clamped to 0..zmax, and its fine part (plane_z.h's
+// pz_fine_bits); false: the triangle has no plane (pcr_plane_none). (The pixel's, even in the shaders run once a
+// sample.)
+bool pcr_plane_z(out uint z, out uint fine) {
     z = 0u;
+    fine = 0u;
     if ((v_plane0.z & PCR_PLANE_ON) == 0) {
         return false;
     }
@@ -167,9 +179,40 @@ bool pcr_plane_z(out uint z) {
     p.step_y_z = intBitsToFloat(v_plane1.w);
     vec2 k = floor(gl_FragCoord.xy); // (not negative)
     // (the quick way, a few floats; where it cannot tell, the exact sum: the same Z, plane_z.h)
-    if (!pz_pixels_quick(p, k.x, k.y, pc.zmax, z)) {
-        z = pz_pixels_z(p, int(k.x), int(k.y), pc.zmax);
+    if (!pz_pixels_quick(p, k.x, k.y, pc.zmax, z, fine)) {
+        z = pz_pixels_z(p, int(k.x), int(k.y), pc.zmax, fine);
     }
+    return true;
+}
+
+// (the depth rule, pcr_prim.h's PCR_DEPTH_RULE) The triangle's plane at this pixel, its Z with the fraction (in Z,
+// half a Z added, clamped to 0..zmax: plane_z.h's pz_pixels_depth), and how far the GS's own rounding could move it
+// (tolerance, in Z): its corners are on the GS's grid of 1/16 of a pixel, so each is up to 1/32 of a GS pixel from
+// where the game put it (scale/32 of the target's pixels: the plane's step a target pixel times that, across and down)
+// and its Z up to half a step of the corners' 256ths. Two meshes of one surface cut into other triangles are within it
+// of each other; two surfaces apart by more than it are not. False: the triangle has no plane.
+bool pcr_plane_depth(out float z, out float tolerance) {
+    z = 0.0;
+    tolerance = 0.0;
+    if ((v_plane0.z & PCR_PLANE_ON) == 0) {
+        return false;
+    }
+    PzPixels p;
+    p.first_low = uint(v_plane0.x);
+    p.first_high = uint(v_plane0.y);
+    p.first_x = (v_plane0.z & 0x7FFF) - 1;
+    p.first_y = (v_plane0.z >> 16) - 1;
+    p.step_x_low = uint(v_plane0.w);
+    p.step_y_low = uint(v_plane1.x);
+    p.steps_high = uint(v_plane1.y);
+    p.step_x_z = intBitsToFloat(v_plane1.z);
+    p.step_y_z = intBitsToFloat(v_plane1.w);
+    vec2 k = floor(gl_FragCoord.xy);
+    if (!pz_pixels_depth_quick(p, k.x, k.y, pc.zmax, z)) {
+        z = pz_pixels_depth(p, int(k.x), int(k.y), pc.zmax);
+    }
+    vec2 corner_step = vec2(pc.src_scale) * (1.0 / 32.0);
+    tolerance = abs(p.step_x_z) * corner_step.x + abs(p.step_y_z) * corner_step.y + 1.0 / 512.0;
     return true;
 }
 #endif

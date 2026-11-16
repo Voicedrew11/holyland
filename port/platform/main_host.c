@@ -190,6 +190,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/frame_profiler.h"
 #include "port/profile_run.h"
 #include "port/settings.h"
 #include "port/savestate.h"
@@ -996,6 +997,8 @@ int main(int argc, char **argv) {
     if (port_options.stats) {
         atexit(print_stats);
     }
+    port_frame_profiler_start(); /* KF4_PROFILE, KF4_PROFILE_OUT, KF4_PROFILE_SPIKE */
+    atexit(port_frame_profiler_stop);
     port_memory_init();
     port_address_init();
     port_disc_open(port_options.disc);

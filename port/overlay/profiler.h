@@ -1,5 +1,5 @@
-// The profiler's panel (Shift+P, port/include/port/profile.h): what holds the frame rate down, thread by thread,
-// drawn over the game by the overlay (port/overlay/overlay.cpp)
+// The profiler (Shift+P; docs/port/PROFILING.md): one window, drawn over the game by the overlay
+// (port/overlay/overlay.cpp); its contents are frames_view.cpp's
 #ifndef PORT_OVERLAY_PROFILER_H
 #define PORT_OVERLAY_PROFILER_H
 

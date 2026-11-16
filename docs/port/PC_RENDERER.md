@@ -376,6 +376,69 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   between), and a triangle past the Z buffer's largest is no longer cut at it with exact Z (each pixel is clamped).
   Needs `shaderInt64` as well as `depthClamp`; a triangle turned far past the screen in a picture between
   (`PCR_PLANE_MOST`), or drawn from the eye's space (`whole_triangle.h`), keeps the interpolated Z.
+- **The fine part and decals (2026-11-15).** Below the whole Z the depth keeps up to 8 bits of the plane's fraction
+  (`plane_z.h`'s `pz_fine_bits`), so that two surfaces a fraction of a Z apart, which the GS rounds to one Z far from
+  the eye, are drawn in their order (map 000's rope ladder: the PS2 shows the strips fighting too). A decal
+  (`is_decal`: blended, GEQUAL, its blend showing what is under it) is tested with the top fine part of its whole Z, so
+  that it ties with the surface under it as on the GS. Written as its depth, that top part made a later draw of the same
+  whole Z lose to it where the GS lets the later draw win: at map 063 a see-through mesh (some of its vertices' alpha
+  below 0x80, so a decal) and the rock drawn after it on the same plane, and the sky showed through a hole in the rock
+  (the owner's F8 of 2026-11-15). Now a decal's passes that write Z mark the pixels they win in the stencil's
+  `decal_won` bit, and `settle_decal_depth` then draws the batch twice more with no colour: the depth reset to the
+  farthest where the bit is set (and the bit cleared), then each of those passes again with the decal's own fine part,
+  GEQUAL, so that the pixel ends with the depth of the fragment that won. Needs the stencil (`stencil_on_`); a decal
+  with DATE by the stencil keeps the top part. Such a batch is not drawn in a kept walk's run. `KF4_PC_DECAL_SETTLE=0`
+  writes the top part, to compare; the stats line counts the decals settled. The seed's pipelines that test Z GEQUAL
+  are made before play with the decal's states too (`pcr_pipelines.cpp`'s `decal_states`). Cost: at 063 (about 40% of
+  the batches decals) 4.28 ms of GPU a picture against 3.99 at the owner's settings; the whole-game tour (760 views
+  at 1x) changed 3 views, each nearer paraLLEl-GS, none further.
+- **The depth rule (2026-11-15).** One test for every draw that tests Z GEQUAL or GREATER, in the fragment shader
+  (`pcr_prim.h`'s `pcr_depth_rule`): no decals singled out, nothing drawn twice. Each fragment has its Z with the
+  fraction, not rounded (`pcr_full_depth`: the plane's, `plane_z.h`'s `pz_pixels_depth`), and a tolerance, the GS's
+  own rounding of it (`pcr_plane_depth`): its corners are on the GS's grid of 1/16 of a pixel, so up to 1/32 of a GS
+  pixel from where the game put them, which moves the plane by its steps across and down times that, and their Z by
+  half of 1/256. Against the depth drawn at each sample: within twice the tolerance (and the float's own step, 2^-23 of
+  the depth) it is a tie, which the GS's test decides (GEQUAL: the later draw wins; GREATER: it fails); else the nearer
+  wins. Two meshes of one surface, however cut into triangles, are within it of each other (`plane_z_test`'s two
+  meshes); two surfaces a fraction of a Z apart (map 000's rope ladder on its log) are not, and sort by their Z where
+  the GS's whole Z fights. Written: the fragment's Z, or where a tie passed the depth there if that is nearer, so that
+  the GPU's own test (GEQUAL or GREATER, as the GS's: the pipelines are unchanged) passes it too; never past the
+  corners' bound (`depth_less`, so the GPU's early tests still reject), and a sample whose tie would need more fails
+  (a steep surface's tie more than the bound's margin away). Every exact Z draw then writes its full Z
+  (`PCR_F_FULL_DEPTH`), decals with no top fine part, and `settle_decal_depth` is off.
+  - The shader needs the depth drawn so far, in draw order. The GPU's depth attachment can't be read so on the
+    owner's RX 9070 XT (RADV) or NVIDIA: neither has `rasterizationOrderDepthAttachmentAccess` (only llvmpipe and
+    some mobile GPUs do; a version that read it as an input attachment was built and dropped the same day). Both have
+    `fragmentShaderPixelInterlock` (`VK_EXT_fragment_shader_interlock`, `cmake/granite_interlock.cmake`), so each
+    depth surface keeps its own copy of the depth (`Surface::zcopy`: R32F, a layer a sample), read and written in the
+    shader's critical section at the end of `main`, after every other discard (the `_dr`/`_drm` shaders). The copy is
+    kept what the depth attachment is: made, grown, copied for the pump, made again at a new scale or MSAA and cleared
+    with it (`clear_depth_image`); a clear drawn as a rectangle clears it in the pass (`clear_depth_copy`,
+    `pcr_zclear.frag`, in the critical section too); a draw that tests ALWAYS and writes Z is the rule's too
+    (`PCR_F_ZALWAYS`); and DATE by the stencil marks where it fails in the copy's sign bit (`pcr_date.frag`'s
+    `PCR_DATE_MARK`; `PCR_F_DATE_CLEARS` where a pass clears the stencil), so that the shader fails what the stencil
+    does. The shader passes a sample only where the GPU's own test will.
+  - Without interlock (or `KF4_PC_DEPTH=exact`): exact Z with decals settled, as above. `KF4_PC_DEPTH=gpu`: the GPU's
+    interpolated depth. The log says which.
+  - Pipelines: the rule's programs are roles 26-65 (single-sampled, then multisampled, each with its twin at the
+    other count: `WarmProgram::other`), the copy's clear 66 and DATE's marking set-up 67; the seed's GEQUAL, GREATER
+    (and with the copy ALWAYS-writing) records are made with the rule's program in their place
+    (`pcr_pipelines.cpp`'s `rule_record`, `zclear_record`).
+  - Measured (RX 9070 XT, RADV, the copy; `profile.py` at the pace settings, 4x, alternated): 063 4.09-4.10 ms of GPU
+    a picture against 4.02-4.03 with exact Z before the settle and 4.60 with it; 009 4.42-4.48 against 4.45-4.50 and
+    9.83-9.84 (the settle more than doubled 009). The owner's 063 hole is drawn (crop against paraLLEl-GS: mean 0.89,
+    no pixel over 40; 9.91 and 726 pixels without the settle). Its extra cost against exact Z at 063 is the opaque
+    world draws (no longer tested before their shader) and a full-screen sprite that tests ALWAYS and writes Z (its
+    copy written in order), about 0.18 ms, less the 2D draws' 0.06. Whole-game tour at 1x (760 views): no view
+    further from paraLLEl-GS than with the settle or without it by more than 0.05% of its pixels; the few views that
+    differ at all differ by 30-50 pixels either way (024's lava edge far off, where the GS's whole Z fights); 028's
+    puddle is right, as with the settle. Vulkan validation clean (RADV and llvmpipe), ASan+UBSan nothing new.
+  - **At MSAA 2 (the owner's), measured after the owner saw it slow everywhere:** the shaders run at every sample (the
+    cut-outs' SSAA) took the pixel's interlock, so a pixel's samples waited for each other: 063 8.00 ms against 4.80
+    before the settle, the cut-outs four times as long. They now take the sample's (`sample_interlock_ordered`: each
+    reads and writes its own sample's layer alone; needs `fragmentShaderSampleInterlock` too): 063 4.77-4.79 against
+    4.78-4.80; 009 5.07 against 4.64-4.71, the world draws testing and storing two samples each and the opaque ones no
+    longer rejected before their shader. The figures above are MSAA 1 (the pace settings).
 - Replaced the draw-order tie (`number_tie`, 2026-11-13 morning: each GEQUAL batch nearer by its place since the Z
   buffer's clear), whose rule needed tuning per case (map 099's tint, map 028's puddle) and still let the moss flicker
   in play; and before it a decal nudge of half a Z.

@@ -63,6 +63,7 @@ struct CanvasCounts {
     uint64_t clears = 0; // (batches cleared, vkCmdClearAttachments, not drawn: as_clear)
     uint64_t dead_batches = 0; // (a pictures' walk's batches not drawn: what they write is never read, pcr_dead_writes.h)
     uint64_t blends_left_out = 0; // (blended batches drawn without the blend: blend_is_source)
+    uint64_t decals_settled = 0; // (decal batches given back their own depth where they won: settle_decal_depth)
 };
 
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
