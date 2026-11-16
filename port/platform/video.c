@@ -560,7 +560,7 @@ void port_video_init(void) {
 }
 
 #ifdef KF4_HAVE_SDL
-/* SDL_Renderer's square for the mouse indicator (port_controls_draw) */
+/* SDL_Renderer's square for the frame-rate counter (port_video_counter_draw) */
 static void fill_rect(void *context, int x, int y, int width, int height, unsigned int rgba) {
     SDL_Rect rect;
 
@@ -579,7 +579,7 @@ static void fill_rect(void *context, int x, int y, int width, int height, unsign
 /* The new pictures presented to the window, by either thread (draw_window, under PRESENT_LOCK; the
    last one drawn again for the overlay is not counted), and the rates sampled from them and from the
    game's frame counter twice a second on the game's thread (port_video_vblank). The counter is drawn
-   by the presenters with plain squares, as the mouse indicator is (port_controls_draw): not with
+   by the presenters with plain squares: not with
    ImGui, whose frame is the game thread's, so it never takes the pictures between from their own
    thread (thread_shows). */
 static uint64_t pictures_presented;
@@ -654,7 +654,7 @@ static const uint8_t counter_glyphs[][7] = {
 };
 
 /* The counter's size in a picture `height` pixels high: a glyph's pixel, and the margin to the
-   picture's edges (the mouse indicator's, port_controls_draw) */
+   picture's edges */
 static void counter_metrics(int height, int *cell, int *margin) {
     *cell = height / 360 > 2 ? height / 360 : 2;
     *margin = height * 3 / 100 > *cell * 2 ? height * 3 / 100 : *cell * 2;
@@ -808,7 +808,7 @@ static void sim_screen(uint64_t tag) {
 }
 
 /* The window drawn: a new picture (fresh: its pixels in shown, or image: the PC renderer's by its tag),
-   or the last again for the overlay; with overlay, the overlay and the mouse indicator over it (the
+   or the last again for the overlay; with overlay, the overlay over it (the
    game's thread only). Under PRESENT_LOCK. */
 static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
     uint32_t width = shown_width, height = shown_height;
@@ -905,7 +905,6 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         SDL_GetRenderDrawBlendMode(renderer, &blend);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         port_video_counter_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
-        port_controls_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
         SDL_SetRenderDrawBlendMode(renderer, blend);
         port_overlay_draw(dst.x, dst.y, dst.w, dst.h);
         SDL_RenderPresent(renderer);
@@ -1004,7 +1003,7 @@ void port_video_show_blank(void) {
 /* --frame-rate above 60: the pictures between two vblanks, each shown at its time. With the Vulkan
    presenter a thread of their own shows them, so that the game's own work between two vblanks (a few
    milliseconds, often without a call into the kernel) does not hold them up; it leaves them to the
-   game's thread while the overlay or the mouse indicator is drawn (their ImGui frame is the game
+   game's thread while the overlay is drawn (their ImGui frame is the game
    thread's; the frame-rate counter is not ImGui's and stays on the thread), and with SDL_Renderer (which is the game thread's) they are the game thread's always:
    shown while it waits for the next vblank (port_video_wait) and whenever it is in the kernel meanwhile
    (port_video_poll). (At 60 and below every picture is a vblank's own, shown by port_video_present.) */
@@ -1023,8 +1022,7 @@ static int between_on(void) {
 
 /* the thread shows them now */
 static int thread_shows(void) {
-    return __atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE) && !port_overlay_visible() &&
-           !port_controls_indicator_shown();
+    return __atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE) && !port_overlay_visible();
 }
 
 int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {

@@ -8,7 +8,7 @@
 //   and from there into an image of the presenter's own;
 // blitted into the swapchain's image, scaled and placed as port_video_fit says (4:3 or the widescreen
 // 16:9, with black bars, or stretched), filtered as "Smooth scaling" says. Dear ImGui's draw lists
-// (the settings overlay and the mouse indicator, port/overlay/overlay.cpp) go over it in a render
+// (the settings overlay, port/overlay/overlay.cpp) go over it in a render
 // pass, with ImGui's own Vulkan backend (third_party/imgui/backends/imgui_impl_vulkan.cpp).
 //
 // The presenter submits to the PC renderer's queue, under its lock (pcr_queue_lock): the queue's order
@@ -1172,7 +1172,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     bool scaled = have_scanout && scanout.scaled != 0 && scanout.scaled_width == uint32_t(w) &&
                   scanout.scaled_height == uint32_t(h);
 
-    // the overlay's draw lists, and the mouse indicator, over the picture's place
+    // the overlay's draw lists over the picture's place
     ImDrawData *draw = nullptr;
     bool shot = false;
     if (overlay) {

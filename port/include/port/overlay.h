@@ -36,7 +36,7 @@ int port_overlay_event(const void *sdl_event);
 int port_overlay_visible(void);
 /* (port/platform/video.c) draws it over the picture, before the window is presented; the picture is
    at x, y, width x height in the window's pixels. On the Vulkan presenter it only makes the draw
-   lists (with the mouse indicator, port_controls_draw), and port_overlay_draw_data hands them out:
+   lists, and port_overlay_draw_data hands them out:
    an ImDrawData *, or NULL when nothing is drawn this time. */
 void port_overlay_draw(int x, int y, int width, int height);
 void *port_overlay_draw_data(void);

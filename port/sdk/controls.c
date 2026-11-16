@@ -13,7 +13,7 @@
        Space         square (attack)          F            cross
        Q             triangle                 Tab          circle
        Enter         start                    Right Shift  select
-       Escape        capture / release the mouse
+       Escape        release the mouse (a click in the window takes it back)
    Mouse, captured, while the player is in control: moving turns and looks; left square, right
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
    cross, right circle, middle cross (the menu mouse), the wheel up / down.
@@ -36,8 +36,10 @@
    F5 / F7 save and load the quick slot's save state, and F3 shows or hides the frame-rate counter.
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look):
-   each movement is applied once, so it neither coasts nor builds speed. Capture is manual (Escape),
-   as in Verdite; losing the window's focus releases it. A small mouse in the corner shows the change.
+   each movement is applied once, so it neither coasts nor builds speed. The capture is a PC game's:
+   the mouse is held while the player is in control and the window has the focus, and let go for the
+   menus, pause and dialogue, the overlay, and another window; it is held again on the way back.
+   Escape lets it go until a click in the window (the click does nothing else).
    A pad script (--input) turns all of this off, so scripted runs stay the same. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +68,9 @@
 
 static struct {
     int layout;
-    int captured;
+    int captured;                /* the mouse is held (SDL's relative mouse mode) */
+    int wants_capture;           /* the player has not let it go with Escape */
+    uint32_t gameplay_ms;        /* SDL_GetTicks at the last read in play */
     int focused;
     int blocked;                 /* the overlay is open */
     int unblocked;               /* it has just closed: what is held is ignored until let go */
@@ -85,8 +89,6 @@ static struct {
     int wheel;                   /* wheel movement since the last read: +1 up, -1 down */
     uint32_t tap_until[16];      /* a short press is held this long, so the game's frame sees it */
     uint32_t wheel_until[2];
-    uint32_t indicator_time;     /* when the capture last changed (0: never) */
-    int indicator_captured;
     int run;                     /* Run is held */
     int listen_action;           /* rebinding: the slot waiting for a press (-1: none) */
     int listen_slot;
@@ -124,7 +126,7 @@ static const struct {
     [ACTION_RIGHT_STICK_LEFT] = {"right_stick_left", "Right stick left", 0},
     [ACTION_RIGHT_STICK_RIGHT] = {"right_stick_right", "Right stick right", 0},
     [ACTION_RUN] = {"run", "Run (hold)", 0},
-    [ACTION_CAPTURE_MOUSE] = {"capture_mouse", "Capture / release the mouse", 0},
+    [ACTION_CAPTURE_MOUSE] = {"capture_mouse", "Release / take back the mouse", 0},
     [ACTION_QUICK_SAVE] = {"quick_save", "Save state (debugging, same build)", 0},
     [ACTION_QUICK_LOAD] = {"quick_load", "Load state (debugging, same build)", 0},
     [ACTION_GAME_SAVE] = {"game_quick_save", "Quick save", 0},
@@ -442,6 +444,7 @@ static void set_captured(int captured);
 void port_controls_init(const char *layout) {
     memset(&pc, 0, sizeof(pc));
     pc.focused = 1;
+    pc.wants_capture = 1;
     pc.listen_action = -1;
     tables_init();
     pc.layout = layout == NULL ? CONTROLS_PS2 : port_controls_layout_from_name(layout);
@@ -822,8 +825,6 @@ static void set_captured(int captured) {
     lead_waiting();
     SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
     SDL_GetRelativeMouseState(NULL, NULL); /* motion before the change is dropped */
-    pc.indicator_time = SDL_GetTicks() | 1u;
-    pc.indicator_captured = captured;
 }
 
 void port_controls_block(int blocked) {
@@ -848,6 +849,7 @@ int port_controls_event(const void *sdl_event) {
             set_captured(0);
         } else if (event->window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
             pc.focused = 1;
+            pc.unblocked = 1; /* the click that brought the window back does nothing */
         }
     }
     if (event->type == SDL_MOUSEWHEEL && port_controls_verdite() && !pc.blocked) {
@@ -907,6 +909,7 @@ static void side_keys(uint64_t *held_keys, int outside_play) {
     *held_keys = held;
 }
 
+#define RELEASE_AFTER_MS 250u /* out of play this long before the mouse is let go */
 #define SAMPLE_EVERY_S 0.0005 /* the mouse read between vblanks no more often than this */
 
 void port_controls_sample_mouse(void) {
@@ -989,6 +992,18 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.swallowed &= mouse;
     mouse &= ~pc.swallowed;
     if (verdite) {
+        /* a click in play with the mouse let go takes it back, and does nothing else */
+        if (gameplay && !pc.wants_capture && mouse != 0) {
+            pc.wants_capture = 1;
+            pc.swallowed |= mouse;
+            mouse = 0;
+        }
+        if (gameplay) {
+            pc.gameplay_ms = now;
+        }
+        /* (let go only after a moment out of play, so a slow frame does not flash the cursor) */
+        set_captured(pc.wants_capture && pc.focused &&
+                     (gameplay || (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
         if (!gameplay) {
             static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
 
@@ -1089,7 +1104,10 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         port_weapon_sets_key(); /* the weapon sets mod: taken in play by game/weapon_sets.c */
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
-        set_captured(!pc.captured);
+        if (gameplay) {
+            pc.wants_capture = !pc.captured;
+            set_captured(pc.wants_capture && pc.focused);
+        }
     }
 
     axis[0] = action_axis(held, ACTION_RIGHT_STICK_LEFT, ACTION_RIGHT_STICK_RIGHT);
@@ -1140,61 +1158,5 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.previous_buttons = pressed;
     pc.previous_gameplay = gameplay;
     *buttons |= pressed | pad;
-}
-
-/* The mouse in the window's top right corner when the capture changes: fades in over 140 ms, stays
-   1100 ms, fades out over 420 ms. A cut across it means released. The glyph and timing are Verdite2's
-   (patches/MouseIndicator.cs, MIT, Voicedrew11). */
-int port_controls_indicator_shown(void) {
-    return port_controls_verdite() && pc.indicator_time != 0 && SDL_GetTicks() - pc.indicator_time < 1660;
-}
-
-void port_controls_draw(PortFillRect fill, void *context, int x, int y, int width, int height) {
-    static const char *const glyph[13] = {
-        "....#....", "....#....", "...###...", "..#####..", ".##.#.##.", ".##.#.##.", ".#######.",
-        ".#######.", ".#######.", ".#######.", ".#######.", "..#####..", "...###...",
-    };
-    uint32_t age;
-    double alpha;
-    int cell;
-    int margin;
-    int origin_x;
-    int origin_y;
-    int pass;
-
-    if (!port_controls_indicator_shown() || width < 64 || height < 64) {
-        return;
-    }
-    age = SDL_GetTicks() - pc.indicator_time;
-    alpha = age < 140 ? age / 140.0 : age < 1240 ? 1.0 : (1660 - age) / 420.0;
-    cell = height / 180 > 2 ? height / 180 : 2;
-    margin = height * 3 / 100 > cell * 2 ? height * 3 / 100 : cell * 2;
-    origin_x = x + width - margin - cell * 9;
-    /* below the frame-rate counter when it is shown (port/platform/video.c) */
-    origin_y = y + margin + port_video_counter_height(height);
-    if (origin_y != y + margin) {
-        origin_y += cell * 2;
-    }
-    for (pass = 0; pass < 2; pass++) {
-        int offset = pass == 0 ? 1 : 0;
-        /* a shadow, then the glyph */
-        unsigned int rgba = pass == 0 ? (unsigned int)(255.0 * 0.55 * alpha) << 24
-                                      : ((unsigned int)(255.0 * alpha) << 24) | 0xFFFFFFu;
-        int row;
-
-        for (row = 0; row < 13; row++) {
-            int column;
-
-            for (column = 0; column < 9; column++) {
-                if (glyph[row][column] != '#') {
-                    continue;
-                }
-                if (!pc.indicator_captured && (row - column == 4 || row - column == 5)) {
-                    continue;
-                }
-                fill(context, origin_x + (column + offset) * cell, origin_y + (row + offset) * cell, cell, cell, rgba);
-            }
-        }
-    }
 }
 #endif

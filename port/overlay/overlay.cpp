@@ -666,7 +666,7 @@ void controls_page() {
         changed();
     }
     tooltip("The layout of Verdite, the KF2/KF3 ports: W A S D to walk and side-step,\nthe mouse to turn and "
-            "look (Escape captures it), Space to attack. (--controls verdite)");
+            "look (held in play; Escape lets it go, a click takes it back), Space to attack. (--controls verdite)");
     layout = port_controls_layout();
 
     bool twin_stick = port_twin_stick_setting() != 0;
@@ -1414,7 +1414,7 @@ void about_window() {
     ImGui::BulletText("The game's code: kfiv-decomp (Voicedrew11 and contributors)");
     ImGui::BulletText("The GS: paraLLEl-GS (Arntzen Software, LGPL-3.0+)");
     ImGui::BulletText("The SPU2: ico-audio, from ico-pc (MIT)");
-    ImGui::BulletText("The Verdite layout and mouse indicator: Verdite2 (Voicedrew11, MIT)");
+    ImGui::BulletText("The Verdite layout: Verdite2 (Voicedrew11, MIT)");
     ImGui::BulletText("Dear ImGui (MIT), cJSON (MIT), SDL2 (zlib)");
     ImGui::End();
 }
@@ -1592,16 +1592,6 @@ void shot_take() {
     }
 }
 
-#ifdef KF4_HAVE_VULKAN_PRESENTER
-// The mouse indicator's squares (port_controls_draw) into ImGui's draw list, under the windows
-void fill_rect(void *context, int x, int y, int width, int height, unsigned int rgba) {
-    ImDrawList *list = static_cast<ImDrawList *>(context);
-    ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-    float sx = scale.x > 0.0f ? scale.x : 1.0f, sy = scale.y > 0.0f ? scale.y : 1.0f;
-    list->AddRectFilled(ImVec2(x / sx, y / sy), ImVec2((x + width) / sx, (y + height) / sy), rgba);
-}
-#endif
-
 bool shot_pending() {
     return shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank;
 }
@@ -1704,7 +1694,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 extern "C" int port_overlay_visible(void) {
     return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
-                     (renderer == nullptr && port_controls_indicator_shown()) || automap_view_visible() ||
+                     automap_view_visible() ||
                      weapon_sets_view_visible() || profiler_visible());
 }
 
@@ -1803,13 +1793,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         if (show_about)
             about_window();
     }
-#ifdef KF4_HAVE_VULKAN_PRESENTER
-    // (SDL_Renderer's window draws the indicator itself, port/platform/video.c)
-    if (renderer == nullptr)
-        port_controls_draw(fill_rect, ImGui::GetBackgroundDrawList(), x, y, width, height);
-#else
     (void)x, (void)y, (void)width, (void)height;
-#endif
     ImGui::Render();
     if (renderer == nullptr) {
         drawn = true; // the presenter records it, and takes the test picture

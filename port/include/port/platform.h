@@ -538,7 +538,7 @@ void port_video_print_stats(void);
 double port_video_pictures_per_second(void);
 double port_video_frames_per_second(void);
 /* The frame-rate counter (port_options.show_fps), drawn by the presenters over the picture at x, y,
-   width x height in the window's pixels, as squares (fill: as port_controls_draw's PortFillRect);
+   width x height in the window's pixels, as squares (fill: rgba with R in the low byte, alpha in the high);
    port_video_counter_height: how far down from the picture's top margin it reaches (0: not shown) */
 int port_video_counter_shown(void);
 int port_video_counter_height(int height);

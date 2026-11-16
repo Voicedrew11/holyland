@@ -144,11 +144,5 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 void port_controls_sample_mouse(void);
 /* While the overlay is open the game gets nothing; what is held when it closes is ignored until let go */
 void port_controls_block(int blocked);
-/* The mouse indicator over the picture (x, y, width, height in the window's pixels), drawn as squares
-   by fill (rgba: R in the low byte, alpha in the high) with the window's renderer (SDL_Renderer, or
-   ImGui's draw list on the Vulkan presenter). port_controls_indicator_shown: 1 while it is drawn. */
-typedef void (*PortFillRect)(void *context, int x, int y, int width, int height, unsigned int rgba);
-void port_controls_draw(PortFillRect fill, void *context, int x, int y, int width, int height);
-int port_controls_indicator_shown(void);
 
 #endif
