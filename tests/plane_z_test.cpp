@@ -234,6 +234,32 @@ static bool same_fixed(PzFixed a, PzFixed b) {
 }
 
 static long fixed_off = 0, fixed_near_half = 0, quick_told = 0, quick_not_told = 0;
+static long depth_checked = 0, depth_quick = 0;
+
+// The depth rule's Z with its fraction (pz_pixels_depth, pz_pixels_depth_quick) at pixel (kx, ky) against the plane's
+// fixed-point value, half a Z added, clamped to 0..most: within the float's rounding of it (2^-23 of it, and 2^-20
+// of a Z); the quick way within its sum's error besides (pz_pixels_quick's bound, doubled)
+static void check_depth(PzFixed f, PzPixels p, int64_t kx, int64_t ky, uint32_t most) {
+    long double value = (long double)(f.base + f.step_x * kx + f.step_y * ky) / 67108864.0L + 0.5L;
+    value = std::clamp<long double>(value, 0.0L, (long double)most);
+    long double slack = 1.0L / 1048576.0L + value / 8388608.0L;
+    float depth = pz_pixels_depth(p, int(kx), int(ky), most);
+    depth_checked++;
+    if (std::fabs((long double)depth - value) > slack && failures++ < 20) {
+        printf("depth: pz_pixels_depth %.6f, want %.6Lf (most %u)\n", double(depth), value, most);
+    }
+    float quick = 0.0f;
+    if (!pz_pixels_depth_quick(p, float(kx), float(ky), most, quick)) {
+        return;
+    }
+    depth_quick++;
+    long double a = std::fabs((long double)p.step_x_z * (long double)(kx - p.first_x));
+    long double b = std::fabs((long double)p.step_y_z * (long double)(ky - p.first_y));
+    long double quick_slack = slack + (a + b + 1.0L) / 524288.0L + value / 4194304.0L;
+    if (std::fabs((long double)quick - value) > quick_slack && failures++ < 20) {
+        printf("depth: pz_pixels_depth_quick %.6f, want %.6Lf (most %u)\n", double(quick), value, most);
+    }
+}
 
 static void fixed_planes() {
     const int64_t z_most = (int64_t(1) << 40) - 1;
@@ -302,6 +328,7 @@ static void fixed_planes() {
                     printf("fixed: pz_pixels_z %lld, plane_fixed_z %lld (most %u)\n", (long long)pixels, (long long)got,
                            most);
                 }
+                check_depth(f, pixels_of, kx, ky, most);
             }
             if (reference_near_half(c, px, py)) {
                 fixed_near_half++;
@@ -386,6 +413,46 @@ static void quick_planes() {
 }
 
 // two_meshes for plane_fixed: both triangles of a quad on one plane give the same three numbers
+// The depth rule's Z (pcr_exact_z.h's pcr_plane_depth: the quick way, else the exact) of one plane drawn by two
+// triangles, each from its own least pixel: within the rule's least tolerance of each other, 1/512 of a Z (the corners'
+// Z step's half) and the float's step (2^-23 of the depth), so that they tie
+static long depth_ties = 0;
+static float shader_depth(PzPixels p, int64_t kx, int64_t ky, uint32_t most) {
+    float depth = 0.0f;
+    if (!pz_pixels_depth_quick(p, float(kx), float(ky), most, depth)) {
+        depth = pz_pixels_depth(p, int(kx), int(ky), most);
+    }
+    return depth;
+}
+
+static PzPixels pixels_from_least(PzFixed f, const int64_t c[3][3], int64_t step, int64_t first) {
+    int least_x = int(std::max<int64_t>(-1, (std::min({c[0][0], c[1][0], c[2][0]}) - first) / step - 1));
+    int least_y = int(std::max<int64_t>(-1, (std::min({c[0][1], c[1][1], c[2][1]}) - first) / step - 1));
+    return pz_pixels(f, least_x, least_y);
+}
+
+static void two_meshes_tie(PzFixed f, const int64_t a[3][3], const int64_t b[3][3], int64_t step, int64_t first) {
+    PzPixels pa = pixels_from_least(f, a, step, first), pb = pixels_from_least(f, b, step, first);
+    int64_t x_lo = std::max({a[0][0], a[1][0], a[2][0]}) / step, y_lo = std::max({a[0][1], a[1][1], a[2][1]}) / step;
+    for (int k = 0; k < 4; k++) {
+        // (a pixel both triangles' least pixels are below: inside their shared bounding box)
+        int64_t kx = std::min<int64_t>(x_lo - int64_t(rng() % 4), (1 << 14) - 1);
+        int64_t ky = std::min<int64_t>(y_lo - int64_t(rng() % 4), (1 << 14) - 1);
+        if (kx < std::max(pa.first_x, pb.first_x) || ky < std::max(pa.first_y, pb.first_y)) {
+            continue;
+        }
+        for (uint32_t most : {0xFFFFFFu, 0xFFFFFFFFu}) {
+            float da = shader_depth(pa, kx, ky, most), db = shader_depth(pb, kx, ky, most);
+            float tie = 1.0f / 512.0f + std::max(da, db) / 8388608.0f;
+            depth_ties++;
+            if (std::fabs(da - db) > tie && failures++ < 20) {
+                printf("two meshes' depth: %.6f and %.6f at pixel (%lld %lld), apart by more than %.6f\n", double(da),
+                       double(db), (long long)kx, (long long)ky, double(tie));
+            }
+        }
+    }
+}
+
 static void fixed_two_meshes() {
     for (int t = 0; t < 20000; t++) {
         bool msaa = (rng() & 1) != 0;
@@ -410,9 +477,13 @@ static void fixed_two_meshes() {
                                     {q[2][0], q[2][1], zof(q[2][0], q[2][1])},
                                     {q[3][0], q[3][1], zof(q[3][0], q[3][1])}};
         checked++;
-        if (!same_fixed(fixed_of(first_tri, step, first), fixed_of(second_tri, step, first)) && failures++ < 20) {
+        PzFixed fa = fixed_of(first_tri, step, first), fb = fixed_of(second_tri, step, first);
+        if (!same_fixed(fa, fb) && failures++ < 20) {
             printf("fixed two meshes: one plane gave two (quad at %lld %lld, %lld across)\n", (long long)x0,
                    (long long)y0, (long long)span);
+        }
+        if (fa.on) {
+            two_meshes_tie(fa, first_tri, second_tri, step, first);
         }
     }
 }
@@ -439,7 +510,8 @@ int main() {
     fixed_two_meshes();
     quick_planes();
     printf("plane_z: %ld checked, %d failures (plane_fixed: %ld planes off, %ld points near a half; quick: %ld told, %ld "
-           "not)\n",
-           checked, failures, fixed_off, fixed_near_half, quick_told, quick_not_told);
+           "not; depth: %ld checked, %ld the quick way, %ld ties of two meshes)\n",
+           checked, failures, fixed_off, fixed_near_half, quick_told, quick_not_told, depth_checked, depth_quick,
+           depth_ties);
     return failures != 0;
 }

@@ -302,15 +302,21 @@ PZ_FN PzPixels pz_pixels(PzFixed f, int least_x, int least_y) {
 
 // The plane's Z at pixel (kx, ky) (from first_x and first_y up, under 2^15 from them), whole, rounded half up,
 // clamped to 0..most: plane_fixed_z's; and its fine part (none where clamped)
-PZ_FN pz_u32 pz_pixels_z(PzPixels p, int kx, int ky, pz_u32 most, PZ_OUT(pz_u32) fine) {
+// The plane's value at pixel (kx, ky), half a Z added, in 2^-PLANE_FIXED_BITS of a Z: bits 0-31 (low) and 32-63 (high)
+PZ_FN void pz_pixels_sum(PzPixels p, int kx, int ky, PZ_OUT(pz_u32) low, PZ_OUT(pz_u32) high) {
     pz_u32 dx = pz_u32(kx - p.first_x) & pz_u32(0x7FFFu), dy = pz_u32(ky - p.first_y) & pz_u32(0x7FFFu);
     pz_u32 s0 = (p.step_x_low & pz_u32(0xFFFFu)) * dx + (p.step_y_low & pz_u32(0xFFFFu)) * dy;
     pz_u32 s1 = (p.step_x_low >> 16) * dx + (p.step_y_low >> 16) * dy;
     int s2 = pz_signed16(p.steps_high) * int(dx) + pz_signed16(p.steps_high >> 16) * int(dy);
     pz_u32 c0, c1;
-    pz_u32 low = uaddCarry(p.first_low, s0, c0);
+    low = uaddCarry(p.first_low, s0, c0);
     low = uaddCarry(low, s1 << 16, c1);
-    pz_u32 high = p.first_high + c0 + c1 + (s1 >> 16) + pz_u32(s2);
+    high = p.first_high + c0 + c1 + (s1 >> 16) + pz_u32(s2);
+}
+
+PZ_FN pz_u32 pz_pixels_z(PzPixels p, int kx, int ky, pz_u32 most, PZ_OUT(pz_u32) fine) {
+    pz_u32 low, high;
+    pz_pixels_sum(p, kx, ky, low, high);
     fine = 0u;
     if (int(high) < 0) {
         return 0u;
@@ -364,6 +370,43 @@ PZ_FN bool pz_pixels_quick(PzPixels p, float kx, float ky, pz_u32 most, PZ_OUT(p
     }
     z = w;
     fine = pz_u32(step) << (PLANE_Z_FINE_BITS - bits);
+    return true;
+}
+
+// The depth rule's Z (port/gs/pc/shaders/pcr_prim.h's PCR_DEPTH_RULE): the plane's value at pixel (kx, ky) with its
+// fraction, not rounded (half a Z added, as pz_pixels_z's sum has it), clamped to 0..most, as a float: whole Z exactly
+// below 2^24 and as much of the fraction as the float holds beside it. Two meshes on one plane get it within
+// 2^-12 of a Z of each other (the sum's rounding) plus the float's, which the rule's tolerance covers.
+// - pz_pixels_depth, from the exact sum;
+// - pz_pixels_depth_quick, in floats (pz_pixels_quick's sum: within its bound e of the exact), where the pixel's place
+//   from first and first's whole Z fit (false: the caller takes pz_pixels_depth). It need not tell which whole Z the
+//   value rounds to, as pz_pixels_quick must: the depth runs on across it.
+PZ_FN float pz_pixels_depth(PzPixels p, int kx, int ky, pz_u32 most) {
+    pz_u32 low, high;
+    pz_pixels_sum(p, kx, ky, low, high);
+    if (int(high) < 0) {
+        return 0.0f;
+    }
+    if ((high >> PLANE_FIXED_BITS) != 0u) {
+        return float(most);
+    }
+    pz_u32 z = (low >> PLANE_FIXED_BITS) | (high << (32 - PLANE_FIXED_BITS));
+    if (z >= most) {
+        return float(most);
+    }
+    return float(z) + float(low & pz_u32(0x3FFFFFFu)) * (1.0f / 67108864.0f);
+}
+
+PZ_FN bool pz_pixels_depth_quick(PzPixels p, float kx, float ky, pz_u32 most, PZ_OUT(float) depth) {
+    float dx = kx - float(p.first_x), dy = ky - float(p.first_y);
+    depth = 0.0f;
+    if (!(dx >= 0.0f && dy >= 0.0f && dx < 32768.0f && dy < 32768.0f && p.first_high < pz_u32(0x1000000u))) {
+        return false;
+    }
+    float fraction = float(p.first_low & pz_u32(0x3FFFFFFu)) * (1.0f / 67108864.0f);
+    float r = (fraction + p.step_x_z * dx) + p.step_y_z * dy;
+    float whole = float((p.first_high << (32 - PLANE_FIXED_BITS)) | (p.first_low >> PLANE_FIXED_BITS));
+    depth = pz_clamp(whole + r, 0.0f, float(most));
     return true;
 }
 

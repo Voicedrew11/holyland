@@ -27,6 +27,11 @@ EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_
            "pcr_prim.vert"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec
+# the exact Z fragment shaders made again with PCR_DEPTH_RULE (pcr_prim.h's depth rule: the depth tested in the
+# shader, against its own copy in the critical section), as <name>_xz_dr for single-sampled passes and <name>_xz_drm
+# for multisampled ones; the ones shaded at every sample are drawn only multisampled
+DEPTH_RULE = ["pcr_prim.frag", "pcr_prim_early.frag"]
+DEPTH_RULE_MS = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
            "pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 
@@ -61,6 +66,14 @@ def build(glslang, folder, target, prefix, what, where):
         made += [(name, name.replace(".", "_") + "_rec", ["-DPCR_RECORDS"]) for name in sources if name in RECORDS]
         made += [(name, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for name, symbol, defines in list(made)
                  if name in EXACT_Z]
+        exact = [(name, symbol, defines) for name, symbol, defines in made if symbol.endswith("_xz")]
+        made += [(name, symbol + "_dr", defines + ["-DPCR_DEPTH_RULE"]) for name, symbol, defines in exact
+                 if name in DEPTH_RULE]
+        made += [(name, symbol + "_drm", defines + ["-DPCR_DEPTH_RULE", "-DPCR_DEPTH_RULE_MS"])
+                 for name, symbol, defines in exact if name in DEPTH_RULE_MS]
+        # (DATE's set-up marking the depth rule's copy: pcr_date.frag's PCR_DATE_MARK)
+        made += [(name, symbol + "_mark", defines + ["-DPCR_DATE_MARK"]) for name, symbol, defines in list(made)
+                 if name in ("pcr_date.frag", "pcr_date_ms.frag") and symbol.endswith("_frag")]
         for name, symbol, defines in made:
             out = os.path.join(tmp, symbol + ".spv")
             if name.endswith(".vert"):

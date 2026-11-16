@@ -184,6 +184,37 @@ bool pcr_plane_z(out uint z, out uint fine) {
     }
     return true;
 }
+
+// (the depth rule, pcr_prim.h's PCR_DEPTH_RULE) The triangle's plane at this pixel, its Z with the fraction (in Z,
+// half a Z added, clamped to 0..zmax: plane_z.h's pz_pixels_depth), and how far the GS's own rounding could move it
+// (tolerance, in Z): its corners are on the GS's grid of 1/16 of a pixel, so each is up to 1/32 of a GS pixel from
+// where the game put it (scale/32 of the target's pixels: the plane's step a target pixel times that, across and down)
+// and its Z up to half a step of the corners' 256ths. Two meshes of one surface cut into other triangles are within it
+// of each other; two surfaces apart by more than it are not. False: the triangle has no plane.
+bool pcr_plane_depth(out float z, out float tolerance) {
+    z = 0.0;
+    tolerance = 0.0;
+    if ((v_plane0.z & PCR_PLANE_ON) == 0) {
+        return false;
+    }
+    PzPixels p;
+    p.first_low = uint(v_plane0.x);
+    p.first_high = uint(v_plane0.y);
+    p.first_x = (v_plane0.z & 0x7FFF) - 1;
+    p.first_y = (v_plane0.z >> 16) - 1;
+    p.step_x_low = uint(v_plane0.w);
+    p.step_y_low = uint(v_plane1.x);
+    p.steps_high = uint(v_plane1.y);
+    p.step_x_z = intBitsToFloat(v_plane1.z);
+    p.step_y_z = intBitsToFloat(v_plane1.w);
+    vec2 k = floor(gl_FragCoord.xy);
+    if (!pz_pixels_depth_quick(p, k.x, k.y, pc.zmax, z)) {
+        z = pz_pixels_depth(p, int(k.x), int(k.y), pc.zmax);
+    }
+    vec2 corner_step = vec2(pc.src_scale) * (1.0 / 32.0);
+    tolerance = abs(p.step_x_z) * corner_step.x + abs(p.step_y_z) * corner_step.y + 1.0 / 512.0;
+    return true;
+}
 #endif
 
 #endif

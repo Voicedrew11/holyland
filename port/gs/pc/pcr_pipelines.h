@@ -46,6 +46,12 @@ namespace pcr {
 struct WarmProgram {
     Vulkan::Program *program = nullptr;
     Vulkan::Program *per_sample = nullptr;
+    // (the depth rule's, which read the depth single-sampled or multisampled: the program and its per-sample variant
+    // drawn in this one's place at the other kind of pass, and whether this one is the multisampled one; nullptr: the
+    // program draws at both)
+    Vulkan::Program *other = nullptr;
+    Vulkan::Program *other_per_sample = nullptr;
+    bool multisampled = false;
 };
 
 // What of the canvas's pipelines depends on the device (the seed's pipelines are made with it: precompile)
@@ -63,6 +69,15 @@ struct WarmDevice {
     // role % decal_programs) and its passes again with no colour (role % decal_programs). decal_roles 0: none (no
     // stencil, or no exact Z)
     uint32_t decal_roles = 0, decal_programs = 1, depth_reset_first = 0;
+    // (the depth rule, pcr_canvas.cpp's rule_on_) Its programs' first role (0: off): 20 single-sampled (the batch
+    // programs' plain and early, then the runs' plain and early, 5 each), then the same 20 multisampled. The seed's
+    // records of the batch programs (roles 0-9 and 11-20) that test Z GEQUAL or GREATER (or, rule_always, ALWAYS and
+    // write it) are made with the rule's program in their place. zclear_role: the depth copy's clear in a pass
+    // (clear_depth_copy), made for every pass with depth; date_mark_role: DATE's set-up marking the copy, made with the
+    // state of DATE's own set-up (role 10).
+    uint32_t rule_first = 0;
+    bool rule_always = false;
+    uint32_t zclear_role = 0, date_mark_role = 0;
 };
 
 // (any thread) The canvas's programs: those whose pipelines are kept. extra: a program drawn only into a
