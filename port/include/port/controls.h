@@ -10,16 +10,25 @@
 /* Called by the game where the player's frame applies the turn and look (Player_Move), whether the
    player is in control (`gameplay`). Gives the mouse's turn and look since the last call, in
    radians, and returns 1; returns 0 and changes nothing when mouse look is off, the mouse is not
-   captured, the player is not in control, or a pad script is playing (so runs stay deterministic). */
+   captured, the player is not in control, or a pad script is playing (so runs stay deterministic).
+   A pad script recorded with mouse look (--record-input) gives back the recorded turns instead. */
 int port_mouse_look(int gameplay, float *yaw, float *pitch);
 
 /* Called by the game (Player_Update) with the pad's held buttons and the action button's bit (the
    game's button for running and for using what is in front). With the separate run mod on
    (port_options.separate_run) and Run bound in the layout, running is Run's: the action bit of
    `held` becomes whether Run is held, so the action button only uses things (pressed is the game's
-   own). Otherwise, or while a pad script plays or one is recorded, `held` is returned as it is: the
-   action button runs, as on the PS2. */
+   own). Otherwise `held` is returned as it is: the action button runs, as on the PS2. A pad script
+   gives what its recording held (run=), or nothing (the action button runs). */
 unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit);
+int port_controls_run_state(void); /* Run held (1) or not (0) with the mod on and bound; -1: the mod does not apply */
+
+/* ---- Recording and replaying the PC's controls (port/sdk/libpad.c, --record-input and --input) ---- */
+int port_pad_script_run(void);                      /* the script's run= at this vblank; -1 none */
+int port_pad_replay_look(float *yaw, float *pitch); /* the recorded turn of this call (1) or none (0); -1 no turns */
+void port_pad_record_look(float yaw, float pitch);  /* (recording) a turn port_mouse_look gave */
+void port_pad_record_event(const char *name, int slot); /* (recording) a PC key the game sees */
+void port_pad_record_note(const char *note);        /* (recording) a comment at this vblank */
 
 /* ---- Layouts --------------------------------------------------------------------------------- */
 #define CONTROLS_PS2 0

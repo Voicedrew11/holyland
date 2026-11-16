@@ -19,7 +19,12 @@
 #define DROVE_LOOK 2
 
 static int setting = 1;
+static int replayed = -1; /* a recording's ts= at this vblank (port_twin_stick_replayed); -1 none */
 static unsigned char drove; /* DROVE_: what the right stick drove last call */
+
+void port_twin_stick_replayed(int on) {
+    replayed = on;
+}
 
 int port_twin_stick_setting(void) {
     return setting;
@@ -29,14 +34,17 @@ void port_twin_stick_set(int on) {
     setting = on != 0;
 }
 
-/* KF4_TWIN_STICK_SCRIPTED=1: on with a pad script too, to test it (tests/twin_stick.pad) */
+/* KF4_TWIN_STICK_SCRIPTED=1: on with a pad script too, to test it (tests/twin_stick.pad); a recording
+   (--record-input) says itself whether it was on (ts=) */
 int port_twin_stick_on(void) {
     const char *scripted;
-
+    if (port_options.input != NULL && replayed >= 0) {
+        return replayed;
+    }
     if (!setting) {
         return 0;
     }
-    if (port_options.input == NULL && port_options.record_input == NULL) {
+    if (port_options.input == NULL) {
         return 1;
     }
     scripted = getenv("KF4_TWIN_STICK_SCRIPTED");

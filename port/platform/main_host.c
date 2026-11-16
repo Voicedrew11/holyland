@@ -143,7 +143,10 @@
        --memcard DIR     the folder that is the memory card in slot 1 (by default memcard in the
                          data folder, next to settings.json); "none" leaves the slot empty
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
-                         (the sound then follows the game's clock and mouse look is off, so it replays)
+                         with the turns mouse look, the run key and twin-stick give the game (the
+                         sound follows the game's clock); replay from the same start: --clock,
+                         --quick-load and the data folder (KF4_DATA_DIR, KF4_READ_SETTINGS=1);
+                         tools/record_input.py records and replays so (tools/README.md)
        --state-save-at VBLANK[:SLOT|:FILE],...
                          save a state at these vblanks (port/platform/savestate.c)
        --state-load [VBLANK:]SLOT|FILE

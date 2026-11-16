@@ -19,7 +19,17 @@
    that cover a vblank add up: their buttons are all down.
 
    --record-input FILE writes what the pad and keyboard send as such a script, a line per run of vblanks
-   with the same buttons and sticks, so a played session can be replayed with --input. */
+   with the same buttons and sticks, so a played session can be replayed with --input. The PC's own
+   controls stay on while recording (mouse look, the separate run key, twin-stick, Verdite's menu side
+   keys), and what they hand the game is written too, so that the replay gives the game the same:
+       <vblank> <buttons> rx=.. ry=.. lx=.. ly=.. ts=<0|1> run=<0|1> <vblanks>
+   ts= is whether twin-stick shaped the sticks (port_twin_stick_on), run= whether the separate run key
+   was held (left out when the separate run mod did not apply: the action button runs), and
+       <vblank> look <yaw> <pitch>       the mouse's turn one port_mouse_look call gave (C99 hex floats)
+       <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, game_save, game_load
+   A recording is the game's input per vblank, not per picture: it replays the same whatever the frame
+   rate, headless or in a window, from the same start (the same --clock, --quick-load or memory card,
+   and the data folder's settings, quick saves, automap and weapon sets as they were). */
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +44,9 @@
 #include "port/host.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/quicksave.h"
 #include "port/savestate.h"
+#include "port/weapon_sets.h"
 
 #define BUTTON_SELECT 0x0001
 #define BUTTON_L3 0x0002
@@ -71,6 +83,8 @@ static const ButtonName button_names[] = {
 typedef struct {
     unsigned int buttons;
     int axis[4]; /* rx, ry, lx, ly: -1 where the line does not set it */
+    int twin;    /* ts=: twin-stick on (1) or off (0); -1 not set (a pad script's own rule) */
+    int run;     /* run=: the separate run key held (1) or not (0); -1 not set (the action button runs) */
 } PadInput;
 
 typedef struct {
@@ -81,6 +95,23 @@ typedef struct {
 
 static ScriptLine *script;
 static int script_lines;
+
+/* A recording's mouse turns and PC keys (look and event lines), in their order */
+#define REPLAY_LOOK 0
+#define REPLAY_WEAPON_SWAP 1
+#define REPLAY_GAME_SAVE 2
+#define REPLAY_GAME_LOAD 3
+
+typedef struct {
+    uint64_t vblank;
+    int kind; /* REPLAY_ */
+    int slot;
+    float yaw, pitch;
+} ReplayItem;
+
+static ReplayItem *looks, *events;
+static int look_count, event_count, look_next, event_next;
+static int script_has_looks; /* the script is a recording with mouse look's turns: port_mouse_look plays them */
 
 /* ---- Recording (--record-input) ---------------------------------------------------------------- */
 static FILE *record_file;
@@ -105,8 +136,16 @@ static void record_flush(void) {
     if (!any) {
         fputc('-', record_file);
     }
-    fprintf(record_file, " rx=%d ry=%d lx=%d ly=%d %llu\n", record_run.axis[0], record_run.axis[1],
-            record_run.axis[2], record_run.axis[3], (unsigned long long)record_count);
+    fprintf(record_file, " rx=%d ry=%d lx=%d ly=%d", record_run.axis[0], record_run.axis[1], record_run.axis[2],
+            record_run.axis[3]);
+    if (record_run.twin >= 0) {
+        fprintf(record_file, " ts=%d", record_run.twin);
+    }
+    if (record_run.run >= 0) {
+        fprintf(record_file, " run=%d", record_run.run);
+    }
+    fprintf(record_file, " %llu\n", (unsigned long long)record_count);
+    fflush(record_file); /* (a crash keeps what was played) */
     record_count = 0;
 }
 
@@ -118,12 +157,32 @@ static void record_close(void) {
     }
 }
 
-/* Once a vblank: what the game reads until the next one */
+/* Once a vblank: what the game reads until the next one. The pad is read again within a vblank while the game
+   waits (the overlay or full map holding it, pipelines being made): the last reading is what the game gets. */
 static void record_vblank(const PadInput *input, uint64_t vblank) {
+    if (record_count != 0 && record_first + record_count - 1 == vblank) {
+        if (memcmp(input, &record_run, sizeof(record_run)) == 0) {
+            return;
+        }
+        if (record_count == 1) {
+            record_run = *input;
+            return;
+        }
+        record_count--;
+        record_flush();
+        record_run = *input;
+        record_first = vblank;
+        record_count = 1;
+        return;
+    }
     if (record_count != 0 && memcmp(input, &record_run, sizeof(record_run)) == 0 &&
         record_first + record_count == vblank) {
         record_count++;
         return;
+    }
+    if (record_count != 0 && vblank < record_first + record_count && record_file != NULL) {
+        fprintf(record_file, "# the vblank went back to %llu (a save state loaded): a replay goes wrong from here\n",
+                (unsigned long long)vblank);
     }
     record_flush();
     record_run = *input;
@@ -173,6 +232,53 @@ static unsigned int parse_buttons(const char *text, const char *path, int line_n
     return bits;
 }
 
+/* A look or event line (the rest of strtok's words) */
+static void load_item(const ScriptLine *line, const char *word, const char *path, int line_number) {
+    ReplayItem item;
+    ReplayItem **list;
+    int *count;
+    char *a = strtok(NULL, " \t\r\n");
+    char *b = strtok(NULL, " \t\r\n");
+
+    memset(&item, 0, sizeof(item));
+    item.vblank = line->first;
+    if (strcmp(word, "look") == 0) {
+        if (a == NULL || b == NULL) {
+            PORT_FATAL("%s:%d: look wants a yaw and a pitch", path, line_number);
+        }
+        item.kind = REPLAY_LOOK;
+        item.yaw = strtof(a, NULL);
+        item.pitch = strtof(b, NULL);
+        list = &looks;
+        count = &look_count;
+        script_has_looks = 1;
+    } else {
+        if (a == NULL) {
+            PORT_FATAL("%s:%d: an event wants a name", path, line_number);
+        }
+        item.kind = strcmp(a, "weapon_swap") == 0 ? REPLAY_WEAPON_SWAP
+                    : strcmp(a, "game_save") == 0 ? REPLAY_GAME_SAVE
+                    : strcmp(a, "game_load") == 0 ? REPLAY_GAME_LOAD
+                                                  : -1;
+        if (item.kind < 0) {
+            PORT_FATAL("%s:%d: no event called %s", path, line_number, a);
+        }
+        item.slot = b != NULL ? (int)strtol(b, NULL, 0) : 0;
+        list = &events;
+        count = &event_count;
+    }
+    /* grown at each power of two */
+    if ((*count & (*count - 1)) == 0 && *count >= 64) {
+        *list = realloc(*list, (size_t)*count * 2 * sizeof(**list));
+    } else if (*count == 0) {
+        *list = malloc(64 * sizeof(**list));
+    }
+    if (*list == NULL) {
+        PORT_FATAL("out of memory for the pad script");
+    }
+    (*list)[(*count)++] = item;
+}
+
 static void load_script(const char *path) {
     FILE *file = fopen(path, "r");
     char text[256];
@@ -195,12 +301,28 @@ static void load_script(const char *path) {
         memset(&line, 0, sizeof(line));
         line.count = 6;
         line.input.axis[0] = line.input.axis[1] = line.input.axis[2] = line.input.axis[3] = -1;
+        line.input.twin = line.input.run = -1;
         for (word = strtok(text, " \t\r\n"); word != NULL; word = strtok(NULL, " \t\r\n")) {
             static const char *const axis_names[4] = {"rx=", "ry=", "lx=", "ly="};
             int axis;
 
             if (words == 0) {
                 line.first = strtoull(word, NULL, 0);
+                words++;
+                continue;
+            }
+            if (words == 1 && (strcmp(word, "look") == 0 || strcmp(word, "event") == 0)) {
+                load_item(&line, word, path, line_number);
+                words = -1;
+                break;
+            }
+            if (strncmp(word, "ts=", 3) == 0) {
+                line.input.twin = (int)strtol(word + 3, NULL, 0) != 0;
+                words++;
+                continue;
+            }
+            if (strncmp(word, "run=", 4) == 0) {
+                line.input.run = (int)strtol(word + 4, NULL, 0) != 0;
                 words++;
                 continue;
             }
@@ -221,8 +343,8 @@ static void load_script(const char *path) {
             }
             words++;
         }
-        if (words == 0) {
-            continue;
+        if (words <= 0) {
+            continue; /* empty, or a look or event line */
         }
         if (words == 1) {
             PORT_FATAL("%s:%d: a vblank with nothing to press", path, line_number);
@@ -245,6 +367,7 @@ static PadInput script_input(uint64_t vblank) {
 
     memset(&input, 0, sizeof(input));
     input.axis[0] = input.axis[1] = input.axis[2] = input.axis[3] = 0x80;
+    input.twin = input.run = -1;
     for (i = 0; i < script_lines; i++) {
         const ScriptLine *line = &script[i];
         int axis;
@@ -258,8 +381,80 @@ static PadInput script_input(uint64_t vblank) {
                 input.axis[axis] = line->input.axis[axis];
             }
         }
+        if (line->input.twin >= 0) {
+            input.twin = line->input.twin;
+        }
+        if (line->input.run >= 0) {
+            input.run = line->input.run;
+        }
     }
     return input;
+}
+
+/* ---- What a recording hands the PC's controls (port/include/port/controls.h) ------------------- */
+int port_pad_script_run(void) {
+    return port_options.input ? script_input(port_vblank_count()).run : -1;
+}
+
+int port_pad_replay_look(float *yaw, float *pitch) {
+    uint64_t vblank = port_vblank_count();
+    static int warned;
+
+    *yaw = *pitch = 0.0f;
+    if (port_options.input == NULL || !script_has_looks) {
+        return -1;
+    }
+    while (look_next < look_count && looks[look_next].vblank < vblank) {
+        if (!warned) {
+            warned = 1;
+            fprintf(stderr, "[pad] the replay is out of step: the mouse turn of vblank %llu was not taken by vblank %llu\n",
+                    (unsigned long long)looks[look_next].vblank, (unsigned long long)vblank);
+        }
+        look_next++;
+    }
+    if (look_next < look_count && looks[look_next].vblank == vblank) {
+        *yaw = looks[look_next].yaw;
+        *pitch = looks[look_next].pitch;
+        look_next++;
+        return 1;
+    }
+    return 0;
+}
+
+void port_pad_record_look(float yaw, float pitch) {
+    if (record_file != NULL) {
+        fprintf(record_file, "%llu look %a %a\n", (unsigned long long)port_vblank_count(), (double)yaw, (double)pitch);
+    }
+}
+
+void port_pad_record_event(const char *name, int slot) {
+    if (record_file != NULL) {
+        fprintf(record_file, "%llu event %s %d\n", (unsigned long long)port_vblank_count(), name, slot);
+    }
+}
+
+void port_pad_record_note(const char *note) {
+    if (record_file != NULL) {
+        fprintf(record_file, "# vblank %llu: %s\n", (unsigned long long)port_vblank_count(), note);
+        fflush(record_file);
+    }
+}
+
+/* At each poll: the recording's PC keys up to this vblank */
+static void replay_events(void) {
+    uint64_t vblank = port_vblank_count();
+
+    while (event_next < event_count && events[event_next].vblank <= vblank) {
+        const ReplayItem *item = &events[event_next++];
+
+        if (item->kind == REPLAY_WEAPON_SWAP) {
+            port_weapon_sets_key();
+        } else if (item->kind == REPLAY_GAME_SAVE) {
+            port_quick_request_save(item->slot);
+        } else if (item->kind == REPLAY_GAME_LOAD) {
+            port_quick_request_load(item->slot);
+        }
+    }
 }
 
 /* ---- SDL -------------------------------------------------------------------------------------- */
@@ -275,6 +470,7 @@ static void sdl_read(void) {
 
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
+    live.twin = live.run = -1;
     /* the buttons, and the sticks' keys; nothing while the overlay is open */
     port_controls_read(&live.buttons, live.axis, controller);
     if (controller == NULL || port_overlay_open()) {
@@ -311,8 +507,20 @@ static void sdl_open_first(void) {
 
 static int use_sdl;
 
+/* (--record-input) at each poll: what the game reads until the next */
+static void record_poll(void) {
+    if (record_file != NULL) {
+        PadInput recorded = live;
+
+        recorded.twin = port_twin_stick_on();
+        recorded.run = port_controls_run_state();
+        record_vblank(&recorded, port_vblank_count());
+    }
+}
+
 void port_pad_init(void) {
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
+    live.twin = live.run = -1;
     if (port_options.record_input != NULL) {
         if (port_options.input != NULL) {
             PORT_FATAL("--record-input records the live pad: it cannot be used with --input");
@@ -321,7 +529,8 @@ void port_pad_init(void) {
         if (record_file == NULL) {
             PORT_FATAL("cannot write the pad script %s", port_options.record_input);
         }
-        fprintf(record_file, "# recorded with --record-input; play it back with --input (and the same --clock and card)\n");
+        fprintf(record_file, "# recorded with --record-input; play it back with --input (and the same --clock, card, --quick-load\n"
+                             "# and data folder: settings, quick saves, automap, weapon sets)\n");
         atexit(record_close);
     }
     port_controls_init(port_options.controls);
@@ -346,8 +555,15 @@ void port_pad_init(void) {
 void port_pad_poll(void) {
 #ifdef KF4_HAVE_SDL
     SDL_Event event;
+#endif
 
+    if (port_options.input) {
+        replay_events();
+        port_twin_stick_replayed(script_input(port_vblank_count()).twin);
+    }
+#ifdef KF4_HAVE_SDL
     if (!use_sdl) {
+        record_poll();
         return;
     }
     while (SDL_PollEvent(&event)) {
@@ -376,9 +592,7 @@ void port_pad_poll(void) {
         sdl_read();
     }
 #endif
-    if (record_file != NULL) {
-        record_vblank(&live, port_vblank_count());
-    }
+    record_poll();
 }
 
 /* ---- libpad ----------------------------------------------------------------------------------- */

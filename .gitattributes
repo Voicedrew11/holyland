@@ -4,3 +4,6 @@
 # Made by tools/build_shaders.py from the shaders: collapsed in GitHub's diffs (linguist-generated) and shown
 # as one "binary files differ" line in git's own (-diff); the shaders' sources carry the real change.
 port/gs/pc/pcr_shaders.h linguist-generated -diff
+
+# cmd reads its labels wrong in a .bat with LF endings
+*.bat text eol=crlf
