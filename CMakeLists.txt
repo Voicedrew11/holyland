@@ -358,6 +358,10 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # and with a frame context moved on only when no command buffer is open (cmake/granite_try_frame_context.cmake)
     include(cmake/granite_try_frame_context.cmake)
     kf4_granite_try_frame_context(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # and with the GPU's work of the next frame context waited for without the device lock
+    # (cmake/granite_frame_context_wait.cmake, after the above)
+    include(cmake/granite_frame_context_wait.cmake)
+    kf4_granite_frame_context_wait(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     # and with fragment shader interlock (cmake/granite_interlock.cmake: the PC renderer's depth rule)
     include(cmake/granite_interlock.cmake)
     kf4_granite_interlock(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)

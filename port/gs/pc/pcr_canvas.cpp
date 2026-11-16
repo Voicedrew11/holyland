@@ -65,6 +65,7 @@ const ZoneId canvas_put_table_on_gpu_zone = port_zone_id("canvas put_table_on_gp
 const ZoneId canvas_copy_surfaces_for_the_pump_zone = port_zone_id("canvas copy_surfaces (for the pump)", ZONE_WORK);
 const ZoneId canvas_start_from_zone = port_zone_id("canvas start_from", ZONE_WORK);
 const ZoneId canvas_draw_again_alone_zone = port_zone_id("canvas draw_again_alone", ZONE_WORK);
+const ZoneId canvas_command_buffer_requested_zone = port_zone_id("canvas command buffer requested (Granite's lock)", ZONE_WAIT);
 const ZoneId canvas_flush_batch_zone = port_zone_id("canvas flush_batch", ZONE_WORK);
 const ZoneId canvas_room_for_planes_zone = port_zone_id("canvas room_for_planes", ZONE_WORK);
 const ZoneId canvas_draw_batch_zone = port_zone_id("canvas draw_batch", ZONE_WORK);
@@ -928,7 +929,10 @@ private:
     CommandBuffer &cmd() {
         flush_run(); // (what the caller records follows the run's draws)
         if (!cmd_) {
-            cmd_ = device_.request_command_buffer();
+            {
+                ZoneScope zone(canvas_command_buffer_requested_zone);
+                cmd_ = device_.request_command_buffer();
+            }
             set0_fresh_ = false;
             table_bound_ = VK_NULL_HANDLE;
             cmd_->set_dynamic_state(dynamic_.ds, dynamic_.blend);

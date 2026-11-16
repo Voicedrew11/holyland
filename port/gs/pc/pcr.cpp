@@ -76,6 +76,9 @@ const ZoneId picture_made_zone = port_zone_id("picture made", ZONE_WORK);
 const ZoneId picture_handed_out_zone = port_zone_id("picture handed out", ZONE_WORK);
 const ZoneId pc_take_picture_zone = port_zone_id("pc take_picture", ZONE_WORK);
 const ZoneId pc_next_frame_context_waits_for_the_gpu_zone = port_zone_id("pc next_frame_context (waits for the GPU)", ZONE_WAIT);
+const ZoneId pc_waits_for_the_gpu_unlocked_zone = port_zone_id("pc waits for the GPU (outside Granite's lock)", ZONE_WAIT);
+const ZoneId pump_begin_picture_again_zone = port_zone_id("pump begin_picture_again", ZONE_WORK);
+const ZoneId pump_waits_for_the_gpu_zone = port_zone_id("pump: waits for the GPU (its pictures in flight)", ZONE_WAIT);
 const ZoneId pc_waits_for_the_pump_room_for_a_frame_zone = port_zone_id("pc waits for the pump (room for a frame)", ZONE_WAIT);
 const ZoneId pump_frame_taken_zone = port_zone_id("pump frame taken", ZONE_WORK);
 const ZoneId pump_picture_between_zone = port_zone_id("pump picture between", ZONE_WORK);
@@ -1347,14 +1350,34 @@ public:
         }
     }
 
+    // Waits, without Granite's device lock, until no more than in_flight of the pictures this one submitted are
+    // still on the GPU (at most PICTURES_FENCED - 1)
+    void wait_for_the_gpu(unsigned in_flight) {
+        if (in_flight >= PICTURES_FENCED || submitted_ <= in_flight) {
+            return;
+        }
+        Fence &fence = fences_[(submitted_ - 1 - in_flight) % PICTURES_FENCED];
+        if (!fence) {
+            return;
+        }
+        pcr::GpuWait wait(&hang_notes_, "a picture's fence", pcr::hang_clock_s());
+        fence->wait();
+        fence.reset();
+    }
+
 private:
+    static constexpr unsigned PICTURES_FENCED = 4;
+
     // cmd submitted and on the GPU's queue, before the picture is handed out: Granite holds a submit without a fence
     // until the next frame context, which only kf4-pc moves on (the pump's pictures would be shown before they are
-    // drawn, and drawn up to a vblank late)
+    // drawn, and drawn up to a vblank late). Its fence kept for wait_for_the_gpu.
     void submit_now(CommandBufferHandle &cmd) {
         hang_notes_.submitted(who_, "a picture", pcr::hang_clock_s());
-        device_.submit(cmd);
+        Fence &fence = fences_[submitted_ % PICTURES_FENCED];
+        fence.reset();
+        device_.submit(cmd, &fence);
         device_.flush_frame();
+        submitted_++;
     }
 
     // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
@@ -1498,6 +1521,8 @@ private:
     PresentScaler scaler_;
     pcr::HangNotes &hang_notes_;
     const char *who_;
+    std::array<Fence, PICTURES_FENCED> fences_; // (submit_now's, the last PICTURES_FENCED pictures')
+    uint64_t submitted_ = 0;
     ImageHandle picture_;
     ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
     BufferHandle readback_;
@@ -1529,7 +1554,12 @@ public:
     Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
          Inbox &inbox, SharedTurnLead &turn_lead, pcr::HangNotes &hang_notes)
         : device_(device), inbox_(inbox), turn_lead_(turn_lead), hang_notes_(hang_notes),
-          out_(device, scanout, presenter, stats, clear, hang_notes, "kf4-pc-pump") {}
+          out_(device, scanout, presenter, stats, clear, hang_notes, "kf4-pc-pump") {
+        const char *in_flight = getenv("KF4_PC_PUMP_IN_FLIGHT");
+        if (in_flight && *in_flight) {
+            in_flight_ = unsigned(strtoul(in_flight, nullptr, 10));
+        }
+    }
 
     ~Pump() {
         stop();
@@ -1631,7 +1661,12 @@ private:
         canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
         canvas_->watch_hangs(hang_notes_, "kf4-pc-pump");
         between_ = std::make_unique<pcr::Between>(device_);
-        while (std::optional<PumpMessage> message = take()) {
+        for (;;) {
+            wait_for_the_gpu();
+            std::optional<PumpMessage> message = take();
+            if (!message) {
+                break;
+            }
             std::visit([this](auto &m) { work(m); }, *message);
             std::lock_guard<std::mutex> hold(lock_);
             busy_ = false;
@@ -1717,11 +1752,26 @@ private:
         turned_before(turn_lead_, turn_to_hand(p.picture, turn_lead_));
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
-        if (walk_ && between_->begin_picture_again(p.picture)) {
+        if (walk_ && begin_picture_again(p.picture)) {
             canvas_->draw_again_alone(*walk_, *between_, picture_next());
             between_->end_picture_again();
         }
         between_took_s_ = port_wall_seconds() - began_s;
+    }
+
+    // Before each message is taken (so before a picture between waits for its time): the GPU's queue kept short. The
+    // pump used to be held back by Granite's device lock while kf4-pc's next_frame_context waited for the GPU (2.4 ms at
+    // a time at 009); without that, it queued pictures faster than the GPU drew them (kf4-pc then waited up to 195 ms
+    // for a frame context) and they came late (777 made, not shown, against 50). Neither the mouse turn nor the picture's cost (from its time) counts the wait.
+    // KF4_PC_PUMP_IN_FLIGHT: the pump's pictures that may still be on the GPU (1; 4 or more: not waited for).
+    void wait_for_the_gpu() {
+        ZoneScope zone(pump_waits_for_the_gpu_zone);
+        out_.wait_for_the_gpu(in_flight_);
+    }
+
+    bool begin_picture_again(const GsnInterpPicture &picture) {
+        ZoneScope zone(pump_begin_picture_again_zone);
+        return between_->begin_picture_again(picture);
     }
 
     // Whether the next message is the picture that shows this picture between, already sent: taken at once, its
@@ -1766,6 +1816,7 @@ private:
     SharedTurnLead &turn_lead_;
     pcr::HangNotes &hang_notes_;
     PictureOut out_;
+    unsigned in_flight_ = 1; // (KF4_PC_PUMP_IN_FLIGHT; set at construction)
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::Between> between_;
@@ -1835,6 +1886,8 @@ public:
             direct_on_ = !(direct && strcmp(direct, "0") == 0);
             const char *wait = getenv("KF4_PC_CONTEXT_WAIT");
             try_contexts_ = !(wait && strcmp(wait, "1") == 0);
+            const char *locked = getenv("KF4_PC_GPU_WAIT_LOCKED");
+            gpu_wait_unlocked_ = !(locked && strcmp(locked, "1") == 0);
         }
         thread_ = std::thread([this] { run(); });
         fprintf(stderr, "[pcr] the PC renderer on %s\n", props.deviceName);
@@ -2223,9 +2276,25 @@ private:
 
     // (kf4-pc) Granite's frame context moved on: waits for the GPU's work of the context it comes round to
     void next_frame_context() {
+        wait_for_the_gpu_unlocked();
         ZoneScope zone(pc_next_frame_context_waits_for_the_gpu_zone);
         pcr::GpuWait wait(&hang_notes_, "kf4-pc's next_frame_context", pcr::hang_clock_s());
         device_->next_frame_context();
+    }
+
+    // (kf4-pc) Before the frame context moves on: the GPU's work of the context it comes round to waited for without
+    // Granite's device lock (cmake/granite_frame_context_wait.cmake), so next_frame_context, which waits holding it,
+    // finds it done and the pump, which takes the lock for every buffer and command buffer, is not held up by the GPU
+    // (it was, 2.4 ms at a time at 009). A timeout (a hang: HangWatch's to note) leaves the wait to
+    // next_frame_context, as before. KF4_PC_GPU_WAIT_LOCKED=1: not waited for here, as before.
+    void wait_for_the_gpu_unlocked() {
+        if (!gpu_wait_unlocked_) {
+            return;
+        }
+        constexpr uint64_t TIMEOUT_NS = 1000ull * 1000 * 1000;
+        ZoneScope zone(pc_waits_for_the_gpu_unlocked_zone);
+        pcr::GpuWait wait(&hang_notes_, "kf4-pc's wait for the next frame context", pcr::hang_clock_s());
+        device_->wait_next_frame_context_idle(TIMEOUT_NS);
     }
 
     // (kf4-pc) A picture the pump drew: a frame context moved on for it (above), now when that waits for nobody's open
@@ -2249,9 +2318,16 @@ private:
         }
     }
 
-    // (kf4-pc, its canvas submitted) The frame contexts owed moved on while that waits for nobody
+    // (kf4-pc, its canvas submitted) The frame contexts owed moved on while that waits for nobody's open command
+    // buffer. Each still waits for the GPU, as next_frame_context does (outside Granite's lock): moved on only when the
+    // GPU was already done (a test, not a wait), up to 8 contexts' work queued up and the pump's pictures came late
+    // (932 not shown as made too late at 009, against 50).
     void pay_frame_contexts() {
-        while (contexts_owed_ > 0 && device_->try_next_frame_context()) {
+        while (contexts_owed_ > 0) {
+            wait_for_the_gpu_unlocked();
+            if (!device_->try_next_frame_context()) {
+                return;
+            }
             contexts_owed_--;
         }
     }
@@ -2333,6 +2409,7 @@ private:
     static constexpr int FRAME_CONTEXTS_OWED_MOST = 8;
     int contexts_owed_ = 0;
     bool try_contexts_ = true; // (KF4_PC_CONTEXT_WAIT=1: false; set at open)
+    bool gpu_wait_unlocked_ = true; // (KF4_PC_GPU_WAIT_LOCKED=1: false; set at open)
     // Pictures straight to the pump (interp_picture). The sender's (the DMA controller's thread): the scale its next
     // picture has, whether its next picture shows a picture between sent to the pump directly or to kf4-pc, and the
     // pictures it sent kf4-pc that kf4-pc says it has taken (routed_done_) once taken
