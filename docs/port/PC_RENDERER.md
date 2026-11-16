@@ -12,12 +12,19 @@ whole stands.
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open
 from item 7 below: layer Z (`--native-layer-z`) only, which the PC renderer keeps but does not apply and the overlay
 does not offer: it has no layers fighting to fix, and its removal is proposed ("Colour high, the 2D mode and layer Z",
-below). Anisotropy, texture detail, the presenter's best scaling and sharpening, MSAA, cut-out AA, colour precision and
-the 2D mode are applied since 2026-11-11 (below) and offered again. The settings that change live go through
+below). Anisotropy, texture detail, the presenter's best scaling and sharpening, colour precision and
+the 2D mode are applied since 2026-11-11 (below) and offered again; MSAA and cut-out AA were too, until 2026-11-16, when
+they were removed for FXAA ("Anti-aliasing", next). The settings that change live go through
 `port/overlay/live_settings.c`, which `KF4_SET_AT=VBLANK:NAME=VALUE,...` drives for tests (e.g.
 `2400:native_widescreen=0`). Pictures are now
 judged against `--renderer gs` (paraLLEl-GS). The native GS's files that item 6 names (`gsn_nd_water.inc`,
 `gsn_nd_pass.inc`, `gsn_shaders.h`, ...) are in git at commit 67af1165.
+
+**2026-11-16: MSAA removed; FXAA in its place** ("Anti-aliasing (2026-11-16)" below). Every MSAA path is gone:
+`--native-msaa`, `--native-cutout-aa`, the multisampled surface images and their resolves and expands, the per-sample
+and multisampled shader variants (58 shaders to 39), the pipelines remade at a new sample count, the depth rule's
+per-sample interlock and the RDNA4 hang's guard in `draw_batch` (the hang needs a 2-sample target: "The RDNA4 hang"
+below). What is described below with MSAA is history.
 
 **2026-11-12: a kept walk's textures in a descriptor table** (issue #110, PERFORMANCE.md "a kept walk's CLUTs and
 textures bound once"). When a walk is handed out, its held textures go into one bindless table (set 2, `u_table` /
@@ -279,7 +286,42 @@ computes its triangle's other two corners' moves for the drop test (a per-vertex
 both). The kept frame's copy (0xF2) resolves the whole two-buffer surface with MSAA; copying only what the pictures between read
 would halve it (not checked which rows those are).
 
-## MSAA and cut-out AA (2026-11-11)
+## Anti-aliasing (2026-11-16)
+
+The owner's decision: MSAA had been a ball and chain on the port (a second image for every colour surface, resolves
+and expands around every read and write, per-sample shaders and interlock, pipelines remade at each count, about
+twice the surfaces' memory, and the RDNA4 hang, which needed a multisampled target), so it was removed whole, and for
+now a simple FXAA stands in. DLAA-like methods (FSR 4, DLSS's DLAA) may follow.
+
+- **Where it runs** (`pcr_antialias.h`, `PictureOut::draw_picture` in `pcr.cpp`): on the picture at the renderer's
+  resolution, right after the canvas's surface is copied into it and before anything reads it (the scaling to the
+  window, the scanout ring, a read-back, `--dump-frames`). One pass for each thread that makes pictures (kf4-pc's and
+  the pump's), so the pictures between have it too. At 4x the picture is 2560 x 1792 (more with native widescreen)
+  before it is scaled down to the window, so FXAA's softening is shrunk with it.
+- **FXAA** (`shaders/pcr_fxaa.frag`): the "quality" form of Lottes' method, written from its description: luma from
+  the colours as shown; no edge under a contrast of 1/24 or 1/8 of the brightest around; the edge's direction and
+  side; 12 steps along it each way (1 pixel, then up to 8); the read moved across by the nearer end's distance, or by
+  the 3 x 3 contrast for a thin feature (0.75). The picture is copied (`Fxaa::copy_`, kept while its size stays) and
+  drawn over whole from the copy, bilinear. It covers everything in the picture, so the 2D (text, the HUD) is
+  softened a little too.
+- **Settings**: `settings.json`'s display `"antialias": "off" | "fxaa"` (FXAA in a new or older settings file; the old
+  `native_msaa` and `native_cutout_aa` are left, not written again), `--antialias off|fxaa` (off without a settings
+  file: headless and scripted runs, so their pictures are as drawn), the overlay's Display, Picture "Anti-aliasing"
+  (live), `KF4_SET_AT=VBLANK:antialias=N`, `kf4-gsreplay --antialias`.
+- **A new method** is one entry in `port/include/port/antialias.h`'s table (its number, its name and its label: the
+  settings, the command line and the overlay take it from there) and one implementation of `pcr::AntiAliasMethod`,
+  made by `AntiAliasing::method_for`. FXAA needs the picture alone. DLAA, FSR 4 and the like are temporal: they also
+  need each pixel's motion, the depth, a camera moved by a sub-pixel jitter every picture, and the frames before. The
+  canvas has none of those to give yet (the depth is the GS's own, per surface; motion would come from the pictures
+  between's moves, `part_moves`, and the native draws), so such a method is a larger step than an entry in the table:
+  the interface takes only the picture now.
+- **The pipeline seed and lists** keep their layout: records of multisampled passes and per-sample programs (the seed's
+  MSAA runs, and older data folders' lists) are skipped, and the canvas's program numbers (roles) are kept, the
+  multisampled ones' left empty, so that the remaining records still name their programs.
+- **Kept**: `cmake/granite_msaa.cmake`, a fix to Granite itself (a render pass's samples in its hash), harmless with
+  every pass at one sample.
+
+## MSAA and cut-out AA (2026-11-11; removed 2026-11-16)
 
 `--native-msaa` and `--native-cutout-aa` (settings.json's `native_msaa`, `native_cutout_aa`) are applied, live from
 a vblank, and the overlay offers them again (Display, Picture). Built the GPU's way, not as the native GS had them:

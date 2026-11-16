@@ -638,7 +638,7 @@ def main():
     parser.add_argument("--no-capture", action="store_true", help="no GS capture, so no census")
     parser.add_argument("--renderer", default="pc", choices=("gs", "pc"),
                         help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS)")
-    parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --native-msaa 2\"")
+    parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --antialias fxaa\"")
     parser.add_argument("--keep-lists", help="a folder for each map's pc_pipeline_list.bin (NNN.bin), the pipelines "
                         "the PC renderer drew with (tools/pipeline_seed.py)")
     parser.add_argument("--turn", action="store_true", help="turn right all along (the views are then not the same "

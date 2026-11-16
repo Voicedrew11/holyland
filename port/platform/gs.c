@@ -173,12 +173,9 @@ static int open_pc_renderer(void) {
         return 0;
     }
     gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());
-    if (port_options.native_msaa > 1) {
-        port_options.native_msaa = gsr_set_msaa(port_options.native_msaa);
-    }
+    gsr_set_antialias(port_options.antialias);
     gsr_set_lod(port_options.native_lod);
     port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
-    gsr_set_cutout_aa(port_options.native_cutout_aa);
     gsr_set_2d(port_options.native_2d);
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
@@ -859,15 +856,6 @@ void port_gs_set_native_2d(int mode) {
 #endif
 }
 
-void port_gs_set_native_cutout_aa(int mode) {
-    port_options.native_cutout_aa = mode;
-#ifdef KF4_HAVE_PARALLEL_GS
-    if (have_pc) {
-        gsr_set_cutout_aa(mode);
-    }
-#endif
-}
-
 int port_gs_native_draws_now(void) {
     /* (the PC renderer moves them only in its own pictures between: frame_interp.c's CPU way cannot) */
     return port_frame_rate_hz() <= 30 || port_interp_on_gpu();
@@ -900,14 +888,13 @@ void port_gs_set_native_layer_z(int mode) {
 #endif
 }
 
-int port_gs_set_native_msaa(int samples) {
+void port_gs_set_antialias(int method) {
+    port_options.antialias = method;
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_pc) {
-        samples = gsr_set_msaa(samples);
+        gsr_set_antialias(method);
     }
 #endif
-    port_options.native_msaa = samples;
-    return samples;
 }
 
 /* --native-widescreen: the widescreen picture is the GS's 640x448 shown at 16:9, its 3D drawn with a

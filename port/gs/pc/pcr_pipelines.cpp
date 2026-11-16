@@ -1,4 +1,4 @@
-// The PC renderer's pipelines made ahead when MSAA's samples change (pcr_pipelines.h)
+// The PC renderer's pipelines kept between runs and made ahead (pcr_pipelines.h)
 #include "pcr_pipelines.h"
 
 #include <stdio.h>
@@ -46,7 +46,7 @@ namespace pcr {
 namespace {
 
 // A compatible render pass's attachments (the canvas's: one colour attachment or none, a depth one or none) and
-// subpasses: made again with other samples from them
+// subpasses, as a record names them
 struct PassDesc {
     uint32_t colours = 0;
     bool depth = false;
@@ -59,9 +59,9 @@ struct PassDesc {
 // made it from, with its program named by the canvas's index of it (warm_watch's: the same across builds, where the
 // program's code may not be) and its render pass by its attachments; plain bytes, zeroed where unused
 struct Record {
-    uint32_t role;       // (warm_watch's index; EXTRA_ROLE: the expand pass)
-    uint32_t per_sample; // (1: the program's variant that draws only with MSAA)
-    uint32_t samples;
+    uint32_t role;       // (warm_watch's index)
+    uint32_t per_sample; // (1: a variant shaded at every sample, of the MSAA the port had: skipped)
+    uint32_t samples;    // (the pass's: 1; more, of the MSAA the port had: skipped)
     uint32_t colours, depth, subpasses;
     VkFormat colour_format, depth_format;
     RenderPassInfo::Subpass subpass[2];
@@ -73,31 +73,17 @@ struct Record {
     uint32_t subpass_index;
     uint32_t subgroup_size_tag;
 };
-constexpr uint32_t EXTRA_ROLE = 1000;
 constexpr size_t RECORDS_MOST = 4096;           // (the list's length at most: the oldest dropped past it)
 constexpr size_t CACHE_BYTES_MOST = 256u << 20; // (a cache file larger than this is not read: made afresh)
-
-struct Kept {
-    DeferredPipelineCompile compile;
-    uint64_t pass = 0;
-};
 
 struct Warm {
     std::mutex lock;
     Device *device = nullptr;
-    std::unordered_map<Program *, WarmProgram> programs; // (by the program and by its per-sample variant)
-    Program *extra = nullptr;
     std::unordered_map<uint64_t, PassDesc> passes;
-    std::unordered_map<uint64_t, Kept> kept;
-    uint64_t serial = 0;                  // (pipelines kept so far)
-    std::array<uint64_t, 9> warmed{};     // (by samples: serial + 1 at the last round made, 0 none)
-    std::atomic<bool> running{false};
-    std::atomic<uint64_t> made{0}, rounds{0};
-    std::atomic<int64_t> ns{0};
     const bool log = getenv("KF4_PC_WARM_LOG") != nullptr; // (each pipeline made, on stderr)
-    // the programs by role (warm_watch's index), and each program's role (true: its MSAA-only variant)
-    std::unordered_map<uint32_t, WarmProgram> roles;
-    std::unordered_map<Program *, std::pair<uint32_t, bool>> role_of;
+    // the programs by role (warm_watch's index), and each program's role
+    std::unordered_map<uint32_t, Program *> roles;
+    std::unordered_map<Program *, uint32_t> role_of;
     WarmDevice traits; // (warm_watch's)
 } warm;
 
@@ -127,12 +113,11 @@ struct Store {
     // made before play (precompile): asked for with the settings, started once the canvas's programs are known too
     bool pre_on = true, pre_asked = false;
     std::atomic<bool> pre_wanted{false}, pre_gave_up{false};
-    uint32_t pre_samples = 1;
     std::chrono::steady_clock::time_point pre_asked_at;
     size_t pre_seed = 0, pre_list = 0; // (the pipelines asked for: from the seed for these settings, from the list)
-    // attachments of the formats and samples the list's passes have (made by the threads making ahead)
+    // attachments of the formats the list's passes have (made by the threads making ahead)
     std::mutex images_lock;
-    std::map<std::tuple<VkFormat, VkFormat, uint32_t>, std::pair<ImageHandle, ImageHandle>> images;
+    std::map<std::pair<VkFormat, VkFormat>, std::pair<ImageHandle, ImageHandle>> images;
     // the saver: every SAVE_EVERY, the files written again when something is new
     std::thread saver;
     std::condition_variable wake;
@@ -190,30 +175,19 @@ void on_compile(Device *, const DeferredPipelineCompile &compile, bool compute, 
         return;
     }
     std::lock_guard<std::mutex> hold(warm.lock);
+    auto pa = warm.passes.find(uint64_t(compile.compatible_render_pass->get_hash()));
     if (warm.log) {
-        auto pr = warm.programs.find(compile.program);
-        auto pa = warm.passes.find(uint64_t(compile.compatible_render_pass->get_hash()));
         auto ro = warm.role_of.find(compile.program);
-        fprintf(stderr, "[warm] %s %s program %p (base %p, role %d), colours %u depth %u subpasses %u, samples %u: %.1f ms\n",
+        fprintf(stderr, "[warm] %s %s program %p (role %d), colours %u depth %u subpasses %u: %.1f ms\n",
                 on_warm_thread ? "ahead" : "draw", sync ? "sync" : "async", (void *)compile.program,
-                pr != warm.programs.end() ? (void *)pr->second.program : nullptr,
-                ro != warm.role_of.end() ? int(ro->second.first) : -1,
-                pa != warm.passes.end() ? pa->second.colours : 9, pa != warm.passes.end() ? pa->second.depth : 9,
-                pa != warm.passes.end() ? pa->second.subpasses : 9,
-                compile.compatible_render_pass->get_sample_count(compile.subpass_index), double(ns) / 1e6);
+                ro != warm.role_of.end() ? int(ro->second) : -1, pa != warm.passes.end() ? pa->second.colours : 9,
+                pa != warm.passes.end() ? pa->second.depth : 9, pa != warm.passes.end() ? pa->second.subpasses : 9,
+                double(ns) / 1e6);
     }
-    if (on_warm_thread) {
+    if (on_warm_thread || pa == warm.passes.end()) {
         return;
     }
-    if (!warm.programs.count(compile.program) || warm.kept.count(uint64_t(compile.hash))) {
-        return;
-    }
-    auto pass = warm.passes.find(uint64_t(compile.compatible_render_pass->get_hash()));
-    if (pass != warm.passes.end()) {
-        remember(compile, pass->second);
-    }
-    warm.kept[uint64_t(compile.hash)] = {compile, uint64_t(compile.compatible_render_pass->get_hash())};
-    warm.serial++;
+    remember(compile, pa->second);
 }
 
 // One pipeline made from compile with program and the pass, unless made already
@@ -227,69 +201,8 @@ void make(Device &device, DeferredPipelineCompile compile, Program *program, con
         return;
     }
     if (CommandBuffer::build_graphics_pipeline(&device, compile, CommandBuffer::CompileMode::Sync).pipeline) {
-        warm.made++;
+        store.ahead_made++;
     }
-}
-
-// (the warm thread) Every pipeline kept made at samples, its program's variants with it; colour and depth: images of
-// the canvas's formats at samples, the passes' attachments
-void round(uint32_t samples, std::vector<Kept> kept, std::unordered_map<uint64_t, PassDesc> passes,
-           std::unordered_map<Program *, WarmProgram> programs, Program *extra, const ImageView *colour,
-           const ImageView *depth, uint64_t serial) {
-    auto start = std::chrono::steady_clock::now();
-    Device &device = *warm.device;
-    std::atomic<bool> extra_made{false};
-    std::atomic<size_t> next{0};
-    // (on half the cores, the game playing meanwhile: with the pipelines made before play kept too, a round has
-    // hundreds to make)
-    auto work = [&] {
-        on_warm_thread = true;
-        Util::register_thread_index(0); // (as start_ahead's threads)
-        for (size_t i = next++; i < kept.size(); i = next++) {
-            const Kept &k = kept[i];
-            auto p = passes.find(k.pass);
-            auto prog = programs.find(k.compile.program);
-            if (p == passes.end() || prog == programs.end() || (p->second.depth && !depth)) {
-                continue;
-            }
-            const PassDesc &d = p->second;
-            RenderPassInfo info;
-            info.num_color_attachments = d.colours;
-            if (d.colours) {
-                info.color_attachments[0] = colour;
-            }
-            info.depth_stencil = d.depth ? depth : nullptr;
-            info.num_subpasses = d.subpasses;
-            info.subpasses = d.subpasses ? d.subpass.data() : nullptr;
-            const RenderPass &pass = CommandBuffer::holyland_render_pass(&device, info);
-            // (the depth rule's programs: their twin at the other kind of pass)
-            const WarmProgram &w = prog->second;
-            bool twin = w.other && w.multisampled != (samples > 1);
-            Program *program = twin ? w.other : w.program, *per_sample = twin ? w.other_per_sample : w.per_sample;
-            make(device, k.compile, program, pass);
-            if (samples > 1 && per_sample) {
-                make(device, k.compile, per_sample, pass);
-            }
-            if (samples > 1 && extra && d.colours == 1 && !d.depth && d.subpasses == 0 && !extra_made.exchange(true)) {
-                make(device, k.compile, extra, pass);
-            }
-        }
-    };
-    unsigned cores = std::thread::hardware_concurrency();
-    unsigned threads = std::max(1u, std::min(unsigned(kept.size() / 4 + 1), cores / 2));
-    std::vector<std::thread> helpers;
-    for (unsigned t = 1; t < threads; t++) {
-        helpers.emplace_back(work);
-    }
-    work();
-    for (std::thread &t : helpers) {
-        t.join();
-    }
-    warm.ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
-    warm.rounds++;
-    std::lock_guard<std::mutex> hold(warm.lock);
-    warm.warmed[samples] = serial + 1;
-    warm.running = false;
 }
 
 // ---- Between runs ----
@@ -302,9 +215,8 @@ void remember(const DeferredPipelineCompile &compile, const PassDesc &pass) {
     }
     Record r;
     memset(&r, 0, sizeof(r));
-    r.role = role->second.first;
-    r.per_sample = role->second.second ? 1 : 0;
-    r.samples = compile.compatible_render_pass->get_sample_count(compile.subpass_index);
+    r.role = role->second;
+    r.samples = 1;
     r.colours = pass.colours;
     r.depth = pass.depth ? 1 : 0;
     r.subpasses = pass.subpasses;
@@ -407,9 +319,8 @@ void load_list() {
     for (uint32_t i = 0; i < got.count; i++) {
         Record r;
         memcpy(&r, bytes.data() + sizeof(got) + size_t(i) * sizeof(Record), sizeof(r));
-        if (r.subpasses > 2 || r.colours > 1 || r.depth > 1 || r.samples == 0 || r.samples > 8 ||
-            (r.samples & (r.samples - 1)) != 0) {
-            continue;
+        if (r.subpasses > 2 || r.colours > 1 || r.depth > 1 || r.samples != 1 || r.per_sample != 0) {
+            continue; // (a multisampled pass's: of the MSAA the port had)
         }
         if (store.record_keys.insert(record_key(r)).second) {
             store.records.push_back(r);
@@ -500,20 +411,18 @@ void saver() {
 
 bool format_ok(Device &device, VkFormat format, VkFormatFeatureFlags2 need);
 
-// Attachments of a record's formats and samples, made as the canvas makes its own for the pipelines made ahead
-// (make_warm_images): the render passes made from them are the canvas's (a compatible pass is named by its
-// attachments' formats, samples and layout, ImageLayout::General). Made by any thread: never drawn into, so made
+// Attachments of a record's formats, made as the canvas makes its own: the render passes made from them are the
+// canvas's (a compatible pass is named by its attachments' formats, samples and layout, ImageLayout::General). Made by any thread: never drawn into, so made
 // with no first layout (VK_IMAGE_LAYOUT_UNDEFINED), whose change Granite would record in a command buffer of the
 // thread's own
 std::pair<ImageHandle, ImageHandle> &images_for(Device &device, const Record &r) {
     std::lock_guard<std::mutex> hold(store.images_lock);
-    auto &slot = store.images[{r.colour_format, r.depth_format, r.samples}];
+    auto &slot = store.images[{r.colour_format, r.depth_format}];
     if (!slot.first && r.colours && format_ok(device, r.colour_format, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT)) {
         ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, r.colour_format);
         info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        info.samples = VkSampleCountFlagBits(r.samples);
         slot.first = device.create_image(info, nullptr);
     }
     if (!slot.second && r.depth && format_ok(device, r.depth_format, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) {
@@ -521,7 +430,6 @@ std::pair<ImageHandle, ImageHandle> &images_for(Device &device, const Record &r)
         info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        info.samples = VkSampleCountFlagBits(r.samples);
         slot.second = device.create_image(info, nullptr);
     }
     return slot;
@@ -532,19 +440,12 @@ bool format_ok(Device &device, VkFormat format, VkFormatFeatureFlags2 need) {
 }
 
 // (a thread making ahead) One record's pipeline made, through the cache
-void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32_t, WarmProgram> &roles) {
+void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32_t, Program *> &roles) {
     auto role = roles.find(r.role);
-    Program *program = nullptr;
-    if (role != roles.end()) {
-        program = r.per_sample ? role->second.per_sample : role->second.program;
-    }
-    if (!program || (r.colours && !format_ok(device, r.colour_format, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT)) ||
+    Program *program = role != roles.end() ? role->second : nullptr;
+    if (!program || r.samples != 1 || r.per_sample != 0 ||
+        (r.colours && !format_ok(device, r.colour_format, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT)) ||
         (r.depth && !format_ok(device, r.depth_format, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT))) {
-        store.ahead_skipped++;
-        return;
-    }
-    const VkPhysicalDeviceLimits &limits = device.get_gpu_properties().limits;
-    if (!(r.samples & limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts)) {
         store.ahead_skipped++;
         return;
     }
@@ -596,27 +497,10 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
             return;
         }
     }
-    uint64_t before = warm.made.load();
     auto start = std::chrono::steady_clock::now();
     make(device, compile, program, pass);
     store.ahead_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
-    if (warm.made.load() != before) {
-        warm.made--; // (counted as made ahead between runs, not for a change of samples)
-        store.ahead_made++;
-    }
-    // kept as a pipeline drawn with is (on_compile): made again at a new count if MSAA's samples change
-    compile.program = program;
-    compile.layout = program->get_pipeline_layout();
-    compile.compatible_render_pass = &pass;
-    compile.cache = CommandBuffer::holyland_pipeline_cache(&device);
-    CommandBuffer::holyland_rehash(compile, false);
-    std::lock_guard<std::mutex> hold(warm.lock);
-    uint64_t pass_hash = uint64_t(pass.get_hash());
-    if (warm.programs.count(program) && warm.passes.count(pass_hash) && !warm.kept.count(uint64_t(compile.hash))) {
-        warm.kept[uint64_t(compile.hash)] = {compile, pass_hash};
-        warm.serial++;
-    }
 }
 
 // (store.lock and warm.lock held) Records' pipelines made on threads of their own, in their order: the list's while
@@ -628,7 +512,7 @@ void start_ahead(std::vector<Record> list, unsigned threads) {
     }
     store.ahead_started = true;
     auto records = std::make_shared<std::vector<Record>>(std::move(list));
-    auto roles = std::make_shared<std::unordered_map<uint32_t, WarmProgram>>(warm.roles);
+    auto roles = std::make_shared<std::unordered_map<uint32_t, Program *>>(warm.roles);
     auto next = std::make_shared<std::atomic<size_t>>(0);
     store.ahead_total = records->size();
     store.ahead_start = std::chrono::steady_clock::now();
@@ -664,7 +548,8 @@ void start_ahead(std::vector<Record> list, unsigned threads) {
 
 // The seed (pcr_pipeline_seed.cpp, made by cmake/pipeline_seed.cmake from port/gs/pc/pipeline_seed.bin, which
 // tools/pipeline_seed.py makes from tours of the game): the canvas's pipelines drawn with, each as the list keeps it,
-// with the MSAA samples of the run it was drawn in. Renderer state only (programs by the canvas's index, Granite's
+// with the MSAA samples of the run it was drawn in (the port had MSAA until 2026-11-16: only the runs at 1 are
+// used). Renderer state only (programs by the canvas's index, Granite's
 // state, attachment formats), none of the game's data. Drawn with KF4_PC_DYNAMIC=0 (no dynamic state), so that every
 // state a draw had is there; with the device's dynamic state put in, those that differ only there are one pipeline.
 struct SeedEntry {
@@ -745,7 +630,7 @@ bool rule_record(const Record &r, const WarmDevice &t, Record &rule) {
     uint32_t kind = r.role < 5 ? 0 : r.role < 10 ? 1 : r.role < 16 ? 2 : 3; // (plain, early, the runs' two)
     uint32_t v = r.role < 10 ? r.role % 5 : (r.role - 11) % 5;
     rule = r;
-    rule.role = t.rule_first + (r.samples > 1 ? 20 : 0) + 5 * kind + v;
+    rule.role = t.rule_first + 5 * kind + v;
     return true;
 }
 
@@ -777,10 +662,10 @@ bool zclear_record(const Record &r, const WarmDevice &t, Record &z) {
     return true;
 }
 
-// (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, and with MSAA
-// those of the runs with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
-// build's layout (Granite's state changed: tools/pipeline_seed.py makes it again).
-std::vector<Record> seed_for(uint32_t samples) {
+// (warm.lock held) The seed's pipelines for this device: those of the runs without MSAA, the canvas's formats and
+// dynamic state put in. Empty when the seed is not of this build's layout (Granite's state changed:
+// tools/pipeline_seed.py makes it again).
+std::vector<Record> seed_for_device() {
     std::vector<Record> out;
     if (pcr_pipeline_seed_size < sizeof(SeedHeader)) {
         return out;
@@ -800,13 +685,9 @@ std::vector<Record> seed_for(uint32_t samples) {
         SeedEntry e;
         memcpy(&e, pcr_pipeline_seed + sizeof(got) + size_t(i) * sizeof(SeedEntry), sizeof(e));
         Record &r = e.record;
-        // (the runs at 1x: their passes drawn at 1x, which a run with MSAA draws some of too (Z-only and 2D ones); the
-        // runs with MSAA only with MSAA)
-        if ((e.run_samples > 1 && samples <= 1) || (r.per_sample && samples <= 1)) {
+        // (the runs with MSAA, of the MSAA the port had: not used)
+        if (e.run_samples != 1 || r.samples != 1 || r.per_sample != 0) {
             continue;
-        }
-        if (samples > 1 && e.run_samples > 1 && r.samples == e.run_samples) {
-            r.samples = samples;
         }
         if (r.depth && is_depth_format(r.depth_format) && t.depth_format != VK_FORMAT_UNDEFINED) {
             r.depth_format = t.depth_format;
@@ -849,14 +730,14 @@ void start_precompile() {
     if (!store.pre_asked || store.ahead_started || !warm.device) {
         return;
     }
-    std::vector<Record> list = seed_for(store.pre_samples);
+    std::vector<Record> list = seed_for_device();
     store.pre_seed = list.size();
     store.pre_list = store.records.size();
     list.insert(list.end(), store.records.begin(), store.records.end());
     unsigned cores = std::thread::hardware_concurrency();
     {
-        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed (samples %u), %zu from the list\n",
-                store.pre_seed, store.pre_samples, store.pre_list);
+        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list\n", store.pre_seed,
+                store.pre_list);
     }
     start_ahead(std::move(list), cores > 2 ? cores - 1 : 1);
     if (!store.ahead_started) {
@@ -866,25 +747,16 @@ void start_precompile() {
 
 } // namespace
 
-void warm_watch(Device &device, const WarmProgram *programs, uint32_t count, Program *extra, const WarmDevice &traits) {
+void warm_watch(Device &device, Program *const *programs, uint32_t count, const WarmDevice &traits) {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     warm.device = &device;
     warm.traits = traits;
     for (uint32_t i = 0; i < count; i++) {
-        warm.programs[programs[i].program] = programs[i];
-        warm.roles[i] = programs[i];
-        warm.role_of[programs[i].program] = {i, false};
-        if (programs[i].per_sample) {
-            warm.programs[programs[i].per_sample] = programs[i];
-            warm.role_of[programs[i].per_sample] = {i, true};
+        if (programs[i]) {
+            warm.roles[i] = programs[i];
+            warm.role_of[programs[i]] = i;
         }
-    }
-    if (extra) {
-        warm.extra = extra;
-        warm.programs[extra] = {extra, nullptr}; // (kept and listed as the others are)
-        warm.roles[EXTRA_ROLE] = {extra, nullptr};
-        warm.role_of[extra] = {EXTRA_ROLE, false};
     }
     Vulkan::holyland_on_compile = on_compile;
     Vulkan::holyland_on_render_pass = on_render_pass;
@@ -895,7 +767,7 @@ void warm_watch(Device &device, const WarmProgram *programs, uint32_t count, Pro
     }
 }
 
-void precompile(uint32_t samples) {
+void precompile() {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     if (!store.open || !store.pre_on || store.pre_asked) {
@@ -903,7 +775,6 @@ void precompile(uint32_t samples) {
     }
     store.pre_asked = true;
     store.pre_wanted = true;
-    store.pre_samples = samples;
     store.pre_asked_at = std::chrono::steady_clock::now();
     start_precompile(); // (when the programs came first)
 }
@@ -934,35 +805,6 @@ bool precompile_progress(int *done, int *total) {
     *done = int(store.ahead_done.load());
     *total = int(store.ahead_total.load());
     return true;
-}
-
-bool warm_ready(uint32_t samples, const ImageView &colour, const ImageView *depth) {
-    if (samples >= warm.warmed.size()) {
-        return true;
-    }
-    std::unique_lock<std::mutex> hold(warm.lock);
-    if (warm.warmed[samples] == warm.serial + 1) {
-        return true;
-    }
-    if (warm.running) {
-        return false;
-    }
-    std::vector<Kept> kept;
-    kept.reserve(warm.kept.size());
-    for (const auto &k : warm.kept) {
-        kept.push_back(k.second);
-    }
-    warm.running = true;
-    // (let go: a thread object left to the end of the program would stop it there; warm_stop waits for it instead)
-    std::thread(round, samples, std::move(kept), warm.passes, warm.programs, warm.extra, &colour, depth, warm.serial)
-        .detach();
-    return false;
-}
-
-void warm_stop() {
-    while (warm.running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
 }
 
 void store_open(Device &device, const char *cache_path) {
@@ -1031,12 +873,6 @@ void warm_print_counts() {
                 (unsigned long long)store.ahead_skipped.load(), double(store.ahead_ns.load()) / 1e6,
                 double(store.ahead_wall_ns.load()) / 1e6, (unsigned long long)store.saves);
     }
-    if (warm.rounds.load() == 0) {
-        return;
-    }
-    fprintf(stderr, "[stats] pc pipelines made ahead (MSAA's samples changed): %llu in %llu rounds, %.1f ms; %zu kept\n",
-            (unsigned long long)warm.made.load(), (unsigned long long)warm.rounds.load(), double(warm.ns.load()) / 1e6,
-            warm.kept.size());
 }
 
 } // namespace pcr

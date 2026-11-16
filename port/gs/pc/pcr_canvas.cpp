@@ -48,8 +48,6 @@ const ZoneId canvas_submit_vkqueuesubmit_zone = port_zone_id("canvas submit (vkQ
 const ZoneId canvas_submit_planes_zone = port_zone_id("canvas submit_planes", ZONE_WORK);
 const ZoneId canvas_end_pass_zone = port_zone_id("canvas end_pass", ZONE_WORK);
 const ZoneId canvas_begin_pass_zone = port_zone_id("canvas begin_pass", ZONE_WORK);
-const ZoneId canvas_resolve_msaa_zone = port_zone_id("canvas resolve (MSAA)", ZONE_WORK);
-const ZoneId canvas_expand_zone = port_zone_id("canvas expand", ZONE_WORK);
 const ZoneId canvas_colour_surface_zone = port_zone_id("canvas colour_surface", ZONE_WORK);
 const ZoneId canvas_grow_zone = port_zone_id("canvas grow", ZONE_WORK);
 const ZoneId canvas_write_upload_into_surfaces_zone = port_zone_id("canvas write_upload_into_surfaces", ZONE_WORK);
@@ -136,7 +134,6 @@ enum : uint32_t {
     F_DATM = 0x10000,
     F_SHADER_BLEND = 0x20000,
     F_SURFACE_CT16 = 0x40000,
-    F_MSAA = 0x80000,
     F_SMOOTH_2D = 0x100000,
     F_DECAL = 0x400000,
     F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
@@ -277,15 +274,10 @@ uint32_t z_psm(uint64_t zbuf) {
 struct Surface {
     uint32_t base_page = 0, fbw = 0, psm = 0;
     uint32_t height = 0; // GS pixels
-    ImageHandle image;   // at the canvas's scale (a depth surface's: with the canvas's samples)
+    ImageHandle image;   // at the canvas's scale
     bool depth = false;
-    // MSAA (a colour surface at the canvas's samples above 1): the image drawn into, beside image, which every copy,
-    // read and upload uses. ms_ahead: drawn since image was (image made again from it, resolved, before it is read);
-    // ms_behind: image written since ms was (ms made again from it, expanded, before it is drawn into). Never both.
-    ImageHandle ms;
-    bool ms_ahead = false, ms_behind = false;
     // (a depth surface, the depth rule's own copy of the depth: Canvas::Impl::rule_on_) its depth as a storage
-    // image, R32F, a layer a sample of image, read and written by the draws' critical sections; kept what image is by
+    // image, R32F (one layer: pcr_prim.h's image2DArray), read and written by the draws' critical sections; kept what image is by
     // every clear, copy and draw of it
     ImageHandle zcopy;
     // (a depth surface: the canvas's vblank it was last drawn with; one not drawn with for long is let go,
@@ -411,7 +403,6 @@ public:
     }
 
     ~Impl() {
-        warm_stop(); // (its thread reads warm_images_)
         end_pass();
         if (cmd_) {
             times_.end(*cmd_);
@@ -427,11 +418,6 @@ public:
 
     void set_scale(uint32_t x, uint32_t y) {
         pending_scale_ = {std::clamp(x, 1u, 8u), std::clamp(y, 1u, 8u)};
-    }
-
-    void set_msaa(uint32_t samples, bool cutout_aa) {
-        pending_samples_ = samples == 2 || samples == 4 || samples == 8 ? samples : 1;
-        cutout_aa_ = cutout_aa && sample_shading_;
     }
 
     void set_between(const Between *between) {
@@ -557,7 +543,7 @@ public:
         trace_.draw = draw;
     }
 
-    // In a pass of its own: the traced pixel's samples in the surfaces its last draw drew into
+    // In a pass of its own: the traced pixel in the surfaces its last draw drew into
     void trace_probe() {
         flush_batch();
         if (!trace_.on || !trace_.colour || trace_.probes >= trace_probes || !holds(colour_, trace_.colour)) {
@@ -565,17 +551,14 @@ public:
         }
         Surface &colour = *trace_.colour;
         Surface *depth = trace_.depth && holds(depth_, trace_.depth) ? trace_.depth : nullptr;
-        const Image &cimage = colour.ms && !colour.ms_behind ? *colour.ms : *colour.image;
-        uint32_t samples = uint32_t(depth ? depth->image->get_create_info().samples : cimage.get_create_info().samples);
-        bool colour_read = uint32_t(cimage.get_create_info().samples) == samples;
+        const Image &cimage = *colour.image;
         end_pass();
         CommandBuffer &c = cmd(GpuWork::surface);
         full_barrier(c);
-        c.set_program(samples > 1 ? probe_ms_program_ : probe_program_);
+        c.set_program(probe_program_);
         // (a depth surface's view: Granite samples its depth alone, the float view)
         c.set_texture(0, 0, depth ? depth->image->get_view() : cimage.get_view(), StockSampler::NearestClamp);
-        c.set_texture(0, 1, colour_read ? cimage.get_view() : depth->image->get_view(),
-                      StockSampler::NearestClamp);
+        c.set_texture(0, 1, cimage.get_view(), StockSampler::NearestClamp);
         c.set_storage_buffer(0, 2, *trace_buf_);
         struct {
             int32_t xy[2];
@@ -586,8 +569,8 @@ public:
         push.xy[1] = trace_.y;
         push.draw = trace_.draw;
         push.slot = trace_.probes;
-        push.samples = samples;
-        push.has_depth = (depth ? 1u : 0u) | (colour_read ? 0u : 2u);
+        push.samples = 1;
+        push.has_depth = depth ? 1u : 0u;
         push.zscale = trace_.zscale;
         c.push_constants(&push, 0, sizeof(push));
         c.dispatch(1, 1, 1);
@@ -633,7 +616,7 @@ public:
     }
 
     bool settled() const {
-        return pending_samples_ == samples_ && pending_scale_ == scale_;
+        return pending_scale_ == scale_;
     }
 
     void frame_mark(uint64_t value) {
@@ -807,9 +790,6 @@ public:
             return false;
         }
         Placed placed = colour_surface(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
-        if (placed.surface) {
-            resolve(*placed.surface);
-        }
         submit(!submit_together());
         times_.begin(out, GpuWork::picture); // (the drawing submitted: what follows in out is the picture's)
         Surface *s = placed.surface;
@@ -1028,7 +1008,7 @@ private:
         end_pass();
         RenderPassInfo rp;
         rp.num_color_attachments = 1;
-        rp.color_attachments[0] = colour.ms ? &colour.ms->get_view() : &colour.image->get_view();
+        rp.color_attachments[0] = &colour.image->get_view();
         rp.load_attachments = 1;
         rp.store_attachments = 1;
         if (depth) {
@@ -1076,15 +1056,14 @@ private:
     }
 
     // ---- The depth rule's own copy of the depth (rule_on_: Surface::zcopy) ----
-    // A copy for a depth image: R32F, a layer a sample, not cleared (a spare of its kind where there is one)
+    // A copy for a depth image: R32F, one layer, not cleared (a spare of its kind where there is one)
     ImageHandle make_zcopy(const Image &depth) {
-        uint32_t layers = std::max(1u, uint32_t(depth.get_create_info().samples));
         ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(depth.get_width(), depth.get_height(), VK_FORMAT_R32_SFLOAT);
         info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        info.layers = layers;
+        info.layers = 1;
         info.levels = 1;
         info.flags = 0;
-        info.misc = IMAGE_MISC_FORCE_ARRAY_BIT; // (pcr_prim.h's image2DArray, one layer or several)
+        info.misc = IMAGE_MISC_FORCE_ARRAY_BIT; // (pcr_prim.h's image2DArray, of one layer)
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         if (spares_on_) {
@@ -1109,8 +1088,7 @@ private:
         if (!rule_on_) {
             return;
         }
-        if (!zcopy || zcopy->get_width() != image.get_width() || zcopy->get_height() != image.get_height() ||
-            zcopy->get_create_info().layers != std::max(1u, uint32_t(image.get_create_info().samples))) {
+        if (!zcopy || zcopy->get_width() != image.get_width() || zcopy->get_height() != image.get_height()) {
             zcopy = make_zcopy(image);
         }
         if (zcopy) {
@@ -1159,9 +1137,6 @@ private:
         }
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        if (depth && samples_ > 1) {
-            info.samples = VkSampleCountFlagBits(samples_); // (drawn only: never read, so never resolved)
-        }
         ImageHandle image = device_.create_image(info, nullptr);
         if (!image) {
             fprintf(stderr, "[pcr] no image for a %ux%u surface\n", width, height);
@@ -1176,137 +1151,21 @@ private:
                 uint32_t(info.usage)};
     }
 
-    // An image for a copy of a surface's `like` (copy_surfaces): a spare of its kind, else made as like was
-    ImageHandle copy_image_like(const Image &like, const Surface &s, bool ms) {
+    // An image for a copy of a surface (copy_surfaces): a spare of its kind, else made as the surface's was
+    ImageHandle copy_image_like(const Image &like, const Surface &s) {
         if (ImageHandle spare = spares_on_ ? spares_->take(kind_of(like)) : ImageHandle()) {
             counts_.surface_copies_into_spares++;
             return spare;
         }
-        return ms ? make_ms_image(like.get_width(), like.get_height()) : make_surface_image(s.width(), s.height, s.depth);
+        return make_surface_image(s.width(), s.height, s.depth);
     }
 
-    // ---- MSAA: a colour surface's multisampled image (Surface::ms) ----
-    ImageHandle make_ms_image(uint32_t width, uint32_t height) {
-        ImageCreateInfo info = ImageCreateInfo::render_target(width, height, colour_format);
-        info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-                     (trace_.on ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u); // (the trace's probe reads it)
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        info.samples = VkSampleCountFlagBits(samples_);
-        ImageHandle image = device_.create_image(info, nullptr);
-        if (!image) {
-            fprintf(stderr, "[pcr] no multisampled image for a %ux%u surface\n", width, height);
-        }
-        return image;
-    }
-
-    // Before a colour surface is drawn into: its multisampled image there and as image is (made, or expanded where
-    // image was written since). False without MSAA (or without memory for it: drawn into image as at 1x).
-    bool ensure_ms(Surface &s) {
-        if (samples_ <= 1 || s.depth) {
-            return false;
-        }
-        if (s.ms && (s.ms->get_width() != s.image->get_width() || s.ms->get_height() != s.image->get_height())) {
-            resolve(s);
-            s.ms.reset();
-        }
-        if (!s.ms) {
-            s.ms = make_ms_image(s.image->get_width(), s.image->get_height());
-            if (!s.ms) {
-                return false;
-            }
-            s.ms_ahead = false;
-            s.ms_behind = true;
-        }
-        if (s.ms_behind) {
-            expand(s, {{0, 0}, {s.image->get_width(), s.image->get_height()}});
-            s.ms_behind = false;
-            counts_msaa_.expands++;
-        }
-        return true;
-    }
-
-    // Before a colour surface's image is read whole (or written where it was drawn): what was drawn into its
-    // multisampled image resolved into it
-    void resolve(Surface &s) {
-        ZoneScope zone(canvas_resolve_msaa_zone);
-        if (!s.ms || !s.ms_ahead) {
-            return;
-        }
-        end_pass();
-        CommandBuffer &c = cmd(GpuWork::copy);
-        full_barrier(c);
-        resolve_rect(c, *s.image, {0, 0, 0}, *s.ms, {0, 0, 0}, {s.image->get_width(), s.image->get_height(), 1});
-        full_barrier(c);
-        s.ms_ahead = false;
-        counts_msaa_.resolves++;
-    }
-
-    void resolve_rect(CommandBuffer &c, const Image &dst, VkOffset3D dst_at, const Image &ms, VkOffset3D src_at,
-                      VkExtent3D extent) {
-        VkImageResolve r = {};
-        r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        r.dstSubresource = r.srcSubresource;
-        r.srcOffset = src_at;
-        r.dstOffset = dst_at;
-        r.extent = extent;
-        device_.get_device_table().vkCmdResolveImage(c.get_command_buffer(), ms.get_image(), VK_IMAGE_LAYOUT_GENERAL,
-                                                     dst.get_image(), VK_IMAGE_LAYOUT_GENERAL, 1, &r);
-    }
-
-    // A rectangle of a colour surface's pixels (at the canvas's scale) copied into dst at dst_at: from its image, or
-    // resolved from its multisampled image when that was drawn since (outside a render pass, barriers the caller's)
+    // A rectangle of a colour surface's pixels (at the canvas's scale) copied into dst at dst_at (outside a render
+    // pass, barriers the caller's)
     void copy_out(CommandBuffer &c, const Image &dst, VkOffset3D dst_at, const Surface &s, VkOffset3D src_at,
                   VkExtent3D extent) {
-        if (s.ms && s.ms_ahead) {
-            resolve_rect(c, dst, dst_at, *s.ms, src_at, extent);
-            counts_msaa_.rect_resolves++;
-            return;
-        }
         const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         c.copy_image(dst, *s.image, dst_at, src_at, extent, colour, colour);
-    }
-
-    // After a colour surface's image was written over a rectangle (at the canvas's scale): the same pixels into every
-    // sample of its multisampled image, unless that is to be expanded whole anyway (ms_behind)
-    void wrote_image(Surface &s, const VkRect2D &rect) {
-        if (!s.ms || s.ms_behind || rect.extent.width == 0 || rect.extent.height == 0) {
-            return;
-        }
-        expand(s, rect);
-        counts_msaa_.rect_expands++;
-    }
-
-    // image's pixels over rect into every sample of ms (a pass of its own, image read by pcr_expand.frag)
-    void expand(Surface &s, const VkRect2D &rect) {
-        ZoneScope zone(canvas_expand_zone);
-        end_pass();
-        CommandBuffer &c = cmd(GpuWork::surface);
-        full_barrier(c);
-        RenderPassInfo rp;
-        rp.num_color_attachments = 1;
-        rp.color_attachments[0] = &s.ms->get_view();
-        rp.load_attachments = 1;
-        rp.store_attachments = 1;
-        rp.render_area = rect;
-        c.begin_render_pass(rp);
-        set0_fresh_ = false;
-        c.set_program(expand_program_);
-        c.set_opaque_state();
-        c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        c.set_cull_mode(VK_CULL_MODE_NONE);
-        c.set_depth_test(false, false);
-        c.set_stencil_test(false);
-        c.set_blend_enable(false);
-        c.set_color_write_mask(0xF);
-        VkViewport vp = {0, 0, float(s.ms->get_width()), float(s.ms->get_height()), 0, 1};
-        c.set_viewport(vp);
-        c.set_scissor(rect);
-        c.set_texture(0, 0, s.image->get_view(), StockSampler::NearestClamp);
-        c.draw(3);
-        c.end_render_pass();
-        full_barrier(c);
     }
 
     static uint32_t rounded_height(uint32_t height, uint32_t psm) {
@@ -1363,9 +1222,7 @@ private:
             }
         }
         if (reuse_on_) {
-            made->image = reuse_image(made->width() * scale_[0], made->height * scale_[1], made->ms);
-            made->ms_ahead = false;
-            made->ms_behind = bool(made->ms); // (expanded from the image before it is drawn into, as one made)
+            made->image = reuse_image(made->width() * scale_[0], made->height * scale_[1]);
         }
         if (!made->image) {
             made->image = make_surface_image(made->width(), made->height, false);
@@ -1438,9 +1295,9 @@ private:
     // A depth surface nothing was drawn with for IDLE_DEPTH_VBLANKS vblanks is let go (each vblank, on kf4-pc's canvas:
     // the pump's surfaces are copies of these). The game clears its Z buffer and draws it anew every frame, so a Z
     // buffer left alone that long holds nothing a later frame reads; drawn with again, it is made new, zeros, as a Z
-    // buffer first drawn with is. The boot's and the menus' Z buffers otherwise stayed for the whole of play: at 4x with
-    // MSAA 2 one the screen's size is 141 MB, held three times (this canvas, the pump's, the spares) and copied for the
-    // pump every game frame (PC_OPTIMIZATION.md, 2026-11-14).
+    // buffer first drawn with is. The boot's and the menus' Z buffers otherwise stayed for the whole of play: at 4x
+    // (with the MSAA 2 the port had then) one the screen's size was 141 MB, held three times (this canvas, the pump's,
+    // the spares) and copied for the pump every game frame (PC_OPTIMIZATION.md, 2026-11-14).
     static constexpr uint64_t IDLE_DEPTH_VBLANKS = 600;
     void let_go_of_idle_depth() {
         for (auto it = depth_.begin(); it != depth_.end();) {
@@ -1454,26 +1311,22 @@ private:
         }
     }
 
-    // A colour surface's images kept when it is let go, the oldest dropped past a few: a surface of the same size made
+    // A colour surface's image kept when it is let go, the oldest dropped past a few: a surface of the same size made
     // again takes them (reuse_image). The GPU is done with them by then as with any image the queue used before: the
     // canvas records into one command buffer at a time, everything outside a pass between full barriers.
-    void keep_spare(ImageHandle image, ImageHandle ms) {
+    void keep_spare(ImageHandle image) {
         constexpr size_t SPARE_SURFACES = 6;
         if (spare_surfaces_.size() == SPARE_SURFACES) {
             spare_surfaces_.erase(spare_surfaces_.begin());
         }
-        spare_surfaces_.push_back({std::move(image), std::move(ms)});
+        spare_surfaces_.push_back(std::move(image));
     }
-    // A kept image of this size (in pixels at the canvas's scale) and the colour's format for a surface made, and its
-    // multisampled image if it had one at the samples drawn now (as made: drawn from the image, expanded, before it is
-    // drawn into). (apply_samples and apply_colour drop the kept ones too: a live change of MSAA or precision)
-    ImageHandle reuse_image(uint32_t width, uint32_t height, ImageHandle &ms) {
+    // A kept image of this size (in pixels at the canvas's scale) and the colour's format for a surface made.
+    // (apply_colour drops the kept ones too: a live change of precision)
+    ImageHandle reuse_image(uint32_t width, uint32_t height) {
         for (auto it = spare_surfaces_.begin(); it != spare_surfaces_.end(); ++it) {
-            if (it->image->get_width() == width && it->image->get_height() == height &&
-                it->image->get_format() == colour_format) {
-                ImageHandle image = std::move(it->image);
-                ms = it->ms && it->ms->get_create_info().samples == VkSampleCountFlagBits(samples_) ? std::move(it->ms)
-                                                                                                    : ImageHandle{};
+            if ((*it)->get_width() == width && (*it)->get_height() == height && (*it)->get_format() == colour_format) {
+                ImageHandle image = std::move(*it);
                 spare_surfaces_.erase(it);
                 counts_.surface_images_reused++;
                 return image;
@@ -1489,7 +1342,7 @@ private:
                     end_pass();
                 }
                 if (reuse_on_ && !(*it)->depth && (*it)->image) {
-                    keep_spare(std::move((*it)->image), std::move((*it)->ms));
+                    keep_spare(std::move((*it)->image));
                 }
                 it = list.erase(it);
             } else {
@@ -1507,15 +1360,6 @@ private:
         if (!bigger) {
             return;
         }
-        // (the multisampled image grown with it, its samples copied; without memory for it, resolved and let go: drawn
-        // at 1x until ensure_ms makes one again)
-        ImageHandle bigger_ms;
-        if (s.ms) {
-            bigger_ms = make_ms_image(bigger->get_width(), bigger->get_height());
-            if (!bigger_ms) {
-                resolve(s);
-            }
-        }
         CommandBuffer &c = cmd(GpuWork::surface);
         VkClearValue zero = {};
         ImageHandle bigger_zcopy;
@@ -1524,18 +1368,11 @@ private:
         } else {
             c.clear_image(*bigger, zero);
         }
-        if (bigger_ms) {
-            c.clear_image(*bigger_ms, zero);
-        }
         full_barrier(c);
         VkImageSubresourceLayers layers = {VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0,
                                            0, 1};
         c.copy_image(*bigger, *s.image, {0, 0, 0}, {0, 0, 0}, {s.image->get_width(), s.image->get_height(), 1}, layers,
                      layers);
-        if (bigger_ms) {
-            c.copy_image(*bigger_ms, *s.ms, {0, 0, 0}, {0, 0, 0}, {s.ms->get_width(), s.ms->get_height(), 1}, layers,
-                         layers);
-        }
         if (bigger_zcopy && s.zcopy) {
             const VkImageSubresourceLayers all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, s.zcopy->get_create_info().layers};
             c.copy_image(*bigger_zcopy, *s.zcopy, {0, 0, 0}, {0, 0, 0}, {s.zcopy->get_width(), s.zcopy->get_height(), 1},
@@ -1545,10 +1382,6 @@ private:
         s.image = bigger;
         s.zcopy = bigger_zcopy;
         s.cleared = false;
-        s.ms = bigger_ms;
-        if (!s.ms) {
-            s.ms_ahead = s.ms_behind = false;
-        }
         s.height = height;
     }
 
@@ -1580,7 +1413,6 @@ private:
             full_barrier(c);
             copy_out(c, *grown.image, {0, int32_t(top), 0}, *o, {0, 0, 0}, {o->image->get_width(), height, 1});
             full_barrier(c);
-            wrote_image(grown, {{0, int32_t(top)}, {o->image->get_width(), height}}); // (and into its samples)
         }
         if (!any) {
             return;
@@ -1660,7 +1492,6 @@ private:
         c.blit_image(*s.image, *staged, {dx, dy, 0}, {dw, dh, 1}, {0, 0, 0},
                      {int32_t(dw / scale_[0]), int32_t(dh / scale_[1]), 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
         full_barrier(c);
-        wrote_image(s, {{dx, dy}, {uint32_t(dw), uint32_t(dh)}});
     }
 
     // An upload into the GS's memory where a colour surface is: its pixels written into the surface too
@@ -1748,7 +1579,6 @@ private:
         copy_out(c, *to->image, to_at, *from, {int32_t((fx + sx) * scale_[0]), int32_t((fy + sy) * scale_[1]), 0},
                  {cw * scale_[0], ch * scale_[1], 1});
         full_barrier(c);
-        wrote_image(*to, {{to_at.x, to_at.y}, {cw * scale_[0], ch * scale_[1]}});
         counts_.copies_between_surfaces++;
     }
 
@@ -1769,7 +1599,6 @@ private:
         if (!one || !buffer) {
             return false;
         }
-        resolve(from);
         end_pass();
         CommandBuffer &c = cmd(GpuWork::copy);
         full_barrier(c);
@@ -2634,8 +2463,6 @@ private:
         ImageHandle kept_frame;
         uint32_t kept_page = 0;
         std::array<uint32_t, 2> scale = {1, 1};
-        uint32_t samples = 1;
-        bool cutout_aa = false;
         int mode_2d = GSN_2D_PS2;         // (read as each batch is drawn: the pump's canvas has no set_2d of its own)
         // (where the canvas that takes the copies puts the images it lets go for them: the copying canvas's spares)
         std::shared_ptr<SpareImages<ImageHandle>> spares;
@@ -2649,8 +2476,6 @@ private:
         copies->kept_frame = kept_frame_; // (never written: a 0xF2 makes a new one)
         copies->kept_page = kept_page_;
         copies->scale = scale_;
-        copies->samples = samples_;
-        copies->cutout_aa = cutout_aa_;
         copies->mode_2d = mode_2d_;
         copies->spares = spares_on_ ? spares_ : nullptr;
         CommandBuffer &c = cmd(GpuWork::copy);
@@ -2659,7 +2484,7 @@ private:
             for (const auto &s : *list) {
                 // (into the images the pump's canvas let go at its last frame, where they are of the same kind: what a
                 // spare held is written over, or made again from the other image before it is read, as a new image's)
-                ImageHandle image = copy_image_like(*s->image, *s, false);
+                ImageHandle image = copy_image_like(*s->image, *s);
                 if (!image) {
                     continue; // (the pump makes it again, as a surface it never had)
                 }
@@ -2668,19 +2493,7 @@ private:
                                                           : VK_IMAGE_ASPECT_DEPTH_BIT;
                 const VkImageSubresourceLayers layers = {aspect, 0, 0, 1};
                 VkExtent3D extent = {s->image->get_width(), s->image->get_height(), 1};
-                // (MSAA: the image and the multisampled one each copied only where it is not to be made again from the
-                // other: an image behind its samples is resolved before it is read, samples behind expanded)
-                ImageHandle ms;
-                if (s->ms) {
-                    ms = copy_image_like(*s->ms, *s, true);
-                    if (!ms) {
-                        continue;
-                    }
-                    if (!s->ms_behind && !(knock_ && strstr(knock_, "copies"))) {
-                        c.copy_image(*ms, *s->ms, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
-                    }
-                }
-                if ((!s->ms || !s->ms_ahead) && !(knock_ && strstr(knock_, "copies"))) {
+                if (!(knock_ && strstr(knock_, "copies"))) {
                     c.copy_image(*image, *s->image, {0, 0, 0}, {0, 0, 0}, extent, layers, layers);
                 }
                 // (the depth rule's copy with it)
@@ -2695,7 +2508,6 @@ private:
                 }
                 auto copy = std::make_unique<Surface>(*s);
                 copy->image = std::move(image);
-                copy->ms = std::move(ms);
                 copy->zcopy = std::move(zcopy);
                 (s->depth ? copies->depth : copies->colour).push_back(std::move(copy));
                 counts_.surfaces_copied++;
@@ -2717,7 +2529,7 @@ private:
             std::vector<std::pair<ImageKind, ImageHandle>> let_go;
             for (auto *list : {&colour_, &depth_}) {
                 for (auto &s : *list) {
-                    for (ImageHandle *image : {&s->image, &s->ms, &s->zcopy}) {
+                    for (ImageHandle *image : {&s->image, &s->zcopy}) {
                         if (*image) {
                             ImageKind kind = kind_of(**image);
                             let_go.emplace_back(kind, std::move(*image));
@@ -2732,8 +2544,6 @@ private:
         kept_frame_ = std::move(copies.kept_frame);
         kept_page_ = copies.kept_page;
         scale_ = pending_scale_ = copies.scale;
-        samples_ = pending_samples_ = copies.samples;
-        cutout_aa_ = copies.cutout_aa;
         mode_2d_ = copies.mode_2d;
         replaying_ = kept_reads_ = false;
         // (the surfaces are kf4-pc's, its store's uploads not here: this canvas only draws kept walks again, whose
@@ -3463,36 +3273,6 @@ private:
         batch_.triangles.reset();
     }
 
-    // Cut-out AA: whether a batch is a cut-out, shaded at every sample of a multisampled target. A cut-out is textured
-    // with the texture's alpha (TCC) and alpha-tested, and the alphas it can make fall on both sides of the test: the
-    // netting, foliage, fences and grates, whose edges inside a primitive are where the texture's alpha crosses AREF.
-    // Shaded once a pixel, a pixel is in or out whole; shaded at each sample, each sample is textured and tested at its
-    // own place. The alphas it can make: the texture's least and most (known for a texture the GPU's sampler reads,
-    // else any), by the texture function with the vertices' alphas (a GIF batch's; a native batch's taken as 0x80).
-    // Not the 2D (FST: sprites, the HUD, the menus), which covers whole pixels.
-    bool is_cutout(const Batch &b) const {
-        const DrawState &s = b.state;
-        if (!cutout_aa_ || !bits(s.prim, 4, 1) || !b.texture.ok || !bits(s.tex0, 34, 1) || bits(s.prim, 8, 1) ||
-            !bits(s.test, 0, 1)) {
-            return false;
-        }
-        auto [lo, hi] = alpha_range(b);
-        uint32_t atst = bits(s.test, 1, 3), ref = bits(s.test, 4, 8);
-        switch (atst) {
-        case 2: // LESS
-        case 5: // GEQUAL
-            return lo < ref && hi >= ref;
-        case 3: // LEQUAL
-        case 6: // GREATER
-            return lo <= ref && hi > ref;
-        case 4: // EQUAL
-        case 7: // NOTEQUAL
-            return lo <= ref && ref <= hi && lo < hi;
-        default: // NEVER, ALWAYS
-            return false;
-        }
-    }
-
     // The least and most alpha a batch's pixels can have, before the alpha test: its vertices' (a native batch's taken as
     // 0x80), through the texture function with the texture's where it is read with TCC (any alpha, 0 to 255, where the
     // texture's are not known)
@@ -3843,7 +3623,7 @@ private:
     // (exact Z, a native batch) Room for its triangles' planes in the plane pass, an entry a triangle written:
     // run_plane_at_ each of its runs' plane_at and batch_planes_ its first plane (no_plane: none). True: a new chunk
     // of planes (a run bound to the last ends before this batch binds it)
-    bool room_for_planes(const Batch &b, uint32_t place_x, uint32_t place_y, bool ms) {
+    bool room_for_planes(const Batch &b, uint32_t place_x, uint32_t place_y) {
         ZoneScope zone(canvas_room_for_planes_zone);
         run_plane_at_.assign(b.runs.size(), no_plane);
         batch_planes_ = no_plane;
@@ -3859,7 +3639,7 @@ private:
             return false;
         }
         uint32_t place = (place_x & 0xFFFFu) | place_y << 16;
-        uint32_t scale = scale_[0] | scale_[1] << 8 | (ms ? plane_entry_msaa : 0u);
+        uint32_t scale = scale_[0] | scale_[1] << 8;
         PlaneEntry *e = room.entries;
         uint32_t at = room.first;
         for (size_t i = 0; i < b.runs.size(); i++) {
@@ -3951,13 +3731,6 @@ private:
                 grow(*depth, colour->height);
             }
         }
-        // MSAA: drawn into the colour surface's multisampled image (and its depth surface's, made at the samples); DATE
-        // by the stencil only where each sample can be read (pcr_date_ms.frag), else by a copy
-        bool ms = ensure_ms(*colour);
-        if (depth && uint32_t(depth->image->get_create_info().samples) != (ms ? samples_ : 1u)) {
-            depth = nullptr; // (no multisampled image for the colour: no memory)
-        }
-        date_stencil = date_stencil && (!ms || sample_shading_);
         zte = zte && depth != nullptr;
         zwrite = zwrite && zte;
         if (zwrite && ztst == 1) {
@@ -4021,8 +3794,6 @@ private:
             knocked_out(b, clear, bits(s.prim, 4, 1) != 0 && b.texture.ok && b.texture.src == SRC_SURFACE)) {
             return;
         }
-        // (cut-out AA: a cut-out's fragment shader at every sample, pcr_prim_sample.frag)
-        bool per_sample = ms && is_cutout(b);
         int v = !b.native                              ? 0
                 : b.program == NativeProgram::vu1_280 ? 2
                 : b.program == NativeProgram::vu1_700 ? 3
@@ -4032,8 +3803,8 @@ private:
         bool blend_supported = blend.supported;
         if (blend.enable && unblend_on_ && blend_is_source(b)) {
             // (the blend's result is its source at every pixel, and the alpha written the same: drawn without the
-            // blend, which reads every pixel it writes: at 4x with two samples and 16 bits a channel that read is most
-            // of what the map costs)
+            // blend, which reads every pixel it writes: at 4x with 16 bits a channel that read is most of what the map
+            // costs)
             blend = BlendChoice();
             counts_.blends_left_out++;
         }
@@ -4058,7 +3829,6 @@ private:
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= blend.flags & ~0x80000000u;
         flags |= date && !date_stencil ? F_DATE | (bits(s.test, 15, 1) ? F_DATM : 0) : 0;
-        flags |= ms ? F_MSAA : 0;
         // (the 2D mode's smooth: only the primitives with texels known read with it, sprites and 2D triangles, and
         // only where magnified: pcr_prim.h's smooth_2d)
         flags |= mode_2d_ == GSN_2D_SMOOTH && (scale_[0] > 1 || scale_[1] > 1) && (flags & F_TME) && !b.native &&
@@ -4071,24 +3841,8 @@ private:
         // and one that tests ALWAYS and writes Z writes the copy as the depth; every exact Z draw writes the Z with its
         // fraction)
         bool rule = rule_on_ && zte && (ztst == 2 || ztst == 3 || (ztst == 1 && zwrite)) && depth->zcopy;
-        // The GPU's depth test on a depth the fragment shader writes (exact Z), into a multisampled target, outside the
-        // interlock's critical section: on RDNA4 (RX 9070 XT, RADV 26.2) it hangs the GPU now and then, a reset of the
-        // whole card (2026-11-16: the 128-wide blur targets' sprites, which hung the card in this morning's runs before
-        // the depth rule, hung it in about 4 runs of 10 drawn so; not with the test off, nor with the corners' depth
-        // unexported, nor at 1 sample, nor interlocked: docs/port/PC_RENDERER.md, "The RDNA4 hang"). The depth rule's
-        // draws are interlocked; ALWAYS without a Z write tests nothing (drawn with the test off, the same pixels, as
-        // the driver would). A draw the rule would take without its copy of the depth (none made: out of memory) is
-        // drawn with the test off too: wrong where it is behind something, rather than the card reset.
+        // (ALWAYS without a Z write tests nothing: drawn with the test off, the same pixels, as the driver would)
         bool ztest = zte && !(ztst == 1 && !zwrite);
-        if (rule_on_ && ms && ztest && !rule) {
-            ztest = false;
-            static bool told = false;
-            if (!told) {
-                told = true;
-                fprintf(stderr, "[pcr] a depth surface has no copy of its depth (out of memory?): its draws are drawn "
-                                "without the depth test at MSAA (the RDNA4 hang)\n");
-            }
-        }
         flags |= rule_on_ ? F_FULL_DEPTH : 0;
         flags |= rule && ztst == 3 ? F_ZGREATER : 0;
         flags |= rule && ztst == 1 ? F_ZALWAYS : 0;
@@ -4214,11 +3968,9 @@ private:
             // (a pass that discards nothing, no alpha test's pass and no DATE from a copy: tested before its shader)
             // (not where traced, whose fragments that fail the test are recorded too)
             bool early = pass.mode == 0 && !(flags & F_DATE) && !traced;
-            Program *program = rule ? (in_run ? rule_run_[ms ? 1 : 0] : rule_[ms ? 1 : 0]).pick(v, early, per_sample)
-                               : in_run ? (early ? (per_sample ? run_early_sample_programs_[v] : run_early_programs_[v])
-                                                 : (per_sample ? run_sample_programs_[v] : run_programs_[v]))
-                                        : (early ? (per_sample ? early_sample_programs_[v] : early_programs_[v])
-                                                 : (per_sample ? sample_programs_[v] : programs_[v]));
+            Program *program = rule     ? (in_run ? rule_run_ : rule_).pick(v, early)
+                               : in_run ? (early ? run_early_programs_[v] : run_programs_[v])
+                                        : (early ? early_programs_[v] : programs_[v]);
             mask = (pass.rgb && blend.write_rgb ? 0x7u : 0u) | (pass.alpha ? 0x8u : 0u);
             if (in_run) {
                 key.program = program;
@@ -4235,7 +3987,7 @@ private:
         pass_state(0, first_mask);
         // (exact Z: the batch's planes worked out by the plane pass before its draws; a run bound to another chunk of
         // planes ends first)
-        if (b.native && planes_ && room_for_planes(b, placed.x, placed.y, ms)) {
+        if (b.native && planes_ && room_for_planes(b, placed.x, placed.y)) {
             flush_run();
         }
         // (the run open ended here unless this batch's first pass continues it: the state set below is this batch's)
@@ -4252,7 +4004,7 @@ private:
         counts_.walk_texture_draws += walk_texture ? 1 : 0;
         c.set_viewport(vp);
         if (date_stencil) {
-            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0, ms,
+            set_up_date(c, *colour, drawn_rect(s.scissor, box, *colour, placed), bits(s.test, 15, 1) != 0,
                         date_mark ? depth : nullptr);
         }
         c.set_scissor(scissor_px);
@@ -4282,10 +4034,9 @@ private:
             }
             counts_clears_++;
             counts_.clears++;
-            drawn_over(b, *colour, ms, box, zte && zwrite);
+            drawn_over(b, box, zte && zwrite);
             return;
         }
-        counts_msaa_.cutout_batches += per_sample ? 1 : 0;
         counts_.walk_clut_draws += walk_clut ? 1 : 0;
         if (settle) {
             VkClearValue zero = {};
@@ -4381,12 +4132,12 @@ private:
             c.set_stencil_test(false);
         }
         if (decal_losses_ && zte && (flags & F_DECAL)) {
-            draw_decal_losses(c, b, push, passes, pass_count, ztst, per_sample, v);
+            draw_decal_losses(c, b, push, passes, pass_count, ztst, v);
         }
         if (settle) {
-            settle_decal_depth(c, b, push, passes, pass_count, per_sample, v, vp);
+            settle_decal_depth(c, b, push, passes, pass_count, v, vp);
         }
-        drawn_over(b, *colour, ms, box, zte && zwrite);
+        drawn_over(b, box, zte && zwrite);
     }
 
     // ---- A decal's depth where it won (exact Z) ----
@@ -4416,7 +4167,7 @@ private:
 
     template <typename Passes>
     void settle_decal_depth(CommandBuffer &c, const Batch &b, PrimPush push, const Passes &passes, int pass_count,
-                            bool per_sample, int v, const VkViewport &vp) {
+                            int v, const VkViewport &vp) {
         uint32_t flags = push.flags & ~((3u << F_PASS_SHIFT) | F_DECAL);
         push.trace_xy = no_trace;
         c.set_blend_enable(false);
@@ -4443,7 +4194,7 @@ private:
         draw();
         c.set_stencil_test(false);
         c.set_viewport(vp);
-        c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
+        c.set_program(programs_[v]);
         c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL); // (is_decal's ZTST)
         for (int i = 0; i < pass_count; i++) {
             if (!passes[i].z) {
@@ -4461,7 +4212,7 @@ private:
     // taking it away again leaves the colour short)
     template <typename Passes>
     void draw_decal_losses(CommandBuffer &c, const Batch &b, PrimPush push, const Passes &passes, int pass_count,
-                           uint32_t ztst, bool per_sample, int v) {
+                           uint32_t ztst, int v) {
         c.set_depth_compare(ztst == 2 ? VK_COMPARE_OP_LESS : VK_COMPARE_OP_LESS_OR_EQUAL);
         c.set_blend_enable(true);
         c.set_blend_factors(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE);
@@ -4475,7 +4226,7 @@ private:
             for (uint32_t far_side : {0u, uint32_t(F_DECAL_LOSS_FAR)}) {
                 push.flags = flags | passes[i].mode << F_PASS_SHIFT | F_DECAL_LOSS | far_side;
                 c.set_blend_op(far_side ? VK_BLEND_OP_REVERSE_SUBTRACT : VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
-                c.set_program(per_sample ? sample_programs_[v] : programs_[v]);
+                c.set_program(programs_[v]);
                 c.push_constants(&push, 0, sizeof(push));
                 c.set_depth_test(true, false);
                 if (b.native) {
@@ -4497,9 +4248,8 @@ private:
         return false;
     }
 
-    // After a batch: its multisampled image ahead of its image, and what was drawn over told to the texture store (its
-    // pages are a surface's now, not the uploads')
-    void drawn_over(const Batch &b, Surface &colour, bool ms, const PixelBox &touched, bool wrote_z) {
+    // After a batch: what was drawn over told to the texture store (its pages are a surface's now, not the uploads')
+    void drawn_over(const Batch &b, const PixelBox &touched, bool wrote_z) {
         const DrawState &s = b.state;
         // The batch's box is its corners' ceil (touch), one past a right or bottom edge on a whole pixel: the GS covers
         // up to before it. The pages told drawn are the pixels covered, so not that extra column and row: the game's
@@ -4514,7 +4264,6 @@ private:
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
         uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
         uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
-        colour.ms_ahead |= ms;
         int32_t x0 = std::max(box.x0, int32_t(scax0)), x1 = std::min(box.x1, int32_t(scax1));
         int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
         if (x1 >= x0 && y1 >= y0 && store_follows_draws_) {
@@ -4530,7 +4279,7 @@ private:
     // fog, every pixel written (no alpha test's pass, no DATE), Z always or no Z test, as the frame has it (not moved
     // in a picture between). Its pixels: the sprite within the scissor, at the canvas's scale (rect), when each edge of
     // the sprite inside the scissor is on a whole GS pixel (a sprite covers the pixels from its first edge to before its
-    // last at any scale and with MSAA: gs_to_clip). The colour the shader would write (FBA's bit 7 with it), the depth
+    // last at any scale: gs_to_clip). The colour the shader would write (FBA's bit 7 with it), the depth
     // pcr_prim.vert's. KF4_PC_CLEARS=0: drawn (to compare).
     bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
                   bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
@@ -4616,8 +4365,7 @@ private:
     // where the target's bit is DATM, read in the pass (pcr_date.frag); the batch then draws where it is set. The
     // scissor is the rectangle's after (the caller sets the batch's again). rect: drawn_rect's.
     // marked: the depth surface whose copy (the depth rule's, rule_on_) is marked where DATE fails, or nullptr
-    void set_up_date(CommandBuffer &c, const Surface &colour, const VkRect2D &rect, bool datm, bool ms,
-                     const Surface *marked) {
+    void set_up_date(CommandBuffer &c, const Surface &colour, const VkRect2D &rect, bool datm, const Surface *marked) {
         counts_date_by_stencil_++;
         if (rect.extent.width == 0 || rect.extent.height == 0) {
             return; // (the batch draws nothing within its scissor)
@@ -4626,10 +4374,10 @@ private:
         c.clear_quad(0, {rect, 0, 1}, zero, VK_IMAGE_ASPECT_STENCIL_BIT);
         in_pass_barrier(c);
         if (marked) {
-            c.set_program(ms ? date_mark_ms_program_ : date_mark_program_);
+            c.set_program(date_mark_program_);
             c.set_storage_texture(1, depth_input_binding, marked->zcopy->get_view());
         } else {
-            c.set_program(ms ? date_ms_program_ : date_program_); // (MSAA: each sample's stencil from its own alpha)
+            c.set_program(date_program_);
         }
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -4643,7 +4391,7 @@ private:
         PrimPush push = {};
         push.inv_size[0] = 1.0f / float(colour.width());
         push.inv_size[1] = 1.0f / float(colour.height);
-        push.flags = (datm ? F_DATM : 0) | (ms ? F_MSAA : 0);
+        push.flags = datm ? F_DATM : 0;
         push.src_scale[0] = int32_t(scale_[0]); // (gs_to_clip's)
         push.src_scale[1] = int32_t(scale_[1]);
         c.push_constants(&push, 0, sizeof(push));
@@ -4774,21 +4522,16 @@ private:
     }
 
     // The colour surfaces' format: the GS's 8 bits a channel. (A 16-bit "colour high" was removed 2026-11-14: no
-    // difference to see, and with MSAA it cost three times as much a layer on RDNA 4: docs/port/PC_OPTIMIZATION.md.)
+    // difference to see, and with the MSAA the port had then it cost three times as much a layer on RDNA 4:
+    // docs/port/PC_OPTIMIZATION.md.)
     static constexpr VkFormat colour_format = VK_FORMAT_R8G8B8A8_UNORM;
 
     // ---- Scale ----
     void apply_scale() {
-        apply_samples();
         if (pending_scale_ == scale_) {
             return;
         }
         end_pass();
-        for (auto &s : colour_) {
-            resolve(*s); // (the new images made from the old ones' pixels; their samples made again: ensure_ms)
-            s->ms.reset();
-            s->ms_ahead = s->ms_behind = false;
-        }
         std::array<uint32_t, 2> old = scale_;
         scale_ = pending_scale_;
         for (auto *list : {&colour_, &depth_}) {
@@ -4812,66 +4555,6 @@ private:
             }
         }
         (void)old;
-    }
-
-    // Small images of the surfaces' colour and depth formats at samples: the attachments the pipelines made ahead are
-    // made against (pcr_pipelines.h)
-    struct WarmImages {
-        ImageHandle colour, depth;
-    };
-    WarmImages make_warm_images(uint32_t samples) {
-        WarmImages w;
-        ImageCreateInfo info = ImageCreateInfo::render_target(16, 16, colour_format);
-        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        info.samples = VkSampleCountFlagBits(samples);
-        w.colour = device_.create_image(info, nullptr);
-        info = ImageCreateInfo::render_target(16, 16, depth_format_);
-        info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        info.samples = VkSampleCountFlagBits(samples);
-        w.depth = device_.create_image(info, nullptr);
-        return w;
-    }
-
-    // MSAA's samples changed (from a vblank, as the scale): the colour surfaces' multisampled images resolved and let go
-    // (made again at the new count as each is drawn into: ensure_ms), the depth surfaces made again at it, cleared (the
-    // game draws its Z anew each frame, as apply_scale has it)
-    void apply_samples() {
-        if (pending_samples_ == samples_) {
-            return;
-        }
-        // (drawn at the old count until the pipelines are made at the new one: pcr_pipelines.h)
-        WarmImages &w = warm_images_[pending_samples_];
-        if (!w.colour) {
-            w = make_warm_images(pending_samples_);
-        }
-        if (w.colour && !warm_ready(pending_samples_, w.colour->get_view(), w.depth ? &w.depth->get_view() : nullptr)) {
-            counts_msaa_.vblanks_waited++;
-            return;
-        }
-        end_pass();
-        for (auto &s : colour_) {
-            resolve(*s);
-            s->ms.reset();
-            s->ms_ahead = s->ms_behind = false;
-        }
-        samples_ = pending_samples_;
-        spare_surfaces_.clear(); // (their multisampled images at the old count)
-        for (auto &s : depth_) {
-            ImageHandle image = make_surface_image(s->width(), s->height, true);
-            if (!image) {
-                continue;
-            }
-            CommandBuffer &c = cmd(GpuWork::surface);
-            full_barrier(c);
-            clear_depth_image(c, *image, s->zcopy, 0.0f);
-            full_barrier(c);
-            s->image = image;
-            s->cleared = false;
-        }
     }
 
     void make_programs() {
@@ -4927,16 +4610,13 @@ private:
 #define PCR_SHADER(name, layout) \
     shader(pcr_spv_##name, sizeof(pcr_spv_##name), pcr_spv_##name##_xz, sizeof(pcr_spv_##name##_xz), layout)
         Shader *vs = PCR_SHADER(pcr_prim_vert, &vert);
-        Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *sfs = PCR_SHADER(pcr_prim_sample_frag, &frag);
-        Shader *efs = PCR_SHADER(pcr_prim_early_frag, &frag), *esfs = PCR_SHADER(pcr_prim_sample_early_frag, &frag);
-        // (each vertex shader with the four fragment shaders: draw_batch's choice)
+        Shader *fs = PCR_SHADER(pcr_prim_frag, &frag), *efs = PCR_SHADER(pcr_prim_early_frag, &frag);
+        // (each vertex shader with the fragment shaders: draw_batch's choice)
         Shader *resetfs = device_.request_shader(pcr_spv_pcr_depth_reset_frag, sizeof(pcr_spv_pcr_depth_reset_frag), &frag);
         auto programs_for = [&](int v, Shader *vertex) {
             depth_reset_programs_[v] = device_.request_program(vertex, resetfs);
             programs_[v] = device_.request_program(vertex, fs);
-            sample_programs_[v] = device_.request_program(vertex, sfs);
             early_programs_[v] = device_.request_program(vertex, efs);
-            early_sample_programs_[v] = device_.request_program(vertex, esfs);
         };
         programs_for(0, vs);
         // (the depth rule's: the exact Z fragment shaders that test the depth themselves, reading it as the pass's
@@ -4945,47 +4625,30 @@ private:
         rule_frag.sets[1].storage_image_mask = 1u << depth_input_binding;
         rule_frag.sets[1].fp_mask |= 1u << depth_input_binding;
         rule_frag.sets[1].meta[depth_input_binding].array_size = 1;
-#define PCR_RULE_SHADER_(name, m) device_.request_shader(pcr_spv_##name##_dr##m, sizeof(pcr_spv_##name##_dr##m), &rule_frag)
-        auto rule_programs_for = [&](int v, Shader *vertex, Shader *const (&single)[2], Shader *const (&multi)[4],
-                                     RulePrograms (&set)[2]) {
-            set[0].plain[v] = device_.request_program(vertex, single[0]);
-            set[0].early[v] = device_.request_program(vertex, single[1]);
-            set[1].plain[v] = device_.request_program(vertex, multi[0]);
-            set[1].early[v] = device_.request_program(vertex, multi[1]);
-            set[1].sample[v] = device_.request_program(vertex, multi[2]);
-            set[1].early_sample[v] = device_.request_program(vertex, multi[3]);
+#define PCR_RULE_SHADER_(name) device_.request_shader(pcr_spv_##name##_dr, sizeof(pcr_spv_##name##_dr), &rule_frag)
+        auto rule_programs_for = [&](int v, Shader *vertex, Shader *const (&shaders)[2], RulePrograms &set) {
+            set.plain[v] = device_.request_program(vertex, shaders[0]);
+            set.early[v] = device_.request_program(vertex, shaders[1]);
         };
-        Shader *rule_single[2] = {}, *rule_multi[4] = {}, *rule_run_single[2] = {}, *rule_run_multi[4] = {};
+        Shader *rule_shaders[2] = {}, *rule_run_shaders[2] = {};
         if (rule_on_) {
-            Shader *single[2] = {PCR_RULE_SHADER_(pcr_prim_frag_xz, ), PCR_RULE_SHADER_(pcr_prim_early_frag_xz, )};
-            Shader *multi[4] = {PCR_RULE_SHADER_(pcr_prim_frag_xz, m), PCR_RULE_SHADER_(pcr_prim_early_frag_xz, m),
-                                PCR_RULE_SHADER_(pcr_prim_sample_frag_xz, m),
-                                PCR_RULE_SHADER_(pcr_prim_sample_early_frag_xz, m)};
-            Shader *run_single[2] = {PCR_RULE_SHADER_(pcr_prim_frag_rec_xz, ), PCR_RULE_SHADER_(pcr_prim_early_frag_rec_xz, )};
-            Shader *run_multi[4] = {PCR_RULE_SHADER_(pcr_prim_frag_rec_xz, m), PCR_RULE_SHADER_(pcr_prim_early_frag_rec_xz, m),
-                                    PCR_RULE_SHADER_(pcr_prim_sample_frag_rec_xz, m),
-                                    PCR_RULE_SHADER_(pcr_prim_sample_early_frag_rec_xz, m)};
-            std::copy(single, single + 2, rule_single);
-            std::copy(multi, multi + 4, rule_multi);
-            std::copy(run_single, run_single + 2, rule_run_single);
-            std::copy(run_multi, run_multi + 4, rule_run_multi);
-            rule_programs_for(0, vs, rule_single, rule_multi, rule_);
+            rule_shaders[0] = PCR_RULE_SHADER_(pcr_prim_frag_xz);
+            rule_shaders[1] = PCR_RULE_SHADER_(pcr_prim_early_frag_xz);
+            rule_run_shaders[0] = PCR_RULE_SHADER_(pcr_prim_frag_rec_xz);
+            rule_run_shaders[1] = PCR_RULE_SHADER_(pcr_prim_early_frag_rec_xz);
+            rule_programs_for(0, vs, rule_shaders, rule_);
         }
 #undef PCR_RULE_SHADER_
         // (the same programs reading their fields from the picture's records: a kept walk's runs, draw_batch)
-        Shader *rfs = PCR_SHADER(pcr_prim_frag_rec, &frag), *rsfs = PCR_SHADER(pcr_prim_sample_frag_rec, &frag);
-        Shader *refs = PCR_SHADER(pcr_prim_early_frag_rec, &frag);
-        Shader *resfs = PCR_SHADER(pcr_prim_sample_early_frag_rec, &frag);
+        Shader *rfs = PCR_SHADER(pcr_prim_frag_rec, &frag), *refs = PCR_SHADER(pcr_prim_early_frag_rec, &frag);
         auto run_programs_for = [&](int v, Shader *vertex) {
             run_programs_[v] = device_.request_program(vertex, rfs);
-            run_sample_programs_[v] = device_.request_program(vertex, rsfs);
             run_early_programs_[v] = device_.request_program(vertex, refs);
-            run_early_sample_programs_[v] = device_.request_program(vertex, resfs);
         };
         Shader *run_vs = PCR_SHADER(pcr_prim_vert_rec, &vert);
         run_programs_for(0, run_vs);
         if (rule_on_) {
-            rule_programs_for(0, run_vs, rule_run_single, rule_run_multi, rule_run_);
+            rule_programs_for(0, run_vs, rule_run_shaders, rule_run_);
         }
         ResourceLayout date = {};
         date.push_constant_size = sizeof(PrimPush);
@@ -4997,8 +4660,6 @@ private:
         date.sets[1].meta[5].array_size = 1;
         Shader *dfs = device_.request_shader(pcr_spv_pcr_date_frag, sizeof(pcr_spv_pcr_date_frag), &date);
         date_program_ = device_.request_program(vs, dfs);
-        Shader *dmfs = device_.request_shader(pcr_spv_pcr_date_ms_frag, sizeof(pcr_spv_pcr_date_ms_frag), &date);
-        date_ms_program_ = device_.request_program(vs, dmfs);
         if (rule_on_) {
             // (DATE's set-up marking the depth rule's copy: pcr_date.frag's PCR_DATE_MARK)
             ResourceLayout date_mark = date;
@@ -5007,18 +4668,9 @@ private:
             date_mark.sets[1].meta[depth_input_binding].array_size = 1;
             date_mark_program_ = device_.request_program(
                 vs, device_.request_shader(pcr_spv_pcr_date_frag_mark, sizeof(pcr_spv_pcr_date_frag_mark), &date_mark));
-            date_mark_ms_program_ = device_.request_program(
-                vs, device_.request_shader(pcr_spv_pcr_date_ms_frag_mark, sizeof(pcr_spv_pcr_date_ms_frag_mark), &date_mark));
         }
         ResourceLayout cover = {};
-        ResourceLayout expand = {};
-        expand.output_mask = 1;
-        expand.sets[0].sampled_image_mask = 1u;
-        expand.sets[0].fp_mask = 1u;
-        expand.sets[0].meta[0].array_size = 1;
         Shader *cvs = device_.request_shader(pcr_spv_pcr_cover_vert, sizeof(pcr_spv_pcr_cover_vert), &cover);
-        Shader *xfs = device_.request_shader(pcr_spv_pcr_expand_frag, sizeof(pcr_spv_pcr_expand_frag), &expand);
-        expand_program_ = device_.request_program(cvs, xfs);
         if (rule_on_) {
             ResourceLayout zclear = {};
             zclear.push_constant_size = 8;
@@ -5039,8 +4691,8 @@ private:
             programs_for(v, native_vs[v - 1]);
             run_programs_for(v, native_run_vs[v - 1]);
             if (rule_on_) {
-                rule_programs_for(v, native_vs[v - 1], rule_single, rule_multi, rule_);
-                rule_programs_for(v, native_run_vs[v - 1], rule_run_single, rule_run_multi, rule_run_);
+                rule_programs_for(v, native_vs[v - 1], rule_shaders, rule_);
+                rule_programs_for(v, native_run_vs[v - 1], rule_run_shaders, rule_run_);
             }
         }
 #undef PCR_ND_SHADER
@@ -5075,41 +4727,32 @@ private:
         }
         Shader *pcs = device_.request_shader(pcr_spv_pcr_probe_comp, sizeof(pcr_spv_pcr_probe_comp), &probe);
         probe_program_ = device_.request_program(pcs);
-        Shader *pmcs = device_.request_shader(pcr_spv_pcr_probe_ms_comp, sizeof(pcr_spv_pcr_probe_ms_comp), &probe);
-        probe_ms_program_ = device_.request_program(pmcs);
-        // (their pipelines made again ahead of a change of MSAA's samples: pcr_pipelines.h)
-        // (roles 0-25 as below; with the depth rule 26-65 its programs: rule_[0] and rule_run_[0]'s plain and early,
-        // then rule_[1] and rule_run_[1]'s with their per-sample variants, each with its twin at the other samples)
-        WarmProgram warmed[68];
+        // (the programs by role, as the pipeline list and seed name them: pcr_pipelines.h. Roles 0-25 as below; with
+        // the depth rule 26-45 its programs, rule_ and rule_run_'s plain and early; 46-65 were their multisampled
+        // variants (the MSAA the port had until 2026-11-16), left empty so that the roles after keep their numbers)
+        Program *warmed[68] = {};
         for (int v = 0; v < 5; v++) {
-            warmed[v] = {programs_[v], sample_programs_[v]};
-            warmed[5 + v] = {early_programs_[v], early_sample_programs_[v]};
+            warmed[v] = programs_[v];
+            warmed[5 + v] = early_programs_[v];
         }
-        warmed[10] = {date_program_, date_ms_program_};
+        warmed[10] = date_program_;
         for (int v = 0; v < 5; v++) {
-            warmed[11 + v] = {run_programs_[v], run_sample_programs_[v]};
-            warmed[16 + v] = {run_early_programs_[v], run_early_sample_programs_[v]};
-            warmed[21 + v] = {depth_reset_programs_[v], nullptr};
+            warmed[11 + v] = run_programs_[v];
+            warmed[16 + v] = run_early_programs_[v];
+            warmed[21 + v] = depth_reset_programs_[v];
         }
         uint32_t roles = 26;
         if (rule_on_) {
-            const RulePrograms *single[2] = {&rule_[0], &rule_run_[0]}, *multi[2] = {&rule_[1], &rule_run_[1]};
+            const RulePrograms *sets[2] = {&rule_, &rule_run_};
             for (int k = 0; k < 4; k++) {
-                const RulePrograms &one = *single[k / 2], &ms = *multi[k / 2];
+                const RulePrograms &set = *sets[k / 2];
                 bool early = k % 2 != 0;
                 for (int v = 0; v < 5; v++) {
-                    Program *one_p = early ? one.early[v] : one.plain[v];
-                    Program *ms_p = early ? ms.early[v] : ms.plain[v];
-                    Program *ms_sample = early ? ms.early_sample[v] : ms.sample[v];
-                    warmed[26 + 5 * k + v] = {one_p, nullptr, ms_p, ms_sample, false};
-                    warmed[46 + 5 * k + v] = {ms_p, ms_sample, one_p, nullptr, true};
+                    warmed[26 + 5 * k + v] = early ? set.early[v] : set.plain[v];
                 }
             }
-            roles = 66;
-        }
-        if (rule_on_) {
-            warmed[66] = {zclear_program_, nullptr};
-            warmed[67] = {date_mark_program_, date_mark_ms_program_};
+            warmed[66] = zclear_program_;
+            warmed[67] = date_mark_program_;
             roles = 68;
         }
         WarmDevice traits;
@@ -5131,33 +4774,29 @@ private:
             traits.zclear_role = 66;
             traits.date_mark_role = 67;
         }
-        warm_watch(device_, warmed, roles, expand_program_, traits);
+        warm_watch(device_, warmed, roles, traits);
     }
 
     Device &device_;
     const DynamicChoice dynamic_ = choose_dynamic(device_);
     GpuTimes &times_;
-    // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700, the ripple's; each shaded once a pixel,
-    // and once a sample (cut-out AA: pcr_prim_sample.frag)
-    std::array<Program *, 5> programs_{}, sample_programs_{};
+    // the batches' programs: the GIF's (pcr_prim.vert), native 000, 280, 700, the ripple's
+    std::array<Program *, 5> programs_{};
     // ... and the same for the draws that discard nothing, the depth test before the shader (pcr_prim_early.frag)
-    std::array<Program *, 5> early_programs_{}, early_sample_programs_{};
+    std::array<Program *, 5> early_programs_{};
     // ... and the one that resets a decal's pixels to the farthest depth (settle_decal_depth)
     std::array<Program *, 5> depth_reset_programs_{};
     // ... and each of them reading a draw's fields from the picture's records (PCR_RECORDS): a kept walk's runs
-    std::array<Program *, 5> run_programs_{}, run_sample_programs_{}, run_early_programs_{}, run_early_sample_programs_{};
-    // ... and the depth rule's (rule_on_): each program's fragment shader testing the depth itself, for a single-sampled
-    // pass ([0]) and a multisampled one ([1]: also shaded at every sample); and reading a draw's fields from the records
+    std::array<Program *, 5> run_programs_{}, run_early_programs_{};
+    // ... and the depth rule's (rule_on_): each program's fragment shader testing the depth itself; and reading a
+    // draw's fields from the records
     struct RulePrograms {
-        std::array<Program *, 5> plain{}, sample{}, early{}, early_sample{};
-        Program *pick(int v, bool early_tested, bool per_sample) const {
-            if (per_sample) {
-                return early_tested ? early_sample[v] : sample[v];
-            }
+        std::array<Program *, 5> plain{}, early{};
+        Program *pick(int v, bool early_tested) const {
             return early_tested ? early[v] : plain[v];
         }
     };
-    RulePrograms rule_[2], rule_run_[2];
+    RulePrograms rule_, rule_run_;
     // (end_pass) a pass ended with nothing recorded since; KF4_PC_PASS_BARRIER=full: full barriers around every pass
     bool pass_ended_ = false;
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
@@ -5167,20 +4806,12 @@ private:
     // (reuse_image; a texture's copy of a surface is used again by surface_copies_, KF4_PC_COPY_POOL). Under water the copy of the frame and the water's targets
     // let each other go every picture, and the tint and the wobble read the frame through a copy of 1024 x 512 texels.
     const bool reuse_on_ = !getenv("KF4_PC_SURFACE_REUSE") || strcmp(getenv("KF4_PC_SURFACE_REUSE"), "0") != 0;
-    // (colour surfaces let go: their images, and their multisampled images, for one of the same size made again)
-    struct SpareSurface {
-        ImageHandle image, ms;
-    };
-    std::vector<SpareSurface> spare_surfaces_;
+    // (colour surfaces let go: their images, for one of the same size made again)
+    std::vector<ImageHandle> spare_surfaces_;
     uint64_t counts_clears_ = 0;
-    Program *date_program_ = nullptr, *date_ms_program_ = nullptr, *expand_program_ = nullptr;
+    Program *date_program_ = nullptr;
     Program *zclear_program_ = nullptr; // (the depth rule's own copy cleared in a pass: clear_depth_copy)
-    Program *date_mark_program_ = nullptr, *date_mark_ms_program_ = nullptr; // (... marked by DATE's set-up)
-    // MSAA: the samples a colour surface's pixel has when drawn into (1: none) and from the next vblank (set_msaa), and
-    // whether cut-outs are shaded at every sample (only where the device shades a sample at a time: sampleRateShading)
-    uint32_t samples_ = 1, pending_samples_ = 1;
-    bool cutout_aa_ = false;
-    const bool sample_shading_ = device_.get_device_features().enabled_features.sampleRateShading != VK_FALSE;
+    Program *date_mark_program_ = nullptr; // (... marked by DATE's set-up)
     // Exact Z (pcr_common.h): the GS's whole Z at each pixel, so that a decal ties with the surface under it as on the GS
     // and the later draw wins. Needs depth clamp (the corners' bound past 1), which every desktop GPU has. Without it, or
     // with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn over a surface cut into other triangles lose to
@@ -5196,7 +4827,6 @@ private:
     static bool interlock(const Device &device) {
         const auto &f = device.get_device_features();
         return f.interlock_features.fragmentShaderPixelInterlock != VK_FALSE &&
-               f.interlock_features.fragmentShaderSampleInterlock != VK_FALSE &&
                f.enabled_features.fragmentStoresAndAtomics != VK_FALSE &&
                f.enabled_features.shaderStorageImageWriteWithoutFormat != VK_FALSE;
     }
@@ -5224,9 +4854,6 @@ private:
     const Buffer *planes_bound_ = nullptr; // (the planes buffer of the last batch's room: set 1's, bind_between)
     std::vector<uint32_t> run_plane_at_;   // (the batch drawn: each of its runs' plane_at, or no_plane)
     uint32_t batch_planes_ = no_plane;     // (... its first plane in planes_bound_)
-    struct MsaaCounts {
-        uint64_t resolves = 0, rect_resolves = 0, expands = 0, rect_expands = 0, cutout_batches = 0, vblanks_waited = 0;
-    } counts_msaa_;
     // the depth surfaces' format, and whether DATE is by its stencil (KF4_PC_STENCIL=0: by a copy, as before)
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
     bool stencil_on_ = false;
@@ -5245,7 +4872,7 @@ private:
         float zscale = 1.0f / 16777216.0f;
     } trace_;
     BufferHandle trace_buf_;
-    Program *probe_program_ = nullptr, *probe_ms_program_ = nullptr;
+    Program *probe_program_ = nullptr;
     bool decal_losses_ = false;
     const Between *between_ = nullptr;
     ImageHandle dummy_uint_, dummy_float_;
@@ -5259,7 +4886,6 @@ private:
     uint32_t aniso_ = 1;
     std::vector<std::unique_ptr<Surface>> colour_, depth_;
     TextureStore store_{store_limits()};
-    std::array<WarmImages, 9> warm_images_; // (by samples: make_warm_images')
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
     // (by sampler_for's key; never let go: a kept walk's batches name them, drawn again on the pump's thread too)
@@ -5379,27 +5005,15 @@ public:
                 (unsigned long long)c.unsupported_texture_on_surface, (unsigned long long)c.unsupported_copies,
                 (unsigned long long)counts_unsupported_upload_, (unsigned long long)counts_unsupported_shape_,
                 (unsigned long long)counts_clut_not_uploads_);
-        if (samples_ > 1 || counts_msaa_.resolves || counts_msaa_.cutout_batches) {
-            fprintf(out,
-                    "[stats] pc canvas MSAA: %u samples, cut-out AA %s; %llu batches shaded at every sample; %llu "
-                    "surfaces resolved whole, %llu rectangles resolved (copies, textures, reads); %llu surfaces "
-                    "expanded into their samples whole, %llu rectangles (uploads, copies into them); %llu vblanks drawn at the old "
-                    "count while the pipelines were made\n",
-                    samples_, cutout_aa_ ? "on" : "off", (unsigned long long)counts_msaa_.cutout_batches,
-                    (unsigned long long)counts_msaa_.resolves, (unsigned long long)counts_msaa_.rect_resolves,
-                    (unsigned long long)counts_msaa_.expands, (unsigned long long)counts_msaa_.rect_expands,
-                    (unsigned long long)counts_msaa_.vblanks_waited);
-        }
         fprintf(out, "[stats] pc canvas: %llu depth surfaces let go, not drawn with for %llu vblanks\n",
                 (unsigned long long)counts_idle_depth_let_go_, (unsigned long long)IDLE_DEPTH_VBLANKS);
         // (what the GPU memory of the surfaces is made of: each surface's place in the GS's memory and its images)
         for (const auto *list : {&colour_, &depth_}) {
             for (const auto &sf : *list) {
                 const ImageCreateInfo &info = sf->image->get_create_info();
-                fprintf(out, "[stats] pc canvas surface: %s, page %u, %u pixels wide (FBW %u), %u rows, PSM 0x%02X; image %ux%u, %u "
-                             "samples%s\n",
+                fprintf(out, "[stats] pc canvas surface: %s, page %u, %u pixels wide (FBW %u), %u rows, PSM 0x%02X; image %ux%u\n",
                         sf->depth ? "depth" : "colour", sf->base_page, sf->width(), sf->fbw, sf->height, sf->psm, info.width,
-                        info.height, unsigned(info.samples), sf->ms ? ", and a multisampled image" : "");
+                        info.height);
             }
         }
         warm_print_counts();
@@ -5425,9 +5039,6 @@ void Canvas::watch_hangs(HangNotes &notes, const char *who) {
     impl_->watch_hangs(notes, who);
 }
 
-void Canvas::set_msaa(uint32_t samples, bool cutout_aa) {
-    impl_->set_msaa(samples, cutout_aa);
-}
 void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
     impl_->set_scale(x_scale, y_scale);
 }

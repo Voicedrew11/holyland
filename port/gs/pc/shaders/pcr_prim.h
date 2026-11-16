@@ -10,13 +10,7 @@
 #endif
 #include "pcr_common.h"
 
-// (pcr_prim_sample.frag, PCR_SAMPLE: shaded once a sample of a multisampled target, its inputs taken at each sample:
-// the cut-outs with cut-out AA, pcr_canvas.cpp)
-#ifdef PCR_SAMPLE
-#define PCR_IN sample noperspective in
-#else
 #define PCR_IN noperspective in
-#endif
 // (PCR_EXACT_Z, the programs' fragment shaders with exact Z: pcr_common.h) the triangle's whole Z shared by its corners
 // and the pixel's Z less it (read at the pixel's middle: pcr_exact_depth); the depth written never past the corners'
 // bound (the GPU's early tests keep)
@@ -26,20 +20,13 @@ layout(location = 10) flat in uint v_zref;
 layout(location = 11) noperspective in float v_zrel;
 layout(depth_less) out float gl_FragDepth;
 #endif
-// (PCR_DEPTH_RULE, the _dr and _drm variants of the exact Z ones: the depth rule, pcr_depth_rule below; _drm drawn
-// multisampled, PCR_DEPTH_RULE_MS) The depth surface's own copy of its depth (pcr_canvas.cpp's Surface::zcopy), a
-// storage image with a layer a sample, bound at set 1's binding 11 (depth_input_binding): read and written in the
+// (PCR_DEPTH_RULE, the _dr variants of the exact Z ones: the depth rule, pcr_depth_rule below) The depth surface's own
+// copy of its depth (pcr_canvas.cpp's Surface::zcopy), a storage image of one layer, bound at set 1's binding 11
+// (depth_input_binding): read and written in the
 // shader's critical section (VK_EXT_fragment_shader_interlock), which runs in the triangles' order at a pixel. The
 // GPU cannot read its depth attachment so (rasterizationOrderDepthAttachmentAccess: neither RADV nor NVIDIA has it)
 #ifdef PCR_DEPTH_RULE
-#ifdef PCR_SAMPLE
-// (shaded at every sample, each invocation reading and writing its own sample's layer alone: ordered with the same
-// sample's only. With the pixel's, a pixel's samples waited for each other: at MSAA 2 the cut-outs at 063 took the
-// GPU four times as long, 2026-11-15)
-layout(sample_interlock_ordered) in;
-#else
 layout(pixel_interlock_ordered) in;
-#endif
 layout(set = 1, binding = 11, r32f) uniform coherent image2DArray u_zstore;
 #endif
 // (pcr_prim_early.frag, PCR_EARLY: the draws that discard nothing, no alpha test's pass and no DATE from a copy:
@@ -163,11 +150,7 @@ void trace(uint outcome, uvec4 c) {
     if (i >= PCR_TRACE_FRAGMENTS) {
         return;
     }
-#ifdef PCR_SAMPLE
-    int sample_id = gl_SampleID;
-#else
-    int sample_id = -1;
-#endif
+    int sample_id = -1; // (the trace's record keeps the sample, of the MSAA the port had)
     uint rgba = min(c.r, 255u) | min(c.g, 255u) << 8 | min(c.b, 255u) << 16 | min(c.a, 255u) << 24;
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked)
@@ -328,7 +311,7 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
 // Catmull-Rom cubic (16 texels) at this pixel's own place, not nearest: the same picture at every scale, the texels'
 // steps smooth and their edges still sharp (the native GS's --native-2d smooth). Read nearest, a texel covers the
 // target's pixels from where its coordinate is reached; its middle, where the cubic puts it, is half a pixel's change
-// on from this pixel's coordinate (taken at the GS's point: gs_to_clip; none with MSAA). The taps stay inside the
+// on from this pixel's coordinate (taken at the GS's point: gs_to_clip). The taps stay inside the
 // texels the primitive covers (v_rect: a letter's cell of a sheet of letters; past it, the letters beside it bled in),
 // and the result inside the four texels around the place (no ring: no colour or alpha they do not have).
 bool smooth_2d_applies(float lod) {
@@ -350,7 +333,7 @@ vec4 tap_2d(ivec2 at, ivec2 size) {
 uvec4 smooth_2d(vec2 uv) {
     ivec2 size = ivec2(int(pc.tex_size & 0xFFFFu), int(pc.tex_size >> 16));
     ivec2 first = ivec2(v_rect & 0xFFFFu), last = ivec2(v_rect >> 16);
-    vec2 shift = (pc.flags & PCR_F_MSAA) != 0u ? vec2(0.0) : 0.5 * (uv_dx + uv_dy);
+    vec2 shift = 0.5 * (uv_dx + uv_dy);
     vec2 q = clamp(uv + shift, vec2(first) + 0.5, vec2(last) + 0.5) - 0.5;
     vec2 i = floor(q);
     vec2 f = q - i;
@@ -458,9 +441,7 @@ bool alpha_passes(uint a) {
 #ifdef PCR_EXACT_Z
 // The pixel's whole Z (pcr_common.h's exact Z), as paraLLEl-GS works it out: the triangle's shared whole Z plus the
 // rounded interpolation of the corners' differences from it at the pixel's middle (with a moved corner's fraction),
-// clamped to the Z buffer's largest. At the middle even where the shader runs once a sample (PCR_SAMPLE, the cut-outs):
-// every sample of a pixel has the Z every other draw gives the pixel, so a decal over a cut-out ties with it (at its
-// samples a sample's Z rounded apart from the pixel's here and there, and the moss over it lost there).
+// clamped to the Z buffer's largest.
 // Below the whole Z the depth keeps the plane's fine part (plane_z.h's pz_fine_bits), so that two surfaces a fraction
 // of a Z apart, which the GS rounds to one Z far from the eye, are drawn in their order (the strip of a log behind its
 // front no longer shows through it), and two meshes on one plane still tie. A decal (pcr_canvas.cpp's is_decal) takes
@@ -500,8 +481,8 @@ void pcr_full_depth(out float z, out float tolerance) {
 }
 
 #ifdef PCR_DEPTH_RULE
-// The depth rule: one test for every draw, the GS's picture without its depth's faults. Against the depth drawn (each
-// sample of it the fragment covers), the fragment's Z with its fraction (z) and tolerance:
+// The depth rule: one test for every draw, the GS's picture without its depth's faults. Against the depth drawn, the
+// fragment's Z with its fraction (z) and tolerance:
 // - within the two tolerances of each other (ours stands for the stored one's too: the same for two layers of one
 //   plane), a tie, which the GS's test decides: GEQUAL passes (the later draw wins), GREATER fails (PCR_F_ZGREATER);
 // - else the nearer wins (larger Z is nearer).
@@ -512,57 +493,36 @@ void pcr_full_depth(out float z, out float tolerance) {
 // as the GS's) passes it too. Never past the corners' bound (gl_FragCoord.z, layout(depth_less): the GPU's early
 // tests); a tie past it (a steep surface, the two more than the bound's margin apart) loses there.
 // The copy is written as the depth attachment is, and kept so by every clear and copy of it (pcr_canvas.cpp): the
-// shader passes a sample only where the GPU's own test on what it writes passes too.
+// shader passes a pixel only where the GPU's own test on what it writes passes too.
 // (In the critical section, at the end of main: after every other discard, so that only what is drawn is stored.)
-// False: no sample passed (discarded).
+// False: it failed (discarded).
 bool pcr_depth_rule(float z, float tolerance) {
     float depth = (z + float(pcr_loss_margin())) * pc.zscale;
     bool greater = (pc.flags & PCR_F_ZGREATER) != 0u, always = (pc.flags & PCR_F_ZALWAYS) != 0u;
-#ifdef PCR_DEPTH_RULE_MS
-    int covered = gl_SampleMaskIn[0];
-#else
-    int covered = 1;
-#endif
-    float stored[8];
-    int passed = 0;
-    float written = depth;
-    for (int left = covered; left != 0; left &= left - 1) {
-        int i = findLSB(left);
-        float raw = imageLoad(u_zstore, ivec3(ivec2(gl_FragCoord.xy), i)).r;
-        // (PCR_F_DATE_MARK: DATE by the stencil, its set-up's mark in the copy's sign bit, pcr_date.frag's)
-        bool date_fails = (pc.flags & PCR_F_DATE_MARK) != 0u && (floatBitsToUint(raw) >> 31) != 0u;
-        stored[i] = abs(raw);
-        float tie = 2.0 * tolerance * pc.zscale + max(depth, stored[i]) * (1.0 / 8388608.0);
-        float ahead = depth - stored[i];
-        if (!date_fails && (always || ahead > tie || (ahead >= -tie && !greater))) {
-            passed |= 1 << i;
-            written = always ? written : max(written, stored[i]);
-        }
-    }
+    ivec3 at = ivec3(ivec2(gl_FragCoord.xy), 0);
+    float raw = imageLoad(u_zstore, at).r;
+    // (PCR_F_DATE_MARK: DATE by the stencil, its set-up's mark in the copy's sign bit, pcr_date.frag's)
+    bool date_fails = (pc.flags & PCR_F_DATE_MARK) != 0u && (floatBitsToUint(raw) >> 31) != 0u;
+    float stored = abs(raw);
+    float tie = 2.0 * tolerance * pc.zscale + max(depth, stored) * (1.0 / 8388608.0);
+    float ahead = depth - stored;
+    bool passed = !date_fails && (always || ahead > tie || (ahead >= -tie && !greater));
+    float written = passed && !always ? max(depth, stored) : depth;
     written = min(written, gl_FragCoord.z);
     // (passed only where the GPU's own test, GEQUAL, GREATER or ALWAYS on what is written, passes too: a tie past
     // the corners' bound fails there, and the copy must be what the depth attachment is)
-    for (int left = passed; left != 0 && !always; left &= left - 1) {
-        int i = findLSB(left);
-        if (greater ? !(written > stored[i]) : !(written >= stored[i])) {
-            passed &= ~(1 << i);
-        }
+    if (passed && !always && (greater ? !(written > stored) : !(written >= stored))) {
+        passed = false;
     }
-#ifdef PCR_DEPTH_RULE_MS
-    gl_SampleMask[0] = passed;
-#endif
     gl_FragDepth = written;
     // (and PCR_F_DATE_CLEARS: where it passed, DATE's stencil cleared, pcr_canvas.cpp's draw_where_date_passes, so
     // marked failing in the copy too)
     bool zwrite = (pc.flags & PCR_F_ZWRITE) != 0u, date_clears = (pc.flags & PCR_F_DATE_CLEARS) != 0u;
-    if (zwrite || date_clears) {
-        for (int left = passed; left != 0; left &= left - 1) {
-            int i = findLSB(left);
-            float value = zwrite ? written : stored[i];
-            imageStore(u_zstore, ivec3(ivec2(gl_FragCoord.xy), i), vec4(date_clears ? -value : value));
-        }
+    if (passed && (zwrite || date_clears)) {
+        float value = zwrite ? written : stored;
+        imageStore(u_zstore, at, vec4(date_clears ? -value : value));
     }
-    return passed != 0;
+    return passed;
 }
 #endif
 

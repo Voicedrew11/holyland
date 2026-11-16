@@ -36,6 +36,7 @@
 #endif
 
 #include "context.hpp"
+#include "pcr_antialias.h"
 #include "pcr_between.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
@@ -572,7 +573,7 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
 // ---- The settings: kept for the steps that draw -------------------------------------------------------
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
-    std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, msaa{1}, cutout_aa{GSN_CUTOUT_AA_OFF}, mode_2d{GSN_2D_PS2},
+    std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, mode_2d{GSN_2D_PS2}, antialias{PORT_AA_OFF},
         layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
@@ -860,10 +861,9 @@ public:
         since_vblank_bytes_ = 0;
     }
 
-    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
-    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d: Canvas::set_2d's
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
-                int mode_2d) {
+    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d:
+    // Canvas::set_2d's
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
@@ -872,7 +872,6 @@ public:
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->set_sampling(lod, uint32_t(aniso));
-            canvas_->set_msaa(samples, cutout_aa);
             canvas_->set_2d(mode_2d);
             canvas_->vblank();
             ZoneScope collect_zone(gpu_times_collected_zone);
@@ -1256,7 +1255,7 @@ public:
     PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
                pcr::HangNotes &hang_notes, const char *who)
         : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device),
-          hang_notes_(hang_notes), who_(who) {}
+          antialiasing_(device), hang_notes_(hang_notes), who_(who) {}
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
@@ -1404,6 +1403,9 @@ private:
         }
         if (!shown) {
             cmd.clear_image(*picture_, clear_.value);
+        } else {
+            // (the picture's anti-aliasing, at the canvas's scale: pcr_antialias.h)
+            antialiasing_.apply(cmd, *picture_, settings().antialias.load(std::memory_order_relaxed));
         }
         cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                     VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1519,6 +1521,7 @@ private:
     Stats &stats_;
     const ClearColour &clear_;
     PresentScaler scaler_;
+    pcr::AntiAliasing antialiasing_;
     pcr::HangNotes &hang_notes_;
     const char *who_;
     std::array<Fence, PICTURES_FENCED> fences_; // (submit_now's, the last PICTURES_FENCED pictures')
@@ -1871,8 +1874,6 @@ public:
         gpu_kind_ = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GSN_GPU_DISCRETE
                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GSN_GPU_INTEGRATED
                                                                                  : GSN_GPU_OTHER;
-        msaa_samples_have_ = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
-                             props.limits.sampledImageDepthSampleCounts;
         out_.emplace(*device_, scanout_, presenter_, stats, clear_, hang_notes_, "kf4-pc");
         const char *watch = getenv("KF4_PC_HANG_WATCH");
         if (!(watch && strcmp(watch, "0") == 0)) {
@@ -2066,10 +2067,6 @@ public:
         return gpu_kind_;
     }
 
-    uint32_t msaa_samples_have() const {
-        return msaa_samples_have_;
-    }
-
     uint32_t clear_rgba() const {
         return clear_.rgba;
     }
@@ -2235,7 +2232,6 @@ private:
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
                            settings.mode_2d.load());
         }
         uint32_t scale = picture_scale_;
@@ -2395,7 +2391,6 @@ private:
     std::unique_ptr<Context> context_; // (before the device: destroyed after it)
     std::unique_ptr<Device> device_;
     int gpu_kind_ = GSN_GPU_OTHER;
-    uint32_t msaa_samples_have_ = 1;
     ClearColour clear_ = clear_colour();
     Inbox inbox_;
     ScanoutRing scanout_;
@@ -2591,23 +2586,12 @@ extern "C" int pcr_set_aniso(int taps) {
     return 1 << l;
 }
 
-extern "C" int pcr_set_msaa(int samples) {
-    // the most this GPU has up to `samples` (colour and depth attachments both, and depth read in a shader)
-    uint32_t have = renderer() ? renderer()->msaa_samples_have() : 1;
-    uint32_t n = 1;
-    while (n * 2 <= uint32_t(samples) && n < 8 && (have & (n * 2))) {
-        n *= 2;
-    }
-    settings().msaa.store(int(n));
-    return int(n);
-}
-
-extern "C" void pcr_set_cutout_aa(int mode) {
-    settings().cutout_aa.store(mode);
-}
-
 extern "C" void pcr_set_2d(int mode) {
     settings().mode_2d.store(mode);
+}
+
+extern "C" void pcr_set_antialias(int method) {
+    settings().antialias.store(port_antialias(method) ? method : PORT_AA_OFF);
 }
 
 extern "C" void pcr_set_layer_z(int mode) {
@@ -2629,10 +2613,9 @@ extern "C" void pcr_pipeline_cache(const char *path) {
     }
 }
 
-// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
-// settings now
+// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile)
 extern "C" void pcr_precompile(void) {
-    pcr::precompile(uint32_t(settings().msaa.load()));
+    pcr::precompile();
 }
 
 // The game waits while they are made (port/platform/kernel.c)

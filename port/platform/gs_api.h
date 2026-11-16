@@ -71,11 +71,8 @@ static inline void gsr_set_lod(int mode) {
 static inline int gsr_set_aniso(int taps) {
     return pcr_set_aniso(taps);
 }
-static inline int gsr_set_msaa(int samples) {
-    return pcr_set_msaa(samples);
-}
-static inline void gsr_set_cutout_aa(int mode) {
-    pcr_set_cutout_aa(mode);
+static inline void gsr_set_antialias(int method) {
+    pcr_set_antialias(method);
 }
 static inline void gsr_set_2d(int mode) {
     pcr_set_2d(mode);

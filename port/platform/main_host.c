@@ -27,12 +27,9 @@
                          a new settings.json, off without one (headless)
        --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
                          half with the row above (port_flicker_filter()); off by default
-       --native-msaa N   the renderer draws the 3D with N samples a pixel (1, 2, 4 or 8; 1, none,
-                         by default): its edges smoothed
-       --native-cutout-aa MODE
-                         with --native-msaa, the cut-outs (netting, foliage, fences, grates):
-                         ssaa (the default: shaded at every sample, their edges smoothed) or off
-                         (shaded once a pixel, as the rest of the 3D)
+       --antialias MODE  the picture's anti-aliasing: off (the picture as drawn; the default without
+                         a settings.json) or fxaa (FXAA over the picture at the renderer's resolution,
+                         before it is scaled to the window: edges smoothed, the 2D's too)
        --native-2d MODE  at a --native-scale above 1, the 2D's textures (the font, the HUD, the menus'
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
@@ -184,6 +181,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/antialias.h"
 #include "port/automap.h"
 #include "port/weapon_sets.h"
 #include "port/audio.h"
@@ -278,9 +276,9 @@ static void usage(const char *program) {
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--weapon-sets] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
-            "          [--native-msaa 1|2|4|8] [--flicker-filter]\n"
+            "          [--antialias off|fxaa] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-cutout-aa ssaa|off] [--native-2d smooth|ps2]\n"
+            "          [--native-2d smooth|ps2]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
             "          [--test-dma-wait]\n"
@@ -347,10 +345,9 @@ static void parse_options(int argc, char **argv) {
     port_options.flash_height = 540;
     port_options.present_scaling = -1;
     port_options.present_sharpen = -1;
-    port_options.native_msaa = 1;
+    port_options.antialias = PORT_AA_OFF;
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
-    port_options.native_cutout_aa = 1; /* GSN_CUTOUT_AA_SSAA */
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
@@ -564,14 +561,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.draw_distance_sky_forced = 1;
-        } else if (strcmp(option, "--native-msaa") == 0) {
-            port_options.native_msaa = atoi(value);
-            if (port_options.native_msaa != 1 && port_options.native_msaa != 2 && port_options.native_msaa != 4 &&
-                port_options.native_msaa != 8) {
-                fprintf(stderr, "--native-msaa wants 1, 2, 4 or 8, not %s\n", value);
+        } else if (strcmp(option, "--antialias") == 0) {
+            port_options.antialias = port_antialias_from_name(value);
+            if (port_options.antialias < 0) {
+                fprintf(stderr, "--antialias wants off or fxaa, not %s\n", value);
                 exit(2);
             }
-            port_options.native_msaa_forced = 1;
+            port_options.antialias_forced = 1;
         } else if (strcmp(option, "--native-lod") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_lod = 0;
@@ -592,16 +588,6 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_aniso_forced = 1;
-        } else if (strcmp(option, "--native-cutout-aa") == 0) {
-            if (strcmp(value, "off") == 0) {
-                port_options.native_cutout_aa = 0;
-            } else if (strcmp(value, "ssaa") == 0) {
-                port_options.native_cutout_aa = 1;
-            } else {
-                fprintf(stderr, "--native-cutout-aa wants ssaa or off, not %s\n", value);
-                exit(2);
-            }
-            port_options.native_cutout_aa_forced = 1;
         } else if (strcmp(option, "--native-2d") == 0) {
             if (strcmp(value, "ps2") == 0) {
                 port_options.native_2d = 0;

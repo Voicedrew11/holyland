@@ -36,9 +36,6 @@
 #define GSN_LOD_PS2 0
 #define GSN_LOD_SCALE 1
 #define GSN_LOD_FULL 2
-/* Cut-out edges (pcr_set_cutout_aa): shaded once a pixel (GSN_CUTOUT_AA_OFF), or at every sample (GSN_CUTOUT_AA_SSAA) */
-#define GSN_CUTOUT_AA_OFF 0
-#define GSN_CUTOUT_AA_SSAA 1
 /* 2D textured from VRAM at a scale above 1 (pcr_set_2d): read nearest at the PS2's pixels, or bilinear (smooth) */
 #define GSN_2D_PS2 0
 #define GSN_2D_SMOOTH 1

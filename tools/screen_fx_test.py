@@ -43,9 +43,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ISO_DEFAULT = r"E:/roms/ps2/King's Field - The Ancient City (USA).iso"
 
-# the owner's settings (settings.json of 2026-10-24): 240, 3x, native widescreen, MSAA 2, aniso 2, cut-out AA ssaa
-OWNER = ["--frame-rate", "240", "--native-scale", "3", "--native-msaa", "2", "--native-aniso", "2",
-         "--native-cutout-aa", "ssaa", "--sky", "modern", "--widescreen", "--native-widescreen"]
+# the owner's settings (settings.json of 2026-10-24, MSAA 2 since replaced by FXAA): 240, 3x, native widescreen,
+# FXAA, aniso 2
+OWNER = ["--frame-rate", "240", "--native-scale", "3", "--antialias", "fxaa", "--native-aniso", "2",
+         "--sky", "modern", "--widescreen", "--native-widescreen"]
 
 SPELLS = [3, 6, 9, 12, 16, 21, 31, 36, 46, 51, 61, 66, 76, 81]
 

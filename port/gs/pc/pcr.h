@@ -69,9 +69,9 @@ void pcr_read_rect(const GsnRect *rect, uint32_t *rgba);
 void pcr_set_scale(int x_scale, int y_scale);
 void pcr_set_lod(int mode);
 int pcr_set_aniso(int taps);
-int pcr_set_msaa(int samples);
-void pcr_set_cutout_aa(int mode);
 void pcr_set_2d(int mode);
+/* The picture's anti-aliasing, PORT_AA_* (port/antialias.h; pcr_antialias.h), from the next picture */
+void pcr_set_antialias(int method);
 void pcr_set_layer_z(int mode);
 /* The --native-draw kinds the PC renderer draws (PORT_ND_* bits): gs.c turns on only those under it */
 int pcr_native_kinds(void);
@@ -121,8 +121,7 @@ size_t pcr_debug_trace_take(PcrTraceFragment *fragments, size_t room, PcrTracePr
    where. A decal behind a nearer surface by more is left as it is. */
 void pcr_debug_decal_losses(int on);
 
-/* 1 once the scale and MSAA's samples last set are what the PC renderer draws with: each is taken at a vblank, and
-   MSAA's only once its pipelines are made (pcr_pipelines.h), which takes some vblanks after it is set */
+/* 1 once the scale last set is what the PC renderer draws with: it is taken at a vblank */
 int pcr_debug_settled(void);
 
 #ifdef __cplusplus

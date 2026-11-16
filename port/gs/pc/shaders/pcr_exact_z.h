@@ -47,7 +47,7 @@ struct GsCorner {
 };
 
 // The farthest a corner may be from the target's origin, in 16ths of a GS pixel: 65536 GS pixels, sixteen times the
-// GS's whole range. Times the scale (at most 16, twice it with MSAA) that is plane_z.h's PLANE_Z_MOST, the most its
+// GS's whole range. Times the scale (at most 16) that is plane_z.h's PLANE_Z_MOST, the most its
 // arithmetic holds. Past it only a picture between's corners turned far past the frame's screen (past_band.h): their
 // Z is the interpolated one.
 #define PCR_PLANE_MOST (1 << 20)
@@ -74,27 +74,26 @@ float pcr_frame_zfrac(float zf, uint z) {
 }
 
 // The triangle's plane as the fragment stage takes it (v_plane0 and v_plane1, below), from its three corners, in a
-// target of scale (the target's pixels a GS pixel, across and down) multisampled or not. The target's pixel k stands
-// for the GS's point gs_to_clip's inverse gives it: without MSAA the first of a GS pixel's pixels is at its integer
-// point, so k / scale; with MSAA a pixel's middle, (k + 1/2) / scale. In 1/16 / m of a GS pixel (m the scale, twice
-// it with MSAA) both are whole: 16 k, or 16 (2 k + 1). None (zeros) past PCR_PLANE_MOST or where plane_fixed cannot
-// hold the plane.
-void pcr_plane_words(GsCorner c0, GsCorner c1, GsCorner c2, ivec2 scale, bool msaa, out ivec4 w0, out ivec4 w1) {
+// target of scale (the target's pixels a GS pixel, across and down). The target's pixel k stands for the GS's point
+// gs_to_clip's inverse gives it: the first of a GS pixel's pixels is at its integer point, so k / scale, which in
+// 1/16 / scale of a GS pixel is whole: 16 k. None (zeros) past PCR_PLANE_MOST or where plane_fixed cannot hold the
+// plane.
+void pcr_plane_words(GsCorner c0, GsCorner c1, GsCorner c2, ivec2 scale, out ivec4 w0, out ivec4 w1) {
     w0 = ivec4(0);
     w1 = ivec4(0);
     ivec2 most = max(max(abs(c0.xy), abs(c1.xy)), abs(c2.xy));
     if (max(most.x, most.y) > PCR_PLANE_MOST) {
         return;
     }
-    i64vec2 m = i64vec2(scale) * (msaa ? 2l : 1l);
+    i64vec2 m = i64vec2(scale);
     i64vec2 p0 = i64vec2(c0.xy) * m, p1 = i64vec2(c1.xy) * m, p2 = i64vec2(c2.xy) * m;
-    PzFixed f = plane_fixed(msaa ? 32l : 16l, msaa ? 16l : 0l, p0.x, p0.y, pcr_plane_z_of(c0), p1.x, p1.y,
-                            pcr_plane_z_of(c1), p2.x, p2.y, pcr_plane_z_of(c2));
+    PzFixed f = plane_fixed(16l, 0l, p0.x, p0.y, pcr_plane_z_of(c0), p1.x, p1.y, pcr_plane_z_of(c1), p2.x, p2.y,
+                            pcr_plane_z_of(c2));
     if (!f.on) {
         return;
     }
     // (the least pixel the triangle covers less one, -1 at least: pz_pixels)
-    int64_t step = msaa ? 32l : 16l, first = msaa ? 16l : 0l;
+    int64_t step = 16l, first = 0l;
     i64vec2 least = min(min(p0, p1), p2) - first;
     least = i64vec2(least.x >= 0l ? least.x / step : -((-least.x + step - 1l) / step),
                     least.y >= 0l ? least.y / step : -((-least.y + step - 1l) / step)) - 1l;
@@ -142,7 +141,7 @@ void pcr_plane_of_draw() {
 #ifdef PCR_EXACT_Z
 // (a GS primitive's) The triangle's plane handed down, from its corners as each is drawn
 void pcr_plane(GsCorner c0, GsCorner c1, GsCorner c2) {
-    pcr_plane_words(c0, c1, c2, pc.src_scale, (pc.flags & PCR_F_MSAA) != 0u, v_plane0, v_plane1);
+    pcr_plane_words(c0, c1, c2, pc.src_scale, v_plane0, v_plane1);
 }
 #else
 // (the variants without exact Z: the GPU may have no 64-bit integers)
@@ -159,8 +158,7 @@ layout(location = 14) flat in ivec4 v_plane1;
 #include "plane_z.h"
 
 // The Z of the triangle's plane at this pixel, whole and clamped to 0..zmax, and its fine part (plane_z.h's
-// pz_fine_bits); false: the triangle has no plane (pcr_plane_none). (The pixel's, even in the shaders run once a
-// sample.)
+// pz_fine_bits); false: the triangle has no plane (pcr_plane_none). (The pixel's.)
 bool pcr_plane_z(out uint z, out uint fine) {
     z = 0u;
     fine = 0u;

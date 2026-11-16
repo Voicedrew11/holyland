@@ -1,8 +1,8 @@
 # Granite (third_party/parallel-gs/Granite) with a render pass's samples in its hash. Device::request_render_pass hashes
 # the attachments' formats but not their samples, so a multisampled pass was given the single-sampled pass of the same
-# formats made before it (or the other way round), and its pipelines the wrong sample count. The PC renderer draws
-# into both (MSAA: a surface's multisampled image, and the passes that are not), so each attachment's samples are
-# hashed too. Made as cmake/granite_depth_bounds.cmake makes its edits (kf4_granite_edit). Run after
+# formats made before it (or the other way round), and its pipelines the wrong sample count. The PC renderer drew
+# into both while it had MSAA (removed 2026-11-16), so each attachment's samples are hashed too; kept as a fix to
+# Granite, harmless with every pass at one sample. Made as cmake/granite_depth_bounds.cmake makes its edits (kf4_granite_edit). Run after
 # kf4_granite_pipeline_warm.
 function(kf4_granite_msaa granite)
     set(dev ${granite}/vulkan/device.cpp)

@@ -148,7 +148,6 @@ void pcr_take_record() {
 #define PCR_F_DATM 0x10000u
 #define PCR_F_SHADER_BLEND 0x20000u // ALPHA's (A - B) * C + D here, from u_dest (a blend with no Vulkan form)
 #define PCR_F_SURFACE_CT16 0x40000u // (PCR_SRC_SURFACE) a 16-bit surface's texture: 5 bits a colour, TEXA's alphas
-#define PCR_F_MSAA 0x80000u        // the target is multisampled (gs_to_clip)
 #define PCR_F_SMOOTH_2D 0x100000u  // the 2D mode's smooth: the 2D's magnified textures read with a cubic (pcr_prim.h)
 #define PCR_F_DECAL 0x400000u      // a decal (pcr_canvas.cpp's is_decal): exact Z's top fine part (pcr_prim.h), the trace's mark, the decal losses
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
@@ -238,20 +237,11 @@ float pcr_depth_h(float zh, float w, uint zref) {
 // own point and a primitive covers the same GS pixels at any scale. (Moved half a GS pixel, as at 1x, a 4x primitive
 // was drawn half a GS pixel up and left: a target drawn whole kept its first two columns and rows undrawn, and a
 // 128-wide texture the game draws, repeated over a floor, showed lines where it repeats; 2026-11-08.)
-// With MSAA (PCR_F_MSAA) a pixel is its samples' area, not its middle: nothing moves, so a GS pixel is its scale's
-// pixels whole (from its integer point to the next) and a primitive on whole GS pixels covers every sample of them (moved
-// half a target pixel, a sprite's edge cut each pixel on it in two: half its samples drawn, a line at every edge).
 vec2 gs_to_clip(vec2 xy) {
-    if ((pc.flags & PCR_F_MSAA) != 0u) {
-        return xy * pc.inv_size * 2.0 - 1.0;
-    }
     return (xy + 0.5 / vec2(pc.src_scale)) * pc.inv_size * 2.0 - 1.0;
 }
 
 // gs_to_clip for a place given times w (xy_h = xy w): Vulkan's clip x and y (its w is w)
 vec2 gs_to_clip_h(vec2 xy_h, float w) {
-    if ((pc.flags & PCR_F_MSAA) != 0u) {
-        return xy_h * pc.inv_size * 2.0 - w;
-    }
     return (xy_h + w * (0.5 / vec2(pc.src_scale))) * pc.inv_size * 2.0 - w;
 }

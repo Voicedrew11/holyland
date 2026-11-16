@@ -44,11 +44,10 @@ typedef struct {
        instead of 640 columns stretched. Off by default; live from the overlay. */
     int native_widescreen;
     int native_widescreen_forced;
-    /* --native-msaa: the renderer draws the 3D with this many samples a pixel (1, the default: none,
-       the PS2's picture; 2, 4 or 8), its edges smoothed. Live from the overlay (but for a change from
-       one count to another, which takes a restart). */
-    int native_msaa;
-    int native_msaa_forced;
+    /* --antialias: the picture's anti-aliasing (PORT_AA_*, port/antialias.h: off, the default without a
+       settings.json, or fxaa). Live from the overlay. */
+    int antialias;
+    int antialias_forced;
     /* --native-lod: the mipmap level the renderer reads a texture at (GSN_LOD_*, gsn.h:
        0 ps2, the GS's own, picked for 640x448; 1 scale, the default, finer by log2 of --native-scale,
        which at 1x is the GS's own; 2 full, level 0 at every distance). Live from the overlay. */
@@ -58,11 +57,6 @@ typedef struct {
        a pixel's footprint (1, off, the default; 2, 4, 8, 16; pcr_set_aniso) */
     int native_aniso;
     int native_aniso_forced;
-    /* --native-cutout-aa: with MSAA, the renderer's cut-outs (netting, foliage, fences, grates: textures
-       see-through in places) shaded at every sample (GSN_CUTOUT_AA_*, gsn.h: 0 off, 1
-       ssaa, the default). Nothing without MSAA. Live from the overlay. */
-    int native_cutout_aa;
-    int native_cutout_aa_forced;
     /* --native-2d: at a --native-scale above 1, the 2D's textures read nearest by the game (the font,
        the HUD, the menus' and title's pictures) read bilinear where magnified (GSN_2D_*,
        gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
@@ -378,15 +372,12 @@ int port_video_picture_height(void);
 /* The renderer's scale across: native_scale, or with --native-widescreen (and widescreen on) the
    smallest whole number at least 4/3 of it */
 int port_gs_native_scale_x(void);
-/* The renderer's MSAA (port_options.native_msaa), from the next vblank; returns the count the GPU
-   gives (see pcr_set_msaa) */
-int port_gs_set_native_msaa(int samples);
+/* The picture's anti-aliasing (port_options.antialias: PORT_AA_*), from the next picture */
+void port_gs_set_antialias(int method);
 /* The renderer's mipmap levels (port_options.native_lod), from the next draw */
 void port_gs_set_native_lod(int mode);
 /* The renderer's anisotropic filtering (port_options.native_aniso: 1 off, 2 to 16), from the next draw */
 void port_gs_set_native_aniso(int taps);
-/* The renderer's cut-outs with MSAA (port_options.native_cutout_aa), from the next draw */
-void port_gs_set_native_cutout_aa(int mode);
 /* The renderer's 2D at a larger scale (port_options.native_2d), from the next draw */
 void port_gs_set_native_2d(int mode);
 /* The renderer's Z (port_options.native_layer_z), from the next draw */
