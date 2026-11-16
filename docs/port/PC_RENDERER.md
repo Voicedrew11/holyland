@@ -103,6 +103,64 @@ and a GPU without the interlock, where exact Z falls back to the plain programs:
 `VK_EXT_fragment_shader_interlock`, RDNA4 there would draw that way at MSAA (untested). A change that takes draws off the
 rule (the flat 2D sprites, PC_OPTIMIZATION.md) must draw them without the shader's depth, as the plain program does.
 
+How the reproducer is run: apply `~/.cache/kf4hang/hang_repro_switches.patch` (not in the tree), then
+`KF4_PC_FLAT_HW=1 ~/.cache/kf4opt/run.sh LABEL 12 9:0` in a real window with the owner's settings, a few seconds
+between runs; Granite's post-mortems land in `~/.cache/kf4hang/pm/` (`GRANITE_VULKAN_POST_MORTEM=1`, set by run.sh).
+The other switches in the patch: `KF4_PC_FLAT_PLAIN` (the shader's depth not written), `KF4_PC_FLAT_NOZTEST` (the test
+off), `KF4_PC_FLAT_NOEARLY`, `KF4_PC_DEPTH_TALL`; MSAA 1 from a copy of the settings (`DATA=` for run.sh).
+
+**It is legitimate Vulkan.** Writing `gl_FragDepth` with the depth test on into a multisampled target is ordinary API
+use, and the validation layers (sync validation, GPU-AV) are clean on that path. A valid program must never hang the
+GPU: the fault is the driver's or the chip's, not the port's. What goes wrong inside is not known: that needs the
+waves' state at the hang (boot with `amdgpu.gpu_recovery=0` so the card stays stopped rather than reset, and read it
+with `umr`), or AMD. What the evidence fits:
+
+- When the shader writes the depth, the depth block cannot test before the shader runs (early Z); it tests the
+  shader's result after ("late Z"), and must still apply overlapping pixels in draw order. It holds the pixels shaded
+  but not yet tested, for the same places. Four whole-target sprites stacked on a target 128 GS pixels wide put very
+  many of them on the same few tiles at once, and 2 samples double what is held for each. A circular wait would fit:
+  the pixel launch waiting for the depth block to free room, the depth block waiting for exports from waves not
+  launched. The devcoredumps of 2026-11-15 fit it: the rasteriser, the pixel launch and the depth block busy, the
+  colour block idle, no texture reads, no fault. It hanging in some runs and not others fits a race.
+- Each change that stopped it takes away a part of that: the test off, the depth block orders nothing; the shader's
+  depth not written, early Z again; MSAA 1, half the state a pixel; the interlock, overlapping pixels held back before
+  the shader's critical section, so they never pile up at the depth block.
+- Other games seldom meet it: few use MSAA (TAA instead) and fewer write the depth in the shader at almost every draw.
+  The port does both, for the PS2's exact Z.
+
+Where the fault may lie, most likely first (none proven):
+
+1. **RADV programs the depth block wrongly for this case.** RDNA4 (GFX12) is new and its workarounds are still being
+   found (RADV's "HiZ/HiS is buggy and can cause random GPU hangs"; "GFX12 seems to require a dummy FS state otherwise
+   it might just hang"). One difference in exactly this area: radeonsi (Mesa's OpenGL) sets `DB_RENDER_CONTROL.OREO_MODE`
+   by whether the pixel shader exports Z (`si_emit_db_render_state`); RADV 26.2.6 never sets it (left 0). Whether that is
+   it is not known.
+2. **An erratum of the chip's late-Z ordering at MSAA.** Its neighbours have errata in the same place, each worked
+   around by Mesa: GFX11 hangs with blending at 1 sample (`has_export_conflict_bug`), Vega's interlock misses overlaps
+   at 8 samples (`has_pops_missed_overlap_bug`), GFX12's HiZ.
+3. **RDNA4's depth compression** with one depth written for both samples of a pixel. HiZ off (`RADV_DEBUG=nohiz`)
+   did not stop it, but HiZ is only part of the compression.
+
+Tests that would decide between them: the reproducer on AMD's own Vulkan driver (AMDVLK; installs beside RADV, picked
+with `AMD_VULKAN_ICD=AMDVLK`): no hang, RADV's (1 or 3); a hang, the chip's (2). And the depth images made with
+compression off (`VK_EXT_image_compression_control`, `VK_IMAGE_COMPRESSION_DISABLED_EXT`): no hang, 3. Either way it is
+worth a Mesa issue (gitlab.freedesktop.org/mesa/mesa) with the reproducer.
+
+**At MSAA 1.** 0 hangs in 8 runs of the reproducer; at MSAA 2's rate (about 4 in 10) 8 clean runs by chance is 1-2%.
+Every hang with a post-mortem was at MSAA 2 (the owner's setting); none is known at 1. So 1 is very likely clear, not
+proven: 20 more clean runs would make a hang at even a tenth of MSAA 2's rate unlikely. `draw_batch`'s guard acts only
+at MSAA above 1; at 1 the draws are as before.
+
+**MSAA's cost to the port, for a decision on keeping it** (the owner, 2026-11-16, considers removing it). Besides this
+hang it brings: a second image for every colour surface, filled from the first before it is drawn (`ensure_ms`,
+`expand`) and resolved before it is read (`resolve`, `copy_out`); per-sample shaders for the cut-outs (cut-out AA) and
+per-sample interlock for the depth rule; the depth rule's copy a layer a sample; about twice the memory for the
+surfaces at 4x (2026-11-13: the frame buffers' surface 342 MB with its two-sample image; each depth surface about
+140 MB); the GPU time of 2 samples at 4x (009 is fill bound there, measure-by-knock-out). At 4x scale the picture is
+already drawn at 6x4 the GS's and scaled down to the screen, which smooths edges much as MSAA does; what MSAA adds
+over that has not been measured (a picture compare at 4x, MSAA 1 against 2, would show it). With MSAA removed, the guard
+and the depth rule's sample variants go too.
+
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
 The pump's canvas now hands the images it lets go back, and the next copies are made into them
