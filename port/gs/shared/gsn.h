@@ -36,9 +36,6 @@
 #define GSN_LOD_PS2 0
 #define GSN_LOD_SCALE 1
 #define GSN_LOD_FULL 2
-/* Cut-out edges (pcr_set_cutout_aa): shaded once a pixel (GSN_CUTOUT_AA_OFF), or at every sample (GSN_CUTOUT_AA_SSAA) */
-#define GSN_CUTOUT_AA_OFF 0
-#define GSN_CUTOUT_AA_SSAA 1
 /* 2D textured from VRAM at a scale above 1 (pcr_set_2d): read nearest at the PS2's pixels, or bilinear (smooth) */
 #define GSN_2D_PS2 0
 #define GSN_2D_SMOOTH 1
@@ -135,6 +132,9 @@ typedef struct {
     uint64_t serial;       /* the frame's: the pictures say which they are of */
     float screen[2][5];    /* the world's projection and the reflection's: sx, sy, cx, cy, cz */
     float move0[12], mid0[12]; /* GsnInterpPicture's move and mid at t 0 (the camera of the frame shown) */
+    float mid1[12];        /* ... mid at t 1: this frame's own camera, the world to its view (the temporal
+                              anti-aliasing's motion for the pictures of the frame itself) */
+    float world_az;        /* the world's projection's az (Z = cz + az / z; screen[0] has the rest) */
     uint32_t kicks;        /* the vertex kicks in the stream: moves has one for each */
     uint32_t runs;         /* the runs (model parts) the moves name */
     uint32_t still;        /* 1: the camera of the frame shown is this frame's, bit for bit (every picture between is
@@ -161,6 +161,9 @@ typedef struct {
                           translation */
     float mid[12];     /* the world to the picture's view: rows of the rotation (and the translation) */
     float t;           /* 0 the frame shown, 1 the frame drawn */
+    float screen[6];   /* the world's projection: sx, sy, cx, cy, cz, az (X = sx x / z + cx, Y = sy y / z + cy,
+                          Z = cz + az / z, from the view mid gives); the temporal anti-aliasing's motion from the
+                          depth (port/gs/pc/pcr_antialias.h) */
     double hand_yaw_rad, hand_pitch_rad; /* the mouse's hand its camera was turned to (port/include/port/mouse_lead.h): a
                           renderer turns it on by what the hand has moved since, as it draws it */
     double shown_s;    /* when the window shows it (port_wall_seconds; 0: not known): the mouse's hand is taken a steady

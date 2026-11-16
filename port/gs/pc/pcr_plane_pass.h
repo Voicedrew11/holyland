@@ -27,9 +27,8 @@ struct PlaneEntry {
     uint32_t triangle; // its triangle in the program's triangles
     uint32_t instance; // its draw's instance (gl_InstanceIndex to the program's vertex shader)
     uint32_t place;    // the frame's place in its surface, GS pixels: X bits 0-15, Y 16-31
-    uint32_t scale;    // the target's scale: X bits 0-7, Y 8-15; plane_entry_msaa where it is multisampled
+    uint32_t scale;    // the target's scale: X bits 0-7, Y 8-15
 };
-constexpr uint32_t plane_entry_msaa = 0x10000u;
 
 // The buffers a native program's plane pass reads: its vertex shader's (the canvas's bind_between)
 struct PlaneSources {

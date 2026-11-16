@@ -36,6 +36,7 @@
 #endif
 
 #include "context.hpp"
+#include "pcr_antialias.h"
 #include "pcr_between.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
@@ -572,7 +573,7 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
 // ---- The settings: kept for the steps that draw -------------------------------------------------------
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
-    std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, msaa{1}, cutout_aa{GSN_CUTOUT_AA_OFF}, mode_2d{GSN_2D_PS2},
+    std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, mode_2d{GSN_2D_PS2}, antialias{PORT_AA_OFF},
         layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
@@ -852,18 +853,18 @@ public:
         front_.feed(path, bytes);
     }
 
-    // A state loaded: no stretch kept from before it
+    // A state loaded: no stretch kept from before it, nor the temporal anti-aliasing's history
     void forget() {
+        pcr_antialias_cut();
         drop_stretch();
         last_stretch_.reset();
         in_replay_ = false;
         since_vblank_bytes_ = 0;
     }
 
-    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); samples and
-    // cutout_aa: MSAA's (Canvas::set_msaa); mode_2d: Canvas::set_2d's
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, uint32_t samples, bool cutout_aa,
-                int mode_2d) {
+    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d:
+    // Canvas::set_2d's
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
@@ -872,7 +873,6 @@ public:
         if (canvas_) {
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->set_sampling(lod, uint32_t(aniso));
-            canvas_->set_msaa(samples, cutout_aa);
             canvas_->set_2d(mode_2d);
             canvas_->vblank();
             ZoneScope collect_zone(gpu_times_collected_zone);
@@ -1254,9 +1254,58 @@ class PictureOut {
 public:
     // hang_notes: its submits' notes and waits (pcr_hang_notes.h); who: its thread, a name that outlives this
     PictureOut(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
-               pcr::HangNotes &hang_notes, const char *who)
+               pcr::HangNotes &hang_notes, pcr::AntiAliasHistory &history, const char *who)
         : device_(device), scanout_(scanout), presenter_(presenter), stats_(stats), clear_(clear), scaler_(device),
-          hang_notes_(hang_notes), who_(who) {}
+          antialiasing_(device, history), history_(history), hang_notes_(hang_notes), who_(who) {}
+
+    // (this one's thread, as canvas begins a drawing a picture will show: a picture between's, between; the game's
+    // frame, nullptr) Its 3D jittered as the temporal anti-aliasing wants (none when it is not wanted), and what the
+    // pictures that show it are kept for them (the canvas stamps the buffers it draws into with its number)
+    void begin_drawing(pcr::Canvas *canvas, const GsnInterpPicture *between) {
+        pcr::JitterSequence sequence = history_.wanted()
+                                           ? antialiasing_.jitter_of(settings().antialias.load(std::memory_order_relaxed))
+                                           : pcr::JitterSequence::none;
+        pcr::AntiAliasHistory::Drawn d =
+            between ? history_.next_drawing(sequence) : history_.drawing_in_step(sequence);
+        Drawing &drawing = drawings_[d.number % drawings_.size()];
+        drawing = {d.number, {}};
+        drawing.facts.jitter = d.jitter;
+        drawing.facts.jitter_index = d.index;
+        if (between) {
+            drawing.facts.camera.known = true;
+            std::copy(std::begin(between->mid), std::end(between->mid), drawing.facts.camera.world_to_view.begin());
+            std::copy(std::begin(between->screen), std::end(between->screen), drawing.facts.camera.screen.begin());
+            drawing.facts.frame = between->serial;
+        } else {
+            frame_drawing_ = drawing; // (the game's frame: resume_frame_drawing goes back to it)
+        }
+        if (canvas) {
+            canvas->begin_drawing(drawing.number, d.jitter);
+        }
+    }
+
+    // (kf4-pc, as frame_interp.c hands over a game frame: after its packets were drawn) The frame's drawing given the
+    // frame's own camera (its pictures, the vblanks' own, have it then), and the next frame's drawing begun on canvas.
+    // (Frames are drawn at a frame's boundary, not a vblank's, so that one frame's 3D has one jitter.)
+    void frame_taken(pcr::Canvas *canvas, const GsnInterpFrame &frame) {
+        Drawing &d = drawings_[frame_drawing_.number % drawings_.size()];
+        if (frame_drawing_.number != 0 && d.number == frame_drawing_.number) {
+            pcr::PictureFacts &f = d.facts;
+            f.camera.known = true;
+            std::copy(std::begin(frame.mid1), std::end(frame.mid1), f.camera.world_to_view.begin());
+            std::copy(std::begin(frame.screen[0]), std::end(frame.screen[0]), f.camera.screen.begin());
+            f.camera.screen[5] = frame.world_az;
+            f.frame = frame.serial;
+        }
+        begin_drawing(canvas, nullptr);
+    }
+
+    // (kf4-pc, after a picture between it walked or gave to the pump) canvas back on the game's frame's drawing
+    void resume_frame_drawing(pcr::Canvas *canvas) {
+        if (canvas) {
+            canvas->begin_drawing(frame_drawing_.number, frame_drawing_.facts.jitter);
+        }
+    }
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
@@ -1395,19 +1444,59 @@ private:
                     VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         GsnRect rect;
         bool shown = false;
+        pcr::ShownRect shown_rect;
         if (canvas && display_rect(v.privileged.data(), rect)) {
             uint64_t smode2 = v.privileged[2 * 2];
             bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
-            pcr::ShownRect shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
-                                         uint32_t(field_doubled && v.field == LOWER_FIELD)};
+            shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
+                          uint32_t(field_doubled && v.field == LOWER_FIELD)};
             shown = canvas->scanout(cmd, shown_rect, *picture_);
         }
         if (!shown) {
             cmd.clear_image(*picture_, clear_.value);
+        } else {
+            // (the picture's anti-aliasing, at the canvas's scale: pcr_antialias.h; with its depth and place when the
+            // temporal inputs are wanted)
+            pcr::PicturePlace place;
+            pcr::PictureFacts facts;
+            if (history_.wanted()) {
+                ShownPicture shown_picture = picture_place(cmd, *canvas, shown_rect);
+                place = shown_picture.place;
+                facts = facts_of(shown_picture.drawing);
+            }
+            antialiasing_.apply(cmd, *picture_, settings().antialias.load(std::memory_order_relaxed), facts, place);
         }
         cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                     VK_ACCESS_2_TRANSFER_READ_BIT);
         return true;
+    }
+
+    // (the temporal anti-aliasing's inputs) Where the picture shown from rect is on the GS's screen, its depth copied
+    // for it (place.zscale 0: none), and the drawing whose 3D it shows (0: none)
+    struct ShownPicture {
+        pcr::PicturePlace place;
+        uint64_t drawing = 0;
+    };
+    ShownPicture picture_place(CommandBuffer &cmd, pcr::Canvas &canvas, const pcr::ShownRect &rect) {
+        ShownPicture shown;
+        pcr::PicturePlace &place = shown.place;
+        uint32_t w = picture_->get_width(), h = picture_->get_height();
+        if (rect.w == 0 || rect.h == 0) {
+            return shown;
+        }
+        place.scale = {float(w) / float(rect.w), float(h) / float(rect.h)};
+        const Image *depth = antialiasing_.depth_image(w, h);
+        std::optional<pcr::Canvas::ShownDepth> d;
+        if (depth) {
+            d = canvas.scanout_depth(cmd, rect, *depth);
+        }
+        if (d) {
+            place.zscale = d->zscale;
+            place.origin = {d->xyoffset[0] + float(rect.x), d->xyoffset[1] + float(rect.y)};
+            place.known = true;
+            shown.drawing = d->drawing;
+        }
+        return shown;
     }
 
     // The picture scaled to the window's size into the slot's scaled image (PresentScaler), when the presenter asks for
@@ -1519,6 +1608,21 @@ private:
     Stats &stats_;
     const ClearColour &clear_;
     PresentScaler scaler_;
+    pcr::AntiAliasing antialiasing_;
+    pcr::AntiAliasHistory &history_; // (both threads')
+    // (the temporal anti-aliasing) The last drawings begun (begin_drawing), by their number, and the game frame's
+    struct Drawing {
+        uint64_t number = 0;
+        pcr::PictureFacts facts;
+    };
+    std::array<Drawing, 8> drawings_{};
+    Drawing frame_drawing_;
+
+    // The facts of drawing number (none known when it is not one of the last drawings_)
+    pcr::PictureFacts facts_of(uint64_t number) const {
+        const Drawing &d = drawings_[number % drawings_.size()];
+        return number != 0 && d.number == number ? d.facts : pcr::PictureFacts{};
+    }
     pcr::HangNotes &hang_notes_;
     const char *who_;
     std::array<Fence, PICTURES_FENCED> fences_; // (submit_now's, the last PICTURES_FENCED pictures')
@@ -1552,9 +1656,9 @@ using PumpMessage = std::variant<PumpFrame, InterpPicture, PumpPicture, MadePict
 class Pump {
 public:
     Pump(Device &device, ScanoutRing &scanout, PresenterHooks &presenter, Stats &stats, const ClearColour &clear,
-         Inbox &inbox, SharedTurnLead &turn_lead, pcr::HangNotes &hang_notes)
+         Inbox &inbox, SharedTurnLead &turn_lead, pcr::HangNotes &hang_notes, pcr::AntiAliasHistory &history)
         : device_(device), inbox_(inbox), turn_lead_(turn_lead), hang_notes_(hang_notes),
-          out_(device, scanout, presenter, stats, clear, hang_notes, "kf4-pc-pump") {
+          out_(device, scanout, presenter, stats, clear, hang_notes, history, "kf4-pc-pump") {
         const char *in_flight = getenv("KF4_PC_PUMP_IN_FLIGHT");
         if (in_flight && *in_flight) {
             in_flight_ = unsigned(strtoul(in_flight, nullptr, 10));
@@ -1752,6 +1856,7 @@ private:
         turned_before(turn_lead_, turn_to_hand(p.picture, turn_lead_));
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
+        out_.begin_drawing(canvas_.get(), &p.picture);
         if (walk_ && begin_picture_again(p.picture)) {
             canvas_->draw_again_alone(*walk_, *between_, picture_next());
             between_->end_picture_again();
@@ -1871,16 +1976,14 @@ public:
         gpu_kind_ = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GSN_GPU_DISCRETE
                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GSN_GPU_INTEGRATED
                                                                                  : GSN_GPU_OTHER;
-        msaa_samples_have_ = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
-                             props.limits.sampledImageDepthSampleCounts;
-        out_.emplace(*device_, scanout_, presenter_, stats, clear_, hang_notes_, "kf4-pc");
+        out_.emplace(*device_, scanout_, presenter_, stats, clear_, hang_notes_, aa_history_, "kf4-pc");
         const char *watch = getenv("KF4_PC_HANG_WATCH");
         if (!(watch && strcmp(watch, "0") == 0)) {
             hang_watch_ = std::make_unique<pcr::HangWatch>(hang_notes_, hang_folder, pcr::HANG_SECONDS);
         }
         if (pump_wanted()) {
             pump_ = std::make_unique<Pump>(*device_, scanout_, presenter_, stats, clear_, inbox_, turn_lead_,
-                                           hang_notes_);
+                                           hang_notes_, aa_history_);
             pump_->start();
             const char *direct = getenv("KF4_PC_DIRECT");
             direct_on_ = !(direct && strcmp(direct, "0") == 0);
@@ -2066,10 +2169,6 @@ public:
         return gpu_kind_;
     }
 
-    uint32_t msaa_samples_have() const {
-        return msaa_samples_have_;
-    }
-
     uint32_t clear_rgba() const {
         return clear_.rgba;
     }
@@ -2211,6 +2310,7 @@ private:
             } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
                 direct_serial_.store(0, std::memory_order_release); // (a new frame: its walk not the pump's yet)
+                out_->frame_taken(intake_.canvas(), **frame);
                 intake_.take_frame(std::move(*frame));
                 intake_times.frame_taken(IntakeTimes::Clock::now());
                 inbox_.done(0);
@@ -2235,7 +2335,6 @@ private:
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           uint32_t(settings.msaa.load()), settings.cutout_aa.load() != GSN_CUTOUT_AA_OFF,
                            settings.mode_2d.load());
         }
         uint32_t scale = picture_scale_;
@@ -2262,6 +2361,11 @@ private:
         }
         if (!extra) {
             pay_frame_contexts(); // (the canvas submitted at the vblank)
+        }
+        if (aa_history_.wanted() && pump_ && !pump_->idle()) {
+            // (the temporal anti-aliasing's history is in the order pictures are made: made after the pump's before it,
+            // as it is handed out after them)
+            pump_->wait_idle();
         }
         MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
         if (extra) {
@@ -2365,8 +2469,13 @@ private:
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
+        out_->begin_drawing(intake_.canvas(), &p.picture); // (drawn here unless it goes to the pump, which begins its own)
         std::optional<Intake::ForPump> for_pump = intake_.walk_picture(p.picture);
         shows_pumped_ = for_pump.has_value();
+        if (for_pump) {
+            aa_history_.drawing_not_made();
+        }
+        out_->resume_frame_drawing(intake_.canvas());
         if (!for_pump) {
             direct_serial_.store(0, std::memory_order_release);
             turned_before(turn_lead_, before_s); // (drawn here: this turn was its last)
@@ -2395,9 +2504,9 @@ private:
     std::unique_ptr<Context> context_; // (before the device: destroyed after it)
     std::unique_ptr<Device> device_;
     int gpu_kind_ = GSN_GPU_OTHER;
-    uint32_t msaa_samples_have_ = 1;
     ClearColour clear_ = clear_colour();
     Inbox inbox_;
+    pcr::AntiAliasHistory aa_history_; // (before the pictures' makers, which hold it)
     ScanoutRing scanout_;
     PresenterHooks presenter_;
     Intake intake_; // (the PC renderer's thread's)
@@ -2591,23 +2700,12 @@ extern "C" int pcr_set_aniso(int taps) {
     return 1 << l;
 }
 
-extern "C" int pcr_set_msaa(int samples) {
-    // the most this GPU has up to `samples` (colour and depth attachments both, and depth read in a shader)
-    uint32_t have = renderer() ? renderer()->msaa_samples_have() : 1;
-    uint32_t n = 1;
-    while (n * 2 <= uint32_t(samples) && n < 8 && (have & (n * 2))) {
-        n *= 2;
-    }
-    settings().msaa.store(int(n));
-    return int(n);
-}
-
-extern "C" void pcr_set_cutout_aa(int mode) {
-    settings().cutout_aa.store(mode);
-}
-
 extern "C" void pcr_set_2d(int mode) {
     settings().mode_2d.store(mode);
+}
+
+extern "C" void pcr_set_antialias(int method) {
+    settings().antialias.store(port_antialias(method) ? method : PORT_AA_OFF);
 }
 
 extern "C" void pcr_set_layer_z(int mode) {
@@ -2629,10 +2727,9 @@ extern "C" void pcr_pipeline_cache(const char *path) {
     }
 }
 
-// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile), for the
-// settings now
+// (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile)
 extern "C" void pcr_precompile(void) {
-    pcr::precompile(uint32_t(settings().msaa.load()));
+    pcr::precompile();
 }
 
 // The game waits while they are made (port/platform/kernel.c)

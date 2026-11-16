@@ -5,7 +5,7 @@ and by paraLLEl-GS with kf4-gsreplay, and compared frame by frame (tools/README.
     python3 tools/replay_compare.py CAPTURE.kf4gs --out DIR [--pc "SETTINGS"] [--decal-losses] [--worst N]
         [--gsreplay out/linux-clang/kf4-gsreplay]
 
---pc: kf4-gsreplay's options for the PC renderer's settings (the player's: --scale, --msaa, ...).
+--pc: kf4-gsreplay's options for the PC renderer's settings (the player's: --scale, --aniso, ...).
 Each frame's PC picture is averaged down to the GS's size (a box per GS pixel) and compared with paraLLEl-GS's: the
 mean difference, and the GS pixels that differ by more than 32 and 64 (of 255). A frame far from its neighbours is
 what shows in some frames only. --decal-losses draws the PC frames again with kf4-gsreplay --decal-losses, and counts

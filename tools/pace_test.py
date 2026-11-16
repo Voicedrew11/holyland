@@ -33,7 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAD = os.path.join(ROOT, "tests", "newgame.pad")
 TELEPORT = 1900
 OWNER = ["--native-draw", "on", "--native-scale", "4", "--widescreen", "--native-widescreen",
-         "--native-msaa", "1", "--native-aniso", "16", "--native-cutout-aa", "ssaa", "--present-scaling", "best",
+         "--antialias", "fxaa", "--native-aniso", "16", "--present-scaling", "best",
          "--present-sharpen", "1"]
 
 

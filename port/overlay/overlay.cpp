@@ -34,6 +34,7 @@
 #include "profiler.h"     // Shift+P
 
 extern "C" {
+#include "port/antialias.h"
 #include "port/adaptive_sync.h"
 #include "port/audio.h"
 #include "port/automap.h"
@@ -251,15 +252,19 @@ void scaling_controls() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
-    if (port_options.renderer == PORT_RENDERER_GS)
-        return;
+}
+
+// Beside anti-aliasing (graphics_page): the presenter's sharpening, after the picture is scaled to the window
+void sharpen_slider() {
+    PortSettings &s = port_settings;
     float sharpen = s.sharpen;
     if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, sharpen > 0 ? "%.2f" : "off")) {
         s.sharpen = sharpen < 0.02f ? 0.0f : sharpen;
         changed();
     }
-    tooltip("Contrast-adaptive sharpening after the scaling: fine detail crisper, hard edges left\n"
-            "alone. 0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
+    tooltip("Contrast-adaptive sharpening after the scaling to the window (so after anti-aliasing): fine\n"
+            "detail crisper, hard edges left alone. Brings back some of the texture detail FXAA softens.\n"
+            "0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
 }
 
 void frame_rate_combo() {
@@ -451,17 +456,23 @@ void graphics_page() {
                 "1x is the PS2's picture. Auto (the default, all the way left): the multiple of 448 lines\n"
                 "nearest the height the window shows the picture at (1080: 2x, 1440: 3x, 2160: 4x), at most\n"
                 "2x on an integrated GPU. Applies from the next picture. (--native-scale auto|1-4)");
-        static const char *const msaa_names[] = {"Off", "2x", "4x", "8x"};
-        int msaa_at = s.native_msaa >= 8 ? 3 : s.native_msaa >= 4 ? 2 : s.native_msaa >= 2 ? 1 : 0;
-        if (ImGui::Combo("Anti-aliasing (MSAA)", &msaa_at, msaa_names, 4))
-            port_live_set(PORT_LIVE_MSAA, 1 << msaa_at);
-        tooltip("Smooths the edges of what the game draws, see-through cut-outs (netting, foliage, fences)\n"
-                "included. Off is the PS2's picture. Costs GPU time, more with a higher resolution. Applies\n"
-                "from the next picture. (--native-msaa 1|2|4|8)");
-        if (s.native_msaa != port_options.native_msaa)
-            ImGui::TextDisabled("This GPU has at most %s", port_options.native_msaa > 1
-                                                                ? msaa_names[port_options.native_msaa >= 8 ? 3 : port_options.native_msaa >= 4 ? 2 : 1]
-                                                                : "none");
+        const char *aa_labels[PORT_AA_COUNT];
+        for (int m = 0; m < PORT_AA_COUNT; m++)
+            aa_labels[m] = port_antialias(m)->label;
+        int aa = port_options.antialias;
+        if (ImGui::Combo("Anti-aliasing", &aa, aa_labels, PORT_AA_COUNT))
+            port_live_set(PORT_LIVE_ANTIALIAS, aa);
+        tooltip("Smooths the stair-steps along edges, on the finished picture at the resolution above, before\n"
+                "it is scaled to the window. FXAA: cheap, but it softens fine detail and the 2D (text, the HUD)\n"
+                "a little too. SMAA: finds edges by their shape, softens less, costs a little more.\n"
+                "SMAA T2x: SMAA on two pictures drawn half a pixel apart, the last one moved to where things are\n"
+                "now: steadier thin edges in motion. Off is the picture as drawn. Applies from the next picture.\n"
+                "(--antialias off|fxaa|smaa|smaa_t2x)");
+        if (port_options.antialias != s.antialias) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+        sharpen_slider();
         texture_quality_combo();
     }
 

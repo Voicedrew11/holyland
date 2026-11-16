@@ -8,8 +8,8 @@
                     "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "frame_rate_cap": 0, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
-                    "native_scale": "auto", "native_widescreen": true, "native_msaa": 1, "native_lod": "scale", "native_aniso": 1,
-                    "native_cutout_aa": "ssaa", "native_2d": "smooth",
+                    "native_scale": "auto", "native_widescreen": true, "antialias": "fxaa", "native_lod": "scale",
+                    "native_aniso": 1, "native_2d": "smooth",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
                     "reflection_clip": true,
                     "presenter": "vulkan"},
@@ -50,6 +50,7 @@
 #endif
 
 #include "cJSON.h"
+#include "port/antialias.h"
 #include "port/audio.h"
 #include "port/automap.h"
 #include "port/weapon_sets.h"
@@ -80,7 +81,7 @@ PortSettings port_settings = {
     .native_scale = 0, /* auto */
     .native_widescreen = 1,
     .native_aniso = 1,
-    .native_cutout_aa = 1, /* GSN_CUTOUT_AA_SSAA */
+    .antialias = PORT_AA_FXAA,
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
@@ -381,20 +382,20 @@ void port_settings_load(void) {
         s->native_widescreen = 1; /* (as above) */
         migrated = 1;
     }
-    s->native_msaa = (int)read_number(display, "native_msaa", s->native_msaa, 1, 8);
+    {
+        /* (native_msaa and native_cutout_aa, of the MSAA the port had until 2026-11-16, are left: not written again) */
+        int method = port_antialias_from_name(read_string(display, "antialias"));
+
+        if (method >= 0) {
+            s->antialias = method;
+        }
+    }
     s->native_aniso = (int)read_number(display, "native_aniso", s->native_aniso, 1, 16);
     {
         const char *lod = read_string(display, "native_lod");
 
         if (lod != NULL) {
             s->native_lod = strcmp(lod, "ps2") == 0 ? 0 : strcmp(lod, "full") == 0 ? 2 : 1;
-        }
-    }
-    {
-        const char *cutout = read_string(display, "native_cutout_aa");
-
-        if (cutout != NULL) {
-            s->native_cutout_aa = strcmp(cutout, "off") == 0 ? 0 : 1;
         }
     }
     {
@@ -515,17 +516,14 @@ void port_settings_load(void) {
     if (!port_options.native_widescreen_forced) {
         port_options.native_widescreen = s->native_widescreen;
     }
-    if (!port_options.native_msaa_forced) {
-        port_options.native_msaa = s->native_msaa;
+    if (!port_options.antialias_forced) {
+        port_options.antialias = s->antialias;
     }
     if (!port_options.native_lod_forced) {
         port_options.native_lod = s->native_lod;
     }
     if (!port_options.native_aniso_forced) {
         port_options.native_aniso = s->native_aniso;
-    }
-    if (!port_options.native_cutout_aa_forced) {
-        port_options.native_cutout_aa = s->native_cutout_aa;
     }
     if (!port_options.native_2d_forced) {
         port_options.native_2d = s->native_2d;
@@ -676,10 +674,9 @@ void port_settings_save(void) {
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
     put(display, "native_widescreen", cJSON_CreateBool(s->native_widescreen));
-    put(display, "native_msaa", cJSON_CreateNumber(s->native_msaa));
+    put(display, "antialias", cJSON_CreateString(port_antialias(s->antialias) ? port_antialias(s->antialias)->name : "off"));
     put(display, "native_aniso", cJSON_CreateNumber(s->native_aniso));
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
-    put(display, "native_cutout_aa", cJSON_CreateString(s->native_cutout_aa == 0 ? "off" : "ssaa"));
     put(display, "native_2d", cJSON_CreateString(s->native_2d == 0 ? "ps2" : "smooth"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));

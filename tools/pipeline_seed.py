@@ -2,11 +2,11 @@
 """The PC renderer's pipeline seed (port/gs/pc/pipeline_seed.bin): every pipeline the canvas draws with in a tour of
 the game, made before play on a first start (port/gs/pc/pcr_pipelines.cpp, "Made before play").
 
-    tools/pipeline_seed.py --work DIR [--exe EXE] [--disc ISO] [--profiles 1x,msaa,ps2] [--jobs 2]
+    tools/pipeline_seed.py --work DIR [--exe EXE] [--disc ISO] [--profiles 1x,ps2] [--jobs 2]
                            [--maps 0,99,...] [--no-tour] [--no-cases] [--merge-only] [--out FILE]
 
-For each profile (the settings that change which pipelines there are: MSAA and the cut-outs shaded a sample at a
-time, the native draws on or off; the scale, anisotropy, the draw distance and the like do not), with
+For each profile (the settings that change which pipelines there are: the native draws on or off; the scale,
+anisotropy, anti-aliasing, the draw distance and the like do not), with
 KF4_PC_DYNAMIC=0 (no dynamic state, so that every state a draw has makes a pipeline of its own: a device with
 dynamic state makes those that differ only there one), KF4_INTERP_DRAW_ALL=1 and --frame-rate 240 (the pictures
 between and their runs):
@@ -14,10 +14,10 @@ between and their runs):
 2. tools/motion_compare.py's cases (the title, every menu page, an item picked up, combat, spells, creatures'
    effects, under water, the drain), each from a data folder of its own;
 each run's pc_pipeline_list.bin kept in DIR/<profile>/. Then every list is merged into the seed: each record with
-the MSAA samples of its run (1, or the profile's), the same ones once, in a fixed order.
+the MSAA samples of its run (always 1 now), the same ones once, in a fixed order.
 
-(Colour high, removed 2026-11-14, had profiles of its own; a seed made before then holds its records, made at
-8 bits.) The records are the renderer's state only (programs by the canvas's index, Granite's pipeline state, attachment formats):
+(Colour high, removed 2026-11-14, and MSAA, removed 2026-11-16, had profiles of their own; a seed made before then
+holds their records: colour high's made at 8 bits, MSAA's skipped.) The records are the renderer's state only (programs by the canvas's index, Granite's pipeline state, attachment formats):
 none of the game's data, so the seed may be in the repository. A record's layout is Granite's: when Granite's
 pipeline state changes, the seed's header no longer matches and it is not used ("[pcr] the pipeline seed is not of
 this build's layout"); make it again. Runs are headless, --no-audio; DIR (pictures, saves) outside the repository.
@@ -34,12 +34,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SEED = os.path.join(ROOT, "port", "gs", "pc", "pipeline_seed.bin")
 
-# name -> (the MSAA samples its passes draw at, the run's options)
+# name -> (the MSAA samples its passes draw at: 1, the seed's layout keeps the field; the run's options)
 PROFILES = {
     "1x": (1, []),
-    "msaa": (4, ["--native-msaa", "4", "--native-cutout-aa", "ssaa"]),
     "ps2": (1, ["--native-draw", "off"]),
-    "ps2msaa": (4, ["--native-draw", "off", "--native-msaa", "4", "--native-cutout-aa", "ssaa"]),
 }
 NO_TOUR = set()
 COMMON = ["--frame-rate", "240"]

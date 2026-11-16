@@ -23,9 +23,8 @@ For each case and profile:
 Pictures are deleted after each step; the worst --top pairs of each case and profile are kept small (640 wide,
 PC | GS | difference) in DIR/evidence/, with flash_find's sheet.
 
-Profiles: 1x (--native-scale 1 --no-native-widescreen), 4xw (--native-scale 4 --widescreen --native-widescreen
---native-msaa 2; gs gets --widescreen; the 4x pictures are brought down to gs's 640 x 448). MSAA is passed but
-the PC renderer does not apply it yet (docs/port/PC_RENDERER.md).
+Profiles: 1x (--native-scale 1 --no-native-widescreen), 4xw (--native-scale 4 --widescreen --native-widescreen;
+gs gets --widescreen; the 4x pictures are brought down to gs's 640 x 448).
 
 Into DIR: report.md (a table a case and profile, then each case's worst pictures), report.json (every picture).
 The pictures hold the game's data: keep DIR outside the repository. Needs Pillow and numpy.
@@ -51,7 +50,7 @@ EXE = os.path.join(ROOT, "out", "windows-clang" if os.name == "nt" else "linux-c
 
 PROFILES = {
     "1x": {"pc": ["--native-scale", "1", "--no-native-widescreen"], "gs": []},
-    "4xw": {"pc": ["--native-scale", "4", "--widescreen", "--native-widescreen", "--native-msaa", "2"],
+    "4xw": {"pc": ["--native-scale", "4", "--widescreen", "--native-widescreen"],
             "gs": ["--widescreen"]},
 }
 

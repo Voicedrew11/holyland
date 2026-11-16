@@ -10,8 +10,7 @@ layout(local_size_x = 64) in;
 
 // A triangle's entry, written by the canvas as a native batch is drawn: x its triangle in the program's tris, y the
 // draw's instance (what gl_InstanceIndex is to its vertex shader), z the frame's place in its surface (GS pixels: X
-// bits 0-15, Y 16-31), w the target's scale (X bits 0-7, Y 8-15) and PCR_PLANES_MSAA
-#define PCR_PLANES_MSAA 0x10000u
+// bits 0-15, Y 16-31), w the target's scale (X bits 0-7, Y 8-15)
 layout(set = 1, binding = 0, std430) readonly buffer Entries {
     uvec4 e[];
 } u_entries;
@@ -40,7 +39,7 @@ void main() {
     GsCorner c0, c1, c2;
     plane_corners(tris[e.x], e.y, place, c0, c1, c2);
     ivec4 w0, w1;
-    pcr_plane_words(c0, c1, c2, scale, (e.w & PCR_PLANES_MSAA) != 0u, w0, w1);
+    pcr_plane_words(c0, c1, c2, scale, w0, w1);
     u_planes_out.w[2u * n] = w0;
     u_planes_out.w[2u * n + 1u] = w1;
 }

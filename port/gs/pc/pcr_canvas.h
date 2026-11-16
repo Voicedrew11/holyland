@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -35,6 +36,7 @@
 #include "pcr_frame_walk.h"
 #include "pcr_gif.h"
 #include "pcr_gpu_time.h"
+#include "pcr_jitter.h"
 #include "pcr_textures.h"
 #include "pcr_trace.h"
 
@@ -137,9 +139,6 @@ public:
     // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
     // at a scale above 1
     void set_2d(int mode);
-    // MSAA: the samples a pixel of the surfaces drawn into has (1, 2, 4 or 8; 1 none), from the next vblank as the
-    // scale; with cutout_aa the cut-outs shaded at every sample (from the next draw)
-    void set_msaa(uint32_t samples, bool cutout_aa);
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);
@@ -221,6 +220,24 @@ public:
     // Everything drawn so far recorded, the shown rectangle copied (scaled to dst's size) into dst, which the
     // commands that follow in cmd may read. False when there is nothing to show (dst left as it was).
     bool scanout(Vulkan::CommandBuffer &cmd, const ShownRect &rect, const Vulkan::Image &dst);
+    // After scanout of rect into a picture dst's size: the depth of its 3D (the Z buffer last drawn with into the
+    // buffer shown) copied into dst (R32F, as the picture is placed): the GS's Z times zscale, larger nearer, 0 where
+    // nothing was drawn; and the XYOFFSET that 3D was drawn with. zscale 0, dst left as it was, when there is no depth
+    // to give (a depth format without its float (D24), the Z buffer holding the next frame's, a picture scaled); none
+    // when there is no 3D in the buffer, or the picture is of one field.
+    struct ShownDepth {
+        float zscale = 0.0f;      // 1 / 2^24, or 1 / 2^32 for a 32-bit Z buffer
+        float xyoffset[2] = {};   // GS pixels: a place on the GS's screen less it is the buffer's pixel
+        uint64_t drawing = 0;     // the drawing (begin_drawing's) that last drew 3D into the buffer
+    };
+    std::optional<ShownDepth> scanout_depth(Vulkan::CommandBuffer &cmd, const ShownRect &rect,
+                                            const Vulkan::Image &dst);
+    // (the temporal anti-aliasing) What is drawn from here on is drawing number drawing (the caller's: scanout_depth
+    // gives it back for the buffer its 3D was last drawn into), with jitter (pcr_jitter.h): the 3D (draws with a depth
+    // test that are native, or GIF triangles and lines not read by UV) into the frame's buffers (those the last two
+    // pictures showed: the one shown and the one drawn) moved by it; the 2D (the HUD tests Z too, but draws sprites and
+    // reads UV), the full-screen effects and the game's own targets are not. Jitter{} (the default) moves nothing.
+    void begin_drawing(uint64_t drawing, Jitter jitter);
     // The command buffer the canvas records into, submitted (before a picture's own commands are)
     void submit();
     // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken
@@ -237,7 +254,7 @@ public:
     void trace_probe();
     size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes);
     void show_decal_losses(bool on);
-    // whether the scale and MSAA's samples last set are drawn with (MSAA's wait for their pipelines: pcr_pipelines.h)
+    // whether the scale last set is drawn with (it is taken at a vblank)
     bool settled() const;
 
     CanvasCounts counts() const;

@@ -3174,6 +3174,13 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
             f->mid0[i * 4 + 3] = (float)pending.before.t[i];
         }
     }
+    for (int i = 0; i < 3; i++) {
+        f->mid1[i * 4 + 0] = (float)pending.scan.camera.r[i][0];
+        f->mid1[i * 4 + 1] = (float)pending.scan.camera.r[i][1];
+        f->mid1[i * 4 + 2] = (float)pending.scan.camera.r[i][2];
+        f->mid1[i * 4 + 3] = (float)pending.scan.camera.t[i];
+    }
+    f->world_az = (float)pending.scan.screen.az;
     f->kicks = gpu_kicks;
     f->runs = o != NULL ? (uint32_t)o->nruns : 0;
     {
@@ -3246,6 +3253,12 @@ static void gpu_picture(const Camera *between, double t, MouseTurn hand, double 
         pic.mid[i * 4 + 2] = (float)between->r[i][2];
         pic.mid[i * 4 + 3] = (float)between->t[i];
     }
+    pic.screen[0] = (float)pending.scan.screen.sx;
+    pic.screen[1] = (float)pending.scan.screen.sy;
+    pic.screen[2] = (float)pending.scan.screen.cx;
+    pic.screen[3] = (float)pending.scan.screen.cy;
+    pic.screen[4] = (float)pending.scan.screen.cz;
+    pic.screen[5] = (float)pending.scan.screen.az;
     if (bits_room < words + 1) {
         free(bits);
         bits_room = words * 2 + 1;

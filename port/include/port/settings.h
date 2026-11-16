@@ -43,10 +43,9 @@ typedef struct {
     int draw_distance_sky; /* with it, the sky's fog pushed out too (port_options.draw_distance_sky) */
     int native_scale;      /* the renderer's resolution, 1 to 4 times the PS2's (port_options.native_scale) */
     int native_widescreen; /* with widescreen, the renderer's picture drawn wider (port_options.native_widescreen) */
-    int native_msaa;       /* the renderer's samples a pixel for the 3D: 1, 2, 4, 8 (port_options.native_msaa) */
+    int antialias;         /* the picture's anti-aliasing: PORT_AA_*, port/antialias.h (port_options.antialias) */
     int native_lod;        /* the renderer's mipmap levels: 0 ps2, 1 scale, 2 full (port_options.native_lod) */
     int native_aniso;      /* the renderer's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
-    int native_cutout_aa;  /* with MSAA, the renderer's cut-outs: 0 off, 1 ssaa (port_options.native_cutout_aa) */
     int native_2d;         /* at a larger scale, the renderer's 2D: 0 ps2, 1 smooth (port_options.native_2d) */
     int native_layer_z;    /* the renderer's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int native_draw;       /* native draw, the whole path: 0 off (the PS2 path), 1 every accepted kind

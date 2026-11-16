@@ -20,20 +20,19 @@ PC_SHADERS = os.path.join(ROOT, "port", "gs", "pc", "shaders")
 PC_OUT = os.path.join(ROOT, "port", "gs", "pc", "pcr_shaders.h")
 # the native draws' VU1 maths, shared with the PC renderer's shaders
 SHARED = os.path.join(ROOT, "port", "render", "shaders")
+# SMAA's reference implementation (third_party/smaa/SMAA.hlsl), included by pcr_smaa.h
+SMAA = os.path.join(ROOT, "third_party", "smaa")
 # shaders made again with PCR_EXACT_Z (pcr_common.h's exact Z: the GS's whole Z at each pixel, where the GPU has
 # depth clamp and 64-bit integers), as <name>_xz and <name>_rec_xz. (The native draws' vertex shaders read their planes
 # from the plane pass, pcr_planes_*.comp, which needs 64-bit integers itself and is made with it alone.)
-EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag",
-           "pcr_prim.vert"]
+EXACT_Z = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim.vert"]
 # shaders made a second time with PCR_RECORDS (pcr_common.h: a draw's fields from a record of the picture's, the
 # kept walks' runs drawn indirect), as <name>_rec
 # the exact Z fragment shaders made again with PCR_DEPTH_RULE (pcr_prim.h's depth rule: the depth tested in the
-# shader, against its own copy in the critical section), as <name>_xz_dr for single-sampled passes and <name>_xz_drm
-# for multisampled ones; the ones shaded at every sample are drawn only multisampled
+# shader, against its own copy in the critical section), as <name>_xz_dr
 DEPTH_RULE = ["pcr_prim.frag", "pcr_prim_early.frag"]
-DEPTH_RULE_MS = ["pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
 RECORDS = ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
-           "pcr_prim.frag", "pcr_prim_early.frag", "pcr_prim_sample.frag", "pcr_prim_sample_early.frag"]
+           "pcr_prim.frag", "pcr_prim_early.frag"]
 
 
 def find_glslang(given):
@@ -69,16 +68,14 @@ def build(glslang, folder, target, prefix, what, where):
         exact = [(name, symbol, defines) for name, symbol, defines in made if symbol.endswith("_xz")]
         made += [(name, symbol + "_dr", defines + ["-DPCR_DEPTH_RULE"]) for name, symbol, defines in exact
                  if name in DEPTH_RULE]
-        made += [(name, symbol + "_drm", defines + ["-DPCR_DEPTH_RULE", "-DPCR_DEPTH_RULE_MS"])
-                 for name, symbol, defines in exact if name in DEPTH_RULE_MS]
         # (DATE's set-up marking the depth rule's copy: pcr_date.frag's PCR_DATE_MARK)
         made += [(name, symbol + "_mark", defines + ["-DPCR_DATE_MARK"]) for name, symbol, defines in list(made)
-                 if name in ("pcr_date.frag", "pcr_date_ms.frag") and symbol.endswith("_frag")]
+                 if name == "pcr_date.frag" and symbol.endswith("_frag")]
         for name, symbol, defines in made:
             out = os.path.join(tmp, symbol + ".spv")
             if name.endswith(".vert"):
                 defines = defines + ["-DPCR_STAGE_VERTEX"]
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED] + defines + [
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED, "-I" + SMAA] + defines + [
                 "-o", out, os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:

@@ -36,7 +36,8 @@ python3 tools/record_input.py replay <REC> --disc <image> --exe <other build>/kf
 python3 tools/record_input.py replay <REC> --disc <image> -- --gs-capture-at 3616    # more options for kf4
 ```
 
-On Windows without Python the player runs `toolsecord_input.bat [kf4.exe] [disc]` instead (or double-clicks it,
+On Windows without Python the player runs `tools
+ecord_input.bat [kf4.exe] [disc]` instead (or double-clicks it,
 with `KF4_EXE` and `KF4_DISC` set, or `kf4.exe` beside it): the same recording.
 
 **record** copies what the run starts from out of the data folder into `REC/start` (`settings.json`,
@@ -165,7 +166,7 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--compare OTHER` | another capture's draws against these, one by one: the GS state, and the vertices (the first that differs, and the largest Z difference) |
 | `--compare-mode gif\|vif` | compare this capture with itself in that mode (with `--vu-round`: the VU1 variant against the recorded packets, draw by draw) |
 | `--limit N` | how many differing draws `--compare` prints (50) |
-| `--renderer gs\|pc` | who draws: paraLLEl-GS (the default) or the PC renderer, the one players get. A capture holds no settings of the PC renderer's: give the player's with `--scale X[xY]` (`native_scale`; with `native_widescreen` and `widescreen` X is `(4 * scale + 2) / 3`: 6x4 at 4), `--msaa N`, `--aniso N`, `--lod ps2\|scale\|full`, `--cutout-aa off\|ssaa`, `--2d ps2\|smooth`, `--colour exact\|high`. The replay waits until the scale and MSAA are in effect (MSAA waits for its pipelines) before the capture's first draw. `--draw`/`--draws` read the GS's memory, which the PC renderer does not keep at the PS2's size: use `--frames` |
+| `--renderer gs\|pc` | who draws: paraLLEl-GS (the default) or the PC renderer, the one players get. A capture holds no settings of the PC renderer's: give the player's with `--scale X[xY]` (`native_scale`; with `native_widescreen` and `widescreen` X is `(4 * scale + 2) / 3`: 6x4 at 4), `--aniso N`, `--lod ps2\|scale\|full`, `--2d ps2\|smooth`, `--antialias off\|fxaa`. The replay waits until the scale is in effect before the capture's first draw. `--draw`/`--draws` read the GS's memory, which the PC renderer does not keep at the PS2's size: use `--frames` |
 | `--end-picture` | `--frames`, and at the end `frame_end.png`: the buffer the last draw drew into, shown as the last vblank shows its buffer. A capture at 30 frames a second ends before the frame it drew is shown (its own vblanks show the frame before) |
 | `--repeat N` | the stream drawn N times over by the same renderer, its state kept between (with `--end-picture`, `frame_end_NNN.png` after each): whether what the renderer carries from frame to frame changes the picture |
 | `--pixel X,Y` with `--renderer pc` | the PC renderer's trace of one surface pixel of GS pixel (X,Y) of the frame buffer at page `--fbp N` (0 by default); `--sub SX,SY` picks the surface pixel in the GS pixel's block of the scale (its middle by default). For each draw whose box covers it: every fragment shaded there (its primitive, its Z and slope, the samples it covers, its colour, whether the alpha test or DATE discarded it, whether it was drawn as a decal), each covered sample's Z against the Z stored before (from the draw's ZTST: `passes` or `FAILS`), and the samples' Z and colour after the draw, read back on the GPU. Its draws are depth tested after their shaders (the picture is the same), and each read-back is a pass of its own |
@@ -207,12 +208,12 @@ For something the PC renderer draws and paraLLEl-GS does not (a flicker that sho
 record more than one frame: start the game with `KF4_GS_CAPTURE_VBLANKS=240` (4 seconds; 1 to 600, about 5 MB of
 memory a vblank while it records), press F9 just before doing what shows it, and keep doing it. A capture made with
 the PC renderer holds its GS memory and registers at its start, so its first frames are drawn from where the game
-was. Then, at the player's settings (here 4x with native widescreen, MSAA 2):
+was. Then, at the player's settings (here 4x with native widescreen, FXAA):
 
 ```sh
-python3 tools/replay_compare.py gs_b.kf4gs --out b --pc "--scale 6x4 --msaa 2 --aniso 16 --lod scale --cutout-aa ssaa --2d smooth --colour high" --decal-losses
+python3 tools/replay_compare.py gs_b.kf4gs --out b --pc "--scale 6x4 --aniso 16 --lod scale --2d smooth --antialias fxaa" --decal-losses
 # b/report.txt: each frame's difference and decal losses; b/worst_*.png: PC | paraLLEl-GS | difference
-kf4-gsreplay gs_b.kf4gs --renderer pc --scale 6x4 --msaa 2 --pixel 300,242 --sub 3,0   # one pixel of a bad frame
+kf4-gsreplay gs_b.kf4gs --renderer pc --scale 6x4 --pixel 300,242 --sub 3,0   # one pixel of a bad frame
 ```
 
 ## map_tour.py
@@ -280,7 +281,7 @@ python3 tools/motion_compare.py --cases list
 ```
 
 For each case and profile (`1x`: `--native-scale 1 --no-native-widescreen`; `4xw`: `--native-scale 4 --widescreen
---native-widescreen --native-msaa 2`, gs with `--widescreen`, the 4x pictures brought down to 640 x 448), three
+--native-widescreen`, gs with `--widescreen`, the 4x pictures brought down to 640 x 448), three
 headless runs one after another: gs at 30 dumping the case's vblanks, pc the same, pc at `--frame-rate 240`
 (left out with `--no-240`). Pictures are measured as `tour_compare.py` does (mean, share over 24 levels, the same
 after a 3 x 3 blur). At 240, `flash_find.py --frames` judges each picture between against its game frames, and

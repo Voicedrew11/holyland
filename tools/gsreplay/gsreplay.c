@@ -45,7 +45,7 @@
                         otherwise):
        --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
                         native_widescreen with widescreen makes X (4 * scale + 2) / 3: 6x4 at 4)
-       --msaa N --aniso N --lod ps2|scale|full --cutout-aa off|ssaa --2d ps2|smooth
+       --aniso N --lod ps2|scale|full --2d ps2|smooth --antialias off|fxaa|smaa|smaa_t2x
                         A capture holds no settings of the PC renderer's: give the player's.
                         With pc, --pixel X,Y traces one surface pixel of GS pixel (X,Y) of the frame buffer at
                         page --fbp N (0 by default): --sub SX,SY picks it in the GS pixel's block of the
@@ -62,6 +62,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "port/antialias.h"
 #include "port/debug.h"
 #include "port/gs_capture_format.h"
 #include "port/host.h"
@@ -204,8 +205,8 @@ static void die(const char *fmt, ...) {
 /* ---- Who draws ---------------------------------------------------------------------------------- */
 /* The PC renderer's settings (--renderer pc): what pcr.h's setters take; 0 leaves the renderer's default */
 typedef struct {
-    int scale_x, scale_y, msaa, aniso;
-    int lod, cutout_aa, mode_2d; /* GSN_* + 1 (0: the default) */
+    int scale_x, scale_y, aniso;
+    int lod, mode_2d, antialias; /* GSN_* + 1, PORT_AA_* + 1 (0: the default) */
 } PcSettings;
 
 /* paraLLEl-GS or the PC renderer, as the run calls them */
@@ -237,24 +238,21 @@ static int pc_open(const PcSettings *s) {
     if (s->scale_x > 0) {
         pcr_set_scale(s->scale_x, s->scale_y > 0 ? s->scale_y : s->scale_x);
     }
-    if (s->msaa > 0 && pcr_set_msaa(s->msaa) != s->msaa) {
-        fprintf(stderr, "kf4-gsreplay: this GPU draws at most %d samples here\n", pcr_set_msaa(s->msaa));
-    }
     if (s->aniso > 0) {
         pcr_set_aniso(s->aniso);
     }
     if (s->lod > 0) {
         pcr_set_lod(s->lod - 1);
     }
-    if (s->cutout_aa > 0) {
-        pcr_set_cutout_aa(s->cutout_aa - 1);
+    if (s->antialias > 0) {
+        pcr_set_antialias(s->antialias - 1);
     }
     if (s->mode_2d > 0) {
         pcr_set_2d(s->mode_2d - 1);
     }
     {
-        /* vblanks showing nothing first, until the settings are drawn with: the PC renderer takes its scale and MSAA at
-           a vblank (MSAA once its pipelines are made), and the capture's draws before would be drawn at 1x */
+        /* vblanks showing nothing first, until the settings are drawn with: the PC renderer takes its scale at a
+           vblank, and the capture's draws before would be drawn at 1x */
         static const uint64_t no_display[0xF0 / 8];
         struct timespec pause = {0, 20 * 1000 * 1000};
         int k;
@@ -1507,8 +1505,8 @@ static void usage(void) {
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
             "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
-            "                    [--scale X[xY]] [--msaa N] [--aniso N] [--lod ps2|scale|full]\n"
-            "                    [--cutout-aa off|ssaa] [--2d ps2|smooth]\n"
+            "                    [--scale X[xY]] [--aniso N] [--lod ps2|scale|full]\n"
+            "                    [--2d ps2|smooth] [--antialias off|fxaa|smaa|smaa_t2x]\n"
             "                    [--sub SX,SY] [--decal-losses]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
@@ -1565,15 +1563,20 @@ int main(int argc, char **argv) {
                 usage();
             }
             i++;
-        } else if (strcmp(a, "--msaa") == 0 || strcmp(a, "--aniso") == 0) {
-            *(a[2] == 'm' ? &pc.msaa : &pc.aniso) = (int)strtol(v, NULL, 0);
+        } else if (strcmp(a, "--aniso") == 0) {
+            pc.aniso = (int)strtol(v, NULL, 0);
             i++;
-        } else if (strcmp(a, "--lod") == 0 || strcmp(a, "--cutout-aa") == 0 || strcmp(a, "--2d") == 0) {
+        } else if (strcmp(a, "--antialias") == 0) {
+            pc.antialias = port_antialias_from_name(v) + 1;
+            if (pc.antialias == 0) {
+                usage();
+            }
+            i++;
+        } else if (strcmp(a, "--lod") == 0 || strcmp(a, "--2d") == 0) {
             /* each setting's names, in its GSN_ constants' order */
-            static const char *const names[3][3] = {
-                {"ps2", "scale", "full"}, {"off", "ssaa", NULL}, {"ps2", "smooth", NULL}};
-            int which = a[2] == 'l' ? 0 : a[2] == 'c' ? 1 : 2;
-            int *field = which == 0 ? &pc.lod : which == 1 ? &pc.cutout_aa : &pc.mode_2d;
+            static const char *const names[2][3] = {{"ps2", "scale", "full"}, {"ps2", "smooth", NULL}};
+            int which = a[2] == 'l' ? 0 : 1;
+            int *field = which == 0 ? &pc.lod : &pc.mode_2d;
             int k;
 
             *field = 0;
