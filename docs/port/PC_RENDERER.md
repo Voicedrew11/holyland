@@ -75,6 +75,34 @@ In the long runs exact Z cost far more than short runs showed: 063 2.364 against
 against 2.375. Drawing the GIF batches whose primitives each have one Z without exact Z (the depth is the same; 9,425
 batches at 063, pictures byte-identical) saved nothing measurable; kept out of the tree as a patch.
 
+**The RDNA4 hang (2026-11-16): what it needs.** Made on demand: a test switch that took the flat, no-Z-write GIF sprites
+off the depth rule (back to the plain exact Z programs, as before the rule) hung the card about 1-2 s after a teleport
+to 009 in 8 of about 20 real-window runs (owner's settings, Mesa 26.2.6, kernel 7.3), always at those same 128-wide
+blur sprites, or the barrier after them. One change at a time, 8 runs each (at that rate 8 clean runs by chance is
+about 1%):
+
+| that draw | runs | hangs |
+| --- | --- | --- |
+| as before the rule: exact Z (`gl_FragDepth`), GEQUAL test, MSAA 2 | ~20 | 8 |
+| the corners' depth clamped to the Z buffer's largest (was 256, past 1) | 6 | 1 |
+| `layout(depth_any)` for `depth_less` | 2 | 1 |
+| the depth surface made tall, never grown | 7 | 1 |
+| **no depth written by the shader** (the plain program, the corners' depth) | 8 | 0 |
+| **the depth test off** for that draw | 8 | 0 |
+| **MSAA 1** | 8 | 0 |
+| **the default: the depth rule (interlocked)** | 10 | 0 |
+
+So the card hangs on a draw whose fragment shader writes its depth, with the GPU's depth test on, into a 2-sample
+target, outside the interlock's critical section. HiZ was ruled out the day before (`RADV_DEBUG=nohiz` hung). Not ours
+to fix in the driver: neither Mesa 26.2.6's RADV nor radeonsi has a GFX12 workaround for it, and no report of it was
+found. Every hang with a post-mortem from 2026-11-15 came before the depth rule (#162), which takes those draws into
+its critical section: main has not hung since in these runs. `draw_batch` keeps every other draw at MSAA off that
+combination (ALWAYS without a Z write drawn with the test off, as the driver does anyway; a draw the rule would take
+without its copy of the depth, out of memory, drawn without the test). Not covered: `KF4_PC_DEPTH=exact` (developers'),
+and a GPU without the interlock, where exact Z falls back to the plain programs: if AMD's Windows driver has no
+`VK_EXT_fragment_shader_interlock`, RDNA4 there would draw that way at MSAA (untested). A change that takes draws off the
+rule (the flat 2D sprites, PC_OPTIMIZATION.md) must draw them without the shader's depth, as the plain program does.
+
 **2026-11-13: the surface copies' images kept** (`pcr_spares.h`). The copies kf4-pc makes of every surface each game
 frame for the pump were new images each time: about 600 MB made and let go a game frame at 4x, MSAA 2, colour high.
 The pump's canvas now hands the images it lets go back, and the next copies are made into them

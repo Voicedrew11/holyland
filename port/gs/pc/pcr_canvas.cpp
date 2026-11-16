@@ -4071,6 +4071,24 @@ private:
         // and one that tests ALWAYS and writes Z writes the copy as the depth; every exact Z draw writes the Z with its
         // fraction)
         bool rule = rule_on_ && zte && (ztst == 2 || ztst == 3 || (ztst == 1 && zwrite)) && depth->zcopy;
+        // The GPU's depth test on a depth the fragment shader writes (exact Z), into a multisampled target, outside the
+        // interlock's critical section: on RDNA4 (RX 9070 XT, RADV 26.2) it hangs the GPU now and then, a reset of the
+        // whole card (2026-11-16: the 128-wide blur targets' sprites, which hung the card in this morning's runs before
+        // the depth rule, hung it in about 4 runs of 10 drawn so; not with the test off, nor with the corners' depth
+        // unexported, nor at 1 sample, nor interlocked: docs/port/PC_RENDERER.md, "The RDNA4 hang"). The depth rule's
+        // draws are interlocked; ALWAYS without a Z write tests nothing (drawn with the test off, the same pixels, as
+        // the driver would). A draw the rule would take without its copy of the depth (none made: out of memory) is
+        // drawn with the test off too: wrong where it is behind something, rather than the card reset.
+        bool ztest = zte && !(ztst == 1 && !zwrite);
+        if (rule_on_ && ms && ztest && !rule) {
+            ztest = false;
+            static bool told = false;
+            if (!told) {
+                told = true;
+                fprintf(stderr, "[pcr] a depth surface has no copy of its depth (out of memory?): its draws are drawn "
+                                "without the depth test at MSAA (the RDNA4 hang)\n");
+            }
+        }
         flags |= rule_on_ ? F_FULL_DEPTH : 0;
         flags |= rule && ztst == 3 ? F_ZGREATER : 0;
         flags |= rule && ztst == 1 ? F_ZALWAYS : 0;
@@ -4321,7 +4339,7 @@ private:
                 flush_run();
             }
             c.set_program(program);
-            c.set_depth_test(zte, pass.z);
+            c.set_depth_test(ztest, ztest && pass.z);
             if (settle) {
                 mark_decal_won(c, pass.z);
             }
