@@ -181,9 +181,11 @@ void on_compile(Device *, const DeferredPipelineCompile &compile, bool compute, 
     if (warm.log) {
         auto pr = warm.programs.find(compile.program);
         auto pa = warm.passes.find(uint64_t(compile.compatible_render_pass->get_hash()));
-        fprintf(stderr, "[warm] %s %s program %p (base %p), colours %u depth %u subpasses %u, samples %u: %.1f ms\n",
+        auto ro = warm.role_of.find(compile.program);
+        fprintf(stderr, "[warm] %s %s program %p (base %p, role %d), colours %u depth %u subpasses %u, samples %u: %.1f ms\n",
                 on_warm_thread ? "ahead" : "draw", sync ? "sync" : "async", (void *)compile.program,
                 pr != warm.programs.end() ? (void *)pr->second.program : nullptr,
+                ro != warm.role_of.end() ? int(ro->second.first) : -1,
                 pa != warm.passes.end() ? pa->second.colours : 9, pa != warm.passes.end() ? pa->second.depth : 9,
                 pa != warm.passes.end() ? pa->second.subpasses : 9,
                 compile.compatible_render_pass->get_sample_count(compile.subpass_index), double(ns) / 1e6);
@@ -248,9 +250,13 @@ void round(uint32_t samples, std::vector<Kept> kept, std::unordered_map<uint64_t
             info.num_subpasses = d.subpasses;
             info.subpasses = d.subpasses ? d.subpass.data() : nullptr;
             const RenderPass &pass = CommandBuffer::holyland_render_pass(&device, info);
-            make(device, k.compile, prog->second.program, pass);
-            if (samples > 1 && prog->second.per_sample) {
-                make(device, k.compile, prog->second.per_sample, pass);
+            // (the depth rule's programs: their twin at the other kind of pass)
+            const WarmProgram &w = prog->second;
+            bool twin = w.other && w.multisampled != (samples > 1);
+            Program *program = twin ? w.other : w.program, *per_sample = twin ? w.other_per_sample : w.per_sample;
+            make(device, k.compile, program, pass);
+            if (samples > 1 && per_sample) {
+                make(device, k.compile, per_sample, pass);
             }
             if (samples > 1 && extra && d.colours == 1 && !d.depth && d.subpasses == 0 && !extra_made.exchange(true)) {
                 make(device, k.compile, extra, pass);
@@ -713,6 +719,52 @@ std::vector<Record> decal_states(const Record &r, const WarmDevice &t) {
     return out;
 }
 
+// (the depth rule) Whether a record is of a batch program's (roles 0-9, 11-20) that tests Z GEQUAL or GREATER, drawn
+// with the rule's program instead; rule: that record
+bool rule_record(const Record &r, const WarmDevice &t, Record &rule) {
+    const auto &st = r.static_state.state;
+    bool tests = r.depth && st.depth_test &&
+                 (st.depth_compare == VK_COMPARE_OP_GREATER_OR_EQUAL || st.depth_compare == VK_COMPARE_OP_GREATER ||
+                  (t.rule_always && st.depth_compare == VK_COMPARE_OP_ALWAYS && st.depth_write));
+    bool batch = r.role < 10 || (r.role >= 11 && r.role < 21);
+    if (t.rule_first == 0 || !tests || !batch) {
+        return false;
+    }
+    uint32_t kind = r.role < 5 ? 0 : r.role < 10 ? 1 : r.role < 16 ? 2 : 3; // (plain, early, the runs' two)
+    uint32_t v = r.role < 10 ? r.role % 5 : (r.role - 11) % 5;
+    rule = r;
+    rule.role = t.rule_first + (r.samples > 1 ? 20 : 0) + 5 * kind + v;
+    return true;
+}
+
+// (the depth rule's own copy, WarmDevice::zclear_role) The copy's clear in a record's pass: pcr_canvas.cpp's
+// clear_depth_copy's state (set_opaque_state, then no culling, no depth or stencil test, no blend, nothing written)
+bool zclear_record(const Record &r, const WarmDevice &t, Record &z) {
+    if (t.zclear_role == 0 || !r.depth) {
+        return false;
+    }
+    memset(&z, 0, sizeof(z));
+    z.role = t.zclear_role;
+    z.samples = r.samples;
+    z.colours = r.colours;
+    z.depth = r.depth;
+    z.subpasses = r.subpasses;
+    z.colour_format = r.colour_format;
+    z.depth_format = r.depth_format;
+    memcpy(z.subpass, r.subpass, sizeof(z.subpass));
+    z.subpass_index = r.subpass_index;
+    z.subgroup_size_tag = r.subgroup_size_tag;
+    auto &st = z.static_state.state;
+    st.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    st.cull_mode = VK_CULL_MODE_NONE;
+    st.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    st.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    st.write_mask = 0;
+    st.dynamic_ds = r.static_state.state.dynamic_ds;
+    st.dynamic_blend = r.static_state.state.dynamic_blend;
+    return true;
+}
+
 // (warm.lock held) The seed's pipelines for these settings and this device: those of the runs at 1x, and with MSAA
 // those of the runs with MSAA (at the count asked); the canvas's formats and dynamic state put in. Empty when the seed is not of this
 // build's layout (Granite's state changed: tools/pipeline_seed.py makes it again).
@@ -752,8 +804,23 @@ std::vector<Record> seed_for(uint32_t samples) {
         if (r.colours && is_colour_format(r.colour_format)) {
             r.colour_format = VK_FORMAT_R8G8B8A8_UNORM; // (the colour surfaces' format)
         }
+        Record rule;
+        if (rule_record(r, t, rule)) {
+            r = rule; // (the program drawn with it: the rule's)
+        }
         if (keys.insert(record_key(r)).second) {
             out.push_back(r);
+        }
+        Record z;
+        if (zclear_record(r, t, z) && keys.insert(record_key(z)).second) {
+            out.push_back(z);
+        }
+        if (t.date_mark_role != 0 && r.role == 10) {
+            Record mark = r; // (DATE's set-up, marking the copy: its state)
+            mark.role = t.date_mark_role;
+            if (keys.insert(record_key(mark)).second) {
+                out.push_back(mark);
+            }
         }
         for (const Record &d : decal_states(r, t)) {
             if (keys.insert(record_key(d)).second) {

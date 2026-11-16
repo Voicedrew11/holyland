@@ -154,6 +154,13 @@ void pcr_take_record() {
 #define PCR_F_DECAL_LOSS 0x800000u // (developers' decal losses) the colour out is 16 of magenta: where the decal lost
 #define PCR_F_DECAL_LOSS_FAR 0x1000000u // ... and its depth PCR_DECAL_LOSS_MARGIN nearer: where it lost by more
 #define PCR_F_EXACT_Z 0x2000000u   // the GS's whole Z at each pixel (pcr_prim.h's PCR_EXACT_Z): the corners' depth a bound
+#define PCR_F_FULL_DEPTH 0x4000000u // (exact Z, the depth rule on) the depth written is the Z with its fraction, not rounded
+                                   // (pcr_prim.h's pcr_full_depth); no decal's top fine part
+#define PCR_F_ZGREATER 0x8000000u  // (the depth rule) the GS's test is GREATER: a tie fails (pcr_prim.h's pcr_depth_rule)
+#define PCR_F_ZWRITE 0x10000000u   // (the depth rule with its own copy of the depth) the pass writes Z: the copy too
+#define PCR_F_ZALWAYS 0x20000000u  // (... and its copy) the GS's test is ALWAYS: every sample passes, the copy written
+#define PCR_F_DATE_MARK 0x40000000u // (... and its copy) DATE by the stencil: the copy's sign bit marks where it fails
+#define PCR_F_DATE_CLEARS 0x200000u // (... and its copy) DATE's stencil cleared where this pass draws: marked failing
 #define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
