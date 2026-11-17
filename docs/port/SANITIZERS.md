@@ -72,5 +72,5 @@ reports. Fixed on the way:
 The fixes change no picture: against main at 000 (with the title and menus), 009:2, 063 and the quick save loaded at
 240 (`KF4_INTERP_DRAW_ALL=1`, Windows, 1x), 118 pictures byte for byte.
 
-Not covered headless: the window and the overlay (`kf4-between` reads `port_overlay_visible` and the mouse indicator's
-time, written by the game's thread), the flash recorder, the sound thread, RADV, a 4x scale.
+Not covered headless: the window and the overlay (`kf4-between` reads `port_overlay_visible`, written by the game's
+thread), the flash recorder, the sound thread, RADV, a 4x scale.
