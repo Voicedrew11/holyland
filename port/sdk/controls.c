@@ -17,8 +17,9 @@
    Mouse, captured, while the player is in control: moving turns and looks; left square, right
    triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
    cross, right circle, middle cross (the menu mouse), the wheel up / down. On a menu screen that takes
-   pointing (port/include/port/menu_pointer.h) the pointer moves the cursor to the line under it and the
-   left button chooses the line clicked; a click on nothing does nothing.
+   pointing (port/include/port/menu_pointer.h) the mouse is let go: the pointer moves the cursor to the
+   line under it and the left button chooses the line clicked; a click on nothing does nothing.
+   Elsewhere out of play (a message, a cutscene) the mouse stays captured and the cursor hidden.
    Outside play, too, A / D (the keys bound to L1 / R1) press d-pad left / right and Left / Right (the
    keys bound to d-pad left / right) press L1 / R1 (port_controls_menu_side_keys, on by default): A / D
    then move left and right in the menus as W / S move up and down (the equipment screen's items, a
@@ -1109,9 +1110,12 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         if (gameplay) {
             pc.gameplay_ms = now;
         }
-        /* (let go only after a moment out of play, so a slow frame does not flash the cursor) */
+        /* out of play the mouse is let go (the cursor shown) only on a screen that takes pointing: a message
+           (an item picked up, a sign read) keeps it held and the cursor hidden, its buttons still press. Let go
+           only after a moment out of play, so a slow frame does not flash the cursor. */
         set_captured(pc.wants_capture && pc.focused &&
-                     (gameplay || (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
+                     (gameplay || !port_menu_pointer_active() ||
+                      (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
         feed_menu_pointer(!gameplay && !pc.captured, mouse);
         if (!gameplay) {
             static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};

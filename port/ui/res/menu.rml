@@ -1,0 +1,26 @@
+<rml>
+<head>
+	<title>Darker Reality</title>
+	<link type="text/rcss" href="kf4.rcss"/>
+</head>
+<!-- The player menu (port/ui/player_ui.cpp fills #tabs, #rows, #help and #prompts) -->
+<body>
+	<div id="shade"></div>
+	<div id="window">
+		<div id="rule-outer">
+			<div id="rule-inner">
+				<div id="crest">
+					<div id="title">Darker Reality</div>
+					<div id="subtitle">King's Field IV</div>
+				</div>
+				<div id="tabs"></div>
+				<div id="page">
+					<div id="rows"></div>
+					<div id="help"></div>
+				</div>
+				<div id="prompts"></div>
+			</div>
+		</div>
+	</div>
+</body>
+</rml>

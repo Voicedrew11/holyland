@@ -1,4 +1,5 @@
-// The settings overlay (port/include/port/overlay.h): F1 opens a menu bar and the Settings window,
+// The settings overlay (port/include/port/overlay.h): F1 opens a menu bar and the Settings window (Shift+F1 on the
+// Vulkan presenter, where F1 is the player menu's: port/include/port/player_ui.h, which this passes events to first),
 // drawn with Dear ImGui (third_party/imgui) over the game's picture, on the window's SDL_Renderer or by
 // the Vulkan presenter (port/platform/present_vk.cpp, --presenter vulkan) with ImGui's Vulkan backend. The
 // pages (the table `pages`): Display, Graphics, Controls, Gameplay, Saves, General, and Developer for
@@ -11,7 +12,9 @@
 //
 // KF4_OVERLAY_SHOT=page@vblank,... opens the overlay on that page at that vblank, even with a pad
 // script, and writes the window's whole picture a few vblanks later as overlay_<page>.png in
-// --dump-dir: pictures of each page, for checking it draws, without anyone at the screen.
+// --dump-dir: pictures of each page, for checking it draws, without anyone at the screen. ui-<tab>[:keys] opens the
+// player menu (port/include/port/player_ui.h) on that tab instead and presses those keys once
+// (ui-display:down.down.confirm), written as overlay_ui-<tab>[:keys].png.
 #include <SDL.h>
 
 #include <cfloat>
@@ -45,6 +48,7 @@ extern "C" {
 #include "port/twin_stick.h"
 #include "port/debug.h"
 #include "port/overlay.h"
+#include "port/player_ui.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
 #include "port/host.h"
@@ -91,6 +95,7 @@ double vu1_ms, gif_ms, vsync_ms, vu1_runs, vu1_insns;
 struct Shot {
     int page;
     uint64_t vblank;
+    std::string ui_tab; // ui-<tab>: the player menu (port/include/port/player_ui.h) open on that tab
 };
 std::vector<Shot> shots;
 size_t shot_next;
@@ -1418,6 +1423,8 @@ void about_window() {
     ImGui::BulletText("The SPU2: ico-audio, from ico-pc (MIT)");
     ImGui::BulletText("The Verdite layout: Verdite2 (Voicedrew11, MIT)");
     ImGui::BulletText("Dear ImGui (MIT), cJSON (MIT), SDL2 (zlib)");
+    ImGui::BulletText("The menu: RmlUi (MIT), FreeType (FreeType Licence)");
+    ImGui::BulletText("Its fonts: IM FELL English (Igino Marini) and Spectral (Production Type), SIL OFL 1.1");
     ImGui::End();
 }
 
@@ -1504,7 +1511,13 @@ void parse_shots(const char *text) {
         if (sign == std::string::npos)
             continue;
         std::string name = item.substr(0, sign);
-        Shot shot = {-1, std::strtoull(item.c_str() + sign + 1, nullptr, 0)};
+        Shot shot = {-1, std::strtoull(item.c_str() + sign + 1, nullptr, 0), ""};
+        if (name.rfind("ui-", 0) == 0) { // the player menu on a tab, the overlay closed
+            shot.page = PAGE_COUNT;
+            shot.ui_tab = name.substr(3);
+            shots.push_back(shot);
+            continue;
+        }
         for (int i = 0; i < PAGE_COUNT; i++)
             if (name == pages[i].id)
                 shot.page = i;
@@ -1523,7 +1536,7 @@ void parse_shots(const char *text) {
             shot.page = PAGE_COUNT + 4;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, graphics, controls, "
-                                 "gameplay, saves, general, developer, closed, map, mini, menu, profiler)\n",
+                                 "gameplay, saves, general, developer, closed, map, mini, menu, profiler, ui-<tab>)\n",
                          name.c_str());
             continue;
         }
@@ -1541,6 +1554,14 @@ void shot_open() {
     const Shot &shot = shots[shot_next];
     if (port_vblank_count() < shot.vblank)
         return;
+    // the player menu opened (and its keys pressed) once a picture, not each vblank until it is taken
+    static size_t ui_shown_for = SIZE_MAX;
+    if (ui_shown_for != shot_next) {
+        ui_shown_for = shot_next;
+        if (!shot.ui_tab.empty() ? !port_player_ui_show(shot.ui_tab.c_str())
+                                 : port_player_ui_open() && !port_player_ui_show(nullptr))
+            std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no player menu tab %s\n", shot.ui_tab.c_str());
+    }
     automap_view_open_for_shot(shot.page == PAGE_COUNT + 1);
     profiler_show_for_shot(shot.page == PAGE_COUNT + 4);
     if (shot.page >= PAGE_COUNT) {
@@ -1569,8 +1590,11 @@ void shot_write(const uint32_t *pixels, int width, int height) {
                                                         : "profiler",
                           (unsigned long long)shot.vblank);
         else // (pages has the settings' pages only)
-            std::snprintf(path, sizeof(path), "%s/overlay_%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
-                          shot.page == PAGE_COUNT ? "closed" : pages[shot.page].id);
+            std::snprintf(path, sizeof(path), "%s/overlay_%s%s.png", port_options.dump_dir ? port_options.dump_dir : ".",
+                          shot.ui_tab.empty() ? "" : "ui-",
+                          !shot.ui_tab.empty()      ? shot.ui_tab.c_str()
+                          : shot.page == PAGE_COUNT ? "closed"
+                                                    : pages[shot.page].id);
         if (port_png_write(path, pixels, (uint32_t)width, (uint32_t)height))
             std::fprintf(stderr, "[overlay] vblank %llu: %dx%d, %s\n", (unsigned long long)port_vblank_count(), width,
                          height, path);
@@ -1626,6 +1650,10 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
         return;
     window = static_cast<SDL_Window *>(sdl_window);
     renderer = static_cast<SDL_Renderer *>(sdl_renderer);
+#ifdef KF4_HAVE_PLAYER_UI
+    if (renderer == nullptr)
+        port_player_ui_init(window); // the player menu: the Vulkan presenter draws it
+#endif
     if (const char *spec = std::getenv("KF4_OVERLAY_SHOT"))
         parse_shots(spec);
 
@@ -1654,12 +1682,15 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
         return;
     }
     ready = true;
-    std::fprintf(stderr, "[overlay] F1 opens the settings\n");
+    std::fprintf(stderr, "[overlay] %s opens the developers' overlay\n", renderer == nullptr ? "Shift+F1" : "F1");
 }
 
 extern "C" int port_overlay_event(const void *sdl_event) {
     const SDL_Event *event = static_cast<const SDL_Event *>(sdl_event);
 
+    // the player menu first (F1 and its keys), unless this overlay is open (Shift+F1, or F1 without the menu)
+    if (!overlay_open && port_player_ui_event(event))
+        return 1;
     if (!ready)
         return 0;
     if (event->type == SDL_KEYDOWN && !event->key.repeat) {
@@ -1695,9 +1726,9 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 }
 
 extern "C" int port_overlay_visible(void) {
-    return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
+    return port_player_ui_visible() || (ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
-                     automap_view_visible() || profiler_visible());
+                     automap_view_visible() || profiler_visible()));
 }
 
 extern "C" void *port_overlay_draw_data(void) {
@@ -1714,11 +1745,12 @@ extern "C" void port_overlay_shot(const unsigned int *rgba, int width, int heigh
 }
 
 extern "C" int port_overlay_open(void) {
-    return ready && overlay_open;
+    return (ready && overlay_open) || port_player_ui_open();
 }
 
 extern "C" int port_overlay_paused(void) {
-    return ready && !shot_mode && ((overlay_open && port_settings.pause_when_open) || port_automap_holds_game());
+    bool open = overlay_open || port_player_ui_open();
+    return ready && !shot_mode && ((open && port_settings.pause_when_open) || port_automap_holds_game());
 }
 
 extern "C" void port_overlay_notify_state(void) {

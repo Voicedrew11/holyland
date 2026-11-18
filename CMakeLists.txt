@@ -407,6 +407,32 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         target_link_libraries(imgui PUBLIC Vulkan::Headers)
         target_sources(kf4_port PRIVATE port/platform/present_vk.cpp)
         target_compile_definitions(kf4_port PRIVATE KF4_HAVE_VULKAN_PRESENTER)
+        # The player menu (port/ui/, port/include/port/player_ui.h): RmlUi, drawn by the Vulkan presenter
+        # (port/platform/present_vk_ui.cpp); its files (port/ui/res/) carried in the game as arrays
+        include(cmake/rmlui.cmake)
+        set(KF4_UI_RES ${CMAKE_SOURCE_DIR}/port/ui/res)
+        file(GLOB_RECURSE KF4_UI_FILES CONFIGURE_DEPENDS RELATIVE ${KF4_UI_RES}
+             ${KF4_UI_RES}/*.rml ${KF4_UI_RES}/*.rcss ${KF4_UI_RES}/*.ttf)
+        list(SORT KF4_UI_FILES)
+        list(TRANSFORM KF4_UI_FILES PREPEND ${KF4_UI_RES}/ OUTPUT_VARIABLE KF4_UI_FILE_PATHS)
+        add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/ui_assets.cpp
+            COMMAND ${CMAKE_COMMAND} -DROOT=${KF4_UI_RES} "-DFILES=${KF4_UI_FILES}"
+                    -DOUT=${CMAKE_BINARY_DIR}/ui_assets.cpp -P ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
+            DEPENDS ${KF4_UI_FILE_PATHS} ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
+            COMMENT "The player menu's files" VERBATIM)
+        add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
+                    port/ui/ui_render.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
+        target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
+        target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
+        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui ${KF4_SDL2_LINK})
+        if(NOT TARGET SDL2::SDL2)
+            target_include_directories(kf4_player_ui PRIVATE ${SDL2_INCLUDE_DIRS})
+        endif()
+        target_compile_options(kf4_player_ui PRIVATE -Wall -Wextra -Wshadow)
+        set_target_properties(kf4_player_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+        target_sources(kf4_port PRIVATE port/platform/present_vk_ui.cpp)
+        target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PLAYER_UI)
+        target_link_libraries(kf4_port PRIVATE kf4_player_ui)
     endif()
 elseif(KF4_USE_PARALLEL_GS)
     message(STATUS "third_party/parallel-gs is not checked out: the game will draw nothing")
@@ -834,6 +860,17 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME pcr_jitter COMMAND pcr_jitter_test)
+endif()
+
+# The player menu's moving about (port/ui/menu_model.hpp): focus, lists, tabs and the pointer, on stand-in rows
+add_executable(ui_menu_test tests/ui_menu_test.cpp port/ui/menu_model.cpp)
+target_include_directories(ui_menu_test PRIVATE port/ui)
+set_target_properties(ui_menu_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(ui_menu_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME ui_menu COMMAND ui_menu_test)
 endif()
 
 # The PC renderer's spare surface images (port/gs/pc/pcr_spares.h): which image a copy is made into, which are let go

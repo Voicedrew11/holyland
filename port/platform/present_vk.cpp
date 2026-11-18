@@ -9,7 +9,8 @@
 // blitted into the swapchain's image, scaled and placed as port_video_fit says (4:3 or the widescreen
 // 16:9, with black bars, or stretched), filtered as "Smooth scaling" says. Dear ImGui's draw lists
 // (the settings overlay, port/overlay/overlay.cpp) go over it in a render
-// pass, with ImGui's own Vulkan backend (third_party/imgui/backends/imgui_impl_vulkan.cpp).
+// pass, with ImGui's own Vulkan backend (third_party/imgui/backends/imgui_impl_vulkan.cpp), and the player menu's
+// triangles (port/include/port/player_ui.h) with its own pipeline (present_vk_ui.cpp), under ImGui's.
 //
 // The presenter submits to the PC renderer's queue, under its lock (pcr_queue_lock): the queue's order
 // and a barrier at the start of each command buffer are all the synchronisation the PC renderer's
@@ -36,12 +37,16 @@
 #include "imgui.h"
 #include "flash_ring.h"
 #include "port/zone_scope.hpp"
+#ifdef KF4_HAVE_PLAYER_UI
+#include "present_vk_ui.hpp"
+#endif
 
 extern "C" {
 #include "gs_api.h"
 #include "port/overlay.h"
 #include "port/debug.h"
 #include "port/platform.h"
+#include "port/player_ui.h"
 #include "port/present_vk.h"
 #include "port/profile.h"
 #include "port/settings.h"
@@ -870,6 +875,9 @@ void close_all() {
     }
     if (pr.device != VK_NULL_HANDLE && vk.vkQueueWaitIdle != nullptr) {
         wait_queue();
+#ifdef KF4_HAVE_PLAYER_UI
+        ui_vk_close();
+#endif
         drop_swapchain_images();
         if (pr.swapchain != VK_NULL_HANDLE) {
             vk.vkDestroySwapchainKHR(pr.device, pr.swapchain, nullptr);
@@ -1030,6 +1038,10 @@ extern "C" int port_vk_open(void *sdl_window) {
         return 0;
     }
     pr.up = true;
+#ifdef KF4_HAVE_PLAYER_UI
+    UiVkSetup ui_setup = {pr.get_instance_proc_addr, pr.instance, pr.gpu, pr.device, pr.pass, FRAMES};
+    ui_vk_open(ui_setup); // (logged when it cannot: the player menu is then not drawn)
+#endif
     static bool waits;
     if (!waits) {
         waits = true;
@@ -1174,9 +1186,14 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
 
     // the overlay's draw lists over the picture's place
     ImDrawData *draw = nullptr;
+    const ui::Frame *menu = nullptr;
     bool shot = false;
     if (overlay) {
         ZoneScope overlay_zone(present_overlay_zone);
+#ifdef KF4_HAVE_PLAYER_UI
+        port_player_ui_draw(int(pr.extent.width), int(pr.extent.height));
+        menu = player_ui_frame();
+#endif
         port_overlay_draw(x, y, w, h);
         draw = pr.imgui ? static_cast<ImDrawData *>(port_overlay_draw_data()) : nullptr;
         shot = port_overlay_shot_due() && pr.can_read;
@@ -1203,6 +1220,11 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     memory.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &memory, 0,
                             nullptr, 0, nullptr);
+#ifdef KF4_HAVE_PLAYER_UI
+    if (menu != nullptr) {
+        ui_vk_prepare(cmd, pr.frame, *menu); // (its textures' uploads: outside the render pass)
+    }
+#endif
     if (pixels != nullptr) {
         if (pr.upload_new) {
             image_barrier(cmd, pr.upload, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
@@ -1260,7 +1282,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     static Squares squares; // (under the window's present lock, port/platform/video.c)
     squares.count = 0;
     port_video_counter_draw(add_square, &squares, x, y, w, h);
-    if (draw != nullptr || squares.count > 0) {
+    if (draw != nullptr || menu != nullptr || squares.count > 0) {
         VkRenderPassBeginInfo pass = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = pr.pass;
         pass.framebuffer = target.framebuffer;
@@ -1269,6 +1291,11 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         for (uint32_t i = 0; i < squares.count; i++) {
             vk.vkCmdClearAttachments(cmd, 1, &squares.clears[i], 1, &squares.rects[i]);
         }
+#ifdef KF4_HAVE_PLAYER_UI
+        if (menu != nullptr) {
+            ui_vk_draw(cmd, pr.frame, *menu, pr.extent.width, pr.extent.height);
+        }
+#endif
         if (draw != nullptr) {
             bool textures = imgui_textures_pending(draw);
             if (textures) {
