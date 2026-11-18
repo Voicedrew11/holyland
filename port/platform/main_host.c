@@ -179,6 +179,8 @@
                          Mcd001.ps2, or a PCSX2 folder card) into empty saves of the save folder,
                          and exit; a save is never replaced (no --disc needed). The first-start
                          setup's Emulator Saves page does the same.
+       --mods DIR        the folder of mods: replacement game files and text, one folder each (by default
+                         mods in the data folder; port/include/port/mods.h); "none": no mods
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
                          with the turns mouse look, the run key and twin-stick give the game (the
                          sound follows the game's clock); replay from the same start: --clock,
@@ -234,6 +236,7 @@
 #include "port/play_priority.h"
 #include "port/thread_name.h"
 #include "port/version.h"
+#include "port/mods.h"
 #include "port/frame_profiler.h"
 #include "port/profile_run.h"
 #include "port/settings.h"
@@ -321,7 +324,7 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--door-speed N] [--game-speed N] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--saves DIR|none] [--import-card FILE]\n"
+            "          [--audio-dump FILE] [--no-audio] [--saves DIR|none] [--import-card FILE] [--mods DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen[=SHAPE]] [--widescreen-hud-centred] [--fov N]\n"
@@ -822,6 +825,8 @@ static void parse_options(int argc, char **argv) {
             port_options.saves = value;
         } else if (strcmp(option, "--import-card") == 0) {
             import_card = value;
+        } else if (strcmp(option, "--mods") == 0) {
+            port_options.mods = value;
         } else if (strcmp(option, "--controls") == 0) {
             /* (gone in November 2026: one set of controls, port/sdk/controls.c; still taken, so old scripts run) */
             fprintf(stderr, "[port] --controls %s: there are no layouts any more; ignored\n", value);
@@ -1191,6 +1196,7 @@ int main(int argc, char **argv) {
     port_memory_init();
     port_address_init();
     port_disc_open(port_options.disc);
+    port_mods_open(port_options.mods); /* replacement files and text, read in place of the disc's */
     open_save_folder();
     port_kernel_init();
     port_dmac_start();

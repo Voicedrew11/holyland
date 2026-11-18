@@ -194,6 +194,7 @@ add_library(kf4_port STATIC
     port/platform/mouse_lead.c
     port/platform/screen_vblank.c
     port/platform/disc.c
+    port/platform/mods.c
     port/platform/disc_image.c
     port/platform/iso9660.c
     port/platform/ipu.c
@@ -846,6 +847,19 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mpeg_demux COMMAND mpeg_demux_test)
+endif()
+
+# Mods (port/platform/mods.c): the text code, the rebuilt message table and name records, and a small extracted
+# disc whose KF4.DAT members a mods folder replaces, read back as the game reads them (with port/platform/disc.c)
+add_executable(mods_test tests/mods_test.c port/platform/mods.c port/platform/disc.c port/platform/disc_image.c
+               port/platform/iso9660.c third_party/cjson/cJSON.c)
+target_include_directories(mods_test PRIVATE port/include third_party/cjson)
+target_link_libraries(mods_test PRIVATE kf4_chdr Threads::Threads)
+if(NOT WIN32)
+    target_compile_options(mods_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME mods COMMAND mods_test ${CMAKE_CURRENT_BINARY_DIR}/mods_test_tmp)
 endif()
 
 # The picture's anti-aliasing methods by name (port/include/port/antialias.h, header only)

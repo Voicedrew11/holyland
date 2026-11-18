@@ -226,6 +226,7 @@ typedef struct {
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *saves;       /* --saves: the save folder (port/include/port/save_files.h), or "none" */
+    const char *mods;        /* --mods: the mods folder (port/include/port/mods.h), or "none" */
     const char *record_input; /* --record-input: write the live pad as a pad script */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     const char *audio_dump;  /* --audio-dump: write the sound as a WAV file */
@@ -679,6 +680,10 @@ int port_disc_find_member(const char *name, uint32_t *lsn, uint32_t *size);
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
 /* The name of the file a sector belongs to, for the log (NULL: none). */
 const char *port_disc_name_at(uint32_t lsn, uint32_t *first_lsn);
+/* Replaces a member of KF4.DAT ("font.txc", "param/item_nam.prm") with new contents, kept in memory and read
+   at sectors past the disc's end; KF4.DAT's table, read by the game, is changed to point there. The data is
+   copied. 1, or 0 when there is no such member. A second call for the same member replaces the first. */
+int port_disc_replace_member(const char *name, const void *data, uint32_t size);
 
 /* ---- The log --------------------------------------------------------------------------------
    port_log writes one line to the state log (--log), port_event the same with the vblank count,
