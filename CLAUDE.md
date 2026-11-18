@@ -86,7 +86,11 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
     `--renderer native|modern|fast|both`, scene scale and FSR/DLSS; docs/ still describe it as history.
 - `port/render/`: CPU-side records shared by the renderers (VU1 recording, part moves for pictures
   between game frames). Shared shader headers in `port/render/shaders/`.
-- `port/overlay/`: the ImGui overlay (settings, stats panels, profiler, automap view).
+- `port/ui/`: the player menu (F1), RmlUi in King's Field IV's look, its settings as data (`settings_rows.cpp`),
+  drawn by the Vulkan presenter (`port/platform/present_vk_ui.cpp`): `docs/port/PLAYER_UI.md`, with the plan to
+  retire ImGui.
+- `port/overlay/`: the ImGui overlay, now the developers' (Shift+F1 where the player menu is): settings, stats
+  panels, profiler, automap view.
 - `launcher/`: **Darker Reality**, the launcher players get (its own CMake project, `cd launcher && cmake --preset
   linux`): builds the game on the player's computer from a release's source and shipped tools, then plays it;
   update notices. `packaging/` makes the releases (AppImage, Windows zip and installer), `.github/workflows/release.yml`
