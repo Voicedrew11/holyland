@@ -26,12 +26,27 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 
 echo "==> the game's source and the tools"
 "$ROOT/packaging/payload.sh" "$CONTENT"
-if [ -z "$SDL2_PREFIX" ]; then
-    SDL2_PREFIX="$ROOT/out/sdl2-release"
-    rm -rf "$SDL2_PREFIX"
-    "$ROOT/packaging/linux/build-sdl2.sh" "$SDL2_PREFIX"
+# DARKER_REALITY_TOOLCHAIN_CACHE (the release workflow): a folder holding the tools toolchain.sh made before,
+# taken as they are when it has them (unpacking LLVM and building SDL2 took 4 minutes there), else filled. Whoever
+# sets it keys it on everything the tools are made from (toolchain.lock, toolchain.sh, build-sdl2.sh).
+TOOLCHAIN_CACHE="${DARKER_REALITY_TOOLCHAIN_CACHE:-}"
+if [ -n "$TOOLCHAIN_CACHE" ] && [ -f "$TOOLCHAIN_CACHE/ID" ]; then
+    echo "==> the tools, from $TOOLCHAIN_CACHE ($(cat "$TOOLCHAIN_CACHE/ID"))"
+    mkdir -p "$CONTENT"
+    cp -a "$TOOLCHAIN_CACHE" "$CONTENT/toolchain"
+else
+    if [ -z "$SDL2_PREFIX" ]; then
+        SDL2_PREFIX="$ROOT/out/sdl2-release"
+        rm -rf "$SDL2_PREFIX"
+        "$ROOT/packaging/linux/build-sdl2.sh" "$SDL2_PREFIX"
+    fi
+    "$ROOT/packaging/linux/toolchain.sh" "$CONTENT" "$SDL2_PREFIX"
+    if [ -n "$TOOLCHAIN_CACHE" ]; then
+        rm -rf "$TOOLCHAIN_CACHE"
+        mkdir -p "$(dirname "$TOOLCHAIN_CACHE")"
+        cp -a "$CONTENT/toolchain" "$TOOLCHAIN_CACHE"
+    fi
 fi
-"$ROOT/packaging/linux/toolchain.sh" "$CONTENT" "$SDL2_PREFIX"
 
 echo "==> the launcher, with the release's tools"
 T="$CONTENT/toolchain"
