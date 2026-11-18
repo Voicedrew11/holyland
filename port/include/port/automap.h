@@ -170,12 +170,12 @@ int port_automap_browse_self_test(void);
 
 /* ---- The files: the fog of war, per save (port/platform/automap.c) ------------------------------
    The explored part of every map is kept in the data folder (automap/live.bin), and copied beside each
-   save as it is made: a memory card save (automap/card_NN.bin, by the save's file number) and a quick
-   save (automap/quick_<file>.bin). Loading a save brings its copy back (or keeps the map as it is, for a
+   save as it is made: one of the game's saves (automap/save<N>.bin, N its number) and a quick save
+   (automap/quick_<file>.bin). Loading a save brings its copy back (or keeps the map as it is, for a
    save made without the mod); a new game starts with nothing explored. */
-void port_automap_card_file(const char *name, int writing); /* libmc: the game opened a memory card file */
-void port_automap_quick_saved(const char *path);             /* quicksave.c: a quick save was written */
-void port_automap_quick_loading(const char *path);           /* quicksave.c: a quick save is being loaded */
+void port_automap_save_file(int number, int writing); /* game/saves.c: save `number` (1 to 3) written or loaded */
+void port_automap_quick_saved(const char *path);       /* quicksave.c: a quick save was written */
+void port_automap_quick_loading(const char *path);     /* quicksave.c: a quick save is being loaded */
 /* the game's side keeps the explored state; these move it to and from bytes */
 size_t Automap_Serialize(uint8_t **out);   /* malloc'd */
 void Automap_Deserialize(const uint8_t *data, size_t size); /* NULL: forget everything */

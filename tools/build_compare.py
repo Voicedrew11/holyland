@@ -5,7 +5,7 @@
                            [-- extra program arguments]
 
 Each spot plays tests/newgame.pad and teleports to MAP[:PLACE] at vblank 1900 (--teleport, --invincible), headless at
---frame-rate 240 with a fixed clock and no memory card, once with each program. A run writes the picture shown at a
+--frame-rate 240 with a fixed clock and saving off (--saves none), once with each program. A run writes the picture shown at a
 few vblanks after the teleport (--dump-frames), the game's state line at every vblank (--log) and F10's state dump
 (KF4_DEBUG_AT=state@) near the end. The two programs' pictures must be the same byte for byte, their state lines the
 same, and their state dumps the same but for the dump's own header (the build, the time). A difference means the
@@ -40,7 +40,7 @@ def run(exe, disc, spot, frames, folder, extra, timeout):
     os.makedirs(folder)
     dumps = [TELEPORT + 300, TELEPORT + 600, frames - 1]
     log = os.path.join(folder, "state.log")
-    cmd = [os.path.abspath(exe), "--disc", disc, "--headless", "--no-audio", "--memcard", "none", "--clock", "2026-01-01T12:00:00",
+    cmd = [os.path.abspath(exe), "--disc", disc, "--headless", "--no-audio", "--saves", "none", "--clock", "2026-01-01T12:00:00",
            "--input", PAD, "--teleport", "%d:%s" % (TELEPORT, spot), "--invincible", "--frame-rate", "240",
            "--frames", str(frames), "--dump-frames", ",".join(str(v) for v in dumps), "--dump-dir", folder,
            "--log", log] + extra

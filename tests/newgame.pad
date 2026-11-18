@@ -1,6 +1,6 @@
 # Boot to a new game: tools/boot_test.py plays this with --input.
 # <vblank> <buttons> [vblanks held, default 6]
-100 CROSS 4     # the memory card notice ("no card")
+100 CROSS 4     # the notice that there is nowhere to save (--saves none)
 300 START 4     # skip the logos
 400 START 4     # Press Start
 500 CROSS 4     # New Game (the cursor starts on it)

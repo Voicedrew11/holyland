@@ -20,7 +20,7 @@
          is the format's minor version: a later one may append more, and a reader takes what it knows
          and skips the rest, so a file of any block size loads in every build of format version 1 (a
          64-byte one with no neighbour known: the game works it out from the position).
-         then the save image, exactly as Game_WriteSaveImage made it (the memory card's bytes). */
+         then the save image, exactly as Game_WriteSaveImage made it (the bytes a save point's save holds). */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>

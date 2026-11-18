@@ -1,7 +1,7 @@
 /* The hands mod's port side (port/include/port/hands.h): its switch and command line, the keys' presses, and
    the hands kept per save, as the automap keeps its explored maps (port/platform/automap.c): hands/live.txt
-   in the data folder is the playthrough's, and each save gets a copy (card_NN.txt for the memory card's save
-   file NN, quick_<file>.txt for a quick save), brought back when that save is loaded. A save made without
+   in the data folder is the playthrough's, and each save gets a copy (save<N>.txt for the game's save N,
+   quick_<file>.txt for a quick save), brought back when that save is loaded. A save made without
    one brings back the weapon sets mod's copy of it (weapon_sets/, that mod's folder) when there is one, else
    empty hands; a new game starts with empty ones. The game's side is game/hands.c. */
 #include <stdio.h>
@@ -299,20 +299,15 @@ static void bring_back(const char *name, const char *what) {
     write_hands("live.txt");
 }
 
-/* /BASLUS-20318S/BASLUS-20318G05: the game's save file 05 */
-void port_hands_card_file(const char *name, int writing) {
-    const char *g;
+/* the game's save `number` (1 to 3: port/include/port/save_files.h): hands/save<number>.txt */
+void port_hands_save_file(int number, int writing) {
     char file[64], what[64];
 
-    if (!port_hands.enabled || name == NULL || (g = strstr(name, "BASLUS-20318G")) == NULL) {
+    if (!port_hands.enabled) {
         return;
     }
-    g += strlen("BASLUS-20318G");
-    if (g[0] < '0' || g[0] > '9' || g[1] < '0' || g[1] > '9' || g[2] != 0) {
-        return;
-    }
-    snprintf(file, sizeof(file), "card_%c%c.txt", g[0], g[1]);
-    snprintf(what, sizeof(what), "memory card save %c%c", g[0], g[1]);
+    snprintf(file, sizeof(file), "save%d.txt", number);
+    snprintf(what, sizeof(what), "save %d", number);
     if (writing) {
         start();
         if (write_hands(file)) {

@@ -142,7 +142,7 @@ int port_debug_wants_gs(void) {
 }
 
 /* ---- F10: the game's state as JSON ------------------------------------------------------------- */
-/* the last events the port logged (port_event: files read, movies, the memory card), --log or not */
+/* the last events the port logged (port_event: files read, movies, the saves), --log or not */
 #define EVENTS 32
 static char events[EVENTS][256];
 static uint64_t event_count;

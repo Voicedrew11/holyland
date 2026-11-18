@@ -12,7 +12,7 @@
    and the register pages; the program's image of the game's and ico-audio's globals (between the
    markers port/platform/state_begin.c and state_end.c); the EE threads' fibers and stacks; the kernel
    (threads, semaphores, handlers, timers, EE time); the DMA controller's counts; VIF1; VU1; the GIF's
-   paths and the GS's VRAM and registers; the libraries (libgraph, libpad, libmc, libcdvd, SIF and the
+   paths and the GS's VRAM and registers; the libraries (libgraph, libpad, libcdvd, SIF and the
    IOP heap, rand); the IOP's memory; libsd's sound data inputs; FSIOPSND, modmidi and modhsyn; the
    sound's clock. The parts list their own variables (port_*_state). Not in a state: what belongs to
    the host (the window, the sound device, the log, files, the options) and the counters of --stats,
@@ -419,8 +419,6 @@ static void sync_all(PortStateIo *io) {
     port_libgraph_state(io);
     section(io, "PAD ");
     port_pad_state(io);
-    section(io, "MC  ");
-    port_mc_state(io);
     section(io, "CDVD");
     port_cdvd_state(io);
     section(io, "SIF ");
@@ -610,9 +608,6 @@ static int save(int slot, const char *file) {
         return 1;
     }
     why = port_sif_state_busy();
-    if (why == NULL) {
-        why = port_mc_state_busy();
-    }
     if (why == NULL) {
         why = port_mpeg_state_busy();
     }

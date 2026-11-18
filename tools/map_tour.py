@@ -304,7 +304,7 @@ def make_base(exe, disc, folder, given):
     [todo]s). Returns it and the run's output."""
     path = given or os.path.join(folder, "base.kf4quick")
     cmd = [exe, "--disc", disc, "--no-audio", "--fast", "--headless", "--frames", "1950", "--clock", CLOCK,
-           "--memcard", "none", "--input", NEWGAME_PAD, "--log", os.path.join(folder, "base_log.txt")]
+           "--saves", "none", "--input", NEWGAME_PAD, "--log", os.path.join(folder, "base_log.txt")]
     if not given:
         cmd += ["--quick-save-at", "1900:" + path]
     env = dict(os.environ, KF4_DATA_DIR=os.path.join(folder, "base_data"))
@@ -440,12 +440,12 @@ def run_map(args, base, number, name, places, folder):
     loads = ",".join(("%d:%s" % (v["load_at"], v["save"])) if v["load_at"] else v["save"] for v in views)
     pad = os.path.join(folder, "title.pad")
     with open(pad, "w") as f:
-        f.write("100 CROSS 4     # the memory card notice; the first view loads on the title screen\n")
+        f.write("100 CROSS 4     # the notice that there is nowhere to save; the first view loads on the title screen\n")
         if args.turn:
             f.write("%d RIGHT %d     # (--turn) turning all along\n" % (FIRST_LOAD, last))
     log = os.path.join(folder, "log.txt")
     cmd = [args.exe, "--disc", args.disc, "--no-audio", "--fast", "--headless", "--frames", str(last), "--clock", CLOCK,
-           "--memcard", "none", "--input", pad, "--quick-load", loads, "--stats", "--log", log,
+           "--saves", "none", "--input", pad, "--quick-load", loads, "--stats", "--log", log,
            "--dump-frames", ",".join(str(v["picture_at"]) for v in views), "--dump-dir", pictures,
            "--renderer", args.renderer] + (args.extra.split() if args.extra else [])
     if not args.no_capture:

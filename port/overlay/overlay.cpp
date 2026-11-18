@@ -773,12 +773,12 @@ void saves_page() {
                        "saves to the chosen slot and %s loads it, in play (not in menus, messages or events); "
                        "a load works on the title screen too.",
                        save_key, load_key);
-    tooltip("A quick save is the game's own save (what a save point writes to the memory card), taken where you "
+    tooltip("A quick save is the game's own save (what a save point writes), taken where you "
             "stand: the map, your position, heading and look, HP and MP, level, stats, items, magic, gold and the "
             "world's flags (doors, chests, events, items picked up).\n"
-            "Loading restarts the map from it, as loading a memory card save does: enemies come back as when "
+            "Loading restarts the map from it, as loading a save does: enemies come back as when "
             "you enter a map, and what lasts only a while (ailments' timers, the power and magic gauges, "
-            "spell effects) starts afresh. Nothing is written to the memory card.");
+            "spell effects) starts afresh. The save point's three saves are left as they are.");
     if (ImGui::BeginTable("quick", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthStretch, 0.7f);
         ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch, 1.3f);

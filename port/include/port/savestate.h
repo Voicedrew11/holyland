@@ -58,7 +58,6 @@ void port_vu1_state(PortStateIo *io);
 void port_gs_state(PortStateIo *io);      /* the GIF's paths and the GS (VRAM, registers) */
 void port_libgraph_state(PortStateIo *io);
 void port_pad_state(PortStateIo *io);
-void port_mc_state(PortStateIo *io);
 void port_cdvd_state(PortStateIo *io);
 void port_sif_state(PortStateIo *io);     /* open files, modules, the IOP heap */
 void port_libc_state(PortStateIo *io);
@@ -71,7 +70,6 @@ void port_audio_state(PortStateIo *io);   /* the sound's clock: last, after the 
 /* Why a state cannot be taken now (NULL: it can), from the parts that know (port/sdk/sif.c,
    port/platform/gs.c); the request waits for the next vblank. */
 const char *port_sif_state_busy(void);
-const char *port_mc_state_busy(void);
 const char *port_gs_state_busy(void);
 /* (port/sdk/libmpeg.c) a movie plays: its decoder is the host's, not in a state */
 const char *port_mpeg_state_busy(void);

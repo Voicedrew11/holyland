@@ -129,7 +129,7 @@ def run_case(a, name, case, mode, out):
     window = (window[0] + offset, window[1] + offset)
     dump = case["dump"] or (600, 611)
     dump = (dump[0] + offset, dump[1] + offset)
-    cmd = [a.exe, "--disc", a.iso, "--headless", "--memcard", "none", "--no-audio", "--input", pad,
+    cmd = [a.exe, "--disc", a.iso, "--headless", "--saves", "none", "--no-audio", "--input", pad,
            "--frames", str(frames)] + OWNER + case["args"] + a.extra
     if case["spot"]:
         cmd += ["--quick-load", os.path.join(a.spots, case["spot"] + ".kf4quick")]

@@ -1,7 +1,7 @@
 /* Teleport (port/platform/teleport.c): a debugging aid that puts the player in any map, at a place read
    from the map's own file, keeping the game's progress. It is a quick load of a save image made from
    the game as it is now, with the map and the position changed (port/include/port/quicksave.h): the
-   game restarts the session on that map, as a memory card load does, and puts the player on the floor
+   game restarts the session on that map, as loading a save does, and puts the player on the floor
    under the place.
 
    The places are those tools/map_tour.py visits: the map's start (where a map change without a link

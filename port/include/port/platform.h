@@ -168,7 +168,7 @@ typedef struct {
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
-    const char *memcard;     /* --memcard: the folder that is the memory card in slot 1, or "none" */
+    const char *saves;       /* --saves: the save folder (port/include/port/save_files.h), or "none" */
     const char *record_input; /* --record-input: write the live pad as a pad script */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */
     const char *audio_dump;  /* --audio-dump: write the sound as a WAV file */
@@ -562,17 +562,13 @@ const char *port_disc_name_at(uint32_t lsn, uint32_t *first_lsn);
 
 /* ---- The log --------------------------------------------------------------------------------
    port_log writes one line to the state log (--log), port_event the same with the vblank count,
-   for the things that happen between frames (files opened, movies, the memory card). */
+   for the things that happen between frames (files opened, movies, the saves). */
 void port_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void port_event(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int port_log_enabled(void);
 
 /* The game's state in one line (game/state_log.c), written to the log once a frame. */
 void kf4_game_state(char *line, size_t size);
-
-/* ---- The memory card (port/sdk/libmc.c) ----------------------------------------------------- */
-/* Opens the card folder of --memcard (by default <host-dir>/memcard), making it if it is missing */
-void port_mc_init(void);
 
 /* ---- The pad (port/sdk/libpad.c) ------------------------------------------------------------ */
 void port_pad_init(void);

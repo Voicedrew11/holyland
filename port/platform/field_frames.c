@@ -1,7 +1,7 @@
 /* Whole frames of the screens the game draws as fields (port_whole_frame(), on by default;
    --no-whole-frame keeps the PS2's way).
 
-   What the game does. The menus (Menu_Run: the pause menu's screens, the memory card, options and
+   What the game does. The menus (Menu_Run: the pause menu's screens, the save screens, options and
    brightness screens) set the GS to field mode (sceGsResetGraph(0, 1, 2, 1)) with two 640x224 buffers:
    every vblank the game draws a new picture into the buffer not shown, with a draw offset half a line
    lower or not (sceGsSetHalfOffset, by the field it will be shown in), and the GS shows each buffer

@@ -41,9 +41,9 @@ ecord_input.bat [kf4.exe] [disc]` instead (or double-clicks it,
 with `KF4_EXE` and `KF4_DISC` set, or `kf4.exe` beside it): the same recording.
 
 **record** copies what the run starts from out of the data folder into `REC/start` (`settings.json`,
-`overlay.ini`, `quicksaves/`, `automap/`, `hands/`, `weapon_sets/`, `memcard/`; nothing in the data folder is changed), then
+`overlay.ini`, `quicksaves/`, `automap/`, `hands/`, `weapon_sets/`, `saves/`; nothing in the data folder is changed), then
 starts the game in its window with the player's settings, `--clock 2026-01-01T12:00:00`, the newest quick save
-loaded by itself (`--quick-load`; `--quick FILE` another, `--quick none` the title and the memory card) and
+loaded by itself (`--quick-load`; `--quick FILE` another, `--quick none` the title and the saves) and
 `--record-input REC/input.pad`. The player plays as usual, presses F8 when the thing shows (the F8 pictures go
 to `captures/` as always, and the vblank into the recording), and closes the game. `REC` is
 `<data folder>/captures/input-YYYYMMDD-HHMMSS` (`--out`, or `KF4_REC` for the .bat), beside F8's and F9's
@@ -80,7 +80,7 @@ look out, so its pictures between repeat but are not exactly the ones the player
 player should avoid the first three.
 
 Determinism: a recording is the game's input per vblank, so it replays the same headless or in a window and at
-any frame rate, from the same start: the same quick save, clock, memory card and data folder (`REC/start`). A
+any frame rate, from the same start: the same quick save, clock, saves and data folder (`REC/start`). A
 build that changes what the game does (game code, input, the mouse look) can go out of step: each recorded turn is
 checked against the vblank it is given back in, and the first that is late is reported. A build that changes
 only the drawing replays in step, which is what makes a recording good for bisecting a renderer bug: replay with

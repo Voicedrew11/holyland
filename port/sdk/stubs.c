@@ -1,6 +1,7 @@
 /* The Sony library that is still a stand-in: libdev. Each call does nothing, or the least that keeps
-   the game going. The rest of the SDK is in port/sdk: libcdvd.c, libdma.c, libgraph.c, libmc.c,
-   libmpeg.c, libpad.c, libsdr.c and sif.c, and the kernel in port/platform/kernel.c. */
+   the game going. The rest of the SDK is in port/sdk: libcdvd.c, libdma.c, libgraph.c,
+   libmpeg.c, libpad.c, libsdr.c and sif.c, and the kernel in port/platform/kernel.c. There is no libmc:
+   the saves are files (game/saves.c). */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>

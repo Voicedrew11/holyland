@@ -9,7 +9,7 @@ pictures between (240) judged against their game frames.
 Each case is a pad script played after tests/newgame.pad (tests/motion/*.pad, vblanks counted from the start of
 the run), with options (--cheats, --teleport, --invincible) and KF4_FX (game/screen_fx.c: spell=N casts that
 spell, creature=ROW puts the player before a creature of that chr record, water forces the under-water screen).
-Every run: --headless --no-audio --fast --memcard none, a fresh KF4_DATA_DIR in DIR, one game at a time.
+Every run: --headless --no-audio --fast --saves none, a fresh KF4_DATA_DIR in DIR, one game at a time.
 
 For each case and profile:
 1. gs: --renderer gs at the PS2's rate (30), --dump-frames at the case's vblanks, --log;
@@ -129,7 +129,7 @@ def run(a, case, d, renderer, opts, frames, rate=None):
     os.makedirs(os.path.join(d, "data"))
     pad = os.path.join(d, "case.pad")
     write_pad(pad, case)
-    cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--memcard", "none", "--input", pad,
+    cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--saves", "none", "--input", pad,
            "--frames", str(max(frames) + 2), "--renderer", renderer, "--dump-frames", ",".join(map(str, frames)),
            "--dump-dir", d, "--log", os.path.join(d, "log.txt")] + case["args"] + opts
     if rate:

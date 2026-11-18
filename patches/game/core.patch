@@ -1470,24 +1470,23 @@ index 608506cc622493703936bd88ef11da2034bd713b..a609b448fd8abef996a5fc7af38eea53
      time->min = BCD2DEC(time->min);
      time->hour = BCD2DEC(time->hour);
 diff --git a/src/game/core/system.c b/src/game/core/system.c
-index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d99315223987599682 100644
+index d8fb9aac24ace72bfc11c16896369294b8455f2c..10f8037ed8a9e430c018b8d9136fc4a2d0e18f24 100644
 --- a/src/game/core/system.c
 +++ b/src/game/core/system.c
-@@ -6,6 +6,13 @@
+@@ -6,6 +6,12 @@
  #include "core/game.h"
  #include "input/pad.h"
  #include "gfx/gs.h"
 +#include <libdev.h>
 +#include <libdma.h>
 +#include <libgraph.h>
-+#include <libmc.h>
 +#include <libsdr.h>
 +#include <libvu0.h>
 +#include <sifdev.h>
  
  extern int opening_movie_skipped; /* set once START was pressed during the opening movie */
  extern char *map_file_area;        /* the memory area the movie player is given as its heap */
-@@ -13,9 +20,10 @@ extern int map_file_area_size;          /* the size it is given for that heap */
+@@ -13,9 +19,10 @@ extern int map_file_area_size;          /* the size it is given for that heap */
  extern int context1_buffer_half;          /* the half of the first double buffer in use; each swap flips it */
  extern int context2_buffer_half;          /* the same for the second */
  extern int D_00446F80;
@@ -1501,7 +1500,7 @@ index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d993152239
  extern char opening_movie_path[];       /* "cdrom0:\DATA\KF4OP.PSS;1" */
  extern char ending_movie_path[];        /* "cdrom0:\DATA\KF4ED.PSS;1" */
  extern char staff_roll_movie_path[];    /* "cdrom0:\DATA\KF4STAFF.PSS;1" */
-@@ -28,31 +36,20 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
+@@ -28,31 +35,20 @@ extern GsDoubleBuffer game_dbuff_context2;  /* the same frame buffers, drawn thr
  extern GsRegisterPair frame_dispfb_regs;    /* the DISPFB values of the two frames */
  extern GsRegisterPair frame_display_regs;   /* the DISPLAY values of the two frames */
  
@@ -1535,7 +1534,7 @@ index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d993152239
  
  /* The opening movie's per-frame callback (given to Movie_Play by Movie_PlayOpening): polls the controller
     and returns TRUE, ending the movie, when START is pressed. */
-@@ -72,7 +69,7 @@ void Movie_PlayOpening(void) {
+@@ -72,7 +68,7 @@ void Movie_PlayOpening(void) {
      char buf[0x40]; /* unused, but retail reserves the 0x40 bytes */
  
      opening_movie_skipped = 0;
@@ -1544,7 +1543,7 @@ index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d993152239
      temp = (s64)0xC000 << 17;
      game_dbuff_clear_color[0] = temp;
      game_dbuff_clear_color[30] = temp;
-@@ -85,7 +82,7 @@ void Movie_PlayOpening(void) {
+@@ -85,7 +81,7 @@ void Movie_PlayOpening(void) {
      context1_buffer_half = 0;
      context2_buffer_half = 0;
      GsDraw_ResetDrawTarget();
@@ -1553,7 +1552,7 @@ index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d993152239
      func_001095D8();
      context1_buffer_half = 1;
      context2_buffer_half = 1;
-@@ -103,9 +100,9 @@ void Movie_PlayEnding(void) {
+@@ -103,9 +99,9 @@ void Movie_PlayEnding(void) {
  
      opening_movie_skipped = 0;
      if ((game_status_flags[0] >> 11) & 1) {
@@ -1565,7 +1564,16 @@ index d8fb9aac24ace72bfc11c16896369294b8455f2c..b7556af05a7e19d56fba28d993152239
      }
      sceGsSyncV(0);
      sceGsSyncV(0);
-@@ -157,7 +154,7 @@ void Display_Init(void) {
+@@ -130,7 +126,7 @@ static int func_0020AF28(void) {
+    and starts the sound library and the IOP heap. */
+ void System_Init(void) {
+     System_RebootIop();
+-    sceMcInit();
++    /* PC: no memory card to start: the saves are files (game/saves.c) */
+     func_0022B5B8();
+     sceDevVu0Pause();
+     func_0022B8E8();
+@@ -157,7 +153,7 @@ void Display_Init(void) {
      Display_BuildProjection(projection_matrix, 512.0f, 1.0f, 65536.0f);
      context1_buffer_half = 0;
      D_00446F80 = 0;
