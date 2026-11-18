@@ -71,6 +71,10 @@ Pinned by SHA-256 in `packaging/toolchain.lock`, downloaded once into `out/packa
 Change a tool: its line in `toolchain.lock` (`packaging/fetch.sh --print NAME` gives the new SHA-256), then the
 `ID` in that platform's `toolchain.sh`, which makes every player's next start build again.
 
+The release workflow keeps the finished Linux tools (`DARKER_REALITY_TOOLCHAIN_CACHE`, read by
+`build-appimage.sh`) and the Windows downloads in GitHub caches saved only on `main` (a tag's own cache is seen by
+that tag alone). Pushing a change to the tools' files to `main` runs the package jobs to refill them.
+
 ### Sizes (2026-11-18)
 
 | | Download | Installed |

@@ -59,10 +59,11 @@ find "$STAGE" -exec touch -d '2020-01-01 00:00:00 UTC' {} +
 echo "==> the zip"
 ZIP="$OUT/$NAME-$VERSION-win-x64.zip"
 rm -f "$ZIP"
+# 7-Zip's normal level on every core: -mx=9 took 3 minutes in the release workflow for a few percent smaller
 if command -v 7z >/dev/null; then
-    (cd "$STAGE" && 7z a -tzip -mx=9 "$ZIP" . >/dev/null)
+    (cd "$STAGE" && 7z a -tzip -mx=5 -mmt=on "$ZIP" . >/dev/null)
 else
-    (cd "$STAGE" && zip -qr9 "$ZIP" .)
+    (cd "$STAGE" && zip -qr "$ZIP" .)
 fi
 echo "zip: $ZIP ($(du -h "$ZIP" | cut -f1))"
 

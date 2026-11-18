@@ -4,6 +4,10 @@
 # password-protected `preview` prerelease instead. Each job also builds the game from the package exactly as a player's launcher
 # does (--build-only: the shipped tools, the read-only source, no git), so a release that cannot build is
 # never made.
+#
+# Its caches (the Linux tools, the Windows downloads) are saved only on main: a cache saved by a tag's run is seen by
+# that tag alone, and every preview is a new tag, so none was ever used. A push to main that changes what the tools
+# are made from runs the two package jobs to fill them (no release, no preview); so does starting it by hand on main.
 name: release
 
 on:
@@ -11,6 +15,13 @@ on:
     # preview-<commit>: tools/prerelease.sh's request for a preview, from any branch (a workflow started by
     # hand runs only once this file is on the default branch); the preview job deletes it
     tags: ["v*", "preview-*"]
+    branches: [main]
+    paths:
+      - packaging/toolchain.lock
+      - packaging/fetch.sh
+      - packaging/linux/toolchain.sh
+      - packaging/linux/build-sdl2.sh
+      - packaging/windows/toolchain.sh
   workflow_dispatch:
     inputs:
       preview:
@@ -28,12 +39,15 @@ jobs:
     env:
       APPIMAGE_EXTRACT_AND_RUN: 1 # (appimagetool and the AppImage itself, without FUSE)
     steps:
+      # the whole history for tools/version.sh's tags, without old files' contents; the submodules at their commit
+      # alone (their history is not needed, and it was most of a minute)
       - uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 0
-      - name: Check out what paraLLEl-GS needs
+          filter: blob:none
+      - name: Check out the submodules and what paraLLEl-GS needs
         run: |
+          git submodule update --init --depth 1
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: Install what SDL2's build needs
@@ -46,12 +60,22 @@ jobs:
         run: |
           case "$GITHUB_REF" in refs/tags/v*) echo "DARKER_REALITY_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
-      - uses: actions/cache@v4
+      - name: Restore the tools
+        id: tools
+        uses: actions/cache/restore@v4
         with:
-          path: out/packaging-cache
-          key: packaging-linux-${{ hashFiles('packaging/toolchain.lock') }}
+          path: out/toolchain-linux
+          key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl2.sh') }}
       - name: The AppImage
+        env:
+          DARKER_REALITY_TOOLCHAIN_CACHE: ${{ github.workspace }}/out/toolchain-linux
         run: packaging/linux/build-appimage.sh
+      - name: Save the tools
+        if: github.ref == 'refs/heads/main' && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/toolchain-linux
+          key: ${{ steps.tools.outputs.cache-primary-key }}
       - name: A player's build from it
         run: |
           app="$(ls dist/*.AppImage)"
@@ -71,12 +95,15 @@ jobs:
       run:
         shell: bash
     steps:
+      # the whole history for tools/version.sh's tags, without old files' contents; the submodules at their commit
+      # alone (their history is not needed, and it was most of a minute)
       - uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 0
-      - name: Check out what paraLLEl-GS needs
+          filter: blob:none
+      - name: Check out the submodules and what paraLLEl-GS needs
         run: |
+          git submodule update --init --depth 1
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: The version
@@ -85,12 +112,20 @@ jobs:
           bash tools/version.sh
       - name: Inno Setup on PATH
         run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
-      - uses: actions/cache@v4
+      - name: Restore the downloads
+        id: downloads
+        uses: actions/cache/restore@v4
         with:
           path: out/packaging-cache
           key: packaging-windows-${{ hashFiles('packaging/toolchain.lock') }}
       - name: The zip and the installer
         run: packaging/windows/build-windows.sh
+      - name: Save the downloads
+        if: github.ref == 'refs/heads/main' && steps.downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/packaging-cache
+          key: ${{ steps.downloads.outputs.cache-primary-key }}
       - name: A player's build from it
         run: |
           stage="dist/win-x64"
@@ -150,9 +185,10 @@ jobs:
           chmod +x stage/linux/*.AppImage
           cp dist/*setup.exe "stage/setup/$NAME-preview-$sha-win-x64-setup.exe"
           unzip -q dist/*-win-x64.zip -d stage/win
-          (cd stage/linux && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-linux-x86_64.zip" . >/dev/null)
-          (cd stage/setup && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64-setup.zip" . >/dev/null)
-          (cd stage/win && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64.zip" . >/dev/null)
+          # the AppImage and the installer are compressed already: stored, not squeezed again
+          (cd stage/linux && 7z a -tzip -mx=0 -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-linux-x86_64.zip" . >/dev/null)
+          (cd stage/setup && 7z a -tzip -mx=0 -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64-setup.zip" . >/dev/null)
+          (cd stage/win && 7z a -tzip -mx=5 -mmt=on -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64.zip" . >/dev/null)
           for f in out/*.zip; do 7z t "-p$PREVIEW_PASSWORD" "$f" >/dev/null; done
           ls -la out
       - name: Replace the preview prerelease

@@ -33,6 +33,9 @@ OutputDir={#Out}
 OutputBaseFilename={#FileName}-{#AppVersion}-win-x64-setup
 Compression=lzma2/max
 SolidCompression=yes
+; LZMA2 in blocks on 4 threads (the release workflow's runner has 4): a little larger, minutes faster
+LZMANumBlockThreads=4
+LZMAUseSeparateProcess=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern

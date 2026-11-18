@@ -19,16 +19,17 @@ SRC="$CONTENT/src"
 rm -rf "$SRC"
 mkdir -p "$SRC"
 
-# copy_tracked REPO PREFIX DEST [path filters...]: the files git tracks in REPO (as they are in the working
-# tree), under its paths matching the filters
+# copy_tracked REPO DEST [path filters...]: the files git tracks in REPO (as they are in the working tree),
+# under its paths matching the filters. One tar for all of them, not a cp per file: starting a process is slow
+# on Windows (a cp per file took 3 minutes of the Windows release; the loop below uses only shell builtins).
 copy_tracked() {
     local repo="$1" dest="$2"
     shift 2
+    mkdir -p "$dest"
     git -C "$repo" ls-files -z --cached -- "$@" | while IFS= read -r -d '' f; do
         [ -f "$repo/$f" ] || continue # a submodule's entry, or a file deleted in the working tree
-        mkdir -p "$dest/$(dirname "$f")"
-        cp -p "$repo/$f" "$dest/$f"
-    done
+        printf '%s\0' "$f"
+    done | tar -C "$repo" --null -T - -cf - | tar -C "$dest" -xpf -
 }
 
 echo "==> the port"
