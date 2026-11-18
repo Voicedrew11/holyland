@@ -2422,7 +2422,7 @@ private:
             return;
         }
         BufferCreateInfo info = {};
-        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.domain = BufferDomain::LinkedDeviceHost;
         info.size = VkDeviceSize(count) * sizeof(Vertex);
         info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         BufferHandle buffer = device_.create_buffer(info, nullptr);
@@ -3506,7 +3506,7 @@ private:
             return;
         }
         BufferCreateInfo info = {};
-        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.domain = BufferDomain::LinkedDeviceHost;
         info.size = n * (sizeof(PrimPush) + sizeof(VkDrawIndirectCommand)) + triangles * sizeof(MergedTriangle);
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         runs_.buffer = device_.create_buffer(info, nullptr);

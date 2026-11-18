@@ -78,7 +78,7 @@ Between::~Between() {
 
 BufferHandle Between::make(const void *data, size_t bytes, bool mapped) {
     BufferCreateInfo info = {};
-    info.domain = mapped ? BufferDomain::LinkedDeviceHostPreferDevice : BufferDomain::Device;
+    info.domain = mapped ? BufferDomain::LinkedDeviceHost : BufferDomain::Device;
     info.size = std::max<size_t>(bytes, 16);
     info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     BufferHandle buffer = device_.create_buffer(info, data);
