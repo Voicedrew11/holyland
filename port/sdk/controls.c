@@ -55,7 +55,7 @@
 #include "port/hands.h"
 
 #ifdef KF4_HAVE_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 #define PI 3.14159265358979323846
@@ -184,8 +184,8 @@ int port_controls_action_used(int action) {
 #ifdef KF4_HAVE_SDL
 #define KEY(name) (BINDING_KEY | SDL_SCANCODE_##name)
 #define MOUSE(n) (BINDING_MOUSE | (n))
-#define PAD(name) (BINDING_PAD | SDL_CONTROLLER_BUTTON_##name)
-#define TRIGGER(name) (BINDING_TRIGGER | SDL_CONTROLLER_AXIS_TRIGGER##name)
+#define PAD(name) (BINDING_PAD | SDL_GAMEPAD_BUTTON_##name)
+#define TRIGGER(name) (BINDING_TRIGGER | SDL_GAMEPAD_AXIS_##name##_TRIGGER)
 #else
 #define KEY(name) 0
 #define MOUSE(n) 0
@@ -202,19 +202,19 @@ static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
     [ACTION_DOWN] = {KEY(DOWN), 0, PAD(DPAD_DOWN)},
     [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
     [ACTION_RIGHT] = {KEY(RIGHT), 0, PAD(DPAD_RIGHT)},
-    [ACTION_CROSS] = {KEY(E), MOUSE(2), PAD(A)},
-    [ACTION_CIRCLE] = {KEY(ESCAPE), KEY(TAB), PAD(B)},
-    [ACTION_SQUARE] = {KEY(SPACE), MOUSE(1), PAD(X)},
-    [ACTION_TRIANGLE] = {KEY(Q), MOUSE(3), PAD(Y)},
-    [ACTION_L1] = {KEY(Z), MOUSE(4), PAD(LEFTSHOULDER)},
-    [ACTION_R1] = {KEY(C), MOUSE(5), PAD(RIGHTSHOULDER)},
+    [ACTION_CROSS] = {KEY(E), MOUSE(2), PAD(SOUTH)},
+    [ACTION_CIRCLE] = {KEY(ESCAPE), KEY(TAB), PAD(EAST)},
+    [ACTION_SQUARE] = {KEY(SPACE), MOUSE(1), PAD(WEST)},
+    [ACTION_TRIANGLE] = {KEY(Q), MOUSE(3), PAD(NORTH)},
+    [ACTION_L1] = {KEY(Z), MOUSE(4), PAD(LEFT_SHOULDER)},
+    [ACTION_R1] = {KEY(C), MOUSE(5), PAD(RIGHT_SHOULDER)},
     [ACTION_L2] = {KEY(PAGEDOWN), 0, TRIGGER(LEFT)},
     [ACTION_R2] = {KEY(PAGEUP), 0, TRIGGER(RIGHT)},
-    [ACTION_L3] = {0, 0, PAD(LEFTSTICK)},
-    [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
+    [ACTION_L3] = {0, 0, PAD(LEFT_STICK)},
+    [ACTION_R3] = {0, 0, PAD(RIGHT_STICK)},
     [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
     [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
-    [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
+    [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFT_STICK)},
     [ACTION_LEFT_STICK_UP] = {KEY(W)},
     [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
     [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
@@ -540,21 +540,21 @@ static const char *const mouse_labels[6] = {"", "Mouse left", "Mouse middle", "M
 /* the PlayStation's name next to the controller's own, as SDL lays the buttons out (Xbox's) */
 static const char *pad_label(int button) {
     switch (button) {
-    case SDL_CONTROLLER_BUTTON_A: return "Pad A";
-    case SDL_CONTROLLER_BUTTON_B: return "Pad B";
-    case SDL_CONTROLLER_BUTTON_X: return "Pad X";
-    case SDL_CONTROLLER_BUTTON_Y: return "Pad Y";
-    case SDL_CONTROLLER_BUTTON_BACK: return "Pad Back";
-    case SDL_CONTROLLER_BUTTON_GUIDE: return "Pad Guide";
-    case SDL_CONTROLLER_BUTTON_START: return "Pad Start";
-    case SDL_CONTROLLER_BUTTON_LEFTSTICK: return "Pad left stick";
-    case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return "Pad right stick";
-    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return "Pad LB";
-    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return "Pad RB";
-    case SDL_CONTROLLER_BUTTON_DPAD_UP: return "Pad up";
-    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return "Pad down";
-    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return "Pad left";
-    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return "Pad right";
+    case SDL_GAMEPAD_BUTTON_SOUTH: return "Pad A";
+    case SDL_GAMEPAD_BUTTON_EAST: return "Pad B";
+    case SDL_GAMEPAD_BUTTON_WEST: return "Pad X";
+    case SDL_GAMEPAD_BUTTON_NORTH: return "Pad Y";
+    case SDL_GAMEPAD_BUTTON_BACK: return "Pad Back";
+    case SDL_GAMEPAD_BUTTON_GUIDE: return "Pad Guide";
+    case SDL_GAMEPAD_BUTTON_START: return "Pad Start";
+    case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "Pad left stick";
+    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "Pad right stick";
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "Pad LB";
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "Pad RB";
+    case SDL_GAMEPAD_BUTTON_DPAD_UP: return "Pad up";
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "Pad down";
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Pad left";
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Pad right";
     default: return NULL;
     }
 }
@@ -574,14 +574,14 @@ void port_controls_binding_label(int binding, char *out, size_t size) {
     case BINDING_PAD:
         name = pad_label(code);
         if (name == NULL) {
-            name = SDL_GameControllerGetStringForButton((SDL_GameControllerButton)code);
+            name = SDL_GetGamepadStringForButton((SDL_GamepadButton)code);
             snprintf(out, size, "Pad %s", name ? name : "?");
         } else {
             snprintf(out, size, "%s", name);
         }
         return;
     case BINDING_TRIGGER:
-        snprintf(out, size, "%s", code == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? "Pad LT" : "Pad RT");
+        snprintf(out, size, "%s", code == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? "Pad LT" : "Pad RT");
         return;
     default:
         snprintf(out, size, "-");
@@ -602,11 +602,11 @@ void port_controls_binding_text(int binding, char *out, size_t size) {
         snprintf(out, size, "mouse:%s", code >= 1 && code <= 5 ? mouse_ids[code] : "");
         return;
     case BINDING_PAD:
-        name = SDL_GameControllerGetStringForButton((SDL_GameControllerButton)code);
+        name = SDL_GetGamepadStringForButton((SDL_GamepadButton)code);
         snprintf(out, size, "pad:%s", name ? name : "");
         return;
     case BINDING_TRIGGER:
-        name = SDL_GameControllerGetStringForAxis((SDL_GameControllerAxis)code);
+        name = SDL_GetGamepadStringForAxis((SDL_GamepadAxis)code);
         snprintf(out, size, "trigger:%s", name ? name : "");
         return;
     default:
@@ -641,18 +641,18 @@ int port_controls_binding_parse(const char *text, int *binding) {
         return 0;
     }
     if (strncmp(text, "pad:", 4) == 0) {
-        SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(text + 4);
+        SDL_GamepadButton button = SDL_GetGamepadButtonFromString(text + 4);
 
-        if (button == SDL_CONTROLLER_BUTTON_INVALID) {
+        if (button == SDL_GAMEPAD_BUTTON_INVALID) {
             return 0;
         }
         *binding = BINDING_PAD | (int)button;
         return 1;
     }
     if (strncmp(text, "trigger:", 8) == 0) {
-        SDL_GameControllerAxis axis = SDL_GameControllerGetAxisFromString(text + 8);
+        SDL_GamepadAxis axis = SDL_GetGamepadAxisFromString(text + 8);
 
-        if (axis != SDL_CONTROLLER_AXIS_TRIGGERLEFT && axis != SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+        if (axis != SDL_GAMEPAD_AXIS_LEFT_TRIGGER && axis != SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
             return 0;
         }
         *binding = BINDING_TRIGGER | (int)axis;
@@ -668,11 +668,11 @@ void port_controls_listen(int action, int slot) {
     }
     pc.listen_action = action;
     pc.listen_slot = slot;
-    pc.listen_until = SDL_GetTicks() + LISTEN_MS;
+    pc.listen_until = (uint32_t)SDL_GetTicks() + LISTEN_MS;
 }
 
 int port_controls_listening(int *action, int *slot) {
-    if (pc.listen_action >= 0 && (int32_t)(pc.listen_until - SDL_GetTicks()) <= 0) {
+    if (pc.listen_action >= 0 && (int32_t)(pc.listen_until - (uint32_t)SDL_GetTicks()) <= 0) {
         pc.listen_action = -1;
     }
     if (pc.listen_action < 0) {
@@ -705,37 +705,37 @@ static int listen_event(const SDL_Event *event) {
         return 0;
     }
     switch (event->type) {
-    case SDL_KEYDOWN:
+    case SDL_EVENT_KEY_DOWN:
         if (event->key.repeat) {
             return 1;
         }
-        if (event->key.keysym.scancode == SDL_SCANCODE_F1) {
+        if (event->key.scancode == SDL_SCANCODE_F1) {
             pc.listen_action = -1;
-        } else if (event->key.keysym.scancode == SDL_SCANCODE_DELETE) {
+        } else if (event->key.scancode == SDL_SCANCODE_DELETE) {
             listened(BINDING_NONE);
         } else if (!pad_slot) {
-            listened(BINDING_KEY | event->key.keysym.scancode);
+            listened(BINDING_KEY | event->key.scancode);
         }
         return 1;
-    case SDL_MOUSEBUTTONDOWN:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (!pad_slot && event->button.button >= 1 && event->button.button <= 5) {
             listened(BINDING_MOUSE | event->button.button);
         }
         return 1;
-    case SDL_CONTROLLERBUTTONDOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         if (pad_slot) {
-            listened(BINDING_PAD | event->cbutton.button);
+            listened(BINDING_PAD | event->gbutton.button);
         }
         return 1;
-    case SDL_CONTROLLERAXISMOTION:
-        if (pad_slot && event->caxis.value > TRIGGER_DOWN &&
-            (event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ||
-             event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT)) {
-            listened(BINDING_TRIGGER | event->caxis.axis);
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        if (pad_slot && event->gaxis.value > TRIGGER_DOWN &&
+            (event->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
+             event->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
+            listened(BINDING_TRIGGER | event->gaxis.axis);
         }
         return 1;
-    case SDL_TEXTINPUT:
-    case SDL_MOUSEWHEEL:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_MOUSE_WHEEL:
         return 1;
     default:
         return 0;
@@ -752,7 +752,11 @@ static void update_cursor(void) {
     int show = !pc.captured && (pc.mouse_last || pc.blocked || !pc.focused);
 
     if (show != pc.cursor_shown) {
-        SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);
+        if (show) {
+            SDL_ShowCursor();
+        } else {
+            SDL_HideCursor();
+        }
         pc.cursor_shown = show;
     }
 }
@@ -764,9 +768,11 @@ static void set_captured(int captured) {
     pc.captured = captured;
     pc.yaw = pc.pitch = 0.0;
     lead_waiting();
-    SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
+    if (port_video_window() != NULL) {
+        SDL_SetWindowRelativeMouseMode(port_video_window(), captured != 0);
+    }
     SDL_GetRelativeMouseState(NULL, NULL); /* motion before the change is dropped */
-    pc.motion_after = SDL_GetTicks() + MOTION_SETTLE_MS;
+    pc.motion_after = (uint32_t)SDL_GetTicks() + MOTION_SETTLE_MS;
     update_cursor();
 }
 
@@ -784,26 +790,26 @@ void port_controls_block(int blocked) {
 /* What the player is using: the mouse, or a key or controller (the cursor follows it: update_cursor) */
 static void note_device(const SDL_Event *event) {
     switch (event->type) {
-    case SDL_KEYDOWN:
+    case SDL_EVENT_KEY_DOWN:
         if (!event->key.repeat) {
             pc.mouse_last = 0;
         }
         break;
-    case SDL_CONTROLLERBUTTONDOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         pc.mouse_last = 0;
         break;
-    case SDL_CONTROLLERAXISMOTION:
-        if (event->caxis.value > STICK_USED || event->caxis.value < -STICK_USED) {
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        if (event->gaxis.value > STICK_USED || event->gaxis.value < -STICK_USED) {
             pc.mouse_last = 0;
         }
         break;
-    case SDL_MOUSEMOTION:
-        if ((int32_t)(SDL_GetTicks() - pc.motion_after) >= 0) {
+    case SDL_EVENT_MOUSE_MOTION:
+        if ((int32_t)((uint32_t)SDL_GetTicks() - pc.motion_after) >= 0) {
             pc.mouse_last = 1;
         }
         break;
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEWHEEL:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_WHEEL:
         pc.mouse_last = 1;
         break;
     default:
@@ -818,34 +824,35 @@ int port_controls_event(const void *sdl_event) {
         return 1;
     }
     note_device(event);
-    if (event->type == SDL_WINDOWEVENT) {
-        if (event->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-            pc.focused = 0;
-            set_captured(0);
-        } else if (event->window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
-            pc.focused = 1;
-            pc.unblocked = 1; /* the click that brought the window back does nothing */
-        }
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+        pc.focused = 0;
+        set_captured(0);
+    } else if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        pc.focused = 1;
+        pc.unblocked = 1; /* the click that brought the window back does nothing */
+    }
+    if (event->type >= SDL_EVENT_WINDOW_FIRST && event->type <= SDL_EVENT_WINDOW_LAST) {
         update_cursor();
     }
-    if (event->type == SDL_MOUSEWHEEL && port_options.input == NULL && !pc.blocked && !port_overlay_holds_mouse()) {
-        pc.wheel += event->wheel.y > 0 ? 1 : event->wheel.y < 0 ? -1 : 0;
+    if (event->type == SDL_EVENT_MOUSE_WHEEL && port_options.input == NULL && !pc.blocked && !port_overlay_holds_mouse()) {
+        /* (whole notches: a smooth wheel's fractions add up to one first) */
+        pc.wheel += event->wheel.integer_y > 0 ? 1 : event->wheel.integer_y < 0 ? -1 : 0;
     }
     return 0;
 }
 
-static int binding_down(int binding, const Uint8 *keys, unsigned int mouse, SDL_GameController *controller) {
+static int binding_down(int binding, const bool *keys, unsigned int mouse, SDL_Gamepad *controller) {
     int code = BINDING_CODE(binding);
 
     switch (BINDING_KIND(binding)) {
     case BINDING_KEY:
-        return pc.focused && code < SDL_NUM_SCANCODES && keys[code];
+        return pc.focused && code < SDL_SCANCODE_COUNT && keys[code];
     case BINDING_MOUSE:
         return (mouse >> code & 1u) != 0;
     case BINDING_PAD:
-        return controller != NULL && SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)code);
+        return controller != NULL && SDL_GetGamepadButton(controller, (SDL_GamepadButton)code);
     case BINDING_TRIGGER:
-        return controller != NULL && SDL_GameControllerGetAxis(controller, (SDL_GameControllerAxis)code) > TRIGGER_DOWN;
+        return controller != NULL && SDL_GetGamepadAxis(controller, (SDL_GamepadAxis)code) > TRIGGER_DOWN;
     default:
         return 0;
     }
@@ -865,7 +872,7 @@ static int action_axis(uint64_t held, int low, int high) {
 void port_controls_sample_mouse(void) {
     static double next_s;
     double now;
-    int dx = 0, dy = 0;
+    float dx = 0.0f, dy = 0.0f; /* (pixels, with a high-resolution mouse's fractions) */
 
     if (diag_spin_rad_s() != 0.0) {
         if (mouse_lead && in_gameplay() && diag_spin_add()) {
@@ -884,7 +891,7 @@ void port_controls_sample_mouse(void) {
     next_s = now + SAMPLE_EVERY_S;
     SDL_PumpEvents(); /* (the other events wait in SDL's queue for libpad's poll at the vblank) */
     SDL_GetRelativeMouseState(&dx, &dy);
-    if (dx == 0 && dy == 0) {
+    if (dx == 0.0f && dy == 0.0f) {
         return;
     }
     pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
@@ -896,7 +903,8 @@ void port_controls_sample_mouse(void) {
    the window. With --widescreen the 2D is squeezed into the middle three quarters (port/platform/gs.c). */
 static int mouse_over_2d(double *x, double *y) {
     SDL_Window *window = SDL_GetMouseFocus();
-    int mouse_x, mouse_y, out_w, out_h, place_x, place_y, place_w, place_h;
+    float mouse_x = 0.0f, mouse_y = 0.0f;
+    int out_w = 0, out_h = 0, place_x, place_y, place_w, place_h;
 
     if (window == NULL) {
         return 0;
@@ -972,9 +980,9 @@ static int binding_listed(HandsPadBindings list, int binding) {
 
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and the sticks' keys */
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller) {
-    SDL_GameController *controller = sdl_controller;
-    const Uint8 *keys = SDL_GetKeyboardState(NULL);
-    uint32_t now = SDL_GetTicks();
+    SDL_Gamepad *controller = sdl_controller;
+    const bool *keys = SDL_GetKeyboardState(NULL);
+    uint32_t now = (uint32_t)SDL_GetTicks();
     unsigned int pressed = 0;     /* from the keyboard and mouse */
     unsigned int pad = 0;         /* from the controller */
     unsigned int mouse = 0;       /* bit n: SDL's mouse button n */
@@ -983,9 +991,9 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     uint64_t held_pad = 0;        /* actions, from the controller */
     uint64_t held;
     uint64_t edges;
-    Uint32 state;
-    int dx = 0;
-    int dy = 0;
+    SDL_MouseButtonFlags state;
+    float dx = 0.0f; /* (pixels, with a high-resolution mouse's fractions) */
+    float dy = 0.0f;
     int gameplay = in_gameplay();
     int lent = port_overlay_holds_mouse(); /* the profiler has the mouse: it is let go, and nothing of it is read */
     HandsPadBindings hands_pad;
@@ -1006,7 +1014,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     if (pc.focused && !lent) {
         for (bit = 1; bit <= 5; bit++) {
-            if (state & SDL_BUTTON(bit)) {
+            if (state & SDL_BUTTON_MASK(bit)) {
                 mouse |= 1u << bit;
             }
         }

@@ -20,7 +20,7 @@ on:
       - packaging/toolchain.lock
       - packaging/fetch.sh
       - packaging/linux/toolchain.sh
-      - packaging/linux/build-sdl2.sh
+      - packaging/linux/build-sdl3.sh
       - packaging/windows/toolchain.sh
   workflow_dispatch:
     inputs:
@@ -34,7 +34,7 @@ permissions:
 
 jobs:
   linux:
-    # the oldest Linux a release supports: SDL2 is built here (packaging/linux/build-sdl2.sh)
+    # the oldest Linux a release supports: SDL3 is built here (packaging/linux/build-sdl3.sh)
     runs-on: ubuntu-22.04
     env:
       APPIMAGE_EXTRACT_AND_RUN: 1 # (appimagetool and the AppImage itself, without FUSE)
@@ -50,7 +50,7 @@ jobs:
           git submodule update --init --depth 1
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
-      - name: Install what SDL2's build needs
+      - name: Install what SDL3's build needs
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake libfuse2 desktop-file-utils libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: out/toolchain-linux
-          key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl2.sh') }}
+          key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl3.sh') }}
       - name: The AppImage
         env:
           DARKER_REALITY_TOOLCHAIN_CACHE: ${{ github.workspace }}/out/toolchain-linux
@@ -81,7 +81,7 @@ jobs:
           app="$(ls dist/*.AppImage)"
           KF4_DATA_DIR="$RUNNER_TEMP/player" "$app" --build-only
           kf4="$(ls "$RUNNER_TEMP"/player/builds/*/kf4)"
-          newest="$(objdump -T "$kf4" "$(dirname "$kf4")/libSDL2-2.0.so.0" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          newest="$(objdump -T "$kf4" "$(dirname "$kf4")/libSDL3.so.0" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           echo "the game needs $newest"
           [ "$(printf '%s\nGLIBC_2.35\n' "$newest" | sort -V | tail -1)" = GLIBC_2.35 ]
       - uses: actions/upload-artifact@v4
@@ -130,7 +130,7 @@ jobs:
         run: |
           stage="dist/win-x64"
           KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/darker-reality.exe --build-only
-          ls "$RUNNER_TEMP"/player/builds/*/kf4.exe "$RUNNER_TEMP"/player/builds/*/SDL2.dll
+          ls "$RUNNER_TEMP"/player/builds/*/kf4.exe "$RUNNER_TEMP"/player/builds/*/SDL3.dll
       - uses: actions/upload-artifact@v4
         with:
           name: windows

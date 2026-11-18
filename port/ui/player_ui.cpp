@@ -6,7 +6,7 @@
 // and the model, and given to RmlUi only when their text changed. The keyboard and the controller go to the model;
 // the mouse goes to RmlUi, whose events on the rows (data-row, data-step, data-choice, data-tab) go to the model. All
 // on the game's thread.
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include <RmlUi/Core.h>
 
@@ -36,7 +36,7 @@ namespace {
 class SystemTies final : public Rml::SystemInterface {
 public:
     double GetElapsedTime() override {
-        return double(SDL_GetTicks64()) / 1000.0;
+        return double(SDL_GetTicks()) / 1000.0;
     }
     bool LogMessage(Rml::Log::Type type, const Rml::String &message) override {
         if (type <= Rml::Log::LT_WARNING) {
@@ -457,7 +457,7 @@ int key_input(SDL_Scancode key, Uint16 modifiers) {
     case SDL_SCANCODE_PAGEUP:
         return int(ui::MenuInput::previous_tab);
     case SDL_SCANCODE_TAB:
-        return int(modifiers & KMOD_SHIFT ? ui::MenuInput::previous_tab : ui::MenuInput::next_tab);
+        return int(modifiers & SDL_KMOD_SHIFT ? ui::MenuInput::previous_tab : ui::MenuInput::next_tab);
     default:
         return -1;
     }
@@ -470,21 +470,21 @@ bool repeats(int input) {
 
 int pad_input(Uint8 button) {
     switch (button) {
-    case SDL_CONTROLLER_BUTTON_DPAD_UP:
+    case SDL_GAMEPAD_BUTTON_DPAD_UP:
         return int(ui::MenuInput::up);
-    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
         return int(ui::MenuInput::down);
-    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
         return int(ui::MenuInput::left);
-    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
         return int(ui::MenuInput::right);
-    case SDL_CONTROLLER_BUTTON_A:
+    case SDL_GAMEPAD_BUTTON_SOUTH:
         return int(ui::MenuInput::confirm);
-    case SDL_CONTROLLER_BUTTON_B:
+    case SDL_GAMEPAD_BUTTON_EAST:
         return int(ui::MenuInput::back);
-    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
         return int(ui::MenuInput::previous_tab);
-    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
         return int(ui::MenuInput::next_tab);
     default:
         return -1;
@@ -493,22 +493,24 @@ int pad_input(Uint8 button) {
 
 void pad_hold(int input) {
     menu.pad_held = repeats(input) ? input : -1;
-    menu.pad_next_ms = SDL_GetTicks64() + PAD_DELAY_MS;
+    menu.pad_next_ms = SDL_GetTicks() + PAD_DELAY_MS;
 }
 
 // The left stick past half way, as a direction
 int stick_direction() {
-    SDL_GameController *pad = nullptr;
-    for (int i = 0; i < SDL_NumJoysticks() && pad == nullptr; i++) {
-        if (SDL_IsGameController(i)) {
-            pad = SDL_GameControllerFromInstanceID(SDL_JoystickGetDeviceInstanceID(i));
-        }
+    // (the first controller libpad opened: SDL_GetGamepadFromID finds only an open one)
+    SDL_Gamepad *pad = nullptr;
+    int count = 0;
+    SDL_JoystickID *pads = SDL_GetGamepads(&count);
+    for (int i = 0; pads != nullptr && i < count && pad == nullptr; i++) {
+        pad = SDL_GetGamepadFromID(pads[i]);
     }
+    SDL_free(pads);
     if (pad == nullptr) {
         return -1;
     }
-    int x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
-    int y = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+    int x = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+    int y = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
     const int half = 16384;
     if (y < -half) {
         return int(ui::MenuInput::up);
@@ -536,7 +538,7 @@ void pad_repeat() {
         }
         pad_hold(stick);
     }
-    uint64_t now = SDL_GetTicks64();
+    uint64_t now = SDL_GetTicks();
     if (menu.pad_held >= 0 && now >= menu.pad_next_ms) {
         menu.pad_next_ms = now + PAD_REPEAT_MS;
         press(ui::MenuInput(menu.pad_held));
@@ -545,17 +547,17 @@ void pad_repeat() {
 
 bool is_input(Uint32 type) {
     switch (type) {
-    case SDL_KEYDOWN:
-    case SDL_KEYUP:
-    case SDL_TEXTINPUT:
-    case SDL_TEXTEDITING:
-    case SDL_MOUSEMOTION:
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEWHEEL:
-    case SDL_CONTROLLERBUTTONDOWN:
-    case SDL_CONTROLLERBUTTONUP:
-    case SDL_CONTROLLERAXISMOTION:
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_TEXT_EDITING:
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         return true;
     default:
         return false;
@@ -564,13 +566,13 @@ bool is_input(Uint32 type) {
 
 // L3 + R3 together open and close the menu
 bool pad_chord(const SDL_Event &event) {
-    if (event.type != SDL_CONTROLLERBUTTONDOWN && event.type != SDL_CONTROLLERBUTTONUP) {
+    if (event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.type != SDL_EVENT_GAMEPAD_BUTTON_UP) {
         return false;
     }
-    bool down = event.type == SDL_CONTROLLERBUTTONDOWN;
-    if (event.cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSTICK) {
+    bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    if (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
         menu.l3 = down;
-    } else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
+    } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
         menu.r3 = down;
     } else {
         return false;
@@ -583,8 +585,9 @@ bool pad_chord(const SDL_Event &event) {
     return menu.open;
 }
 
-int mouse_x(int x) {
-    return int(float(x) * menu.pixels_per_unit);
+// a mouse position in SDL's window units to the menu's pixels
+int mouse_x(float x) {
+    return int(x * menu.pixels_per_unit);
 }
 
 void quit() {
@@ -664,8 +667,8 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     if (!menu.ready) {
         return 0;
     }
-    if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_F1) {
-        if (event.key.keysym.mod & KMOD_SHIFT) {
+    if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
+        if (event.key.mod & SDL_KMOD_SHIFT) {
             return 0; // (the developers' overlay)
         }
         if (!event.key.repeat) {
@@ -681,39 +684,39 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         return 0;
     }
     switch (event.type) {
-    case SDL_KEYDOWN: {
-        if (event.key.keysym.scancode == SDL_SCANCODE_F11) {
+    case SDL_EVENT_KEY_DOWN: {
+        if (event.key.scancode == SDL_SCANCODE_F11) {
             return 0; // (full screen: the overlay's key, open or not)
         }
-        int input = key_input(event.key.keysym.scancode, event.key.keysym.mod);
+        int input = key_input(event.key.scancode, event.key.mod);
         if (input >= 0 && (!event.key.repeat || repeats(input))) {
             menu.device = Device::keyboard;
             press(ui::MenuInput(input));
         }
         break;
     }
-    case SDL_CONTROLLERBUTTONDOWN: {
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
         menu.device = Device::pad;
-        if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
+        if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
             set_open(false);
             break;
         }
-        int input = pad_input(event.cbutton.button);
+        int input = pad_input(event.gbutton.button);
         if (input >= 0) {
             press(ui::MenuInput(input));
             pad_hold(input);
         }
         break;
     }
-    case SDL_CONTROLLERBUTTONUP:
-        if (pad_input(event.cbutton.button) == menu.pad_held) {
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        if (pad_input(event.gbutton.button) == menu.pad_held) {
             menu.pad_held = -1;
         }
         break;
-    case SDL_MOUSEMOTION:
+    case SDL_EVENT_MOUSE_MOTION:
         menu.context->ProcessMouseMove(mouse_x(event.motion.x), mouse_x(event.motion.y), 0);
         break;
-    case SDL_MOUSEBUTTONDOWN:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
         menu.context->ProcessMouseMove(mouse_x(event.button.x), mouse_x(event.button.y), 0);
         if (event.button.button == SDL_BUTTON_RIGHT) {
             press(ui::MenuInput::back);
@@ -721,12 +724,12 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
             menu.context->ProcessMouseButtonDown(0, 0);
         }
         break;
-    case SDL_MOUSEBUTTONUP:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
         if (event.button.button == SDL_BUTTON_LEFT) {
             menu.context->ProcessMouseButtonUp(0, 0);
         }
         break;
-    case SDL_MOUSEWHEEL:
+    case SDL_EVENT_MOUSE_WHEEL:
         menu.context->ProcessMouseWheel(Rml::Vector2f(0.0f, float(-event.wheel.y)), 0);
         break;
     default:

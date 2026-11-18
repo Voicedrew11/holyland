@@ -499,6 +499,8 @@ void port_gs_present_scale(int width, int height, float sharpen);
 float port_video_sharpen(void);
 /* the refresh rate of the window's screen (Hz), 0 when not known (no window) */
 int port_video_refresh_rate(void);
+/* (the game's thread) the game's SDL_Window, NULL with none (headless, or before port_video_init) */
+void *port_video_window(void);
 /* (any thread) the window's screen refreshed at seen_s (port_wall_seconds): its vblank as the system knows it
    (port/include/port/screen_vblank.h), or the KF4_PRESENT_SIM screen's. The screen's refresh clock learns from
    them (port/include/port/refresh_clock.h). */

@@ -12,7 +12,7 @@
    compiler, or llvm-profdata-<version> on PATH). gcc: the runs added to the .gcda files beside the objects.
 4. Configures the same folder with KF4_PGO=<that file> (clang) or KF4_PGO=use (gcc) and builds everything.
 
--D passes cache variables to both configures (on Windows SDL2_DIR, for one). Afterwards check the build against the
+-D passes cache variables to both configures (on Windows SDL3_DIR, for one). Afterwards check the build against the
 developers' one with tools/build_compare.py. The spots are the ones the frames are checked at; the profile is only
 as good as the play it saw, so a run that never opens the menus leaves the menus' code as cold.
 """

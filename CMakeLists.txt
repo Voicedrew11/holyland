@@ -318,20 +318,15 @@ elseif(NOT APPLE)
         message(STATUS "libdrm not found: the screen's vblanks are not known, and --frame-rate monitor times the pictures by the rate alone")
     endif()
 endif()
-# SDL2 for the pad (and, from step 2, the window); without it the pad takes only a pad script
-option(KF4_USE_SDL "Use SDL2 for the pad" ON)
+# SDL3 for the window, the keyboard, the mouse, controllers and sound; without it the pad takes only a pad
+# script and there is no window
+option(KF4_USE_SDL "Use SDL3 for the window, input and sound" ON)
 if(KF4_USE_SDL)
-    find_package(SDL2 CONFIG)
+    find_package(SDL3 CONFIG)
 endif()
-if(KF4_USE_SDL AND SDL2_FOUND)
+if(KF4_USE_SDL AND SDL3_FOUND)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_SDL)
-    if(TARGET SDL2::SDL2)
-        set(KF4_SDL2_LINK SDL2::SDL2)
-    else()
-        target_include_directories(kf4_port PRIVATE ${SDL2_INCLUDE_DIRS})
-        set(KF4_SDL2_LINK ${SDL2_LIBRARIES})
-    endif()
-    target_link_libraries(kf4_port PRIVATE ${KF4_SDL2_LINK})
+    target_link_libraries(kf4_port PRIVATE SDL3::SDL3)
     # The settings overlay (F1): Dear ImGui (third_party/imgui) on the window's SDL_Renderer
     enable_language(CXX)
     add_library(imgui STATIC
@@ -339,13 +334,10 @@ if(KF4_USE_SDL AND SDL2_FOUND)
         third_party/imgui/imgui_draw.cpp
         third_party/imgui/imgui_tables.cpp
         third_party/imgui/imgui_widgets.cpp
-        third_party/imgui/backends/imgui_impl_sdl2.cpp
-        third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+        third_party/imgui/backends/imgui_impl_sdl3.cpp
+        third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp)
     target_include_directories(imgui PUBLIC third_party/imgui)
-    if(NOT TARGET SDL2::SDL2)
-        target_include_directories(imgui PRIVATE ${SDL2_INCLUDE_DIRS})
-    endif()
-    target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
+    target_link_libraries(imgui PUBLIC SDL3::SDL3)
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
     target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/update_badge.cpp port/overlay/automap_view.cpp
                    port/overlay/profiler.cpp
@@ -353,7 +345,7 @@ if(KF4_USE_SDL AND SDL2_FOUND)
                    port/overlay/profile_run_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
-    message(STATUS "SDL2 not used: the pad takes only a pad script (--input), and there is no window")
+    message(STATUS "SDL3 not used: the pad takes only a pad script (--input), and there is no window")
 endif()
 # paraLLEl-GS, the GS in Vulkan compute; without it the game runs and draws nothing
 # The software SPU2 (third_party/ico-audio, from ico-pc) and its tests
@@ -424,10 +416,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     port/ui/ui_render.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
-        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui ${KF4_SDL2_LINK})
-        if(NOT TARGET SDL2::SDL2)
-            target_include_directories(kf4_player_ui PRIVATE ${SDL2_INCLUDE_DIRS})
-        endif()
+        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3)
         target_compile_options(kf4_player_ui PRIVATE -Wall -Wextra -Wshadow)
         set_target_properties(kf4_player_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
         target_sources(kf4_port PRIVATE port/platform/present_vk_ui.cpp)
@@ -1068,7 +1057,7 @@ if(NOT WIN32)
 endif()
 add_test(NAME pass_draw COMMAND pass_draw_test)
 
-# Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL2, and
+# Windows: put the DLLs the program needs next to it, so it runs from Explorer or a shortcut (SDL3, and
 # llvm-mingw's C++ runtime, which paraLLEl-GS needs)
 if(WIN32)
     get_filename_component(KF4_COMPILER_BIN ${CMAKE_C_COMPILER} DIRECTORY)

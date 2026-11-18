@@ -58,15 +58,15 @@ Pinned by SHA-256 in `packaging/toolchain.lock`, downloaded once into `out/packa
 
 - **Linux** (`packaging/linux/toolchain.sh`): clang, lld and llvm-ar from LLVM 22.1.8 (stripped; the developers use
   clang 22); CMake 3.31.6; Ninja; a sysroot from Ubuntu 22.04's release pocket (glibc 2.35, libstdc++ 12 linked
-  in statically, libdrm); SDL2 2.30.9 built from source on Ubuntu 22.04 (`packaging/linux/build-sdl2.sh`), every
+  in statically, libdrm); SDL3 3.4.20 built from source on Ubuntu 22.04 (`packaging/linux/build-sdl3.sh`), every
   system library it uses loaded at run time, so it needs only the C library. It goes beside the game (run path
   `$ORIGIN`). The game runs on glibc 2.35 and newer: Ubuntu 22.04, Debian 12, SteamOS 3, current Fedora/Arch.
   The release workflow checks that.
-  - Ubuntu's own SDL2 (2.0.20) is too old for the game (it uses SDL 2.24's hints).
-  - `SDL_config.h` in the sysroot has the X11/Wayland/KMSDRM drivers taken out, so Dear ImGui's `SDL_syswm.h`
-    needs no X11 headers; nothing reads those members.
+  - Ubuntu 22.04 has no SDL3 package at all. SDL3's headers need none of X11's or Wayland's (SDL2's `SDL_syswm.h`
+    did), so the sysroot holds SDL3's headers alone.
+  - SDL3 opens the window through Wayland where there is one (SDL2 2.30 in the AppImage went through XWayland).
 - **Windows** (`packaging/windows/toolchain.sh`): llvm-mingw 20260616 (clang 22, x86_64 only, no debugger or
-  sanitizer runtimes), CMake, Ninja, SDL2's MinGW build. The same as `ci.yml`.
+  sanitizer runtimes), CMake, Ninja, SDL3's MinGW build. The same as `ci.yml`.
 
 Change a tool: its line in `toolchain.lock` (`packaging/fetch.sh --print NAME` gives the new SHA-256), then the
 `ID` in that platform's `toolchain.sh`, which makes every player's next start build again.
@@ -147,7 +147,7 @@ launcher is built with `-DDARKER_REALITY_VERSION`, and passes it to the game's b
    and installer, builds the game from each package with `--build-only` as a player would, and opens a **draft**
    release. Publishing the draft is what players' launchers see.
 
-By hand: `packaging/linux/build-appimage.sh [SDL2_PREFIX]` (on Ubuntu 22.04, or with an SDL2 built there, e.g. in
+By hand: `packaging/linux/build-appimage.sh [SDL3_PREFIX]` (on Ubuntu 22.04, or with an SDL3 built there, e.g. in
 `podman run ubuntu:22.04`), `packaging/windows/build-windows.sh` (Git Bash; or on Linux with `LLVM_MINGW` set to
 llvm-mingw's Linux build, which cross-compiles the launcher and makes no installer).
 

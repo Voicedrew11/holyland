@@ -7,7 +7,7 @@
 // The full map holds the game while it is open (port_automap_holds_game) and takes the mouse: the wheel
 // zooms toward the cursor, a left drag moves, a right click fits the map again. The map key or Escape closes
 // it. Everything here runs on the game's thread, inside the overlay's ImGui frame.
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -1276,9 +1276,9 @@ bool map_key(const SDL_Event *event) {
         int b = port_controls_binding(ACTION_MAP, slot);
         if (b == BINDING_NONE)
             continue;
-        if (event->type == SDL_KEYDOWN && BINDING_KIND(b) == BINDING_KEY && BINDING_CODE(b) == (int)event->key.keysym.scancode)
+        if (event->type == SDL_EVENT_KEY_DOWN && BINDING_KIND(b) == BINDING_KEY && BINDING_CODE(b) == (int)event->key.scancode)
             return true;
-        if (event->type == SDL_CONTROLLERBUTTONDOWN && BINDING_KIND(b) == BINDING_PAD && BINDING_CODE(b) == event->cbutton.button)
+        if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && BINDING_KIND(b) == BINDING_PAD && BINDING_CODE(b) == event->gbutton.button)
             return true;
     }
     return false;
@@ -1314,8 +1314,8 @@ bool automap_view_minimap_place(int x, int y, int width, int height, float box[4
 bool automap_view_event(const SDL_Event *event) {
     if (!port_automap_full_open())
         return false;
-    if (event->type == SDL_KEYDOWN) {
-        SDL_Scancode key = event->key.keysym.scancode;
+    if (event->type == SDL_EVENT_KEY_DOWN) {
+        SDL_Scancode key = event->key.scancode;
         if (key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN || key == SDL_SCANCODE_HOME) {
             // Home: the player's own map (the map browser) at his own level
             view_level = key == SDL_SCANCODE_HOME ? 0 : view_level + (key == SDL_SCANCODE_PAGEUP ? 1 : -1);
@@ -1330,9 +1330,9 @@ bool automap_view_event(const SDL_Event *event) {
             return true;
         }
     }
-    bool repeat = event->type == SDL_KEYDOWN && event->key.repeat;
-    if (!repeat && (map_key(event) || (event->type == SDL_KEYDOWN && event->key.keysym.scancode == SDL_SCANCODE_ESCAPE) ||
-                    (event->type == SDL_CONTROLLERBUTTONDOWN && event->cbutton.button == SDL_CONTROLLER_BUTTON_B))) {
+    bool repeat = event->type == SDL_EVENT_KEY_DOWN && event->key.repeat;
+    if (!repeat && (map_key(event) || (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_ESCAPE) ||
+                    (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event->gbutton.button == SDL_GAMEPAD_BUTTON_EAST))) {
         port_automap_set_full_open(0);
         return true;
     }

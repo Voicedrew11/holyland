@@ -2,8 +2,6 @@
 // from the release's source and tools, then plays it.
 //
 //   darker-reality [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]
-#define SDL_MAIN_HANDLED
-#include <SDL.h>
 
 #include <cstdio>
 #include <cstring>
@@ -31,7 +29,6 @@ void usage() {
 } // namespace
 
 int main(int argc, char **argv) {
-    SDL_SetMainReady();
     launcher::LaunchOptions options;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--") == 0) {

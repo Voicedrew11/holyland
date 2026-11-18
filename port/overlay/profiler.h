@@ -3,7 +3,7 @@
 #ifndef PORT_OVERLAY_PROFILER_H
 #define PORT_OVERLAY_PROFILER_H
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 // Shift+P: shows or hides the panel; true when the event was its
 bool profiler_key(const SDL_Event &event);

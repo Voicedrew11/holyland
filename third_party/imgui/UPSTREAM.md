@@ -8,8 +8,8 @@ It draws the settings overlay (`port/overlay/overlay.cpp`, F1) over the game's p
 | file | what it is |
 | --- | --- |
 | `imgui*.cpp`, `imgui*.h`, `imconfig.h`, `imstb_*.h` | the library |
-| `backends/imgui_impl_sdl2.*` | the platform backend: SDL2's events, the mouse, the keyboard and game controllers |
-| `backends/imgui_impl_sdlrenderer2.*` | the renderer backend: draws with the window's `SDL_Renderer` (SDL 2.0.17 or newer) |
+| `backends/imgui_impl_sdl3.*` | the platform backend: SDL3's events, the mouse, the keyboard and game controllers |
+| `backends/imgui_impl_sdlrenderer3.*` | the renderer backend: draws with the window's `SDL_Renderer` (the launcher, and the game without Vulkan) |
 | `backends/imgui_impl_vulkan.*` | the renderer backend of the Vulkan presenter (`port/platform/present_vk.cpp`, `--presenter vulkan`), built with `IMGUI_IMPL_VULKAN_NO_PROTOTYPES` (its functions are loaded from the native GS's Vulkan instance); copied from the same release |
 
 Not copied: the demo, the examples, the misc folder and the other backends.

@@ -1,7 +1,7 @@
 // One run of the launcher (session.h)
 #include "session.h"
 
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include <atomic>
 #include <cstdio>

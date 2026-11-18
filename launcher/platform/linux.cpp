@@ -197,7 +197,7 @@ public:
             }
         }
         tools.cmake_options = {"-DCMAKE_TOOLCHAIN_FILE=" + (root / "linux.cmake").generic_string()};
-        tools.runtime_files = {root / "lib/libSDL2-2.0.so.0"};
+        tools.runtime_files = {root / "lib/libSDL3.so.0"};
         tools.env = {{"PATH", (root / "llvm/bin").string() + ":" + env_or_empty("PATH")}};
         tools.id = "linux:" + read_id(root / "ID");
         return tools;
