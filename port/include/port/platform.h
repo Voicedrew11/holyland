@@ -167,7 +167,6 @@ typedef struct {
     int reflection_clip_forced; /* --reflection-clip: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
-    const char *controls;    /* --controls: the keyboard and mouse layout, ps2 (default) or verdite */
     const char *saves;       /* --saves: the save folder (port/include/port/save_files.h), or "none" */
     const char *record_input; /* --record-input: write the live pad as a pad script */
     int clock_fixed;         /* --clock: the disc drive's clock is fixed (clock_fields), not the host's */

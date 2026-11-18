@@ -1,49 +1,40 @@
-/* PC controls (port/include/port/controls.h): the keyboard, the mouse and a game controller as the
-   pad, through binding tables the settings overlay rebinds (F1, Controls) and settings.json keeps.
-   Two layouts, each with its own table:
+/* PC controls (port/include/port/controls.h): the keyboard, the mouse and a game controller as the pad, all at
+   once, through one binding table the settings overlay rebinds and settings.json keeps. There is no layout to
+   choose: what each does follows what the player is doing.
 
-   PS2 (the default), as port/sdk/libpad.c always had it:
-       arrows      the d-pad              W A S D    the left stick   I J K L   the right stick
-       Z or space  cross    X  circle     C  square  V  triangle
-       Q  L1    E  R1    1  L2    3  R2   Enter  start  Backspace  select
+   The keyboard (the game's own button for each in brackets):
+       W A S D       the left stick: walk and step sideways (twin-stick), move the menus' cursor
+       arrows        the d-pad: walk and turn, move the menus' cursor
+       I J K L       the right stick: turn and look
+       Space         square (attack)                 E          cross (use, talk, confirm)
+       Q             triangle (magic)                Escape, Tab  circle (the menu, back)
+       Z / C         L1 / R1 (side steps, a menu's pages)
+       Page Down / Up  L2 / R2 (look down / up)      Enter      start (pause)
+       Backspace     select (the shortcut)           Left Shift  run (the separate run mod)
+   The mouse, held while the player is in control (the window focused, no menu over the game): moving turns and
+   looks; left square, right triangle, middle cross, the side buttons L1 / R1. Out of play (menus, pause,
+   dialogue) left is cross, right circle, middle cross (the menu mouse), and the wheel up / down. On a menu
+   screen that takes pointing (port/include/port/menu_pointer.h) the mouse is let go: the pointer moves the
+   cursor to the line under it and the left button chooses the line clicked; a click on nothing does nothing.
+   Elsewhere out of play (a message, a cutscene) the mouse stays held and the cursor hidden. A menu over the
+   game (F1, the overlay) or another window lets it go; a click in play takes it back.
 
-   Verdite (--controls verdite), the keyboard layout of Verdite, the KF2/KF3 ports:
-       W / Up        d-pad up (forward)       S / Down     d-pad down (back)
-       Left / Right  d-pad left / right       A / D        L1 / R1 (side steps)
-       Space         square (attack)          F            cross
-       Q             triangle                 Tab          circle
-       Enter         start                    Right Shift  select
-       Escape        release the mouse (a click in the window takes it back)
-   Mouse, captured, while the player is in control: moving turns and looks; left square, right
-   triangle, middle cross (the mouse bindings of the table). Otherwise (menus, pause, dialogue): left
-   cross, right circle, middle cross (the menu mouse), the wheel up / down. On a menu screen that takes
-   pointing (port/include/port/menu_pointer.h) the mouse is let go: the pointer moves the cursor to the
-   line under it and the left button chooses the line clicked; a click on nothing does nothing.
-   Elsewhere out of play (a message, a cutscene) the mouse stays captured and the cursor hidden.
-   Outside play, too, A / D (the keys bound to L1 / R1) press d-pad left / right and Left / Right (the
-   keys bound to d-pad left / right) press L1 / R1 (port_controls_menu_side_keys, on by default): A / D
-   then move left and right in the menus as W / S move up and down (the equipment screen's items, a
-   list's pages, the options' values, the King's Map), and the arrows do what L1 / R1 do there (turn
-   the weapon on the equipment screen, zoom the King's Map). A key held as play starts or stops does
-   nothing until it is let go. Not while a pad script plays or one is recorded.
+   While the mouse is let go its cursor shows only while the mouse is what is being used: a key or a controller
+   hides it, moving or clicking the mouse shows it again.
 
-   In both, with the separate run mod on (--separate-run, the Mods page), Left Shift and the
-   controller's left stick press run while held, and the action button (cross; F in Verdite) only
-   uses things. Off, Run is not used and the action button runs, as on the PS2.
+   A controller's buttons are the PS2 pad's (A cross, B circle, X square, Y triangle, the shoulders and triggers
+   L1 R1 L2 R2). F2 / F4 take and load a quick save (port/platform/quicksave.c), F5 / F7 save and load the quick
+   slot's save state, and F3 shows or hides the frame-rate counter.
 
-   In both, twin-stick controls (port/include/port/twin_stick.h, on by default) make the left stick
-   (W A S D in the PS2 layout) walk and step sideways and the right stick (I J K L) turn and look.
+   With the separate run mod on (--separate-run, the Mods page), Left Shift and the controller's left stick
+   press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
+   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make the left
+   stick walk and step sideways and the right stick turn and look; off, the left stick is the d-pad (walk and
+   turn), as on the PS2.
 
-   In both, a controller's buttons are as the PS2 pad's (A cross, B circle, X square, Y triangle, the
-   shoulders and triggers L1 R1 L2 R2), F2 / F4 take and load a quick save (port/platform/quicksave.c),
-   F5 / F7 save and load the quick slot's save state, and F3 shows or hides the frame-rate counter.
-
-   Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look):
-   each movement is applied once, so it neither coasts nor builds speed. The capture is a PC game's:
-   the mouse is held while the player is in control and the window has the focus, and let go for the
-   menus, pause and dialogue, the overlay, and another window; it is held again on the way back.
-   Escape lets it go until a click in the window (the click does nothing else).
-   A pad script (--input) turns all of this off, so scripted runs stay the same. */
+   Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look): each
+   movement is applied once, so it neither coasts nor builds speed. A mouse button held as play starts or stops
+   does nothing until it is let go (a menu's click does not become an attack). A pad script (--input) turns all of this off, so scripted runs stay the same. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,9 +63,11 @@
 #define MAX_TURN (PI / 2.0)
 
 static struct {
-    int layout;
     int captured;                /* the mouse is held (SDL's relative mouse mode) */
-    int wants_capture;           /* the player has not let it go with Escape */
+    int wants_capture;           /* the player has not let it go (ACTION_CAPTURE_MOUSE) */
+    int mouse_last;              /* the mouse was used last, not a key or a controller: its cursor shows */
+    int cursor_shown;            /* SDL's cursor is shown (while the mouse is let go) */
+    uint32_t motion_after;       /* SDL_GetTicks before which mouse motion is not the player's (SDL's warp) */
     uint32_t gameplay_ms;        /* SDL_GetTicks at the last read in play */
     int focused;
     int blocked;                 /* the overlay is open */
@@ -87,8 +80,6 @@ static struct {
     int previous_gameplay;
     unsigned int previous_buttons;
     unsigned int swallowed;      /* mouse buttons held across a change of mode, ignored until released */
-    int previous_side;           /* the side keys were swapped at the last read (port_controls_menu_side_keys) */
-    uint64_t swallowed_side;     /* side keys held across that changing, ignored until released */
     uint64_t previous_actions;
     uint64_t swallowed_actions;  /* actions held when the overlay closed */
     int wheel;                   /* wheel movement since the last read: +1 up, -1 down */
@@ -173,10 +164,7 @@ const char *port_controls_action_id(int action) {
     return action >= 0 && action < ACTION_COUNT ? actions[action].id : "?";
 }
 
-int port_controls_action_used(int layout, int action) {
-    if (action == ACTION_CAPTURE_MOUSE) {
-        return layout == CONTROLS_VERDITE;
-    }
+int port_controls_action_used(int action) {
     if (action == ACTION_RUN) {
         return port_options.separate_run;
     }
@@ -192,7 +180,7 @@ int port_controls_action_used(int layout, int action) {
     return action >= 0 && action < ACTION_COUNT;
 }
 
-/* ---- The layouts' tables ---------------------------------------------------------------------- */
+/* ---- The table ------------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_SDL
 #define KEY(name) (BINDING_KEY | SDL_SCANCODE_##name)
 #define MOUSE(n) (BINDING_MOUSE | (n))
@@ -205,148 +193,103 @@ int port_controls_action_used(int layout, int action) {
 #define TRIGGER(name) 0
 #endif
 
-static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS] = {
-    [CONTROLS_PS2] = {
-        [ACTION_UP] = {KEY(UP), 0, PAD(DPAD_UP)},
-        [ACTION_DOWN] = {KEY(DOWN), 0, PAD(DPAD_DOWN)},
-        [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
-        [ACTION_RIGHT] = {KEY(RIGHT), 0, PAD(DPAD_RIGHT)},
-        [ACTION_CROSS] = {KEY(Z), KEY(SPACE), PAD(A)},
-        [ACTION_CIRCLE] = {KEY(X), 0, PAD(B)},
-        [ACTION_SQUARE] = {KEY(C), 0, PAD(X)},
-        [ACTION_TRIANGLE] = {KEY(V), 0, PAD(Y)},
-        [ACTION_L1] = {KEY(Q), 0, PAD(LEFTSHOULDER)},
-        [ACTION_R1] = {KEY(E), 0, PAD(RIGHTSHOULDER)},
-        [ACTION_L2] = {KEY(1), 0, TRIGGER(LEFT)},
-        [ACTION_R2] = {KEY(3), 0, TRIGGER(RIGHT)},
-        [ACTION_L3] = {0, 0, PAD(LEFTSTICK)},
-        [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
-        [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
-        [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
-        [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
-        [ACTION_LEFT_STICK_UP] = {KEY(W)},
-        [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
-        [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
-        [ACTION_LEFT_STICK_RIGHT] = {KEY(D)},
-        [ACTION_RIGHT_STICK_UP] = {KEY(I)},
-        [ACTION_RIGHT_STICK_DOWN] = {KEY(K)},
-        [ACTION_RIGHT_STICK_LEFT] = {KEY(J)},
-        [ACTION_RIGHT_STICK_RIGHT] = {KEY(L)},
-        [ACTION_QUICK_SAVE] = {KEY(F5)},
-        [ACTION_QUICK_LOAD] = {KEY(F7)},
-        [ACTION_GAME_SAVE] = {KEY(F2)},
-        [ACTION_GAME_LOAD] = {KEY(F4)},
-        [ACTION_GS_CAPTURE] = {KEY(F9)},
-        [ACTION_STATE_DUMP] = {KEY(F10)},
-        [ACTION_AUDIO_TAIL] = {KEY(F12)},
-        [ACTION_FLASH_RECORD] = {KEY(F8)},
-        [ACTION_SHOW_FPS] = {KEY(F3)},
-        [ACTION_STATS_PANEL] = {KEY(F6)},
-        [ACTION_MAP] = {KEY(M)},
-        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(DPAD_RIGHT)},
-        [ACTION_SPELL_SWAP] = {KEY(T), 0, PAD(DPAD_LEFT)},
-        [ACTION_HOTKEY_NEXT] = {KEY(G), 0, PAD(DPAD_DOWN)},
-        [ACTION_HOTKEY_PREVIOUS] = {0, 0, PAD(DPAD_UP)},
-    },
-    [CONTROLS_VERDITE] = {
-        [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
-        [ACTION_DOWN] = {KEY(S), KEY(DOWN), PAD(DPAD_DOWN)},
-        [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
-        [ACTION_RIGHT] = {KEY(RIGHT), 0, PAD(DPAD_RIGHT)},
-        [ACTION_CROSS] = {KEY(F), MOUSE(2), PAD(A)},
-        [ACTION_CIRCLE] = {KEY(TAB), 0, PAD(B)},
-        [ACTION_SQUARE] = {KEY(SPACE), MOUSE(1), PAD(X)},
-        [ACTION_TRIANGLE] = {KEY(Q), MOUSE(3), PAD(Y)},
-        [ACTION_L1] = {KEY(A), 0, PAD(LEFTSHOULDER)},
-        [ACTION_R1] = {KEY(D), 0, PAD(RIGHTSHOULDER)},
-        [ACTION_L2] = {0, 0, TRIGGER(LEFT)},
-        [ACTION_R2] = {0, 0, TRIGGER(RIGHT)},
-        [ACTION_L3] = {0, 0, PAD(LEFTSTICK)},
-        [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
-        [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
-        [ACTION_SELECT] = {KEY(RSHIFT), 0, PAD(BACK)},
-        [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
-        [ACTION_CAPTURE_MOUSE] = {KEY(ESCAPE)},
-        [ACTION_QUICK_SAVE] = {KEY(F5)},
-        [ACTION_QUICK_LOAD] = {KEY(F7)},
-        [ACTION_GAME_SAVE] = {KEY(F2)},
-        [ACTION_GAME_LOAD] = {KEY(F4)},
-        [ACTION_GS_CAPTURE] = {KEY(F9)},
-        [ACTION_STATE_DUMP] = {KEY(F10)},
-        [ACTION_AUDIO_TAIL] = {KEY(F12)},
-        [ACTION_FLASH_RECORD] = {KEY(F8)},
-        [ACTION_SHOW_FPS] = {KEY(F3)},
-        [ACTION_STATS_PANEL] = {KEY(F6)},
-        [ACTION_MAP] = {KEY(M)},
-        [ACTION_WEAPON_SWAP] = {KEY(1), KEY(R), PAD(DPAD_RIGHT)},
-        [ACTION_SPELL_SWAP] = {KEY(2), 0, PAD(DPAD_LEFT)},
-        [ACTION_HOTKEY_NEXT] = {KEY(3), 0, PAD(DPAD_DOWN)},
-        [ACTION_HOTKEY_PREVIOUS] = {0, 0, PAD(DPAD_UP)},
-    },
+/* Two keys or mouse buttons and a controller button an action. The game's buttons: square attacks, triangle
+   casts, cross uses (and runs, without the separate run mod), circle opens the menu, select the shortcut, start
+   pauses (Input_SetDefaultControls). In the menus cross chooses, circle goes back, and square and triangle do
+   a screen's own things (triangle takes off what is worn). */
+static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
+    [ACTION_UP] = {KEY(UP), 0, PAD(DPAD_UP)},
+    [ACTION_DOWN] = {KEY(DOWN), 0, PAD(DPAD_DOWN)},
+    [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
+    [ACTION_RIGHT] = {KEY(RIGHT), 0, PAD(DPAD_RIGHT)},
+    [ACTION_CROSS] = {KEY(E), MOUSE(2), PAD(A)},
+    [ACTION_CIRCLE] = {KEY(ESCAPE), KEY(TAB), PAD(B)},
+    [ACTION_SQUARE] = {KEY(SPACE), MOUSE(1), PAD(X)},
+    [ACTION_TRIANGLE] = {KEY(Q), MOUSE(3), PAD(Y)},
+    [ACTION_L1] = {KEY(Z), MOUSE(4), PAD(LEFTSHOULDER)},
+    [ACTION_R1] = {KEY(C), MOUSE(5), PAD(RIGHTSHOULDER)},
+    [ACTION_L2] = {KEY(PAGEDOWN), 0, TRIGGER(LEFT)},
+    [ACTION_R2] = {KEY(PAGEUP), 0, TRIGGER(RIGHT)},
+    [ACTION_L3] = {0, 0, PAD(LEFTSTICK)},
+    [ACTION_R3] = {0, 0, PAD(RIGHTSTICK)},
+    [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
+    [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
+    [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFTSTICK)},
+    [ACTION_LEFT_STICK_UP] = {KEY(W)},
+    [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
+    [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
+    [ACTION_LEFT_STICK_RIGHT] = {KEY(D)},
+    [ACTION_RIGHT_STICK_UP] = {KEY(I)},
+    [ACTION_RIGHT_STICK_DOWN] = {KEY(K)},
+    [ACTION_RIGHT_STICK_LEFT] = {KEY(J)},
+    [ACTION_RIGHT_STICK_RIGHT] = {KEY(L)},
+    [ACTION_QUICK_SAVE] = {KEY(F5)},
+    [ACTION_QUICK_LOAD] = {KEY(F7)},
+    [ACTION_GAME_SAVE] = {KEY(F2)},
+    [ACTION_GAME_LOAD] = {KEY(F4)},
+    [ACTION_GS_CAPTURE] = {KEY(F9)},
+    [ACTION_STATE_DUMP] = {KEY(F10)},
+    [ACTION_AUDIO_TAIL] = {KEY(F12)},
+    [ACTION_FLASH_RECORD] = {KEY(F8)},
+    [ACTION_SHOW_FPS] = {KEY(F3)},
+    [ACTION_STATS_PANEL] = {KEY(F6)},
+    [ACTION_MAP] = {KEY(M)},
+    [ACTION_WEAPON_SWAP] = {KEY(1), KEY(R), PAD(DPAD_RIGHT)},
+    [ACTION_SPELL_SWAP] = {KEY(2), KEY(T), PAD(DPAD_LEFT)},
+    [ACTION_HOTKEY_NEXT] = {KEY(3), KEY(G), PAD(DPAD_DOWN)},
+    [ACTION_HOTKEY_PREVIOUS] = {KEY(4), 0, PAD(DPAD_UP)},
 };
-/* Verdite's mouse outside play: left cross, right circle, middle cross */
+/* The mouse outside play: left cross, right circle, middle cross */
 static const int default_menu_mouse[3] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_CROSS};
 
-/* The tables in use: the defaults until settings.json (port/overlay/settings.c) or the overlay changes
-   them, which may be before port_controls_init */
+/* The table in use: the defaults until settings.json (port/overlay/settings.c) or the overlay changes it, which
+   may be before port_controls_init */
 static int tables_ready;
-static int bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS];
+static int bindings[ACTION_COUNT][BINDING_SLOTS];
 static int menu_mouse[3];
-static int menu_side_keys;
 static double sensitivity;
 static int invert_y;
 static int mouse_lead = 1; /* instant mouse look (port/include/port/mouse_lead.h) */
 
-static void reset_layout(int layout) {
-    memcpy(bindings[layout], default_bindings[layout], sizeof(bindings[layout]));
-    if (layout == CONTROLS_VERDITE) {
-        memcpy(menu_mouse, default_menu_mouse, sizeof(menu_mouse));
-        menu_side_keys = 1;
-        sensitivity = 1.0;
-        invert_y = 0;
-    }
+static void reset_tables(void) {
+    memcpy(bindings, default_bindings, sizeof(bindings));
+    memcpy(menu_mouse, default_menu_mouse, sizeof(menu_mouse));
+    sensitivity = 1.0;
+    invert_y = 0;
 }
 
 static void tables_init(void) {
-    int layout;
-
     if (tables_ready) {
         return;
     }
-    for (layout = 0; layout < CONTROLS_LAYOUTS; layout++) {
-        reset_layout(layout);
-    }
+    reset_tables();
     tables_ready = 1;
 }
 
-void port_controls_reset(int layout) {
+void port_controls_reset(void) {
     tables_init();
-    if (layout >= 0 && layout < CONTROLS_LAYOUTS) {
-        reset_layout(layout);
-    }
+    reset_tables();
 }
 
-int port_controls_binding(int layout, int action, int slot) {
-    if (layout < 0 || layout >= CONTROLS_LAYOUTS || action < 0 || action >= ACTION_COUNT || slot < 0 ||
-        slot >= BINDING_SLOTS) {
+int port_controls_binding(int action, int slot) {
+    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= BINDING_SLOTS) {
         return BINDING_NONE;
     }
     tables_init();
-    return bindings[layout][action][slot];
+    return bindings[action][slot];
 }
 
-void port_controls_bind(int layout, int action, int slot, int binding) {
-    if (layout < 0 || layout >= CONTROLS_LAYOUTS || action < 0 || action >= ACTION_COUNT || slot < 0 ||
-        slot >= BINDING_SLOTS) {
+void port_controls_bind(int action, int slot, int binding) {
+    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= BINDING_SLOTS) {
         return;
     }
     tables_init();
-    bindings[layout][action][slot] = binding;
+    bindings[action][slot] = binding;
 }
 
-int port_controls_is_default(int layout, int action) {
+int port_controls_is_default(int action) {
     tables_init();
-    return memcmp(bindings[layout][action], default_bindings[layout][action], sizeof(bindings[layout][action])) == 0;
+    return memcmp(bindings[action], default_bindings[action], sizeof(bindings[action])) == 0;
 }
 
 int port_controls_menu_mouse(int button) {
@@ -359,16 +302,6 @@ void port_controls_set_menu_mouse(int button, int action) {
     if (button >= 0 && button < 3) {
         menu_mouse[button] = action;
     }
-}
-
-int port_controls_menu_side_keys(void) {
-    tables_init();
-    return menu_side_keys;
-}
-
-void port_controls_set_menu_side_keys(int on) {
-    tables_init();
-    menu_side_keys = on != 0;
 }
 
 double port_controls_mouse_sensitivity(void) {
@@ -419,7 +352,7 @@ static void lead_waiting(void) {
 }
 
 /* KF4_DIAG_SPIN=RAD_S (developers): a steady turn of RAD_S radians a second added in play as the mouse's motion
-   would be, with any layout and with a pad script (--input), to test a fast spin of the mouse without one (the
+   would be, also with a pad script (--input), to test a fast spin of the mouse without one (the
    pictures between's cuts, the world at the screen's edge: port/include/port/interp_camera.h, past_band.h). 0: off */
 static double diag_spin_rad_s(void) {
     static int read;
@@ -451,52 +384,16 @@ static int diag_spin_add(void) {
     return 1;
 }
 
-/* ---- Layouts ---------------------------------------------------------------------------------- */
-static const char *const layout_names[CONTROLS_LAYOUTS] = {"ps2", "verdite"};
-
-const char *port_controls_layout_name(int layout) {
-    return layout >= 0 && layout < CONTROLS_LAYOUTS ? layout_names[layout] : "?";
-}
-
-int port_controls_layout_from_name(const char *name) {
-    int i;
-
-    for (i = 0; name != NULL && i < CONTROLS_LAYOUTS; i++) {
-        if (strcmp(name, layout_names[i]) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static void set_captured(int captured);
 
-void port_controls_init(const char *layout) {
+void port_controls_init(void) {
     memset(&pc, 0, sizeof(pc));
     pc.focused = 1;
     pc.wants_capture = 1;
+    pc.mouse_last = 1;
+    pc.cursor_shown = 1;
     pc.listen_action = -1;
     tables_init();
-    pc.layout = layout == NULL ? CONTROLS_PS2 : port_controls_layout_from_name(layout);
-    if (pc.layout < 0) {
-        PORT_FATAL("--controls: \"%s\" is not a layout (ps2, verdite)", layout);
-    }
-}
-
-int port_controls_layout(void) {
-    return pc.layout;
-}
-
-void port_controls_set_layout(int layout) {
-    if (layout < 0 || layout >= CONTROLS_LAYOUTS || layout == pc.layout) {
-        return;
-    }
-    set_captured(0);
-    pc.layout = layout;
-}
-
-int port_controls_verdite(void) {
-    return pc.layout == CONTROLS_VERDITE && port_options.input == NULL;
 }
 
 /* The player was in control at the game's last frame */
@@ -522,7 +419,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
             return turned;
         }
     }
-    if (!port_controls_verdite() && diag_spin_rad_s() == 0.0) {
+    if (port_options.input != NULL && diag_spin_rad_s() == 0.0) {
         MouseTurn none = {0, 0};
 
         port_mouse_lead_waiting(none, reading_time()); /* (no mouse look: nothing ahead) */
@@ -564,7 +461,7 @@ int port_controls_run_state(void) {
         return -1;
     }
     for (slot = 0; slot < BINDING_SLOTS; slot++) {
-        if (port_controls_binding(pc.layout, ACTION_RUN, slot) != BINDING_NONE) {
+        if (port_controls_binding(ACTION_RUN, slot) != BINDING_NONE) {
             return pc.run;
         }
     }
@@ -795,7 +692,7 @@ void port_controls_listen_cancel(void) {
 }
 
 static void listened(int binding) {
-    bindings[pc.layout][pc.listen_action][pc.listen_slot] = binding;
+    bindings[pc.listen_action][pc.listen_slot] = binding;
     pc.listen_action = -1;
 }
 
@@ -846,6 +743,20 @@ static int listen_event(const SDL_Event *event) {
 }
 
 /* ---- Reading ---------------------------------------------------------------------------------- */
+#define MOTION_SETTLE_MS 150u /* after the mouse is held or let go, motion is SDL's warp, not the player's */
+#define STICK_USED 16384      /* a controller's stick pushed this far is the controller in use */
+
+/* The cursor, while the mouse is let go: shown while the mouse is what is being used, or a menu is over the game,
+   or the window is not focused; hidden after a key or a controller is used, until the mouse moves */
+static void update_cursor(void) {
+    int show = !pc.captured && (pc.mouse_last || pc.blocked || !pc.focused);
+
+    if (show != pc.cursor_shown) {
+        SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);
+        pc.cursor_shown = show;
+    }
+}
+
 static void set_captured(int captured) {
     if (captured == pc.captured) {
         return;
@@ -855,6 +766,8 @@ static void set_captured(int captured) {
     lead_waiting();
     SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
     SDL_GetRelativeMouseState(NULL, NULL); /* motion before the change is dropped */
+    pc.motion_after = SDL_GetTicks() + MOTION_SETTLE_MS;
+    update_cursor();
 }
 
 void port_controls_block(int blocked) {
@@ -865,6 +778,37 @@ void port_controls_block(int blocked) {
         pc.unblocked = 1;
     }
     pc.blocked = blocked;
+    update_cursor();
+}
+
+/* What the player is using: the mouse, or a key or controller (the cursor follows it: update_cursor) */
+static void note_device(const SDL_Event *event) {
+    switch (event->type) {
+    case SDL_KEYDOWN:
+        if (!event->key.repeat) {
+            pc.mouse_last = 0;
+        }
+        break;
+    case SDL_CONTROLLERBUTTONDOWN:
+        pc.mouse_last = 0;
+        break;
+    case SDL_CONTROLLERAXISMOTION:
+        if (event->caxis.value > STICK_USED || event->caxis.value < -STICK_USED) {
+            pc.mouse_last = 0;
+        }
+        break;
+    case SDL_MOUSEMOTION:
+        if ((int32_t)(SDL_GetTicks() - pc.motion_after) >= 0) {
+            pc.mouse_last = 1;
+        }
+        break;
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEWHEEL:
+        pc.mouse_last = 1;
+        break;
+    default:
+        break;
+    }
 }
 
 int port_controls_event(const void *sdl_event) {
@@ -873,6 +817,7 @@ int port_controls_event(const void *sdl_event) {
     if (listen_event(event)) {
         return 1;
     }
+    note_device(event);
     if (event->type == SDL_WINDOWEVENT) {
         if (event->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
             pc.focused = 0;
@@ -881,8 +826,9 @@ int port_controls_event(const void *sdl_event) {
             pc.focused = 1;
             pc.unblocked = 1; /* the click that brought the window back does nothing */
         }
+        update_cursor();
     }
-    if (event->type == SDL_MOUSEWHEEL && port_controls_verdite() && !pc.blocked) {
+    if (event->type == SDL_MOUSEWHEEL && port_options.input == NULL && !pc.blocked) {
         pc.wheel += event->wheel.y > 0 ? 1 : event->wheel.y < 0 ? -1 : 0;
     }
     return 0;
@@ -913,32 +859,6 @@ static int action_axis(uint64_t held, int low, int high) {
     return l && !h ? 0x00 : h && !l ? 0xFF : 0x80;
 }
 
-#define SIDE_ACTIONS \
-    ((uint64_t)1 << ACTION_LEFT | (uint64_t)1 << ACTION_RIGHT | (uint64_t)1 << ACTION_L1 | (uint64_t)1 << ACTION_R1)
-
-/* Verdite outside play (port_controls_menu_side_keys): the keys' L1 / R1 become d-pad left / right and
-   their d-pad left / right L1 / R1. A side key held when that changes does nothing until it is let go,
-   so a side step held as the menu opens does not move its cursor. */
-static void side_keys(uint64_t *held_keys, int outside_play) {
-    int side = outside_play && menu_side_keys && port_options.input == NULL;
-    uint64_t held = *held_keys;
-
-    if (side != pc.previous_side) {
-        pc.swallowed_side = held & SIDE_ACTIONS;
-        pc.previous_side = side;
-    }
-    pc.swallowed_side &= held;
-    held &= ~pc.swallowed_side;
-    if (side) {
-        uint64_t moved = held & ~SIDE_ACTIONS;
-
-        moved |= (held >> ACTION_L1 & 1u) << ACTION_LEFT | (held >> ACTION_R1 & 1u) << ACTION_RIGHT;
-        moved |= (held >> ACTION_LEFT & 1u) << ACTION_L1 | (held >> ACTION_RIGHT & 1u) << ACTION_R1;
-        held = moved;
-    }
-    *held_keys = held;
-}
-
 #define RELEASE_AFTER_MS 250u /* out of play this long before the mouse is let go */
 #define SAMPLE_EVERY_S 0.0005 /* the mouse read between vblanks no more often than this */
 
@@ -953,7 +873,7 @@ void port_controls_sample_mouse(void) {
         }
         return;
     }
-    if (pc.layout != CONTROLS_VERDITE || port_options.input != NULL || port_options.headless || !mouse_lead ||
+    if (port_options.input != NULL || port_options.headless || !mouse_lead ||
         pc.blocked || !pc.captured || !in_gameplay()) {
         return;
     }
@@ -1019,7 +939,7 @@ static void feed_menu_pointer(int pointing, unsigned int mouse) {
     previous_y = y;
 }
 
-/* The controller buttons bound to the hands mod's keys in the layout */
+/* The controller buttons bound to the hands mod's keys */
 typedef struct {
     int count;
     int binding[HANDS_KEY_COUNT];
@@ -1031,7 +951,7 @@ static HandsPadBindings hands_pad_bindings(void) {
     int binding;
 
     for (action = 0; action < ACTION_COUNT; action++) {
-        binding = bindings[pc.layout][action][BINDING_PAD_SLOT];
+        binding = bindings[action][BINDING_PAD_SLOT];
         if (hands_key_of(action) >= 0 && BINDING_KIND(binding) >= BINDING_PAD && list.count < HANDS_KEY_COUNT) {
             list.binding[list.count++] = binding;
         }
@@ -1054,12 +974,11 @@ static int binding_listed(HandsPadBindings list, int binding) {
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller) {
     SDL_GameController *controller = sdl_controller;
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
-    int verdite = pc.layout == CONTROLS_VERDITE;
     uint32_t now = SDL_GetTicks();
     unsigned int pressed = 0;     /* from the keyboard and mouse */
     unsigned int pad = 0;         /* from the controller */
     unsigned int mouse = 0;       /* bit n: SDL's mouse button n */
-    unsigned int menu = 0;        /* Verdite's mouse outside play */
+    unsigned int menu = 0;        /* the mouse outside play */
     uint64_t held_keys = 0;       /* actions, from the keyboard and mouse */
     uint64_t held_pad = 0;        /* actions, from the controller */
     uint64_t held;
@@ -1067,7 +986,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     Uint32 state;
     int dx = 0;
     int dy = 0;
-    int gameplay = verdite && in_gameplay();
+    int gameplay = in_gameplay();
     HandsPadBindings hands_pad;
     int action;
     int slot;
@@ -1091,55 +1010,52 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (pc.unblocked) {
         pc.swallowed |= mouse;
     }
-    if (verdite) {
-        /* a button held when the mode changes does nothing until it is let go: a menu's confirmation
-           does not become an attack */
-        if (gameplay != pc.previous_gameplay) {
-            pc.swallowed = mouse;
-        }
+    /* a button held when the mode changes does nothing until it is let go: a menu's confirmation does not become
+       an attack */
+    if (gameplay != pc.previous_gameplay) {
+        pc.swallowed = mouse;
     }
     pc.swallowed &= mouse;
     mouse &= ~pc.swallowed;
-    if (verdite) {
-        /* a click in play with the mouse let go takes it back, and does nothing else */
-        if (gameplay && !pc.wants_capture && mouse != 0) {
-            pc.wants_capture = 1;
-            pc.swallowed |= mouse;
-            mouse = 0;
-        }
-        if (gameplay) {
-            pc.gameplay_ms = now;
-        }
-        /* out of play the mouse is let go (the cursor shown) only on a screen that takes pointing: a message
-           (an item picked up, a sign read) keeps it held and the cursor hidden, its buttons still press. Let go
-           only after a moment out of play, so a slow frame does not flash the cursor. */
-        set_captured(pc.wants_capture && pc.focused &&
-                     (gameplay || !port_menu_pointer_active() ||
-                      (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
-        feed_menu_pointer(!gameplay && !pc.captured, mouse);
-        if (!gameplay) {
-            static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
+    /* a click in play with the mouse let go takes it back, and does nothing else */
+    if (gameplay && !pc.wants_capture && mouse != 0) {
+        pc.wants_capture = 1;
+        pc.swallowed |= mouse;
+        mouse = 0;
+    }
+    if (gameplay) {
+        pc.gameplay_ms = now;
+    }
+    /* out of play the mouse is let go (the cursor shown) only on a screen that takes pointing: a message
+       (an item picked up, a sign read) keeps it held and the cursor hidden, its buttons still press. Let go
+       only after a moment out of play, so a slow frame does not flash the cursor. */
+    set_captured(pc.wants_capture && pc.focused &&
+                 (gameplay || !port_menu_pointer_active() ||
+                  (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
+    feed_menu_pointer(!gameplay && !pc.captured, mouse);
+    if (!gameplay) {
+        static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
 
-            for (bit = 0; bit < 3; bit++) {
-                /* (where a screen takes pointing the left button is the pointer's: port/include/port/menu_pointer.h) */
-                if (menu_buttons[bit] == SDL_BUTTON_LEFT && port_menu_pointer_active()) {
-                    continue;
-                }
-                if ((mouse >> menu_buttons[bit] & 1u) && menu_mouse[bit] >= 0) {
-                    menu |= actions[menu_mouse[bit]].bit;
-                }
+        for (bit = 0; bit < 3; bit++) {
+            /* (where a screen takes pointing the left button is the pointer's: port/include/port/menu_pointer.h) */
+            if (menu_buttons[bit] == SDL_BUTTON_LEFT && port_menu_pointer_active()) {
+                continue;
             }
-            /* the table's mouse buttons press in play, with the mouse captured */
-            mouse = 0;
-        } else if (!pc.captured) {
-            mouse = 0;
+            if ((mouse >> menu_buttons[bit] & 1u) && menu_mouse[bit] >= 0) {
+                menu |= actions[menu_mouse[bit]].bit;
+            }
         }
+        /* the table's mouse buttons press in play, with the mouse captured; out of play only the side
+           buttons (L1 / R1: a menu's pages) */
+        mouse &= 1u << SDL_BUTTON_X1 | 1u << SDL_BUTTON_X2;
+    } else if (!pc.captured) {
+        mouse = 0;
     }
 
     hands_pad = hands_pad_bindings();
     for (action = 0; action < ACTION_COUNT; action++) {
         for (slot = 0; slot < BINDING_SLOTS; slot++) {
-            int binding = bindings[pc.layout][action][slot];
+            int binding = bindings[action][slot];
 
             /* the hands mod: a controller button of a hand's (the d-pad) is the hand's in play and the game's
                elsewhere (the menus' cursor) */
@@ -1164,7 +1080,6 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.swallowed_actions &= held;
     held_keys &= ~pc.swallowed_actions;
     held_pad &= ~pc.swallowed_actions;
-    side_keys(&held_keys, verdite && !gameplay);
     held = held_keys | held_pad;
     for (action = 0; action < ACTION_COUNT; action++) {
         if (held_keys >> action & 1u) {
@@ -1231,7 +1146,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
             port_hands_key(key); /* the hands mod: taken by game/hands.c */
         }
     }
-    if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
+    if (edges >> ACTION_CAPTURE_MOUSE & 1u) {
         if (gameplay) {
             pc.wants_capture = !pc.captured;
             set_captured(pc.wants_capture && pc.focused);
@@ -1242,11 +1157,6 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     axis[1] = action_axis(held, ACTION_RIGHT_STICK_UP, ACTION_RIGHT_STICK_DOWN);
     axis[2] = action_axis(held, ACTION_LEFT_STICK_LEFT, ACTION_LEFT_STICK_RIGHT);
     axis[3] = action_axis(held, ACTION_LEFT_STICK_UP, ACTION_LEFT_STICK_DOWN);
-
-    if (!verdite) {
-        *buttons |= pressed | pad;
-        return;
-    }
 
     if (gameplay && pc.captured) {
         pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
@@ -1285,6 +1195,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     pc.previous_buttons = pressed;
     pc.previous_gameplay = gameplay;
+    update_cursor();
     *buttons |= pressed | pad;
 }
 #endif

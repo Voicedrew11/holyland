@@ -972,7 +972,7 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
         entry(col(60, 160, 255), "Guide note (?)", 3);
     at.y += ts;
     char key[64] = "M";
-    int binding = port_controls_binding(port_controls_layout(), ACTION_MAP, 0);
+    int binding = port_controls_binding(ACTION_MAP, 0);
     if (binding != 0)
         port_controls_binding_label(binding, key, sizeof(key));
     char help[384];
@@ -1272,9 +1272,8 @@ void draw_full(const PortAutomapPlayer &own, ImVec2 g0, ImVec2 g1) {
 }
 
 bool map_key(const SDL_Event *event) {
-    int layout = port_controls_layout();
     for (int slot = 0; slot < BINDING_SLOTS; slot++) {
-        int b = port_controls_binding(layout, ACTION_MAP, slot);
+        int b = port_controls_binding(ACTION_MAP, slot);
         if (b == BINDING_NONE)
             continue;
         if (event->type == SDL_KEYDOWN && BINDING_KIND(b) == BINDING_KEY && BINDING_CODE(b) == (int)event->key.keysym.scancode)
