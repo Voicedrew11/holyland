@@ -448,6 +448,23 @@ void graphics_page() {
         tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
         ImGui::Unindent();
     }
+    {
+        int fov = port_options.fov;
+        char name[40];
+
+        snprintf(name, sizeof(name), fov == 64 ? "%d (the PS2's)" : "%d degrees", fov);
+        if (ImGui::SliderInt("Field of view", &fov, 30, 120, name, ImGuiSliderFlags_AlwaysClamp)) {
+            s.fov = port_options.fov = fov;
+            changed();
+        }
+        tooltip("The 3D view's horizontal field at 4:3, in degrees. 64 is the PS2's; more sees further\n"
+                "round the sides, less zooms in. Widescreen widens the same view further. Applies at once.\n"
+                "(--fov 30-120)");
+        if (port_options.fov != s.fov) {
+            ImGui::SameLine();
+            ImGui::TextColored(colour_note, "(this run: command line)");
+        }
+    }
     if (pc) {
         int scale = port_options.native_scale;
         char scale_name[32];
@@ -914,9 +931,9 @@ std::string bug_report() {
     text += line;
     text += "\n";
     std::snprintf(line, sizeof(line),
-                  "options: unpaced=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
+                  "options: unpaced=%d fov=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
                   "no_audio=%d device_clock=%d\n",
-                  port_options.fast, port_options.deinterlace,
+                  port_options.fast, port_options.fov, port_options.deinterlace,
                   port_options.progressive, port_options.anti_blur, port_options.adapt_width, port_options.no_audio,
                   port_audio_device_clock());
     text += line;
