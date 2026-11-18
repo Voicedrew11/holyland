@@ -9,8 +9,8 @@
 
    The drawing: after the game's HUD (Hud_Draw), in its packet chain, as one VIF DIRECT packet of GIF data, in two
    passes. First every card's frame, cut from the HUD's own frame picture (gage.tx2, still in GS memory from
-   Hud_Draw): the stone and gold edge of its long bar for the sides and corners, the glow of its red orb for the
-   inside. Then the pictures: each sent to GS memory where gage.tx2 is (the game sends gage.tx2 again before it draws
+   Hud_Draw): the stone and gold edge of its long bar for the sides and corners, over a dark inside the scene shows
+   through. Then the pictures: each sent to GS memory where gage.tx2 is (the game sends gage.tx2 again before it draws
    the HUD each frame; nothing else draws from there) and drawn as a textured sprite before the next is sent. GS
    context 1, as the HUD: alpha blending (Cs - Cd) * As + Cd and the HUD's test (no Z written). Laid out in the HUD's
    640 x 448 and marked as the HUD for --widescreen, so it moves with the HUD.
@@ -67,6 +67,7 @@ static const HandKind card_hands[CARD_COUNT] = {
 #define FADED 0.25f        /* a quarter */
 #define PULSE_VBLANKS 9    /* a changed card pulses for 150 ms */
 #define FLASH_VBLANKS 15   /* a refused one flashes for 250 ms */
+#define INSIDE_ALPHA 0x50  /* a card's dark inside, of the cross's alpha (0x80 opaque): about 60% */
 
 /* ---- The pictures --------------------------------------------------------------------------------------- */
 #define PICTURE_W 128 /* the model's 256 x 128 at half size */
@@ -95,8 +96,6 @@ typedef struct {
 static const Piece edge_corner = {247, 20, 256, 29};
 static const Piece edge_side = {247, 32, 256, 56};
 static const Piece edge_top = {110, 20, 190, 29};
-/* the middle of the red orb: the inside of a card */
-static const Piece orb_glow = {39, 35, 75, 77};
 
 static Piece mirrored(Piece p, int across, int down) {
     Piece m = p;
@@ -369,7 +368,7 @@ static Box drawn_box(int card) {
     return b;
 }
 
-/* The card's frame: the orb's glow inside, the bar's stone and gold edge round it, warmer while
+/* The card's frame: a dark inside the scene shows through, the bar's stone and gold edge round it, warmer while
    it pulses, red while refused. GAGE_TEX0 set. */
 static void draw_card_frame(Gif *g, int card, float alpha) {
     HandKind kind = card_hands[card];
@@ -380,7 +379,7 @@ static void draw_card_frame(Gif *g, int card, float alpha) {
     u64 stone = rgba(GAGE_GREY + (int)(0x38 * pulse), GAGE_GREY + (int)(0x1C * pulse), GAGE_GREY, a);
     float ix0 = b.x0 + EDGE_PX, iy0 = b.y0 + EDGE_PX, ix1 = b.x1 - EDGE_PX, iy1 = b.y1 - EDGE_PX;
 
-    gif_piece(g, orb_glow, ix0, iy0, ix1, iy1, rgba(GAGE_GREY, GAGE_GREY, GAGE_GREY, a));
+    gif_rect(g, ix0, iy0, ix1, iy1, rgba(0x08, 0x07, 0x06, a * INSIDE_ALPHA / 0x80));
     gif_piece(g, mirrored(edge_corner, 1, 0), b.x0, b.y0, ix0, iy0, stone);
     gif_piece(g, edge_corner, ix1, b.y0, b.x1, iy0, stone);
     gif_piece(g, mirrored(edge_corner, 1, 1), b.x0, iy1, ix0, b.y1, stone);
