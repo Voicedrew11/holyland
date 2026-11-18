@@ -735,6 +735,10 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     return is_input(event.type);
 }
 
+extern "C" int port_player_ui_ready(void) {
+    return menu.ready;
+}
+
 extern "C" int port_player_ui_open(void) {
     return menu.ready && menu.open;
 }

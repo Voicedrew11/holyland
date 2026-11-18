@@ -52,6 +52,9 @@ int port_overlay_shot_due(void);
 void port_overlay_shot(const unsigned int *rgba, int width, int height);
 /* 1 while it is open: the keyboard, mouse and controller go to it, not to the game */
 int port_overlay_open(void);
+/* The key that opens it, and so gives its windows (the profiler, the extended stats) the mouse: "Shift+F1" where
+   the player menu has F1, else "F1" */
+const char *port_overlay_key(void);
 /* The game holds still while the overlay is open ("Pause the game while the overlay is open") */
 int port_overlay_paused(void);
 /* (port/sdk/controls.c) a save state was asked for by its key: shows port_state_message() a while */

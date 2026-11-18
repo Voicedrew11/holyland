@@ -18,6 +18,7 @@
 #include "profile_run_view.h"
 
 extern "C" {
+#include "port/overlay.h"
 #include "port/profile.h"
 #include "port/profile_run.h"
 #include "port/sampler.h"
@@ -191,7 +192,8 @@ std::string run_text() {
 void draw_controls(bool overlay_open) {
     bool recording = port_profile_run_recording() != 0;
     if (!overlay_open) {
-        ImGui::TextDisabled(recording ? "Recording. F1 for the mouse: Stop, Save, Copy" : "F1 for the mouse: Start");
+        ImGui::TextDisabled(recording ? "Recording. %s for the mouse: Stop, Save, Copy" : "%s for the mouse: Start",
+                            port_overlay_key());
         return;
     }
     if (ImGui::Button(recording ? "Stop" : "Start")) {

@@ -157,7 +157,10 @@ void set_open(bool value) {
         return;
     overlay_open = value;
     port_controls_block(overlay_open);
-    if (!overlay_open) {
+    if (overlay_open) {
+        port_player_ui_show(nullptr); // one menu at a time: the player menu closes under this one
+        show_settings = !profiler_visible(); // opened for the profiler's mouse, the Settings window would cover it
+    } else {
         port_controls_listen_cancel();
         port_settings_save();
     }
@@ -1420,7 +1423,8 @@ void menu_bar() {
     ImGui::MenuItem("About", nullptr, &show_about);
     update_badge_menu_item();
     char status[96];
-    std::snprintf(status, sizeof(status), "F1 to close%s", port_overlay_paused() ? "   (game paused)" : "");
+    std::snprintf(status, sizeof(status), "%s to close%s", port_overlay_key(),
+                  port_overlay_paused() ? "   (game paused)" : "");
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(status).x - 16);
     ImGui::TextDisabled("%s", status);
     ImGui::EndMainMenuBar();
@@ -1667,7 +1671,7 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
         return;
     }
     ready = true;
-    std::fprintf(stderr, "[overlay] %s opens the developers' overlay\n", renderer == nullptr ? "Shift+F1" : "F1");
+    std::fprintf(stderr, "[overlay] %s opens the developers' overlay\n", port_overlay_key());
 }
 
 extern "C" int port_overlay_event(const void *sdl_event) {
@@ -1731,6 +1735,10 @@ extern "C" void port_overlay_shot(const unsigned int *rgba, int width, int heigh
 
 extern "C" int port_overlay_open(void) {
     return (ready && overlay_open) || port_player_ui_open();
+}
+
+extern "C" const char *port_overlay_key(void) {
+    return port_player_ui_ready() ? "Shift+F1" : "F1";
 }
 
 extern "C" int port_overlay_paused(void) {

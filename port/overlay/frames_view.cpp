@@ -22,6 +22,7 @@
 #include "port/zone_record.hpp"
 
 extern "C" {
+#include "port/overlay.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/zones.h"
@@ -431,8 +432,13 @@ void draw_graph(bool overlay_open) {
         return;
     }
     const Bar &b = c.bars[i];
-    ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms%s", (unsigned long long)b.index, b.ms, b.gpu_ms,
-                      overlay_open ? "\nclick: its timeline and zones" : "\nF1 for the mouse: click to pick it");
+    if (overlay_open) {
+        ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms\nclick: its timeline and zones",
+                          (unsigned long long)b.index, b.ms, b.gpu_ms);
+    } else {
+        ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms\n%s for the mouse: click to pick it",
+                          (unsigned long long)b.index, b.ms, b.gpu_ms, port_overlay_key());
+    }
     if (ImGui::IsItemClicked()) {
         pick(int64_t(b.index));
     }
@@ -494,9 +500,9 @@ void draw_timeline(bool overlay_open) {
         ImGui::TextDisabled("No picture done yet.");
         return;
     }
-    ImGui::Text("Picture %llu: %.3f ms%s. %s", (unsigned long long)p.frame.index, p.frame.ms(),
-                state.picked < 0 ? " (the newest)" : "",
-                overlay_open ? "Wheel: zoom; drag: move; double-click: whole." : "F1 for the mouse to zoom and move.");
+    ImGui::Text("Picture %llu: %.3f ms%s. %s%s", (unsigned long long)p.frame.index, p.frame.ms(),
+                state.picked < 0 ? " (the newest)" : "", overlay_open ? "" : port_overlay_key(),
+                overlay_open ? "Wheel: zoom; drag: move; double-click: whole." : " for the mouse to zoom and move.");
     float row_h = ImGui::GetFontSize() + 3, label_w = ImGui::GetFontSize() * 9;
     // (a lane keeps the rows it has needed since the window opened: nothing moves as the pictures change)
     state.lane_rows.resize(std::max(state.lane_rows.size(), p.spans.size()), 0);
