@@ -143,8 +143,8 @@ static inline size_t gsr_table_state_size(void) {
 static inline void gsr_table_state(PortStateIo *io, size_t size) {
     pcr_table_state(io, size);
 }
-static inline void gsr_enable_present(void) {
-    pcr_enable_present();
+static inline void gsr_enable_present(PcrMakeSurface make_surface) {
+    pcr_enable_present(make_surface);
 }
 static inline int gsr_present_device(GsnPresentDevice *out) {
     return pcr_present_device(out);

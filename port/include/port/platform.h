@@ -524,7 +524,13 @@ void port_field_frames_reset(int whole);
 uint64_t port_field_frames_replays(void);
 
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
+/* Before port_gs_init: the window the Vulkan presenter shows (when it is wanted), so that the PC renderer chooses a
+   GPU and a queue that can present to it (port_video_make_surface) */
+void port_video_open_window(void);
 void port_video_init(void);
+/* A Vulkan surface (VkSurfaceKHR) for the window opened by port_video_open_window, on the instance (VkInstance):
+   1, or 0 without the window. The caller destroys it. On the DMA controller's thread (the PC renderer's opening). */
+int port_video_make_surface(void *instance, uint64_t *surface);
 /* A picture's tag: the vblank it belongs to, and when in it (phase, 0 to 1: 0 is the vblank's own
    picture; --frame-rate above 60 has more between two vblanks). The window shows each at its time. */
 #define PORT_PICTURE_TAG(vblank, phase) (((uint64_t)(vblank) << 16) | (uint64_t)((phase) * 65536.0) & 0xFFFF)
