@@ -96,7 +96,7 @@ void write(const fs::path &file, const std::string &text) {
 }
 
 void test_disc_folder() {
-    fs::path dir = temp_dir("holyland_launcher_test_disc");
+    fs::path dir = temp_dir("darker_reality_launcher_test_disc");
     check("empty folder", check_disc(dir).verdict == DiscVerdict::not_kf4);
     write(dir / "system.cnf", "BOOT2 = cdrom0:\\SLUS_203.18;1\n");
     write(dir / "Data/kf4.dat", "x");
@@ -110,7 +110,7 @@ void test_disc_folder() {
 }
 
 void test_choices() {
-    fs::path dir = temp_dir("holyland_launcher_test_choices");
+    fs::path dir = temp_dir("darker_reality_launcher_test_choices");
     fs::path file = dir / "launcher.json";
     LauncherChoices none = read_choices(file);
     check("defaults", none.disc.empty() && none.update_check && none.skipped.empty());
@@ -235,7 +235,7 @@ bool has(const std::vector<std::string> &args, const std::string &arg) {
 }
 
 void test_local_build() {
-    fs::path dir = temp_dir("holyland_launcher_test_build");
+    fs::path dir = temp_dir("darker_reality_launcher_test_build");
     BuildRequest request{"/content", dir / "abc", "0.2.0"};
 
     FakePlatform platform;

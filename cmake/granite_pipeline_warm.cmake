@@ -9,17 +9,17 @@ function(kf4_granite_pipeline_warm granite)
     set(cpp ${granite}/vulkan/command_buffer.cpp)
     set(dev ${granite}/vulkan/device.cpp)
     kf4_granite_edit(${hpp} "\tstatic Pipeline build_compute_pipeline(Device *device, const DeferredPipelineCompile &compile, CompileMode mode);"
-        "\tstatic void holyland_rehash(DeferredPipelineCompile &compile, bool compute); static VkPipelineCache holyland_pipeline_cache(Device *device); static const RenderPass &holyland_render_pass(Device *device, const RenderPassInfo &info); // (holyland)" FALSE)
+        "\tstatic void kf4_rehash(DeferredPipelineCompile &compile, bool compute); static VkPipelineCache kf4_pipeline_cache(Device *device); static const RenderPass &kf4_render_pass(Device *device, const RenderPassInfo &info); // (darker-reality)" FALSE)
     kf4_granite_edit(${cpp} "static void log_compile_time(const char *tag, Hash hash,"
-        "#include \"../../../../cmake/granite_pipeline_warm.inc\" // (holyland)" TRUE)
+        "#include \"../../../../cmake/granite_pipeline_warm.inc\" // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\tlog_compile_time(\"compute\", compile.hash, end_ts - start_ts, vr, mode);"
-        "\tif (holyland_on_compile) holyland_on_compile(device, compile, true, end_ts - start_ts, mode == CompileMode::Sync, vr == VK_SUCCESS && compute_pipeline != VK_NULL_HANDLE); // (holyland)" FALSE)
+        "\tif (kf4_on_compile) kf4_on_compile(device, compile, true, end_ts - start_ts, mode == CompileMode::Sync, vr == VK_SUCCESS && compute_pipeline != VK_NULL_HANDLE); // (darker-reality)" FALSE)
     kf4_granite_edit(${cpp} "\tlog_compile_time(\"graphics\", compile.hash, end_ts - start_ts, res, mode);"
-        "\tif (holyland_on_compile) holyland_on_compile(device, compile, false, end_ts - start_ts, mode == CompileMode::Sync, res == VK_SUCCESS && pipeline != VK_NULL_HANDLE); // (holyland)" FALSE)
+        "\tif (kf4_on_compile) kf4_on_compile(device, compile, false, end_ts - start_ts, mode == CompileMode::Sync, res == VK_SUCCESS && pipeline != VK_NULL_HANDLE); // (darker-reality)" FALSE)
     kf4_granite_edit(${dev} "const RenderPass &Device::request_render_pass(const RenderPassInfo &info, bool compatible)"
-        "extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info); // (holyland: cmake/granite_pipeline_warm.inc)" TRUE)
+        "extern void (*kf4_on_render_pass)(Util::Hash hash, const RenderPassInfo &info); // (darker-reality: cmake/granite_pipeline_warm.inc)" TRUE)
     kf4_granite_replace(${dev} "\t\tret = render_passes.emplace_yield(hash, hash, this, info);\n"
-        "\t{\n\t\tret = render_passes.emplace_yield(hash, hash, this, info);\n\t\tif (compatible && holyland_on_render_pass) holyland_on_render_pass(hash, info); // (holyland)\n\t}\n")
+        "\t{\n\t\tret = render_passes.emplace_yield(hash, hash, this, info);\n\t\tif (compatible && kf4_on_render_pass) kf4_on_render_pass(hash, info); // (darker-reality)\n\t}\n")
 endfunction()
 
 # Granite's pipeline binaries (VK_KHR_pipeline_binary, RADV's way) are serialized for the pipeline cache's file by
@@ -29,9 +29,9 @@ function(kf4_granite_pipeline_cache_locks granite)
     set(map ${granite}/util/intrusive_hash_map.hpp)
     set(cache ${granite}/vulkan/pipeline_cache.cpp)
     kf4_granite_edit(${map} "\t// Not supposed to be called in racy conditions,"
-        "\tRWSpinLock &holyland_lock() const { return lock; } // (holyland: cmake/granite_pipeline_warm.cmake)" TRUE)
+        "\tRWSpinLock &kf4_lock() const { return lock; } // (darker-reality: cmake/granite_pipeline_warm.cmake)" TRUE)
     kf4_granite_edit(${cache} "\t// Granite's magic UUID."
-        "\tUtil::RWSpinLockReadHolder holyland_sized(binary_mapping.holyland_lock()), holyland_sized_binaries(binaries.holyland_lock()); // (holyland)" TRUE)
+        "\tUtil::RWSpinLockReadHolder kf4_sized(binary_mapping.kf4_lock()), kf4_sized_binaries(binaries.kf4_lock()); // (darker-reality)" TRUE)
     kf4_granite_edit(${cache} "\tif (size < get_serialized_size())"
-        "\tUtil::RWSpinLockReadHolder holyland_serialized(binary_mapping.holyland_lock()), holyland_serialized_binaries(binaries.holyland_lock()); // (holyland)" TRUE)
+        "\tUtil::RWSpinLockReadHolder kf4_serialized(binary_mapping.kf4_lock()), kf4_serialized_binaries(binaries.kf4_lock()); // (darker-reality)" TRUE)
 endfunction()

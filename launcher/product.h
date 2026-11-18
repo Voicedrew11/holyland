@@ -1,6 +1,6 @@
-// What the player sees the port called (docs/port/LAUNCHER.md): the launcher's window and messages, the
-// AppImage's folders. One place, so that a new name is one edit here and in packaging/package.env. The
-// project's own names (kf4, the data folder holyland/) are not the player's and stay.
+// The port's name (docs/port/LAUNCHER.md): the launcher's window and messages, the AppImage's folders. A new
+// name is an edit here, in packaging/package.env and in the folders of port/platform/data_dir.c. The game's
+// program stays kf4.
 #pragma once
 
 namespace launcher {

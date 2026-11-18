@@ -21,13 +21,19 @@ typedef enum { DATA_DIR_WINDOWS, DATA_DIR_POSIX } DataDirSystem;
 
 typedef const char *(*DataDirEnv)(const char *name);
 
-/* KF4_DATA_DIR, else %APPDATA%\holyland, else $XDG_CONFIG_HOME/holyland, else ~/.config/holyland, else
-   "holyland" (relative to the working folder) */
+/* KF4_DATA_DIR, else %APPDATA%\darker-reality, else $XDG_CONFIG_HOME/darker-reality, else
+   ~/.config/darker-reality, else "darker-reality" (relative to the working folder) */
 int data_dir_resolve(DataDirSystem system, DataDirEnv env, char *out, size_t out_size);
 
-/* KF4_BUILDS_DIR, else %LOCALAPPDATA%\holyland\builds, else $XDG_DATA_HOME/holyland/builds, else
-   ~/.local/share/holyland/builds, else <data folder>/builds */
+/* KF4_BUILDS_DIR, else %LOCALAPPDATA%\darker-reality\builds, else $XDG_DATA_HOME/darker-reality/builds, else
+   ~/.local/share/darker-reality/builds, else <data folder>/builds */
 int data_dir_resolve_builds(DataDirSystem system, DataDirEnv env, char *out, size_t out_size);
+
+/* Until 2026-11-18 the folders were named holyland (the project's old name): moves the old data folder and
+   the old local folder (the one holding builds/, and on Linux states/) to the names above, each only when the
+   old one exists and the new one does not. Nothing moves under KF4_DATA_DIR or KF4_BUILDS_DIR. Call it once,
+   first thing, before either folder is used (the game's main and the launcher's). Returns how many moved. */
+int data_dir_move_old_folders(DataDirSystem system, DataDirEnv env);
 
 /* the system this program was built for */
 DataDirSystem data_dir_this_system(void);

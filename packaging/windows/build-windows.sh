@@ -33,7 +33,7 @@ case "$(uname -s)" in
 MINGW* | MSYS* | CYGWIN*)
     "$T/cmake/bin/cmake.exe" -G Ninja -S "$ROOT/launcher" -B "$B" -DCMAKE_MAKE_PROGRAM="$T/ninja/ninja.exe" \
         -DCMAKE_C_COMPILER="$T/llvm-mingw/bin/clang.exe" -DCMAKE_CXX_COMPILER="$T/llvm-mingw/bin/clang++.exe" \
-        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DHOLYLAND_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
     "$T/cmake/bin/cmake.exe" --build "$B"
     ;;
 *)
@@ -41,7 +41,7 @@ MINGW* | MSYS* | CYGWIN*)
     cmake -G Ninja -S "$ROOT/launcher" -B "$B" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
         -DCMAKE_C_COMPILER="$LM/bin/x86_64-w64-mingw32-clang" -DCMAKE_CXX_COMPILER="$LM/bin/x86_64-w64-mingw32-clang++" \
         -DCMAKE_RC_COMPILER="$LM/bin/x86_64-w64-mingw32-windres" -DCMAKE_FIND_ROOT_PATH="$LM/x86_64-w64-mingw32" \
-        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DHOLYLAND_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
     cmake --build "$B"
     ;;
 esac
@@ -62,8 +62,8 @@ echo "zip: $ZIP ($(du -h "$ZIP" | cut -f1))"
 
 if command -v iscc >/dev/null; then
     echo "==> the installer"
-    HOLYLAND_VERSION="$VERSION" HOLYLAND_NAME="$NAME" HOLYLAND_DISPLAY_NAME="$DISPLAY_NAME" \
-        HOLYLAND_APP_ID="$APP_ID" HOLYLAND_INNO_APP_ID="$INNO_APP_ID" \
-        HOLYLAND_INNO_PRIVILEGES="$INNO_PRIVILEGES" HOLYLAND_STAGE="$(cygpath -w "$STAGE" 2>/dev/null || echo "$STAGE")" \
-        HOLYLAND_OUT="$(cygpath -w "$OUT" 2>/dev/null || echo "$OUT")" iscc "$(cygpath -w "$ROOT/packaging/windows/installer.iss" 2>/dev/null || echo "$ROOT/packaging/windows/installer.iss")"
+    DARKER_REALITY_VERSION="$VERSION" DARKER_REALITY_NAME="$NAME" DARKER_REALITY_DISPLAY_NAME="$DISPLAY_NAME" \
+        DARKER_REALITY_APP_ID="$APP_ID" DARKER_REALITY_INNO_APP_ID="$INNO_APP_ID" \
+        DARKER_REALITY_INNO_PRIVILEGES="$INNO_PRIVILEGES" DARKER_REALITY_STAGE="$(cygpath -w "$STAGE" 2>/dev/null || echo "$STAGE")" \
+        DARKER_REALITY_OUT="$(cygpath -w "$OUT" 2>/dev/null || echo "$OUT")" iscc "$(cygpath -w "$ROOT/packaging/windows/installer.iss" 2>/dev/null || echo "$ROOT/packaging/windows/installer.iss")"
 fi

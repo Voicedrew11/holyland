@@ -5,11 +5,11 @@
 #   packaging/fetch.sh NAME            the file's path (downloaded if not cached)
 #   packaging/fetch.sh --print NAME    its SHA-256, for a new line in toolchain.lock
 #
-# The cache is $HOLYLAND_CACHE, else out/packaging-cache/.
+# The cache is $DARKER_REALITY_CACHE, else out/packaging-cache/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CACHE="${HOLYLAND_CACHE:-$ROOT/out/packaging-cache}"
+CACHE="${DARKER_REALITY_CACHE:-$ROOT/out/packaging-cache}"
 PRINT=0
 if [ "${1:-}" = "--print" ]; then PRINT=1; shift; fi
 NAME="${1:?usage: packaging/fetch.sh [--print] NAME}"

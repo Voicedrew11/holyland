@@ -3,11 +3,12 @@
 Players get **Darker Reality**, a launcher that builds the game on their own computer and then plays it. A
 release never contains a built `kf4`: the game's code comes from the decomp, so, like the Verdite ports
 (`verdite-core/launcher`), a release ships the **source and the tools** and the build happens on the player's
-machine. The design follows Verdite's launcher; holyland is C/C++, so the code is new (`launcher/`).
+machine. The design follows Verdite's launcher; Darker Reality is C/C++, so the code is new (`launcher/`).
 
-"Darker Reality" is what players see (`launcher/product.h`, `packaging/package.env`). The project's own names
-are unchanged: `kf4`, and the data folder `holyland/` (renaming it would leave players' settings
-and saves behind).
+"Darker Reality" is the project's name (it was holyland until 2026-11-18): `launcher/product.h`,
+`packaging/package.env`, and the folders in `port/platform/data_dir.c`. The game's program is still `kf4`. The
+first start after the rename moves the old `holyland` data and local folders to their new names
+(`data_dir_move_old_folders`), so players keep their settings and saves.
 
 ## What it does
 
@@ -31,11 +32,11 @@ updates)"; the desktop entry's action) shows the launcher instead: Play, Change 
 
 | Where | What | Written by |
 |---|---|---|
-| data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.config/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
+| data folder (`port/platform/data_dir.c`: `%APPDATA%\darker-reality`, `~/.config/darker-reality`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
 | | `launcher.json`: disc, `update_check`, `skipped` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
 | | `build.log`, `game.log` | the launcher |
-| builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
+| builds folder (`%LOCALAPPDATA%\darker-reality\builds`, `$XDG_DATA_HOME/darker-reality/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
 | install folder (read-only) | the launcher, `content/` | the installer |
 
 ## Platforms
@@ -129,8 +130,8 @@ The same as Verdite's launcher: the player is told; nothing installs itself.
 
 ## Versions
 
-The tag is the version (`tools/version.sh`: `$HOLYLAND_VERSION`, else the newest `vX.Y.Z` tag, else 0.0.0). The
-launcher is built with `-DHOLYLAND_VERSION`, and passes it to the game's build as `KF4_VERSION`
+The tag is the version (`tools/version.sh`: `$DARKER_REALITY_VERSION`, else the newest `vX.Y.Z` tag, else 0.0.0). The
+launcher is built with `-DDARKER_REALITY_VERSION`, and passes it to the game's build as `KF4_VERSION`
 (`port/include/port/version.h`, shown in About and the bug report). A developer's build has none.
 
 ## Making a release

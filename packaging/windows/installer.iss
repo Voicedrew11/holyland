@@ -1,18 +1,18 @@
-; Inno Setup script for Darker Reality, the release of holyland (docs/port/LAUNCHER.md, "Releases"). Run packaging/windows/build-windows.sh,
+; Inno Setup script for Darker Reality (docs/port/LAUNCHER.md, "Releases"). Run packaging/windows/build-windows.sh,
 ; which sets every name below from packaging/package.env and stages the files; never iscc on its own.
 ;
 ; The installer does not ask for the disc: the launcher asks at the first start, builds the game into
-; %LOCALAPPDATA%\holyland\builds and keeps settings and saves in %APPDATA%\holyland (the project's
-; folder name, kept from before the release had a name of its own), so the install folder stays
+; %LOCALAPPDATA%\darker-reality\builds and keeps settings and saves in %APPDATA%\darker-reality
+; (port/platform/data_dir.c, which moves them there from the old name, holyland), so the install folder stays
 ; read-only, an uninstall leaves saves alone, and reinstalling the same release does not build again.
-#define AppVersion GetEnv("HOLYLAND_VERSION")
-#define FileName   GetEnv("HOLYLAND_NAME")
-#define AppName    GetEnv("HOLYLAND_DISPLAY_NAME")
-#define Exe        GetEnv("HOLYLAND_APP_ID") + ".exe"
-#define AppGuid    GetEnv("HOLYLAND_INNO_APP_ID")
-#define Stage      GetEnv("HOLYLAND_STAGE")
-#define Out        GetEnv("HOLYLAND_OUT")
-#define Privileges GetEnv("HOLYLAND_INNO_PRIVILEGES")
+#define AppVersion GetEnv("DARKER_REALITY_VERSION")
+#define FileName   GetEnv("DARKER_REALITY_NAME")
+#define AppName    GetEnv("DARKER_REALITY_DISPLAY_NAME")
+#define Exe        GetEnv("DARKER_REALITY_APP_ID") + ".exe"
+#define AppGuid    GetEnv("DARKER_REALITY_INNO_APP_ID")
+#define Stage      GetEnv("DARKER_REALITY_STAGE")
+#define Out        GetEnv("DARKER_REALITY_OUT")
+#define Privileges GetEnv("DARKER_REALITY_INNO_PRIVILEGES")
 #if AppVersion == "" || AppName == "" || FileName == "" || AppGuid == "" || Stage == "" || Out == ""
   #error Run packaging/windows/build-windows.sh rather than iscc directly.
 #endif

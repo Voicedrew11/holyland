@@ -36,33 +36,33 @@ function(kf4_granite_dynamic_state granite)
     kf4_granite_replace(${hpp} "uint32_t depth_bounds_test : 1; uint32_t padding : 6;"
         "uint32_t depth_bounds_test : 1; uint32_t dynamic_ds : 1; uint32_t dynamic_blend : 1; uint32_t padding : 4;")
     kf4_granite_edit(${hpp} "\tinline void set_color_write_mask(uint32_t write_mask)"
-        "\tinline void set_dynamic_state(bool dynamic_ds, bool dynamic_blend) { SET_STATIC_STATE(dynamic_ds); SET_STATIC_STATE(dynamic_blend); } // (holyland)" TRUE)
+        "\tinline void set_dynamic_state(bool dynamic_ds, bool dynamic_blend) { SET_STATIC_STATE(dynamic_ds); SET_STATIC_STATE(dynamic_blend); } // (darker-reality)" TRUE)
     kf4_granite_edit(${hpp} "\tvoid bind_pipeline(VkPipelineBindPoint bind_point, VkPipeline pipeline, uint32_t active_dynamic_state);"
-        "\tstruct { bool valid; uint32_t ds[4]; float constants[4]; uint32_t count; VkBool32 enable[VULKAN_NUM_ATTACHMENTS]; VkColorComponentFlags mask[VULKAN_NUM_ATTACHMENTS]; VkColorBlendEquationEXT eq[VULKAN_NUM_ATTACHMENTS]; } holyland_emitted = {}; void holyland_flush_dynamic(); VkPipeline holyland_bound = VK_NULL_HANDLE; bool holyland_bind(VkPipelineBindPoint bind_point, VkPipeline pipeline, uint32_t active_dynamic_state); // (holyland)" TRUE)
+        "\tstruct { bool valid; uint32_t ds[4]; float constants[4]; uint32_t count; VkBool32 enable[VULKAN_NUM_ATTACHMENTS]; VkColorComponentFlags mask[VULKAN_NUM_ATTACHMENTS]; VkColorBlendEquationEXT eq[VULKAN_NUM_ATTACHMENTS]; } kf4_emitted = {}; void kf4_flush_dynamic(); VkPipeline kf4_bound = VK_NULL_HANDLE; bool kf4_bind(VkPipelineBindPoint bind_point, VkPipeline pipeline, uint32_t active_dynamic_state); // (darker-reality)" TRUE)
     # the code, and the calls into it: the hash without the dynamic state, the pipeline made with it, set before a draw
     kf4_granite_edit(${cpp} "Pipeline CommandBuffer::build_graphics_pipeline(Device *device, const DeferredPipelineCompile &compile,"
-        "#include \"../../../../cmake/granite_dynamic_state.inc\" // (holyland)" TRUE)
+        "#include \"../../../../cmake/granite_dynamic_state.inc\" // (darker-reality)" TRUE)
     kf4_granite_replace(${cpp} "\th.data(compile.static_state.words, sizeof(compile.static_state.words));"
-        "\tconst PipelineState holyland_hashed = holyland_hash_state(compile.static_state); // (holyland)\n\th.data(holyland_hashed.words, sizeof(holyland_hashed.words));")
+        "\tconst PipelineState kf4_hashed = kf4_hash_state(compile.static_state); // (darker-reality)\n\th.data(kf4_hashed.words, sizeof(kf4_hashed.words));")
     kf4_granite_replace(${cpp} "\tif (compile.static_state.state.blend_enable)\n"
-        "\tif (compile.static_state.state.blend_enable && !compile.static_state.state.dynamic_ds) // (holyland)\n")
+        "\tif (compile.static_state.state.blend_enable && !compile.static_state.state.dynamic_ds) // (darker-reality)\n")
     kf4_granite_replace(${cpp} "VkDynamicState states[8] = {" "VkDynamicState states[32] = {")
     kf4_granite_edit(${cpp} "\t// Blend state"
-        "\tif (compile.static_state.state.dynamic_ds) dynamic_mask |= holyland_dynamic_states(*device, compile.static_state, states, dyn.dynamicStateCount); // (holyland)" TRUE)
+        "\tif (compile.static_state.state.dynamic_ds) dynamic_mask |= kf4_dynamic_states(*device, compile.static_state, states, dyn.dynamicStateCount); // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\tuint32_t update_vbo_mask = dirty_vbos & active_vbos;"
-        "\tif (pipeline_state.static_state.state.dynamic_ds) holyland_flush_dynamic(); // (holyland)" TRUE)
+        "\tif (pipeline_state.static_state.state.dynamic_ds) kf4_flush_dynamic(); // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\ttable.vkCmdBindPipeline(cmd, bind_point, pipeline);"
-        "\tif (holyland_bind(bind_point, pipeline, active_dynamic_state)) // (holyland: not the graphics pipeline bound already)" TRUE)
+        "\tif (kf4_bind(bind_point, pipeline, active_dynamic_state)) // (darker-reality: not the graphics pipeline bound already)" TRUE)
     kf4_granite_edit(${cpp} "\t                        pipeline_info.initialPipeline);"
-        "\tholyland_bound = VK_NULL_HANDLE; // (holyland)" FALSE)
+        "\tkf4_bound = VK_NULL_HANDLE; // (darker-reality)" FALSE)
     # (the bits kept where Granite clears the render state: set_opaque_state and the like)
     kf4_granite_edit(${cpp} "\t// Preserve spec constant mask."
-        "\tconst bool holyland_keep[2] = { pipeline_state.static_state.state.dynamic_ds != 0, pipeline_state.static_state.state.dynamic_blend != 0 }; // (holyland)" TRUE)
+        "\tconst bool kf4_keep[2] = { pipeline_state.static_state.state.dynamic_ds != 0, pipeline_state.static_state.state.dynamic_blend != 0 }; // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\tmemset(&state, 0, sizeof(state));"
-        "\tstate.dynamic_ds = holyland_keep[0]; state.dynamic_blend = holyland_keep[1]; // (holyland)" FALSE)
+        "\tstate.dynamic_ds = kf4_keep[0]; state.dynamic_blend = kf4_keep[1]; // (darker-reality)" FALSE)
     # VK_EXT_extended_dynamic_state3 and its features, where the device has it
     kf4_granite_edit(${ctx_hpp} "\tVkPhysicalDeviceMaintenance5FeaturesKHR maintenance5_features = {};"
-        "\tVkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features = {}; // (holyland)" FALSE)
+        "\tVkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features = {}; // (darker-reality)" FALSE)
     kf4_granite_edit(${ctx} "\tif (has_extension(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME))"
-        "\tif (has_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME); ADD_CHAIN(ext.eds3_features, EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT); } // (holyland)" TRUE)
+        "\tif (has_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME); ADD_CHAIN(ext.eds3_features, EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT); } // (darker-reality)" TRUE)
 endfunction()

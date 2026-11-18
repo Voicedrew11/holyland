@@ -89,7 +89,7 @@ cp -r "$SDL2_PREFIX/include/SDL2" "$S/usr/include/"
 # SDL_syswm.h (which Dear ImGui's SDL2 backend includes) brings in X11's and Wayland's headers for the window
 # drivers SDL was built with. Nothing here reads those members (SDL_SysWMinfo's union is padded to the same
 # size either way), so the drivers are left out of the header rather than X11 and Wayland put in the sysroot.
-sed -i -E 's/^#define (SDL_VIDEO_DRIVER_(X11|WAYLAND|KMSDRM)[A-Z0-9_]*) 1$/\/* #undef \1 (holyland: packaging\/linux\/toolchain.sh) *\//' \
+sed -i -E 's/^#define (SDL_VIDEO_DRIVER_(X11|WAYLAND|KMSDRM)[A-Z0-9_]*) 1$/\/* #undef \1 (darker-reality: packaging\/linux\/toolchain.sh) *\//' \
     "$S/usr/include/SDL2/SDL_config.h"
 # SDL2 as the game's CMakeLists.txt finds it (find_package(SDL2 CONFIG))
 mkdir -p "$S/usr/lib/cmake/SDL2"

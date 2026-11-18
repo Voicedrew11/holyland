@@ -5,16 +5,16 @@
 #
 #   cd launcher && cmake --preset linux && cmake --build --preset linux && ctest --test-dir ../out/launcher-linux
 cmake_minimum_required(VERSION 3.21)
-project(holyland_launcher C CXX)
+project(darker_reality_launcher C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 
 # the release's version (tools/version.sh); empty in a developer's build, which is never told of updates
-set(HOLYLAND_VERSION "" CACHE STRING "The release's version (0.2.0)")
-if(NOT HOLYLAND_VERSION MATCHES "^([0-9]+(\\.[0-9]+)*)?$")
-    message(FATAL_ERROR "HOLYLAND_VERSION must be dotted numbers (0.2.0), not '${HOLYLAND_VERSION}'")
+set(DARKER_REALITY_VERSION "" CACHE STRING "The release's version (0.2.0)")
+if(NOT DARKER_REALITY_VERSION MATCHES "^([0-9]+(\\.[0-9]+)*)?$")
+    message(FATAL_ERROR "DARKER_REALITY_VERSION must be dotted numbers (0.2.0), not '${DARKER_REALITY_VERSION}'")
 endif()
 
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -73,7 +73,7 @@ target_link_libraries(launcher_imgui PUBLIC ${LAUNCHER_SDL2})
 
 add_executable(launcher main.cpp session.cpp window.cpp)
 set_target_properties(launcher PROPERTIES OUTPUT_NAME darker-reality) # launcher/product.h: kProductId
-target_compile_definitions(launcher PRIVATE HOLYLAND_VERSION="${HOLYLAND_VERSION}")
+target_compile_definitions(launcher PRIVATE DARKER_REALITY_VERSION="${DARKER_REALITY_VERSION}")
 target_compile_options(launcher PRIVATE ${LAUNCHER_WARNINGS})
 target_link_libraries(launcher PRIVATE launcher_platform launcher_imgui)
 if(WIN32)

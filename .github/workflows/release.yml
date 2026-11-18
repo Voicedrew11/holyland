@@ -44,7 +44,7 @@ jobs:
             libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
       - name: The version
         run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
+          case "$GITHUB_REF" in refs/tags/v*) echo "DARKER_REALITY_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - uses: actions/cache@v4
         with:
@@ -81,7 +81,7 @@ jobs:
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: The version
         run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
+          case "$GITHUB_REF" in refs/tags/v*) echo "DARKER_REALITY_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - name: Inno Setup on PATH
         run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
@@ -161,7 +161,7 @@ jobs:
           cat > notes.md <<'NOTES'
           **Preview builds are password protected.** Join the [Verdite Project Discord](https://discord.gg/R4EKCs8RWH) for access.
 
-          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\holyland\saves` on Windows and `~/.config/holyland/saves` on Linux (quick saves beside them, in `quicksaves`).
+          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\darker-reality\saves` on Windows and `~/.config/darker-reality/saves` on Linux (quick saves beside them, in `quicksaves`).
 
           The first start asks for your King's Field IV disc (the USA release, SLUS-20318) and builds the game on your computer, which takes a few minutes and happens once.
           NOTES

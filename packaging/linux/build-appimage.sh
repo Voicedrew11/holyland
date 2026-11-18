@@ -40,7 +40,7 @@ rm -rf "$B"
 env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" -G Ninja -S "$ROOT/launcher" -B "$B" \
     -DCMAKE_MAKE_PROGRAM="$T/bin/ninja" -DCMAKE_C_COMPILER="$T/llvm/bin/clang" \
     -DCMAKE_CXX_COMPILER="$T/llvm/bin/clang++" -DCMAKE_TOOLCHAIN_FILE="$T/linux.cmake" \
-    -DCMAKE_BUILD_TYPE=Release -DHOLYLAND_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+    -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
 env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" --build "$B"
 cp "$B/$APP_ID" "$APPDIR/usr/bin/$APP_ID"
 strip "$APPDIR/usr/bin/$APP_ID"

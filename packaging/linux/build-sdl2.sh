@@ -29,8 +29,8 @@ objdump -p "$PREFIX/lib/libSDL2-2.0.so.0" | awk '/NEEDED/ { print "  " $2 }'
 loads="$(strings "$PREFIX/lib/libSDL2-2.0.so.0")"
 for want in libX11 libwayland-client 'libpulse|libpipewire|libasound'; do
     grep -Eq "^($want)[^ ]*\.so" <<<"$loads" && continue
-    if [ "${HOLYLAND_PARTIAL_SDL2:-0}" = 1 ]; then
-        echo "build-sdl2.sh: WARNING: no $want (allowed by HOLYLAND_PARTIAL_SDL2=1: a test build only)" >&2
+    if [ "${DARKER_REALITY_PARTIAL_SDL2:-0}" = 1 ]; then
+        echo "build-sdl2.sh: WARNING: no $want (allowed by DARKER_REALITY_PARTIAL_SDL2=1: a test build only)" >&2
     else
         echo "build-sdl2.sh: SDL2 was built without $want: install its -dev package (see release.yml)" >&2
         exit 1

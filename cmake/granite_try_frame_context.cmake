@@ -9,8 +9,8 @@
 function(kf4_granite_try_frame_context granite)
     kf4_granite_replace(${granite}/vulkan/device.hpp
         "\tvoid next_frame_context();\n"
-        "\tvoid next_frame_context();\n\tbool try_next_frame_context(); // (holyland) next_frame_context unless a command buffer is open\n")
+        "\tvoid next_frame_context();\n\tbool try_next_frame_context(); // (darker-reality) next_frame_context unless a command buffer is open\n")
     kf4_granite_replace(${granite}/vulkan/device.cpp
         "void Device::next_frame_context()\n{\n\tDRAIN_FRAME_LOCK();\n"
-        "bool Device::try_next_frame_context() // (holyland)\n{\n\t{\n\t\tstd::lock_guard<std::mutex> holder{lock.lock};\n\t\tif (lock.counter != 0)\n\t\t\treturn false;\n\t}\n\tnext_frame_context();\n\treturn true;\n}\n\nvoid Device::next_frame_context()\n{\n\tDRAIN_FRAME_LOCK();\n")
+        "bool Device::try_next_frame_context() // (darker-reality)\n{\n\t{\n\t\tstd::lock_guard<std::mutex> holder{lock.lock};\n\t\tif (lock.counter != 0)\n\t\t\treturn false;\n\t}\n\tnext_frame_context();\n\treturn true;\n}\n\nvoid Device::next_frame_context()\n{\n\tDRAIN_FRAME_LOCK();\n")
 endfunction()
