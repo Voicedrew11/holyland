@@ -12,8 +12,9 @@
    Hud_Draw): the stone and gold edge of its long bar for the sides and corners, over a dark inside the scene shows
    through. Then the pictures: each sent to GS memory where gage.tx2 is (the game sends gage.tx2 again before it draws
    the HUD each frame; nothing else draws from there) and drawn as a textured sprite before the next is sent. GS
-   context 1, as the HUD: alpha blending (Cs - Cd) * As + Cd and the HUD's test (no Z written). Laid out in the HUD's
-   640 x 448 and marked as the HUD for --widescreen, so it moves with the HUD.
+   context 1, as the HUD: alpha blending (Cs - Cd) * As + Cd and the HUD's test (no Z written). Laid out in its own
+   units and placed in the HUD's 640 x 448 by the player's corner and size (port_hands.corner, .scale); marked for
+   --widescreen as the HUD against the side it keeps to, so it stays at the 16:9 picture's edge.
 
    The cross fades to a quarter after a few seconds with no hand key pressed (port_hands.fade); a card whose
    contents changed glows warm, and one whose key did nothing flashes red. Every card, empty or not, is drawn at the
@@ -51,11 +52,38 @@ void Widescreen_Mark(int what);
 #define GS_X0 1728
 #define GS_Y0 1824
 #define CARD_W 70        /* three cards and their gaps: the HUD frame's width (218) */
-#define CARD_H 80
 #define CARD_GAP 3
-#define CROSS_LEFT 18    /* under the HUD's ring (its frame is drawn 16 in, the ring's edge a little further) */
-#define CROSS_BOTTOM 432 /* the HUD's frame starts 16 from the top: so 16 from the bottom */
-#define MIDDLE_DROP 24   /* the hotkey's card is this much lower */
+#define CROSS_W (3 * CARD_W + 2 * CARD_GAP)
+#define SIDE_MARGIN 18   /* under the HUD's ring (its frame is drawn 16 in, the ring's edge a little further) */
+#define END_MARGIN 16    /* the HUD's frame starts 16 from the top: so 16 from the top or bottom */
+#define HUD_BOTTOM 106   /* the HUD's frame: 128 texels drawn at 0.7 down, from 16 */
+
+/* Each corner: which edges the cross keeps to, how far from the top when at the top, and how widescreen moves it */
+typedef struct {
+    int right;     /* against the right edge, else the left */
+    int bottom;    /* against the bottom, else at `top` */
+    float top;
+    int widescreen; /* PORT_WIDESCREEN_HUD_LEFT or _RIGHT */
+} CornerPlace;
+
+static const CornerPlace corner_places[PORT_HANDS_CORNER_COUNT] = {
+    [PORT_HANDS_BOTTOM_LEFT] = {0, 1, 0, PORT_WIDESCREEN_HUD_LEFT},
+    [PORT_HANDS_BOTTOM_RIGHT] = {1, 1, 0, PORT_WIDESCREEN_HUD_RIGHT},
+    [PORT_HANDS_TOP_RIGHT] = {1, 0, END_MARGIN, PORT_WIDESCREEN_HUD_RIGHT},
+    [PORT_HANDS_TOP_LEFT] = {0, 0, HUD_BOTTOM + 8, PORT_WIDESCREEN_HUD_LEFT},
+};
+
+/* each card shape's height (CARD_W wide): square is about square on the screen, whose pixels are a little narrow */
+static const float card_heights[PORT_HANDS_CARDS_COUNT] = {
+    [PORT_HANDS_CARDS_TALL] = 80,
+    [PORT_HANDS_CARDS_SQUARE] = 70,
+};
+
+/* each layout's drop of the hotkey's card, the middle one, below the other two */
+static const float middle_drops[PORT_HANDS_LAYOUT_COUNT] = {
+    [PORT_HANDS_LAYOUT_CROSS] = 24,
+    [PORT_HANDS_LAYOUT_ROW] = 0,
+};
 
 enum { CARD_SPELL, CARD_HOTKEY, CARD_WEAPON, CARD_COUNT }; /* left to right */
 
@@ -289,9 +317,32 @@ static u64 rgba(int r, int g, int b, int a) {
     return (u64)(r & 0xFF) | (u64)(g & 0xFF) << 8 | (u64)(b & 0xFF) << 16 | (u64)(a & 0xFF) << 24 | (u64)0x3F800000 << 32;
 }
 
+/* Where this frame's cross is and its shape: its top left in the HUD's 640 x 448, its scale, its cards' height
+   and the middle card's drop. Everything below is laid out in the cross's own units (CROSS_W wide, card_h + drop
+   high, from its top left) and placed by xyz. */
+typedef struct {
+    float x, y, scale;
+    float card_h, drop;
+} Place;
+
+static Place place = {SIDE_MARGIN, 448 - END_MARGIN - 104, 1.0f, 80, 24};
+
+static Place place_of(const PortHandsOptions *o) {
+    const CornerPlace *c = &corner_places[o->corner];
+    Place p;
+
+    p.scale = o->scale;
+    p.card_h = card_heights[o->cards];
+    p.drop = middle_drops[o->layout];
+    p.x = c->right ? 640 - SIDE_MARGIN - CROSS_W * p.scale : SIDE_MARGIN;
+    p.y = c->bottom ? 448 - END_MARGIN - (p.card_h + p.drop) * p.scale : c->top;
+    return p;
+}
+
+/* a point of the cross, in its own units, as the GS's XYZ2 */
 static u64 xyz(float x, float y) {
-    u64 gx = (u64)(int)((GS_X0 + x) * 16.0f + 0.5f) & 0xFFFF;
-    u64 gy = (u64)(int)((GS_Y0 + y) * 16.0f + 0.5f) & 0xFFFF;
+    u64 gx = (u64)(int)((GS_X0 + place.x + x * place.scale) * 16.0f + 0.5f) & 0xFFFF;
+    u64 gy = (u64)(int)((GS_Y0 + place.y + y * place.scale) * 16.0f + 0.5f) & 0xFFFF;
 
     return gx | gy << 16;
 }
@@ -319,10 +370,10 @@ typedef struct {
 static Box card_box(int card) {
     Box box;
 
-    box.x0 = CROSS_LEFT + card * (CARD_W + CARD_GAP);
+    box.x0 = (float)(card * (CARD_W + CARD_GAP));
     box.x1 = box.x0 + CARD_W;
-    box.y1 = CROSS_BOTTOM - (card == CARD_HOTKEY ? 0 : MIDDLE_DROP);
-    box.y0 = box.y1 - CARD_H;
+    box.y0 = card == CARD_HOTKEY ? place.drop : 0.0f;
+    box.y1 = box.y0 + place.card_h;
     return box;
 }
 
@@ -520,7 +571,8 @@ void Hands_DrawCross(void) {
     }
     alpha = cross_alpha();
     count = hotkey_count();
-    Widescreen_Mark(PORT_WIDESCREEN_HUD_LEFT);
+    place = place_of(&port_hands);
+    Widescreen_Mark(corner_places[port_hands.corner].widescreen);
     GsDraw_QueueFlush(); /* the VU1's own GIF packets out before ours (as TextureTable_QueueAll does) */
     if (count >= 0) {
         /* the font to GS memory, as Message_Draw sends it: its page (0x3B40) and CLUTs (0x3FE0) are clear of

@@ -85,10 +85,40 @@ size_t hands_format(const HandsState *state, char *out, size_t size);
 int hands_parse(const char *text, HandsState *out);
 
 /* ---- The switch (port/platform/hands.c) --------------------------------------------------------------- */
+/* the corner of the screen the cross is in */
+typedef enum {
+    PORT_HANDS_BOTTOM_LEFT, /* the default */
+    PORT_HANDS_BOTTOM_RIGHT,
+    PORT_HANDS_TOP_RIGHT,
+    PORT_HANDS_TOP_LEFT, /* under the HUD */
+    PORT_HANDS_CORNER_COUNT
+} PortHandsCorner;
+
+/* how the three cards are set out */
+typedef enum {
+    PORT_HANDS_LAYOUT_CROSS, /* the hotkey's card, the middle one, lower (the default) */
+    PORT_HANDS_LAYOUT_ROW,   /* in line */
+    PORT_HANDS_LAYOUT_COUNT
+} PortHandsLayout;
+
+/* the cards' shape */
+typedef enum {
+    PORT_HANDS_CARDS_TALL, /* the default */
+    PORT_HANDS_CARDS_SQUARE,
+    PORT_HANDS_CARDS_COUNT
+} PortHandsCards;
+
+#define PORT_HANDS_SCALE_MIN 0.4f
+#define PORT_HANDS_SCALE_MAX 1.0f
+
 typedef struct {
-    int enabled; /* off by default */
-    int forced;  /* --hands: on for this run whatever settings.json says */
-    int fade;    /* the cross fades after a while with nothing pressed (on by default) */
+    int enabled;            /* off by default */
+    int forced;             /* --hands: on for this run whatever settings.json says */
+    int fade;               /* the cross fades after a while with nothing pressed (on by default) */
+    float scale;            /* the cross's size, PORT_HANDS_SCALE_MIN to _MAX (1, the default: full) */
+    PortHandsCorner corner; /* where it is */
+    PortHandsLayout layout;
+    PortHandsCards cards;
 } PortHandsOptions;
 extern PortHandsOptions port_hands;
 
@@ -97,6 +127,14 @@ void port_hands_settings_read(const void *mods);       /* settings.json's "mods"
 void port_hands_settings_write(void *mods);
 void port_hands_set_enabled(int on); /* the Gameplay page */
 void port_hands_set_fade(int on);
+void port_hands_set_scale(float scale); /* clamped to PORT_HANDS_SCALE_MIN to _MAX */
+void port_hands_set_corner(PortHandsCorner corner);
+void port_hands_set_layout(PortHandsLayout layout);
+void port_hands_set_cards(PortHandsCards cards);
+/* settings.json's names, also shown */
+extern const char *const port_hands_corner_names[PORT_HANDS_CORNER_COUNT];
+extern const char *const port_hands_layout_names[PORT_HANDS_LAYOUT_COUNT];
+extern const char *const port_hands_cards_names[PORT_HANDS_CARDS_COUNT];
 
 /* ---- The hands kept (port/platform/hands.c keeps them, game/hands.c changes them) --------------------- */
 extern HandsState port_hands_state;

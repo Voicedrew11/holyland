@@ -450,6 +450,9 @@ static void squeeze_x(int path, uint8_t *data) {
     if (mode == PORT_WIDESCREEN_HUD_LEFT && !port_options.widescreen_hud_centred) {
         anchor = 0x6C00;
     }
+    if (mode == PORT_WIDESCREEN_HUD_RIGHT && !port_options.widescreen_hud_centred) {
+        anchor = 0x9400;
+    }
     anchor += shift;
     x = anchor + (x - anchor) * 3 / 4;
     data[0] = (uint8_t)x;

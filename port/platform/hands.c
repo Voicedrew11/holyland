@@ -18,7 +18,21 @@
 #include "port/platform.h"
 #include "port/settings.h"
 
-PortHandsOptions port_hands = {0, 0, 1};
+PortHandsOptions port_hands = {0, 0, 1, 1.0f, PORT_HANDS_BOTTOM_LEFT, PORT_HANDS_LAYOUT_CROSS, PORT_HANDS_CARDS_TALL};
+const char *const port_hands_corner_names[PORT_HANDS_CORNER_COUNT] = {
+    [PORT_HANDS_BOTTOM_LEFT] = "bottom left",
+    [PORT_HANDS_BOTTOM_RIGHT] = "bottom right",
+    [PORT_HANDS_TOP_RIGHT] = "top right",
+    [PORT_HANDS_TOP_LEFT] = "top left",
+};
+const char *const port_hands_layout_names[PORT_HANDS_LAYOUT_COUNT] = {
+    [PORT_HANDS_LAYOUT_CROSS] = "cross",
+    [PORT_HANDS_LAYOUT_ROW] = "row",
+};
+const char *const port_hands_cards_names[PORT_HANDS_CARDS_COUNT] = {
+    [PORT_HANDS_CARDS_TALL] = "tall",
+    [PORT_HANDS_CARDS_SQUARE] = "square",
+};
 HandsState port_hands_state;
 
 static unsigned long long pressed_at[HANDS_KEY_COUNT];
@@ -36,10 +50,31 @@ int port_hands_option(int argc, char **argv, int *i) {
 }
 
 /* ---- settings.json ------------------------------------------------------------------------------- */
+static float clamped_scale(float scale) {
+    if (!(scale >= PORT_HANDS_SCALE_MIN)) { /* NaN too */
+        return PORT_HANDS_SCALE_MIN;
+    }
+    return scale > PORT_HANDS_SCALE_MAX ? PORT_HANDS_SCALE_MAX : scale;
+}
+
+/* the index of `item`'s string in `names`, -1 when it is not a string or not one of them */
+static int named(const cJSON *item, const char *const *names, int count) {
+    int i;
+
+    for (i = 0; cJSON_IsString(item) && i < count; i++) {
+        if (strcmp(item->valuestring, names[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 void port_hands_settings_read(const void *mods_json) {
     const cJSON *mods = mods_json;
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(mods, "hands");
     const cJSON *fade = cJSON_GetObjectItemCaseSensitive(mods, "hands_fade");
+    const cJSON *scale = cJSON_GetObjectItemCaseSensitive(mods, "hands_scale");
+    int found;
 
     if (!cJSON_IsBool(item)) {
         item = cJSON_GetObjectItemCaseSensitive(mods, "weapon_sets"); /* the mod it replaces */
@@ -50,11 +85,24 @@ void port_hands_settings_read(const void *mods_json) {
     if (cJSON_IsBool(fade)) {
         port_hands.fade = cJSON_IsTrue(fade);
     }
+    if (cJSON_IsNumber(scale)) {
+        port_hands.scale = clamped_scale((float)scale->valuedouble);
+    }
+    found = named(cJSON_GetObjectItemCaseSensitive(mods, "hands_corner"), port_hands_corner_names, PORT_HANDS_CORNER_COUNT);
+    if (found >= 0) {
+        port_hands.corner = (PortHandsCorner)found;
+    }
+    found = named(cJSON_GetObjectItemCaseSensitive(mods, "hands_layout"), port_hands_layout_names, PORT_HANDS_LAYOUT_COUNT);
+    if (found >= 0) {
+        port_hands.layout = (PortHandsLayout)found;
+    }
+    found = named(cJSON_GetObjectItemCaseSensitive(mods, "hands_cards"), port_hands_cards_names, PORT_HANDS_CARDS_COUNT);
+    if (found >= 0) {
+        port_hands.cards = (PortHandsCards)found;
+    }
 }
 
-static void put(cJSON *mods, const char *name, int on) {
-    cJSON *value = cJSON_CreateBool(on);
-
+static void put_item(cJSON *mods, const char *name, cJSON *value) {
     if (cJSON_GetObjectItemCaseSensitive(mods, name) != NULL) {
         cJSON_ReplaceItemInObjectCaseSensitive(mods, name, value);
     } else {
@@ -62,11 +110,19 @@ static void put(cJSON *mods, const char *name, int on) {
     }
 }
 
+static void put(cJSON *mods, const char *name, int on) {
+    put_item(mods, name, cJSON_CreateBool(on));
+}
+
 void port_hands_settings_write(void *mods_json) {
     cJSON *mods = mods_json;
 
     put(mods, "hands", port_hands.enabled);
     put(mods, "hands_fade", port_hands.fade);
+    put_item(mods, "hands_scale", cJSON_CreateNumber(port_hands.scale));
+    put_item(mods, "hands_corner", cJSON_CreateString(port_hands_corner_names[port_hands.corner]));
+    put_item(mods, "hands_layout", cJSON_CreateString(port_hands_layout_names[port_hands.layout]));
+    put_item(mods, "hands_cards", cJSON_CreateString(port_hands_cards_names[port_hands.cards]));
     cJSON_DeleteItemFromObjectCaseSensitive(mods, "weapon_sets");
 }
 
@@ -78,6 +134,32 @@ void port_hands_set_enabled(int on) {
 void port_hands_set_fade(int on) {
     port_hands.fade = on != 0;
     port_settings_changed();
+}
+
+void port_hands_set_scale(float scale) {
+    port_hands.scale = clamped_scale(scale);
+    port_settings_changed();
+}
+
+void port_hands_set_layout(PortHandsLayout layout) {
+    if (layout >= 0 && layout < PORT_HANDS_LAYOUT_COUNT) {
+        port_hands.layout = layout;
+        port_settings_changed();
+    }
+}
+
+void port_hands_set_cards(PortHandsCards cards) {
+    if (cards >= 0 && cards < PORT_HANDS_CARDS_COUNT) {
+        port_hands.cards = cards;
+        port_settings_changed();
+    }
+}
+
+void port_hands_set_corner(PortHandsCorner corner) {
+    if (corner >= 0 && corner < PORT_HANDS_CORNER_COUNT) {
+        port_hands.corner = corner;
+        port_settings_changed();
+    }
 }
 
 /* ---- The keys ------------------------------------------------------------------------------------ */

@@ -158,6 +158,8 @@ int port_flicker_filter(void);
 int port_seamless_scroll(void);
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
+#define PORT_WIDESCREEN_HUD_RIGHT 3 /* 2D laid out against the 4:3 frame's right edge (the hands mod's cross in a
+                                       right corner): at the 16:9 picture's right edge, or centred, as above */
 
 /* port_frame_interp(): 1 while the opt-in higher frame rates are on (--frame-rate 60 to 240;
    port/platform/frame_interp.c). The patched GameLoop_DrawFrame then marks, in its packet chain, where
