@@ -798,3 +798,104 @@ Looked at and left: **GPU memory.** What is left is the three sets of surfaces (
 the pump keeping surfaces of its own, which needs to know that a walk reads nothing it has not drawn (the brightness
 pass's copy takes 512 rows where the clear covers 448: a rule would refuse it at once), for 0.5 GB. The flash
 recorder's ring is 0.55 GB while it is on (the owner's setting; off, it is nothing), and 3x in place of 4x is 1.0 GB.
+
+## A Vega 7 at 1080p (2026-11-18, branch perf/low-end-1080p)
+
+Everything above was measured on an RX 9070 XT. This is the low end: a laptop with a Ryzen 5 5625U (6 cores, Vega 7
+integrated graphics, RADV "RENOIR", 512 MB carved out of 16 GB of DDR4 shared with the CPU), a 1920x1200 60 Hz panel.
+
+**Settings** (a copy of the data folder, `KF4_READ_SETTINGS=1`): a 1920x1080 window, widescreen with native widescreen,
+resolution auto (2x: the canvas 1920x896 a buffer), SMAA T2x, sharpen 0.5, scaling best, texture quality Maximum (LOD
+full, anisotropic 16), draw distance 4x, sky modern, reflection cut, frame rate unlocked with no cap, vsync off. A real
+window on the screen, `tests/newgame.pad` and `--teleport 1900:MAP:0 --invincible`, 25 s measured, `KF4_GSN_GPU_TIME=1`.
+
+**On battery the numbers move.** The first half of the work was on battery (balanced-battery profile): the GPU's
+clock fell to 400 MHz now and then and the memory's between 800 and 1333 MHz, about 5% between runs, and once 20%
+when the battery ran down. The final numbers are on mains power (performance profile), the baseline (main at 792b2788)
+and the branch alternated, two runs each: the kinds of work not changed agree within 1% between the builds.
+
+### Where the time went (main, 009)
+
+The **GPU is the limit**: the game's thread spends 74% of its time waiting for the DMA, which waits for the renderer.
+17.0 to 17.2 ms of GPU a picture, about 58 a second at best, and the game itself fell to 27-29 frames a second on battery
+(each game frame needs its own picture and one between: two pictures in 33 ms).
+
+| Kind | ms | What it is |
+|---|---|---|
+| 2d | 3.7 | the full-screen fills (1.8: four a game frame, 0.9 ms each), the brightness pass (0.45), shadows' DATE (0.5) |
+| picture | 3.7-3.8 | the scanout and SMAA T2x: depth copy, motion, the picture's copy, edges, weights, blend, resolve |
+| native 000 | 3.2 | the map |
+| present | 2.6 | scaling to the window (best) and sharpening |
+| native 700, 280 | 1.3, 1.1 | |
+| texture copy, planes, copy | 0.6, 0.6, 0.3 | |
+
+What each setting costs (009, main, on battery; one setting changed): anti-aliasing off 15.3 ms (T2x 3.4 ms, SMAA 2.4,
+FXAA 1.2); scaling smooth without sharpening 13.2 with AA off (best and sharpening 2.1 ms more); texture quality High in
+place of Maximum, and draw distance 1x in place of 4x, no measurable difference at 009. **This GPU is short of memory
+bandwidth and of arithmetic both**: a full-screen pass at 1920x896 costs 0.3 to 0.6 ms here where it cost 0.02 to 0.05
+on the 9070 XT, and the scaler turned out to be bound by its arithmetic (below).
+
+### What changed
+
+| | 009 main | 009 branch | 020 main | 020 branch |
+|---|---|---|---|---|
+| GPU ms a picture (two runs each) | 17.18, 17.01 | 15.21, 15.17 | 14.31, 14.31 | 12.47, 12.45 |
+| picture (SMAA T2x) | 3.80, 3.67 | 3.01, 3.00 | 3.69, 3.61 | 3.00, 2.96 |
+| present (scaling, sharpening) | 2.62, 2.61 | 1.35, 1.35 | 2.59, 2.61 | 1.36, 1.33 |
+| most GPU memory held (VRAM + GTT) | 4.38 GB | 3.09 GB | 4.37 GB | 3.08 GB |
+
+About 1.9 ms a picture (11-13%), and 1.3 GB.
+
+1. **Scaling to the window: one pass where one direction is already the window's** (`PresentScaler`, pcr.cpp). At 2x
+   with native widescreen the picture is 1920 wide, as the window is: the across pass was the identity (the cubic's
+   weights at whole pixels are 1 and 0, and its clamp keeps the pixel) and still wrote 1920x896 at 8 bytes a pixel. Now
+   the other direction's pass decodes and encodes alone. About 1.0 ms.
+2. **The picture's sRGB decoded by the sampler**, not by `pow()` in the shader: the picture is made with an sRGB view
+   (`IMAGE_MISC_MUTABLE_SRGB_BIT`) and the scaling reads it through that. Three `pow()` a pixel read and five reads a
+   pixel made; about 0.6 ms. `KF4_PC_SCALE_SRGB=0`: the shader decodes, as before.
+3. **SMAA T2x reads the picture without copying it**: T2x blends into its history image, not the picture, so the copy
+   SMAA 1x needs (its blend writes the picture it reads) is left out. About 0.3 ms. The weights pass's clear is left out
+   too (it writes every pixel).
+4. **The flash recorder's ring on an integrated GPU: 128 MB at most** (`flash_ring_most_bytes`; it was 512, allocated
+   as 776 MB, more than the 512 MB carve-out by itself), and **not made again for the rate while nothing is shown, nor
+   more than every 10 s** (`flash_ring_keeps_rate`): unlocked's rate is its ceiling (959) while nothing is shown,
+   through a load or a teleport, and the ring was freed and made again at each, with a wait for the GPU to be idle,
+   three times in 20 s.
+5. **The presenter leaves out its clear of the window** when the picture covers it all (16:9 in a 16:9 window): a whole
+   window written a picture less (not in the GPU time above, which is the renderer's).
+6. **The game's clear of the screen is cleared, not drawn** (`as_clear`): it runs from Y -0.5 to 223.5, its field's half
+   pixel, which at 2x and 4x is a whole pixel of the target; the rule asked for whole GS pixels. About 700 more clears in
+   a 20 s run. It costs the same here (0.9 ms either way: the fill's memory, not the shader), and is exact.
+7. **Fixed: the jitter moved sprites.** `DrawState::prim` has no primitive type (`prim & 0x7F8`), so SMAA T2x's test for
+   sprites, `bits(s.prim, 0, 3) == 6`, never held, and the screen's untextured fills and the HUD's untextured sprites
+   that test Z were jittered with the 3D. Now `b.sprites`. No difference in the pictures compared (the fills cover the
+   whole screen).
+
+Tried and taken out: the last scaling pass and the sharpening in one compute pass (shared memory, a 16x16 tile and its
+border): 3.07 ms against 1.78, the scaling's arithmetic done twice over by the border's threads.
+
+### Checks
+
+- Pictures byte for byte against main (headless `--dump-frames`, 2x native widescreen): AA off at 009 (three vblanks,
+  2x and 4x) and 020; SMAA 1x and SMAA T2x at 009: identical.
+- The window's picture (`--dump-present 1920x1080`): within one level of main's at every pixel without sharpening (6%
+  of pixels differ by one, from the image between's half floats no longer there and the sampler's exact sRGB decode);
+  sharpening 0.5 takes that to at most 4 at 12% of pixels.
+- The 37 unit tests; `flash_ring_test` has the heap's limit and the rate's keeping.
+- Real-window runs at 009 and 020 on mains power, no GPU hang, no validation errors in the log.
+- The game under ASan and UBSan in a real window at these settings, 20 s at 009: the known reports only
+  (`SoundDriver_Remote`, the decomp's casts, Granite's `render_pass.cpp:52`).
+- Not run: TSan, the gcc and Windows builds, a map tour against `--renderer gs`, the 9070 XT (the owner's card).
+
+### Found and not done
+
+- **The four full-screen fills a game frame, 0.9 ms each** (1.8 ms a picture): the game's colour and Z clear, a second
+  clear, a Z-only clear and the Z clear after the last draw that tests it. The pump leaves the dead ones out of the
+  pictures between (`pcr_dead_writes.h`); kf4-pc draws them all. Cleared or drawn they cost the same: neither HiZ nor
+  DCC off (`RADV_DEBUG=nohiz`, `nodcc`) changed them. A frame's fills left out where the frame's own walk shows them
+  dead would be worth about 1.8 ms on a game frame's picture here. Radeon GPU Profiler would say why a 1920x448 fill
+  takes 0.9 ms.
+- **SMAA T2x's motion pass** (RG16F, written and read twice) could be worked out in the blend and the resolve, which
+  read only their own pixel's: about 0.2-0.3 ms.
+- **The sharpening** could be done in the presenter's copy to the swapchain, which is a blit now: one window-sized pass.
+- **The brightness pass** (0.45) and its copy (0.6, "texture copy"): PC_OPTIMIZATION.md above.

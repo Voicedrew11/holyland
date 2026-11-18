@@ -217,6 +217,19 @@ int memory_type(uint32_t bits, VkMemoryPropertyFlags want) {
     return -1;
 }
 
+// The largest device-local heap's size (an integrated GPU's carve-out; 0: none)
+uint64_t device_local_heap_bytes() {
+    VkPhysicalDeviceMemoryProperties props;
+    vk.vkGetPhysicalDeviceMemoryProperties(pr.gpu, &props);
+    uint64_t most = 0;
+    for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
+        if ((props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && props.memoryHeaps[i].size > most) {
+            most = props.memoryHeaps[i].size;
+        }
+    }
+    return most;
+}
+
 // A buffer the CPU writes or reads, mapped for good
 bool make_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer *buffer, VkDeviceMemory *memory,
                       void **map) {
@@ -567,6 +580,9 @@ struct Flash {
     double megabytes = 0;
     float seconds_made = 0;
     int height_made = 0;
+    int hz_made = 0;           // (the pictures a second it was made for: flash_ring_keeps_rate)
+    double made_at = 0;        // (port_wall_seconds when it was made)
+    uint64_t most_bytes = 0;   // (flash_ring_most_bytes of the GPU's device-local heap; 0: not yet looked at)
     bool failed = false; // could not be made with these options: not tried again until they change
     // the key's request (any thread) and the writer (its thread)
     char folder[1100] = {};
@@ -611,8 +627,23 @@ bool flash_ring(int w, int h) {
         fl.failed = false;
         return false;
     }
-    // (held to FLASH_RING_MOST_BYTES: smaller pictures, then fewer, at a high frame rate)
-    const FlashRingSize size = flash_ring_size(seconds, port_frame_rate_hz(), rows, w, h);
+    // (held to flash_ring_most_bytes: smaller pictures, then fewer, at a high frame rate; the rate it was made for kept
+    // while the rate found stays near it)
+    if (fl.most_bytes == 0) {
+        VkPhysicalDeviceProperties props;
+        vk.vkGetPhysicalDeviceProperties(pr.gpu, &props);
+        fl.most_bytes =
+            flash_ring_most_bytes(device_local_heap_bytes(), props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
+    }
+    int hz = port_frame_rate_hz();
+    // (nothing shown, a load or a teleport: unlocked's rate is its ceiling then, not a rate pictures come at; the ring
+    // is kept as it is)
+    const bool showing = port_video_pictures_per_second() > 0;
+    if (fl.image != VK_NULL_HANDLE &&
+        (!showing || flash_ring_keeps_rate(fl.hz_made, hz, port_wall_seconds() - fl.made_at))) {
+        hz = fl.hz_made;
+    }
+    const FlashRingSize size = flash_ring_size(seconds, hz, rows, w, h, fl.most_bytes);
     const uint32_t layers = size.layers, width = size.width, height = size.height;
     if (fl.image != VK_NULL_HANDLE && fl.layers == layers && fl.width == width && fl.height == height) {
         return true;
@@ -623,6 +654,8 @@ bool flash_ring(int w, int h) {
     flash_free();
     fl.seconds_made = seconds;
     fl.height_made = rows;
+    fl.hz_made = hz;
+    fl.made_at = port_wall_seconds();
     fl.failed = true;
     VkImageCreateInfo info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     info.imageType = VK_IMAGE_TYPE_2D;
@@ -660,8 +693,10 @@ bool flash_ring(int w, int h) {
     fl.head = fl.count = 0;
     fl.megabytes = double(req.size) / 1048576.0;
     fl.pictures.assign(layers, FlashPicture());
-    std::fprintf(stderr, "[present] flash recorder: the last %u pictures kept on the GPU at %u x %u (%.0f MB)\n", layers, width,
-                 height, fl.megabytes);
+    std::fprintf(stderr,
+                 "[present] flash recorder: the last %u pictures kept on the GPU at %u x %u (%.0f MB; at most %.0f MB, "
+                 "for %d a second)\n",
+                 layers, width, height, fl.megabytes, double(fl.most_bytes) / 1048576.0, hz);
     return true;
 }
 
@@ -1240,10 +1275,6 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
     image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    VkClearColorValue black = {};
-    black.float32[3] = 1.0f;
-    VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vk.vkCmdClearColorImage(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
     VkImage source = VK_NULL_HANDLE;
     uint32_t source_w = 0, source_h = 0;
     if (pr.source == SOURCE_UPLOAD && !pr.upload_new) {
@@ -1258,6 +1289,16 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         source = VkImage(scanout.image);
         source_w = scanout.width;
         source_h = scanout.height;
+    }
+    // (the bars beside or above the picture black; the whole image when no picture covers it all. Not cleared when one
+    // does, a 16:9 picture in a 16:9 window: a whole window's write a picture less, 0.2 ms on a Vega 7 at 1080p)
+    const bool covered = source != VK_NULL_HANDLE && x <= 0 && y <= 0 && x + w >= int(pr.extent.width) &&
+                         y + h >= int(pr.extent.height);
+    if (!covered) {
+        VkClearColorValue black = {};
+        black.float32[3] = 1.0f;
+        VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vk.vkCmdClearColorImage(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
     }
     if (source != VK_NULL_HANDLE && w > 0 && h > 0) {
         image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

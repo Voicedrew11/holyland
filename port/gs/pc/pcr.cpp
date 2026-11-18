@@ -448,10 +448,14 @@ public:
 
     // An RGBA8 image in the GENERAL layout, for the scanout and the picture: copied into and out of, and read by
     // the presenter (a copy, a blit or a shader)
-    static ImageHandle make_picture_image(Device &device, uint32_t width, uint32_t height) {
+    // (srgb_view: read as sRGB too, the sampler decoding it to linear light: PresentScaler's source)
+    static ImageHandle make_picture_image(Device &device, uint32_t width, uint32_t height, bool srgb_view = false) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (srgb_view) {
+            info.misc |= IMAGE_MISC_MUTABLE_SRGB_BIT;
+        }
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         return device.create_image(info, nullptr);
@@ -1117,40 +1121,60 @@ class PresentScaler {
 public:
     explicit PresentScaler(Device &device) : device_(device) {}
 
-    // picture into scaled, or with sharpen above 0 into work and sharpened from it into scaled
+    // picture into scaled, or with sharpen above 0 into work and sharpened from it into scaled. A picture made with an
+    // sRGB view (ScanoutRing::make_picture_image's srgb_view) is decoded to linear light by the sampler as it is read.
     void scale(CommandBuffer &cmd, const Image &picture, const Image &scaled, const Image *work, float sharpen) {
         if (!scale_) {
             make_programs();
         }
         uint32_t pw = picture.get_width(), ph = picture.get_height();
         uint32_t w = scaled.get_width(), h = scaled.get_height();
-        struct {
-            int32_t src[2];
-            float ratio[2];
-            int32_t linear;
-        } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
         bool sharpened = sharpen > 0 && work;
         const Image &to = sharpened ? *work : scaled;
+        // (the sampler's sRGB decode in place of the shader's: pow() three times a pixel read, five or more reads a
+        // pixel made, where the scaling is the shader's arithmetic more than its reads. 0.6 ms a picture of 1.8 on a
+        // Vega 7 at 1080p, 2026-11-18. The sampler's decode is exact; the shader's pow() is within a rounding of it)
+        const bool decoded = srgb_decode_ && (picture.get_create_info().misc & IMAGE_MISC_MUTABLE_SRGB_BIT) != 0;
+        struct OneDirection {
+            int32_t src[2], along[2];
+            float ratio;
+            int32_t decode, encode;
+        };
         // (two passes, across then down, pcr_present_scale_1d.frag: far fewer reads than the one pass. The one pass
         // where the image between them cannot be made, or with KF4_PC_SCALE_PASSES=1, to compare)
-        if (two_passes_ && across_image(w, ph)) {
-            struct {
-                int32_t src[2], along[2];
-                float ratio;
-                int32_t decode, encode;
-            } across = {{int32_t(pw), int32_t(ph)}, {1, 0}, float(pw) / float(w), 1, 0},
-              down = {{int32_t(w), int32_t(ph)}, {0, 1}, float(ph) / float(h), 0, 1};
-            pass(cmd, *across_, scale_1d_, picture.get_view(), &across, sizeof(across));
-            pass(cmd, to, scale_1d_, across_->get_view(), &down, sizeof(down));
+        if (two_passes_ && (pw == w || ph == h)) {
+            // One direction the picture's own size already (native widescreen's 1920 across at 2x in a 1080p
+            // window): the filter there is the identity (the cubic's weights at whole pixels are 1 and 0, and the
+            // clamp keeps the pixel), so that pass is left out and the other decodes and encodes alone. The same
+            // picture but for the image between's half-float rounding. 1.0 ms a picture less on a Vega 7 at 1080p
+            // (2026-11-18): a whole pass writing 8 bytes a pixel.
+            const bool down = pw == w;
+            const OneDirection one = {{int32_t(pw), int32_t(ph)},
+                                      {down ? 0 : 1, down ? 1 : 0},
+                                      down ? float(ph) / float(h) : float(pw) / float(w),
+                                      decoded ? 0 : 1,
+                                      1};
+            across_.reset(); // (not needed while the sizes stay)
+            pass(cmd, to, scale_1d_, picture.get_view(), decoded, &one, sizeof(one));
+        } else if (two_passes_ && across_image(w, ph)) {
+            const OneDirection across = {{int32_t(pw), int32_t(ph)}, {1, 0}, float(pw) / float(w), decoded ? 0 : 1, 0},
+                               down = {{int32_t(w), int32_t(ph)}, {0, 1}, float(ph) / float(h), 0, 1};
+            pass(cmd, *across_, scale_1d_, picture.get_view(), decoded, &across, sizeof(across));
+            pass(cmd, to, scale_1d_, across_->get_view(), false, &down, sizeof(down));
         } else {
-            pass(cmd, to, scale_, picture.get_view(), &scaling, sizeof(scaling));
+            struct {
+                int32_t src[2];
+                float ratio[2];
+                int32_t linear;
+            } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
+            pass(cmd, to, scale_, picture.get_view(), false, &scaling, sizeof(scaling));
         }
         if (sharpened) {
             struct {
                 int32_t size[2];
                 float strength;
             } sharpening = {{int32_t(w), int32_t(h)}, sharpen};
-            pass(cmd, scaled, sharpen_, work->get_view(), &sharpening, sizeof(sharpening));
+            pass(cmd, scaled, sharpen_, work->get_view(), false, &sharpening, sizeof(sharpening));
         }
     }
 
@@ -1174,9 +1198,10 @@ private:
             vs, device_.request_shader(pcr_spv_pcr_present_sharpen_frag, sizeof(pcr_spv_pcr_present_sharpen_frag), &frag));
     }
 
-    // A pass over the whole of dst, reading src (after whatever wrote it; read after by anything)
-    static void pass(CommandBuffer &cmd, const Image &dst, Program *program, const ImageView &src, const void *push,
-                     size_t push_size) {
+    // A pass over the whole of dst, reading src (after whatever wrote it; read after by anything); srgb: through its
+    // sRGB view, the sampler decoding it
+    static void pass(CommandBuffer &cmd, const Image &dst, Program *program, const ImageView &src, bool srgb,
+                     const void *push, size_t push_size) {
         cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
         RenderPassInfo rp;
@@ -1189,7 +1214,12 @@ private:
         cmd.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         cmd.set_cull_mode(VK_CULL_MODE_NONE);
         cmd.set_depth_test(false, false);
-        cmd.set_texture(0, 0, src, StockSampler::NearestClamp);
+        if (srgb) {
+            cmd.set_srgb_texture(0, 0, src);
+            cmd.set_sampler(0, 0, StockSampler::NearestClamp);
+        } else {
+            cmd.set_texture(0, 0, src, StockSampler::NearestClamp);
+        }
         cmd.push_constants(push, 0, push_size);
         cmd.draw(3);
         cmd.end_render_pass();
@@ -1215,6 +1245,8 @@ private:
     Program *scale_ = nullptr, *scale_1d_ = nullptr, *sharpen_ = nullptr;
     ImageHandle across_;
     const bool two_passes_ = !(getenv("KF4_PC_SCALE_PASSES") && strcmp(getenv("KF4_PC_SCALE_PASSES"), "1") == 0);
+    // KF4_PC_SCALE_SRGB=0: the shader decodes the picture's sRGB itself (to compare)
+    const bool srgb_decode_ = !(getenv("KF4_PC_SCALE_SRGB") && strcmp(getenv("KF4_PC_SCALE_SRGB"), "0") == 0);
 };
 
 Settings &settings(); // (below)
@@ -1433,7 +1465,7 @@ private:
     // there is none). False if the image cannot be made.
     bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Canvas *canvas) {
         if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
-            picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height);
+            picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height, true);
             if (!picture_) {
                 fprintf(stderr, "[pcr] no image for a %ux%u picture\n", size.width, size.height);
                 return false;

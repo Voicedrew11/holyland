@@ -3954,7 +3954,9 @@ private:
         push.src_scale[1] = int32_t(scale_[1]);
         // (the temporal anti-aliasing's jitter: the 3D of the frame's buffers, begin_drawing. The game's HUD tests Z
         // too: the 3D is the native draws and the GIF's triangles and lines read with ST and Q, not sprites nor UV)
-        bool sprite = bits(s.prim, 0, 3) == 6, uv = tme && bits(s.prim, 8, 1) != 0;
+        // (a batch of sprites: DrawState's prim has no primitive type, its bits 0-2 always 0, and the jitter moved the
+        // screen's fills and the HUD's untextured sprites with the 3D until 2026-11-18)
+        bool sprite = b.sprites, uv = tme && bits(s.prim, 8, 1) != 0;
         bool three_d = b.native || (!sprite && !uv);
         push.jitter = jitter_packed_ != 0 && ztest && three_d && (fbp == shown_pages_[0] || fbp == shown_pages_[1])
                           ? jitter_packed_
@@ -4371,9 +4373,13 @@ private:
     // A batch that is a clear drawn as a rectangle: one sprite of one colour and one Z, untextured, unblended, without
     // fog, every pixel written (no alpha test's pass, no DATE), Z always or no Z test, as the frame has it (not moved
     // in a picture between). Its pixels: the sprite within the scissor, at the canvas's scale (rect), when each edge of
-    // the sprite inside the scissor is on a whole GS pixel (a sprite covers the pixels from its first edge to before its
-    // last at any scale: gs_to_clip). The colour the shader would write (FBA's bit 7 with it), the depth
-    // pcr_prim.vert's. KF4_PC_CLEARS=0: drawn (to compare).
+    // the sprite inside the scissor is on a whole pixel of the target (a sprite covers the target's pixels from its
+    // first edge to before its last, each at the GS's place times the scale: gs_to_clip). Not only whole GS pixels: the
+    // game's own clear of the screen runs from Y -0.5 to 223.5 (its field's half-pixel), at 2x the target's rows 0 to
+    // 446, and was drawn through the shader at every picture until 2026-11-18. (On a Vega 7 at 1080p the clear costs
+    // about what the draw did, 0.9 ms each: the fill's memory, not the shader. PC_OPTIMIZATION.md, "A Vega 7 at
+    // 1080p".) The colour the shader would write (FBA's bit 7 with it), the depth pcr_prim.vert's.
+    // KF4_PC_CLEARS=0: drawn (to compare).
     bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
                   bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
         const DrawState &s = b.state;
@@ -4403,17 +4409,22 @@ private:
         x1 += float(placed.x);
         y0 += float(placed.y);
         y1 += float(placed.y);
-        auto whole_or_out = [](float e, float lo, float hi) { return e <= lo || e >= hi || e == std::floor(e); };
-        if (!whole_or_out(x0, sx0, sx1) || !whole_or_out(x1, sx0, sx1) || !whole_or_out(y0, sy0, sy1) ||
-            !whole_or_out(y1, sy0, sy1)) {
+        // (an edge times the scale: the target's pixels the draw's edge is at, exact for a GS place in 16ths at a scale
+        // of 1 to 4)
+        auto whole_or_out = [](float e, float lo, float hi, uint32_t scale) {
+            float t = e * float(scale);
+            return e <= lo || e >= hi || t == std::floor(t);
+        };
+        if (!whole_or_out(x0, sx0, sx1, scale_[0]) || !whole_or_out(x1, sx0, sx1, scale_[0]) ||
+            !whole_or_out(y0, sy0, sy1, scale_[1]) || !whole_or_out(y1, sy0, sy1, scale_[1])) {
             return false;
         }
-        int32_t px0 = std::max(scissor_px.offset.x, int32_t(std::max(x0, 0.0f)) * int32_t(scale_[0]));
-        int32_t py0 = std::max(scissor_px.offset.y, int32_t(std::max(y0, 0.0f)) * int32_t(scale_[1]));
+        int32_t px0 = std::max(scissor_px.offset.x, int32_t(std::max(x0, 0.0f) * float(scale_[0])));
+        int32_t py0 = std::max(scissor_px.offset.y, int32_t(std::max(y0, 0.0f) * float(scale_[1])));
         int32_t px1 = std::min<int64_t>(scissor_px.offset.x + int32_t(scissor_px.extent.width),
-                                        int64_t(std::max(x1, 0.0f)) * scale_[0]);
+                                        int64_t(std::max(x1, 0.0f) * float(scale_[0])));
         int32_t py1 = std::min<int64_t>(scissor_px.offset.y + int32_t(scissor_px.extent.height),
-                                        int64_t(std::max(y1, 0.0f)) * scale_[1]);
+                                        int64_t(std::max(y1, 0.0f) * float(scale_[1])));
         px1 = std::min(px1, int32_t(colour.image->get_width()));
         py1 = std::min(py1, int32_t(colour.image->get_height()));
         if (px1 <= px0 || py1 <= py0) {
