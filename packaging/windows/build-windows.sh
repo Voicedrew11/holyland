@@ -50,6 +50,12 @@ cp "$T/SDL2/x86_64-w64-mingw32/bin/SDL2.dll" "$STAGE/"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE.txt"
 "$ROOT/packaging/manifest.sh" "$CONTENT"
 
+# One past date on every file. A zip keeps local times with no time zone and Windows' own "Extract all" reads them
+# as the player's local time, so a build packed in UTC unpacks hours in the future west of UTC. Ninja then finds its
+# build file older than the toolchain's CMake files on every try and stops ("manifest 'build.ninja' still dirty
+# after 100 tries"). A date years back stays in the past under any time zone.
+find "$STAGE" -exec touch -d '2020-01-01 00:00:00 UTC' {} +
+
 echo "==> the zip"
 ZIP="$OUT/$NAME-$VERSION-win-x64.zip"
 rm -f "$ZIP"
