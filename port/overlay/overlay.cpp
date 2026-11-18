@@ -32,6 +32,7 @@
 
 #include "automap_view.h" // the automap mod
 #include "profiler.h"     // Shift+P
+#include "update_badge.h" // a new release, found by the launcher
 
 extern "C" {
 #include "port/antialias.h"
@@ -914,7 +915,7 @@ void sample_rates() {
 
 std::string bug_report() {
     char line[512];
-    std::string text = "holyland (King's Field IV PC port)\n";
+    std::string text = std::string(update_badge_version_line()) + " (King's Field IV PC port)\n";
 
     std::snprintf(line, sizeof(line), "vblank %llu, %.1f pictures/s, %.2f vblanks/s, %.1f game frames/s\n",
                   (unsigned long long)port_vblank_count(), port_video_pictures_per_second(), vblanks_per_second, frames_per_second);
@@ -1409,7 +1410,8 @@ void about_window() {
         ImGui::End();
         return;
     }
-    ImGui::Text("holyland: King's Field IV on the PC, built from the kfiv-decomp decompilation");
+    ImGui::Text("Darker Reality: King's Field IV on the PC, built from the kfiv-decomp decompilation");
+    ImGui::TextDisabled("%s", update_badge_version_line());
     ImGui::Separator();
     ImGui::BulletText("The game's code: kfiv-decomp (Voicedrew11 and contributors)");
     ImGui::BulletText("The GS: paraLLEl-GS (Arntzen Software, LGPL-3.0+)");
@@ -1424,6 +1426,7 @@ void menu_bar() {
         return;
     ImGui::MenuItem("Settings", nullptr, &show_settings);
     ImGui::MenuItem("About", nullptr, &show_about);
+    update_badge_menu_item();
     char status[96];
     std::snprintf(status, sizeof(status), "F1 to close%s", port_overlay_paused() ? "   (game paused)" : "");
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(status).x - 16);
@@ -1746,6 +1749,15 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         return;
     sample_rates();
     port_settings_poll();
+    // a new release the launcher found: a note when nothing else is showing
+    static bool update_note_pending;
+    if (update_badge_poll(SDL_GetTicks()))
+        update_note_pending = true;
+    if (update_note_pending && !building_shown()) {
+        update_note_pending = false;
+        toast_text = update_badge_note;
+        toast_until = SDL_GetTicks() + 6000;
+    }
     shot_open();
     if (!port_overlay_visible())
         return;
@@ -1790,6 +1802,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
             settings_window();
         if (show_about)
             about_window();
+        update_badge_window();
     }
     (void)x, (void)y, (void)width, (void)height;
     ImGui::Render();

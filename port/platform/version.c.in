@@ -1,0 +1,4 @@
+/* Written by CMake from port/platform/version.c.in (KF4_VERSION): port/include/port/version.h */
+#include "port/version.h"
+
+const char port_version[] = "@KF4_VERSION@";

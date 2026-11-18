@@ -1,0 +1,109 @@
+# A release (docs/port/LAUNCHER.md, "Making a release"): on a vMAJOR.MINOR.PATCH tag (tools/release.sh), the
+# Linux AppImage, the Windows zip and installer, into a DRAFT release; publishing the draft is what players'
+# launchers are told about. Each job also builds the game from the package exactly as a player's launcher
+# does (--build-only: the shipped tools, the read-only source, no git), so a release that cannot build is
+# never made.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # the oldest Linux a release supports: SDL2 is built here (packaging/linux/build-sdl2.sh)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      - name: Install what SDL2's build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libfuse2 libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxfixes-dev libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev \
+            libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
+      - name: The version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
+          bash tools/version.sh
+      - uses: actions/cache@v4
+        with:
+          path: out/packaging-cache
+          key: packaging-linux-${{ hashFiles('packaging/toolchain.lock') }}
+      - name: The AppImage
+        run: packaging/linux/build-appimage.sh
+      - name: A player's build from it
+        run: |
+          app="$(ls dist/*.AppImage)"
+          KF4_DATA_DIR="$RUNNER_TEMP/player" "$app" --build-only
+          kf4="$(ls "$RUNNER_TEMP"/player/builds/*/kf4)"
+          newest="$(objdump -T "$kf4" "$(dirname "$kf4")/libSDL2-2.0.so.0" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          echo "the game needs $newest"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$newest" | sort -V | tail -1)" = GLIBC_2.35 ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.AppImage
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      - name: The version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
+          bash tools/version.sh
+      - name: Inno Setup on PATH
+        run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: out/packaging-cache
+          key: packaging-windows-${{ hashFiles('packaging/toolchain.lock') }}
+      - name: The zip and the installer
+        run: packaging/windows/build-windows.sh
+      - name: A player's build from it
+        run: |
+          stage="dist/win-x64"
+          KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/darker-reality.exe --build-only
+          ls "$RUNNER_TEMP"/player/builds/*/kf4.exe "$RUNNER_TEMP"/player/builds/*/SDL2.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+
+  release:
+    needs: [linux, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*

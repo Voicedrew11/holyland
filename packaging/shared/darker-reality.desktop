@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Darker Reality
+GenericName=King's Field IV
+Comment=A PC port of King's Field IV (SLUS-20318), built on your computer. Requires your own disc.
+Exec=darker-reality %f
+Icon=darker-reality
+Terminal=false
+Categories=Game;AdventureGame;
+Keywords=kings field;fromsoftware;playstation 2;ancient city;
+Actions=Launcher;
+
+[Desktop Action Launcher]
+Name=Disc, rebuild and updates
+Exec=darker-reality --launcher

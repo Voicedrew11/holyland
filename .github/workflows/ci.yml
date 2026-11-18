@@ -88,3 +88,30 @@ jobs:
           python tools/port_census.py out/windows-clang > census.txt
           cat census.txt
           grep -q '^0 error(s) in' census.txt
+
+  # The launcher (launcher/, docs/port/LAUNCHER.md): its tests, and Granite's edits making no change to a
+  # read-only checkout that has them (a release's source on the player's computer)
+  launcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Check out what paraLLEl-GS needs
+        run: |
+          git -C third_party/parallel-gs submodule update --init Granite
+          git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang libsdl2-dev
+      - name: Build and test
+        run: |
+          cd launcher
+          cmake --preset linux
+          cmake --build --preset linux
+          ctest --test-dir ../out/launcher-linux --output-on-failure
+      - name: Granite's edits on a read-only copy
+        run: |
+          cmake -DGRANITE=third_party/parallel-gs/Granite -P cmake/apply_granite_edits.cmake
+          cp -r third_party/parallel-gs/Granite "$RUNNER_TEMP/granite"
+          chmod -R a-w "$RUNNER_TEMP/granite"
+          cmake -DGRANITE="$RUNNER_TEMP/granite" -P cmake/apply_granite_edits.cmake

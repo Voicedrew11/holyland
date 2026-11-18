@@ -46,3 +46,4 @@ out/
 
 # --- tools/patches.py working copy ---
 work/
+dist/

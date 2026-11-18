@@ -55,6 +55,7 @@
 #include "port/automap.h"
 #include "port/hands.h"
 #include "port/controls.h"
+#include "port/data_dir.h"
 #include "port/twin_stick.h"
 #include "port/host.h"
 #include "port/platform.h"
@@ -95,37 +96,16 @@ static int dirty;
 static double dirty_since;
 
 /* ---- The data folder -------------------------------------------------------------------------- */
+static const char *read_env(const char *name) {
+    return getenv(name);
+}
+
 const char *port_data_dir(void) {
     static char path[1024];
-    const char *base;
 
-    if (path[0] != 0) {
-        return path;
+    if (path[0] == 0 && !data_dir_resolve(data_dir_this_system(), read_env, path, sizeof(path))) {
+        PORT_FATAL("the data folder's path is too long (KF4_DATA_DIR, APPDATA or HOME)");
     }
-    base = getenv("KF4_DATA_DIR");
-    if (base != NULL && *base != 0) {
-        snprintf(path, sizeof(path), "%s", base);
-        return path;
-    }
-#ifdef _WIN32
-    base = getenv("APPDATA");
-    if (base != NULL && *base != 0) {
-        snprintf(path, sizeof(path), "%s\\holyland", base);
-        return path;
-    }
-#else
-    base = getenv("XDG_CONFIG_HOME");
-    if (base != NULL && *base != 0) {
-        snprintf(path, sizeof(path), "%s/holyland", base);
-        return path;
-    }
-    base = getenv("HOME");
-    if (base != NULL && *base != 0) {
-        snprintf(path, sizeof(path), "%s/.config/holyland", base);
-        return path;
-    }
-#endif
-    snprintf(path, sizeof(path), "holyland");
     return path;
 }
 

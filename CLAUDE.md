@@ -87,7 +87,13 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
 - `port/render/`: CPU-side records shared by the renderers (VU1 recording, part moves for pictures
   between game frames). Shared shader headers in `port/render/shaders/`.
 - `port/overlay/`: the ImGui overlay (settings, stats panels, profiler, automap view).
-- `cmake/granite_*.cmake`: patches written into paraLLEl-GS's Granite at each configure. The submodule
+- `launcher/`: **Darker Reality**, the launcher players get (its own CMake project, `cd launcher && cmake --preset
+  linux`): builds the game on the player's computer from a release's source and shipped tools, then plays it;
+  update notices. `packaging/` makes the releases (AppImage, Windows zip and installer), `.github/workflows/release.yml`
+  on a `v*` tag. All in `docs/port/LAUNCHER.md`. "Darker Reality" is the players' name only: the data folder stays
+  `holyland/`.
+- `cmake/granite_*.cmake`: patches written into paraLLEl-GS's Granite at each configure (the list:
+  `cmake/granite_edits.cmake`; a file is written only when its text changes, since a release's source is read-only). The submodule
   shows as dirty because of them (`ignore = dirty`); that's expected.
 
 ## Concepts that span files
