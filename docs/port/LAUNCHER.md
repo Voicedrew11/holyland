@@ -6,7 +6,7 @@ release never contains a built `kf4`: the game's code comes from the decomp, so,
 machine. The design follows Verdite's launcher; holyland is C/C++, so the code is new (`launcher/`).
 
 "Darker Reality" is what players see (`launcher/product.h`, `packaging/package.env`). The project's own names
-are unchanged: the repository, `kf4`, and the data folder `holyland/` (renaming it would leave players' settings
+are unchanged: `kf4`, and the data folder `holyland/` (renaming it would leave players' settings
 and saves behind).
 
 ## What it does
@@ -113,7 +113,7 @@ PGO with the player's disc (`tools/pgo_train.py`) is a possible later option; it
 
 The same as Verdite's launcher: the player is told; nothing installs itself.
 
-- `launcher/update_check.cpp` asks `GET https://api.github.com/repos/Voicedrew11/holyland/releases/latest` (drafts
+- `launcher/update_check.cpp` asks `GET https://api.github.com/repos/Voicedrew11/darker-reality/releases/latest` (drafts
   and pre-releases are never "latest") on its own thread, at most once an hour, 10 s at most; the answer goes to
   `update.json`. No network: the cached answer stands. A URL that is not `https://github.com/` is refused.
 - The rules are shared C (`port/platform/update_notice.c`, `tests/update_notice_test.c`): `v` dropped, dotted

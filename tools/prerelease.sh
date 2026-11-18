@@ -28,12 +28,13 @@ git push -q -f origin "refs/tags/$tag"
 git tag -d "$tag" >/dev/null
 echo "==> preview ${sha::9} asked for ($tag)"
 for _ in $(seq 30); do
-    run="$(gh run list --workflow release.yml --event push --commit "$sha" --limit 10 \
-        --json databaseId,headBranch --jq "[.[] | select(.headBranch == \"$tag\")][0].databaseId // empty")"
+    # (by name, not --workflow: GitHub finds a workflow by its file only once it is on the default branch)
+    run="$(gh run list --event push --commit "$sha" --limit 10 --json databaseId,headBranch,workflowName \
+        --jq "[.[] | select(.headBranch == \"$tag\" and .workflowName == \"release\")][0].databaseId // empty")"
     [ -n "$run" ] && break
     sleep 3
 done
-[ -n "${run:-}" ] || { echo "could not find the run; see: gh run list --workflow release.yml"; exit 1; }
+[ -n "${run:-}" ] || { echo "could not find the run; see: gh run list"; exit 1; }
 echo "    $(gh run view "$run" --json url --jq .url)"
 [ "$WAIT" = 1 ] || exit 0
 gh run watch "$run" --exit-status --interval 30 >/dev/null

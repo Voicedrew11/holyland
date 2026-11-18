@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define UPDATE_REPOSITORY "Voicedrew11/holyland"
+#define UPDATE_REPOSITORY "Voicedrew11/darker-reality"
 #define UPDATE_CHECK_INTERVAL_S 3600 /* at most once an hour, as Verdite's launcher */
 
 typedef struct {
