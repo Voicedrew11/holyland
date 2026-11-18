@@ -75,6 +75,10 @@ public:
 
     virtual std::unique_ptr<ChildProcess> start(const ProcessSpec &spec, std::string &why) const = 0;
 
+    // a stopped game's exit code (ChildProcess::wait's, not 0) in words for its log: "code 0xC00000FD, a stack
+    // overflow". The code alone when the system's table does not know it.
+    virtual std::string describe_exit(int code) const = 0;
+
     // the system's file chooser for the disc (an .iso or an extracted disc's SYSTEM.CNF); nullopt when
     // cancelled or there is none (the launcher's typed path is then the way)
     virtual std::optional<fs::path> pick_disc() const = 0;

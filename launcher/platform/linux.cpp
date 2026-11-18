@@ -214,6 +214,14 @@ public:
 
     const BuildStrategy &build_strategy() const override { return local_cmake_build(); }
 
+    // (wait's 128 + N: ended by signal N)
+    std::string describe_exit(int code) const override {
+        std::string text = "code " + std::to_string(code);
+        if (code > 128 && code < 128 + NSIG)
+            text += std::string(", ended by a signal: ") + strsignal(code - 128);
+        return text;
+    }
+
     std::unique_ptr<ChildProcess> start(const ProcessSpec &spec, std::string &why) const override {
         int pipe_fds[2] = {-1, -1};
         if (spec.capture_output && pipe2(pipe_fds, O_CLOEXEC) != 0) {

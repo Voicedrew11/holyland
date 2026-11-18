@@ -160,6 +160,25 @@ private:
     std::string pending_;
 };
 
+// What Windows' exception codes, ended with, mean. Some crashes cannot run the game's own crash report (a stack
+// overflow, a fast fail): this line in game.log is then all there is.
+struct ExitMeaning {
+    DWORD code;
+    const char *meaning;
+};
+constexpr ExitMeaning kExitMeanings[] = {
+    {0xC0000005, "an access violation (a read or write of memory it does not have)"},
+    {0xC00000FD, "a stack overflow"},
+    {0xC0000409, "a fast fail (a failed security check or a corrupted heap: no crash report is possible)"},
+    {0xC0000374, "a corrupted heap"},
+    {0xC000001D, "an illegal instruction (one this CPU does not have)"},
+    {0xC0000094, "an integer divided by zero"},
+    {0xC0000096, "a privileged instruction"},
+    {0xC0000017, "no memory left"},
+    {0x80000003, "a breakpoint"},
+    {0x00000003, "abort() (a failed assertion, or a C++ error nothing caught)"},
+};
+
 constexpr std::size_t kMaxAnswer = 1 << 20;
 
 struct InternetHandle {
@@ -223,6 +242,16 @@ public:
     }
 
     const BuildStrategy &build_strategy() const override { return local_cmake_build(); }
+
+    std::string describe_exit(int code) const override {
+        char text[160];
+        std::snprintf(text, sizeof(text), "code 0x%08lX", (unsigned long)(DWORD)code);
+        for (const ExitMeaning &known : kExitMeanings) {
+            if (known.code == (DWORD)code)
+                return std::string(text) + ", " + known.meaning;
+        }
+        return text;
+    }
 
     std::unique_ptr<ChildProcess> start(const ProcessSpec &spec, std::string &why) const override {
         std::wstring line;
