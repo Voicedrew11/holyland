@@ -122,8 +122,9 @@ private:
 };
 
 // SMAA's three passes (shaders/pcr_smaa.h, the reference implementation at its HIGH preset, luma edges), for SMAA 1x
-// and T2x: the picture copied; its edges into edges_; their blending weights into weights_; the blend from the copy
-// and the weights into a target. (SMAA's stencil, which runs the weights pass only where there are edges, is left out:
+// and T2x: the picture copied (only when the blend writes the picture itself: SMAA 1x; T2x blends into its history,
+// so its passes read the picture as it is); its edges into edges_; their blending weights into weights_; the blend
+// from the picture (or its copy) and the weights into a target. (SMAA's stencil, which runs the weights pass only where there are edges, is left out:
 // SMAA 1x cost 0.17 ms a picture at 4x, 2026-11-16.)
 class SmaaPasses {
 public:
@@ -147,22 +148,33 @@ public:
     bool run(CommandBuffer &cmd, const Image &picture, const std::array<float, 4> &subsample, const Image &target,
              const Image *motion) {
         uint32_t w = picture.get_width(), h = picture.get_height();
+        // (the blend into another image than the picture: no copy, the passes read the picture. 0.3 ms a picture at
+        // 2x on a Vega 7, 2026-11-18)
+        const bool copied = &target == &picture;
         if (!area_ || !search_ ||
-            !keep_image(device_, copy_, w, h, VK_FORMAT_R8G8B8A8_UNORM, COPY_USAGE, "SMAA's copy") ||
+            (copied && !keep_image(device_, copy_, w, h, VK_FORMAT_R8G8B8A8_UNORM, COPY_USAGE, "SMAA's copy")) ||
             !keep_image(device_, edges_, w, h, VK_FORMAT_R8G8_UNORM, TARGET_USAGE, "SMAA's edges") ||
             !keep_image(device_, weights_, w, h, VK_FORMAT_R8G8B8A8_UNORM, TARGET_USAGE, "SMAA's weights")) {
             return false;
         }
         const Push push = {{1.0f / float(w), 1.0f / float(h), float(w), float(h)},
                            {subsample[0], subsample[1], subsample[2], subsample[3]}};
-        copy_picture(cmd, picture, *copy_);
+        const Image &source = copied ? *copy_ : picture;
+        if (copied) {
+            copy_picture(cmd, picture, *copy_);
+        } else {
+            // (after whatever wrote the picture: the scanout, the depth's copy)
+            cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        }
 
         begin_over(cmd, *edges_, edges_program_, true);
-        cmd.set_texture(0, 0, copy_->get_view(), StockSampler::LinearClamp);
+        cmd.set_texture(0, 0, source.get_view(), StockSampler::LinearClamp);
         cmd.push_constants(&push, 0, sizeof(push));
         draw_over(cmd);
 
-        begin_over(cmd, *weights_, weights_program_, true);
+        // (not cleared: the weights pass writes every pixel, 0 where there is no edge, where the edges pass discards)
+        begin_over(cmd, *weights_, weights_program_, false);
         cmd.set_texture(0, 0, edges_->get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 1, area_->get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 2, search_->get_view(), StockSampler::NearestClamp);
@@ -170,7 +182,7 @@ public:
         draw_over(cmd);
 
         begin_over(cmd, target, motion ? blend_moved_program_ : blend_program_, false);
-        cmd.set_texture(0, 0, copy_->get_view(), StockSampler::LinearClamp);
+        cmd.set_texture(0, 0, source.get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 1, weights_->get_view(), StockSampler::LinearClamp);
         if (motion) {
             cmd.set_texture(0, 2, motion->get_view(), StockSampler::LinearClamp);

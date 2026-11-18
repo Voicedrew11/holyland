@@ -1,6 +1,6 @@
 /* The mouse in the game's menus (game/menu_pointer.c): point at a line to bring the game's cursor to it, click
-   it to choose it, as in a PC program. Only with the Verdite layout, the mouse let go (port/sdk/controls.c:
-   outside play) and no pad script playing or recording, so scripted runs stay the same.
+   it to choose it, as in a PC program. Only with the mouse let go (port/sdk/controls.c: outside play) and no
+   pad script playing or recording, so scripted runs stay the same.
 
    The pointer moves the cursor with the game's own presses: each menu frame it adds the up / down (or left /
    right) step toward the line pointed at to the menu's buttons, so a screen's cursor moves as a pad would move

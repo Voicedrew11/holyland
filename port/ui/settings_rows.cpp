@@ -345,16 +345,6 @@ const SettingRow graphics_rows[] = {
 };
 
 // ---- Controls -------------------------------------------------------------------------------------------------------
-const Choice layouts[] = {{"PS2 pad", CONTROLS_PS2}, {"Verdite (mouse look)", CONTROLS_VERDITE}};
-int get_layout() {
-    return port_controls_layout();
-}
-void set_layout(int layout) {
-    port_controls_set_layout(layout);
-    std::snprintf(port_settings.layout, sizeof(port_settings.layout), "%s", port_controls_layout_name(layout));
-    changed();
-}
-
 int get_twin_stick() {
     return port_twin_stick_setting() != 0;
 }
@@ -374,9 +364,6 @@ bool separate_run_overridden() {
     return port_options.separate_run != port_settings.separate_run;
 }
 
-bool verdite() {
-    return port_controls_layout() == CONTROLS_VERDITE;
-}
 int get_sensitivity() {
     return int(std::lround(port_controls_mouse_sensitivity() * 100.0));
 }
@@ -396,11 +383,6 @@ void set_invert(int on) {
 }
 
 const SettingRow controls_rows[] = {
-    {"Layout",
-     "PS2 pad: the keyboard as the PS2's pad (arrows, W A S D and I J K L; Z X C V the face buttons).\nVerdite: "
-     "W A S D walk and side-step, the mouse turns and looks, Space attacks. Escape lets the mouse go; a click "
-     "takes it back.",
-     RowKind::choice, layouts, {}, get_layout, set_layout},
     {"Twin-stick controls",
      "The left stick walks and steps sideways, the right stick turns and looks. Off: the PS2's sticks, the left one "
      "the d-pad.",
@@ -410,11 +392,10 @@ const SettingRow controls_rows[] = {
      "up and opens.",
      RowKind::toggle, on_off, {}, get_separate_run, set_separate_run, nullptr, nullptr, nullptr, nullptr,
      separate_run_overridden},
-    {"Mouse", "", RowKind::heading, {}, {}, nullptr, nullptr, nullptr, nullptr, verdite},
+    {"Mouse", "", RowKind::heading},
     {"Mouse sensitivity", "How far the view turns for the mouse's movement.", RowKind::number, {}, {25, 400, 5},
-     get_sensitivity, set_sensitivity, nullptr, describe_sensitivity, verdite},
-    {"Invert up and down", "Moving the mouse up looks down.", RowKind::toggle, on_off, {}, get_invert, set_invert,
-     nullptr, nullptr, verdite},
+     get_sensitivity, set_sensitivity, nullptr, describe_sensitivity},
+    {"Invert up and down", "Moving the mouse up looks down.", RowKind::toggle, on_off, {}, get_invert, set_invert},
 };
 
 // ---- Gameplay -------------------------------------------------------------------------------------------------------

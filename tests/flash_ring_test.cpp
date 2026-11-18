@@ -68,9 +68,40 @@ void always_within() {
     }
 }
 
+// A GPU with little memory of its own: a quarter of its heap, within the least and the most
+void held_to_the_heap() {
+    CHECK(flash_ring_most_bytes(0, false) == FLASH_RING_MOST_BYTES);                // (not known: as before)
+    CHECK(flash_ring_most_bytes(16ull << 30, false) == FLASH_RING_MOST_BYTES);      // (a 16 GB card)
+    CHECK(flash_ring_most_bytes(1ull << 30, false) == 256ull << 20);                // (a 1 GB card)
+    CHECK(flash_ring_most_bytes(64ull << 20, false) == FLASH_RING_LEAST_BYTES);     // (never below the least)
+    CHECK(flash_ring_most_bytes(0, true) == FLASH_RING_MOST_BYTES_INTEGRATED);      // (integrated: the system's memory)
+    CHECK(flash_ring_most_bytes(8ull << 30, true) == FLASH_RING_MOST_BYTES_INTEGRATED);
+    const uint64_t most = flash_ring_most_bytes(8ull << 30, true);
+    const FlashRingSize s = flash_ring_size(2.0f, 500, 540, 1920, 1080, most);
+    CHECK(s.bytes() <= most);
+    CHECK(s.height == FLASH_RING_FEWEST_ROWS); // (smaller pictures first, then fewer)
+    CHECK(s.layers < 1000);
+    CHECK(flash_ring_size(2.0f, 60, 540, 1920, 1080, most).bytes() <= most);
+}
+
+// The rate a ring was made for is kept while the rate found stays within a third of it, and for a while whatever it is
+void rate_kept_near() {
+    CHECK(flash_ring_keeps_rate(120, 120, 60.0));
+    CHECK(flash_ring_keeps_rate(120, 150, 60.0));
+    CHECK(flash_ring_keeps_rate(120, 95, 60.0));
+    CHECK(!flash_ring_keeps_rate(120, 170, 60.0));
+    CHECK(!flash_ring_keeps_rate(120, 80, 60.0));
+    CHECK(flash_ring_keeps_rate(120, 959, 2.0)); // (a load's ceiling, soon after it was made)
+    CHECK(flash_ring_keeps_rate(30, 60, 60.0));  // (both 60 at least)
+    CHECK(flash_ring_keeps_rate(60, 75, 60.0));
+    CHECK(!flash_ring_keeps_rate(0, 60, 60.0));  // (none made)
+}
+
 } // namespace
 
 int main() {
+    held_to_the_heap();
+    rate_kept_near();
     as_asked_when_it_fits();
     smaller_pictures_first();
     then_fewer_pictures();

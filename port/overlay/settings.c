@@ -14,17 +14,20 @@
                     "reflection_clip": true,
                     "presenter": "vulkan"},
        "audio":    {"volume": 100, "mute": false},
-       "controls": {"layout": "ps2", "mouse_sensitivity": 1.0, "invert_y": false,
+       "controls": {"mouse_sensitivity": 1.0, "invert_y": false,
                     "instant_mouse_look": true, "twin_stick": true,
-                    "menu_mouse": ["cross", "circle", "cross"], "menu_side_keys": true,
-                    "bindings": {"verdite": {"square": ["key:Space", "mouse:left", "pad:x"]}}},
+                    "menu_mouse": ["cross", "circle", "cross"],
+                    "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
        "mods":     {"myus_necklace": false, "separate_run": false, "no_hit_jolt": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
-   "bindings" holds only the actions that differ from their layout's defaults (port/sdk/controls.c),
-   each as its three slots: two keys or mouse buttons, and a controller button. Keys this version does
-   not know are kept as they are. A missing or broken file means the defaults.
+   "bindings" holds only the actions that differ from their defaults (port/sdk/controls.c), each as its
+   three slots: two keys or mouse buttons, and a controller button. Until November 2026 there were two
+   layouts, "layout": "ps2" or "verdite", each with its own table ("bindings": {"ps2": {...}, "verdite":
+   {...}}): such a file's changes in the layout it used are read into the one table, and the next save
+   writes the new form without "layout" (or the gone "menu_side_keys"). Other keys this version does not
+   know are kept as they are. A missing or broken file means the defaults.
 
    "version" is the file's: 2 from stage 4 (docs/port/STEP3.md), when the Vulkan presenter became the
    default. Every save writes every setting out, so a file from before (no "version") says
@@ -75,7 +78,6 @@ PortSettings port_settings = {
     .seamless_scroll = 1,
     .frame_rate = 30,
     .volume = 100,
-    .layout = "ps2",
     .ui_scale = 1.0f,
     .presenter = PORT_PRESENTER_VULKAN,
     .native_lod = 1, /* GSN_LOD_SCALE */
@@ -178,20 +180,44 @@ static int action_from_id(const char *id) {
     return -1;
 }
 
+/* one table of bindings: {"cross": ["key:E", "mouse:middle", "pad:a"], ...} */
+static void read_bindings(const cJSON *table) {
+    const cJSON *entry;
+
+    cJSON_ArrayForEach(entry, table) {
+        int action = action_from_id(entry->string);
+        int slot;
+
+        if (action < 0 || !cJSON_IsArray(entry)) {
+            fprintf(stderr, "[settings] controls: no action called \"%s\"\n", entry->string);
+            continue;
+        }
+        for (slot = 0; slot < BINDING_SLOTS; slot++) {
+            const cJSON *item = cJSON_GetArrayItem(entry, slot);
+            int binding;
+
+            if (cJSON_IsString(item) && port_controls_binding_parse(item->valuestring, &binding)) {
+                port_controls_bind(action, slot, binding);
+            } else if (item != NULL) {
+                fprintf(stderr, "[settings] controls: %s: not a key or button\n", entry->string);
+            }
+        }
+    }
+}
+
+static int controls_migrated; /* the file has the controls of before November 2026: written again in the new form */
+
 static void read_controls(const cJSON *controls) {
     const cJSON *bindings = cJSON_GetObjectItemCaseSensitive(controls, "bindings");
     const cJSON *menu = cJSON_GetObjectItemCaseSensitive(controls, "menu_mouse");
-    const char *layout = read_string(controls, "layout");
+    const cJSON *ps2 = cJSON_GetObjectItemCaseSensitive(bindings, "ps2");
+    const cJSON *verdite = cJSON_GetObjectItemCaseSensitive(bindings, "verdite");
     int i;
 
-    if (layout != NULL && port_controls_layout_from_name(layout) >= 0) {
-        snprintf(port_settings.layout, sizeof(port_settings.layout), "%s", layout);
-    }
     port_controls_set_mouse(read_number(controls, "mouse_sensitivity", 1.0, 0.05, 10.0),
                             read_bool(controls, "invert_y", 0));
     port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 1));
     port_twin_stick_set(read_bool(controls, "twin_stick", 1));
-    port_controls_set_menu_side_keys(read_bool(controls, "menu_side_keys", 1));
     for (i = 0; i < 3 && cJSON_IsArray(menu); i++) {
         const cJSON *item = cJSON_GetArrayItem(menu, i);
 
@@ -200,29 +226,14 @@ static void read_controls(const cJSON *controls) {
                                                                                      : action_from_id(item->valuestring));
         }
     }
-    for (i = 0; i < CONTROLS_LAYOUTS; i++) {
-        const cJSON *table = cJSON_GetObjectItemCaseSensitive(bindings, port_controls_layout_name(i));
-        const cJSON *entry;
+    if (cJSON_IsObject(ps2) || cJSON_IsObject(verdite)) {
+        /* (before November 2026) a table for each layout: the changes in the one that was used */
+        const char *layout = read_string(controls, "layout");
 
-        cJSON_ArrayForEach(entry, table) {
-            int action = action_from_id(entry->string);
-            int slot;
-
-            if (action < 0 || !cJSON_IsArray(entry)) {
-                fprintf(stderr, "[settings] controls: no action called \"%s\"\n", entry->string);
-                continue;
-            }
-            for (slot = 0; slot < BINDING_SLOTS; slot++) {
-                const cJSON *item = cJSON_GetArrayItem(entry, slot);
-                int binding;
-
-                if (cJSON_IsString(item) && port_controls_binding_parse(item->valuestring, &binding)) {
-                    port_controls_bind(i, action, slot, binding);
-                } else if (item != NULL) {
-                    fprintf(stderr, "[settings] controls: %s: not a key or button\n", entry->string);
-                }
-            }
-        }
+        read_bindings(layout != NULL && strcmp(layout, "verdite") == 0 ? verdite : ps2);
+        controls_migrated = 1;
+    } else {
+        read_bindings(bindings);
     }
 }
 
@@ -523,12 +534,13 @@ void port_settings_load(void) {
     if (!port_options.native_draw_forced) {
         port_options.native_draw = s->native_draw ? PORT_ND_ACCEPTED : 0;
     }
-    if (port_options.controls == NULL) {
-        port_options.controls = s->layout;
-    }
     port_settings_apply_audio();
     if (file == NULL) {
         dirty = 1; /* the first run writes the defaults, so the file is there to find */
+    }
+    if (controls_migrated && active == 1) {
+        dirty = 1;
+        fprintf(stderr, "[settings] controls: one set of controls now (the layouts are gone); the changed keys kept\n");
     }
     if (migrated && active == 1) {
         dirty = 1;
@@ -566,42 +578,36 @@ static cJSON *section(const char *key) {
 static void write_controls(cJSON *controls) {
     cJSON *bindings = cJSON_CreateObject();
     cJSON *menu = cJSON_CreateArray();
-    int layout;
+    int action;
     int i;
 
-    put(controls, "layout", cJSON_CreateString(port_settings.layout));
+    cJSON_DeleteItemFromObjectCaseSensitive(controls, "layout");         /* (gone: one table) */
+    cJSON_DeleteItemFromObjectCaseSensitive(controls, "menu_side_keys"); /* (gone with the Verdite layout) */
     put(controls, "mouse_sensitivity", cJSON_CreateNumber(port_controls_mouse_sensitivity()));
     put(controls, "invert_y", cJSON_CreateBool(port_controls_mouse_invert()));
     put(controls, "instant_mouse_look", cJSON_CreateBool(port_controls_mouse_lead()));
     put(controls, "twin_stick", cJSON_CreateBool(port_twin_stick_setting()));
     for (i = 0; i < 3; i++) {
-        int action = port_controls_menu_mouse(i);
+        int menu_action = port_controls_menu_mouse(i);
 
-        cJSON_AddItemToArray(menu, cJSON_CreateString(action < 0 ? "none" : port_controls_action_id(action)));
+        cJSON_AddItemToArray(menu, cJSON_CreateString(menu_action < 0 ? "none" : port_controls_action_id(menu_action)));
     }
     put(controls, "menu_mouse", menu);
-    put(controls, "menu_side_keys", cJSON_CreateBool(port_controls_menu_side_keys()));
-    for (layout = 0; layout < CONTROLS_LAYOUTS; layout++) {
-        cJSON *table = cJSON_CreateObject();
-        int action;
+    for (action = 0; action < ACTION_COUNT; action++) {
+        cJSON *slots;
+        int slot;
 
-        for (action = 0; action < ACTION_COUNT; action++) {
-            cJSON *slots;
-            int slot;
-
-            if (port_controls_is_default(layout, action)) {
-                continue;
-            }
-            slots = cJSON_CreateArray();
-            for (slot = 0; slot < BINDING_SLOTS; slot++) {
-                char text[64];
-
-                port_controls_binding_text(port_controls_binding(layout, action, slot), text, sizeof(text));
-                cJSON_AddItemToArray(slots, cJSON_CreateString(text));
-            }
-            cJSON_AddItemToObject(table, port_controls_action_id(action), slots);
+        if (port_controls_is_default(action)) {
+            continue;
         }
-        cJSON_AddItemToObject(bindings, port_controls_layout_name(layout), table);
+        slots = cJSON_CreateArray();
+        for (slot = 0; slot < BINDING_SLOTS; slot++) {
+            char text[64];
+
+            port_controls_binding_text(port_controls_binding(action, slot), text, sizeof(text));
+            cJSON_AddItemToArray(slots, cJSON_CreateString(text));
+        }
+        cJSON_AddItemToObject(bindings, port_controls_action_id(action), slots);
     }
     put(controls, "bindings", bindings);
 }

@@ -1,7 +1,6 @@
-/* PC controls (port/sdk/controls.c): the keyboard, the mouse and a game controller as the pad, by
-   tables that can be rebound (the settings overlay, F1). Two layouts: PS2 (the default), the keys of
-   port/sdk/libpad.c, and Verdite (--controls verdite), the keyboard layout and mouse look of the
-   KF2/KF3 ports. */
+/* PC controls (port/sdk/controls.c): the keyboard, the mouse and a game controller as the pad, all at once,
+   by one table that can be rebound (the settings overlay). There is no layout to choose: the mouse is held and
+   looks in play, is let go in the menus, and its cursor shows while it is the thing being used. */
 #ifndef PORT_CONTROLS_H
 #define PORT_CONTROLS_H
 
@@ -16,7 +15,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch);
 
 /* Called by the game (Player_Update) with the pad's held buttons and the action button's bit (the
    game's button for running and for using what is in front). With the separate run mod on
-   (port_options.separate_run) and Run bound in the layout, running is Run's: the action bit of
+   (port_options.separate_run) and Run bound, running is Run's: the action bit of
    `held` becomes whether Run is held, so the action button only uses things (pressed is the game's
    own). Otherwise `held` is returned as it is: the action button runs, as on the PS2. A pad script
    gives what its recording held (run=), or nothing (the action button runs). */
@@ -30,17 +29,7 @@ void port_pad_record_look(float yaw, float pitch);  /* (recording) a turn port_m
 void port_pad_record_event(const char *name, int slot); /* (recording) a PC key the game sees */
 void port_pad_record_note(const char *note);        /* (recording) a comment at this vblank */
 
-/* ---- Layouts --------------------------------------------------------------------------------- */
-#define CONTROLS_PS2 0
-#define CONTROLS_VERDITE 1
-#define CONTROLS_LAYOUTS 2
-
-void port_controls_init(const char *layout); /* "ps2" (or NULL) or "verdite" */
-int port_controls_verdite(void);             /* the Verdite layout is on (and no pad script plays) */
-int port_controls_layout(void);
-void port_controls_set_layout(int layout);
-const char *port_controls_layout_name(int layout); /* "ps2", "verdite" */
-int port_controls_layout_from_name(const char *name); /* -1: not a layout */
+void port_controls_init(void);
 
 /* ---- What can be bound ------------------------------------------------------------------------ */
 typedef enum {
@@ -69,7 +58,7 @@ typedef enum {
     ACTION_RIGHT_STICK_LEFT,
     ACTION_RIGHT_STICK_RIGHT,
     ACTION_RUN,           /* the separate run mod: running apart from the action button (port_controls_run_held) */
-    ACTION_CAPTURE_MOUSE, /* Verdite: capture or release the mouse */
+    ACTION_CAPTURE_MOUSE, /* let the mouse go in play, or take it back (unbound by default) */
     ACTION_QUICK_SAVE,    /* save states (port/include/port/savestate.h), the quick slot: F5, F7 */
     ACTION_QUICK_LOAD,
     ACTION_GAME_SAVE,     /* quick saves (port/include/port/quicksave.h), any build: F2, F4 */
@@ -103,27 +92,22 @@ typedef enum {
 
 const char *port_controls_action_label(int action); /* "Cross", "Left stick up", "Quick save" */
 const char *port_controls_action_id(int action);    /* "cross", "left_stick_up": settings.json's names */
-int port_controls_action_used(int layout, int action); /* the action means something in that layout */
-int port_controls_binding(int layout, int action, int slot);
-void port_controls_bind(int layout, int action, int slot, int binding);
-int port_controls_is_default(int layout, int action);
-void port_controls_reset(int layout); /* the layout's defaults, mouse included */
+int port_controls_action_used(int action); /* the action means something (its mod is on) */
+int port_controls_binding(int action, int slot);
+void port_controls_bind(int action, int slot, int binding);
+int port_controls_is_default(int action);
+void port_controls_reset(void); /* the defaults, mouse included */
 /* For people ("Space", "Mouse left", "Pad A") and for settings.json ("key:Space", "mouse:left",
    "pad:a", "trigger:lefttrigger"); 0 when the text is no binding. */
 void port_controls_binding_label(int binding, char *out, size_t size);
 void port_controls_binding_text(int binding, char *out, size_t size);
 int port_controls_binding_parse(const char *text, int *binding);
 
-/* Verdite: the pad button each mouse button (0 left, 1 right, 2 middle) presses outside play, an
-   ACTION_ of the face buttons and d-pad (-1: none) */
+/* The pad button each mouse button (0 left, 1 right, 2 middle) presses outside play, an ACTION_ of the face
+   buttons and d-pad (-1: none) */
 int port_controls_menu_mouse(int button);
 void port_controls_set_menu_mouse(int button, int action);
-/* Verdite outside play (the menu mouse's "not in play"): the keys bound to L1 / R1 (A / D) press d-pad
-   left / right and the keys bound to d-pad left / right (the arrows) press L1 / R1, so A / D move left
-   and right in the menus as W / S move up and down. On by default; the controller is unchanged. */
-int port_controls_menu_side_keys(void);
-void port_controls_set_menu_side_keys(int on);
-/* Verdite's mouse look: a multiple of 0.15 degrees a pixel, and whether up and down are swapped */
+/* Mouse look: a multiple of 0.15 degrees a pixel, and whether up and down are swapped */
 double port_controls_mouse_sensitivity(void);
 int port_controls_mouse_invert(void);
 void port_controls_set_mouse(double sensitivity, int invert_y);
