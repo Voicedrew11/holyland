@@ -5,6 +5,8 @@
 !port/gs/pc/pipeline_seed.bin
 *.cue
 *.chd
+# (iso9660_test's CHDs: a 24-sector image the test makes itself, none of the game's data; tests/iso9660_test.c)
+!tests/data/*.chd
 *.elf
 *.irx
 *.rom

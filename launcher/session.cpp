@@ -457,8 +457,8 @@ void Session::draw_update_window() {
 Screen Session::draw_choose_disc() {
     ImGui::TextUnformatted("Choose your King's Field IV disc");
     ImGui::TextWrapped("%s plays the game from your own copy of the disc: King's Field: The Ancient City, "
-                       "the USA release (SLUS-20318). Choose an ISO image of it, or the SYSTEM.CNF of a disc "
-                       "you copied into a folder.", kProductName);
+                       "the USA release (SLUS-20318). Choose an ISO or CHD image of it, or the SYSTEM.CNF of a "
+                       "disc you copied into a folder.", kProductName);
     if (!disc_error_.empty())
         ImGui::TextColored(kRed, "%s", disc_error_.c_str());
     ImGui::Spacing();

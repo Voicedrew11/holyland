@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Darker Reality (called holyland until 2026-11-18) is a native PC port (Windows, Linux; 64-bit) of King's Field IV, built from the
 [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PS2 game. The game's own
 C is compiled as is (with patches); `port/` stands in for the PS2 beneath it. No game data is in the repo:
-running needs the owner's disc image (`--disc <iso or folder>` or `KF4_DISC`).
+running needs the owner's disc image (`--disc <iso, chd or folder>` or `KF4_DISC`).
 
 `README.md` is out of date (it still says "step 0"). Trust the code and the git log.
 

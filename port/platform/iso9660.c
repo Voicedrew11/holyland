@@ -1,45 +1,20 @@
 /* An ISO 9660 image's files (port/include/port/iso9660.h). Everything read from the image is checked
    against the buffer it is in: the image is the player's file. */
-#if !defined(_WIN32)
-#define _FILE_OFFSET_BITS 64
-#define _POSIX_C_SOURCE 200809L
-#endif
 #include "port/iso9660.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_DEPTH 8
 #define MAX_DIRECTORY_BYTES (1u << 20) /* KF4's largest is a few sectors */
 
-static int seek(FILE *image, uint64_t offset) {
-#ifdef _WIN32
-    return _fseeki64(image, (__int64)offset, SEEK_SET);
-#else
-    return fseeko(image, (off_t)offset, SEEK_SET);
-#endif
-}
-
-int iso9660_read(FILE *image, uint32_t lsn, uint32_t sectors, void *buffer) {
-    size_t bytes = (size_t)sectors * ISO9660_SECTOR_SIZE;
-    size_t got;
-
-    if (seek(image, (uint64_t)lsn * ISO9660_SECTOR_SIZE) != 0) {
-        return 0;
-    }
-    got = fread(buffer, 1, bytes, image);
-    if (got < bytes) {
-        memset((unsigned char *)buffer + got, 0, bytes - got);
-    }
-    return got > 0;
-}
-
 static uint32_t le32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 typedef struct {
-    FILE *image;
+    DiscImage *image;
     Iso9660Visit visit;
     void *context;
 } Walk;
@@ -83,7 +58,7 @@ static Iso9660Result walk_directory(const Walk *walk, const char *dir_path, uint
     if (data == NULL) {
         return ISO9660_BAD_DIRECTORY;
     }
-    if (!iso9660_read(walk->image, lsn, sectors, data)) {
+    if (!disc_image_read(walk->image, lsn, sectors, data)) {
         free(data);
         return ISO9660_BAD_DIRECTORY;
     }
@@ -123,12 +98,12 @@ static Iso9660Result walk_directory(const Walk *walk, const char *dir_path, uint
     return result;
 }
 
-Iso9660Result iso9660_list(FILE *image, uint32_t *disc_sectors, Iso9660Visit visit, void *context) {
+Iso9660Result iso9660_list(DiscImage *image, uint32_t *disc_sectors, Iso9660Visit visit, void *context) {
     unsigned char pvd[ISO9660_SECTOR_SIZE];
     const unsigned char *root = pvd + 156;
     Walk walk = {image, visit, context};
 
-    if (!iso9660_read(image, 16, 1, pvd) || pvd[0] != 1 || memcmp(pvd + 1, "CD001", 5) != 0) {
+    if (!disc_image_read(image, 16, 1, pvd) || pvd[0] != 1 || memcmp(pvd + 1, "CD001", 5) != 0) {
         return ISO9660_NOT_ISO;
     }
     if (disc_sectors != NULL) {
