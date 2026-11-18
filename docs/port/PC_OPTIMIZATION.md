@@ -887,6 +887,18 @@ border): 3.07 ms against 1.78, the scaling's arithmetic done twice over by the b
   (`SoundDriver_Remote`, the decomp's casts, Granite's `render_pass.cpp:52`).
 - Not run: TSan, the gcc and Windows builds, a map tour against `--renderer gs`, the 9070 XT (the owner's card).
 
+### What a layer costs here, and what exact Z costs (later the same day, on battery)
+
+`kf4-layerbench --size 1920x896 --target "8 bits a channel, 1 sample"`: a plain colour fill 0.43 ms a layer, textured
+with depth 0.56, a shader that writes its own depth 0.89 (hidden behind what is drawn: 0.13 to 0.18). About 16 GB/s
+written. So the fills below cost what any layer costs here: only drawing fewer, or with fewer bytes, saves.
+
+**Exact Z costs 2.5 ms a picture here** (009, the same build, `KF4_PC_EXACT_Z=0` against on): 16.18 to 13.69 ms. 2d
+4.18 to 3.01 (the fills write their own depth), native 000 3.42 to 2.70, native 700 1.28 to 0.85, planes 0.58 to none.
+Exact Z is what keeps decals on their surfaces, so it stays; but a batch of one Z everywhere (the fills, the clears
+drawn, untextured sprites) gets the same depth from the GPU's interpolation as from the shader, where it is exactly
+representable: those could be drawn with the GPU's depth and early tests, about 1.2 ms.
+
 ### Found and not done
 
 - **The four full-screen fills a game frame, 0.9 ms each** (1.8 ms a picture): the game's colour and Z clear, a second
