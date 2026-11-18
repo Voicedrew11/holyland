@@ -146,6 +146,21 @@ By hand: `packaging/linux/build-appimage.sh [SDL2_PREFIX]` (on Ubuntu 22.04, or 
 `podman run ubuntu:22.04`), `packaging/windows/build-windows.sh` (Git Bash; or on Linux with `LLVM_MINGW` set to
 llvm-mingw's Linux build, which cross-compiles the launcher and makes no installer).
 
+## Previews
+
+A build for testers, as Verdite3's: `tools/prerelease.sh` on a pushed branch publishes its HEAD as the rolling
+`preview` prerelease, replacing the last one (one preview at a time, links that never change). Each package (the
+AppImage, the Windows zip, the installer) is in a zip locked with the `PREVIEW_PASSWORD` repository secret
+(AES-256); the release notes say to ask on the Verdite Project Discord for it.
+
+- It asks by pushing the tag `preview-<commit>`, which starts `release.yml` from that commit on any branch, and the
+  job deletes it afterwards. (Verdite's way, starting the workflow by hand, also works here, once `release.yml` is
+  on the default branch: `gh workflow run release.yml --ref <branch> -f preview=true`.)
+- A prerelease is never GitHub's "latest": no launcher is told about a preview. A preview's own version is the last
+  release's tag (0.0.0 before the first), so testers are told when the next release is out.
+- `preview-cleanup.yml` deletes the preview when a release is published.
+- Change the password: `gh secret set PREVIEW_PASSWORD`, then a new preview.
+
 ## Not done
 
 - macOS, iOS, Android (see Platforms).

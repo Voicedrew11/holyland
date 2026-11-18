@@ -1,14 +1,22 @@
 # A release (docs/port/LAUNCHER.md, "Making a release"): on a vMAJOR.MINOR.PATCH tag (tools/release.sh), the
 # Linux AppImage, the Windows zip and installer, into a DRAFT release; publishing the draft is what players'
-# launchers are told about. Each job also builds the game from the package exactly as a player's launcher
+# launchers are told about. A preview (tools/prerelease.sh, "Previews") builds the same packages into the rolling,
+# password-protected `preview` prerelease instead. Each job also builds the game from the package exactly as a player's launcher
 # does (--build-only: the shipped tools, the read-only source, no git), so a release that cannot build is
 # never made.
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    # preview-<commit>: tools/prerelease.sh's request for a preview, from any branch (a workflow started by
+    # hand runs only once this file is on the default branch); the preview job deletes it
+    tags: ["v*", "preview-*"]
   workflow_dispatch:
+    inputs:
+      preview:
+        description: 'Publish the build as the rolling "preview" prerelease (tools/prerelease.sh)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -17,6 +25,8 @@ jobs:
   linux:
     # the oldest Linux a release supports: SDL2 is built here (packaging/linux/build-sdl2.sh)
     runs-on: ubuntu-22.04
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1 # (appimagetool and the AppImage itself, without FUSE)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +44,7 @@ jobs:
             libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
       - name: The version
         run: |
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
+          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - uses: actions/cache@v4
         with:
@@ -71,7 +81,7 @@ jobs:
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: The version
         run: |
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"; fi
+          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - name: Inno Setup on PATH
         run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
@@ -95,7 +105,7 @@ jobs:
 
   release:
     needs: [linux, windows]
-    if: github.ref_type == 'tag'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -107,3 +117,57 @@ jobs:
           draft: true
           generate_release_notes: true
           files: dist/*
+
+  # The preview: one prerelease under the tag `preview`, a build handed to testers, replaced whole on every run, so
+  # there is never more than one and its download links never change (as Verdite3's). Each package is zipped with the
+  # PREVIEW_PASSWORD secret (AES-256). A prerelease is never GitHub's "latest", so the launcher's update check never
+  # announces it, and `preview` is no version (tools/version.sh reads vMAJOR.MINOR.PATCH alone).
+  # preview-cleanup.yml deletes it when a release is published.
+  preview:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/preview-') || (github.event_name == 'workflow_dispatch' && inputs.preview)
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: packaging/package.env
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Zip each package with the password
+        run: |
+          test -n "$PREVIEW_PASSWORD" || { echo "the PREVIEW_PASSWORD secret is not set"; exit 1; }
+          command -v 7z >/dev/null || { sudo apt-get update && sudo apt-get install -y p7zip-full; }
+          . packaging/package.env
+          sha="${GITHUB_SHA::9}"
+          mkdir -p out stage/linux stage/setup stage/win
+          cp dist/*.AppImage "stage/linux/$NAME-preview-$sha-x86_64.AppImage"
+          chmod +x stage/linux/*.AppImage
+          cp dist/*setup.exe "stage/setup/$NAME-preview-$sha-win-x64-setup.exe"
+          unzip -q dist/*-win-x64.zip -d stage/win
+          (cd stage/linux && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-linux-x86_64.zip" . >/dev/null)
+          (cd stage/setup && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64-setup.zip" . >/dev/null)
+          (cd stage/win && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" "../../out/$NAME-preview-win-x64.zip" . >/dev/null)
+          for f in out/*.zip; do 7z t "-p$PREVIEW_PASSWORD" "$f" >/dev/null; done
+          ls -la out
+      - name: Replace the preview prerelease
+        run: |
+          . packaging/package.env
+          cat > notes.md <<'NOTES'
+          **Preview builds are password protected.** Join the [Verdite Project Discord](https://discord.gg/R4EKCs8RWH) for access.
+
+          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\holyland\saves` on Windows and `~/.config/holyland/saves` on Linux (quick saves beside them, in `quicksaves`).
+
+          The first start asks for your King's Field IV disc (the USA release, SLUS-20318) and builds the game on your computer, which takes a few minutes and happens once.
+          NOTES
+          gh release delete preview --cleanup-tag --yes 2>/dev/null || true
+          gh release create preview out/*.zip --target "$GITHUB_SHA" --prerelease \
+            --title "$DISPLAY_NAME preview (${GITHUB_SHA::9})" --notes-file notes.md
+      - name: The request's tag goes
+        if: always() && startsWith(github.ref, 'refs/tags/preview-')
+        run: gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$GITHUB_REF_NAME" || true
