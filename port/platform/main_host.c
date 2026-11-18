@@ -139,8 +139,6 @@
                          handing GIF packets to the GS and in vsyncs, and VU1's runs and instructions
        --audio-dump FILE write the sound as a 48 kHz WAV file
        --no-audio        play no sound (it is still made, for --audio-dump)
-       --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
-                         port/sdk/controls.c)
        --saves DIR       the folder the game's saves go in (by default saves in the data folder, next
                          to settings.json); "none": saving is off
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
@@ -275,7 +273,7 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--saves DIR|none]\n"
+            "          [--audio-dump FILE] [--no-audio] [--saves DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
@@ -684,7 +682,8 @@ static void parse_options(int argc, char **argv) {
         } else if (strcmp(option, "--saves") == 0) {
             port_options.saves = value;
         } else if (strcmp(option, "--controls") == 0) {
-            port_options.controls = value;
+            /* (gone in November 2026: one set of controls, port/sdk/controls.c; still taken, so old scripts run) */
+            fprintf(stderr, "[port] --controls %s: there are no layouts any more; ignored\n", value);
         } else if (strcmp(option, "--dump-dir") == 0) {
             port_options.dump_dir = value;
         } else if (strcmp(option, "--state-save-at") == 0) {

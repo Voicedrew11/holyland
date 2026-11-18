@@ -602,7 +602,7 @@ void ps2_picture_section() {
 }
 
 // ---- Controls ------------------------------------------------------------------------------------
-void binding_button(int layout, int action, int slot) {
+void binding_button(int action, int slot) {
     int listen_action, listen_slot;
     bool listening = port_controls_listening(&listen_action, &listen_slot) && listen_action == action &&
                      listen_slot == slot;
@@ -613,7 +613,7 @@ void binding_button(int layout, int action, int slot) {
                       action, slot);
     } else {
         char name[64];
-        port_controls_binding_label(port_controls_binding(layout, action, slot), name, sizeof(name));
+        port_controls_binding_label(port_controls_binding(action, slot), name, sizeof(name));
         std::snprintf(label, sizeof(label), "%s###b%d_%d", name, action, slot);
     }
     if (listening)
@@ -623,12 +623,12 @@ void binding_button(int layout, int action, int slot) {
     if (listening)
         ImGui::PopStyleColor();
     if (!listening && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-        port_controls_bind(layout, action, slot, BINDING_NONE);
+        port_controls_bind(action, slot, BINDING_NONE);
         changed();
     }
 }
 
-// The mouse's buttons outside play (Verdite layout): which pad button each presses
+// The mouse's buttons outside play: which pad button each presses
 void mouse_in_menus() {
     static const int menu_actions[] = {-1, ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE,
                                        ACTION_START, ACTION_SELECT};
@@ -649,7 +649,6 @@ void mouse_in_menus() {
 
 void controls_page() {
     PortSettings &s = port_settings;
-    int layout = port_controls_layout();
     int listen_action, listen_slot;
     static int was_listening;
     bool listening = port_controls_listening(&listen_action, &listen_slot);
@@ -659,21 +658,9 @@ void controls_page() {
         changed();
     was_listening = listening;
 
-    if (ImGui::RadioButton("PS2 pad (keyboard as the pad)", layout == CONTROLS_PS2)) {
-        port_controls_set_layout(CONTROLS_PS2);
-        std::snprintf(s.layout, sizeof(s.layout), "%s", port_controls_layout_name(CONTROLS_PS2));
-        changed();
-    }
-    tooltip("Arrows, W A S D and I J K L, Z X C V as the face buttons: the keyboard as a pad. (--controls ps2)");
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Verdite (mouse look)", layout == CONTROLS_VERDITE)) {
-        port_controls_set_layout(CONTROLS_VERDITE);
-        std::snprintf(s.layout, sizeof(s.layout), "%s", port_controls_layout_name(CONTROLS_VERDITE));
-        changed();
-    }
-    tooltip("The layout of Verdite, the KF2/KF3 ports: W A S D to walk and side-step,\nthe mouse to turn and "
-            "look (held in play; Escape lets it go, a click takes it back), Space to attack. (--controls verdite)");
-    layout = port_controls_layout();
+    ImGui::TextWrapped("One set of controls: W A S D walk and step sideways, the mouse turns and looks (held in "
+                       "play, let go in the menus), Space attacks, Q casts, E uses, Escape opens the menu and goes "
+                       "back. A controller works at the same time.");
 
     bool twin_stick = port_twin_stick_setting() != 0;
     if (ImGui::Checkbox("Twin-stick controls", &twin_stick)) {
@@ -696,26 +683,24 @@ void controls_page() {
         ImGui::TextColored(colour_note, "(on for this run: command line)");
     }
 
-    if (layout == CONTROLS_VERDITE) {
-        ImGui::SeparatorText("Mouse");
-        float sensitivity = (float)port_controls_mouse_sensitivity();
-        bool invert = port_controls_mouse_invert() != 0;
-        if (ImGui::SliderFloat("Mouse sensitivity", &sensitivity, 0.25f, 4.0f, "%.2fx",
-                               ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic)) {
-            port_controls_set_mouse(sensitivity, invert);
-            changed();
-        }
-        if (ImGui::Checkbox("Invert mouse up / down", &invert)) {
-            port_controls_set_mouse(sensitivity, invert);
-            changed();
-        }
-        bool menus_open = ImGui::TreeNode("Mouse buttons in menus");
-        tooltip("Outside play (menus, pause, talking) the mouse presses these. In play, with the mouse\ncaptured, "
-                "its buttons are the bindings below.");
-        if (menus_open) {
-            mouse_in_menus();
-            ImGui::TreePop();
-        }
+    ImGui::SeparatorText("Mouse");
+    float sensitivity = (float)port_controls_mouse_sensitivity();
+    bool invert = port_controls_mouse_invert() != 0;
+    if (ImGui::SliderFloat("Mouse sensitivity", &sensitivity, 0.25f, 4.0f, "%.2fx",
+                           ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic)) {
+        port_controls_set_mouse(sensitivity, invert);
+        changed();
+    }
+    if (ImGui::Checkbox("Invert mouse up / down", &invert)) {
+        port_controls_set_mouse(sensitivity, invert);
+        changed();
+    }
+    bool menus_open = ImGui::TreeNode("Mouse buttons in menus");
+    tooltip("Outside play (menus, pause, talking) the mouse presses these. In play, with the mouse\ncaptured, "
+            "its buttons are the bindings below.");
+    if (menus_open) {
+        mouse_in_menus();
+        ImGui::TreePop();
     }
 
     ImGui::SeparatorText("Bindings");
@@ -738,34 +723,34 @@ void controls_page() {
         ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableHeadersRow();
         for (int action = 0; action < ACTION_COUNT; action++) {
-            if (!port_controls_action_used(layout, action))
+            if (!port_controls_action_used(action))
                 continue;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            if (port_controls_is_default(layout, action))
+            if (port_controls_is_default(action))
                 ImGui::TextUnformatted(port_controls_action_label(action));
             else
                 ImGui::TextColored(colour_note, "%s *", port_controls_action_label(action));
             for (int slot = 0; slot < BINDING_SLOTS; slot++) {
                 ImGui::TableNextColumn();
-                binding_button(layout, action, slot);
+                binding_button(action, slot);
             }
         }
         ImGui::EndTable();
     }
     if (ImGui::Button("Defaults")) {
-        port_controls_reset(layout);
+        port_controls_reset();
         changed();
     }
-    tooltip("Puts this layout's keys, buttons and mouse settings back as they were.");
+    tooltip("Puts the keys, buttons and mouse settings back as they were.");
     ImGui::SameLine();
     ImGui::TextDisabled("* changed from the default");
 }
 
 // ---- Saves ---------------------------------------------------------------------------------------
 void key_name(int action, char *out, size_t size) {
-    port_controls_binding_label(port_controls_binding(port_controls_layout(), action, 0), out, size);
+    port_controls_binding_label(port_controls_binding(action, 0), out, size);
 }
 
 void saves_page() {
@@ -929,9 +914,9 @@ std::string bug_report() {
     text += line;
     text += "\n";
     std::snprintf(line, sizeof(line),
-                  "options: controls=%s unpaced=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
+                  "options: unpaced=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
                   "no_audio=%d device_clock=%d\n",
-                  port_controls_layout_name(port_controls_layout()), port_options.fast, port_options.deinterlace,
+                  port_options.fast, port_options.deinterlace,
                   port_options.progressive, port_options.anti_blur, port_options.adapt_width, port_options.no_audio,
                   port_audio_device_clock());
     text += line;
@@ -1043,7 +1028,7 @@ void debug_tools() {
     char keys[3][64];
     const int actions[3] = {ACTION_GS_CAPTURE, ACTION_STATE_DUMP, ACTION_AUDIO_TAIL};
     for (int i = 0; i < 3; i++)
-        port_controls_binding_label(port_controls_binding(port_controls_layout(), actions[i], 0), keys[i],
+        port_controls_binding_label(port_controls_binding(actions[i], 0), keys[i],
                                     sizeof(keys[i]));
 
     if (!ImGui::CollapsingHeader("Debugging tools"))
@@ -1073,7 +1058,7 @@ void debug_tools() {
     // the flash recorder (port/include/port/present_vk.h): the last pictures shown, kept on the GPU
     {
         char key[64];
-        port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_FLASH_RECORD, 0), key, sizeof(key));
+        port_controls_binding_label(port_controls_binding(ACTION_FLASH_RECORD, 0), key, sizeof(key));
         bool on = port_options.flash_seconds > 0;
         if (ImGui::Checkbox("Flash recorder", &on))
             port_options.flash_seconds = on ? 2.0f : 0.0f;
@@ -1338,7 +1323,7 @@ void overlay_section() {
     tooltip("Off: the game runs on behind the overlay.");
     bool fps = port_options.show_fps != 0;
     char fps_key[64];
-    port_controls_binding_label(port_controls_binding(port_controls_layout(), ACTION_SHOW_FPS, 0), fps_key,
+    port_controls_binding_label(port_controls_binding(ACTION_SHOW_FPS, 0), fps_key,
                                 sizeof(fps_key));
     if (ImGui::Checkbox("Frame-rate counter", &fps)) {
         s.show_fps = port_options.show_fps = fps;

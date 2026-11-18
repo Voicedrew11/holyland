@@ -71,7 +71,7 @@ What `--record-input` writes (`port/sdk/libpad.c`), one line per run of vblanks 
 
 What is replayed: the pad's buttons and sticks as the game read them each vblank (the last reading of a vblank,
 when the overlay, the full map or a pipeline wait reads it again), the mouse look's turns call for call as exact
-floats, the separate run key, twin-stick's shaping, Verdite's menu side keys, the weapon swap key, and the quick
+floats, the separate run key, twin-stick's shaping, the weapon swap key, and the quick
 save and quick load keys (against the copy of the quick saves). What is not: save states (F5 / F7: written as
 comments; a loaded one makes the rest go wrong), quick loads and saves made from the overlay's menu, settings
 changed in the overlay mid-run (the replay has the settings of the start), F8 and F9 themselves, the sound, and

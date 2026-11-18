@@ -1,8 +1,8 @@
 /* libpad for the PC port (port/include/libpad.h): a DualShock 2 in port 0, slot 0, and nothing in
    port 1. Its buttons come from a pad script (--input), for tests, or else from the first SDL game
-   controller, the keyboard and the mouse, by the bindings of port/sdk/controls.c (by default the
-   keyboard has arrows for the d-pad, W A S D and I J K L for the sticks, Z or space cross, X circle,
-   C square, V triangle, Q E 1 3 for L1 R1 L2 R2, Enter start and Backspace select).
+   controller, the keyboard and the mouse, by the bindings of port/sdk/controls.c (by default W A S D
+   the left stick, the arrows the d-pad, the mouse turning and looking, Space square, E cross, Q
+   triangle, Escape circle, Enter start).
 
    The pad behaves as a DualShock 2 does for libpad: digital (id 4, report type 0x41) or analog (id 7,
    0x73), pressure-sensitive (0x79) when the game asks, two motors (the SDL controller's rumble), and
@@ -20,8 +20,7 @@
 
    --record-input FILE writes what the pad and keyboard send as such a script, a line per run of vblanks
    with the same buttons and sticks, so a played session can be replayed with --input. The PC's own
-   controls stay on while recording (mouse look, the separate run key, twin-stick, Verdite's menu side
-   keys), and what they hand the game is written too, so that the replay gives the game the same:
+   controls stay on while recording (mouse look, the separate run key, twin-stick), and what they hand the game is written too, so that the replay gives the game the same:
        <vblank> <buttons> rx=.. ry=.. lx=.. ly=.. ts=<0|1> run=<0|1> <vblanks>
    ts= is whether twin-stick shaped the sticks (port_twin_stick_on), run= whether the separate run key
    was held (left out when the separate run mod did not apply: the action button runs), and
@@ -536,7 +535,7 @@ void port_pad_init(void) {
                              "# and data folder: settings, quick saves, automap, hands)\n");
         atexit(record_close);
     }
-    port_controls_init(port_options.controls);
+    port_controls_init();
     if (port_options.input) {
         load_script(port_options.input);
     }
