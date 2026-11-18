@@ -68,7 +68,7 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
 ## Layout
 
 - `game/`: new game-side features in C that live with the game code (quick save, automap, cheats,
-  widescreen, draw distance, frame interpolation, screen effects, stats, weapon sets) and
+  widescreen, draw distance, frame interpolation, screen effects, stats, hands and hotkeys) and
   `game/native_draw/` (draws the game's models directly instead of through its VU1 packets).
 - `port/platform/`: the PS2 under the game: kernel and threads (`fiber.c`), memory and EE addresses, DMA,
   VIF1, VU1 (interpreter `vu1.c` plus HLE per VU1 program `vu1_hle_*.c`), disc, save states, pacing

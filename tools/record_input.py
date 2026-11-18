@@ -5,7 +5,7 @@
     tools/record_input.py replay REC [--disc ISO] [--exe PATH] [--out DIR] [--check] [--at VBLANK,...] [-- kf4 options]
 
 record: copies what the run starts from out of the data folder (settings.json, overlay.ini, quick saves, automap,
-weapon sets, memory card) into REC/start, then starts the game in its window with the player's settings, a fixed
+hands, memory card) into REC/start, then starts the game in its window with the player's settings, a fixed
 clock, the newest quick save (loaded by itself) and --record-input REC/input.pad. Play as usual; the recording is
 complete when the game is closed. REC is <data folder>/captures/input-YYYYMMDD-HHMMSS by default, beside F8's and
 F9's captures (the data folder: KF4_DATA_DIR, else %APPDATA%\\holyland or ~/.config/holyland). REC/info.txt names the
@@ -35,7 +35,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLOCK = "2026-01-01T12:00:00"
 START_FILES = ("settings.json", "overlay.ini")
-START_DIRS = ("quicksaves", "automap", "weapon_sets", "memcard")
+START_DIRS = ("quicksaves", "automap", "hands", "weapon_sets", "memcard")
 PIPELINES = os.path.join(tempfile.gettempdir(), "kf4_replay_pipelines")
 PIPELINE_FILES = ("pc_pipelines.bin", "pc_pipeline_list.bin")
 OUT_OF_STEP = "[pad] the replay is out of step"

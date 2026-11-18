@@ -81,7 +81,10 @@ typedef enum {
     ACTION_SHOW_FPS,      /* the frame-rate counter shown or hidden (port_options.show_fps): F3 */
     ACTION_STATS_PANEL,   /* the extended stats mod's panel shown or hidden (port/include/port/stats.h): F6 */
     ACTION_MAP,           /* the automap mod: the full map opened or closed (port/include/port/automap.h): M */
-    ACTION_WEAPON_SWAP,   /* the weapon sets mod: set 2 swapped in (port/include/port/weapon_sets.h): R, R3 */
+    ACTION_WEAPON_SWAP,   /* the hands mod (port/include/port/hands.h): the other weapon; its d-pad is the hands' in play */
+    ACTION_SPELL_SWAP,    /* the other spell */
+    ACTION_HOTKEY_NEXT,   /* the next hotkey that holds something */
+    ACTION_HOTKEY_PREVIOUS,
     ACTION_COUNT
 } PortAction;
 

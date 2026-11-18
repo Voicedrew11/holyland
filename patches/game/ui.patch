@@ -2469,7 +2469,7 @@ index 0000000000000000000000000000000000000000..882f07b65bf6bab2936fe88998ef3f83
 +
 +#endif
 diff --git a/src/game/ui/menu_screens.c b/src/game/ui/menu_screens.c
-index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a49a26c445 100644
+index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa38aa358e 100644
 --- a/src/game/ui/menu_screens.c
 +++ b/src/game/ui/menu_screens.c
 @@ -4,6 +4,7 @@
@@ -2489,11 +2489,11 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
 +#include <stdio.h>
 +#include <time.h>
 +#include "port/libc_ps2.h" /* PC: newlib's mktime on the game's struct tm */
-+/* PC: the weapon sets mod's Weapon 2 and Shield 2 on the equipment screen (game/weapon_sets.c) */
-+void WeaponSets_LinkLists(void);
-+s32 WeaponSets_TrackEquip(MenuItemList *list, s32 group_shown);
-+int WeaponSets_ShownIsEquipped(MenuItemList *list, MenuItem *item, int equipped);
-+int WeaponSets_Choose(MenuItemList *list, MenuItem *item);
++/* PC: the hands mod on the equipment screen (game/hands.c, and its "Put in" box, game/hands_put.h) */
++void Hands_BuildRings(void);
++int Hands_Choose(MenuItemList *list, MenuItem *item);
++u16 HandsPut_Buttons(u16 buttons);
++void HandsPut_Draw(void);
 +/* PORT: as libcdvd.h and libgraph.h declare them; those headers cannot be included while core/file.h and gfx/packet.h
 +   declare SDK functions of their own */
 +int sceCdBreak(void);
@@ -2791,7 +2791,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
      } else {
          castable_spell_cursor[0] = NULL;
      }
-+    WeaponSets_LinkLists(); /* PC: the weapon sets mod's lists, linked above the weapon's while it is on */
++    Hands_BuildRings(); /* PC: the hands mod: each row shows its slot in hand */
      equip_list_shown[0] = (MenuItemList *)equip_list_refs[equip_group_shown];
  }
  
@@ -3356,22 +3356,19 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
      *D2_CHCR = D_CHCR_STR;
      DRAW_NODE_MODEL(&model_load_shown, local, menu_draw_color);
      if ((menu_buttons & PAD_CROSS) && menu_input_enabled != 0) {
-@@ -3592,6 +3610,7 @@ static void Menu_UpdateEquip(void) {
-     } else if (equip_group_shown < 0) {
-         equip_group_shown = 10;
-     }
-+    equip_group_shown = WeaponSets_TrackEquip(equip_list_shown[0], equip_group_shown); /* PC: the weapon sets mod */
-     index = CURRENT_ITEM->item_number - bases.first_item[CURRENT_ITEM->group];
-     if (CURRENT_ITEM->group == 0) {
-         D_00446E30 = weapon_level_records[index].level_index + 1;
-@@ -3601,10 +3620,11 @@ static void Menu_UpdateEquip(void) {
-     for (i = 0; i < equip_part_count; i++) {
+@@ -3574,6 +3592,7 @@ static void Menu_UpdateEquip(void) {
+     {
+     void *definition;
+     SpritePacket *parts;
++    menu_buttons = HandsPut_Buttons(menu_buttons); /* PC: the hands mod's "Put in" box takes them while it is up */
+     if ((menu_buttons & PAD_UP) && equip_model_shown != 0 && menu_input_enabled != 0 && worn_model_loading == 0) {
+         EQUIP_LIST = EQUIP_LIST->next;
+         ((void (*)(s32))Menu_ShiftEquipModelsNextList)(0); // match: called with the number alone
+@@ -3602,9 +3621,9 @@ static void Menu_UpdateEquip(void) {
          kind = equip_parts[i].handler_index;
          SET_BLEND(equip_parts[i].blend_mode);
--        if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number)) {
+         if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number)) {
 -            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
-+        if (WeaponSets_ShownIsEquipped(equip_list_shown[0], CURRENT_ITEM, /* PC: the weapon sets mod */
-+                                       Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number))) {
 +            MenuSprite_Draw((sptr)&equip_parts[i], kind + 1000, 0, (int)screen_part_alphas[i]);
          } else {
 -            MenuSprite_Draw((int)&equip_parts[i], kind + 1000, 1, (int)screen_part_alphas[i]);
@@ -3379,7 +3376,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
          }
          SET_BLEND(0);
      }
-@@ -3827,7 +3847,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3827,7 +3846,7 @@ static void Menu_UpdateEquip(void) {
                  detail_panel_sound_pending = 0;
                  for (i = 0; i < equip_s_part_count; i++) {
                      SET_BLEND(equip_s_parts[i].blend_mode);
@@ -3388,7 +3385,13 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
                      SET_BLEND(0);
                  }
                  MenuText_SetColor(panel_text_color);
-@@ -3967,7 +3987,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3962,12 +3981,13 @@ static void Menu_UpdateEquip(void) {
+         MenuText_SetColor(menu_draw_color);
+         ((int (*)(KindObject *))MenuDraw_Word)((KindObject *)&sprite); // match: the result register stays taken
+     }
++    HandsPut_Draw(); /* PC: the hands mod's "Put in" box, over the item */
+     if (equipped_list_open != 0) {
+         MenuDraw_SetGsRegister(0x47, 0x30000);
          word.raw = 0x000A87507AF07D00;
          for (i = 0; i < equip_s_part_count; i++) {
              SET_BLEND(equip_s_parts[i].blend_mode);
@@ -3402,8 +3405,8 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..22a792a8d3942533c6f00a127b9085a4
          f32 unused_pair[32];
  
 -        if (*equipped_item_refs[EQUIP_LIST->group] != *equip_list_refs[EQUIP_LIST->group]) {
-+        if (WeaponSets_Choose(equip_list_shown[0], CURRENT_ITEM)) {
-+            /* PC: Weapon 2 or Shield 2 of the weapon sets mod: kept by the mod for the swap, not worn */
++        if (Hands_Choose(equip_list_shown[0], CURRENT_ITEM)) {
++            /* PC: a slot of the hands mod not in hand: the item kept there, not worn */
 +        } else if (*equipped_item_refs[EQUIP_LIST->group] != *equip_list_refs[EQUIP_LIST->group]) {
              Sound_PlayMenu(0);
              if (weapon_defs[player_state.weapon].action_handler_index == 2 && EQUIP_LIST->group == 0
