@@ -53,7 +53,7 @@
 #include "port/antialias.h"
 #include "port/audio.h"
 #include "port/automap.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 #include "port/controls.h"
 #include "port/twin_stick.h"
 #include "port/host.h"
@@ -446,7 +446,7 @@ void port_settings_load(void) {
     s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
-    port_weapon_sets_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the weapon sets mod */
+    port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
     overlay = cJSON_GetObjectItemCaseSensitive(document, "overlay");
     s->pause_when_open = read_bool(overlay, "pause_when_open", s->pause_when_open);
     s->show_fps = read_bool(overlay, "show_fps", s->show_fps);
@@ -692,7 +692,7 @@ void port_settings_save(void) {
     put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
-    port_weapon_sets_settings_write(section("mods")); /* the weapon sets mod */
+    port_hands_settings_write(section("mods")); /* the hands mod */
     overlay = section("overlay");
     put(overlay, "pause_when_open", cJSON_CreateBool(s->pause_when_open));
     put(overlay, "show_fps", cJSON_CreateBool(s->show_fps));

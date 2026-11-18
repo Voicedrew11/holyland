@@ -38,7 +38,7 @@ extern "C" {
 #include "port/adaptive_sync.h"
 #include "port/audio.h"
 #include "port/automap.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 #include "port/cheats.h"
 #include "port/controls.h"
 #include "port/twin_stick.h"
@@ -1200,7 +1200,7 @@ void gameplay_page() {
                  "still flashes red, rumbles and knocks you back. Applies at once. (--no-hit-jolt)");
     port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
     automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
-    weapon_sets_view_mods_section(); // the weapon sets mod (port/overlay/weapon_sets_view.cpp)
+    hands_view_mods_section(); // the hands mod (port/overlay/hands_view.cpp)
 }
 
 // ---- Developer -----------------------------------------------------------------------------------
@@ -1694,8 +1694,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 extern "C" int port_overlay_visible(void) {
     return ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
-                     automap_view_visible() ||
-                     weapon_sets_view_visible() || profiler_visible());
+                     automap_view_visible() || profiler_visible());
 }
 
 extern "C" void *port_overlay_draw_data(void) {
@@ -1781,7 +1780,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         pad_quiet = held;
     }
     automap_view_draw(x, y, width, height); // the automap mod, under the overlay's windows
-    weapon_sets_view_draw(x, y, width, height); // the weapon sets mod (port/overlay/weapon_sets_view.cpp)
     draw_toast();
     draw_building();
     port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)

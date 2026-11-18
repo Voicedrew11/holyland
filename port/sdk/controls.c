@@ -60,7 +60,7 @@
 #include "port/quicksave.h"
 #include "port/settings.h"
 #include "port/stats.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL.h>
@@ -142,8 +142,27 @@ static const struct {
     [ACTION_SHOW_FPS] = {"show_fps", "Show / hide the frame rate", 0},
     [ACTION_STATS_PANEL] = {"stats_panel", "Show / hide the stats panel (mod)", 0},
     [ACTION_MAP] = {"map", "Map (the automap mod)", 0},
-    [ACTION_WEAPON_SWAP] = {"weapon_swap", "Swap weapon sets (mod)", 0},
+    [ACTION_WEAPON_SWAP] = {"weapon_swap", "Swap weapon (hands mod)", 0},
+    [ACTION_SPELL_SWAP] = {"spell_swap", "Swap spell (hands mod)", 0},
+    [ACTION_HOTKEY_NEXT] = {"hotkey_next", "Next hotkey (hands mod)", 0},
+    [ACTION_HOTKEY_PREVIOUS] = {"hotkey_previous", "Previous hotkey (hands mod)", 0},
 };
+
+/* The hands mod's key of the action, -1 none */
+static int hands_key_of(int action) {
+    switch (action) {
+    case ACTION_WEAPON_SWAP:
+        return HANDS_KEY_WEAPON;
+    case ACTION_SPELL_SWAP:
+        return HANDS_KEY_SPELL;
+    case ACTION_HOTKEY_NEXT:
+        return HANDS_KEY_HOTKEY_NEXT;
+    case ACTION_HOTKEY_PREVIOUS:
+        return HANDS_KEY_HOTKEY_PREVIOUS;
+    default:
+        return -1;
+    }
+}
 
 const char *port_controls_action_label(int action) {
     return action >= 0 && action < ACTION_COUNT ? actions[action].label : "?";
@@ -166,8 +185,8 @@ int port_controls_action_used(int layout, int action) {
     if (action == ACTION_MAP) {
         return port_automap.enabled;
     }
-    if (action == ACTION_WEAPON_SWAP) {
-        return port_weapon_sets.enabled;
+    if (hands_key_of(action) >= 0) {
+        return port_hands.enabled;
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -223,7 +242,10 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_SHOW_FPS] = {KEY(F3)},
         [ACTION_STATS_PANEL] = {KEY(F6)},
         [ACTION_MAP] = {KEY(M)},
-        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(RIGHTSTICK)},
+        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(DPAD_RIGHT)},
+        [ACTION_SPELL_SWAP] = {KEY(T), 0, PAD(DPAD_LEFT)},
+        [ACTION_HOTKEY_NEXT] = {KEY(G), 0, PAD(DPAD_DOWN)},
+        [ACTION_HOTKEY_PREVIOUS] = {0, 0, PAD(DPAD_UP)},
     },
     [CONTROLS_VERDITE] = {
         [ACTION_UP] = {KEY(W), KEY(UP), PAD(DPAD_UP)},
@@ -255,7 +277,10 @@ static const int default_bindings[CONTROLS_LAYOUTS][ACTION_COUNT][BINDING_SLOTS]
         [ACTION_SHOW_FPS] = {KEY(F3)},
         [ACTION_STATS_PANEL] = {KEY(F6)},
         [ACTION_MAP] = {KEY(M)},
-        [ACTION_WEAPON_SWAP] = {KEY(R), 0, PAD(RIGHTSTICK)},
+        [ACTION_WEAPON_SWAP] = {KEY(1), KEY(R), PAD(DPAD_RIGHT)},
+        [ACTION_SPELL_SWAP] = {KEY(2), 0, PAD(DPAD_LEFT)},
+        [ACTION_HOTKEY_NEXT] = {KEY(3), 0, PAD(DPAD_DOWN)},
+        [ACTION_HOTKEY_PREVIOUS] = {0, 0, PAD(DPAD_UP)},
     },
 };
 /* Verdite's mouse outside play: left cross, right circle, middle cross */
@@ -993,6 +1018,37 @@ static void feed_menu_pointer(int pointing, unsigned int mouse) {
     previous_y = y;
 }
 
+/* The controller buttons bound to the hands mod's keys in the layout */
+typedef struct {
+    int count;
+    int binding[HANDS_KEY_COUNT];
+} HandsPadBindings;
+
+static HandsPadBindings hands_pad_bindings(void) {
+    HandsPadBindings list = {0, {0}};
+    int action;
+    int binding;
+
+    for (action = 0; action < ACTION_COUNT; action++) {
+        binding = bindings[pc.layout][action][BINDING_PAD_SLOT];
+        if (hands_key_of(action) >= 0 && BINDING_KIND(binding) >= BINDING_PAD && list.count < HANDS_KEY_COUNT) {
+            list.binding[list.count++] = binding;
+        }
+    }
+    return list;
+}
+
+static int binding_listed(HandsPadBindings list, int binding) {
+    int i;
+
+    for (i = 0; i < list.count; i++) {
+        if (list.binding[i] == binding) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Once a vblank: the keyboard, mouse and controller into libpad's buttons and the sticks' keys */
 void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller) {
     SDL_GameController *controller = sdl_controller;
@@ -1011,6 +1067,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     int dx = 0;
     int dy = 0;
     int gameplay = verdite && in_gameplay();
+    HandsPadBindings hands_pad;
     int action;
     int slot;
     int bit;
@@ -1075,10 +1132,17 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         }
     }
 
+    hands_pad = hands_pad_bindings();
     for (action = 0; action < ACTION_COUNT; action++) {
         for (slot = 0; slot < BINDING_SLOTS; slot++) {
             int binding = bindings[pc.layout][action][slot];
 
+            /* the hands mod: a controller button of a hand's (the d-pad) is the hand's in play and the game's
+               elsewhere (the menus' cursor) */
+            if (port_hands.enabled && BINDING_KIND(binding) >= BINDING_PAD && binding_listed(hands_pad, binding) &&
+                (hands_key_of(action) >= 0) != (in_gameplay() != 0)) {
+                continue;
+            }
             if (binding_down(binding, keys, mouse, controller)) {
                 if (BINDING_KIND(binding) >= BINDING_PAD) {
                     held_pad |= (uint64_t)1 << action;
@@ -1155,9 +1219,13 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_STATS_PANEL & 1u) {
         port_stats_toggle_panel();
     }
-    if (edges >> ACTION_WEAPON_SWAP & 1u) {
-        port_pad_record_event("weapon_swap", 0);
-        port_weapon_sets_key(); /* the weapon sets mod: taken in play by game/weapon_sets.c */
+    for (action = 0; action < ACTION_COUNT; action++) {
+        int key = hands_key_of(action);
+
+        if (key >= 0 && (edges >> action & 1u)) {
+            port_pad_record_event(port_hands_event_name(key), 0);
+            port_hands_key(key); /* the hands mod: taken by game/hands.c */
+        }
     }
     if (verdite && (edges >> ACTION_CAPTURE_MOUSE & 1u)) {
         if (gameplay) {

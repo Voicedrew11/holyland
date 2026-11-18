@@ -35,7 +35,7 @@
 
 #include "libmc.h"
 #include "port/automap.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -370,7 +370,7 @@ int sceMcOpen(int port, int slot, const char *name, int mode) {
     }
     files[fd].writable = (mode & MC_RDWR) != MC_RDONLY;
     port_automap_card_file(name, files[fd].writable); /* the automap mod: its state kept per save */
-    port_weapon_sets_card_file(name, files[fd].writable); /* the weapon sets mod: set 2 kept per save */
+    port_hands_card_file(name, files[fd].writable); /* the hands mod: the hands kept per save */
     return start_call(MC_FUNC_OPEN, fd);
 }
 

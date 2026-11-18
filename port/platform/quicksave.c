@@ -36,7 +36,7 @@
 
 #include "port/platform.h"
 #include "port/automap.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 #include "port/quicksave.h"
 #include "port/settings.h"
 
@@ -452,7 +452,7 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         return 0;
     }
     port_automap_quick_saved(path); /* the automap mod: the explored maps kept with the save */
-    port_weapon_sets_quick_saved(path); /* the weapon sets mod: set 2 kept with the save */
+    port_hands_quick_saved(path); /* the hands mod: the hands kept with the save */
     port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
                "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
                stamped.rotation[1], stamped.rotation[0], stamped.hp, stamped.mp, stamped.neighbour_map & 0xFFFF,
@@ -477,7 +477,7 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info) {
     }
     expected = *info;
     port_automap_quick_loading(path); /* the automap mod: the save's explored maps brought back */
-    port_weapon_sets_quick_loading(path); /* the weapon sets mod: the save's set 2 brought back */
+    port_hands_quick_loading(path); /* the hands mod: the save's hands brought back */
     return image;
 }
 

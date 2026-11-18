@@ -26,10 +26,11 @@
    ts= is whether twin-stick shaped the sticks (port_twin_stick_on), run= whether the separate run key
    was held (left out when the separate run mod did not apply: the action button runs), and
        <vblank> look <yaw> <pitch>       the mouse's turn one port_mouse_look call gave (C99 hex floats)
-       <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, game_save, game_load
+       <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, spell_swap, hotkey_next,
+                                         hotkey_previous (the hands mod), game_save, game_load
    A recording is the game's input per vblank, not per picture: it replays the same whatever the frame
    rate, headless or in a window, from the same start (the same --clock, --quick-load or memory card,
-   and the data folder's settings, quick saves, automap and weapon sets as they were). */
+   and the data folder's settings, quick saves, automap and hands as they were). */
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +48,7 @@
 #include "port/platform.h"
 #include "port/quicksave.h"
 #include "port/savestate.h"
-#include "port/weapon_sets.h"
+#include "port/hands.h"
 
 #define BUTTON_SELECT 0x0001
 #define BUTTON_L3 0x0002
@@ -99,7 +100,7 @@ static int script_lines;
 
 /* A recording's mouse turns and PC keys (look and event lines), in their order */
 #define REPLAY_LOOK 0
-#define REPLAY_WEAPON_SWAP 1
+#define REPLAY_HANDS 1 /* a hand key: the item's slot is the HandsKey */
 #define REPLAY_GAME_SAVE 2
 #define REPLAY_GAME_LOAD 3
 
@@ -257,14 +258,15 @@ static void load_item(const ScriptLine *line, const char *word, const char *path
         if (a == NULL) {
             PORT_FATAL("%s:%d: an event wants a name", path, line_number);
         }
-        item.kind = strcmp(a, "weapon_swap") == 0 ? REPLAY_WEAPON_SWAP
-                    : strcmp(a, "game_save") == 0 ? REPLAY_GAME_SAVE
-                    : strcmp(a, "game_load") == 0 ? REPLAY_GAME_LOAD
-                                                  : -1;
+        item.kind = strcmp(a, "game_save") == 0 ? REPLAY_GAME_SAVE : strcmp(a, "game_load") == 0 ? REPLAY_GAME_LOAD : -1;
+        item.slot = b != NULL ? (int)strtol(b, NULL, 0) : 0;
+        if (item.kind < 0) {
+            item.slot = port_hands_event_key(a);
+            item.kind = item.slot >= 0 ? REPLAY_HANDS : -1;
+        }
         if (item.kind < 0) {
             PORT_FATAL("%s:%d: no event called %s", path, line_number, a);
         }
-        item.slot = b != NULL ? (int)strtol(b, NULL, 0) : 0;
         list = &events;
         count = &event_count;
     }
@@ -448,8 +450,8 @@ static void replay_events(void) {
     while (event_next < event_count && events[event_next].vblank <= vblank) {
         const ReplayItem *item = &events[event_next++];
 
-        if (item->kind == REPLAY_WEAPON_SWAP) {
-            port_weapon_sets_key();
+        if (item->kind == REPLAY_HANDS) {
+            port_hands_key((HandsKey)item->slot);
         } else if (item->kind == REPLAY_GAME_SAVE) {
             port_quick_request_save(item->slot);
         } else if (item->kind == REPLAY_GAME_LOAD) {
@@ -531,7 +533,7 @@ void port_pad_init(void) {
             PORT_FATAL("cannot write the pad script %s", port_options.record_input);
         }
         fprintf(record_file, "# recorded with --record-input; play it back with --input (and the same --clock, card, --quick-load\n"
-                             "# and data folder: settings, quick saves, automap, weapon sets)\n");
+                             "# and data folder: settings, quick saves, automap, hands)\n");
         atexit(record_close);
     }
     port_controls_init(port_options.controls);

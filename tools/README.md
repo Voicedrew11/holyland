@@ -41,7 +41,7 @@ ecord_input.bat [kf4.exe] [disc]` instead (or double-clicks it,
 with `KF4_EXE` and `KF4_DISC` set, or `kf4.exe` beside it): the same recording.
 
 **record** copies what the run starts from out of the data folder into `REC/start` (`settings.json`,
-`overlay.ini`, `quicksaves/`, `automap/`, `weapon_sets/`, `memcard/`; nothing in the data folder is changed), then
+`overlay.ini`, `quicksaves/`, `automap/`, `hands/`, `weapon_sets/`, `memcard/`; nothing in the data folder is changed), then
 starts the game in its window with the player's settings, `--clock 2026-01-01T12:00:00`, the newest quick save
 loaded by itself (`--quick-load`; `--quick FILE` another, `--quick none` the title and the memory card) and
 `--record-input REC/input.pad`. The player plays as usual, presses F8 when the thing shows (the F8 pictures go
