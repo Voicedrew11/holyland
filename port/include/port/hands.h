@@ -126,18 +126,7 @@ void port_hands_quick_loading(const char *path);           /* quicksave.c: one i
 void port_hands_title(void);                               /* (game) the title screen: the next game may be a new one */
 int port_hands_new_game(void);                             /* (game, the first frame in play after the title) 1: a new game */
 
-/* ---- The cross's count (game/hands_cross.c fills it, port/overlay/hands_view.cpp draws) ----------------------- */
-typedef struct {
-    unsigned long long vblank; /* the last vblank the cross was drawn (0: never) */
-    float alpha;               /* its fade, 0 to 1 */
-    int count;                 /* the hotkey's items carried, -1 none to show (a spell, an empty hotkey) */
-    float count_x, count_y;    /* the count's bottom right corner, in the HUD's 640 x 448 */
-} PortHandsCross;
-extern PortHandsCross port_hands_cross;
-
 /* the overlay's side (port/overlay/hands_view.cpp, called by port/overlay/overlay.cpp) */
-int hands_view_visible(void);
-void hands_view_draw(int x, int y, int width, int height);
 void hands_view_mods_section(void);
 
 #ifdef __cplusplus

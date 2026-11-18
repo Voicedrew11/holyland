@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "common.h"
+#include "gfx/texture.h"
 #include "item/item.h"
 #include "map/map.h"
 #include "player/player.h"
@@ -41,6 +42,9 @@ extern int packet_buffers_size;
 u32 *Packet_Alloc(int quadwords);
 void Packet_AppendToChain(u32 *packet, u32 *packet_end);
 void GsDraw_QueueFlush(void);
+void TextureTable_QueueAll(TextureTableHeader *table);
+extern sptr menu_heap;
+sptr Message_GetFontTexture(sptr font_base); /* ui/message.c: font.tmr, the game's font */
 void Widescreen_Mark(int what);
 
 /* ---- The layout, in the HUD's 640 x 448 (Hud_InitSprite: x + 1728, y + 1824 in GS pixels) ---------------- */
@@ -67,7 +71,8 @@ static const HandKind card_hands[CARD_COUNT] = {
 #define FADED 0.25f        /* a quarter */
 #define PULSE_VBLANKS 9    /* a changed card pulses for 150 ms */
 #define FLASH_VBLANKS 15   /* a refused one flashes for 250 ms */
-#define INSIDE_ALPHA 0x50  /* a card's dark inside, of the cross's alpha (0x80 opaque): about 60% */
+#define INSIDE_ALPHA 0x68  /* a card's dark inside, of the cross's alpha (0x80 opaque): about 80%, so lava and
+                              torchlight behind it do not show through as colour */
 
 /* ---- The pictures --------------------------------------------------------------------------------------- */
 #define PICTURE_W 128 /* the model's 256 x 128 at half size */
@@ -224,6 +229,7 @@ static void update_pictures(void) {
 /* ---- The GIF data -------------------------------------------------------------------------------------------- */
 #define GS_PRIM 0x00
 #define GS_RGBAQ 0x01
+#define GS_ST 0x02
 #define GS_UV 0x03
 #define GS_XYZ2 0x05
 #define GS_TEX0_1 0x06
@@ -388,8 +394,6 @@ static void draw_card_frame(Gif *g, int card, float alpha) {
     gif_piece(g, mirrored(edge_top, 0, 1), ix0, iy1, ix1, b.y1, stone);
     gif_piece(g, mirrored(edge_side, 1, 0), b.x0, iy0, ix0, iy1, stone);
     gif_piece(g, edge_side, ix1, iy0, b.x1, iy1, stone);
-    /* the bar's dark outline, which its sides leave out (they reach the picture's edge) */
-    gif_frame(g, b.x0, b.y0, b.x1, b.y1, rgba(0, 0, 0, a * 3 / 4));
     if (flash > 0.0f) {
         /* over the gold line, the inner third of the edge */
         float in = EDGE_PX / 3.0f;
@@ -430,21 +434,72 @@ static void draw_card_picture(Gif *g, int card, float alpha) {
 }
 
 /* the quadwords the cross's packet can take at most: the frames, and the pictures with their registers */
-/* each card's frame: 9 pieces of 6 registers, the outline and the flash's two frames of 4 rectangles of 4 */
+/* each card's frame: its inside and 8 pieces, 6 registers each at most, and the flash's two frames of 4 rectangles
+   of 4 */
 #define FRAME_QUADWORDS (CARD_COUNT * (9 * 6 + 3 * 4 * 4) + 16)
 #define PICTURE_QUADWORDS (PICTURE_W * PICTURE_H * 4 / 16 + 16)
-#define CROSS_QUADWORDS (FRAME_QUADWORDS + CARD_COUNT * PICTURE_QUADWORDS + 8)
+#define CROSS_QUADWORDS (FRAME_QUADWORDS + CARD_COUNT * PICTURE_QUADWORDS + COUNT_QUADWORDS + 8)
 
-static void note_count(float alpha) {
-    PortHandsCross *c = &port_hands_cross;
-    int value = port_hands_state.hands[HAND_HOTKEY].slots[port_hands_state.hands[HAND_HOTKEY].out];
-    Box b = card_box(CARD_HOTKEY);
+/* ---- The count: the hotkey's items carried, in the game's own font (ui/message.c, Message_DrawGlyph) ---------- */
+/* font.tmr's second page, where its half-width glyphs are: 10 x 20 texels each, 50 a row from t 460 of 512 */
+#define FONT_TEX0 0x4007FC2665423B40ull
+#define GLYPH_W 10
+#define GLYPH_H 20
+#define GLYPH_COLUMNS 50
+#define GLYPH_TOP 460
+#define FONT_SIZE 512.0f
+#define COUNT_DIGITS 4
+/* glyphs and their shadows, 6 registers each, and the registers round them */
+#define COUNT_QUADWORDS (2 * COUNT_DIGITS * 6 + 8)
 
-    c->vblank = port_vblank_count();
-    c->alpha = alpha;
-    c->count = HOTKEY_TYPE(value) == HOTKEY_ITEM ? item_counts[HOTKEY_NUMBER(value)] : -1;
-    c->count_x = b.x1 - EDGE_PX - 2.0f;
-    c->count_y = b.y1 - EDGE_PX - 1.0f;
+/* the hotkey's count, -1 none to show (a spell, an empty hotkey) */
+static int hotkey_count(void) {
+    const Hand *hand = &port_hands_state.hands[HAND_HOTKEY];
+    int value = hand->slots[hand->out];
+
+    return HOTKEY_TYPE(value) == HOTKEY_ITEM ? item_counts[HOTKEY_NUMBER(value)] : -1;
+}
+
+/* one half-width glyph of the font (an ASCII character) with its top left at x, y (FONT_TEX0 set) */
+static void gif_glyph(Gif *g, char c, float x, float y, u64 colour) {
+    int index = c - 0x20;
+    float s0 = (float)(index % GLYPH_COLUMNS * GLYPH_W) / FONT_SIZE;
+    float t0 = (float)(GLYPH_TOP + index / GLYPH_COLUMNS * GLYPH_H) / FONT_SIZE;
+    float s1 = s0 + GLYPH_W / FONT_SIZE, t1 = t0 + GLYPH_H / FONT_SIZE;
+    union {
+        float f;
+        u32 u;
+    } a, b;
+
+    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE); /* ST, as the game's text */
+    gif_ad(g, GS_RGBAQ, colour);
+    a.f = s0, b.f = t0;
+    gif_ad(g, GS_ST, (u64)a.u | (u64)b.u << 32);
+    gif_ad(g, GS_XYZ2, xyz(x, y));
+    a.f = s1, b.f = t1;
+    gif_ad(g, GS_ST, (u64)a.u | (u64)b.u << 32);
+    gif_ad(g, GS_XYZ2, xyz(x + GLYPH_W, y + GLYPH_H));
+}
+
+/* The count at the bottom right inside the hotkey's card, white with a dark shadow as over the scene. The font is
+   in GS memory (Hands_DrawCross queued it). */
+static void draw_count(Gif *g, int count, float alpha) {
+    Box b = drawn_box(CARD_HOTKEY);
+    char digits[COUNT_DIGITS + 1];
+    int a = (int)(0x80 * alpha);
+    int n = snprintf(digits, sizeof(digits), "%d", count);
+    float x = b.x1 - EDGE_PX - 1.0f - (float)(n * GLYPH_W);
+    float y = b.y1 - EDGE_PX - (float)GLYPH_H; /* the digits reach the cell's bottom: clear of the gold line */
+    int i;
+
+    gif_ad(g, GS_TEXFLUSH, 0);
+    gif_ad(g, GS_TEX0_1, FONT_TEX0);
+    gif_ad(g, GS_TEX1_1, 0); /* as the game's text */
+    gif_ad(g, GS_CLAMP_1, 0);
+    for (i = 0; i < n; i++) {
+        gif_glyph(g, digits[i], x + (float)(i * GLYPH_W) + 1.0f, y + 1.0f, rgba(0, 0, 0, a * 3 / 4));
+        gif_glyph(g, digits[i], x + (float)(i * GLYPH_W), y, rgba(0x80, 0x80, 0x80, a));
+    }
 }
 
 void Hands_DrawCross(void) {
@@ -453,6 +508,7 @@ void Hands_DrawCross(void) {
     float alpha;
     int quadwords;
     int card;
+    int count;
 
     if (!port_hands.enabled || game_options[9] == 0 || map_draw_state.hud_shown == 0) {
         return;
@@ -463,8 +519,14 @@ void Hands_DrawCross(void) {
         return;
     }
     alpha = cross_alpha();
+    count = hotkey_count();
     Widescreen_Mark(PORT_WIDESCREEN_HUD_LEFT);
     GsDraw_QueueFlush(); /* the VU1's own GIF packets out before ours (as TextureTable_QueueAll does) */
+    if (count >= 0) {
+        /* the font to GS memory, as Message_Draw sends it: its page (0x3B40) and CLUTs (0x3FE0) are clear of
+           gage.tx2 and the pictures (0x3640), and the game's text sends it again before drawing from it */
+        TextureTable_QueueAll((TextureTableHeader *)Message_GetFontTexture(menu_heap));
+    }
     /* a DMA tag, a quadword of VIF codes (NOP, NOP, NOP, DIRECT: as the game's own packets, the VIF codes in the data),
        the GIF data, and a quadword for the chain's next tag */
     start = Packet_Alloc(2 + CROSS_QUADWORDS + 1);
@@ -484,6 +546,9 @@ void Hands_DrawCross(void) {
     for (card = 0; card < CARD_COUNT; card++) {
         draw_card_picture(&g, card, alpha);
     }
+    if (count >= 0) {
+        draw_count(&g, count, alpha);
+    }
     gif_ad(&g, GS_CLAMP_1, 0);    /* as Hud_Draw leaves them */
     gif_ad(&g, GS_ALPHA_1, 0x48);
     g.tag[0] |= (u64)1 << 15; /* EOP */
@@ -497,5 +562,4 @@ void Hands_DrawCross(void) {
     start[7] = 0x50000000u | (u32)quadwords;        /* VIF DIRECT */
     Packet_AppendToChain(start, start + 8 + quadwords * 4);
     Widescreen_Mark(PORT_WIDESCREEN_3D);
-    note_count(alpha);
 }

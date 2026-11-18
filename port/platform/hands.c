@@ -20,7 +20,6 @@
 
 PortHandsOptions port_hands = {0, 0, 1};
 HandsState port_hands_state;
-PortHandsCross port_hands_cross = {0, 0.0f, -1, 0.0f, 0.0f};
 
 static unsigned long long pressed_at[HANDS_KEY_COUNT];
 static int started;
