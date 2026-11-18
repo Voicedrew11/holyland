@@ -39,7 +39,7 @@ jobs:
       - name: Install what SDL2's build needs
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libfuse2 libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+          sudo apt-get install -y ninja-build cmake libfuse2 desktop-file-utils libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxfixes-dev libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev \
             libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
       - name: The version
