@@ -10,6 +10,7 @@
 #include "launcher_files.h"
 
 extern "C" {
+#include "port/disc_image.h"
 #include "port/iso9660.h"
 }
 
@@ -51,6 +52,10 @@ struct FileCloser {
     void operator()(FILE *f) const { std::fclose(f); }
 };
 
+struct ImageCloser {
+    void operator()(DiscImage *image) const { disc_image_close(image); }
+};
+
 struct IsoListing {
     std::uint32_t system_cnf_lsn = 0;
     std::uint32_t system_cnf_size = 0;
@@ -71,18 +76,27 @@ void note_file(void *context, const char *path, std::uint32_t lsn, std::uint32_t
 }
 
 DiscCheck check_image(const fs::path &path) {
-    std::unique_ptr<FILE, FileCloser> image(open_file(path, "rb"));
-    if (!image)
+    FILE *file = open_file(path, "rb");
+    if (file == nullptr)
         return {DiscVerdict::unreadable, "The disc image cannot be opened.", {}};
+    DiscImage *opened = nullptr;
+    DiscImageResult result = disc_image_open(file, &opened); // (owns the file from here)
+    if (result != DISC_IMAGE_OK) {
+        std::string why = disc_image_result_text(result);
+        why[0] = (char)std::toupper((unsigned char)why[0]);
+        return {DiscVerdict::unreadable, why + ".", {}};
+    }
+    std::unique_ptr<DiscImage, ImageCloser> image(opened);
     IsoListing listing;
     if (iso9660_list(image.get(), nullptr, note_file, &listing) != ISO9660_OK)
         return {DiscVerdict::unreadable,
-                "This file is not a disc image the game can read. Use an ISO image (.iso) of the disc.", {}};
+                "This file is not a disc image the game can read. Use an ISO (.iso) or CHD (.chd) image of the disc.",
+                {}};
     std::string system_cnf;
     if (listing.has_system_cnf && listing.system_cnf_size <= kMaxSystemCnf) {
         std::uint32_t sectors = (listing.system_cnf_size + ISO9660_SECTOR_SIZE - 1) / ISO9660_SECTOR_SIZE;
         std::string buffer((std::size_t)(sectors ? sectors : 1) * ISO9660_SECTOR_SIZE, '\0');
-        if (iso9660_read(image.get(), listing.system_cnf_lsn, sectors, buffer.data()))
+        if (disc_image_read(image.get(), listing.system_cnf_lsn, sectors, buffer.data()))
             system_cnf = buffer.substr(0, listing.system_cnf_size);
     }
     return judge_disc(system_cnf, listing.has_kf4_dat);

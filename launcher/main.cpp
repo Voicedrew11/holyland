@@ -21,7 +21,7 @@ namespace {
 void usage() {
     std::printf("%s [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]\n"
                 "  --launcher    show the launcher (disc, rebuild, update checks) instead of starting the game\n"
-                "  --disc PATH   the disc to play: an .iso, or an extracted disc's folder\n"
+                "  --disc PATH   the disc to play: an .iso or .chd, or an extracted disc's folder\n"
                 "  --build-only  build the game for this release if it is not built, with no window (tests, CI)\n"
                 "  --version     print the version\n"
                 "  -- ...        everything after is passed to the game (kf4 --help lists it)\n",

@@ -106,7 +106,16 @@ void test_disc_folder() {
     check("missing", check_disc(dir / "nothing.iso").verdict == DiscVerdict::missing);
     write(dir / "fake.iso", std::string(40000, 'x'));
     check("not an image", check_disc(dir / "fake.iso").verdict == DiscVerdict::unreadable);
+    write(dir / "fake.chd", "MComprHD" + std::string(40000, 'x'));
+    DiscCheck broken = check_disc(dir / "fake.chd");
+    check("a broken CHD says so", broken.verdict == DiscVerdict::unreadable && broken.message.find("CHD") != std::string::npos);
     fs::remove_all(dir);
+}
+
+// tests/data's CHD: a disc image with SYSTEM.CNF ("BOOT2", booting nothing) and DATA\KF4.DAT, read through it
+void test_disc_chd() {
+    DiscCheck chd = check_disc(fs::path(TEST_DATA_DIR) / "disc_dvd.chd");
+    check("a CHD is read: its files are found", chd.verdict == DiscVerdict::other_release);
 }
 
 void test_choices() {
@@ -301,6 +310,7 @@ int main() {
     test_ninja();
     test_disc_verdict();
     test_disc_folder();
+    test_disc_chd();
     test_choices();
     test_local_build();
     std::printf("%d/%d passed\n", checked - failed, checked);

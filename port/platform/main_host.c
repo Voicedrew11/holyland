@@ -1,8 +1,8 @@
 /* The PC program's entry: reads the command line, sets up the host side, then runs the game's own
    main.
 
-     kf4 --disc <image.iso or folder> [options]
-       --disc PATH       the user's own disc: an ISO image or the folder it was extracted to
+     kf4 --disc <image.iso, image.chd or folder> [options]
+       --disc PATH       the user's own disc: an ISO or CHD image, or the folder it was extracted to
                          (or KF4_DISC in the environment)
        --fast            do not hold the game to 59.94 vblanks a second
        --frames N        stop after N vblanks
@@ -272,7 +272,7 @@ static FILE *log_file;
 
 static void usage(const char *program) {
     fprintf(stderr,
-            "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
+            "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--saves DIR|none]\n"
@@ -721,7 +721,7 @@ static void parse_options(int argc, char **argv) {
         }
     }
     if (port_options.disc == NULL) {
-        fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso or folder> (or KF4_DISC)\n");
+        fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso, image.chd or folder> (or KF4_DISC)\n");
         usage(argv[0]);
     }
 }

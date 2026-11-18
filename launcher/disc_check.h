@@ -1,6 +1,6 @@
 // Is this the player's King's Field IV disc (docs/port/LAUNCHER.md, "The disc")? The same files the game
-// requires (port/platform/disc.c: SYSTEM.CNF and DATA\KF4.DAT), read from an .iso with the game's own
-// ISO 9660 reader (port/platform/iso9660.c) or from an extracted disc's folder, plus the release
+// requires (port/platform/disc.c: SYSTEM.CNF and DATA\KF4.DAT), read from an .iso or .chd with the game's own
+// readers (port/platform/disc_image.c, iso9660.c) or from an extracted disc's folder, plus the release
 // SYSTEM.CNF boots: the port is built from the USA release.
 #pragma once
 
@@ -24,7 +24,7 @@ struct DiscCheck {
     std::string boot;    // what SYSTEM.CNF boots ("SLUS_203.18"), when read
 };
 
-// An .iso, or a folder (or a file in it, such as its SYSTEM.CNF: the folder is meant)
+// An .iso or .chd (port/disc_image.h), or a folder (or a file in it, such as its SYSTEM.CNF: the folder is meant)
 DiscCheck check_disc(const std::filesystem::path &path);
 
 // The verdict from what was found on the disc: SYSTEM.CNF's text ("" when missing) and whether

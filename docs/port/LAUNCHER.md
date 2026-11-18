@@ -16,8 +16,8 @@ first start after the rename moves the old `holyland` data and local folders to 
 2. Starts the update check on a thread of its own (below).
 3. The disc: the one given (`--disc PATH` or a path alone), else the one chosen last time (`launcher.json`), else
    it asks: the system's file chooser (Windows: IFileOpenDialog; Linux: kdialog or zenity) or a typed path. The
-   disc is checked as the game checks it (`SYSTEM.CNF`, `DATA\KF4.DAT`, read with the game's own ISO 9660 reader,
-   `port/platform/iso9660.c`) and must boot `SLUS_203.18`, the USA release the decomp is of; a wrong disc says why.
+   disc is checked as the game checks it (`SYSTEM.CNF`, `DATA\KF4.DAT`, read with the game's own readers: an
+   `.iso` or `.chd` image through `port/platform/disc_image.c`, its files through `iso9660.c`) and must boot `SLUS_203.18`, the USA release the decomp is of; a wrong disc says why.
 4. The build key (`launcher/build_key.h`): SHA-256 of the version, `content/manifest.txt` and the tools' `ID`.
    No `builds/<key>/kf4` yet: the build runs with a progress window; a failure keeps the window up with the end of
    `build.log`, Try again, Copy the log.

@@ -1,6 +1,6 @@
 /* The disc (port/include/port/platform.h): the user's own copy, read by sector as the drive reads it.
 
-   An ISO 9660 image (.iso) is read as it is: its sector numbers are the disc's. An extracted disc (a
+   A disc image (port/disc_image.h: an .iso, or a .chd) is read as it is: its sector numbers are the disc's. An extracted disc (a
    folder holding SYSTEM.CNF, DATA\ and so on) has no sector numbers, so each of its files is given a
    run of sectors of its own, in path order; the game only ever reads a file through the sector
    sceCdSearchFile gave it (KF4.DAT's members are found by their offset from its first sector), so any
@@ -27,6 +27,7 @@
 #include <pthread.h>
 #endif
 
+#include "port/disc_image.h"
 #include "port/host.h"
 #include "port/iso9660.h"
 #include "port/platform.h"
@@ -41,7 +42,7 @@ typedef struct {
     int is_member;    /* a KF4.DAT member: in the names, never searched or read on its own */
 } DiscFile;
 
-static FILE *image;      /* an ISO image, or NULL for a folder */
+static DiscImage *image; /* a disc image, or NULL for a folder */
 static DiscFile *files;
 static int file_count;
 static int file_capacity;
@@ -81,29 +82,35 @@ static void add_file(const char *path, const char *host_path, uint32_t lsn, uint
 }
 
 static int read_image(uint32_t lsn, uint32_t sectors, void *buffer) {
-    return iso9660_read(image, lsn, sectors, buffer);
+    return disc_image_read(image, lsn, sectors, buffer);
 }
 
 static uint32_t le32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-/* ---- An ISO 9660 image ------------------------------------------------------------------------ */
+/* ---- A disc image ----------------------------------------------------------------------------- */
 static void add_image_file(void *context, const char *path, uint32_t lsn, uint32_t size) {
     (void)context;
     add_file(path, NULL, lsn, size, 0);
 }
 
-static void open_iso(const char *path) {
-    image = fopen(path, "rb");
-    if (image == NULL) {
+static void open_image(const char *path) {
+    FILE *file = fopen(path, "rb");
+    DiscImageResult opened;
+
+    if (file == NULL) {
         PORT_FATAL("cannot open the disc image %s", path);
+    }
+    opened = disc_image_open(file, &image);
+    if (opened != DISC_IMAGE_OK) {
+        PORT_FATAL("cannot read the disc image %s: %s", path, disc_image_result_text(opened));
     }
     switch (iso9660_list(image, &disc_sectors, add_image_file, NULL)) {
     case ISO9660_OK:
         break;
     case ISO9660_NOT_ISO:
-        PORT_FATAL("%s is not an ISO 9660 image", path);
+        PORT_FATAL("%s (%s) holds no ISO 9660 disc", path, disc_image_format(image));
     case ISO9660_BAD_DIRECTORY:
         PORT_FATAL("cannot read the directories of the disc image %s", path);
     }
@@ -250,14 +257,14 @@ void port_disc_open(const char *path) {
         walk_folder("", path, 0);
         disc_sectors = next_folder_lsn;
     } else {
-        open_iso(path);
+        open_image(path);
     }
     if (!port_disc_find("\\SYSTEM.CNF", NULL, NULL) || !port_disc_find("\\DATA\\KF4.DAT", NULL, NULL)) {
         PORT_FATAL("%s is not King's Field IV's disc (no SYSTEM.CNF or DATA\\KF4.DAT)", path);
     }
     list_archive();
     qsort(files, (size_t)file_count, sizeof(DiscFile), compare_lsn);
-    fprintf(stderr, "[disc] %s: %s, %d files and archive members\n", path, image ? "ISO image" : "folder",
+    fprintf(stderr, "[disc] %s: %s, %d files and archive members\n", path, image ? disc_image_format(image) : "folder",
             file_count);
 }
 

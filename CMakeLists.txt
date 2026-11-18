@@ -168,6 +168,7 @@ add_library(kf4_port STATIC
     port/platform/mouse_lead.c
     port/platform/screen_vblank.c
     port/platform/disc.c
+    port/platform/disc_image.c
     port/platform/iso9660.c
     port/platform/ipu.c
     port/platform/host_time.c
@@ -213,6 +214,9 @@ add_library(kf4_port STATIC
     port/audio/sdrdrv.c)
 target_include_directories(kf4_port PUBLIC port/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
+include(cmake/libchdr.cmake) # CHD disc images (port/platform/disc_image.c)
+kf4_add_libchdr(${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kf4_port PRIVATE kf4_chdr)
 # the plain GS types the PC renderer and the port share (port/gs/shared/gsn.h, gs_api.h includes it)
 target_include_directories(kf4_port PRIVATE port/gs/shared)
 # native draw's renderer core (port/include/port/render.h): the game's side hands it draws, the PC renderer
@@ -705,9 +709,12 @@ if(KF4_TESTS)
 endif()
 
 # An ISO 9660 image's files, as the game's disc reader and the launcher's disc check list them
-# (port/platform/iso9660.c): a small image made by the test, and broken ones
-add_executable(iso9660_test tests/iso9660_test.c port/platform/iso9660.c)
+# (port/platform/iso9660.c, through disc_image.c): a small image made by the test, broken ones, and the same
+# image as CHDs (tests/data/: a DVD's and a CD's, made with chdman)
+add_executable(iso9660_test tests/iso9660_test.c port/platform/iso9660.c port/platform/disc_image.c)
 target_include_directories(iso9660_test PRIVATE port/include)
+target_link_libraries(iso9660_test PRIVATE kf4_chdr)
+target_compile_definitions(iso9660_test PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 if(NOT WIN32)
     target_compile_options(iso9660_test PRIVATE -Wall -Wextra -Wshadow)
 endif()

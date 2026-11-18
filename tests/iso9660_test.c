@@ -1,11 +1,18 @@
-/* port/platform/iso9660.c: an image made here (SYSTEM.CNF, DATA\KF4.DAT) listed as the disc reader and the
-   launcher's disc check list it, and broken images refused without reading past what was read.
+/* port/platform/iso9660.c and disc_image.c: an image made here (SYSTEM.CNF, DATA\KF4.DAT) listed as the disc
+   reader and the launcher's disc check list it, broken images refused without reading past what was read, and
+   the same image as CHDs (tests/data/, made from `iso9660_test write disc.iso` with chdman, below).
 
-     iso9660_test */
+     iso9660_test
+     iso9660_test write PATH   writes the image made here, for the CHDs:
+       chdman createdvd -i disc.iso -o tests/data/disc_dvd.chd
+       chdman createcd -i disc_mode1.cue -o tests/data/disc_cd_mode1.chd   (TRACK 01 MODE1/2048, the .iso)
+       chdman createcd -i disc_mode2.cue -o tests/data/disc_cd_mode2.chd   (TRACK 01 MODE2/2352: a .bin of
+         Mode 2 Form 1 frames, the .iso's sectors at byte 24 of each, written by tests/data/make_mode2_bin.py) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "port/disc_image.h"
 #include "port/iso9660.h"
 
 static int failed, checked;
@@ -66,14 +73,19 @@ static void make_disc(void) {
     memcpy(disc + 20 * ISO9660_SECTOR_SIZE, "BOOT2", 5);
 }
 
-static FILE *image_of(const unsigned char *bytes, size_t size) {
+/* the bytes as an open disc image, or NULL */
+static DiscImage *image_of(const unsigned char *bytes, size_t size) {
     FILE *f = tmpfile();
+    DiscImage *image = NULL;
 
-    if (f != NULL && fwrite(bytes, 1, size, f) != size) {
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fwrite(bytes, 1, size, f) != size) {
         fclose(f);
         return NULL;
     }
-    return f;
+    return disc_image_open(f, &image) == DISC_IMAGE_OK ? image : NULL;
 }
 
 typedef struct {
@@ -93,37 +105,120 @@ static void visit(void *context, const char *path, uint32_t lsn, uint32_t size) 
     }
 }
 
-static Iso9660Result list(const unsigned char *bytes, size_t size, Listing *l, uint32_t *sectors) {
-    FILE *f = image_of(bytes, size);
-    Iso9660Result r;
-
+static Iso9660Result list_image(DiscImage *image, Listing *l, uint32_t *sectors) {
     memset(l, 0, sizeof(*l));
-    if (f == NULL) {
-        return ISO9660_NOT_ISO;
-    }
-    r = iso9660_list(f, sectors, visit, l);
-    fclose(f);
+    return image != NULL ? iso9660_list(image, sectors, visit, l) : ISO9660_NOT_ISO;
+}
+
+static Iso9660Result list(const unsigned char *bytes, size_t size, Listing *l, uint32_t *sectors) {
+    DiscImage *image = image_of(bytes, size);
+    Iso9660Result r = list_image(image, l, sectors);
+
+    disc_image_close(image);
     return r;
 }
 
-static void test_good(void) {
+/* the listing of make_disc's image, read from `image` */
+static void check_listing(const char *what, DiscImage *image) {
     Listing l;
     uint32_t sectors = 0;
     unsigned char buffer[ISO9660_SECTOR_SIZE];
-    FILE *f;
+    char name[96];
+
+    snprintf(name, sizeof(name), "%s: lists", what);
+    check(name, list_image(image, &l, &sectors) == ISO9660_OK);
+    snprintf(name, sizeof(name), "%s: the disc's size", what);
+    check(name, sectors == SECTORS);
+    snprintf(name, sizeof(name), "%s: the files", what);
+    check(name, l.count == 2 && strcmp(l.seen[0], "\\DATA\\KF4.DAT") == 0 && l.lsn[0] == 21 && l.size[0] == 3000 &&
+                    strcmp(l.seen[1], "\\SYSTEM.CNF") == 0 && l.lsn[1] == 20 && l.size[1] == 5);
+    snprintf(name, sizeof(name), "%s: reads a sector", what);
+    check(name, image != NULL && disc_image_read(image, 20, 1, buffer) && memcmp(buffer, "BOOT2", 5) == 0);
+    memset(buffer, 0xAA, sizeof(buffer));
+    snprintf(name, sizeof(name), "%s: past the end: zeros, nothing read", what);
+    check(name, image != NULL && !disc_image_read(image, 999, 1, buffer) && buffer[0] == 0 && buffer[2047] == 0);
+}
+
+static void test_good(void) {
+    DiscImage *image;
 
     make_disc();
-    check("lists", list(disc, sizeof(disc), &l, &sectors) == ISO9660_OK);
-    check("the disc's size", sectors == SECTORS);
-    check("two files", l.count == 2);
-    check("into folders, no version", strcmp(l.seen[0], "\\DATA\\KF4.DAT") == 0 && l.lsn[0] == 21 && l.size[0] == 3000);
-    check("root file", strcmp(l.seen[1], "\\SYSTEM.CNF") == 0 && l.lsn[1] == 20 && l.size[1] == 5);
-    f = image_of(disc, sizeof(disc));
-    check("reads a sector", f != NULL && iso9660_read(f, 20, 1, buffer) && memcmp(buffer, "BOOT2", 5) == 0);
-    check("past the end: zeros, nothing read", f != NULL && !iso9660_read(f, 999, 1, buffer) && buffer[0] == 0);
-    if (f != NULL) {
-        fclose(f);
+    image = image_of(disc, sizeof(disc));
+    check("an ISO image", image != NULL && strcmp(disc_image_format(image), "ISO image") == 0);
+    check_listing("ISO", image);
+    disc_image_close(image);
+}
+
+static DiscImage *open_data(const char *name) {
+    char path[1024];
+    FILE *f;
+    DiscImage *image = NULL;
+
+    snprintf(path, sizeof(path), "%s/%s", TEST_DATA_DIR, name);
+    f = fopen(path, "rb");
+    if (f == NULL || disc_image_open(f, &image) != DISC_IMAGE_OK) {
+        printf("     (%s: cannot open)\n", path);
+        return NULL;
     }
+    return image;
+}
+
+static void test_chd(void) {
+    static const struct {
+        const char *file, *format;
+    } chds[] = {
+        {"disc_dvd.chd", "CHD (DVD)"},
+        {"disc_cd_mode1.chd", "CHD (CD, MODE1)"},
+        {"disc_cd_mode2.chd", "CHD (CD, MODE2_RAW)"},
+    };
+    unsigned char bytes[4096];
+    size_t i, n = 0;
+    FILE *f;
+    DiscImage *image;
+
+    make_disc();
+    for (i = 0; i < sizeof(chds) / sizeof(chds[0]); i++) {
+        image = open_data(chds[i].file);
+        check(chds[i].format, image != NULL && strcmp(disc_image_format(image), chds[i].format) == 0);
+        check_listing(chds[i].file, image);
+        disc_image_close(image);
+    }
+
+    /* the DVD's CHD cut short: its header is there, its hunk map is not */
+    {
+        char path[1024];
+
+        snprintf(path, sizeof(path), "%s/disc_dvd.chd", TEST_DATA_DIR);
+        f = fopen(path, "rb");
+        if (f != NULL) {
+            n = fread(bytes, 1, 200, f);
+            fclose(f);
+        }
+    }
+    f = tmpfile();
+    image = (void *)1;
+    check("a CHD cut short is refused", f != NULL && fwrite(bytes, 1, n, f) == n && n == 200 &&
+                                             disc_image_open(f, &image) == DISC_IMAGE_BROKEN && image == NULL);
+
+    /* the magic, then nothing a CHD's header holds */
+    memset(bytes, 0, sizeof(bytes));
+    memcpy(bytes, "MComprHD", 8);
+    f = tmpfile();
+    image = (void *)1;
+    check("a CHD's magic alone is refused", f != NULL && fwrite(bytes, 1, sizeof(bytes), f) == sizeof(bytes) &&
+                                                 disc_image_open(f, &image) == DISC_IMAGE_BROKEN && image == NULL);
+}
+
+static int write_disc(const char *path) {
+    FILE *f = fopen(path, "wb");
+    int ok;
+
+    make_disc();
+    ok = f != NULL && fwrite(disc, 1, sizeof(disc), f) == sizeof(disc);
+    if (f != NULL) {
+        ok = fclose(f) == 0 && ok;
+    }
+    return ok ? 0 : 1;
 }
 
 static void test_broken(void) {
@@ -157,9 +252,13 @@ static void test_broken(void) {
     check("a directory loop ends", list(disc, sizeof(disc), &l, NULL) == ISO9660_OK);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "write") == 0) {
+        return write_disc(argv[2]);
+    }
     test_good();
     test_broken();
+    test_chd();
     printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;
 }

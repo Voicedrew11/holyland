@@ -1,6 +1,6 @@
 # Darker Reality, the launcher (launcher/product.h, docs/port/LAUNCHER.md): builds King's Field IV's PC port on the player's computer
 # from a release's source and tools, then plays it. Its own project: it needs neither the decomp nor the
-# game's build, only SDL2 and a few files the game shares with it (port/platform/data_dir.c, iso9660.c,
+# game's build, only SDL2 and a few files the game shares with it (port/platform/data_dir.c, disc_image.c (and third_party/libchdr), iso9660.c,
 # update_notice.c, third_party/imgui and cjson).
 #
 #   cd launcher && cmake --preset linux && cmake --build --preset linux && ctest --test-dir ../out/launcher-linux
@@ -25,6 +25,7 @@ endif()
 # What the launcher shares with the game, and its own parts that need no window: tested on their own
 add_library(launcher_core STATIC
     ${ROOT}/port/platform/data_dir.c
+    ${ROOT}/port/platform/disc_image.c
     ${ROOT}/port/platform/iso9660.c
     ${ROOT}/port/platform/update_notice.c
     ${ROOT}/third_party/cjson/cJSON.c
@@ -37,7 +38,9 @@ add_library(launcher_core STATIC
 target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson)
 target_compile_options(launcher_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${LAUNCHER_WARNINGS}>)
 find_package(Threads REQUIRED)
-target_link_libraries(launcher_core PUBLIC Threads::Threads)
+include(${ROOT}/cmake/libchdr.cmake) # CHD disc images (port/platform/disc_image.c)
+kf4_add_libchdr(${ROOT})
+target_link_libraries(launcher_core PUBLIC Threads::Threads kf4_chdr)
 
 # One file per system (platform.h); a new system is a new file and a line here
 if(WIN32)
@@ -92,6 +95,7 @@ if(LAUNCHER_TESTS)
     enable_testing()
     add_executable(launcher_test tests/launcher_test.cpp)
     target_link_libraries(launcher_test PRIVATE launcher_core)
+    target_compile_definitions(launcher_test PRIVATE TEST_DATA_DIR="${ROOT}/tests/data")
     target_compile_options(launcher_test PRIVATE ${LAUNCHER_WARNINGS})
     add_test(NAME launcher COMMAND launcher_test)
 endif()

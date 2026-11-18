@@ -283,7 +283,7 @@ public:
         IFileOpenDialog *dialog = nullptr;
         if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileOpenDialog,
                                        reinterpret_cast<void **>(&dialog)))) {
-            COMDLG_FILTERSPEC filters[] = {{L"King's Field IV disc (.iso, or an extracted disc's SYSTEM.CNF)", L"*.iso;SYSTEM.CNF"},
+            COMDLG_FILTERSPEC filters[] = {{L"King's Field IV disc (.iso, .chd, or an extracted disc's SYSTEM.CNF)", L"*.iso;*.chd;SYSTEM.CNF"},
                                            {L"All files", L"*.*"}};
             dialog->SetFileTypes(2, filters);
             dialog->SetTitle(L"Choose your King's Field IV disc");

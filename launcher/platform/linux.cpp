@@ -279,10 +279,10 @@ public:
         auto zenity = on_path("zenity");
         if (kdialog && (kde || !zenity))
             argv = {kdialog->string(), "--title", "Choose your King's Field IV disc", "--getopenfilename", home,
-                    "*.iso *.ISO SYSTEM.CNF|King's Field IV disc (.iso, or an extracted disc's SYSTEM.CNF)"};
+                    "*.iso *.ISO *.chd *.CHD SYSTEM.CNF|King's Field IV disc (.iso, .chd, or an extracted disc's SYSTEM.CNF)"};
         else if (zenity)
             argv = {zenity->string(), "--file-selection", "--title=Choose your King's Field IV disc",
-                    "--file-filter=King's Field IV disc | *.iso *.ISO SYSTEM.CNF", "--file-filter=All files | *"};
+                    "--file-filter=King's Field IV disc | *.iso *.ISO *.chd *.CHD SYSTEM.CNF", "--file-filter=All files | *"};
         else
             return std::nullopt;
         std::string why;
