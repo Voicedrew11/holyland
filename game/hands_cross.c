@@ -7,14 +7,17 @@
    picture is stored at half height). A card reads its model from the disc when what it shows changes and keeps
    the picture at half size, 128 x 64, 32 KB.
 
-   The drawing: after the game's HUD (Hud_Draw), in its packet chain, as one VIF DIRECT packet of GIF data: each
-   card's frame as flat sprites, then its picture sent to GS memory and drawn as a textured sprite. The pictures go
-   where the HUD's frame picture (gage.tx2) is, which the game sends again before it draws the HUD each frame; nothing
-   else draws from there. Each card's picture is sent there and drawn before the next card's is sent. GS context 1, as the HUD: alpha blending (Cs - Cd) * As + Cd and the HUD's test (no
-   Z written). Laid out in the HUD's 640 x 448 and marked as the HUD for --widescreen, so it moves with the HUD.
+   The drawing: after the game's HUD (Hud_Draw), in its packet chain, as one VIF DIRECT packet of GIF data, in two
+   passes. First every card's frame, cut from the HUD's own frame picture (gage.tx2, still in GS memory from
+   Hud_Draw): the stone and gold edge of its long bar for the sides and corners, the glow of its red orb for the
+   inside. Then the pictures: each sent to GS memory where gage.tx2 is (the game sends gage.tx2 again before it draws
+   the HUD each frame; nothing else draws from there) and drawn as a textured sprite before the next is sent. GS
+   context 1, as the HUD: alpha blending (Cs - Cd) * As + Cd and the HUD's test (no Z written). Laid out in the HUD's
+   640 x 448 and marked as the HUD for --widescreen, so it moves with the HUD.
 
    The cross fades to a quarter after a few seconds with no hand key pressed (port_hands.fade); a card whose
-   contents changed pulses, and one whose key did nothing flashes red. */
+   contents changed glows warm, and one whose key did nothing flashes red. Every card, empty or not, is drawn at the
+   cross's alpha. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,11 +46,11 @@ void Widescreen_Mark(int what);
 /* ---- The layout, in the HUD's 640 x 448 (Hud_InitSprite: x + 1728, y + 1824 in GS pixels) ---------------- */
 #define GS_X0 1728
 #define GS_Y0 1824
-#define CARD_W 52
-#define CARD_H 60
+#define CARD_W 70        /* three cards and their gaps: the HUD frame's width (218) */
+#define CARD_H 80
 #define CARD_GAP 3
-#define CROSS_LEFT 16    /* the HUD's frame starts 16 in */
-#define CROSS_BOTTOM 432 /* and 16 from the top: so 16 from the bottom */
+#define CROSS_LEFT 18    /* under the HUD's ring (its frame is drawn 16 in, the ring's edge a little further) */
+#define CROSS_BOTTOM 432 /* the HUD's frame starts 16 from the top: so 16 from the bottom */
 #define MIDDLE_DROP 24   /* the hotkey's card is this much lower */
 
 enum { CARD_SPELL, CARD_HOTKEY, CARD_WEAPON, CARD_COUNT }; /* left to right */
@@ -73,6 +76,39 @@ static const HandKind card_hands[CARD_COUNT] = {
 /* GS memory: the HUD's frame picture (gage.tx2, hud_sprites[0]: TBP0 0x3640, 256 x 128 PSMT8, 32 KB), a page boundary;
    each card's picture goes there in turn, drawn before the next is sent (the GS does them in order) */
 #define PICTURE_TBP 0x3640
+
+/* ---- The frame: pieces of gage.tx2 (hud_sprites[0]: 256 x 128 PSMT8, its CLUT with it) -------------------- */
+/* hud_sprites[0]'s TEX0 with the CLUT always loaded (CLD 1): the HUD's sprites after it load their own */
+#define GAGE_TEX0 ((0x4007DA85E1313640ull & ~(7ull << 61)) | (1ull << 61))
+#define GAGE_GREY 0x5A    /* hud_sprites[0]'s colour */
+#define GAGE_CLAMP 5      /* CLAMP_1 as Hud_Draw draws it: clamped both ways (the bar's edge is the picture's) */
+#define EDGE_TEXELS 9     /* the bar's edge: stone, then a gold line three texels wide */
+#define TEXEL_PX 0.8f     /* the HUD's frame is drawn at 0.85 across, 0.7 down */
+#define EDGE_PX (EDGE_TEXELS * TEXEL_PX)
+
+/* A piece of gage.tx2, in texels; u0 > u1 or v0 > v1 draws it mirrored */
+typedef struct {
+    float u0, v0, u1, v1;
+} Piece;
+
+/* the long bar's top right: its corner, its right side, its top; the other sides are these mirrored */
+static const Piece edge_corner = {247, 20, 256, 29};
+static const Piece edge_side = {247, 32, 256, 56};
+static const Piece edge_top = {110, 20, 190, 29};
+/* the middle of the red orb: the inside of a card */
+static const Piece orb_glow = {39, 35, 75, 77};
+
+static Piece mirrored(Piece p, int across, int down) {
+    Piece m = p;
+
+    if (across) {
+        m.u0 = p.u1, m.u1 = p.u0;
+    }
+    if (down) {
+        m.v0 = p.v1, m.v1 = p.v0;
+    }
+    return m;
+}
 
 typedef struct {
     int key;                               /* what it shows: the model's file (MODEL_KEY), 0 nothing */
@@ -193,6 +229,7 @@ static void update_pictures(void) {
 #define GS_XYZ2 0x05
 #define GS_TEX0_1 0x06
 #define GS_TEX1_1 0x14
+#define GS_CLAMP_1 0x08
 #define GS_TEXFLUSH 0x3F
 #define GS_ALPHA_1 0x42
 #define GS_TEST_1 0x47
@@ -313,56 +350,89 @@ static float cross_alpha(void) {
     return 1.0f - (1.0f - FADED) * t;
 }
 
-static void draw_card(Gif *g, int card, float alpha) {
-    HandKind kind = card_hands[card];
-    CardPicture *p = &pictures[card];
+/* a piece of gage.tx2 drawn over x0, y0 to x1, y1 (GAGE_TEX0 set) */
+static void gif_piece(Gif *g, Piece p, float x0, float y0, float x1, float y1, u64 colour) {
+    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE | PRIM_FST);
+    gif_ad(g, GS_RGBAQ, colour);
+    gif_ad(g, GS_UV, (u64)(int)(p.u0 * 16.0f) | (u64)(int)(p.v0 * 16.0f) << 16);
+    gif_ad(g, GS_XYZ2, xyz(x0, y0));
+    gif_ad(g, GS_UV, (u64)(int)(p.u1 * 16.0f) | (u64)(int)(p.v1 * 16.0f) << 16);
+    gif_ad(g, GS_XYZ2, xyz(x1, y1));
+}
+
+/* the card's box, one larger while it pulses */
+static Box drawn_box(int card) {
     Box b = card_box(card);
-    float pulse = 1.0f - since(hands_feedback.changed_vblank[kind], PULSE_VBLANKS);
-    float flash = 1.0f - since(hands_feedback.refused_vblank[kind], FLASH_VBLANKS);
-    float grow = pulse > 0.0f ? 1.0f : 0.0f;
-    int a = (int)(0x80 * alpha);
-    int lift = (int)(0x30 * pulse);
-    float side;
+    float grow = since(hands_feedback.changed_vblank[card_hands[card]], PULSE_VBLANKS) < 1.0f ? 1.0f : 0.0f;
 
     b.x0 -= grow, b.y0 -= grow, b.x1 += grow, b.y1 += grow;
-    /* the card: dark, a light edge, a dark line round it; red while refused */
-    gif_rect(g, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1, rgba(0x08 + lift / 2, 0x0A + lift / 2, 0x10 + lift / 2, a * 5 / 8));
+    return b;
+}
+
+/* The card's frame: the orb's glow inside, the bar's stone and gold edge round it, warmer while
+   it pulses, red while refused. GAGE_TEX0 set. */
+static void draw_card_frame(Gif *g, int card, float alpha) {
+    HandKind kind = card_hands[card];
+    Box b = drawn_box(card);
+    float pulse = 1.0f - since(hands_feedback.changed_vblank[kind], PULSE_VBLANKS);
+    float flash = 1.0f - since(hands_feedback.refused_vblank[kind], FLASH_VBLANKS);
+    int a = (int)(0x80 * alpha);
+    u64 stone = rgba(GAGE_GREY + (int)(0x38 * pulse), GAGE_GREY + (int)(0x1C * pulse), GAGE_GREY, a);
+    float ix0 = b.x0 + EDGE_PX, iy0 = b.y0 + EDGE_PX, ix1 = b.x1 - EDGE_PX, iy1 = b.y1 - EDGE_PX;
+
+    gif_piece(g, orb_glow, ix0, iy0, ix1, iy1, rgba(GAGE_GREY, GAGE_GREY, GAGE_GREY, a));
+    gif_piece(g, mirrored(edge_corner, 1, 0), b.x0, b.y0, ix0, iy0, stone);
+    gif_piece(g, edge_corner, ix1, b.y0, b.x1, iy0, stone);
+    gif_piece(g, mirrored(edge_corner, 1, 1), b.x0, iy1, ix0, b.y1, stone);
+    gif_piece(g, mirrored(edge_corner, 0, 1), ix1, iy1, b.x1, b.y1, stone);
+    gif_piece(g, edge_top, ix0, b.y0, ix1, iy0, stone);
+    gif_piece(g, mirrored(edge_top, 0, 1), ix0, iy1, ix1, b.y1, stone);
+    gif_piece(g, mirrored(edge_side, 1, 0), b.x0, iy0, ix0, iy1, stone);
+    gif_piece(g, edge_side, ix1, iy0, b.x1, iy1, stone);
+    /* the bar's dark outline, which its sides leave out (they reach the picture's edge) */
     gif_frame(g, b.x0, b.y0, b.x1, b.y1, rgba(0, 0, 0, a * 3 / 4));
     if (flash > 0.0f) {
-        gif_frame(g, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1, rgba(0xC8, 0x20, 0x18, a));
-    } else {
-        gif_frame(g, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1, rgba(0x70 + lift, 0x78 + lift, 0x88 + lift, a * 3 / 4));
-    }
-    if (!p->loaded) {
-        return;
-    }
-    /* the picture, square (it is stored at half height), as large as fits inside the edge */
-    side = (b.x1 - b.x0) - 4.0f;
-    if (b.y1 - b.y0 - 4.0f < side) {
-        side = b.y1 - b.y0 - 4.0f;
-    }
-    {
-        float x0 = (b.x0 + b.x1 - side) * 0.5f, y0 = (b.y0 + b.y1 - side) * 0.5f;
-        int tbp = PICTURE_TBP;
-        int bright = 0x80 + lift;
+        /* over the gold line, the inner third of the edge */
+        float in = EDGE_PX / 3.0f;
 
-        gif_picture(g, tbp, p->pixels);
-        gif_ad(g, GS_TEXFLUSH, 0);
-        /* TEX0: TBP0, TBW 2, PSMCT32, TW 7 (128), TH 6 (64), TCC (RGBA), TFX modulate */
-        gif_ad(g, GS_TEX0_1, (u64)tbp | (u64)(PICTURE_W / 64) << 14 | (u64)7 << 26 | (u64)6 << 30 | (u64)1 << 34);
-        gif_ad(g, GS_TEX1_1, 0x60); /* bilinear up and down */
-        gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE | PRIM_FST);
-        gif_ad(g, GS_RGBAQ, rgba(bright, bright, bright, a));
-        /* the middle of the picture: the pictures leave a margin round the item, which the card's edge does already */
-        gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * MARGIN) | (u64)(PICTURE_H * 16 * MARGIN) << 16);
-        gif_ad(g, GS_XYZ2, xyz(x0, y0));
-        gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * (1 - MARGIN)) | (u64)(PICTURE_H * 16 * (1 - MARGIN)) << 16);
-        gif_ad(g, GS_XYZ2, xyz(x0 + side, y0 + side));
+        gif_frame(g, ix0 - in, iy0 - in, ix1 + in, iy1 + in, rgba(0xC8, 0x20, 0x18, (int)(a * flash)));
+        gif_frame(g, ix0 - in + 1, iy0 - in + 1, ix1 + in - 1, iy1 + in - 1, rgba(0xC8, 0x20, 0x18, (int)(a * flash)));
     }
 }
 
+/* The card's picture, square (it is stored at half height), as large as fits inside the frame */
+static void draw_card_picture(Gif *g, int card, float alpha) {
+    CardPicture *p = &pictures[card];
+    Box b = drawn_box(card);
+    float pulse = 1.0f - since(hands_feedback.changed_vblank[card_hands[card]], PULSE_VBLANKS);
+    float side = (b.x1 - b.x0) - 2.0f * EDGE_PX;
+    float x0, y0;
+    int bright = 0x80 + (int)(0x30 * pulse);
+
+    if (!p->loaded) {
+        return;
+    }
+    if (b.y1 - b.y0 - 2.0f * EDGE_PX < side) {
+        side = b.y1 - b.y0 - 2.0f * EDGE_PX;
+    }
+    x0 = (b.x0 + b.x1 - side) * 0.5f;
+    y0 = (b.y0 + b.y1 - side) * 0.5f;
+    gif_picture(g, PICTURE_TBP, p->pixels);
+    gif_ad(g, GS_TEXFLUSH, 0);
+    /* TEX0: TBP0, TBW 2, PSMCT32, TW 7 (128), TH 6 (64), TCC (RGBA), TFX modulate */
+    gif_ad(g, GS_TEX0_1, (u64)PICTURE_TBP | (u64)(PICTURE_W / 64) << 14 | (u64)7 << 26 | (u64)6 << 30 | (u64)1 << 34);
+    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE | PRIM_FST);
+    gif_ad(g, GS_RGBAQ, rgba(bright, bright, bright, (int)(0x80 * alpha)));
+    /* the middle of the picture: the pictures leave a margin round the item, which the card's edge does already */
+    gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * MARGIN) | (u64)(PICTURE_H * 16 * MARGIN) << 16);
+    gif_ad(g, GS_XYZ2, xyz(x0, y0));
+    gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * (1 - MARGIN)) | (u64)(PICTURE_H * 16 * (1 - MARGIN)) << 16);
+    gif_ad(g, GS_XYZ2, xyz(x0 + side, y0 + side));
+}
+
 /* the quadwords the cross's packet can take at most: the frames, and the pictures with their registers */
-#define FRAME_QUADWORDS (CARD_COUNT * (1 + 9 * 4) + 8)
+/* each card's frame: 9 pieces of 6 registers, the outline and the flash's two frames of 4 rectangles of 4 */
+#define FRAME_QUADWORDS (CARD_COUNT * (9 * 6 + 3 * 4 * 4) + 16)
 #define PICTURE_QUADWORDS (PICTURE_W * PICTURE_H * 4 / 16 + 16)
 #define CROSS_QUADWORDS (FRAME_QUADWORDS + CARD_COUNT * PICTURE_QUADWORDS + 8)
 
@@ -374,8 +444,8 @@ static void note_count(float alpha) {
     c->vblank = port_vblank_count();
     c->alpha = alpha;
     c->count = HOTKEY_TYPE(value) == HOTKEY_ITEM ? item_counts[HOTKEY_NUMBER(value)] : -1;
-    c->count_x = b.x1 - 3.0f;
-    c->count_y = b.y1 - 2.0f;
+    c->count_x = b.x1 - EDGE_PX - 2.0f;
+    c->count_y = b.y1 - EDGE_PX - 1.0f;
 }
 
 void Hands_DrawCross(void) {
@@ -404,10 +474,19 @@ void Hands_DrawCross(void) {
     g.tag = NULL;
     gif_ad(&g, GS_ALPHA_1, 0x44); /* (Cs - Cd) * As + Cd */
     gif_ad(&g, GS_TEST_1, 0x31001); /* the HUD's: no Z written */
+    /* the frames first, while gage.tx2 is in GS memory; the pictures go over it */
+    gif_ad(&g, GS_TEXFLUSH, 0);
+    gif_ad(&g, GS_TEX0_1, GAGE_TEX0);
+    gif_ad(&g, GS_TEX1_1, 0x60); /* bilinear up and down */
+    gif_ad(&g, GS_CLAMP_1, GAGE_CLAMP);
     for (card = 0; card < CARD_COUNT; card++) {
-        draw_card(&g, card, alpha);
+        draw_card_frame(&g, card, alpha);
     }
-    gif_ad(&g, GS_ALPHA_1, 0x48); /* as Hud_Draw leaves it */
+    for (card = 0; card < CARD_COUNT; card++) {
+        draw_card_picture(&g, card, alpha);
+    }
+    gif_ad(&g, GS_CLAMP_1, 0);    /* as Hud_Draw leaves them */
+    gif_ad(&g, GS_ALPHA_1, 0x48);
     g.tag[0] |= (u64)1 << 15; /* EOP */
     quadwords = (int)(g.at - (u64 *)(start + 8)) / 2;
     if (g.at > g.end) {
