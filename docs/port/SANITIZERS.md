@@ -21,7 +21,7 @@ cmake --preset linux-clang -B out/linux-clang-tsan -DKF4_SANITIZE=thread
 cmake --build out/linux-clang-tsan
 TSAN_OPTIONS="suppressions=$PWD/tools/tsan.supp halt_on_error=0 second_deadlock_stack=1 report_signal_unsafe=0 log_path=/tmp/tsan" \
   KF4_DATA_DIR=/tmp/kf4data setarch $(uname -m) -R out/linux-clang-tsan/kf4 --disc <image> --renderer pc --headless \
-  --no-audio --memcard none --input tests/newgame.pad --teleport 1900:9:0 --invincible --frame-rate 240 \
+  --no-audio --saves none --input tests/newgame.pad --teleport 1900:9:0 --invincible --frame-rate 240 \
   --frames 2300 --dump-frames 2299 --dump-dir /tmp/kf4dump --stats
 ```
 

@@ -29,8 +29,8 @@
        <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, spell_swap, hotkey_next,
                                          hotkey_previous (the hands mod), game_save, game_load
    A recording is the game's input per vblank, not per picture: it replays the same whatever the frame
-   rate, headless or in a window, from the same start (the same --clock, --quick-load or memory card,
-   and the data folder's settings, quick saves, automap and hands as they were). */
+   rate, headless or in a window, from the same start (the same --clock, --quick-load or save, and the
+   data folder's settings, quick saves, automap and hands as they were). */
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>

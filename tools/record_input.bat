@@ -18,7 +18,7 @@ rem the full map is fine.
 rem
 rem It goes to <data folder>\captures\input-DATE-TIME\ (beside F8's and F9's captures; the data folder is
 rem %KF4_DATA_DIR%, else %APPDATA%\holyland; %KF4_REC% names another folder):
-rem   input.pad  the recording        start\  your settings, quick saves, automap, weapon sets and memory card as
+rem   input.pad  the recording        start\  your settings, quick saves, automap, hands, weapon sets and saves as
 rem   info.txt   program, quick save, clock    they were at the start (copied; nothing in the data folder changes)
 rem Send the whole folder (and your F8 pictures from captures\). It holds your saves: it is not for the repository.
 
@@ -53,7 +53,7 @@ if not defined QUICK (echo No quick save found in %DATA%\quicksaves & pause & ex
 mkdir "%REC%\start" >nul 2>&1
 if exist "%DATA%\settings.json" copy /y "%DATA%\settings.json" "%REC%\start\" >nul
 if exist "%DATA%\overlay.ini" copy /y "%DATA%\overlay.ini" "%REC%\start\" >nul
-for %%d in (quicksaves automap weapon_sets memcard) do if exist "%DATA%\%%d" robocopy "%DATA%\%%d" "%REC%\start\%%d" /e /njh /njs /nfl /ndl /np >nul
+for %%d in (quicksaves automap hands weapon_sets saves) do if exist "%DATA%\%%d" robocopy "%DATA%\%%d" "%REC%\start\%%d" /e /njh /njs /nfl /ndl /np >nul
 (
 echo exe=%EXE%
 echo quick=%QUICK%

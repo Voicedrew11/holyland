@@ -43,11 +43,12 @@ waits for the disc. Stop it with Ctrl+C.
 Three ways to keep a game ([`docs/port/README.md`](docs/port/README.md) says more):
 - **Quick saves (F2 to save, F4 to load): the ones to play with.** The game's own save, taken where you
   stand, without a save point. They load in any build of the port, so they survive updates. Loading
-  one restarts the map from it, as loading a memory card save does: enemies are back.
+  one restarts the map from it, as loading a save does: enemies are back.
 - **Save states (F5, F7): for debugging.** The whole running game, exact to the frame, but they load
   only in the build that made them, so an update makes them useless.
-- **Memory card saves**, at the game's save points: the PS2's own, in the `memcard` folder (a PCSX2
-  folder memory card works too).
+- **Saves**, at the game's save points: the game's three, each a file in the `saves` folder of the data
+  folder (`save1.kf4save` to `save3.kf4save`; `--saves DIR` puts them elsewhere). A save is written whole
+  or not at all, and the one it replaces is kept beside it as `.bak` (read instead if the save is damaged).
 
 ## Working on it
 

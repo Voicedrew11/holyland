@@ -3,11 +3,11 @@
    program can read them (save states, port/include/port/savestate.h, load only in the build that
    made them).
 
-   A quick save is the image Game_WriteSaveImage writes for a memory card save (it holds the map, the
+   A quick save is the image Game_WriteSaveImage writes for a save point's save (it holds the map, the
    player's position, heading and look, HP and MP, the stats, the items, the flags of the world), with
-   a small PC header. Loading puts that image where a memory card load puts it and leaves the game's
+   a small PC header. Loading puts that image where loading a save puts it and leaves the game's
    main loop as a card load does, so the game restarts the session from it (GameLoop_ResetSystems,
-   GameLoop_Run on the saved map). No memory card is read or written either way. */
+   GameLoop_Run on the saved map). The save point's saves (game/saves.c) are not touched either way. */
 #ifndef PORT_QUICKSAVE_H
 #define PORT_QUICKSAVE_H
 

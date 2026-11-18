@@ -75,7 +75,7 @@ def train(args, exe, profile_dir, clang):
         folder = os.path.join(profile_dir, "run_" + spot.replace(":", "_"))
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder)
-        cmd = [exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
+        cmd = [exe, "--disc", args.disc, "--headless", "--no-audio", "--saves", "none", "--clock",
                "2026-01-01T12:00:00", "--input", PAD, "--teleport", "%d:%s" % (TELEPORT, spot), "--invincible",
                "--frame-rate", "240", "--frames", str(args.frames), "--dump-frames", str(args.frames - 1),
                "--dump-dir", folder] + args.extra

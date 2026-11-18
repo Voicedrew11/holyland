@@ -43,7 +43,7 @@ GPU memory and no hang where the owner's real play (unlocked, cap 500) held 8 GB
 - A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.config/holyland`
   so the owner's files are not written. Not `KF4_OVERLAY_SHOT`: it reads settings too but hides the window.
 - The window must be on the screen: the owner should be able to see the run.
-- Leave out `--headless`; keep `--input tests/newgame.pad --teleport ... --invincible --no-audio --memcard none`.
+- Leave out `--headless`; keep `--input tests/newgame.pad --teleport ... --invincible --no-audio --saves none`.
 - Check the run's `[stats]` lines show what you meant to test (pictures between drawn, native draws not 0).
 - Headless runs are still right for comparing pictures byte for byte (`--dump-frames`).
 
@@ -73,7 +73,7 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
 - `port/platform/`: the PS2 under the game: kernel and threads (`fiber.c`), memory and EE addresses, DMA,
   VIF1, VU1 (interpreter `vu1.c` plus HLE per VU1 program `vu1_hle_*.c`), disc, save states, pacing
   (`refresh_clock.c`, `unlocked_rate.c`, `screen_vblank.c`), the Vulkan presenter, and `main_host.c` (options).
-- `port/sdk/`: the PS2 SDK libraries the game links against (libgraph, libpad, libcdvd, libmc, libc/libm
+- `port/sdk/`: the PS2 SDK libraries the game links against (libgraph, libpad, libcdvd, libc/libm
   with PS2-exact results, MPEG). `port/include/`: their headers. `port/audio/`: the IOP sound side.
 - `port/gs/`: the Graphics Synthesizer, behind `port/platform/gs_api.h`:
   - `pc/` (`pcr*`): the PC renderer, the only one players get (the default). It draws the GS's input
@@ -99,3 +99,6 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   (`port/platform/ee_address.c`, `memory.c`).
 - Save states are exact but tied to one build. Quick saves (F2/F4) are the game's own save and survive
   updates.
+- No memory card: the save points' three saves are files (`<data folder>/saves/saveN.kf4save`, `--saves DIR|none`).
+  `game/saves.c` stands in for the game's card layer (`save/save_card.c` and `save/mc.c` are left out of the
+  build) and `port/platform/save_files.c` writes the files; the save and load screens skip choosing a card.

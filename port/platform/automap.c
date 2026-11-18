@@ -258,28 +258,23 @@ void port_automap_start(void) {
     }
 }
 
-/* /BASLUS-20318S/BASLUS-20318G05: the game's save file 05 */
-void port_automap_card_file(const char *name, int writing) {
-    const char *g;
+/* the game's save `number` (1 to 3: port/include/port/save_files.h): automap/save<number>.bin */
+void port_automap_save_file(int number, int writing) {
     char file[64];
 
-    if (!port_automap.enabled || name == NULL || (g = strstr(name, "BASLUS-20318G")) == NULL) {
+    if (!port_automap.enabled) {
         return;
     }
-    g += strlen("BASLUS-20318G");
-    if (g[0] < '0' || g[0] > '9' || g[1] < '0' || g[1] > '9' || g[2] != 0) {
-        return;
-    }
-    snprintf(file, sizeof(file), "card_%c%c.bin", g[0], g[1]);
+    snprintf(file, sizeof(file), "save%d.bin", number);
     if (writing) {
         if (write_state(file)) {
-            port_event("automap: the explored maps kept with memory card save %c%c", g[0], g[1]);
+            port_event("automap: the explored maps kept with save %d", number);
         }
         port_automap_save_live(1);
     } else {
         loaded_since_title = 1;
         if (read_state(file)) {
-            port_event("automap: the explored maps of memory card save %c%c brought back", g[0], g[1]);
+            port_event("automap: the explored maps of save %d brought back", number);
             port_automap_mark_dirty();
         }
     }

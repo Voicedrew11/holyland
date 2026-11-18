@@ -1,7 +1,7 @@
 # New Game, then walk and turn in the first map (099.map): for numeric checks of movement and collision,
 # played with --input tests/walk.pad --frames 4200 (and the options tools/boot_test.py passes).
 # <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward
-100 CROSS 4     # the memory card notice ("no card")
+100 CROSS 4     # the notice that there is nowhere to save (--saves none)
 300 START 4     # skip the logos
 400 START 4     # Press Start
 500 CROSS 4     # New Game (the cursor starts on it)

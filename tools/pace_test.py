@@ -88,7 +88,7 @@ def command(args, folder, map_index, frames, flags):
         where = ["--input", args.input or PAD, "--quick-load", args.quick_load]
     else:
         where = ["--input", PAD, "--teleport", "%d:%s" % (TELEPORT, place_of(map_index)), "--invincible"]
-    return [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--memcard", "none", "--clock",
+    return [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--saves", "none", "--clock",
             "2026-01-01T12:00:00"] + where + ["--frames", str(frames), "--stats", "--dump-frames", str(frames - 1), "--dump-dir", folder, "--frame-rate",
             args.frame_rate or str(args.hz)] + flags + OWNER + args.extra
 

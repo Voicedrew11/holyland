@@ -1,11 +1,11 @@
 /* quicksave.c: PC-only. The game's side of quick saves (port/include/port/quicksave.h).
 
    Save: Game_WriteSaveImage (core/game.c) writes the game into save_image as the save screen does
-   before a memory card save (ui/trade.c, after PlayTime_Update); the image goes to a file instead of
-   the card. save_image is put back as it was afterwards.
+   before a save point's save (ui/trade.c, after PlayTime_Update); the image goes to a quick save file
+   instead of a save (game/saves.c). save_image is put back as it was afterwards.
 
-   Load: the image goes into save_image as a memory card load leaves it (save/save_card.c,
-   SaveCard_StepLoad: save_loaded = 1, game_status.bit9 = 1). In play that ends the main loop
+   Load: the image goes into save_image as loading a save leaves it (game/saves.c, as save/save_card.c's
+   SaveCard_StepLoad on the PS2: save_loaded = 1, game_status.bit9 = 1). In play that ends the main loop
    (GameLoop_Run), and main (main.c) then runs GameLoop_ResetSystems, which reads the image back
    (Game_ReadSaveImage), and GameLoop_Run on the saved map (saved_map_tag), which leaves the player
    where the image says: the image holds the position and the rotation (PlayerState 0x00 to 0x20). On
@@ -80,8 +80,8 @@ static MapLoadRequest way_in;
      and walked on) when the player stands on a record that needs it (needs_neighbour_map), at the
      joins, finishing the read there and then if it is not done.
    The records between name no map and keep whatever was loaded last, so what is loaded depends on
-   the way the player came, which the save image does not hold: a memory card save is taken at a save
-   point, where it does not matter. A quick save keeps it in its PC block, and a quick load puts it
+   the way the player came, which the save image does not hold: a save is taken at a save point, where
+   it does not matter. A quick save keeps it in its PC block, and a quick load puts it
    back through the same steps.
 
    Which origin led to what the other slot holds or is loading (-1: none), and whether it is set up.
@@ -228,7 +228,7 @@ static void run_neighbour_load(int set_up) {
    the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
    where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
    player stands where the neighbour is needed (without drawing: the screen is black, about to fade
-   in). A memory card load does nothing here. A made-up file's player is put on the floor first. */
+   in). Loading a save point's save does nothing here. A made-up file's player is put on the floor first. */
 void Quick_RestoreNeighbour(void) {
     MapSlot *current = &map_slots[current_map_slot & 1];
     MapLoadRequest *origins = (MapLoadRequest *)current->origins;
@@ -336,7 +336,7 @@ const char *Quick_WhyNotInPlay(void) {
    off in play is still running (Script_EventRunning, script/script.c). The image holds what such a script has
    done so far but not the script, so it would load with the rest of it never done: a door it opened that it was
    to close (the Dark Knight's on map 036, which then never shows his text nor sets him on), a lever half thrown.
-   A memory card save is taken at a save point, where no such script runs. */
+   A save point's save is taken there, where no such script runs. */
 static const char *why_not_now(void) {
     static char text[96];
     const char *why = Quick_WhyNotInPlay();
@@ -376,7 +376,7 @@ static void quick_save(void) {
     free(kept);
 }
 
-/* Puts a quick save's image where a memory card load puts it: 1 when the game's check passes */
+/* Puts a quick save's image where loading a save puts it: 1 when the game's check passes */
 static int quick_load_image(void) {
     PortQuickInfo info;
     size_t size;

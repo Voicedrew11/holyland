@@ -51,7 +51,7 @@ def run(exe, disc, frames, folder, renderer):
     os.makedirs(folder, exist_ok=True)
     last = max(int(n) for n in frames.split(","))
     cmd = [exe, "--disc", disc, "--fast", "--headless", "--frames", str(last + 1),
-           "--clock", "2026-01-01T12:00:00", "--memcard", "none", "--no-audio", "--input", PAD,
+           "--clock", "2026-01-01T12:00:00", "--saves", "none", "--no-audio", "--input", PAD,
            "--dump-frames", frames, "--dump-dir", folder, "--renderer", renderer]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:

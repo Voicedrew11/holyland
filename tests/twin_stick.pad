@@ -2,7 +2,7 @@
 # the sticks give. Twin-stick is off under a pad script unless KF4_TWIN_STICK_SCRIPTED=1:
 #   KF4_TWIN_STICK_SCRIPTED=1 kf4 --disc ... --headless --input tests/twin_stick.pad --frames 3000 --log FILE
 # <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward
-100 CROSS 4     # the memory card notice ("no card")
+100 CROSS 4     # the notice that there is nowhere to save (--saves none)
 300 START 4     # skip the logos
 400 START 4     # Press Start
 500 CROSS 4     # New Game (the cursor starts on it)

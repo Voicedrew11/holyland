@@ -2469,7 +2469,7 @@ index 0000000000000000000000000000000000000000..882f07b65bf6bab2936fe88998ef3f83
 +
 +#endif
 diff --git a/src/game/ui/menu_screens.c b/src/game/ui/menu_screens.c
-index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa38aa358e 100644
+index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76d99627c4 100644
 --- a/src/game/ui/menu_screens.c
 +++ b/src/game/ui/menu_screens.c
 @@ -4,6 +4,7 @@
@@ -3588,17 +3588,54 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              }
          }
          SET_PART_MODE(0);
-@@ -5611,16 +5648,21 @@ static void Menu_UpdateCardSlot(void) {
-         }
+@@ -5595,32 +5632,54 @@ static s32 Menu_MoveAllItemsCursor(void) {
+     return FALSE;
+ }
+ 
+-/* The memory card screen: draws its parts, picks a card slot and starts the load or save screen (Menu_UpdateSaveList). */
++/* PC: how much the save list is dimmed (0 none, 1 fully): the question and message boxes are see-through, and
++   at a PC's resolution the rows behind them read through the box's own text, so while one is up the rows, their
++   text and the cursor bar are drawn at a third of their brightness. It eases in and out over a few frames. */
++static f32 pc_list_dim;
++
++static f32 PcList_Light(s32 box_up) {
++    if (box_up) {
++        pc_list_dim = pc_list_dim + 0.2f > 1.0f ? 1.0f : pc_list_dim + 0.2f;
++    } else {
++        pc_list_dim = pc_list_dim - 0.2f < 0.0f ? 0.0f : pc_list_dim - 0.2f;
++    }
++    return 1.0f - 0.65f * pc_list_dim;
++}
++
++/* The memory card screen: draws its parts, picks a card slot and starts the load or save screen (Menu_UpdateSaveList).
++   PC: there is no card to pick (the saves are files: game/saves.c). The save folder is chosen as the screen opens,
++   as Cross on the first slot would, and the screen is left as soon as it waits for a button again (the save list
++   was left, or a message read), as Circle would. The two slots are not drawn. */
+ static void Menu_UpdateCardSlot(void) {
+     u32 i;
+     s32 card_result;
+     u8 kind;
+     PadReport *report;
++    s32 pc_cross = 0;  /* PC: Cross on the save folder, once, as the screen opens */
++    s32 pc_circle = 0; /* PC: Circle, to leave once the screen waits again with no message up */
++    u32 pressed;
+ 
+     card_result = SaveCard_Update();
+     if (card_screen_state.check_finished == 0 && SaveCard_IsChecking() == 0) {
+         card_screen_state.input_locked = 0;
+         card_screen_state.check_finished = 1;
+-        if (SaveCard_IsPresent(0) == 0 && SaveCard_IsPresent(1) != 0) {
+-            card_screen_state.selected_card = 1;
+-        }
++        card_screen_state.selected_card = 0;
++        pc_cross = 1;
      }
  
-+    /* PC: the mouse's pointing: the two slots, side by side */
-+    if (card_screen_state.check_finished != 0 && card_screen_state.dialog_id < 0) {
-+        MenuPad_PointCursor(card_screen_state.selected_card, MENU_AXIS_HORIZONTAL);
-+        MenuPad_PointParts(slot_parts, slot_part_count, 31, 0, 0);
-+    }
      for (i = 0; i < slot_part_count; i++) {
          kind = slot_parts[i].handler_index;
++        if (kind == 26 || kind == 27 || kind == 31) {
++            continue; /* PC: the two card slots and the cursor on them */
++        }
          Menu_SetBlendMode(slot_parts[i].blend_mode);
          switch (kind) {
          case 2:
@@ -3612,7 +3649,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              }
              break;
          case 3:
-@@ -5629,67 +5671,67 @@ static void Menu_UpdateCardSlot(void) {
+@@ -5629,67 +5688,67 @@ static void Menu_UpdateCardSlot(void) {
              case 5:
              case 9:
              case 10:
@@ -3696,7 +3733,57 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              break;
          }
          SET_PART_MODE(0);
-@@ -5861,7 +5903,7 @@ static void Menu_UpdateSaveList(void) {
+@@ -5728,35 +5787,38 @@ static void Menu_UpdateCardSlot(void) {
+         card_screen_state.dialog_id = 10;
+         SaveCard_StartCheck(1);
+     } else if (card_screen_state.card_op_running == 0 && card_screen_state.input_locked == 0) {
+-        if ((menu_buttons & (PAD_LEFT | PAD_RIGHT)) && pad_mode != 0xFF && card_screen_state.dialog_id == -1) {
+-            Sound_PlayMenu(1);
+-            card_screen_state.selected_card = (card_screen_state.selected_card + 1) & 1;
+-        } else {
++        /* PC: no Left and Right between the two slots: there is one save folder */
++        {
+             report = Pad_GetReport(0, 0);
+-            if ((report->pressed & PAD_CROSS) && pad_mode != 0xFF) {
++            pressed = pad_mode != 0xFF ? report->pressed : 0;
++            if (pc_cross) {
++                pressed = PAD_CROSS;
++            } else if (card_screen_state.dialog_id == -1) {
++                pc_circle = 1;
++                pressed = PAD_CIRCLE;
++            }
++            if (pressed & PAD_CROSS) {
+                 if (card_screen_state.dialog_id != -1) {
+                     Sound_PlayMenu(0);
+                     card_screen_state.dialog_id = -1;
+                 } else if (SaveCard_IsPresent(card_screen_state.selected_card) != 0) {
+                     if (SaveCard_CheckSavesIntact() > 0) {
+                         if (SaveCard_StartReadList(card_screen_state.selected_card, 1) == 0) {
+-                            Sound_PlayMenu(0);
+                             card_screen_state.card_op_running = 1;
+                         }
+                     } else {
+                         card_screen_state.dialog_id = 9;
+                     }
+                 } else if (card_screen_state.selected_card == 0) {
+-                    Sound_PlayMenu(0);
+                     card_screen_state.dialog_id = 4;
+                 } else if (card_screen_state.selected_card == 1) {
+-                    Sound_PlayMenu(0);
+                     card_screen_state.dialog_id = 5;
+                 }
+             } else {
+-                report = Pad_GetReport(0, 0);
+-                if (((report->pressed & PAD_CIRCLE) && pad_mode != 0xFF) || game_status.bit9) {
+-                    Sound_PlayMenu(2);
++                if ((pressed & PAD_CIRCLE) || game_status.bit9) {
++                    if (!pc_circle) {
++                        Sound_PlayMenu(2);
++                    }
+                     if (card_screen_state.dialog_id != -1) {
+                         card_screen_state.dialog_id = -1;
+                     } else {
+@@ -5861,10 +5923,12 @@ static void Menu_UpdateSaveList(void) {
      u8 kind;
      s32 slot;
      s32 group;
@@ -3705,7 +3792,30 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
      s32 entry;
      GsPackedWord word;
      PadReport *report;
-@@ -5968,21 +6010,27 @@ static void Menu_UpdateSaveList(void) {
++    f32 list_light;        /* PC: PcList_Light */
++    ColorBytes text_color; /* PC: the area names' colour, dimmed with the rows */
+ 
+     info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(0);
+     D_00446DF4 = info[0]->level;
+@@ -5962,27 +6026,46 @@ static void Menu_UpdateSaveList(void) {
+         }
+     }
+ 
++    switch (card_screen_state.list_step) { /* PC: a box is up (the steps that draw mc_parts below) */
++    case 1:
++    case 3:
++    case 8:
++    case 10:
++    case 23:
++        list_light = PcList_Light(1);
++        break;
++    default:
++        list_light = PcList_Light(0);
++        break;
++    }
+     for (i = 0; i < data_part_count; i++) {
+         kind = data_parts[i].handler_index;
+         slot = data_parts[i].slot;
          Menu_SetBlendMode(data_parts[i].blend_mode);
          switch (kind) {
          case 2:
@@ -3716,13 +3826,14 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              group = slot / 3;
              if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[group] == 1) {
 -                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
-+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
++                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i] * list_light);
              }
              break;
          case 25:
              if (MENU_SCREEN_SAVES(&card_screen_state)->save_state[slot] == 1) {
 -                MenuSprite_Draw((int)&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
-+                MenuSprite_Draw((sptr)&data_parts[i], 0x401, card_screen_state.selected_save, screen_part_alphas[i]);
++                MenuSprite_Draw((sptr)&data_parts[i], 0x401, card_screen_state.selected_save,
++                                screen_part_alphas[i] * list_light);
 +                /* PC: the mouse's pointing: the saves there are */
 +                if (card_screen_state.list_step == -1) {
 +                    MenuPad_PointCursor(card_screen_state.selected_save, MENU_AXIS_VERTICAL);
@@ -3737,7 +3848,18 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              break;
          }
          SET_PART_MODE(0);
-@@ -6006,19 +6054,19 @@ static void Menu_UpdateSaveList(void) {
+@@ -5993,7 +6076,9 @@ static void Menu_UpdateSaveList(void) {
+     for (i = 0; i < 3; i++) {
+         entry = ((s32 *)table)[info[i]->save_area + 1];
+         MenuText_SetPen(word);
+-        MenuText_SetColor(menu_draw_color);
++        text_color = menu_draw_color;
++        text_color.alpha = (u8)(text_color.alpha * list_light);
++        MenuText_SetColor(text_color);
+         if (entry != 0) {
+             MenuText_DrawWrapped((u16 *)(table + entry), 0x18);
+         }
+@@ -6006,19 +6091,19 @@ static void Menu_UpdateSaveList(void) {
          if (kind == 3) {
              switch (card_screen_state.list_step) {
              case 8:
@@ -3762,7 +3884,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
                  break;
              }
          } else {
-@@ -6028,7 +6076,7 @@ static void Menu_UpdateSaveList(void) {
+@@ -6028,7 +6113,7 @@ static void Menu_UpdateSaveList(void) {
              case 8:
              case 10:
              case 23:
@@ -3771,7 +3893,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
                  break;
              }
          }
-@@ -6036,6 +6084,9 @@ static void Menu_UpdateSaveList(void) {
+@@ -6036,6 +6121,9 @@ static void Menu_UpdateSaveList(void) {
      }
  
      if (card_screen_state.list_step == 8) {
@@ -3781,7 +3903,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
          bar.first.f.lo16 = 0x7490;
          bar.first.f.mid16 = card_screen_state.confirm_choice * 0xC0 + 0x80A0;
          bar.first.f.mid24 = 0x5F370;
-@@ -6287,6 +6338,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6287,6 +6375,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      }
      context->selection += 7;
      context->selection %= 7;
@@ -3797,7 +3919,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
  
      switch (context->selection) {
      case 0:
-@@ -6372,7 +6432,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6372,7 +6469,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      for (i = 0; i < option_part_count; i++) {
          kind = option_parts[i].handler_index;
          Menu_SetBlendMode(option_parts[i].blend_mode);
@@ -3806,7 +3928,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -6553,6 +6613,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6553,6 +6650,11 @@ static void Menu_UpdateButtonConfig(void) {
      line_count = choice_count + 1;
      button_line += line_count;
      button_line %= line_count;
@@ -3818,7 +3940,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
  
      wrap = choice_count; // match: a second variable, set here, is what retail keeps in $16 for the two divisions
      for (i = 0; i < wrap; i++) {
-@@ -6625,14 +6690,14 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6625,14 +6727,14 @@ static void Menu_UpdateButtonConfig(void) {
          switch (kind) {
          case 2:
              if (button_prompt != 0) {
@@ -3836,7 +3958,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              }
              break;
          case 0x18:
-@@ -6656,7 +6721,7 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6656,7 +6758,7 @@ static void Menu_UpdateButtonConfig(void) {
                  D_00446DF4 = 0;
                  D_00446DF8 = 0;
              }
@@ -3845,7 +3967,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              break;
          case 0x21:
              if (D_00446E00 == 0) {
-@@ -6664,11 +6729,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6664,11 +6766,11 @@ static void Menu_UpdateButtonConfig(void) {
              }
              D_00446E04 = button_choices_shown[D_00446E00];
              // match: called as returning a value, which keeps $2 out of the count's increment
@@ -3859,7 +3981,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
              break;
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
-@@ -6891,16 +6956,16 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6891,16 +6993,16 @@ static void Menu_UpdateCardCheck(void) {
              ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
              switch (card_screen_state.dialog_id) {
              case 0x10:
@@ -3880,7 +4002,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
                  break;
              }
              Menu_SetBlendMode(0);
-@@ -6908,6 +6973,9 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6908,6 +7010,9 @@ static void Menu_UpdateCardCheck(void) {
      }
  
      if (card_screen_state.skip_drawing == 0) {
@@ -3890,7 +4012,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
          bar.first.f.lo16 = 0x75D0;
          bar.first.f.mid16 = card_screen_state.selected_card * 0xE0 + 0x8250;
          bar.first.f.mid24 = 0xDBBA0;
-@@ -7043,7 +7111,7 @@ static void Menu_UpdateBrightness(void) {
+@@ -7043,7 +7148,7 @@ static void Menu_UpdateBrightness(void) {
      for (i = 0; i < bright_part_count; i++) {
          kind = bright_parts[i].handler_index;
          Menu_SetBlendMode(bright_parts[i].blend_mode);
@@ -3899,7 +4021,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
          Menu_SetBlendMode(0);
      }
      switch (system_screen_state) {
-@@ -7097,7 +7165,7 @@ static void Menu_WaitForCancel(void) {
+@@ -7097,7 +7202,7 @@ static void Menu_WaitForCancel(void) {
     text drawer returns, nothing without a text. */
  static int Menu_DrawEquipItemText(s32 index) {
      DataNode *node;
@@ -3908,7 +4030,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
      s32 slot;
      s32 entry;
      GsPackedWord word;
-@@ -7112,6 +7180,7 @@ static int Menu_DrawEquipItemText(s32 index) {
+@@ -7112,6 +7217,7 @@ static int Menu_DrawEquipItemText(s32 index) {
          MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
          return MenuText_DrawWrappedLong((u16 *)(table + entry), 0x1B);
      }
@@ -3916,7 +4038,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..9ce95f93a242d05db5fe9e65289054fa
  }
  
  /* If the item list has anything: names its five models and chains the five load nodes for them. */
-@@ -7461,7 +7530,7 @@ void Menu_DrawBrightness(s32 level) {
+@@ -7461,7 +7567,7 @@ void Menu_DrawBrightness(s32 level) {
      cursor[1].as_int = 0xFFFFF;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 5;
@@ -4524,7 +4646,7 @@ index 2d93d8ffe6c19858a638f7e6f0beb307be469ea1..3adaa127017dca14e9b69bb4acce26c4
  
  /* Whether the player has any item other than the keys and the "none" items (the main menu's item screen). */
 diff --git a/src/game/ui/trade.c b/src/game/ui/trade.c
-index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531741fe5c1 100644
+index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438dbb02a5d 100644
 --- a/src/game/ui/trade.c
 +++ b/src/game/ui/trade.c
 @@ -17,6 +17,10 @@
@@ -5612,7 +5734,59 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
      screen = &save_screen_state;
      screen->dialog_id = -1;
      screen->card_update_result = 0;
-@@ -5573,20 +5600,20 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5544,8 +5571,25 @@ static int SaveScreen_CutModelChain(void) {
+     return 1;
+ }
+ 
++/* PC: how much the save list is dimmed (0 none, 1 fully): the question and message boxes are see-through, and
++   at a PC's resolution the rows behind them read through the box's own text, so while one is up the rows, their
++   text and the cursor bar are drawn at a third of their brightness. It eases in and out over a few frames. */
++static f32 pc_list_dim;
++
++static f32 PcList_Light(s32 box_up) {
++    if (box_up) {
++        pc_list_dim = pc_list_dim + 0.2f > 1.0f ? 1.0f : pc_list_dim + 0.2f;
++    } else {
++        pc_list_dim = pc_list_dim - 0.2f < 0.0f ? 0.0f : pc_list_dim - 0.2f;
++    }
++    return 1.0f - 0.65f * pc_list_dim;
++}
++
+ /* The save screen: draws its parts, picks a card, asks the format and overwrite questions, runs the card
+-   checks and hands over to the save list (SaveScreen_UpdateSaveList). */
++   checks and hands over to the save list (SaveScreen_UpdateSaveList).
++   PC: there is no card to pick (the saves are files: game/saves.c). The save folder is chosen as the screen
++   opens, as Cross on the first slot would, and the screen is left as soon as it waits for a button again (the
++   save list was left, or a message read), as Circle would. The two slots are not drawn. */
+ static void SaveScreen_UpdateCardSelect(void) {
+     MenuCursorBar bar;
+     GsPackedWord unused_corner;
+@@ -5555,6 +5599,9 @@ static void SaveScreen_UpdateCardSelect(void) {
+     s32 slot;
+     s32 card_flags;
+     PadReport *report;
++    s32 pc_cross = 0;  /* PC: Cross on the save folder, once, as the screen opens */
++    s32 pc_circle = 0; /* PC: Circle, to leave once the screen waits again with no message up */
++    u32 pressed;
+ 
+     card_result = SaveCard_Update();
+     if (SaveCard_HasCard(save_screen_state.selected_card) == 0 && save_screen_state.dialog_id == 14) {
+@@ -5563,30 +5610,32 @@ static void SaveScreen_UpdateCardSelect(void) {
+     if (save_screen_state.check_finished == 0 && SaveCard_IsCheckRunning() == 0) {
+         save_screen_state.input_locked = 0;
+         save_screen_state.check_finished = 1;
+-        if (SaveCard_IsPresent(0) == 0 && SaveCard_IsPresent(1) != 0) {
+-            save_screen_state.selected_card = 1;
+-        }
++        save_screen_state.selected_card = 0;
++        pc_cross = 1;
+     }
+ 
+     for (i = 0; i < slot_part_count; i++) {
+         kind = slot_parts[i].handler_index;
++        if (kind == 26 || kind == 27 || kind == 31) {
++            continue; /* PC: the two card slots and the cursor on them */
++        }
          SELECT_PART((s8)slot_parts[i].blend_mode);
          switch (kind) {
          case 2:
@@ -5637,7 +5811,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
                  }
              }
              break;
-@@ -5600,75 +5627,78 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5600,75 +5649,78 @@ static void SaveScreen_UpdateCardSelect(void) {
              case 14:
              case 15:
              case 21:
@@ -5735,7 +5909,73 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
          // match: a depth nothing reads; without it the 64-bit mask of the bar's depth field is loaded after the branch below
          unused_corner.f.mid24 = 0x5F370;
          bar.first.f.lo16 = 0x7580;
-@@ -6036,23 +6066,23 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -5781,19 +5833,27 @@ static void SaveScreen_UpdateCardSelect(void) {
+         save_screen_state.card_op_running = 0;
+         SaveCard_StartCheck(1);
+     } else if (save_screen_state.card_op_running == 0 && save_screen_state.input_locked == 0) {
+-        if ((menu_buttons & (PAD_LEFT | PAD_RIGHT)) && modal_pad_mode != 0xFF && save_screen_state.dialog_id == -1) {
+-            Sound_PlayMenu(1);
+-            save_screen_state.selected_card = (save_screen_state.selected_card + 1) & 1;
+-        } else {
++        /* PC: no Left and Right between the two slots: there is one save folder */
++        {
+             report = Pad_GetReport(0, 0);
+-            if ((report->pressed & PAD_CROSS) && modal_pad_mode != 0xFF) {
+-                Sound_PlayMenu(0);
++            pressed = modal_pad_mode != 0xFF ? report->pressed : 0;
++            if (pc_cross) {
++                pressed = PAD_CROSS;
++            } else if (save_screen_state.dialog_id == -1) {
++                pc_circle = 1;
++                pressed = PAD_CIRCLE;
++            }
++            if (pressed & PAD_CROSS) {
++                if (!pc_cross) {
++                    Sound_PlayMenu(0);
++                }
+                 save_screen_state.confirm_pending = 1;
+                 save_screen_state.input_locked = 1;
+             } else {
+-                report = Pad_GetReport(0, 0);
+-                if ((report->pressed & PAD_CIRCLE) && modal_pad_mode != 0xFF) {
+-                    Sound_PlayMenu(2);
++                if (pressed & PAD_CIRCLE) {
++                    if (!pc_circle) {
++                        Sound_PlayMenu(2);
++                    }
+                     if (save_screen_state.dialog_id == 14) {
+                         if (SaveCard_StartReadList(save_screen_state.selected_card, 0) == 0) {
+                             save_screen_state.card_op_running = 1;
+@@ -5929,6 +5989,8 @@ static void SaveScreen_UpdateSaveList(void) {
+     PadReport *report;
+     s32 same_count;
+     s32 save_state;
++    f32 list_light;        /* PC: PcList_Light */
++    ColorBytes text_color; /* PC: the area names' colour, dimmed with the rows */
+     s32 line;
+     s32 swapped;
+ 
+@@ -6030,29 +6092,44 @@ static void SaveScreen_UpdateSaveList(void) {
+         }
+     }
+ 
++    switch (save_screen_state.list_step) { /* PC: a box is up (the steps that draw mc_parts below) */
++    case 0:
++    case 2:
++    case 6:
++    case 7:
++    case 10:
++    case 11:
++    case 20:
++        list_light = PcList_Light(1);
++        break;
++    default:
++        list_light = PcList_Light(0);
++        break;
++    }
+     for (i = 0; i < data_part_count; i++) {
+         kind = data_parts[i].handler_index;
+         slot = data_parts[i].slot;
          ((int (*)(s8))Menu_SetBlendMode)((s8)data_parts[i].blend_mode); // match: a signed byte, see SET_PART_MODE_OF
          switch (kind) {
          case 2:
@@ -5746,16 +5986,17 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
              group = slot / 3;
              if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 1) {
 -                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
-+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i]);
++                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3, screen_part_alphas[i] * list_light);
              } else if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[group]] == 0) {
 -                MenuSprite_Draw((int)&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
-+                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i]);
++                MenuSprite_Draw((sptr)&data_parts[i], 0x3EB, group * 3 + 1, screen_part_alphas[i] * list_light);
              }
              break;
          case 25:
              if (MENU_SCREEN_SAVES(&save_screen_state)->save_state[save_line_slots[slot]] != -1) {
 -                MenuSprite_Draw((int)&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
-+                MenuSprite_Draw((sptr)&data_parts[i], 0x401, save_screen_state.selected_save, screen_part_alphas[i]);
++                MenuSprite_Draw((sptr)&data_parts[i], 0x401, save_screen_state.selected_save,
++                                screen_part_alphas[i] * list_light);
              }
              break;
          default:
@@ -5764,16 +6005,20 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
              break;
          }
          SET_PART_MODE(0);
-@@ -6067,7 +6097,7 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6066,8 +6143,10 @@ static void SaveScreen_UpdateSaveList(void) {
+             if (kind != 0) {
                  text = (char *)table + kind;
                  MenuText_SetPen(word);
-                 MenuText_SetColor(menu_draw_color);
+-                MenuText_SetColor(menu_draw_color);
 -                MenuText_DrawWrapped((TradeValue *)text, 0x18);
++                text_color = menu_draw_color;
++                text_color.alpha = (u8)(text_color.alpha * list_light);
++                MenuText_SetColor(text_color);
 +                MenuText_DrawWrapped((u16 *)text, 0x18);
              }
          }
          word.f.mid16 += 0x340;
-@@ -6079,25 +6109,25 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6079,25 +6158,25 @@ static void SaveScreen_UpdateSaveList(void) {
          if (kind == 3) {
              switch (save_screen_state.list_step) {
              case 6:
@@ -5806,7 +6051,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
                  break;
              }
          } else {
-@@ -6109,7 +6139,7 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6109,7 +6188,7 @@ static void SaveScreen_UpdateSaveList(void) {
              case 10:
              case 11:
              case 20:
@@ -5815,7 +6060,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..8b2aaeb2e1b2870ce84c5075bfb20531
                  break;
              }
          }
-@@ -6117,6 +6147,9 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6117,6 +6196,9 @@ static void SaveScreen_UpdateSaveList(void) {
      }
  
      if (save_screen_state.list_step == 6 || save_screen_state.list_step == 7) {

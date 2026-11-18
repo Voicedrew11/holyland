@@ -141,8 +141,8 @@
        --no-audio        play no sound (it is still made, for --audio-dump)
        --controls NAME   the keyboard and mouse layout: ps2 (the default) or verdite (mouse look,
                          port/sdk/controls.c)
-       --memcard DIR     the folder that is the memory card in slot 1 (by default memcard in the
-                         data folder, next to settings.json); "none" leaves the slot empty
+       --saves DIR       the folder the game's saves go in (by default saves in the data folder, next
+                         to settings.json); "none": saving is off
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
                          with the turns mouse look, the run key and twin-stick give the game (the
                          sound follows the game's clock); replay from the same start: --clock,
@@ -197,6 +197,7 @@
 #include "port/settings.h"
 #include "port/savestate.h"
 #include "port/quicksave.h"
+#include "port/save_files.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
 #include "port/stats.h"
@@ -273,7 +274,7 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--memcard DIR|none]\n"
+            "          [--audio-dump FILE] [--no-audio] [--controls ps2|verdite] [--saves DIR|none]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
@@ -679,8 +680,8 @@ static void parse_options(int argc, char **argv) {
             port_options.audio_dump = value;
         } else if (strcmp(option, "--record-input") == 0) {
             port_options.record_input = value;
-        } else if (strcmp(option, "--memcard") == 0) {
-            port_options.memcard = value;
+        } else if (strcmp(option, "--saves") == 0) {
+            port_options.saves = value;
         } else if (strcmp(option, "--controls") == 0) {
             port_options.controls = value;
         } else if (strcmp(option, "--dump-dir") == 0) {
@@ -972,6 +973,18 @@ static void print_stats(void) {
     port_host_float_end(mode);
 }
 
+/* The save folder: --saves, or saves in the data folder */
+static void open_save_folder(void) {
+    char folder[1024];
+
+    if (port_options.saves != NULL) {
+        port_saves_open(port_options.saves);
+        return;
+    }
+    snprintf(folder, sizeof(folder), "%s/saves", port_data_dir());
+    port_saves_open(folder);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -992,7 +1005,7 @@ int main(int argc, char **argv) {
     port_memory_init();
     port_address_init();
     port_disc_open(port_options.disc);
-    port_mc_init();
+    open_save_folder();
     port_kernel_init();
     port_dmac_start();
     port_debug_init(gs_capture_at); /* before the GS: a capture asked for makes a --headless run draw */

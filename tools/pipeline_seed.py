@@ -74,7 +74,7 @@ def case_run(a, name, opts, case_name, case):
     pad = os.path.join(d, "input.pad")
     motion_compare.write_pad(pad, case)
     last = max(case["frames"]) + 2
-    cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--memcard", "none", "--input", pad,
+    cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--saves", "none", "--input", pad,
            "--frames", str(last), "--dump-frames", str(last - 1), "--dump-dir", d] + case["args"] + opts + COMMON
     env = env_for(data)
     if case["fx"]:

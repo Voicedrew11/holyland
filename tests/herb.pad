@@ -2,7 +2,7 @@
 # an item drawn large, the camera moving (docs/port/NATIVE_DRAW_TASKS.md, the proof). Played with
 # --frames 1881; the herb fills the middle of the picture from about vblank 1815 to 1840.
 # <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward, ry=0 looks down
-100 CROSS 4     # the memory card notice ("no card")
+100 CROSS 4     # the notice that there is nowhere to save (--saves none)
 300 START 4     # skip the logos
 400 START 4     # Press Start
 500 CROSS 4     # New Game (the cursor starts on it)
