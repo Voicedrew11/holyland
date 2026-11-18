@@ -14,7 +14,7 @@ the frames (below) and, last, the profile run's functions. Three tools, from the
 Where each picture's time went, thread by thread and on the GPU, in the order it happened. Built after Verdite 2's
 frame profiler (Verdite Core's `FrameProfiler`, `ProfilerPanel`), with the GPU on the same clock as the threads.
 
-**In game:** Shift+P, and recording runs while the window is open (Shift+F1 for the mouse).
+**In game:** Shift+P, and recording runs while the window is open; the mouse is the window's while it is open (the keyboard and controller still play).
 
 - A bar a picture: its length (blue, red past the spike line), the GPU's busy time in it (orange), the screen's
   budget (green). Click a bar to pick that picture; **Newest** goes back to following the newest.
@@ -78,7 +78,7 @@ frames took their place.
 
 ## A profile run
 
-**In game:** Shift+P, then Shift+F1 for the mouse, open "Functions and GPU (profile run)" (the window's last section) and
+**In game:** Shift+P, then open "Functions and GPU (profile run)" (the window's last section) and
 press **Start**. Play the
 part to look at, then **Stop** (or keep it running: the tables update twice a second). The thread list is by CPU
 time; pick one to see its functions:

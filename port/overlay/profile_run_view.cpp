@@ -18,7 +18,6 @@
 #include "profile_run_view.h"
 
 extern "C" {
-#include "port/overlay.h"
 #include "port/profile.h"
 #include "port/profile_run.h"
 #include "port/sampler.h"
@@ -189,13 +188,8 @@ std::string run_text() {
     return text;
 }
 
-void draw_controls(bool overlay_open) {
+void draw_controls() {
     bool recording = port_profile_run_recording() != 0;
-    if (!overlay_open) {
-        ImGui::TextDisabled(recording ? "Recording. %s for the mouse: Stop, Save, Copy" : "%s for the mouse: Start",
-                            port_overlay_key());
-        return;
-    }
     if (ImGui::Button(recording ? "Stop" : "Start")) {
         if (recording) {
             port_profile_run_stop();
@@ -345,14 +339,14 @@ void profile_run_view_step() {
     pictures = picture_count;
 }
 
-void profile_run_view_draw(bool overlay_open) {
+void profile_run_view_draw() {
     if (port_profile_run_recording()) {
         ImGui::SetNextItemOpen(true, ImGuiCond_Once); // (a run under way when the panel first shows: open)
     }
     if (!ImGui::CollapsingHeader("Functions and GPU (profile run)")) {
         return;
     }
-    draw_controls(overlay_open);
+    draw_controls();
     std::lock_guard<std::mutex> hold(lock);
     if (!saved_path.empty()) {
         ImGui::TextDisabled("Saved: %s", saved_path.c_str());

@@ -60,6 +60,6 @@ void profiler_step() {
     profile_run_view_step();
 }
 
-void profiler_draw(bool overlay_open) {
-    frames_view_draw(overlay_open);
+void profiler_draw() {
+    frames_view_draw();
 }

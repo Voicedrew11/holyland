@@ -7,7 +7,7 @@
 
 // (the game's thread, twice a second while the panel is shown) the run's latest report taken in
 void profile_run_view_step();
-// (inside the panel's ImGui window) the section; overlay_open: the mouse is the overlay's, the buttons work
-void profile_run_view_draw(bool overlay_open);
+// (inside the panel's ImGui window) the section and its buttons
+void profile_run_view_draw();
 
 #endif

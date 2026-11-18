@@ -828,7 +828,7 @@ int port_controls_event(const void *sdl_event) {
         }
         update_cursor();
     }
-    if (event->type == SDL_MOUSEWHEEL && port_options.input == NULL && !pc.blocked) {
+    if (event->type == SDL_MOUSEWHEEL && port_options.input == NULL && !pc.blocked && !port_overlay_holds_mouse()) {
         pc.wheel += event->wheel.y > 0 ? 1 : event->wheel.y < 0 ? -1 : 0;
     }
     return 0;
@@ -987,6 +987,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     int dx = 0;
     int dy = 0;
     int gameplay = in_gameplay();
+    int lent = port_overlay_holds_mouse(); /* the profiler has the mouse: it is let go, and nothing of it is read */
     HandsPadBindings hands_pad;
     int action;
     int slot;
@@ -999,7 +1000,11 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         pc.run = 0;
         return;
     }
-    if (pc.focused) {
+    if (lent) {
+        dx = dy = 0;
+        pc.wheel = 0;
+    }
+    if (pc.focused && !lent) {
         for (bit = 1; bit <= 5; bit++) {
             if (state & SDL_BUTTON(bit)) {
                 mouse |= 1u << bit;
@@ -1029,10 +1034,10 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     /* out of play the mouse is let go (the cursor shown) only on a screen that takes pointing: a message
        (an item picked up, a sign read) keeps it held and the cursor hidden, its buttons still press. Let go
        only after a moment out of play, so a slow frame does not flash the cursor. */
-    set_captured(pc.wants_capture && pc.focused &&
+    set_captured(!lent && pc.wants_capture && pc.focused &&
                  (gameplay || !port_menu_pointer_active() ||
                   (pc.captured && now - pc.gameplay_ms < RELEASE_AFTER_MS)));
-    feed_menu_pointer(!gameplay && !pc.captured, mouse);
+    feed_menu_pointer(!gameplay && !pc.captured && !lent, mouse);
     if (!gameplay) {
         static const int menu_buttons[3] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
 
@@ -1147,7 +1152,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         }
     }
     if (edges >> ACTION_CAPTURE_MOUSE & 1u) {
-        if (gameplay) {
+        if (gameplay && !lent) {
             pc.wants_capture = !pc.captured;
             set_captured(pc.wants_capture && pc.focused);
         }

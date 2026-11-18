@@ -12,8 +12,8 @@ bool profiler_visible();
 void profiler_show_for_shot(bool show);
 // once a vblank (port_overlay_vblank): takes a reading twice a second
 void profiler_step();
-// draws it, inside the overlay's ImGui frame; overlay_open: the settings are open, the mouse the overlay's (the
-// panel's button can be pressed)
-void profiler_draw(bool overlay_open);
+// draws it, inside the overlay's ImGui frame. While it is shown the mouse is its (port_overlay_holds_mouse): the
+// cursor free, and the keyboard too while one of its text fields is being typed in.
+void profiler_draw();
 
 #endif

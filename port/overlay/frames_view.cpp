@@ -22,7 +22,6 @@
 #include "port/zone_record.hpp"
 
 extern "C" {
-#include "port/overlay.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/zones.h"
@@ -389,7 +388,7 @@ void draw_summary() {
 }
 
 // A bar a picture: its length (blue), the GPU's busy time in it (orange), the screen's budget (a line)
-void draw_graph(bool overlay_open) {
+void draw_graph() {
     const Copy &c = state.copy;
     float width = ImGui::GetContentRegionAvail().x, height = ImGui::GetFontSize() * 7;
     ImVec2 at = ImGui::GetCursorScreenPos();
@@ -432,13 +431,8 @@ void draw_graph(bool overlay_open) {
         return;
     }
     const Bar &b = c.bars[i];
-    if (overlay_open) {
-        ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms\nclick: its timeline and zones",
-                          (unsigned long long)b.index, b.ms, b.gpu_ms);
-    } else {
-        ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms\n%s for the mouse: click to pick it",
-                          (unsigned long long)b.index, b.ms, b.gpu_ms, port_overlay_key());
-    }
+    ImGui::SetTooltip("picture %llu: %.2f ms, GPU busy %.2f ms\nclick: its timeline and zones",
+                      (unsigned long long)b.index, b.ms, b.gpu_ms);
     if (ImGui::IsItemClicked()) {
         pick(int64_t(b.index));
     }
@@ -494,15 +488,14 @@ void timeline_input(float left, float width) {
 }
 
 // Every lane with something in the picture: its zones nested by depth, on one time axis
-void draw_timeline(bool overlay_open) {
+void draw_timeline() {
     const Picked &p = state.copy.picked;
     if (!p.have) {
         ImGui::TextDisabled("No picture done yet.");
         return;
     }
-    ImGui::Text("Picture %llu: %.3f ms%s. %s%s", (unsigned long long)p.frame.index, p.frame.ms(),
-                state.picked < 0 ? " (the newest)" : "", overlay_open ? "" : port_overlay_key(),
-                overlay_open ? "Wheel: zoom; drag: move; double-click: whole." : " for the mouse to zoom and move.");
+    ImGui::Text("Picture %llu: %.3f ms%s. Wheel: zoom; drag: move; double-click: whole.",
+                (unsigned long long)p.frame.index, p.frame.ms(), state.picked < 0 ? " (the newest)" : "");
     float row_h = ImGui::GetFontSize() + 3, label_w = ImGui::GetFontSize() * 9;
     // (a lane keeps the rows it has needed since the window opened: nothing moves as the pictures change)
     state.lane_rows.resize(std::max(state.lane_rows.size(), p.spans.size()), 0);
@@ -665,7 +658,7 @@ std::string table_text(const std::vector<Row> &rows) {
     return text;
 }
 
-void draw_table_controls(const std::vector<Row> &rows, bool overlay_open) {
+void draw_table_controls(const std::vector<Row> &rows) {
     static const char *const sources[] = {"the picked picture", "averaged over the window"};
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
     ImGui::Combo("##source", &state.table_source, sources, 2);
@@ -691,14 +684,14 @@ void draw_table_controls(const std::vector<Row> &rows, bool overlay_open) {
     ImGui::SameLine();
     ImGui::Checkbox("waits", &state.show_waits);
     ImGui::SameLine();
-    if (overlay_open && ImGui::Button("Copy table")) {
+    if (ImGui::Button("Copy table")) {
         ImGui::SetClipboardText(table_text(rows).c_str());
     }
 }
 
-void draw_table(bool overlay_open) {
+void draw_table() {
     std::vector<Row> rows = table_rows();
-    draw_table_controls(rows, overlay_open);
+    draw_table_controls(rows);
     double frame_ms = state.table_source == 1 ? state.copy.avg_ms
                       : state.copy.picked.have ? state.copy.picked.frame.ms()
                                                : 0.0;
@@ -759,7 +752,7 @@ void frames_view_show(bool show) {
     }
 }
 
-void frames_view_draw(bool overlay_open) {
+void frames_view_draw() {
     bool show = wanted_shown.load();
     if (show != state.shown) {
         state.shown = show;
@@ -770,9 +763,6 @@ void frames_view_draw(bool overlay_open) {
     }
     refresh();
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoFocusOnAppearing;
-    if (!overlay_open) {
-        flags |= ImGuiWindowFlags_NoInputs;
-    }
     ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(1000, 760), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.88f);
@@ -787,16 +777,16 @@ void frames_view_draw(bool overlay_open) {
         ImGui::TextUnformatted("Recording: the first pictures are on their way (a picture is done once the GPU's times are in).");
     } else {
         draw_summary();
-        draw_graph(overlay_open);
+        draw_graph();
         draw_spikes();
         if (ImGui::CollapsingHeader("Timeline", ImGuiTreeNodeFlags_DefaultOpen)) {
-            draw_timeline(overlay_open);
+            draw_timeline();
         }
         if (ImGui::CollapsingHeader("Zones", ImGuiTreeNodeFlags_DefaultOpen)) {
-            draw_table(overlay_open);
+            draw_table();
         }
     }
     // (every function by the sampler, threads without zones and the driver's code too: what to give a zone next)
-    profile_run_view_draw(overlay_open);
+    profile_run_view_draw();
     ImGui::End();
 }

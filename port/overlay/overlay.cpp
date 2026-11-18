@@ -17,6 +17,7 @@
 // (ui-display:down.down.confirm), written as overlay_ui-<tab>[:keys].png.
 #include <SDL.h>
 
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -71,6 +72,8 @@ SDL_Renderer *renderer; // NULL on the Vulkan presenter
 bool ready;
 bool drawn; // the Vulkan presenter: this vblank's draw lists are ImGui's draw data
 bool overlay_open;
+// ImGui's WantTextInput at the last frame drawn (the drawing thread), for the game's thread
+std::atomic<bool> imgui_typing{false};
 bool show_settings = true;
 bool show_about;
 int page; // an index in `pages`
@@ -159,7 +162,6 @@ void set_open(bool value) {
     port_controls_block(overlay_open);
     if (overlay_open) {
         port_player_ui_show(nullptr); // one menu at a time: the player menu closes under this one
-        show_settings = !profiler_visible(); // opened for the profiler's mouse, the Settings window would cover it
     } else {
         port_controls_listen_cancel();
         port_settings_save();
@@ -1612,6 +1614,11 @@ bool shot_pending() {
     return shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank;
 }
 
+bool is_mouse_event(Uint32 type) {
+    return type == SDL_MOUSEMOTION || type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP ||
+           type == SDL_MOUSEWHEEL;
+}
+
 bool is_input_event(Uint32 type) {
     switch (type) {
     case SDL_KEYDOWN:
@@ -1707,6 +1714,20 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         ImGui_ImplSDL2_ProcessEvent(event);
         return is_input_event(event->type);
     }
+    // the profiler, the overlay closed: the mouse is its, and the keys while one of its text fields is typed in
+    if (!overlay_open && profiler_visible()) {
+        if (is_mouse_event(event->type)) {
+            ImGui_ImplSDL2_ProcessEvent(event);
+            return 1;
+        }
+        if (is_input_event(event->type) && imgui_typing.load()) {
+            ImGui_ImplSDL2_ProcessEvent(event);
+            return 1;
+        }
+        if (event->type == SDL_KEYUP)
+            ImGui_ImplSDL2_ProcessEvent(event); // (a key let go after typing stopped is let go in ImGui too)
+        return 0;
+    }
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
     if (!overlay_open)
         return 0;
@@ -1735,6 +1756,10 @@ extern "C" void port_overlay_shot(const unsigned int *rgba, int width, int heigh
 
 extern "C" int port_overlay_open(void) {
     return (ready && overlay_open) || port_player_ui_open();
+}
+
+extern "C" int port_overlay_holds_mouse(void) {
+    return ready && !overlay_open && profiler_visible();
 }
 
 extern "C" const char *port_overlay_key(void) {
@@ -1766,6 +1791,14 @@ extern "C" void port_overlay_vblank(void) {
         return;
     port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     profiler_step();             // Shift+P (port/overlay/profiler.cpp)
+    // typing in the profiler's text field (the overlay and the player menu closed): the game gets no keys meanwhile
+    static bool typing;
+    bool now_typing = port_overlay_holds_mouse() && !port_player_ui_open() && imgui_typing.load();
+    if (now_typing != typing) {
+        typing = now_typing;
+        if (!overlay_open && !port_player_ui_open()) // (those block the game themselves, and let go when closed)
+            port_controls_block(typing);
+    }
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
@@ -1820,7 +1853,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     draw_toast();
     draw_building();
     port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
-    profiler_draw(overlay_open);                                // Shift+P (port/overlay/profiler.cpp)
+    profiler_draw();                                            // Shift+P (port/overlay/profiler.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)
@@ -1830,6 +1863,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         update_badge_window();
     }
     (void)x, (void)y, (void)width, (void)height;
+    imgui_typing.store(ImGui::GetIO().WantTextInput);
     ImGui::Render();
     if (renderer == nullptr) {
         drawn = true; // the presenter records it, and takes the test picture
