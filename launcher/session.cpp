@@ -325,9 +325,15 @@ int Session::play() {
         std::fprintf(stdout, "%s\n", line->c_str());
         log << *line << '\n';
     }
+    int code = game->wait();
+    if (code != 0) {
+        // (in the log too: a crash the game cannot report itself, a stack overflow or a fast fail, leaves only this)
+        std::string stopped = std::string("[") + kProductId + "] the game stopped: " + platform_.describe_exit(code);
+        std::fprintf(stdout, "%s\n", stopped.c_str());
+        log << stopped << '\n';
+    }
     std::fflush(stdout);
     log.close();
-    int code = game->wait();
     if (code != 0)
         show_game_stopped(code);
     return code;
@@ -357,7 +363,7 @@ void Session::show_game_stopped(int code) {
         ImGui::BeginMenuBar();
         ImGui::TextUnformatted(kProductName);
         ImGui::EndMenuBar();
-        ImGui::TextColored(kRed, "The game stopped unexpectedly (code %d).", code);
+        ImGui::TextColored(kRed, "The game stopped unexpectedly (%s).", platform_.describe_exit(code).c_str());
         ImGui::TextWrapped("Its last messages are below; all of them are in %s. Please include that file in a "
                            "bug report.", paths_.game_log().u8string().c_str());
         ImGui::BeginChild("log", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);

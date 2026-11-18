@@ -211,6 +211,7 @@ public:
         }
         return std::make_unique<FakeProcess>(script);
     }
+    std::string describe_exit(int code) const override { return "code " + std::to_string(code); }
     std::optional<fs::path> pick_disc() const override { return std::nullopt; }
     std::optional<std::string> http_get(std::string_view, std::string_view, int) const override { return std::nullopt; }
 };

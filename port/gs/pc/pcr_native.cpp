@@ -273,7 +273,9 @@ private:
             device_.unmap_host_buffer(*l.buffer, MEMORY_ACCESS_WRITE_BIT);
         }
         BufferCreateInfo info = {};
-        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        // (the card's memory the CPU can write while there is room, else the computer's: a card without Resizable BAR
+        // has only 256 MiB of the first, and PreferDevice's fallback, the card's own memory, cannot be mapped)
+        info.domain = BufferDomain::LinkedDeviceHost;
         info.size = VkDeviceSize(room) * unit;
         info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         l.buffer = device_.create_buffer(info, nullptr);
