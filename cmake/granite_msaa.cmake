@@ -7,7 +7,7 @@
 function(kf4_granite_msaa granite)
     set(dev ${granite}/vulkan/device.cpp)
     kf4_granite_edit(${dev} "\t\th.u32(info.color_attachments[i]->get_image().get_swapchain_layout());"
-        "\t\th.u32(info.color_attachments[i]->get_image().get_create_info().samples); // (holyland: cmake/granite_msaa.cmake)" FALSE)
+        "\t\th.u32(info.color_attachments[i]->get_image().get_create_info().samples); // (darker-reality: cmake/granite_msaa.cmake)" FALSE)
     kf4_granite_edit(${dev} "\t\tif (info.depth_stencil->get_image().get_create_info().domain == ImageDomain::Transient)"
-        "\t\th.u32(info.depth_stencil->get_image().get_create_info().samples); // (holyland: cmake/granite_msaa.cmake)" TRUE)
+        "\t\th.u32(info.depth_stencil->get_image().get_create_info().samples); // (darker-reality: cmake/granite_msaa.cmake)" TRUE)
 endfunction()

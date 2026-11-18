@@ -39,42 +39,48 @@ function(kf4_granite_depth_bounds granite)
     file(READ ${hpp} text)
     string(FIND "${text}" "uint32_t depth_bounds_test : 1;" have)
     if(have EQUAL -1)
+        set(before "${text}")
         string(REPLACE "uint32_t padding : 7;" "uint32_t depth_bounds_test : 1; uint32_t padding : 6;" text "${text}")
-        file(WRITE ${hpp} "${text}")
+        if(NOT text STREQUAL before) # (a later edit may have moved it on: a release's source is read-only)
+            file(WRITE ${hpp} "${text}")
+        endif()
     endif()
     kf4_granite_edit(${hpp} "\tinline void set_color_write_mask(uint32_t write_mask)"
-        "\tinline void set_depth_bounds_test(bool depth_bounds_test) { SET_STATIC_STATE(depth_bounds_test); } // (holyland)" TRUE)
+        "\tinline void set_depth_bounds_test(bool depth_bounds_test) { SET_STATIC_STATE(depth_bounds_test); } // (darker-reality)" TRUE)
     # the pipeline: the test on, its bounds dynamic
     file(READ ${cpp} text)
     string(FIND "${text}" "VkDynamicState states[8] = {" have)
     if(have EQUAL -1)
+        set(before "${text}")
         string(REPLACE "VkDynamicState states[7] = {" "VkDynamicState states[8] = {" text "${text}")
-        file(WRITE ${cpp} "${text}")
+        if(NOT text STREQUAL before) # (granite_dynamic_state.cmake makes it states[32]: a release's source is read-only)
+            file(WRITE ${cpp} "${text}")
+        endif()
     endif()
     kf4_granite_edit(${cpp} "\tif (compile.static_state.state.stencil_test)"
-        "\tif (compile.static_state.state.depth_bounds_test) states[dyn.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS; // (holyland)" TRUE)
+        "\tif (compile.static_state.state.depth_bounds_test) states[dyn.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS; // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\tds.depthWriteEnable = "
-        "\tds.depthBoundsTestEnable = compile.compatible_render_pass->has_depth(compile.subpass_index) && compile.static_state.state.depth_bounds_test != 0; // (holyland)" TRUE)
+        "\tds.depthBoundsTestEnable = compile.compatible_render_pass->has_depth(compile.subpass_index) && compile.static_state.state.depth_bounds_test != 0; // (darker-reality)" TRUE)
     # the device feature
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.depthBounds) enabled_features.depthBounds = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.depthBounds) enabled_features.depthBounds = VK_TRUE; // (darker-reality)" TRUE)
     # and an indirect draw's first instance (the PC renderer's runs of native batches: pcr_canvas.cpp's Runs)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.drawIndirectFirstInstance) enabled_features.drawIndirectFirstInstance = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.drawIndirectFirstInstance) enabled_features.drawIndirectFirstInstance = VK_TRUE; // (darker-reality)" TRUE)
     # and dual-source blending (the runs' blend: the colour's factors from the fragment shader)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.dualSrcBlend) enabled_features.dualSrcBlend = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.dualSrcBlend) enabled_features.dualSrcBlend = VK_TRUE; // (darker-reality)" TRUE)
     # and depth clamp, on in every pipeline where the GPU has it (the PC renderer's exact Z: a triangle's corners' depth
     # a bound a little nearer than its pixels' Z, which near the Z buffer's largest Z is past 1: clamped, not clipped)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.depthClamp) enabled_features.depthClamp = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.depthClamp) enabled_features.depthClamp = VK_TRUE; // (darker-reality)" TRUE)
     # and clip distances (the native draws' cut of the mirror image at its water: pcr_nd000.vert's mirror_cut)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.shaderClipDistance) enabled_features.shaderClipDistance = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.shaderClipDistance) enabled_features.shaderClipDistance = VK_TRUE; // (darker-reality)" TRUE)
     # and geometry shaders' feature: no geometry shader, but the fragment shaders read gl_PrimitiveID (the developers'
     # pixel trace, pcr_prim.h), which needs it (the Vulkan validation layer's VUID-VkShaderModuleCreateInfo-pCode-08740)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
-        "\t\tif (pdf2.features.geometryShader) enabled_features.geometryShader = VK_TRUE; // (holyland)" TRUE)
+        "\t\tif (pdf2.features.geometryShader) enabled_features.geometryShader = VK_TRUE; // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\traster.depthBiasEnable = compile.static_state.state.depth_bias_enable != 0;"
-        "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (holyland)" FALSE)
+        "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (darker-reality)" FALSE)
 endfunction()

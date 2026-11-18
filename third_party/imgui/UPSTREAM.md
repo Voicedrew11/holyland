@@ -15,4 +15,4 @@ It draws the settings overlay (`port/overlay/overlay.cpp`, F1) over the game's p
 Not copied: the demo, the examples, the misc folder and the other backends.
 
 Keep these files as they are upstream, so they can be updated by copying a newer release over them.
-holyland's own code goes in `port/overlay/`.
+Darker Reality's own code goes in `port/overlay/`.

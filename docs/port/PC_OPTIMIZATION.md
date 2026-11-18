@@ -36,7 +36,7 @@ differences under about 5% as noise.
 Each run is a real full-screen window on the screen, with the owner's settings read from a copy of the data folder:
 
 ```sh
-D=~/.cache/kf4hang/data    # a copy of ~/.config/holyland: settings.json and the pipeline cache
+D=~/.cache/kf4hang/data    # a copy of ~/.config/darker-reality: settings.json and the pipeline cache
 KF4_DATA_DIR=$D KF4_READ_SETTINGS=1 KF4_GSN_GPU_TIME=1 out/linux-clang/kf4 --disc <image> --no-audio --saves none \
     --input tests/newgame.pad --teleport 1900:9:0 --invincible --frames 4700 --stats \
     [--profile-at 2700:20:FILE]        # with KF4_GPU_DETAIL=1 for the split by shader state

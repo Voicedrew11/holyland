@@ -1,0 +1,110 @@
+// The desktop systems' build (build_strategy.h): the release's source configured with CMake and built with
+// Ninja, with the tools the release ships, as the developers' release preset builds it (CMakePresets.json
+// "release": LTO, no frame pointers), then the game's files kept and the rest removed.
+#include <string>
+#include <system_error>
+#include <vector>
+
+#include "build_log.h"
+#include "build_strategy.h"
+#include "platform.h"
+
+namespace launcher {
+
+namespace {
+
+class LocalCMakeBuild final : public BuildStrategy {
+public:
+    BuildResult build(const Platform &platform, const BuildRequest &request, BuildProgress &progress) const override;
+};
+
+// runs one step, its output into the log; "" when it worked, else why not
+std::string run_step(const Platform &platform, const ProcessSpec &spec, BuildProgress &progress) {
+    std::string why;
+    std::string command;
+    for (const std::string &arg : spec.argv)
+        command += (command.empty() ? "" : " ") + arg;
+    progress.log_line("> " + command);
+    auto process = platform.start(spec, why);
+    if (!process)
+        return "Could not start " + spec.argv[0] + ": " + why;
+    progress.running(process.get());
+    while (auto line = process->read_line()) {
+        progress.log_line(*line);
+        if (auto step = ninja_step(*line))
+            progress.steps(step->done, step->total);
+    }
+    int code = process->wait();
+    progress.running(nullptr);
+    if (progress.cancelled())
+        return "Cancelled.";
+    if (code != 0)
+        return "The build stopped with an error (code " + std::to_string(code) + ").";
+    return {};
+}
+
+std::string path_option(const char *name, const fs::path &path) {
+    return std::string("-D") + name + "=" + path.generic_string();
+}
+
+BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest &request,
+                                   BuildProgress &progress) const {
+    std::string why;
+    auto tools = platform.toolchain(request.content, why);
+    if (!tools)
+        return {false, "The build tools are missing from this release: " + why};
+    fs::path source = request.content / "src";
+    fs::path obj = request.build_dir / "obj";
+    std::error_code error;
+    fs::create_directories(obj, error);
+    if (error)
+        return {false, "Cannot make the build folder " + obj.string() + ": " + error.message()};
+
+    progress.stage("Preparing the build");
+    ProcessSpec configure;
+    configure.argv = {tools->cmake.string(), "-G", "Ninja", "-S", source.string(), "-B", obj.string(),
+                      path_option("CMAKE_MAKE_PROGRAM", tools->ninja), path_option("CMAKE_C_COMPILER", tools->c_compiler),
+                      path_option("CMAKE_CXX_COMPILER", tools->cxx_compiler), "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                      "-DKF4_LTO=ON", "-DKF4_FRAME_POINTERS=OFF", "-DKF4_TESTS=OFF", "-DKF4_DECOMP_PREPATCHED=ON",
+                      "-DKF4_VERSION=" + request.version};
+    configure.argv.insert(configure.argv.end(), tools->cmake_options.begin(), tools->cmake_options.end());
+    configure.working_dir = request.build_dir;
+    configure.env = tools->env;
+    configure.capture_output = true;
+    if (std::string failed = run_step(platform, configure, progress); !failed.empty())
+        return {false, failed};
+
+    progress.stage("Building the game");
+    ProcessSpec compile;
+    compile.argv = {tools->cmake.string(), "--build", obj.string(), "--target", "kf4"};
+    compile.working_dir = request.build_dir;
+    compile.env = tools->env;
+    compile.capture_output = true;
+    if (std::string failed = run_step(platform, compile, progress); !failed.empty())
+        return {false, failed};
+
+    progress.stage("Finishing");
+    std::vector<fs::path> keep = platform.game_files(obj);
+    if (keep.empty())
+        return {false, "The build finished but made no game program."};
+    keep.insert(keep.end(), tools->runtime_files.begin(), tools->runtime_files.end());
+    for (const fs::path &file : keep) {
+        fs::path copy = request.build_dir / file.filename();
+        fs::copy_file(file, copy, fs::copy_options::overwrite_existing, error);
+        if (error)
+            return {false, "Cannot copy " + file.string() + ": " + error.message()};
+        // a copy of the release's read-only file stays removable (Windows will not delete a read-only one)
+        fs::permissions(copy, fs::perms::owner_write, fs::perm_options::add, error);
+    }
+    fs::remove_all(obj, error); // the objects are big and never used again; a failure here is harmless
+    return {true, {}};
+}
+
+} // namespace
+
+const BuildStrategy &local_cmake_build() {
+    static const LocalCMakeBuild strategy;
+    return strategy;
+}
+
+} // namespace launcher

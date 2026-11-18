@@ -158,7 +158,7 @@ std::string short_name(const std::string &name) {
 std::string run_text() {
     std::string text;
     char line[400];
-    std::snprintf(line, sizeof(line), "holyland profile run: %.1f s, %llu pictures, GPU %.2f ms a picture\n", seconds,
+    std::snprintf(line, sizeof(line), "Darker Reality profile run: %.1f s, %llu pictures, GPU %.2f ms a picture\n", seconds,
                   (unsigned long long)pictures, gpu_ms_per_picture);
     text += line;
     for (const Thread &t : threads) {

@@ -187,6 +187,7 @@
 
 #include "port/antialias.h"
 #include "port/automap.h"
+#include "port/data_dir.h"
 #include "port/hands.h"
 #include "port/audio.h"
 #include "port/debug.h"
@@ -985,6 +986,10 @@ static void open_save_folder(void) {
     port_saves_open(folder);
 }
 
+static const char *read_env(const char *name) {
+    return getenv(name);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -993,6 +998,7 @@ int main(int argc, char **argv) {
     SetUnhandledExceptionFilter(crash_report);
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
+    data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, holyland, before any use */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();

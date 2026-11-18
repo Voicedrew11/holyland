@@ -34,9 +34,9 @@ extern const size_t pcr_pipeline_seed_size;
 
 namespace Vulkan {
 // (cmake/granite_pipeline_warm.inc)
-extern void (*holyland_on_compile)(Device *device, const DeferredPipelineCompile &compile, bool compute, int64_t ns,
+extern void (*kf4_on_compile)(Device *device, const DeferredPipelineCompile &compile, bool compute, int64_t ns,
                                    bool sync, bool ok);
-extern void (*holyland_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
+extern void (*kf4_on_render_pass)(Util::Hash hash, const RenderPassInfo &info);
 } // namespace Vulkan
 
 using namespace Vulkan;
@@ -195,8 +195,8 @@ void make(Device &device, DeferredPipelineCompile compile, Program *program, con
     compile.program = program;
     compile.layout = program->get_pipeline_layout();
     compile.compatible_render_pass = &pass;
-    compile.cache = CommandBuffer::holyland_pipeline_cache(&device);
-    CommandBuffer::holyland_rehash(compile, false);
+    compile.cache = CommandBuffer::kf4_pipeline_cache(&device);
+    CommandBuffer::kf4_rehash(compile, false);
     if (program->get_pipeline(compile.hash).pipeline != VK_NULL_HANDLE) {
         return;
     }
@@ -462,7 +462,7 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
     info.depth_stencil = r.depth ? &images.second->get_view() : nullptr;
     info.num_subpasses = r.subpasses;
     info.subpasses = r.subpasses ? r.subpass : nullptr;
-    const RenderPass &pass = CommandBuffer::holyland_render_pass(&device, info);
+    const RenderPass &pass = CommandBuffer::kf4_render_pass(&device, info);
     DeferredPipelineCompile compile;
     memset(&compile, 0, sizeof(compile));
     memcpy(&compile.static_state, &r.static_state, sizeof(r.static_state));
@@ -491,7 +491,7 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
         named.program = program;
         named.layout = program->get_pipeline_layout();
         named.compatible_render_pass = &pass;
-        CommandBuffer::holyland_rehash(named, false);
+        CommandBuffer::kf4_rehash(named, false);
         std::lock_guard<std::mutex> hold(store.hashes_lock);
         if (!store.hashes.insert(uint64_t(named.hash)).second) {
             return;
@@ -758,8 +758,8 @@ void warm_watch(Device &device, Program *const *programs, uint32_t count, const 
             warm.role_of[programs[i]] = i;
         }
     }
-    Vulkan::holyland_on_compile = on_compile;
-    Vulkan::holyland_on_render_pass = on_render_pass;
+    Vulkan::kf4_on_compile = on_compile;
+    Vulkan::kf4_on_render_pass = on_render_pass;
     if (store.pre_on) {
         start_precompile(); // (when the settings came first)
     } else if (store.ahead_on) {
@@ -829,8 +829,8 @@ void store_open(Device &device, const char *cache_path) {
     load_list();
     store.open = true;
     // (the hooks from here: the list is kept from the first pipeline drawn with; warm_watch sets them too)
-    Vulkan::holyland_on_compile = on_compile;
-    Vulkan::holyland_on_render_pass = on_render_pass;
+    Vulkan::kf4_on_compile = on_compile;
+    Vulkan::kf4_on_render_pass = on_render_pass;
     store.saver = std::thread(saver);
     if (warm.log || getenv("KF4_PC_PIPELINE_LOG")) {
         fprintf(stderr, "[pcr] pipeline cache %s: %s (%llu bytes), %zu pipelines listed to make ahead\n",

@@ -1,20 +1,20 @@
-// (holyland) Granite's command buffer with Vulkan's dynamic state for depth, stencil, culling, topology and blend
+// (darker-reality) Granite's command buffer with Vulkan's dynamic state for depth, stencil, culling, topology and blend
 // constants (Vulkan 1.3's extended dynamic state) and, where the device has VK_EXT_extended_dynamic_state3's, for
 // blend enable, the blend equation and the colour write mask. Included into vulkan/command_buffer.cpp (inside
 // namespace Vulkan) by cmake/granite_dynamic_state.cmake, which also adds the calls into Granite's own code.
 //
 // A command buffer whose static state has `dynamic_ds` (and `dynamic_blend`) set (set_dynamic_state) makes its pipelines with that state dynamic and looks them up by a hash without it:
-// draws that differ only there share one pipeline, and each draw sets what differs (holyland_flush_dynamic) instead of
+// draws that differ only there share one pipeline, and each draw sets what differs (kf4_flush_dynamic) instead of
 // binding another.
 // The rest of Granite is as it was: a command buffer without the bits makes and binds its pipelines as before.
 
-std::atomic<uint64_t> holyland_pipeline_binds{0}; // graphics pipelines bound (--stats)
+std::atomic<uint64_t> kf4_pipeline_binds{0}; // graphics pipelines bound (--stats)
 
-enum { HOLYLAND_DYNAMIC_BIT = 1u << 31 }; // (a pipeline's dynamic_mask: made with the state below dynamic)
+enum { DARKER_REALITY_DYNAMIC_BIT = 1u << 31 }; // (a pipeline's dynamic_mask: made with the state below dynamic)
 
 // Primitive topology's class (Vulkan's dynamic topology may change only within one without
 // dynamicPrimitiveTopologyUnrestricted): the pipeline is looked up by the class
-static uint32_t holyland_topology_class(uint32_t topology)
+static uint32_t kf4_topology_class(uint32_t topology)
 {
 	switch (topology)
 	{
@@ -33,7 +33,7 @@ static uint32_t holyland_topology_class(uint32_t topology)
 }
 
 // The static state a pipeline is looked up by: the dynamic state left out
-static PipelineState holyland_hash_state(const PipelineState &in)
+static PipelineState kf4_hash_state(const PipelineState &in)
 {
 	PipelineState s = in;
 	if (s.state.dynamic_ds)
@@ -53,7 +53,7 @@ static PipelineState holyland_hash_state(const PipelineState &in)
 		s.state.stencil_back_compare_op = 0;
 		s.state.cull_mode = 0;
 		s.state.front_face = 0;
-		s.state.topology = holyland_topology_class(in.state.topology);
+		s.state.topology = kf4_topology_class(in.state.topology);
 	}
 	if (s.state.dynamic_ds && s.state.dynamic_blend)
 	{
@@ -71,7 +71,7 @@ static PipelineState holyland_hash_state(const PipelineState &in)
 
 // The pipeline's dynamic states, those not in states[] yet added (Granite's own, from the state it is made with, may
 // be some of them); returns the bits for its dynamic_mask
-static uint32_t holyland_dynamic_states(const Device &device, const PipelineState &s, VkDynamicState *states,
+static uint32_t kf4_dynamic_states(const Device &device, const PipelineState &s, VkDynamicState *states,
                                         uint32_t &count)
 {
 	auto add = [&](VkDynamicState state) {
@@ -103,32 +103,32 @@ static uint32_t holyland_dynamic_states(const Device &device, const PipelineStat
 		add(VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT);
 		add(VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT);
 	}
-	return HOLYLAND_DYNAMIC_BIT | COMMAND_BUFFER_DIRTY_STENCIL_REFERENCE_BIT;
+	return DARKER_REALITY_DYNAMIC_BIT | COMMAND_BUFFER_DIRTY_STENCIL_REFERENCE_BIT;
 }
 
 // A pipeline about to be bound: whether it is to be (bind_pipeline). A command buffer with dynamic state does not bind
 // the graphics pipeline it has bound already (Granite binds again after a render pass begins, or a program is set,
 // whichever pipeline it then finds). And a pipeline without the dynamic state makes Vulkan's dynamic state unknown.
-bool CommandBuffer::holyland_bind(VkPipelineBindPoint bind_point, VkPipeline pipeline, uint32_t active_dynamic_state)
+bool CommandBuffer::kf4_bind(VkPipelineBindPoint bind_point, VkPipeline pipeline, uint32_t active_dynamic_state)
 {
 	if (bind_point != VK_PIPELINE_BIND_POINT_GRAPHICS)
 		return true;
-	if (pipeline_state.static_state.state.dynamic_ds && pipeline == holyland_bound)
+	if (pipeline_state.static_state.state.dynamic_ds && pipeline == kf4_bound)
 		return false;
-	holyland_bound = pipeline;
-	holyland_pipeline_binds.fetch_add(1, std::memory_order_relaxed);
-	if (!(active_dynamic_state & HOLYLAND_DYNAMIC_BIT))
-		holyland_emitted.valid = false;
+	kf4_bound = pipeline;
+	kf4_pipeline_binds.fetch_add(1, std::memory_order_relaxed);
+	if (!(active_dynamic_state & DARKER_REALITY_DYNAMIC_BIT))
+		kf4_emitted.valid = false;
 	return true;
 }
 
 // Before a draw: the dynamic state the draw's differs in from what was set last (all of it after a pipeline bound
 // without it), as Granite would have made it into the pipeline (build_graphics_pipeline: depth and stencil only with
 // such an attachment, a colour attachment's blending and writes only where it is used and the program writes it)
-void CommandBuffer::holyland_flush_dynamic()
+void CommandBuffer::kf4_flush_dynamic()
 {
 	auto &s = pipeline_state.static_state.state;
-	auto &e = holyland_emitted;
+	auto &e = kf4_emitted;
 	const RenderPass *rp = pipeline_state.compatible_render_pass;
 	unsigned sub = pipeline_state.subpass_index;
 	bool depth = rp->has_depth(sub), stencil = rp->has_stencil(sub);

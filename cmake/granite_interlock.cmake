@@ -6,8 +6,8 @@
 function(kf4_granite_interlock granite)
     set(ctx_hpp ${granite}/vulkan/context.hpp)
     set(ctx ${granite}/vulkan/context.cpp)
-    kf4_granite_edit(${ctx_hpp} "\tVkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features = {}; // (holyland)"
-        "\tVkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_features = {}; // (holyland)" FALSE)
+    kf4_granite_edit(${ctx_hpp} "\tVkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features = {}; // (darker-reality)"
+        "\tVkPhysicalDeviceFragmentShaderInterlockFeaturesEXT interlock_features = {}; // (darker-reality)" FALSE)
     kf4_granite_edit(${ctx} "\tif (has_extension(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME))"
-        "\tif (has_extension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME); ADD_CHAIN(ext.interlock_features, FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT); } // (holyland)" TRUE)
+        "\tif (has_extension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME); ADD_CHAIN(ext.interlock_features, FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT); } // (darker-reality)" TRUE)
 endfunction()

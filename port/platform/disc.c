@@ -28,6 +28,7 @@
 #endif
 
 #include "port/host.h"
+#include "port/iso9660.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/zones.h"
@@ -79,26 +80,8 @@ static void add_file(const char *path, const char *host_path, uint32_t lsn, uint
     f->is_member = is_member;
 }
 
-static int seek_image(uint64_t offset) {
-#ifdef _WIN32
-    return _fseeki64(image, (__int64)offset, SEEK_SET);
-#else
-    return fseeko(image, (off_t)offset, SEEK_SET);
-#endif
-}
-
 static int read_image(uint32_t lsn, uint32_t sectors, void *buffer) {
-    size_t bytes = (size_t)sectors * DISC_SECTOR_SIZE;
-    size_t got;
-
-    if (seek_image((uint64_t)lsn * DISC_SECTOR_SIZE) != 0) {
-        return 0;
-    }
-    got = fread(buffer, 1, bytes, image);
-    if (got < bytes) {
-        memset((unsigned char *)buffer + got, 0, bytes - got);
-    }
-    return got > 0;
+    return iso9660_read(image, lsn, sectors, buffer);
 }
 
 static uint32_t le32(const unsigned char *p) {
@@ -106,67 +89,24 @@ static uint32_t le32(const unsigned char *p) {
 }
 
 /* ---- An ISO 9660 image ------------------------------------------------------------------------ */
-static void walk_iso_directory(const char *dir_path, uint32_t lsn, uint32_t size, int depth) {
-    unsigned char *data;
-    uint32_t sectors = (size + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
-    uint32_t offset = 0;
-
-    if (depth > 8 || sectors == 0) {
-        return;
-    }
-    data = malloc((size_t)sectors * DISC_SECTOR_SIZE);
-    if (data == NULL || !read_image(lsn, sectors, data)) {
-        PORT_FATAL("cannot read the disc's directory at sector %u", lsn);
-    }
-    while (offset < size) {
-        const unsigned char *record = data + offset;
-        unsigned length = record[0];
-        char name[256];
-        char path[512];
-        unsigned name_length;
-        unsigned i;
-
-        if (length == 0) {
-            /* records do not cross a sector: the rest of this one is empty */
-            offset = (offset / DISC_SECTOR_SIZE + 1) * DISC_SECTOR_SIZE;
-            continue;
-        }
-        name_length = record[32];
-        if (!(name_length == 1 && (record[33] == 0 || record[33] == 1))) {
-            for (i = 0; i < name_length && i < sizeof(name) - 1; i++) {
-                name[i] = (char)record[33 + i];
-            }
-            name[i] = 0;
-            /* the version (";1") is not part of the name kept */
-            if (strchr(name, ';')) {
-                *strchr(name, ';') = 0;
-            }
-            snprintf(path, sizeof(path), "%s\\%s", dir_path, name);
-            if (record[25] & 2) {
-                walk_iso_directory(path, le32(record + 2), le32(record + 10), depth + 1);
-            } else {
-                add_file(path, NULL, le32(record + 2), le32(record + 10), 0);
-            }
-        }
-        offset += length;
-    }
-    free(data);
+static void add_image_file(void *context, const char *path, uint32_t lsn, uint32_t size) {
+    (void)context;
+    add_file(path, NULL, lsn, size, 0);
 }
 
 static void open_iso(const char *path) {
-    unsigned char pvd[DISC_SECTOR_SIZE];
-    const unsigned char *root;
-
     image = fopen(path, "rb");
     if (image == NULL) {
         PORT_FATAL("cannot open the disc image %s", path);
     }
-    if (!read_image(16, 1, pvd) || pvd[0] != 1 || memcmp(pvd + 1, "CD001", 5) != 0) {
+    switch (iso9660_list(image, &disc_sectors, add_image_file, NULL)) {
+    case ISO9660_OK:
+        break;
+    case ISO9660_NOT_ISO:
         PORT_FATAL("%s is not an ISO 9660 image", path);
+    case ISO9660_BAD_DIRECTORY:
+        PORT_FATAL("cannot read the directories of the disc image %s", path);
     }
-    disc_sectors = le32(pvd + 80);
-    root = pvd + 156;
-    walk_iso_directory("", le32(root + 2), le32(root + 10), 0);
 }
 
 /* ---- An extracted disc ------------------------------------------------------------------------ */

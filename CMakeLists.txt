@@ -140,6 +140,14 @@ elseif(KF4_PGO)
 endif()
 
 # ---- The PS2 side ---------------------------------------------------------------------------------
+# The release this build is (port/include/port/version.h): the launcher gives it from the release's tag;
+# empty in a developer's build
+set(KF4_VERSION "" CACHE STRING "The release's version (0.2.0), set by the launcher's build; empty for a developer's")
+if(NOT KF4_VERSION MATCHES "^([0-9]+(\\.[0-9]+)*)?$")
+    message(FATAL_ERROR "KF4_VERSION must be dotted numbers (0.2.0), not '${KF4_VERSION}'")
+endif()
+configure_file(port/platform/version.c.in ${CMAKE_BINARY_DIR}/version.c @ONLY)
+
 add_library(kf4_port STATIC
     port/platform/memory.c
     port/platform/ee_address.c
@@ -160,6 +168,7 @@ add_library(kf4_port STATIC
     port/platform/mouse_lead.c
     port/platform/screen_vblank.c
     port/platform/disc.c
+    port/platform/iso9660.c
     port/platform/ipu.c
     port/platform/host_time.c
     port/platform/int_divide.c
@@ -184,6 +193,9 @@ add_library(kf4_port STATIC
     port/platform/profile_run.c
     port/debug/gs_capture.c
     port/overlay/settings.c
+    port/platform/data_dir.c
+    port/platform/update_notice.c
+    ${CMAKE_BINARY_DIR}/version.c
     port/overlay/live_settings.c
     third_party/cjson/cJSON.c
     port/sdk/sif.c
@@ -280,9 +292,24 @@ elseif(NOT APPLE)
     if(PkgConfig_FOUND)
         pkg_check_modules(LIBDRM QUIET IMPORTED_TARGET libdrm)
     endif()
+    # a release's build has no pkg-config: libdrm is found in its sysroot by its files (docs/port/LAUNCHER.md)
+    if(NOT LIBDRM_FOUND)
+        find_path(KF4_LIBDRM_INCLUDE xf86drm.h PATH_SUFFIXES libdrm)
+        find_library(KF4_LIBDRM_LIBRARY drm)
+        if(KF4_LIBDRM_INCLUDE AND KF4_LIBDRM_LIBRARY)
+            add_library(kf4_libdrm INTERFACE)
+            target_include_directories(kf4_libdrm INTERFACE ${KF4_LIBDRM_INCLUDE} ${KF4_LIBDRM_INCLUDE}/libdrm)
+            target_link_libraries(kf4_libdrm INTERFACE ${KF4_LIBDRM_LIBRARY})
+            set(LIBDRM_FOUND TRUE)
+        endif()
+    endif()
     if(LIBDRM_FOUND)
         target_compile_definitions(kf4_port PRIVATE KF4_HAVE_LIBDRM)
-        target_link_libraries(kf4_port PRIVATE PkgConfig::LIBDRM)
+        if(TARGET PkgConfig::LIBDRM)
+            target_link_libraries(kf4_port PRIVATE PkgConfig::LIBDRM)
+        else()
+            target_link_libraries(kf4_port PRIVATE kf4_libdrm)
+        endif()
     else()
         message(STATUS "libdrm not found: the screen's vblanks are not known, and --frame-rate monitor times the pictures by the rate alone")
     endif()
@@ -316,7 +343,7 @@ if(KF4_USE_SDL AND SDL2_FOUND)
     endif()
     target_link_libraries(imgui PUBLIC ${KF4_SDL2_LINK})
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
-    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/automap_view.cpp
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/update_badge.cpp port/overlay/automap_view.cpp
                    port/overlay/profiler.cpp
                    port/overlay/frames_view.cpp
                    port/overlay/profile_run_view.cpp)
@@ -336,35 +363,9 @@ option(KF4_USE_PARALLEL_GS "Draw with paraLLEl-GS (third_party/parallel-gs)" ON)
 if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/volk/volk.h)
     enable_language(CXX)
     set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
-    # Granite with the depth bounds test (cmake/granite_depth_bounds.cmake: made in its checkout)
-    include(cmake/granite_depth_bounds.cmake)
-    kf4_granite_depth_bounds(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with dynamic state for the PC renderer's draws (cmake/granite_dynamic_state.cmake, after the above)
-    include(cmake/granite_dynamic_state.cmake)
-    kf4_granite_dynamic_state(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with the hooks of the pipeline list (cmake/granite_pipeline_warm.cmake, after the above)
-    include(cmake/granite_pipeline_warm.cmake)
-    kf4_granite_pipeline_warm(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    kf4_granite_pipeline_cache_locks(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with a render pass's samples in its hash (cmake/granite_msaa.cmake: from the PC renderer's MSAA, removed; kept as a fix)
-    include(cmake/granite_msaa.cmake)
-    kf4_granite_msaa(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with an image's first layout transition visible to what follows (cmake/granite_layout_sync.cmake)
-    include(cmake/granite_layout_sync.cmake)
-    kf4_granite_layout_sync(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with a buffer bound again unchanged keeping its descriptor set (cmake/granite_descriptor_reuse.cmake)
-    include(cmake/granite_descriptor_reuse.cmake)
-    kf4_granite_descriptor_reuse(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with a frame context moved on only when no command buffer is open (cmake/granite_try_frame_context.cmake)
-    include(cmake/granite_try_frame_context.cmake)
-    kf4_granite_try_frame_context(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with the GPU's work of the next frame context waited for without the device lock
-    # (cmake/granite_frame_context_wait.cmake, after the above)
-    include(cmake/granite_frame_context_wait.cmake)
-    kf4_granite_frame_context_wait(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
-    # and with fragment shader interlock (cmake/granite_interlock.cmake: the PC renderer's depth rule)
-    include(cmake/granite_interlock.cmake)
-    kf4_granite_interlock(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # Granite with Darker Reality's edits, made in its checkout (cmake/granite_edits.cmake lists them)
+    include(cmake/granite_edits.cmake)
+    kf4_granite_edits(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
     # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
@@ -417,50 +418,62 @@ set(KF4_SRC ${CMAKE_BINARY_DIR}/decomp_src)
 if(NOT EXISTS ${KF4_DECOMP}/src/game)
     message(FATAL_ERROR "decomp/src/game is missing: run git submodule update --init")
 endif()
-find_package(Git REQUIRED)
+# A release (packaging/payload.sh) carries decomp/src/game and src/nonmatching with the patches already
+# applied and no git, so that the launcher can build on a player's machine with only the shipped tools
+# (docs/port/LAUNCHER.md). There the copy is taken as it is.
+option(KF4_DECOMP_PREPATCHED "decomp/ already has the patches applied (a release's source; no git needed)" OFF)
+if(KF4_DECOMP_PREPATCHED)
+    file(REMOVE_RECURSE ${KF4_STAGE})
+    file(MAKE_DIRECTORY ${KF4_STAGE}/src)
+    file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_STAGE}/src
+        NO_SOURCE_PERMISSIONS)
+else()
+    find_package(Git REQUIRED)
 
-file(GLOB_RECURSE KF4_PATCHES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/patches/*.patch)
-list(SORT KF4_PATCHES)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_PATCHES})
-# moving the decomp pin re-runs configure: git's HEAD file of the submodule changes with it
-execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} rev-parse --git-path HEAD
-    OUTPUT_VARIABLE KF4_DECOMP_HEAD OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
-if(rc EQUAL 0)
-    get_filename_component(KF4_DECOMP_HEAD ${KF4_DECOMP_HEAD} ABSOLUTE BASE_DIR ${KF4_DECOMP})
-    if(EXISTS ${KF4_DECOMP_HEAD})
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_DECOMP_HEAD})
+    file(GLOB_RECURSE KF4_PATCHES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/patches/*.patch)
+    list(SORT KF4_PATCHES)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_PATCHES})
+    # moving the decomp pin re-runs configure: git's HEAD file of the submodule changes with it
+    execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} rev-parse --git-path HEAD
+        OUTPUT_VARIABLE KF4_DECOMP_HEAD OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
+    if(rc EQUAL 0)
+        get_filename_component(KF4_DECOMP_HEAD ${KF4_DECOMP_HEAD} ABSOLUTE BASE_DIR ${KF4_DECOMP})
+        if(EXISTS ${KF4_DECOMP_HEAD})
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${KF4_DECOMP_HEAD})
+        endif()
     endif()
-endif()
 
-# decomp/ must be at its pin, unedited: an edit there would be compiled without being in a patch
-execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} status --porcelain -- src/game src/nonmatching
-    OUTPUT_VARIABLE KF4_DECOMP_EDITS OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_VARIABLE out RESULT_VARIABLE rc)
-if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "git status failed in ${KF4_DECOMP}:\n${out}")
-endif()
-if(NOT "${KF4_DECOMP_EDITS}" STREQUAL "")
-    message(FATAL_ERROR "decomp/ has local changes:\n${KF4_DECOMP_EDITS}\n"
-        "decomp/ must stay at its pin, unedited. PC edits go in patches/ (tools/patches.py).")
-endif()
-
-# the staging copy: the pinned decomp with the patches applied, rebuilt from scratch every configure
-file(REMOVE_RECURSE ${KF4_STAGE})
-file(MAKE_DIRECTORY ${KF4_STAGE}/src)
-file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_STAGE}/src)
-# its own repo, so that git apply works on paths relative to the copy's root (not holyland's)
-execute_process(COMMAND ${GIT_EXECUTABLE} init -q WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc
-    OUTPUT_VARIABLE out ERROR_VARIABLE out)
-if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "git init failed in ${KF4_STAGE}:\n${out}")
-endif()
-foreach(patch ${KF4_PATCHES})
-    execute_process(COMMAND ${GIT_EXECUTABLE} apply --whitespace=nowarn ${patch}
-        WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+    # decomp/ must be at its pin, unedited: an edit there would be compiled without being in a patch
+    execute_process(COMMAND ${GIT_EXECUTABLE} -C ${KF4_DECOMP} status --porcelain -- src/game src/nonmatching
+        OUTPUT_VARIABLE KF4_DECOMP_EDITS OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_VARIABLE out RESULT_VARIABLE rc)
     if(NOT rc EQUAL 0)
-        message(FATAL_ERROR "patch ${patch} does not apply to decomp/ at its pin:\n${out}")
+        message(FATAL_ERROR "git status failed in ${KF4_DECOMP}:\n${out}")
     endif()
-endforeach()
+    if(NOT "${KF4_DECOMP_EDITS}" STREQUAL "")
+        message(FATAL_ERROR "decomp/ has local changes:\n${KF4_DECOMP_EDITS}\n"
+            "decomp/ must stay at its pin, unedited. PC edits go in patches/ (tools/patches.py).")
+    endif()
+
+    # the staging copy: the pinned decomp with the patches applied, rebuilt from scratch every configure
+    file(REMOVE_RECURSE ${KF4_STAGE})
+    file(MAKE_DIRECTORY ${KF4_STAGE}/src)
+    file(COPY ${KF4_DECOMP}/src/game ${KF4_DECOMP}/src/nonmatching DESTINATION ${KF4_STAGE}/src
+        NO_SOURCE_PERMISSIONS)
+    # its own repo, so that git apply works on paths relative to the copy's root (not Darker Reality's)
+    execute_process(COMMAND ${GIT_EXECUTABLE} init -q WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc
+        OUTPUT_VARIABLE out ERROR_VARIABLE out)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "git init failed in ${KF4_STAGE}:\n${out}")
+    endif()
+    foreach(patch ${KF4_PATCHES})
+        execute_process(COMMAND ${GIT_EXECUTABLE} apply --whitespace=nowarn ${patch}
+            WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "patch ${patch} does not apply to decomp/ at its pin:\n${out}")
+        endif()
+    endforeach()
+endif()
 
 # sync the staging copy into decomp_src/. COPY_FILE leaves a file alone when it is already the same,
 # so its timestamp, and the object built from it, survive. (The .git is at the staging root, not under src.)
@@ -585,7 +598,7 @@ endif()
 # The debugging tools (port/debug/, docs/port/README.md "Debugging"): the build a GS capture names,
 # from git at each build (build_rev.h)
 add_custom_target(kf4_build_rev
-    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/build_rev.h
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/build_rev.h -DVERSION=${KF4_VERSION}
         -P ${CMAKE_SOURCE_DIR}/tools/build_rev.cmake
     BYPRODUCTS ${CMAKE_BINARY_DIR}/build_rev.h)
 add_dependencies(kf4_port kf4_build_rev)
@@ -677,6 +690,29 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME sampler COMMAND sampler_test)
+endif()
+
+# The update notice's rules and the data folder's place, shared by the game and the launcher
+# (port/platform/update_notice.c, data_dir.c; docs/port/LAUNCHER.md)
+add_executable(update_notice_test tests/update_notice_test.c port/platform/update_notice.c port/platform/data_dir.c
+    third_party/cjson/cJSON.c)
+target_include_directories(update_notice_test PRIVATE port/include third_party/cjson)
+if(NOT WIN32)
+    target_compile_options(update_notice_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME update_notice COMMAND update_notice_test)
+endif()
+
+# An ISO 9660 image's files, as the game's disc reader and the launcher's disc check list them
+# (port/platform/iso9660.c): a small image made by the test, and broken ones
+add_executable(iso9660_test tests/iso9660_test.c port/platform/iso9660.c)
+target_include_directories(iso9660_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(iso9660_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME iso9660 COMMAND iso9660_test)
 endif()
 
 # The picture's anti-aliasing methods by name (port/include/port/antialias.h, header only)

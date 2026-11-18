@@ -104,7 +104,7 @@ Pass `--exe`: `pace_test.find_exe` picks `out/linux-gcc` first if one exists, an
 functions as frames of their own, so it sees more than the panel):
 
 ```sh
-S=~/.config/holyland/captures/profile_....txt; K=out/linux-clang/kf4
+S=~/.config/darker-reality/captures/profile_....txt; K=out/linux-clang/kf4
 python3 tools/sampler/stacks.py $S $K --threads                   # every thread, then the busiest's functions
 python3 tools/sampler/stacks.py $S $K --thread kf4-pc-pump --top 60
 python3 tools/sampler/stacks.py $S $K --thread kf4-pc --callers draw_batch --depth 4
