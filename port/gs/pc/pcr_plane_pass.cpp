@@ -70,6 +70,10 @@ public:
         }
     }
 
+    std::span<Program *const> compute_programs() const {
+        return programs_;
+    }
+
     PlaneRoom reserve(const PlaneSources &sources, uint32_t count) {
         PlaneRoom room;
         if (count == 0 || sources.program >= programs || !programs_[sources.program]) {
@@ -172,6 +176,10 @@ private:
 
 PlanePass::PlanePass(Device &device) : impl_(std::make_unique<Impl>(device)) {}
 PlanePass::~PlanePass() = default;
+
+std::span<Program *const> PlanePass::compute_programs() const {
+    return impl_->compute_programs();
+}
 
 PlaneRoom PlanePass::reserve(const PlaneSources &sources, uint32_t count) {
     return impl_->reserve(sources, count);

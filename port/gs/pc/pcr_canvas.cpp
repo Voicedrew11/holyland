@@ -4878,7 +4878,7 @@ private:
             traits.zclear_role = 66;
             traits.date_mark_role = 67;
         }
-        warm_watch(device_, warmed, roles, traits);
+        warm_watch(device_, warmed, roles, traits, planes_ ? planes_->compute_programs() : std::span<Program *const>{});
     }
 
     Device &device_;

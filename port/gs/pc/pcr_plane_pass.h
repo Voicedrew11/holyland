@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 #include "device.hpp"
 
@@ -51,6 +52,9 @@ public:
     ~PlanePass();
     PlanePass(const PlanePass &) = delete;
     PlanePass &operator=(const PlanePass &) = delete;
+
+    // These dispatches use the default compute pipeline state and no specialization constants.
+    std::span<Vulkan::Program *const> compute_programs() const;
 
     // Room for count triangles read from sources
     PlaneRoom reserve(const PlaneSources &sources, uint32_t count);

@@ -84,6 +84,7 @@ struct Warm {
     // the programs by role (warm_watch's index), and each program's role
     std::unordered_map<uint32_t, Program *> roles;
     std::unordered_map<Program *, uint32_t> role_of;
+    std::vector<Program *> compute_programs; // (default state, for startup only)
     WarmDevice traits; // (warm_watch's)
 } warm;
 
@@ -171,7 +172,14 @@ void on_compile(Device *, const DeferredPipelineCompile &compile, bool compute, 
         uint64_t now = port_profile_now_ns();
         port_zone_after(zone, now > uint64_t(ns) ? now - uint64_t(ns) : 0);
     }
-    if (compute || !ok) {
+    if (compute) {
+        if (warm.log && ok) {
+            fprintf(stderr, "[warm] %s %s compute %016llx: %.1f ms\n", on_warm_thread ? "ahead" : "dispatch",
+                    sync ? "sync" : "async", (unsigned long long)compile.hash, double(ns) / 1e6);
+        }
+        return;
+    }
+    if (!ok) {
         return;
     }
     std::lock_guard<std::mutex> hold(warm.lock);
@@ -503,18 +511,36 @@ void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
-// (store.lock and warm.lock held) Records' pipelines made on threads of their own, in their order: the list's while
-// the game runs (a draw that wants one not made yet makes it itself, as without the list), or before play
-// (start_precompile: the seed's and the list's, on every core but one, while the game waits)
-void start_ahead(std::vector<Record> list, unsigned threads) {
-    if (store.ahead_started || !store.open || list.empty() || !warm.device) {
+// The plane pass dispatches with a fresh command buffer's default compute state.
+void make_compute_ahead(Device &device, Program *program) {
+    DeferredPipelineCompile compile{};
+    compile.program = program;
+    compile.layout = program->get_pipeline_layout();
+    compile.cache = CommandBuffer::kf4_pipeline_cache(&device);
+    CommandBuffer::kf4_rehash(compile, true);
+    if (program->get_pipeline(compile.hash).pipeline != VK_NULL_HANDLE) {
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    if (CommandBuffer::build_compute_pipeline(&device, compile, CommandBuffer::CompileMode::Sync).pipeline) {
+        store.ahead_made++;
+    }
+    store.ahead_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+// (store.lock and warm.lock held) Build the list in the background or the startup work while the game waits.
+void start_ahead(std::vector<Record> list, std::vector<Program *> compute, unsigned threads) {
+    const size_t total = list.size() + compute.size();
+    if (store.ahead_started || !store.open || total == 0 || !warm.device) {
         return;
     }
     store.ahead_started = true;
     auto records = std::make_shared<std::vector<Record>>(std::move(list));
+    auto compute_programs = std::make_shared<std::vector<Program *>>(std::move(compute));
     auto roles = std::make_shared<std::unordered_map<uint32_t, Program *>>(warm.roles);
     auto next = std::make_shared<std::atomic<size_t>>(0);
-    store.ahead_total = records->size();
+    store.ahead_total = total;
     store.ahead_start = std::chrono::steady_clock::now();
     Device *device = warm.device;
     for (unsigned t = 0; t < threads; t++) {
@@ -523,9 +549,13 @@ void start_ahead(std::vector<Record> list, unsigned threads) {
             // (Granite's compile log names a thread by its index: these threads request no command buffer, the only
             // other use of it, so the canvas thread's index stands in, as an unregistered thread's would)
             Util::register_thread_index(0);
-            for (size_t i = (*next)++; i < records->size() && !store.ahead_stop; i = (*next)++) {
-                make_ahead(*device, (*records)[i], *roles);
-                if (++store.ahead_done == records->size()) {
+            for (size_t i = (*next)++; i < total && !store.ahead_stop; i = (*next)++) {
+                if (i < compute_programs->size()) {
+                    make_compute_ahead(*device, (*compute_programs)[i]);
+                } else {
+                    make_ahead(*device, (*records)[i - compute_programs->size()], *roles);
+                }
+                if (++store.ahead_done == total) {
                     store.ahead_wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                               std::chrono::steady_clock::now() - store.ahead_start)
                                               .count();
@@ -534,7 +564,7 @@ void start_ahead(std::vector<Record> list, unsigned threads) {
                                 "[pcr] pipelines made ahead: %llu made, %llu skipped, of %zu asked for, in %.1f ms on "
                                 "%u threads\n",
                                 (unsigned long long)store.ahead_made.load(),
-                                (unsigned long long)store.ahead_skipped.load(), records->size(),
+                                (unsigned long long)store.ahead_skipped.load(), total,
                                 double(store.ahead_wall_ns) / 1e6, threads);
                     }
                 }
@@ -725,7 +755,7 @@ std::vector<Record> seed_for_device() {
 }
 
 // (store.lock and warm.lock held) Made before play, once both the settings (precompile) and the programs
-// (warm_watch) are known: the seed's for these settings, then the list's
+// (warm_watch) are known: fixed compute pipelines, the seed for these settings, and the list.
 void start_precompile() {
     if (!store.pre_asked || store.ahead_started || !warm.device) {
         return;
@@ -736,10 +766,10 @@ void start_precompile() {
     list.insert(list.end(), store.records.begin(), store.records.end());
     unsigned cores = std::thread::hardware_concurrency();
     {
-        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list\n", store.pre_seed,
-                store.pre_list);
+        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list, %zu fixed compute\n",
+                store.pre_seed, store.pre_list, warm.compute_programs.size());
     }
-    start_ahead(std::move(list), cores > 2 ? cores - 1 : 1);
+    start_ahead(std::move(list), warm.compute_programs, cores > 2 ? cores - 1 : 1);
     if (!store.ahead_started) {
         store.pre_wanted = false; // (nothing to make)
     }
@@ -747,7 +777,8 @@ void start_precompile() {
 
 } // namespace
 
-void warm_watch(Device &device, Program *const *programs, uint32_t count, const WarmDevice &traits) {
+void warm_watch(Device &device, Program *const *programs, uint32_t count, const WarmDevice &traits,
+                std::span<Program *const> compute_programs) {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     warm.device = &device;
@@ -758,12 +789,18 @@ void warm_watch(Device &device, Program *const *programs, uint32_t count, const 
             warm.role_of[programs[i]] = i;
         }
     }
+    warm.compute_programs.clear();
+    for (Program *program : compute_programs) {
+        if (program) {
+            warm.compute_programs.push_back(program);
+        }
+    }
     Vulkan::kf4_on_compile = on_compile;
     Vulkan::kf4_on_render_pass = on_render_pass;
     if (store.pre_on) {
         start_precompile(); // (when the settings came first)
     } else if (store.ahead_on) {
-        start_ahead(store.records, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)));
+        start_ahead(store.records, {}, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)));
     }
 }
 
