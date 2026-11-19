@@ -24,6 +24,7 @@ extern "C" {
 #include "port/automap.h"
 #include "port/controls.h"
 #include "port/platform.h"
+#include "port/player_ui.h"
 }
 
 #include "automap_view.h"
@@ -1373,7 +1374,7 @@ void automap_view_draw(int x, int y, int width, int height) {
     picture(x, y, width, height, g0, g1);
     if (full)
         draw_full(player, g0, g1);
-    else if (port_automap.minimap && player.shown)
+    else if (!port_player_ui_open() && port_automap.minimap && player.shown)
         draw_minimap(player, g0, g1);
 }
 
