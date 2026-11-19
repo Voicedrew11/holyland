@@ -5,6 +5,8 @@
        --disc PATH       the user's own disc: an ISO or CHD image, or the folder it was extracted to
                          (or KF4_DISC in the environment)
        --fast            do not hold the game to 59.94 vblanks a second
+       --door-speed N    doors open and close this many times faster than on the PS2: 2 to 8, or 1
+                         for the default speed
        --frames N        stop after N vblanks
        --input FILE      press the buttons a pad script says (port/sdk/libpad.c) instead of SDL's
        --log FILE        write the game's state each vblank, and what happens between ("-": stderr)
@@ -273,7 +275,7 @@ static FILE *log_file;
 
 static void usage(const char *program) {
     fprintf(stderr,
-            "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--frames N] [--input FILE] [--log FILE|-]\n"
+            "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--door-speed N] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--saves DIR|none]\n"
@@ -343,6 +345,7 @@ static void parse_options(int argc, char **argv) {
     int i;
 
     port_options.disc = getenv("KF4_DISC");
+    port_options.door_speed = 1;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
     port_options.seamless_scroll = 1;
@@ -544,6 +547,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
+        } else if (strcmp(option, "--door-speed") == 0) {
+            char *end;
+            long speed = strtol(value, &end, 10);
+
+            if (end == value || *end != 0 || speed < 1 || speed > 8) {
+                fprintf(stderr, "--door-speed wants 2 to 8, or 1 for the PS2's, not %s\n", value);
+                exit(2);
+            }
+            port_options.door_speed = (int)speed;
+            port_options.door_speed_forced = 1;
         } else if (strcmp(option, "--frame-rate-cap") == 0) {
             port_options.frame_rate_cap = atoi(value);
             if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap > 1000)) {

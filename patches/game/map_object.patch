@@ -73,7 +73,7 @@ index 22c57f5f873812a6442640267f8592f88c9d1da3..2abd2ff5a45b1a599021b655fc66ce73
          bit = game_status.bit1;
          game_status.bit1 = 1;
 diff --git a/src/game/map_object/door.c b/src/game/map_object/door.c
-index ca11e10ff92986756121d2db0239f82cd2f37acd..b3e4539659747ca1d43410cdeab2d1950a4def03 100644
+index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a7280e83912 100644
 --- a/src/game/map_object/door.c
 +++ b/src/game/map_object/door.c
 @@ -1,6 +1,7 @@
@@ -84,7 +84,7 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..b3e4539659747ca1d43410cdeab2d195
  
  void Vector_Copy(void *, void *);
  void MapObject_UpdateOpeningDoor(MapObject *);
-@@ -15,8 +16,10 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+@@ -15,11 +16,22 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
  void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
  void Model_MultiplyChildMatrices(ModelPart *);
  void sceVu0CopyMatrix(void *, void *);
@@ -97,6 +97,36 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..b3e4539659747ca1d43410cdeab2d195
  extern u8 item_counts[];
  extern float player_state[];
  
++/* PC: --door-speed (port/host.h): the animation's steps this game frame, not past its end */
++static void StepDoorAnim(MapObject *object) {
++    int steps = port_door_speed();
++
++    do {
++        ((int (*)(char *))MapObject_StepAnim)((char *)object); // match: it returns a value
++    } while (--steps > 0 && MODEL_CHANNEL(object->model)->frame != 0);
++}
++
+ /* Start handler of the door-like kinds: closed (animation 4) or already open
+    (animation 5). Kind 6 remembers where its second part sits and, when it starts
+    open, is run until it gets there. */
+@@ -118,7 +130,7 @@ void MapObject_UpdateOpeningDoor(MapObject *object) {
+         work->timer--;
+     }
+     if (MODEL_CHANNEL(object->model)->frame != 0) {
+-        ((int (*)(char *))MapObject_StepAnim)((char *)object); // match: it returns a value
++        StepDoorAnim(object);
+         kind = object->definition->kind;
+         if (kind == 6) {
+             Vector_Subtract(&delta, object->model->parts[1].position, work);
+@@ -193,7 +205,7 @@ void MapObject_UpdateClosingDoor(MapObject *object) {
+         work->timer--;
+     }
+     if (MODEL_CHANNEL(object->model)->frame != 0) {
+-        ((int (*)(char *))MapObject_StepAnim)((char *)object); // match: it returns a value
++        StepDoorAnim(object);
+         if (object->definition->kind == 6) {
+             Vector_Subtract(&delta, object->model->parts[1].position, work);
+             sine = sinf(-object->model->rotation.y);
 diff --git a/src/game/map_object/fade.c b/src/game/map_object/fade.c
 index b05ea38ab06a70cba70cd70a8d9079ef2c902800..8c7a16a37718d992e72f114cb25b030b1b96abe1 100644
 --- a/src/game/map_object/fade.c
