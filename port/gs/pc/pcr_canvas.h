@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "device.hpp"
+#include "gs_drawing.h"
 #include "pcr_between.h"
 #include "pcr_frame_walk.h"
 #include "pcr_gif.h"
@@ -69,47 +70,6 @@ struct CanvasCounts {
     uint64_t decals_settled = 0; // (decal batches given back their own depth where they won: settle_decal_depth)
 };
 
-// A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
-// format, and the pixels (x, y, w, h). lower_field 1: a field shown at twice its lines that an interlaced TV shows
-// a line lower than the other (the odd lines): the game drew it half a field's line higher for that
-// (sceGsSetHalfOffset), so it is moved down a line of the picture.
-struct ShownRect {
-    uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
-    uint32_t lower_field = 0;
-};
-
-constexpr uint32_t no_instance = 0xFFFFFFFFu;
-
-// The VU1 program whose maths draws a native batch (its vertex shader)
-enum class NativeProgram : uint8_t {
-    vu1_000, // shaders/pcr_nd000.vert: a triangle the arena's numbers of its corners, and of its kick with the kicks
-             // before it; instance: the record (bits 0-29), Gouraud (30)
-    vu1_280, // shaders/pcr_nd280.vert: a triangle the arena's slots of its corners and of its kick; instance: the record
-             // (bits 0-27), the context whose XYOFFSET (28), the sphere pass (29), Gouraud (30)
-    vu1_700, // shaders/pcr_nd700.vert: a triangle the arena's numbers of its corners and of its kick; instance: the
-             // record (bits 0-29), Gouraud (30)
-    ripple,  // shaders/pcr_ndripple.vert (the reflection's water, no VU1 program): a triangle the arena's numbers of its
-             // corners; instance: the record (bits 0-29)
-};
-
-// A batch of a native draw (pcr_native.h): its triangles from first_triangle in triangles (a uvec4 each), drawn by the
-// record of records the instance names, the meshes' vertices in arena
-struct NativeBatch {
-    NativeProgram program = NativeProgram::vu1_000;
-    Vulkan::BufferHandle arena, records, triangles;
-    uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
-    // (the frame's own walk kept: NativeDraws::begin_frame_kept) the instance its pictures between draw it with, the
-    // record with its move; no_instance: none
-    uint32_t picture_instance = no_instance;
-    // Every corner's alpha is 0x80 exactly as the program leaves it in RGBAQ (program 0x000: its mesh's colours' alpha,
-    // which the lights do not touch). False when not known. A blend by As that is then the source alone is drawn
-    // without the blend (pcr_canvas.cpp's blend_is_source).
-    bool alpha_is_one = false;
-    // (developers' counters, KF4_PC_TIES and KF4_PC_OVERDRAW: pcr_canvas.cpp) the draw it is of: its RdDraw's kind
-    // (RD_KIND_*) and identity (port/include/port/render.h: the owner's EE address, the part, a slot)
-    uint32_t kind = 0, id[3] = {};
-};
-
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
 // in order, every image and buffer they use held, and what it read of the texture store from before it
 class KeptWalk;
@@ -124,8 +84,9 @@ class SurfaceCopies;
 // KF4_PC_SUBMIT_TOGETHER=0: the canvas's command buffer flushed on its own before a picture's (as before #110)
 bool submit_together();
 
-class Canvas {
+class Canvas final : public Drawing {
 public:
+    using ShownDepth = pcr::ShownDepth;
     // times: the GPU's time of what the canvas records (outlives the canvas)
     Canvas(Vulkan::Device &device, GpuTimes &times);
     ~Canvas();
@@ -137,12 +98,12 @@ public:
     void watch_hangs(HangNotes &notes, const char *who);
 
     // The surfaces' pixels a GS pixel is, across and down (1 to 8): from the next vblank
-    void set_scale(uint32_t x_scale, uint32_t y_scale);
+    void set_scale(uint32_t x_scale, uint32_t y_scale) override;
     // Texture detail (GSN_LOD_*) and anisotropy (1 to 16) for the batches from the next vblank
-    void set_sampling(int lod, uint32_t aniso);
+    void set_sampling(int lod, uint32_t aniso) override;
     // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
     // at a scale above 1
-    void set_2d(int mode);
+    void set_2d(int mode) override;
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);
@@ -192,61 +153,56 @@ public:
     PictureWalk as_picture_walk(const KeptWalk &frame, const FrameTargets &targets) const;
 
     // The front end's events (pcr_gif.h), with its register file at each
-    void primitive(const GsRegisterFile &file, const GifPrimitive &primitive);
-    void texture_written(uint64_t tex0, uint64_t texclut);
+    void primitive(const GsRegisterFile &file, const GifPrimitive &primitive) override;
+    void texture_written(uint64_t tex0, uint64_t texclut) override;
     // A native batch, with the registers as its writes left them and PRIM's 11 bits in effect. Its texture is read
     // whole; what it draws over is taken as its scissor's rectangle.
-    void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch);
-    void upload(const TransferRegisters &transfer, std::span<const uint8_t> bytes);
-    void local_copy(const TransferRegisters &transfer);
+    void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch) override;
+    void upload(const TransferRegisters &transfer, std::span<const uint8_t> bytes) override;
+    void local_copy(const TransferRegisters &transfer) override;
     // A local-to-host transfer (TRXDIR 1): its pixels made ready for read_fifo, from the uploads or the surface
-    void local_to_host(const TransferRegisters &transfer);
+    void local_to_host(const TransferRegisters &transfer) override;
     // The read-back's next qwords (zeroes past its end). Any thread, while the canvas's thread is idle (after
     // everything sent before was done: pcr_read_fifo waits for that).
-    void read_fifo(void *dst, uint32_t qwords);
+    void read_fifo(void *dst, uint32_t qwords) override;
     // The port's marks for the pictures between (frame_interp.c's meaning): 0x7D's 0xF0 and 0xF1 a
     // picture between begins and ends (its uploads are not the frame's), 0xF2 the frame shown kept, 0xF4 to 0xF5
     // the draws that read that kept frame in place of its buffer; 0x7C the frame's k-th upload made again (its
     // registers checked against those set now, as the GS checks them)
-    void frame_mark(uint64_t value);
-    void upload_again(const GsRegisterFile &file, uint64_t value);
+    void frame_mark(uint64_t value) override;
+    void upload_again(const GsRegisterFile &file, uint64_t value) override;
 
     // A state loaded: nothing of the GS's memory is known any more
-    void forget();
+    void forget() override;
 
     // Save states: the GS's 4 MB (the uploads', with the colour surfaces' pixels over the pages drawn last) and the
     // CLUT buffer; taken back as the uploads' (the surfaces made again from them as they are drawn into or shown).
     // Z buffers are not kept (the game draws its Z anew each frame).
-    std::vector<uint8_t> vram_image();
-    TextureStore::ClutState clut_state() const;
-    void restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut);
+    std::vector<uint8_t> vram_image() override;
+    TextureStore::ClutState clut_state() const override;
+    void restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut) override;
 
     // Everything drawn so far recorded, the shown rectangle copied (scaled to dst's size) into dst, which the
     // commands that follow in cmd may read. False when there is nothing to show (dst left as it was).
-    bool scanout(Vulkan::CommandBuffer &cmd, const ShownRect &rect, const Vulkan::Image &dst);
+    bool scanout(Vulkan::CommandBuffer &cmd, const ShownRect &rect, const Vulkan::Image &dst) override;
     // After scanout of rect into a picture dst's size: the depth of its 3D (the Z buffer last drawn with into the
     // buffer shown) copied into dst (R32F, as the picture is placed): the GS's Z times zscale, larger nearer, 0 where
     // nothing was drawn; and the XYOFFSET that 3D was drawn with. zscale 0, dst left as it was, when there is no depth
     // to give (a depth format without its float (D24), the Z buffer holding the next frame's, a picture scaled); none
-    // when there is no 3D in the buffer, or the picture is of one field.
-    struct ShownDepth {
-        float zscale = 0.0f;      // 1 / 2^24, or 1 / 2^32 for a 32-bit Z buffer
-        float xyoffset[2] = {};   // GS pixels: a place on the GS's screen less it is the buffer's pixel
-        uint64_t drawing = 0;     // the drawing (begin_drawing's) that last drew 3D into the buffer
-    };
+    // when there is no 3D in the buffer, or the picture is of one field. (gs_drawing.h's ShownDepth)
     std::optional<ShownDepth> scanout_depth(Vulkan::CommandBuffer &cmd, const ShownRect &rect,
-                                            const Vulkan::Image &dst);
+                                            const Vulkan::Image &dst) override;
     // (the temporal anti-aliasing) What is drawn from here on is drawing number drawing (the caller's: scanout_depth
     // gives it back for the buffer its 3D was last drawn into), with jitter (pcr_jitter.h): the 3D (draws with a depth
     // test that are native, or GIF triangles and lines not read by UV) into the frame's buffers (those the last two
     // pictures showed: the one shown and the one drawn) moved by it; the 2D (the HUD tests Z too, but draws sprites and
     // reads UV), the full-screen effects and the game's own targets are not. Jitter{} (the default) moves nothing.
-    void begin_drawing(uint64_t drawing, Jitter jitter);
+    void begin_drawing(uint64_t drawing, Jitter jitter) override;
     // The command buffer the canvas records into, submitted (before a picture's own commands are)
-    void submit();
+    void submit() override;
     // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken. game_vblank: the
     // game's number for it, where known (the developers' counters name the frames by it; else the canvas's own count)
-    void vblank(uint64_t game_vblank = UINT64_MAX);
+    void vblank(uint64_t game_vblank = UINT64_MAX) override;
     // A frame taken for its pictures between, with its packets the last taken in: the uploads since the last vblank
     // are the frame's, what its pictures ask for again (upload_again), as the vblank after them would have made them
     void frame_taken();
@@ -269,7 +225,7 @@ public:
 
     CanvasCounts counts() const;
     // --stats: the "[stats] pc canvas" lines, and the texture store's
-    void print_counts() const;
+    void print_counts() const override;
 
 private:
     class Impl;

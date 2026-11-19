@@ -162,7 +162,7 @@ bool take_batch(const VuModel &vu, uint32_t top, uint32_t start, RdMeshData &mes
         b.alpha_lo = std::min(b.alpha_lo, ac);
         b.alpha_hi = std::max(b.alpha_hi, ac);
     }
-    // The triangles, as the GS queues the kicks (the GIF front end, port/gs/pc/pcr_gif.cpp): a kick whose XYZF2 has ADC set
+    // The triangles, as the GS queues the kicks (the GIF front end, port/gs/shared/pcr_gif.cpp): a kick whose XYZF2 has ADC set
     // by the data (the normal's w, ORed into it by the program) draws nothing. Clipping's ADC is the
     // frame's.
     uint32_t prim = uint32_t((b.tag[0] >> 47) & 0x7FF);

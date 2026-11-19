@@ -54,7 +54,7 @@ public:
         }
     }
 
-    void met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
+    void met(uint64_t value, GifFrontEnd &front, NativeSink &canvas) {
         switch (RD_ND_COMMAND(value)) {
         case RD_ND_DRAW:
             draw(value, front, canvas);
@@ -186,7 +186,7 @@ private:
         }
     }
 
-    void draw(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
+    void draw(uint64_t value, GifFrontEnd &front, NativeSink &canvas) {
         RdDraw d;
         RdCamera cam;
         fetched_.clear();
@@ -296,7 +296,7 @@ private:
 
     // A draw of program 0x700 (the effects): as VU1's run of each batch, its A+D packet (the flipbook's TEX0 perhaps put
     // in), then the strip unless VU1's count of clipped vertices says it is not kicked, its kicked triangles listed
-    void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
+    void draw_700(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, NativeSink &canvas) {
         counts_.draws++;
         Vu1Record k = vu1_record_700(d, cam);
         mirror_cut(k.clip, cam);
@@ -440,7 +440,7 @@ private:
     // written as the strip's tag's PRE writes it (a strip, textured, blended); its triangles those the EE does not give
     // ADC, drawn by shaders/pcr_ndripple.vert with RGBAQ's colour and FOG's fog as the chain left them (the TEX0, ALPHA
     // and CLAMP of the strips are the chain's own writes, before and after the draws)
-    void draw_ripple(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
+    void draw_ripple(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, NativeSink &canvas) {
         counts_.draws++;
         RippleRecord k = ripple_record(d, cam);
         const GsRegisterFile &file = front.registers();
@@ -495,7 +495,7 @@ private:
     // picture is drawn, as frame_interp.c writes the PS2 path's TEX0 (ad_write); the frame shown before's pass reads the
     // frame shown kept (0xF2), between the marks that have the canvas read it (0xF4, 0xF5), as frame_interp.c puts them
     // around the PS2 path's packet
-    void draw_pass(const RdDraw &d, GifFrontEnd &front, Canvas &canvas) {
+    void draw_pass(const RdDraw &d, GifFrontEnd &front, NativeSink &canvas) {
         counts_.draws++;
         RdPass p;
         rd_pass_of(d, p);
@@ -675,7 +675,7 @@ private:
 
     // A draw of program 0x280 (the skinned models): as VU1's run of each batch, the plan says whether the run draws
     // (its strip and second pass, and so their registers) and which triangles VU1 kicks; those are listed each time
-    void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, Canvas &canvas) {
+    void draw_280(const RdDraw &d, const RdCamera &cam, GifFrontEnd &front, NativeSink &canvas) {
         counts_.draws++;
         Vu1Record280 k = vu1_record_280(d, cam);
         mirror_cut(k.clip, cam);
@@ -745,7 +745,7 @@ private:
     // sphere-mapped shine is not drawn: its registers are another A+D packet), and PRIM from its tag given to the canvas
     // without writing it: VU1 kicks neither, so the GS's registers stay as the frame leaves them.
     void draw_left_out(const RdBatch &b, uint32_t base, uint32_t slots, NativeProgram program, const BufferHandle &records,
-                       uint32_t record, GifFrontEnd &front, Canvas &canvas) {
+                       uint32_t record, GifFrontEnd &front, NativeSink &canvas) {
         NativeBatch nb;
         nb.program = program;
         nb.first_triangle = list_kicked(b, nullptr, base, slots, true, nb.triangle_count);
@@ -908,7 +908,7 @@ int NativeDraws::kinds() {
            PORT_ND_GOLD | PORT_ND_SHADOWS | PORT_ND_EFFECTS | PORT_ND_WATER | PORT_ND_PASSES;
 }
 
-void NativeDraws::met(uint64_t value, GifFrontEnd &front, Canvas &canvas) {
+void NativeDraws::met(uint64_t value, GifFrontEnd &front, NativeSink &canvas) {
     impl_->met(value, front, canvas);
 }
 
