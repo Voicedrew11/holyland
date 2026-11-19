@@ -156,6 +156,12 @@ int port_flicker_filter(void);
    --native-scale. On, the sprite ends on the target's edge (MapScroll_UpdateDraw,
    GsDraw_DrawScrollingTexture): the same pixels covered, its texels a whole one apart. */
 int port_seamless_scroll(void);
+
+/* port_auto_loot_gold(): 1 while the gold an enemy drops when the player kills it goes into his purse at once,
+   with the pickup's own notice, rather than a pile to press the action button for (settings.json's
+   mods.auto_loot_gold, the Gameplay page; off by default). */
+int port_auto_loot_gold(void);
+
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 #define PORT_WIDESCREEN_HUD_RIGHT 3 /* 2D laid out against the 4:3 frame's right edge (the hands mod's cross in a

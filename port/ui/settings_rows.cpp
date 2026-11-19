@@ -420,6 +420,17 @@ bool jolt_overridden() {
     return port_options.no_hit_jolt != port_settings.no_hit_jolt;
 }
 
+int get_auto_loot_gold() {
+    return port_options.auto_loot_gold != 0;
+}
+void set_auto_loot_gold(int on) {
+    port_settings.auto_loot_gold = port_options.auto_loot_gold = on;
+    changed();
+}
+bool auto_loot_gold_overridden() {
+    return port_options.auto_loot_gold != port_settings.auto_loot_gold;
+}
+
 const SettingRow gameplay_rows[] = {
     {"Changes to how the game plays", "", RowKind::heading},
     {"Myu's Necklace always",
@@ -428,6 +439,10 @@ const SettingRow gameplay_rows[] = {
     {"No camera jolt from hits",
      "A hard hit no longer throws the view down. It still flashes, rumbles and knocks you back.", RowKind::toggle,
      on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
+    {"Auto-loot gold drops",
+     "The gold an enemy drops when you kill it is automatically looted.",
+     RowKind::toggle, on_off, {}, get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr,
+     auto_loot_gold_overridden},
 };
 
 // ---- Saves ----------------------------------------------------------------------------------------------------------

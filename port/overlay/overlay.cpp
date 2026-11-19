@@ -1194,6 +1194,8 @@ void gameplay_page() {
     mod_checkbox("No camera jolt when enemies hit you", &s.no_hit_jolt, &port_options.no_hit_jolt,
                  "A hard hit no longer throws the view down: the camera stays where you aimed it. The hit\n"
                  "still flashes red, rumbles and knocks you back. Applies at once. (--no-hit-jolt)");
+    mod_checkbox("Auto-loot gold drops", &s.auto_loot_gold, &port_options.auto_loot_gold,
+                 "The gold an enemy drops when you kill it is automatically looted.");
     port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
     automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
     hands_view_mods_section(); // the hands mod (port/overlay/hands_view.cpp)
