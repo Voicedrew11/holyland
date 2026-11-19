@@ -104,6 +104,9 @@ struct NativeBatch {
     // which the lights do not touch). False when not known. A blend by As that is then the source alone is drawn
     // without the blend (pcr_canvas.cpp's blend_is_source).
     bool alpha_is_one = false;
+    // (developers' counters, KF4_PC_TIES and KF4_PC_OVERDRAW: pcr_canvas.cpp) the draw it is of: its RdDraw's kind
+    // (RD_KIND_*) and identity (port/include/port/render.h: the owner's EE address, the part, a slot)
+    uint32_t kind = 0, id[3] = {};
 };
 
 // A picture between's walk as the canvas made it (pcr_canvas.cpp): its batches, uploads, copies, CLUT loads and marks
@@ -240,8 +243,9 @@ public:
     void begin_drawing(uint64_t drawing, Jitter jitter);
     // The command buffer the canvas records into, submitted (before a picture's own commands are)
     void submit();
-    // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken
-    void vblank();
+    // A vblank (each, whether a picture is made or not): what was drawn submitted, a new scale taken. game_vblank: the
+    // game's number for it, where known (the developers' counters name the frames by it; else the canvas's own count)
+    void vblank(uint64_t game_vblank = UINT64_MAX);
     // A frame taken for its pictures between, with its packets the last taken in: the uploads since the last vblank
     // are the frame's, what its pictures ask for again (upload_again), as the vblank after them would have made them
     void frame_taken();

@@ -177,7 +177,10 @@ private:
     }
 
     // A batch of a draw whose record is put twice in the frame's walk kept: the instance its picture between draws
+    // (and, for the developers' counters, the draw it is of: draw()'s)
     void name_picture(NativeBatch &nb) const {
+        nb.kind = draw_kind_;
+        memcpy(nb.id, draw_id_, sizeof(nb.id));
         if (walk_ == PartWalk::frame_kept) {
             nb.picture_instance = nb.instance + 1;
         }
@@ -191,6 +194,8 @@ private:
             counts_.lost++;
             return;
         }
+        draw_kind_ = d.kind;
+        memcpy(draw_id_, d.id, sizeof(draw_id_));
         if (d.program == 0x280) {
             draw_280(d, cam, front, canvas);
             return;
@@ -865,6 +870,8 @@ private:
     std::unordered_map<RdMesh, uint32_t> placed_;              // a mesh's first vertex in the arena
     std::unordered_map<uint64_t, uint32_t> triangles_placed_; // a batch's first triangle, by its mesh and number
     std::vector<std::shared_ptr<const RdMeshData>> fetched_;
+    // (the draw being drawn's kind and identity: name_picture gives them to its batches, for the developers' counters)
+    uint32_t draw_kind_ = 0, draw_id_[3] = {};
     PartMoves parts_;
     PartWalk walk_ = PartWalk::frame;
     bool frame_kept_ = false, trail_paired_ = false, moved_on_cpu_ = false;

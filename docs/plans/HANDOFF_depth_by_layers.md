@@ -1,5 +1,7 @@
 # Handoff: depth by layers, a proof of concept
 
+**Done 2026-11-19: `depth-by-layers.md`.**
+
 2026-11-19. For the next agent, on branch `measure/world-plain` (or after it is merged). Read `CLAUDE.md` first, then
 `renderer-scene-not-gs.md` (the plan, revised today) and `world-plain.md` (the measurements this builds on).
 

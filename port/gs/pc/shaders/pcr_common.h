@@ -32,9 +32,12 @@ layout(push_constant, std430) uniform Push {
     uint trace_xy;     // (developers' pixel trace, pcr_prim.h's trace) the target's pixel traced: x | y << 16;
                        // PCR_NO_TRACE none
     uint trace_draw;   // ... the draw its fragments are recorded as (the caller's number)
+                       // (developers' tie counter, PCR_COUNT_BIT set: its slot in u_trace, pcr_prim.h's pcr_count_ties)
     uint merged;       // (PCR_RECORDS, a native program's) not 0: the draw's triangles from u_merged (below)
     uint plane_at;     // (a native draw's, exact Z) its triangle n's plane is u_planes' n + this (n gl_VertexIndex / 3:
                        // pcr_exact_z.h's pcr_plane_of_draw); PCR_NO_PLANE: none
+                       // (developers' KF4_PC_DEPTH=layers, PCR_F_LAYER, no exact Z: no plane, the layer's Z more in
+                       // 1/256 of a Z: pcr_layer_bias)
     uint jitter;       // the draw moved by this sub-pixel offset, in the target's own pixels: x bits 0-15, y 16-31, each
                        // packSnorm2x16's (the frame's 3D with a temporal anti-aliasing method, pcr_jitter.h; else 0)
 } pc;
@@ -161,12 +164,21 @@ void pcr_take_record() {
 #define PCR_F_ZALWAYS 0x20000000u  // (... and its copy) the GS's test is ALWAYS: every sample passes, the copy written
 #define PCR_F_DATE_MARK 0x40000000u // (... and its copy) DATE by the stencil: the copy's sign bit marks where it fails
 #define PCR_F_DATE_CLEARS 0x200000u // (... and its copy) DATE's stencil cleared where this pass draws: marked failing
+#define PCR_F_LAYER 0x80000u       // (developers' KF4_PC_DEPTH=layers, no exact Z) a layer: its corners plane_at / 256 of a Z nearer
+#define PCR_F_PIXEL_CLAMP 0x80000000u // (... every draw) Z clamped to zmax at each pixel, not at the corners: the depth is
+                                      // Z / zmax, the viewport's depth range 0 to zmax * zscale, the GPU's depth clamp
 #define PCR_DECAL_LOSS_MARGIN 16u
+#define PCR_COUNT_BIT 0x80000000u  // (trace_draw: the developers' tie counter's slot, pcr_prim.h's pcr_count_ties)
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
 // (the developers' decal losses: Z PCR_DECAL_LOSS_MARGIN nearer)
 uint pcr_loss_margin() {
     return (pc.flags & PCR_F_DECAL_LOSS_FAR) != 0u ? PCR_DECAL_LOSS_MARGIN : 0u;
+}
+
+// (developers' KF4_PC_DEPTH=layers: a layer's corners this much nearer, in Z; pcr_canvas.cpp's is_layer)
+float pcr_layer_bias() {
+    return (pc.flags & PCR_F_LAYER) != 0u ? float(pc.plane_at) * (1.0 / 256.0) : 0.0;
 }
 
 // Exact Z (PCR_F_EXACT_Z). The GS tests and writes Z as a whole number at each pixel, interpolated from its corners' Z
@@ -196,6 +208,9 @@ uint pcr_loss_margin() {
 #ifdef PCR_STAGE_VERTEX
 layout(location = 10) flat out uint v_zref;
 layout(location = 11) noperspective out float v_zrel;
+// (every program's corners worked out the same way in every pipeline, whatever its fragment stage: a layer drawn over
+// its surface from the same corners has the same depth, where the GPU's own depth test decides; KF4_PC_DEPTH=gpu|layers)
+invariant gl_Position;
 #endif
 float pcr_depth(uint z, float zfrac, uint zref) {
 #ifdef PCR_STAGE_VERTEX
@@ -205,7 +220,10 @@ float pcr_depth(uint z, float zfrac, uint zref) {
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
     }
-    return float(min(z, pc.zmax) + pcr_loss_margin()) * pc.zscale;
+    if ((pc.flags & PCR_F_PIXEL_CLAMP) != 0u) {
+        return (float(z) + float(pcr_loss_margin()) + pcr_layer_bias()) / float(pc.zmax);
+    }
+    return (float(min(z, pc.zmax) + pcr_loss_margin()) + pcr_layer_bias()) * pc.zscale;
 }
 
 // pcr_depth for a corner given as Z times w (pcr_nd000.vert's whole triangles, vu1_000_maths.h's Whole): the depth times
@@ -220,7 +238,10 @@ float pcr_depth_h(float zh, float w, uint zref) {
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (zh + margin * w) * pc.zscale + w * (4.0 / 16777216.0);
     }
-    return (zh + margin * w) * pc.zscale;
+    if ((pc.flags & PCR_F_PIXEL_CLAMP) != 0u) {
+        return (zh + (margin + pcr_layer_bias()) * w) / float(pc.zmax);
+    }
+    return (zh + (margin + pcr_layer_bias()) * w) * pc.zscale;
 }
 
 #define PCR_NO_RECT 0xFFFFFFFFu    // (v_rect: no texels known for the primitive)

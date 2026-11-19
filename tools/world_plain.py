@@ -45,6 +45,12 @@ VARIANTS = {
     "gpu_nodcc": ("the GPU's depth test, RADV's colour compression off", {"KF4_PC_DEPTH": "gpu", "RADV_DEBUG": "nodcc"},
                   {}),
     "gpu_nohiz": ("the GPU's depth test, RADV's HiZ off", {"KF4_PC_DEPTH": "gpu", "RADV_DEBUG": "nohiz"}, {}),
+    # The depth by layers' proof of concept (docs/plans/depth-by-layers.md): the GPU's depth test, the layers (decals)
+    # drawn a little nearer (pcr_canvas.cpp's KF4_PC_DEPTH=layers)
+    "layers": ("the GPU's depth test, Z clamped at each pixel, the layers drawn 1 Z nearer (depth by layers)",
+               {"KF4_PC_DEPTH": "layers"}, {}),
+    "unorm": ("the GPU's depth test in 16-bit steps (D16_UNORM: the GS's whole Z), Z clamped at each pixel, DATE by a "
+              "copy", {"KF4_PC_DEPTH": "unorm"}, {}),
     "gpu_aniso1": ("the GPU's depth test, anisotropic filtering 1x", {"KF4_PC_DEPTH": "gpu"}, {"native_aniso": 1}),
     # The prototype plain path (pcr_canvas.cpp's KF4_PC_PLAIN_WORLD): the world into images of its own, optimal
     # layouts, attachment use alone, cleared by the pass; the picture lacks the world

@@ -882,7 +882,8 @@ public:
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d:
     // Canvas::set_2d's
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d) {
+    // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, uint64_t game_vblank) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
@@ -892,7 +893,7 @@ public:
             canvas_->set_scale(scale & 0xFF, scale >> 8);
             canvas_->set_sampling(lod, uint32_t(aniso));
             canvas_->set_2d(mode_2d);
-            canvas_->vblank();
+            canvas_->vblank(game_vblank);
             ZoneScope collect_zone(gpu_times_collected_zone);
             times_->collect();
         }
@@ -2408,7 +2409,7 @@ private:
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           settings.mode_2d.load());
+                           settings.mode_2d.load(), v.tag >> 16);
         }
         uint32_t scale = picture_scale_;
         if (!extra) {

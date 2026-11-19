@@ -4,7 +4,7 @@ under water, each played the same way by both renderers and compared picture by 
 pictures between (240) judged against their game frames.
 
     tools/motion_compare.py --out DIR [--exe EXE] [--disc ISO] [--cases a,b|list] [--profiles 1x,4xw]
-                            [--no-240] [--keep] [--top N] [--level L]
+                            [--no-240] [--keep] [--top N] [--level L] [--pc-extra "ARGS"] [--ties]
 
 Each case is a pad script played after tests/newgame.pad (tests/motion/*.pad, vblanks counted from the start of
 the run), with options (--cheats, --teleport, --invincible) and KF4_FX (game/screen_fx.c: spell=N casts that
@@ -137,9 +137,16 @@ def run(a, case, d, renderer, opts, frames, rate=None):
     cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--saves", "none", "--input", pad,
            "--frames", str(max(frames) + 2), "--renderer", renderer, "--dump-frames", ",".join(map(str, frames)),
            "--dump-dir", d, "--log", os.path.join(d, "log.txt")] + case["args"] + opts
+    if renderer == "pc" and a.pc_extra:
+        cmd += a.pc_extra.split()
     if rate:
         cmd += ["--frame-rate", str(rate)]
     env = dict(os.environ, KF4_DATA_DIR=os.path.join(d, "data"))
+    if renderer == "pc" and a.ties and not rate:
+        # (the PC renderer's developers' counters at each compared vblank: docs/plans/depth-by-layers.md)
+        env["KF4_PC_TIES"] = os.path.join(d, "ties.txt")
+        env["KF4_PC_TIES_AT"] = ",".join(map(str, frames))
+        env["KF4_PC_OVERDRAW"] = os.path.join(d, "overdraw.txt")
     env.pop("KF4_FX", None)
     if case["fx"]:
         env["KF4_FX"] = case["fx"]
@@ -236,6 +243,9 @@ def compare_case(a, name, case, profile):
         res["game240_checked"], res["game240_differ"] = same_state, differ
         if not a.keep:
             shutil.rmtree(d240, ignore_errors=True)
+    for kept in ("ties.txt", "overdraw.txt"):  # (--ties: kept beside the runs)
+        if os.path.isfile(os.path.join(pc_d, kept)):
+            shutil.copyfile(os.path.join(pc_d, kept), os.path.join(base, kept))
     if not a.keep:
         shutil.rmtree(gs_d, ignore_errors=True)
         shutil.rmtree(pc_d, ignore_errors=True)
@@ -282,6 +292,10 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the runs' pictures")
     ap.add_argument("--top", type=int, default=3, help="pairs kept a case and profile (3)")
     ap.add_argument("--level", type=int, default=24)
+    ap.add_argument("--pc-extra", help="more arguments for the pc runs, e.g. \"--native-draw on\"")
+    ap.add_argument("--ties", action="store_true", help="(pc) the depth rule's ties and the native batches' fragments "
+                    "counted at each compared vblank: runs/CASE_PROFILE/pc/ties.txt, overdraw.txt (tools/depth_ties.py; "
+                    "kept with --keep)")
     a = ap.parse_args()
     if a.cases == "list":
         print("\n".join(CASES))

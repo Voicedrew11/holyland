@@ -41,6 +41,13 @@ deciding (below).
 
 ### 1. Depth by knowing the geometry
 
+**Revised by the proof of concept (`depth-by-layers.md`, 2026-11-19): depth by the GS's precision, not by layers.**
+The ties are not knowable from the data (they are spread over the map's records, and far from the eye unrelated
+surfaces share a whole Z of the game's 16-bit Z buffer), but nothing needs to know them: a `D16_UNORM` depth buffer
+rounds each pixel to the GS's whole Z in the GPU's own depth unit, so the GS's ties are ties there and GEQUAL lets the
+later draw win, with early tests, no interlock, copy, planes or bias; with each pixel's Z clamped by the depth clamp it
+draws the whole-game tour closer to paraLLEl-GS than the depth rule. What follows was the plan before it.
+
 The GS's Z is a whole number from each triangle's plane, and a later draw wins a tie (GEQUAL). The game relies on
 ties: decals and layers drawn over their surface as meshes of their own (the moss on 063's wall, 028's puddle, 099's
 rock shading, the lava's edges, 280's fire). A replay of the GS's stream cannot tell which triangles can tie, so every
@@ -99,9 +106,10 @@ history image of the last picture), so it comes where those need it, not as a st
 
 ## Order, and how each step is judged
 
-1. **The proof of concept for depth by layers** (`HANDOFF_depth_by_layers.md`): whether the game's data tells which
-   surfaces tie, and what the GPU's depth with layers handled costs and changes in pixels, against paraLLEl-GS, in a
-   map tour; and the world's overdraw. It decides 1's exactness and whether the scene renderer starts there.
+1. **The proof of concept for depth by layers** (`HANDOFF_depth_by_layers.md`; done: `depth-by-layers.md`): whether
+   the game's data tells which surfaces tie (no), and what the GPU's depth costs and changes in pixels against
+   paraLLEl-GS in a map tour (with a 16-bit UNORM depth, the GPU's depth's cost and fewer differences than today's);
+   and the world's overdraw. It decides 1's exactness and whether the scene renderer starts there.
 2. The budget-based cut (6), alongside, first.
 3. Fold the layers (3) and leave out the frame's dead writes: exact, independent of the rest.
 4. The scene renderer's world: depth by knowing the geometry (1), its order and draws (2).
