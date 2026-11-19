@@ -1093,6 +1093,47 @@ private:
     enum class PassReads { nothing, target };
 
     // The pass drawing into colour (and depth): the open one when it is that, else a new one
+    // (developers' KF4_PC_PLAIN_WORLD) The plain images for a world batch drawn for like: made at like's image's size
+    // (with a depth image of that size), marked to be cleared after each clear of the frame buffer. nullptr when they could not be made.
+    Surface *plain_surfaces(const Surface &like) {
+        const Image &li = *like.image;
+        if (!plain_colour_ || plain_colour_->image->get_width() != li.get_width() ||
+            plain_colour_->image->get_height() != li.get_height()) {
+            if (pass_colour_ == plain_colour_.get() && plain_colour_) {
+                end_pass();
+            }
+            auto make = [&](bool depth) {
+                auto s = std::make_unique<Surface>();
+                s->base_page = like.base_page;
+                s->fbw = like.fbw;
+                s->psm = like.psm;
+                s->height = like.height;
+                s->depth = depth;
+                ImageCreateInfo info =
+                    ImageCreateInfo::render_target(li.get_width(), li.get_height(), depth ? depth_format_ : colour_format);
+                info.usage = depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                s->image = device_.create_image(info, nullptr);
+                return s;
+            };
+            plain_colour_ = make(false);
+            plain_depth_ = make(true);
+            plain_stale_ = true;
+            fprintf(stderr, "[pcr] plain world: images %ux%u%s\n", li.get_width(), li.get_height(),
+                    plain_colour_->image && plain_depth_->image ? "" : " (not made)");
+        }
+        if (!plain_colour_->image || !plain_depth_->image) {
+            return nullptr;
+        }
+        if (plain_stale_) {
+            plain_stale_ = false;
+            plain_clear_ = true;
+            if (pass_colour_ == plain_colour_.get()) {
+                end_pass(); // (so that the next pass clears)
+            }
+        }
+        return plain_colour_.get();
+    }
+
     void begin_pass(Surface &colour, Surface *depth, PassReads reads) {
         ZoneScope zone(canvas_begin_pass_zone);
         if (pass_colour_ == &colour && (depth == nullptr || pass_depth_ == depth) &&
@@ -1108,6 +1149,19 @@ private:
         if (depth) {
             rp.depth_stencil = &depth->image->get_view();
             rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+        }
+        // (developers' KF4_PC_PLAIN_WORLD: the plain images' first pass after the frame buffer's clear clears them, colour and depth,
+        // with the pass's load op: a fast clear. Its depth is attached whether this batch tests it or not.)
+        if (&colour == plain_colour_.get() && plain_clear_) {
+            rp.load_attachments = 0;
+            rp.clear_attachments = 1;
+            rp.clear_color[0] = {};
+            rp.depth_stencil = &plain_depth_->image->get_view();
+            rp.op_flags = RENDER_PASS_OP_CLEAR_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+            rp.clear_depth_stencil = {0.0f, 0};
+            depth = plain_depth_.get();
+            plain_clear_ = false;
+            counts_plain_clears_++;
         }
         RenderPassInfo::Subpass subpass = {};
         if (reads == PassReads::target) {
@@ -3858,6 +3912,21 @@ private:
                    std::min(int32_t(scay1), int32_t(colour->height) - 1 - int32_t(placed.y))};
         }
         date_stencil = date_stencil && depth != nullptr;
+        // (developers' KF4_PC_PLAIN_WORLD: the world's batch into the plain images instead)
+        bool plain_batch = false;
+        if (plain_on_ && b.native && b.program != NativeProgram::ripple && !date && !b.shader_blend &&
+            colour->psm == GSN_PSMCT32 && colour->width() >= 640 &&
+            !(bits(s.prim, 4, 1) != 0 && b.texture.ok && b.texture.src == SRC_SURFACE)) {
+            if (!plain_images_) {
+                plain_batch = true;
+                counts_plain_++;
+            } else if (Surface *plain = plain_surfaces(*colour)) {
+                colour = plain;
+                depth = depth ? plain_depth_.get() : nullptr;
+                plain_batch = true;
+                counts_plain_++;
+            }
+        }
         // (KF4_PC_STENCIL=0: the destination as it is before the draw, which the shader reads: a copy, as the draw
         // writes it)
         ImageHandle dest_copy;
@@ -3903,6 +3972,12 @@ private:
         bool clear_z_only = false;
         bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect,
                               clear_z_only);
+        // (developers' KF4_PC_PLAIN_WORLD: the frame buffer cleared, the game's frame begun: the plain images cleared
+        // at their next pass)
+        if (plain_images_ && clear && !clear_z_only && !plain_batch && colour->psm == GSN_PSMCT32 &&
+            colour->width() >= 640) {
+            plain_stale_ = true;
+        }
         // (developers' knock-outs, KF4_PC_KNOCK: one kind of work left out of the pictures between, to time the rest:
         // the picture is wrong, the GPU time a picture less is what that work costs)
         if (knock_ && between_ && between_->active() &&
@@ -3916,6 +3991,9 @@ private:
                                                        : 1;
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
         bool blend_supported = blend.supported;
+        if (plain_batch && plain_unblended_) {
+            blend = BlendChoice(); // (developers' KF4_PC_PLAIN_WORLD=unblended)
+        }
         if (blend.enable && unblend_on_ && blend_is_source(b)) {
             // (the blend's result is its source at every pixel, and the alpha written the same: drawn without the
             // blend, which reads every pixel it writes: at 4x with 16 bits a channel that read is most of what the map
@@ -5144,6 +5222,23 @@ private:
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
+    // Developers' KF4_PC_PLAIN_WORLD=1, with KF4_PC_DEPTH=gpu: the world drawn as a PC game draws it, to time the floor
+    // (docs/plans/world-plain.md). The world's batches (native programs 0x000, 0x280 and 0x700 into a 32-bit colour
+    // surface; not DATE's, not one read from a surface such as the sky, none blended in the shader) go to images of
+    // their own, the size of the surface they were for: optimal layouts, attachment use alone (so compressible: DCC
+    // and HiZ), cleared by their pass's load op after each clear of the frame buffer, the GPU's depth test. The frame's surfaces never get the world, so the picture lacks it: for
+    // timing only.
+    const bool plain_asked_ = getenv("KF4_PC_PLAIN_WORLD") && strcmp(getenv("KF4_PC_PLAIN_WORLD"), "0") != 0;
+    const bool plain_on_ = plain_asked_ && !exact_z_;
+    // (=unblended: the world's batches drawn without their blend too, as a PC game draws opaque geometry, the picture's
+    // see-through parts then wrong as well; =opaque: without their blend, in the frame's surfaces as before)
+    const bool plain_unblended_ = plain_asked_ && (strcmp(getenv("KF4_PC_PLAIN_WORLD"), "unblended") == 0 ||
+                                                   strcmp(getenv("KF4_PC_PLAIN_WORLD"), "opaque") == 0);
+    const bool plain_images_ = plain_asked_ && strcmp(getenv("KF4_PC_PLAIN_WORLD"), "opaque") != 0;
+    std::unique_ptr<Surface> plain_colour_, plain_depth_;
+    bool plain_stale_ = true;             // (the frame buffer cleared since the plain images were: draw_batch)
+    bool plain_clear_ = false;            // (the plain images' next pass clears them)
+    uint64_t counts_plain_ = 0, counts_plain_clears_ = 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
     HangNotes *hang_notes_ = nullptr; // (watch_hangs)
     const char *hang_who_ = "";
@@ -5259,6 +5354,11 @@ public:
                 (unsigned long long)counts_clut_not_uploads_);
         fprintf(out, "[stats] pc canvas: %llu depth surfaces let go, not drawn with for %llu vblanks\n",
                 (unsigned long long)counts_idle_depth_let_go_, (unsigned long long)IDLE_DEPTH_VBLANKS);
+        if (plain_asked_) {
+            fprintf(out, "[stats] pc canvas, plain world (KF4_PC_PLAIN_WORLD): %s; %llu batches drawn plainly, %llu clears\n",
+                    plain_on_ ? "on" : "off (it needs KF4_PC_DEPTH=gpu)", (unsigned long long)counts_plain_,
+                    (unsigned long long)counts_plain_clears_);
+        }
         // (what the GPU memory of the surfaces is made of: each surface's place in the GS's memory and its images)
         for (const auto *list : {&colour_, &depth_}) {
             for (const auto &sf : *list) {

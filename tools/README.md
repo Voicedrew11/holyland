@@ -15,6 +15,7 @@
 | `replay_compare.py` | a GS capture of many frames drawn by the PC renderer (at a player's settings) and by paraLLEl-GS, compared frame by frame (`kf4-gsreplay`, below): the frames where the PC renderer's picture differs most, and with `--decal-losses` where decals lost a near tie (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
 | `layer_inventory.py` | the game's full-screen layers in a tour of play (scenes, actions, `KF4_FX`, every map): each one's GS state, its GPU time by draw (`kf4-gsreplay --gpu-draws`), what reads each channel it writes, and its class (clear, dead, foldable into scanout, must stay in memory); real-window totals at the owner's settings; `report.md` (below; docs/plans/fullscreen-layers-inventory.md) |
+| `world_plain.py` | the world's GPU time drawn the GS's way and with each GS-exact mechanism switched off (`KF4_PC_*` switches, the prototype plain path `KF4_PC_PLAIN_WORLD`, RADV's compression and HiZ off), a few scenes at 1x, 2x and 4x in a real window with the owner's settings, by `layer_inventory.py`'s live step (below; docs/plans/world-plain.md) |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
 | `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and the GPU time a picture (docs/port/RENDERER.md, "Measuring the pace") |
@@ -355,6 +356,36 @@ How a layer is found and judged (the analysis, in the tool):
 
 Into `--out`: `scenarios/NAME/` (the captures, their lists and `--gpu-draws` files, the pictures, the live profiles),
 `report.md`, `report.json`.
+
+## world_plain.py
+
+What the world costs on the GPU (docs/plans/world-plain.md): `layer_inventory.py`'s scenes (`start`, `pond`,
+`palace`, any with a live moment) played in a **real window** with the owner's settings by its live step, once for
+each **variant** at each native scale. A variant is a set of developers' switches, each off the exact path (the
+picture may differ; for timing only): `--variants list` names them. `--rounds` runs the whole matrix again in the same
+order, so that a drift of the GPU's clocks shows as a spread, not as a variant's cost; a variant's files already made
+are kept (delete them to run it again).
+
+```sh
+python3 tools/world_plain.py --out /tmp/world --disc kfiv_us.iso --rounds 2                 # 3 scenes, 7 variants, 1x/2x/4x
+python3 tools/world_plain.py --out /tmp/world --scales 2 --variants gpu_nodcc,gpu_nohiz,plainworld,plainopaque
+python3 tools/world_plain.py --out /tmp/world --scales 2 --rates 60 --variants exact,gpu    # pictures between
+python3 tools/world_plain.py --out /tmp/world --report-only --variants exact,gpu
+```
+
+- **The world**: the native draws (programs 0x000, 0x280 the skinned models, 0x700), less program 0x000's DATE draws
+  (the entity pool's) and the sky (read from a target's copy), with exact Z's planes pass. Every figure is GPU ms a
+  game frame: the run's GPU time over its game frames (at 60, a game frame and a picture between).
+- The plain path, `KF4_PC_PLAIN_WORLD=1` with `KF4_PC_DEPTH=gpu` (`pcr_canvas.cpp`): the world's batches drawn into
+  images of their own, the size of the surface they were for, optimal layouts, attachment use alone, cleared by their
+  pass's load op after each clear of the frame buffer; `=unblended` draws them without their blend too, `=opaque`
+  without their blend in the frame's surfaces. The picture lacks the world (or its see-through parts): timing only.
+  `--stats` counts its batches and clears.
+- A run is about 14 s (4 s profiled, from `layer_inventory.py`'s base quick save); the full matrix of 3 scenes, 7
+  variants, 3 scales and 2 rounds about 35 minutes. Mains power, nothing else on the GPU.
+
+Into `--out`: `scenarios/NAME/live_VARIANT_sSCALE_rROUND_RATE.*` (the profile, the log, stderr, the result),
+`world_plain.md` and `world_plain.json` (the medians by scene, scale, rate and variant).
 
 ## kf4-layerbench: what a full-screen layer costs on this GPU
 

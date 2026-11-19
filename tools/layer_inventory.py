@@ -301,17 +301,20 @@ def time_capture(a, folder, cap, scale):
 
 
 # ---- The live runs (a real window, the owner's settings) ----------------------------------------------
-def live_scenario(a, name, rate):
+def live_scenario(a, name, rate, tag="", env_more=None, settings_more=None):
+    """The scenario in a real window at rate; tag names a variant's files (live_<tag>_<rate>.*), env_more and
+    settings_more what the variant changes (world_plain.py's switches and scales)"""
     sc = scenario(name)
     if sc["live"] is None:
         return None
     folder = os.path.join(a.out, "scenarios", slug(name))
     os.makedirs(folder, exist_ok=True)
-    prof = os.path.join(folder, "live_%d.prof" % rate)
-    done = os.path.join(folder, "live_%d.json" % rate)
+    stem = "live_%s%d" % (tag + "_" if tag else "", rate)
+    prof = os.path.join(folder, stem + ".prof")
+    done = os.path.join(folder, stem + ".json")
     if os.path.exists(done) and not a.force:
         return json.load(open(done))
-    data_dir = os.path.join(folder, "live_data_%d" % rate)
+    data_dir = os.path.join(folder, stem.replace("live_", "live_data_", 1))
     shutil.rmtree(data_dir, ignore_errors=True)
     os.makedirs(data_dir)
     home = os.path.expanduser("~/.config/darker-reality")
@@ -322,6 +325,7 @@ def live_scenario(a, name, rate):
     settings = json.load(open(settings_path))
     settings.setdefault("display", {})["frame_rate"] = rate
     settings["display"].update(sc["settings"])
+    settings["display"].update(settings_more or {})
     json.dump(settings, open(settings_path, "w"), indent=1)
     pad = os.path.join(folder, "input.pad")
     write_pad(pad, sc, None)
@@ -339,7 +343,7 @@ def live_scenario(a, name, rate):
         args = [re.sub(r"^1800:", "300:", x) for x in args] + ["--quick-load", a.base_path]
         start = max(400, start - shift)
     end = start + a.live_seconds * 60 + 120
-    log = os.path.join(folder, "live_%d_log.txt" % rate)
+    log = os.path.join(folder, stem + "_log.txt")
     cmd = [a.exe, "--disc", a.disc, "--no-audio", "--saves", "none", "--clock", CLOCK, "--input", pad,
            "--frames", str(end), "--stats", "--log", log,
            "--profile-at", "%d:%d:%s" % (start, a.live_seconds, prof)] + args
@@ -348,13 +352,15 @@ def live_scenario(a, name, rate):
     if sc["fx"]:
         env["KF4_FX"] = sc["fx"]
     env.update(sc["env"])
-    rc, wall = run(cmd, env, os.path.join(folder, "live_%d_stderr.txt" % rate))
+    env.update(env_more or {})
+    rc, wall = run(cmd, env, os.path.join(folder, stem + "_stderr.txt"))
     result = {"name": name, "rate": rate, "exit": rc, "wall": round(wall, 1), "start": start,
-              "seconds": a.live_seconds, "from_quick_save": bool(quick), "settings": sc["settings"],
-              "env": sc["env"], "fx": sc["fx"]}
+              "seconds": a.live_seconds, "from_quick_save": bool(quick),
+              "settings": dict(sc["settings"], **(settings_more or {})), "env": dict(sc["env"], **(env_more or {})),
+              "fx": sc["fx"], "tag": tag}
     result.update(read_profile(prof))
     result["game_frames"] = game_frames_between(log, start, start + a.live_seconds * 60)
-    result["stats"] = [l.rstrip() for l in open(os.path.join(folder, "live_%d_stderr.txt" % rate), errors="replace")
+    result["stats"] = [l.rstrip() for l in open(os.path.join(folder, stem + "_stderr.txt"), errors="replace")
                        if l.startswith("[stats] pc renderer GPU time") or l.startswith("[stats] frame rate")
                        or l.startswith("[stats] pc pump:")]
     shutil.rmtree(data_dir, ignore_errors=True)
