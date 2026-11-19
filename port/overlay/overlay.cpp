@@ -1155,7 +1155,7 @@ void teleport_section() {
                 "You are put on the floor under the place.");
     }
     ImGui::BeginDisabled(place_count == 0);
-    if (ImGui::Button("Teleport"))
+    if (ImGui::Button("Teleport##go"))
         port_teleport_request(map, place);
     ImGui::EndDisabled();
     tooltip("Restarts the game on that map, as loading a save does, with your items, stats and the\n"
