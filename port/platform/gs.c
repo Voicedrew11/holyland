@@ -183,7 +183,10 @@ static int open_pc_renderer(void) {
     gsr_set_presenter(port_video_submit, port_video_submit_image);
     /* the pipelines made before play, for these settings (port/gs/pc/pcr_pipelines.h): the game waits for them at its
        first vblank (port/platform/kernel.c), "Building shaders" in the window */
-    gsr_precompile();
+    int dump_scaled = port_options.dump_present_width > 0;
+    int sharpen = (!port_options.headless || dump_scaled) && port_video_sharpen() > 0;
+    int scaling = dump_scaled || sharpen || (!port_options.headless && port_video_scaling() == PORT_SCALING_BEST);
+    gsr_precompile(scaling, sharpen);
     return 1;
 }
 #endif

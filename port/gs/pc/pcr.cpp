@@ -1121,6 +1121,18 @@ class PresentScaler {
 public:
     explicit PresentScaler(Device &device) : device_(device) {}
 
+    void warm_pipelines(std::vector<pcr::FullscreenPipeline> &passes, bool sharpen) {
+        make_programs();
+        passes.push_back({scale_, VK_FORMAT_R8G8B8A8_UNORM});
+        if (two_passes_) {
+            passes.push_back({scale_1d_, VK_FORMAT_R16G16B16A16_SFLOAT});
+            passes.push_back({scale_1d_, VK_FORMAT_R8G8B8A8_UNORM});
+        }
+        if (sharpen) {
+            passes.push_back({sharpen_, VK_FORMAT_R8G8B8A8_UNORM});
+        }
+    }
+
     // picture into scaled, or with sharpen above 0 into work and sharpened from it into scaled. A picture made with an
     // sRGB view (ScanoutRing::make_picture_image's srgb_view) is decoded to linear light by the sampler as it is read.
     void scale(CommandBuffer &cmd, const Image &picture, const Image &scaled, const Image *work, float sharpen) {
@@ -2029,6 +2041,16 @@ public:
         return true;
     }
 
+    void precompile(bool scaling, bool sharpen) {
+        std::vector<pcr::FullscreenPipeline> passes;
+        pcr::AntiAliasing::warm_pipelines(*device_, settings.antialias.load(), passes);
+        if (scaling) {
+            PresentScaler scaler(*device_);
+            scaler.warm_pipelines(passes, sharpen);
+        }
+        pcr::precompile(std::move(passes));
+    }
+
     // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
     // seconds more it is left (the process ends with it)
     // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
@@ -2760,8 +2782,8 @@ extern "C" void pcr_pipeline_cache(const char *path) {
 }
 
 // (after the settings, before the game draws) The pipelines made before play (pcr_pipelines.h, precompile)
-extern "C" void pcr_precompile(void) {
-    pcr::precompile();
+extern "C" void pcr_precompile(int scaling, int sharpen) {
+    renderer()->precompile(scaling != 0, sharpen != 0);
 }
 
 // The game waits while they are made (port/platform/kernel.c)

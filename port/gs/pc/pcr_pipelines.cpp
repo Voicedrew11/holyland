@@ -116,6 +116,7 @@ struct Store {
     std::atomic<bool> pre_wanted{false}, pre_gave_up{false};
     std::chrono::steady_clock::time_point pre_asked_at;
     size_t pre_seed = 0, pre_list = 0; // (the pipelines asked for: from the seed for these settings, from the list)
+    std::vector<FullscreenPipeline> pre_fullscreen;
     // attachments of the formats the list's passes have (made by the threads making ahead)
     std::mutex images_lock;
     std::map<std::pair<VkFormat, VkFormat>, std::pair<ImageHandle, ImageHandle>> images;
@@ -186,11 +187,11 @@ void on_compile(Device *, const DeferredPipelineCompile &compile, bool compute, 
     auto pa = warm.passes.find(uint64_t(compile.compatible_render_pass->get_hash()));
     if (warm.log) {
         auto ro = warm.role_of.find(compile.program);
-        fprintf(stderr, "[warm] %s %s program %p (role %d), colours %u depth %u subpasses %u: %.1f ms\n",
+        fprintf(stderr, "[warm] %s %s program %p (role %d), colours %u depth %u subpasses %u: %.1f ms, hash %016llx\n",
                 on_warm_thread ? "ahead" : "draw", sync ? "sync" : "async", (void *)compile.program,
                 ro != warm.role_of.end() ? int(ro->second) : -1, pa != warm.passes.end() ? pa->second.colours : 9,
                 pa != warm.passes.end() ? pa->second.depth : 9, pa != warm.passes.end() ? pa->second.subpasses : 9,
-                double(ns) / 1e6);
+                double(ns) / 1e6, (unsigned long long)compile.hash);
     }
     if (on_warm_thread || pa == warm.passes.end()) {
         return;
@@ -448,9 +449,7 @@ bool format_ok(Device &device, VkFormat format, VkFormatFeatureFlags2 need) {
 }
 
 // (a thread making ahead) One record's pipeline made, through the cache
-void make_ahead(Device &device, const Record &r, const std::unordered_map<uint32_t, Program *> &roles) {
-    auto role = roles.find(r.role);
-    Program *program = role != roles.end() ? role->second : nullptr;
+void make_ahead(Device &device, const Record &r, Program *program) {
     if (!program || r.samples != 1 || r.per_sample != 0 ||
         (r.colours && !format_ok(device, r.colour_format, VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT)) ||
         (r.depth && !format_ok(device, r.depth_format, VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT))) {
@@ -529,16 +528,44 @@ void make_compute_ahead(Device &device, Program *program) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
+struct GraphicsJob {
+    Record record;
+    Program *program;
+};
+
+Record fullscreen_record(VkFormat format) {
+    Record r{};
+    r.samples = 1;
+    r.colours = 1;
+    r.colour_format = format;
+    // The AA and scaling passes use opaque state with culling and depth disabled.
+    auto &state = r.static_state.state;
+    state.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    state.cull_mode = VK_CULL_MODE_NONE;
+    state.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    state.write_mask = ~0u;
+    return r;
+}
+
 // (store.lock and warm.lock held) Build the list in the background or the startup work while the game waits.
-void start_ahead(std::vector<Record> list, std::vector<Program *> compute, unsigned threads) {
-    const size_t total = list.size() + compute.size();
+void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute,
+                 std::span<const FullscreenPipeline> fullscreen, unsigned threads) {
+    const size_t total = list.size() + compute.size() + fullscreen.size();
     if (store.ahead_started || !store.open || total == 0 || !warm.device) {
         return;
     }
     store.ahead_started = true;
-    auto records = std::make_shared<std::vector<Record>>(std::move(list));
+    auto graphics = std::make_shared<std::vector<GraphicsJob>>();
+    graphics->reserve(list.size() + fullscreen.size());
+    for (const FullscreenPipeline &pass : fullscreen) {
+        graphics->push_back({fullscreen_record(pass.format), pass.program});
+    }
+    for (const Record &record : list) {
+        auto role = warm.roles.find(record.role);
+        graphics->push_back({record, role == warm.roles.end() ? nullptr : role->second});
+    }
     auto compute_programs = std::make_shared<std::vector<Program *>>(std::move(compute));
-    auto roles = std::make_shared<std::unordered_map<uint32_t, Program *>>(warm.roles);
     auto next = std::make_shared<std::atomic<size_t>>(0);
     store.ahead_total = total;
     store.ahead_start = std::chrono::steady_clock::now();
@@ -553,7 +580,8 @@ void start_ahead(std::vector<Record> list, std::vector<Program *> compute, unsig
                 if (i < compute_programs->size()) {
                     make_compute_ahead(*device, (*compute_programs)[i]);
                 } else {
-                    make_ahead(*device, (*records)[i - compute_programs->size()], *roles);
+                    const GraphicsJob &job = (*graphics)[i - compute_programs->size()];
+                    make_ahead(*device, job.record, job.program);
                 }
                 if (++store.ahead_done == total) {
                     store.ahead_wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -755,7 +783,7 @@ std::vector<Record> seed_for_device() {
 }
 
 // (store.lock and warm.lock held) Made before play, once both the settings (precompile) and the programs
-// (warm_watch) are known: fixed compute pipelines, the seed for these settings, and the list.
+// (warm_watch) are known: fixed compute, active post-processing, the seed for these settings, and the list.
 void start_precompile() {
     if (!store.pre_asked || store.ahead_started || !warm.device) {
         return;
@@ -766,10 +794,12 @@ void start_precompile() {
     list.insert(list.end(), store.records.begin(), store.records.end());
     unsigned cores = std::thread::hardware_concurrency();
     {
-        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list, %zu fixed compute\n",
-                store.pre_seed, store.pre_list, warm.compute_programs.size());
+        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list, %zu fixed compute, "
+                        "%zu post-processing\n",
+                store.pre_seed, store.pre_list, warm.compute_programs.size(), store.pre_fullscreen.size());
     }
-    start_ahead(std::move(list), warm.compute_programs, cores > 2 ? cores - 1 : 1);
+    start_ahead(list, warm.compute_programs, store.pre_fullscreen, cores > 2 ? cores - 1 : 1);
+    store.pre_fullscreen.clear();
     if (!store.ahead_started) {
         store.pre_wanted = false; // (nothing to make)
     }
@@ -800,17 +830,18 @@ void warm_watch(Device &device, Program *const *programs, uint32_t count, const 
     if (store.pre_on) {
         start_precompile(); // (when the settings came first)
     } else if (store.ahead_on) {
-        start_ahead(store.records, {}, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)));
+        start_ahead(store.records, {}, {}, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)));
     }
 }
 
-void precompile() {
+void precompile(std::vector<FullscreenPipeline> fullscreen) {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     if (!store.open || !store.pre_on || store.pre_asked) {
         return;
     }
     store.pre_asked = true;
+    store.pre_fullscreen = std::move(fullscreen);
     store.pre_wanted = true;
     store.pre_asked_at = std::chrono::steady_clock::now();
     start_precompile(); // (when the programs came first)

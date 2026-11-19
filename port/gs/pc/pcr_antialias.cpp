@@ -10,6 +10,7 @@
 #include "Textures/AreaTex.h"   // (third_party/smaa: SMAA's lookup textures)
 #include "Textures/SearchTex.h"
 #include "command_buffer.hpp"
+#include "pcr_pipelines.h"
 #include "pcr_shaders.h"
 
 using namespace Vulkan;
@@ -96,9 +97,11 @@ const VkImageUsageFlags COPY_USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE
 // FXAA (shaders/pcr_fxaa.frag): the picture copied, then drawn over whole from the copy
 class Fxaa final : public AntiAliasMethod {
 public:
-    explicit Fxaa(Device &device)
-        : device_(device), program_(over_program(device, pcr_spv_pcr_fxaa_frag, sizeof(pcr_spv_pcr_fxaa_frag), 1,
-                                                 2 * sizeof(float))) {}
+    explicit Fxaa(Device &device) : device_(device), program_(make_program(device)) {}
+
+    static Program *make_program(Device &device) {
+        return over_program(device, pcr_spv_pcr_fxaa_frag, sizeof(pcr_spv_pcr_fxaa_frag), 1, 2 * sizeof(float));
+    }
 
     bool apply(CommandBuffer &cmd, const AntiAliasFrame &frame) override {
         const Image &picture = frame.picture;
@@ -128,19 +131,24 @@ private:
 // SMAA 1x cost 0.17 ms a picture at 4x, 2026-11-16.)
 class SmaaPasses {
 public:
+    struct Programs {
+        Program *edges, *weights, *blend, *blend_moved;
+    };
+
     explicit SmaaPasses(Device &device)
-        : device_(device),
-          edges_program_(over_program(device, pcr_spv_pcr_smaa_edges_frag, sizeof(pcr_spv_pcr_smaa_edges_frag), 1,
-                                      sizeof(Push))),
-          weights_program_(over_program(device, pcr_spv_pcr_smaa_weights_frag,
-                                        sizeof(pcr_spv_pcr_smaa_weights_frag), 3, sizeof(Push))),
-          blend_program_(over_program(device, pcr_spv_pcr_smaa_blend_frag, sizeof(pcr_spv_pcr_smaa_blend_frag), 2,
-                                      sizeof(Push))),
-          blend_moved_program_(over_program(device, pcr_spv_pcr_smaa_blend_t2x_frag,
-                                            sizeof(pcr_spv_pcr_smaa_blend_t2x_frag), 3, sizeof(Push))),
+        : device_(device), programs_(make_programs(device)),
           area_(lookup(device, AREATEX_WIDTH, AREATEX_HEIGHT, VK_FORMAT_R8G8_UNORM, areaTexBytes, "AreaTex")),
           search_(lookup(device, SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, VK_FORMAT_R8_UNORM, searchTexBytes,
                          "SearchTex")) {}
+
+    static Programs make_programs(Device &device) {
+        return {
+            over_program(device, pcr_spv_pcr_smaa_edges_frag, sizeof(pcr_spv_pcr_smaa_edges_frag), 1, sizeof(Push)),
+            over_program(device, pcr_spv_pcr_smaa_weights_frag, sizeof(pcr_spv_pcr_smaa_weights_frag), 3, sizeof(Push)),
+            over_program(device, pcr_spv_pcr_smaa_blend_frag, sizeof(pcr_spv_pcr_smaa_blend_frag), 2, sizeof(Push)),
+            over_program(device, pcr_spv_pcr_smaa_blend_t2x_frag, sizeof(pcr_spv_pcr_smaa_blend_t2x_frag), 3, sizeof(Push)),
+        };
+    }
 
     // picture's SMAA into target (the picture itself, or another image its size), with subsample as the weights'
     // subsampleIndices (0 for SMAA 1x); with motion (not null), the motion blended too and its length in target's
@@ -168,20 +176,20 @@ public:
                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
         }
 
-        begin_over(cmd, *edges_, edges_program_, true);
+        begin_over(cmd, *edges_, programs_.edges, true);
         cmd.set_texture(0, 0, source.get_view(), StockSampler::LinearClamp);
         cmd.push_constants(&push, 0, sizeof(push));
         draw_over(cmd);
 
         // (not cleared: the weights pass writes every pixel, 0 where there is no edge, where the edges pass discards)
-        begin_over(cmd, *weights_, weights_program_, false);
+        begin_over(cmd, *weights_, programs_.weights, false);
         cmd.set_texture(0, 0, edges_->get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 1, area_->get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 2, search_->get_view(), StockSampler::NearestClamp);
         cmd.push_constants(&push, 0, sizeof(push));
         draw_over(cmd);
 
-        begin_over(cmd, target, motion ? blend_moved_program_ : blend_program_, false);
+        begin_over(cmd, target, motion ? programs_.blend_moved : programs_.blend, false);
         cmd.set_texture(0, 0, source.get_view(), StockSampler::LinearClamp);
         cmd.set_texture(0, 1, weights_->get_view(), StockSampler::LinearClamp);
         if (motion) {
@@ -213,7 +221,7 @@ private:
     }
 
     Device &device_;
-    Program *edges_program_, *weights_program_, *blend_program_, *blend_moved_program_;
+    Programs programs_;
     ImageHandle area_, search_;          // (the lookup textures, made once)
     ImageHandle copy_, edges_, weights_; // (kept while the picture's size stays)
 };
@@ -237,8 +245,12 @@ private:
 class SmaaT2x final : public AntiAliasMethod {
 public:
     explicit SmaaT2x(Device &device)
-        : passes_(device), resolve_program_(over_program(device, pcr_spv_pcr_smaa_resolve_frag,
-                                                         sizeof(pcr_spv_pcr_smaa_resolve_frag), 3, sizeof(Push))) {}
+        : passes_(device), resolve_program_(make_resolve_program(device)) {}
+
+    static Program *make_resolve_program(Device &device) {
+        return over_program(device, pcr_spv_pcr_smaa_resolve_frag, sizeof(pcr_spv_pcr_smaa_resolve_frag), 3,
+                            sizeof(Push));
+    }
 
     bool apply(CommandBuffer &cmd, const AntiAliasFrame &frame) override {
         if (!frame.keep_into) {
@@ -444,6 +456,7 @@ private:
         v[3] = d;
     }
 
+public:
     static Program *motion_program(Device &device) {
         ResourceLayout vert = {};
         Shader *vs = device.request_shader(pcr_spv_pcr_present_vert, sizeof(pcr_spv_pcr_present_vert), &vert);
@@ -458,6 +471,7 @@ private:
             vs, device.request_shader(pcr_spv_pcr_aa_motion_frag, sizeof(pcr_spv_pcr_aa_motion_frag), &layout));
     }
 
+private:
     Device &device_;
     Program *motion_program_, *debug_program_;
     ImageHandle depth_, motion_; // (kept while the picture's size stays)
@@ -467,6 +481,26 @@ private:
 AntiAliasing::AntiAliasing(Device &device, AntiAliasHistory &history)
     : device_(device), history_(history), inputs_(std::make_unique<Inputs>(device)) {}
 AntiAliasing::~AntiAliasing() = default;
+
+void AntiAliasing::warm_pipelines(Device &device, int method, std::vector<FullscreenPipeline> &passes) {
+    constexpr VkFormat picture = VK_FORMAT_R8G8B8A8_UNORM;
+    if (method == PORT_AA_FXAA) {
+        passes.push_back({Fxaa::make_program(device), picture});
+        return;
+    }
+    if (method != PORT_AA_SMAA && method != PORT_AA_SMAA_T2X) {
+        return;
+    }
+    const SmaaPasses::Programs programs = SmaaPasses::make_programs(device);
+    passes.push_back({programs.edges, VK_FORMAT_R8G8_UNORM});
+    passes.push_back({programs.weights, picture});
+    passes.push_back({programs.blend, picture});
+    if (method == PORT_AA_SMAA_T2X) {
+        passes.push_back({Inputs::motion_program(device), VK_FORMAT_R16G16_SFLOAT});
+        passes.push_back({programs.blend_moved, picture});
+        passes.push_back({SmaaT2x::make_resolve_program(device), picture});
+    }
+}
 
 const Image *AntiAliasing::depth_image(uint32_t width, uint32_t height) {
     return inputs_->depth(width, height);
