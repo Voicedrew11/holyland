@@ -250,10 +250,10 @@ index 9632089b07a8631adfbaad8c3b7755ccc0d01f47..8da8ce93b63513c623713215f4f37f9b
      sprite.prim = 0x156;
      sprite.rgba[3] = sprite.rgba[2] = sprite.rgba[1] = sprite.rgba[0] = 0x80;
 diff --git a/src/game/gfx/movie.c b/src/game/gfx/movie.c
-index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d639571006df52 100644
+index 21ca77cb44b94d7856167204f85a294b52c8d4ab..bed0832474a493511c00c13c4b300d7d072a25d3 100644
 --- a/src/game/gfx/movie.c
 +++ b/src/game/gfx/movie.c
-@@ -5,36 +5,25 @@
+@@ -5,36 +5,26 @@
     ring (MovieOut) for the vblank handler, which sends the GS packets that show them one field at a time. */
  #include "gfx/movie.h"
  #include "gfx/gs.h"
@@ -294,6 +294,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
 +#include <sifrpc.h>
 +#include <ctype.h>
 +#include <string.h>
++#include "port/audio.h"
 +
 +/* PORT: not in port/include/eekernel.h yet */
 +int TerminateThread(int thread_id);
@@ -304,11 +305,13 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  
  /* The movie player's .data: the flags the vblank handler shares, the picture ring and the decoder state. */
  #define MOVIE_DATA4 __attribute__((section(".data"), aligned(4)))
-@@ -55,14 +44,12 @@ s32 movie_idle_vblanks MOVIE_DATA4 = { 0 };         /* 0x437A4C vblanks with no
+@@ -55,14 +45,14 @@ s32 movie_idle_vblanks MOVIE_DATA4 = { 0 };         /* 0x437A4C vblanks with no
  static char movie_audio_zero_buffer[0x800];               /* 0x1E4F7C0 0x800 zero bytes for the IOP */
  static u32 movie_init_display_packet[0x50];                /* 0x1E4FFC0 GS packet of Movie_InitDisplay */
  static u32 movie_clear_packet[0x70];                /* 0x1E50100 GS packet of MovieDisplay_Clear */
 -extern char _gp[];
++static int movie_audio_preloaded;
++static u32 movie_pictures_advanced;
  
  /* an object of 8 bytes or less kept in .rodata, as the game keeps them, not in .sdata */
  #define IN_RODATA __attribute__((section(".rodata")))
@@ -320,7 +323,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  static void *Movie_HeapAlloc(u32 size, u32 alignment);
  static int Movie_PlayFile(char *path, int (*skip_requested)(void));
  static int Movie_PlayLoop(MovieVideoDecoder *decoder, MovieReadBuffer *read_buffer, MovieFile *file,
-@@ -93,9 +80,9 @@ static s32 MovieAudio_IsPreset(MovieAudio *audio);
+@@ -93,9 +83,9 @@ static s32 MovieAudio_IsPreset(MovieAudio *audio);
  static int MovieAudio_SendToIop(MovieAudio *audio);
  static void MovieAudio_GetIopSpace(int *first, int *first_size, int *second, int *second_size, MovieAudio *audio,
                                     int play_pos);
@@ -332,7 +335,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  static void MovieAudio_SetMasterVolume(int volume);
  static void MovieAudio_SetInputVolume(int volume);
  static int MovieStream_GetBlockIndex(MovieStreamBuffer *stream, u32 address);
-@@ -157,35 +144,35 @@ static void MovieOut_DropOldest(MovieOutBuffer *buffer);
+@@ -157,35 +147,35 @@ static void MovieOut_DropOldest(MovieOutBuffer *buffer);
  static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y, s32 width, s32 height,
                                s32 picture_width, s32 picture_height);
  static void MovieDisplay_Delete(MovieDisplay *display);
@@ -392,7 +395,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  static int Movie_VblankHandler(int cause);
  static int Movie_GifDmaHandler(void);
  static void Movie_StartDisplay(s32 field);
-@@ -194,14 +181,11 @@ static s32 MovieFile_Open(MovieFile *file, char *path);
+@@ -194,14 +184,11 @@ static s32 MovieFile_Open(MovieFile *file, char *path);
  static s32 MovieFile_Close(MovieFile *file);
  static s32 MovieFile_Read(MovieFile *file, u32 *buffer, s32 size, s32 lsn);
  
@@ -410,7 +413,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      movie_thread.heap_start = start;
      movie_thread.heap_next = start;
      movie_thread.heap_end = start + size - 1;
-@@ -209,8 +193,8 @@ static void Movie_HeapInit(u32 start, u32 size) {
+@@ -209,8 +196,8 @@ static void Movie_HeapInit(u32 start, u32 size) {
  
  /* Takes size bytes at the next multiple of alignment from the movie player's block; NULL when it is full. */
  static void *Movie_HeapAlloc(u32 size, u32 alignment) {
@@ -421,7 +424,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  
      if (movie_thread.heap_end < end) {
          return NULL;
-@@ -221,9 +205,9 @@ static void *Movie_HeapAlloc(u32 size, u32 alignment) {
+@@ -221,9 +208,9 @@ static void *Movie_HeapAlloc(u32 size, u32 alignment) {
  
  /* Plays a movie file: carves the player's buffers out of the block given, sets up the display and runs the
     movie to its end. Returns -1 when the block is too small. */
@@ -433,7 +436,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      if ((movie_thread.idle_stack = Movie_HeapAlloc(0x800, 0x40)) == NULL ||
          (movie_thread.decode_stack = Movie_HeapAlloc(0x4000, 0x40)) == NULL ||
          (movie_thread.mpeg_work = Movie_HeapAlloc(0x13B800, 0x40)) == NULL ||
-@@ -234,7 +218,7 @@ int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void),
+@@ -234,7 +221,7 @@ int Movie_Play(char *path, u32 heap, u32 heap_size, int (*skip_requested)(void),
          (movie_thread.out_tags = Movie_HeapAlloc(0x10AF40, 0x40)) == NULL ||
          (movie_thread.time_stamps = Movie_HeapAlloc(0x3C00, 0x40)) == NULL ||
          (movie_thread.unk34 = Movie_HeapAlloc(0x100, 0x40)) == NULL ||
@@ -442,7 +445,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
          return -1;
      }
      movie_thread.video_mode = video_mode;
-@@ -295,7 +279,7 @@ static int Movie_PlayLoop(MovieVideoDecoder *decoder, MovieReadBuffer *read_buff
+@@ -295,7 +282,7 @@ static int Movie_PlayLoop(MovieVideoDecoder *decoder, MovieReadBuffer *read_buff
          get_size = MovieReadBuf_BeginGet(read_buffer, &get_src);
          if (get_size > 0) {
              proceeded =
@@ -451,7 +454,27 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
              MovieReadBuf_EndGet(read_buffer, proceeded);
              write_rest -= proceeded;
          }
-@@ -348,18 +332,17 @@ static void Movie_Setup(char *path) {
+@@ -327,7 +314,7 @@ static void Movie_Yield(void) {
+ 
+ /* TRUE when enough sound is buffered to start, or the movie has no sound (isAudioOK). */
+ static int Movie_IsAudioReady(void) {
+-    return (movie_has_sound_stream != 0) ? MovieAudio_IsPreset(&movie_audio) : TRUE;
++    return movie_audio_preloaded || movie_has_sound_stream == 0 || MovieAudio_IsPreset(&movie_audio);
+ }
+ 
+ /* Sets up everything a movie needs: the DMA controller, the read ring, the video and sound decoders and their
+@@ -343,23 +330,27 @@ static void Movie_Setup(char *path) {
+     MovieVideo_Init(&movie_decoder, movie_thread.mpeg_work, 0x13B800, movie_thread.stream_data, movie_thread.stream_tags,
+                     0x80, movie_thread.time_stamps, 0x280);
+     MovieAudio_Init(&movie_audio, movie_thread.audio_data, 0xC000, 0x6000);
++    while (!MovieFile_Open(&movie_thread.file, path)) {
++        printf("Can't Open file %s\n", path);
++    }
++    movie_audio_preloaded = movie_has_sound_stream != 0 && movie_thread.file.is_cd_stream &&
++                            port_movie_audio_load(movie_thread.file.lsn, movie_thread.file.size);
+     MovieVideo_SetStream(&movie_decoder, 0, 0, (sceMpegCallback)Movie_VideoCallback, MOVIE_READ_BUFFER(&movie_thread));
+-    if (movie_has_sound_stream != 0) {
++    if (movie_has_sound_stream != 0 && !movie_audio_preloaded) {
          MovieVideo_SetStream(&movie_decoder, 2, 0, (sceMpegCallback)Movie_AudioCallback,
                               MOVIE_READ_BUFFER(&movie_thread));
      }
@@ -474,7 +497,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      thread_param.option = 0;
      movie_thread.idle_thread = CreateThread(&thread_param);
      StartThread(movie_thread.idle_thread, NULL);
-@@ -367,7 +350,7 @@ static void Movie_Setup(char *path) {
+@@ -367,13 +358,10 @@ static void Movie_Setup(char *path) {
      thread_param.stack = movie_thread.decode_stack;
      thread_param.stackSize = 0x4000;
      thread_param.initPriority = 1;
@@ -483,7 +506,13 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      thread_param.option = 0;
      movie_thread.decode_thread = CreateThread(&thread_param);
      StartThread(movie_thread.decode_thread, &movie_decoder);
-@@ -382,7 +365,7 @@ static void Movie_Setup(char *path) {
+-    while (!MovieFile_Open(&movie_thread.file, path)) {
+-        printf("Can't Open file %s\n", path);
+-    }
+     movie_decoder.intc_handler = AddIntcHandler(2, Movie_VblankHandler, 0);
+     EnableIntc(2);
+     movie_decoder.dmac_handler = AddDmacHandler(2, (int (*)(int))Movie_GifDmaHandler, 0);
+@@ -382,7 +370,7 @@ static void Movie_Setup(char *path) {
  
  /* Frees what Movie_Setup set up: the threads, the handlers, the decoder, the sound buffers and the file. */
  static void Movie_Shutdown(void) {
@@ -492,7 +521,18 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      MovieOut_Delete(&movie_out_buffer);
      TerminateThread(movie_thread.decode_thread);
      DeleteThread(movie_thread.decode_thread);
-@@ -413,7 +396,7 @@ static void Movie_DebugPrint(char *message) {
+@@ -393,6 +381,10 @@ static void Movie_Shutdown(void) {
+     DisableIntc(2);
+     RemoveIntcHandler(2, movie_decoder.intc_handler);
+     MovieVideo_Delete(&movie_decoder);
++    if (movie_audio_preloaded) {
++        port_movie_audio_unload();
++        movie_audio_preloaded = 0;
++    }
+     MovieAudio_Delete(&movie_audio);
+     MovieFile_Close(&movie_thread.file);
+ }
+@@ -413,7 +405,7 @@ static void Movie_DebugPrint(char *message) {
  static int Movie_VideoCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_data, MovieReadBuffer *read_buffer) {
      u8 *first_src = stream_data->data;
      u8 *second_src = read_buffer->data;
@@ -501,7 +541,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      int second_src_size;
      u8 *first_dest;
      int first_dest_size;
-@@ -426,8 +409,8 @@ static int Movie_VideoCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
+@@ -426,8 +418,8 @@ static int Movie_VideoCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
      }
      second_src_size = stream_data->len - first_src_size;
      MovieVideo_BeginPut(&movie_decoder, &first_dest, &first_dest_size, &second_dest, &second_dest_size);
@@ -512,7 +552,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                                  first_src_size, second_src, second_src_size);
      if (copied > 0) {
          if (!MovieVideo_PutStamp(&movie_decoder, stream_data->pts, stream_data->dts, first_dest, copied)) {
-@@ -460,7 +443,7 @@ static int Movie_AudioCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
+@@ -460,7 +452,7 @@ static int Movie_AudioCallback(sceMpeg *mpeg, MovieStreamCallbackData *stream_da
      if (first_src >= end) {
          first_src -= ring_size;
      }
@@ -521,7 +561,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      first_src_size = (remaining < first_src_size) ? remaining : first_src_size;
      second_src_size = remaining - first_src_size;
      MovieAudio_BeginPut(&movie_audio, &first_dest, &first_dest_size, &second_dest, &second_dest_size);
-@@ -572,7 +555,7 @@ static int MovieAudio_Init(MovieAudio *audio, u8 *data, int size, int iop_buffer
+@@ -572,7 +564,7 @@ static int MovieAudio_Init(MovieAudio *audio, u8 *data, int size, int iop_buffer
          return 0;
      }
      memset(movie_audio_zero_buffer, 0, 0x800);
@@ -530,7 +570,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      MovieAudio_SetMasterVolume(movie_thread.volume);
      return 1;
  }
-@@ -742,13 +725,13 @@ static int MovieAudio_SendToIop(MovieAudio *audio) {
+@@ -742,13 +734,13 @@ static int MovieAudio_SendToIop(MovieAudio *audio) {
      first_src = audio->data + (audio->put - audio->count + audio->size) % audio->size;
      second_src = audio->data;
      whole_count = (audio->count / 1024) * 1024;
@@ -546,7 +586,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                                         first_src, first_src_size, second_src, second_src_size);
      }
      audio->count -= sent;
-@@ -783,7 +766,7 @@ static void MovieAudio_GetIopSpace(int *first, int *first_size, int *second, int
+@@ -783,7 +775,7 @@ static void MovieAudio_GetIopSpace(int *first, int *first_size, int *second, int
  
  /* Sends two source stretches to two stretches of IOP memory, as one stream, dropping what does not fit; returns
     the bytes sent (the SDK sample's sendToIOP2area). */
@@ -555,7 +595,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                                     u8 *first_src, int first_src_size, u8 *second_src, int second_src_size) {
      if (first_dest_size + second_dest_size < first_src_size + second_src_size) {
          int excess = (first_src_size + second_src_size) - (first_dest_size + second_dest_size);
-@@ -813,8 +796,8 @@ static int MovieAudio_SendTwoAreas(u8 *first_dest, int first_dest_size, u8 *seco
+@@ -813,8 +805,8 @@ static int MovieAudio_SendTwoAreas(u8 *first_dest, int first_dest_size, u8 *seco
  
  /* Copies size bytes to IOP memory with sceSifSetDma and waits for the transfer (the SDK sample's sendToIOP);
     returns size. */
@@ -566,7 +606,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      int dma_id;
  
      if (size <= 0) {
-@@ -823,7 +806,7 @@ static int Movie_SendToIop(void *dest, void *src, int size) {
+@@ -823,7 +815,7 @@ static int Movie_SendToIop(void *dest, void *src, int size) {
      dma.data = src;
      dma.addr = dest;
      dma.size = size;
@@ -575,7 +615,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      FlushCache(0);
      dma_id = sceSifSetDma(&dma, 1);
      do {
-@@ -849,10 +832,10 @@ static void MovieAudio_SetInputVolume(int volume) {
+@@ -849,10 +841,10 @@ static void MovieAudio_SetInputVolume(int volume) {
  
  /* Block index of a DMA address in the stream ring; the tag after the last block counts as 0 (getFIFOindex). */
  static int MovieStream_GetBlockIndex(MovieStreamBuffer *stream, u32 address) {
@@ -588,7 +628,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  }
  
  /* Writes D3_CHCR with the DMA controller held (setD3_CHCR). */
-@@ -886,7 +869,7 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
+@@ -886,7 +878,7 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
      int i;
  
      stream->data = data;
@@ -597,7 +637,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      stream->block_count = block_count;
      stream->data_size = block_count * 0x800;
      stream->dma_start = 0;
-@@ -908,12 +891,12 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
+@@ -908,12 +900,12 @@ static int MovieStream_Init(MovieStreamBuffer *stream, u8 *data, MovieDmaTag *ta
      sema_param.maxCount = 1;
      stream->sema = CreateSema(&sema_param);
      for (i = 0; i < stream->block_count; i++) {
@@ -614,7 +654,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      Movie_SetD4Chcr(D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN);
      return TRUE;
  }
-@@ -932,12 +915,12 @@ static int MovieStream_Reset(MovieStreamBuffer *stream) {
+@@ -932,12 +924,12 @@ static int MovieStream_Reset(MovieStreamBuffer *stream) {
      stream->saved.d4_qwc = 0;
      stream->saved.d4_chcr = 0;
      for (i = 0; i < stream->block_count; i++) {
@@ -631,7 +671,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      Movie_SetD4Chcr(D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN);
      return TRUE;
  }
-@@ -1007,13 +990,13 @@ static int MovieStream_AddDma(MovieStreamBuffer *stream) {
+@@ -1007,13 +999,13 @@ static int MovieStream_AddDma(MovieStreamBuffer *stream) {
      if (read_count > 0) {
          /* the tag that ended the chain becomes an ordinary one */
          last = (stream->dma_start + stream->dma_count - 1 + stream->block_count) % stream->block_count;
@@ -647,7 +687,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
          index = (index + 1) % stream->block_count;
      }
      stream->dma_count += read_count;
-@@ -1065,12 +1048,12 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
+@@ -1065,12 +1057,12 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
      s32 index_next;
  
      WaitSema(stream->sema);
@@ -665,7 +705,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                       ? 0
                       : 3;
          d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | D_CHCR_STR;
-@@ -1082,10 +1065,10 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
+@@ -1082,10 +1074,10 @@ static int MovieStream_RestartDma(MovieStreamBuffer *stream) {
          index = MovieStream_GetBlockIndex(stream, stream->saved.d4_madr);
          index_next = MovieStream_GetBlockIndex(stream, d4_madr_next);
          if (index != index_next) {
@@ -680,7 +720,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                           ? 0
                           : 3;
              d4_chcr_next = (stream->saved.d4_chcr & 0x0FFFFFFF) | (tag_id << 28) | D_CHCR_STR;
-@@ -1234,7 +1217,7 @@ static int MovieStream_PutStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
+@@ -1234,7 +1226,7 @@ static int MovieStream_PutStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
      if (stream->stamp_count < stream->stamp_capacity) {
          MovieStream_TrimStamps(stream, stamp);
          is_queued = TRUE;
@@ -689,7 +729,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
          slot->pos = stamp->pos;
          slot->pts = stamp->pts;
          stream->stamps[stream->stamp_write].len = stamp->len;
-@@ -1265,7 +1248,7 @@ static int MovieStream_GetStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
+@@ -1265,7 +1257,7 @@ static int MovieStream_GetStamp(MovieStreamBuffer *stream, MovieTimeStamp *stamp
      WaitSema(stream->sema);
      stamp_out->pts = -1;
      stamp_out->dts = -1;
@@ -698,7 +738,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      stamp_count = stream->stamp_count;
      stamp_write = stream->stamp_write;
      if (stamp_count > 0) {
-@@ -1308,7 +1291,8 @@ static int MovieVideo_Init(MovieVideoDecoder *decoder, u8 *work_area, int work_a
+@@ -1308,7 +1300,8 @@ static int MovieVideo_Init(MovieVideoDecoder *decoder, u8 *work_area, int work_a
  
  /* Calls sceMpegSetDecodeMode with whatever the argument registers hold (videoDecSetDecodeMode); nothing calls it. */
  void MovieVideo_SetDecodeMode(void) {
@@ -708,7 +748,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  }
  
  /* Registers the callback that receives one elementary stream of the movie (videoDecSetStream). */
-@@ -1368,7 +1352,7 @@ static int MovieVideo_PutStamp(MovieVideoDecoder *decoder, s64 pts, s64 dts, u8
+@@ -1368,7 +1361,7 @@ static int MovieVideo_PutStamp(MovieVideoDecoder *decoder, s64 pts, s64 dts, u8
  
      stamp.pts = pts;
      stamp.dts = dts;
@@ -717,7 +757,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      stamp.len = len;
      return MovieStream_PutStamp(&movie_decoder.stream, &stamp); // match: the global buffer, not the decoder's own (the same one)
  }
-@@ -1406,8 +1390,8 @@ static int MovieVideo_Flush(MovieVideoDecoder *decoder) {
+@@ -1406,8 +1399,8 @@ static int MovieVideo_Flush(MovieVideoDecoder *decoder) {
      if (first_size + second_size < 4) {
          return 0;
      }
@@ -728,7 +768,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                                       NULL, 0);
      MovieVideo_EndPut(&movie_decoder, copied);
      MovieStream_Flush(&decoder->stream);
-@@ -1429,6 +1413,7 @@ static void MovieVideo_Main(MovieVideoDecoder *decoder) {
+@@ -1429,6 +1422,7 @@ static void MovieVideo_Main(MovieVideoDecoder *decoder) {
      MovieOut_Reset(&movie_out_buffer);
      MovieVideo_DecodeAll(decoder);
      while (movie_out_buffer.count != 0) {
@@ -736,7 +776,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      }
      MovieVideo_SetState(decoder, MOVIE_VIDEO_STATE_ENDED);
  }
-@@ -1447,7 +1432,7 @@ static int MovieVideo_DecodeAll(MovieVideoDecoder *decoder) {
+@@ -1447,7 +1441,7 @@ static int MovieVideo_DecodeAll(MovieVideoDecoder *decoder) {
          while ((picture = MovieOut_GetWriteSlot(&movie_out_buffer)) == NULL) {
              Movie_Yield();
          }
@@ -745,7 +785,24 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
              Movie_DebugPrint("sceMpegGetPicture() decode error");
          }
          MovieOut_Commit(&movie_out_buffer);
-@@ -1591,13 +1576,17 @@ static void MovieOut_DropOldest(MovieOutBuffer *buffer) {
+@@ -1523,7 +1517,9 @@ static int MovieVideo_CopyTwoAreas(u8 *dest0, s32 dest0_size, u8 *dest1, s32 des
+ 
+ /* Sends waiting sound to the IOP; returns 0. */
+ static int Movie_PumpAudio(void) {
+-    MovieAudio_SendToIop(&movie_audio);
++    if (!movie_audio_preloaded) {
++        MovieAudio_SendToIop(&movie_audio);
++    }
+     return 0;
+ }
+ 
+@@ -1586,18 +1582,23 @@ static MovieOutTag *MovieOut_GetOldestTag(MovieOutBuffer *buffer) {
+ static void MovieOut_DropOldest(MovieOutBuffer *buffer) {
+     if (buffer->count > 0) {
+         buffer->count--;
++        movie_pictures_advanced++;
+     }
+ }
  
  #define ROUND_UP(value, unit) ((((value) + (unit) - 1) / (unit)) * (unit))
  
@@ -764,7 +821,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
  
      movie_pictures_enabled = 0;
      movie_picture_vblanks = 0;
-@@ -1612,13 +1601,21 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
+@@ -1612,13 +1613,21 @@ static void MovieDisplay_Init(MovieDisplay *display, s32 screen_x, s32 screen_y,
      display->picture_height = picture_height;
      display->frame_base[0] = 0;
      display->screen_y = screen_y;
@@ -790,7 +847,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      packet = GsPacket_AddPrmodecont(packet, 1);
      packet = GsPacket_AddFrame(packet, display->frame_base[0], ROUND_UP(display->width, 64) / 64, 0, 0);
      packet = GsPacket_AddTest(packet, 0, 0, 0, 0, 0, 0, 0, 0);
-@@ -1637,7 +1634,7 @@ static void MovieDisplay_Delete(MovieDisplay *display) {
+@@ -1637,7 +1646,7 @@ static void MovieDisplay_Delete(MovieDisplay *display) {
  
  /* Builds the GIF chain that shows a decoded picture on one field: for the first field it uploads the picture as
     a texture, one 16x16 macroblock at a time, and for both it draws the texture over the field's frame buffer. */
@@ -799,7 +856,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      s32 screen_rect[4];
      s32 texture_rect[4];
      s32 picture_width = display->picture_width;
-@@ -1646,7 +1643,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+@@ -1646,7 +1655,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
      s32 field_height = display->height / 2;
      s32 rows = picture_height >> 4;
      s32 columns = picture_width >> 4;
@@ -808,7 +865,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      s32 field_pages = (field_height + 31) / 32;      /* a field's frame buffer, in rows of GS pages */
      s32 buffer_width = ROUND_UP(width, 64) / 64;
      s32 buffer_pixels = buffer_width * 64;
-@@ -1654,6 +1651,14 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+@@ -1654,6 +1663,14 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
      s32 column;
      s32 row;
  
@@ -823,7 +880,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      if (field == 0) {
          screen_rect[0] = display->screen_x << 4;
          screen_rect[1] = display->screen_y << 4;
-@@ -1689,6 +1694,29 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+@@ -1689,6 +1706,29 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
              }
          }
      }
@@ -853,7 +910,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      packet = GsPacket_AddDmaTag(packet, 0, 0, 0, 7, 0, 9);
      packet = GsPacket_AddGifTag(packet, 0xE, 1, 0, 0, 0, 1, 8);
      packet = GsPacket_AddTexflush(packet);
-@@ -1701,7 +1729,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
+@@ -1701,7 +1741,7 @@ static void MovieDisplay_BuildFieldPackets(MovieDisplay *display, u32 packet_sta
  static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
      s32 frame_base;
  
@@ -862,7 +919,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
          frame_base = display->frame_base[1];
      } else {
          frame_base = display->frame_base[0];
-@@ -1713,14 +1741,14 @@ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
+@@ -1713,14 +1753,14 @@ static void MovieDisplay_ShowField(MovieDisplay *display, s32 second) {
  /* Fills both fields' frame buffers with one color. */
  static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
      s32 rect[4];
@@ -880,7 +937,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      packet = GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width, 0, display->height << 1);
      packet = GsPacket_AddColorSprite(packet, rect, color);
      GS_PACKET_ADD_SCISSOR_32(packet, 0, display->width - 1, 0, display->height - 1);
-@@ -1731,7 +1759,7 @@ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
+@@ -1731,7 +1771,7 @@ static void MovieDisplay_Clear(MovieDisplay *display, u32 color) {
  }
  
  /* Adds a textured sprite: screen_rect and texture_rect are x, y, width, height. */
@@ -889,7 +946,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      return GsPacket_AddXyz2(
          GsPacket_AddUv(
              GsPacket_AddXyz2(GsPacket_AddUv(GsPacket_AddPrim(packet, 6, 0, 1, 0, 0, 0, 1, 0, 0), texture_rect[0],
-@@ -1742,7 +1770,7 @@ static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture
+@@ -1742,7 +1782,7 @@ static int GsPacket_AddTexturedSprite(int packet, s32 *screen_rect, s32 *texture
  }
  
  /* Adds a sprite of one color over rect (x, y, width, height), color as RGBA bytes. */
@@ -898,7 +955,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      return GsPacket_AddXyz2(
          GsPacket_AddRgbaq(GsPacket_AddXyz2(GsPacket_AddPrim(packet, 6, 0, 0, 0, 0, 0, 1, 0, 0), rect[0], rect[1], 0),
                            color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF, color >> 24, 0),
-@@ -1751,44 +1779,44 @@ static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
+@@ -1751,44 +1791,44 @@ static int GsPacket_AddColorSprite(int packet, s32 *rect, u32 color) {
  
  /* Writes a DMA tag at address packet (one doubleword; the other half of its quadword is left alone). Returns the
     address after the quadword. */
@@ -951,7 +1008,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      u64 low = ((u64)lcm) | (lod_k << 32);
      u64 middle = (((u64)mxl) << 2) | (((u64)mtba) << 9);
      u64 high = ((((u64)mmin) << 6) | (((u64)mmag) << 5)) | (((u64)lod_l) << 19);
-@@ -1797,7 +1825,7 @@ static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u3
+@@ -1797,7 +1837,7 @@ static int GsPacket_AddTex1(s64 packet, u32 lcm, u32 mxl, u32 mmag, u32 mmin, u3
  }
  
  /* Adds a TEX0_1: the texture's place, size and format. */
@@ -960,7 +1017,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                              u32 tcc, u32 tfx, u32 cbp, u32 cpsm, u32 csm, u32 csa, u32 cld) {
      u64 value;
  
-@@ -1806,18 +1834,18 @@ static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_widt
+@@ -1806,18 +1846,18 @@ static int GsPacket_AddTex0(s64 packet, u32 tbp0, u32 tbw, u32 psm, u32 tex_widt
  }
  
  /* Adds a PRIM. */
@@ -982,7 +1039,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      u64 low = ((u64)blue << 16) | ((u64)green << 8);
      u64 high = red | (q_value << 32);
  
-@@ -1825,12 +1853,12 @@ static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha
+@@ -1825,12 +1865,12 @@ static int GsPacket_AddRgbaq(s64 packet, u32 red, u32 green, u32 blue, u32 alpha
  }
  
  /* Adds an XYZ2: a vertex, which draws. */
@@ -997,7 +1054,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      u64 low = fbp | (fbmsk << 32);
      u64 high = ((u64)psm << 24) | ((u64)fbw << 16);
  
-@@ -1838,13 +1866,13 @@ static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
+@@ -1838,13 +1878,13 @@ static int GsPacket_AddFrame(s64 packet, u32 fbp, u32 fbw, u32 psm, u64 fbmsk) {
  }
  
  /* Adds a TEST_1: alpha, destination alpha and depth tests. */
@@ -1013,7 +1070,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      u64 low = scax0 | (scay1 << 48);
      u64 high = ((u64)scay0 << 32) | ((u64)scax1 << 16);
  
-@@ -1852,22 +1880,22 @@ static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64
+@@ -1852,22 +1892,22 @@ static int GsPacket_AddScissor(s64 packet, u32 scax0, u32 scax1, u32 scay0, u64
  }
  
  /* Adds an XYOFFSET_1. */
@@ -1040,7 +1097,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      u64 low = ((wms << 32) >> 32) | (maxv << 34);
      u64 middle = ((maxu << 32) >> 18) | ((minu << 32) >> 28);
      u64 high = ((wmt << 32) >> 30) | ((minv << 32) >> 8);
-@@ -1876,22 +1904,22 @@ static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u
+@@ -1876,22 +1916,22 @@ static int GsPacket_AddClamp(s64 packet, u64 wms, u64 wmt, u64 minu, u64 maxu, u
  }
  
  /* Adds a BITBLTBUF: destination buffer of a transfer. */
@@ -1067,7 +1124,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      return GsPacket_AddReg(packet, GS_REG_TRXDIR, (u64)direction);
  }
  
-@@ -1900,8 +1928,8 @@ static const char field_names[] = "EVEN\0ODD ";
+@@ -1900,8 +1940,8 @@ static const char field_names[] = "EVEN\0ODD ";
  static const char vblank_format[] = "GS_CSR=%s vbct=%d isvb%d\n";
  
  /* Starts the GIF DMA channel on a chain of packets. */
@@ -1078,7 +1135,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      *D2_QWC = 0;
      *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
-@@ -1919,24 +1947,20 @@ static int Movie_VblankHandler(int cause) {
+@@ -1919,24 +1959,31 @@ static int Movie_VblankHandler(int cause) {
              tag = MovieOut_GetOldestTag(&movie_out_buffer);
              if (tag == NULL) {
                  movie_idle_vblanks++;
@@ -1087,6 +1144,17 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
                  return 0;
              }
              if (movie_start_field == 0 && tag->status == MOVIE_OUT_STATUS_FULL) {
++                /* Leave two pictures of slack for device buffering and field timing. Only drop
++                   complete pictures that have not started their GIF transfer. */
++                if (movie_audio_preloaded) {
++                    uint64_t target = port_movie_audio_picture();
++
++                    while (movie_out_buffer.count > 1 && movie_pictures_advanced + 2 < target) {
++                        tag->status = MOVIE_OUT_STATUS_EMPTY;
++                        MovieOut_DropOldest(&movie_out_buffer);
++                        tag = MovieOut_GetOldestTag(&movie_out_buffer);
++                    }
++                }
                  MovieDisplay_ShowField(&movie_thread.display, 1);
 -                Movie_SendGifChain((u32)tag->field_packets[0]);
 +                Movie_SendGifChain(tag->field_packets[0]);
@@ -1105,7 +1173,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      return 0;
  }
  
-@@ -1946,8 +1970,6 @@ static int Movie_GifDmaHandler(void) {
+@@ -1946,8 +1993,6 @@ static int Movie_GifDmaHandler(void) {
          MovieOut_DropOldest(&movie_out_buffer);
          movie_picture_shown = 0;
      }
@@ -1114,7 +1182,15 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
      return 0;
  }
  
-@@ -2021,14 +2043,14 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -1957,6 +2002,7 @@ static void Movie_StartDisplay(s32 field) {
+     while (sceGsSyncV(0) == field) {
+     }
+     movie_idle_vblanks = 0;
++    movie_pictures_advanced = 0;
+     movie_pictures_enabled = 1;
+     movie_picture_vblanks = 0;
+ }
+@@ -2021,14 +2067,14 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
      s32 i;
      char *suffix;
  
@@ -1132,7 +1208,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
              file->is_cd_stream = TRUE;
              for (i = 0; i < name_length; i++) {
                  if (name[i] == '/') {
-@@ -2036,7 +2058,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -2036,7 +2082,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
                  }
                  name[i] = toupper(name[i]);
              }
@@ -1141,7 +1217,7 @@ index 21ca77cb44b94d7856167204f85a294b52c8d4ab..f00adfe48d2de77c96dab6a6a4d63957
              sprintf(full_path, (char *)cd_path_format, name, suffix);
          } else {
              file->is_cd_stream = FALSE;
-@@ -2054,7 +2076,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
+@@ -2054,7 +2100,7 @@ static s32 MovieFile_Open(MovieFile *file, char *path) {
              printf("SifAllocIopHeap Error\n");
              return 0;
          }

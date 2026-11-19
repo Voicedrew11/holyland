@@ -49,4 +49,10 @@ int port_fsiopsnd_call(unsigned int function, void *send_buffer, int send_size, 
 int port_sdrdrv_arg_count(int command);
 int port_sdrdrv_call(int command, const uint32_t *args);
 
+/* Disc movies can preload their PCM so SDRDRV plays it independently of video decoding. */
+int port_movie_audio_load(uint32_t lsn, uint32_t file_size);
+void port_movie_audio_unload(void);
+/* The elapsed picture on the device clock, or 0 when there is no independent movie audio clock. */
+uint64_t port_movie_audio_picture(void);
+
 #endif

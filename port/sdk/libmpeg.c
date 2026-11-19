@@ -184,6 +184,8 @@ int sceMpegIsRefBuffEmpty(sceMpeg *mp) {
 }
 
 /* ---- The demultiplexer (libmpeg's pack.o) ------------------------------------------------------- */
+#define PSS_PCM_STREAM 0xBDFFA00000ULL
+
 /* the PSS streams a callback can ask for, by type: the id and the mask of the bits that name it */
 static const struct {
     uint64_t id;
@@ -191,7 +193,7 @@ static const struct {
 } stream_types[10] = {
     {0xE000000000ULL, 0xFF00000000ULL}, /* 0 MPEG video, channel in the stream id */
     {0xBDFFC00000ULL, 0xFFFFFFFFFFULL}, /* 1 */
-    {0xBDFFA00000ULL, 0xFFFFFFFFFFULL}, /* 2 PCM sound */
+    {PSS_PCM_STREAM, 0xFFFFFFFFFFULL},  /* 2 PCM sound */
     {0xBDFFA10000ULL, 0xFFFFFFFFFFULL}, /* 3 */
     {0xBDFF900000ULL, 0xFFFFFFFFFFULL}, /* 4 */
     {0xC000000000ULL, 0xFF00000000ULL}, /* 5 MPEG audio */
@@ -468,6 +470,120 @@ int sceMpegDemuxPssRing(sceMpeg *mp, void *buf, int size, void *ring, int ring_s
         }
     } while (pss_next(&b, 32) == 0x1BA);
     return consumed;
+}
+
+/* ---- PCM read-ahead for disc movies -------------------------------------------------------------- */
+typedef struct {
+    uint8_t header[40]; /* SShd (including its 24-byte body), then SSbd and the PCM byte count */
+    uint32_t header_size;
+    uint8_t *data;
+    uint32_t size;
+    uint32_t used;
+} PssPcm;
+
+static uint32_t pcm_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static int pss_append_pcm(PssPcm *pcm, const uint8_t *data, uint32_t bytes, uint32_t file_size) {
+    if (pcm->data == NULL) {
+        uint32_t needed = sizeof(pcm->header) - pcm->header_size;
+        uint32_t take = bytes < needed ? bytes : needed;
+        const uint8_t *h = pcm->header;
+
+        memcpy(pcm->header + pcm->header_size, data, take);
+        pcm->header_size += take;
+        if (pcm->header_size < sizeof(pcm->header)) {
+            return 1;
+        }
+        if (memcmp(h, "SShd", 4) != 0 || pcm_le32(h + 4) != 24 || pcm_le32(h + 8) != 1 ||
+            pcm_le32(h + 12) != 48000 || pcm_le32(h + 16) != 2 || pcm_le32(h + 20) != 512 ||
+            memcmp(h + 32, "SSbd", 4) != 0) {
+            return 0;
+        }
+        pcm->size = pcm_le32(h + 36);
+        if (pcm->size == 0 || pcm->size > file_size || pcm->size % 1024 != 0) {
+            return 0;
+        }
+        pcm->data = malloc(pcm->size);
+        if (pcm->data == NULL) {
+            return 0;
+        }
+        data += take;
+        bytes -= take;
+    }
+    if (bytes > pcm->size - pcm->used) {
+        bytes = pcm->size - pcm->used;
+    }
+    memcpy(pcm->data + pcm->used, data, bytes);
+    pcm->used += bytes;
+    return 1;
+}
+
+/* Read the packetized stream in disc order, retaining only PCM. A complete packet and the next disc
+   read fit in the buffer even when a packet crosses a read boundary. */
+uint8_t *port_mpeg_load_pcm(uint32_t lsn, uint32_t file_size, uint32_t *pcm_size) {
+    enum { READ_BYTES = 64 * 1024, MAX_PACKET_BYTES = 6 + 65535 };
+    uint8_t *buffer = malloc(READ_BYTES + MAX_PACKET_BYTES);
+    uint32_t buffered = 0;
+    PssPcm pcm = {0};
+
+    if (buffer == NULL) {
+        return NULL;
+    }
+    for (uint32_t offset = 0; offset < file_size;) {
+        uint32_t take = file_size - offset < READ_BYTES ? file_size - offset : READ_BYTES;
+        uint32_t sectors = (take + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
+        uint32_t pos = 0;
+
+        if (!port_disc_read(lsn + offset / DISC_SECTOR_SIZE, sectors, buffer + buffered)) {
+            break;
+        }
+        offset += take;
+        buffered += take;
+        while (buffered - pos >= 6) {
+            const uint8_t *p = buffer + pos;
+            uint32_t available = buffered - pos;
+            uint32_t packet_size;
+
+            if (p[0] != 0 || p[1] != 0 || p[2] != 1 || p[3] == 0xb9) {
+                goto done;
+            }
+            if (p[3] == 0xba) {
+                if (available < 14) {
+                    break;
+                }
+                packet_size = 14 + (p[13] & 7);
+            } else {
+                packet_size = 6 + ((uint32_t)p[4] << 8 | p[5]);
+            }
+            if (available < packet_size) {
+                break;
+            }
+            if (p[3] == (PSS_PCM_STREAM >> 32) && packet_size >= 13) {
+                uint32_t payload = 9 + p[8];
+
+                if (payload + 4 <= packet_size && pcm_le32(p + payload) == 0x0000a0ff) {
+                    if (!pss_append_pcm(&pcm, p + payload + 4, packet_size - payload - 4, file_size)) {
+                        goto done;
+                    }
+                    if (pcm.data != NULL && pcm.used == pcm.size) {
+                        *pcm_size = pcm.size;
+                        free(buffer);
+                        return pcm.data;
+                    }
+                }
+            }
+            pos += packet_size;
+        }
+        buffered -= pos;
+        memmove(buffer, buffer + pos, buffered);
+    }
+
+done:
+    free(buffer);
+    free(pcm.data);
+    return NULL;
 }
 
 /* ---- Pictures ----------------------------------------------------------------------------------- */
