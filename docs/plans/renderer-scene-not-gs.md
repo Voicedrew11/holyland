@@ -74,7 +74,9 @@ left for the design:
 
 ### Settled by the design (`scene-renderer-design.md`, 2026-11-19)
 
-The design is written; its owner's decisions are listed there. In short:
+The design is written, and the owner took its recommendations (2026-11-19): `D16_UNORM` depth and the tints drawn at
+their place settled; program 0x280's fused passes and mouse look's reprojection as directions their slices measure.
+In short:
 
 - **The scene**: built on the renderer's thread as it meets the chain (a draw's material is the chain's state at its
   place), then read-only: passes (a target each), native draws as instanced draws of persistent meshes, the GIF
@@ -96,8 +98,7 @@ The design is written; its owner's decisions are listed there. In short:
 
 1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,
    `depth-by-layers.md`.
-2. **Settle the design** (done 2026-11-19): `scene-renderer-design.md`; the owner's choices (depth's exactness above
-   all) to be made on its numbers.
+2. **Settle the design** (done 2026-11-19): `scene-renderer-design.md`, its decisions taken by the owner.
 3. **Build it in slices**, as the design orders them, each a renderer the developers can run beside today's
    (`--renderer`), judged on its pictures and its GPU time.
 4. **Replace** today's renderer for players once the scene renderer draws everything at least as close to

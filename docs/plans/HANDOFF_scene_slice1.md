@@ -2,9 +2,8 @@
 
 2026-11-19. For the next agent, after `measure/depth-by-layers` (with the design) is merged or on top of it. Read
 `CLAUDE.md`, then `renderer-scene-not-gs.md` (the direction) and **`scene-renderer-design.md`** (the design: what
-this slice builds and why). Before building, ask the owner for the decisions the design lists ("The owner's
-decisions"); slice 1 needs only the first (depth: `D16_UNORM`, recommended). If the owner chose otherwise, stop and
-say what changes.
+this slice builds and why). The owner's decisions are taken (2026-11-19: the design's "The owner's
+decisions"): depth is `D16_UNORM`, which is all slice 1 needs of them.
 
 ## The mission
 

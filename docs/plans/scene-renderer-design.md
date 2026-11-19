@@ -14,7 +14,7 @@ added developers' switches and counters only (below, "What this step added"); no
   program 0x000 that native draw does not take yet. The scene is the native draws with their materials resolved in
   the chain's order, the GIF draws as 2D items, the targets as passes, all in the stream's order ("1. The frame as a
   scene").
-- **Depth: `D16_UNORM`, not the GS's arithmetic in the shader** (recommended; the owner decides). Measured as the
+- **Depth: `D16_UNORM`, not the GS's arithmetic in the shader** (the owner's decision, 2026-11-19). Measured as the
   ceiling the handoff asked for (`KF4_PC_DEPTH=gsexact`: exact Z's whole Z alone at each pixel, written by the shader),
   the GS's arithmetic as the PC renderer has it is **further** from paraLLEl-GS than `D16_UNORM` (9,371 pixels over 24
   levels in the 760-view tour against 7,008; in motion 1,125,827 against 1,120,237) and its world costs 1.4-3.7 ms more
@@ -43,7 +43,7 @@ added developers' switches and counters only (below, "What this step added"); no
   judge against paraLLEl-GS and against today's ("10. The slices"). Today's renderer goes when the scene renderer draws
   the layer inventory's every scenario and the tours and motion cases at least as close to paraLLEl-GS.
 
-The owner's decisions are collected in "The owner's decisions" below.
+The owner's decisions (2026-11-19: the recommendations taken) are in "The owner's decisions" below.
 
 ## What this step added (developers' only)
 
@@ -297,8 +297,10 @@ and 1,262 further (motion: UNORM 6,549 nearer and 494 further; gsexact 3,347 and
 paraLLEl-GS, whether any other depth mode draws it within 24: today's rule fixes 12, gsexact 11, the GPU's float depth
 27, the float depth clamped at each pixel 25; **any of them, 33**. The other 6,975 are drawn the same wrong way by every
 depth mode: 5,549 at 099 (view 6: the one view over 0.4% in every mode, not depth), 473 at 002, 465 at 027, 107 at
-098, 79 at 013. So the depth part of "exact" is settled to a few dozen pixels in 760 views, and the GS's arithmetic
-cannot buy more than those.
+098, 79 at 013. So, as far as the four depth modes tried can tell, the depth part of "exact" is a few dozen pixels in
+760 views. That is a bound from what was tried, not a proof: a depth stepped exactly as paraLLEl-GS steps it (not
+built) could fix pixels none of these fixes. But the 6,975 are drawn the same wrong way by every mode, and 5,549 of
+them are one view known not to be depth, so little is left for any depth to fix.
 
 **Why the GS's arithmetic in the shader is further, not nearer.** It is the PC renderer's exact Z (the plane through
 the corners worked out in integers, rounded half to even at the pixel's point), not the GS's rasterizer: paraLLEl-GS
@@ -307,13 +309,13 @@ steps Z across the triangle as the GS does, and where the two round differently 
 whole Z (73 pixels; UNORM and the rule draw it as paraLLEl-GS does), map 100's wall edge (139), map 112 (134). The
 GPU's D16 rounding of its interpolated depth happens to land with paraLLEl-GS's far more often. Matching paraLLEl-GS's
 own Z stepping in a shader would be a third design (its DDA per pixel, written as the depth: the cost of gsexact or
-more) for at most the 33 pixels above.
+more) for what the bound above says is a few dozen pixels.
 
 **Cost**: gsexact needs the planes (a compute pass of 64-bit integer maths over every native triangle, 0.7-1.4 ms a
 game frame on the Vega 7: `world-plain.md`) and a depth written by the shader (early tests on the corners' bound
 only); UNORM needs nothing but the depth unit.
 
-**Recommendation (the owner's decision 1)**: `D16_UNORM` for the game's 16-bit Z buffers (every 3D draw: PSMZ16S),
+**Decided (the owner's decision 1, 2026-11-19)**: `D16_UNORM` for the game's 16-bit Z buffers (every 3D draw: PSMZ16S),
 the depth Z / 65535 clamped at each pixel by the depth clamp to the viewport's 0 to 1, the GS's test as the GPU's
 (GEQUAL, GREATER, ALWAYS, NEVER), invariant positions; D32F for the 24- and 32-bit Z buffers (the menus'). "Exact" for
 depth then means: the GS's whole Z, rounded by the GPU, ties decided by the later draw as on the GS; single pixels
@@ -549,18 +551,32 @@ in the tours and motion cases, draws every scenario of the layer inventory, and 
 
 ## The owner's decisions
 
-1. **Depth: `D16_UNORM`** (recommended), or the GS's arithmetic in the shader. Numbers above: UNORM 7,008 pixels from
-   paraLLEl-GS in the tour (gsexact 9,371, today 8,845), in motion 1,120,237 (gsexact 1,125,827, today 1,126,375); at
-   most 33 of UNORM's pixels are depth at all; gsexact costs 1.4-3.7 ms more a game frame in the world at 2x (1.40 at
-   099, 3.73 at the pond, 2.28 at the palace) and needs 64-bit integers. "Exact" for depth would mean the GS's whole Z rounded by the GPU, with single pixels along steep edges
-   either side of a half.
-2. **Program 0x280's two passes as one draw** where the first pass is opaque: exact but for triangles of one batch
-   on the same whole Z, whose sphere pass the GS draws twice over the later one; slice 3 counts the pixels, the owner
-   decides on them. Without it the pond and the palace keep about 900-1,400 calls a frame for the skinned models.
-3. **Mouse look**: drawn from the scene with the newest camera, the last few milliseconds' turn by reprojection with a
-   small drawn margin (recommended); or reprojection alone (not enough margin for a whip: 0.4 rad at 6 rad/s).
-4. **Tints under the HUD**: drawn at their place (recommended for now: 0.5-1.3 ms only where they show), or the HUD
-   drawn into an image of its own so that they fold too.
+2026-11-19: the owner took the recommendations, the well-supported ones as settled, the others as the direction to
+build and measure, each to be looked at again only on its slice's numbers.
+
+1. **Depth: `D16_UNORM`. Settled.** UNORM is 7,008 pixels from paraLLEl-GS in the tour (gsexact 9,371, today 8,845),
+   1,120,237 in motion (gsexact 1,125,827, today 1,126,375); of its 7,008, at most 33 are fixed by any depth mode
+   tried; gsexact's world costs 1.4-3.7 ms more a game frame at 2x (1.40 at 099, 3.73 at the pond, 2.28 at the palace)
+   and needs 64-bit integers. "Exact" for depth means the GS's whole Z rounded by the GPU, with single pixels along
+   steep edges either side of a half. D32F for the 24- and 32-bit Z buffers (the menus'). Still to check before
+   players get it: the tour on an Intel or NVIDIA GPU (only RADV's rounding was measured).
+2. **Program 0x280's two passes as one draw, where the first pass is unblended (or its blend leaves the source alone).
+   The direction; slice 3 builds and measures it.** Exact but for triangles of one batch on the same whole Z, whose
+   sphere pass the GS draws twice over the later one. Slice 3 counts how many batches it applies to (not counted yet:
+   the world is mostly drawn with a blend by As), the pixels it changes against the two passes drawn apart, and the
+   calls a frame left; the owner looks at the changed pixels before it is kept. Where it does not apply the two passes
+   stay two draws.
+3. **Mouse look drawn from the scene with the newest camera, the last few milliseconds' turn by reprojection with a
+   small drawn margin. The direction; slice 4 sizes it.** The lead of about 0.4 rad at 6 rad/s is read from
+   `mouse_lead.h`, not measured; slice 4 measures the late turns and sizes the margin from them.
+4. **Tints under the HUD drawn at their place. Settled for now** (0.5-1.3 ms only where they show); the HUD in an
+   image of its own, so that they fold too, only if a later measurement says it is worth it.
+
+Also taken with them, as the design has them: the scene built in the chain's order on the renderer's thread; the
+texture store as the resolver with a bindless table; DATE by the first-draw image (slice 1 checks its assumptions:
+`GsDraw_SetScreenAlpha(0)` just before the shadows, a fallback by a copy where not); the alpha's reset folded into the
+clear where nothing reads the alpha before it (slice 1's census checks, slice 2 folds); pictures between from the
+scene; scheduling by predicted cost, the game never held; the six slices in their order.
 
 ## Risks and what is not known
 
