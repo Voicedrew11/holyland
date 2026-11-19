@@ -77,6 +77,11 @@ CASES = {
     # swings (the weapon's trail), its attacks, hits, its death or the player's
     "combat": dict(pad="combat", args=["--cheats", "all", "--teleport", "2200:2:0"], fx="creature=0:400",
                    frames=r(2200, 2211) + r(2290, 2301) + r(2500, 2523) + r(2640, 2663) + r(2800, 2823)),
+    # A Fireball kills the Maneater on map 002. Keep drawing through the death and reward sequence.
+    "first kill": dict(pad="first_kill", args=["--cheats", "all", "--invincible", "--teleport", "2200:2:0",
+                                              "--clock", "2026-11-18T18:00:00"],
+                       fx="creature=0:180,spell=3",
+                       frames=r(2438, 2453) + r(2588, 2623) + r(2640, 2659)),
     # spells cast (KF4_FX=spell=N, TRIANGLE every 120 vblanks from 1900; tests/motion/cast.pad). 36, 61 and 76
     # showed nothing in these vblanks (2026-11-11): only those seen cast are kept
     **{"spell %d" % s: dict(pad="cast", args=["--cheats", "spells,magic"], fx="spell=%d" % s,

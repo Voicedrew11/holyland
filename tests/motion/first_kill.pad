@@ -1,0 +1,9 @@
+# After newgame.pad, put on the club and close Equipment before the teleport to map 002.
+1800 CIRCLE 4
+1860 DOWN 4
+1900 DOWN 4
+1940 CROSS 4
+2000 RIGHT 4
+2060 CIRCLE 4
+2120 CIRCLE 4
+2440 TRIANGLE 4   # Cast Fireball at the Maneater placed in front of the player by KF4_FX.

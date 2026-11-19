@@ -29,10 +29,18 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
+#include <vector>
 
 #include "device.hpp"
 
 namespace pcr {
+
+// A post-processing pass draws a full-screen triangle into one colour target.
+struct FullscreenPipeline {
+    Vulkan::Program *program;
+    VkFormat format;
+};
 
 // What of the canvas's pipelines depends on the device (the seed's pipelines are made with it: precompile)
 struct WarmDevice {
@@ -61,14 +69,16 @@ struct WarmDevice {
 };
 
 // (any thread) The canvas's programs by role (its index of them: nullptr where a role is no longer drawn), whose
-// pipelines are listed and made ahead
-void warm_watch(Vulkan::Device &device, Vulkan::Program *const *programs, uint32_t count, const WarmDevice &traits);
+// pipelines are listed and made ahead. The plane pass's fixed compute programs are made before play too.
+void warm_watch(Vulkan::Device &device, Vulkan::Program *const *programs, uint32_t count, const WarmDevice &traits,
+                std::span<Vulkan::Program *const> compute_programs);
 
 // (any thread, after the settings are set, before the game draws) The pipelines made before play: the seed's (every
-// pipeline the canvas draws with in a tour of the game, for these settings) and the list's, on every core but one,
+// pipeline the canvas draws with in a tour of the game, for these settings), the list's, the plane pass's, and
+// active post-processing, on every core but one,
 // through the cache; precompile_running is true until they are made (the game waits, "Building shaders"). Not with
 // KF4_PC_PRECOMPILE=0 (the list made ahead while the game runs, as before) or without the cache.
-void precompile();
+void precompile(std::vector<FullscreenPipeline> fullscreen);
 bool precompile_running();
 bool precompile_progress(int *done, int *total);
 

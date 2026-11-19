@@ -18,12 +18,15 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include "device.hpp"
 #include "pcr_jitter.h"
 #include "port/antialias.h"
 
 namespace pcr {
+
+struct FullscreenPipeline;
 
 // The camera of a picture's 3D: the world to its view and the world's projection (frame_interp.c's, gsn.h's
 // GsnInterpPicture mid and screen), so that a pixel and its depth give a place in the world
@@ -128,6 +131,8 @@ class AntiAliasing {
 public:
     AntiAliasing(Vulkan::Device &device, AntiAliasHistory &history);
     ~AntiAliasing();
+
+    static void warm_pipelines(Vulkan::Device &device, int method, std::vector<FullscreenPipeline> &passes);
 
     // The image Canvas::scanout_depth is to copy this picture's depth into (R32F, width x height); null when it
     // cannot be made
