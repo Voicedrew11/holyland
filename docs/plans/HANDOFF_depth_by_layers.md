@@ -101,6 +101,9 @@ for the scene renderer's depth. The mode and the counters stay developers' switc
   on mains power, the balanced profile as before, nothing else on the GPU, and no building while it runs (the APU's
   CPU and GPU share their power). A run is about 14 s; say when windows will open.
 - Pictures headless and byte for byte (`--dump-frames`, the tours).
+- **Output on disk, not in `/tmp`**: on the owner's laptop `/tmp` (and the session scratchpad under it) is a 7.6 GB RAM
+  disk; map tours and captures fill it and can run the machine out of memory. Give every tool an `--out` under
+  `~/Documents/darker-reality-measurements/` (a dated folder; add it to the README there).
 - The GPU-time sums overcount where submissions overlap (4x, 60): compare like with like (`world-plain.md`, "What
   the sums mean").
 - `decomp/` is read-only. Commit on a branch; ask the owner before pushing.
