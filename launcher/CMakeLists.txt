@@ -1,6 +1,6 @@
 # Darker Reality, the launcher (launcher/product.h, docs/port/LAUNCHER.md): builds King's Field IV's PC port on the player's computer
 # from a release's source and tools, then plays it. Its own project: it needs neither the decomp nor the
-# game's build, only SDL2 and a few files the game shares with it (port/platform/data_dir.c, disc_image.c (and third_party/libchdr), iso9660.c,
+# game's build, only SDL3 and a few files the game shares with it (port/platform/data_dir.c, disc_image.c (and third_party/libchdr), iso9660.c,
 # update_notice.c, third_party/imgui and cjson).
 #
 #   cd launcher && cmake --preset linux && cmake --build --preset linux && ctest --test-dir ../out/launcher-linux
@@ -56,23 +56,17 @@ add_library(launcher_platform STATIC ${LAUNCHER_PLATFORM})
 target_link_libraries(launcher_platform PUBLIC launcher_core ${LAUNCHER_PLATFORM_LIBS})
 target_compile_options(launcher_platform PRIVATE ${LAUNCHER_WARNINGS})
 
-# The window: SDL2 and Dear ImGui on SDL's renderer
-find_package(SDL2 CONFIG REQUIRED)
-if(TARGET SDL2::SDL2)
-    set(LAUNCHER_SDL2 SDL2::SDL2)
-else()
-    set(LAUNCHER_SDL2 ${SDL2_LIBRARIES})
-    include_directories(${SDL2_INCLUDE_DIRS})
-endif()
+# The window: SDL3 and Dear ImGui on SDL's renderer
+find_package(SDL3 CONFIG REQUIRED)
 add_library(launcher_imgui STATIC
     ${ROOT}/third_party/imgui/imgui.cpp
     ${ROOT}/third_party/imgui/imgui_draw.cpp
     ${ROOT}/third_party/imgui/imgui_tables.cpp
     ${ROOT}/third_party/imgui/imgui_widgets.cpp
-    ${ROOT}/third_party/imgui/backends/imgui_impl_sdl2.cpp
-    ${ROOT}/third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+    ${ROOT}/third_party/imgui/backends/imgui_impl_sdl3.cpp
+    ${ROOT}/third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp)
 target_include_directories(launcher_imgui PUBLIC ${ROOT}/third_party/imgui)
-target_link_libraries(launcher_imgui PUBLIC ${LAUNCHER_SDL2})
+target_link_libraries(launcher_imgui PUBLIC SDL3::SDL3)
 
 add_executable(launcher main.cpp session.cpp window.cpp)
 set_target_properties(launcher PROPERTIES OUTPUT_NAME darker-reality) # launcher/product.h: kProductId
@@ -87,7 +81,7 @@ if(WIN32)
         target_link_options(launcher PRIVATE -static)
     endif()
 endif()
-# (Linux: a release's toolchain file gives it the run path $ORIGIN, and the AppImage puts SDL2 beside it)
+# (Linux: a release's toolchain file gives it the run path $ORIGIN, and the AppImage puts SDL3 beside it)
 
 # Tests: the launcher's parts with a pretend system (tests/launcher_test.cpp)
 option(LAUNCHER_TESTS "Build the launcher's unit tests" ON)

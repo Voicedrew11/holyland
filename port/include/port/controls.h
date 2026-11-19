@@ -85,8 +85,8 @@ typedef enum {
 #define BINDING_NONE 0
 #define BINDING_KEY 0x10000     /* | SDL_Scancode */
 #define BINDING_MOUSE 0x20000   /* | SDL's mouse button: 1 left, 2 middle, 3 right, 4 and 5 the side ones */
-#define BINDING_PAD 0x30000     /* | SDL_GameControllerButton */
-#define BINDING_TRIGGER 0x40000 /* | SDL_GameControllerAxis: the two triggers */
+#define BINDING_PAD 0x30000     /* | SDL_GamepadButton */
+#define BINDING_TRIGGER 0x40000 /* | SDL_GamepadAxis: the two triggers */
 #define BINDING_KIND(b) ((b) & 0x7FFF0000)
 #define BINDING_CODE(b) ((b) & 0xFFFF)
 

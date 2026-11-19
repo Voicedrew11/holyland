@@ -29,7 +29,7 @@ TSAN_OPTIONS="suppressions=$PWD/tools/tsan.supp halt_on_error=0 second_deadlock_
   "unexpected memory mapping".
 - The pictures between, and so the pump (`kf4-pc-pump`), run only above 60: `--frame-rate 240`. Headless,
   `--frame-rate unlocked` draws almost none; with `KF4_PRESENT_SIM=240` it does, and the presenter's thread
-  (`kf4-between`) runs with its pacing. `KF4_PRESENT_SIM` needs a build with SDL2, and runs at the wall clock's pace.
+  (`kf4-between`) runs with its pacing. `KF4_PRESENT_SIM` needs a build with SDL3, and runs at the wall clock's pace.
 - On lavapipe a run takes about twice as long as with a normal build (the GPU's work, done on the CPU by Mesa, is not
   instrumented).
 - Without a GPU (a VM, WSL): lavapipe, `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. Two things to know:

@@ -11,7 +11,7 @@
 
 // (any thread) Shown or not: while shown, the frames are wanted (recorded)
 void frames_view_show(bool show);
-// overlay_open: the settings are open, the mouse the overlay's (the window can be clicked, scrolled, zoomed)
-void frames_view_draw(bool overlay_open);
+// (inside the overlay's ImGui frame) the window; it has the mouse while shown (profiler.h)
+void frames_view_draw();
 
 #endif

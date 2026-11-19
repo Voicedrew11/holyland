@@ -1,5 +1,5 @@
 # Configures the PC port (which proves the patches apply to the pinned decomp), builds it with paraLLEl-GS, and fails if any game code still errors.
-# Two jobs: Linux with gcc, and Windows with llvm-mingw (the windows-clang preset) and SDL2, on two pinned
+# Two jobs: Linux with gcc, and Windows with llvm-mingw (the windows-clang preset) and SDL3, on two pinned
 # llvm-mingw releases: the one the port is developed with (clang 22) and a later one, whose io.h once
 # clashed with a file-scope `open` in the overlay. The later one runs on main only (a pull request's check is the
 # developers' release alone).
@@ -74,7 +74,7 @@ jobs:
       matrix:
         llvm_mingw: ${{ fromJSON(github.ref == 'refs/heads/main' && '["20260616", "20261006"]' || '["20260616"]') }}
     env:
-      SDL2_VERSION: "2.30.9"
+      SDL3_VERSION: "3.4.20"
       NINJA_VERSION: "1.12.1"
       CCACHE_VERSION: "4.14.2"
       CCACHE_SHA256: 6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84
@@ -89,14 +89,14 @@ jobs:
         run: |
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
-      - name: Download llvm-mingw, SDL2, Ninja and ccache
+      - name: Download llvm-mingw, SDL3, Ninja and ccache
         run: |
           mkdir -p "$RUNNER_TEMP/tools"
           cd "$RUNNER_TEMP/tools"
           lm="llvm-mingw-${{ matrix.llvm_mingw }}-ucrt-x86_64"
           curl -fsSL -o lm.zip "https://github.com/mstorsjo/llvm-mingw/releases/download/${{ matrix.llvm_mingw }}/$lm.zip"
           unzip -q lm.zip
-          curl -fsSL -o sdl.zip "https://github.com/libsdl-org/SDL/releases/download/release-$SDL2_VERSION/SDL2-devel-$SDL2_VERSION-mingw.zip"
+          curl -fsSL -o sdl.zip "https://github.com/libsdl-org/SDL/releases/download/release-$SDL3_VERSION/SDL3-devel-$SDL3_VERSION-mingw.zip"
           unzip -q sdl.zip
           curl -fsSL -o ninja.zip "https://github.com/ninja-build/ninja/releases/download/v$NINJA_VERSION/ninja-win.zip"
           mkdir ninja && unzip -q ninja.zip -d ninja
@@ -108,7 +108,7 @@ jobs:
           echo "$tools/$lm/bin" >> "$GITHUB_PATH"
           echo "$tools/ninja" >> "$GITHUB_PATH"
           echo "$tools/$cc" >> "$GITHUB_PATH"
-          echo "SDL2_DIR=$tools/SDL2-$SDL2_VERSION/x86_64-w64-mingw32/lib/cmake/SDL2" >> "$GITHUB_ENV"
+          echo "SDL3_DIR=$tools/SDL3-$SDL3_VERSION/x86_64-w64-mingw32/lib/cmake/SDL3" >> "$GITHUB_ENV"
       - name: Tool versions
         run: |
           which clang cmake ninja
@@ -123,7 +123,7 @@ jobs:
           restore-keys: ccache-windows-${{ matrix.llvm_mingw }}-
       - name: Configure
         run: |
-          cmake --preset windows-clang -DSDL2_DIR="$SDL2_DIR" \
+          cmake --preset windows-clang -DSDL3_DIR="$SDL3_DIR" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: |
@@ -158,12 +158,33 @@ jobs:
         run: |
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
+      # SDL3 from the release's pinned source (packaging/linux/build-sdl3.sh: the runner's Ubuntu has no SDL3 package),
+      # with what its build needs, kept between runs
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang libsdl2-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxtst-dev \
+            libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev libdecor-0-dev libpulse-dev \
+            libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
+      - name: Restore SDL3
+        id: sdl3
+        uses: actions/cache/restore@v4
+        with:
+          path: out/sdl3-ci
+          key: sdl3-ci-${{ hashFiles('packaging/toolchain.lock', 'packaging/linux/build-sdl3.sh') }}
+      - name: Build SDL3
+        if: steps.sdl3.outputs.cache-hit != 'true'
+        run: packaging/linux/build-sdl3.sh out/sdl3-ci
+      - name: Save SDL3
+        if: github.ref == 'refs/heads/main' && steps.sdl3.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/sdl3-ci
+          key: ${{ steps.sdl3.outputs.cache-primary-key }}
       - name: Build and test
         run: |
           cd launcher
-          cmake --preset linux
+          cmake --preset linux -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/out/sdl3-ci"
           cmake --build --preset linux
           ctest --test-dir ../out/launcher-linux --output-on-failure
       - name: Granite's edits on a read-only copy

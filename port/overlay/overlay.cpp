@@ -15,8 +15,9 @@
 // --dump-dir: pictures of each page, for checking it draws, without anyone at the screen. ui-<tab>[:keys] opens the
 // player menu (port/include/port/player_ui.h) on that tab instead and presses those keys once
 // (ui-display:down.down.confirm), written as overlay_ui-<tab>[:keys].png.
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -26,8 +27,8 @@
 #include <string>
 #include <vector>
 
-#include "backends/imgui_impl_sdl2.h"
-#include "backends/imgui_impl_sdlrenderer2.h"
+#include "backends/imgui_impl_sdl3.h"
+#include "backends/imgui_impl_sdlrenderer3.h"
 #ifdef KF4_HAVE_VULKAN_PRESENTER
 #include "backends/imgui_impl_vulkan.h"
 #endif
@@ -71,6 +72,8 @@ SDL_Renderer *renderer; // NULL on the Vulkan presenter
 bool ready;
 bool drawn; // the Vulkan presenter: this vblank's draw lists are ImGui's draw data
 bool overlay_open;
+// ImGui's WantTextInput at the last frame drawn (the drawing thread), for the game's thread
+std::atomic<bool> imgui_typing{false};
 bool show_settings = true;
 bool show_about;
 int page; // an index in `pages`
@@ -125,9 +128,9 @@ void load_font() {
 // (port/platform/video.c); 1 elsewhere
 float screen_scale() {
 #ifdef _WIN32
-    float dpi = 0.0f;
-    if (window != NULL && SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), NULL, &dpi, NULL) == 0 && dpi > 96.0f)
-        return dpi / 96.0f;
+    float scale = window != NULL ? SDL_GetWindowDisplayScale(window) : 0.0f;
+    if (scale > 1.0f)
+        return scale;
 #endif
     return 1.0f;
 }
@@ -157,7 +160,9 @@ void set_open(bool value) {
         return;
     overlay_open = value;
     port_controls_block(overlay_open);
-    if (!overlay_open) {
+    if (overlay_open) {
+        port_player_ui_show(nullptr); // one menu at a time: the player menu closes under this one
+    } else {
         port_controls_listen_cancel();
         port_settings_save();
     }
@@ -188,7 +193,7 @@ void window_size_combo() {
     char label[64];
     int current = -1;
 
-    SDL_GetDisplayBounds(window != NULL ? SDL_GetWindowDisplayIndex(window) : 0, &screen);
+    SDL_GetDisplayBounds(window != NULL ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay(), &screen);
     auto width_of = [&](int w, int h) { return w > 0 ? w : wide ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3; };
     // a height whose width the shape gives is left out where a monitor's size is the same
     auto duplicate = [&](int i) {
@@ -1407,7 +1412,7 @@ void about_window() {
     ImGui::BulletText("The GS: paraLLEl-GS (Arntzen Software, LGPL-3.0+)");
     ImGui::BulletText("The SPU2: ico-audio, from ico-pc (MIT)");
     ImGui::BulletText("The Verdite layout: Verdite2 (Voicedrew11, MIT)");
-    ImGui::BulletText("Dear ImGui (MIT), cJSON (MIT), SDL2 (zlib)");
+    ImGui::BulletText("Dear ImGui (MIT), cJSON (MIT), SDL3 (zlib)");
     ImGui::BulletText("The menu: RmlUi (MIT), FreeType (FreeType Licence)");
     ImGui::BulletText("Its fonts: IM FELL English (Igino Marini) and Spectral (Production Type), SIL OFL 1.1");
     ImGui::End();
@@ -1420,7 +1425,8 @@ void menu_bar() {
     ImGui::MenuItem("About", nullptr, &show_about);
     update_badge_menu_item();
     char status[96];
-    std::snprintf(status, sizeof(status), "F1 to close%s", port_overlay_paused() ? "   (game paused)" : "");
+    std::snprintf(status, sizeof(status), "%s to close%s", port_overlay_key(),
+                  port_overlay_paused() ? "   (game paused)" : "");
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(status).x - 16);
     ImGui::TextDisabled("%s", status);
     ImGui::EndMainMenuBar();
@@ -1428,7 +1434,7 @@ void menu_bar() {
 
 // The last save state request's message, a while after its key was pressed
 void draw_toast() {
-    Uint32 now = SDL_GetTicks();
+    Uint32 now = (Uint32)SDL_GetTicks();
     if (toast_until == 0 || (int32_t)(toast_until - now) <= 0)
         return;
     const char *text = toast_text();
@@ -1594,33 +1600,46 @@ void shot_take() {
     if (!shot_due())
         return;
     int width = 0, height = 0;
-    SDL_GetRendererOutputSize(renderer, &width, &height);
-    std::vector<uint32_t> pixels((size_t)width * height);
-    if (SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, pixels.data(), width * 4) != 0) {
+    SDL_Surface *read = SDL_RenderReadPixels(renderer, nullptr);
+    SDL_Surface *rgba = read != nullptr ? SDL_ConvertSurface(read, SDL_PIXELFORMAT_ABGR8888) : nullptr;
+    if (rgba == nullptr) {
         std::fprintf(stderr, "[overlay] cannot read the window back: %s\n", SDL_GetError());
         shot_write(nullptr, 0, 0);
     } else {
+        width = rgba->w;
+        height = rgba->h;
+        std::vector<uint32_t> pixels((size_t)width * height);
+        for (int y = 0; y < height; y++)
+            std::memcpy(&pixels[(size_t)y * width], static_cast<const uint8_t *>(rgba->pixels) + (size_t)y * rgba->pitch,
+                        (size_t)width * 4);
         shot_write(pixels.data(), width, height);
     }
+    SDL_DestroySurface(rgba);
+    SDL_DestroySurface(read);
 }
 
 bool shot_pending() {
     return shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank;
 }
 
+bool is_mouse_event(Uint32 type) {
+    return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_BUTTON_DOWN || type == SDL_EVENT_MOUSE_BUTTON_UP ||
+           type == SDL_EVENT_MOUSE_WHEEL;
+}
+
 bool is_input_event(Uint32 type) {
     switch (type) {
-    case SDL_KEYDOWN:
-    case SDL_KEYUP:
-    case SDL_TEXTINPUT:
-    case SDL_TEXTEDITING:
-    case SDL_MOUSEMOTION:
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEWHEEL:
-    case SDL_CONTROLLERBUTTONDOWN:
-    case SDL_CONTROLLERBUTTONUP:
-    case SDL_CONTROLLERAXISMOTION:
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_TEXT_EDITING:
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         return true;
     default:
         return false;
@@ -1654,10 +1673,10 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
     apply_style();
     bool started;
     if (renderer != nullptr) {
-        started = ImGui_ImplSDL2_InitForSDLRenderer(window, renderer) && ImGui_ImplSDLRenderer2_Init(renderer);
+        started = ImGui_ImplSDL3_InitForSDLRenderer(window, renderer) && ImGui_ImplSDLRenderer3_Init(renderer);
     } else {
 #ifdef KF4_HAVE_VULKAN_PRESENTER
-        started = ImGui_ImplSDL2_InitForVulkan(window) && port_vk_imgui_init();
+        started = ImGui_ImplSDL3_InitForVulkan(window) && port_vk_imgui_init();
 #else
         started = false;
 #endif
@@ -1667,7 +1686,7 @@ extern "C" void port_overlay_init(void *sdl_window, void *sdl_renderer) {
         return;
     }
     ready = true;
-    std::fprintf(stderr, "[overlay] %s opens the developers' overlay\n", renderer == nullptr ? "Shift+F1" : "F1");
+    std::fprintf(stderr, "[overlay] %s opens the developers' overlay\n", port_overlay_key());
 }
 
 extern "C" int port_overlay_event(const void *sdl_event) {
@@ -1678,8 +1697,8 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         return 1;
     if (!ready)
         return 0;
-    if (event->type == SDL_KEYDOWN && !event->key.repeat) {
-        SDL_Scancode key = event->key.keysym.scancode;
+    if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat) {
+        SDL_Scancode key = event->key.scancode;
         if (key == SDL_SCANCODE_F1 || (overlay_open && key == SDL_SCANCODE_ESCAPE && !ImGui::GetIO().WantTextInput)) {
             set_open(!overlay_open);
             return 1;
@@ -1693,26 +1712,40 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         if (!ImGui::GetIO().WantTextInput && profiler_key(*event))
             return 1;
     }
-    if (event->type == SDL_KEYUP &&
-        (event->key.keysym.scancode == SDL_SCANCODE_F1 || event->key.keysym.scancode == SDL_SCANCODE_F11))
+    if (event->type == SDL_EVENT_KEY_UP &&
+        (event->key.scancode == SDL_SCANCODE_F1 || event->key.scancode == SDL_SCANCODE_F11))
         return 1;
     // the automap mod's full map: its key closes it, and it has the mouse while it is open
     if (!overlay_open && automap_view_event(event))
         return 1;
     if (!overlay_open && port_automap_full_open()) {
-        ImGui_ImplSDL2_ProcessEvent(event);
+        ImGui_ImplSDL3_ProcessEvent(event);
         return is_input_event(event->type);
+    }
+    // the profiler, the overlay closed: the mouse is its, and the keys while one of its text fields is typed in
+    if (!overlay_open && profiler_visible()) {
+        if (is_mouse_event(event->type)) {
+            ImGui_ImplSDL3_ProcessEvent(event);
+            return 1;
+        }
+        if (is_input_event(event->type) && imgui_typing.load()) {
+            ImGui_ImplSDL3_ProcessEvent(event);
+            return 1;
+        }
+        if (event->type == SDL_EVENT_KEY_UP)
+            ImGui_ImplSDL3_ProcessEvent(event); // (a key let go after typing stopped is let go in ImGui too)
+        return 0;
     }
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
     if (!overlay_open)
         return 0;
-    ImGui_ImplSDL2_ProcessEvent(event);
+    ImGui_ImplSDL3_ProcessEvent(event);
     return is_input_event(event->type);
 }
 
 extern "C" int port_overlay_visible(void) {
     return port_player_ui_visible() || (ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
-                     (toast_until != 0 && (int32_t)(toast_until - SDL_GetTicks()) > 0) || building_shown() ||
+                     (toast_until != 0 && (int32_t)(toast_until - (Uint32)SDL_GetTicks()) > 0) || building_shown() ||
                      automap_view_visible() || profiler_visible()));
 }
 
@@ -1733,6 +1766,14 @@ extern "C" int port_overlay_open(void) {
     return (ready && overlay_open) || port_player_ui_open();
 }
 
+extern "C" int port_overlay_holds_mouse(void) {
+    return ready && !overlay_open && profiler_visible();
+}
+
+extern "C" const char *port_overlay_key(void) {
+    return port_player_ui_ready() ? "Shift+F1" : "F1";
+}
+
 extern "C" int port_overlay_paused(void) {
     bool open = overlay_open || port_player_ui_open();
     return ready && !shot_mode && ((open && port_settings.pause_when_open) || port_automap_holds_game());
@@ -1740,17 +1781,17 @@ extern "C" int port_overlay_paused(void) {
 
 extern "C" void port_overlay_notify_state(void) {
     toast_text = port_state_message;
-    toast_until = SDL_GetTicks() + 2500;
+    toast_until = (Uint32)SDL_GetTicks() + 2500;
 }
 
 extern "C" void port_overlay_notify_quick(void) {
     toast_text = port_quick_message;
-    toast_until = SDL_GetTicks() + 3000;
+    toast_until = (Uint32)SDL_GetTicks() + 3000;
 }
 
 extern "C" void port_overlay_notify_debug(void) {
     toast_text = port_debug_message;
-    toast_until = SDL_GetTicks() + 4000;
+    toast_until = (Uint32)SDL_GetTicks() + 4000;
 }
 
 extern "C" void port_overlay_vblank(void) {
@@ -1758,6 +1799,14 @@ extern "C" void port_overlay_vblank(void) {
         return;
     port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     profiler_step();             // Shift+P (port/overlay/profiler.cpp)
+    // typing in the profiler's text field (the overlay and the player menu closed): the game gets no keys meanwhile
+    static bool typing;
+    bool now_typing = port_overlay_holds_mouse() && !port_player_ui_open() && imgui_typing.load();
+    if (now_typing != typing) {
+        typing = now_typing;
+        if (!overlay_open && !port_player_ui_open()) // (those block the game themselves, and let go when closed)
+            port_controls_block(typing);
+    }
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
@@ -1768,12 +1817,12 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     port_settings_poll();
     // a new release the launcher found: a note when nothing else is showing
     static bool update_note_pending;
-    if (update_badge_poll(SDL_GetTicks()))
+    if (update_badge_poll((Uint32)SDL_GetTicks()))
         update_note_pending = true;
     if (update_note_pending && !building_shown()) {
         update_note_pending = false;
         toast_text = update_badge_note;
-        toast_until = SDL_GetTicks() + 6000;
+        toast_until = (Uint32)SDL_GetTicks() + 6000;
     }
     shot_open();
     if (!port_overlay_visible())
@@ -1794,13 +1843,13 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
     if (renderer != nullptr) {
-        ImGui_ImplSDLRenderer2_NewFrame();
+        ImGui_ImplSDLRenderer3_NewFrame();
     } else {
 #ifdef KF4_HAVE_VULKAN_PRESENTER
         ImGui_ImplVulkan_NewFrame();
 #endif
     }
-    ImGui_ImplSDL2_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     if (pad_quiet && !listening) {
         bool held = false;
@@ -1812,7 +1861,7 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     draw_toast();
     draw_building();
     port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
-    profiler_draw(overlay_open);                                // Shift+P (port/overlay/profiler.cpp)
+    profiler_draw();                                            // Shift+P (port/overlay/profiler.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)
@@ -1822,11 +1871,12 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         update_badge_window();
     }
     (void)x, (void)y, (void)width, (void)height;
+    imgui_typing.store(ImGui::GetIO().WantTextInput);
     ImGui::Render();
     if (renderer == nullptr) {
         drawn = true; // the presenter records it, and takes the test picture
         return;
     }
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
+    ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
     shot_take();
 }

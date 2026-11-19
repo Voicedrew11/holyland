@@ -19,6 +19,8 @@ extern "C" {
 void port_player_ui_init(void *sdl_window);
 /* (port/overlay/overlay.cpp, each SDL event) 1 when the menu took it, and nothing else may see it */
 int port_player_ui_event(const void *sdl_event);
+/* 1 when the menu started (it has F1, and the developers' overlay Shift+F1) */
+int port_player_ui_ready(void);
 /* 1 while the menu is open: the keyboard, mouse and controller are its */
 int port_player_ui_open(void);
 /* 1 when the menu draws something this picture */
@@ -33,6 +35,9 @@ void port_player_ui_draw(int width, int height);
 #else
 static inline int port_player_ui_event(const void *sdl_event) {
     (void)sdl_event;
+    return 0;
+}
+static inline int port_player_ui_ready(void) {
     return 0;
 }
 static inline int port_player_ui_open(void) {

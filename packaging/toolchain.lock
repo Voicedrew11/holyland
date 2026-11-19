@@ -5,8 +5,8 @@
 # every player's next start build again).
 #
 # Linux: LLVM's own release (clang and lld, as the developers' clang 22), CMake, Ninja, and a sysroot from
-# Ubuntu 22.04's release pocket (glibc 2.35, libstdc++ 12, libdrm), and SDL2 built from source by
-# packaging/linux/build-sdl2.sh and shipped with the game, so it runs on Ubuntu 22.04, Debian 12, SteamOS 3 and newer.
+# Ubuntu 22.04's release pocket (glibc 2.35, libstdc++ 12, libdrm), and SDL3 built from source by
+# packaging/linux/build-sdl3.sh and shipped with the game, so it runs on Ubuntu 22.04, Debian 12, SteamOS 3 and newer.
 llvm-linux                 df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384  https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
 cmake-linux                5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf  https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz
 ninja-linux                6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
@@ -19,12 +19,12 @@ deb-libstdc++-12-dev       27767620a793cd97f58580e795592aa8f49122116f74b45fa8a5f
 deb-libstdc++6             035cfe195ddf3a091abbc0c323285772ccbdbb2fb75279e44a0915748b4e5726  http://archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/libstdc++6_12-20220319-1ubuntu1_amd64.deb
 deb-libdrm-dev             e8061fe24e5a0c23ed170d51f340fff5e2774691b046c32d434b941952778170  http://archive.ubuntu.com/ubuntu/pool/main/libd/libdrm/libdrm-dev_2.4.110-1ubuntu1_amd64.deb
 deb-libdrm2                e5ea68db36b31aab442c790e1c78ecdf53646c16b0cd83db15966632ba04152c  http://archive.ubuntu.com/ubuntu/pool/main/libd/libdrm/libdrm2_2.4.110-1ubuntu1_amd64.deb
-sdl2-source                24b574f71c87a763f50704bbb630cbe38298d544a1f890f099a4696b1d6beba4  https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-2.30.9.tar.gz
+sdl3-source                f3bb06f55bed9557227a700af2ea62e49497ebdf58037732a731a5fb3ef8581f  https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-3.4.20.tar.gz
 appimagetool               46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
 #
-# Windows: llvm-mingw (the developers' release, clang 22), CMake, Ninja and SDL2's MinGW build, the same
+# Windows: llvm-mingw (the developers' release, clang 22), CMake, Ninja and SDL3's MinGW build, the same
 # as .github/workflows/ci.yml.
 llvm-mingw                 b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35  https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip
 cmake-windows              d163cd3ab4959b0a53fa8988f2ddbd2e6c501658201e6a154386bad9dbe4f836  https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-windows-x86_64.zip
 ninja-windows              f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a  https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip
-sdl2-mingw                 492abbc78bbcad000d224cc56a200938f8be09a4a9aae253defa6035cbf68d9d  https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-devel-2.30.9-mingw.zip
+sdl3-mingw                 5d321d3d2d499cfabad3023921e4b56bbec03558060f4e195ce626d200126442  https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-devel-3.4.20-mingw.zip

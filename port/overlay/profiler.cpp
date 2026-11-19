@@ -3,7 +3,7 @@
 //
 // profiler_key and profiler_step run on the game's thread (the window's events, the vblank); profiler_draw on the
 // thread that shows the picture.
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 #include <atomic>
 
@@ -30,8 +30,8 @@ void set_shown(bool show) {
 } // namespace
 
 bool profiler_key(const SDL_Event &event) {
-    if (event.type != SDL_KEYDOWN || event.key.repeat || event.key.keysym.scancode != SDL_SCANCODE_P ||
-        !(event.key.keysym.mod & KMOD_SHIFT)) {
+    if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat || event.key.scancode != SDL_SCANCODE_P ||
+        !(event.key.mod & SDL_KMOD_SHIFT)) {
         return false;
     }
     set_shown(!shown.load());
@@ -60,6 +60,6 @@ void profiler_step() {
     profile_run_view_step();
 }
 
-void profiler_draw(bool overlay_open) {
-    frames_view_draw(overlay_open);
+void profiler_draw() {
+    frames_view_draw();
 }

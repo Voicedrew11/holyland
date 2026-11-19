@@ -35,7 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef KF4_HAVE_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 #include "libpad.h"
@@ -461,7 +461,7 @@ static void replay_events(void) {
 
 /* ---- SDL -------------------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_SDL
-static SDL_GameController *controller;
+static SDL_Gamepad *controller;
 
 static int stick_byte(Sint16 value) {
     return (value + 32768) >> 8;
@@ -479,11 +479,11 @@ static void sdl_read(void) {
         return;
     }
     {
-        static const SDL_GameControllerAxis axes[4] = {SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY,
-                                                       SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY};
+        static const SDL_GamepadAxis axes[4] = {SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY,
+                                                       SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY};
 
         for (i = 0; i < 4; i++) {
-            int value = stick_byte(SDL_GameControllerGetAxis(controller, axes[i]));
+            int value = stick_byte(SDL_GetGamepadAxis(controller, axes[i]));
 
             /* the stick, unless it rests in the middle and a key is held */
             if (live.axis[i] == 0x80 || value < 0x60 || value > 0xA0) {
@@ -494,16 +494,22 @@ static void sdl_read(void) {
 }
 
 static void sdl_open_first(void) {
+    int count = 0;
     int i;
+    SDL_JoystickID *pads = SDL_GetGamepads(&count);
 
-    for (i = 0; i < SDL_NumJoysticks() && controller == NULL; i++) {
-        if (SDL_IsGameController(i)) {
-            controller = SDL_GameControllerOpen(i);
-            if (controller) {
-                port_event("pad: %s", SDL_GameControllerName(controller));
-            }
+    if (pads == NULL) {
+        return;
+    }
+    for (i = 0; i < count && controller == NULL; i++) {
+        controller = SDL_OpenGamepad(pads[i]);
+        if (controller) {
+            const char *name = SDL_GetGamepadName(controller);
+
+            port_event("pad: %s", name != NULL ? name : "(no name)");
         }
     }
+    SDL_free(pads);
 }
 #endif
 
@@ -542,7 +548,7 @@ void port_pad_init(void) {
 #ifdef KF4_HAVE_SDL
     /* with a window, SDL's events are read even when a script plays the pad */
     if (!port_options.headless) {
-        if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
+        if (!SDL_Init(SDL_INIT_GAMEPAD | SDL_INIT_EVENTS)) {
             fprintf(stderr, "[port] SDL: %s; the pad stays idle\n", SDL_GetError());
             return;
         }
@@ -613,7 +619,7 @@ void port_pad_poll(void) {
     }
     while (SDL_PollEvent(&event)) {
         if (port_options.input) {
-            if (event.type == SDL_QUIT) {
+            if (event.type == SDL_EVENT_QUIT) {
                 exit(0);
             }
             continue;
@@ -621,14 +627,14 @@ void port_pad_poll(void) {
         if (port_controls_event(&event) || port_overlay_event(&event)) {
             continue;
         }
-        if (event.type == SDL_CONTROLLERDEVICEADDED && controller == NULL) {
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED && controller == NULL) {
             sdl_open_first();
-        } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller != NULL &&
-                   event.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller))) {
-            SDL_GameControllerClose(controller);
+        } else if (event.type == SDL_EVENT_GAMEPAD_REMOVED && controller != NULL &&
+                   event.gdevice.which == SDL_GetGamepadID(controller)) {
+            SDL_CloseGamepad(controller);
             controller = NULL;
             sdl_open_first();
-        } else if (event.type == SDL_QUIT) {
+        } else if (event.type == SDL_EVENT_QUIT) {
             port_event("quit");
             exit(0);
         }
@@ -796,7 +802,7 @@ static void set_motors(int small, int big) {
     calls = 0;
     last_small = small;
     last_big = big;
-    SDL_GameControllerRumble(controller, (Uint16)(big * 257), small ? 0xFFFF : 0, 1000);
+    SDL_RumbleGamepad(controller, (Uint16)(big * 257), small ? 0xFFFF : 0, 1000);
 #else
     (void)small;
     (void)big;

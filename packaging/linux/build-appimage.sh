@@ -3,18 +3,18 @@
 # packaging/package.env).
 #
 #   usr/bin/<APP_ID>                  the launcher (built here with the release's own tools)
-#   usr/bin/libSDL2-2.0.so.0          its SDL2 (packaging/linux/build-sdl2.sh)
+#   usr/bin/libSDL3.so.0              its SDL3 (packaging/linux/build-sdl3.sh)
 #   usr/share/<APP_ID>/content/       the game's source, the tools, manifest.txt
 #
 # It does NOT need the disc: the game is built on the player's computer. Run it on Ubuntu 22.04 (the release
-# workflow does) or give an SDL2 built there: packaging/linux/build-appimage.sh [SDL2_PREFIX]. The game's tree
+# workflow does) or give an SDL3 built there: packaging/linux/build-appimage.sh [SDL3_PREFIX]. The game's tree
 # needs its submodules (CLAUDE.md), not a configure.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck disable=SC1091
 . "$ROOT/packaging/package.env"
-SDL2_PREFIX="${1:-}"
+SDL3_PREFIX="${1:-}"
 OUT="${OUT:-$ROOT/dist}"
 APPDIR="$OUT/$NAME.AppDir"
 VERSION="${VERSION:-$(bash "$ROOT/tools/version.sh")}"
@@ -28,19 +28,19 @@ echo "==> the game's source and the tools"
 "$ROOT/packaging/payload.sh" "$CONTENT"
 # DARKER_REALITY_TOOLCHAIN_CACHE (the release workflow): a folder holding the tools toolchain.sh made before,
 # taken as they are when it has them (unpacking LLVM and building SDL2 took 4 minutes there), else filled. Whoever
-# sets it keys it on everything the tools are made from (toolchain.lock, toolchain.sh, build-sdl2.sh).
+# sets it keys it on everything the tools are made from (toolchain.lock, toolchain.sh, build-sdl3.sh).
 TOOLCHAIN_CACHE="${DARKER_REALITY_TOOLCHAIN_CACHE:-}"
 if [ -n "$TOOLCHAIN_CACHE" ] && [ -f "$TOOLCHAIN_CACHE/ID" ]; then
     echo "==> the tools, from $TOOLCHAIN_CACHE ($(cat "$TOOLCHAIN_CACHE/ID"))"
     mkdir -p "$CONTENT"
     cp -a "$TOOLCHAIN_CACHE" "$CONTENT/toolchain"
 else
-    if [ -z "$SDL2_PREFIX" ]; then
-        SDL2_PREFIX="$ROOT/out/sdl2-release"
-        rm -rf "$SDL2_PREFIX"
-        "$ROOT/packaging/linux/build-sdl2.sh" "$SDL2_PREFIX"
+    if [ -z "$SDL3_PREFIX" ]; then
+        SDL3_PREFIX="$ROOT/out/sdl3-release"
+        rm -rf "$SDL3_PREFIX"
+        "$ROOT/packaging/linux/build-sdl3.sh" "$SDL3_PREFIX"
     fi
-    "$ROOT/packaging/linux/toolchain.sh" "$CONTENT" "$SDL2_PREFIX"
+    "$ROOT/packaging/linux/toolchain.sh" "$CONTENT" "$SDL3_PREFIX"
     if [ -n "$TOOLCHAIN_CACHE" ]; then
         rm -rf "$TOOLCHAIN_CACHE"
         mkdir -p "$(dirname "$TOOLCHAIN_CACHE")"
@@ -59,7 +59,7 @@ env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" -G Nin
 env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" --build "$B"
 cp "$B/$APP_ID" "$APPDIR/usr/bin/$APP_ID"
 strip "$APPDIR/usr/bin/$APP_ID"
-cp "$T/lib/libSDL2-2.0.so.0" "$APPDIR/usr/bin/"
+cp "$T/lib/libSDL3.so.0" "$APPDIR/usr/bin/"
 
 "$ROOT/packaging/manifest.sh" "$CONTENT"
 # the release's content is never written: the launcher builds into the player's builds folder

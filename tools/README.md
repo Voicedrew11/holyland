@@ -105,10 +105,10 @@ cmake --preset windows-clang-release            # or linux-clang-release, linux-
 cmake --build out/windows-clang-release
 ```
 
-PGO on top (clang or gcc; Windows needs `-D SDL2_DIR=...` as for any configure):
+PGO on top (clang or gcc; Windows needs `-D SDL3_DIR=...` as for any configure):
 
 ```sh
-python tools/pgo_train.py --preset windows-clang-release --disc <image> [-D SDL2_DIR=...]
+python tools/pgo_train.py --preset windows-clang-release --disc <image> [-D SDL3_DIR=...]
 ```
 
 It configures `out/<preset>-pgo` with `KF4_PGO=generate`, builds `kf4`, plays the four spots headless and silent for

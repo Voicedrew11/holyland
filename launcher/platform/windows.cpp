@@ -206,15 +206,15 @@ public:
         tools.ninja = root / "ninja/ninja.exe";
         tools.c_compiler = root / "llvm-mingw/bin/clang.exe";
         tools.cxx_compiler = root / "llvm-mingw/bin/clang++.exe";
-        fs::path sdl2 = root / "SDL2/x86_64-w64-mingw32/lib/cmake/SDL2";
+        fs::path sdl3 = root / "SDL3/x86_64-w64-mingw32/lib/cmake/SDL3";
         std::error_code error;
-        for (const fs::path &tool : {tools.cmake, tools.ninja, tools.c_compiler, tools.cxx_compiler, sdl2}) {
+        for (const fs::path &tool : {tools.cmake, tools.ninja, tools.c_compiler, tools.cxx_compiler, sdl3}) {
             if (!fs::exists(tool, error)) {
                 why = tool.u8string() + " is missing";
                 return std::nullopt;
             }
         }
-        tools.cmake_options = {"-DSDL2_DIR=" + sdl2.generic_u8string()};
+        tools.cmake_options = {"-DSDL3_DIR=" + sdl3.generic_u8string()};
         tools.env = {{"PATH", (root / "llvm-mingw/bin").u8string() + ";" + env_or_empty("PATH")}};
         auto id = std::fopen((root / "ID").u8string().c_str(), "rb");
         char buffer[256] = {};
@@ -234,7 +234,7 @@ public:
         if (!fs::is_regular_file(build_dir / "kf4.exe", error))
             return files;
         files.push_back(build_dir / "kf4.exe");
-        // its DLLs, copied beside it by the build (CMakeLists.txt: SDL2, libc++, libunwind)
+        // its DLLs, copied beside it by the build (CMakeLists.txt: SDL3, libc++, libunwind)
         for (fs::directory_iterator it(build_dir, error), end; !error && it != end; it.increment(error))
             if (it->path().extension() == ".dll")
                 files.push_back(it->path());

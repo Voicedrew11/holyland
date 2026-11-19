@@ -22,8 +22,8 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
-#include <SDL.h>
-#include <SDL_vulkan.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 
 #include <atomic>
 #include <cmath>
@@ -352,7 +352,7 @@ int wanted_mode() {
 // is minimised, or it failed)
 bool make_swapchain() {
     int drawable_w = 0, drawable_h = 0;
-    SDL_Vulkan_GetDrawableSize(pr.window, &drawable_w, &drawable_h);
+    SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
     VkSurfaceCapabilitiesKHR caps;
     if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pr.gpu, pr.surface, &caps) != VK_SUCCESS) {
         return false;
@@ -1047,7 +1047,7 @@ extern "C" int port_vk_open(void *sdl_window) {
         pr = Presenter();
         return 0;
     }
-    if (!SDL_Vulkan_CreateSurface(pr.window, pr.instance, &pr.surface)) {
+    if (!SDL_Vulkan_CreateSurface(pr.window, pr.instance, nullptr, &pr.surface)) {
         std::fprintf(stderr, "[present] no Vulkan surface for the window: %s\n", SDL_GetError());
         pr.surface = VK_NULL_HANDLE;
         close_all();
@@ -1144,7 +1144,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         return;
     }
     int drawable_w = 0, drawable_h = 0;
-    SDL_Vulkan_GetDrawableSize(pr.window, &drawable_w, &drawable_h);
+    SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
     if (drawable_w <= 0 || drawable_h <= 0) {
         return;
     }

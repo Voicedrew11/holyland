@@ -26,7 +26,7 @@
 #endif
 
 #ifdef KF4_HAVE_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 #include "port/adaptive_sync.h"
@@ -390,6 +390,10 @@ static int texture_smooth;
 static uint32_t *shown;
 static uint32_t shown_width, shown_height; /* its size */
 
+void *port_video_window(void) {
+    return window;
+}
+
 /* the window's size in windowed mode: the height the settings say, and the width they say (a
    monitor's size, which the picture is fitted into) or as wide as the picture's shape (4:3, or 16:9
    with --widescreen) at that height */
@@ -407,16 +411,21 @@ static void window_size(int *width, int *height) {
 /* The window's screen's refresh rate, for --frame-rate monitor; and its vblanks, for the refresh clock, when
    the screen is another */
 static void read_refresh_rate(void) {
-    static SDL_DisplayMode opened;
-    SDL_DisplayMode mode;
-    int display = SDL_GetWindowDisplayIndex(window);
+    static int opened_w, opened_h, opened_hz;
+    SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    const SDL_DisplayMode *mode = display != 0 ? SDL_GetCurrentDisplayMode(display) : NULL;
+    int hz;
 
-    if (display >= 0 && SDL_GetCurrentDisplayMode(display, &mode) == 0 && mode.refresh_rate > 0) {
-        __atomic_store_n(&refresh_rate, mode.refresh_rate, __ATOMIC_RELEASE);
-        if (mode.w != opened.w || mode.h != opened.h || mode.refresh_rate != opened.refresh_rate) {
-            opened = mode;
-            port_screen_vblank_open(mode.w, mode.h, mode.refresh_rate);
-        }
+    if (mode == NULL || mode->refresh_rate <= 0.0f) {
+        return;
+    }
+    hz = (int)(mode->refresh_rate + 0.5f);
+    __atomic_store_n(&refresh_rate, hz, __ATOMIC_RELEASE);
+    if (mode->w != opened_w || mode->h != opened_h || hz != opened_hz) {
+        opened_w = mode->w;
+        opened_h = mode->h;
+        opened_hz = hz;
+        port_screen_vblank_open(mode->w, mode->h, hz);
     }
 }
 #endif
@@ -429,14 +438,14 @@ void port_video_apply_settings(void) {
         return;
     }
     read_refresh_rate();
-    SDL_SetWindowFullscreen(window, port_settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    SDL_SetWindowFullscreen(window, port_settings.fullscreen != 0); /* (the desktop's mode: no mode was set) */
     if (!port_settings.fullscreen) {
         window_size(&width, &height);
         SDL_SetWindowSize(window, width, height);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (renderer != NULL) {
-        SDL_RenderSetVSync(renderer, port_settings.vsync || port_options.adaptive_sync);
+        SDL_SetRenderVSync(renderer, port_settings.vsync || port_options.adaptive_sync ? 1 : SDL_RENDERER_VSYNC_DISABLED);
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     if (presenter == PORT_PRESENTER_VULKAN) {
@@ -447,26 +456,20 @@ void port_video_apply_settings(void) {
 }
 
 #ifdef KF4_HAVE_SDL
-static SDL_Window *make_window(Uint32 flags) {
+static SDL_Window *make_window(SDL_WindowFlags flags) {
     int width, height;
 
     window_size(&width, &height);
     if (port_settings.fullscreen) {
-        flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        flags |= SDL_WINDOW_FULLSCREEN; /* (the desktop's mode) */
     }
     /* pictures of the overlay for tests (KF4_OVERLAY_SHOT) need no window on the screen */
     if (getenv("KF4_OVERLAY_SHOT") != NULL) {
         flags |= SDL_WINDOW_HIDDEN;
     }
-    SDL_Window *made = SDL_CreateWindow("King's Field IV", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
-                                        height, flags);
-    /* SDL2 (and sdl2-compat, per window) starts text input by default, which hands the keys to the
-       desktop's input method (IBus, Fcitx): its language box opens over the game and holds the keys,
-       and the player stops walking. Nothing here reads typed text (the overlay has no text fields) */
-    if (made != NULL) {
-        SDL_StopTextInput();
-    }
-    return made;
+    /* (centred on the screen; SDL3 starts no text input, so the desktop's input method (IBus, Fcitx) does not
+       take the keys: the overlay (Dear ImGui) starts it only while one of its text fields is typed in) */
+    return SDL_CreateWindow("King's Field IV", width, height, flags);
 }
 #endif
 
@@ -490,10 +493,11 @@ void port_video_init(void) {
     if (port_options.headless || !port_gs_enabled()) {
         return;
     }
-    /* the window's sizes are the screen's own pixels: without this, Windows at 150% scaling shows a
-       2560 x 1440 monitor as 1707 x 960 and stretches the window's picture up to it */
-    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+    /* The window's sizes are the screen's own pixels: on Windows SDL3's own (it is aware of each monitor's
+       scaling), on a scaled Wayland desktop by this hint (as SDL2 and sdl2-compat had it). Without it a 2560 x
+       1440 screen at 115% gives a 2226 x 1252 swapchain, stretched up by the compositor. */
+    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
     }
@@ -533,19 +537,14 @@ void port_video_init(void) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return;
     }
-    renderer = SDL_CreateRenderer(window, -1,
-                                  SDL_RENDERER_ACCELERATED |
-                                      (port_settings.vsync || port_options.adaptive_sync ? SDL_RENDERER_PRESENTVSYNC : 0));
-    if (renderer == NULL) {
-        renderer = SDL_CreateRenderer(window, -1, 0);
-    }
+    renderer = SDL_CreateRenderer(window, NULL);
     if (renderer == NULL) {
         fprintf(stderr, "[video] no renderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         window = NULL;
         return;
     }
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    SDL_SetRenderVSync(renderer, port_settings.vsync || port_options.adaptive_sync ? 1 : SDL_RENDERER_VSYNC_DISABLED);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
@@ -554,7 +553,7 @@ void port_video_init(void) {
     read_refresh_rate();
 #else
     if (!port_options.headless && port_gs_enabled()) {
-        fprintf(stderr, "[video] built without SDL2: no window\n");
+        fprintf(stderr, "[video] built without SDL3: no window\n");
     }
 #endif
 }
@@ -562,13 +561,13 @@ void port_video_init(void) {
 #ifdef KF4_HAVE_SDL
 /* SDL_Renderer's square for the frame-rate counter (port_video_counter_draw) */
 static void fill_rect(void *context, int x, int y, int width, int height, unsigned int rgba) {
-    SDL_Rect rect;
+    SDL_FRect rect;
 
     (void)context;
-    rect.x = x;
-    rect.y = y;
-    rect.w = width;
-    rect.h = height;
+    rect.x = (float)x;
+    rect.y = (float)y;
+    rect.w = (float)width;
+    rect.h = (float)height;
     SDL_SetRenderDrawColor(renderer, (Uint8)rgba, (Uint8)(rgba >> 8), (Uint8)(rgba >> 16), (Uint8)(rgba >> 24));
     SDL_RenderFillRect(renderer, &rect);
 }
@@ -880,33 +879,38 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         SDL_UpdateTexture(texture, NULL, shown, (int)(width * 4));
     }
     {
-        int out_w, out_h, smooth;
-        SDL_Rect dst;
+        int out_w = 0, out_h = 0, smooth;
+        int dst_x, dst_y, dst_w, dst_h;
+        SDL_FRect dst;
         SDL_BlendMode blend;
 
-        SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-        port_video_fit(out_w, out_h, &dst.x, &dst.y, &dst.w, &dst.h);
+        SDL_GetCurrentRenderOutputSize(renderer, &out_w, &out_h);
+        port_video_fit(out_w, out_h, &dst_x, &dst_y, &dst_w, &dst_h);
+        dst.x = (float)dst_x;
+        dst.y = (float)dst_y;
+        dst.w = (float)dst_w;
+        dst.h = (float)dst_h;
         /* the PC renderer's picture scaled to the window already (the best scaling): a pixel a pixel;
            else SDL's bilinear (smooth, best) or nearest (sharp). The GS scales its next pictures to the
            picture's place now. */
-        smooth = port_video_scaling() != PORT_SCALING_SHARP && !(texture_width == (uint32_t)dst.w && texture_height == (uint32_t)dst.h);
+        smooth = port_video_scaling() != PORT_SCALING_SHARP && !(texture_width == (uint32_t)dst_w && texture_height == (uint32_t)dst_h);
         if (texture_smooth != smooth) {
             texture_smooth = smooth;
-            SDL_SetTextureScaleMode(texture, texture_smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+            SDL_SetTextureScaleMode(texture, texture_smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
         }
         if (port_video_scaling() == PORT_SCALING_BEST || port_video_sharpen() > 0) {
-            port_gs_present_scale(dst.w, dst.h, port_video_sharpen());
+            port_gs_present_scale(dst_w, dst_h, port_video_sharpen());
         } else {
             port_gs_present_scale(0, 0, 0);
         }
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, texture, NULL, &dst);
+        SDL_RenderTexture(renderer, texture, NULL, &dst);
         SDL_GetRenderDrawBlendMode(renderer, &blend);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        port_video_counter_draw(fill_rect, NULL, dst.x, dst.y, dst.w, dst.h);
+        port_video_counter_draw(fill_rect, NULL, dst_x, dst_y, dst_w, dst_h);
         SDL_SetRenderDrawBlendMode(renderer, blend);
-        port_overlay_draw(dst.x, dst.y, dst.w, dst.h);
+        port_overlay_draw(dst_x, dst_y, dst_w, dst_h);
         SDL_RenderPresent(renderer);
     }
 }
@@ -929,11 +933,8 @@ void port_video_present(void) {
         /* the height the picture is shown at, for --native-scale auto (port_gs_native_scale) */
         int out_w, out_h, x, y, w, h;
 
-#if SDL_VERSION_ATLEAST(2, 26, 0)
+        out_w = out_h = 0;
         SDL_GetWindowSizeInPixels(window, &out_w, &out_h);
-#else
-        SDL_GetWindowSize(window, &out_w, &out_h);
-#endif
         if (out_w > 0 && out_h > 0) {
             port_video_fit(out_w, out_h, &x, &y, &w, &h);
             __atomic_store_n(&picture_out_height, h, __ATOMIC_RELEASE);

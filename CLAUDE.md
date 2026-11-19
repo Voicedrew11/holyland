@@ -24,6 +24,8 @@ out/linux-clang/kf4 --help                 # every option
 - Release builds: the `*-release` presets (LTO, no frame pointers) and `tools/pgo_train.py` (PGO); check one against
   the developers' build with `tools/build_compare.py` (`tools/README.md`, "A release build").
 - The game code is GNU C: MSVC `cl` cannot build it.
+- SDL3 (3.2 or newer; releases pin 3.4.20 in `packaging/toolchain.lock`): Fedora's `SDL3-devel`, or `-DSDL3_DIR=<its lib/cmake/SDL3>`
+  (Windows: SDL3's MinGW build). Without it the game builds with no window, input or sound.
 - Sanitizers: `-DKF4_SANITIZE=address,undefined` (or `thread`). Use clang (`out/linux-clang-asan`,
   `out/linux-clang-tsan`); the gcc sanitizer builds don't link. How to run them, TSan's suppressions
   (`tools/tsan.supp`) and the known reports: `docs/port/SANITIZERS.md`.

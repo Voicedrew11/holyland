@@ -249,9 +249,9 @@ void test_local_build() {
     BuildRequest request{"/content", dir / "abc", "0.2.0"};
 
     FakePlatform platform;
-    write(dir / "tools/libSDL2-2.0.so.0", "sdl");
-    fs::permissions(dir / "tools/libSDL2-2.0.so.0", fs::perms::owner_write, fs::perm_options::remove);
-    platform.runtime_file = dir / "tools/libSDL2-2.0.so.0";
+    write(dir / "tools/libSDL3.so.0", "sdl");
+    fs::permissions(dir / "tools/libSDL3.so.0", fs::perms::owner_write, fs::perm_options::remove);
+    platform.runtime_file = dir / "tools/libSDL3.so.0";
     platform.scripts = {Script{{"-- Configuring done"}, 0, false},
                         Script{{"[1/3] cc a.c", "[2/3] cc b.c", "[3/3] link kf4"}, 0, true}};
     Recorder progress;
@@ -271,9 +271,9 @@ void test_local_build() {
     check("output logged", progress.log.size() >= 4);
     std::error_code error;
     check("the tools' runtime files beside the game, removable",
-          fs::exists(dir / "abc/libSDL2-2.0.so.0") &&
-              (fs::status(dir / "abc/libSDL2-2.0.so.0", error).permissions() & fs::perms::owner_write) != fs::perms::none);
-    fs::permissions(dir / "tools/libSDL2-2.0.so.0", fs::perms::owner_write, fs::perm_options::add, error);
+          fs::exists(dir / "abc/libSDL3.so.0") &&
+              (fs::status(dir / "abc/libSDL3.so.0", error).permissions() & fs::perms::owner_write) != fs::perms::none);
+    fs::permissions(dir / "tools/libSDL3.so.0", fs::perms::owner_write, fs::perm_options::add, error);
 
     FakePlatform failing;
     failing.scripts = {Script{{"CMake Error: no compiler"}, 1, false}};

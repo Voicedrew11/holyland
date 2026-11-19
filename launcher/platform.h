@@ -22,9 +22,9 @@ struct Toolchain {
     fs::path ninja;
     fs::path c_compiler;
     fs::path cxx_compiler;
-    std::vector<std::string> cmake_options; // "-DNAME=VALUE" the system adds: sysroot, SDL2_DIR
+    std::vector<std::string> cmake_options; // "-DNAME=VALUE" the system adds: sysroot, SDL3_DIR
     std::vector<std::pair<std::string, std::string>> env; // set for the build's programs (PATH)
-    std::vector<fs::path> runtime_files;                  // put beside the built game (Linux: its SDL2)
+    std::vector<fs::path> runtime_files;                  // put beside the built game (Linux: its SDL3)
     std::string id;                         // names these tools in the build key
 };
 

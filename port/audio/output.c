@@ -26,7 +26,7 @@
 #include "spu2.h"
 
 #ifdef KF4_HAVE_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 #ifdef _WIN32
@@ -77,7 +77,7 @@ void port_audio_unlock(void) {
 #define DEVICE_MAX_BYTES (SPU2_RATE * 4u / 2u)
 #define DEVICE_STALL_MS 500u
 
-static SDL_AudioDeviceID device;
+static SDL_AudioStream *device; /* the sound device's stream (SDL_OpenAudioDeviceStream), NULL with none */
 static int device_playing;          /* the game's clock: the queue has started */
 static uint64_t tick_due_x64;       /* the device's clock: the next tick, in 1/64 SPU2 frames */
 static volatile uint32_t last_callback;
@@ -129,22 +129,30 @@ static void apply_volume(int16_t *frames, int count) {
 
 /* ---- The device's clock --------------------------------------------------------------------------- */
 #ifdef KF4_HAVE_SDL
-/* SDL's audio thread: the frames the device asks for, with the driver's ticks between them */
-static void device_callback(void *user, Uint8 *stream, int length) {
-    int16_t *out = (int16_t *)stream;
-    int frames = length / 4;
+/* SDL's audio thread: the frames the device asks for (`wanted` bytes more), with the driver's ticks between
+   them, put into the device's stream a chunk at a time */
+static void device_callback(void *user, SDL_AudioStream *stream, int wanted, int total) {
+    int16_t chunk[CHUNK_FRAMES * 2];
+    int frames = (wanted + 3) / 4;
 
     (void)user;
+    (void)total;
     port_audio_lock();
-    last_callback = SDL_GetTicks();
+    last_callback = (uint32_t)SDL_GetTicks();
     if (!device_clock) {
         port_audio_unlock();
-        memset(stream, 0, (size_t)length);
+        memset(chunk, 0, sizeof(chunk));
+        while (frames > 0) {
+            int count = frames < CHUNK_FRAMES ? frames : CHUNK_FRAMES;
+
+            SDL_PutAudioStreamData(stream, chunk, count * 4);
+            frames -= count;
+        }
         return;
     }
     while (frames > 0) {
         uint64_t now_x64 = spu2_time() * 64u;
-        int count = frames;
+        int count = frames < CHUNK_FRAMES ? frames : CHUNK_FRAMES;
 
         if (tick_due_x64 <= now_x64) {
             sd_set_time_render();
@@ -155,10 +163,10 @@ static void device_callback(void *user, Uint8 *stream, int length) {
         if ((tick_due_x64 - now_x64 + 63u) / 64u < (uint64_t)count) {
             count = (int)((tick_due_x64 - now_x64 + 63u) / 64u);
         }
-        spu2_render(out, count);
-        port_debug_audio_frames(out, count); /* F12's last 20 seconds (port/debug/debug.c) */
-        apply_volume(out, count);
-        out += count * 2;
+        spu2_render(chunk, count);
+        port_debug_audio_frames(chunk, count); /* F12's last 20 seconds (port/debug/debug.c) */
+        apply_volume(chunk, count);
+        SDL_PutAudioStreamData(stream, chunk, count * 4);
         frames -= count;
     }
     port_audio_unlock();
@@ -171,8 +179,8 @@ static void fall_back_to_game_clock(void) {
     sd_set_clock(0, frame_offset = (int64_t)spu2_time() - (int64_t)(port_ee_cycles() / AUDIO_EE_CYCLES_PER_FRAME));
     fsiopsnd_resume_ticks(port_ee_cycles());
     port_audio_unlock();
-    SDL_CloseAudioDevice(device);
-    device = 0;
+    SDL_DestroyAudioStream(device); /* (closes the device; waits for a callback still running) */
+    device = NULL;
     fprintf(stderr, "[audio] the sound device stopped asking for sound; the sound now follows the game's clock, "
                     "without a device\n");
 }
@@ -193,24 +201,24 @@ static void open_outputs(void) {
 #ifdef KF4_HAVE_SDL
     stats_on = getenv("KF4_AUDIO_STATS") != NULL;
     if (!port_options.headless && !port_options.no_audio) {
-        SDL_AudioSpec want;
-        SDL_AudioSpec have;
+        SDL_AudioSpec spec;
         int pull = (port_options.audio_dump == NULL && port_options.input == NULL && !port_options.fast &&
                     port_options.record_input == NULL) ||
                    getenv("KF4_AUDIO_DEVICE_CLOCK") != NULL;
 
-        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+        /* the device's buffer, 1024 frames (21 ms): asked for before the audio starts */
+        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             fprintf(stderr, "[audio] no sound: %s\n", SDL_GetError());
             return;
         }
-        memset(&want, 0, sizeof(want));
-        want.freq = SPU2_RATE;
-        want.format = AUDIO_S16LSB;
-        want.channels = 2;
-        want.samples = 1024;
-        want.callback = pull ? device_callback : NULL;
-        device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-        if (device == 0) {
+        spec.freq = SPU2_RATE;
+        spec.format = SDL_AUDIO_S16LE;
+        spec.channels = 2;
+        /* (the stream converts to the device's own format and rate, if they differ; it starts paused) */
+        device = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, pull ? device_callback : NULL,
+                                           NULL);
+        if (device == NULL) {
             fprintf(stderr, "[audio] no sound device: %s\n", SDL_GetError());
             return;
         }
@@ -218,8 +226,8 @@ static void open_outputs(void) {
             device_clock = 1;
             sd_set_clock(1, 0);
             tick_due_x64 = TICK_FRAMES_X64;
-            last_callback = SDL_GetTicks();
-            SDL_PauseAudioDevice(device, 0);
+            last_callback = (uint32_t)SDL_GetTicks();
+            SDL_ResumeAudioStreamDevice(device);
         }
     }
 #endif
@@ -232,11 +240,12 @@ static void output(const int16_t *frames, int count) {
         wav_frames += (uint32_t)count;
     }
 #ifdef KF4_HAVE_SDL
-    if (device != 0) {
-        Uint32 queued = SDL_GetQueuedAudioSize(device);
+    if (device != NULL) {
+        int queued_bytes = SDL_GetAudioStreamQueued(device);
+        uint32_t queued = queued_bytes > 0 ? (uint32_t)queued_bytes : 0u;
 
         if (stats_on) {
-            uint32_t now = SDL_GetTicks();
+            uint32_t now = (uint32_t)SDL_GetTicks();
 
             if (device_playing && queued < stats_min) {
                 stats_min = queued;
@@ -255,11 +264,11 @@ static void output(const int16_t *frames, int count) {
         if (device_playing && queued == 0) {
             /* ran dry: wait to have 100 ms again */
             stats_dry++;
-            SDL_PauseAudioDevice(device, 1);
+            SDL_PauseAudioStreamDevice(device);
             device_playing = 0;
         } else if (queued > DEVICE_MAX_BYTES) {
             stats_drops++;
-            SDL_ClearQueuedAudio(device);
+            SDL_ClearAudioStream(device);
         }
         if (device_gain != 0x10000) {
             int16_t scaled[CHUNK_FRAMES * 2];
@@ -269,12 +278,12 @@ static void output(const int16_t *frames, int count) {
             }
             memcpy(scaled, frames, (size_t)count * 4u);
             apply_volume(scaled, count);
-            SDL_QueueAudio(device, scaled, (Uint32)count * 4u);
+            SDL_PutAudioStreamData(device, scaled, count * 4);
         } else {
-            SDL_QueueAudio(device, frames, (Uint32)count * 4u);
+            SDL_PutAudioStreamData(device, frames, count * 4);
         }
-        if (!device_playing && SDL_GetQueuedAudioSize(device) >= DEVICE_START_BYTES) {
-            SDL_PauseAudioDevice(device, 0);
+        if (!device_playing && SDL_GetAudioStreamQueued(device) >= (int)DEVICE_START_BYTES) {
+            SDL_ResumeAudioStreamDevice(device);
             device_playing = 1;
         }
     }
@@ -292,9 +301,9 @@ void port_audio_finish(void) {
         wav = NULL;
     }
 #ifdef KF4_HAVE_SDL
-    if (device != 0) {
-        SDL_CloseAudioDevice(device);
-        device = 0;
+    if (device != NULL) {
+        SDL_DestroyAudioStream(device);
+        device = NULL;
     }
 #endif
 }
@@ -322,15 +331,15 @@ void port_audio_sync(uint64_t now) {
     }
 #ifdef KF4_HAVE_SDL
     if (device_clock) {
-        uint32_t since = SDL_GetTicks() - last_callback;
+        uint32_t since = (uint32_t)SDL_GetTicks() - last_callback;
 
         if (since > DEVICE_STALL_MS) {
             fall_back_to_game_clock();
         } else {
-            if (stats_on && SDL_GetTicks() - stats_time >= 1000) {
+            if (stats_on && (uint32_t)SDL_GetTicks() - stats_time >= 1000) {
                 fprintf(stderr, "[audio] device clock: SPU2 at %.2f s, game at %.2f s\n", spu2_time() / 48000.0,
                         (double)now / 147456000.0);
-                stats_time = SDL_GetTicks();
+                stats_time = (uint32_t)SDL_GetTicks();
             }
             return;
         }

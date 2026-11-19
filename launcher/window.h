@@ -1,4 +1,4 @@
-// The launcher's window: SDL2 with Dear ImGui on SDL's own renderer (no Vulkan, so it opens even where
+// The launcher's window: SDL3 with Dear ImGui on SDL's own renderer (no Vulkan, so it opens even where
 // the game's GPU needs cannot be met). Main thread.
 #pragma once
 

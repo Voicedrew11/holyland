@@ -2,7 +2,7 @@
 # The Windows release (docs/port/LAUNCHER.md, "Releases"): dist/<NAME>-<version>-win-x64.zip and, where Inno
 # Setup's iscc is on PATH, dist/<NAME>-<version>-win-x64-setup.exe (names from packaging/package.env). Both hold:
 #
-#   <APP_ID>.exe, SDL2.dll     the launcher (built here with the release's own llvm-mingw)
+#   <APP_ID>.exe, SDL3.dll     the launcher (built here with the release's own llvm-mingw)
 #   content\                   the game's source, the tools, manifest.txt
 #
 # Runs in Git Bash on Windows (the release workflow), or on Linux with LLVM_MINGW pointing at llvm-mingw's
@@ -28,12 +28,12 @@ T="$CONTENT/toolchain"
 echo "==> the launcher, with the release's tools"
 B="$ROOT/out/launcher-release-windows"
 rm -rf "$B"
-SDL2_DIR="$T/SDL2/x86_64-w64-mingw32/lib/cmake/SDL2"
+SDL3_DIR="$T/SDL3/x86_64-w64-mingw32/lib/cmake/SDL3"
 case "$(uname -s)" in
 MINGW* | MSYS* | CYGWIN*)
     "$T/cmake/bin/cmake.exe" -G Ninja -S "$ROOT/launcher" -B "$B" -DCMAKE_MAKE_PROGRAM="$T/ninja/ninja.exe" \
         -DCMAKE_C_COMPILER="$T/llvm-mingw/bin/clang.exe" -DCMAKE_CXX_COMPILER="$T/llvm-mingw/bin/clang++.exe" \
-        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+        -DSDL3_DIR="$SDL3_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
     "$T/cmake/bin/cmake.exe" --build "$B"
     ;;
 *)
@@ -41,12 +41,12 @@ MINGW* | MSYS* | CYGWIN*)
     cmake -G Ninja -S "$ROOT/launcher" -B "$B" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
         -DCMAKE_C_COMPILER="$LM/bin/x86_64-w64-mingw32-clang" -DCMAKE_CXX_COMPILER="$LM/bin/x86_64-w64-mingw32-clang++" \
         -DCMAKE_RC_COMPILER="$LM/bin/x86_64-w64-mingw32-windres" -DCMAKE_FIND_ROOT_PATH="$LM/x86_64-w64-mingw32" \
-        -DSDL2_DIR="$SDL2_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+        -DSDL3_DIR="$SDL3_DIR" -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
     cmake --build "$B"
     ;;
 esac
 cp "$B/$APP_ID.exe" "$STAGE/"
-cp "$T/SDL2/x86_64-w64-mingw32/bin/SDL2.dll" "$STAGE/"
+cp "$T/SDL3/x86_64-w64-mingw32/bin/SDL3.dll" "$STAGE/"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE.txt"
 "$ROOT/packaging/manifest.sh" "$CONTENT"
 
