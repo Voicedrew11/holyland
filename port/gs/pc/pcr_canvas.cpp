@@ -1163,7 +1163,9 @@ private:
     void clear_depth_image(CommandBuffer &c, const Image &image, ImageHandle &zcopy, float depth) {
         VkClearValue value = {};
         value.depthStencil.depth = depth;
-        c.clear_image(image, value, VK_IMAGE_ASPECT_DEPTH_BIT);
+        // (the stencil with it: zero, as the decals' settle wants it, settle_decal_depth)
+        c.clear_image(image, value, stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                                : VK_IMAGE_ASPECT_DEPTH_BIT);
         if (!rule_on_) {
             return;
         }
@@ -4119,7 +4121,9 @@ private:
                 uint32_t zp = z_psm(s.zbuf);
                 uint32_t zmax = zp == 0x30 ? 0xFFFFFFFFu : zp == 0x31 ? 0xFFFFFFu : 0xFFFFu;
                 float zscale = zp == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
-                att[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                // (the stencil with it where there is one: settle_decal_depth's decal_won kept zero)
+                att[1].aspectMask = stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                                : VK_IMAGE_ASPECT_DEPTH_BIT;
                 att[1].clearValue.depthStencil.depth = float(std::min(v0.z, zmax)) * zscale;
                 count = 2;
             }
@@ -4134,8 +4138,6 @@ private:
         }
         counts_.walk_clut_draws += walk_clut ? 1 : 0;
         if (settle) {
-            VkClearValue zero = {};
-            c.clear_quad(0, {settle_rect, 0, 1}, zero, VK_IMAGE_ASPECT_STENCIL_BIT);
             counts_.decals_settled++;
         }
         c.set_opaque_state();
@@ -4240,17 +4242,19 @@ private:
     // against the surface of its whole Z under it as on the GS. Written as its depth, that top part made every later draw
     // of the same whole Z lose to it, where the GS lets the later draw win: a rock drawn over a see-through mesh on its
     // own plane (map 063) was not drawn, and the sky showed through. So the decal's passes that write Z also set the
-    // stencil's decal_won bit where they pass (the stencil cleared over the batch's rectangle before), and after them
+    // stencil's decal_won bit where they pass (zero before: the reset below clears every bit it set, and the stencil is
+    // cleared with the depth), and after them
     // settle_decal_depth draws the batch twice more with no colour: where the bit is set, the depth reset to the
     // farthest and the bit cleared (pcr_depth_reset.frag: the stencil tested before it, so that only those pixels are
     // shaded, by a shader that does nothing); then each pass that wrote Z again with the decal's own fine part, GEQUAL,
     // so that each of those pixels ends with the nearest of its fragments' own depth (the fragment that won has the
     // largest whole Z of those there; and a fragment that lost has its own depth below the Z it lost to, so it changes
     // nothing). The second draw discards what the first discarded (the same shader and flags, without PCR_F_DECAL), so a
-    // pixel reset is a pixel written again. (Measured at 063 with the owner's settings, RX 9070 XT: 4.28 ms of GPU a
-    // picture against 3.99 without. Slower ways: the stencil kept clear by the depth surfaces' clears instead of a clear
-    // a decal, 4.70; the second draw only where the bit is set, 4.75: the stencil's test in a draw that writes its own
-    // depth costs more there than it saves)
+    // pixel reset is a pixel written again. (Measured at 063 with the owner's settings of 2026-11-15, MSAA 2, RX 9070
+    // XT: 4.28 ms of GPU a picture against 3.99 without; the second draw only where the bit is set, 4.75: the stencil's
+    // test in a draw that writes its own depth costs more there than it saves. 2026-11-19, 4x, no MSAA: the stencil
+    // cleared over each decal's rectangle before its passes cost the most of it, 009 9.72 ms against 6.98 without
+    // (about 1,900 decals settled a picture, the pond's), 063 4.66-4.75 against 4.49-4.51, the pictures the same)
     static constexpr uint8_t decal_won = 0x2; // (bit 0 is DATE's: set_up_date)
 
     // A decal's pass: decal_won set where it passes, if it writes Z
@@ -4276,7 +4280,10 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         };
-        // (every fragment, no alpha test and no DATE: each pixel the bit is set at is reached; the depth the viewport's)
+        // (every fragment, no alpha test and no DATE: each pixel the bit is set at is reached, and its bit cleared, so
+        // that the stencil's decal_won is zero again after (the stencil cleared with the depth, clear_depth_image); the
+        // depth the viewport's. A triangle over the batch's rectangle instead, stencil-tested: 009 16.1 ms of GPU a
+        // picture against 7.0, the rectangles' pixels far more than the batches')
         c.set_program(depth_reset_programs_[v]);
         VkViewport farthest = vp;
         farthest.minDepth = farthest.maxDepth = 0.0f;

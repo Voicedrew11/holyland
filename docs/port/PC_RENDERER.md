@@ -598,6 +598,14 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   are made before play with the decal's states too (`pcr_pipelines.cpp`'s `decal_states`). Cost: at 063 (about 40% of
   the batches decals) 4.28 ms of GPU a picture against 3.99 at the owner's settings; the whole-game tour (760 views
   at 1x) changed 3 views, each nearer paraLLEl-GS, none further.
+  **2026-11-19: no stencil clear a decal.** The stencil was cleared over each decal's rectangle before its passes; now
+  it is cleared with the depth (`clear_depth_image` and a clear drawn as a rectangle) and kept zero by the reset, which
+  clears every bit the passes set. Knocked out one at a time at 009 (4x, `profile.py`): that clear 2.71 ms of GPU a
+  picture, the reset 1.45, the passes again 1.77, the marking nothing. Now 009 6.98 ms against 9.72 (the rule 4.65), 063
+  4.49-4.51 against 4.66-4.75 (the rule 3.46-3.77); the 063 walk's 64 pictures at 4x and the whole-game tour the same
+  byte for byte (map 039 aside, which varies run to run), with and without the rule. The reset as a stencil-tested
+  rectangle over the decal's instead of the decal again was slower: 009 16.1 ms, the rectangles' pixels far more than
+  the decals'.
 - **The depth rule (2026-11-15).** One test for every draw that tests Z GEQUAL or GREATER, in the fragment shader
   (`pcr_prim.h`'s `pcr_depth_rule`): no decals singled out, nothing drawn twice. Each fragment has its Z with the
   fraction, not rounded (`pcr_full_depth`: the plane's, `plane_z.h`'s `pz_pixels_depth`), and a tolerance, the GS's
