@@ -2469,7 +2469,7 @@ index 0000000000000000000000000000000000000000..882f07b65bf6bab2936fe88998ef3f83
 +
 +#endif
 diff --git a/src/game/ui/menu_screens.c b/src/game/ui/menu_screens.c
-index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76d99627c4 100644
+index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce82175d3ca9d4 100644
 --- a/src/game/ui/menu_screens.c
 +++ b/src/game/ui/menu_screens.c
 @@ -4,6 +4,7 @@
@@ -3783,7 +3783,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
                      if (card_screen_state.dialog_id != -1) {
                          card_screen_state.dialog_id = -1;
                      } else {
-@@ -5861,10 +5923,12 @@ static void Menu_UpdateSaveList(void) {
+@@ -5861,10 +5923,13 @@ static void Menu_UpdateSaveList(void) {
      u8 kind;
      s32 slot;
      s32 group;
@@ -3794,10 +3794,11 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
      PadReport *report;
 +    f32 list_light;        /* PC: PcList_Light */
 +    ColorBytes text_color; /* PC: the area names' colour, dimmed with the rows */
++    s32 drew_confirmation;
  
      info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(0);
      D_00446DF4 = info[0]->level;
-@@ -5962,27 +6026,46 @@ static void Menu_UpdateSaveList(void) {
+@@ -5962,27 +6027,46 @@ static void Menu_UpdateSaveList(void) {
          }
      }
  
@@ -3848,7 +3849,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
              break;
          }
          SET_PART_MODE(0);
-@@ -5993,7 +6076,9 @@ static void Menu_UpdateSaveList(void) {
+@@ -5993,7 +6077,9 @@ static void Menu_UpdateSaveList(void) {
      for (i = 0; i < 3; i++) {
          entry = ((s32 *)table)[info[i]->save_area + 1];
          MenuText_SetPen(word);
@@ -3859,7 +3860,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
          if (entry != 0) {
              MenuText_DrawWrapped((u16 *)(table + entry), 0x18);
          }
-@@ -6006,19 +6091,19 @@ static void Menu_UpdateSaveList(void) {
+@@ -6006,19 +6092,19 @@ static void Menu_UpdateSaveList(void) {
          if (kind == 3) {
              switch (card_screen_state.list_step) {
              case 8:
@@ -3884,7 +3885,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
                  break;
              }
          } else {
-@@ -6028,7 +6113,7 @@ static void Menu_UpdateSaveList(void) {
+@@ -6028,14 +6114,17 @@ static void Menu_UpdateSaveList(void) {
              case 8:
              case 10:
              case 23:
@@ -3893,17 +3894,29 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
                  break;
              }
          }
-@@ -6036,6 +6121,9 @@ static void Menu_UpdateSaveList(void) {
+         SET_PART_MODE(0);
      }
  
-     if (card_screen_state.list_step == 8) {
-+        /* PC: the mouse's pointing: yes and no */
-+        MenuPad_PointCursor(card_screen_state.confirm_choice, MENU_AXIS_VERTICAL);
+-    if (card_screen_state.list_step == 8) {
++    drew_confirmation = card_screen_state.list_step == 8;
++    if (drew_confirmation) {
++        /* PC: the hit regions for the yes and no choices */
 +        MenuPad_PointRows(2, 0x7490, 0x80A0, 0x1720, 0xB0, 0xC0);
          bar.first.f.lo16 = 0x7490;
          bar.first.f.mid16 = card_screen_state.confirm_choice * 0xC0 + 0x80A0;
          bar.first.f.mid24 = 0x5F370;
-@@ -6287,6 +6375,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6269,6 +6358,10 @@ static void Menu_UpdateSaveList(void) {
+         }
+         break;
+     }
++    /* The next pointer step needs the selection after this frame's input. */
++    if (drew_confirmation && card_screen_state.list_step == 8) {
++        MenuPad_PointCursor(card_screen_state.confirm_choice, MENU_AXIS_VERTICAL);
++    }
+ }
+ 
+ /* The options screen: moves the cursor over its seven lines, changes the option under it, draws the parts, and
+@@ -6287,6 +6380,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      }
      context->selection += 7;
      context->selection %= 7;
@@ -3919,7 +3932,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
  
      switch (context->selection) {
      case 0:
-@@ -6372,7 +6469,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6372,7 +6474,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      for (i = 0; i < option_part_count; i++) {
          kind = option_parts[i].handler_index;
          Menu_SetBlendMode(option_parts[i].blend_mode);
@@ -3928,7 +3941,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -6553,6 +6650,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6553,6 +6655,11 @@ static void Menu_UpdateButtonConfig(void) {
      line_count = choice_count + 1;
      button_line += line_count;
      button_line %= line_count;
@@ -3940,7 +3953,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
  
      wrap = choice_count; // match: a second variable, set here, is what retail keeps in $16 for the two divisions
      for (i = 0; i < wrap; i++) {
-@@ -6625,14 +6727,14 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6625,14 +6732,14 @@ static void Menu_UpdateButtonConfig(void) {
          switch (kind) {
          case 2:
              if (button_prompt != 0) {
@@ -3958,7 +3971,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
              }
              break;
          case 0x18:
-@@ -6656,7 +6758,7 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6656,7 +6763,7 @@ static void Menu_UpdateButtonConfig(void) {
                  D_00446DF4 = 0;
                  D_00446DF8 = 0;
              }
@@ -3967,7 +3980,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
              break;
          case 0x21:
              if (D_00446E00 == 0) {
-@@ -6664,11 +6766,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6664,11 +6771,11 @@ static void Menu_UpdateButtonConfig(void) {
              }
              D_00446E04 = button_choices_shown[D_00446E00];
              // match: called as returning a value, which keeps $2 out of the count's increment
@@ -3981,7 +3994,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
              break;
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
-@@ -6891,16 +6993,16 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6891,16 +6998,16 @@ static void Menu_UpdateCardCheck(void) {
              ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
              switch (card_screen_state.dialog_id) {
              case 0x10:
@@ -4002,7 +4015,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
                  break;
              }
              Menu_SetBlendMode(0);
-@@ -6908,6 +7010,9 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6908,6 +7015,9 @@ static void Menu_UpdateCardCheck(void) {
      }
  
      if (card_screen_state.skip_drawing == 0) {
@@ -4012,7 +4025,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
          bar.first.f.lo16 = 0x75D0;
          bar.first.f.mid16 = card_screen_state.selected_card * 0xE0 + 0x8250;
          bar.first.f.mid24 = 0xDBBA0;
-@@ -7043,7 +7148,7 @@ static void Menu_UpdateBrightness(void) {
+@@ -7043,7 +7153,7 @@ static void Menu_UpdateBrightness(void) {
      for (i = 0; i < bright_part_count; i++) {
          kind = bright_parts[i].handler_index;
          Menu_SetBlendMode(bright_parts[i].blend_mode);
@@ -4021,7 +4034,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
          Menu_SetBlendMode(0);
      }
      switch (system_screen_state) {
-@@ -7097,7 +7202,7 @@ static void Menu_WaitForCancel(void) {
+@@ -7097,7 +7207,7 @@ static void Menu_WaitForCancel(void) {
     text drawer returns, nothing without a text. */
  static int Menu_DrawEquipItemText(s32 index) {
      DataNode *node;
@@ -4030,7 +4043,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
      s32 slot;
      s32 entry;
      GsPackedWord word;
-@@ -7112,6 +7217,7 @@ static int Menu_DrawEquipItemText(s32 index) {
+@@ -7112,6 +7222,7 @@ static int Menu_DrawEquipItemText(s32 index) {
          MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
          return MenuText_DrawWrappedLong((u16 *)(table + entry), 0x1B);
      }
@@ -4038,7 +4051,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..701251fe4ea2713edba2a218bb09ca76
  }
  
  /* If the item list has anything: names its five models and chains the five load nodes for them. */
-@@ -7461,7 +7567,7 @@ void Menu_DrawBrightness(s32 level) {
+@@ -7461,7 +7572,7 @@ void Menu_DrawBrightness(s32 level) {
      cursor[1].as_int = 0xFFFFF;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 5;
@@ -4646,7 +4659,7 @@ index 2d93d8ffe6c19858a638f7e6f0beb307be469ea1..3adaa127017dca14e9b69bb4acce26c4
  
  /* Whether the player has any item other than the keys and the "none" items (the main menu's item screen). */
 diff --git a/src/game/ui/trade.c b/src/game/ui/trade.c
-index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438dbb02a5d 100644
+index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..448cd797dde64b6a18653b7cb802578c11233f0a 100644
 --- a/src/game/ui/trade.c
 +++ b/src/game/ui/trade.c
 @@ -17,6 +17,10 @@
@@ -5946,7 +5959,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
                      if (save_screen_state.dialog_id == 14) {
                          if (SaveCard_StartReadList(save_screen_state.selected_card, 0) == 0) {
                              save_screen_state.card_op_running = 1;
-@@ -5929,6 +5989,8 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -5929,8 +5989,11 @@ static void SaveScreen_UpdateSaveList(void) {
      PadReport *report;
      s32 same_count;
      s32 save_state;
@@ -5954,8 +5967,11 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
 +    ColorBytes text_color; /* PC: the area names' colour, dimmed with the rows */
      s32 line;
      s32 swapped;
++    s32 drew_confirmation;
  
-@@ -6030,29 +6092,44 @@ static void SaveScreen_UpdateSaveList(void) {
+     info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(save_line_slots[0]);
+     D_00446DF4 = info[0]->level;
+@@ -6030,29 +6093,44 @@ static void SaveScreen_UpdateSaveList(void) {
          }
      }
  
@@ -6005,7 +6021,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
              break;
          }
          SET_PART_MODE(0);
-@@ -6066,8 +6143,10 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6066,8 +6144,10 @@ static void SaveScreen_UpdateSaveList(void) {
              if (kind != 0) {
                  text = (char *)table + kind;
                  MenuText_SetPen(word);
@@ -6018,7 +6034,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
              }
          }
          word.f.mid16 += 0x340;
-@@ -6079,25 +6158,25 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6079,25 +6159,25 @@ static void SaveScreen_UpdateSaveList(void) {
          if (kind == 3) {
              switch (save_screen_state.list_step) {
              case 6:
@@ -6051,7 +6067,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
                  break;
              }
          } else {
-@@ -6109,7 +6188,7 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6109,14 +6189,17 @@ static void SaveScreen_UpdateSaveList(void) {
              case 10:
              case 11:
              case 20:
@@ -6060,13 +6076,23 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..84b4e0e881fc4e639e45ee41c2d20438
                  break;
              }
          }
-@@ -6117,6 +6196,9 @@ static void SaveScreen_UpdateSaveList(void) {
+         SET_PART_MODE(0);
      }
  
-     if (save_screen_state.list_step == 6 || save_screen_state.list_step == 7) {
-+        /* PC: the mouse's pointing: yes and no */
-+        MenuPad_PointCursor(save_screen_state.confirm_choice, MENU_AXIS_VERTICAL);
+-    if (save_screen_state.list_step == 6 || save_screen_state.list_step == 7) {
++    drew_confirmation = save_screen_state.list_step == 6 || save_screen_state.list_step == 7;
++    if (drew_confirmation) {
++        /* PC: the hit regions for the yes and no choices */
 +        MenuPad_PointRows(2, 0x7490, 0x80A0, 0x1720, 0xB0, 0xC0);
          bar.first.f.lo16 = 0x7490;
          bar.first.f.mid16 = save_screen_state.confirm_choice * 0xC0 + 0x80A0;
          bar.first.f.mid24 = 0x5F370;
+@@ -6370,4 +6453,8 @@ static void SaveScreen_UpdateSaveList(void) {
+         }
+         break;
+     }
++    /* The next pointer step needs the selection after this frame's input. */
++    if (drew_confirmation && (save_screen_state.list_step == 6 || save_screen_state.list_step == 7)) {
++        MenuPad_PointCursor(save_screen_state.confirm_choice, MENU_AXIS_VERTICAL);
++    }
+ }
