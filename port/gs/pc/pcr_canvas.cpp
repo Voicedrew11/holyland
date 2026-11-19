@@ -498,6 +498,7 @@ public:
     }
 
     void upload(const TransferRegisters &t, std::span<const uint8_t> bytes) {
+        surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_upload_zone);
         flush_batch();
         TransferRegs regs = {t.bitbltbuf, t.trxpos, t.trxreg};
@@ -651,6 +652,7 @@ public:
     }
 
     void upload_again(const GsRegisterFile &file, uint64_t value) {
+        surface_writes_++; // (same_as_last_clear)
         uint32_t k = uint32_t(value);
         const TransferRegisters now = {file.reg[gs_reg::bitbltbuf], file.reg[gs_reg::trxpos], file.reg[gs_reg::trxreg]};
         if (k >= uploads_frame_.size() || uint32_t(uploads_frame_[k].transfer.bitbltbuf >> 32) != uint32_t(value >> 32) ||
@@ -663,6 +665,7 @@ public:
     }
 
     void local_copy(const TransferRegisters &t) {
+        surface_writes_++; // (same_as_last_clear)
         flush_batch();
         if (keeping_) {
             kept_->steps.emplace_back(KeptCopy{t});
@@ -701,6 +704,7 @@ public:
     }
 
     void forget() {
+        surface_writes_++; // (same_as_last_clear)
         flush_batch();
         kept_spoilt_ |= keeping_;
         end_pass();
@@ -730,6 +734,7 @@ public:
     }
 
     void vblank() {
+        surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_vblank_zone);
         flush_batch();
         if (!uploads_now_.empty()) {
@@ -784,6 +789,7 @@ public:
     }
 
     void restore(std::span<const uint8_t> vram, const TextureStore::ClutState &clut) {
+        surface_writes_++; // (same_as_last_clear)
         forget();
         store_.restore_vram(vram);
         store_.set_clut_state(clut);
@@ -1207,6 +1213,7 @@ private:
 
     // ---- Surfaces ----
     ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
+        surface_writes_++; // (same_as_last_clear: a new image, perhaps where a surface's last was)
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
                                                               depth ? depth_format_ : colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
@@ -1405,6 +1412,7 @@ private:
     // A kept image of this size (in pixels at the canvas's scale) and the colour's format for a surface made.
     // (apply_colour drops the kept ones too: a live change of precision)
     ImageHandle reuse_image(uint32_t width, uint32_t height) {
+        surface_writes_++; // (same_as_last_clear)
         for (auto it = spare_surfaces_.begin(); it != spare_surfaces_.end(); ++it) {
             if ((*it)->get_width() == width && (*it)->get_height() == height && (*it)->get_format() == colour_format) {
                 ImageHandle image = std::move(*it);
@@ -2389,6 +2397,7 @@ private:
     }
 
     void draw_again(const Kept &walk, const Between &between) {
+        surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_draw_again_zone);
         flush_batch();
         between_ = &between;
@@ -2600,6 +2609,7 @@ private:
     }
 
     void start_from(Copies &copies) {
+        surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_start_from_zone);
         flush_batch();
         end_pass();
@@ -2637,6 +2647,7 @@ private:
     static constexpr uint32_t batches_a_submit = 128;
 
     void draw_again_alone(const Kept &walk, const Between &between, bool picture_follows) {
+        surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_draw_again_alone_zone);
         flush_batch();
         between_ = &between;
@@ -3854,6 +3865,9 @@ private:
         }
         // (a run open, Runs: these calls record nothing, so it is left open; the GPU's timing of it may land in this
         // batch's)
+        // (same_as_last_clear: a batch that gets this far may write; one left out above wrote nothing, and what came
+        // before here wrote other surfaces than its own, clear_depth_aliases, or made images, counted where made)
+        surface_writes_++;
         times_.begin_draw(cmd_keeping_run(), batch_work(b),
                           batch_state_key(b, zte, zwrite, ztst, date, date_stencil, pass_count));
         begin_pass(*colour, depth, date_stencil ? PassReads::target : PassReads::nothing);
@@ -3868,7 +3882,9 @@ private:
         VkRect2D scissor_px = {{sx0, sy0}, {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)}};
         // (a clear drawn as a rectangle: cleared, vkCmdClearAttachments, the same pixels without the draw's shader)
         VkClearRect clear_rect;
-        bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect);
+        bool clear_z_only = false;
+        bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect,
+                              clear_z_only);
         // (developers' knock-outs, KF4_PC_KNOCK: one kind of work left out of the pictures between, to time the rest:
         // the picture is wrong, the GPU time a picture less is what that work costs)
         if (knock_ && between_ && between_->active() &&
@@ -4116,21 +4132,35 @@ private:
             }
             att[0].clearValue.color.float32[3] = float(a) / 255.0f;
             uint32_t count = 1;
+            if (clear_z_only) {
+                count = 0; // (the depth alone, att[0] below)
+            }
             if (zwrite) {
                 // (pcr_prim.vert's depth: Z within the format's, by its scale)
                 uint32_t zp = z_psm(s.zbuf);
                 uint32_t zmax = zp == 0x30 ? 0xFFFFFFFFu : zp == 0x31 ? 0xFFFFFFu : 0xFFFFu;
                 float zscale = zp == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
                 // (the stencil with it where there is one: settle_decal_depth's decal_won kept zero)
-                att[1].aspectMask = stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
-                                                : VK_IMAGE_ASPECT_DEPTH_BIT;
-                att[1].clearValue.depthStencil.depth = float(std::min(v0.z, zmax)) * zscale;
-                count = 2;
+                VkClearAttachment &za = att[count];
+                za = {};
+                za.aspectMask = stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+                                            : VK_IMAGE_ASPECT_DEPTH_BIT;
+                za.clearValue.depthStencil.depth = float(std::min(v0.z, zmax)) * zscale;
+                count++;
+            }
+            const Image *zcopy = zwrite && rule_on_ && depth->zcopy ? depth->zcopy.get() : nullptr;
+            if (same_as_last_clear(colour->image.get(), zwrite ? depth->image.get() : nullptr, zcopy, clear_rect.rect,
+                                   att, count)) {
+                counts_clears_again_++;
+                drawn_over(b, box, zte && zwrite);
+                return;
             }
             c.clear_quad(clear_rect, att, count);
             if (zwrite) {
-                clear_depth_copy(c, *depth, clear_rect.rect, att[1].clearValue.depthStencil.depth, vp);
+                clear_depth_copy(c, *depth, clear_rect.rect, att[count - 1].clearValue.depthStencil.depth, vp);
             }
+            last_clear_ = {colour->image.get(), zwrite ? depth->image.get() : nullptr, zcopy, clear_rect.rect,
+                           {att[0], att[1]}, count, surface_writes_};
             counts_clears_++;
             counts_.clears++;
             drawn_over(b, box, zte && zwrite);
@@ -4432,21 +4462,26 @@ private:
     // 446, and was drawn through the shader at every picture until 2026-11-18. (On a Vega 7 at 1080p the clear costs
     // about what the draw did, 0.9 ms each: the fill's memory, not the shader. PC_OPTIMIZATION.md, "A Vega 7 at
     // 1080p".) The colour the shader would write (FBA's bit 7 with it), the depth pcr_prim.vert's.
-    // KF4_PC_CLEARS=0: drawn (to compare).
+    // A Z-only write (the alpha test NEVER with FAIL ZB_ONLY, z_only) is the depth cleared alone: the game writes Z 0
+    // over the screen so twice a frame, which through the shader wrote the depth with exact Z (009 on a Vega 7: about
+    // 0.5 ms a picture for the two). KF4_PC_CLEARS=0: drawn (to compare).
     bool as_clear(const Batch &b, const Surface &colour, const Placed &placed, bool zte, bool zwrite, uint32_t ztst,
-                  bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect) const {
+                  bool date, const auto &pass, int pass_count, const VkRect2D &scissor_px, VkClearRect &rect,
+                  bool &z_only) const {
         const DrawState &s = b.state;
+        // (a Z-only write, the alpha test NEVER with FAIL ZB_ONLY: the depth cleared, the colour untouched)
+        z_only = zwrite && !pass.rgb && !pass.alpha && pass.z;
         // (a picture between's: only a batch whose kicks all stay, Batch::still: the shader gives the vertices' own)
         bool as_the_frame = b.still || (!b.moved && !(between_ && between_->active()));
         if (!clears_on_ || b.native || b.shader_blend || !as_the_frame || !b.sprites ||
             b.vertices.size() != 6 || bits(s.prim, 4, 3) != 0 || date || pass_count != 1 || pass.mode != 0 ||
-            !pass.rgb || !pass.alpha || (zte && ztst != 1) || (zwrite && !zte)) {
+            (!z_only && (!pass.rgb || !pass.alpha)) || (zte && ztst != 1) || (zwrite && !zte)) {
             return false;
         }
         const Vertex &v0 = b.vertices[0];
         float x0 = v0.x, y0 = v0.y, x1 = v0.x, y1 = v0.y;
         for (const Vertex &v : b.vertices) {
-            if (memcmp(v.rgba, v0.rgba, 4) != 0 || v.z != v0.z) {
+            if ((!z_only && memcmp(v.rgba, v0.rgba, 4) != 0) || v.z != v0.z) {
                 return false;
             }
             x0 = std::min(x0, v.x);
@@ -4484,6 +4519,26 @@ private:
             return false; // (draws nothing: left to the draw, which draws nothing either)
         }
         rect = {{{px0, py0}, {uint32_t(px1 - px0), uint32_t(py1 - py0)}}, 0, 1};
+        return true;
+    }
+
+    // A clear that writes what the last clear wrote, over the same images and rectangle, with nothing that could
+    // have written a surface since (surface_writes_: only this batch begun): it writes nothing new and is left out.
+    // The game clears the frame twice at every frame, the second time with its other context's registers (009 at 2x
+    // on a Vega 7: a colour, depth and depth copy written over 1920x896 for nothing; about 0.1 ms a picture).
+    bool same_as_last_clear(const Image *colour, const Image *depth, const Image *zcopy, const VkRect2D &rect,
+                            const VkClearAttachment *att, uint32_t count) const {
+        const LastClear &l = last_clear_;
+        if (clear_again_ || l.writes + 1 != surface_writes_ || l.colour != colour || l.depth != depth ||
+            l.zcopy != zcopy || l.count != count || memcmp(&l.rect, &rect, sizeof(rect)) != 0) {
+            return false;
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            if (l.att[i].aspectMask != att[i].aspectMask || l.att[i].colorAttachment != att[i].colorAttachment ||
+                memcmp(&l.att[i].clearValue, &att[i].clearValue, sizeof(VkClearValue)) != 0) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -4959,6 +5014,18 @@ private:
     const bool full_pass_barriers_ = getenv("KF4_PC_PASS_BARRIER") && strcmp(getenv("KF4_PC_PASS_BARRIER"), "full") == 0;
     // (as_clear) KF4_PC_CLEARS=0: clears drawn as the rectangles they are; and the batches cleared
     const bool clears_on_ = !getenv("KF4_PC_CLEARS") || strcmp(getenv("KF4_PC_CLEARS"), "0") != 0;
+    // (same_as_last_clear) the last clear, and a count of everything that may have written a surface since: each
+    // batch begun, each upload, copy and walk drawn again. KF4_PC_CLEAR_AGAIN=1: a clear the same as the last drawn
+    // all the same (to compare)
+    struct LastClear {
+        const Image *colour = nullptr, *depth = nullptr, *zcopy = nullptr;
+        VkRect2D rect = {};
+        VkClearAttachment att[2] = {};
+        uint32_t count = 0;
+        uint64_t writes = UINT64_MAX;
+    } last_clear_;
+    uint64_t surface_writes_ = 0;
+    const bool clear_again_ = getenv("KF4_PC_CLEAR_AGAIN") && strcmp(getenv("KF4_PC_CLEAR_AGAIN"), "0") != 0;
     // KF4_PC_SURFACE_REUSE=0: a colour surface's images made new each time (as before); else kept to be used again
     // (reuse_image; a texture's copy of a surface is used again by surface_copies_, KF4_PC_COPY_POOL). Under water the copy of the frame and the water's targets
     // let each other go every picture, and the tint and the wobble read the frame through a copy of 1024 x 512 texels.
@@ -4972,6 +5039,7 @@ private:
     std::array<uint32_t, 2> shown_pages_ = {no_zbuf, no_zbuf};
     BufferHandle depth_staging_;
     uint64_t counts_clears_ = 0;
+    uint64_t counts_clears_again_ = 0; // (same_as_last_clear: left out)
     Program *date_program_ = nullptr;
     Program *zclear_program_ = nullptr; // (the depth rule's own copy cleared in a pass: clear_depth_copy)
     Program *date_mark_program_ = nullptr; // (... marked by DATE's set-up)
@@ -5139,7 +5207,8 @@ public:
                 "uploaded, %llu from surfaces, %llu missing (%llu drawn untextured); surfaces %llu made, %llu filled "
                 "from uploads, %llu with images used again; %llu uploads into surfaces, %llu copies between them; %llu "
                 "textures' copies of surfaces in images used again; %llu Z buffers cleared by another width's clear; "
-                "%llu clears drawn as rectangles cleared; %llu decals given back their own depth where they won\n",
+                "%llu clears drawn as rectangles cleared (%llu more left out, the same as the last); %llu decals given back "
+                "their own depth where they won\n",
                 (unsigned long long)c.primitives, (unsigned long long)c.triangles, (unsigned long long)c.batches,
                 (unsigned long long)c.passes, (unsigned long long)c.native_batches,
                 (unsigned long long)c.native_draw_calls, (unsigned long long)c.textures_uploaded,
@@ -5148,7 +5217,8 @@ public:
                 (unsigned long long)c.surfaces_filled_from_uploads, (unsigned long long)c.surface_images_reused,
                 (unsigned long long)c.uploads_into_surfaces, (unsigned long long)c.copies_between_surfaces,
                 (unsigned long long)c.texture_copies_reused, (unsigned long long)counts_depth_aliases_cleared_,
-                (unsigned long long)counts_clears_, (unsigned long long)c.decals_settled);
+                (unsigned long long)counts_clears_, (unsigned long long)counts_clears_again_,
+                (unsigned long long)c.decals_settled);
         fprintf(out,
                 "[stats] pc canvas textures: %llu batches read by the GPU's sampler (%llu mipmapped, %llu anisotropic); "
                 "by the GS's read: %llu (a region mode), %llu (decoded in part); kept walks' textured batches: %llu, %llu "

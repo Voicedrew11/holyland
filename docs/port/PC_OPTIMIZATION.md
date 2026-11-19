@@ -889,7 +889,7 @@ border): 3.07 ms against 1.78, the scaling's arithmetic done twice over by the b
 
 ### Found and not done
 
-- **The four full-screen fills a game frame, 0.9 ms each** (1.8 ms a picture): the game's colour and Z clear, a second
+- **The four full-screen fills a game frame, 0.9 ms each** (1.8 ms a picture; two of them done on 2026-11-19, below): the game's colour and Z clear, a second
   clear, a Z-only clear and the Z clear after the last draw that tests it. The pump leaves the dead ones out of the
   pictures between (`pcr_dead_writes.h`); kf4-pc draws them all. Cleared or drawn they cost the same: neither HiZ nor
   DCC off (`RADV_DEBUG=nohiz`, `nodcc`) changed them. A frame's fills left out where the frame's own walk shows them
@@ -899,3 +899,44 @@ border): 3.07 ms against 1.78, the scaling's arithmetic done twice over by the b
   read only their own pixel's: about 0.2-0.3 ms.
 - **The sharpening** could be done in the presenter's copy to the swapchain, which is a blit now: one window-sized pass.
 - **The brightness pass** (0.45) and its copy (0.6, "texture copy"): PC_OPTIMIZATION.md above.
+
+## The Vega 7 again: the frame's fills (2026-11-19)
+
+The same laptop on mains power (balanced profile), main at 25328480, the same settings and runs as above. GPU a picture
+at 009: 14.16 and 14.36 ms; 2d the most of any kind, 3.4 to 3.5 ms. By shader state (`KF4_GPU_DETAIL=1`,
+`--profile-at`), the most was `2d | untextured | Z always write`: 1.8 ms a picture, the frame's full-screen fills.
+
+A game frame at 009, in order (in bold, what is written for nothing or through the shader where a clear does):
+
+1. the colour and Z cleared (`00000080`, Z 0), cleared already (`as_clear`);
+2. **the same clear again**, with the other context's registers, nothing between;
+3. the reflection's 256x256 surface cleared and drawn, its Z in the frame's Z buffer;
+4. **Z 0 written over the screen** with the colour masked (the alpha test NEVER, FAIL ZB_ONLY): drawn through the
+   shader, exact Z and all;
+5. the map, then the destination alpha's reset (ten strips, blended, Z 0 written), the hands, native 280;
+6. **Z 0 written over the screen again** the same way, then the HUD and the brightness pass.
+
+Each costs about what any layer costs on this card (memory, not the shader). Changed, both exact:
+
+- **A Z-only write is a clear of the depth alone** (`as_clear`'s `z_only`): the depth, its stencil and the depth rule's
+  copy cleared, the colour not touched.
+- **A clear the same as the last is left out** (`same_as_last_clear`): the same images, rectangle and values, and
+  nothing since that could have written a surface (`surface_writes_`: a batch begun, an upload, a copy, a walk drawn
+  again, an image made). `KF4_PC_CLEAR_AGAIN=1` draws it (to compare). The pump's dead writes already left it out of
+  the pictures between; this is the game frame's own picture.
+
+| | 009 main | 009 branch | 020 main | 020 branch |
+|---|---|---|---|---|
+| GPU ms a picture (two runs each, alternated) | 14.16, 14.36 | 13.75, 13.80 | 11.65, 11.71 | 11.47, 11.55 |
+| 2d | 3.44, 3.53 | 2.94, 2.94 | 3.26, 3.26 | 3.10, 3.10 |
+
+About 0.5 ms at 009 (3.5%), 0.17 at 020: most of it the Z-only clears (2d 3.52 to 3.02 with those alone, one run);
+the repeat clear about 0.1 more. Pictures byte for byte against main: 009 and 020, AA off and SMAA T2x, five
+vblanks each (headless, 2x native widescreen): identical. The 37 unit tests pass.
+
+**What is left of the fills:** the first clear and the two Z-only clears, about 0.5 ms each, and the alpha's reset
+(0.45). They are partial clears: both buffers of the frame are one image (640x928 GS pixels) and the depth too, so no
+clear covers a whole image and none can be a fast clear (DCC, HTILE). Each buffer an image of its own might make the
+first clear nearly free (not tried); that is the next thing to look at here. The last Z-only clear (6.) is dead (nothing tests Z after it
+before the next frame's clear) but the HUD writes Z after it, so leaving it out needs the frame's walk, as the pump's.
+
