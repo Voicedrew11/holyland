@@ -52,6 +52,9 @@ int sceMpegIsEnd(sceMpeg *mp);
 int sceMpegIsRefBuffEmpty(sceMpeg *mp);
 void sceMpegSetDecodeMode(sceMpeg *mp, int ni, int np, int nb);
 
+/* The port's movie player uploads row-major RGBA. Other callers default to libmpeg's macroblock order. */
+void port_mpeg_set_linear_output(sceMpeg *mp, int linear);
+
 /* The disc movie's 48 kHz stereo PCM, in SPU2 input order. The caller owns the returned buffer. */
 uint8_t *port_mpeg_load_pcm(uint32_t lsn, uint32_t file_size, uint32_t *pcm_size);
 

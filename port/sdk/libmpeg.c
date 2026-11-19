@@ -11,14 +11,14 @@
    - sceMpegGetPicture decodes until a picture is ready to show, in display order: a B picture at
      once, an I or P picture when the next reference comes, the last one at the sequence end code.
      frameCount, sceMpegIsEnd and sceMpegIsRefBuffEmpty change as libmpeg's do.
-   - The picture is converted to RGB32 as the IPU's CSC does it, one 16x16 macroblock after another
-     going down each column of macroblocks, then across: the order the player's GS packets upload
-     them in. The background callback runs while it converts, where libmpeg runs it during the CSC.
+   - The picture is converted to RGB32 with the IPU's CSC. The movie player requests row-major
+     output for its batched upload. The default still uses the IPU's 16x16 macroblock order.
+     The background callback runs at the conversion, where libmpeg runs it during the CSC.
 
    libmpeg suspends the IPU's input around each conversion (the stop and restart DMA callbacks); the
    decoder here does not use the IPU, so it never calls them, and the stream's DMA only moves as the
-   decoder reads. Decoding takes no EE time: the player shows a picture every two fields whatever, so
-   the movie runs at the PS2's pace. */
+   decoder reads. Decoding takes no EE time. The player shows a picture every two fields and can
+   drop late pictures when the audio device clock runs ahead. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,6 +62,7 @@ typedef struct {
     int out_state;  /* a picture has been decoded since the reset */
     int total_frames;
     int pictures;   /* pictures shown since sceMpegCreate */
+    int linear_output;
     int64_t pts[3], dts[3]; /* each picture buffer's time stamps */
 } MpegState;
 
@@ -181,6 +182,10 @@ int sceMpegIsEnd(sceMpeg *mp) {
 
 int sceMpegIsRefBuffEmpty(sceMpeg *mp) {
     return state_of(mp)->ref_count == 0;
+}
+
+void port_mpeg_set_linear_output(sceMpeg *mp, int linear) {
+    state_of(mp)->linear_output = linear;
 }
 
 /* ---- The demultiplexer (libmpeg's pack.o) ------------------------------------------------------- */
@@ -592,37 +597,59 @@ static uint8_t clamp_color(int value) {
 }
 
 /* The IPU's CSC: ITU-R BT.601 with its 8-bit coefficients (in 128ths: 1.164 0x95, 1.596 0xCC,
-   0.813 0x68, 0.391 0x32, 2.016 0x102), alpha 0x80. Macroblocks go down each column, then across. */
+   0.813 0x68, 0.391 0x32, 2.016 0x102), alpha 0x80. Two adjacent pixels share chroma. */
+static void convert_line(uint8_t *restrict out, const uint8_t *luma, const uint8_t *cb, const uint8_t *cr,
+                         int width) {
+    for (int x = 0; x < width; x += 2) {
+        int blue = cb[x / 2] - 128;
+        int red = cr[x / 2] - 128;
+        int r = 0xCC * red + 64;
+        int g = -0x68 * red - 0x32 * blue + 64;
+        int b = 0x102 * blue + 64;
+
+        for (int i = 0; i < 2; i++) {
+            int y = luma[x + i];
+            int lum = 0x95 * (y > 16 ? y - 16 : 0);
+
+            out[0] = clamp_color((lum + r) >> 7);
+            out[1] = clamp_color((lum + g) >> 7);
+            out[2] = clamp_color((lum + b) >> 7);
+            out[3] = 0x80;
+            out += 4;
+        }
+    }
+}
+
 static void convert_picture(MpegState *s, const Mpeg2Frame *frame, uint8_t *rgb32, int mb_limit) {
     const Mpeg2Decoder *d = &s->decoder;
     int width = d->mb_width * 16;
     int n = 0;
-    int mb_x, mb_y, x, y;
 
-    for (mb_x = 0; mb_x < d->mb_width; mb_x++) {
-        for (mb_y = 0; mb_y < d->mb_height; mb_y++) {
+    if (s->linear_output && mb_limit >= d->mb_width * d->mb_height) {
+        for (int y = 0; y < d->mb_height * 16; y++) {
+            size_t chroma = (size_t)(y / 2) * (width / 2);
+            size_t luma = (size_t)y * width;
+
+            convert_line(rgb32 + luma * 4, frame->y + luma, frame->cb + chroma, frame->cr + chroma, width);
+        }
+        return;
+    }
+
+    /* The IPU's macroblocks go down each column, then across. */
+    for (int mb_x = 0; mb_x < d->mb_width; mb_x++) {
+        for (int mb_y = 0; mb_y < d->mb_height; mb_y++) {
             uint8_t *out = rgb32 + (size_t)n * 0x400;
 
             if (n++ >= mb_limit) {
                 return;
             }
-            for (y = 0; y < 16; y++) {
+            for (int y = 0; y < 16; y++) {
                 int py = mb_y * 16 + y;
                 const uint8_t *luma = frame->y + py * width + mb_x * 16;
                 const uint8_t *cb = frame->cb + (py >> 1) * (width / 2) + mb_x * 8;
                 const uint8_t *cr = frame->cr + (py >> 1) * (width / 2) + mb_x * 8;
 
-                for (x = 0; x < 16; x++) {
-                    int lum = 0x95 * (luma[x] > 16 ? luma[x] - 16 : 0);
-                    int blue = cb[x >> 1] - 128;
-                    int red = cr[x >> 1] - 128;
-
-                    out[0] = clamp_color((lum + 0xCC * red + 64) >> 7);
-                    out[1] = clamp_color((lum - 0x68 * red - 0x32 * blue + 64) >> 7);
-                    out[2] = clamp_color((lum + 0x102 * blue + 64) >> 7);
-                    out[3] = 0x80;
-                    out += 4;
-                }
+                convert_line(out + y * 64, luma, cb, cr, 16);
             }
         }
     }
