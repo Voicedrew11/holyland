@@ -1,5 +1,8 @@
 # The full-screen layers: an inventory (step 1)
 
+**2026-11-19, later: the savings below are to be built into the scene renderer** (its final pass), not into today's
+renderer (`renderer-scene-not-gs.md`, "The decision").
+
 2026-11-19. Step "Order 1" of `renderer-scene-not-gs.md`: every full-screen layer King's Field IV draws, what it is in
 the game's code, what it costs on the GPU, what reads it, and whether a fast clear, the removal of dead writes or a fold
 into the scanout could take it away exactly. Measurement only: the renderer draws as on `main` (8ebebb84).

@@ -1,5 +1,8 @@
 # The camera-whip slowdown: what it is, and the general fixes
 
+**2026-11-19, later: the fixes below are the scene renderer's** (its scheduling, its pictures between, its present),
+not patches to today's renderer (`renderer-scene-not-gs.md`, "The decision"); the inbox's wait zones (8ebebb84) stay.
+
 2026-11-19. Measured on the Ryzen 5 5625U laptop (Vega 7 integrated graphics, RADV), main at e05cd0ef. The laptop
 is only where the problem is easiest to see. Nothing below is a fix for one GPU: each item is work the renderer does
 on every GPU, and it is visible here because this GPU has the least headroom.

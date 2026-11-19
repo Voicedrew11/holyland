@@ -1,5 +1,9 @@
 # The world drawn plainly: what it costs
 
+**2026-11-19, later: the plan has moved on** (`renderer-scene-not-gs.md`, "The decision"): the scene renderer is
+built, today's renderer is not sped up, and depth is settled by `depth-by-layers.md` (the GS's precision, not
+knowledge of the geometry). "What it means for the rewrite" below is as it was written.
+
 2026-11-19. The step after the inventory of full-screen layers (`fullscreen-layers-inventory.md`) in
 `renderer-scene-not-gs.md`, as `HANDOFF_world_plain.md` set it: what the world costs on the GPU drawn the GS's way
 today, what each GS-exact mechanism costs, and what the floor is. Measurement and developers' switches only; nothing a

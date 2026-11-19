@@ -6,6 +6,10 @@ go, because the draws that can tie are known from the game's data and everything
 test. Developers' switches and counters only; nothing a player gets (the default path's pictures are `main`'s byte for
 byte: below, "Checks").
 
+**The owner's decision after it (2026-11-19): no change to today's renderer; the scene renderer is built next, and
+takes its depth from here** (`renderer-scene-not-gs.md`, `HANDOFF_scene_renderer_design.md`). Where this says the UNORM
+depth could go into today's renderer, read it as a measurement of what the scene renderer's depth will do.
+
 ## The answer, short
 
 **The premise is half right, and the conclusion is better than it asked for.**

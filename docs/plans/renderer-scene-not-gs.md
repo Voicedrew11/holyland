@@ -1,8 +1,18 @@
 # Drawing the scene, not replaying the GS
 
-2026-11-19 (revised the same day after `world-plain.md`). A direction for the PC renderer: why it is slow for a PS2
-game, and what it should become. The measurements behind it: `camera-whip-slowdown.md` (the game held by the GPU),
-`fullscreen-layers-inventory.md` (the full-screen layers) and `world-plain.md` (the world and the GS-exact mechanisms).
+2026-11-19, revised three times that day: after `world-plain.md`, after `depth-by-layers.md`, and after the owner's
+decision (below). A direction for the PC renderer: why it is slow for a PS2 game, and what replaces it. The
+measurements behind it: `camera-whip-slowdown.md` (the game held by the GPU), `fullscreen-layers-inventory.md` (the
+full-screen layers), `world-plain.md` (the world and the GS-exact mechanisms) and `depth-by-layers.md` (depth, ties,
+overdraw).
+
+## The decision (2026-11-19)
+
+**Build the scene renderer; do not speed up today's renderer.** Today's PC renderer (`port/gs/pc/`, a replay of the
+GS's stream) stays the players' renderer, fixed where it is broken, until the scene renderer replaces it; the savings
+the studies found (folding the layers, the depth, the pump's copies) are built into the scene renderer, not patched
+into the replay. Next: settle the scene renderer's design (`HANDOFF_scene_renderer_design.md`), then build it in
+slices.
 
 ## The goal
 
@@ -24,99 +34,75 @@ Vega 7, GPU ms a game frame:
 | ... of it exact depth: the depth rule's interlocked test and copy, exact Z's planes pass | 2.7-4.4, and 1.4 more outside the world | the GS's integer Z and its ties, decided per pixel in draw order |
 | ... the rest: about three full screens of shading, and the skinned models' many small draws | 2.8-6.1 | the GS's order (its memory made overdraw nearly free), VU1's batches |
 | The full-screen layers (clears, the alpha's reset, fills, the brightness pass) | 3.3 median | the GS made a full-screen pass nearly free |
-| The final picture and present | about 2.7 a vblank | separate passes (the inventory's open question) |
+| The final picture and present | about 2.7 a vblank | separate passes |
 | A picture between | as much as a game frame, or more | the whole stream replayed, the world 1.5-1.8 times dearer, surfaces copied |
 
 What does **not** cost anything measurable (`world-plain.md`): the blends done in the shader, both frame buffers one
-image, the GENERAL layout, colour compression, blending the whole world. The world drawn into images of its own, made
-as a PC game makes its targets, costs the same. The cost is not where the pixels are kept but **how the scene is
-drawn**: in the GS's order, with the GS's depth, as many small draws, all of it again for each picture.
+image, the GENERAL layout, colour compression, blending the whole world, separate PC-style targets. The cost is not
+where the pixels are kept but **how the scene is drawn**: in the GS's order, with the GS's depth, as many small draws,
+all of it again for each picture.
 
-## What it should become
+## What the scene renderer is
 
-Read the game's frame as a scene (meshes, instances, cameras: the native draws carry them already) and draw it the way
-a PC game would. Exactness stays the rule: each step's pictures checked against `main` byte for byte
-(`--dump-frames`), or against paraLLEl-GS by a stated pixel measure where a step changes what exact means, the owner
-deciding (below).
+It reads the game's frame as a scene (meshes, instances, cameras, materials: the native draws carry most of it) and
+draws it the way a PC game would, with the GS's results where they show. What the studies have settled, and what is
+left for the design:
 
-### 1. Depth by knowing the geometry
+### Settled by measurement
 
-**Revised by the proof of concept (`depth-by-layers.md`, 2026-11-19): depth by the GS's precision, not by layers.**
-The ties are not knowable from the data (they are spread over the map's records, and far from the eye unrelated
-surfaces share a whole Z of the game's 16-bit Z buffer), but nothing needs to know them: a `D16_UNORM` depth buffer
-rounds each pixel to the GS's whole Z in the GPU's own depth unit, so the GS's ties are ties there and GEQUAL lets the
-later draw win, with early tests, no interlock, copy, planes or bias; with each pixel's Z clamped by the depth clamp it
-draws the whole-game tour closer to paraLLEl-GS than the depth rule. What follows was the plan before it.
+- **Depth: the GS's precision, not knowledge of the geometry** (`depth-by-layers.md`). The ties the GS's depth makes
+  cannot be listed from the data (spread over the map's records; far from the eye unrelated surfaces share a whole Z
+  of the game's 16-bit Z buffer), and nothing needs to list them. A `D16_UNORM` depth buffer for the game's 16-bit Z
+  buffers rounds each pixel to the GS's whole Z in the GPU's own depth unit, the depth clamp clamps each pixel to the
+  format's largest, and the GPU's GEQUAL lets the later draw win a tie, as on the GS: early tests kept, no interlock,
+  copy, planes or bias, no shader writing depth. Measured: the world at the GPU depth's cost (2.8 / 6.0 / 6.1 ms at
+  2x at 099, the pond and the palace, against today's 5.4 / 10.3 / 9.3), the whole-game tour closer to paraLLEl-GS
+  than today's depth rule. Open (the design's): whether "exact" is that (single pixels differ from the GS where its
+  rounding and the GPU's fall on either side of a half) or the GS's arithmetic in the shader (a ceiling to measure);
+  and DATE without the depth buffer's stencil.
+- **Keep the game's draw order.** The GS's tie rule (the later draw wins) decides about 7% of the fragments (most of
+  them the same plane drawn twice), so reordering draws changes pictures. Batching consecutive draws of one state into
+  one call keeps their order and is exact; sorting front to back is not, and would save little: the world shades 3-6
+  fragments a pixel at 2x, much of it layers and effects that must be shaded anyway; only palace-like scenes have
+  large opaque overdraw (about 1.8 fragments a pixel). A depth pre-pass, if any, keeps the order.
+- **The full-screen layers fold into the final pass** (`fullscreen-layers-inventory.md`): the brightness pass, tints,
+  fades, the screen fill, applied with the same arithmetic in the same order; the dead writes left out; clears as fast
+  clears. About 2.9 ms of a game frame at the median (folding 1.75, the dead writes 0.66, the fast clears 0.47), and
+  in every picture between.
+- **Targets as images of their own** cost nothing extra and are what fast clears and folding need; they are the scene
+  renderer's way, not a step of their own.
 
-The GS's Z is a whole number from each triangle's plane, and a later draw wins a tie (GEQUAL). The game relies on
-ties: decals and layers drawn over their surface as meshes of their own (the moss on 063's wall, 028's puddle, 099's
-rock shading, the lava's edges, 280's fire). A replay of the GS's stream cannot tell which triangles can tie, so every
-pixel of every draw is tested GS-exactly, in draw order, which needs the interlock and a copy of the depth. Every
-cheaper way tried failed (`PC_RENDERER.md`: the decal nudge, the draw-number tie, the settled decals), because each had
-to guess ties from an anonymous stream.
+### For the design (`HANDOFF_scene_renderer_design.md`)
 
-A scene renderer knows what the triangles are:
-- **ties are known, not detected**: which meshes lie on which (coplanar layers), from the map's data when the map
-  loads, and from the models';
-- **the order is the renderer's**: opaque geometry first and front to back, each layer after its own surface, then the
-  see-through things, so nothing reads the depth in draw order: no interlock, no copy, no copy clears, no DATE
-  marking;
-- **depth comes from one place**: each triangle's plane from the transform that places its vertices (not a second
-  pass running the vertex programs again), and a layer drawn with its surface's plane, or tested EQUAL against it,
-  ties exactly under the GPU's own GEQUAL, with no depth written by a shader.
+- What a frame's scene is, made from the native draws and the GIF draws that remain (the 2D, the HUD, the menus, the
+  screen passes), and where each draw's material (texture, CLUT, blend, tests) is resolved: today only in the chain's
+  order, against the GS's memory as the uploads leave it.
+- The targets the game draws into and reads back (the reflection, the water and lava targets, the sky's scrolling
+  texture, the frame copied for the under-water and drain screens, the Dark Succubus's copy, the menus' grab).
+- The skinned models' many small draws (program 0x280: about 890 a game frame at the pond) batched.
+- **Pictures between from the scene**: each drawn at its time (instances and camera moved, as `part_moves` moves them
+  today), not a replay of the stream with copies of the frame's surfaces; instant mouse look as a reprojection of the
+  finished picture with a margin (`camera-whip-slowdown.md`).
+- **The GPU never holds the game**: pictures scheduled by their measured cost, one that cannot be drawn in time left
+  out, the game always at its rate (`camera-whip-slowdown.md`).
+- The final picture and present (scaling, sharpening, anti-aliasing: about 2.7 ms a vblank at 2x), and a vblank that
+  shows the same picture not made again.
+- How it lives beside today's renderer while it is built, and how its pictures are judged.
 
-What it does not settle: where two different, non-coplanar surfaces cross, the GS rounds Z to whole numbers and the
-GPU keeps a fraction, so they may pick different winners along that line. Whether that is exact enough is the owner's
-decision, made on numbers: the proof of concept measures it (`HANDOFF_depth_by_layers.md`).
+## Order
 
-### 2. The world in a PC game's order, and few draws
+1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,
+   `depth-by-layers.md`.
+2. **Settle the design** (`HANDOFF_scene_renderer_design.md`): `scene-renderer-design.md`, with the owner's choices
+   (depth's exactness above all) made on its numbers.
+3. **Build it in slices**, as the design orders them, each a renderer the developers can run beside today's
+   (`--renderer`), judged on its pictures and its GPU time.
+4. **Replace** today's renderer for players once the scene renderer draws everything at least as close to
+   paraLLEl-GS, and remove the replay.
 
-Opaque geometry front to back, so that hidden pixels fail the early depth test (a full screen of map-like geometry
-costs 0.91 ms on the Vega 7 at 2x, a hidden one 0.12: the world's floor is about 1-1.5 ms there, against 2.8-6.1 with
-the GPU's depth today). The skinned models (program 0x280: hundreds of small draws a game frame at the pond, 2.4 ms at
-1x) batched or instanced.
-
-### 3. The full-screen layers folded into one pass
-
-Collect a frame's screen-wide layers in their order (tints, fades, the brightness pass, the previous frame's blend) and
-apply them together in the final pass, with the same arithmetic in the same order; leave out the dead writes
-(`fullscreen-layers-inventory.md`: 1.2-1.8 ms of every game frame and every picture between, and 0.66 of dead
-writes). Independent of 1 and 2, exact by construction.
-
-### 4. Pictures between from the scene
-
-A picture between draws the scene at its time (instances and camera moved), not a replay of the stream with copies of
-the frame's surfaces. Instant mouse look's turn: a reprojection of the finished picture with a margin.
-
-### 5. The final picture and present
-
-The scaling, sharpening and anti-aliasing passes into the window, about 2.7 ms a vblank at 2x (more at 4x): the
-largest cost left once the rest is done, and a limit on pictures a second by itself.
-
-### 6. The GPU never holds the game
-
-Pictures scheduled by measured cost (`camera-whip-slowdown.md`): a picture that cannot be drawn in time is left out,
-the game always at its own rate. A safety net, first.
-
-### Demoted: separate, compressible targets
-
-Each displayed buffer an image of its own, optimal layouts, compression. Measured, it does nothing for the world on the
-Vega 7 (`world-plain.md`). It is still worth the swap's clear as a fast clear (0.47 ms) and what folding needs (a
-history image of the last picture), so it comes where those need it, not as a step of its own.
-
-## Order, and how each step is judged
-
-1. **The proof of concept for depth by layers** (`HANDOFF_depth_by_layers.md`; done: `depth-by-layers.md`): whether
-   the game's data tells which surfaces tie (no), and what the GPU's depth costs and changes in pixels against
-   paraLLEl-GS in a map tour (with a 16-bit UNORM depth, the GPU's depth's cost and fewer differences than today's);
-   and the world's overdraw. It decides 1's exactness and whether the scene renderer starts there.
-2. The budget-based cut (6), alongside, first.
-3. Fold the layers (3) and leave out the frame's dead writes: exact, independent of the rest.
-4. The scene renderer's world: depth by knowing the geometry (1), its order and draws (2).
-5. Pictures between from the scene (4).
-6. The final picture and present (5).
-
-Each step is judged on its pictures (byte for byte against `main`, or the measure the owner chose for depth) and on
-GPU ms a game frame and a picture between before and after, in a real window with the owner's settings
-(`world_plain.py`, `layer_inventory.py --steps live`), on the Vega 7 and the 9070 XT. The target at 2x on the Vega
-7: the world 1-2 ms a game frame, a game frame in all a small fraction of today's 16-20 ms.
+Each slice is judged on its pictures (against paraLLEl-GS by `tour_compare.py` and `motion_compare.py`, no further
+from it than today's renderer; byte for byte against today's where the design says a part is exact, such as the folded
+layers' arithmetic) and on GPU ms a game frame and a picture between, in a real window with the owner's settings
+(`world_plain.py`, `layer_inventory.py --steps live`), on the Vega 7 and the 9070 XT. The target at 2x on the Vega 7:
+the world 1-2 ms a game frame, a game frame in all a small fraction of today's 16-20 ms, and a picture between less than
+a game frame.

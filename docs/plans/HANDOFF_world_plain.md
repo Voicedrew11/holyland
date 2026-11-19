@@ -1,5 +1,7 @@
 # Handoff: measure the world drawn plainly
 
+**Done 2026-11-19: `world-plain.md`.**
+
 2026-11-19. For the next agent, on branch `inventory/fullscreen-layers` (or after it is merged). Read `CLAUDE.md` first.
 
 ## The mission

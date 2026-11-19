@@ -1,5 +1,7 @@
 # Handoff: step 1, the inventory of full-screen layers
 
+**Done 2026-11-19: `fullscreen-layers-inventory.md`.**
+
 2026-11-19. For the next agent. Read first, in this folder: `renderer-scene-not-gs.md` (the direction: this is its
 step "Order 1") and `camera-whip-slowdown.md` (the measurements that led here). Also `CLAUDE.md` at the root.
 
