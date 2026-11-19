@@ -393,6 +393,15 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
+    # the scene renderer (port/gs/scene/, docs/plans/scene-renderer-design.md: --renderer scene, developers' only), under
+    # the PC renderer's shell
+    file(GLOB KF4_SCENE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/scene/*.cpp)
+    add_library(kf4_scene STATIC ${KF4_SCENE_SOURCES})
+    target_include_directories(kf4_scene PRIVATE port/include PUBLIC port/gs/scene)
+    target_link_libraries(kf4_scene PRIVATE parallel-gs kf4_pc kf4_pc_gif kf4_pc_textures kf4_profile)
+    target_compile_options(kf4_scene PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+    set_target_properties(kf4_scene PROPERTIES CXX_STANDARD 20)
+    target_link_libraries(kf4_port PUBLIC kf4_scene)
     # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the PC renderer's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
     if(TARGET imgui)

@@ -169,8 +169,9 @@ static int open_pc_renderer(void) {
     /* (before it opens: its pipelines are made through the kept cache from the first draw on) */
     snprintf(path, sizeof(path), "%s/pc_pipelines.bin", port_data_dir());
     gsr_pipeline_cache(path);
-    if (!gsr_open(NULL)) {
-        fprintf(stderr, "[gs] the PC renderer did not start (no Vulkan device it can use)\n");
+    if (!(port_options.renderer == PORT_RENDERER_SCENE ? gsr_open_scene(NULL) : gsr_open(NULL))) {
+        fprintf(stderr, "[gs] the %s renderer did not start (no Vulkan device it can use)\n",
+                port_options.renderer == PORT_RENDERER_SCENE ? "scene" : "PC");
         return 0;
     }
     gsr_set_scale(port_gs_native_scale_x(), port_gs_native_scale());

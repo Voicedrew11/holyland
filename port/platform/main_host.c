@@ -12,8 +12,10 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
-       --renderer NAME   who draws: pc (the default: the PC renderer, port/gs/pc/) or gs
-                         (paraLLEl-GS, the accurate GS, for comparing pictures against; developers only)
+       --renderer NAME   who draws: pc (the default: the PC renderer, port/gs/pc/), gs (paraLLEl-GS,
+                         the accurate GS, for comparing pictures against) or scene (the scene renderer
+                         being built to replace the PC renderer, port/gs/scene/); the last two
+                         developers' only
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the renderer's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the renderer,
@@ -281,7 +283,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs|scene]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
@@ -487,11 +489,13 @@ static void parse_options(int argc, char **argv) {
                 port_options.renderer = PORT_RENDERER_GS;
             } else if (strcmp(value, "pc") == 0) {
                 port_options.renderer = PORT_RENDERER_PC;
+            } else if (strcmp(value, "scene") == 0) {
+                port_options.renderer = PORT_RENDERER_SCENE;
             } else if (strcmp(value, "native") == 0 || strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0) {
                 port_options.renderer = PORT_RENDERER_PC;
                 fprintf(stderr, "[options] --renderer %s: the PC renderer draws now\n", value);
             } else {
-                fprintf(stderr, "--renderer wants pc or gs, not %s\n", value);
+                fprintf(stderr, "--renderer wants pc, gs or scene, not %s\n", value);
                 exit(2);
             }
         } else if (strcmp(option, "--presenter") == 0) {
