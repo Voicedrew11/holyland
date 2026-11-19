@@ -24,6 +24,7 @@
 #include "thread_id.hpp"
 
 extern "C" {
+#include "port/crash_note.h"
 #include "port/profile.h"
 #include "port/zones.h"
 }
@@ -408,11 +409,20 @@ void save_locked() {
     }
 }
 
+// (store.lock held) Whether threads are making pipelines ahead now
+bool making_ahead() {
+    return store.ahead_started && store.ahead_done.load() < store.ahead_total.load() && !store.ahead_stop;
+}
+
+// (its own thread) The files written every SAVE_EVERY. Not while pipelines are made ahead: the cache read out
+// (vkGetPipelineCacheData) while a dozen threads add to it is allowed, but it is where a driver's own locking is
+// tested hardest (a player's crash in AMD's Windows driver at 76% of "Preparing shaders", 2026-11-19), for no gain:
+// the next tick after they are done writes them.
 void saver() {
     std::unique_lock<std::mutex> hold(store.lock);
     while (!store.stopping) {
         store.wake.wait_for(hold, SAVE_EVERY);
-        if (!store.stopping) {
+        if (!store.stopping && !making_ahead()) {
             save_locked();
         }
     }
@@ -577,12 +587,27 @@ void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute
             // other use of it, so the canvas thread's index stands in, as an unregistered thread's would)
             Util::register_thread_index(0);
             for (size_t i = (*next)++; i < total && !store.ahead_stop; i = (*next)++) {
+                char note[192];
                 if (i < compute_programs->size()) {
+                    snprintf(note, sizeof note, "making pipeline %zu of %zu ahead (compute program %zu)", i + 1, total,
+                             i);
+                    port_crash_note_set(note);
                     make_compute_ahead(*device, (*compute_programs)[i]);
                 } else {
                     const GraphicsJob &job = (*graphics)[i - compute_programs->size()];
+                    const auto &st = job.record.static_state.state;
+                    snprintf(note, sizeof note,
+                             "making pipeline %zu of %zu ahead (role %u, colour format %d, depth format %d, depth test "
+                             "%u compare %u, stencil %u, blend %u, dynamic %u%u, record %016llx)",
+                             i + 1, total, unsigned(job.record.role), int(job.record.colour_format),
+                             int(job.record.depth ? job.record.depth_format : VK_FORMAT_UNDEFINED),
+                             unsigned(st.depth_test), unsigned(st.depth_compare), unsigned(st.stencil_test),
+                             unsigned(st.blend_enable), unsigned(st.dynamic_ds), unsigned(st.dynamic_blend),
+                             (unsigned long long)record_key(job.record));
+                    port_crash_note_set(note);
                     make_ahead(*device, job.record, job.program);
                 }
+                port_crash_note_set("");
                 if (++store.ahead_done == total) {
                     store.ahead_wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                               std::chrono::steady_clock::now() - store.ahead_start)

@@ -241,8 +241,9 @@ if(NOT MSVC)
 endif()
 target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
-# GS libraries (kf4_gs, built into tests without the port) add to them as well
-add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c)
+# GS libraries (kf4_gs, built into tests without the port) add to them as well; with them each thread's note for the
+# crash report (port/include/port/crash_note.h), which the GS libraries write too
+add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c port/platform/crash_note.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
 # the frame profiler's frames, worked out from the zones' rings (port/include/port/zone_record.hpp) on a thread of
@@ -387,7 +388,8 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     list(APPEND KF4_PC_SOURCES ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp)
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
     target_include_directories(kf4_pc PRIVATE port/include port/gs/shared third_party/smaa PUBLIC port/gs/pc)
-    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves)
+    target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves
+                          kf4_profile) # (port_crash_note_set: pcr_pipelines.cpp)
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)

@@ -2037,7 +2037,12 @@ public:
             gpu_wait_unlocked_ = !(locked && strcmp(locked, "1") == 0);
         }
         thread_ = std::thread([this] { run(); });
-        fprintf(stderr, "[pcr] the PC renderer on %s\n", props.deviceName);
+        // (the driver too: a crash or a wrong picture on one driver is told apart by it in a player's log)
+        const VkPhysicalDeviceVulkan12Properties &v12 = device_->get_device_features().vk12_props;
+        fprintf(stderr, "[pcr] the PC renderer on %s (vendor %04x device %04x, driver %s %s, version %08x, Vulkan %u.%u)\n",
+                props.deviceName, props.vendorID, props.deviceID, v12.driverName[0] ? v12.driverName : "?",
+                v12.driverInfo, props.driverVersion, VK_API_VERSION_MAJOR(props.apiVersion),
+                VK_API_VERSION_MINOR(props.apiVersion));
         return true;
     }
 

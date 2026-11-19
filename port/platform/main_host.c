@@ -199,6 +199,7 @@
 #include "port/save_files.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
+#include "port/crash_note.h"
 #include "port/stats.h"
 
 static int parse_cheats(const char *list);
@@ -226,6 +227,8 @@ static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
     crash_where(e->ExceptionRecord->ExceptionAddress, where, sizeof where);
     fprintf(stderr, "[port] crashed: exception 0x%08lx at %p (%s)\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
             e->ExceptionRecord->ExceptionAddress, where);
+    fprintf(stderr, "[port] on thread %lu%s%s\n", (unsigned long)GetCurrentThreadId(),
+            port_crash_note()[0] ? ", which was " : " (no note of what it was doing)", port_crash_note());
     if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && e->ExceptionRecord->NumberParameters >= 2) {
         fprintf(stderr, "[port] (a %s of %p)\n", e->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
                 (void *)e->ExceptionRecord->ExceptionInformation[1]);
@@ -233,7 +236,7 @@ static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
 #if defined(_M_X64) || defined(__x86_64__)
     /* the callers, unwound from each module's .pdata (no symbols here: llvm-addr2line names kf4.exe's) */
     CONTEXT context = *e->ContextRecord;
-    for (int depth = 0; depth < 16 && context.Rip; depth++) {
+    for (int depth = 0; depth < 32 && context.Rip; depth++) {
         DWORD64 base = 0;
         PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &base, NULL);
         if (!function) {
