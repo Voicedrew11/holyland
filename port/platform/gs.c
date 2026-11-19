@@ -303,6 +303,11 @@ static uint32_t psm_bits(uint32_t psm) {
 #define FRAME_PICTURES 16
 static uint32_t frame_pictures[FRAME_PICTURES];
 static uint32_t frame_picture_next;
+static uint32_t draw_offset_x = 0x6C00; /* XYOFFSET_1's X as last written, 12.4 */
+
+static int movie_gif_path(int path) {
+    return path == 3 && draw_offset_x == 0 && port_movie_playing();
+}
 
 static void frame_picture(uint32_t tbp, int is_picture) {
     int i;
@@ -320,14 +325,16 @@ static void frame_picture(uint32_t tbp, int is_picture) {
     }
 }
 
-static void image_register(uint32_t reg, uint64_t value) {
+static void image_register(int path, uint32_t reg, uint64_t value) {
     if (reg == GS_REG_BITBLTBUF) {
         image_bitbltbuf = value;
     } else if (reg == GS_REG_TRXREG) {
         image_trxreg = value;
     } else if (reg == GS_REG_TRXDIR) {
         if ((value & 3) != 1) {
-            frame_picture((uint32_t)(image_bitbltbuf >> 32) & 0x3FFF, (value & 3) == 2 || (image_trxreg & 0xFFF) == 640);
+            /* A full-width movie upload is a source texture. It still needs widescreen squeeze. */
+            int frame_upload = (image_trxreg & 0xFFF) == 640 && !movie_gif_path(path);
+            frame_picture((uint32_t)(image_bitbltbuf >> 32) & 0x3FFF, (value & 3) == 2 || frame_upload);
         }
         if ((value & 3) == 0) {
             image_bits_left = (image_trxreg & 0xFFF) * ((image_trxreg >> 32) & 0xFFF) *
@@ -372,7 +379,6 @@ static void image_data(size_t qwords) {
    A movie draws into a frame of its own, at a draw offset of 0: its pictures are squeezed about the
    middle of that frame, and its black clear, which reaches the edges, becomes the bars.
    With the switch off nothing here runs, and the packets go to the GS untouched. */
-static uint32_t draw_offset_x = 0x6C00; /* XYOFFSET_1's X as last written, 12.4 */
 static uint32_t draw_offset_x2 = 0x6C00; /* XYOFFSET_2's */
 static uint32_t frame_fbp[2];            /* FRAME_1's and FRAME_2's FBP as last written (these two are
                                             not in save states: the game writes them again each frame) */
@@ -434,7 +440,7 @@ static void squeeze_x(int path, uint8_t *data) {
     if ((p->prim & 0x200) && frame_fbp[1] == frame_fbp[0]) {
         shift = (int)draw_offset_x2 - (int)draw_offset_x; /* context 2, into the frame (above) */
     }
-    if (path == 3 && draw_offset_x == 0 && port_movie_playing()) {
+    if (movie_gif_path(path)) {
         /* a movie (gfx/movie.c) draws its pictures into its own frame, with a draw offset of 0:
            squeezed about that frame's middle, between the bars of its black clear */
         anchor = 320 << 4;
@@ -529,7 +535,7 @@ static void read_gif(int path, uint64_t *qwords, size_t count, int squeeze) {
                 if (reg == GS_REG_FINISH) {
                     __atomic_fetch_or(EE_HW(volatile uint64_t *, 0x12001000), (uint64_t)GS_CSR_FINISH, __ATOMIC_RELEASE);
                 } else if (reg >= GS_REG_BITBLTBUF && reg <= GS_REG_TRXDIR) {
-                    image_register(reg, qwords[i * 2]);
+                    image_register(path, reg, qwords[i * 2]);
                 } else if (reg == GS_REG_FRAME_1 || reg == GS_REG_FRAME_2) {
                     frame_picture((uint32_t)(qwords[i * 2] & 0x1FF) << 5, 1);
                     frame_fbp[reg - GS_REG_FRAME_1] = (uint32_t)(qwords[i * 2] & 0x1FF);

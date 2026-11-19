@@ -11,14 +11,14 @@
    - sceMpegGetPicture decodes until a picture is ready to show, in display order: a B picture at
      once, an I or P picture when the next reference comes, the last one at the sequence end code.
      frameCount, sceMpegIsEnd and sceMpegIsRefBuffEmpty change as libmpeg's do.
-   - The picture is converted to RGB32 as the IPU's CSC does it, one 16x16 macroblock after another
-     going down each column of macroblocks, then across: the order the player's GS packets upload
-     them in. The background callback runs while it converts, where libmpeg runs it during the CSC.
+   - The picture is converted to RGB32 with the IPU's CSC. The movie player requests row-major
+     output for its batched upload. The default still uses the IPU's 16x16 macroblock order.
+     The background callback runs at the conversion, where libmpeg runs it during the CSC.
 
    libmpeg suspends the IPU's input around each conversion (the stop and restart DMA callbacks); the
    decoder here does not use the IPU, so it never calls them, and the stream's DMA only moves as the
-   decoder reads. Decoding takes no EE time: the player shows a picture every two fields whatever, so
-   the movie runs at the PS2's pace. */
+   decoder reads. Decoding takes no EE time. The player shows a picture every two fields and can
+   drop late pictures when the audio device clock runs ahead. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,6 +62,7 @@ typedef struct {
     int out_state;  /* a picture has been decoded since the reset */
     int total_frames;
     int pictures;   /* pictures shown since sceMpegCreate */
+    int linear_output;
     int64_t pts[3], dts[3]; /* each picture buffer's time stamps */
 } MpegState;
 
@@ -183,7 +184,13 @@ int sceMpegIsRefBuffEmpty(sceMpeg *mp) {
     return state_of(mp)->ref_count == 0;
 }
 
+void port_mpeg_set_linear_output(sceMpeg *mp, int linear) {
+    state_of(mp)->linear_output = linear;
+}
+
 /* ---- The demultiplexer (libmpeg's pack.o) ------------------------------------------------------- */
+#define PSS_PCM_STREAM 0xBDFFA00000ULL
+
 /* the PSS streams a callback can ask for, by type: the id and the mask of the bits that name it */
 static const struct {
     uint64_t id;
@@ -191,7 +198,7 @@ static const struct {
 } stream_types[10] = {
     {0xE000000000ULL, 0xFF00000000ULL}, /* 0 MPEG video, channel in the stream id */
     {0xBDFFC00000ULL, 0xFFFFFFFFFFULL}, /* 1 */
-    {0xBDFFA00000ULL, 0xFFFFFFFFFFULL}, /* 2 PCM sound */
+    {PSS_PCM_STREAM, 0xFFFFFFFFFFULL},  /* 2 PCM sound */
     {0xBDFFA10000ULL, 0xFFFFFFFFFFULL}, /* 3 */
     {0xBDFF900000ULL, 0xFFFFFFFFFFULL}, /* 4 */
     {0xC000000000ULL, 0xFF00000000ULL}, /* 5 MPEG audio */
@@ -470,43 +477,179 @@ int sceMpegDemuxPssRing(sceMpeg *mp, void *buf, int size, void *ring, int ring_s
     return consumed;
 }
 
+/* ---- PCM read-ahead for disc movies -------------------------------------------------------------- */
+typedef struct {
+    uint8_t header[40]; /* SShd (including its 24-byte body), then SSbd and the PCM byte count */
+    uint32_t header_size;
+    uint8_t *data;
+    uint32_t size;
+    uint32_t used;
+} PssPcm;
+
+static uint32_t pcm_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static int pss_append_pcm(PssPcm *pcm, const uint8_t *data, uint32_t bytes, uint32_t file_size) {
+    if (pcm->data == NULL) {
+        uint32_t needed = sizeof(pcm->header) - pcm->header_size;
+        uint32_t take = bytes < needed ? bytes : needed;
+        const uint8_t *h = pcm->header;
+
+        memcpy(pcm->header + pcm->header_size, data, take);
+        pcm->header_size += take;
+        if (pcm->header_size < sizeof(pcm->header)) {
+            return 1;
+        }
+        if (memcmp(h, "SShd", 4) != 0 || pcm_le32(h + 4) != 24 || pcm_le32(h + 8) != 1 ||
+            pcm_le32(h + 12) != 48000 || pcm_le32(h + 16) != 2 || pcm_le32(h + 20) != 512 ||
+            memcmp(h + 32, "SSbd", 4) != 0) {
+            return 0;
+        }
+        pcm->size = pcm_le32(h + 36);
+        if (pcm->size == 0 || pcm->size > file_size || pcm->size % 1024 != 0) {
+            return 0;
+        }
+        pcm->data = malloc(pcm->size);
+        if (pcm->data == NULL) {
+            return 0;
+        }
+        data += take;
+        bytes -= take;
+    }
+    if (bytes > pcm->size - pcm->used) {
+        bytes = pcm->size - pcm->used;
+    }
+    memcpy(pcm->data + pcm->used, data, bytes);
+    pcm->used += bytes;
+    return 1;
+}
+
+/* Read the packetized stream in disc order, retaining only PCM. A complete packet and the next disc
+   read fit in the buffer even when a packet crosses a read boundary. */
+uint8_t *port_mpeg_load_pcm(uint32_t lsn, uint32_t file_size, uint32_t *pcm_size) {
+    enum { READ_BYTES = 64 * 1024, MAX_PACKET_BYTES = 6 + 65535 };
+    uint8_t *buffer = malloc(READ_BYTES + MAX_PACKET_BYTES);
+    uint32_t buffered = 0;
+    PssPcm pcm = {0};
+
+    if (buffer == NULL) {
+        return NULL;
+    }
+    for (uint32_t offset = 0; offset < file_size;) {
+        uint32_t take = file_size - offset < READ_BYTES ? file_size - offset : READ_BYTES;
+        uint32_t sectors = (take + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE;
+        uint32_t pos = 0;
+
+        if (!port_disc_read(lsn + offset / DISC_SECTOR_SIZE, sectors, buffer + buffered)) {
+            break;
+        }
+        offset += take;
+        buffered += take;
+        while (buffered - pos >= 6) {
+            const uint8_t *p = buffer + pos;
+            uint32_t available = buffered - pos;
+            uint32_t packet_size;
+
+            if (p[0] != 0 || p[1] != 0 || p[2] != 1 || p[3] == 0xb9) {
+                goto done;
+            }
+            if (p[3] == 0xba) {
+                if (available < 14) {
+                    break;
+                }
+                packet_size = 14 + (p[13] & 7);
+            } else {
+                packet_size = 6 + ((uint32_t)p[4] << 8 | p[5]);
+            }
+            if (available < packet_size) {
+                break;
+            }
+            if (p[3] == (PSS_PCM_STREAM >> 32) && packet_size >= 13) {
+                uint32_t payload = 9 + p[8];
+
+                if (payload + 4 <= packet_size && pcm_le32(p + payload) == 0x0000a0ff) {
+                    if (!pss_append_pcm(&pcm, p + payload + 4, packet_size - payload - 4, file_size)) {
+                        goto done;
+                    }
+                    if (pcm.data != NULL && pcm.used == pcm.size) {
+                        *pcm_size = pcm.size;
+                        free(buffer);
+                        return pcm.data;
+                    }
+                }
+            }
+            pos += packet_size;
+        }
+        buffered -= pos;
+        memmove(buffer, buffer + pos, buffered);
+    }
+
+done:
+    free(buffer);
+    free(pcm.data);
+    return NULL;
+}
+
 /* ---- Pictures ----------------------------------------------------------------------------------- */
 static uint8_t clamp_color(int value) {
     return (uint8_t)(value < 0 ? 0 : value > 255 ? 255 : value);
 }
 
 /* The IPU's CSC: ITU-R BT.601 with its 8-bit coefficients (in 128ths: 1.164 0x95, 1.596 0xCC,
-   0.813 0x68, 0.391 0x32, 2.016 0x102), alpha 0x80. Macroblocks go down each column, then across. */
+   0.813 0x68, 0.391 0x32, 2.016 0x102), alpha 0x80. Two adjacent pixels share chroma. */
+static void convert_line(uint8_t *restrict out, const uint8_t *luma, const uint8_t *cb, const uint8_t *cr,
+                         int width) {
+    for (int x = 0; x < width; x += 2) {
+        int blue = cb[x / 2] - 128;
+        int red = cr[x / 2] - 128;
+        int r = 0xCC * red + 64;
+        int g = -0x68 * red - 0x32 * blue + 64;
+        int b = 0x102 * blue + 64;
+
+        for (int i = 0; i < 2; i++) {
+            int y = luma[x + i];
+            int lum = 0x95 * (y > 16 ? y - 16 : 0);
+
+            out[0] = clamp_color((lum + r) >> 7);
+            out[1] = clamp_color((lum + g) >> 7);
+            out[2] = clamp_color((lum + b) >> 7);
+            out[3] = 0x80;
+            out += 4;
+        }
+    }
+}
+
 static void convert_picture(MpegState *s, const Mpeg2Frame *frame, uint8_t *rgb32, int mb_limit) {
     const Mpeg2Decoder *d = &s->decoder;
     int width = d->mb_width * 16;
     int n = 0;
-    int mb_x, mb_y, x, y;
 
-    for (mb_x = 0; mb_x < d->mb_width; mb_x++) {
-        for (mb_y = 0; mb_y < d->mb_height; mb_y++) {
+    if (s->linear_output && mb_limit >= d->mb_width * d->mb_height) {
+        for (int y = 0; y < d->mb_height * 16; y++) {
+            size_t chroma = (size_t)(y / 2) * (width / 2);
+            size_t luma = (size_t)y * width;
+
+            convert_line(rgb32 + luma * 4, frame->y + luma, frame->cb + chroma, frame->cr + chroma, width);
+        }
+        return;
+    }
+
+    /* The IPU's macroblocks go down each column, then across. */
+    for (int mb_x = 0; mb_x < d->mb_width; mb_x++) {
+        for (int mb_y = 0; mb_y < d->mb_height; mb_y++) {
             uint8_t *out = rgb32 + (size_t)n * 0x400;
 
             if (n++ >= mb_limit) {
                 return;
             }
-            for (y = 0; y < 16; y++) {
+            for (int y = 0; y < 16; y++) {
                 int py = mb_y * 16 + y;
                 const uint8_t *luma = frame->y + py * width + mb_x * 16;
                 const uint8_t *cb = frame->cb + (py >> 1) * (width / 2) + mb_x * 8;
                 const uint8_t *cr = frame->cr + (py >> 1) * (width / 2) + mb_x * 8;
 
-                for (x = 0; x < 16; x++) {
-                    int lum = 0x95 * (luma[x] > 16 ? luma[x] - 16 : 0);
-                    int blue = cb[x >> 1] - 128;
-                    int red = cr[x >> 1] - 128;
-
-                    out[0] = clamp_color((lum + 0xCC * red + 64) >> 7);
-                    out[1] = clamp_color((lum - 0x68 * red - 0x32 * blue + 64) >> 7);
-                    out[2] = clamp_color((lum + 0x102 * blue + 64) >> 7);
-                    out[3] = 0x80;
-                    out += 4;
-                }
+                convert_line(out + y * 64, luma, cb, cr, 16);
             }
         }
     }
