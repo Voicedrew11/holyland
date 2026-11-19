@@ -43,6 +43,7 @@
 #include "pcr_hang_watch.h"
 #include "pcr_native.h"
 #include "pcr_census.h"
+#include "pcr_frame_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
 #include "pcr_pipelines.h"
@@ -683,6 +684,13 @@ public:
         times_ = std::make_unique<pcr::GpuTimes>(device);
         canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
         canvas_->watch_hangs(hang_notes, "kf4-pc");
+        if (frame_census_) {
+            canvas_->observe_native_batches([this](const pcr::GsRegisterFile &file, uint32_t prim, const pcr::NativeBatch &nb) {
+                if (census_now()) {
+                    frame_census_->native_batch(file, prim, nb);
+                }
+            });
+        }
         natives_ = std::make_unique<pcr::NativeDraws>(device);
         between_ = std::make_unique<pcr::Between>(device);
     }
@@ -859,6 +867,7 @@ public:
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
         }
+        frame_census_ = pcr::FrameCensus::from_env();
     }
 
     void feed(int path, const std::vector<uint8_t> &bytes) {
@@ -868,7 +877,12 @@ public:
         }
         stretch_bytes_ += bytes.size();
         since_vblank_bytes_ += bytes.size();
+        if (frame_census_ && census_now()) {
+            frame_census_->bytes(path, bytes.size());
+        }
+        feeding_path_ = path;
         front_.feed(path, bytes);
+        feeding_path_ = 0;
     }
 
     // A state loaded: no stretch kept from before it, nor the temporal anti-aliasing's history
@@ -900,6 +914,9 @@ public:
         if (census_) {
             census_->display(privileged[0], privileged[14], privileged[18]);
         }
+        if (frame_census_ && canvas_) {
+            frame_census_->vblank(game_vblank, canvas_->counts());
+        }
     }
 
     void print_census() const {
@@ -928,6 +945,9 @@ private:
         if (census_) {
             census_->primitive(front_.registers(), primitive);
         }
+        if (frame_census_ && census_now()) {
+            frame_census_->primitive(feeding_path_, in_native_, front_.registers(), primitive);
+        }
         if (canvas_) {
             canvas_->primitive(front_.registers(), primitive);
         }
@@ -935,6 +955,9 @@ private:
     void image_upload(const pcr::TransferRegisters &transfer, std::span<const uint8_t> bytes, pcr::UploadEnd) override {
         if (census_) {
             census_->upload(transfer, bytes.size());
+        }
+        if (frame_census_ && census_now()) {
+            frame_census_->upload(transfer, bytes.size());
         }
         if (canvas_) {
             canvas_->upload(transfer, bytes);
@@ -944,6 +967,9 @@ private:
         if (census_) {
             census_->copy(transfer, "local");
         }
+        if (frame_census_ && census_now()) {
+            frame_census_->local_copy(transfer);
+        }
         if (canvas_) {
             canvas_->local_copy(transfer);
         }
@@ -951,6 +977,9 @@ private:
     void local_to_host(const pcr::TransferRegisters &transfer) override {
         if (census_) {
             census_->copy(transfer, "read-back");
+        }
+        if (frame_census_ && census_now()) {
+            frame_census_->read_back(transfer);
         }
         if (canvas_) {
             canvas_->local_to_host(transfer);
@@ -960,8 +989,13 @@ private:
         if (census_) {
             census_->other("native draw (0x7B)");
         }
+        if (frame_census_ && census_now()) {
+            frame_census_->native_draw(value);
+        }
         if (natives_ && canvas_) {
+            in_native_ = true;
             natives_->met(value, front_, *canvas_);
+            in_native_ = false;
         } else if (RD_ND_COMMAND(value) == RD_ND_FRAME) {
             rd_consumer_frame(value); // (the core waits for the frames' marks to be met)
         }
@@ -970,6 +1004,9 @@ private:
         if (census_) {
             census_->other("upload again (0x7C)");
         }
+        if (frame_census_ && census_now()) {
+            frame_census_->upload_again();
+        }
         if (canvas_) {
             canvas_->upload_again(front_.registers(), value);
         }
@@ -977,6 +1014,9 @@ private:
     void frame_mark(uint64_t value) override {
         if (census_) {
             census_->other("frame mark (0x7D)");
+        }
+        if (frame_census_ && census_now()) {
+            frame_census_->frame_mark(value);
         }
         // (frame_interp.c's replays sent as packets, between 0xF0 and 0xF1 (the exact restore): not the game's, no
         // stretch of them kept)
@@ -1069,6 +1109,13 @@ private:
 
     pcr::GifFrontEnd front_;
     std::unique_ptr<pcr::Census> census_;
+    // (KF4_PC_FRAME_CENSUS: the game's own packets, not a picture between's walk or frame_interp.c's replays)
+    std::unique_ptr<pcr::FrameCensus> frame_census_;
+    int feeding_path_ = 0;
+    bool in_native_ = false;
+    bool census_now() const {
+        return !in_replay_ && !between_active();
+    }
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
     std::unique_ptr<pcr::Canvas> canvas_;
     std::unique_ptr<pcr::NativeDraws> natives_;

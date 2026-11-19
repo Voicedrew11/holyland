@@ -1,5 +1,7 @@
 # Handoff: settle the scene renderer's design
 
+**Done 2026-11-19**: `scene-renderer-design.md`; the next step is `HANDOFF_scene_slice1.md`.
+
 2026-11-19. For the next agent, on branch `measure/depth-by-layers` (or after it is merged). Read `CLAUDE.md` first,
 then in this folder `renderer-scene-not-gs.md` (the direction and the owner's decision), and the four studies behind
 it: `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`, `depth-by-layers.md`.

@@ -414,6 +414,9 @@ public:
                                                      : "this GPU has no 64-bit integers in shaders");
         } else if (rule_on_) {
             fprintf(stderr, "[pcr] depth: the depth rule (the shader tests the depth: fragment shader interlock)\n");
+        } else if (gs_whole_) {
+            fprintf(stderr, "[pcr] depth: the GS's whole Z at each pixel, no fraction (KF4_PC_DEPTH=gsexact: developers' "
+                            "only)\n");
         } else {
             fprintf(stderr, "[pcr] depth: exact Z with decals settled (%s)\n",
                     depth_asked() == DepthAsked::exact ? "KF4_PC_DEPTH=exact" : "this GPU has no fragment shader interlock");
@@ -477,7 +480,12 @@ public:
         batch_.draw_last = gpu_draw_;
     }
 
+    std::function<void(const GsRegisterFile &, uint32_t, const NativeBatch &)> native_observer_;
+
     void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) {
+        if (native_observer_) {
+            native_observer_(file, prim, nb);
+        }
         counts_.native_batches++;
         counts_.triangles += nb.triangle_count;
         DrawState s = state_of(file, prim);
@@ -4358,6 +4366,7 @@ private:
             flags |= F_PIXEL_CLAMP;
             vp.maxDepth = unorm_on_ ? 1.0f : float(push.zmax) * push.zscale;
         }
+        flags |= gs_whole_ ? F_PIXEL_CLAMP : 0; // (with exact Z: the whole Z alone, KF4_PC_DEPTH=gsexact)
         // (the depth rule: a draw that tests Z GEQUAL or GREATER tests it in its shader against the depth surface's copy,
         // and one that tests ALWAYS and writes Z writes the copy as the depth; every exact Z draw writes the Z with its
         // fraction)
@@ -5522,11 +5531,14 @@ private:
     // (developers' KF4_PC_DEPTH=rule|exact|gpu|layers: the depth rule where the GPU has it, exact Z with decals settled,
     // the GPU's interpolated depth, or that with the layers drawn nearer (layers_on_); to compare in one build. Unset:
     // the depth rule where the GPU has it, else exact Z)
-    enum class DepthAsked { rule, exact, gpu, layers, unorm };
+    // gsexact: exact Z's whole Z alone at each pixel (no fine part, no decal settled, no rule): the GS's arithmetic in the
+    // shader, every tie a tie in the GPU's own GEQUAL; the ceiling docs/plans/scene-renderer-design.md measures)
+    enum class DepthAsked { rule, exact, gpu, layers, unorm, gsexact };
     static DepthAsked depth_asked() {
         const char *v = getenv("KF4_PC_DEPTH");
         return !v                         ? DepthAsked::rule
                : strcmp(v, "exact") == 0  ? DepthAsked::exact
+               : strcmp(v, "gsexact") == 0 ? DepthAsked::gsexact
                : strcmp(v, "gpu") == 0    ? DepthAsked::gpu
                : strcmp(v, "layers") == 0 ? DepthAsked::layers
                : strcmp(v, "unorm") == 0  ? DepthAsked::unorm
@@ -5553,7 +5565,10 @@ private:
     // (exact Z: decals given back their own depth where they won, settle_decal_depth. Developers' KF4_PC_DECAL_SETTLE=0:
     // not, the top fine part written, to compare)
     const bool settle_on_ =
-        exact_z_ && !rule_on_ && !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
+        exact_z_ && !rule_on_ && depth_asked() != DepthAsked::gsexact &&
+        !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
+    // (developers' KF4_PC_DEPTH=gsexact: the whole Z alone, pcr_prim.h's pcr_whole_depth by PCR_F_PIXEL_CLAMP)
+    const bool gs_whole_ = exact_z_ && depth_asked() == DepthAsked::gsexact;
     // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
     // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
     const std::unique_ptr<PlanePass> planes_ =
@@ -5957,6 +5972,11 @@ void Canvas::read_fifo(void *dst, uint32_t qwords) {
 void Canvas::forget() {
     impl_->forget();
 }
+void Canvas::observe_native_batches(
+    std::function<void(const GsRegisterFile &, uint32_t, const NativeBatch &)> observer) {
+    impl_->native_observer_ = std::move(observer);
+}
+
 void Canvas::native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch) {
     impl_->native_batch(file, prim, batch);
 }

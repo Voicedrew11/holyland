@@ -51,6 +51,10 @@ VARIANTS = {
                {"KF4_PC_DEPTH": "layers"}, {}),
     "unorm": ("the GPU's depth test in 16-bit steps (D16_UNORM: the GS's whole Z), Z clamped at each pixel, DATE by a "
               "copy", {"KF4_PC_DEPTH": "unorm"}, {}),
+    # The GS's arithmetic in the shader, as a ceiling (docs/plans/scene-renderer-design.md): exact Z's whole Z alone at
+    # each pixel (no fine part, no decal settled, no rule), the depth written by the shader, DATE by the stencil
+    "gsexact": ("exact Z's whole Z alone at each pixel, written by the shader (the GS's arithmetic: a ceiling)",
+                {"KF4_PC_DEPTH": "gsexact"}, {}),
     "gpu_aniso1": ("the GPU's depth test, anisotropic filtering 1x", {"KF4_PC_DEPTH": "gpu"}, {"native_aniso": 1}),
     # The prototype plain path (pcr_canvas.cpp's KF4_PC_PLAIN_WORLD): the world into images of its own, optimal
     # layouts, attachment use alone, cleared by the pass; the picture lacks the world

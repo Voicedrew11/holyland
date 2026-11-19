@@ -460,7 +460,12 @@ void pcr_whole_depth() {
         z = pc.zmax;
         fine = 0u;
     }
-    if ((pc.flags & PCR_F_DECAL) != 0u) {
+    // (developers' KF4_PC_DEPTH=gsexact, PCR_F_PIXEL_CLAMP with exact Z, which it means nothing to otherwise: the GS's
+    // whole Z alone, no fine part, so that every two surfaces on one whole Z tie and the later draw wins, as on the GS;
+    // docs/plans/scene-renderer-design.md)
+    if ((pc.flags & PCR_F_PIXEL_CLAMP) != 0u) {
+        fine = 0u;
+    } else if ((pc.flags & PCR_F_DECAL) != 0u) {
         fine = pz_fine_top(z);
     }
     gl_FragDepth = (float(z + pcr_loss_margin()) + float(fine) * (1.0 / 256.0)) * pc.zscale;

@@ -16,6 +16,7 @@
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
 | `layer_inventory.py` | the game's full-screen layers in a tour of play (scenes, actions, `KF4_FX`, every map): each one's GS state, its GPU time by draw (`kf4-gsreplay --gpu-draws`), what reads each channel it writes, and its class (clear, dead, foldable into scanout, must stay in memory); real-window totals at the owner's settings; `report.md` (below; docs/plans/fullscreen-layers-inventory.md) |
 | `world_plain.py` | the world's GPU time drawn the GS's way and with each GS-exact mechanism switched off (`KF4_PC_*` switches, the prototype plain path `KF4_PC_PLAIN_WORLD`, RADV's compression and HiZ off), a few scenes at 1x, 2x and 4x in a real window with the owner's settings, by `layer_inventory.py`'s live step (below; docs/plans/world-plain.md) |
+| `scene_census.py` | what each game frame hands the renderer at a few scenes (native draws by kind, GIF primitives by path and class, the draws in order and their runs, uploads, copies, DATE's fragments), headless with the PC renderer's frame census (`KF4_PC_FRAME_CENSUS`); docs/plans/scene-renderer-design.md |
 | `depth_ties.py` | the PC renderer's developers' counters read (`map_tour.py --ties`, `motion_compare.py --ties`): the depth rule's ties by map and by class of draw, the draws with the most, and the world's fragments a pixel; `--scenes` the overdraw and draw order by depth mode (below; docs/plans/depth-by-layers.md) |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
@@ -388,6 +389,22 @@ python3 tools/world_plain.py --out /tmp/world --report-only --variants exact,gpu
 Into `--out`: `scenarios/NAME/live_VARIANT_sSCALE_rROUND_RATE.*` (the profile, the log, stderr, the result),
 `world_plain.md` and `world_plain.json` (the medians by scene, scale, rate and variant).
 
+## scene_census.py
+
+What each game frame hands the renderer (docs/plans/scene-renderer-design.md, "The frame as a scene"): each scene
+(`layer_inventory.py`'s scenarios: 099's start, the pond, the palace, combat, under water, the menus, the title) played
+headless at 30 with native draw on at 2x, with the PC renderer's frame census (`KF4_PC_FRAME_CENSUS=FILE`,
+`KF4_PC_FRAME_CENSUS_AT="A-B"`: `port/gs/pc/pcr_frame_census.h`, one JSON line a frame) and its overdraw counter
+(DATE's fragments). `census.md` is each scene's median frame; `census.json` the same as data.
+
+```sh
+python3 tools/scene_census.py --out ~/Documents/darker-reality-measurements/DATE-census --disc kfiv_us.iso
+python3 tools/scene_census.py --out ... --report-only
+```
+
+The title and the menus' loops give their pictures no game vblank: their frames are all counted, those without native
+draws kept.
+
 ## depth_ties.py
 
 The depth rule's ties and the world's overdraw (docs/plans/depth-by-layers.md), from the PC renderer's developers'
@@ -413,7 +430,8 @@ python3 tools/depth_ties.py --scenes DIR      # DIR/MODE/SCENE/{overdraw,ties}.t
 the native draws are off without it). The depth modes to compare (`KF4_PC_DEPTH`): `rule` (the default), `exact`,
 `gpu`, `layers` (the GPU's depth, Z clamped at each pixel, the decals `KF4_PC_LAYER_BIAS` nearer; `KF4_PC_LAYERS`,
 `KF4_PC_PIXEL_CLAMP`) and `unorm` (the GPU's depth in the GS's 16-bit whole steps, `D16_UNORM`, DATE by a copy);
-`world_plain.py`'s variants `layers` and `unorm` time them.
+`world_plain.py`'s variants `layers` and `unorm` time them, and `gsexact` (`KF4_PC_DEPTH=gsexact`: exact Z's whole Z alone
+at each pixel, the GS's arithmetic in the shader as a ceiling: docs/plans/scene-renderer-design.md).
 
 ## kf4-layerbench: what a full-screen layer costs on this GPU
 

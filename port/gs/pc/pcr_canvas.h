@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -261,6 +262,10 @@ public:
     void show_decal_losses(bool on);
     // whether the scale last set is drawn with (it is taken at a vblank)
     bool settled() const;
+
+    // (developers' KF4_PC_FRAME_CENSUS, pcr_frame_census.h) each native batch shown to observer first, with the registers
+    // it is drawn with
+    void observe_native_batches(std::function<void(const GsRegisterFile &, uint32_t, const NativeBatch &)> observer);
 
     CanvasCounts counts() const;
     // --stats: the "[stats] pc canvas" lines, and the texture store's

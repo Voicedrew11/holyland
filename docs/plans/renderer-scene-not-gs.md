@@ -72,29 +72,32 @@ left for the design:
 - **Targets as images of their own** cost nothing extra and are what fast clears and folding need; they are the scene
   renderer's way, not a step of their own.
 
-### For the design (`HANDOFF_scene_renderer_design.md`)
+### Settled by the design (`scene-renderer-design.md`, 2026-11-19)
 
-- What a frame's scene is, made from the native draws and the GIF draws that remain (the 2D, the HUD, the menus, the
-  screen passes), and where each draw's material (texture, CLUT, blend, tests) is resolved: today only in the chain's
-  order, against the GS's memory as the uploads leave it.
-- The targets the game draws into and reads back (the reflection, the water and lava targets, the sky's scrolling
-  texture, the frame copied for the under-water and drain screens, the Dark Succubus's copy, the menus' grab).
-- The skinned models' many small draws (program 0x280: about 890 a game frame at the pond) batched.
-- **Pictures between from the scene**: each drawn at its time (instances and camera moved, as `part_moves` moves them
-  today), not a replay of the stream with copies of the frame's surfaces; instant mouse look as a reprojection of the
-  finished picture with a margin (`camera-whip-slowdown.md`).
-- **The GPU never holds the game**: pictures scheduled by their measured cost, one that cannot be drawn in time left
-  out, the game always at its rate (`camera-whip-slowdown.md`).
-- The final picture and present (scaling, sharpening, anti-aliasing: about 2.7 ms a vblank at 2x), and a vblank that
-  shows the same picture not made again.
-- How it lives beside today's renderer while it is built, and how its pictures are judged.
+The design is written; its owner's decisions are listed there. In short:
+
+- **The scene**: built on the renderer's thread as it meets the chain (a draw's material is the chain's state at its
+  place), then read-only: passes (a target each), native draws as instanced draws of persistent meshes, the GIF
+  primitives left as 2D items (140-460 a frame in play), the full-screen layers, the copies, in the stream's order.
+- **Depth**: `D16_UNORM` recommended over the GS's arithmetic in the shader, measured: 7,008 pixels from paraLLEl-GS in
+  the tour against 9,371, and 1.4-3.7 ms less in the world at 2x; at most 33 of those 7,008 are depth at all.
+- **DATE** without a stencil, exactly: the shadows as an order-free first-draw image (MIN blend) and one darkening
+  pass; the HUD's one DATE sprite from a copy of its rectangle; the alpha's reset folded into the frame's clear.
+- **Materials**: the texture store stays the resolver in the chain's order; resolved textures in a bindless table,
+  held by the scene, so pictures between upload nothing again.
+- **Draws**: 100-250 calls a frame by runs of one pipeline as indirect draws, once program 0x280's batch and its
+  sphere pass are one draw (their alternation is 927 of the pond's 1,020 runs).
+- **Pictures between** from the scene at their time; mouse look drawn from the scene, the last turn reprojected.
+- **Scheduling**: today's cut never fires (its test, a backlog over 2 vblanks, is what the inbox's back-pressure never
+  lets happen); the scene renderer decides each picture between by its predicted cost and never holds the game.
+- **Six slices**, beside today's renderer as `--renderer scene`; the first: `HANDOFF_scene_slice1.md`.
 
 ## Order
 
 1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,
    `depth-by-layers.md`.
-2. **Settle the design** (`HANDOFF_scene_renderer_design.md`): `scene-renderer-design.md`, with the owner's choices
-   (depth's exactness above all) made on its numbers.
+2. **Settle the design** (done 2026-11-19): `scene-renderer-design.md`; the owner's choices (depth's exactness above
+   all) to be made on its numbers.
 3. **Build it in slices**, as the design orders them, each a renderer the developers can run beside today's
    (`--renderer`), judged on its pictures and its GPU time.
 4. **Replace** today's renderer for players once the scene renderer draws everything at least as close to
