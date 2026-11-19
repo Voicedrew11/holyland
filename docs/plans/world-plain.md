@@ -6,8 +6,8 @@ today, what each GS-exact mechanism costs, and what the floor is. Measurement an
 player gets.
 
 Made by `tools/world_plain.py` (tools/README.md, "world_plain.py"), with `layer_inventory.py`'s live step and the
-prototype plain path `KF4_PC_PLAIN_WORLD` (`pcr_canvas.cpp`). Its raw output is the game's and stays outside the
-repository.
+prototype plain path `KF4_PC_PLAIN_WORLD` (`pcr_canvas.cpp`). Every result is in `world-plain-results.md`; the raw
+runs are the game's and stay outside the repository (the owner's `~/Documents/darker-reality-measurements/`).
 
 ## The answer, short
 
