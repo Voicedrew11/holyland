@@ -461,6 +461,7 @@ public:
             open_batch(s, p);
         }
         add_primitive(p);
+        batch_.draw_last = gpu_draw_;
     }
 
     void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) {
@@ -482,6 +483,7 @@ public:
         } else {
             batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance});
         }
+        batch_.draw_last = gpu_draw_;
     }
 
     void texture_written(uint64_t tex0, uint64_t texclut) {
@@ -551,6 +553,13 @@ public:
     void trace_draw(uint32_t draw) {
         flush_batch();
         trace_.draw = draw;
+    }
+
+    // (KF4_GPU_DRAWS) The GS draw sent next, as kf4-gsreplay numbers them: the GPU's intervals are written with the
+    // draws they were for (a batch's, its first and last; other work, the draw it came before). Batches are as without.
+    void gpu_draw(uint32_t draw) {
+        gpu_draw_ = draw;
+        times_.set_draws(draw, draw);
     }
 
     // In a pass of its own: the traced pixel in the surfaces its last draw drew into
@@ -2250,6 +2259,7 @@ private:
         // (a kept walk's batch: its texture's place in the walk's table, Kept::table, and its sampler's in Kept::samplers;
         // no_table: set 1's)
         uint32_t table_at = no_table, sampler_at = 0;
+        uint32_t draw_first = 0, draw_last = 0; // (Canvas::gpu_draw's numbers: the GS draws it holds)
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -3094,6 +3104,7 @@ private:
         batch_.boxes.clear();
         batch_.sprites = true;
         batch_.shader_blend = shader_blend_on_ && !choose_blend(s.alpha, bits(s.prim, 6, 1) != 0).supported;
+        batch_.draw_first = batch_.draw_last = gpu_draw_;
         if (bits(s.prim, 4, 1)) {
             batch_.texture = bind_texture(s, cols, rows);
             if (batch_.texture.src == SRC_INDEX) {
@@ -3761,6 +3772,13 @@ private:
 
     void draw_batch(const Batch &b) {
         ZoneScope zone(canvas_draw_batch_zone);
+        // (KF4_GPU_DRAWS: what this records is for the batch's draws, its copies too; the draw sent next after)
+        times_.set_draws(b.draw_first, b.draw_last);
+        struct DrawsBack {
+            GpuTimes &times;
+            uint32_t next;
+            ~DrawsBack() { times.set_draws(next, next); }
+        } draws_back{times_, gpu_draw_};
         const DrawState &s = b.state;
         counts_.batches++;
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
@@ -5035,6 +5053,7 @@ private:
     // (the temporal anti-aliasing) the jitter of what is drawn now, packed (set_jitter); the frame's buffers, the pages
     // the last two pictures showed (scanout); the buffer scanout_depth copies through
     uint32_t jitter_packed_ = 0;
+    uint32_t gpu_draw_ = 0; // (gpu_draw's)
     uint64_t drawing_ = 0; // (begin_drawing's: stamped on the colour surfaces its 3D draws into, Surface::drawing)
     std::array<uint32_t, 2> shown_pages_ = {no_zbuf, no_zbuf};
     BufferHandle depth_staging_;
@@ -5378,6 +5397,9 @@ bool Canvas::trace_pixel(const PcrTraceSpot &spot) {
 }
 void Canvas::trace_draw(uint32_t draw) {
     impl_->trace_draw(draw);
+}
+void Canvas::gpu_draw(uint32_t draw) {
+    impl_->gpu_draw(draw);
 }
 void Canvas::trace_probe() {
     impl_->trace_probe();

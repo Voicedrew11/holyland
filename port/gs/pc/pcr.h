@@ -114,6 +114,10 @@ void pcr_print_stats(void);
 int pcr_debug_trace(const PcrTraceSpot *spot);
 void pcr_debug_trace_draw(uint32_t draw);
 void pcr_debug_trace_probe(void);
+/* The GPU's time by GS draw (KF4_GPU_DRAWS=FILE, set before pcr_open, with KF4_GSN_GPU_TIME and the profiler's GPU detail
+   on: kf4-gsreplay --gpu-draws): the draw sent next is numbered draw, and every GPU interval is written to FILE with the
+   draws it was for. Batches are made as without it (no flush), each timed on its own. */
+void pcr_debug_gpu_draw(uint32_t draw);
 size_t pcr_debug_trace_take(PcrTraceFragment *fragments, size_t room, PcrTraceProbe *probes, size_t probe_room,
                             size_t *probes_taken);
 

@@ -32,6 +32,10 @@
    - mapview=N: the map viewer of map item N (1 to 4 the picture maps, 5 the King's Map: the world drawn
      from above with Game_BlendScreenOffsetDown and Game_TintScreen over it), opened once, 60 frames into
      play, as using the item does
+   - mapchange=N: the change to map N started once, when the player has had control 60 frames (MapChange_StartToMap, as a door
+     without a link: the frame captured to 0x2BC0, its fade, the new map's start; this one changes the game)
+   - savepoint: the save screen opened once, when the player has had control 60 frames, as a save point opens it
+     (game_status.save_requested: SaveScreen_Run, its backdrop of the frame; this one changes the game)
    KF4_FX_LOG=1 prints, every 60 frames, the map, the player's place and the Dark Succubus' distance. */
 #include <math.h>
 #include <stdio.h>
@@ -43,16 +47,19 @@
 #include "map/map.h"
 #include "player/player.h"
 #include "gfx/packet.h"
+#include "core/game.h"
 
 void GsDraw_CopyFrameToTexture(int fbp, int psm, int width, int height);
 void GsDraw_ResetDrawTarget(void);
 void GsDraw_QueueTexFlush(void);
 void GsDraw_QueueTexturedSprite(void *sprite);
 void MapViewer_OpenForItem(int viewer_number);
+void MapChange_StartToMap(int new_value);
 
 extern PlayerState player_state;
 extern PlayerScreenTint player_screen_tint;
 extern MapDrawStateOverlays map_draw_state;
+extern GameStatus game_status;
 extern u8 game_options[0x10];
 extern int message_dim_alpha;
 extern u32 frame_counter;
@@ -83,6 +90,8 @@ enum {
     FX_COPYTEX = 1 << 18,
     FX_MAPVIEW = 1 << 19,
     FX_CREATURE = 1 << 20,
+    FX_MAPCHANGE = 1 << 21,
+    FX_SAVEPOINT = 1 << 22,
 };
 
 static const struct {
@@ -93,9 +102,10 @@ static const struct {
     {"aim", FX_AIM},       {"haze", FX_HAZE},       {"depth", FX_DEPTH},         {"down", FX_DOWN},
     {"updown", FX_UPDOWN}, {"shift", FX_SHIFT},     {"fill", FX_FILL},           {"fade", FX_FADE},
     {"tint", FX_TINT},     {"dim", FX_DIM},         {"bright40", FX_BRIGHT40},   {"brightff", FX_BRIGHTFF},
-    {"succubus", FX_SUCCUBUS}, {"copytex", FX_COPYTEX},
+    {"succubus", FX_SUCCUBUS}, {"copytex", FX_COPYTEX}, {"savepoint", FX_SAVEPOINT},
 };
 
+static int fx_mapchange, fx_in_play;
 static int fx_read, fx, fx_log, fx_spell, fx_mapview, fx_frames, fx_creature, fx_creature_done, fx_creature_seen;
 static float fx_creature_distance = 600.0f;
 
@@ -141,6 +151,9 @@ static void fx_parse(void) {
             } else if (n > 8 && strncmp(p, "mapview=", 8) == 0) {
                 fx |= FX_MAPVIEW;
                 fx_mapview = atoi(p + 8);
+            } else if (n > 10 && strncmp(p, "mapchange=", 10) == 0) {
+                fx |= FX_MAPCHANGE;
+                fx_mapchange = atoi(p + 10);
             } else {
                 fprintf(stderr, "[fx] KF4_FX: '%.*s' is not an effect\n", (int)n, p);
             }
@@ -198,6 +211,17 @@ void ScreenFx_Frame(void) {
     if ((fx & FX_MAPVIEW) && fx_frames == 60) {
         fprintf(stderr, "[fx] frame %u: map viewer %d asked for\n", frame_counter, fx_mapview);
         MapViewer_OpenForItem(fx_mapview);
+    }
+    /* (these two once the player has had control 60 frames: in play, not in the opening) */
+    if (game_status.player_control == 0) {
+        fx_in_play = 0;
+    } else if (++fx_in_play == 60 && (fx & FX_MAPCHANGE)) {
+        fprintf(stderr, "[fx] frame %u: the change to map %d asked for\n", frame_counter, fx_mapchange);
+        MapChange_StartToMap(fx_mapchange);
+    }
+    if ((fx & FX_SAVEPOINT) && fx_in_play == 60) {
+        fprintf(stderr, "[fx] frame %u: the save screen asked for\n", frame_counter);
+        game_status.save_requested = TRUE;
     }
     if (fx & FX_SPELL) {
         player_state.equipped_magic = (u8)fx_spell;

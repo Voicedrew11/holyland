@@ -2985,6 +2985,10 @@ extern "C" void pcr_debug_trace_draw(uint32_t draw) {
     on_canvas([&](pcr::Canvas &canvas) { canvas.trace_draw(draw); });
 }
 
+extern "C" void pcr_debug_gpu_draw(uint32_t draw) {
+    on_canvas([&](pcr::Canvas &canvas) { canvas.gpu_draw(draw); });
+}
+
 extern "C" void pcr_debug_trace_probe(void) {
     on_canvas([](pcr::Canvas &canvas) { canvas.trace_probe(); });
 }

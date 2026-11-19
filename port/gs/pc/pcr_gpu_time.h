@@ -75,6 +75,9 @@ public:
     // The same for a draw of shader state key (shader_state_key): with the profiler's detail on, a change of state
     // begins an interval of its own
     void begin_draw(Vulkan::CommandBuffer &cmd, GpuWork work, uint32_t state_key);
+    // (developers', KF4_GPU_DRAWS) The GS draws what is recorded from here on is for, as kf4-gsreplay numbers them
+    // (Canvas::gpu_draw): written with each interval
+    void set_draws(uint32_t first, uint32_t last);
     // cmd about to be submitted: its open interval closed (no-op if cmd has none). Every submit is preceded by it.
     void end(Vulkan::CommandBuffer &cmd);
 

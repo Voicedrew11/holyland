@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #ifdef __linux__
@@ -44,6 +45,22 @@ bool labels_on() {
     const char *v = getenv("KF4_GPU_LABELS");
     return v && atoi(v) >= 1;
 }
+
+// KF4_GPU_DRAWS=FILE (developers', kf4-gsreplay --gpu-draws): every interval written to FILE with the GS draws it was
+// for (Canvas::gpu_draw's numbers: kf4-gsreplay --list's), each batch an interval of its own. One file for every
+// GpuTimes (lines from two threads interleave whole).
+FILE *draws_file() {
+    static FILE *file = [] {
+        const char *path = getenv("KF4_GPU_DRAWS");
+        FILE *f = path && *path ? fopen(path, "w") : nullptr;
+        if (f) {
+            fprintf(f, "# interval picture work state first_draw last_draw ns\n");
+        }
+        return f;
+    }();
+    return file;
+}
+std::mutex draws_file_lock;
 
 // The profiler's rows: a kind's key, a shader state's (of a kind)
 const uint64_t KIND_ROW = uint64_t(1) << 56, SHADER_ROW = uint64_t(2) << 56;
@@ -238,7 +255,7 @@ private:
 class GpuTimes::Impl {
 public:
     explicit Impl(Device &device)
-        : device_(device), on_(switched_on()), labels_(labels_on()),
+        : device_(device), on_(switched_on()), labels_(labels_on()), draws_out_(draws_file()),
           period_ns_(double(device.get_gpu_properties().limits.timestampPeriod)), lane_(device, period_ns_) {}
 
     void begin(CommandBuffer &cmd, GpuWork work, uint32_t state) {
@@ -246,9 +263,11 @@ public:
         if (!detail) {
             state = 0;
         }
-        // (detail 2: each draw an interval of its own, the same state or not)
-        bool each_draw = detail >= 2 && state != 0;
-        if (open_ && open_cmd_ == &cmd && open_work_ == work && open_state_ == state && !each_draw) {
+        // (detail 2, or the draws written: each draw an interval of its own, the same state or not; with the draws
+        // written, other work too once the draws it is for change)
+        bool each_draw = (detail >= 2 || draws_out_) && state != 0;
+        bool same_draws = !draws_out_ || (open_first_ == draw_first_ && open_last_ == draw_last_);
+        if (open_ && open_cmd_ == &cmd && open_work_ == work && open_state_ == state && !each_draw && same_draws) {
             return;
         }
         if (open_ && open_cmd_ != &cmd) {
@@ -273,6 +292,14 @@ public:
         open_work_ = work;
         open_state_ = state;
         open_start_ = now;
+        open_first_ = draw_first_;
+        open_last_ = draw_last_;
+        open_picture_ = pictures_;
+    }
+
+    void set_draws(uint32_t first, uint32_t last) {
+        draw_first_ = first;
+        draw_last_ = last;
     }
 
     void end(CommandBuffer &cmd) {
@@ -308,11 +335,21 @@ public:
                     add_to_profile(i, ns);
                 }
                 lane_.put(i.work, i.state, t0, t1);
+                if (draws_out_) {
+                    std::lock_guard<std::mutex> hold(draws_file_lock);
+                    fprintf(draws_out_, "%llu %llu %s %08X %u %u %llu\n", (unsigned long long)intervals_written_++,
+                            (unsigned long long)i.picture, work_names[size_t(i.work)], i.state, i.first, i.last,
+                            (unsigned long long)ns);
+                }
             }
             pending_.pop_front();
         }
         lane_.close();
         flush_to_profile();
+        if (draws_out_) {
+            std::lock_guard<std::mutex> hold(draws_file_lock);
+            fflush(draws_out_);
+        }
         while (pending_.size() > pending_most) {
             pending_.pop_front();
             dropped_++;
@@ -362,12 +399,14 @@ private:
         QueryPoolHandle start, end;
         GpuWork work;
         uint32_t state; // (0: none)
+        uint32_t first, last; // (the GS draws it was for: set_draws, KF4_GPU_DRAWS)
+        uint64_t picture;     // (the pictures counted before it began)
     };
 
     // the open interval closed at now (when timed), its label ended
     void close(CommandBuffer &cmd, const QueryPoolHandle &now) {
         if (open_start_ && now) {
-            pending_.push_back({open_start_, now, open_work_, open_state_});
+            pending_.push_back({open_start_, now, open_work_, open_state_, open_first_, open_last_, open_picture_});
         }
         open_start_.reset();
         if (labels_) {
@@ -411,12 +450,15 @@ private:
     static constexpr size_t pending_most = size_t(1) << 16;
 
     bool on() const {
-        return on_ || port_profile_gpu_recording() || port_zones_recording();
+        return on_ || draws_out_ || port_profile_gpu_recording() || port_zones_recording();
     }
 
     Device &device_;
     bool on_;
     bool labels_;
+    FILE *draws_out_; // (KF4_GPU_DRAWS: draws_file)
+    uint32_t draw_first_ = 0, draw_last_ = 0, open_first_ = 0, open_last_ = 0;
+    uint64_t open_picture_ = 0, intervals_written_ = 0;
     double period_ns_;
     bool open_ = false;
     CommandBuffer *open_cmd_ = nullptr;
@@ -439,6 +481,10 @@ void GpuTimes::begin(CommandBuffer &cmd, GpuWork work) {
 
 void GpuTimes::begin_draw(CommandBuffer &cmd, GpuWork work, uint32_t state_key) {
     impl_->begin(cmd, work, state_key);
+}
+
+void GpuTimes::set_draws(uint32_t first, uint32_t last) {
+    impl_->set_draws(first, last);
 }
 
 void GpuTimes::end(CommandBuffer &cmd) {

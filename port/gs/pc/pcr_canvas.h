@@ -251,6 +251,7 @@ public:
     // submits, waits for the GPU and returns the fragments counted, kept or not) and the decal losses
     bool trace_pixel(const PcrTraceSpot &spot);
     void trace_draw(uint32_t draw);
+    void gpu_draw(uint32_t draw); // (KF4_GPU_DRAWS: pcr.h's pcr_debug_gpu_draw)
     void trace_probe();
     size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes);
     void show_decal_losses(bool on);
