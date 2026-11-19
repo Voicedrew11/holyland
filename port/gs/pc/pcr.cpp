@@ -85,6 +85,9 @@ const ZoneId pump_frame_taken_zone = port_zone_id("pump frame taken", ZONE_WORK)
 const ZoneId pump_picture_between_zone = port_zone_id("pump picture between", ZONE_WORK);
 const ZoneId pump_picture_zone = port_zone_id("pump picture", ZONE_WORK);
 const ZoneId pc_take_picture_between_zone = port_zone_id("pc take_picture_between", ZONE_WORK);
+const ZoneId pc_inbox_waits_for_room_zone = port_zone_id("pc inbox: the sender waits for room", ZONE_WAIT);
+const ZoneId pc_inbox_waits_for_a_reply_zone = port_zone_id("pc inbox: the sender waits for its picture", ZONE_WAIT);
+const ZoneId pc_inbox_waits_behind_zone = port_zone_id("pc inbox: the sender waits for the renderer (2 vblanks behind)", ZONE_WAIT);
 
 namespace {
 
@@ -194,7 +197,11 @@ public:
     // Any thread. False once the PC renderer's thread has stopped (the message is dropped).
     bool put(Message message, size_t bytes, bool vblank) {
         std::unique_lock<std::mutex> hold(lock_);
-        room_.wait(hold, [&] { return stopping_ || held_bytes_ == 0 || held_bytes_ + bytes <= MAX_HELD_BYTES; });
+        auto room = [&] { return stopping_ || held_bytes_ == 0 || held_bytes_ + bytes <= MAX_HELD_BYTES; };
+        if (!room()) {
+            ZoneScope zone(pc_inbox_waits_for_room_zone);
+            room_.wait(hold, room);
+        }
         if (stopping_) {
             return false;
         }
@@ -260,6 +267,7 @@ public:
     // The sender: its picture's answer (0 if the thread went first)
     int wait_reply(const Reply &reply) {
         std::unique_lock<std::mutex> hold(lock_);
+        ZoneScope zone(pc_inbox_waits_for_a_reply_zone);
         idle_.wait(hold, [&] { return gone_ || reply.done; });
         return reply.done ? reply.result : 0;
     }
@@ -267,7 +275,13 @@ public:
     // The sender of a window's picture: at most two vblanks ahead of their pictures handed out
     void wait_behind_at_most(uint64_t vblanks) {
         std::unique_lock<std::mutex> hold(lock_);
-        idle_.wait(hold, [&] { return gone_ || vblanks_sent_ - vblanks_done_ <= vblanks; });
+        auto caught_up = [&] { return gone_ || vblanks_sent_ - vblanks_done_ <= vblanks; };
+        if (!caught_up()) {
+            // (the wait that holds the DMA controller's thread, and so the game, when the GPU is too slow: without
+            // its zone the profiler counted it as the "dma GS vsync" zone's own work)
+            ZoneScope zone(pc_inbox_waits_behind_zone);
+            idle_.wait(hold, caught_up);
+        }
     }
 
     int backlog() {
