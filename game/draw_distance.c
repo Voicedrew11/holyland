@@ -109,13 +109,18 @@ void DrawDistance_NoteBehind(const void *record) {
 }
 
 /* MapObject_DrawAll: an object not in view drawn all the same, for the pictures between: one in view with its map
-   record (no linked point owner of its own, as MapObject_UpdateAll decides) whose record is drawn behind the player */
+   record (no linked point owner of its own, as MapObject_UpdateAll decides) whose record is drawn behind the player.
+   Only an object in use: MapObject_UpdateAll marks no other in view, so the PS2 never draws one. A map keeps spare
+   models out of use until something calls them up (a container's broken model, MapObject_Break), some parked far
+   from where they will be used: map 008's broken barrel waits in the air beyond the hill of map 099, and was drawn
+   there in the sky. */
 int DrawDistance_ObjectBehind(const MapObject *object) {
     uintptr_t key = (uintptr_t)object->map_record;
     u32 i;
     int n;
 
-    if (key == 0 || (object->source->linked_point_owner != 0 && object->source->linked_point_owner != 0xFF)) {
+    if (key == 0 || !(object->state_flags & MAP_OBJECT_IN_USE) ||
+        (object->source->linked_point_owner != 0 && object->source->linked_point_owner != 0xFF)) {
         return 0;
     }
     i = behind_slot(key);
