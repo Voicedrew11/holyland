@@ -4175,6 +4175,12 @@ private:
         } else if (!b.native) {
             bind_vertices(c, b);
         }
+        // (a decal of a program whose decals are given their depth first, decal_depth_first, rather than settled after)
+        bool depth_first = settle && depth_first_program(v);
+        if (depth_first) {
+            decal_depth_first(c, b, push, flags, passes, pass_count, v);
+            c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL); // (is_decal's ZTST)
+        }
         for (int i = 0; i < pass_count; i++) {
             const Pass &pass = passes[i];
             push.flags = (flags & ~(3u << F_PASS_SHIFT)) | pass.mode << F_PASS_SHIFT | (pass.z && zwrite ? F_ZWRITE : 0u);
@@ -4187,8 +4193,8 @@ private:
                 flush_run();
             }
             c.set_program(program);
-            c.set_depth_test(ztest, ztest && pass.z);
-            if (settle) {
+            c.set_depth_test(ztest, ztest && pass.z && !depth_first);
+            if (settle && !depth_first) {
                 mark_decal_won(c, pass.z);
             }
             if (date_stencil) {
@@ -4225,16 +4231,56 @@ private:
             set_vertex_attribs(c);
             c.draw(uint32_t(b.vertices.size()));
         }
-        if (settle) {
+        if (settle && !depth_first) {
             c.set_stencil_test(false);
         }
         if (decal_losses_ && zte && (flags & F_DECAL)) {
             draw_decal_losses(c, b, push, passes, pass_count, ztst, v);
         }
-        if (settle) {
+        if (settle && !depth_first) {
             settle_decal_depth(c, b, push, passes, pass_count, v, vp);
         }
         drawn_over(b, box, zte && zwrite);
+    }
+
+    // A decal's depth given before its colour instead of settled after: each pass that writes Z drawn with no colour and
+    // the decal's own fine part, GEQUAL, so that each pixel holds the nearer of what was there and the decal's own
+    // depth; then its passes as ever, tested with the top fine part (a tie with the surface under it passes, as on the
+    // GS) and writing no depth. No stencil, no reset: two draws a pass that writes Z, not three. Unlike the GS (and the
+    // settle), where a decal overlaps itself its farther part is not drawn under the nearer, the nearer's depth being
+    // there before either's colour: map 013's blended tree came out thinner, 097's crate washed out. So only for the
+    // programs in depth_first_program.
+    // (2026-11-19, 4x: 009's fire, about 1,900 decals of 280's a picture, 7.06 ms of GPU a picture settled, 5.64 with
+    // 280's given their depth first (the rule 4.65); 063 the same, 4.45-4.50. Pictures: the whole-game tour at 1x and 32
+    // frames of 009's fire at 4x no pixel more than 4 apart from the settle's; every program's decals so, 009 5.56 but
+    // 34 tour views further from paraLLEl-GS, the tree and the crate)
+    static bool depth_first_program(int v) {
+        return v == 2; // (native 280's: draw_batch's v)
+    }
+    template <typename Passes>
+    void decal_depth_first(CommandBuffer &c, const Batch &b, PrimPush push, uint32_t flags, const Passes &passes,
+                           int pass_count, int v) {
+        flags &= ~((3u << F_PASS_SHIFT) | F_DECAL);
+        push.trace_xy = no_trace;
+        c.set_program(programs_[v]);
+        c.set_blend_enable(false);
+        c.set_color_write_mask(0);
+        c.set_stencil_test(false);
+        c.set_depth_test(true, true);
+        c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL);
+        for (int i = 0; i < pass_count; i++) {
+            if (!passes[i].z) {
+                continue;
+            }
+            push.flags = flags | passes[i].mode << F_PASS_SHIFT;
+            c.push_constants(&push, 0, sizeof(push));
+            if (b.native) {
+                draw_native_runs(c, b);
+                continue;
+            }
+            set_vertex_attribs(c);
+            c.draw(uint32_t(b.vertices.size()));
+        }
     }
 
     // ---- A decal's depth where it won (exact Z) ----

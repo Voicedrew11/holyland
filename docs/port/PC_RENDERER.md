@@ -606,6 +606,13 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
   byte for byte (map 039 aside, which varies run to run), with and without the rule. The reset as a stencil-tested
   rectangle over the decal's instead of the decal again was slower: 009 16.1 ms, the rectangles' pixels far more than
   the decals'.
+  **2026-11-19: native 280's decals given their depth first** (`decal_depth_first`, `depth_first_program`): each pass
+  that writes Z drawn first with no colour and the decal's own fine part, then the passes tested with the top part and
+  writing no depth; no stencil, no reset, two draws a pass, not three. 009 (its fire: about 1,900 decals of 280's a
+  picture) 5.65 ms against 7.06 (the rule 4.65); 063 unchanged, about 4.5. Pictures: the whole-game tour at 1x and 32
+  frames of 009's fire at 4x within 4 levels of the settle's at every pixel. Not for every program: where a decal
+  overlaps itself its farther part is no longer drawn under its nearer, and 34 tour views moved further from
+  paraLLEl-GS (map 013's blended tree thinner, 097's crate washed out), for 009 5.56 ms.
 - **The depth rule (2026-11-15).** One test for every draw that tests Z GEQUAL or GREATER, in the fragment shader
   (`pcr_prim.h`'s `pcr_depth_rule`): no decals singled out, nothing drawn twice. Each fragment has its Z with the
   fraction, not rounded (`pcr_full_depth`: the plane's, `plane_z.h`'s `pz_pixels_depth`), and a tolerance, the GS's

@@ -696,6 +696,9 @@ std::vector<Record> decal_states(const Record &r, const WarmDevice &t) {
     again.static_state.state.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
     again.static_state.state.stencil_test = 0;
     out.push_back(again);
+    Record colour = r; // (decal_depth_first: its passes after its depth, writing none; made for every program's)
+    colour.static_state.state.depth_write = 0;
+    out.push_back(colour);
     return out;
 }
 
