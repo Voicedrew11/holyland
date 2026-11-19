@@ -544,7 +544,15 @@ bool pcr_exact_depth() {
     rule_tolerance = tolerance;
     return true;
 #else
-    gl_FragDepth = (z + float(pcr_loss_margin())) * pc.zscale;
+    float depth = (z + float(pcr_loss_margin())) * pc.zscale;
+    // (KF4_PC_DEPTH=nudge: the depth rule's tie without reading the depth drawn. The GPU's own test (GEQUAL) passes a
+    // later draw within twice its tolerance of what is there by writing it that much nearer; GREATER that much
+    // farther, so a tie fails. Never past the corners' bound, as the rule.)
+    if ((pc.flags & PCR_F_DEPTH_NUDGE) != 0u) {
+        float nudge = 2.0 * tolerance * pc.zscale + depth * (1.0 / 8388608.0);
+        depth = (pc.flags & PCR_F_ZGREATER) != 0u ? depth - nudge : min(depth + nudge, gl_FragCoord.z);
+    }
+    gl_FragDepth = depth;
     return true;
 #endif
 }

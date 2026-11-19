@@ -626,6 +626,17 @@ on the GS, and the depth test's GEQUAL lets the later draw win: no Z added to an
     does. The shader passes a sample only where the GPU's own test will.
   - Without interlock (or `KF4_PC_DEPTH=exact`): exact Z with decals settled, as above. `KF4_PC_DEPTH=gpu`: the GPU's
     interpolated depth. The log says which.
+  - **Tried and not taken (2026-11-19): the tie by a nudge (`KF4_PC_DEPTH=nudge`, branch feat/depth-nudge).** No
+    interlock: every GEQUAL draw writes its full Z twice its tolerance nearer (GREATER farther), capped at the corners'
+    bound, so the GPU's own test passes what the rule calls a tie. Fast: 009 4.65 ms of GPU a picture (rule 4.65,
+    settle 9.76), 063 3.16-3.43 (rule 3.46-3.77, settle 4.66-4.75; `profile.py`, 4x, alternated). But it cannot tie
+    two layers that are both nudged: the base and the layer over it move by the same amount, so the layer still loses
+    wherever its Z is a hair farther. In a 64-frame walk at 063 (4x, `replay_compare.py`) the moss over the low wall
+    (the owner's flicker of 2026-11-12) is lost over patches of the wall: of the pixels where nudge and rule differ,
+    463k are nearer paraLLEl-GS with the rule, 49k with the nudge. The still tour (760 views, 1x) barely shows it
+    (rule nearer in 790 pixels, nudge 289; map 013 v10: a trunk behind a wall shows through). Nudging decals alone
+    is the 2026-11-12 decal nudge, which failed because the wall under the moss is blended too. So a GPU without
+    interlock keeps the settle.
   - Pipelines: the rule's programs are roles 26-65 (single-sampled, then multisampled, each with its twin at the
     other count: `WarmProgram::other`), the copy's clear 66 and DATE's marking set-up 67; the seed's GEQUAL, GREATER
     (and with the copy ALWAYS-writing) records are made with the rule's program in their place

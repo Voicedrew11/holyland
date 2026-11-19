@@ -146,6 +146,7 @@ enum : uint32_t {
     F_ZALWAYS = 0x20000000,
     F_DATE_MARK = 0x40000000,
     F_DATE_CLEARS = 0x200000,
+    F_DEPTH_NUDGE = 0x80000, // (KF4_PC_DEPTH=nudge: pcr_common.h)
 };
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
@@ -405,6 +406,8 @@ public:
                                                      : "this GPU has no 64-bit integers in shaders");
         } else if (rule_on_) {
             fprintf(stderr, "[pcr] depth: the depth rule (the shader tests the depth: fragment shader interlock)\n");
+        } else if (nudge_on_) {
+            fprintf(stderr, "[pcr] depth: exact Z nudged by its tolerance (KF4_PC_DEPTH=nudge)\n");
         } else {
             fprintf(stderr, "[pcr] depth: exact Z with decals settled (%s)\n",
                     depth_asked() == DepthAsked::exact ? "KF4_PC_DEPTH=exact" : "this GPU has no fragment shader interlock");
@@ -3922,8 +3925,11 @@ private:
         bool rule = rule_on_ && zte && (ztst == 2 || ztst == 3 || (ztst == 1 && zwrite)) && depth->zcopy;
         // (ALWAYS without a Z write tests nothing: drawn with the test off, the same pixels, as the driver would)
         bool ztest = zte && !(ztst == 1 && !zwrite);
-        flags |= rule_on_ ? F_FULL_DEPTH : 0;
+        flags |= rule_on_ || nudge_on_ ? F_FULL_DEPTH : 0;
         flags |= rule && ztst == 3 ? F_ZGREATER : 0;
+        // (KF4_PC_DEPTH=nudge: a draw that tests Z GEQUAL or GREATER writes its Z nudged by its tolerance)
+        bool nudge = nudge_on_ && zte && (ztst == 2 || ztst == 3);
+        flags |= nudge ? F_DEPTH_NUDGE | (ztst == 3 ? F_ZGREATER : 0) : 0;
         flags |= rule && ztst == 1 ? F_ZALWAYS : 0;
         // (... DATE by the stencil: its set-up marks where it fails in the copy, which the shader reads, so that the
         // copy is not written where the stencil fails the fragment)
@@ -4929,10 +4935,27 @@ private:
     // (and 64-bit integers: the plane's exact arithmetic, pcr_exact_z.h)
     // (developers' KF4_PC_DEPTH=rule|exact|gpu: the depth rule where the GPU has it, exact Z with decals settled, or the
     // GPU's interpolated depth; to compare in one build. Unset: the depth rule where the GPU has it, else exact Z)
-    enum class DepthAsked { rule, exact, gpu };
+    // (=nudge: exact Z with its fraction, a GEQUAL or GREATER draw's depth written nudged by its tolerance; no
+    // interlock, nothing settled: pcr_prim.h's pcr_exact_depth. Weighed against the rule 2026-11-19 and not taken:
+    // docs/port/PC_RENDERER.md, "The depth rule")
+    enum class DepthAsked { rule, exact, gpu, nudge };
     static DepthAsked depth_asked() {
         const char *v = getenv("KF4_PC_DEPTH");
-        return !v ? DepthAsked::rule : strcmp(v, "exact") == 0 ? DepthAsked::exact : strcmp(v, "gpu") == 0 ? DepthAsked::gpu : DepthAsked::rule;
+        if (!v) {
+            return DepthAsked::rule;
+        }
+        static const struct {
+            const char *name;
+            DepthAsked asked;
+        } names[] = {{"exact", DepthAsked::exact},
+                     {"gpu", DepthAsked::gpu},
+                     {"nudge", DepthAsked::nudge}};
+        for (const auto &n : names) {
+            if (strcmp(v, n.name) == 0) {
+                return n.asked;
+            }
+        }
+        return DepthAsked::rule;
     }
     static bool interlock(const Device &device) {
         const auto &f = device.get_device_features();
@@ -4953,8 +4976,9 @@ private:
     const bool rule_on_ = exact_z_ && interlock(device_) && depth_asked() == DepthAsked::rule;
     // (exact Z: decals given back their own depth where they won, settle_decal_depth. Developers' KF4_PC_DECAL_SETTLE=0:
     // not, the top fine part written, to compare)
+    const bool nudge_on_ = exact_z_ && depth_asked() == DepthAsked::nudge;
     const bool settle_on_ =
-        exact_z_ && !rule_on_ && !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
+        exact_z_ && !rule_on_ && !nudge_on_ && !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
     // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
     // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
     const std::unique_ptr<PlanePass> planes_ =

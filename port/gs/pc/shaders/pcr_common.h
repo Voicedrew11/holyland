@@ -161,6 +161,8 @@ void pcr_take_record() {
 #define PCR_F_ZALWAYS 0x20000000u  // (... and its copy) the GS's test is ALWAYS: every sample passes, the copy written
 #define PCR_F_DATE_MARK 0x40000000u // (... and its copy) DATE by the stencil: the copy's sign bit marks where it fails
 #define PCR_F_DATE_CLEARS 0x200000u // (... and its copy) DATE's stencil cleared where this pass draws: marked failing
+#define PCR_F_DEPTH_NUDGE 0x80000u // (KF4_PC_DEPTH=nudge, with PCR_F_FULL_DEPTH) the depth written nudged by twice its
+                                   // tolerance: nearer (GEQUAL), farther with PCR_F_ZGREATER (pcr_prim.h's pcr_exact_depth)
 #define PCR_DECAL_LOSS_MARGIN 16u
 #define PCR_NO_TRACE 0xFFFFFFFFu
 
