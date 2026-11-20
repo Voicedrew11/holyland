@@ -555,8 +555,8 @@ the owner's 2x in a real window.
 | 6. For players | settings, the overlay, save states, `pace_test.py`, `map_tour.py`; the 9070 XT and an Intel or NVIDIA GPU | the owner's review; then `pc` retired | |
 
 Slice 1 is built and measured (2026-11-19): `scene-slice1-results.md`, each criterion with its numbers. It passes but
-for DATE's 0.1 ms (0.39 at the pond, against the PC renderer's 2.5 there with its copies) and the copies of the
-reflection and the HUD's DATE sprite; the validation layer was not run.
+for DATE's 0.1 ms (0.39 at the pond, against the PC renderer's 2.5 there with its copies: the owner accepts it for now,
+to come back to once more of the renderer is done) and the copies of the reflection and the HUD's DATE sprite.
 
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.

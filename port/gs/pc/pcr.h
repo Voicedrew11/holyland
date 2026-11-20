@@ -46,6 +46,10 @@ int pcr_gpu_kind(void);
    done everything sent before */
 void pcr_gif(int path, const void *data, size_t bytes);
 void pcr_wait(void);
+/* Before the process exits: everything sent done, as pcr_wait, two seconds at most (and the pump's likewise), so that
+   the renderer's thread is not drawing while exit's handlers tear down what it uses (the statics of Mesa, Granite or a
+   Vulkan layer made after pcr_open, which go before its own handler stops the thread) */
+void pcr_settle(void);
 void pcr_read_fifo(void *dst, uint32_t qwords);
 int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);

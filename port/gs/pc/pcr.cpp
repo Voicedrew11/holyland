@@ -2149,14 +2149,19 @@ public:
         pcr::precompile(std::move(passes));
     }
 
-    // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
-    // seconds more it is left (the process ends with it)
-    // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
-    void stop() {
+    // What was sent done, two seconds at most (the pump's likewise, after kf4-pc's: kf4-pc may wait for it)
+    void settle() {
         inbox_.wait_idle_for(std::chrono::seconds(2));
         if (pump_) {
             pump_->wait_idle_for(std::chrono::seconds(2));
         }
+    }
+
+    // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
+    // seconds more it is left (the process ends with it)
+    // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
+    void stop() {
+        settle();
         inbox_.stop();
         if (inbox_.wait_gone_for(std::chrono::seconds(2))) {
             thread_.join();
@@ -2756,6 +2761,12 @@ extern "C" void pcr_gif(int path, const void *data, size_t bytes) {
 
 extern "C" void pcr_wait(void) {
     renderer()->wait();
+}
+
+extern "C" void pcr_settle(void) {
+    if (renderer()) {
+        renderer()->settle();
+    }
 }
 
 extern "C" void pcr_read_fifo(void *dst, uint32_t qwords) {

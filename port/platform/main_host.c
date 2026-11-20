@@ -945,7 +945,13 @@ static void drained(void *unused) {
     (void)unused;
 }
 
+static int stats_printed;
+
 static void print_stats(void) {
+    if (stats_printed) {
+        return;
+    }
+    stats_printed = 1;
     uint32_t mode = port_host_float_begin(); /* (at exit, which the game's thread may call) */
     double per_second = port_ticks_per_second();
     double vu1 = (double)port_stats.vu1_ticks / per_second;
@@ -980,6 +986,15 @@ static void print_stats(void) {
     port_host_float_end(mode);
 }
 
+/* --stats printed now, once (the exit handler then prints nothing): before a run's own exit, while the renderer's
+   Vulkan device is still whole. Exit's handlers run after the statics of Vulkan layers and drivers made since this
+   was registered are gone, and the PC renderer's GPU times wait for the device. */
+void port_print_stats(void) {
+    if (port_options.stats) {
+        print_stats();
+    }
+}
+
 /* The save folder: --saves, or saves in the data folder */
 static void open_save_folder(void) {
     char folder[1024];
@@ -1010,7 +1025,7 @@ int main(int argc, char **argv) {
     open_log();
     atexit(close_log);
     if (port_options.stats) {
-        atexit(print_stats);
+        atexit(print_stats); /* (a run's own end prints them before exit: port_print_stats) */
     }
     port_frame_profiler_start(); /* KF4_PROFILE, KF4_PROFILE_OUT, KF4_PROFILE_SPIKE */
     atexit(port_frame_profiler_stop);

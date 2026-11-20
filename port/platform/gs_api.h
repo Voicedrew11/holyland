@@ -25,6 +25,9 @@ static inline void gsr_hang_reports_in(const char *folder) {
 static inline void gsr_gif(int path, const void *data, size_t bytes) {
     pcr_gif(path, data, bytes);
 }
+static inline void gsr_settle(void) {
+    pcr_settle();
+}
 static inline void gsr_pipeline_cache(const char *path) {
     pcr_pipeline_cache(path);
 }

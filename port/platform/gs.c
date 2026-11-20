@@ -966,6 +966,12 @@ void port_gs_finish(void) {
     while (backend && port_gs_vsync_pending()) {
         port_dmac_wake();
     }
+#ifdef KF4_HAVE_PARALLEL_GS
+    /* (the renderer's thread done before exit's handlers run: pcr_settle) */
+    if (have_pc) {
+        gsr_settle();
+    }
+#endif
 }
 
 int port_gs_replay_uploads(void) {

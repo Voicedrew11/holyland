@@ -420,6 +420,8 @@ void port_gs_read_fifo(void *dst, uint32_t qwords);
 void port_gs_post_vsync(void);
 /* Waits until every queued vblank is scanned out (before the program stops). */
 void port_gs_finish(void);
+/* --stats printed now, once (main_host.c): before a run's own exit, while the Vulkan device is whole */
+void port_print_stats(void);
 /* The controller's side: a vblank is queued; scan it out. */
 int port_gs_vsync_pending(void);
 /* The renderer's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they
