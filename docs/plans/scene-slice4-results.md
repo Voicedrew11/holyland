@@ -237,9 +237,47 @@ ms a game frame, medians of two rounds; a picture between is the 60 run less the
 A picture between halved at the pond and the palace and is under half a game frame at 099. What is left in one, at the
 palace: 0x000 3.24 (now its pixels: 0.98 with none drawn), 0x280 1.69, the 2D 0.35, the stand-ins' copies 0.83; at the
 pond 0x700 (the effects, not placed: its shader one of the 244-register ones) about 2.1 ms a game frame and as much
-again a picture. The final pass, 5.5 ms a game frame, is untouched.
+again a picture, three quarters of it pixels. The final pass, 5.5 ms a game frame, is untouched.
 
 Next on the same way: 0x700 placed (the pond), then the final pass and the GS's pixel in the shader (3f's (2) and (3)).
+
+### 0x700 next: how to do it well
+
+The effects (`pcr_nd700.vert`, `vu1_700_maths.h`; the pond's spray and the fire creatures) are about 2.1 ms a game
+frame at the pond and as much again a picture between, mostly pixels (below). Their vertex shader is one
+of the two with 244-248 registers and a wave a SIMD (`RADV_DEBUG=shaderstats`, `MESA_SHADER_CACHE_DISABLE=true`).
+What 0x000's and 0x280's taught, in order:
+
+1. **Bound it first** (an hour, no building): extend `KF4_SCN_ND_EMPTY` to 0x700 (`pcr_nd700.vert` made with
+   `SCN_ND_EMPTY`, `vs_rec[nd700]`) and `world_plain.py`'s `scene_tiny_empty_nodetail`, at the pond, 30 and 60.
+   Already known (`cost2/`, the "0x280, 0x700" column less 0x280's): 0x700 at the pond is 2.08 ms a game frame at 30,
+   **0.51 of it with no pixels**; a picture between's 2.15, 0.67 of it with none. So placing can win at most about
+   0.5 ms a frame and 0.6 a picture: most of 0x700 is its pixels (blended effects over much of the screen), which
+   is 3f's (3), the GS's pixel in the shader. Placing 0x700 alone does not bring the pond under half a game frame.
+2. **Read the record where used, everywhere.** `vu1_700_maths.h` has the same `Draw d;` copy as 0x000's and 0x280's
+   had; the placing shader must take `ND_D_DIRECT` (`#define d draws[d_at]`) from the start. Check its statistics
+   before timing it: no scratch, under ~64 registers. It may be worth trying `ND_D_DIRECT` in the unplaced vertex
+   shaders too (0x700's and the ripple's) before placing them at all: the 244 registers may be that copy.
+3. **The batch's vertices** (`draw_700` in `pcr_native.cpp`): set `nb.first_vertex = base + b.first`,
+   `nb.vertex_count = b.count` (one slot a vertex; `draw_left_out` already does). 0x700's loop transforms a "vertex n"
+   past the strip (`RdBatch::past`), but no triangle corner reads it: the job is the strip's `count`.
+4. **What 0x700's corners need from a vertex differs from 0x000's** (`pcr_nd700.vert`), so read it line by line:
+   - the position's own w (`mesh.q[at * 4].w`, 16 for the effects): the mirror cut is `cut / pw` in a whole triangle and
+     `cut * q * f` on the screen, and a whole triangle's Q is `1 / (c.w * pw)`. Keep `pw` in the placed vertex (a pad
+     word of `Placed`);
+   - the drop in a picture between looks at the kick and the two vertices before it (`kick - i`, `i < 3`) with no check
+     of the batch's start (0x280's checks its number in the batch, 0x000's `befores`): keep that exactly;
+   - no ADC clip test of its own (VU1's count decides the whole strip on the CPU), no wave UVs, no far plane;
+   - `lit_colour` is the model's one colour by the lights (no point lights, no `colour_u` walk).
+   One `Placed` layout fits; `place_vertices` takes a third program (native slot 2: set 0's bindings 9 and 10), and
+   `prepare_placing`'s `slot > 1` test becomes `slot > 2`.
+5. **The pictures**: byte for byte against `KF4_SCN_PLACED=0` in the cases with effects (fire elementals, salamanders,
+   spell 3, spell 16, fire genie, the pond), headless at 60 with `--native-draw on` (without it no native draw is drawn
+   and the check checks nothing); the fast turn (`look` lines, `2026-11-20-scene-vertices-once/turn/turn.pad`) at 240,
+   where only the whole corners may differ, by a level.
+6. **Then time it** in a real window (`world_plain.py`, 2x, 30 and 60, as drawn and with no pixels).
+
+The same holds for the ripple (`pcr_ndripple.vert`), small today.
 
 ## What is left of slice 4
 
