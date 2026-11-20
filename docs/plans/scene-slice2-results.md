@@ -120,10 +120,11 @@ picture is made each vblank, so what moves into the picture is paid twice a game
 
 ## What is left, and what slice 3 starts from
 
-- **The world's 0.4 ms (1.5 at the pond) more with the alpha's fold**: not yet explained; the first thing to look at,
-  since it is a third to a half of what the slice saves.
-- **The fills after the HUD** (above): folding them as the design has them changes pixels against slice 1 (towards
-  the GS's arithmetic). Decided by the owner before they are folded.
+- **The world's 0.4 ms (1.5 at the pond) more with the alpha's fold**: found and taken (2026-11-20,
+  `scene-slice2-after.md`): not the world's but the shadows' first-draw image's clear, timed in the world's last draw;
+  the image is no longer cleared each frame.
+- **The fills after the HUD**: folded (`scene-slice2-after.md`), byte for byte slice 2's: the GS's arithmetic came out
+  further from paraLLEl-GS, the frame under the fills being a level off it already.
 - **The frame's partial clears**: where both frame buffers are one target (the pond, from a New Game) a frame's
   clear is a partial render area, not a fast clear. Each frame buffer an image of its own (the design's "3. The
   targets") would make them whole-image clears.

@@ -60,7 +60,7 @@ layout(set = 1, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE, PCR_F
 layout(set = 1, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
 #ifdef SCN_FIRST_DRAW
 // (the scene renderer's DATE, port/gs/scene/scn_draw.cpp: the shadows' first-draw image, scn_first_draw.frag's) The
-// number of the first triangle drawn at each pixel; this draw's triangle n is pc.record + n
+// number of the first triangle drawn at each pixel, over 2^24; this draw's triangle n is pc.record + n
 layout(set = 1, binding = 10) uniform sampler2D u_first;
 #endif
 layout(set = 1, binding = 2) uniform Clut {
@@ -611,7 +611,7 @@ void main() {
 #endif
 #ifdef SCN_FIRST_DRAW
     // (drawn only where this triangle was the first drawn: the pixel the GS's DATE lets it draw)
-    if (texelFetch(u_first, ivec2(gl_FragCoord.xy), 0).r != float(pc.record + uint(gl_PrimitiveID))) {
+    if (texelFetch(u_first, ivec2(gl_FragCoord.xy), 0).r != float(pc.record + uint(gl_PrimitiveID)) * (1.0 / 16777216.0)) {
         discard;
     }
 #endif

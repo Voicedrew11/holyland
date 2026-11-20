@@ -241,6 +241,11 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
         rp.clear_depth_stencil = {pass.depth_value, 0};
     }
     rp.render_area = pass.area;
+    if (time_clears_ && (pass.clear_colour || pass.clear_depth)) {
+        // (developers', KF4_SCN_TIME_CLEARS=1: its load ops' clears timed as clears, else they are in the interval of
+        // the draw before; a timestamp more, which waits for the GPU: the frame takes longer timed)
+        times_.begin(c, pcr::GpuWork::surface);
+    }
     c.begin_render_pass(rp);
     uint32_t set = no_material; // (the material whose state the command buffer has: a draw of it again sets nothing)
     for (uint32_t i = 0; i < pass.draw_count; i++) {

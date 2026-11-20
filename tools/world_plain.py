@@ -79,6 +79,11 @@ VARIANTS = {
                      {}, ["--renderer", "scene"]),
     "scene_nohold": ("the scene renderer, each clear a step where met (KF4_SCN_HOLD_CLEARS=0)",
                      {"KF4_SCN_HOLD_CLEARS": "0"}, {}, ["--renderer", "scene"]),
+    # ... the first-draw image (DATE's shadows) cleared every frame (scene-slice2-after.md)
+    "scene_firstclear": ("the scene renderer, the first-draw image cleared every frame (KF4_SCN_FIRST_KEEP=0)",
+                         {"KF4_SCN_FIRST_KEEP": "0"}, {}, ["--renderer", "scene"]),
+    "scene_nofills": ("the scene renderer, the fills after the HUD drawn into the target (KF4_SCN_FOLD_FILLS=0)",
+                      {"KF4_SCN_FOLD_FILLS": "0"}, {}, ["--renderer", "scene"]),
     # The same of another build, given by --exe-for scene_ref=EXE (an earlier slice's, measured in the same rounds)
     "scene_ref": ("the scene renderer of the build --exe-for names (an earlier slice's)", {}, {},
                   ["--renderer", "scene"]),

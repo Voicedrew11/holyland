@@ -563,7 +563,9 @@ drawn), the alpha's reset folded into the frame's clear, the brightness drawn by
 the history made where a texture reads such a frame; every picture byte for byte slice 1's. A game frame is 0.9 / 1.7 /
 1.4 ms less at 099 / the pond / the palace, short of the 2.5-3 asked: the fills after the HUD are not folded (byte for
 byte they must be the GPU's blend, drawn again each picture), the world's time grows 0.4 ms with the alpha's fold (not
-yet explained), and at the pond the frame's clears are partial render areas.
+yet explained), and at the pond the frame's clears are partial render areas. After it (`scene-slice2-after.md`): the
+0.4 ms was the shadows' first-draw image's clear, timed in the world's last draw (the image is now cleared once in 128
+frames), and the fills after the HUD are folded byte for byte; a game frame 0.35 / 0.6 / 0.17 ms less again.
 
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
@@ -595,6 +597,8 @@ build and measure, each to be looked at again only on its slice's numbers.
    shade and MapDrawState's fill, folded into the picture as ((A - B) * C >> 7) + D a channel (`scene-slice2-results.md`):
    their pixels then differ from the GPU blend's (slice 1's) by a shade here and there. The owner accepts a picture that
    differs where it cannot be told apart; check that the changed pixels are nearer paraLLEl-GS, not further.
+   Measured (`scene-slice2-after.md`): further, since the frame under the fills is a level off paraLLEl-GS already;
+   so they are folded with the arithmetic of slice 2's blend (byte for byte), the GS's a developers' switch.
 
 Also taken with them, as the design has them: the scene built in the chain's order on the renderer's thread; the
 texture store as the resolver with a bindless table; DATE by the first-draw image (slice 1 checks its assumptions:
