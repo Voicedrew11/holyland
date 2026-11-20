@@ -698,6 +698,7 @@ public:
             // (another renderer under the shell, pcr_shell.h: no canvas, no pictures between of its own, no census)
             drawing_ = maker(device, *times_, hang_notes);
             natives_ = std::make_unique<pcr::NativeDraws>(device);
+            between_ = std::make_unique<pcr::Between>(device); // (the pictures' buffers: the drawing draws them)
             return;
         }
         auto canvas = std::make_unique<pcr::Canvas>(device, *times_);
@@ -723,14 +724,7 @@ public:
     void take_frame(InterpFrame frame) {
         ZoneScope zone(pc_frame_taken_pictures_between_zone);
         if (!canvas_) {
-            // (another renderer under the shell, pcr_shell.h: its own pictures between)
-            if (drawing_) {
-                using FS = pcr::Drawing::FrameStretch;
-                const uint64_t bytes = frame->packet_bytes;
-                drawing_->frame_taken(since_vblank_bytes_ != 0 && since_vblank_bytes_ == bytes ? FS::open
-                                      : since_vblank_bytes_ == 0 && last_vblank_bytes_ == bytes ? FS::last
-                                                                                                 : FS::none);
-            }
+            take_frame_drawn(std::move(frame));
             return;
         }
         if (!between_) {
@@ -772,6 +766,43 @@ public:
         last_stretch_.reset();
     }
 
+    // (another renderer under the shell, pcr_shell.h: its own pictures between) The frame's stretch of packets, kept as
+    // for the canvas (its kicks numbered, the native draws' records paired with their pictures'), and its kicks made the
+    // frame's walked kicks: the stretch still open where the frame's packets are those since the last vblank (the mouse
+    // turned: the frame taken at its own vblank's first picture), else the one closed at the last vblank (mostly: the
+    // frame taken at its first picture between, a vblank after its packets). The drawing is told which, or none.
+    void take_frame_drawn(InterpFrame frame) {
+        using FS = pcr::Drawing::FrameStretch;
+        FS which = FS::none;
+        if (frame_stretch_ && stretch_open_ && since_vblank_bytes_ == frame->packet_bytes) {
+            last_stretch_ = close_stretch();
+            which = FS::open;
+        } else {
+            drop_stretch();
+            which = since_vblank_bytes_ == 0 ? FS::last : FS::none;
+        }
+        frame_taken_at_ = vblanks_;
+        pcr::Drawing::FrameShape shape;
+        shape.draw_fbp = frame->draw_fbp;
+        shape.shown_fbp = frame->shown_fbp;
+        shape.kicks = frame->kicks;
+        const uint64_t packet_bytes = frame->packet_bytes;
+        between_->take_frame(std::move(frame));
+        pcr::FrameWalkRefused refused = pcr::FrameWalkRefused::none;
+        if (which == FS::none || !last_stretch_) {
+            refused = pcr::FrameWalkRefused::not_kept;
+        } else if (last_stretch_->bytes != packet_bytes) {
+            refused = pcr::FrameWalkRefused::not_the_frame;
+        } else if (last_stretch_->trail_paired) {
+            refused = pcr::FrameWalkRefused::trail_paired;
+        } else if (!between_->adopt_live_kicks(std::move(last_stretch_->kicks), std::move(last_stretch_->trail_moves))) {
+            refused = pcr::FrameWalkRefused::not_the_frame;
+        }
+        between_->frame_from_own_walk(refused);
+        drawing_->frame_taken(refused == pcr::FrameWalkRefused::none ? which : FS::none, shape);
+        last_stretch_.reset();
+    }
+
     // What a picture between leaves to the pump: the picture, with the frame first when the pump has not this walk
     struct ForPump {
         std::optional<PumpFrame> frame;
@@ -784,8 +815,11 @@ public:
     std::optional<ForPump> walk_picture(const GsnInterpPicture &picture) {
         ZoneScope zone(pc_walk_picture_a_picture_between_zone);
         if (!canvas_) {
-            if (drawing_) {
-                drawing_->picture_between(picture);
+            // (another renderer under the shell: the picture's buffers made, the drawing draws it)
+            drop_stretch();
+            if (drawing_ && between_ && between_->begin_picture_again(picture)) {
+                drawing_->picture_between(picture, {&between_->picture(), &between_->kicks(), &between_->moves()});
+                between_->end_picture_again();
             }
             return std::nullopt;
         }
@@ -941,7 +975,6 @@ public:
     // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, uint64_t game_vblank) {
         vblanks_++;
-        last_vblank_bytes_ = since_vblank_bytes_;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
@@ -1095,10 +1128,12 @@ private:
         bool trail_paired = false;
     };
     void open_stretch() {
-        if (!canvas_ || !natives_ || !between_) {
+        if (!natives_ || !between_) {
             return;
         }
-        canvas_->keep_walk();
+        if (canvas_) {
+            canvas_->keep_walk();
+        }
         front_.number_kicks();
         between_->keep_live_kicks();
         natives_->begin_frame_kept();
@@ -1107,8 +1142,10 @@ private:
     }
     Stretch close_stretch() {
         Stretch s;
-        canvas_->stop_keeping();
-        s.walk = canvas_->take_kept_walk();
+        if (canvas_) {
+            canvas_->stop_keeping();
+            s.walk = canvas_->take_kept_walk();
+        }
         front_.stop_numbering();
         s.kicks = between_->end_live_kicks();
         natives_->end_frame_kept();
@@ -1186,7 +1223,6 @@ private:
     // and its uploads the frame's: take_frame), and the bytes of the packets taken in since the last vblank
     bool frame_stretch_ = true;
     uint64_t since_vblank_bytes_ = 0;
-    uint64_t last_vblank_bytes_ = 0; // (the packets' bytes between the two vblanks before)
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
@@ -2544,6 +2580,9 @@ private:
             pump_->wait_idle();
         }
         MadePicture made = out_->make(v, scale, intake_.drawing(), *intake_.gpu_times());
+        if (pcr::Drawing *drawing = intake_.drawing()) {
+            drawing->picture_made();
+        }
         if (extra) {
             stats.interp_late += uint64_t(not_shown_when_late(made, last_between_));
         }

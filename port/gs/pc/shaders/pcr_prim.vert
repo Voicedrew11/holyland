@@ -65,6 +65,10 @@ layout(set = 0, binding = 2, std430) readonly buffer Moves {
 #define PCR_K_CORNER 3u
 #define PCR_K_SPRITE 4u
 #define PCR_K_FST 8u
+// (the scene renderer's: a triangle crossing the Z buffer's range, cut for the frame) a piece of it, drawn in the frame
+// only; the whole triangle of its kicks, drawn in its pictures between only
+#define PCR_K_FRAME_ONLY 16u
+#define PCR_K_PICTURE_ONLY 32u
 
 // a moved kick's place less its XYOFFSET, in the surface (the frame's place in it added)
 vec2 place_of(KickNow r, uint k) {
@@ -188,6 +192,10 @@ void main() {
         colour = vec4(c.rgba);
         stq = c.stq;
         fog = c.fog;
+    }
+    if ((a_kicks.w & (pic.counts.x != 0u ? PCR_K_FRAME_ONLY : PCR_K_PICTURE_ONLY)) != 0u) {
+        gone = true;
+        pos = vec2(1.0e9);
     }
     if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
         // (exact Z: pcr_exact_z.h; a moved sprite's or a moved triangle's corners all made of kicks, or none)

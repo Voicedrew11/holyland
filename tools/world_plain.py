@@ -124,6 +124,20 @@ VARIANTS = {
     "scene_bound_nodetail": ("the scene renderer, each picture between the frame's scene again, the GPU's time by kind "
                              "alone", {"KF4_SCN_BETWEEN_BOUND": "1", "KF4_GPU_DETAIL": "0"}, {},
                              ["--renderer", "scene"]),
+    # Slice 3f's cheap tests (scene-slice4-results.md): what the world's 7 ms a game frame is made of. Each the GPU's time
+    # by kind alone; the pictures of the first two are wrong
+    "scene_flat_nodetail": ("the scene renderer, its draws shaded one colour (KF4_SCN_FLAT=1: the shading's bound)",
+                            {"KF4_SCN_FLAT": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
+    "scene_tiny_nodetail": ("the scene renderer, its draws' scissor a pixel (KF4_SCN_TINY=1: no pixels, the vertex "
+                            "stage and the draws left)", {"KF4_SCN_TINY": "1", "KF4_GPU_DETAIL": "0"}, {},
+                            ["--renderer", "scene"]),
+    "scene_aniso1_nodetail": ("the scene renderer, anisotropic filtering 1x", {"KF4_GPU_DETAIL": "0"},
+                              {"native_aniso": 1}, ["--renderer", "scene"]),
+    "scene_nodcc_nodetail": ("the scene renderer, RADV's colour compression off", {"RADV_DEBUG": "nodcc",
+                                                                                  "KF4_GPU_DETAIL": "0"}, {},
+                             ["--renderer", "scene"]),
+    "scene_nohiz_nodetail": ("the scene renderer, RADV's HiZ off", {"RADV_DEBUG": "nohiz", "KF4_GPU_DETAIL": "0"}, {},
+                             ["--renderer", "scene"]),
     "scene_fuse_nodetail": ("the scene renderer, 0x280's two passes as one draw, the GPU's time by kind alone",
                             {"KF4_SCN_FUSE_280": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }

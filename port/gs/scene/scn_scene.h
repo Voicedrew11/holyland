@@ -69,6 +69,9 @@ struct Draw {
     pcr::NativeProgram native_program = pcr::NativeProgram::vu1_000;
     Vulkan::BufferHandle arena, records, triangles;
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
+    // (slice 4) the record its pictures between draw it with (its move: pcr_native.h's NativeBatch::picture_instance);
+    // pcr::no_instance: none (drawn as in the frame)
+    uint32_t picture_instance = 0xFFFFFFFFu;
     // The GIF's primitives: their corners in Scene::vertices, three a triangle
     uint32_t first_vertex = 0, vertex_count = 0;
     // (the GIF's triangles Z tested: 3D the native draw does not take, program 0x000's triangles cut up where they cross

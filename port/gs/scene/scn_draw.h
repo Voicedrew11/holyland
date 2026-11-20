@@ -25,10 +25,12 @@
 #include <stdio.h>
 
 #include <array>
+#include <unordered_map>
 #include <cstdint>
 #include <vector>
 
 #include "device.hpp"
+#include "gs_drawing.h"
 #include "pcr_gpu_time.h"
 #include "scn_scene.h"
 
@@ -40,9 +42,18 @@ public:
     Drawer(const Drawer &) = delete;
     Drawer &operator=(const Drawer &) = delete;
 
+    // (slice 4) A picture between drawn from a kept scene: its buffers bound where the shaders read a picture's (set 0's
+    // bindings 0 to 2: pcr_between.h's), each native draw by the record its pictures draw it with
+    // (Draw::picture_instance), and every image in stand_ins drawn into or read in its stand-in's place (the images the
+    // scene writes: the picture never draws into the GS's memory)
+    struct PictureDraw {
+        pcr::Drawing::PictureBuffers buffers;
+        const std::unordered_map<const Vulkan::Image *, Vulkan::ImageHandle> *stand_ins = nullptr;
+    };
+
     // The scene's steps into cmd, in order: each op between full barriers, each pass a render pass. What follows in cmd
-    // sees all of it.
-    void record(const Scene &scene, Vulkan::CommandBuffer &cmd);
+    // sees all of it. picture: as a picture between's (above), else the scene's own.
+    void record(const Scene &scene, Vulkan::CommandBuffer &cmd, const PictureDraw *picture = nullptr);
 
     // DATE by the first-draw image is possible here: an R32F colour target that blends (MIN)
     bool first_draw_ok() const {
@@ -93,6 +104,7 @@ public:
         // (slice 3d) fused first passes drawn with their own set 1 for want of their sphere's place in the records: drawn
         // without the sphere pass (none met; counted)
         uint64_t fused_unrecorded = 0;
+        uint64_t picture_scenes = 0; // (slice 4: the scenes recorded for pictures between)
     };
     const Counts &counts() const {
         return counts_;
@@ -174,6 +186,18 @@ private:
     void full_barrier(Vulkan::CommandBuffer &c);
     void pass_to_pass_barrier(Vulkan::CommandBuffer &c);
     void make_programs();
+    // (a picture between's, record's picture) an image's stand-in, or itself; the picture's buffer at set 0's binding;
+    // the record a native draw is drawn with
+    const Vulkan::Image &image(const Vulkan::ImageHandle &h) const;
+    const Vulkan::Buffer *picture_buffer(uint32_t binding) const;
+    uint32_t instance_of(const Draw &d) const;
+    const PictureDraw *picture_ = nullptr;
+    // (developers', slice 3f's bounds: docs/plans/scene-slice4-results.md) KF4_SCN_FLAT=1: the plain passes' draws by a
+    // fragment shader of one colour (scn_flat.frag); KF4_SCN_TINY=1: their scissor one pixel (the vertex stage and the
+    // draws' own cost left). The pictures are wrong.
+    const bool flat_on_ = getenv("KF4_SCN_FLAT") && atoi(getenv("KF4_SCN_FLAT")) != 0;
+    const bool tiny_on_ = getenv("KF4_SCN_TINY") && atoi(getenv("KF4_SCN_TINY")) != 0;
+    std::array<Vulkan::Program *, size_t(Program::count)> flat_{}, flat_rec_{};
 
     Vulkan::Device &device_;
     pcr::GpuTimes &times_;
