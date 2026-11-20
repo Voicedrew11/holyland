@@ -731,6 +731,9 @@ private:
                     nb.records = records_280_.buffer;
                     nb.triangles = kicked_.buffer;
                     nb.instance = record | ((prim >> 9) & 1) << 28 | pass << 29 | ((prim >> 3) & 1) << 30;
+                    // (the first pass: every corner's alpha the colour's scale and bias's, min(w * 0 + 128, 255), when
+                    // they are 0 and 128; the sphere pass's alpha is vertex 1's of the same, the same 0x80)
+                    nb.alpha_is_one = k.scale[3] == 0.0f && k.bias[3] == 128.0f;
                     name_picture(nb);
                     canvas.native_batch(front.registers(), prim, nb);
                     counts_.triangles += nb.triangle_count;

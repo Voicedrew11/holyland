@@ -56,7 +56,10 @@ SCENE_AGAIN = [
     (os.path.join(SCENE_SHADERS, "scn_first_draw.frag"), "scn_first_draw_frag_rec", ["-DPCR_RECORDS", "-DPCR_DRAWS_APART"]),
 ] + [(os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_rec", ["-DPCR_RECORDS", "-DPCR_DRAWS_APART"])
      for name in ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
-                  "pcr_prim.frag", "pcr_prim_early.frag"]]
+                  "pcr_prim.frag", "pcr_prim_early.frag"]] + [
+    # (slice 3d: program 0x280's first pass with its sphere pass in it, one draw: pcr_prim.h's SCN_FUSE_280)
+    (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_fuse",
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_FUSE_280"]) for name in ["pcr_nd280.vert", "pcr_prim_early.frag"]]
 
 
 def main():

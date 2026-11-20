@@ -44,6 +44,16 @@ layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.ve
 // v_color's divisor: Q for a native draw's whole triangle in a picture between (its colour given times Q:
 // whole_triangle.h, pcr_nd000.vert's draw_whole), else 0 (the colour as is)
 layout(location = 12) PCR_IN float v_color_q;
+// (SCN_FUSE_280, the scene renderer's program 0x280 with its two passes as one draw: scn_build.cpp's fuse_280) the
+// sphere pass's S, T and Q (1) and its alpha, from pcr_nd280.vert; the texture's coordinates read through PCR_STQ, the
+// first pass's then the sphere's
+#ifdef SCN_FUSE_280
+layout(location = 5) PCR_IN vec4 v_sphere;
+vec3 pcr_stq;
+#define PCR_STQ pcr_stq
+#else
+#define PCR_STQ v_stq
+#endif
 
 layout(location = 0) out vec4 o_color;
 #if defined(PCR_RECORDS) && !defined(PCR_DRAWS_APART)
@@ -280,7 +290,7 @@ vec2 texture_uv() {
     // S/Q times the size lands on a whole texel in the menus' brightness sprite and background, which draw the buffer
     // back over itself 1:1, and the menus at 1x sat a GS pixel left of gs's, 2026-11-11. The GS's own U and V are in
     // 1/16 texel.)
-    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? v_stq.xy : v_stq.xy / v_stq.z * size;
+    vec2 uv = (pc.flags & PCR_F_FST) != 0u ? PCR_STQ.xy : PCR_STQ.xy / PCR_STQ.z * size;
     return round(uv * 256.0) / 256.0;
 }
 
@@ -367,7 +377,7 @@ uvec4 sample_texture() {
     vec2 uv = texture_uv();
     float lod = pc.lod_k;
     if ((pc.tex1 & 0x80u) == 0u) {
-        lod += log2(1.0 / abs(v_stq.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
+        lod += log2(1.0 / abs(PCR_STQ.z)) * float(1u << ((pc.tex1 >> 8) & 3u));
     }
     float bias = float(int(pc.tex1) >> 16) / 256.0;
     if (smooth_2d_applies(lod)) {
@@ -606,6 +616,55 @@ bool pcr_exact_depth() {
 }
 #endif
 
+// The texture function (TFX, TCC) on the texture's colour at this pixel and the vertex colour vc, then the fog, into c:
+// the GS's integers (a macro, so that the shaders that use it once are as they were)
+#define PCR_TEXTURE_AND_FOG(c, vc) \
+    if ((pc.flags & PCR_F_TME) != 0u) { \
+        uvec4 t = sample_texture(); \
+        bool tcc = (pc.flags & PCR_F_TCC) != 0u; \
+        switch ((pc.flags >> PCR_F_TFX_SHIFT) & 3u) { \
+        case 0u: /* MODULATE */ \
+            c.rgb = min((t.rgb * vc.rgb) >> 7, uvec3(255u)); \
+            c.a = tcc ? min((t.a * vc.a) >> 7, 255u) : vc.a; \
+            break; \
+        case 1u: /* DECAL */ \
+            c.rgb = t.rgb; \
+            c.a = tcc ? t.a : vc.a; \
+            break; \
+        case 2u: /* HIGHLIGHT */ \
+            c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u)); \
+            c.a = tcc ? min(t.a + vc.a, 255u) : vc.a; \
+            break; \
+        default: /* HIGHLIGHT2 */ \
+            c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u)); \
+            c.a = tcc ? t.a : vc.a; \
+            break; \
+        } \
+    } \
+    if ((pc.flags & PCR_F_FGE) != 0u) { \
+        uint f = uint(clamp(v_fog, 0.0, 255.0)); \
+        uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
+        c.rgb = (f * c.rgb + (255u - f) * fog) >> 8; \
+    }
+
+#ifdef SCN_FUSE_280
+// ALPHA's (A - B) * C + D as blended above, over cd: the first pass's colour as written, not the destination's copy
+uvec3 blended_over(uvec4 cs, uvec4 cd) {
+    if ((pc.alpha & 0x20000u) != 0u && cs.a < 0x80u) {
+        return cs.rgb;
+    }
+    ivec3 s = ivec3(cs.rgb), d = ivec3(cd.rgb);
+    uint sel_a = pc.alpha & 3u, sel_b = (pc.alpha >> 2) & 3u, sel_c = (pc.alpha >> 4) & 3u, sel_d = (pc.alpha >> 6) & 3u;
+    ivec3 a = sel_a == 0u ? s : sel_a == 1u ? d : ivec3(0);
+    ivec3 b = sel_b == 0u ? s : sel_b == 1u ? d : ivec3(0);
+    ivec3 dd = sel_d == 0u ? s : sel_d == 1u ? d : ivec3(0);
+    int ad = (pc.alpha & 0x40000u) != 0u ? 0x80 : int(cd.a);
+    int c = sel_c == 0u ? int(cs.a) : sel_c == 1u ? ad : int((pc.alpha >> 8) & 0xFFu);
+    ivec3 r = (((a - b) * c) >> 7) + dd;
+    return (pc.alpha & 0x10000u) != 0u ? uvec3(clamp(r, 0, 255)) : uvec3(r & 0xFF);
+}
+#endif
+
 #if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
 // (PCR_DRAWS_APART: the pixel shaded for one record at a time, pcr_common.h's PCR_EACH_RECORD; main below)
 void pcr_shade() {
@@ -630,6 +689,9 @@ void main() {
     if (pc.trace_xy != PCR_NO_TRACE) {
         trace_dz = vec2(dFdxFine(gl_FragCoord.z), dFdyFine(gl_FragCoord.z)) / pc.zscale;
     }
+#ifdef SCN_FUSE_280
+    pcr_stq = v_stq;
+#endif
     if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
@@ -646,33 +708,7 @@ void main() {
 #endif
     uvec4 vc = uvec4((v_color_q > 0.0 ? v_color / v_color_q : v_color) + 0.001);
     uvec4 c = vc;
-    if ((pc.flags & PCR_F_TME) != 0u) {
-        uvec4 t = sample_texture();
-        bool tcc = (pc.flags & PCR_F_TCC) != 0u;
-        switch ((pc.flags >> PCR_F_TFX_SHIFT) & 3u) {
-        case 0u: // MODULATE
-            c.rgb = min((t.rgb * vc.rgb) >> 7, uvec3(255u));
-            c.a = tcc ? min((t.a * vc.a) >> 7, 255u) : vc.a;
-            break;
-        case 1u: // DECAL
-            c.rgb = t.rgb;
-            c.a = tcc ? t.a : vc.a;
-            break;
-        case 2u: // HIGHLIGHT
-            c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
-            c.a = tcc ? min(t.a + vc.a, 255u) : vc.a;
-            break;
-        default: // HIGHLIGHT2
-            c.rgb = min(((t.rgb * vc.rgb) >> 7) + vc.a, uvec3(255u));
-            c.a = tcc ? t.a : vc.a;
-            break;
-        }
-    }
-    if ((pc.flags & PCR_F_FGE) != 0u) {
-        uint f = uint(clamp(v_fog, 0.0, 255.0));
-        uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu);
-        c.rgb = (f * c.rgb + (255u - f) * fog) >> 8;
-    }
+    PCR_TEXTURE_AND_FOG(c, vc)
 #ifndef PCR_EARLY
     uint pass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
     if (pass != 0u && alpha_passes(c.a) != (pass == 1u)) {
@@ -680,12 +716,41 @@ void main() {
         discard;
     }
 #endif
+#ifdef SCN_FUSE_280
+    // The sphere pass over the first (scn_build.cpp's fuse_280): the first's colour as it writes it (unblended or its
+    // blend the source alone, its alpha test passed: nothing discarded), then the sphere's pixel from its own record
+    // (pc.merged) and its corners (v_sphere): its texture, the texture function, fog and alpha test, and its blend over
+    // the first's colour in the GS's integers; where its alpha test fails (AFAIL KEEP), the first's as it is. Z is the
+    // first's: the sphere's test (GEQUAL or ALWAYS, the same Z) passes wherever the first's did.
+    uvec4 cd = uvec4(c.rgb, (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a);
+    pcr_record_at = pc.merged;
+    pcr_stq = v_sphere.xyz;
+    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
+        vec2 uv = texture_uv();
+        uv_dx = dFdx(uv);
+        uv_dy = dFdy(uv);
+    }
+    uvec4 vs = uvec4(255u, 255u, 255u, uint(v_sphere.w + 0.001));
+    c = vs;
+    PCR_TEXTURE_AND_FOG(c, vs)
+    uint spass = (pc.flags >> PCR_F_PASS_SHIFT) & 3u;
+    uvec3 rgb;
+    uint a;
+    if (spass != 0u && alpha_passes(c.a) != (spass == 1u)) {
+        rgb = cd.rgb;
+        a = cd.a;
+    } else {
+        rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended_over(c, cd) : c.rgb;
+        a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
+    }
+#else
     uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
     if ((pc.flags & PCR_F_PREMUL) != 0u) {
         uint k = (pc.flags & PCR_F_C_FIX) != 0u ? pc.clamp_hi >> 24 : c.a;
         rgb = min((rgb * k) >> 7, uvec3(255u));
     }
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
+#endif
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
     o_color = vec4(vec3(rgb) / 255.0, alpha_out);
 #if defined(PCR_RECORDS) && !defined(PCR_DRAWS_APART)

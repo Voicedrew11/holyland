@@ -230,3 +230,140 @@ The spread between rounds 0.00-0.09 (the palace without blended runs 0.15).
 - 0x000's time at 099 (2.6 ms with the detail on) is not in its calls: part 3f (`HANDOFF_scene_slice3.md`) studies
   where it goes, and the scanout's 5.5 ms a game frame (half the GPU's frame at all three places), and measures the
   calls' CPU time, where batching's gain is; the slice's "under 2 ms" is judged by it.
+
+## 3d. 0x280's two passes as one draw
+
+2026-11-20 (`2026-11-20-scene-slice3-3d/`), on `scene/slice3c` from 3b. Done before 3c and 3f by the owner's choice
+(the handoff's order was 3c, 3f, then 3d). Behind `KF4_SCN_FUSE_280=1`, **off by default**: the owner has not judged
+its pictures, and they cannot be judged against paraLLEl-GS until 3c (below).
+
+### The bound first
+
+Before building, a developers' switch that leaves 0x280's sphere passes out (`KF4_SCN_NO_SPHERE=1`, the picture lacks
+the shine; `world_plain.py`'s `scene_nosphere`) bounded what fusing could save (`bound/`): the GPU's time with the
+second pass gone and the first passes' runs no longer cut by it. `world_plain.py` now has a `0x280` column (0x280 alone,
+without 0x700).
+
+### What it does
+
+- **The pairs** (`scn_build.cpp`'s `fuse_280`). VU1's program 0x280 kicks a batch's strip twice where it has a sphere
+  pass: lit and textured, then the same triangles with the sphere-mapped shine blended over. The first pass is drawn as
+  ever; when its sphere pass comes next (the same record and triangles, nothing drawn between) and the pair can be one
+  draw, the first's draw gets a material that points to the sphere's (`Material::fuse`) and the sphere pass is not
+  drawn. Where it cannot, two draws as before.
+- **When a pair can be one draw** (`not_fusable`): the first pass's colour written as it is (unblended, or its blend
+  the source alone: `(Cs - Cd) * As + Cd` with every alpha 0x80, the draw's colour scale.w 0 and bias.w 128, now
+  `NativeBatch::alpha_is_one` for 0x280 too), its alpha test passing everywhere (none, or 0x80 tested), no DATE; the
+  sphere's alpha test keeping the pixel where it fails (AFAIL KEEP); the same frame (all of it written), Z buffer, Z test
+  (GEQUAL or ALWAYS, so the sphere passes where the first did), scissor and XYOFFSET (the context may differ: the sphere
+  pass draws with context 2, whose registers are the same); the sphere's texture not a target's copy.
+- **The census** (`KF4_SCN_SPHERE_CENSUS=1`, `census/`): every pair in the 50 scenarios, 773,678, by both passes'
+  registers. 99.5% are one pattern: the first `(Cs - Cd) * As + Cd` at alpha 0x80, alpha test GREATER 0 (passes), Z
+  GEQUAL written; the sphere `Cd * As + Cs` (ALPHA 0x09), its alpha the texture's, alpha test GREATER 0 with KEEP, the
+  same Z test; only TEX0, TEX1 and PRIM differ. The others: a first pass whose alpha is the texture's (its test can
+  fail: 2,226) and a blended first pass with alpha not 0x80 (1,463), drawn apart.
+- **The fused shaders** (`pcr_prim.h` and `pcr_nd280.vert` built with `SCN_FUSE_280`: `scn_pcr_*_fuse` in
+  `scn_shaders.h`). The vertex shader also hands down the sphere's S, T, Q and alpha (`v_sphere`, as its own pass would
+  in `v_stq` and `v_color.a`). The fragment shader shades the first pass, takes its colour as written, then switches
+  to the sphere's record (the first record's `merged`, a field the scene's records did not use; the sphere records
+  after the draws', one a material: `scn_draw.cpp`'s `prepare`) and shades the sphere: texture, texture function, fog,
+  alpha test, and its blend over the first's colour in the GS's integers (`blended_over`); where its alpha test fails,
+  the first's colour. Unblended, the early depth test. The texture function and fog became a macro used at both places
+  (`PCR_TEXTURE_AND_FOG`) and the texture's coordinates are read through `PCR_STQ`: the PC renderer's shaders and the
+  scene's others are byte for byte as they were (`pcr_shaders.h` unchanged; `scn_shaders.h` only gains the two).
+- `build_draw`'s GS registers into a record moved to helpers (`texture_flags`, `gs_fields`, `alpha_fields`,
+  `material_textures`) so that the sphere's record is made by the same code.
+
+### Applies to
+
+All three places' pairs but the pond's 3% (`[stats] scene renderer 0x280 fused`, headless at 2x): the pond 67,891 of
+69,975 pairs (the rest the first pass's alpha test), the palace 195,887 of 195,887; the 50 scenarios 763,605 of
+767,293 (`scen_fuse/`: the first pass's alpha test 2,225, the first pass blended 1,463).
+
+### The calls a frame
+
+As 3b's counts (headless at 2x, the runs log's medians over the 100 vblanks before each scenario's first picture;
+`runs/`):
+
+| | 099 (start) | the pond | the palace |
+|---|---|---|---|
+| draw calls, two passes (3b) | 171 | 968 | 975 |
+| draw calls, fused | **36** | **200** | **46** |
+| ... 0x280's | 139 → 4 | 883 → 115 | 935 → 6.5 |
+| indirect commands | 203 → 271 | 674 → 1,027 | 509 → 973 |
+
+The design's 100-250 calls a frame: the pond 200, 099 and the palace under it. The pond's 0x280 calls left are its
+first passes without a sphere pass and the pairs drawn apart, alternating with the fused draws' program.
+
+### The GPU time
+
+`world_plain.py --scales 2 --rounds 2` in a real window with the owner's settings (Vega 7, 30), ms a game frame,
+medians (`bound/`, `cost/`; the spread between rounds 0.00-0.12):
+
+| | 0x280: two passes | no sphere pass (bound) | fused | all, detail on: two → fused | all, detail off |
+|---|---|---|---|---|---|
+| the pond | 1.93 | 1.44 | **1.63** | 13.18 → 12.85 | 13.11 → 12.77 |
+| the palace | 2.62 | 1.07 | **1.08** | 12.72 → 11.22 | 12.73 → 11.22 |
+
+- **The palace gets the whole bound** (1.54 of 1.56 ms, 12% of the GPU's frame): its 1,400 tiny draws alternating
+  between two programs were the cost, not the shine's pixels. **The pond two-thirds of it** (0.30 of 0.48): the fused
+  shader's second texture read is paid there, over larger models.
+- **0x280 under 1 ms is not met**: 1.63 / 1.08, and the bound shows fusing cannot meet it (1.44 / 1.07 with no shine at
+  all). What is left is the first passes' own drawing, as 0x000's is its pixels (3b): 3f's question, with the
+  criterion moved there.
+
+### The pictures
+
+- **Off (the default): byte for byte 3b's**, the 50 scenarios at 2x (`scen_off/`, against `bin/kf4_3b`): 49 of 50,
+  "start spin" as ever.
+- **Fused against the two passes**, the 50 scenarios at 2x (`scen_fuse/`): 43 of 50 byte for byte; 6 changed
+  ("start spin" aside): combat, fire elementals, salamanders, first kill, death, the palace. 12 pictures changed, up to
+  241,396 pixels (combat at 2653), **nearly all by 1 level**: 89-94% of a picture's changed pixels by 1, 6-11% by 2-4,
+  at most 370 a picture by 5-24, and at most **33 a picture by more than 24** (the palace's 12 pixels apart: 10 of them
+  by 5-24). The changes are on the creatures' shiny skins
+  (the fire elemental, the Watcher's arm, the dying creature), where the sphere's blend differs: the two passes' is
+  Vulkan's (`Cd * As / 128` in floats, rounded to the nearest), the fused shader's the GS's (`(Cd * As) >> 7`, the
+  remainder dropped). The few over 24 are a batch's triangles that tie in Z at a pixel: the GS (and two passes) blends
+  the shine over both, the fused draw once (the palace's 12 pixels: 37 → 12 by two passes, 20 fused). The pictures,
+  each changed moment's frame with its changes ringed, then the two passes, the fused draw and the difference magnified:
+  `fuse_pictures/` (`fuse_pictures.py`).
+- **Against paraLLEl-GS at 1x** (`scen_gs1x/`, `scen_gs1x_keep/`; the six changed scenarios, both drawn and compared
+  with it): **the fused pictures are further from it**, in 9 of the 10 changed pictures. Where the two differ, the mean
+  error from paraLLEl-GS is 0.48-0.93 for the two passes and 0.90-1.95 fused, and paraLLEl-GS-exact pixels there fall
+  from about half to 6-21%; the pixels differing from it over the whole picture rise by up to 7% (death at 3603:
+  225,116 → 241,498). Signed, the two passes are -0.1 to +0.1 a channel from paraLLEl-GS at those pixels, fused -0.4 to
+  -0.7. The tenth (death at 3863, 1,475 pixels) goes the other way: the two passes +0.49 there, fused +0.02, mean error
+  1.00 → 0.75, exact 13% → 28%: where the picture runs bright of paraLLEl-GS, the GS's rounding lands nearer it, as a
+  level in the inputs would have it. paraLLEl-GS's blend is the
+  fused shader's (`floor((A - B) * C / 128) + D`, its `ubershader.comp`'s `alpha_blend`), so the difference is in the
+  blend's inputs: **3c's level**. Over the whole picture the scene renderer is -0.9 to +0.4 a channel from paraLLEl-GS
+  at 1x, 10-23% of pixels exact (combat and death here), under every picture; at the shine's pixels the two passes'
+  rounding to the nearest happens to land nearer it, and the GS's arithmetic on inputs already off does not. **Not
+  judgeable until 3c finds the level**; by "nearer paraLLEl-GS, never further" not to be kept on now.
+
+### Passes
+
+| criterion | measured | passed |
+|---|---|---|
+| Behind a switch, off by default | `KF4_SCN_FUSE_280=1` | yes |
+| Off: byte for byte 3b's (the 50 scenarios at 2x) | 49 of 50, "start spin" as ever | yes |
+| The batches it applies to, counted | 763,605 of 767,293 pairs in the 50 scenarios; the pond 97%, the palace 100% | yes |
+| The pixels it changes against the two passes (the 50 scenarios at 2x) | 6 scenarios, 12 pictures, nearly all by 1 level, at most 33 a picture over 24 | counted |
+| ... against paraLLEl-GS, 3c's level noted | further from it at the changed pixels; 3c's level not yet found | **no** (until 3c) |
+| ... the tour and `motion_compare.py` at 1x | not run: the pictures against paraLLEl-GS are 3c's question first | not done |
+| Pictures of the changed pixels for the owner | `fuse_pictures/`, 12 sheets | yes |
+| Calls a frame, the design's 100-250 | 36 / 200 / 46 | yes (at most 250) |
+| 0x280 at the pond and the palace under 1 ms (2x, real window) | 1.63 / 1.08; the bound 1.44 / 1.07 | **no**: not fusing's to give |
+| The validation layer with synchronization validation, fused: the pond, the palace, combat, death (`validation/`) | no error or warning; 369,715 fused draws; every picture byte for byte the fused build's without the layer | yes |
+| ctest | 37 of 37 | yes |
+
+### What 3c, 3e and 3f start from
+
+- **3c** decides 3d: with the level found (or bounded), the fused pictures measured against paraLLEl-GS again. If the
+  level is in the inputs both share (the first pass's colour, the texture's), its fix moves both; the fused blend is the
+  GS's own arithmetic, so it should then be the nearer.
+- **3e**: the owner's decision on 3d (its pictures in `fuse_pictures/`, its paraLLEl-GS comparison after 3c), and the
+  9070 XT with the owner's settings, indirect draws on (3b's risk), fused and not.
+- **3f**: 0x280's time left (1.63 / 1.08 ms fused) is its first passes' pixels, as 0x000's is: the same study. The
+  0x700 at the pond (about 2.0 ms of its 3.65 "0x280, 0x700") is not in any part's plan yet.
+- The bound's switch (`KF4_SCN_NO_SPHERE`) and the census (`KF4_SCN_SPHERE_CENSUS`) stay, developers' only.

@@ -12,7 +12,9 @@
 #include <array>
 #include <bitset>
 #include <cmath>
+#include <map>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -235,7 +237,17 @@ public:
     }
 
     void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) override {
+        if (sphere_census_ && nb.program == NativeProgram::vu1_280) {
+            census_280(file, prim, nb);
+        }
+        if (no_sphere_ && nb.program == NativeProgram::vu1_280 && ((nb.instance >> 29) & 1)) {
+            return; // (a developers' bound: 0x280's sphere passes not drawn, what fusing them could save at most)
+        }
+        const bool n280 = nb.program == NativeProgram::vu1_280;
+        const bool sphere_pass = n280 && ((nb.instance >> 29) & 1);
         flush_batch();
+        const bool sphere_of_first = sphere_pass && first_is_drawn(nb); // (after the GIF's batch before it is drawn)
+        fuse_.valid = false;
         counts_.native_batches++;
         Batch b;
         b.state = state_of(file, prim);
@@ -261,7 +273,162 @@ public:
                 last_native_ = {true, b.state, store_events_, b.texture, texture_pages(b.state)};
             }
         }
+        if (sphere_of_first && fuse_280(b)) {
+            return;
+        }
+        size_t draws = scene_.draws.size(), materials = scene_.materials.size();
         build_draw(b);
+        if (fuse_on_ && n280 && !sphere_pass && drawer_.records_on()) {
+            // (a first pass drawn as a draw of its own in the open pass: its sphere pass, next, may be drawn in it)
+            counts_.fuse_firsts++;
+            if (pass_.open && scene_.draws.size() == draws + 1) {
+                const Draw &d = scene_.draws.back();
+                if (d.native && d.instance == nb.instance && d.first_triangle == nb.first_triangle) {
+                    fuse_ = {true, b.state, nb.instance, nb.triangle_count, nb.alpha_is_one, draws,
+                             scene_.steps.size(), pass_.index, scene_.materials.size() == materials + 1};
+                }
+            }
+        }
+    }
+
+    // ---- Program 0x280's two passes as one draw (slice 3d, KF4_SCN_FUSE_280; HANDOFF_scene_slice3.md, "3d") ----
+    // VU1's program 0x280 kicks each batch's strip twice where the batch has a sphere pass (render.cpp,
+    // take_batch_280): lit and textured, then the same triangles with the sphere-mapped shine blended over them. Where
+    // the first pass writes its colour as it is (unblended, or its blend the source alone: every alpha 0x80) and its alpha
+    // test cannot fail, the sphere pass reads, at each of its pixels, the first's colour there, so both are one draw: the
+    // first's draw made with the fused shaders (pcr_prim.h's SCN_FUSE_280), its record pointing to the sphere's
+    // (Material::fuse, scn_draw.cpp's prepare), the sphere's blend made in the shader in the GS's integers. Where the
+    // sphere's Z test is GEQUAL or ALWAYS, the same Z buffer and frame, it passes where the first did (the same Z). What
+    // differs from the two passes drawn apart: the blend's rounding (Vulkan's, the GS's here), and where a batch's
+    // triangles cover a pixel twice at the same Z (the later's first pass, then both sphere passes: here each its own).
+
+    // The draw the sphere pass's first pass made, still the scene's last, nothing between
+    bool first_is_drawn(const NativeBatch &nb) const {
+        const Fuse &f = fuse_;
+        return f.valid && (f.instance & 0x0FFFFFFFu) == (nb.instance & 0x0FFFFFFFu) && f.count == nb.triangle_count &&
+               pass_.open && pass_.index == f.pass && scene_.draws.size() == f.draw + 1 &&
+               scene_.steps.size() == f.steps;
+    }
+
+    // Why the pair cannot be one draw, or nullptr
+    static const char *not_fusable(const DrawState &a, bool alpha_one, const Batch &sb, const Material &first) {
+        const DrawState &s = sb.state;
+        // the first's colour written as it is
+        if (bits(a.prim, 6, 1)) {
+            bool source = bits(a.alpha, 0, 2) == 0 && bits(a.alpha, 2, 2) == 1 && bits(a.alpha, 6, 2) == 1 &&
+                          ((bits(a.alpha, 4, 2) == 0 && alpha_one) ||
+                           (bits(a.alpha, 4, 2) == 2 && bits(a.alpha, 32, 8) == 0x80));
+            if (!source) {
+                return "the first pass blended";
+            }
+        }
+        // its alpha test passed everywhere: none, ALWAYS, or its alpha the vertices' 0x80 and passing
+        if (bits(a.test, 0, 1) && bits(a.test, 1, 3) != 1) {
+            bool known = (!bits(a.prim, 4, 1) || !bits(a.tex0, 34, 1)) && alpha_one;
+            uint32_t aref = bits(a.test, 4, 8), atst = bits(a.test, 1, 3);
+            bool passes = atst == 2 ? 0x80 < aref : atst == 3 ? 0x80 <= aref : atst == 4 ? 0x80 == aref
+                        : atst == 5 ? 0x80 >= aref : atst == 6 ? 0x80 > aref : atst == 7 ? 0x80 != aref : false;
+            if (!known || !passes) {
+                return "the first pass's alpha test";
+            }
+        }
+        if (first.pass_count != 1 || first.dest || first.surface || first.picture_layer) {
+            return "the first pass's material";
+        }
+        // the sphere's alpha test: none, or the pixel kept where it fails
+        if (bits(s.test, 0, 1) && bits(s.test, 1, 3) != 1 && bits(s.test, 12, 2) != 0) {
+            return "the sphere's alpha test";
+        }
+        if (bits(a.test, 14, 1) || bits(s.test, 14, 1)) {
+            return "DATE";
+        }
+        // the same frame (all of it written), Z buffer, Z test (GEQUAL or ALWAYS), scissor and offset
+        if (a.frame != s.frame || (a.frame >> 32) != 0) {
+            return "the frame";
+        }
+        if (a.zbuf != s.zbuf) {
+            return "the Z buffer";
+        }
+        // (the context may differ, the sphere's pass in context 2: its registers compared as they are. XYOFFSET the same,
+        // the first's instance's context, which picks the vertex shader's offset, is the sphere's offset too)
+        if (a.scissor != s.scissor || a.xyoffset != s.xyoffset) {
+            return "the scissor or offset";
+        }
+        if (bits(a.test, 16, 3) != bits(s.test, 16, 3) || (bits(s.test, 16, 1) && bits(s.test, 17, 2) != 1 &&
+                                                           bits(s.test, 17, 2) != 2)) {
+            return "the Z test";
+        }
+        // the sphere's texture one the records can read (not a target's copy)
+        if (bits(s.prim, 4, 1) && (!sb.texture.ok || sb.texture.src == SRC_SURFACE || sb.texture_later)) {
+            return "the sphere's texture";
+        }
+        return nullptr;
+    }
+
+    // The sphere pass sb drawn in its first pass's draw (fuse_), if it can be (not_fusable); false: drawn apart
+    bool fuse_280(const Batch &sb) {
+        Draw &d = scene_.draws[fuse_.draw];
+        const Material first = scene_.materials[d.material];
+        if (const char *why = not_fusable(fuse_.state, fuse_.alpha_one, sb, first)) {
+            fuse_refused_[why]++;
+            return false;
+        }
+        // the sphere's record: its texture, texture function, fog, alpha test (pcr_common.h's pass mode 1, those that
+        // pass) and blend (PCR_F_SHADER_BLEND: blended_over), its FBA
+        const DrawState &s = sb.state;
+        Material sm;
+        sm.program = Program::nd280;
+        sm.pass_count = 1;
+        sm.passes[0] = first.passes[0];
+        sm.ztest = first.ztest;
+        sm.zcompare = first.zcompare;
+        sm.push = first.push;
+        uint32_t flags = texture_flags(s, sb.texture) | (first.push.flags & F_PIXEL_CLAMP);
+        flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
+        flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
+        flags |= bits(s.prim, 6, 1) ? F_SHADER_BLEND : 0;
+        flags |= (bits(s.test, 0, 1) && bits(s.test, 1, 3) != 1 ? 1u : 0u) << F_PASS_SHIFT;
+        sm.push.flags = flags;
+        gs_fields(s, sb.texture, bits(s.alpha, 32, 8), sm.push);
+        sm.push.alpha = alpha_fields(s, bits(s.frame, 24, 6));
+        material_textures(sb.texture, sm);
+        sm.state = first.state;
+        // the first's material, unblended (its blend the source alone), its alpha test gone (passed everywhere), the
+        // sphere's after it
+        Material fm = first;
+        fm.blend = pcr::BlendChoice();
+        fm.blend.write_rgb = first.blend.write_rgb;
+        fm.push.flags &= ~(F_PREMUL | F_C_FIX | F_ALPHA_FACTOR | F_SHADER_BLEND);
+        fm.passes[0].mode = 0;
+        fm.state.blending = false;
+        fm.state.passes = 2; // (the GPU's time by shader state: the fused draws apart)
+        // (the material the first's draw made, used by it alone: let go)
+        if (fuse_.material_made && d.material + 1 == scene_.materials.size()) {
+            scene_.materials.pop_back();
+        }
+        // (the pair before's materials again, where the same)
+        const LastFused &l = last_fused_;
+        if (l.valid && l.fused < scene_.materials.size() && l.sphere < scene_.materials.size() &&
+            same_material(scene_.materials[l.sphere], sm) && same_material_unfused(scene_.materials[l.fused], fm)) {
+            d.material = l.fused;
+            counts_.fused_same++;
+        } else {
+            uint32_t si = uint32_t(scene_.materials.size());
+            scene_.materials.push_back(std::move(sm));
+            fm.fuse = si;
+            d.material = uint32_t(scene_.materials.size());
+            scene_.materials.push_back(std::move(fm));
+            last_fused_ = {true, d.material, si};
+        }
+        counts_.fused++;
+        return true;
+    }
+
+    // same_material, but for Material::fuse (a fused material against one about to be)
+    static bool same_material_unfused(const Material &fused, const Material &m) {
+        Material a = fused;
+        a.fuse = no_material;
+        return same_material(a, m);
     }
 
     void texture_written(uint64_t tex0, uint64_t texclut) override {
@@ -473,7 +640,81 @@ public:
         return pending_scale_ == scale_;
     }
 
+    // (developers', KF4_SCN_SPHERE_CENSUS: slice 3d) program 0x280's batches by their two passes' registers: each pair
+    // of a first pass and its sphere pass (the same record and triangles, one after the other) counted by what the two
+    // set, for what drawing both as one must cover
+    void census_280(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) {
+        DrawState s = state_of(file, prim);
+        bool sphere = (nb.instance >> 29) & 1;
+        if (!sphere) {
+            census_first_ = {true, s, nb.instance, nb.first_triangle, nb.triangle_count, nb.alpha_is_one};
+            census_singles_++;
+            return;
+        }
+        const auto &f = census_first_;
+        if (!f.valid || (f.instance & 0x0FFFFFFFu) != (nb.instance & 0x0FFFFFFFu) || f.count != nb.triangle_count) {
+            census_["(a sphere pass without its first)"]++;
+            return;
+        }
+        census_singles_--;
+        census_first_.valid = false;
+        auto pass = [](const DrawState &d, bool one) {
+            char t[256];
+            snprintf(t, sizeof(t),
+                     "abe %u alpha %02x fix %02x one %u; test ate %u atst %u aref %02x afail %u date %u zte %u ztst %u "
+                     "zmsk %u; tme %u tfx %u tcc %u psm %02x fge %u fba %u fbmsk %08x",
+                     bits(d.prim, 6, 1), bits(d.alpha, 0, 8), bits(d.alpha, 32, 8), one ? 1u : 0u, bits(d.test, 0, 1),
+                     bits(d.test, 1, 3), bits(d.test, 4, 8), bits(d.test, 12, 2), bits(d.test, 14, 1),
+                     bits(d.test, 16, 1), bits(d.test, 17, 2), bits(d.zbuf, 32, 1), bits(d.prim, 4, 1),
+                     bits(d.tex0, 35, 2), bits(d.tex0, 34, 1), bits(d.tex0, 20, 6), bits(d.prim, 5, 1),
+                     bits(d.fba, 0, 1), uint32_t(d.frame >> 32));
+            return std::string(t);
+        };
+        const DrawState &a = f.state;
+        std::string key = "first: " + pass(a, f.alpha_one) + " | sphere: " + pass(s, f.alpha_one) + " | differ:";
+        const uint64_t DrawState::*fields[] = {&DrawState::frame, &DrawState::zbuf, &DrawState::tex1,
+                                              &DrawState::clamp, &DrawState::scissor, &DrawState::xyoffset};
+        const char *names[] = {"frame", "zbuf", "tex1", "clamp", "scissor", "xyoffset"};
+        for (size_t i = 0; i < 6; i++) {
+            key += a.*fields[i] != s.*fields[i] ? std::string(" ") + names[i] : "";
+        }
+        key += a.prim != s.prim ? " prim" : "";
+        key += (a.tex0 & ~(uint64_t(0xFF) << 34)) != (s.tex0 & ~(uint64_t(0xFF) << 34)) ? " tex0-texture" : "";
+        census_[key]++;
+        census_pairs_++;
+    }
+
+    void print_census() const {
+        std::vector<std::pair<uint64_t, std::string>> rows;
+        for (const auto &[k, n] : census_) {
+            rows.push_back({n, k});
+        }
+        std::sort(rows.rbegin(), rows.rend());
+        fprintf(stderr, "[stats] scene 0x280 census: %llu pairs, %llu first passes alone\n",
+                (unsigned long long)census_pairs_, (unsigned long long)census_singles_);
+        for (size_t i = 0; i < rows.size() && i < 40; i++) {
+            fprintf(stderr, "[stats] scene 0x280 census: %8llu %s\n", (unsigned long long)rows[i].first,
+                    rows[i].second.c_str());
+        }
+    }
+
     void print_counts() const override {
+        if (sphere_census_) {
+            print_census();
+        }
+        if (fuse_on_) {
+            std::string why;
+            for (const auto &[k, n] : fuse_refused_) {
+                why += "; " + k + " " + std::to_string(n);
+            }
+            fprintf(stderr,
+                    "[stats] scene renderer 0x280 fused: %llu of %llu first passes drawn with their sphere pass (%llu "
+                    "with the pair before's materials); drawn apart%s; drawn without their sphere pass for want of its "
+                    "record %llu\n",
+                    (unsigned long long)counts_.fused, (unsigned long long)counts_.fuse_firsts,
+                    (unsigned long long)counts_.fused_same, why.empty() ? ": none" : why.c_str(),
+                    (unsigned long long)drawer_.counts().fused_unrecorded);
+        }
         const Drawer::Counts &d = drawer_.counts();
         fprintf(stderr,
                 "[stats] scene renderer: %llu scenes drawn; %llu passes, %llu draws (%llu native, %llu GIF, %llu clears in a "
@@ -564,6 +805,8 @@ private:
     void close_scene(bool flush) {
         end_shadow_run();
         pass_.open = false;
+        fuse_.valid = false;
+        last_fused_.valid = false;
         if (scene_.empty()) {
             return;
         }
@@ -3025,6 +3268,52 @@ private:
     }
 
     // ---- A batch as the scene's draw (pcr_canvas.cpp's draw_batch, the depth KF4_PC_DEPTH=unorm's) ----
+    // (its parts that are the GS's registers as they are, the sphere pass's material too: fuse_280)
+    // the texture's flags (pcr_common.h's PCR_F_*): none untextured
+    static uint32_t texture_flags(const DrawState &s, const BoundTexture &t) {
+        if (!bits(s.prim, 4, 1) || !t.ok) {
+            return 0;
+        }
+        return F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
+               (bits(s.tex0, 34, 1) ? F_TCC : 0) | t.src << F_SRC_SHIFT |
+               (t.src == SRC_SURFACE && is_colour_16(bits(s.tex0, 20, 6)) ? F_SURFACE_CT16 : 0);
+    }
+    // the texture's size, CLAMP (and FIX), TEST's alpha test, FOGCOL, TEXA, TEX1 and its levels
+    static void gs_fields(const DrawState &s, const BoundTexture &t, uint32_t fix, PrimPush &push) {
+        push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
+        push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
+        push.clamp_hi = uint32_t((s.clamp >> 24) & 0xFFFFFu) | fix << 24;
+        push.test = bits(s.test, 1, 3) | bits(s.test, 4, 8) << 3;
+        push.fogcol = uint32_t(s.fogcol & 0xFFFFFF);
+        push.texa = bits(s.texa, 0, 8) | bits(s.texa, 15, 1) << 15 | bits(s.texa, 32, 8) << 16;
+        push.tex1 = bits(s.tex1, 5, 1) | bits(s.tex1, 6, 3) << 1 | bits(s.tex1, 2, 3) << 4 | bits(s.tex1, 0, 1) << 7 |
+                    bits(s.tex1, 19, 2) << 8 | t.sampling;
+        int32_t k = int32_t(bits(s.tex1, 32, 12) << 20) >> 20;
+        push.lod_k = float(k) / 16.0f;
+        push.levels = t.levels;
+    }
+    // ALPHA, COLCLAMP, PABE and a 24-bit frame (pcr_common.h's alpha)
+    static uint32_t alpha_fields(const DrawState &s, uint32_t fpsm) {
+        return bits(s.alpha, 0, 8) | bits(s.alpha, 32, 8) << 8 | bits(s.colclamp, 0, 1) << 16 |
+               bits(s.pabe, 0, 1) << 17 | (fpsm == GSN_PSMCT24 ? 1u : 0u) << 18;
+    }
+    // the texture's images into the material's set 1
+    void material_textures(const BoundTexture &bt, Material &m) {
+        if (bt.ok) {
+            if (bt.src == SRC_SAMPLED) {
+                m.sampled = bt.image;
+                m.sampler = bt.sampler;
+            } else if (bt.src == SRC_SURFACE) {
+                m.surface = bt.image;
+            } else {
+                m.texels = bt.image;
+                if (bt.src == SRC_INDEX) {
+                    m.clut = clut_index(bt.clut);
+                }
+            }
+        }
+    }
+
     void build_draw(Batch &b) {
         const DrawState &s = b.state;
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
@@ -3183,12 +3472,7 @@ private:
         push.zmax = zmax_of(zpsm);
         push.zscale = zpsm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f;
         bool tme = bits(s.prim, 4, 1) != 0;
-        uint32_t flags = 0;
-        if (tme && b.texture.ok) {
-            flags |= F_TME | (bits(s.prim, 8, 1) ? F_FST : 0) | bits(s.tex0, 35, 2) << F_TFX_SHIFT |
-                     (bits(s.tex0, 34, 1) ? F_TCC : 0) | b.texture.src << F_SRC_SHIFT |
-                     (b.texture.src == SRC_SURFACE && is_colour_16(bits(s.tex0, 20, 6)) ? F_SURFACE_CT16 : 0);
-        }
+        uint32_t flags = texture_flags(s, b.texture);
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
         flags |= fba ? F_FBA : 0;
         flags |= blend.flags & ~0x80000000u;
@@ -3200,26 +3484,14 @@ private:
         // (the depth: Z / zmax at each pixel, clamped by the depth clamp to the viewport's 0 to 1)
         flags |= F_PIXEL_CLAMP;
         push.flags = flags;
-        push.tex_size = (1u << std::min(bits(s.tex0, 26, 4), 10u)) | (1u << std::min(bits(s.tex0, 30, 4), 10u)) << 16;
-        push.clamp_lo = uint32_t(s.clamp & 0xFFFFFFu);
-        uint32_t fix = (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8);
-        push.clamp_hi = uint32_t((s.clamp >> 24) & 0xFFFFFu) | fix << 24;
-        push.test = atst | bits(s.test, 4, 8) << 3;
-        push.fogcol = uint32_t(s.fogcol & 0xFFFFFF);
-        push.texa = bits(s.texa, 0, 8) | bits(s.texa, 15, 1) << 15 | bits(s.texa, 32, 8) << 16;
-        push.tex1 = bits(s.tex1, 5, 1) | bits(s.tex1, 6, 3) << 1 | bits(s.tex1, 2, 3) << 4 | bits(s.tex1, 0, 1) << 7 |
-                    bits(s.tex1, 19, 2) << 8 | b.texture.sampling;
-        int32_t k = int32_t(bits(s.tex1, 32, 12) << 20) >> 20;
-        push.lod_k = float(k) / 16.0f;
-        push.levels = b.texture.levels;
+        gs_fields(s, b.texture, (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8), push);
         push.src_scale[0] = int32_t(scale_[0]);
         push.src_scale[1] = int32_t(scale_[1]);
         push.place[0] = int32_t(placed.x);
         push.place[1] = int32_t(placed.y);
         push.dest_offset[0] = dest_offset.x;
         push.dest_offset[1] = dest_offset.y;
-        push.alpha = bits(s.alpha, 0, 8) | bits(s.alpha, 32, 8) << 8 | bits(s.colclamp, 0, 1) << 16 |
-                     bits(s.pabe, 0, 1) << 17 | (fpsm == GSN_PSMCT24 ? 1u : 0u) << 18;
+        push.alpha = alpha_fields(s, fpsm);
         push.clut_at = 0xFFFFFFFFu;
         push.table = 0xFFFFu;
         push.trace_xy = no_trace;
@@ -3254,20 +3526,7 @@ private:
         m.constants[0] = m.constants[1] = m.constants[2] = c;
         m.constants[3] = 128.0f / 255.0f;
         // the textures
-        const BoundTexture &bt = b.texture;
-        if (bt.ok) {
-            if (bt.src == SRC_SAMPLED) {
-                m.sampled = bt.image;
-                m.sampler = bt.sampler;
-            } else if (bt.src == SRC_SURFACE) {
-                m.surface = bt.image;
-            } else {
-                m.texels = bt.image;
-                if (bt.src == SRC_INDEX) {
-                    m.clut = clut_index(bt.clut);
-                }
-            }
-        }
+        material_textures(b.texture, m);
         m.dest = dest;
         Draw d;
         d.viewport = vp;
@@ -3456,7 +3715,7 @@ private:
         if (a.program != b.program || a.pass_count != b.pass_count || a.ztest != b.ztest || a.zcompare != b.zcompare ||
             a.texels.get() != b.texels.get() || a.surface.get() != b.surface.get() ||
             a.sampled.get() != b.sampled.get() || a.dest.get() != b.dest.get() || a.sampler != b.sampler ||
-            a.clut != b.clut || memcmp(&a.push, &b.push, sizeof(a.push)) != 0 ||
+            a.clut != b.clut || a.fuse != b.fuse || memcmp(&a.push, &b.push, sizeof(a.push)) != 0 ||
             memcmp(a.constants, b.constants, sizeof(a.constants)) != 0) {
             return false;
         }
@@ -3672,6 +3931,37 @@ private:
     std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
+    // (slice 3d's bound, developers' only: the picture lacks the shine) program 0x280's second, sphere-mapped passes
+    // left out, so that its time with them gone is the most drawing both passes as one could save
+    const bool no_sphere_ = getenv("KF4_SCN_NO_SPHERE") && strcmp(getenv("KF4_SCN_NO_SPHERE"), "0") != 0;
+    const bool sphere_census_ = getenv("KF4_SCN_SPHERE_CENSUS") && strcmp(getenv("KF4_SCN_SPHERE_CENSUS"), "0") != 0;
+    // (slice 3d) program 0x280's two passes as one draw where they can be (fuse_280): off by default until the owner has
+    // judged its pictures (scene-renderer-design.md, decision 2); needs the scene's records
+    const bool fuse_on_ = getenv("KF4_SCN_FUSE_280") && strcmp(getenv("KF4_SCN_FUSE_280"), "0") != 0;
+    // the first pass just drawn, whose sphere pass may come next: its state, instance, triangles, the draw it made (and
+    // whether that made a material), the scene's steps and the pass then
+    struct Fuse {
+        bool valid = false;
+        DrawState state{};
+        uint32_t instance = 0, count = 0;
+        bool alpha_one = false;
+        size_t draw = 0, steps = 0;
+        uint32_t pass = 0;
+        bool material_made = false;
+    } fuse_;
+    struct LastFused {
+        bool valid = false;
+        uint32_t fused = 0, sphere = 0;
+    } last_fused_;
+    std::map<std::string, uint64_t> fuse_refused_;
+    struct CensusFirst {
+        bool valid = false;
+        DrawState state{};
+        uint32_t instance = 0, first = 0, count = 0;
+        bool alpha_one = false;
+    } census_first_;
+    std::map<std::string, uint64_t> census_;
+    uint64_t census_pairs_ = 0, census_singles_ = 0;
     struct Counts {
         uint64_t scenes = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
@@ -3682,6 +3972,8 @@ private:
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0;
         uint64_t shader_blends = 0, read_backs = 0;
+        uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
+                                                             // pair before's materials again)
         // (slice 2) clears held back, then drawn as load ops, in a pass or alone, or dead; layers kept, drawn into the
         // target after all, dead, and pictures composed with them; alpha resets folded into the frame's clear
         uint64_t clears_held = 0, clears_in_pass = 0, clears_alone = 0, clears_dead = 0;
