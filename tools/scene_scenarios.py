@@ -5,7 +5,7 @@ under water, the Dark Succubus' copy, combat, the spells ...): each played headl
 their pictures at the scenario's moments compared byte for byte.
 
     tools/scene_scenarios.py --out DIR [--disc ISO] [--exe EXE] [--scenarios NAME,...|all] [--jobs N]
-                             [--reference ENV] [--scale 2] [--keep] [--gs]
+                             [--reference ENV | --reference-exe EXE] [--scale 2] [--keep] [--gs]
 
 Each scenario as layer_inventory.py's capture step plays it (its pad script, teleport, KF4_FX, options; 2x with
 native widescreen), but native draw on (off where the scenario's settings say so: "start native off") and no GS
@@ -14,6 +14,9 @@ capture: once with --renderer pc and the reference's environment
 --dump-frames at the scenario's moments (the last vblank of each of its captures). Then for each moment: both
 pictures there, and how many pixels differ (and by more than 24 levels). A scenario passes when the scene renderer
 ran to its end and drew every moment the PC renderer drew.
+
+With --reference-exe EXE the reference is that build's scene renderer instead (an earlier slice's: "pictures byte for
+byte slice 1's"), still in NAME/pc/.
 
 With --gs (meant for --scale 1), a third run by paraLLEl-GS (--renderer gs), and at each moment the scene and PC
 renderers each measured against it too, all three without widescreen: pixels differing (over 24) and the mean error over the pixels where scene
@@ -42,9 +45,9 @@ import map_tour  # noqa: E402
 EXE = os.path.join(ROOT, "out", "linux-clang", "kf4")
 
 
-def play(a, name, renderer, env_extra):
+def play(a, name, renderer, env_extra, folder_name=None, exe=None):
     sc = inv.scenario(name)
-    folder = os.path.join(a.out, inv.slug(name), renderer)
+    folder = os.path.join(a.out, inv.slug(name), folder_name or renderer)
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(os.path.join(folder, "pictures"))
     pad = os.path.join(folder, "input.pad")
@@ -53,7 +56,7 @@ def play(a, name, renderer, env_extra):
     os.makedirs(data_dir)
     end = inv.last_vblank(sc)
     moments = [v + inv.CAPTURE_VBLANKS - 1 for v in sc["captures"]]
-    cmd = [a.exe, "--disc", a.disc, "--headless", "--fast", "--no-audio", "--saves", "none", "--clock", inv.CLOCK,
+    cmd = [exe or a.exe, "--disc", a.disc, "--headless", "--fast", "--no-audio", "--saves", "none", "--clock", inv.CLOCK,
            "--input", pad, "--frames", str(end), "--stats", "--native-scale", str(a.scale),
            "--antialias", "off", "--native-draw", sc["settings"].get("native_draw", "on"),
            "--frame-rate", "30",
@@ -105,7 +108,8 @@ def compare(a, name, moments):
 
 def scenario_job(a, name):
     ref_env = dict(kv.split("=", 1) for kv in a.reference.split(",") if kv)
-    pc = play(a, name, "pc", ref_env)
+    # (the reference: the PC renderer, or with --reference-exe that build's scene renderer, in pc/ all the same)
+    pc = play(a, name, "scene" if a.reference_exe else "pc", ref_env, "pc", a.reference_exe)
     scene = play(a, name, "scene", {})
     if a.gs:
         play(a, name, "gs", {})
@@ -121,7 +125,9 @@ def scenario_job(a, name):
 
 
 def report(a, results):
-    md = ["# The scene renderer against the PC renderer (%s), the layer inventory's scenarios" % (a.reference or "its default"),
+    what = ("the scene renderer of %s" % a.reference_exe) if a.reference_exe else \
+        ("the PC renderer (%s)" % (a.reference or "its default"))
+    md = ["# The scene renderer against %s, the layer inventory's scenarios" % what,
           "", "Made by `tools/scene_scenarios.py`: headless, 30, native draw on, %dx%s, no "
           "anti-aliasing; pictures at each scenario's moments." % (a.scale, "" if a.gs else " with native widescreen"), "",
           "| scenario | scene exit | pc exit | moments drawn (scene / pc) | identical | pixels differing (over 24) |",
@@ -161,6 +167,8 @@ def main():
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 4))
     p.add_argument("--reference", default="KF4_PC_DEPTH=unorm",
                    help="the PC renderer's environment, NAME=VALUE,... (default KF4_PC_DEPTH=unorm)")
+    p.add_argument("--reference-exe", default=None,
+                   help="the reference is this build's scene renderer (e.g. an earlier slice's), not the PC renderer")
     p.add_argument("--scale", type=int, default=2)
     p.add_argument("--keep", action="store_true", help="keep the pictures")
     p.add_argument("--gs", action="store_true", help="paraLLEl-GS played too, both measured against it (use --scale 1)")

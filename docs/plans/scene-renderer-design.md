@@ -558,6 +558,13 @@ Slice 1 is built and measured (2026-11-19): `scene-slice1-results.md`, each crit
 for DATE's 0.1 ms (0.39 at the pond, against the PC renderer's 2.5 there with its copies: the owner accepts it for now,
 to come back to once more of the renderer is done) and the copies of the reflection and the HUD's DATE sprite.
 
+Slice 2 is built and measured (2026-11-20): `scene-slice2-results.md`. Clears held back into load ops (dead ones never
+drawn), the alpha's reset folded into the frame's clear, the brightness drawn by each picture in place of its copy out,
+the history made where a texture reads such a frame; every picture byte for byte slice 1's. A game frame is 0.9 / 1.7 /
+1.4 ms less at 099 / the pond / the palace, short of the 2.5-3 asked: the fills after the HUD are not folded (byte for
+byte they must be the GPU's blend, drawn again each picture), the world's time grows 0.4 ms with the alpha's fold (not
+yet explained), and at the pond the frame's clears are partial render areas.
+
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
 

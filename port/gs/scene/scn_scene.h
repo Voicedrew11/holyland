@@ -50,6 +50,8 @@ struct Material {
     Vulkan::ImageHandle texels, surface, sampled, dest;
     const Vulkan::Sampler *sampler = nullptr;
     uint32_t clut = no_clut;
+    // (a picture's) drawn by scn_picture_layer.frag: a kept layer that is the frame read at its own place, nothing more
+    bool picture_layer = false;
     // (the GPU's time by shader state, KF4_GPU_DETAIL: pcr_gpu_time.h's shader_state_key, without the first-draw field
     // the drawer adds by its pass)
     pcr::ShaderState state{};
@@ -86,13 +88,17 @@ enum class PassKind : uint8_t {
 
 struct Pass {
     PassKind kind = PassKind::plain;
-    Vulkan::ImageHandle colour, depth; // (depth: none, or the pass's depth attachment)
-    // Load ops: the target cleared as the pass begins, or kept
+    Vulkan::ImageHandle colour, depth; // (either may be none: a clear of the other alone)
+    // Load ops: the target cleared as the pass begins (over area), or kept
     bool clear_colour = false, clear_depth = false;
+    // The render area: the whole target, or the rectangle its load ops clear (a frame's rows where both frame buffers
+    // are one target); every draw of the pass is inside it
+    VkRect2D area = {{0, 0}, {UINT32_MAX, UINT32_MAX}};
     VkClearColorValue colour_value{};
     float depth_value = 0.0f;
     uint32_t first_draw = 0, draw_count = 0;
     Vulkan::ImageHandle first; // (darken: the first-draw image its draws read)
+    bool picture = false;      // (the picture's: the frame's layers drawn over it, timed as the picture)
 };
 
 // What is done outside the passes, between them

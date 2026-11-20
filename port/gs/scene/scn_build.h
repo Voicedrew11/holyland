@@ -17,6 +17,13 @@
 // cleared the target's alpha before them and nothing wrote it since but the shadows; elsewhere by a copy of the
 // rectangle drawn in, as the HUD's one DATE sprite is.
 //
+// The frame's layers (slice 2, docs/plans/scene-slice2-results.md): a clear is held back until what it cleared is used,
+// then made the load op of the pass that draws there (its render area the clear's rectangle: a frame's rows where both
+// frame buffers are one target) or a clear in it; one written over first is never drawn (dead). GsDraw_SetScreenAlpha(0)
+// is folded into the frame's clear where nothing read the alpha since (the clear writes its alpha, the draws between
+// none). The brightness (the frame drawn over itself) is kept and drawn by each picture in place of its copy out; a
+// texture read of that frame reads the history (the frame with it drawn), anything else draws it into the target first.
+//
 // One thread: the shell's ("kf4-pc").
 #pragma once
 

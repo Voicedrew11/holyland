@@ -3,7 +3,7 @@
 (docs/plans/world-plain.md).
 
     tools/world_plain.py --out DIR [--disc ISO] [--scenes start,pond,palace] [--variants exact,gpu,...|list]
-                         [--scales 1,2,4] [--rates 30] [--rounds N] [--report-only]
+                         [--scales 1,2,4] [--rates 30] [--rounds N] [--report-only] [--exe-for VARIANT=EXE,...]
 
 Each scene of tools/layer_inventory.py played in a real window with the owner's settings (its live step: a copy of
 the data folder, KF4_READ_SETTINGS=1, KF4_GPU_DETAIL=1), once for each variant (developers' KF4_PC_* switches, off the
@@ -71,6 +71,17 @@ VARIANTS = {
     # The scene renderer (docs/plans/scene-renderer-design.md): the game's arguments, no KF4_PC_* switch (it ignores them)
     "scene": ("the scene renderer (--renderer scene, docs/plans/scene-renderer-design.md)", {}, {},
               ["--renderer", "scene"]),
+    # ... with one of slice 2's folds off (scene-slice2-results.md): the alpha's reset drawn, the brightness drawn into
+    # the target, each clear a step where it is met
+    "scene_noalpha": ("the scene renderer, the alpha's reset drawn (KF4_SCN_FOLD_ALPHA=0)", {"KF4_SCN_FOLD_ALPHA": "0"},
+                      {}, ["--renderer", "scene"]),
+    "scene_nofold": ("the scene renderer, the brightness drawn into the target (KF4_SCN_FOLD=0)", {"KF4_SCN_FOLD": "0"},
+                     {}, ["--renderer", "scene"]),
+    "scene_nohold": ("the scene renderer, each clear a step where met (KF4_SCN_HOLD_CLEARS=0)",
+                     {"KF4_SCN_HOLD_CLEARS": "0"}, {}, ["--renderer", "scene"]),
+    # The same of another build, given by --exe-for scene_ref=EXE (an earlier slice's, measured in the same rounds)
+    "scene_ref": ("the scene renderer of the build --exe-for names (an earlier slice's)", {}, {},
+                  ["--renderer", "scene"]),
 }
 MAIN = "exact,exactz,nosettle,noplanes,gpu,noblend,plain"
 
@@ -132,6 +143,8 @@ def main():
     p.add_argument("--rounds", type=int, default=1)
     p.add_argument("--seconds", type=int, default=4)
     p.add_argument("--report-only", action="store_true")
+    p.add_argument("--exe-for", default="",
+                   help="VARIANT=EXE,...: a variant played by another build (e.g. scene_ref=out/slice1/kf4)")
     a = p.parse_args()
     if a.variants == "list":
         for n, v in VARIANTS.items():
@@ -160,12 +173,15 @@ def main():
             map_tour.make_base(a.exe, a.disc, a.out, None)
         a.base = map_tour.read_base(base_path)
         a.base_path = base_path
+        exe_for = dict(kv.split("=", 1) for kv in a.exe_for.split(",") if kv)
+        own_exe = a.exe
         for rnd in range(a.rounds):
             for scene in scenes:
                 for scale in scales:
                     for v in variants:
                         for rate in rates:
                             tag = "%s_s%d_r%d" % (v, scale, rnd)
+                            a.exe = exe_for.get(v, own_exe)
                             r = inv.live_scenario(a, scene, rate, tag, VARIANTS[v][1],
                                                   dict(VARIANTS[v][2], native_scale=scale),
                                                   args_more=VARIANTS[v][3] if len(VARIANTS[v]) > 3 else [])
