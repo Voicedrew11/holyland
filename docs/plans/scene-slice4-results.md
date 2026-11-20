@@ -28,7 +28,30 @@ new camera removes the world's own cost; that is slice 3f's study (where the wor
 and each picture between records them all again, unmoved, into the same targets: an upper bound on a picture between
 from the scene (it also remakes uploads, copies and the scrolling textures). `world_plain.py --variants
 scene_nodetail,scene_bound_nodetail --rates 30,60`: a picture between's GPU time is the 60 run's less the 30 run's, a
-game frame. Results: `bound/world_plain.md` (to be read into this section).
+game frame. `bound/world_plain.md`, two rounds, medians, ms a game frame (at 60 a game frame has one picture between):
+
+| | all at 30 | all at 60, bound | a picture between (60 less 30) | of it the world | the 2D and copies | half a game frame |
+|---|---|---|---|---|---|---|
+| 099 | 10.52 | 15.19 | 4.67 | 3.90 | 0.80 | 5.26 |
+| the pond | 13.09 | 21.58 | 8.49 | 7.56 | 0.28 | 6.55 |
+| the palace | 12.81 | 21.37 | 8.56 | 7.42 | 0.62 | 6.41 |
+
+- **A redraw costs what the first draw does**: the world drawn twice is twice the world to 0.1 ms (no warm cache, no
+  cheaper second pass). Without the bound, 60 costs 0.1-0.4 ms more than 30 (a picture between shows the last picture).
+- So "under half a game frame" holds at 099 and not at the pond or the palace, by the world's own cost; at the pond and
+  the palace the picture's kinds grow 0.5 ms too (not yet explained).
+- At 60, 2x, on the Vega 7 a game frame's two vblanks fit (about 13 and 8.5 ms against 16.7 each). At 240 they do not:
+  a picture between alone is 8.5 ms where a picture has 4.2.
+
+### What it means (the owner, 2026-11-20)
+
+The owner expects very high frame rates on this integrated GPU: the bar is absolute (240: about 4 ms a picture, all
+of it), not half a game frame. Every picture must draw the world again at its own camera, so the world's cost a draw
+(7.4 ms at the pond at 2x, for a PS2 frame of 12,000-44,000 triangles) and the final pass's (about 2.75 ms a picture)
+are what the frame rate is made of. Slice 4 is still needed (no restore, no third redraw, pictures between from the
+scene), but the frame rate is slice 3f's to win, which moves up: after 4a, before 4b and slice 5, starting with cheap
+tests that tell the costs apart (1x against 2x, anisotropy, a trivial fragment shader as the shader's bound, colour
+compression and the images' layout).
 
 ### Found on the way
 
