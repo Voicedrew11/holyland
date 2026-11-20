@@ -2135,6 +2135,11 @@ public:
     }
 
     void precompile(bool scaling, bool sharpen) {
+        if (drawing_maker() != nullptr) {
+            // (the pipelines made before play are the canvas's, started by its programs (warm_watch): under another
+            // renderer they never start, and the game would wait the 20 s precompile_running gives them)
+            return;
+        }
         std::vector<pcr::FullscreenPipeline> passes;
         pcr::AntiAliasing::warm_pipelines(*device_, settings.antialias.load(), passes);
         if (scaling) {
@@ -3091,6 +3096,13 @@ extern "C" void pcr_debug_decal_losses(int on) {
 
 extern "C" int pcr_debug_settled(void) {
     bool settled = false;
-    on_canvas([&](pcr::Canvas &canvas) { settled = canvas.settled(); });
+    if (renderer()) {
+        Renderer &r = *renderer();
+        r.run_job([&] {
+            if (pcr::Drawing *drawing = r.intake().drawing()) {
+                settled = drawing->settled();
+            }
+        });
+    }
     return settled ? 1 : 0;
 }

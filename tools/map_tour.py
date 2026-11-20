@@ -2,7 +2,7 @@
 """A tour of the game's maps: every map visited and pictured, without playing there.
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
-                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc]
+                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc|scene]
                       [--extra "ARGS"] [--turn] [--keep-lists DIR] [--ties]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
@@ -641,8 +641,9 @@ def main():
     parser.add_argument("--jobs", type=int, default=3, help="maps run at once (default 3)")
     parser.add_argument("--base", help="the quick save to start from (default: made from tests/newgame.pad)")
     parser.add_argument("--no-capture", action="store_true", help="no GS capture, so no census")
-    parser.add_argument("--renderer", default="pc", choices=("gs", "pc"),
-                        help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS)")
+    parser.add_argument("--renderer", default="pc", choices=("gs", "pc", "scene"),
+                        help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS; scene: the scene "
+                             "renderer, docs/plans/scene-renderer-design.md)")
     parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --antialias fxaa\"")
     parser.add_argument("--ties", action="store_true",
                         help="(pc) the depth rule's ties and each native batch's fragments counted at each view's picture: "

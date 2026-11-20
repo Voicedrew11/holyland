@@ -124,6 +124,8 @@ public:
 
     // --stats: its lines
     virtual void print_counts() const = 0;
+    // Whether the scale last set is drawn with (it is taken at a vblank: kf4-gsreplay waits for it)
+    virtual bool settled() const = 0;
 };
 
 } // namespace pcr

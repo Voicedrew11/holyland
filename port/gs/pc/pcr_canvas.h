@@ -217,7 +217,7 @@ public:
     size_t take_trace(std::vector<PcrTraceFragment> &fragments, std::vector<PcrTraceProbe> &probes);
     void show_decal_losses(bool on);
     // whether the scale last set is drawn with (it is taken at a vblank)
-    bool settled() const;
+    bool settled() const override;
 
     // (developers' KF4_PC_FRAME_CENSUS, pcr_frame_census.h) each native batch shown to observer first, with the registers
     // it is drawn with

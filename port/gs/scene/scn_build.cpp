@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cmath>
 #include <memory>
 #include <unordered_map>
@@ -248,7 +249,7 @@ public:
             } else {
                 b.texture = bind_texture(b.state, 1u << std::min(bits(b.state.tex0, 26, 4), 10u),
                                          1u << std::min(bits(b.state.tex0, 30, 4), 10u));
-                last_native_ = {true, b.state, store_events_, b.texture};
+                last_native_ = {true, b.state, store_events_, b.texture, texture_pages(b.state)};
             }
         }
         build_draw(b);
@@ -321,7 +322,7 @@ public:
         store_events_++;
         last_native_ = {};
         alpha_clear_ = nullptr;
-        alpha_watch_ = nullptr;
+        alpha_watches_.clear();
     }
 
     std::vector<uint8_t> vram_image() override {
@@ -424,6 +425,10 @@ public:
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
+    }
+
+    bool settled() const override {
+        return pending_scale_ == scale_;
     }
 
     void print_counts() const override {
@@ -776,6 +781,7 @@ private:
         for (auto it = colour_.begin(); it != colour_.end();) {
             Target *o = it->get();
             if (o != &grown && o->base_page >= old_end && o->base_page < end) {
+                forget_alpha(o->image.get());
                 it = colour_.erase(it);
             } else {
                 ++it;
@@ -895,9 +901,7 @@ private:
             counts_.unsupported_copies++;
             return;
         }
-        if (from->image.get() == alpha_watch_) {
-            alpha_read_ = true;
-        }
+        alpha_read(from->image.get());
         bool covered = dx == 0 && dy == 0 && w >= std::max(1u, dbw) * 64 && fx + sx + w <= from->width() &&
                        fy + sy + h <= from->height;
         Placed placed = colour_target(dbp / 32, dbw, GSN_PSMCT32, dy + h, covered);
@@ -989,9 +993,7 @@ private:
         if (!from || fx + sx + w > from->width() || fy + sy + h > from->height) {
             return false;
         }
-        if (from->image.get() == alpha_watch_) {
-            alpha_read_ = true;
-        }
+        alpha_read(from->image.get());
         std::vector<uint32_t> pixels;
         if (!read_pixels(*from, fx + sx, fy + sy, w, h, pixels)) {
             return false;
@@ -1308,9 +1310,7 @@ private:
             counts_.unsupported_texture_on_target++;
             return b;
         }
-        if (from->image.get() == alpha_watch_) {
-            alpha_read_ = true;
-        }
+        alpha_read(from->image.get());
         ImageCreateInfo info =
             ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -1710,12 +1710,19 @@ private:
         int32_t x0 = std::max(box.x0, int32_t(scax0)), x1 = std::min(box.x1, int32_t(scax1));
         int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
         if (x1 >= x0 && y1 >= y0) {
-            store_.drawn({fbp * 32, fbw, fpsm, uint32_t(x0), uint32_t(y0), uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
+            VramRect drawn = {fbp * 32, fbw, fpsm, uint32_t(x0), uint32_t(y0), uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)};
+            store_.drawn(drawn);
+            std::bitset<512> pages = pages_of(drawn);
             if (wrote_z) {
-                store_.drawn({bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
-                              uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)});
+                VramRect z = {bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
+                              uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)};
+                store_.drawn(z);
+                pages |= pages_of(z);
             }
-            store_events_++;
+            // (the last native batch's texture kept only while nothing is drawn over its pages)
+            if (last_native_.valid && (pages & last_native_.pages).any()) {
+                last_native_.valid = false;
+            }
         }
     }
 
@@ -1843,8 +1850,8 @@ private:
         }
         // (the census: the frame's alpha read before its reset)
         // (a texture read from the target, a copy or a read-back of it: where they are made)
-        if (colour->image.get() == alpha_watch_ && (date || (bits(s.prim, 6, 1) && bits(s.alpha, 4, 2) == 1))) {
-            alpha_read_ = true;
+        if (date || (bits(s.prim, 6, 1) && bits(s.alpha, 4, 2) == 1)) {
+            alpha_read(colour->image.get());
         }
         ImageHandle dest;
         VkOffset2D dest_offset = {0, 0};
@@ -2125,20 +2132,45 @@ private:
         alpha_clear_ = image;
         run_.next = 0;
         run_.cleared = false;
-        if (alpha_watch_ == image) {
+        auto w = std::find_if(alpha_watches_.begin(), alpha_watches_.end(),
+                              [&](const AlphaWatch &x) { return x.image == image; });
+        if (w != alpha_watches_.end()) {
             counts_.alpha_checked_frames++;
-            counts_.alpha_read_frames += alpha_read_ ? 1 : 0;
-            if (alpha_read_ && counts_.alpha_read_frames <= 5) {
+            counts_.alpha_read_frames += w->read ? 1 : 0;
+            if (w->read && counts_.alpha_read_frames <= 5) {
                 fprintf(stderr, "[scn] the frame's alpha read between its clear and its reset (vblank %llu)\n",
                         (unsigned long long)vblank_);
             }
+            alpha_watches_.erase(w);
         }
-        alpha_watch_ = nullptr;
     }
 
+    // (each target watched on its own: a reflection's clear between the frame's clear and its reset is not the frame's)
     void watch_alpha(const Image *image) {
-        alpha_watch_ = image;
-        alpha_read_ = false;
+        for (AlphaWatch &w : alpha_watches_) {
+            if (w.image == image) {
+                w.read = false;
+                return;
+            }
+        }
+        if (alpha_watches_.size() == 8) {
+            alpha_watches_.erase(alpha_watches_.begin()); // (a target let go of, or grown into another image)
+        }
+        alpha_watches_.push_back({image, false});
+    }
+
+    void forget_alpha(const Image *image) {
+        alpha_watches_.erase(std::remove_if(alpha_watches_.begin(), alpha_watches_.end(),
+                                            [&](const AlphaWatch &w) { return w.image == image; }),
+                             alpha_watches_.end());
+    }
+
+    void alpha_read(const Image *image) {
+        for (AlphaWatch &w : alpha_watches_) {
+            if (w.image == image) {
+                w.read = true;
+            }
+        }
     }
 
     // The scene's CLUTs: the last one again where it is the same
@@ -2188,7 +2220,7 @@ private:
     uint32_t aniso_ = 1;
     uint64_t frame_ = 0, vblank_ = 0;
     uint64_t clut_serial_ = 0;
-    uint64_t store_events_ = 0; // (anything that may change what the store answers: uploads, copies, CLUT loads, draws)
+    uint64_t store_events_ = 0; // (anything that may change what the store answers: uploads, copies, CLUT loads; draws invalidate the last native batch's texture by its pages)
     std::vector<std::unique_ptr<Target>> colour_, depth_;
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
@@ -2200,15 +2232,41 @@ private:
         DrawState state{};
         uint64_t events = 0;
         BoundTexture texture;
+        std::bitset<512> pages; // (what its texture reads: every level's)
     } last_native_;
+
+    // The pages a draw's texture may read: each level's (TEX0's, MIPTBP1's and MIPTBP2's), as the store reads them
+    static std::bitset<512> texture_pages(const DrawState &s) {
+        std::bitset<512> pages;
+        uint32_t psm = bits(s.tex0, 20, 6), tw = bits(s.tex0, 26, 4), th = bits(s.tex0, 30, 4);
+        uint32_t levels = std::min(bits(s.tex1, 2, 3), 6u) + 1;
+        for (uint32_t l = 0; l < levels; l++) {
+            uint32_t tbp, tbw;
+            if (l == 0) {
+                tbp = bits(s.tex0, 0, 14);
+                tbw = bits(s.tex0, 14, 6);
+            } else {
+                uint64_t m = l <= 3 ? s.miptbp1 : s.miptbp2;
+                uint32_t k = (l - 1) % 3;
+                tbp = bits(m, int(20 * k), 14);
+                tbw = bits(m, int(20 * k + 14), 6);
+            }
+            uint32_t w = std::max(1u, (1u << std::min(tw, 10u)) >> l), h = std::max(1u, (1u << std::min(th, 10u)) >> l);
+            pages |= pages_of({tbp, std::max(1u, tbw), psm, 0, 0, w, h});
+        }
+        return pages;
+    }
     uint32_t clut_at_ = no_clut;
     std::vector<uint8_t> fifo_;
     size_t fifo_at_ = 0;
     // DATE: the colour target whose alpha is known clear (GsDraw_SetScreenAlpha(0)) but for the shadows'; the census's
-    // target watched from its clear to its reset, and whether its alpha was read meanwhile
+    // targets watched from their clears to their resets, and whether their alpha was read meanwhile
     const Image *alpha_clear_ = nullptr;
-    const Image *alpha_watch_ = nullptr;
-    bool alpha_read_ = false;
+    struct AlphaWatch {
+        const Image *image;
+        bool read;
+    };
+    std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     struct Counts {

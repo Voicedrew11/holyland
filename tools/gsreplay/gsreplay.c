@@ -42,8 +42,9 @@
                         (port/platform/vu1_hle*.c) or check (both, compared run by run: memory,
                         packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
-     --renderer gs|pc   who draws: paraLLEl-GS, the accurate GS (the default), or the PC renderer
-                        (port/gs/pc/), the one players get. With pc, --frames are at its scale, and
+     --renderer gs|pc|scene  who draws: paraLLEl-GS, the accurate GS (the default), the PC renderer
+                        (port/gs/pc/), the one players get, or the scene renderer (port/gs/scene/, under the PC
+                        renderer's shell: what pc takes below, but not the pixel trace). With pc, --frames are at its scale, and
                         these set it up as a player's settings.json does (the PC renderer's defaults
                         otherwise):
        --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
@@ -78,6 +79,7 @@
 #include "port/profile.h"
 #include "port/render.h"
 #include "pcr.h"
+#include "scn.h"
 
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
@@ -237,8 +239,9 @@ static int gs_open(const PcSettings *settings) {
 static const Drawer gs_drawer = {"paraLLEl-GS",      gs_open,        port_gs_backend_gif, port_gs_backend_read_fifo,
                                  port_gs_backend_vsync, port_gs_backend_restore, port_gs_backend_vram};
 
-static int pc_open(const PcSettings *s) {
-    if (!pcr_open(NULL)) {
+/* (scene: the scene renderer under the PC renderer's shell, port/gs/scene/scn.h) */
+static int pc_open_as(const PcSettings *s, int scene) {
+    if (!(scene ? scn_open(NULL) : pcr_open(NULL))) {
         return 0;
     }
     pcr_set_native_draw(GSN_NATIVE_DRAW_PS2); /* (a capture's native draws are not fed to the PC renderer) */
@@ -278,6 +281,10 @@ static int pc_open(const PcSettings *s) {
     return 1;
 }
 
+static int pc_open(const PcSettings *s) {
+    return pc_open_as(s, 0);
+}
+
 static int pc_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     return pcr_vsync(privileged, field, want_pixels ? GSN_WANT_PIXELS : 0, want_pixels ? frame : NULL);
 }
@@ -292,6 +299,14 @@ static int pc_restore(uint32_t type, const void *data, size_t size) {
 }
 
 static const Drawer pc_drawer = {"the PC renderer", pc_open, pcr_gif, pcr_read_fifo, pc_vsync, pc_restore, NULL};
+
+/* The scene renderer (port/gs/scene/scn.h): the PC renderer's shell with the scene renderer under it, the same calls */
+static int scene_open(const PcSettings *s) {
+    return pc_open_as(s, 1);
+}
+
+static const Drawer scene_drawer = {"the scene renderer", scene_open, pcr_gif, pcr_read_fifo, pc_vsync, pc_restore,
+                                    NULL};
 
 /* ---- The file ------------------------------------------------------------------------------------ */
 typedef struct {
@@ -1592,7 +1607,7 @@ static void usage(void) {
             "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--end-picture] [--out DIR] [--list]\n"
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
-            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
+            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc|scene]\n"
             "                    [--scale X[xY]] [--aniso N] [--lod ps2|scale|full]\n"
             "                    [--2d ps2|smooth] [--antialias off|fxaa|smaa|smaa_t2x]\n"
             "                    [--sub SX,SY] [--decal-losses] [--gpu-draws FILE] [--events]\n"
@@ -1646,6 +1661,8 @@ int main(int argc, char **argv) {
                 run.drawer = &gs_drawer;
             } else if (strcmp(v, "pc") == 0) {
                 run.drawer = &pc_drawer;
+            } else if (strcmp(v, "scene") == 0) {
+                run.drawer = &scene_drawer;
             } else {
                 usage();
             }

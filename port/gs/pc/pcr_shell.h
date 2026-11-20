@@ -1,7 +1,7 @@
 // The PC renderer's shell (pcr.cpp: its device, thread, inbox, scanout ring, presenter, save states and captures) with
 // another renderer under it than the canvas: the scene renderer (port/gs/scene/scn.h, --renderer scene). That renderer
 // draws the frame through gs_drawing.h's Drawing; the shell then has no pictures between of its own (a picture between
-// shows the last picture again), no pump and no census.
+// shows the last picture again), no pump, no census and no pipelines made before play.
 #pragma once
 
 #include <memory>
