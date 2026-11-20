@@ -591,6 +591,11 @@ build and measure, each to be looked at again only on its slice's numbers.
 4. **Tints under the HUD drawn at their place. Settled for now** (0.5-1.3 ms only where they show); the HUD in an
    image of its own, so that they fold too, only if a later measurement says it is worth it.
 
+5. **The fills after the HUD folded with the GS's arithmetic. Decided (2026-11-20).** The fade, the dim, the pause's
+   shade and MapDrawState's fill, folded into the picture as ((A - B) * C >> 7) + D a channel (`scene-slice2-results.md`):
+   their pixels then differ from the GPU blend's (slice 1's) by a shade here and there. The owner accepts a picture that
+   differs where it cannot be told apart; check that the changed pixels are nearer paraLLEl-GS, not further.
+
 Also taken with them, as the design has them: the scene built in the chain's order on the renderer's thread; the
 texture store as the resolver with a bindless table; DATE by the first-draw image (slice 1 checks its assumptions:
 `GsDraw_SetScreenAlpha(0)` just before the shadows, a fallback by a copy where not); the alpha's reset folded into the
