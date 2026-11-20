@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "device.hpp"
+#include "gsn.h"
 #include "pcr_gif.h"
 #include "pcr_textures.h"
 
@@ -126,6 +127,20 @@ public:
     virtual void print_counts() const = 0;
     // Whether the scale last set is drawn with (it is taken at a vblank: kf4-gsreplay waits for it)
     virtual bool settled() const = 0;
+
+    // Pictures between (a renderer with its own way of drawing them: the scene renderer's; the canvas's are the shell's,
+    // pcr_between.h). frame_taken: frame_interp.c hands over a game frame (its GsnInterpFrame), whose packets are those
+    // taken in since the last vblank (open), those between the two vblanks before (last: the frame is mostly taken at
+    // its first picture between, a vblank after its packets), or neither. picture_between: a picture between of that
+    // frame asked for; true when it is drawn (the next picture shows it).
+    enum class FrameStretch : uint8_t { none, open, last };
+    virtual void frame_taken(FrameStretch stretch) {
+        (void)stretch;
+    }
+    virtual bool picture_between(const GsnInterpPicture &picture) {
+        (void)picture;
+        return false;
+    }
 };
 
 } // namespace pcr

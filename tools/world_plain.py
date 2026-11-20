@@ -116,6 +116,14 @@ VARIANTS = {
     # ... 0x280's two passes as one draw where they can be (slice 3d, KF4_SCN_FUSE_280=1)
     "scene_fuse": ("the scene renderer, 0x280's two passes as one draw (KF4_SCN_FUSE_280=1)", {"KF4_SCN_FUSE_280": "1"},
                    {}, ["--renderer", "scene"]),
+    # Slice 4's bound (scene-slice4-results.md): each picture between records the frame's whole scene again, unmoved, into
+    # the same targets (KF4_SCN_BETWEEN_BOUND=1): what a picture between from the scene costs at most; wrong pictures.
+    # Run at 30 and 60: the difference a game frame is a picture between's GPU time
+    "scene_bound": ("the scene renderer, each picture between the frame's scene again (KF4_SCN_BETWEEN_BOUND=1: a bound)",
+                    {"KF4_SCN_BETWEEN_BOUND": "1"}, {}, ["--renderer", "scene"]),
+    "scene_bound_nodetail": ("the scene renderer, each picture between the frame's scene again, the GPU's time by kind "
+                             "alone", {"KF4_SCN_BETWEEN_BOUND": "1", "KF4_GPU_DETAIL": "0"}, {},
+                             ["--renderer", "scene"]),
     "scene_fuse_nodetail": ("the scene renderer, 0x280's two passes as one draw, the GPU's time by kind alone",
                             {"KF4_SCN_FUSE_280": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }

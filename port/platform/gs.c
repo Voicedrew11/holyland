@@ -990,6 +990,17 @@ int port_gs_interp_gpu(void) {
     return port_gs_replay_uploads() && pc_between;
 }
 
+int port_gs_between_leaves_memory(void) {
+    /* (KF4_SCN_RESTORE=1: the restore drawn all the same, as before slice 4) */
+    static int restore = -1;
+
+    if (restore < 0) {
+        const char *e = getenv("KF4_SCN_RESTORE");
+        restore = e != NULL && strcmp(e, "0") != 0;
+    }
+    return have_pc && port_options.renderer == PORT_RENDERER_SCENE && port_gs_interp_gpu() && !restore;
+}
+
 void port_gs_interp_frame(void *frame) {
 #ifdef KF4_HAVE_PARALLEL_GS
     gsr_interp_frame((GsnInterpFrame *)frame);

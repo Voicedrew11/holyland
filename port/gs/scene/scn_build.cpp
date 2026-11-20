@@ -627,6 +627,8 @@ public:
         apply_scale();
         vblank_ = game_vblank;
         close_scene(true);
+        last_stretch_ = std::move(stretch_);
+        stretch_.clear();
         {
             GpuWait wait(&notes_, "the scene renderer's next_frame_context", hang_clock_s());
             device_.next_frame_context();
@@ -634,6 +636,46 @@ public:
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
+    }
+
+    // ---- Pictures between ----
+    // (developers', KF4_SCN_BETWEEN_BOUND=1: slice 4's bound) the frame's whole scene kept as frame_interp.c takes it,
+    // and recorded again, unmoved and into the same targets, for each picture between: what a picture between drawn
+    // from the scene costs at most (it makes the frame's uploads, copies and scrolling textures again too); the
+    // pictures are wrong
+    void frame_taken(FrameStretch which) override {
+        flush_batch();
+        if (!between_bound_) {
+            return;
+        }
+        kept_.clear();
+        if (which == FrameStretch::open) {
+            close_scene(true);
+            kept_ = std::move(stretch_);
+            stretch_.clear();
+        } else if (which == FrameStretch::last) {
+            kept_ = last_stretch_;
+        }
+        counts_.frames_kept += kept_.empty() ? 0 : 1;
+    }
+
+    bool picture_between(const GsnInterpPicture &) override {
+        if (!between_bound_ || kept_.empty()) {
+            return false;
+        }
+        flush_batch();
+        close_scene(false);
+        for (const Scene &sc : kept_) {
+            CommandBufferHandle cmd = device_.request_command_buffer();
+            cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
+            drawer_.record(sc, *cmd);
+            times_.end(*cmd);
+            notes_.submitted("kf4-pc", "a picture between's bound (the frame's scene again)", hang_clock_s());
+            device_.submit(cmd);
+        }
+        device_.flush_frame();
+        counts_.bound_pictures++;
+        return true;
     }
 
     bool settled() const override {
@@ -714,6 +756,11 @@ public:
                     (unsigned long long)counts_.fused, (unsigned long long)counts_.fuse_firsts,
                     (unsigned long long)counts_.fused_same, why.empty() ? ": none" : why.c_str(),
                     (unsigned long long)drawer_.counts().fused_unrecorded);
+        }
+        if (between_bound_) {
+            fprintf(stderr, "[stats] scene renderer pictures between's bound: %llu frames kept, %llu pictures between "
+                    "recorded them again\n", (unsigned long long)counts_.frames_kept,
+                    (unsigned long long)counts_.bound_pictures);
         }
         const Drawer::Counts &d = drawer_.counts();
         fprintf(stderr,
@@ -828,7 +875,13 @@ private:
             device_.flush_frame();
         }
         counts_.scenes++;
-        scene_.clear();
+        if (between_bound_) {
+            // (the stretch: the scenes closed since the last vblank, a frame's when frame_interp.c takes it)
+            stretch_.push_back(std::move(scene_));
+            scene_ = Scene();
+        } else {
+            scene_.clear();
+        }
         clut_at_ = no_clut;
     }
 
@@ -3873,6 +3926,9 @@ private:
     Drawer drawer_;
     TextureStore store_;
     Scene scene_;
+    // (KF4_SCN_BETWEEN_BOUND) the frame's scene kept for its pictures between's bound
+    const bool between_bound_ = getenv("KF4_SCN_BETWEEN_BOUND") && strcmp(getenv("KF4_SCN_BETWEEN_BOUND"), "0") != 0;
+    std::vector<Scene> kept_, stretch_, last_stretch_;
     bool d16_ = false, first_draw_on_ = false;
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = 0, mode_2d_ = 0;
@@ -3963,7 +4019,7 @@ private:
     std::map<std::string, uint64_t> census_;
     uint64_t census_pairs_ = 0, census_singles_ = 0;
     struct Counts {
-        uint64_t scenes = 0, primitives = 0, native_batches = 0, load_clears = 0;
+        uint64_t scenes = 0, bound_pictures = 0, frames_kept = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;

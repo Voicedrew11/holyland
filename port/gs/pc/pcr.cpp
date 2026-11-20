@@ -722,6 +722,17 @@ public:
     // vblanks), is made its pictures' walk when the frame is its packets, and the rules make the stream's of it.
     void take_frame(InterpFrame frame) {
         ZoneScope zone(pc_frame_taken_pictures_between_zone);
+        if (!canvas_) {
+            // (another renderer under the shell, pcr_shell.h: its own pictures between)
+            if (drawing_) {
+                using FS = pcr::Drawing::FrameStretch;
+                const uint64_t bytes = frame->packet_bytes;
+                drawing_->frame_taken(since_vblank_bytes_ != 0 && since_vblank_bytes_ == bytes ? FS::open
+                                      : since_vblank_bytes_ == 0 && last_vblank_bytes_ == bytes ? FS::last
+                                                                                                 : FS::none);
+            }
+            return;
+        }
         if (!between_) {
             return;
         }
@@ -772,7 +783,13 @@ public:
     // moved by the shaders to the picture's time, and the walk kept. The live state is put back after.
     std::optional<ForPump> walk_picture(const GsnInterpPicture &picture) {
         ZoneScope zone(pc_walk_picture_a_picture_between_zone);
-        if (!between_ || !canvas_) {
+        if (!canvas_) {
+            if (drawing_) {
+                drawing_->picture_between(picture);
+            }
+            return std::nullopt;
+        }
+        if (!between_) {
             return std::nullopt;
         }
         drop_stretch();
@@ -924,6 +941,7 @@ public:
     // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, uint64_t game_vblank) {
         vblanks_++;
+        last_vblank_bytes_ = since_vblank_bytes_;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
@@ -1168,6 +1186,7 @@ private:
     // and its uploads the frame's: take_frame), and the bytes of the packets taken in since the last vblank
     bool frame_stretch_ = true;
     uint64_t since_vblank_bytes_ = 0;
+    uint64_t last_vblank_bytes_ = 0; // (the packets' bytes between the two vblanks before)
 };
 
 // ---- A picture made, and handed out ------------------------------------------------------------------
