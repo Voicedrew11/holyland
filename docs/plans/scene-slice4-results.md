@@ -222,7 +222,9 @@ pictures between, **byte for byte the same**; against paraLLEl-GS the same score
 46 degrees a game frame, `look` lines in a pad script: the pictures between draw the triangles VU1 left out whole): of
 72 pictures, 8 pictures between differ in 1 to 3 pixels by 1 level of 255, the whole corners (`whole_place`, the
 PC's own maths, not VU1's exact arithmetic) made in the compute stage, whose float contraction differs from the vertex
-stage's: invisible.
+stage's: invisible. The validation layer with synchronization validation (the fast turn at 60, combat, fire
+elementals; `validation/`, `validation_s4/`): no hazard from the placing; the two usage errors it found were 4a's (a
+stand-in cleared without `TRANSFER_DST`, an op's copy copied from without `TRANSFER_SRC`), fixed on `scene/slice4`.
 
 ### The GPU's time (real window, the owner's settings, 2x; `cost2/`)
 
