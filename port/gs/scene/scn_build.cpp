@@ -859,7 +859,7 @@ public:
                 const ImageHandle &c = stand_in_pool_[k];
                 if (c && c->get_width() == live.get_width() && c->get_height() == live.get_height() &&
                     c->get_format() == live.get_format() &&
-                    c->get_create_info().usage == live.get_create_info().usage) {
+                    c->get_create_info().usage == (live.get_create_info().usage | stand_in_usage)) {
                     si.image = std::move(stand_in_pool_[k]);
                     stand_in_pool_.erase(stand_in_pool_.begin() + std::ptrdiff_t(k));
                     break;
@@ -867,6 +867,7 @@ public:
             }
             if (!si.image) {
                 ImageCreateInfo info = live.get_create_info();
+                info.usage |= stand_in_usage; // (started by a clear or a copy, copied from to the picture)
                 info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
                 si.image = device_.create_image(info, nullptr);
                 counts_.stand_ins_made++;
@@ -3101,7 +3102,8 @@ private:
         if (!kept.image) {
             ImageCreateInfo info =
                 ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
-            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            // (TRANSFER_SRC: a picture between's stand-in starts as a copy of it)
+            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             info.layout = ImageLayout::General;
             info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
             kept.image = device_.create_image(info, nullptr);
@@ -3536,7 +3538,8 @@ private:
     ImageHandle copy_of_rect(const Target &s, const VkRect2D &rect, GpuWork work) {
         ImageCreateInfo info = ImageCreateInfo::render_target(rect.extent.width, rect.extent.height,
                                                               s.image->get_format());
-        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // (TRANSFER_SRC: a picture between's stand-in starts as a copy of it)
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         ImageHandle copy = device_.create_image(info, nullptr);
@@ -4282,6 +4285,7 @@ private:
     std::unordered_map<const Image *, StandIn> stand_in_plan_;
     std::unordered_map<const Image *, ImageHandle> stand_ins_;
     std::vector<ImageHandle> stand_in_pool_;
+    static constexpr VkImageUsageFlags stand_in_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     // (developers', KF4_SCN_BETWEEN_LOG=1: the first frames' stand-ins on stderr)
     const bool between_log_ = getenv("KF4_SCN_BETWEEN_LOG") && strcmp(getenv("KF4_SCN_BETWEEN_LOG"), "0") != 0;
     int logged_plans_ = 0;
