@@ -94,6 +94,92 @@ compression and the images' layout).
 - Developers': `KF4_SCN_BETWEEN_LOG=1` (the first frames' stand-ins), `KF4_SCN_BETWEEN_BOUND=1` (the bound above),
   `KF4_SCN_RESTORE=1` (the exact restore as before).
 
+### Against paraLLEl-GS at 60
+
+`motion_compare.py --rate 60 --renderer pc,scene --profiles 1x --pc-extra "--native-draw on"` (`motion60/`): the 15
+cases, paraLLEl-GS at 60 drawing frame_interp.c's stream as the reference, each picture paired. At 60 a vblank's own
+picture is the picture between, so 410 of the 745 pictures are pictures between. Sums over the cases:
+
+| | pictures between: over 24 levels | mean | game frames: over 24 levels | mean |
+|---|---|---|---|---|
+| the PC renderer | 208.78% | 747.39 | 50.64% | 414.54 |
+| the scene renderer | 208.41% | 747.65 | 50.37% | 413.63 |
+
+**No further than today's pictures between** (the criterion): lower in pixels over 24 levels, level in the mean (0.03%
+more, the title's 0.8 and combat's 0.26; spell 3, spell 16, underwater and drain a little less). Salamanders are
+closer than the PC renderer's in both (0.00% against 0.24%). Case by case: `motion60/report_60.md`.
+
+At 240 paraLLEl-GS cannot be the reference for the pictures at phases: only the PC renderer's shell draws extra pictures
+(gs.c's present_extra), so a `--renderer gs` run dumps each vblank's own picture alone, the same pictures as at 60. The
+pictures between at 240 are judged as the tool always judged them: flash_find against their game frames, and the game
+frames at 240 against those at 30, both renderers (below).
+
+### At 240
+
+`motion_compare.py --renderer scene` and `--renderer pc` (`flash240_scene/`, `flash240_pc/`, 1x, native draw on): the
+pictures between at 240 (four a vblank) checked by flash_find against their game frames, and the game frames at 240
+against the same vblanks at 30. **The two renderers alike in every case**: flagged pictures between the same (first kill
+10 of 288, spell 3 27 of 240, the PC renderer's same pictures; none elsewhere), no game frame at 240 differing from 30's
+in either. At 30 against paraLLEl-GS the same too (salamanders 0.00% against the PC renderer's 0.01%).
+
+### The GPU's time (real window, the owner's settings, 2x, Vega 7)
+
+`world_plain.py --variants scene_nodetail --rates 30,60 --rounds 2` (`cost4a/`), ms a game frame (at 60 a game frame
+has one picture between), medians:
+
+| | all at 30 | all at 60 | a picture between (60 less 30) | the bound's | of it 0x000; 0x280 and 0x700 | the stand-ins' copies |
+|---|---|---|---|---|---|---|
+| 099 | 10.45 | 16.65 | 6.20 | 4.67 | 4.18; 0.72 | 0.95 |
+| the pond | 13.13 | 27.26 | 14.13 | 8.49 | 4.94; 7.05 | 1.82 |
+| the palace | 12.76 | 26.52 | 13.76 | 8.56 | 4.12; 5.99 | 1.21 |
+
+**A picture between costs more than the frame's own draw**, far over the bound: the moved world is dearer than the
+unmoved one (at the pond 0x280's pictures 4.7 ms against the frame's 1.9, 0x000's 4.9 against 3.4), since the
+pictures' moves (`vu1_*_maths.h`'s `moved()`: at 0x280 a slerp, sines and cosines, a corner) are made in a vertex stage
+that is the world's cost already (3f below), once a triangle corner; and the stand-ins were copied around the frame's
+rows (the other frame buffer and its Z, which nothing read): 1.8 ms at the pond. That copy is now made only where an op
+of the frame copies from the image (pictures unchanged: underwater, combat, first kill, the menus byte for byte the
+same scores). Measured again (`cost4a_trim/`, same run otherwise), **it saves next to nothing**:
+
+| | all at 30 | all at 60 | a picture between | before the trim | the copies at 60 |
+|---|---|---|---|---|---|
+| 099 | 10.42 | 16.63 | 6.21 | 6.20 | 1.42 |
+| the pond | 13.18 | 27.00 | 13.82 | 14.13 | 1.75 |
+| the palace | 12.76 | 26.31 | 13.55 | 13.76 | 1.30 |
+
+Still 2.7 stand-in copies a picture (2176 for 796 pictures at the pond): the copies left are the whole images an op of
+the frame reads and the shown picture's copy out of its stand-in, not the rows around the frame. Copies are not where
+a picture between's time is; the moved world is (3f below).
+
+## 3f's cheap tests: what the world is made of
+
+`world_plain.py` (`bounds3f/`), 30, two rounds, ms a game frame. `KF4_SCN_TINY=1`: every plain draw's scissor one pixel
+(the vertex stage, the draws and the rasteriser's set-up left, no pixels); `KF4_SCN_FLAT=1`: every plain draw shaded
+one colour (the GS's pixel arithmetic gone; the depth test, the blend and the rasterising kept):
+
+| | world 2x | no pixels | one colour | world 1x | anisotropy 1x | colour compression off | HiZ off | the picture and present |
+|---|---|---|---|---|---|---|---|---|
+| 099 | 3.81 | 1.20 | 1.62 | 2.22 | 3.55 | 3.82 | 3.92 | 5.53 (2.75 a picture) |
+| the pond | 7.39 | 4.60 | 5.59 | 5.27 | 7.23 | 7.52 | 7.55 | 5.45 |
+| the palace | 6.66 | 4.17 | 3.32 | 5.54 | 6.65 | 6.66 | 6.72 | 5.62 |
+
+- **At the pond and the palace most of the world is not pixels**: 4.6 and 4.2 ms with none drawn, nearly all of it the
+  native programs' vertex stage (0x280 2.15 ms at the palace with no pixels). Each triangle corner is a vertex shader
+  invocation that runs VU1's maths for its mesh vertex whole (`pcr_nd*.vert`: a triangle the arena's slots of its
+  corners, `gl_VertexIndex % 3`, a draw without indices: no vertex reused), so a mesh vertex's maths is made once for
+  each triangle corner that uses it, about three times a pass (0x280's sphere pass again). In a picture between
+  (`ND_C_MOVING`) each corner's invocation also places all three of its triangle's corners moved (`whole_place` of
+  `tri.x`, `tri.y` and `tri.z`, for `whole_triangle.h`): up to nine times a pass. This is why a picture between's world
+  costs more than the frame's.
+- **The GS's pixel arithmetic in the shader is the rest**: 2.2 / 1.8 / 3.3 ms (the world less one colour's).
+- **Texturing, memory and compression are not it**: anisotropy, RADV's colour compression and HiZ change nothing.
+- **The final pass is 2.2-2.75 ms a picture whatever the world costs** (5.5 a game frame at 2x, 4.3 at 1x).
+
+So for a high frame rate on this GPU (240: about 4 ms a picture, all of it), three structural costs, none of them
+tuning: (1) each mesh vertex's maths (and a picture's move) made once a draw, not once a triangle corner; (2) the final
+pass (scanout, anti-aliasing, scaling and sharpening) a fraction of its 2.75 ms; (3) the GS's pixel in the shader
+lighter where its parts are not used. (1) is the largest and the one pictures between multiply.
+
 ## What is left of slice 4
 
 - 4a proper: the kept frame scene drawn again at t into images of its own (stand-ins for every target it writes, the

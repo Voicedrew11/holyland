@@ -771,7 +771,8 @@ public:
 
     // How each image the kept scenes write starts in a picture: the first-draw image cleared (no triangle yet); one whose
     // first use is a clear of all of it as it is; one first cleared in part (a frame buffer of two in one image), the live
-    // image's pixels around that part copied; any other (first read, or copied into), the live image copied whole. The
+    // image's pixels around that part copied where an op of the frame copies from the image (the frame before blended
+    // in), else as it is; any other (first read, or copied into), the live image copied whole. The
     // stand-ins are images of the same size and format, kept a size and format across frames: each picture sets what
     // it starts from, so any of them will do.
     struct StandIn {
@@ -787,7 +788,7 @@ public:
         }
         stand_in_plan_.clear();
         stand_ins_.clear();
-        std::unordered_set<const Image *> written;
+        std::unordered_set<const Image *> written, read_by_op;
         using Start = StandIn::Start;
         auto whole = [](const Image &im, const VkRect2D &r) {
             return r.offset.x <= 0 && r.offset.y <= 0 && int64_t(r.offset.x) + r.extent.width >= im.get_width() &&
@@ -811,6 +812,9 @@ public:
             for (const Step &st : sc.steps) {
                 if (st.kind == Step::Kind::op) {
                     const Op &op = sc.ops[st.index];
+                    if (op.src) {
+                        read_by_op.insert(op.src.get());
+                    }
                     meet(op.src, false, Start::copy_whole, {}, op.depth);
                     meet(op.dst, true, op.kind == Op::Kind::clear ? Start::as_is : Start::copy_whole, {}, op.depth);
                     continue;
@@ -844,6 +848,12 @@ public:
             StandIn &si = it->second;
             if (si.start == Start::first_draw) {
                 si.depth = false;
+            }
+            if (si.start == Start::copy_around && !read_by_op.count(it->first)) {
+                // (a frame buffer of two in one image, and its Z: the rows around the frame's are the other buffer's,
+                // which the picture neither shows nor, unless an op of the frame copies from the image, reads; 1.8 ms
+                // a picture at the pond at 2x copied)
+                si.start = Start::as_is;
             }
             for (size_t k = 0; k < stand_in_pool_.size(); k++) {
                 const ImageHandle &c = stand_in_pool_[k];
