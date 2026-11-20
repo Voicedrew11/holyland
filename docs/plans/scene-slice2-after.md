@@ -132,7 +132,14 @@ this build in the same rounds, medians of two rounds, ms a game frame (`cost_fin
   +0.5): small, but under every picture, and what stands between the fills' GS arithmetic and paraLLEl-GS. Not
   counted by the tours (pixels over 24). Worth finding before slice 3's fused passes are judged against paraLLEl-GS, since
   their pixel changes are of the same size.
-- **The frame buffers as one target at the pond**: the owner's to decide (asked 2026-11-20).
+- **The frame buffers as one target at the pond**: the owner chose an image each (decision 6), and it was built: the
+  target split where a frame is asked for 448 rows or more down it (New Game's first frame draws 897 rows at FBP 0,
+  making FBP 0 and 140 one target; one split a run). Pictures byte for byte, the validation layer clean, but no gain:
+  the pond 13.14 ms a game frame split against 13.10 not, the palace and 099 the same (two rounds,
+  `~/Documents/darker-reality-measurements/2026-11-20-scene-split/`). The partial render area's clear costs no more
+  than a whole image's here. Not kept. (On the way: the first-draw image, made again whenever the target's size
+  changed, was then made and cleared every frame, the two buffers being 896 and 960 rows: worth keeping in mind if the
+  targets change.)
 - **Slice 3** (`scene-renderer-design.md`, "5. Draws"): see "Slice 3's start".
 
 ## Slice 3's start

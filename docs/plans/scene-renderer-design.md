@@ -600,6 +600,12 @@ build and measure, each to be looked at again only on its slice's numbers.
    Measured (`scene-slice2-after.md`): further, since the frame under the fills is a level off paraLLEl-GS already;
    so they are folded with the arithmetic of slice 2's blend (byte for byte), the GS's a developers' switch.
 
+6. **The frame buffers an image each. Decided (2026-11-20).** Where both frame buffers are found as one target (from a
+   New Game: the pond's 1920x1856), each frame's clear is a partial render area, not a fast clear (`scene-slice2-after.md`);
+   each frame buffer an image of its own, as "3. The targets" has it, a read across the two answered by the store.
+   Built and measured the same day (`scene-slice2-after.md`): no gain (the pond 13.14 ms a game frame split, 13.10
+   not), so not kept; the partial clears cost nothing measurable here.
+
 Also taken with them, as the design has them: the scene built in the chain's order on the renderer's thread; the
 texture store as the resolver with a bindless table; DATE by the first-draw image (slice 1 checks its assumptions:
 `GsDraw_SetScreenAlpha(0)` just before the shadows, a fallback by a copy where not); the alpha's reset folded into the
