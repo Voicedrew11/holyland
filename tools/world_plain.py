@@ -87,6 +87,17 @@ VARIANTS = {
     # The same of another build, given by --exe-for scene_ref=EXE (an earlier slice's, measured in the same rounds)
     "scene_ref": ("the scene renderer of the build --exe-for names (an earlier slice's)", {}, {},
                   ["--renderer", "scene"]),
+    # ... each draw's fields as push constants and its textures in a set 1 of its own, as slice 2 (slice 3's records
+    # and bindless table off: HANDOFF_scene_slice3.md, 3a)
+    "scene_norecords": ("the scene renderer, a draw's fields as push constants (KF4_SCN_RECORDS=0)",
+                        {"KF4_SCN_RECORDS": "0"}, {}, ["--renderer", "scene"]),
+    # The GPU's time by kind of work alone (KF4_GPU_DETAIL=0): the detail's timestamps at each change of shader state
+    # wait for the GPU, and program 0x280 changes state with every pass (scene-slice2-after.md, "Slice 3's start"); the
+    # world is then the native draws' kinds whole (0x000's DATE and sky in it), "All" the figure to read
+    "scene_nodetail": ("the scene renderer, the GPU's time by kind alone (KF4_GPU_DETAIL=0)", {"KF4_GPU_DETAIL": "0"},
+                       {}, ["--renderer", "scene"]),
+    "scene_ref_nodetail": ("the scene renderer of the build --exe-for names, the GPU's time by kind alone",
+                           {"KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }
 MAIN = "exact,exactz,nosettle,noplanes,gpu,noblend,plain"
 
@@ -97,16 +108,19 @@ def world_split(r):
     """GPU ms a game frame by part: the world, its DATE draws, the sky, the scrolling targets (native 280), the
     2D draws (layers, HUD), copies, the picture and present, and all"""
     frames = r.get("game_frames") or 0
-    if not frames or not r.get("shaders"):
+    if not frames or not r.get("kinds"):
         return None
     ms = lambda ns: ns / 1e6 / frames  # noqa: E731
     parts = dict(world=0.0, planes=0.0, date=0.0, sky=0.0, n280=0.0, d2=0.0, copies=0.0, scanout=0.0, other=0.0)
-    for state, (ns, _) in r["shaders"].items():
+    for state, (ns, _) in r.get("shaders", {}).items():
         if state.startswith("native 000"):
             parts["date" if "DATE" in state else "sky" if "surface copy" in state else "world"] += ms(ns)
+    detail = bool(r.get("shaders"))
     for kind, (ns, _) in r["kinds"].items():
         k = kind[3:] if kind.startswith("pc ") else kind
         if k == "native 000":
+            if not detail:
+                parts["world"] += ms(ns)  # (no shader states: the kind whole, its DATE and sky in it)
             continue
         if k == "planes":
             parts["planes"] += ms(ns)
@@ -217,18 +231,20 @@ def report(a, scenes, variants, scales, rates):
                         continue
                     med = {k: statistics.median(x[k] for x in runs) for k in runs[0] if k != "native"}
                     med["spread"] = max(x["world_all"] for x in runs) - min(x["world_all"] for x in runs)
+                    med["spread_all"] = max(x["total"] for x in runs) - min(x["total"] for x in runs)
                     med["n"] = len(runs)
                     nat = runs[0]["native"]
                     rows.append(dict(scene=scene, scale=scale, rate=rate, variant=v, native=nat, **med))
     json.dump(rows, open(os.path.join(a.out, "world_plain.json"), "w"), indent=1)
     head = ("| Scene | Scale | Rate | Variant | 0x000 | 0x280, 0x700 | Planes | World | DATE | Sky | 2D | Copies | "
-            "Scanout | All | Runs (spread) |")
+            "Scanout | All | Runs (spread) | All's spread |")
     lines = [head, "|" + "---|" * (head.count("|") - 1)]
     for r in rows:
-        lines.append("| %s | %dx | %d | %s | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %d (%.2f) |"
+        lines.append("| %s | %dx | %d | %s | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %d (%.2f) "
+                     "| %.2f |"
                      % (r["scene"], r["scale"], r["rate"], r["variant"], r["world"], r["n280"], r["planes"],
                         r["world_all"], r["date"], r["sky"], r["d2"], r["copies"], r["scanout"], r["total"], r["n"],
-                        r["spread"]))
+                        r["spread"], r.get("spread_all", 0.0)))
     text = "\n".join(lines) + "\n"
     open(os.path.join(a.out, "world_plain.md"), "w").write(text)
     print(text)

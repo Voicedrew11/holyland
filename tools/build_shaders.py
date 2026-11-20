@@ -49,7 +49,14 @@ SCENE_OUT = os.path.join(ROOT, "port", "gs", "scene", "scn_shaders.h")
 SCENE_AGAIN = [
     # (DATE's shadows drawn where their triangle came first: pcr_prim.h's SCN_FIRST_DRAW)
     (os.path.join(PC_SHADERS, "pcr_prim.frag"), "scn_prim_first_frag", ["-DSCN_FIRST_DRAW"]),
-]
+    # (the PC renderer's shaders and these two reading a draw's fields from the scene's records, PCR_RECORDS:
+    # scn_draw.cpp's records; PCR_DRAWS_APART, each record a draw of its own, no merged runs: pcr_common.h)
+    (os.path.join(PC_SHADERS, "pcr_prim.frag"), "scn_prim_first_frag_rec",
+     ["-DSCN_FIRST_DRAW", "-DPCR_RECORDS", "-DPCR_DRAWS_APART"]),
+    (os.path.join(SCENE_SHADERS, "scn_first_draw.frag"), "scn_first_draw_frag_rec", ["-DPCR_RECORDS", "-DPCR_DRAWS_APART"]),
+] + [(os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_rec", ["-DPCR_RECORDS", "-DPCR_DRAWS_APART"])
+     for name in ["pcr_prim.vert", "pcr_nd000.vert", "pcr_nd280.vert", "pcr_nd700.vert", "pcr_ndripple.vert",
+                  "pcr_prim.frag", "pcr_prim_early.frag"]]
 
 
 def main():

@@ -485,6 +485,20 @@ public:
                 (unsigned long long)counts_.primitives, (unsigned long long)counts_.native_batches,
                 (unsigned long long)counts_.native_joined, (unsigned long long)counts_.native_same_material,
                 (unsigned long long)d.state_set);
+        auto per = [&](uint64_t n) { return d.scenes ? double(n) / double(d.scenes) : 0.0; };
+        fprintf(stderr,
+                "[stats] scene renderer calls: %llu scenes recorded; %llu calls (%.1f a scene), %llu of them from the "
+                "scene's records; %llu runs of one pipeline, textures bindless (%.1f a scene), %llu of them 0x280's "
+                "(%.1f); a run ended by its pass %llu, a change of state %llu, its own descriptors %llu, a clear %llu, the "
+                "GIF's 3D %llu (%llu runs cut in two by it); %llu records, table %.1f textures a scene (%llu at most), "
+                "%.1f CLUTs; %llu materials with their own set 1 for want of a sampler's place\n",
+                (unsigned long long)d.scenes, (unsigned long long)d.calls, per(d.calls),
+                (unsigned long long)d.record_calls, (unsigned long long)d.runs, per(d.runs),
+                (unsigned long long)d.runs_280, per(d.runs_280), (unsigned long long)d.ends[Drawer::end_pass],
+                (unsigned long long)d.ends[Drawer::end_state], (unsigned long long)d.ends[Drawer::end_own],
+                (unsigned long long)d.ends[Drawer::end_clear], (unsigned long long)d.ends[Drawer::end_gif3d],
+                (unsigned long long)d.gif3d_splits, (unsigned long long)d.records, per(d.table_entries),
+                (unsigned long long)d.table_max, per(d.cluts), (unsigned long long)d.own_sampler);
         fprintf(stderr,
                 "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened; the image cleared "
                 "%llu times), %llu DATE draws by a copy (%llu of them native); alpha reset seen %llu times; the alpha read "
@@ -3382,6 +3396,7 @@ private:
         d.material = material;
         const Material &mm = scene_.materials.back();
         if (!b.native) {
+            d.gif_3d = !b.sprites && mm.ztest;
             d.first_vertex = uint32_t(scene_.vertices.size());
             d.vertex_count = uint32_t(b.vertices.size());
             scene_.vertices.insert(scene_.vertices.end(), b.vertices.begin(), b.vertices.end());

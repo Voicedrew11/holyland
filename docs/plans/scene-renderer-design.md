@@ -572,6 +572,10 @@ bindless table, still a call a draw, with the counts and the baseline (the detai
 indirect draws; 3c the level off paraLLEl-GS at 1x found or bounded (a study, any time before 3d is judged); 3d 0x280's
 two passes as one draw behind a switch, off until the owner has looked at its changed pixels; 3e the slice judged
 whole and the owner's decision on 3d. Their numbers go into `scene-slice3-results.md` as each is done.
+3a is done (2026-11-20): every draw from the scene's records with its textures bindless, the pictures byte for byte
+slice 2's; the runs counted (243 / 1,053 / 1,652 a frame at 099 / the pond / the palace, 0x280's 139 / 885 / 1,437, as
+the census); the GPU time slice 2's at 099 and the pond, 0.12 ms more at the palace (0x280's many small draws). The
+fragment stage reading its record in an indirect draw is 3b's first question.
 
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.

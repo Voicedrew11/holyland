@@ -46,7 +46,7 @@ layout(location = 3) flat in uvec2 v_rect; // (the 2D mode's smooth: pcr_prim.ve
 layout(location = 12) PCR_IN float v_color_q;
 
 layout(location = 0) out vec4 o_color;
-#ifdef PCR_RECORDS
+#if defined(PCR_RECORDS) && !defined(PCR_DRAWS_APART)
 // (a run's draw, pc.factors' top bit: the blend's colour factors, the source's in rgb and one minus the destination's in
 // alpha (the blend's SRC1_COLOR and ONE_MINUS_SRC1_ALPHA); the colour out's alpha then the alpha the blend would have
 // written)
@@ -78,7 +78,8 @@ layout(set = 0, binding = 15, std430) readonly buffer WalkCluts {
 // (PCR_RECORDS: a merged run's draw, pcr_canvas.cpp's Runs, is several batches' triangles, each with its own texture
 // and sampler: the index differs within the draw, so it is nonuniformEXT there. Without it the pixels of two batches
 // that share a quad at an edge read one or the other's texture, found on RADV 2026-11-14)
-#ifdef PCR_RECORDS
+// (PCR_DRAWS_APART, the scene renderer's records: each record a draw of its own, its index the same across the draw)
+#if defined(PCR_RECORDS) && !defined(PCR_DRAWS_APART)
 #define PCR_TABLE_AT nonuniformEXT(pc.table & 0xFFFFu)
 #define PCR_SAMPLER_AT nonuniformEXT((pc.table >> 16) & 15u)
 #else
@@ -682,7 +683,7 @@ void main() {
     uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     float alpha_out = (pc.flags & PCR_F_ALPHA_FACTOR) != 0u ? float(c.a) / 128.0 : float(a) / 255.0;
     o_color = vec4(vec3(rgb) / 255.0, alpha_out);
-#ifdef PCR_RECORDS
+#if defined(PCR_RECORDS) && !defined(PCR_DRAWS_APART)
     o_factor = vec4(0.0);
     if ((pc.factors & 0x80000000u) != 0u) {
         // Vulkan's factors as its blend has them: the source alpha and the constant (FIX / 128) clamped to [0, 1]
