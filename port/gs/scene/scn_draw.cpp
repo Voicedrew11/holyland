@@ -23,6 +23,7 @@ constexpr uint32_t walk_samplers = 16;
 constexpr uint32_t trace_binding = 6, records_binding = 7, merged_binding = 8, planes_binding = 9;
 constexpr uint32_t first_binding = 10; // (set 1's: pcr_prim.h's u_first, SCN_FIRST_DRAW)
 constexpr uint32_t vertex_input_count = pcr::vertex_input_count;
+constexpr uint32_t scn_alpha_one = 0x1; // (pcr_common.h's SCN_ALPHA_ONE)
 
 uint32_t native_slot(pcr::NativeProgram program) {
     return program == pcr::NativeProgram::vu1_000   ? 0
@@ -62,12 +63,25 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
     if (!first_draw_ok_) {
         fprintf(stderr, "[scn] no R32F colour target that blends here: DATE by a copy of the target\n");
     }
+    // (the records: gl_DrawID in the vertex stage, and the fragment stage's subgroup's first record, pcr_common.h's
+    // PCR_EACH_RECORD; the runs: indirect draws of several commands, each with its own first instance)
+    const bool draw_ids = f.vk11_features.shaderDrawParameters;
+    const bool ballot = (f.vk11_props.subgroupSupportedStages & VK_SHADER_STAGE_FRAGMENT_BIT) != 0 &&
+                        (f.vk11_props.subgroupSupportedOperations & VK_SUBGROUP_FEATURE_BALLOT_BIT) != 0;
+    if (records_on_ && (!draw_ids || !ballot)) {
+        fprintf(stderr, "[scn] no draw parameters or subgroup ballot in the fragment stage here: no records\n");
+        records_on_ = false;
+    }
+    indirect_on_ = indirect_on_ && records_on_ && f.enabled_features.multiDrawIndirect &&
+                   f.enabled_features.drawIndirectFirstInstance;
+    max_run_ = indirect_on_ ? std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u) : 1u;
     make_programs();
     if (const char *log = getenv("KF4_SCN_RUNS_LOG")) {
         runs_log_ = fopen(log, "w");
         if (runs_log_) {
             fprintf(runs_log_, "# vblank picture draws calls record_calls runs runs_280 end_pass end_state end_own "
-                               "end_clear end_gif3d gif3d_splits records table cluts\n");
+                               "end_clear end_gif3d gif3d_splits records table cluts draw_calls indirect_calls "
+                               "indirect_draws calls_gif calls_000 calls_280 calls_700 calls_ripple\n");
         }
     }
     ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(1, 1, VK_FORMAT_R8G8B8A8_UINT);
@@ -274,6 +288,17 @@ void Drawer::prepare(const Scene &scene) {
             return;
         }
     }
+    // the GIF's primitives' corners, for the draws from the records (one buffer: a run's draws from it)
+    if (!scene.vertices.empty()) {
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+        info.size = scene.vertices.size() * sizeof(scene.vertices[0]);
+        info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        p.vertices = device_.create_buffer(info, scene.vertices.data());
+        if (!p.vertices) {
+            return;
+        }
+    }
     // a record a draw's pass, in the draws' order
     std::vector<pcr::PrimPush> records;
     records.reserve(scene.draws.size() + scene.draws.size() / 4);
@@ -299,6 +324,7 @@ void Drawer::prepare(const Scene &scene) {
         r.factors = 0;
         for (uint32_t i = 0; i < m.pass_count; i++) {
             r.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | m.passes[i].mode << pcr::F_PASS_SHIFT;
+            r.factors = alpha_one(m, i) ? scn_alpha_one : 0;
             records.push_back(r);
         }
     }
@@ -315,25 +341,116 @@ void Drawer::prepare(const Scene &scene) {
         std::fill(p.first_record.begin(), p.first_record.end(), no_record);
         return;
     }
+    // the runs' commands: a call from the records each at most
+    if (indirect_on_) {
+        info.size = records.size() * sizeof(VkDrawIndirectCommand);
+        info.domain = BufferDomain::LinkedDeviceHost;
+        info.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        p.commands = device_.create_buffer(info, nullptr);
+        p.command_map = p.commands ? static_cast<VkDrawIndirectCommand *>(
+                                         device_.map_host_buffer(*p.commands, MEMORY_ACCESS_WRITE_BIT))
+                                   : nullptr;
+        if (p.command_map) {
+            p.command_capacity = uint32_t(records.size());
+        } else {
+            p.commands.reset();
+        }
+    }
     counts_.records += records.size();
     counts_.table_entries += views.size();
     counts_.table_max = std::max<uint64_t>(counts_.table_max, views.size());
     counts_.cluts += scene.cluts.size();
 }
 
-// A call into the runs: a run goes on while the key is the same, else a new one starts and what ended the last is
-// counted
+// (an unblended pass that writes no alpha: its alpha out 1.0 from its record, pcr_common.h's SCN_ALPHA_ONE)
+bool Drawer::alpha_one(const Material &m, uint32_t pass) {
+    return !m.blend.enable && (m.passes[pass].mask & 0x8u) == 0;
+}
+
+bool Drawer::same_state(const RunKey &a, const RunKey &b) {
+    return a.program == b.program && a.ztest == b.ztest && a.zwrite == b.zwrite && a.zcompare == b.zcompare &&
+           a.blend == b.blend &&
+           (!a.blend || (a.src == b.src && a.src_alpha == b.src_alpha && a.dst == b.dst && a.dst_alpha == b.dst_alpha &&
+                         a.op == b.op && a.op_alpha == b.op_alpha)) &&
+           a.mask == b.mask && memcmp(a.constants, b.constants, sizeof(a.constants)) == 0 &&
+           memcmp(&a.viewport, &b.viewport, sizeof(a.viewport)) == 0 &&
+           memcmp(&a.scissor, &b.scissor, sizeof(a.scissor)) == 0 &&
+           memcmp(a.native, b.native, sizeof(a.native)) == 0 && a.gif_3d == b.gif_3d;
+}
+
+// A key in one form for the same pixels: the alpha's blend where the alpha is not written, and the blend constants where
+// no factor reads them, as unblended's (the call's state is set from the key in this form, set_call_state; the blend
+// constants are the material's, set_draw_state, read by no factor where the key has them 0)
+void Drawer::canonical(RunKey &k) {
+    const RunKey none;
+    if (!k.blend) {
+        k.src = none.src;
+        k.src_alpha = none.src_alpha;
+        k.dst = none.dst;
+        k.dst_alpha = none.dst_alpha;
+        k.op = none.op;
+        k.op_alpha = none.op_alpha;
+    } else if ((k.mask & 0x8u) == 0) {
+        k.src_alpha = VK_BLEND_FACTOR_ONE;
+        k.dst_alpha = VK_BLEND_FACTOR_ZERO;
+        k.op_alpha = VK_BLEND_OP_ADD;
+    }
+    auto constant = [](VkBlendFactor f) {
+        return f >= VK_BLEND_FACTOR_CONSTANT_COLOR && f <= VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    };
+    if (!k.blend || !(constant(k.src) || constant(k.dst) || constant(k.src_alpha) || constant(k.dst_alpha))) {
+        memset(k.constants, 0, sizeof(k.constants));
+    }
+}
+
+// Whether a call of key draws the same pixels in a run of state run, run then the state for both: the same state, or
+// a run blended by the source's alpha (Cs As + Cd (1 - As)) and an unblended call whose alpha out is 1.0 and is not
+// written (alpha_one, the record's SCN_ALPHA_ONE: Cs 1 + Cd 0 is Cs), either way round
+bool Drawer::merge(RunKey &run, const RunKey &key) {
+    if (same_state(run, key)) {
+        run.alpha_one = run.alpha_one && key.alpha_one;
+        return true;
+    }
+    auto by_alpha = [](const RunKey &k) {
+        return k.blend && k.src == VK_BLEND_FACTOR_SRC_ALPHA && k.dst == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA &&
+               k.op == VK_BLEND_OP_ADD && (k.mask & 0x8u) == 0;
+    };
+    const RunKey *blended = nullptr, *plain = nullptr;
+    if (by_alpha(run) && key.alpha_one) {
+        blended = &run;
+        plain = &key;
+    } else if (run.alpha_one && by_alpha(key)) {
+        blended = &key;
+        plain = &run;
+    } else {
+        return false;
+    }
+    RunKey as = *plain; // (the unblended call as blended)
+    as.blend = true;
+    as.src = blended->src;
+    as.src_alpha = blended->src_alpha;
+    as.dst = blended->dst;
+    as.dst_alpha = blended->dst_alpha;
+    as.op = blended->op;
+    as.op_alpha = blended->op_alpha;
+    memcpy(as.constants, blended->constants, sizeof(as.constants));
+    if (!same_state(as, *blended)) {
+        return false;
+    }
+    RunKey merged = *blended;
+    merged.alpha_one = false;
+    run = merged;
+    return true;
+}
+
+// A call into the runs: a run goes on while the call merges with its state (merge), else a new one starts and what
+// ended the last is counted
 void Drawer::count_call(const RunKey &key) {
     counts_.calls++;
     RunState &r = run_;
     auto same = [](const RunKey &a, const RunKey &b) {
-        return a.program == b.program && a.ztest == b.ztest && a.zwrite == b.zwrite && a.zcompare == b.zcompare &&
-               a.blend == b.blend &&
-               (!a.blend || (a.src == b.src && a.src_alpha == b.src_alpha && a.dst == b.dst && a.op == b.op)) &&
-               a.mask == b.mask && memcmp(a.constants, b.constants, sizeof(a.constants)) == 0 &&
-               memcmp(&a.viewport, &b.viewport, sizeof(a.viewport)) == 0 &&
-               memcmp(&a.scissor, &b.scissor, sizeof(a.scissor)) == 0 &&
-               memcmp(a.native, b.native, sizeof(a.native)) == 0 && a.gif_3d == b.gif_3d;
+        RunKey m = a;
+        return merge(m, b);
     };
     // (a stretch of the GIF's 3D between two calls that would have been one run)
     if (key.gif_3d && !r.in_gif3d) {
@@ -347,13 +464,14 @@ void Drawer::count_call(const RunKey &key) {
         }
     }
     End end = end_count;
+    RunKey run = r.last;
     if (!r.open) {
         end = end_pass;
     } else if (r.after_clear) {
         end = end_clear;
     } else if (key.own || r.last.own) {
         end = end_own;
-    } else if (!same(r.last, key)) {
+    } else if (!merge(run, key)) {
         end = key.gif_3d || r.last.gif_3d ? end_gif3d : end_state;
     }
     if (end != end_count) {
@@ -363,7 +481,8 @@ void Drawer::count_call(const RunKey &key) {
     }
     r.open = true;
     r.after_clear = false;
-    r.last = key;
+    r.last = end != end_count ? key : run;
+    r.call = key;
 }
 
 void Drawer::log_scene(const Scene &scene, const Counts &b) {
@@ -376,9 +495,15 @@ void Drawer::log_scene(const Scene &scene, const Counts &b) {
     for (uint32_t e = 0; e < end_count; e++) {
         fprintf(runs_log_, " %llu", (unsigned long long)(a.ends[e] - b.ends[e]));
     }
-    fprintf(runs_log_, " %llu %llu %llu %llu\n", (unsigned long long)(a.gif3d_splits - b.gif3d_splits),
+    fprintf(runs_log_, " %llu %llu %llu %llu %llu %llu %llu", (unsigned long long)(a.gif3d_splits - b.gif3d_splits),
             (unsigned long long)(a.records - b.records), (unsigned long long)(a.table_entries - b.table_entries),
-            (unsigned long long)(a.cluts - b.cluts));
+            (unsigned long long)(a.cluts - b.cluts), (unsigned long long)(a.draw_calls - b.draw_calls),
+            (unsigned long long)(a.indirect_calls - b.indirect_calls),
+            (unsigned long long)(a.indirect_draws - b.indirect_draws));
+    for (size_t i = 0; i < a.draw_calls_by.size(); i++) {
+        fprintf(runs_log_, " %llu", (unsigned long long)(a.draw_calls_by[i] - b.draw_calls_by[i]));
+    }
+    fprintf(runs_log_, "\n");
 }
 
 void Drawer::record(const Scene &scene, CommandBuffer &c) {
@@ -406,6 +531,10 @@ void Drawer::record(const Scene &scene, CommandBuffer &c) {
     }
     if (after_pass) {
         full_barrier(c);
+    }
+    if (prepared_.command_map) {
+        device_.unmap_host_buffer(*prepared_.commands, MEMORY_ACCESS_WRITE_BIT);
+        prepared_.command_map = nullptr;
     }
     if (runs_log_) {
         log_scene(scene, before);
@@ -465,12 +594,14 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
     }
     c.begin_render_pass(rp);
     run_ = RunState();
+    pending_ = Pending();
     uint32_t set = no_material; // (the material whose state the command buffer has: a draw of it again sets nothing)
     for (uint32_t i = 0; i < pass.draw_count; i++) {
         const Draw &d = scene.draws[pass.first_draw + i];
         record_draw(scene, pass, pass.first_draw + i, c, set);
         set = d.clear || scene.materials[d.material].pass_count != 1 ? no_material : d.material;
     }
+    flush_run(c);
     c.end_render_pass();
 }
 
@@ -574,50 +705,78 @@ void Drawer::push_record(CommandBuffer &c, uint32_t record) {
     c.push_constants(&push, 0, sizeof(push));
 }
 
-void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, CommandBuffer &c, uint32_t set) {
-    counts_.draws++;
-    const Draw &d = scene.draws[index];
-    const Material &m = scene.materials[d.material];
-    const uint32_t rec = prepared_.first_record[index];
-    if (!d.clear && d.native && set == d.material) {
-        // (the draw before's material: its state, bindings and constants are the command buffer's; its record, or a
-        // shadow's number)
-        counts_.native_draws++;
-        counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
-        counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
-        if (rec != no_record) {
-            push_record(c, rec);
-            counts_.record_calls++;
-        } else if (d.shadow != no_shadow) {
-            pcr::PrimPush push = m.push;
-            push.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | m.passes[0].mode << pcr::F_PASS_SHIFT;
-            push.record = d.shadow;
-            c.push_constants(&push, 0, sizeof(push));
+// (the draw calls by program, Counts::draw_calls_by: the GIF's, then the native programs' as their slots)
+static uint32_t call_slot(const Draw &d) {
+    return d.native ? 1 + native_slot(d.native_program) : 0;
+}
+
+// A call joins the open run where the run counting would have it one (count_call: the same state, no clear or draw of
+// its own between, the same pass) and its record is the next: the run's records are the push constants' first plus
+// gl_DrawID
+bool Drawer::joins(const RunKey &key, uint32_t record) const {
+    const Pending &r = pending_;
+    return r.open && !run_.after_clear && prepared_.command_map && prepared_.commands_used < prepared_.command_capacity &&
+           r.count < max_run_ && record == r.first_record + r.count && [&] {
+               RunKey m = r.key;
+               return merge(m, key);
+           }();
+}
+
+// (the call's state and push constants are the command buffer's: set by the caller where it opens a run)
+void Drawer::add_to_run(const RunKey &key, uint32_t record, const VkDrawIndirectCommand &command, uint32_t slot,
+                        CommandBuffer &c) {
+    Prepared &p = prepared_;
+    Pending &r = pending_;
+    if (r.open) {
+        // (the run's state, the blend by the source's alpha where the call brings it: set now, the run not yet drawn)
+        RunKey m = r.key;
+        merge(m, key);
+        if (m.blend != r.key.blend) {
+            set_call_state(m, c);
         }
-        count_call(run_.last);
-        c.draw(d.triangle_count * 3, 1, d.first_triangle * 3, d.instance);
+        r.key = m;
+    } else {
+        r.open = true;
+        r.key = key;
+        r.first_record = record;
+        r.first_command = p.commands_used;
+        r.count = 0;
+        r.slot = slot;
+        r.first = command;
+    }
+    if (p.command_map && p.commands_used < p.command_capacity) {
+        p.command_map[p.commands_used++] = command;
+    }
+    r.count++;
+}
+
+void Drawer::flush_run(CommandBuffer &c) {
+    Pending &r = pending_;
+    if (!r.open) {
         return;
     }
+    r.open = false;
+    if (r.count == 1) {
+        c.draw(r.first.vertexCount, r.first.instanceCount, r.first.firstVertex, r.first.firstInstance);
+    } else {
+        c.draw_indirect(*prepared_.commands, VkDeviceSize(r.first_command) * sizeof(VkDrawIndirectCommand), r.count,
+                        sizeof(VkDrawIndirectCommand));
+        counts_.indirect_calls++;
+        counts_.indirect_draws += r.count;
+    }
+    counts_.draw_calls++;
+    counts_.draw_calls_by[r.slot]++;
+}
+
+void Drawer::set_draw_state(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, bool records,
+                            CommandBuffer &c) {
     counts_.state_set++;
     c.set_viewport(d.viewport);
     c.set_scissor(d.scissor);
-    if (d.clear) {
-        pcr::ShaderState clear = {};
-        clear.first_draw = 3;
-        times_.begin_draw(c, work_of(d), pcr::shader_state_key(clear));
-        counts_.clears++;
-        run_.after_clear = true;
-        c.clear_quad(d.clear_rect, d.clear_att, d.clear_count);
-        return;
-    }
     pcr::ShaderState st = m.state;
     st.first_draw = pass.kind == PassKind::first_draw ? 1 : pass.kind == PassKind::darken ? 2 : 0;
     times_.begin_draw(c, pass.picture ? pcr::GpuWork::picture : work_of(d), pcr::shader_state_key(st));
-    counts_.native_draws += d.native ? 1 : 0;
-    counts_.gif_draws += d.native ? 0 : 1;
-    counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
-    counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
-    if (rec != no_record) {
+    if (records) {
         bind_records(pass, d, c);
     } else {
         bind_own(scene, pass, d, m, c);
@@ -628,14 +787,91 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
     c.set_depth_compare(m.zcompare);
     c.set_blend_constants(m.constants);
     if (!d.native) {
-        size_t bytes = size_t(d.vertex_count) * sizeof(pcr::Vertex);
-        memcpy(c.allocate_vertex_data(0, bytes, sizeof(pcr::Vertex)), scene.vertices.data() + d.first_vertex, bytes);
+        if (records) {
+            // (the scene's corners: the draw's first is its command's first vertex)
+            c.set_vertex_binding(0, *prepared_.vertices, 0, sizeof(pcr::Vertex));
+        } else {
+            size_t bytes = size_t(d.vertex_count) * sizeof(pcr::Vertex);
+            memcpy(c.allocate_vertex_data(0, bytes, sizeof(pcr::Vertex)), scene.vertices.data() + d.first_vertex,
+                   bytes);
+        }
         for (uint32_t i = 0; i < vertex_input_count; i++) {
             c.set_vertex_attrib(i, 0, pcr::vertex_inputs[i].format, pcr::vertex_inputs[i].offset);
         }
     }
+}
+
+void Drawer::set_call_state(const RunKey &key, CommandBuffer &c) {
+    c.set_program(key.program);
+    c.set_depth_test(key.ztest, key.zwrite);
+    c.set_blend_enable(key.blend);
+    if (key.blend) {
+        c.set_blend_factors(key.src, key.src_alpha, key.dst, key.dst_alpha);
+        c.set_blend_op(key.op, key.op_alpha);
+    }
+    c.set_color_write_mask(key.mask);
+}
+
+void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, CommandBuffer &c, uint32_t set) {
+    counts_.draws++;
+    const Draw &d = scene.draws[index];
+    const Material &m = scene.materials[d.material];
+    const uint32_t rec = prepared_.first_record[index];
+    const uint32_t slot = call_slot(d);
+    if (!d.clear && d.native && set == d.material) {
+        // (the draw before's material: its state, bindings and constants are the command buffer's; its record, or a
+        // shadow's number)
+        counts_.native_draws++;
+        counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
+        counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
+        const RunKey key = run_.call;
+        const VkDrawIndirectCommand command = {d.triangle_count * 3, 1, d.first_triangle * 3, d.instance};
+        if (rec != no_record) {
+            if (!joins(key, rec)) {
+                flush_run(c);
+                set_call_state(key, c); // (the run before may have been blended by its calls: merge)
+                push_record(c, rec);
+            }
+            counts_.record_calls++;
+            count_call(key);
+            add_to_run(key, rec, command, slot, c);
+            return;
+        }
+        flush_run(c);
+        if (d.shadow != no_shadow) {
+            pcr::PrimPush push = m.push;
+            push.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | m.passes[0].mode << pcr::F_PASS_SHIFT;
+            push.record = d.shadow;
+            c.push_constants(&push, 0, sizeof(push));
+        }
+        count_call(key);
+        c.draw(command.vertexCount, 1, command.firstVertex, command.firstInstance);
+        counts_.draw_calls++;
+        counts_.draw_calls_by[slot]++;
+        return;
+    }
+    if (d.clear) {
+        flush_run(c);
+        counts_.state_set++;
+        c.set_viewport(d.viewport);
+        c.set_scissor(d.scissor);
+        pcr::ShaderState clear = {};
+        clear.first_draw = 3;
+        times_.begin_draw(c, work_of(d), pcr::shader_state_key(clear));
+        counts_.clears++;
+        run_.after_clear = true;
+        c.clear_quad(d.clear_rect, d.clear_att, d.clear_count);
+        return;
+    }
+    counts_.native_draws += d.native ? 1 : 0;
+    counts_.gif_draws += d.native ? 0 : 1;
+    counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
+    counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
     size_t v = size_t(m.program);
     const bool records = rec != no_record;
+    const VkDrawIndirectCommand command =
+        d.native ? VkDrawIndirectCommand{d.triangle_count * 3, 1, d.first_triangle * 3, d.instance}
+                 : VkDrawIndirectCommand{d.vertex_count, 1, records ? d.first_vertex : 0, 0};
     pcr::PrimPush push = m.push;
     if (d.shadow != no_shadow) {
         push.record = d.shadow;
@@ -653,6 +889,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
     key.own = !records;
     key.gif_3d = d.gif_3d;
     key.n280 = d.native && d.native_program == pcr::NativeProgram::vu1_280;
+    bool state_set = false; // (the state the draw's calls share: set once, by the first call that opens a run)
     for (uint32_t i = 0; i < m.pass_count; i++) {
         const Material::AlphaPass &ap = m.passes[i];
         if (pass.kind == PassKind::first_draw) {
@@ -661,15 +898,9 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.ztest = m.ztest;
             key.zwrite = false;
             key.blend = true;
-            key.src = key.src_alpha = key.dst = VK_BLEND_FACTOR_ONE;
-            key.op = VK_BLEND_OP_MIN;
+            key.src = key.src_alpha = key.dst = key.dst_alpha = VK_BLEND_FACTOR_ONE;
+            key.op = key.op_alpha = VK_BLEND_OP_MIN;
             key.mask = 0x1;
-            c.set_program(key.program);
-            c.set_depth_test(m.ztest, false);
-            c.set_blend_enable(true);
-            c.set_blend_factors(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE);
-            c.set_blend_op(VK_BLEND_OP_MIN, VK_BLEND_OP_MIN);
-            c.set_color_write_mask(0x1);
         } else {
             bool early = ap.mode == 0 && !(m.push.flags & pcr::F_DATE);
             key.program = m.picture_layer               ? picture_layer_
@@ -682,32 +913,42 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.src = m.blend.src;
             key.src_alpha = m.blend.src_alpha;
             key.dst = m.blend.dst;
+            key.dst_alpha = VK_BLEND_FACTOR_ZERO;
             key.op = m.blend.op;
+            key.op_alpha = VK_BLEND_OP_ADD;
             key.mask = ap.mask;
-            c.set_program(key.program);
-            c.set_depth_test(m.ztest, m.ztest && ap.zwrite);
-            if (m.blend.enable) {
-                c.set_blend_enable(true);
-                c.set_blend_factors(m.blend.src, m.blend.src_alpha, m.blend.dst, VK_BLEND_FACTOR_ZERO);
-                c.set_blend_op(m.blend.op, VK_BLEND_OP_ADD);
-            } else {
-                c.set_blend_enable(false);
-            }
-            c.set_color_write_mask(ap.mask);
         }
+        key.alpha_one = records && blend_runs_ && alpha_one(m, i) && pass.kind != PassKind::first_draw && !m.picture_layer;
+        canonical(key);
+        if (records && joins(key, rec + i)) {
+            // (the open run's state is this call's: nothing set)
+            counts_.record_calls++;
+            count_call(key);
+            add_to_run(key, rec + i, command, slot, c);
+            continue;
+        }
+        flush_run(c);
+        if (!state_set) {
+            set_draw_state(scene, pass, d, m, records, c);
+            state_set = true;
+        }
+        set_call_state(key, c);
+        count_call(key);
         if (records) {
             push_record(c, rec + i);
             counts_.record_calls++;
-        } else {
-            push.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | ap.mode << pcr::F_PASS_SHIFT;
-            c.push_constants(&push, 0, sizeof(push));
+            add_to_run(key, rec + i, command, slot, c);
+            continue;
         }
-        count_call(key);
+        push.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | ap.mode << pcr::F_PASS_SHIFT;
+        c.push_constants(&push, 0, sizeof(push));
         if (d.native) {
-            c.draw(d.triangle_count * 3, 1, d.first_triangle * 3, d.instance);
+            c.draw(command.vertexCount, 1, command.firstVertex, command.firstInstance);
         } else {
             c.draw(d.vertex_count);
         }
+        counts_.draw_calls++;
+        counts_.draw_calls_by[slot]++;
     }
 }
 

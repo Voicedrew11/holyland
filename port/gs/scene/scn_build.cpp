@@ -500,6 +500,13 @@ public:
                 (unsigned long long)d.gif3d_splits, (unsigned long long)d.records, per(d.table_entries),
                 (unsigned long long)d.table_max, per(d.cluts), (unsigned long long)d.own_sampler);
         fprintf(stderr,
+                "[stats] scene renderer draw calls: %llu (%.1f a scene: the GIF's %.1f, 0x000 %.1f, 0x280 %.1f, 0x700 "
+                "%.1f, the ripple %.1f), %llu of them indirect (%.1f a scene) with %llu commands (%.1f a scene)\n",
+                (unsigned long long)d.draw_calls, per(d.draw_calls), per(d.draw_calls_by[0]), per(d.draw_calls_by[1]),
+                per(d.draw_calls_by[2]), per(d.draw_calls_by[3]), per(d.draw_calls_by[4]),
+                (unsigned long long)d.indirect_calls, per(d.indirect_calls), (unsigned long long)d.indirect_draws,
+                per(d.indirect_draws));
+        fprintf(stderr,
                 "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened; the image cleared "
                 "%llu times), %llu DATE draws by a copy (%llu of them native); alpha reset seen %llu times; the alpha read "
                 "between the frame's clear and its reset in %llu of %llu frames checked\n",
