@@ -17,6 +17,7 @@
 | `layer_inventory.py` | the game's full-screen layers in a tour of play (scenes, actions, `KF4_FX`, every map): each one's GS state, its GPU time by draw (`kf4-gsreplay --gpu-draws`), what reads each channel it writes, and its class (clear, dead, foldable into scanout, must stay in memory); real-window totals at the owner's settings; `report.md` (below; docs/plans/fullscreen-layers-inventory.md) |
 | `world_plain.py` | the world's GPU time drawn the GS's way and with each GS-exact mechanism switched off (`KF4_PC_*` switches, the prototype plain path `KF4_PC_PLAIN_WORLD`, RADV's compression and HiZ off), a few scenes at 1x, 2x and 4x in a real window with the owner's settings, by `layer_inventory.py`'s live step (below; docs/plans/world-plain.md) |
 | `scene_census.py` | what each game frame hands the renderer at a few scenes (native draws by kind, GIF primitives by path and class, the draws in order and their runs, uploads, copies, DATE's fragments), headless with the PC renderer's frame census (`KF4_PC_FRAME_CENSUS`); docs/plans/scene-renderer-design.md |
+| `scene_scenarios.py` | the scene renderer (`--renderer scene`) against the PC renderer in `layer_inventory.py`'s scenarios, headless, picture by picture at each scenario's moments (2x with native widescreen); `--gs` (with `--scale 1`) plays paraLLEl-GS too and measures both against it; docs/plans/scene-slice1-results.md |
 | `depth_ties.py` | the PC renderer's developers' counters read (`map_tour.py --ties`, `motion_compare.py --ties`): the depth rule's ties by map and by class of draw, the draws with the most, and the world's fragments a pixel; `--scenes` the overdraw and draw order by depth mode (below; docs/plans/depth-by-layers.md) |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
@@ -287,6 +288,7 @@ same in both runs, and a vblank where it is not is left out and named.
 python3 tools/motion_compare.py --disc kfiv_us.iso --out /tmp/motion                 # every case, 1x and 4xw, 240
 python3 tools/motion_compare.py --out /tmp/motion --cases menus,combat --profiles 1x --no-240
 python3 tools/motion_compare.py --cases list
+python3 tools/motion_compare.py --out /tmp/motion --profiles 1x --no-240 --renderer scene --pc-extra "--native-draw on --frame-rate 30"
 ```
 
 For each case and profile (`1x`: `--native-scale 1 --no-native-widescreen`; `4xw`: `--native-scale 4 --widescreen
@@ -373,6 +375,7 @@ python3 tools/world_plain.py --out /tmp/world --disc kfiv_us.iso --rounds 2     
 python3 tools/world_plain.py --out /tmp/world --scales 2 --variants gpu_nodcc,gpu_nohiz,plainworld,plainopaque
 python3 tools/world_plain.py --out /tmp/world --scales 2 --rates 60 --variants exact,gpu    # pictures between
 python3 tools/world_plain.py --out /tmp/world --report-only --variants exact,gpu
+python3 tools/world_plain.py --out /tmp/world --scales 2 --rounds 2 --variants unorm,scene  # the scene renderer
 ```
 
 - **The world**: the native draws (programs 0x000, 0x280 the skinned models, 0x700), less program 0x000's DATE draws

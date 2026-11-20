@@ -44,6 +44,8 @@ public:
     struct Counts {
         uint64_t passes = 0, draws = 0, native_draws = 0, gif_draws = 0, clears = 0, ops = 0;
         uint64_t first_draws = 0, darkened = 0; // (DATE's shadows: drawn into the first-draw image, then darkened)
+        // (draws that set their material's state: the others are the one before's)
+        uint64_t state_set = 0;
     };
     const Counts &counts() const {
         return counts_;
@@ -52,7 +54,8 @@ public:
 private:
     void record_op(const Op &op, Vulkan::CommandBuffer &c);
     void record_pass(const Scene &scene, const Pass &pass, Vulkan::CommandBuffer &c);
-    void record_draw(const Scene &scene, const Pass &pass, const Draw &d, Vulkan::CommandBuffer &c);
+    // set: the material whose state the command buffer has from the draw before in the pass (no_material: none)
+    void record_draw(const Scene &scene, const Pass &pass, const Draw &d, Vulkan::CommandBuffer &c, uint32_t set);
     void full_barrier(Vulkan::CommandBuffer &c);
     void pass_to_pass_barrier(Vulkan::CommandBuffer &c);
     void make_programs();

@@ -57,6 +57,8 @@ struct ShaderState {
     uint8_t depth;        // 0: no Z test; else ZTST (1 always, 2 greater or equal, 3 greater)
     bool depth_write;
     uint8_t passes;       // the alpha test's passes (1 or 2)
+    uint8_t first_draw;   // (the scene renderer's) 0: a draw; 1: DATE's shadows' numbers into the first-draw image;
+                          // 2: the darkening by it; 3: a clear in a pass (vkCmdClearAttachments)
 };
 // The state in 32 bits (never 0), and back as text for the profiler's row
 uint32_t shader_state_key(const ShaderState &state);

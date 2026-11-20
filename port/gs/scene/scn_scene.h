@@ -22,6 +22,7 @@
 namespace scn {
 
 constexpr uint32_t no_clut = 0xFFFFFFFFu;
+constexpr uint32_t no_material = 0xFFFFFFFFu;
 constexpr uint32_t no_shadow = 0xFFFFFFFFu;
 
 // The draw's vertex shader (pcr_canvas.cpp's v): pcr_prim.vert for the GIF's, pcr_nd000.vert, pcr_nd280.vert,
@@ -49,6 +50,9 @@ struct Material {
     Vulkan::ImageHandle texels, surface, sampled, dest;
     const Vulkan::Sampler *sampler = nullptr;
     uint32_t clut = no_clut;
+    // (the GPU's time by shader state, KF4_GPU_DETAIL: pcr_gpu_time.h's shader_state_key, without the first-draw field
+    // the drawer adds by its pass)
+    pcr::ShaderState state{};
 };
 
 struct Draw {

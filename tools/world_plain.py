@@ -7,8 +7,9 @@
 
 Each scene of tools/layer_inventory.py played in a real window with the owner's settings (its live step: a copy of
 the data folder, KF4_READ_SETTINGS=1, KF4_GPU_DETAIL=1), once for each variant (developers' KF4_PC_* switches, off the
-exact path: for timing only) at each native scale. The rounds run the whole matrix again, in the same order, so a
-drift of the GPU's clocks shows as a spread rather than as a variant's cost.
+exact path: for timing only) at each native scale. A variant may carry extra command-line arguments for the game as an
+optional fourth element (e.g. ["--renderer", "scene"]), appended after the scenario's own. The rounds run the whole
+matrix again, in the same order, so a drift of the GPU's clocks shows as a spread rather than as a variant's cost.
 
 The world: the native draws (VU1 programs 0x000, 0x280 the skinned models and 0x700), less program 0x000's entity
 pool DATE draws and the sky (read from a target's copy), with exact Z's planes (`pc planes`). Every figure is GPU ms a game
@@ -67,6 +68,9 @@ VARIANTS = {
                           "RADV_DEBUG": "nodcc"}, {}),
     "plainopaque": ("... and drawn unblended", {"KF4_PC_DEPTH": "gpu", "KF4_PC_SHADER_BLEND": "0",
                                                 "KF4_PC_PLAIN_WORLD": "unblended"}, {}),
+    # The scene renderer (docs/plans/scene-renderer-design.md): the game's arguments, no KF4_PC_* switch (it ignores them)
+    "scene": ("the scene renderer (--renderer scene, docs/plans/scene-renderer-design.md)", {}, {},
+              ["--renderer", "scene"]),
 }
 MAIN = "exact,exactz,nosettle,noplanes,gpu,noblend,plain"
 
@@ -130,9 +134,12 @@ def main():
     p.add_argument("--report-only", action="store_true")
     a = p.parse_args()
     if a.variants == "list":
-        for n, (what, env, settings) in VARIANTS.items():
+        for n, v in VARIANTS.items():
+            what, env, settings = v[:3]
+            args = v[3] if len(v) > 3 else []
             print("%-12s %s; %s" % (n, what, " ".join(["%s=%s" % kv for kv in env.items()] +
-                                                      ["%s: %s" % kv for kv in settings.items()])))
+                                                      ["%s: %s" % kv for kv in settings.items()] +
+                                                      (["args: %s" % " ".join(args)] if args else []))))
         return
     if not a.disc and not a.report_only:
         sys.exit("world_plain: pass --disc or set KF4_DISC")
@@ -160,7 +167,8 @@ def main():
                         for rate in rates:
                             tag = "%s_s%d_r%d" % (v, scale, rnd)
                             r = inv.live_scenario(a, scene, rate, tag, VARIANTS[v][1],
-                                                  dict(VARIANTS[v][2], native_scale=scale))
+                                                  dict(VARIANTS[v][2], native_scale=scale),
+                                                  args_more=VARIANTS[v][3] if len(VARIANTS[v]) > 3 else [])
                             w = world_split(r) if r else None
                             print("%-8s %dx %-9s %d round %d: %s" % (
                                 scene, scale, v, rate, rnd, "world %.2f, all %.2f ms a game frame" % (

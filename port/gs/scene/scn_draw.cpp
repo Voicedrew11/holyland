@@ -236,23 +236,46 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
         rp.clear_depth_stencil = {pass.depth_value, 0};
     }
     c.begin_render_pass(rp);
+    uint32_t set = no_material; // (the material whose state the command buffer has: a draw of it again sets nothing)
     for (uint32_t i = 0; i < pass.draw_count; i++) {
-        record_draw(scene, pass, scene.draws[pass.first_draw + i], c);
+        const Draw &d = scene.draws[pass.first_draw + i];
+        record_draw(scene, pass, d, c, set);
+        set = d.clear || scene.materials[d.material].pass_count != 1 ? no_material : d.material;
     }
     c.end_render_pass();
 }
 
-void Drawer::record_draw(const Scene &scene, const Pass &pass, const Draw &d, CommandBuffer &c) {
+void Drawer::record_draw(const Scene &scene, const Pass &pass, const Draw &d, CommandBuffer &c, uint32_t set) {
     counts_.draws++;
     const Material &m = scene.materials[d.material];
-    times_.begin(c, work_of(d));
+    if (!d.clear && d.native && set == d.material) {
+        // (the draw before's material: its state, bindings and constants are the command buffer's; a shadow's number)
+        counts_.native_draws++;
+        counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
+        counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
+        if (d.shadow != no_shadow) {
+            pcr::PrimPush push = m.push;
+            push.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | m.passes[0].mode << pcr::F_PASS_SHIFT;
+            push.record = d.shadow;
+            c.push_constants(&push, 0, sizeof(push));
+        }
+        c.draw(d.triangle_count * 3, 1, d.first_triangle * 3, d.instance);
+        return;
+    }
+    counts_.state_set++;
     c.set_viewport(d.viewport);
     c.set_scissor(d.scissor);
     if (d.clear) {
+        pcr::ShaderState clear = {};
+        clear.first_draw = 3;
+        times_.begin_draw(c, work_of(d), pcr::shader_state_key(clear));
         counts_.clears++;
         c.clear_quad(d.clear_rect, d.clear_att, d.clear_count);
         return;
     }
+    pcr::ShaderState st = m.state;
+    st.first_draw = pass.kind == PassKind::first_draw ? 1 : pass.kind == PassKind::darken ? 2 : 0;
+    times_.begin_draw(c, work_of(d), pcr::shader_state_key(st));
     counts_.native_draws += d.native ? 1 : 0;
     counts_.gif_draws += d.native ? 0 : 1;
     counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;

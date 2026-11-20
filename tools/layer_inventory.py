@@ -301,9 +301,10 @@ def time_capture(a, folder, cap, scale):
 
 
 # ---- The live runs (a real window, the owner's settings) ----------------------------------------------
-def live_scenario(a, name, rate, tag="", env_more=None, settings_more=None):
-    """The scenario in a real window at rate; tag names a variant's files (live_<tag>_<rate>.*), env_more and
-    settings_more what the variant changes (world_plain.py's switches and scales)"""
+def live_scenario(a, name, rate, tag="", env_more=None, settings_more=None, args_more=None):
+    """The scenario in a real window at rate; tag names a variant's files (live_<tag>_<rate>.*), env_more,
+    settings_more and args_more (extra command-line arguments, after the scenario's own, so a later --renderer wins)
+    what the variant changes (world_plain.py's switches, scales and renderers)"""
     sc = scenario(name)
     if sc["live"] is None:
         return None
@@ -346,7 +347,7 @@ def live_scenario(a, name, rate, tag="", env_more=None, settings_more=None):
     log = os.path.join(folder, stem + "_log.txt")
     cmd = [a.exe, "--disc", a.disc, "--no-audio", "--saves", "none", "--clock", CLOCK, "--input", pad,
            "--frames", str(end), "--stats", "--log", log,
-           "--profile-at", "%d:%d:%s" % (start, a.live_seconds, prof)] + args
+           "--profile-at", "%d:%d:%s" % (start, a.live_seconds, prof)] + args + list(args_more or [])
     env = dict(os.environ, KF4_DATA_DIR=data_dir, KF4_READ_SETTINGS="1", KF4_GPU_DETAIL="1")
     env.pop("KF4_FX", None)
     if sc["fx"]:

@@ -121,10 +121,18 @@ What still comes as GIF in play, a frame (GS pixels; a sprite's rectangle, a tri
 | the weapon's trail (combat) | native | 4 triangles | |
 | 3D of program 0x000 that native draw does not take | 1 | 63-333 triangles (91 more unblended in combat) | |
 
-The last row is not identified yet: about 27 VU1 runs a frame at 099 (`kf4-gsreplay --list` of a capture with native
-draw on: `prog 000`, into the frame, Z GEQUAL and written, TEX0 at pages 394, 468 and others), not wave-UV records
-(`--native-wave-uvs gpu` leaves 63 of the 100) and not effects native draw declines (`KF4_ND_LOG` names none). Slice 1
-finds their call site and draws them natively or as the scene's 3D items.
+The last row is the map's triangles that cross the GS's range, cut up (identified in slice 1, 2026-11-19): where a
+map record's box is partly out of the range the GS can draw (`Map_ClassifyRecordOnScreen` 0: a corner projected past
+z 0xFFFF0, or outside the 16-bit screen), `Map_DrawRecords` calls `ModelScreen_CutClippedTriangles`
+(`model/model_screen.c`) after the record's draw. It projects every triangle on the EE and queues each one with a corner
+out of range and some of it on the screen as 16 smaller ones (`ModelScreen_QueueCutTriangle`: four strips of nine
+vertices made on the EE, the block's GS setup and the matrix sent along) through VU1 program 0x000. The native draw of
+the record leaves those triangles out as the PS2 does, so the pieces come as PATH1. At 099 (base save, 700 vblanks,
+289 game frames) 5,264 were queued: about 18 a frame, some 290 triangles, the 63-333 above. In combat the 91 more
+unblended ones are the same, the player close to a wall. They go on as GIF: the scene renderer draws them as the
+scene's 3D items with `pcr_prim`'s arithmetic (the 1x tour shows them byte for byte the PC renderer's). Drawing them
+natively would need the native draw to take vertices the EE makes each frame, for a few hundred triangles, so it is not
+worth it before batching (slice 3) wants every 3D draw in the arena.
 
 Outside play (the same counter, the title and the menus' loops; each kind of frame and how many of the run's):
 
@@ -546,6 +554,10 @@ the owner's 2x in a real window.
 | 5. Scheduling and present | the budget, the threads, one final pass, a repeated vblank not made again | the mouse spin at the owner's settings holds 30 game frames a second, with as many pictures between as fit; a repeated vblank under 0.3 ms | the GPU's timestamps' spread on a busy integrated GPU |
 | 6. For players | settings, the overlay, save states, `pace_test.py`, `map_tour.py`; the 9070 XT and an Intel or NVIDIA GPU | the owner's review; then `pc` retired | |
 
+Slice 1 is built and measured (2026-11-19): `scene-slice1-results.md`, each criterion with its numbers. It passes but
+for DATE's 0.1 ms (0.39 at the pond, against the PC renderer's 2.5 there with its copies) and the copies of the
+reflection and the HUD's DATE sprite; the validation layer was not run.
+
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
 
@@ -580,7 +592,6 @@ scene; scheduling by predicted cost, the game never held; the six slices in thei
 
 ## Risks and what is not known
 
-- The 0x000 GIF 3D that native draw does not take (above) is not identified.
 - The census ran headless at 30 at seven scenes; the map change, the map viewers, the save screen and the Dark
   Succubus' copy were not counted (the inventory's captures of them were made with native draw off).
 - D16's rounding and the depth clamp on Intel and NVIDIA (above).

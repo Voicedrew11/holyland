@@ -241,9 +241,10 @@ public:
         b.y1 = int32_t(bits(b.state.scissor, 48, 11));
         if (bits(b.state.prim, 4, 1)) {
             // (a native batch's texture read whole; the same state as the batch before, with nothing between that
-            // changed what the store answers, the same texture)
-            if (last_native_.valid && last_native_.state == b.state && last_native_.events == store_events_ &&
-                last_native_.texture.src != SRC_SURFACE) {
+            // changed what the store answers, the same texture. A target's copy too, while nothing is drawn over its
+            // pages (drawn_over) and no op writes another image (add_op): as the canvas copies once for the batches it
+            // puts together, and without it every batch's copy is an op that ends the pass)
+            if (last_native_.valid && last_native_.state == b.state && last_native_.events == store_events_) {
                 b.texture = last_native_.texture;
                 counts_.textures_reused++;
             } else {
@@ -318,6 +319,7 @@ public:
         depth_.clear();
         textures_.clear();
         sampled_.clear();
+        target_copies_.clear();
         clut_serial_++;
         store_events_++;
         last_native_ = {};
@@ -435,11 +437,14 @@ public:
         const Drawer::Counts &d = drawer_.counts();
         fprintf(stderr,
                 "[stats] scene renderer: %llu scenes drawn; %llu passes, %llu draws (%llu native, %llu GIF, %llu clears in a "
-                "pass), %llu ops, %llu load-op clears; %llu primitives, %llu native batches\n",
+                "pass), %llu ops, %llu load-op clears; %llu primitives, %llu native batches (%llu joined to the draw "
+                "before, %llu more with its material, %llu draws with their state set)\n",
                 (unsigned long long)counts_.scenes, (unsigned long long)d.passes, (unsigned long long)d.draws,
                 (unsigned long long)d.native_draws, (unsigned long long)d.gif_draws, (unsigned long long)d.clears,
                 (unsigned long long)d.ops, (unsigned long long)counts_.load_clears,
-                (unsigned long long)counts_.primitives, (unsigned long long)counts_.native_batches);
+                (unsigned long long)counts_.primitives, (unsigned long long)counts_.native_batches,
+                (unsigned long long)counts_.native_joined, (unsigned long long)counts_.native_same_material,
+                (unsigned long long)d.state_set);
         fprintf(stderr,
                 "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened), %llu DATE draws by "
                 "a copy (%llu of them native); alpha reset seen %llu times; the alpha read between the frame's clear and "
@@ -450,14 +455,16 @@ public:
         fprintf(stderr,
                 "[stats] scene renderer targets and textures: %llu targets made, %llu grown, %llu filled from uploads, "
                 "%llu uploads written into them, %llu copies between them, %llu depth aliases cleared; textures %llu "
-                "decoded, %llu sampled, %llu from targets, %llu missing, %llu reused; %llu shader blends, %llu read-backs; "
+                "decoded, %llu sampled, %llu from targets (%llu into a kept image), %llu missing, %llu reused; "
+                "%llu shader blends, %llu read-backs; "
                 "not drawn: %llu shapes, %llu blends, %llu textures on targets, %llu copies, %llu uploads into targets, "
                 "%llu read-backs; %llu uploads asked again passed\n",
                 (unsigned long long)counts_.targets_made, (unsigned long long)counts_.targets_grown,
                 (unsigned long long)counts_.filled_from_uploads, (unsigned long long)counts_.uploads_into_targets,
                 (unsigned long long)counts_.copies_between_targets, (unsigned long long)counts_.depth_aliases_cleared,
                 (unsigned long long)counts_.textures_uploaded, (unsigned long long)counts_.textures_sampled,
-                (unsigned long long)counts_.textures_from_targets, (unsigned long long)counts_.textures_missing,
+                (unsigned long long)counts_.textures_from_targets, (unsigned long long)counts_.target_copies_reused,
+                (unsigned long long)counts_.textures_missing,
                 (unsigned long long)counts_.textures_reused, (unsigned long long)counts_.shader_blends,
                 (unsigned long long)counts_.read_backs, (unsigned long long)counts_.unsupported_shapes,
                 (unsigned long long)counts_.unsupported_blends, (unsigned long long)counts_.unsupported_texture_on_target,
@@ -482,6 +489,10 @@ private:
             return;
         }
         scene_.vblank = vblank_;
+        if (dump_at_ != 0 && vblank_ >= dump_at_ && dumped_ < 3) {
+            dump_scene();
+            dumped_++;
+        }
         CommandBufferHandle cmd = device_.request_command_buffer();
         cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
         drawer_.record(scene_, *cmd);
@@ -498,6 +509,42 @@ private:
         scene_.clear();
         clut_at_ = no_clut;
     }
+
+    // (developers', KF4_SCN_DUMP_AT=VBLANK) The scene closed at or after VBLANK, and the two after it, step by step on
+    // stderr: each pass's kind, images, load ops and draws, each op's kind, work and size
+    void dump_scene() const {
+        static const char *kinds[] = {"plain", "first_draw", "darken"};
+        static const char *ops[] = {"clear", "copy", "blit"};
+        fprintf(stderr, "[scn dump] vblank %llu: %zu steps, %zu passes, %zu draws, %zu ops\n",
+                (unsigned long long)vblank_, scene_.steps.size(), scene_.passes.size(), scene_.draws.size(),
+                scene_.ops.size());
+        for (const Step &st : scene_.steps) {
+            if (st.kind == Step::Kind::op) {
+                const Op &o = scene_.ops[st.index];
+                fprintf(stderr, "[scn dump]   op %-5s work %2d dst %p %ux%u extent %ux%u%s\n", ops[int(o.kind)],
+                        int(o.work), (const void *)o.dst.get(), o.dst ? o.dst->get_width() : 0,
+                        o.dst ? o.dst->get_height() : 0, o.extent.width, o.extent.height, o.depth ? " depth" : "");
+                continue;
+            }
+            const Pass &ps = scene_.passes[st.index];
+            uint32_t native = 0, gif = 0, clears = 0, shadows = 0;
+            for (uint32_t i = 0; i < ps.draw_count; i++) {
+                const Draw &d = scene_.draws[ps.first_draw + i];
+                clears += d.clear ? 1 : 0;
+                native += !d.clear && d.native ? 1 : 0;
+                gif += !d.clear && !d.native ? 1 : 0;
+                shadows += d.shadow != no_shadow ? 1 : 0;
+            }
+            fprintf(stderr,
+                    "[scn dump]   pass %-10s colour %p %ux%u depth %p%s%s: %u draws (%u native, %u GIF, %u clears, "
+                    "%u shadows)\n",
+                    kinds[int(ps.kind)], (const void *)ps.colour.get(), ps.colour->get_width(),
+                    ps.colour->get_height(), (const void *)ps.depth.get(), ps.clear_colour ? " clear-colour" : "",
+                    ps.clear_depth ? " clear-depth" : "", ps.draw_count, native, gif, clears, shadows);
+        }
+    }
+    const uint64_t dump_at_ = getenv("KF4_SCN_DUMP_AT") ? strtoull(getenv("KF4_SCN_DUMP_AT"), nullptr, 0) : 0;
+    uint32_t dumped_ = 0;
 
     // The open pass: its colour and depth images and kind; a draw into others begins a new one
     struct OpenPass {
@@ -536,6 +583,10 @@ private:
         last_clear_ = {};
         if (op.dst && op.dst.get() == alpha_clear_) {
             alpha_clear_ = nullptr; // (written: its alpha no longer known)
+        }
+        if (last_native_.valid && last_native_.texture.src == SRC_SURFACE && op.dst) {
+            // (a target written outside the passes, or the copy's kept image written again: no longer known the same)
+            last_native_.valid = false;
         }
         scene_.steps.push_back({Step::Kind::op, uint32_t(scene_.ops.size())});
         scene_.ops.push_back(std::move(op));
@@ -1311,16 +1362,34 @@ private:
             return b;
         }
         alpha_read(from->image.get());
-        ImageCreateInfo info =
-            ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
-        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        info.layout = ImageLayout::General;
-        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        ImageHandle copy = device_.create_image(info, nullptr);
-        if (!copy) {
-            return b;
+        // One image kept a size and format, written again by each copy: the scene's steps are drawn in order with a
+        // full barrier around each op, so a copy into it comes after every draw that read what it held before. It is
+        // cleared only where what was copied into it before reaches past this copy (as pcr_copy_pool.h's).
+        uint32_t pw = w * scale_[0], ph = h * scale_[1];
+        uint64_t key = uint64_t(cols * scale_[0]) | uint64_t(rows * scale_[1]) << 16 |
+                       uint64_t(from->image->get_format()) << 32;
+        TargetCopy &kept = target_copies_[key];
+        bool clear_first = false;
+        if (!kept.image) {
+            ImageCreateInfo info =
+                ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
+            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            info.layout = ImageLayout::General;
+            info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+            kept.image = device_.create_image(info, nullptr);
+            if (!kept.image) {
+                target_copies_.erase(key);
+                return b;
+            }
+            clear_first = w < cols || h < rows;
+        } else {
+            clear_first = kept.w > pw || kept.h > ph;
+            counts_.target_copies_reused++;
         }
-        if (w < cols || h < rows) {
+        kept.w = clear_first ? pw : std::max(kept.w, pw);
+        kept.h = clear_first ? ph : std::max(kept.h, ph);
+        ImageHandle copy = kept.image;
+        if (clear_first) {
             Op clear;
             clear.kind = Op::Kind::clear;
             clear.dst = copy;
@@ -1337,6 +1406,12 @@ private:
         counts_.textures_from_targets++;
         return b;
     }
+
+    struct TargetCopy {
+        ImageHandle image;
+        uint32_t w = 0, h = 0; // (pixels: what copies wrote into it since it was cleared)
+    };
+    std::unordered_map<uint64_t, TargetCopy> target_copies_;
 
     void evict_textures() {
         if (textures_.size() >= 4096) {
@@ -1726,13 +1801,15 @@ private:
         }
     }
 
-    // GsDraw_SetScreenAlpha(0) (game/gfx/gs_draw.c): sprites over the whole target, untextured, one pass that writes
-    // the alpha, every alpha written with bit 7 clear. The target's alpha is then known to be clear everywhere.
+    // GsDraw_SetScreenAlpha(0) (game/gfx/gs_draw.c): sprites over the whole frame, untextured, one pass that writes
+    // the alpha, every alpha written with bit 7 clear. The frame's alpha is then known to be clear everywhere. (The
+    // frame is placed down its target where both frame buffers are one target, as at 2x with native widescreen: the
+    // back buffer at row 448.)
     static bool is_alpha_reset(const Batch &b, const Target &colour, const Placed &placed, uint32_t pass_count,
                                const Material::AlphaPass &pass) {
         const DrawState &s = b.state;
         if (b.native || !b.sprites || b.vertices.empty() || pass_count != 1 || pass.mode != 0 || !(pass.mask & 0x8) ||
-            bits(s.prim, 4, 1) || bits(s.fba, 0, 1) || placed.x != 0 || placed.y != 0) {
+            bits(s.prim, 4, 1) || bits(s.fba, 0, 1) || placed.x != 0 || placed.y >= colour.height) {
             return false;
         }
         for (const Vertex &v : b.vertices) {
@@ -1742,9 +1819,22 @@ private:
         }
         uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
         uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
-        int32_t bottom = int32_t(std::min(colour.height, scay1 + 1));
+        int32_t bottom = int32_t(std::min(colour.height - placed.y, scay1 + 1));
         return scax0 == 0 && scay0 == 0 && scax1 + 1 >= colour.width() && b.x0 <= 0 && b.y0 <= 0 &&
                b.x1 >= int32_t(colour.width()) && b.y1 >= bottom;
+    }
+
+    // The frame's clear: a clear of the GS frame's own rectangle, its scissor from its top left over the target's
+    // width and at least half a frame (224 rows) tall, all of it cleared. The frame can be placed down its target (both
+    // frame buffers in one target), so it is found by its scissor and place, not the image's size.
+    bool is_frame_clear(const VkRect2D &rect, const VkRect2D &scissor_px, const Target &colour, const Placed &placed,
+                        uint32_t scax0, uint32_t scax1, uint32_t scay0, uint32_t scay1) const {
+        if (placed.x != 0 || scax0 != 0 || scay0 != 0 || scax1 + 1 < colour.width() || scay1 + 1 < 224) {
+            return false;
+        }
+        return rect.offset.x == 0 && rect.offset.y == int32_t(placed.y * scale_[1]) &&
+               rect.extent.width >= colour.image->get_width() && rect.offset.x == scissor_px.offset.x &&
+               rect.offset.y == scissor_px.offset.y && rect.extent.height >= scissor_px.extent.height;
     }
 
     // ---- A batch as the scene's draw (pcr_canvas.cpp's draw_batch, the depth KF4_PC_DEPTH=unorm's) ----
@@ -1844,6 +1934,7 @@ private:
         bool fba = bits(s.fba, 0, 1) != 0, datm = bits(s.test, 15, 1) != 0;
         bool shadow = shadow_candidate && !b.shader_blend && pass_count == 1 && passes[0].mode == 0 &&
                       passes[0].alpha && fba && !datm && alpha_clear_ == colour->image.get() &&
+                      alpha_clear_y_ == placed.y &&
                       run_.next + b.nb.triangle_count <= (1u << 24);
         if (shadow_candidate && !shadow) {
             end_shadow_run();
@@ -1851,7 +1942,7 @@ private:
         // (the census: the frame's alpha read before its reset)
         // (a texture read from the target, a copy or a read-back of it: where they are made)
         if (date || (bits(s.prim, 6, 1) && bits(s.alpha, 4, 2) == 1)) {
-            alpha_read(colour->image.get());
+            alpha_read(colour->image.get(), placed.y);
         }
         ImageHandle dest;
         VkOffset2D dest_offset = {0, 0};
@@ -1930,6 +2021,26 @@ private:
                      : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                  : VK_COMPARE_OP_GREATER;
         m.blend = blend;
+        {
+            pcr::ShaderState &st = m.state;
+            st.program = !b.native                                 ? 0
+                         : b.nb.program == NativeProgram::vu1_280 ? 2
+                         : b.nb.program == NativeProgram::vu1_700 ? 3
+                                                                  : 1;
+            if (tme && b.texture.ok) {
+                st.texture = b.texture.src == SRC_SAMPLED ? 3 : b.texture.src == SRC_SURFACE ? 2 : 1;
+                st.tfx = uint8_t(bits(s.tex0, 35, 2));
+                st.alpha_channel = bits(s.tex0, 34, 1) != 0;
+            }
+            st.fog = bits(s.prim, 5, 1) != 0;
+            st.blending = bits(s.prim, 6, 1) != 0 || b.shader_blend;
+            st.blend = uint8_t(bits(s.alpha, 0, 8));
+            st.shader_blend = b.shader_blend;
+            st.date = date && !shadow ? 2 : 0;
+            st.depth = zte ? uint8_t(ztst) : 0;
+            st.depth_write = zwrite;
+            st.passes = uint8_t(pass_count);
+        }
         float c = float(bits(s.alpha, 32, 8)) / 128.0f;
         m.constants[0] = m.constants[1] = m.constants[2] = c;
         m.constants[3] = 128.0f / 255.0f;
@@ -1992,16 +2103,48 @@ private:
             d.clear_count = count;
             bool alpha_high = !z_only && ((fba ? v0.rgba[3] | 0x80u : v0.rgba[3]) & 0x80u) != 0;
             add_clear(*colour, zwrite ? depth : nullptr, std::move(d), std::move(m));
-            if (!z_only && clear_rect.rect.offset.x == 0 && clear_rect.rect.offset.y == 0 &&
-                clear_rect.rect.extent.width >= colour->image->get_width() &&
-                clear_rect.rect.extent.height >= colour->image->get_height() / 2) {
+            if (!z_only && is_frame_clear(clear_rect.rect, scissor_px, *colour, placed, scax0, scax1, scay0, scay1)) {
                 // (the frame's clear: the census watches its alpha until its reset)
-                watch_alpha(colour->image.get());
+                watch_alpha(colour->image.get(), placed.y);
             }
             if (alpha_high && colour->image.get() == alpha_clear_) {
                 alpha_clear_ = nullptr;
             }
             drawn_over(b, box, zwrite);
+            return;
+        }
+        // A native batch with the last draw's material, in its pass: that material again (the drawer sets nothing new
+        // for it), and where its triangles go on from the last's in the same record, the last draw made longer (as the
+        // canvas's batch of runs: pcr_canvas.cpp's native_batch). The shadows' numbers go on as their triangles do.
+        Draw *last = b.native ? joinable_draw(*colour, depth, shadow, d) : nullptr;
+        if (last && same_material(scene_.materials[last->material], m)) {
+            d.material = last->material;
+            const Material &mm = scene_.materials[d.material];
+            bool longer = last->instance == d.instance &&
+                          last->first_triangle + last->triangle_count == d.first_triangle &&
+                          (!shadow || last->shadow + last->triangle_count == run_.next);
+            counts_.native_joined += longer ? 1 : 0;
+            counts_.native_same_material += longer ? 0 : 1;
+            if (longer) {
+                last->triangle_count += d.triangle_count;
+                if (shadow) {
+                    run_.next += d.triangle_count;
+                }
+                last_clear_ = {};
+            } else if (shadow) {
+                add_shadow(*colour, depth, std::move(d));
+            } else {
+                last_clear_ = {};
+                add_draw(std::move(d));
+            }
+            if (!shadow && colour->image.get() == alpha_clear_) {
+                for (uint32_t i = 0; i < mm.pass_count; i++) {
+                    if (mm.passes[i].mask & 0x8) {
+                        alpha_clear_ = nullptr;
+                    }
+                }
+            }
+            drawn_over(b, box, zte && zwrite);
             return;
         }
         uint32_t material = uint32_t(scene_.materials.size());
@@ -2024,12 +2167,61 @@ private:
                 writes_alpha |= (mm.passes[i].mask & 0x8) != 0;
             }
             if (is_alpha_reset(b, *colour, placed, pass_count, mm.passes[0])) {
-                alpha_reset(colour->image.get());
+                alpha_reset(colour->image.get(), placed.y);
             } else if (writes_alpha && colour->image.get() == alpha_clear_) {
                 alpha_clear_ = nullptr;
             }
         }
         drawn_over(b, box, zte && zwrite);
+    }
+
+    // The open pass's last draw where a native batch into colour and depth (a shadow or not) may follow it with its
+    // material: a native draw of the same program, buffers, viewport and scissor, last in the pass the batch goes into
+    Draw *joinable_draw(const Target &colour, const Target *depth, bool shadow, const Draw &d) {
+        if (!pass_.open || scene_.draws.empty()) {
+            return nullptr;
+        }
+        const Pass &p = scene_.passes[pass_.index];
+        const Image *depth_image = depth ? depth->image.get() : nullptr;
+        if (p.draw_count == 0 || p.first_draw + p.draw_count != scene_.draws.size() || pass_.depth != depth_image) {
+            return nullptr;
+        }
+        if (shadow ? pass_.kind != PassKind::first_draw || run_.draws.empty() ||
+                         run_.colour.get() != colour.image.get() || run_.draws.back() != scene_.draws.size() - 1
+                   : pass_.kind != PassKind::plain || pass_.colour != colour.image.get()) {
+            return nullptr;
+        }
+        Draw &last = scene_.draws.back();
+        if (!last.native || last.clear || last.native_program != d.native_program ||
+            last.arena.get() != d.arena.get() || last.records.get() != d.records.get() ||
+            last.triangles.get() != d.triangles.get() ||
+            memcmp(&last.viewport, &d.viewport, sizeof(d.viewport)) != 0 ||
+            memcmp(&last.scissor, &d.scissor, sizeof(d.scissor)) != 0 || (last.shadow != no_shadow) != shadow) {
+            return nullptr;
+        }
+        return &last;
+    }
+
+    static bool same_material(const Material &a, const Material &b) {
+        if (a.program != b.program || a.pass_count != b.pass_count || a.ztest != b.ztest || a.zcompare != b.zcompare ||
+            a.texels.get() != b.texels.get() || a.surface.get() != b.surface.get() ||
+            a.sampled.get() != b.sampled.get() || a.dest.get() != b.dest.get() || a.sampler != b.sampler ||
+            a.clut != b.clut || memcmp(&a.push, &b.push, sizeof(a.push)) != 0 ||
+            memcmp(a.constants, b.constants, sizeof(a.constants)) != 0) {
+            return false;
+        }
+        const pcr::BlendChoice &x = a.blend, &y = b.blend;
+        if (x.enable != y.enable || x.src != y.src || x.dst != y.dst || x.src_alpha != y.src_alpha || x.op != y.op ||
+            x.flags != y.flags || x.write_rgb != y.write_rgb) {
+            return false;
+        }
+        for (uint32_t i = 0; i < a.pass_count; i++) {
+            if (a.passes[i].mode != b.passes[i].mode || a.passes[i].mask != b.passes[i].mask ||
+                a.passes[i].zwrite != b.passes[i].zwrite) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // A clear: the pass's load op where it is the pass's first and covers the whole of what it clears, else a clear
@@ -2126,14 +2318,15 @@ private:
         add_draw(std::move(d));
     }
 
-    void alpha_reset(const Image *image) {
+    void alpha_reset(const Image *image, uint32_t y) {
         end_shadow_run();
         counts_.alpha_resets++;
         alpha_clear_ = image;
+        alpha_clear_y_ = y;
         run_.next = 0;
         run_.cleared = false;
         auto w = std::find_if(alpha_watches_.begin(), alpha_watches_.end(),
-                              [&](const AlphaWatch &x) { return x.image == image; });
+                              [&](const AlphaWatch &x) { return x.image == image && x.y == y; });
         if (w != alpha_watches_.end()) {
             counts_.alpha_checked_frames++;
             counts_.alpha_read_frames += w->read ? 1 : 0;
@@ -2146,9 +2339,9 @@ private:
     }
 
     // (each target watched on its own: a reflection's clear between the frame's clear and its reset is not the frame's)
-    void watch_alpha(const Image *image) {
+    void watch_alpha(const Image *image, uint32_t y) {
         for (AlphaWatch &w : alpha_watches_) {
-            if (w.image == image) {
+            if (w.image == image && w.y == y) {
                 w.read = false;
                 return;
             }
@@ -2156,7 +2349,7 @@ private:
         if (alpha_watches_.size() == 8) {
             alpha_watches_.erase(alpha_watches_.begin()); // (a target let go of, or grown into another image)
         }
-        alpha_watches_.push_back({image, false});
+        alpha_watches_.push_back({image, y, false});
     }
 
     void forget_alpha(const Image *image) {
@@ -2165,9 +2358,18 @@ private:
                              alpha_watches_.end());
     }
 
+    // (a texture, copy or read-back of the target: every frame in it counted as read)
     void alpha_read(const Image *image) {
         for (AlphaWatch &w : alpha_watches_) {
             if (w.image == image) {
+                w.read = true;
+            }
+        }
+    }
+
+    void alpha_read(const Image *image, uint32_t y) {
+        for (AlphaWatch &w : alpha_watches_) {
+            if (w.image == image && w.y == y) {
                 w.read = true;
             }
         }
@@ -2261,9 +2463,12 @@ private:
     size_t fifo_at_ = 0;
     // DATE: the colour target whose alpha is known clear (GsDraw_SetScreenAlpha(0)) but for the shadows'; the census's
     // targets watched from their clears to their resets, and whether their alpha was read meanwhile
+    // (each frame by its image and its row in it: both frame buffers can be one target)
     const Image *alpha_clear_ = nullptr;
+    uint32_t alpha_clear_y_ = 0;
     struct AlphaWatch {
         const Image *image;
+        uint32_t y;
         bool read;
     };
     std::vector<AlphaWatch> alpha_watches_;
@@ -2271,6 +2476,7 @@ private:
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     struct Counts {
         uint64_t scenes = 0, primitives = 0, native_batches = 0, load_clears = 0;
+        uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;
         uint64_t targets_made = 0, targets_grown = 0, filled_from_uploads = 0, uploads_into_targets = 0,

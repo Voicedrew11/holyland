@@ -77,7 +77,7 @@ uint32_t shader_state_key(const ShaderState &s) {
     return (s.program & 3u) | (s.texture & 3u) << 2 | (s.tfx & 3u) << 4 | uint32_t(s.alpha_channel) << 6 |
            uint32_t(s.fog) << 7 | uint32_t(s.blending ? s.blend : 0) << 8 | uint32_t(s.blending) << 16 |
            uint32_t(s.shader_blend) << 17 | (s.date & 3u) << 18 | (s.depth & 3u) << 20 |
-           uint32_t(s.depth_write) << 22 | (s.passes & 3u) << 23 | 1u << 31;
+           uint32_t(s.depth_write) << 22 | (s.passes & 3u) << 23 | (s.first_draw & 3u) << 25 | 1u << 31;
 }
 
 void shader_state_text(uint32_t key, char *text, size_t size) {
@@ -88,6 +88,8 @@ void shader_state_text(uint32_t key, char *text, size_t size) {
     static const char *const alphas[4] = {"As", "Ad", "FIX", "?"};
     static const char *const dates[4] = {"", " | DATE stencil", " | DATE copy", ""};
     static const char *const depths[4] = {"no Z", "Z always", "Z >=", "Z >"};
+    static const char *const firsts[4] = {"", " | DATE first-draw numbers", " | DATE first-draw darkening",
+                                          " | clear in a pass"};
     char texture[48], blend[48];
     uint32_t b = field(key, 8, 8);
 
@@ -106,9 +108,10 @@ void shader_state_text(uint32_t key, char *text, size_t size) {
     } else {
         blend[0] = '\0';
     }
-    snprintf(text, size, "%s | %s%s%s%s | %s%s%s", programs[field(key, 0, 2)], texture, field(key, 7, 1) ? " | fog" : "",
-             blend, dates[field(key, 18, 2)], depths[field(key, 20, 2)], field(key, 22, 1) ? " write" : "",
-             field(key, 23, 2) > 1 ? " | alpha test 2 passes" : "");
+    snprintf(text, size, "%s | %s%s%s%s%s | %s%s%s", programs[field(key, 0, 2)], texture,
+             field(key, 7, 1) ? " | fog" : "", blend, dates[field(key, 18, 2)], firsts[field(key, 25, 2)],
+             depths[field(key, 20, 2)],
+             field(key, 22, 1) ? " write" : "", field(key, 23, 2) > 1 ? " | alpha test 2 passes" : "");
 }
 
 // The frame profiler's GPU lane (port/include/port/zones.h): the intervals put on the CPU's clock (calibrated

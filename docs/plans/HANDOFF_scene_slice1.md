@@ -1,5 +1,9 @@
 # Handoff: the scene renderer, slice 1 (game frames at 30)
 
+**Status (2026-11-19): built and measured.** `scene-slice1-results.md` has each criterion of "What it must show" below,
+measured, and what slice 2 starts from. Not run: the Vulkan validation layer (not installed on the owner's machine).
+This note stays as the slice's brief.
+
 2026-11-19. For the next agent, after `measure/depth-by-layers` (with the design) is merged or on top of it. Read
 `CLAUDE.md`, then `renderer-scene-not-gs.md` (the direction) and **`scene-renderer-design.md`** (the design: what
 this slice builds and why). The owner's decisions are taken (2026-11-19: the design's "The owner's
