@@ -549,7 +549,7 @@ the owner's 2x in a real window.
 |---|---|---|---|
 | 1. Game frames at 30 | the scene built from the chain; the world in order, unbatched (a draw a native batch); GIF 2D; targets as images; `D16_UNORM`; DATE by the first-draw image; the passes drawn as GIF (not folded); the unidentified 0x000 GIF 3D found | tour against paraLLEl-GS within UNORM's 7,008 (no worse than the rule's 8,845); every motion case at 30 no further than the rule; the layer inventory's every scenario draws; the world's GPU ms within 10% of `unorm`'s (2.8 / 6.0 / 6.1) | targets aliasing in ways the census did not reach (the map change, the map viewers, the menus' grab); the menus' 32-bit Z |
 | 2. The frame's layers | clears as load ops, dead writes left out, the alpha's reset folded into the clear, the passes after the HUD folded into the final pass, the history image | pictures byte for byte slice 1's; a game frame 2.5-3 ms less at 2x (the inventory's 0.47 + 0.66 + 1.75 + 0.42) | a reader of the alpha before the reset somewhere (falls back per frame) |
-| 3. Batching | bindless textures; runs as indirect draws; 0x280's two passes as one draw where exact | pictures byte for byte slice 2's where claimed exact, the fused passes' pixel changes counted and shown to the owner; 100-250 calls a frame; the world at 099 under 2 ms, the pond and palace's 0x280 under 1 ms | the fused passes' overlap; drivers' indirect draw speed on integrated GPUs |
+| 3. Batching | bindless textures; runs as indirect draws; 0x280's two passes as one draw where exact | pictures byte for byte slice 2's where claimed exact, the fused passes' pixel changes counted and shown to the owner; 100-250 calls a frame; the world at 099 under 2 ms (after 3b: not batching's to give, judged by part 3f's study of where the GPU's time goes), the pond and palace's 0x280 under 1 ms | the fused passes' overlap; drivers' indirect draw speed on integrated GPUs; indirect draws on RADV (the PC renderer's hang on the 9070 XT) |
 | 4. Pictures between | the scene drawn at t; mouse look from the scene with the late turn's reprojection | `motion_compare.py` at 60 and 240 no further from paraLLEl-GS than today's pictures between; a picture between under half a game frame's GPU time | parts paired by identity that today's replay pairs otherwise (look-alikes) |
 | 5. Scheduling and present | the budget, the threads, one final pass, a repeated vblank not made again | the mouse spin at the owner's settings holds 30 game frames a second, with as many pictures between as fit; a repeated vblank under 0.3 ms | the GPU's timestamps' spread on a busy integrated GPU |
 | 6. For players | settings, the overlay, save states, `pace_test.py`, `map_tour.py`; the 9070 XT and an Intel or NVIDIA GPU | the owner's review; then `pc` retired | |
@@ -576,6 +576,12 @@ whole and the owner's decision on 3d. Their numbers go into `scene-slice3-result
 slice 2's; the runs counted (243 / 1,053 / 1,652 a frame at 099 / the pond / the palace, 0x280's 139 / 885 / 1,437, as
 the census); the GPU time slice 2's at 099 and the pond, 0.12 ms more at the palace (0x280's many small draws). The
 fragment stage reading its record in an indirect draw is 3b's first question.
+3b is done (2026-11-20): runs as indirect draws, the fragment stage shading a record at a time (one flat value from the
+vertex stage), unblended batches drawn in runs blended by As where exact; pictures byte for byte 3a's; calls a frame
+171 / 971 / 1,478 (0x000's 13 / 55 / 25). The GPU time 3a's at 099 and the pond, 0.15 ms less at the palace; 0x000 at
+099 still 2.6 ms: its calls were not its cost. Batching saves the CPU's time, which the GPU's timestamps do not see. A
+sixth part, 3f, studies where the GPU's time goes (0x000's pixels, the 5.5 ms scanout) and the calls' CPU time; the
+"under 2 ms" is judged by it (`HANDOFF_scene_slice3.md`, "After 3b").
 
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.

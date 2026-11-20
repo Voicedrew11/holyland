@@ -1,6 +1,7 @@
 # The scene renderer, slice 3: results
 
-Slice 3 of `scene-renderer-design.md` ("The slices"): batching, cut into five parts (`HANDOFF_scene_slice3.md`), on
+Slice 3 of `scene-renderer-design.md` ("The slices"): batching, cut into five parts and a sixth after 3b (3f, a study of
+where the GPU's time goes: `HANDOFF_scene_slice3.md`, "After 3b"), on
 `scene/slice3` from slice 2's end (`d45c9b4a`). A section a part, written as each is done. The measurements are in
 `~/Documents/darker-reality-measurements/2026-11-20-scene-slice3-<part>/` (their README entries).
 
@@ -226,5 +227,6 @@ The spread between rounds 0.00-0.09 (the palace without blended runs 0.15).
   in this part's runs, but the 9070 XT was not tried: 3e must, with the owner's settings, before the runs are kept on
   there. `KF4_SCN_INDIRECT=0` is the way back.
 - 3d: 0x280's alternation is 81-97% of the calls left (139 / 885 / 1,437 a frame).
-- 0x000's time at 099 (2.6 ms with the detail on) is not in its calls: a study of where it goes (as 3c's of the level)
-  is needed before the slice's "under 2 ms" can be judged.
+- 0x000's time at 099 (2.6 ms with the detail on) is not in its calls: part 3f (`HANDOFF_scene_slice3.md`) studies
+  where it goes, and the scanout's 5.5 ms a game frame (half the GPU's frame at all three places), and measures the
+  calls' CPU time, where batching's gain is; the slice's "under 2 ms" is judged by it.
