@@ -1,7 +1,9 @@
 // VU1's program 0x280 on the GPU, shared (vu1_280_draw.h): its arithmetic and maths. Before it, the including shader
 // declares `pic` (a picture between's Picture), `mesh` (the arena: eight qwords a vertex) and the record's struct.
 // The steps are VU1's: port/platform/vu1_hle_280.c is the specification.
+#ifndef ND_D_DIRECT // (scn_place_*.comp: d the record in its buffer, read where used, not a copy)
 Draw d;
+#endif
 
 // ---- VU1's arithmetic ----
 // FTOI: toward zero; from 2^31 on, the largest integer with the float's sign (VU1's saturation: a vertex

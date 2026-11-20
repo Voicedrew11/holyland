@@ -46,6 +46,113 @@ layout(set = 0, binding = 7, std430) readonly buffer Draws {
 };
 #include "vu1_280_maths.h"
 
+#ifdef SCN_PLACED
+// (the scene renderer's: each vertex worked out once a draw, scn_place_280.comp; the instance its job's number)
+#include "scn_placed.h"
+layout(set = 1, binding = 11, std430) readonly buffer Jobs {
+    uvec4 jobs[];
+};
+layout(set = 1, binding = 12, std430) readonly buffer PlacedIn {
+    Placed placed[];
+};
+uvec4 job;
+Placed at_slot(uint slot) {
+    return placed[job.z + (slot - job.y) / 2u];
+}
+Whole whole_of(Placed p) {
+    Whole w;
+    w.h = p.whole.xyz;
+    w.w = p.whole.w;
+    return w;
+}
+
+void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
+    uint triangle, instance;
+    pcr_triangle(triangle, instance);
+    job = jobs[instance];
+    instance = job.x;
+#ifdef PCR_RECORDS
+    pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
+#endif
+    uvec4 tri = tris[triangle];
+    uint which = uint(gl_VertexIndex) % 3u;
+    uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
+    uint kick = tri.w & 0x7FFFFFFFu;
+    bool left_out = (tri.w & 0x80000000u) != 0u;
+    uint record = instance & 0x0FFFFFFFu;
+    bool sphere = ((instance >> 29) & 1u) != 0u, gouraud = ((instance >> 30) & 1u) != 0u;
+    ivec4 off = draws[record].offset;
+    ivec2 offset = ((instance >> 28) & 1u) != 0u ? off.zw : off.xy;
+    bool moving = (draws[record].info.y & ND_C_MOVING) != 0;
+    Placed c = at_slot(slot);
+    // (the colour: the kick's for a flat triangle's first pass, as pcr_nd280.vert's lit_colour(gouraud ? slot : kick))
+    uvec4 rgba = scn_unpack_rgba(!sphere && !gouraud ? at_slot(kick).rgba : c.rgba);
+    gl_ClipDistance[0] = c.cut;
+    uint z = c.z;
+    float zfrac = c.zfrac;
+    uint zref = which == 0u ? c.zframe : at_slot(tri.x).zframe;
+    float f = c.f;
+    bool gone = left_out;
+    bool whole = false;
+    Whole w0, w1, w2;
+    if (moving) {
+        w0 = whole_of(at_slot(tri.x));
+        w1 = whole_of(at_slot(tri.y));
+        w2 = whole_of(at_slot(tri.z));
+        whole = left_out || whole_behind(w0, w1, w2);
+    }
+    if (whole) {
+        Whole cw = which == 0u ? w0 : which == 1u ? w1 : w2;
+        v_rect = uvec2(PCR_NO_RECT);
+        if (whole_outside(w0, w1, w2)) {
+            whole_not_drawn();
+            v_color = vec4(0.0);
+            v_stq = vec3(0.0);
+            v_fog = 0.0;
+            return;
+        }
+        whole_position(cw, w0, w1, w2, offset, false);
+        float qn = 1.0 / cw.w;
+        if (!sphere) {
+            v_stq = c.st.xyz * qn;
+            v_color = vec4(rgba) * qn;
+            v_color_q = qn;
+        } else {
+            v_stq = c.st.xyz;
+            v_color = vec4(rgba);
+        }
+        vec4 fog = draws[record].fog;
+        v_fog = fog.z + fog.w * qn;
+        return;
+    }
+    ivec2 xyg = c.xy;
+    if (moving) {
+        int kk = mesh.q[kick * 4u + 4u].x; // (the kick's number in the batch)
+        for (int i = 0; i < 3 && i <= kk && !gone; i++) {
+            gone = (at_slot(kick - 2u * uint(i)).flags & SCN_PLACED_DROP) != 0u;
+        }
+    }
+    ivec2 g = moving ? xyg : ivec2(int(uint(xyg.x) & 0xFFFFu), int(uint(xyg.y) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - offset.x), float(g.y - offset.y)) / 16.0;
+    xy += vec2(pc.place);
+    if (gone) {
+        xy = vec2(1.0e9);
+    }
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw();
+    }
+    vec3 stq = sphere ? c.st.xyz : vec3(vu_mul(c.st.x, c.q), vu_mul(c.st.y, c.q), vu_mul(c.st.z, c.q)) * f;
+    vec2 ndc = gs_to_clip(xy);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = c.cut * c.q * f;
+    v_color = vec4(rgba);
+    v_stq = stq;
+    v_fog = c.st.w;
+    v_rect = uvec2(PCR_NO_RECT);
+}
+#else
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
@@ -55,6 +162,11 @@ void main() {
     pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
 #endif
     uvec4 tri = tris[triangle];
+#ifdef SCN_ND_EMPTY
+    // (the scene renderer's developers' bound, KF4_SCN_ND_EMPTY: the draws with no maths, every triangle off the target)
+    gl_Position = vec4(2.0, 2.0, 0.5, 1.0 + float(tri.x & 1u) * 1.0e-7);
+    return;
+#endif
     uint which = uint(gl_VertexIndex) % 3u;
     uint slot = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     uint kick = tri.w & 0x7FFFFFFFu;
@@ -186,3 +298,4 @@ void main() {
     v_fog = float((w16 >> 4) & 0xFFu);
     v_rect = uvec2(PCR_NO_RECT);
 }
+#endif

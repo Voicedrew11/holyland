@@ -69,6 +69,8 @@ struct Draw {
     pcr::NativeProgram native_program = pcr::NativeProgram::vu1_000;
     Vulkan::BufferHandle arena, records, triangles;
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
+    // (0x000's and 0x280's) the arena's vertices its corners are of (NativeBatch's): placed once a draw
+    uint32_t native_first_vertex = 0, native_vertex_count = 0;
     // (slice 4) the record its pictures between draw it with (its move: pcr_native.h's NativeBatch::picture_instance);
     // pcr::no_instance: none (drawn as in the frame)
     uint32_t picture_instance = 0xFFFFFFFFu;

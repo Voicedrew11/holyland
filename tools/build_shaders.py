@@ -59,7 +59,13 @@ SCENE_AGAIN = [
                   "pcr_prim.frag", "pcr_prim_early.frag"]] + [
     # (slice 3d: program 0x280's first pass with its sphere pass in it, one draw: pcr_prim.h's SCN_FUSE_280)
     (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_fuse",
-     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_FUSE_280"]) for name in ["pcr_nd280.vert", "pcr_prim_early.frag"]]
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_FUSE_280"]) for name in ["pcr_nd280.vert", "pcr_prim_early.frag"]] + [
+    # (each vertex of 0x000's and 0x280's draws worked out once, scn_place_*.comp: port/render/shaders/scn_placed.h)
+    (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_placed",
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_PLACED"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]] + [
+    # (developers' bound, KF4_SCN_ND_EMPTY: the native draws of 0x000 and 0x280 with no maths)
+    (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_empty",
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_ND_EMPTY"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]]
 
 
 def main():

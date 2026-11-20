@@ -261,6 +261,8 @@ private:
                 nb.triangles = triangles_.buffer;
                 nb.records = records_.buffer;
                 nb.triangle_count = n;
+                nb.first_vertex = base + b.first;
+                nb.vertex_count = b.count;
                 nb.instance = record | ((prim >> 3) & 1) << 30;
                 // (program 0x000 leaves the mesh's colours' alpha in RGBAQ as it is: vu1_000_maths.h's lit_colour, the
                 // lights' w 1; the batch's least and most are render.cpp's)
@@ -730,6 +732,8 @@ private:
                     nb.arena = arena_.buffer;
                     nb.records = records_280_.buffer;
                     nb.triangles = kicked_.buffer;
+                    nb.first_vertex = base + 2 * b.first;
+                    nb.vertex_count = b.count;
                     nb.instance = record | ((prim >> 9) & 1) << 28 | pass << 29 | ((prim >> 3) & 1) << 30;
                     // (the first pass: every corner's alpha the colour's scale and bias's, min(w * 0 + 128, 255), when
                     // they are 0 and 128; the sphere pass's alpha is vertex 1's of the same, the same 0x80)
@@ -764,6 +768,8 @@ private:
         nb.arena = arena_.buffer;
         nb.records = records;
         nb.triangles = kicked_.buffer;
+        nb.first_vertex = base + slots * b.first;
+        nb.vertex_count = b.count;
         nb.instance = program == NativeProgram::vu1_280 ? (record | ((prim >> 9) & 1) << 28 | ((prim >> 3) & 1) << 30)
                                                         : (record | ((prim >> 3) & 1) << 30);
         name_picture(nb);

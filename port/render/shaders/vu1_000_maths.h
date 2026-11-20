@@ -2,7 +2,9 @@
 // declares `pic` (a picture between's Picture), `mesh` (the arena: four qwords a vertex) and the record's struct
 // (vu1_000_draw.h). The steps are VU1's: port/platform/vu1_hle.c is the specification.
 // PCR_ND (the PC renderer's shaders) also takes VU1's clip judgement (vu_clipped).
+#ifndef ND_D_DIRECT // (scn_place_*.comp: d the record in its buffer, read where used, not a copy)
 Draw d;
+#endif
 
 // FTOI: toward zero, kept within what an int holds
 int ftoi(float v) {
@@ -226,7 +228,7 @@ Moved moved(uint at, Place p) {
     return r;
 }
 
-#if defined(PC_DRAW) || defined(PCR_ND)
+#if defined(PC_DRAW) || defined(PCR_ND) || defined(SCN_PLACE)
 // VU1's clip judgement of a place (nd_plan_vertex_vu): past the guard band (2047 about the 2048 middle) in X or Y, or Z
 // below 0
 bool vu_clipped(uint at) {

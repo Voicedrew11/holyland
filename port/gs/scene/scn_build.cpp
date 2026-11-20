@@ -1100,6 +1100,11 @@ public:
                 (unsigned long long)d.indirect_calls, per(d.indirect_calls), (unsigned long long)d.indirect_draws,
                 per(d.indirect_draws));
         fprintf(stderr,
+                "[stats] scene renderer vertices placed once (0x000, 0x280): %llu jobs (%.1f a scene, %llu draws sharing "
+                "one before them), %llu vertices (%.1f a scene), %llu dispatches\n",
+                (unsigned long long)d.place_jobs, per(d.place_jobs), (unsigned long long)d.place_shared,
+                (unsigned long long)d.placed_vertices, per(d.placed_vertices), (unsigned long long)d.place_dispatches);
+        fprintf(stderr,
                 "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened; the image cleared "
                 "%llu times), %llu DATE draws by a copy (%llu of them native); alpha reset seen %llu times; the alpha read "
                 "between the frame's clear and its reset in %llu of %llu frames checked\n",
@@ -3941,6 +3946,8 @@ private:
             d.triangles = b.nb.triangles;
             d.first_triangle = b.nb.first_triangle;
             d.triangle_count = b.nb.triangle_count;
+            d.native_first_vertex = b.nb.first_vertex;
+            d.native_vertex_count = b.nb.vertex_count;
             d.instance = b.nb.instance;
             d.picture_instance = b.nb.picture_instance;
             d.kind = b.nb.kind;
@@ -4035,13 +4042,20 @@ private:
         if (last && same_material(scene_.materials[last->material], m)) {
             d.material = last->material;
             const Material &mm = scene_.materials[d.material];
-            bool longer = last->instance == d.instance &&
+            // (and the vertices its corners are of go on from the last's, or are among them: one range to place)
+            const uint32_t slots = d.native_program == pcr::NativeProgram::vu1_280 ? 2 : 1;
+            const uint32_t last_end = last->native_first_vertex + slots * last->native_vertex_count;
+            const uint32_t end = d.native_first_vertex + slots * d.native_vertex_count;
+            const bool vertices_on = d.native_first_vertex >= last->native_first_vertex &&
+                                     d.native_first_vertex <= last_end;
+            bool longer = last->instance == d.instance && vertices_on &&
                           last->first_triangle + last->triangle_count == d.first_triangle &&
                           (!shadow || last->shadow + last->triangle_count == run_.base + run_.next);
             counts_.native_joined += longer ? 1 : 0;
             counts_.native_same_material += longer ? 0 : 1;
             if (longer) {
                 last->triangle_count += d.triangle_count;
+                last->native_vertex_count = (std::max(last_end, end) - last->native_first_vertex) / slots;
                 if (shadow) {
                     run_.next += d.triangle_count;
                 }
