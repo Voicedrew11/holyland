@@ -123,11 +123,7 @@ int port_frame_interp(void) {
    followed (the schedule's times stay put). After the menus' 60 or a load the rate climbs a quarter each half second,
    about three seconds from the least to 500. (Tried and left out: the top at once where it showed all that was asked
    for. The rate overshot and the pictures came in bursts again, in play too.) Before the window has shown anything,
-   and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before.
-   And never more than the renderer has time for (port_gs_pictures_room_hz: the scene renderer draws its pictures between
-   on the thread that takes the game's packets in). A quarter over what was shown kept that thread busy all the time: the
-   pictures queued behind a game frame's packets (5-6 ms in one go) were begun late, and it never caught up before the
-   next frame's; drawn too late to show, 100-470 ms went by with no picture (063, 2026-11-20). */
+   and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before. */
 #define UNLOCKED_LEAST_HZ 120
 
 /* hz, no more than adaptive sync's cap under the screen's rate (port/include/port/adaptive_sync.h) where it is on */
@@ -144,7 +140,7 @@ static int unlocked_asked_hz(void) {
     int cap = port_options.frame_rate_cap;
     int top = under_adaptive_sync_cap(cap > 0 && cap < most ? cap : (int)most);
     int asked, last = asked_now;
-    double shown = port_video_pictures_per_second(), room;
+    double shown = port_video_pictures_per_second();
 
     if (follow < 0) {
         const char *e = getenv("KF4_UNLOCKED_FOLLOW");
@@ -155,8 +151,6 @@ static int unlocked_asked_hz(void) {
         return top;
     }
     asked = (int)(shown * 1.25);
-    room = port_gs_pictures_room_hz();
-    asked = room > 0 && room < asked ? (int)room : asked;
     asked = asked < UNLOCKED_LEAST_HZ ? UNLOCKED_LEAST_HZ : asked;
     asked = asked > top ? top : asked;
     if (asked != top && last != 0 && last <= top && abs(asked - last) * 20 < last) {

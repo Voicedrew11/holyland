@@ -134,36 +134,7 @@ void turn_lead() {
 
 } // namespace
 
-// kf4-pc's room for pictures between: a window's time split into pictures and the rest
-void room() {
-    PictureRoom r;
-    CHECK(!r.close_window(10.0)); // (the first window opens)
-    CHECK(r.room_hz() == 0);
-    // half a second: 100 pictures of 2 ms (0.2 s), a game frame's packets 15 times at 6 ms (0.09 s)
-    for (int i = 0; i < 100; i++) {
-        r.picture(0.002);
-    }
-    for (int i = 0; i < 15; i++) {
-        r.other(0.006);
-    }
-    CHECK(!r.close_window(10.3)); // (not half a second yet)
-    CHECK(r.close_window(10.5));
-    // (0.92 * 0.5 - 0.09) / 0.002 pictures in half a second
-    const double want = (PictureRoom::BUSY_SHARE * 0.5 - 0.09) / 0.002 / 0.5;
-    CHECK(std::fabs(r.room_hz() - want) < 1e-6);
-    // a window with no picture drawn here: not known
-    r.other(0.1);
-    CHECK(r.close_window(11.0));
-    CHECK(r.room_hz() == 0);
-    // the rest taking more than the share: no room (known: the least)
-    r.picture(0.002);
-    r.other(0.49);
-    CHECK(r.close_window(11.5));
-    CHECK(r.room_hz() == 1);
-}
-
 int main() {
-    room();
     cost_follows();
     rule();
     begin_at();

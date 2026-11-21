@@ -415,8 +415,6 @@ int port_gs_interp_gpu(void);
 int port_gs_between_leaves_memory(void);
 void port_gs_interp_frame(void *frame);
 void port_gs_interp_picture(const void *picture);
-/* --frame-rate unlocked: the pictures between a second the renderer has time for (0: not known) */
-double port_gs_pictures_room_hz(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
