@@ -171,10 +171,18 @@ struct Batch {
     bool shader_blend = false, sprites = true;
     std::vector<PixelBox> boxes;
     NativeBatch nb;
+    // (a GIF batch reading the frame it draws into: its texture bound where it is drawn, not folded: open_batch)
+    bool texture_later = false;
 };
 
 constexpr VkFormat colour_format = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr float first_none = 3.0e38f; // (the first-draw image cleared: no triangle yet)
+constexpr float first_none = 1.0f; // (the first-draw image cleared: no triangle yet; a number is n / 2^24, below it)
+// The first-draw image is not cleared each frame (a clear of it was 0.5 ms a game frame at 2x on the Vega 7): each
+// frame's numbers are a generation's, (first_generations - 1 - generation) << first_shadow_bits plus the triangle's, so
+// that a later frame's are smaller than every earlier frame's left in the image and win the MIN blend, and none of them
+// is a number of this frame's. The image is cleared when the generations run out, once in first_generations frames.
+constexpr uint32_t first_shadow_bits = 17; // (a frame's shadow triangles at most: 131,072)
+constexpr uint32_t first_generations = 1u << (24 - first_shadow_bits);
 
 } // namespace
 
@@ -325,6 +333,9 @@ public:
         last_native_ = {};
         alpha_clear_ = nullptr;
         alpha_watches_.clear();
+        pending_.clear();
+        layers_.clear();
+        folds_.clear();
     }
 
     std::vector<uint8_t> vram_image() override {
@@ -372,25 +383,54 @@ public:
             return false;
         }
         Placed placed = colour_target(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
+        Target *s = placed.target;
+        int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        std::vector<Layer> drawn;
+        bool lower = false;
+        if (s) {
+            uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
+            x0 = int32_t(rx * scale_[0]);
+            y0 = int32_t(ry * scale_[1]);
+            x1 = int32_t(std::min(rx + rect.w, s->width()) * scale_[0]);
+            y1 = int32_t(std::min(ry + rect.h, s->height) * scale_[1]);
+            lower = rect.lower_field && dst.get_height() == 2 * uint32_t(std::max(y1 - y0, 0));
+            if (x1 > x0 && y1 > y0) {
+                // what the stream drew there: the clears held back drawn; the layers kept drawn over the picture
+                // where it is the target's pixels as they are, else into the target first
+                VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+                touch(s->image, false, shown, false);
+                bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
+                if (!lower && same_size && composable(s->image.get(), shown)) {
+                    for (const Layer &l : layers_) {
+                        if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
+                            drawn.push_back(l);
+                        }
+                    }
+                }
+                if (drawn.empty() || !picture_draws(drawn, shown)) {
+                    drawn.clear();
+                    draw_layers(s->image, shown);
+                }
+            }
+        }
         // (the scene so far submitted without a flush: the caller submits out right after, and both go to the GPU's
         // queue in one vkQueueSubmit)
         close_scene(false);
         times_.begin(out, GpuWork::picture);
-        Target *s = placed.target;
         if (!s) {
             return false;
         }
         out.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
-        uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
-        int32_t x0 = int32_t(rx * scale_[0]), y0 = int32_t(ry * scale_[1]);
-        int32_t x1 = int32_t(std::min(rx + rect.w, s->width()) * scale_[0]);
-        int32_t y1 = int32_t(std::min(ry + rect.h, s->height) * scale_[1]);
         if (x1 <= x0 || y1 <= y0) {
             return false;
         }
-        if (rect.lower_field && dst.get_height() == 2 * uint32_t(y1 - y0)) {
+        if (lower) {
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
+            return true;
+        }
+        if (!drawn.empty()) {
+            compose(out, *s, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}, dst, drawn);
             return true;
         }
         if (uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height()) {
@@ -446,10 +486,11 @@ public:
                 (unsigned long long)counts_.native_joined, (unsigned long long)counts_.native_same_material,
                 (unsigned long long)d.state_set);
         fprintf(stderr,
-                "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened), %llu DATE draws by "
-                "a copy (%llu of them native); alpha reset seen %llu times; the alpha read between the frame's clear and "
-                "its reset in %llu of %llu frames checked\n",
-                (unsigned long long)d.first_draws, (unsigned long long)d.darkened, (unsigned long long)counts_.date_copies,
+                "[stats] scene renderer DATE: %llu shadow draws by the first-draw image (%llu darkened; the image cleared "
+                "%llu times), %llu DATE draws by a copy (%llu of them native); alpha reset seen %llu times; the alpha read "
+                "between the frame's clear and its reset in %llu of %llu frames checked\n",
+                (unsigned long long)d.first_draws, (unsigned long long)d.darkened,
+                (unsigned long long)counts_.first_cleared, (unsigned long long)counts_.date_copies,
                 (unsigned long long)counts_.date_copies_native, (unsigned long long)counts_.alpha_resets,
                 (unsigned long long)counts_.alpha_read_frames, (unsigned long long)counts_.alpha_checked_frames);
         fprintf(stderr,
@@ -470,6 +511,18 @@ public:
                 (unsigned long long)counts_.unsupported_blends, (unsigned long long)counts_.unsupported_texture_on_target,
                 (unsigned long long)counts_.unsupported_copies, (unsigned long long)counts_.unsupported_uploads,
                 (unsigned long long)counts_.unsupported_read_backs, (unsigned long long)counts_.uploads_again_passed);
+        fprintf(stderr,
+                "[stats] scene renderer layers: clears %llu held back: %llu load ops, %llu in a pass, %llu alone, %llu "
+                "dead; %llu alpha resets folded into the frame's clear; layers %llu kept: %llu drawn into the target, "
+                "%llu dead; %llu pictures drawn with them; %llu textures of a frame from its history (%llu made); fills "
+                "after the HUD %llu kept, %llu drawn by pictures with the brightness\n",
+                (unsigned long long)counts_.clears_held, (unsigned long long)counts_.load_clears,
+                (unsigned long long)counts_.clears_in_pass, (unsigned long long)counts_.clears_alone,
+                (unsigned long long)counts_.clears_dead, (unsigned long long)counts_.alpha_resets_folded,
+                (unsigned long long)counts_.layers_kept, (unsigned long long)counts_.layers_drawn,
+                (unsigned long long)counts_.layers_dead, (unsigned long long)counts_.pictures_composed,
+                (unsigned long long)counts_.histories_read, (unsigned long long)counts_.histories_made,
+                (unsigned long long)counts_.fills_kept, (unsigned long long)counts_.fills_composed);
         TextureStoreCounts t = store_.counts();
         fprintf(stderr,
                 "[stats] scene renderer texture store: %llu uploads (%llu bytes), %llu resolves (%llu kept answers), %llu "
@@ -479,12 +532,17 @@ public:
     }
 
 private:
+    // A frame's place in its target (both frame buffers can be one target): colour_target's
+    struct Placed {
+        Target *target = nullptr;
+        uint32_t x = 0, y = 0;
+    };
+
     // ---- The scene ----
     // The scene drawn and submitted (flush: put on the GPU's queue now, else with the next submit that flushes)
     void close_scene(bool flush) {
         end_shadow_run();
         pass_.open = false;
-        last_clear_ = {};
         if (scene_.empty()) {
             return;
         }
@@ -535,37 +593,115 @@ private:
                 gif += !d.clear && !d.native ? 1 : 0;
                 shadows += d.shadow != no_shadow ? 1 : 0;
             }
+            char area[64] = "";
+            if (ps.area.extent.width != UINT32_MAX) {
+                snprintf(area, sizeof(area), " area %d,%d %ux%u", ps.area.offset.x, ps.area.offset.y,
+                         ps.area.extent.width, ps.area.extent.height);
+            }
             fprintf(stderr,
-                    "[scn dump]   pass %-10s colour %p %ux%u depth %p%s%s: %u draws (%u native, %u GIF, %u clears, "
+                    "[scn dump]   pass %-10s colour %p %ux%u depth %p%s%s%s: %u draws (%u native, %u GIF, %u clears, "
                     "%u shadows)\n",
-                    kinds[int(ps.kind)], (const void *)ps.colour.get(), ps.colour->get_width(),
-                    ps.colour->get_height(), (const void *)ps.depth.get(), ps.clear_colour ? " clear-colour" : "",
-                    ps.clear_depth ? " clear-depth" : "", ps.draw_count, native, gif, clears, shadows);
+                    kinds[int(ps.kind)], (const void *)ps.colour.get(), ps.colour ? ps.colour->get_width() : 0,
+                    ps.colour ? ps.colour->get_height() : 0, (const void *)ps.depth.get(),
+                    ps.clear_colour ? " clear-colour" : "", ps.clear_depth ? " clear-depth" : "", area, ps.draw_count,
+                    native, gif, clears, shadows);
+            if (!dump_draws_) {
+                continue;
+            }
+            for (uint32_t i = 0; i < ps.draw_count; i++) {
+                const Draw &d = scene_.draws[ps.first_draw + i];
+                if (d.native) {
+                    continue;
+                }
+                if (d.clear) {
+                    const VkRect2D &r = d.clear_rect.rect;
+                    fprintf(stderr, "[scn dump]     #%u clear %d,%d %ux%u:", ps.first_draw + i, r.offset.x, r.offset.y,
+                            r.extent.width, r.extent.height);
+                    for (uint32_t k = 0; k < d.clear_count; k++) {
+                        const VkClearAttachment &a = d.clear_att[k];
+                        if (a.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
+                            const float *c = a.clearValue.color.float32;
+                            fprintf(stderr, " colour %.0f %.0f %.0f %.0f", c[0] * 255, c[1] * 255, c[2] * 255, c[3] * 255);
+                        } else {
+                            fprintf(stderr, " depth %g", a.clearValue.depthStencil.depth);
+                        }
+                    }
+                    fprintf(stderr, "\n");
+                    continue;
+                }
+                const Material &m = scene_.materials[d.material];
+                float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+                for (uint32_t k = 0; k < d.vertex_count; k++) {
+                    const Vertex &v = scene_.vertices[d.first_vertex + k];
+                    x0 = std::min(x0, v.x);
+                    y0 = std::min(y0, v.y);
+                    x1 = std::max(x1, v.x);
+                    y1 = std::max(y1, v.y);
+                }
+                char text[200];
+                shader_state_text(shader_state_key(m.state), text, sizeof(text));
+                const Vertex &v0 = scene_.vertices[d.first_vertex];
+                fprintf(stderr,
+                        "[scn dump]     #%u gif %u vertices (%.1f,%.1f)-(%.1f,%.1f) place %d,%d rgba %u %u %u %u mask "
+                        "%x%s flags %x alpha %x: %s\n",
+                        ps.first_draw + i, d.vertex_count, x0, y0, x1, y1, m.push.place[0], m.push.place[1],
+                        v0.rgba[0], v0.rgba[1], v0.rgba[2], v0.rgba[3], m.passes[0].mask, m.pass_count > 1 ? "+" : "",
+                        m.push.flags, m.push.alpha, text);
+            }
         }
     }
+    const bool dump_draws_ = getenv("KF4_SCN_DUMP_DRAWS") && strcmp(getenv("KF4_SCN_DUMP_DRAWS"), "0") != 0;
     const uint64_t dump_at_ = getenv("KF4_SCN_DUMP_AT") ? strtoull(getenv("KF4_SCN_DUMP_AT"), nullptr, 0) : 0;
     uint32_t dumped_ = 0;
 
-    // The open pass: its colour and depth images and kind; a draw into others begins a new one
+    // The open pass: its colour and depth images, kind and render area; a draw into others, or outside the area,
+    // begins a new one
     struct OpenPass {
         bool open = false;
         uint32_t index = 0;
         const Image *colour = nullptr, *depth = nullptr;
         PassKind kind = PassKind::plain;
+        VkRect2D area = whole_area;
     } pass_;
+    static constexpr VkRect2D whole_area = {{0, 0}, {UINT32_MAX, UINT32_MAX}};
 
-    Pass &use_pass(const ImageHandle &colour, const ImageHandle &depth, PassKind kind, const ImageHandle &first = {}) {
+    static bool rect_contains(const VkRect2D &outer, const VkRect2D &inner) {
+        return inner.offset.x >= outer.offset.x && inner.offset.y >= outer.offset.y &&
+               int64_t(inner.offset.x) + inner.extent.width <= int64_t(outer.offset.x) + outer.extent.width &&
+               int64_t(inner.offset.y) + inner.extent.height <= int64_t(outer.offset.y) + outer.extent.height;
+    }
+    static bool rects_meet(const VkRect2D &a, const VkRect2D &b) {
+        return int64_t(a.offset.x) < int64_t(b.offset.x) + b.extent.width &&
+               int64_t(b.offset.x) < int64_t(a.offset.x) + a.extent.width &&
+               int64_t(a.offset.y) < int64_t(b.offset.y) + b.extent.height &&
+               int64_t(b.offset.y) < int64_t(a.offset.y) + a.extent.height && a.extent.width && a.extent.height &&
+               b.extent.width && b.extent.height;
+    }
+    static VkRect2D whole_of(const Image &image) {
+        return {{0, 0}, {image.get_width(), image.get_height()}};
+    }
+
+    // The open pass where it draws into colour (and depth, if any) inside its area and is of kind; else a new one
+    // (scissor: what the draw reaches, null for anywhere in the target)
+    Pass &use_pass(const ImageHandle &colour, const ImageHandle &depth, PassKind kind, const ImageHandle &first = {},
+                   const VkRect2D *scissor = nullptr) {
         if (pass_.open && pass_.kind == kind && pass_.colour == colour.get() &&
-            (!depth || pass_.depth == depth.get())) {
+            (!depth || pass_.depth == depth.get()) && (!scissor || rect_contains(pass_.area, *scissor))) {
             return scene_.passes[pass_.index];
         }
+        return new_pass(colour, depth, kind, first, whole_area);
+    }
+
+    Pass &new_pass(const ImageHandle &colour, const ImageHandle &depth, PassKind kind, const ImageHandle &first,
+                   const VkRect2D &area) {
         Pass p;
         p.kind = kind;
         p.colour = colour;
         p.depth = depth;
         p.first = first;
+        p.area = area;
         p.first_draw = uint32_t(scene_.draws.size());
-        pass_ = {true, uint32_t(scene_.passes.size()), colour.get(), depth.get(), kind};
+        pass_ = {true, uint32_t(scene_.passes.size()), colour.get(), depth.get(), kind, area};
         scene_.steps.push_back({Step::Kind::pass, uint32_t(scene_.passes.size())});
         scene_.passes.push_back(std::move(p));
         return scene_.passes.back();
@@ -576,11 +712,34 @@ private:
         scene_.passes[pass_.index].draw_count++;
     }
 
-    // Something outside the passes: the open one ended (the shadows' darkening drawn first)
+    // Something outside the passes: the open one ended (the shadows' darkening drawn first). What it reads, and what it
+    // writes of a target, is as the stream has it there: the clears held back and the layers folded there drawn first
+    // (an op that clears a whole image writes them over: dead)
     void add_op(Op &&op) {
         end_shadow_run();
+        if (op.src) {
+            VkExtent3D e = op.kind == Op::Kind::blit ? op.src_extent : op.extent;
+            touch(op.src, op.depth, {{op.src_at.x, op.src_at.y}, {e.width, e.height}});
+        }
+        if (op.dst) {
+            if (op.kind == Op::Kind::clear) {
+                written_over(op.dst, op.depth, whole_of(*op.dst));
+            } else {
+                touch(op.dst, op.depth, {{op.dst_at.x, op.dst_at.y}, {op.extent.width, op.extent.height}});
+            }
+            for (AlphaFold &f : folds_) {
+                if (f.image == op.dst.get()) {
+                    f.valid = false; // (the frame written outside its draws: its alpha's reset is drawn)
+                }
+            }
+        }
+        push_op(std::move(op));
+    }
+
+    // (add_op without the clears and layers: theirs)
+    void push_op(Op &&op) {
+        end_shadow_run();
         pass_.open = false;
-        last_clear_ = {};
         if (op.dst && op.dst.get() == alpha_clear_) {
             alpha_clear_ = nullptr; // (written: its alpha no longer known)
         }
@@ -631,16 +790,966 @@ private:
         add_op(std::move(op));
     }
 
+    // ---- Clears held back (slice 2: clears as load ops, dead ones left out) ----
+    // A clear is not drawn where the stream has it. It waits until something uses what it cleared: a draw there (it is
+    // then the load op of the draw's pass, the pass's render area its rectangle, or a clear in the pass), an op that
+    // reads or writes there, a read-back or a picture (a pass or an op of its own). A clear that a later one writes
+    // over first, or an op that clears the whole image, is never drawn (dead): the swap's first clear, a Z buffer
+    // cleared and not tested again before its next clear. Kept across scenes: a clear left at a frame's end goes to
+    // whatever next uses its image.
+    struct PendingClear {
+        ImageHandle image;
+        bool depth = false;
+        VkRect2D rect{};
+        VkClearValue value{};
+        uint64_t id = 0;
+    };
+    std::vector<PendingClear> pending_;
+    uint64_t next_clear_id_ = 1;
+    const bool hold_clears_ = !(getenv("KF4_SCN_HOLD_CLEARS") && strcmp(getenv("KF4_SCN_HOLD_CLEARS"), "0") == 0);
+
+    // A clear met: held back (its id), what it writes over of the clears and layers before it dead
+    uint64_t pend_clear(const ImageHandle &image, bool depth, const VkRect2D &rect, const VkClearValue &value) {
+        written_over(image, depth, rect);
+        PendingClear p;
+        p.image = image;
+        p.depth = depth;
+        p.rect = rect;
+        p.value = value;
+        p.id = next_clear_id_++;
+        counts_.clears_held++;
+        pending_.push_back(std::move(p));
+        uint64_t id = pending_.back().id;
+        if (!hold_clears_) {
+            touch(image, depth, rect);
+        }
+        return id;
+    }
+
+    // rect of image (its colour, or its depth) written whole: the clears held back there and the layers folded there
+    // that it covers are dead; those it only meets are drawn first
+    void written_over(const ImageHandle &image, bool depth, const VkRect2D &rect) {
+        for (size_t i = 0; i < pending_.size();) {
+            const PendingClear &p = pending_[i];
+            if (p.image.get() == image.get() && p.depth == depth && rect_contains(rect, p.rect)) {
+                counts_.clears_dead++;
+                pending_.erase(pending_.begin() + ptrdiff_t(i));
+            } else {
+                i++;
+            }
+        }
+        if (!depth) {
+            for (size_t i = 0; i < layers_.size();) {
+                if (layers_[i].image.get() == image.get() && rect_contains(rect, layers_[i].rect)) {
+                    counts_.layers_dead++;
+                    layers_.erase(layers_.begin() + ptrdiff_t(i));
+                            } else {
+                    i++;
+                }
+            }
+        }
+        touch(image, depth, rect);
+    }
+
+    // What the stream has drawn into rect of image (its colour or its depth) made so in the scene: the clears held
+    // back there each a step of its own, and the layers folded there drawn
+    void touch(const ImageHandle &image, bool depth, const VkRect2D &rect, bool layers_too = true) {
+        for (size_t i = 0; i < pending_.size();) {
+            const PendingClear &p = pending_[i];
+            if (p.image.get() == image.get() && p.depth == depth && rects_meet(p.rect, rect)) {
+                PendingClear taken = std::move(pending_[i]);
+                pending_.erase(pending_.begin() + ptrdiff_t(i));
+                put_clear(taken);
+            } else {
+                i++;
+            }
+        }
+        if (!depth && layers_too) {
+            draw_layers(image, rect);
+        }
+    }
+
+    // A clear held back made a step of its own: an op over its whole image, else a pass that clears its rectangle by
+    // its load op (its render area)
+    void put_clear(const PendingClear &p) {
+        if (p.rect.offset.x == 0 && p.rect.offset.y == 0 && p.rect.extent.width == p.image->get_width() &&
+            p.rect.extent.height == p.image->get_height()) {
+            Op op;
+            op.kind = Op::Kind::clear;
+            op.dst = p.image;
+            op.depth = p.depth;
+            op.value = p.value;
+            op.work = GpuWork::surface;
+            push_op(std::move(op));
+            fold_cleared(p.id, AlphaFold::Where::op, uint32_t(scene_.ops.size() - 1));
+            counts_.clears_alone++;
+            return;
+        }
+        end_shadow_run();
+        pass_.open = false;
+        Pass &pass = new_pass(p.depth ? ImageHandle() : p.image, p.depth ? p.image : ImageHandle(), PassKind::plain, {},
+                              p.rect);
+        if (p.depth) {
+            pass.clear_depth = true;
+            pass.depth_value = p.value.depthStencil.depth;
+        } else {
+            pass.clear_colour = true;
+            pass.colour_value = p.value.color;
+        }
+        pass_.open = false; // (nothing is drawn in it)
+        fold_cleared(p.id, AlphaFold::Where::pass, uint32_t(scene_.passes.size() - 1));
+        counts_.clears_alone++;
+    }
+
+    // The pass a plain draw into colour (and depth: uses_depth, it tests or writes it) goes into, within scissor, with
+    // the clears held back that it meets made: the load ops of a new pass where they are one rectangle holding the
+    // draw (its render area), else clears in the pass, before it
+    Pass &pass_for(const ImageHandle &colour, const ImageHandle &depth, const VkRect2D &scissor, bool uses_depth) {
+        draw_layers(colour, scissor);
+        int32_t c = -1, z = -1;
+        uint32_t met = 0;
+        for (size_t i = 0; i < pending_.size(); i++) {
+            const PendingClear &p = pending_[i];
+            bool mine = p.depth ? uses_depth && depth && p.image.get() == depth.get() : p.image.get() == colour.get();
+            if (!mine || !rects_meet(p.rect, scissor)) {
+                continue;
+            }
+            met++;
+            (p.depth ? z : c) = int32_t(i);
+        }
+        if (met == 0) {
+            return use_pass(colour, depth, PassKind::plain, {}, &scissor);
+        }
+        const VkRect2D *area = nullptr;
+        if (met == uint32_t(c >= 0) + uint32_t(z >= 0)) {
+            const VkRect2D &r = pending_[size_t(c >= 0 ? c : z)].rect;
+            bool one = c < 0 || z < 0 || memcmp(&pending_[size_t(c)].rect, &pending_[size_t(z)].rect, sizeof(r)) == 0;
+            VkRect2D fb = whole_of(*colour);
+            if (depth) {
+                fb.extent.width = std::min(fb.extent.width, depth->get_width());
+                fb.extent.height = std::min(fb.extent.height, depth->get_height());
+            }
+            if (one && rect_contains(r, scissor) && rect_contains(fb, r)) {
+                area = &r;
+            }
+        }
+        if (area) {
+            VkRect2D r = *area;
+            end_shadow_run();
+            pass_.open = false;
+            Pass &pass = new_pass(colour, depth, PassKind::plain, {}, r);
+            uint32_t at = uint32_t(scene_.passes.size() - 1);
+            for (int32_t i : {c, z}) {
+                if (i < 0) {
+                    continue;
+                }
+                const PendingClear &p = pending_[size_t(i)];
+                if (p.depth) {
+                    pass.clear_depth = true;
+                    pass.depth_value = p.value.depthStencil.depth;
+                } else {
+                    pass.clear_colour = true;
+                    pass.colour_value = p.value.color;
+                }
+                fold_cleared(p.id, AlphaFold::Where::pass, at);
+                counts_.load_clears++;
+            }
+            for (int32_t i : {std::max(c, z), std::min(c, z)}) {
+                if (i >= 0) {
+                    pending_.erase(pending_.begin() + i);
+                }
+            }
+            return scene_.passes[at];
+        }
+        // clears in the pass: its area holds them and the draw (one past the pass's framebuffer, the smaller of its
+        // images, a step of its own before it)
+        VkRect2D fb = whole_of(*colour);
+        if (depth) {
+            fb.extent.width = std::min(fb.extent.width, depth->get_width());
+            fb.extent.height = std::min(fb.extent.height, depth->get_height());
+        }
+        std::vector<PendingClear> taken;
+        for (size_t i = 0; i < pending_.size();) {
+            const PendingClear &p = pending_[i];
+            bool mine = p.depth ? uses_depth && depth && p.image.get() == depth.get() : p.image.get() == colour.get();
+            if (mine && rects_meet(p.rect, scissor)) {
+                PendingClear t = std::move(pending_[i]);
+                pending_.erase(pending_.begin() + ptrdiff_t(i));
+                if (rect_contains(fb, t.rect)) {
+                    taken.push_back(std::move(t));
+                } else {
+                    put_clear(t);
+                }
+            } else {
+                i++;
+            }
+        }
+        bool inside = true;
+        for (const PendingClear &p : taken) {
+            inside = inside && pass_.open && rect_contains(pass_.area, p.rect);
+        }
+        if (!inside) {
+            pass_.open = false;
+        }
+        use_pass(colour, depth, PassKind::plain, {}, &scissor);
+        for (const PendingClear &p : taken) {
+            Draw d;
+            d.clear = true;
+            d.viewport = {0, 0, float(colour->get_width()), float(colour->get_height()), 0, 1};
+            d.scissor = p.rect;
+            d.clear_rect = {p.rect, 0, 1};
+            VkClearAttachment &a = d.clear_att[0];
+            a.aspectMask = p.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            a.colorAttachment = 0;
+            a.clearValue = p.value;
+            d.clear_count = 1;
+            d.material = uint32_t(scene_.materials.size());
+            scene_.materials.emplace_back();
+            add_draw(std::move(d));
+            fold_cleared(p.id, AlphaFold::Where::draw, uint32_t(scene_.draws.size() - 1));
+            counts_.clears_in_pass++;
+        }
+        return scene_.passes[pass_.index];
+    }
+
+    // An image let go of: what was held back for it goes with it
+    void forget_held(const Image *image) {
+        pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
+                                      [&](const PendingClear &p) { return p.image.get() == image; }),
+                       pending_.end());
+        layers_.erase(std::remove_if(layers_.begin(), layers_.end(),
+                                     [&](const Layer &l) { return l.image.get() == image; }),
+                      layers_.end());
+    }
+
+    // ---- The frame's layers folded into the picture (slice 2) ----
+    // The brightness (Game_ApplyBrightness: the frame drawn over itself, each pixel from its own place, last in the
+    // frame) is not drawn into the target, and its copy of the frame not made: it is kept, and each picture of the
+    // frame (scanout) is that draw, reading the target, in place of the copy out (the same draw, the same arithmetic).
+    // Anything else that comes to the frame's pixels (a draw, an op, a read-back) draws it into the target first, at
+    // its place in the stream; a clear over it makes it dead; a texture read of the frame reads the history.
+    struct Layer {
+        ImageHandle image;     // the target
+        VkRect2D rect{};       // its pixels in it (its box in its scissor)
+        Material m;
+        Draw d;
+        std::vector<Vertex> vertices;
+        std::array<uint32_t, 256> clut{};
+        bool has_clut = false;
+        // (the brightness) the frame read at its own pixel: the texture as the batch asked for it, made again where the
+        // layer is drawn into the target
+        bool self_read = false;
+        // (a fill after the HUD, is_fill's) what scn_picture_layer.frag applies to what the brightness reads: ALPHA's
+        // word as PrimPush's alpha, the fill's RGBA, and bit 0 blended (PRIM's ABE), bit 1 alpha written, bit 2 FBA,
+        // bit 3 the GS's arithmetic (else the GPU blend's rounding)
+        bool fill = false;
+        std::array<uint32_t, 3> fill_word{};
+        DrawState state{};
+        uint32_t cols = 0, rows = 0;
+        int32_t place[2] = {};
+        uint64_t serial = 0;
+    };
+    std::vector<Layer> layers_;
+    uint64_t layer_serial_ = 0;
+    // The history: a kept layer's frame with it drawn, its rectangle's size, made where a texture reads the frame
+    // (the knock-back's frame before, Game_BlendPreviousFrame) rather than drawing the layer into the target
+    struct History {
+        ImageHandle image;
+        uint64_t layer = 0; // (the layer's serial: the frame unchanged while it is kept)
+    } history_;
+    const bool fold_layers_ = !(getenv("KF4_SCN_FOLD") && strcmp(getenv("KF4_SCN_FOLD"), "0") == 0);
+    const bool fold_fills_ = fold_layers_ && !(getenv("KF4_SCN_FOLD_FILLS") && strcmp(getenv("KF4_SCN_FOLD_FILLS"), "0") == 0);
+    // (developers', KF4_SCN_FILL_GS=1) the folded fills by the GS's arithmetic, floored, rather than as the GPU's blend
+    // rounds them: the GS's is not nearer paraLLEl-GS while the frame under them is a level off it
+    // (scene-slice2-after.md)
+    const bool fill_gs_ = getenv("KF4_SCN_FILL_GS") && strcmp(getenv("KF4_SCN_FILL_GS"), "0") != 0;
+
+    // The layers folded into image that meet rect drawn into the target, in order
+    void draw_layers(const ImageHandle &image, const VkRect2D &rect) {
+        std::vector<Layer> taken;
+        for (size_t i = 0; i < layers_.size();) {
+            if (layers_[i].image.get() == image.get() && rects_meet(layers_[i].rect, rect)) {
+                taken.push_back(std::move(layers_[i]));
+                layers_.erase(layers_.begin() + ptrdiff_t(i));
+            } else {
+                i++;
+            }
+        }
+        if (taken.empty()) {
+            return;
+        }
+        for (Layer &l : taken) {
+            Material m = l.m;
+            if (l.self_read) {
+                BoundTexture t = target_texture(l.state.tex0, l.cols, l.rows);
+                if (!t.ok) {
+                    continue;
+                }
+                m.surface = t.image;
+                m.push.src_offset[0] = m.push.src_offset[1] = 0;
+            }
+            if (l.has_clut) {
+                m.clut = clut_index(l.clut);
+            }
+            Draw d = l.d;
+            d.material = uint32_t(scene_.materials.size());
+            scene_.materials.push_back(std::move(m));
+            d.first_vertex = uint32_t(scene_.vertices.size());
+            d.vertex_count = uint32_t(l.vertices.size());
+            scene_.vertices.insert(scene_.vertices.end(), l.vertices.begin(), l.vertices.end());
+            pass_for(l.image, {}, d.scissor, false);
+            add_draw(std::move(d));
+            counts_.layers_drawn++;
+        }
+    }
+
+    // A GIF batch that is a layer (Layer above): the frame read at its own pixels (reads_own_frame's, every texel it
+    // reads inside its own rectangle: reads_inside), over the whole frame (its scissor and box as the alpha's
+    // reset's), its colour written, no Z written or tested (ZTST always), no DATE, its blend none or Vulkan's.
+    bool is_layer(const Batch &b, const Target &colour, const Placed &placed, bool z_written, bool zte, uint32_t ztst,
+                  bool date) const {
+        const DrawState &s = b.state;
+        if (!fold_layers_ || !b.texture_later || b.native || !b.sprites || b.vertices.empty() || b.shader_blend ||
+            date || z_written || (zte && ztst != 1) || placed.x != 0 || placed.y >= colour.height) {
+            return false;
+        }
+        BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
+        if (!blend.supported || !blend.write_rgb) {
+            return false;
+        }
+        uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
+        uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
+        int32_t bottom = int32_t(std::min(colour.height - placed.y, scay1 + 1));
+        if (scax0 != 0 || scay0 != 0 || scax1 + 1 < colour.width() || scay1 + 1 < 224 || b.x0 > 0 || b.y0 > 0 ||
+            b.x1 < int32_t(colour.width()) || b.y1 < bottom) {
+            return false;
+        }
+        PixelBox box = {b.x0, b.y0, b.x1, b.y1};
+        return reads_inside(b, placed, drawn_rect(s.scissor, box, colour, placed));
+    }
+
+    // A fill after the HUD (GsDraw_FillScreen's there: MapDrawState's fill, Game_DrawFade, the message dim, the pause's
+    // shade; scene-renderer-design.md's decision 5): untextured sprites of one colour tiling the whole frame (as a layer's
+    // box and scissor), no fog, no Z written or tested, no DATE, one pass writing every pixel's colour (FBMSK clear but
+    // for the alpha's byte, whole), its blend none or Vulkan's. Kept as a layer: where the brightness follows it, each
+    // picture draws the two as one, the fill applied to what the brightness reads (scn_picture_layer.frag: rounded as
+    // the GPU's blend rounds it, or by the GS's arithmetic: fill_gs_); else drawn into the target as any layer.
+    bool is_fill(const Batch &b, const Target &colour, const Placed &placed, bool z_written, bool zte, uint32_t ztst,
+                 bool date, const Material &m) const {
+        const DrawState &s = b.state;
+        if (!fold_fills_ || b.native || !b.sprites || b.vertices.empty() || b.vertices.size() % 6 != 0 ||
+            b.shader_blend || b.texture_later || date || z_written || (zte && ztst != 1) || bits(s.prim, 4, 1) ||
+            bits(s.prim, 5, 1) || placed.x != 0 || placed.y >= colour.height || m.pass_count != 1 ||
+            m.passes[0].mode != 0 || (m.passes[0].mask & 0x7) != 0x7 || !m.blend.supported) {
+            return false;
+        }
+        uint32_t fbmsk = uint32_t(s.frame >> 32);
+        if ((fbmsk & 0xFFFFFFu) != 0 || ((fbmsk >> 24) != 0 && (fbmsk >> 24) != 0xFF)) {
+            return false;
+        }
+        for (const Vertex &v : b.vertices) {
+            if (memcmp(v.rgba, b.vertices[0].rgba, sizeof(v.rgba)) != 0) {
+                return false;
+            }
+        }
+        uint32_t scax0 = bits(s.scissor, 0, 11), scax1 = bits(s.scissor, 16, 11);
+        uint32_t scay0 = bits(s.scissor, 32, 11), scay1 = bits(s.scissor, 48, 11);
+        int32_t bottom = int32_t(std::min(colour.height - placed.y, scay1 + 1));
+        if (scax0 != 0 || scay0 != 0 || scax1 + 1 < colour.width() || scay1 + 1 < 224 || b.x0 > 0 || b.y0 > 0 ||
+            b.x1 < int32_t(colour.width()) || b.y1 < bottom) {
+            return false;
+        }
+        // (its sprites tile their box: no gap the brightness could read through)
+        float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+        double area = 0;
+        for (size_t i = 0; i < b.vertices.size(); i += 6) {
+            const Vertex &va = b.vertices[i], &vb = b.vertices[i + 4];
+            float rx0 = std::min(va.x, vb.x), ry0 = std::min(va.y, vb.y), rx1 = std::max(va.x, vb.x),
+                  ry1 = std::max(va.y, vb.y);
+            for (size_t j = 0; j < i; j += 6) {
+                const Vertex &oa = b.vertices[j], &ob = b.vertices[j + 4];
+                if (rx0 < std::max(oa.x, ob.x) && std::min(oa.x, ob.x) < rx1 && ry0 < std::max(oa.y, ob.y) &&
+                    std::min(oa.y, ob.y) < ry1) {
+                    return false;
+                }
+            }
+            area += double(rx1 - rx0) * double(ry1 - ry0);
+            x0 = std::min(x0, rx0);
+            y0 = std::min(y0, ry0);
+            x1 = std::max(x1, rx1);
+            y1 = std::max(y1, ry1);
+        }
+        return std::fabs(area - double(x1 - x0) * double(y1 - y0)) <= 1e-3;
+    }
+
+    // The layers kept on image meeting rect are all fills (none, or a chain that the brightness, or another fill, may
+    // be kept after)
+    bool only_fills(const Image *image, const VkRect2D &rect) const {
+        for (const Layer &l : layers_) {
+            if (l.image.get() == image && rects_meet(l.rect, rect) && !l.fill) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // What the picture of shown draws of the layers kept there, in order, as one draw: the brightness alone, or the
+    // fills kept before it applied to what it reads (each covering the brightness's rectangle, which covers the
+    // picture; the brightness lean); else nothing (the layers drawn into the target first)
+    bool picture_draws(const std::vector<Layer> &layers, const VkRect2D &shown) const {
+        if (layers.empty() || layers.back().fill) {
+            return false;
+        }
+        if (layers.size() == 1) {
+            return true;
+        }
+        const Layer &top = layers.back();
+        if (!lean_layer(top) || layers.size() - 1 > fills_at_most || !rect_contains(top.rect, shown)) {
+            return false;
+        }
+        for (size_t i = 0; i + 1 < layers.size(); i++) {
+            if (!layers[i].fill || !rect_contains(layers[i].rect, top.rect)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    static constexpr size_t fills_at_most = 8;
+
+    // (a layer reading the frame, reads_own_frame's) Whether every texel it reads is a pixel of the target inside
+    // `inside` (its own rectangle, which nothing changes while it is kept: what is drawn there draws it first), and no
+    // texel past what the texture's copy would hold or wrapped. Each sprite's pixels as Vulkan covers them (their
+    // middles, the corners half a GS pixel moved: gs_to_clip), each read nearest at UV there (linear across the
+    // sprite: the GPU's interpolation off by a little, then rounded to 1/256 as pcr_prim.h's texture_uv does), at the
+    // surface's scale.
+    bool reads_inside(const Batch &b, const Placed &placed, const VkRect2D &inside) const {
+        const DrawState &s = b.state;
+        if (bits(s.clamp, 0, 2) >= 2 || bits(s.clamp, 2, 2) >= 2 || b.vertices.size() % 6 != 0 ||
+            inside.extent.width == 0 || inside.extent.height == 0) {
+            return false;
+        }
+        const double size[2] = {double(std::min(1u << std::min(bits(s.tex0, 26, 4), 10u), b.texture.cols)),
+                                double(std::min(1u << std::min(bits(s.tex0, 30, 4), 10u), b.texture.rows))};
+        const double scale[2] = {double(scale_[0]), double(scale_[1])};
+        const double place[2] = {double(placed.x), double(placed.y)};
+        const int64_t lo_px[2] = {inside.offset.x, inside.offset.y};
+        const int64_t hi_px[2] = {int64_t(inside.offset.x) + inside.extent.width,
+                                  int64_t(inside.offset.y) + inside.extent.height};
+        const int64_t sc_lo[2] = {int64_t((bits(s.scissor, 0, 11) + placed.x) * scale_[0]),
+                                  int64_t((bits(s.scissor, 32, 11) + placed.y) * scale_[1])};
+        const int64_t sc_hi[2] = {int64_t((bits(s.scissor, 16, 11) + 1 + placed.x) * scale_[0]) - 1,
+                                  int64_t((bits(s.scissor, 48, 11) + 1 + placed.y) * scale_[1]) - 1};
+        const double slack = 1.0 / 1024.0;
+        for (size_t i = 0; i < b.vertices.size(); i += 6) {
+            const Vertex &a = b.vertices[i], &c = b.vertices[i + 4]; // (add_primitive's sprite: va, c, d, c, vb, d)
+            if (a.q != 1.0f || c.q != 1.0f) {
+                return false;
+            }
+            const double p0[2] = {a.x, a.y}, p1[2] = {c.x, c.y}, t0[2] = {a.s, a.t}, t1[2] = {c.s, c.t};
+            int64_t first[2], last[2];
+            double read_lo[2], read_hi[2];
+            bool empty = false;
+            for (int k = 0; k < 2 && !empty; k++) {
+                double e0 = std::min(p0[k], p1[k]), e1 = std::max(p0[k], p1[k]);
+                first[k] = std::max(int64_t(std::ceil((e0 + place[k]) * scale[k])), sc_lo[k]);
+                last[k] = std::min(int64_t(std::ceil((e1 + place[k]) * scale[k])) - 1, sc_hi[k]);
+                if (e1 <= e0 || last[k] < first[k]) {
+                    empty = true;
+                    break;
+                }
+                auto at = [&](int64_t px) {
+                    double x = double(px) / scale[k] - place[k];
+                    return t0[k] + (x - p0[k]) * (t1[k] - t0[k]) / (p1[k] - p0[k]);
+                };
+                // (the GPU's interpolation a little either side, then rounded to 1/256 as the shader does)
+                double ua = at(first[k]), ub = at(last[k]);
+                read_lo[k] = std::round((std::min(ua, ub) - slack) * 256.0) / 256.0;
+                read_hi[k] = std::round((std::max(ua, ub) + slack) * 256.0) / 256.0;
+            }
+            if (empty) {
+                continue;
+            }
+            for (int k = 0; k < 2; k++) {
+                if (read_lo[k] < 0.0 || read_hi[k] >= size[k]) {
+                    return false;
+                }
+                int64_t h0 = int64_t(std::floor(read_lo[k] * scale[k])) + int64_t(place[k] * scale[k]);
+                int64_t h1 = int64_t(std::floor(read_hi[k] * scale[k])) + int64_t(place[k] * scale[k]);
+                if (h0 < lo_px[k] || h1 >= hi_px[k]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // A layer kept (not drawn): the clears held back where it draws drawn first, the layers kept before it kept
+    void keep_layer(const Batch &b, const Target &colour, const Placed &placed, Material &&m, Draw &&d,
+                    const VkRect2D &rect, bool fill = false) {
+        if (rect.extent.width == 0 || rect.extent.height == 0) {
+            return;
+        }
+        // (a layer kept there before is drawn: this one reads it; but fills kept before a fill or the brightness stay
+        // kept, for the picture to draw them as one)
+        bool chain = fold_fills_ && only_fills(colour.image.get(), rect);
+        touch(colour.image, false, rect, !chain);
+        Layer l;
+        l.image = colour.image;
+        l.rect = rect;
+        l.serial = ++layer_serial_;
+        m.ztest = false; // (ZTST always, no Z written: the same pixels with no depth attached)
+        if (b.texture.ok && b.texture.src == SRC_SURFACE) {
+            l.self_read = true;
+            l.state = b.state;
+            l.cols = b.texture.cols;
+            l.rows = b.texture.rows;
+            m.push.src_offset[0] = int32_t(placed.x);
+            m.push.src_offset[1] = int32_t(placed.y);
+        }
+        l.place[0] = int32_t(placed.x);
+        l.place[1] = int32_t(placed.y);
+        if (fill) {
+            const DrawState &s = b.state;
+            const Vertex &v = b.vertices[0];
+            bool alpha = (m.passes[0].mask & 0x8) && (s.frame >> 56) == 0;
+            l.fill = true;
+            l.fill_word = {m.push.alpha, uint32_t(v.rgba[0]) | uint32_t(v.rgba[1]) << 8 | uint32_t(v.rgba[2]) << 16 |
+                                             uint32_t(v.rgba[3]) << 24,
+                           (bits(s.prim, 6, 1) ? 1u : 0u) | (alpha ? 2u : 0u) | (bits(s.fba, 0, 1) ? 4u : 0u) |
+                               (fill_gs_ ? 8u : 0u)};
+            counts_.fills_kept++;
+        }
+        if (m.clut != no_clut) {
+            l.has_clut = true;
+            l.clut = scene_.cluts[m.clut];
+            m.clut = no_clut;
+        }
+        for (uint32_t i = 0; i < m.pass_count; i++) {
+            if ((m.passes[i].mask & 0x8) && colour.image.get() == alpha_clear_) {
+                alpha_clear_ = nullptr;
+            }
+        }
+        l.vertices = b.vertices;
+        l.m = std::move(m);
+        l.d = std::move(d);
+        layers_.push_back(std::move(l));
+        counts_.layers_kept++;
+    }
+
+    // The layer kept on image that meets shown can be drawn by the picture: inside it
+    bool composable(const Image *image, const VkRect2D &shown) const {
+        bool any = false;
+        for (const Layer &l : layers_) {
+            if (l.image.get() != image || !rects_meet(l.rect, shown)) {
+                continue;
+            }
+            if (!rect_contains(shown, l.rect)) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+
+    // The pixels a layer of sprites surely draws (its sprites tiling a rectangle, a pixel in from its edges for the
+    // GPU's rounding), in the target; empty where not known
+    VkRect2D inside_of(const Layer &l) const {
+        const VkRect2D none = {{0, 0}, {0, 0}};
+        const std::vector<Vertex> &v = l.vertices;
+        if (v.empty() || v.size() % 6 != 0) {
+            return none;
+        }
+        float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+        double area = 0;
+        std::vector<std::array<float, 4>> boxes;
+        for (size_t i = 0; i < v.size(); i += 6) {
+            // (add_primitive's sprite: va, c, d, c, vb, d)
+            std::array<float, 4> r = {std::min(v[i].x, v[i + 4].x), std::min(v[i].y, v[i + 4].y),
+                                      std::max(v[i].x, v[i + 4].x), std::max(v[i].y, v[i + 4].y)};
+            for (const auto &o : boxes) {
+                if (r[0] < o[2] && o[0] < r[2] && r[1] < o[3] && o[1] < r[3]) {
+                    return none;
+                }
+            }
+            boxes.push_back(r);
+            area += double(r[2] - r[0]) * double(r[3] - r[1]);
+            x0 = std::min(x0, r[0]);
+            y0 = std::min(y0, r[1]);
+            x1 = std::max(x1, r[2]);
+            y1 = std::max(y1, r[3]);
+        }
+        if (std::fabs(area - double(x1 - x0) * double(y1 - y0)) > 1e-3) {
+            return none;
+        }
+        float sx = float(scale_[0]), sy = float(scale_[1]);
+        int32_t px0 = int32_t(std::ceil((x0 + float(l.place[0])) * sx)) + 1;
+        int32_t py0 = int32_t(std::ceil((y0 + float(l.place[1])) * sy)) + 1;
+        int32_t px1 = int32_t(std::ceil((x1 + float(l.place[0])) * sx)) - 1;
+        int32_t py1 = int32_t(std::ceil((y1 + float(l.place[1])) * sy)) - 1;
+        const VkRect2D &sc = l.d.scissor;
+        px0 = std::max(px0, sc.offset.x);
+        py0 = std::max(py0, sc.offset.y);
+        px1 = std::min(px1, sc.offset.x + int32_t(sc.extent.width));
+        py1 = std::min(py1, sc.offset.y + int32_t(sc.extent.height));
+        if (px1 <= px0 || py1 <= py0) {
+            return none;
+        }
+        return {{px0, py0}, {uint32_t(px1 - px0), uint32_t(py1 - py0)}};
+    }
+
+    // A layer's draw into an image that holds rect of its target from its top left (the picture, the history): its
+    // viewport and scissor moved, the target read where the frame is
+    static Draw moved_draw(const Layer &l, const VkRect2D &rect, VkExtent2D size) {
+        Draw d = l.d;
+        d.viewport.x -= float(rect.offset.x);
+        d.viewport.y -= float(rect.offset.y);
+        int32_t a0 = std::max(d.scissor.offset.x - rect.offset.x, 0);
+        int32_t b0 = std::max(d.scissor.offset.y - rect.offset.y, 0);
+        int32_t a1 = std::min(d.scissor.offset.x + int32_t(d.scissor.extent.width) - rect.offset.x, int32_t(size.width));
+        int32_t b1 = std::min(d.scissor.offset.y + int32_t(d.scissor.extent.height) - rect.offset.y,
+                              int32_t(size.height));
+        d.scissor = a1 > a0 && b1 > b0 ? VkRect2D{{a0, b0}, {uint32_t(a1 - a0), uint32_t(b1 - b0)}}
+                                       : VkRect2D{{0, 0}, {0, 0}};
+        return d;
+    }
+
+    // Copies of rect of the target into dst at its top left, but where inside (in the target) is: the bands around it
+    template <typename CopyFn>
+    static void copy_around(const VkRect2D &rect, const VkRect2D &inside, CopyFn &&copy) {
+        const int32_t w = int32_t(rect.extent.width), h = int32_t(rect.extent.height);
+        int32_t ix0 = std::clamp(inside.offset.x - rect.offset.x, 0, w);
+        int32_t iy0 = std::clamp(inside.offset.y - rect.offset.y, 0, h);
+        int32_t ix1 = std::clamp(inside.offset.x + int32_t(inside.extent.width) - rect.offset.x, ix0, w);
+        int32_t iy1 = std::clamp(inside.offset.y + int32_t(inside.extent.height) - rect.offset.y, iy0, h);
+        if (ix1 <= ix0 || iy1 <= iy0) {
+            copy(0, 0, w, h);
+            return;
+        }
+        copy(0, 0, w, iy0);
+        copy(0, iy1, w, h - iy1);
+        copy(0, iy0, ix0, iy1 - iy0);
+        copy(ix1, iy0, w - ix1, iy1 - iy0);
+    }
+
+    // A kept layer scn_picture_layer.frag draws as pcr_prim.frag would: the frame read at its own place (UV, nearest,
+    // no wrap: reads_inside's), every pixel (no alpha test), no fog, no blend of any kind
+    bool lean_layer(const Layer &l) const {
+        const Material &m = l.m;
+        const uint32_t not_lean = F_FGE | F_SHADER_BLEND | F_DATE | F_SMOOTH_2D | F_SURFACE_CT16 | F_PREMUL |
+                                  F_ALPHA_FACTOR | F_DECAL | F_EXACT_Z;
+        return lean_layers_ && l.self_read && m.program == Program::gif && m.pass_count == 1 &&
+               m.passes[0].mode == 0 && !m.blend.enable && (m.push.flags & F_TME) && (m.push.flags & F_FST) &&
+               ((m.push.flags >> F_SRC_SHIFT) & 7u) == SRC_SURFACE && !(m.push.flags & not_lean);
+    }
+    const bool lean_layers_ = !(getenv("KF4_SCN_LEAN_LAYER") && strcmp(getenv("KF4_SCN_LEAN_LAYER"), "0") == 0);
+
+    // The picture: shown (the target's pixels) into dst, the same size, with the layer kept there drawn over it (the
+    // final pass): the target copied where the layer does not surely draw, then the layer, reading the target
+    void compose(CommandBuffer &out, const Target &s, const VkRect2D &shown, const Image &dst,
+                 const std::vector<Layer> &layers) {
+        Scene sc;
+        Image &dst_image = const_cast<Image &>(dst);
+        dst_image.add_reference(); // (the shell's picture: held by the pass and ops below while they are recorded)
+        ImageHandle to(&dst_image);
+        const VkExtent2D size = {dst.get_width(), dst.get_height()};
+        // (picture_draws': the brightness alone, or after fills it reads through)
+        const Layer &l = layers.back();
+        const Material &lm = l.m;
+        VkRect2D inside = {{0, 0}, {0, 0}};
+        if (lm.pass_count == 1 && lm.passes[0].mode == 0 && lm.passes[0].mask == 0xF && !lm.blend.enable) {
+            inside = inside_of(l);
+        }
+        std::vector<VkRect2D> bands;
+        copy_around(shown, inside, [&](int32_t x, int32_t y, int32_t w, int32_t h) {
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            bands.push_back({{x, y}, {uint32_t(w), uint32_t(h)}});
+            Op op;
+            op.kind = Op::Kind::copy;
+            op.dst = to;
+            op.src = s.image;
+            op.dst_at = {x, y, 0};
+            op.src_at = {shown.offset.x + x, shown.offset.y + y, 0};
+            op.extent = {uint32_t(w), uint32_t(h), 1};
+            op.work = GpuWork::picture;
+            sc.steps.push_back({Step::Kind::op, uint32_t(sc.ops.size())});
+            sc.ops.push_back(std::move(op));
+        });
+        Pass p;
+        p.colour = to;
+        p.picture = true;
+        // (the fills over the target's pixels copied, where the brightness may not draw: its last row is not drawn, and
+        // shows the frame with the fills; their own draws, the GPU's blend, cut to the bands)
+        for (size_t i = 0; i + 1 < layers.size(); i++) {
+            const Layer &f = layers[i];
+            for (const VkRect2D &band : bands) {
+                Draw fd = moved_draw(f, shown, size);
+                int32_t x0 = std::max(fd.scissor.offset.x, band.offset.x);
+                int32_t y0 = std::max(fd.scissor.offset.y, band.offset.y);
+                int32_t x1 = std::min(fd.scissor.offset.x + int32_t(fd.scissor.extent.width),
+                                      band.offset.x + int32_t(band.extent.width));
+                int32_t y1 = std::min(fd.scissor.offset.y + int32_t(fd.scissor.extent.height),
+                                      band.offset.y + int32_t(band.extent.height));
+                if (x1 <= x0 || y1 <= y0) {
+                    continue;
+                }
+                fd.scissor = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+                fd.material = uint32_t(sc.materials.size());
+                sc.materials.push_back(f.m);
+                fd.first_vertex = uint32_t(sc.vertices.size());
+                fd.vertex_count = uint32_t(f.vertices.size());
+                sc.vertices.insert(sc.vertices.end(), f.vertices.begin(), f.vertices.end());
+                sc.draws.push_back(std::move(fd));
+                p.draw_count++;
+            }
+        }
+        Draw d = moved_draw(l, shown, size);
+        if (d.scissor.extent.width != 0) {
+            d.material = uint32_t(sc.materials.size());
+            sc.materials.push_back(l.m);
+            Material &m = sc.materials.back();
+            m.picture_layer = lean_layer(l);
+            if (l.has_clut) {
+                m.clut = uint32_t(sc.cluts.size());
+                sc.cluts.push_back(l.clut);
+            } else if (layers.size() > 1) {
+                // (the fills, in scn_picture_layer.frag's u_fills where a CLUT would be: their count, then each's
+                // words, a uvec4 each)
+                std::array<uint32_t, 256> fills{};
+                fills[0] = uint32_t(layers.size() - 1);
+                for (size_t i = 0; i + 1 < layers.size(); i++) {
+                    memcpy(&fills[4 * (i + 1)], layers[i].fill_word.data(), sizeof(layers[i].fill_word));
+                }
+                m.clut = uint32_t(sc.cluts.size());
+                sc.cluts.push_back(fills);
+                counts_.fills_composed += layers.size() - 1;
+            }
+            d.first_vertex = uint32_t(sc.vertices.size());
+            d.vertex_count = uint32_t(l.vertices.size());
+            sc.vertices.insert(sc.vertices.end(), l.vertices.begin(), l.vertices.end());
+            sc.draws.push_back(std::move(d));
+            p.draw_count++;
+        }
+        sc.steps.push_back({Step::Kind::pass, uint32_t(sc.passes.size())});
+        sc.passes.push_back(std::move(p));
+        drawer_.record(sc, out);
+        counts_.pictures_composed++;
+    }
+
+    // The history of the layer kept on from's pixels in rect, if one is: an image of the layer's rectangle, the frame
+    // with the layer drawn (made now, a step of the scene, unless it is the layer's already). Null where none is kept.
+    const Layer *history_for(const Target &from, const VkRect2D &rect) {
+        const Layer *kept = nullptr;
+        for (const Layer &l : layers_) {
+            if (l.image.get() == from.image.get() && rects_meet(l.rect, rect)) {
+                if (kept) {
+                    return nullptr;
+                }
+                kept = &l;
+            }
+        }
+        if (!kept || (history_.image && history_.layer == kept->serial)) {
+            return kept;
+        }
+        const Layer &l = *kept;
+        if (!history_.image || history_.image->get_width() != l.rect.extent.width ||
+            history_.image->get_height() != l.rect.extent.height) {
+            ImageCreateInfo info = ImageCreateInfo::render_target(l.rect.extent.width, l.rect.extent.height,
+                                                                  colour_format);
+            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            info.layout = ImageLayout::General;
+            info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+            history_.image = device_.create_image(info, nullptr);
+            if (!history_.image) {
+                return nullptr;
+            }
+        }
+        history_.layer = l.serial;
+        // (the frame's own pixels, its clears held back drawn: not the layer, which is drawn into the history)
+        touch(from.image, false, l.rect, false);
+        copy_around(l.rect, inside_of(l), [&](int32_t x, int32_t y, int32_t w, int32_t h) {
+            if (w > 0 && h > 0) {
+                Op op;
+                op.kind = Op::Kind::copy;
+                op.dst = history_.image;
+                op.src = from.image;
+                op.dst_at = {x, y, 0};
+                op.src_at = {l.rect.offset.x + x, l.rect.offset.y + y, 0};
+                op.extent = {uint32_t(w), uint32_t(h), 1};
+                op.work = GpuWork::texture_copy;
+                push_op(std::move(op));
+            }
+        });
+        Draw d = moved_draw(l, l.rect, {l.rect.extent.width, l.rect.extent.height});
+        d.material = uint32_t(scene_.materials.size());
+        scene_.materials.push_back(l.m);
+        if (l.has_clut) {
+            scene_.materials.back().clut = clut_index(l.clut);
+        }
+        d.first_vertex = uint32_t(scene_.vertices.size());
+        d.vertex_count = uint32_t(l.vertices.size());
+        scene_.vertices.insert(scene_.vertices.end(), l.vertices.begin(), l.vertices.end());
+        end_shadow_run();
+        pass_.open = false;
+        new_pass(history_.image, {}, PassKind::plain, {}, whole_area);
+        add_draw(std::move(d));
+        pass_.open = false;
+        counts_.histories_made++;
+        return kept;
+    }
+
+    // ---- The alpha's reset folded into the frame's clear (slice 2) ----
+    // GsDraw_SetScreenAlpha(0) writes the frame's alpha alone, everywhere. Where nothing read the frame's alpha since
+    // its clear (the census: alpha_watches_), and the clear, the reset and every draw between write the frame's
+    // rectangle alone, the clear writes the reset's alpha, the draws between write no alpha, and the reset is not
+    // drawn: the alpha is then the reset's everywhere, as the GS has it. Else the reset is drawn.
+    struct AlphaFold {
+        bool valid = false;
+        const Image *image = nullptr;
+        uint32_t y = 0;
+        VkRect2D rect{};
+        uint64_t scene = 0; // (counts_.scenes when the clear was met: the reset must be in the same scene)
+        uint64_t clear = 0; // the clear's id (pend_clear's)
+        enum class Where : uint8_t { held, pass, draw, op } where = Where::held;
+        uint32_t index = 0;
+        uint32_t first_pass = 0, first_draw = 0, first_material = 0;
+    };
+    // (each frame by its image and its row in it, as the census's watches: a reflection's clear between the frame's
+    // clear and its reset is the reflection's)
+    std::vector<AlphaFold> folds_;
+    const bool fold_alpha_ = !(getenv("KF4_SCN_FOLD_ALPHA") && strcmp(getenv("KF4_SCN_FOLD_ALPHA"), "0") == 0);
+
+    void fold_cleared(uint64_t id, AlphaFold::Where where, uint32_t index) {
+        for (AlphaFold &f : folds_) {
+            if (f.valid && f.clear == id) {
+                f.where = where;
+                f.index = index;
+            }
+        }
+    }
+
+    // The reset (is_alpha_reset's) folded into the frame's clear, if it can be: true when it need not be drawn
+    bool fold_alpha_reset(const Batch &b, const Target &colour, const Placed &placed, const VkRect2D &rect,
+                          const Material &m) {
+        auto found = std::find_if(folds_.begin(), folds_.end(), [&](const AlphaFold &f) {
+            return f.image == colour.image.get() && f.y == placed.y;
+        });
+        if (found == folds_.end()) {
+            return false;
+        }
+        AlphaFold &f = *found;
+        if (!fold_alpha_ || !f.valid || f.scene != counts_.scenes || memcmp(&f.rect, &rect, sizeof(rect)) != 0 || m.pass_count != 1 ||
+            m.passes[0].mask != 0x8 || m.blend.enable) {
+            return false;
+        }
+        auto w = std::find_if(alpha_watches_.begin(), alpha_watches_.end(),
+                              [&](const AlphaWatch &x) { return x.image == colour.image.get() && x.y == placed.y; });
+        if (w == alpha_watches_.end() || w->read) {
+            return false;
+        }
+        const uint8_t a = b.vertices[0].rgba[3];
+        for (const Vertex &v : b.vertices) {
+            if (v.rgba[3] != a) {
+                return false;
+            }
+        }
+        // every draw into the frame since its clear: inside the rectangle, its material its own
+        std::vector<uint32_t> patch;
+        for (uint32_t pi = f.first_pass; pi < scene_.passes.size(); pi++) {
+            const Pass &p = scene_.passes[pi];
+            if (p.colour.get() != f.image) {
+                continue;
+            }
+            bool is_clear = f.where == AlphaFold::Where::pass && f.index == pi;
+            if (p.clear_colour && !is_clear) {
+                return false;
+            }
+            for (uint32_t k = 0; k < p.draw_count; k++) {
+                uint32_t di = p.first_draw + k;
+                const Draw &d = scene_.draws[di];
+                if (di < f.first_draw) {
+                    continue;
+                }
+                if (d.clear) {
+                    bool colour_cleared = false;
+                    for (uint32_t i = 0; i < d.clear_count; i++) {
+                        colour_cleared |= (d.clear_att[i].aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
+                    }
+                    if (colour_cleared && !(f.where == AlphaFold::Where::draw && f.index == di)) {
+                        return false;
+                    }
+                    continue;
+                }
+                const Material &dm = scene_.materials[d.material];
+                bool alpha = false;
+                for (uint32_t i = 0; i < dm.pass_count; i++) {
+                    alpha |= (dm.passes[i].mask & 0x8) != 0;
+                }
+                if (!alpha) {
+                    continue;
+                }
+                if (!rects_meet(f.rect, d.scissor)) {
+                    continue; // (the other frame's rows: its alpha is not the reset's)
+                }
+                if (d.material < f.first_material || !rect_contains(f.rect, d.scissor)) {
+                    return false;
+                }
+                patch.push_back(d.material);
+            }
+        }
+        // the clear: its alpha the reset's
+        float alpha = float(a) / 255.0f;
+        switch (f.where) {
+        case AlphaFold::Where::held: {
+            auto p = std::find_if(pending_.begin(), pending_.end(), [&](const PendingClear &x) { return x.id == f.clear; });
+            if (p == pending_.end()) {
+                return false;
+            }
+            p->value.color.float32[3] = alpha;
+            break;
+        }
+        case AlphaFold::Where::pass:
+            scene_.passes[f.index].colour_value.float32[3] = alpha;
+            break;
+        case AlphaFold::Where::draw:
+            for (uint32_t i = 0; i < scene_.draws[f.index].clear_count; i++) {
+                VkClearAttachment &att = scene_.draws[f.index].clear_att[i];
+                if (att.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
+                    att.clearValue.color.float32[3] = alpha;
+                }
+            }
+            break;
+        case AlphaFold::Where::op:
+            scene_.ops[f.index].value.color.float32[3] = alpha;
+            break;
+        }
+        for (uint32_t mi : patch) {
+            Material &pm = scene_.materials[mi];
+            for (uint32_t i = 0; i < pm.pass_count; i++) {
+                pm.passes[i].mask &= ~0x8u;
+            }
+        }
+        f.valid = false;
+        counts_.alpha_resets_folded++;
+        return true;
+    }
+
     // ---- DATE's shadows by the first-draw image ----
     // The run of shadows drawn into the first-draw image since the last darkening, and the numbers given out since the
     // target's alpha was reset (one image a frame, cleared by the run after the reset)
     struct ShadowRun {
         ImageHandle colour, depth;
         std::vector<uint32_t> draws; // (scene_.draws' of the open run)
-        uint32_t next = 0;           // the next triangle's number
-        bool cleared = false;        // the first-draw image cleared since the reset
+        uint32_t next = 0;           // the next triangle's number since the reset
+        bool cleared = false;        // the reset's generation begun (the first-draw image cleared if it had to be)
+        uint32_t base = 0;           // the generation's first number (first_shadow_bits)
     } run_;
     ImageHandle first_image_;
+    uint32_t first_generation_ = first_generations; // (the image's last generation; first_generations: to be cleared)
+    // (developers', KF4_SCN_FIRST_KEEP=0) the first-draw image cleared every frame
+    const bool first_kept_ = !(getenv("KF4_SCN_FIRST_KEEP") && strcmp(getenv("KF4_SCN_FIRST_KEEP"), "0") == 0);
 
     // The run's shadows drawn where their triangle came first, darkening the target
     void end_shadow_run() {
@@ -650,6 +1759,7 @@ private:
         std::vector<uint32_t> draws;
         draws.swap(run_.draws);
         pass_.open = false;
+        // (what was held back for the frame was drawn before the shadows: build_draw's touch)
         use_pass(run_.colour, run_.depth, PassKind::darken, first_image_);
         for (uint32_t i : draws) {
             Draw d = scene_.draws[i];
@@ -675,11 +1785,6 @@ private:
         }
         return image;
     }
-
-    struct Placed {
-        Target *target = nullptr;
-        uint32_t x = 0, y = 0;
-    };
 
     // The colour target a frame at this base page and width draws into, height rows of it (pcr_canvas.cpp's
     // colour_surface: the same rules, as ops of the scene)
@@ -782,6 +1887,7 @@ private:
                 if ((*it)->image.get() == alpha_clear_) {
                     alpha_clear_ = nullptr;
                 }
+                forget_held((*it)->image.get());
                 it = list.erase(it);
             } else {
                 ++it;
@@ -801,6 +1907,7 @@ private:
         if (s.image.get() == alpha_clear_) {
             alpha_clear_ = bigger.get();
         }
+        forget_held(s.image.get());
         s.image = bigger;
         s.cleared = false;
         s.height = height;
@@ -833,6 +1940,7 @@ private:
             Target *o = it->get();
             if (o != &grown && o->base_page >= old_end && o->base_page < end) {
                 forget_alpha(o->image.get());
+                forget_held(o->image.get());
                 it = colour_.erase(it);
             } else {
                 ++it;
@@ -982,6 +2090,8 @@ private:
     // A rectangle of a colour target's GS pixels (the first of each at the scale) read from the GPU, as RGBA8. Draws the
     // scene so far and waits for the GPU.
     bool read_pixels(Target &from, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint32_t> &out) {
+        touch(from.image, false,
+              {{int32_t(x * scale_[0]), int32_t(y * scale_[1])}, {w * scale_[0], h * scale_[1]}});
         close_scene(false);
         ImageCreateInfo info = ImageCreateInfo::render_target(w, h, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -1067,6 +2177,7 @@ private:
                     continue;
                 }
                 if (s->depth) {
+                    forget_held(s->image.get());
                     op_clear(image, true, 0.0f);
                 } else {
                     op_blit(image, {0, 0, 0}, {image->get_width(), image->get_height(), 1}, s->image, {0, 0, 0},
@@ -1076,6 +2187,7 @@ private:
             }
         }
         first_image_.reset();
+        first_generation_ = first_generations;
         last_native_ = {};
     }
 
@@ -1138,13 +2250,7 @@ private:
         BoundTexture b;
         TextureRegs regs = {s.tex0, s.tex1, s.miptbp1, s.miptbp2, s.clamp};
         uint32_t psm = bits(s.tex0, 20, 6);
-        uint32_t tw = 1u << std::min(bits(s.tex0, 26, 4), 10u), th = 1u << std::min(bits(s.tex0, 30, 4), 10u);
-        if (bits(s.clamp, 0, 2) == 0 || bits(s.clamp, 0, 2) == 3) {
-            cols = tw;
-        }
-        if (bits(s.clamp, 2, 2) == 0 || bits(s.clamp, 2, 2) == 3) {
-            rows = th;
-        }
+        texture_extent(s, cols, rows);
         TextureAnswer a = store_.resolve(regs, cols, rows);
         b.cols = cols;
         b.rows = rows;
@@ -1396,8 +2502,37 @@ private:
             clear.work = GpuWork::texture_copy;
             add_op(std::move(clear));
         }
-        op_copy(copy, {0, 0, 0}, from->image, {int32_t(ox * scale_[0]), int32_t(oy * scale_[1]), 0},
-                {w * scale_[0], h * scale_[1], 1}, false, GpuWork::texture_copy);
+        const VkRect2D region = {{int32_t(ox * scale_[0]), int32_t(oy * scale_[1])}, {pw, ph}};
+        if (const Layer *kept = history_for(*from, region)) {
+            // (a frame whose brightness is kept: the target's pixels, its clears held back drawn but not the layer,
+            // and where the layer is, the history's)
+            touch(from->image, false, region, false);
+            Op op;
+            op.kind = Op::Kind::copy;
+            op.dst = copy;
+            op.src = from->image;
+            op.src_at = {region.offset.x, region.offset.y, 0};
+            op.extent = {pw, ph, 1};
+            op.work = GpuWork::texture_copy;
+            push_op(std::move(op));
+            int32_t x0 = std::max(kept->rect.offset.x, region.offset.x);
+            int32_t y0 = std::max(kept->rect.offset.y, region.offset.y);
+            int32_t x1 = std::min(kept->rect.offset.x + int32_t(kept->rect.extent.width), region.offset.x + int32_t(pw));
+            int32_t y1 = std::min(kept->rect.offset.y + int32_t(kept->rect.extent.height), region.offset.y + int32_t(ph));
+            Op from_history;
+            from_history.kind = Op::Kind::copy;
+            from_history.dst = copy;
+            from_history.src = history_.image;
+            from_history.dst_at = {x0 - region.offset.x, y0 - region.offset.y, 0};
+            from_history.src_at = {x0 - kept->rect.offset.x, y0 - kept->rect.offset.y, 0};
+            from_history.extent = {uint32_t(x1 - x0), uint32_t(y1 - y0), 1};
+            from_history.work = GpuWork::texture_copy;
+            push_op(std::move(from_history));
+            counts_.histories_read++;
+        } else {
+            op_copy(copy, {0, 0, 0}, from->image, {region.offset.x, region.offset.y, 0}, {pw, ph, 1}, false,
+                    GpuWork::texture_copy);
+        }
         b.image = copy;
         b.src = SRC_SURFACE;
         b.cols = cols;
@@ -1434,9 +2569,38 @@ private:
         if (bits(s.prim, 4, 1)) {
             uint32_t cols = 0, rows = 0;
             texels_read(p, s.tex0, cols, rows);
-            batch_.texture = bind_texture(s, cols, rows);
+            if (reads_own_frame(s)) {
+                // (the frame read at its own pixels, the brightness: bound in build_draw, unless it is folded. Nothing
+                // comes between this and build_draw but the batch's primitives, so the copy made there is this one's.)
+                texture_extent(s, cols, rows);
+                batch_.texture_later = true;
+                batch_.texture.cols = cols;
+                batch_.texture.rows = rows;
+            } else {
+                batch_.texture = bind_texture(s, cols, rows);
+            }
         }
         batch_open_ = true;
+    }
+
+    // A texture's texels read as bind_texture asks for them: the whole of an axis that repeats
+    static void texture_extent(const DrawState &s, uint32_t &cols, uint32_t &rows) {
+        uint32_t tw = 1u << std::min(bits(s.tex0, 26, 4), 10u), th = 1u << std::min(bits(s.tex0, 30, 4), 10u);
+        if (bits(s.clamp, 0, 2) == 0 || bits(s.clamp, 0, 2) == 3) {
+            cols = tw;
+        }
+        if (bits(s.clamp, 2, 2) == 0 || bits(s.clamp, 2, 2) == 3) {
+            rows = th;
+        }
+    }
+
+    // A GIF batch whose texture may be the frame it draws into, read at the frame's own place: its base page and width
+    // the frame's, 32-bit, UV (FST), read nearest (each texel at most the pixel it is drawn at: build_draw checks)
+    bool reads_own_frame(const DrawState &s) const {
+        uint32_t fpsm = bits(s.frame, 24, 6), tpsm = bits(s.tex0, 20, 6);
+        return fold_layers_ && bits(s.prim, 8, 1) && bits(s.tex0, 0, 14) == bits(s.frame, 0, 9) * 32 &&
+               bits(s.tex0, 14, 6) == bits(s.frame, 16, 6) && (fpsm == GSN_PSMCT32 || fpsm == GSN_PSMCT24) &&
+               (tpsm == GSN_PSMCT32 || tpsm == GSN_PSMCT24) && bits(s.tex1, 5, 1) == 0 && bits(s.tex1, 6, 3) == 0;
     }
 
     void flush_batch() {
@@ -1679,7 +2843,9 @@ private:
             if (o->cleared && o->cleared_z == std::min(z, zmax)) {
                 continue;
             }
-            op_clear(o->image, true, depth_of(z, o->psm));
+            VkClearValue value{};
+            value.depthStencil.depth = depth_of(z, o->psm);
+            pend_clear(o->image, true, whole_of(*o->image), value);
             o->cleared = true;
             o->cleared_z = std::min(z, zmax);
             counts_.depth_aliases_cleared++;
@@ -1905,6 +3071,28 @@ private:
             depth->cleared = false;
         }
         PixelBox box = {b.x0, b.y0, b.x1, b.y1};
+        // A layer of the frame's end (slice 2): kept and drawn by the picture, not into the target
+        bool z_written = false;
+        for (uint32_t i = 0; i < pass_count; i++) {
+            z_written |= passes[i].z && zwrite;
+        }
+        bool layer = is_layer(b, *colour, placed, z_written, zte, ztst, date);
+        if (b.texture_later) {
+            if (layer) {
+                // (the frame itself, read at each pixel's own place: see the picture's compose)
+                uint32_t cols = b.texture.cols, rows = b.texture.rows;
+                b.texture = BoundTexture();
+                b.texture.image = colour->image;
+                b.texture.src = SRC_SURFACE;
+                b.texture.cols = cols;
+                b.texture.rows = rows;
+                b.texture.ok = true;
+                alpha_read(colour->image.get());
+            } else {
+                b.texture = bind_texture(s, b.texture.cols, b.texture.rows);
+            }
+            b.texture_later = false;
+        }
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
         if (!blend.supported && !b.shader_blend) {
             counts_.unsupported_blends++;
@@ -1935,7 +3123,7 @@ private:
         bool shadow = shadow_candidate && !b.shader_blend && pass_count == 1 && passes[0].mode == 0 &&
                       passes[0].alpha && fba && !datm && alpha_clear_ == colour->image.get() &&
                       alpha_clear_y_ == placed.y &&
-                      run_.next + b.nb.triangle_count <= (1u << 24);
+                      run_.next + b.nb.triangle_count <= (1u << first_shadow_bits);
         if (shadow_candidate && !shadow) {
             end_shadow_run();
         }
@@ -2075,43 +3263,87 @@ private:
             d.kind = b.nb.kind;
             memcpy(d.id, b.nb.id, sizeof(d.id));
         }
-        // a clear drawn as a rectangle: cleared (the pass's load op where it is the pass's first and covers it)
+        // a clear drawn as a rectangle: held back (pend_clear) until what it cleared is used
         VkClearRect clear_rect;
         bool z_only = false;
         bool clear = !b.native && as_clear(b, placed, *colour, zte, zwrite, ztst, date, m.passes[0], passes[0].rgb,
                                            passes[0].alpha, pass_count, scissor_px, clear_rect, z_only);
         if (clear) {
             const Vertex &v0 = b.vertices[0];
-            uint32_t count = 0;
+            uint64_t colour_clear = 0;
+            uint32_t first_pass = pass_.open ? pass_.index : uint32_t(scene_.passes.size());
             if (!z_only) {
-                VkClearAttachment &a = d.clear_att[count++];
-                a.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                a.colorAttachment = 0;
+                VkClearValue value{};
                 uint8_t alpha = fba ? uint8_t(v0.rgba[3] | 0x80u) : v0.rgba[3];
                 for (int i = 0; i < 3; i++) {
-                    a.clearValue.color.float32[i] = float(v0.rgba[i]) / 255.0f;
+                    value.color.float32[i] = float(v0.rgba[i]) / 255.0f;
                 }
-                a.clearValue.color.float32[3] = float(alpha) / 255.0f;
+                value.color.float32[3] = float(alpha) / 255.0f;
+                colour_clear = pend_clear(colour->image, false, clear_rect.rect, value);
             }
             if (zwrite) {
-                VkClearAttachment &a = d.clear_att[count++];
-                a.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                a.clearValue.depthStencil.depth = depth_of(v0.z, zpsm);
+                VkClearValue value{};
+                value.depthStencil.depth = depth_of(v0.z, zpsm);
+                pend_clear(depth->image, true, clear_rect.rect, value);
             }
-            d.clear = true;
-            d.clear_rect = clear_rect;
-            d.clear_count = count;
             bool alpha_high = !z_only && ((fba ? v0.rgba[3] | 0x80u : v0.rgba[3]) & 0x80u) != 0;
-            add_clear(*colour, zwrite ? depth : nullptr, std::move(d), std::move(m));
             if (!z_only && is_frame_clear(clear_rect.rect, scissor_px, *colour, placed, scax0, scax1, scay0, scay1)) {
-                // (the frame's clear: the census watches its alpha until its reset)
+                // (the frame's clear: the census watches its alpha until its reset, which may fold into it)
                 watch_alpha(colour->image.get(), placed.y);
+                AlphaFold f;
+                f.image = colour->image.get();
+                f.y = placed.y;
+                f.rect = clear_rect.rect;
+                f.scene = counts_.scenes;
+                f.clear = colour_clear;
+                f.first_pass = first_pass;
+                f.first_draw = uint32_t(scene_.draws.size());
+                f.first_material = uint32_t(scene_.materials.size());
+                // (still held back, or drawn already where hold_clears_ is off)
+                f.valid = std::any_of(pending_.begin(), pending_.end(),
+                                      [&](const PendingClear &x) { return x.id == colour_clear; });
+                folds_.erase(std::remove_if(folds_.begin(), folds_.end(),
+                                            [&](const AlphaFold &o) { return o.image == f.image && o.y == f.y; }),
+                             folds_.end());
+                if (folds_.size() == 8) {
+                    folds_.erase(folds_.begin());
+                }
+                folds_.push_back(f);
             }
             if (alpha_high && colour->image.get() == alpha_clear_) {
                 alpha_clear_ = nullptr;
             }
             drawn_over(b, box, zwrite);
             return;
+        }
+        if (layer || is_fill(b, *colour, placed, z_written, zte, ztst, date, m)) {
+            keep_layer(b, *colour, placed, std::move(m), std::move(d), drawn_rect(s.scissor, box, *colour, placed),
+                       !layer);
+            drawn_over(b, box, zte && zwrite);
+            return;
+        }
+        const bool uses_depth = depth && (m.ztest || [&] {
+            for (uint32_t i = 0; i < m.pass_count; i++) {
+                if (m.passes[i].zwrite) {
+                    return true;
+                }
+            }
+            return false;
+        }());
+        if (!b.native && !shadow && is_alpha_reset(b, *colour, placed, pass_count, m.passes[0]) &&
+            fold_alpha_reset(b, *colour, placed, drawn_rect(s.scissor, box, *colour, placed), m)) {
+            alpha_reset(colour->image.get(), placed.y);
+            drawn_over(b, box, zte && zwrite);
+            return;
+        }
+        // the clears held back and the layers kept where it draws: drawn before it
+        if (shadow) {
+            if (uses_depth) {
+                touch(depth->image, true, scissor_px);
+            }
+            touch(colour->image, false, scissor_px);
+        } else {
+            pass_for(colour->image, depth ? depth->image : ImageHandle(), scissor_px, uses_depth);
         }
         // A native batch with the last draw's material, in its pass: that material again (the drawer sets nothing new
         // for it), and where its triangles go on from the last's in the same record, the last draw made longer (as the
@@ -2122,7 +3354,7 @@ private:
             const Material &mm = scene_.materials[d.material];
             bool longer = last->instance == d.instance &&
                           last->first_triangle + last->triangle_count == d.first_triangle &&
-                          (!shadow || last->shadow + last->triangle_count == run_.next);
+                          (!shadow || last->shadow + last->triangle_count == run_.base + run_.next);
             counts_.native_joined += longer ? 1 : 0;
             counts_.native_same_material += longer ? 0 : 1;
             if (longer) {
@@ -2130,11 +3362,9 @@ private:
                 if (shadow) {
                     run_.next += d.triangle_count;
                 }
-                last_clear_ = {};
             } else if (shadow) {
                 add_shadow(*colour, depth, std::move(d));
             } else {
-                last_clear_ = {};
                 add_draw(std::move(d));
             }
             if (!shadow && colour->image.get() == alpha_clear_) {
@@ -2159,8 +3389,6 @@ private:
         if (shadow) {
             add_shadow(*colour, depth, std::move(d));
         } else {
-            last_clear_ = {};
-            use_pass(colour->image, depth ? depth->image : ImageHandle(), PassKind::plain);
             add_draw(std::move(d));
             bool writes_alpha = false;
             for (uint32_t i = 0; i < pass_count; i++) {
@@ -2224,68 +3452,8 @@ private:
         return true;
     }
 
-    // A clear: the pass's load op where it is the pass's first and covers the whole of what it clears, else a clear
-    // in the pass (vkCmdClearAttachments); left out where it writes what the clear before it wrote, nothing between
-    // (pcr_canvas.cpp's same_as_last_clear: the game clears the frame twice, the second time with its other context's
-    // registers)
-    void add_clear(Target &colour, Target *depth, Draw &&d, Material &&m) {
-        ImageHandle depth_image = depth ? depth->image : ImageHandle();
-        LastClear now = {colour.image.get(), depth_image.get(), d.clear_rect.rect, {d.clear_att[0], d.clear_att[1]},
-                         d.clear_count, true};
-        if (last_clear_.valid && pass_.open && last_clear_.same(now)) {
-            return;
-        }
-        bool fresh = !(pass_.open && pass_.colour == colour.image.get() && (!depth || pass_.depth == depth_image.get()) &&
-                       pass_.kind == PassKind::plain);
-        Pass &pass = use_pass(colour.image, depth_image, PassKind::plain);
-        last_clear_ = now;
-        const VkRect2D &r = d.clear_rect.rect;
-        bool covers_colour = r.offset.x == 0 && r.offset.y == 0 && r.extent.width == colour.image->get_width() &&
-                             r.extent.height == colour.image->get_height();
-        bool covers_depth = !depth || (depth->image->get_width() == colour.image->get_width() &&
-                                       depth->image->get_height() == colour.image->get_height());
-        if (fresh && pass.draw_count == 0 && covers_colour && covers_depth) {
-            for (uint32_t i = 0; i < d.clear_count; i++) {
-                const VkClearAttachment &a = d.clear_att[i];
-                if (a.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
-                    pass.clear_colour = true;
-                    pass.colour_value = a.clearValue.color;
-                } else {
-                    pass.clear_depth = true;
-                    pass.depth_value = a.clearValue.depthStencil.depth;
-                }
-            }
-            counts_.load_clears++;
-            return;
-        }
-        d.material = uint32_t(scene_.materials.size());
-        scene_.materials.push_back(std::move(m));
-        add_draw(std::move(d));
-    }
-
-    struct LastClear {
-        const Image *colour = nullptr, *depth = nullptr;
-        VkRect2D rect{};
-        VkClearAttachment att[2]{};
-        uint32_t count = 0;
-        bool valid = false;
-        bool same(const LastClear &o) const {
-            if (colour != o.colour || depth != o.depth || count != o.count || memcmp(&rect, &o.rect, sizeof(rect)) != 0) {
-                return false;
-            }
-            for (uint32_t i = 0; i < count; i++) {
-                if (att[i].aspectMask != o.att[i].aspectMask ||
-                    memcmp(&att[i].clearValue, &o.att[i].clearValue, sizeof(VkClearValue)) != 0) {
-                    return false;
-                }
-            }
-            return true;
-        }
-    } last_clear_;
-
     // A shadow into the open run: the first-draw pass (its image cleared by the run's first pass since the reset)
     void add_shadow(Target &colour, Target *depth, Draw &&d) {
-        last_clear_ = {};
         ImageHandle depth_image = depth ? depth->image : ImageHandle();
         if (!run_.draws.empty() && (run_.colour.get() != colour.image.get() || run_.depth.get() != depth_image.get())) {
             end_shadow_run();
@@ -2298,6 +3466,7 @@ private:
             info.layout = ImageLayout::General;
             info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
             first_image_ = device_.create_image(info, nullptr);
+            first_generation_ = first_generations;
             run_.cleared = false;
         }
         run_.colour = colour.image;
@@ -2308,11 +3477,18 @@ private:
                 pass_.open = false; // (a pass of its own that clears it)
             }
             Pass &fresh = use_pass(first_image_, depth_image, PassKind::first_draw);
-            fresh.clear_colour = true;
-            fresh.colour_value.float32[0] = first_none;
+            if (first_generation_ + 1 >= first_generations || !first_kept_) {
+                fresh.clear_colour = true;
+                fresh.colour_value.float32[0] = first_none;
+                first_generation_ = 0;
+                counts_.first_cleared++;
+            } else {
+                first_generation_++;
+            }
+            run_.base = (first_generations - 1 - first_generation_) << first_shadow_bits;
             run_.cleared = true;
         }
-        d.shadow = run_.next;
+        d.shadow = run_.base + run_.next;
         run_.next += d.triangle_count;
         run_.draws.push_back(uint32_t(scene_.draws.size()));
         add_draw(std::move(d));
@@ -2477,13 +3653,18 @@ private:
     struct Counts {
         uint64_t scenes = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
-        uint64_t date_copies = 0, date_copies_native = 0, alpha_resets = 0, alpha_read_frames = 0,
+        uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;
         uint64_t targets_made = 0, targets_grown = 0, filled_from_uploads = 0, uploads_into_targets = 0,
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0;
         uint64_t shader_blends = 0, read_backs = 0;
+        // (slice 2) clears held back, then drawn as load ops, in a pass or alone, or dead; layers kept, drawn into the
+        // target after all, dead, and pictures composed with them; alpha resets folded into the frame's clear
+        uint64_t clears_held = 0, clears_in_pass = 0, clears_alone = 0, clears_dead = 0;
+        uint64_t layers_kept = 0, layers_drawn = 0, layers_dead = 0, pictures_composed = 0, alpha_resets_folded = 0;
+        uint64_t histories_made = 0, histories_read = 0, fills_kept = 0, fills_composed = 0;
         uint64_t unsupported_shapes = 0, unsupported_blends = 0, unsupported_texture_on_target = 0,
                  unsupported_copies = 0, unsupported_uploads = 0, unsupported_read_backs = 0, uploads_again_passed = 0;
     } counts_;

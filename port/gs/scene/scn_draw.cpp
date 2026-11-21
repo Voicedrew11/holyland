@@ -135,6 +135,9 @@ void Drawer::make_programs() {
         SCN_PCR_SHADER(pcr_ndripple_vert, &batch_vert),
     };
 #undef SCN_PCR_SHADER
+    Shader *layerfs = device_.request_shader(scn_spv_scn_picture_layer_frag, sizeof(scn_spv_scn_picture_layer_frag),
+                                             &frag);
+    picture_layer_ = device_.request_program(vs[size_t(Program::gif)], layerfs);
     for (size_t v = 0; v < size_t(Program::count); v++) {
         plain_[v] = device_.request_program(vs[v], fs);
         early_[v] = device_.request_program(vs[v], efs);
@@ -220,20 +223,28 @@ void Drawer::record_op(const Op &op, CommandBuffer &c) {
 void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c) {
     counts_.passes++;
     RenderPassInfo rp;
-    rp.num_color_attachments = 1;
-    rp.color_attachments[0] = &pass.colour->get_view();
-    rp.store_attachments = 1;
-    if (pass.clear_colour) {
-        rp.clear_attachments = 1;
-        rp.clear_color[0] = pass.colour_value;
-    } else {
-        rp.load_attachments = 1;
+    if (pass.colour) {
+        rp.num_color_attachments = 1;
+        rp.color_attachments[0] = &pass.colour->get_view();
+        rp.store_attachments = 1;
+        if (pass.clear_colour) {
+            rp.clear_attachments = 1;
+            rp.clear_color[0] = pass.colour_value;
+        } else {
+            rp.load_attachments = 1;
+        }
     }
     if (pass.depth) {
         rp.depth_stencil = &pass.depth->get_view();
         rp.op_flags = RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT |
                       (pass.clear_depth ? RENDER_PASS_OP_CLEAR_DEPTH_STENCIL_BIT : RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT);
         rp.clear_depth_stencil = {pass.depth_value, 0};
+    }
+    rp.render_area = pass.area;
+    if (time_clears_ && (pass.clear_colour || pass.clear_depth)) {
+        // (developers', KF4_SCN_TIME_CLEARS=1: its load ops' clears timed as clears, else they are in the interval of
+        // the draw before; a timestamp more, which waits for the GPU: the frame takes longer timed)
+        times_.begin(c, pcr::GpuWork::surface);
     }
     c.begin_render_pass(rp);
     uint32_t set = no_material; // (the material whose state the command buffer has: a draw of it again sets nothing)
@@ -275,7 +286,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, const Draw &d, Co
     }
     pcr::ShaderState st = m.state;
     st.first_draw = pass.kind == PassKind::first_draw ? 1 : pass.kind == PassKind::darken ? 2 : 0;
-    times_.begin_draw(c, work_of(d), pcr::shader_state_key(st));
+    times_.begin_draw(c, pass.picture ? pcr::GpuWork::picture : work_of(d), pcr::shader_state_key(st));
     counts_.native_draws += d.native ? 1 : 0;
     counts_.gif_draws += d.native ? 0 : 1;
     counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
@@ -356,7 +367,10 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, const Draw &d, Co
             c.set_color_write_mask(0x1);
         } else {
             bool early = ap.mode == 0 && !(m.push.flags & pcr::F_DATE);
-            c.set_program(pass.kind == PassKind::darken ? first_[v] : early ? early_[v] : plain_[v]);
+            c.set_program(m.picture_layer             ? picture_layer_
+                          : pass.kind == PassKind::darken ? first_[v]
+                          : early                       ? early_[v]
+                                                        : plain_[v]);
             c.set_depth_test(m.ztest, m.ztest && ap.zwrite);
             if (m.blend.enable) {
                 c.set_blend_enable(true);

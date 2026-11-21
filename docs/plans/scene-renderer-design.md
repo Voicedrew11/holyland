@@ -558,6 +558,15 @@ Slice 1 is built and measured (2026-11-19): `scene-slice1-results.md`, each crit
 for DATE's 0.1 ms (0.39 at the pond, against the PC renderer's 2.5 there with its copies: the owner accepts it for now,
 to come back to once more of the renderer is done) and the copies of the reflection and the HUD's DATE sprite.
 
+Slice 2 is built and measured (2026-11-20): `scene-slice2-results.md`. Clears held back into load ops (dead ones never
+drawn), the alpha's reset folded into the frame's clear, the brightness drawn by each picture in place of its copy out,
+the history made where a texture reads such a frame; every picture byte for byte slice 1's. A game frame is 0.9 / 1.7 /
+1.4 ms less at 099 / the pond / the palace, short of the 2.5-3 asked: the fills after the HUD are not folded (byte for
+byte they must be the GPU's blend, drawn again each picture), the world's time grows 0.4 ms with the alpha's fold (not
+yet explained), and at the pond the frame's clears are partial render areas. After it (`scene-slice2-after.md`): the
+0.4 ms was the shadows' first-draw image's clear, timed in the world's last draw (the image is now cleared once in 128
+frames), and the fills after the HUD are folded byte for byte; a game frame 0.35 / 0.6 / 0.17 ms less again.
+
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
 
@@ -583,6 +592,19 @@ build and measure, each to be looked at again only on its slice's numbers.
    `mouse_lead.h`, not measured; slice 4 measures the late turns and sizes the margin from them.
 4. **Tints under the HUD drawn at their place. Settled for now** (0.5-1.3 ms only where they show); the HUD in an
    image of its own, so that they fold too, only if a later measurement says it is worth it.
+
+5. **The fills after the HUD folded with the GS's arithmetic. Decided (2026-11-20).** The fade, the dim, the pause's
+   shade and MapDrawState's fill, folded into the picture as ((A - B) * C >> 7) + D a channel (`scene-slice2-results.md`):
+   their pixels then differ from the GPU blend's (slice 1's) by a shade here and there. The owner accepts a picture that
+   differs where it cannot be told apart; check that the changed pixels are nearer paraLLEl-GS, not further.
+   Measured (`scene-slice2-after.md`): further, since the frame under the fills is a level off paraLLEl-GS already;
+   so they are folded with the arithmetic of slice 2's blend (byte for byte), the GS's a developers' switch.
+
+6. **The frame buffers an image each. Decided (2026-11-20).** Where both frame buffers are found as one target (from a
+   New Game: the pond's 1920x1856), each frame's clear is a partial render area, not a fast clear (`scene-slice2-after.md`);
+   each frame buffer an image of its own, as "3. The targets" has it, a read across the two answered by the store.
+   Built and measured the same day (`scene-slice2-after.md`): no gain (the pond 13.14 ms a game frame split, 13.10
+   not), so not kept; the partial clears cost nothing measurable here.
 
 Also taken with them, as the design has them: the scene built in the chain's order on the renderer's thread; the
 texture store as the resolver with a bindless table; DATE by the first-draw image (slice 1 checks its assumptions:

@@ -7,6 +7,8 @@
 // One thread: the builder's.
 #pragma once
 
+#include <stdlib.h>
+
 #include <array>
 #include <cstdint>
 
@@ -63,9 +65,11 @@ private:
     Vulkan::Device &device_;
     pcr::GpuTimes &times_;
     bool dynamic_ds_ = false, dynamic_blend_ = false, first_draw_ok_ = false;
+    const bool time_clears_ = getenv("KF4_SCN_TIME_CLEARS") && atoi(getenv("KF4_SCN_TIME_CLEARS")) != 0;
     // by Program: the plain fragment shader, the one tested before it (pcr_prim_early.frag), the first-draw image's
     // (scn_first_draw.frag) and the shadows' darkening (pcr_prim.frag with SCN_FIRST_DRAW)
     std::array<Vulkan::Program *, size_t(Program::count)> plain_{}, early_{}, first_id_{}, first_{};
+    Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
     Vulkan::ImageHandle dummy_uint_, dummy_float_;
     Vulkan::BufferHandle zeros_, no_clut_, no_trace_;
     Vulkan::BindlessDescriptorPoolHandle table_pool_;
