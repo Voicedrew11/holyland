@@ -27,6 +27,8 @@ struct FakeRow {
     int choices = 0;
     int value = 0; // choice: the chosen; toggle: 0 / 1; number: the value
     int activated = 0;
+    int listened = -1; // a binding: the slot last listened for
+    int cleared = -1;  // and last cleared
 };
 
 class FakeRows final : public MenuRows {
@@ -51,6 +53,12 @@ public:
     }
     void activate(int tab, int row) override {
         tabs[tab][row].activated++;
+    }
+    void listen(int tab, int row, int slot) override {
+        tabs[tab][row].listened = slot;
+    }
+    void clear(int tab, int row, int slot) override {
+        tabs[tab][row].cleared = slot;
     }
 };
 
@@ -224,6 +232,38 @@ void pointer() {
 
 } // namespace
 
+// Bindings: Left / Right choose the slot (not past the ends) and keep it from row to row; Confirm listens there,
+// Clear empties it; a click on a slot listens there; Clear does nothing on other rows
+void bindings() {
+    FakeRows rows;
+    rows.tabs = {{{RowKind::heading}, {RowKind::binding, true, 3}, {RowKind::binding, true, 3}, {RowKind::toggle}}};
+    MenuModel menu(rows);
+    menu.open_at(0);
+    CHECK(menu.row() == 1 && menu.slot() == 0);
+    menu.press(MenuInput::left);
+    CHECK(menu.slot() == 0);
+    menu.press(MenuInput::right);
+    menu.press(MenuInput::right);
+    menu.press(MenuInput::right);
+    CHECK(menu.slot() == 2);
+    menu.press(MenuInput::confirm);
+    CHECK(rows.tabs[0][1].listened == 2 && !menu.list_open());
+    menu.press(MenuInput::down);
+    CHECK(menu.row() == 2 && menu.slot() == 2);
+    menu.press(MenuInput::left);
+    menu.press(MenuInput::clear);
+    CHECK(rows.tabs[0][2].cleared == 1 && rows.tabs[0][2].listened == -1);
+    menu.press(MenuInput::down);
+    menu.press(MenuInput::clear);
+    CHECK(rows.tabs[0][3].value == 0);
+    menu.click_slot(1, 0);
+    CHECK(menu.row() == 1 && menu.slot() == 0 && rows.tabs[0][1].listened == 0);
+    menu.click_slot(3, 1); // not a binding: nothing
+    CHECK(menu.row() == 1 && rows.tabs[0][3].value == 0);
+    menu.click_slot(2, 3); // no such slot
+    CHECK(menu.row() == 1);
+}
+
 int main() {
     focus_skips_and_stops();
     left_right();
@@ -231,6 +271,7 @@ int main() {
     tabs();
     rows_change_under_the_focus();
     pointer();
+    bindings();
     if (failures != 0) {
         std::printf("%d failures\n", failures);
         return 1;

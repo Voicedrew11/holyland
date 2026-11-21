@@ -179,3 +179,26 @@ const char *update_badge_version_line() {
         std::snprintf(line, sizeof(line), "%s (developer's build %s)", kProductName, KF4_BUILD_REV);
     return line;
 }
+
+bool update_badge_due() {
+    return due && !hidden;
+}
+
+const char *update_badge_summary() {
+    static char summary[160];
+    std::snprintf(summary, sizeof(summary), "%s %s is out. You have %s. Your settings and saves are kept.", kProductName,
+                  release.tag, port_version[0] != 0 ? port_version : "a developer's build");
+    return summary;
+}
+
+void update_badge_open_page() {
+    if (due && !SDL_OpenURL(release.url)) {
+        std::fprintf(stderr, "[update] could not open %s: %s\n", release.url, SDL_GetError());
+    }
+}
+
+void update_badge_skip() {
+    if (due) {
+        skip_this_version();
+    }
+}

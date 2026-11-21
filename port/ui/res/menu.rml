@@ -3,19 +3,25 @@
 	<title>Holyland</title>
 	<link type="text/rcss" href="kf4.rcss"/>
 </head>
-<!-- The player menu (port/ui/player_ui.cpp fills #tabs, #rows, #help and #prompts) -->
+<!-- The player menu (port/ui/player_ui.cpp fills #tabs, #version, #heading, #rows, #help and #prompts) -->
 <body>
 	<div id="shade"></div>
 	<div id="window">
 		<div id="rule-outer">
 			<div id="rule-inner">
-				<div id="crest">
-					<div id="title">Holyland</div>
-					<div id="subtitle">King's Field IV</div>
-				</div>
-				<div id="tabs"></div>
-				<div id="page">
-					<div id="rows"></div>
+				<div id="main">
+					<div id="sidebar">
+						<div id="crest">
+							<img id="logo" src="logo.alpha"/>
+							<div id="subtitle">King's Field IV</div>
+						</div>
+						<div id="tabs"></div>
+						<div id="version"></div>
+					</div>
+					<div id="content">
+						<div id="heading"></div>
+						<div id="rows"></div>
+					</div>
 					<div id="help"></div>
 				</div>
 				<div id="prompts"></div>

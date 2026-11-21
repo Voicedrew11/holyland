@@ -415,7 +415,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         include(cmake/rmlui.cmake)
         set(KF4_UI_RES ${CMAKE_SOURCE_DIR}/port/ui/res)
         file(GLOB_RECURSE KF4_UI_FILES CONFIGURE_DEPENDS RELATIVE ${KF4_UI_RES}
-             ${KF4_UI_RES}/*.rml ${KF4_UI_RES}/*.rcss ${KF4_UI_RES}/*.ttf)
+             ${KF4_UI_RES}/*.rml ${KF4_UI_RES}/*.rcss ${KF4_UI_RES}/*.ttf ${KF4_UI_RES}/*.alpha)
         list(SORT KF4_UI_FILES)
         list(TRANSFORM KF4_UI_FILES PREPEND ${KF4_UI_RES}/ OUTPUT_VARIABLE KF4_UI_FILE_PATHS)
         add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/ui_assets.cpp

@@ -24,6 +24,8 @@
 #include "ui_frame.hpp"
 #include "ui_render.hpp"
 
+#include "../overlay/update_badge.h"
+
 extern "C" {
 #include "port/controls.h"
 #include "port/player_ui.h"
@@ -50,15 +52,9 @@ public:
 class AssetFiles final : public Rml::FileInterface {
 public:
     Rml::FileHandle Open(const Rml::String &path) override {
-        std::string_view name = path;
-        while (!name.empty() && (name.front() == '/' || name.front() == '.')) {
-            name.remove_prefix(1);
-        }
-        for (size_t i = 0; i < ui_asset_count; i++) {
-            if (name == ui_assets[i].path) {
-                open_.push_back({&ui_assets[i], 0});
-                return Rml::FileHandle(open_.size());
-            }
+        if (const UiAsset *file = ui_asset(path)) {
+            open_.push_back({file, 0});
+            return Rml::FileHandle(open_.size());
         }
         std::fprintf(stderr, "[ui] no file %s in the menu's files\n", path.c_str());
         return 0;
@@ -111,15 +107,6 @@ private:
     std::vector<Reading> open_; // (a handle is its place plus one; the menu opens a handful of files, once)
 };
 
-const UiAsset *asset(std::string_view path) {
-    for (size_t i = 0; i < ui_asset_count; i++) {
-        if (path == ui_assets[i].path) {
-            return &ui_assets[i];
-        }
-    }
-    return nullptr;
-}
-
 // ---- The menu's state -----------------------------------------------------------------------------------------------
 enum class Device { keyboard, pad };
 
@@ -142,7 +129,7 @@ struct Menu {
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
-    std::string tabs_rml, rows_rml, help_rml, prompts_rml;
+    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml;
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
     Device device = Device::keyboard;
@@ -151,6 +138,7 @@ struct Menu {
     uint64_t pad_next_ms = 0;
     int stick_direction = -1; // the left stick's, as a MenuInput (or -1)
     bool l3 = false, r3 = false;
+    bool was_listening = false; // a binding's slot waited for a key last picture
     // the window's pixels for each of SDL's window units (a HiDPI screen: 2)
     float pixels_per_unit = 1.0f;
     bool drawn = false;
@@ -166,6 +154,9 @@ void set_open(bool open) {
     }
     menu.open = open;
     port_controls_block(open);
+    if (port_controls_listening(nullptr, nullptr)) {
+        port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
+    }
     if (open) {
         menu.model.open_at(menu.model.tab());
         menu.scrolled_row = -2;
@@ -215,6 +206,8 @@ void PointerEvents::ProcessEvent(Rml::Event &event) {
     int row = 0;
     if (find_attribute(target, "data-tab", value)) {
         menu.model.click_tab(value);
+    } else if (find_attribute(target, "data-slot", value) && find_attribute(target, "data-row", row)) {
+        menu.model.click_slot(row, value);
     } else if (find_attribute(target, "data-choice", value)) {
         menu.model.click_choice(value);
     } else if (find_attribute(target, "data-step", value) && find_attribute(target, "data-row", row)) {
@@ -249,6 +242,7 @@ void escaped(std::string &out, std::string_view text) {
     }
 }
 
+// The sections down the sidebar, with the keys that move between them above and below
 std::string tabs_rml() {
     std::string out = menu.device == Device::pad ? "<tab class=\"end\">L1</tab>" : "<tab class=\"end\">Q</tab>";
     for (int t = 0; t < menu.rows.tab_count(); t++) {
@@ -259,6 +253,35 @@ std::string tabs_rml() {
     }
     out += menu.device == Device::pad ? "<tab class=\"end\">R1</tab>" : "<tab class=\"end\">E</tab>";
     return out;
+}
+
+std::string heading_rml() {
+    std::string out;
+    escaped(out, menu.rows.tab(menu.model.tab()).name);
+    return out;
+}
+
+std::string version_rml() {
+    std::string out;
+    if (update_badge_due()) {
+        out += "<update>An update is out: Sound &amp; Menu</update>";
+    }
+    escaped(out, update_badge_version_line());
+    return out;
+}
+
+// A binding's slots: the chosen one marked on the focused row, the one waiting for a key lit
+void slots_rml(std::string &out, int tab, int row, bool focused) {
+    for (int slot = 0; slot < menu.rows.shape(tab, row).choice_count; slot++) {
+        std::string text = menu.rows.slot_text(tab, row, slot);
+        out += "<slot data-slot=\"" + std::to_string(slot) + "\" class=\"";
+        out += focused && slot == menu.model.slot() ? "chosen " : "";
+        out += menu.rows.listening(tab, row, slot) ? "listening " : "";
+        out += text == "-" ? "empty" : "";
+        out += "\">";
+        escaped(out, text);
+        out += "</slot>";
+    }
 }
 
 // A row's value: the arrows either side on the focused row (dim at the ends), a number's bar under it
@@ -312,11 +335,15 @@ std::string rows_rml() {
         out += focused ? "focused " : "";
         out += shape.enabled ? "" : "disabled ";
         out += shape.kind == ui::RowKind::action ? "action " : "";
+        out += shape.kind == ui::RowKind::binding ? "binding " : "";
+        out += menu.rows.changed_from_default(tab, row) ? "changed " : "";
         out += open ? "open" : "";
         out += "\"><label>";
         escaped(out, r.label);
         out += "</label>";
-        if (shape.kind == ui::RowKind::action) {
+        if (shape.kind == ui::RowKind::binding) {
+            slots_rml(out, tab, row, focused);
+        } else if (shape.kind == ui::RowKind::action) {
             out += focused && shape.enabled ? "<value>Enter</value>" : "";
         } else {
             value_rml(out, tab, row, shape, focused);
@@ -359,13 +386,24 @@ std::string help_rml() {
         out += "<p class=\"note\">This run's value was set on the command line. A change here is kept for the next "
                "start.</p>";
     }
+    if (menu.rows.changed_from_default(tab, row)) {
+        out += "<p class=\"note\">Changed from the default.</p>";
+    }
+    if (r.note != nullptr && r.note() != nullptr && r.note()[0] != 0) {
+        out += "<p class=\"note\">";
+        escaped(out, r.note());
+        out += "</p>";
+    }
     return out;
 }
 
 void prompt(std::string &out, const char *key_a, const char *key_b, const char *what) {
-    out += "<prompt><key>";
-    out += key_a;
-    out += "</key>";
+    out += "<prompt>";
+    if (key_a[0] != 0) {
+        out += "<key>";
+        out += key_a;
+        out += "</key>";
+    }
     if (key_b != nullptr) {
         out += "<key>";
         out += key_b;
@@ -378,6 +416,22 @@ void prompt(std::string &out, const char *key_a, const char *key_b, const char *
 std::string prompts_rml() {
     std::string out;
     bool pad = menu.device == Device::pad;
+    if (port_controls_listening(nullptr, nullptr)) {
+        prompt(out, "", nullptr, menu.model.slot() == BINDING_PAD_SLOT ? "Press a controller button" : "Press a key or mouse button");
+        prompt(out, "Del", nullptr, "Clear");
+        prompt(out, "F1", nullptr, "Cancel");
+        return out;
+    }
+    int row = menu.model.row();
+    if (row >= 0 && menu.rows.shape(menu.model.tab(), row).kind == ui::RowKind::binding) {
+        prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Move");
+        prompt(out, "&#x2190;", "&#x2192;", "Slot");
+        prompt(out, pad ? "Cross" : "Enter", nullptr, "Change");
+        prompt(out, pad ? "Square" : "Del", nullptr, "Clear");
+        prompt(out, pad ? "L1" : "Q", pad ? "R1" : "E", "Sections");
+        prompt(out, pad ? "Circle" : "Esc", nullptr, "Close");
+        return out;
+    }
     if (menu.model.list_open()) {
         prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Choose");
         prompt(out, pad ? "Cross" : "Enter", nullptr, "Pick");
@@ -387,7 +441,7 @@ std::string prompts_rml() {
     prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Move");
     prompt(out, "&#x2190;", "&#x2192;", "Change");
     prompt(out, pad ? "Cross" : "Enter", nullptr, "Select");
-    prompt(out, pad ? "L1" : "Q", pad ? "R1" : "E", "Tabs");
+    prompt(out, pad ? "L1" : "Q", pad ? "R1" : "E", "Sections");
     prompt(out, pad ? "Circle" : "Esc", nullptr, "Close");
     return out;
 }
@@ -404,6 +458,8 @@ void set_part(const char *id, std::string &last, std::string now) {
 
 void write_page() {
     set_part("tabs", menu.tabs_rml, tabs_rml());
+    set_part("heading", menu.heading_rml, heading_rml());
+    set_part("version", menu.version_rml, version_rml());
     set_part("rows", menu.rows_rml, rows_rml());
     set_part("help", menu.help_rml, help_rml());
     set_part("prompts", menu.prompts_rml, prompts_rml());
@@ -450,6 +506,8 @@ int key_input(SDL_Scancode key, Uint16 modifiers) {
     case SDL_SCANCODE_ESCAPE:
     case SDL_SCANCODE_BACKSPACE:
         return int(ui::MenuInput::back);
+    case SDL_SCANCODE_DELETE:
+        return int(ui::MenuInput::clear);
     case SDL_SCANCODE_E:
     case SDL_SCANCODE_PAGEDOWN:
         return int(ui::MenuInput::next_tab);
@@ -482,6 +540,8 @@ int pad_input(Uint8 button) {
         return int(ui::MenuInput::confirm);
     case SDL_GAMEPAD_BUTTON_EAST:
         return int(ui::MenuInput::back);
+    case SDL_GAMEPAD_BUTTON_WEST:
+        return int(ui::MenuInput::clear);
     case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
         return int(ui::MenuInput::previous_tab);
     case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
@@ -585,6 +645,35 @@ bool pad_chord(const SDL_Event &event) {
     return menu.open;
 }
 
+// The right button: on a binding's slot, clears it; anywhere else, Back
+void right_click() {
+    int slot = 0, row = 0;
+    Rml::Element *over = menu.context->GetHoverElement();
+    if (find_attribute(over, "data-slot", slot) && find_attribute(over, "data-row", row)) {
+        menu.model.point_at_row(row);
+        if (menu.model.row() == row) {
+            while (menu.model.slot() < slot) {
+                menu.model.press(ui::MenuInput::right);
+            }
+            while (menu.model.slot() > slot) {
+                menu.model.press(ui::MenuInput::left);
+            }
+            menu.model.press(ui::MenuInput::clear);
+        }
+        return;
+    }
+    press(ui::MenuInput::back);
+}
+
+// A binding made or cleared while a slot waited (by port/sdk/controls.c, which took the key): saved
+void watch_listening() {
+    bool listening = port_controls_listening(nullptr, nullptr) != 0;
+    if (menu.was_listening && !listening) {
+        port_settings_changed();
+    }
+    menu.was_listening = listening;
+}
+
 // a mouse position in SDL's window units to the menu's pixels
 int mouse_x(float x) {
     return int(x * menu.pixels_per_unit);
@@ -617,7 +706,7 @@ bool load_fonts() {
          Rml::Style::FontWeight::Normal},
     };
     for (const Face &face : faces) {
-        const UiAsset *file = asset(face.path);
+        const UiAsset *file = ui_asset(face.path);
         if (file == nullptr ||
             !Rml::LoadFontFace(Rml::Span<const Rml::byte>(file->data, file->size), face.family, face.style, face.weight)) {
             std::fprintf(stderr, "[ui] the font %s did not load\n", face.path);
@@ -719,7 +808,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         menu.context->ProcessMouseMove(mouse_x(event.button.x), mouse_x(event.button.y), 0);
         if (event.button.button == SDL_BUTTON_RIGHT) {
-            press(ui::MenuInput::back);
+            right_click();
         } else if (event.button.button == SDL_BUTTON_LEFT) {
             menu.context->ProcessMouseButtonDown(0, 0);
         }
@@ -766,8 +855,11 @@ extern "C" int port_player_ui_show(const char *tab_id) {
         return 0;
     }
     set_open(true);
+    if (port_controls_listening(nullptr, nullptr)) {
+        port_controls_listen_cancel();
+    }
     menu.model.open_at(tab);
-    static const char *const names[] = {"up", "down", "left", "right", "confirm", "back", "next", "previous"};
+    static const char *const names[] = {"up", "down", "left", "right", "confirm", "back", "next", "previous", "clear"};
     for (spec = colon == std::string_view::npos ? std::string_view() : spec.substr(colon + 1); !spec.empty();) {
         size_t end = spec.find('.');
         std::string_view name = spec.substr(0, end);
@@ -789,10 +881,11 @@ extern "C" void port_player_ui_draw(int width, int height) {
     int units_w = 0, units_h = 0;
     SDL_GetWindowSize(menu.window, &units_w, &units_h);
     menu.pixels_per_unit = units_w > 0 ? float(width) / float(units_w) : 1.0f;
-    // the menu's 1000 x 680 dp window fitted to the game's window, with a margin
-    float dp = std::max(std::min(float(width) / 1060.0f, float(height) / 720.0f), 0.4f);
+    // the menu's 1200 x 740 dp window fitted to the game's window, with a margin
+    float dp = std::max(std::min(float(width) / 1260.0f, float(height) / 780.0f), 0.4f);
 
     pad_repeat();
+    watch_listening();
     menu.recorder.begin_frame(width, height);
     menu.context->SetDimensions(Rml::Vector2i(width, height));
     menu.context->SetDensityIndependentPixelRatio(dp);
@@ -800,5 +893,6 @@ extern "C" void port_player_ui_draw(int width, int height) {
     menu.context->Update();
     scroll_to_focus();
     menu.context->Render();
+    menu.recorder.end_frame();
     menu.drawn = true;
 }
