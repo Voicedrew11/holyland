@@ -42,7 +42,7 @@ only `--headless`. A headless run or one with a pad script (`--input`) does not 
 screen, and sizes things for 60 pictures a second: on 2026-11-13 headless runs at a simulated 240 Hz showed 3.7 GB of
 GPU memory and no hang where the owner's real play (unlocked, cap 500) held 8 GB and hung the card.
 
-- A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.config/holyland`
+- A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.local/share/holyland`
   so the owner's files are not written. Not `KF4_OVERLAY_SHOT`: it reads settings too but hides the window.
 - The window must be on the screen: the owner should be able to see the run.
 - Leave out `--headless`; keep `--input tests/newgame.pad --teleport ... --invincible --no-audio --saves none`.

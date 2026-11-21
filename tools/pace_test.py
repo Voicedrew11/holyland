@@ -63,7 +63,7 @@ def label_of(spot):
 def owner_data_dir():
     if os.name == "nt":
         return os.path.join(os.environ.get("APPDATA", ""), "holyland")
-    return os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "holyland")
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "holyland")
 
 
 def data_folder(keep, name):

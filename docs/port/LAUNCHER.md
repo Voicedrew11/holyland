@@ -32,7 +32,7 @@ updates)"; the desktop entry's action) shows the launcher instead: Play, Change 
 
 | Where | What | Written by |
 |---|---|---|
-| data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.config/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
+| data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.local/share/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
 | | `launcher.json`: disc, `update_check`, `skipped` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
 | | `build.log`, `game.log` | the launcher |

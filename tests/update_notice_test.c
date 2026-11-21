@@ -133,19 +133,20 @@ static int resolves(DataDirSystem system, const char *const *env, const char *da
 static void test_data_dir(void) {
     static const char *const linux_home[] = {"HOME=/home/p", NULL};
     static const char *const linux_xdg[] = {"HOME=/home/p", "XDG_CONFIG_HOME=/c", "XDG_DATA_HOME=/d", NULL};
-    static const char *const linux_empty_xdg[] = {"HOME=/home/p", "XDG_CONFIG_HOME=", NULL};
+    static const char *const linux_empty_xdg[] = {"HOME=/home/p", "XDG_DATA_HOME=", NULL};
     static const char *const given[] = {"HOME=/home/p", "KF4_DATA_DIR=/tmp/run", "XDG_DATA_HOME=/d", NULL};
     static const char *const given_builds[] = {"HOME=/home/p", "KF4_BUILDS_DIR=/b", NULL};
     static const char *const windows[] = {"APPDATA=C:\\U\\R", "LOCALAPPDATA=C:\\U\\L", NULL};
     static const char *const nothing[] = {NULL};
     char tiny[8];
 
-    check("linux home", resolves(DATA_DIR_POSIX, linux_home, "/home/p/.config/holyland", "/home/p/.local/share/holyland/builds"));
-    check("linux xdg", resolves(DATA_DIR_POSIX, linux_xdg, "/c/holyland", "/d/holyland/builds"));
-    check("empty xdg is unset", resolves(DATA_DIR_POSIX, linux_empty_xdg, "/home/p/.config/holyland",
+    check("linux home", resolves(DATA_DIR_POSIX, linux_home, "/home/p/.local/share/holyland",
+                                 "/home/p/.local/share/holyland/builds"));
+    check("linux xdg", resolves(DATA_DIR_POSIX, linux_xdg, "/d/holyland", "/d/holyland/builds"));
+    check("empty xdg is unset", resolves(DATA_DIR_POSIX, linux_empty_xdg, "/home/p/.local/share/holyland",
                                          "/home/p/.local/share/holyland/builds"));
     check("KF4_DATA_DIR keeps builds with it", resolves(DATA_DIR_POSIX, given, "/tmp/run", "/tmp/run/builds"));
-    check("KF4_BUILDS_DIR", resolves(DATA_DIR_POSIX, given_builds, "/home/p/.config/holyland", "/b"));
+    check("KF4_BUILDS_DIR", resolves(DATA_DIR_POSIX, given_builds, "/home/p/.local/share/holyland", "/b"));
     check("windows", resolves(DATA_DIR_WINDOWS, windows, "C:\\U\\R\\holyland", "C:\\U\\L\\holyland\\builds"));
     check("nothing set", resolves(DATA_DIR_POSIX, nothing, "holyland", "holyland/builds"));
     test_env = linux_home;
@@ -159,16 +160,55 @@ static int is_folder(const char *path) {
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-/* in a scratch HOME: the old folders move once; a folder already under the new name is never replaced */
+static int is_file(const char *path) {
+    struct stat info;
+
+    return stat(path, &info) == 0 && S_ISREG(info.st_mode);
+}
+
+static void write_text(const char *path, const char *text) {
+    FILE *file = fopen(path, "w");
+
+    if (file != NULL) {
+        fputs(text, file);
+        fclose(file);
+    }
+}
+
+static int file_says(const char *path, const char *text) {
+    char got[64] = {0};
+    FILE *file = fopen(path, "r");
+    size_t n;
+
+    if (file == NULL) {
+        return 0;
+    }
+    n = fread(got, 1, sizeof(got) - 1, file);
+    fclose(file);
+    got[n] = 0;
+    return strcmp(got, text) == 0;
+}
+
+static void in_home(char *out, size_t size, const char *home, const char *path) {
+    snprintf(out, size, "%s%s", home, path);
+}
+
+/* in a scratch HOME: the darker-reality folders take their new names; the old config folder's files move into
+   the data folder; a file already there is never replaced */
 static void test_move_old_folders(void) {
     char home[] = "/tmp/data_dir_test_XXXXXX";
-    char env_home[64], path[128];
+    char env_home[64], path[160];
     const char *env[] = {env_home, NULL};
-    static const char *const made[] = {"/.config", "/.config/darker-reality", "/.local", "/.local/share",
-                                       "/.local/share/darker-reality", "/.local/share/darker-reality/builds"};
-    static const char *const left[] = {"/.config/darker-reality", "/.config/holyland", "/.config",
-                                       "/.local/share/holyland/builds", "/.local/share/holyland",
-                                       "/.local/share", "/.local"};
+    static const char *const made[] = {"/.config", "/.config/holyland", "/.config/holyland/saves", "/.local",
+                                       "/.local/share", "/.local/share/darker-reality",
+                                       "/.local/share/darker-reality/builds"};
+    static const char *const files[] = {"/.config/holyland/settings.json", "/.config/holyland/saves/save0.kf4save",
+                                        "/.config/holyland/launcher.json"};
+    static const char *const left[] = {
+        "/.local/share/holyland/settings.json", "/.local/share/holyland/saves/save0.kf4save",
+        "/.local/share/holyland/launcher.json", "/.config/holyland/launcher.json", "/.local/share/holyland/saves",
+        "/.local/share/holyland/builds", "/.config/holyland", "/.local/share/holyland", "/.local/share", "/.local",
+        "/.config"};
     size_t i;
 
     if (mkdtemp(home) == NULL) {
@@ -177,23 +217,44 @@ static void test_move_old_folders(void) {
     }
     snprintf(env_home, sizeof(env_home), "HOME=%s", home);
     for (i = 0; i < sizeof(made) / sizeof(made[0]); i++) {
-        snprintf(path, sizeof(path), "%s%s", home, made[i]);
+        in_home(path, sizeof(path), home, made[i]);
         mkdir(path, 0755);
     }
-    test_env = env;
-    check("both moved", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 2);
-    snprintf(path, sizeof(path), "%s/.config/holyland", home);
-    check("data folder has its new name", is_folder(path));
-    snprintf(path, sizeof(path), "%s/.local/share/holyland/builds", home);
-    check("builds came along", is_folder(path));
-    snprintf(path, sizeof(path), "%s/.config/darker-reality", home);
-    mkdir(path, 0755);
-    check("a new folder is never replaced", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 0 && is_folder(path));
-    for (i = 0; i < sizeof(left) / sizeof(left[0]); i++) {
-        snprintf(path, sizeof(path), "%s%s", home, left[i]);
-        rmdir(path);
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        in_home(path, sizeof(path), home, files[i]);
+        write_text(path, "old");
     }
-    rmdir(home);
+    test_env = env;
+    check("the old local folder and the config folder moved", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 2);
+    in_home(path, sizeof(path), home, "/.local/share/holyland/builds");
+    check("builds came along", is_folder(path));
+    in_home(path, sizeof(path), home, "/.local/share/holyland/saves/save0.kf4save");
+    check("saves moved", is_file(path));
+    in_home(path, sizeof(path), home, "/.local/share/holyland/settings.json");
+    check("settings moved", file_says(path, "old"));
+    in_home(path, sizeof(path), home, "/.config/holyland");
+    check("the emptied config folder is gone", !is_folder(path));
+    check("nothing more to move", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 0);
+
+    /* a config folder again (an older build run since), with a file the data folder has too */
+    mkdir(path, 0755);
+    in_home(path, sizeof(path), home, "/.local/share/holyland/launcher.json");
+    write_text(path, "new");
+    in_home(path, sizeof(path), home, "/.config/holyland/launcher.json");
+    write_text(path, "older");
+    check("a file of the same name is not moved", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 0);
+    in_home(path, sizeof(path), home, "/.local/share/holyland/launcher.json");
+    check("the data folder's file is kept", file_says(path, "new"));
+    in_home(path, sizeof(path), home, "/.config/holyland/launcher.json");
+    check("the old one stays where it was", file_says(path, "older"));
+
+    for (i = 0; i < sizeof(left) / sizeof(left[0]); i++) {
+        in_home(path, sizeof(path), home, left[i]);
+        if (remove(path) != 0) {
+            rmdir(path);
+        }
+    }
+    check("scratch folder emptied", rmdir(home) == 0);
 }
 #endif
 
