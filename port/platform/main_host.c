@@ -46,9 +46,11 @@
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
                          full (level 0, the finest, at every distance)
-       --native-aniso N  anisotropic filtering of mipmapped textures: up to N reads (1, off, the
-                         default; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
-                         and walls at a grazing angle (gs_frag.h, sample_texture)
+       --native-aniso N  anisotropic filtering: up to N reads (1, off, the default: the PS2's
+                         levels; 2, 4, 8 or 16) along a pixel's footprint on the texture, for floors
+                         and walls at a grazing angle. On, the scene renderer reads the 3D's bilinear
+                         textures at the GPU's own level, their smaller levels made on the PC
+                         (port/gs/shared/mip_chain.h)
        --native-layer-z MODE
                          how the renderer keeps and tests the 3D's Z: tolerant (the default: Z's
                          fraction kept, straight seams where surfaces meet, and the layers the game

@@ -303,6 +303,12 @@ uint aniso_log2() {
     return (pc.tex1 >> 10) & 7u;
 }
 
+// Whether the texture's change a pixel across and down is wanted (uv_dx, uv_dy)
+bool wants_uv_change() {
+    return (pc.flags & PCR_F_TME) != 0u &&
+           (aniso_log2() != 0u || (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u);
+}
+
 // The sampled texture read with the sampler's anisotropy (aniso_log2 above 0: a mipmapped texture filtered bilinear).
 // The GS picks the level from the distance alone, the same along a surface and across it, so a floor or wall seen at
 // a grazing angle gets a level coarser than its texels across the pixel want. The pixel's footprint on the texture
@@ -321,6 +327,33 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     vec2 size = vec2(sampled_size());
     t = sampled_grad(uv / size, uv_dx / size, uv_dy / size);
     return true;
+}
+
+// A texture read at its own level (PCR_TEX1_GPU_LEVELS: scn_build.cpp's gpu_levels_for), filtered anisotropically here,
+// not by the sampler. The GPU's own anisotropy (RADV on RDNA, 2026-11-21) starts in a step: where a floor's footprint
+// grows long enough its level jumps finer, a line at a fixed distance that crawls as the camera moves. Here the level
+// is the footprint's width (its short axis, or its long axis over the most reads, at least a texel: level 0 where
+// magnified) and the reads are spread along its long axis over its length less that width, so at every change of the
+// number of reads they start where the fewer were: the picture changes smoothly with distance and angle.
+vec4 sampled_footprint(vec2 uv) {
+    vec2 size = vec2(sampled_size());
+    float lx = length(uv_dx), ly = length(uv_dy);
+    float major = max(lx, ly), minor = min(lx, ly);
+    float most = float(1u << aniso_log2());
+    float width = max(max(minor, major / most), 1.0);
+    float lod = log2(width);
+    int reads = int(min(ceil(major / width - 1.0 / 64.0), most));
+    if (reads <= 1) {
+        return sampled_lod(uv / size, lod);
+    }
+    vec2 along = (lx >= ly ? uv_dx : uv_dy) / major;
+    vec2 step = along * ((major - width) / float(reads - 1));
+    vec2 at = uv - step * (0.5 * float(reads - 1));
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < reads; i++) {
+        sum += sampled_lod((at + step * float(i)) / size, lod);
+    }
+    return sum / float(reads);
 }
 
 // The 2D mode's smooth (pcr_canvas.cpp, PCR_F_SMOOTH_2D: at a scale above 1, a sprite's or a 2D triangle's texture
@@ -383,6 +416,11 @@ uvec4 sample_texture() {
     float bias = float(int(pc.tex1) >> 16) / 256.0;
     if (smooth_2d_applies(lod)) {
         return smooth_2d(uv);
+    }
+    if (src_kind() == PCR_SRC_SAMPLED && (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u) {
+        // (the level and the anisotropy from the footprint: no GS level, bias or MMAG/MMIN choice; the sampler is
+        // bilinear and trilinear over the texture's levels made on the PC)
+        return uvec4(round(sampled_footprint(uv) * 255.0));
     }
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
@@ -643,9 +681,12 @@ bool pcr_exact_depth() {
         } \
     } \
     if ((pc.flags & PCR_F_FGE) != 0u) { \
-        uint f = uint(clamp(v_fog, 0.0, 255.0)); \
-        uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
-        c.rgb = (f * c.rgb + (255u - f) * fog) >> 8; \
+        /* the GS's fog as paraLLEl-GS has it: F rounded, the colour the fog colour plus (C - FOGCOL) * F / 256 \
+           rounded (F 255 leaves a colour as it is). Truncated, every fogged pixel came out a step darker than the \
+           GS's: at map 000 against --renderer gs, 11% of pixels exact before, 46% after, 2026-11-21 */ \
+        int f = int(roundEven(clamp(v_fog, 0.0, 255.0))); \
+        ivec3 fog = ivec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
+        c.rgb = uvec3(fog + (((ivec3(c.rgb) - fog) * f + 128) >> 8)); \
     }
 
 #ifdef SCN_FUSE_280
@@ -693,7 +734,7 @@ void main() {
 #ifdef SCN_FUSE_280
     pcr_stq = v_stq;
 #endif
-    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
+    if (wants_uv_change()) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
@@ -726,7 +767,7 @@ void main() {
     uvec4 cd = uvec4(c.rgb, (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a);
     pcr_record_at = pc.merged;
     pcr_stq = v_sphere.xyz;
-    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
+    if (wants_uv_change()) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
