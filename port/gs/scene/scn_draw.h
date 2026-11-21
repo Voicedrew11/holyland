@@ -58,6 +58,10 @@ public:
     bool dynamic_blend() const {
         return dynamic_blend_;
     }
+    // the draws' fields from the scene's records (KF4_SCN_RECORDS, and the device's features): slice 3d's fusion needs them
+    bool records_on() const {
+        return records_on_;
+    }
 
     // What ends a run (Counts::ends): a draw that cannot join the call before it in one indirect draw
     enum End : uint32_t {
@@ -86,6 +90,9 @@ public:
         // (the scenes' records, table entries and CLUTs, and the scenes recorded)
         uint64_t records = 0, table_entries = 0, cluts = 0, scenes = 0, table_max = 0;
         uint64_t own_sampler = 0; // (materials kept to their own set 1: no room for their sampler)
+        // (slice 3d) fused first passes drawn with their own set 1 for want of their sphere's place in the records: drawn
+        // without the sphere pass (none met; counted)
+        uint64_t fused_unrecorded = 0;
     };
     const Counts &counts() const {
         return counts_;
@@ -188,6 +195,7 @@ private:
     Pending pending_;
     FILE *runs_log_ = nullptr; // (developers', KF4_SCN_RUNS_LOG=FILE: a line a scene recorded, its calls and runs)
     Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
+    Vulkan::Program *fused_280_ = nullptr; // (slice 3d: pcr_nd280.vert and pcr_prim_early.frag with SCN_FUSE_280)
     Vulkan::ImageHandle dummy_uint_, dummy_float_;
     Vulkan::BufferHandle zeros_, no_clut_, no_trace_;
     Vulkan::BindlessDescriptorPoolHandle table_pool_;

@@ -52,6 +52,9 @@ struct Material {
     uint32_t clut = no_clut;
     // (a picture's) drawn by scn_picture_layer.frag: a kept layer that is the frame read at its own place, nothing more
     bool picture_layer = false;
+    // (slice 3d, program 0x280's first pass with its sphere pass in it: scn_build.cpp's fuse_280) the sphere pass's
+    // material, its record the one the fused shaders read after the first's (pcr_prim.h's SCN_FUSE_280); no_material: none
+    uint32_t fuse = no_material;
     // (the GPU's time by shader state, KF4_GPU_DETAIL: pcr_gpu_time.h's shader_state_key, without the first-draw field
     // the drawer adds by its pass)
     pcr::ShaderState state{};

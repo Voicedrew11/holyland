@@ -24,12 +24,13 @@ GPUs.
 | 3a | records and the bindless table, still a call a draw; the counts; the baseline | slice 2 | byte for byte slice 2's; GPU time no worse |
 | 3b | runs as indirect draws (all but 0x280's alternation) | 3a | byte for byte; calls counted (done 2026-11-20; 0x000 at 099 under 2 ms not met, moved to 3f) |
 | 3c | the level off paraLLEl-GS at 1x (a study) | nothing | found, or what is ruled out written down |
-| 3d | 0x280's two passes as one draw, behind a switch | 3b; 3c before it is judged | the changes counted and pictured for the owner; 0x280 under 1 ms |
+| 3d | 0x280's two passes as one draw, behind a switch | 3b; 3c before it is judged | the changes counted and pictured for the owner; 0x280 under 1 ms (done 2026-11-20, before 3c and 3f by the owner's choice: `KF4_SCN_FUSE_280`, off; 0x280 1.63 / 1.08 ms, under 1 ms not fusing's to give, moved to 3f; further from paraLLEl-GS until 3c) |
 | 3f | where the GPU's time goes: 0x000's pixels, the scanout; and the calls' CPU time (a study) | nothing | the causes measured; the fixes proposed with their gains; 0x000 at 099 under 2 ms judged by it |
 | 3e | the slice judged whole; the owner's decision on 3d | 3a-3d, 3f | the results document complete; slice 4's start written |
 
 3c and 3f touch no renderer code (but developers' switches to measure with) and can be done at any point before 3e
-(first, if a session is short of a whole part).
+(first, if a session is short of a whole part). The owner moved 3d ahead of 3f (2026-11-20); 3d is done
+(`scene-slice3-results.md`, "3d"), so 3c, 3f and 3e are left, and 3d's pictures wait on 3c.
 
 ### After 3b (2026-11-20): what batching does and does not buy
 

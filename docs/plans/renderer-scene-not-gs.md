@@ -100,6 +100,8 @@ Slices 1 and 2 are built and measured (`scene-slice1-results.md`, `scene-slice2-
 Slice 3 (batching) is under way, cut into parts of a session or so each: `HANDOFF_scene_slice3.md`. 3a and 3b are
 done: calls a frame down by half to two-thirds, the GPU time little changed (0.15 ms less at the palace). Batching saves
 the CPU's time; the world's GPU time is in its pixels, which part 3f studies (and the scanout, half the GPU's frame).
+3d (0x280's two passes as one draw, off by default) took the palace's GPU frame from 12.7 to 11.2 ms and the pond's
+from 13.2 to 12.9, calls a frame to 36 / 200 / 46; its pictures wait on 3c's level against paraLLEl-GS.
 
 ## Order
 

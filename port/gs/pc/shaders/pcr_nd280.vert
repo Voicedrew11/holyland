@@ -22,6 +22,11 @@ layout(location = 2) noperspective out float v_fog;
 layout(location = 12) noperspective out float v_color_q;
 layout(location = 3) flat out uvec2 v_rect; // (the 2D mode's: none for a native draw)
 out float gl_ClipDistance[1]; // the mirror image's cut at the water (pcr_nd000.vert's mirror_cut)
+#ifdef SCN_FUSE_280
+// (the scene renderer's first pass with the sphere pass in it: pcr_prim.h's SCN_FUSE_280) the sphere pass's S, T and Q
+// and its alpha, as its own pass would hand them down in v_stq and v_color.a
+layout(location = 5) noperspective out vec4 v_sphere;
+#endif
 
 // a picture between's (port/gs/pc/pcr_between.h; zeros outside one)
 layout(set = 0, binding = 0, std430) readonly buffer Picture {
@@ -93,10 +98,22 @@ void main() {
             v_color = vec4(0.0);
             v_stq = vec3(0.0);
             v_fog = 0.0;
+#ifdef SCN_FUSE_280
+            v_sphere = vec4(0.0);
+#endif
             return;
         }
         whole_position(c, w0, w1, w2, offset, false);
         float qn = 1.0 / c.w;
+#ifdef SCN_FUSE_280
+        {
+            vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
+            uint one = slot - 2u * uint(X.x) + 2u;
+            float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
+            v_sphere = vec4(vu_mul(vu_add(acc.x, 1.0), 0.5), vu_mul(vu_add(acc.y, 1.0), 0.5), 1.0,
+                            float(uint(ftoi(a1)) & 0xFFu));
+        }
+#endif
         if (!sphere) {
             vec4 st = qf(slot, 2u);
             v_stq = st.xyz * qn;
@@ -139,6 +156,15 @@ void main() {
     }
     vec3 stq;
     uvec4 rgba;
+#ifdef SCN_FUSE_280
+    {
+        vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
+        uint one = slot - 2u * uint(X.x) + 2u;
+        float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
+        v_sphere = vec4(vu_mul(vu_add(acc.x, 1.0), 0.5), vu_mul(vu_add(acc.y, 1.0), 0.5), 1.0,
+                        float(uint(ftoi(a1)) & 0xFFu));
+    }
+#endif
     if (!sphere) {
         vec4 st = qf(slot, 2u);
         stq = vec3(vu_mul(st.x, q), vu_mul(st.y, q), vu_mul(st.z, q)) * f;

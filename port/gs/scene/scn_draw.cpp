@@ -168,6 +168,9 @@ void Drawer::make_programs() {
         SCN_REC_SHADER(pcr_nd280_vert_rec, &batch_vert), SCN_REC_SHADER(pcr_nd700_vert_rec, &batch_vert),
         SCN_REC_SHADER(pcr_ndripple_vert_rec, &batch_vert),
     };
+    // (slice 3d: program 0x280's two passes as one draw, pcr_prim.h's SCN_FUSE_280; the early tests: nothing discarded)
+    fused_280_ = device_.request_program(SCN_REC_SHADER(pcr_nd280_vert_fuse, &batch_vert),
+                                         SCN_REC_SHADER(pcr_prim_early_frag_fuse, &frag));
 #undef SCN_REC_SHADER
 #undef SCN_PCR_SHADER
     Shader *layerfs = device_.request_shader(scn_spv_scn_picture_layer_frag, sizeof(scn_spv_scn_picture_layer_frag),
@@ -261,6 +264,14 @@ void Drawer::prepare(const Scene &scene) {
         }
         eligible[i] = 1;
     }
+    // (slice 3d) a first pass fused with its sphere pass is drawn from the records, the sphere's with it, or not at all
+    for (size_t i = 0; i < scene.materials.size(); i++) {
+        uint32_t f = scene.materials[i].fuse;
+        if (f != no_material && eligible[i] && !eligible[f]) {
+            eligible[i] = 0;
+            counts_.fused_unrecorded++;
+        }
+    }
     for (uint32_t i = samplers; i < p.samplers.size(); i++) {
         p.samplers[i] = p.samplers[0];
     }
@@ -302,19 +313,10 @@ void Drawer::prepare(const Scene &scene) {
     // a record a draw's pass, in the draws' order
     std::vector<pcr::PrimPush> records;
     records.reserve(scene.draws.size() + scene.draws.size() / 4);
-    for (size_t di = 0; di < scene.draws.size(); di++) {
-        const Draw &d = scene.draws[di];
-        if (d.clear || !eligible[d.material]) {
-            continue;
-        }
-        const Material &m = scene.materials[d.material];
-        p.first_record[di] = uint32_t(records.size());
+    auto record_of = [&](const Material &m, uint32_t mi) {
         pcr::PrimPush r = m.push;
-        if (d.shadow != no_shadow) {
-            r.record = d.shadow;
-        }
-        r.table = table_of[d.material] == no_record ? 0xFFFFu : table_of[d.material];
-        if (m.sampled && table_of[d.material] != no_record) {
+        r.table = table_of[mi] == no_record ? 0xFFFFu : table_of[mi];
+        if (m.sampled && table_of[mi] != no_record) {
             // (a sampled texture's size from its record: pcr_prim.h's sampled_size)
             r.src_offset[0] = int32_t(m.sampled->get_width());
             r.src_offset[1] = int32_t(m.sampled->get_height());
@@ -322,10 +324,42 @@ void Drawer::prepare(const Scene &scene) {
         r.clut_at = m.clut != no_clut ? m.clut * 256u : 0xFFFFFFFFu;
         r.merged = 0;
         r.factors = 0;
+        return r;
+    };
+    // (slice 3d) the fused first passes' records, to point at their sphere pass's (after the draws' records: merged)
+    std::vector<std::pair<uint32_t, uint32_t>> fused; // (the first's record, the sphere's material)
+    for (size_t di = 0; di < scene.draws.size(); di++) {
+        const Draw &d = scene.draws[di];
+        if (d.clear || !eligible[d.material]) {
+            continue;
+        }
+        const Material &m = scene.materials[d.material];
+        p.first_record[di] = uint32_t(records.size());
+        pcr::PrimPush r = record_of(m, d.material);
+        if (d.shadow != no_shadow) {
+            r.record = d.shadow;
+        }
+        if (m.fuse != no_material) {
+            fused.push_back({uint32_t(records.size()), m.fuse});
+        }
         for (uint32_t i = 0; i < m.pass_count; i++) {
             r.flags = (m.push.flags & ~(3u << pcr::F_PASS_SHIFT)) | m.passes[i].mode << pcr::F_PASS_SHIFT;
             r.factors = alpha_one(m, i) ? scn_alpha_one : 0;
             records.push_back(r);
+        }
+    }
+    // the sphere passes' records, one a material, in pcr::PrimPush::merged of their first's (pcr_prim.h's SCN_FUSE_280)
+    if (!fused.empty()) {
+        std::vector<uint32_t> sphere_record(scene.materials.size(), no_record);
+        for (const auto &[at, sm] : fused) {
+            if (sphere_record[sm] == no_record) {
+                const Material &m = scene.materials[sm];
+                sphere_record[sm] = uint32_t(records.size());
+                pcr::PrimPush r = record_of(m, sm);
+                r.flags = m.push.flags; // (its alpha test's pass mode its own: fuse_280)
+                records.push_back(r);
+            }
+            records[at].merged = sphere_record[sm];
         }
     }
     if (records.empty()) {
@@ -903,7 +937,8 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.mask = 0x1;
         } else {
             bool early = ap.mode == 0 && !(m.push.flags & pcr::F_DATE);
-            key.program = m.picture_layer               ? picture_layer_
+            key.program = m.fuse != no_material && records ? fused_280_
+                          : m.picture_layer               ? picture_layer_
                           : pass.kind == PassKind::darken ? (records ? first_rec_[v] : first_[v])
                           : early                         ? (records ? early_rec_[v] : early_[v])
                                                           : (records ? plain_rec_[v] : plain_[v]);
@@ -918,7 +953,8 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.op_alpha = VK_BLEND_OP_ADD;
             key.mask = ap.mask;
         }
-        key.alpha_one = records && blend_runs_ && alpha_one(m, i) && pass.kind != PassKind::first_draw && !m.picture_layer;
+        key.alpha_one = records && blend_runs_ && alpha_one(m, i) && pass.kind != PassKind::first_draw &&
+                        !m.picture_layer && m.fuse == no_material;
         canonical(key);
         if (records && joins(key, rec + i)) {
             // (the open run's state is this call's: nothing set)
