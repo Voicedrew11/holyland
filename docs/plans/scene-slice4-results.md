@@ -180,6 +180,107 @@ tuning: (1) each mesh vertex's maths (and a picture's move) made once a draw, no
 pass (scanout, anti-aliasing, scaling and sharpening) a fraction of its 2.75 ms; (3) the GS's pixel in the shader
 lighter where its parts are not used. (1) is the largest and the one pictures between multiply.
 
+## Vertices once (3f's first part, before 4b; branch `scene/vertices-once`)
+
+0x000's and 0x280's native draws drawn from each mesh vertex worked out once a draw. A compute pass before the scene's
+steps (`scn_draw.cpp`'s `prepare_placing` and `place_vertices`, `port/gs/scene/shaders/scn_place_000.comp` and
+`scn_place_280.comp`) runs VU1's maths (`vu1_000_maths.h`, `vu1_280_maths.h`, unchanged) for each vertex of each job, a
+draw's run of the arena's vertices with the instance it is drawn with (`NativeBatch::first_vertex`, `vertex_count`; a
+run met again in another pass, as DATE's shadows', is one job), into 80 bytes a vertex (`port/render/shaders/
+scn_placed.h`): its place, Z, Q, S T Q, fog, colour, the mirror's cut, and in a picture between its moved place, drop
+and whole corner. `pcr_nd000.vert` and `pcr_nd280.vert` made with `SCN_PLACED` read their corners from it (the
+command's firstInstance is the job). `KF4_SCN_PLACED=0` draws them as before. The PC renderer's shaders are unchanged.
+
+### The bound, before building (`2026-11-20-scene-vertices-once/bound`, `empty`)
+
+Real window, 2x, no pixels (`KF4_SCN_TINY=1`), ms a game frame:
+
+| | 0x000 | ... a third of its triangles (`KF4_SCN_THIRD=1`) | ... no maths (`KF4_SCN_ND_EMPTY=1`) | 0x280 | ... a third | ... no maths |
+|---|---|---|---|---|---|---|
+| the pond, 30 | 2.15 | 1.11 | 0.19 | 1.90 | 1.39 | 0.35 |
+| the palace, 30 | 1.96 | 0.94 | 0.14 | 2.15 | 1.90 | 0.19 |
+| the palace, 60 | 6.31 | 3.01 | 0.42 | 7.46 | 6.72 | 0.40 |
+
+The maths is over 90% of both programs' vertex stage; the draws themselves are cheap (0x280's 260 a scene about 0.7
+us each with none). 0x000's time follows its corners; 0x280's hardly (a third of its triangles left 6.72 of 7.46): its
+small draws, a wave or so each, one after another, each a wave's whole latency, and the shader (as RADV's statistics
+showed later, `RADV_DEBUG=shaderstats`) 248 registers, one wave a SIMD and 52 KB of scratch a wave.
+
+### Found building it
+
+The first placing was slower than the shaders it stood in for (0x280 at the palace 4.5 ms against 2.6). The compute
+shaders copied the draw's record (`Draw d`, about 1.4 KB) into a variable, and its arrays indexed at run time
+(`d.vertex[s]`, `d.point_pos[ps + l]`) put the copy in scratch memory: 52 and 72 KB a wave. Read from its buffer where
+used (`ND_D_DIRECT`: `d` a macro for `draws[d_at]`), the placing has no scratch, 48 and 64 registers, 4 and 5 waves a
+SIMD; the placed vertex shaders are about 450 instructions with 32 to 36 registers.
+
+### The pictures
+
+Headless, the scene renderer at 60 with native draws on, `KF4_SCN_PLACED=1` against `=0`, nine motion cases (menus,
+combat, first kill, spell 3, salamanders, watchers, under water, drain, fire elementals): 507 pictures, game frames and
+pictures between, **byte for byte the same**; against paraLLEl-GS the same scores as 4a's. A fast turn at 240 (about
+46 degrees a game frame, `look` lines in a pad script: the pictures between draw the triangles VU1 left out whole): of
+72 pictures, 8 pictures between differ in 1 to 3 pixels by 1 level of 255, the whole corners (`whole_place`, the
+PC's own maths, not VU1's exact arithmetic) made in the compute stage, whose float contraction differs from the vertex
+stage's: invisible. The validation layer with synchronization validation (the fast turn at 60, combat, fire
+elementals; `validation/`, `validation_s4/`): no hazard from the placing; the two usage errors it found were 4a's (a
+stand-in cleared without `TRANSFER_DST`, an op's copy copied from without `TRANSFER_SRC`), fixed on `scene/slice4`.
+
+### The GPU's time (real window, the owner's settings, 2x; `cost2/`)
+
+ms a game frame, medians of two rounds; a picture between is the 60 run less the 30:
+
+| | all at 30 | all at 60 | a picture between | before (4a, trimmed) | half a game frame | world at 30 (before) | 0x280 at 30 (before) |
+|---|---|---|---|---|---|---|---|
+| 099 | 9.97 | 14.74 | **4.77** | 6.21 | 4.99 | 3.66 (3.81) | 0.10 (0.26) |
+| the pond | 11.05 | 18.02 | **6.97** | 13.82 | 5.53 | 5.24 (7.38) | 0.59 (1.93) |
+| the palace | 10.66 | 16.83 | **6.17** | 13.55 | 5.33 | 4.53 (6.66) | 1.28 (2.61) |
+
+A picture between halved at the pond and the palace and is under half a game frame at 099. What is left in one, at the
+palace: 0x000 3.24 (now its pixels: 0.98 with none drawn), 0x280 1.69, the 2D 0.35, the stand-ins' copies 0.83; at the
+pond 0x700 (the effects, not placed: its shader one of the 244-register ones) about 2.1 ms a game frame and as much
+again a picture, three quarters of it pixels. The final pass, 5.5 ms a game frame, is untouched.
+
+Next on the same way: 0x700 placed (the pond), then the final pass and the GS's pixel in the shader (3f's (2) and (3)).
+
+### 0x700 next: how to do it well
+
+The effects (`pcr_nd700.vert`, `vu1_700_maths.h`; the pond's spray and the fire creatures) are about 2.1 ms a game
+frame at the pond and as much again a picture between, mostly pixels (below). Their vertex shader is one
+of the two with 244-248 registers and a wave a SIMD (`RADV_DEBUG=shaderstats`, `MESA_SHADER_CACHE_DISABLE=true`).
+What 0x000's and 0x280's taught, in order:
+
+1. **Bound it first** (an hour, no building): extend `KF4_SCN_ND_EMPTY` to 0x700 (`pcr_nd700.vert` made with
+   `SCN_ND_EMPTY`, `vs_rec[nd700]`) and `world_plain.py`'s `scene_tiny_empty_nodetail`, at the pond, 30 and 60.
+   Already known (`cost2/`, the "0x280, 0x700" column less 0x280's): 0x700 at the pond is 2.08 ms a game frame at 30,
+   **0.51 of it with no pixels**; a picture between's 2.15, 0.67 of it with none. So placing can win at most about
+   0.5 ms a frame and 0.6 a picture: most of 0x700 is its pixels (blended effects over much of the screen), which
+   is 3f's (3), the GS's pixel in the shader. Placing 0x700 alone does not bring the pond under half a game frame.
+2. **Read the record where used, everywhere.** `vu1_700_maths.h` has the same `Draw d;` copy as 0x000's and 0x280's
+   had; the placing shader must take `ND_D_DIRECT` (`#define d draws[d_at]`) from the start. Check its statistics
+   before timing it: no scratch, under ~64 registers. It may be worth trying `ND_D_DIRECT` in the unplaced vertex
+   shaders too (0x700's and the ripple's) before placing them at all: the 244 registers may be that copy.
+3. **The batch's vertices** (`draw_700` in `pcr_native.cpp`): set `nb.first_vertex = base + b.first`,
+   `nb.vertex_count = b.count` (one slot a vertex; `draw_left_out` already does). 0x700's loop transforms a "vertex n"
+   past the strip (`RdBatch::past`), but no triangle corner reads it: the job is the strip's `count`.
+4. **What 0x700's corners need from a vertex differs from 0x000's** (`pcr_nd700.vert`), so read it line by line:
+   - the position's own w (`mesh.q[at * 4].w`, 16 for the effects): the mirror cut is `cut / pw` in a whole triangle and
+     `cut * q * f` on the screen, and a whole triangle's Q is `1 / (c.w * pw)`. Keep `pw` in the placed vertex (a pad
+     word of `Placed`);
+   - the drop in a picture between looks at the kick and the two vertices before it (`kick - i`, `i < 3`) with no check
+     of the batch's start (0x280's checks its number in the batch, 0x000's `befores`): keep that exactly;
+   - no ADC clip test of its own (VU1's count decides the whole strip on the CPU), no wave UVs, no far plane;
+   - `lit_colour` is the model's one colour by the lights (no point lights, no `colour_u` walk).
+   One `Placed` layout fits; `place_vertices` takes a third program (native slot 2: set 0's bindings 9 and 10), and
+   `prepare_placing`'s `slot > 1` test becomes `slot > 2`.
+5. **The pictures**: byte for byte against `KF4_SCN_PLACED=0` in the cases with effects (fire elementals, salamanders,
+   spell 3, spell 16, fire genie, the pond), headless at 60 with `--native-draw on` (without it no native draw is drawn
+   and the check checks nothing); the fast turn (`look` lines, `2026-11-20-scene-vertices-once/turn/turn.pad`) at 240,
+   where only the whole corners may differ, by a level.
+6. **Then time it** in a real window (`world_plain.py`, 2x, 30 and 60, as drawn and with no pixels).
+
+The same holds for the ripple (`pcr_ndripple.vert`), small today.
+
 ## What is left of slice 4
 
 - 4a proper: the kept frame scene drawn again at t into images of its own (stand-ins for every target it writes, the

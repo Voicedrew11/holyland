@@ -105,6 +105,8 @@ public:
         // without the sphere pass (none met; counted)
         uint64_t fused_unrecorded = 0;
         uint64_t picture_scenes = 0; // (slice 4: the scenes recorded for pictures between)
+        // (each vertex once) the jobs placed, the vertices in them, the draws that share a job with one before
+        uint64_t place_jobs = 0, placed_vertices = 0, place_shared = 0, place_dispatches = 0;
     };
     const Counts &counts() const {
         return counts_;
@@ -125,6 +127,16 @@ private:
         Vulkan::BufferHandle commands, vertices;
         VkDrawIndirectCommand *command_map = nullptr;
         uint32_t command_capacity = 0, commands_used = 0;
+        // (each vertex once: place_vertices) by draw, its job (no_record: none, drawn as the PC renderer's shader
+        // draws it); the jobs (scn_placed.h) and the placed vertices; the dispatches, a program's buffers each
+        std::vector<uint32_t> job_of;
+        Vulkan::BufferHandle jobs, placed;
+        struct Placing {
+            uint32_t slot = 0; // (native_slot: 0x000's 0, 0x280's 1)
+            const Vulkan::Buffer *arena = nullptr, *records = nullptr;
+            uint32_t first_job = 0, count = 0;
+        };
+        std::vector<Placing> placings;
     };
     // A call as a run sees it: what must be the same for two calls to be one indirect draw
     struct RunKey {
@@ -191,12 +203,26 @@ private:
     const Vulkan::Image &image(const Vulkan::ImageHandle &h) const;
     const Vulkan::Buffer *picture_buffer(uint32_t binding) const;
     uint32_t instance_of(const Draw &d) const;
+    // (each vertex once, scn_placed.h) the scene's jobs (prepare) and their placing, recorded before its passes; a
+    // native draw's firstInstance (its job's number, or its instance)
+    void prepare_placing(const Scene &scene);
+    void place_vertices(Vulkan::CommandBuffer &c);
+    uint32_t first_instance(uint32_t index, const Draw &d) const;
+    // KF4_SCN_PLACED=0: 0x000's and 0x280's draws as the PC renderer's shaders draw them, each corner its maths whole
+    const bool placed_on_ = !getenv("KF4_SCN_PLACED") || atoi(getenv("KF4_SCN_PLACED")) != 0;
+    std::array<Vulkan::Program *, 2> place_{};
     const PictureDraw *picture_ = nullptr;
     // (developers', slice 3f's bounds: docs/plans/scene-slice4-results.md) KF4_SCN_FLAT=1: the plain passes' draws by a
     // fragment shader of one colour (scn_flat.frag); KF4_SCN_TINY=1: their scissor one pixel (the vertex stage and the
     // draws' own cost left). The pictures are wrong.
     const bool flat_on_ = getenv("KF4_SCN_FLAT") && atoi(getenv("KF4_SCN_FLAT")) != 0;
     const bool tiny_on_ = getenv("KF4_SCN_TINY") && atoi(getenv("KF4_SCN_TINY")) != 0;
+    // KF4_SCN_THIRD=1: each native draw with a third of its triangles (its vertex stage's work as if each mesh vertex's
+    // maths were made once, not once a triangle corner: the bound of making it once)
+    const bool third_on_ = getenv("KF4_SCN_THIRD") && atoi(getenv("KF4_SCN_THIRD")) != 0;
+    uint32_t native_corners(const Draw &d) const {
+        return (third_on_ ? (d.triangle_count + 2) / 3 : d.triangle_count) * 3;
+    }
     std::array<Vulkan::Program *, size_t(Program::count)> flat_{}, flat_rec_{};
 
     Vulkan::Device &device_;

@@ -131,6 +131,16 @@ VARIANTS = {
     "scene_tiny_nodetail": ("the scene renderer, its draws' scissor a pixel (KF4_SCN_TINY=1: no pixels, the vertex "
                             "stage and the draws left)", {"KF4_SCN_TINY": "1", "KF4_GPU_DETAIL": "0"}, {},
                             ["--renderer", "scene"]),
+    # The bound of each mesh vertex's maths once (scene-slice4-results.md, "Vertices once"): no pixels, and each native
+    # draw a third of its triangles (KF4_SCN_THIRD=1)
+    "scene_tiny_third_nodetail": ("the scene renderer, no pixels and the native draws a third of their triangles "
+                                  "(KF4_SCN_TINY=1 KF4_SCN_THIRD=1: the vertex stage's bound)",
+                                  {"KF4_SCN_TINY": "1", "KF4_SCN_THIRD": "1", "KF4_GPU_DETAIL": "0"}, {},
+                                  ["--renderer", "scene"]),
+    "scene_tiny_empty_nodetail": ("the scene renderer, no pixels and the 0x000 and 0x280 draws with no maths "
+                                  "(KF4_SCN_TINY=1 KF4_SCN_ND_EMPTY=1: the draws' own floor)",
+                                  {"KF4_SCN_TINY": "1", "KF4_SCN_ND_EMPTY": "1", "KF4_GPU_DETAIL": "0"}, {},
+                                  ["--renderer", "scene"]),
     "scene_aniso1_nodetail": ("the scene renderer, anisotropic filtering 1x", {"KF4_GPU_DETAIL": "0"},
                               {"native_aniso": 1}, ["--renderer", "scene"]),
     "scene_nodcc_nodetail": ("the scene renderer, RADV's colour compression off", {"RADV_DEBUG": "nodcc",

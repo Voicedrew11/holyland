@@ -72,6 +72,110 @@ void draw_whole(Whole c, Whole w0, Whole w1, Whole w2, vec3 st, bool gouraud, ui
     v_fog = d.fog.z + d.fog.w * q; // (the fragment stage clamps it to 0..255)
 }
 
+#ifdef SCN_PLACED
+// (the scene renderer's: each vertex worked out once a draw, scn_place_000.comp; the instance its job's number)
+#include "scn_placed.h"
+layout(set = 1, binding = 11, std430) readonly buffer Jobs {
+    uvec4 jobs[];
+};
+layout(set = 1, binding = 12, std430) readonly buffer PlacedIn {
+    Placed placed[];
+};
+uvec4 job;
+Placed at_vertex(uint at) {
+    return placed[job.z + (at - job.y)];
+}
+Whole whole_of(Placed p) {
+    Whole w;
+    w.h = p.whole.xyz;
+    w.w = p.whole.w;
+    return w;
+}
+
+void main() {
+    v_color_q = 0.0;
+    pcr_plane_none();
+    uint triangle, instance;
+    pcr_triangle(triangle, instance);
+    job = jobs[instance];
+    instance = job.x;
+#ifdef PCR_RECORDS
+    pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
+#endif
+    uvec4 tri = tris[triangle];
+    uint which = uint(gl_VertexIndex) % 3u;
+    uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
+    uint kick = tri.w & 0x0FFFFFFFu;
+    uint befores = (tri.w >> 28) & 3u;
+    uint record = instance & 0x3FFFFFFFu;
+    bool gouraud = (instance >> 30) != 0u;
+    ivec4 info = draws[record].info;
+    bool moving = (info.w & ND_C_MOVING) != 0, far = (info.w & ND_C_FAR) != 0;
+    // VU1's ADC: the kick's clip and the two kicks' before it
+    bool gone = false;
+    for (uint i = 0u; i <= befores && !gone; i++) {
+        gone = (at_vertex(kick - i).flags & SCN_PLACED_CLIPPED) != 0u;
+    }
+    Placed c = at_vertex(at);
+    uvec4 rgba = scn_unpack_rgba(gouraud ? c.rgba : at_vertex(kick).rgba);
+    gl_ClipDistance[0] = c.cut;
+    float f = 1.0;
+    vec3 stq = vec3(vu_mul(c.st.x, c.q), vu_mul(c.st.y, c.q), vu_mul(c.st.z, c.q));
+    uint z = c.zframe;
+    float zfrac = 0.0;
+    uint zref = which == 0u ? z : at_vertex(tri.x).zframe;
+    ivec2 xyg = c.xy;
+    if (moving) {
+        Whole w0 = whole_of(at_vertex(tri.x)), w1 = whole_of(at_vertex(tri.y)), w2 = whole_of(at_vertex(tri.z));
+        if (gone || whole_behind(w0, w1, w2)) {
+            // (pcr_nd000.vert's draw_whole)
+            Whole cw = which == 0u ? w0 : which == 1u ? w1 : w2;
+            v_rect = uvec2(PCR_NO_RECT);
+            if (whole_outside(w0, w1, w2)) {
+                whole_not_drawn();
+                v_color = vec4(0.0);
+                v_stq = vec3(0.0);
+                v_fog = 0.0;
+                return;
+            }
+            whole_position(cw, w0, w1, w2, info.yz, far);
+            float q = 1.0 / cw.w;
+            v_color = vec4(rgba) * q;
+            v_color_q = q;
+            v_stq = c.st.xyz * q;
+            vec4 fog = draws[record].fog;
+            v_fog = fog.z + fog.w * q;
+            return;
+        }
+        z = c.z;
+        zfrac = c.zfrac;
+        stq *= c.f;
+        f = c.f;
+        for (uint i = 0u; i <= befores && !gone; i++) {
+            gone = (at_vertex(kick - i).flags & SCN_PLACED_DROP) != 0u;
+        }
+    }
+    z = far ? 0u : z;
+    zfrac = far ? 0.0 : zfrac;
+    zref = far ? 0u : zref;
+    ivec2 g = moving ? xyg : ivec2(int(uint(xyg.x) & 0xFFFFu), int(uint(xyg.y) & 0xFFFFu));
+    vec2 xy = vec2(float(g.x - info.y), float(g.y - info.z)) / 16.0;
+    xy += vec2(pc.place);
+    if (gone) {
+        xy = vec2(1.0e9);
+    }
+    vec2 ndc = gs_to_clip(xy);
+    gl_Position = vec4(ndc, pcr_depth(z, zfrac, zref), 1.0);
+    gl_ClipDistance[0] = c.cut * c.q * f;
+    v_color = vec4(rgba);
+    v_stq = stq;
+    v_fog = c.st.w;
+    v_rect = uvec2(PCR_NO_RECT);
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
+        pcr_plane_of_draw();
+    }
+}
+#else
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
@@ -81,6 +185,11 @@ void main() {
     pcr_pass_record(); // (the fragment stage's fields: pcr_common.h)
 #endif
     uvec4 tri = tris[triangle];
+#ifdef SCN_ND_EMPTY
+    // (the scene renderer's developers' bound, KF4_SCN_ND_EMPTY: the draws with no maths, every triangle off the target)
+    gl_Position = vec4(2.0, 2.0, 0.5, 1.0 + float(tri.x & 1u) * 1.0e-7);
+    return;
+#endif
     uint which = uint(gl_VertexIndex) % 3u;
     uint at = which == 0u ? tri.x : which == 1u ? tri.y : tri.z;
     uint kick = tri.w & 0x0FFFFFFFu;
@@ -163,3 +272,4 @@ void main() {
         pcr_plane_of_draw(); // (exact Z: the plane pass's, pcr_exact_z.h)
     }
 }
+#endif

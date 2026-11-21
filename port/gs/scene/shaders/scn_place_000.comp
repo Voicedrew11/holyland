@@ -1,0 +1,85 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The scene renderer's placing of program 0x000's vertices (port/render/shaders/scn_placed.h): each vertex of a job
+// worked out once, as pcr_nd000.vert worked it out for each triangle corner of it (its maths: vu1_000_maths.h)
+#define SCN_PLACE
+layout(local_size_x = 64) in;
+
+// (as pcr_nd000.vert's)
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
+    vec4 move[3];
+    vec4 mid[3];
+    vec4 screen[2];
+    vec4 zt;
+} pic;
+layout(set = 0, binding = 3, std430) readonly buffer Mesh {
+    ivec4 q[];
+} mesh;
+#include "vu1_000_draw.h"
+layout(set = 0, binding = 4, std430) readonly buffer Draws {
+    Draw draws[];
+};
+// (the record read from its buffer where used: a copy of it, its arrays indexed at run time, the compiler kept in
+// scratch memory, 50 to 70 KB a wave, and the placing was slower than the vertex shaders it stands in for)
+#define ND_D_DIRECT
+uint d_at;
+#define d draws[d_at]
+#include "vu1_000_maths.h"
+#include "scn_placed.h"
+
+layout(set = 1, binding = 0, std430) readonly buffer Jobs {
+    uvec4 jobs[];
+};
+layout(set = 1, binding = 1, std430) writeonly buffer PlacedOut {
+    Placed placed[];
+};
+layout(push_constant, std430) uniform PlacePush {
+    uint first_job;
+} place_push;
+
+Placed place(uint at) {
+    Placed r;
+    ivec4 N = mesh.q[at * 4u + 1u], T = mesh.q[at * 4u + 2u];
+    Place p = vu_place(at);
+    r.q = p.q;
+    r.cut = d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex * vec4(mesh.q[at * 4u]));
+    float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, p.q)), 255.0), 0.0);
+    uint w16 = (uint(ftoi(fogf * 16.0)) | uint(N.w)) & 0xFFFFu;
+    if ((d.info.w & ND_C_WAVE) != 0) {
+        // (pcr_nd000.vert's wave UVs)
+        uint w = uint(T.w) & 15u;
+        uint o = d.wave[w >> 2][w & 3u];
+        T.x = (int(uint(T.x) + (o & 0xFFFFu)) << 16) >> 16;
+        T.y = (int(uint(T.y) + (o >> 16)) << 16) >> 16;
+    }
+    r.st = vec4(vec3(T.xyz) / 4096.0, float((w16 >> 4) & 0xFFu));
+    r.zframe = gs_z(p);
+    r.xy = ivec2(p.x, p.y);
+    r.z = r.zframe;
+    r.zfrac = 0.0;
+    r.f = 1.0;
+    r.flags = vu_clipped(at) ? SCN_PLACED_CLIPPED : 0u;
+    r.whole = vec4(0.0);
+    if ((d.info.w & ND_C_MOVING) != 0) {
+        Whole w = whole_place(at);
+        r.whole = vec4(w.h, w.w);
+        Moved m = moved(at, p);
+        r.xy = ivec2(m.x, m.y);
+        r.z = m.z;
+        r.zfrac = m.zfrac;
+        r.f = m.f;
+        r.flags |= m.drop ? SCN_PLACED_DROP : 0u;
+    }
+    r.rgba = scn_pack_rgba(lit_colour(at));
+    r.pad0 = 0u;
+    r.pad1 = 0u;
+    return r;
+}
+
+void main() {
+    uvec4 job = jobs[place_push.first_job + gl_WorkGroupID.x];
+    d_at = job.x & 0x3FFFFFFFu;
+    for (uint i = gl_LocalInvocationID.x; i < job.w; i += 64u) {
+        placed[job.z + i] = place(job.y + i);
+    }
+}

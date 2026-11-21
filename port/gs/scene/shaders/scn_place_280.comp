@@ -1,0 +1,90 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The scene renderer's placing of program 0x280's vertices (port/render/shaders/scn_placed.h): each vertex of a job
+// worked out once, as pcr_nd280.vert worked it out for each triangle corner of it (its maths: vu1_280_maths.h)
+#define SCN_PLACE
+layout(local_size_x = 64) in;
+
+// (as pcr_nd280.vert's)
+layout(set = 0, binding = 0, std430) readonly buffer Picture {
+    vec4 move[3];
+    vec4 mid[3];
+    vec4 screen[2];
+    vec4 zt;
+} pic;
+layout(set = 0, binding = 6, std430) readonly buffer Mesh {
+    ivec4 q[];
+} mesh;
+#include "vu1_280_draw.h"
+layout(set = 0, binding = 7, std430) readonly buffer Draws {
+    Draw draws[];
+};
+// (the record read from its buffer where used: a copy of it, its arrays indexed at run time, the compiler kept in
+// scratch memory, 50 to 70 KB a wave, and the placing was slower than the vertex shaders it stands in for)
+#define ND_D_DIRECT
+uint d_at;
+#define d draws[d_at]
+#include "vu1_280_maths.h"
+#include "scn_placed.h"
+
+layout(set = 1, binding = 0, std430) readonly buffer Jobs {
+    uvec4 jobs[];
+};
+layout(set = 1, binding = 1, std430) writeonly buffer PlacedOut {
+    Placed placed[];
+};
+layout(push_constant, std430) uniform PlacePush {
+    uint first_job;
+} place_push;
+
+// A vertex (its slot) of a pass (sphere: the sphere-mapped one)
+Placed place(uint slot, bool sphere) {
+    Placed r;
+    ivec4 X = mesh.q[slot * 4u + 4u];
+    int s = vertex_set(slot);
+    Place pl = vu_place(slot);
+    r.q = pl.q;
+    r.cut = d.clip == vec4(0.0) ? 0.0 : dot(d.clip, d.vertex[s] * qf(slot, 0u));
+    r.zframe = uint(pl.z >> 4) & 0xFFFFFFu;
+    float fogf = max(min(vu_add(d.fog.z, vu_mul(d.fog.w, pl.q)), 255.0), 0.0);
+    uint w16 = (uint(ftoi(fogf * 16.0)) | uint(X.z)) & 0xFFFFu;
+    r.xy = ivec2(pl.x, pl.y);
+    r.z = r.zframe;
+    r.zfrac = 0.0;
+    r.f = 1.0;
+    r.flags = 0u;
+    r.whole = vec4(0.0);
+    if ((d.info.y & ND_C_MOVING) != 0) {
+        Whole w = whole_place(slot);
+        r.whole = vec4(w.h, w.w);
+        Moved m = moved(slot, s, pl);
+        r.xy = ivec2(m.x, m.y);
+        r.z = m.z;
+        r.zfrac = m.zfrac;
+        r.f = m.f;
+        r.flags = m.drop ? SCN_PLACED_DROP : 0u;
+    }
+    if (!sphere) {
+        r.st = vec4(qf(slot, 2u).xyz, float((w16 >> 4) & 0xFFu));
+        r.rgba = scn_pack_rgba(lit_colour(slot));
+    } else {
+        // ((Ms * normal).xy + 1 * 1) * 0.5; Q 1; white, with vertex 1's alpha (pcr_nd280.vert's)
+        vec4 acc = vu_transform3(d.sphere[s], qf(slot, 1u).xyz);
+        r.st = vec4(vu_mul(vu_add(acc.x, 1.0), 0.5), vu_mul(vu_add(acc.y, 1.0), 0.5), 1.0, float((w16 >> 4) & 0xFFu));
+        uint one = slot - 2u * uint(X.x) + 2u;
+        float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
+        r.rgba = scn_pack_rgba(uvec4(255u, 255u, 255u, uint(ftoi(a1)) & 0xFFu));
+    }
+    r.pad0 = 0u;
+    r.pad1 = 0u;
+    return r;
+}
+
+void main() {
+    uvec4 job = jobs[place_push.first_job + gl_WorkGroupID.x];
+    d_at = job.x & 0x0FFFFFFFu;
+    bool sphere = ((job.x >> 29) & 1u) != 0u;
+    for (uint i = gl_LocalInvocationID.x; i < job.w; i += 64u) {
+        placed[job.z + i] = place(job.y + 2u * i, sphere);
+    }
+}

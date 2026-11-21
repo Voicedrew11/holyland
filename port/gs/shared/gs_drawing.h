@@ -40,6 +40,9 @@ struct NativeBatch {
     NativeProgram program = NativeProgram::vu1_000;
     Vulkan::BufferHandle arena, records, triangles;
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
+    // (programs 0x000 and 0x280) the arena's vertices its triangles' corners are of: the first's slot and how many
+    // (a vertex one slot for 0x000, two for 0x280); the scene renderer places each once a draw (scn_place.comp)
+    uint32_t first_vertex = 0, vertex_count = 0;
     // (the frame's own walk kept: NativeDraws::begin_frame_kept) the instance its pictures between draw it with, the
     // record with its move; no_instance: none
     uint32_t picture_instance = no_instance;

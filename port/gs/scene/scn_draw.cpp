@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <unordered_map>
 
 #include "pcr_shaders.h"
 #include "scn_shaders.h"
@@ -22,6 +23,7 @@ constexpr uint32_t walk_sampler_binding = walk_clut_binding + 1;
 constexpr uint32_t walk_samplers = 16;
 constexpr uint32_t trace_binding = 6, records_binding = 7, merged_binding = 8, planes_binding = 9;
 constexpr uint32_t first_binding = 10; // (set 1's: pcr_prim.h's u_first, SCN_FIRST_DRAW)
+constexpr uint32_t jobs_binding = 11, placed_binding = 12; // (set 1's: scn_placed.h's, SCN_PLACED)
 constexpr uint32_t vertex_input_count = pcr::vertex_input_count;
 constexpr uint32_t scn_alpha_one = 0x1; // (pcr_common.h's SCN_ALPHA_ONE)
 
@@ -120,6 +122,11 @@ void Drawer::make_programs() {
     }
     batch_vert.sets[1].storage_buffer_mask = 1u << records_binding | 1u << merged_binding | 1u << planes_binding;
     batch_vert.sets[1].meta[records_binding].array_size = 1;
+    // (0x000's and 0x280's placed vertices: SCN_PLACED)
+    ResourceLayout placed_vert = batch_vert;
+    placed_vert.sets[1].storage_buffer_mask |= 1u << jobs_binding | 1u << placed_binding;
+    placed_vert.sets[1].meta[jobs_binding].array_size = 1;
+    placed_vert.sets[1].meta[placed_binding].array_size = 1;
     batch_vert.sets[1].meta[merged_binding].array_size = 1;
     batch_vert.sets[1].meta[planes_binding].array_size = 1;
     ResourceLayout vert = batch_vert;
@@ -168,6 +175,34 @@ void Drawer::make_programs() {
         SCN_REC_SHADER(pcr_nd280_vert_rec, &batch_vert), SCN_REC_SHADER(pcr_nd700_vert_rec, &batch_vert),
         SCN_REC_SHADER(pcr_ndripple_vert_rec, &batch_vert),
     };
+    if (placed_on_) {
+        vs_rec[size_t(Program::nd000)] = SCN_REC_SHADER(pcr_nd000_vert_placed, &placed_vert);
+        vs_rec[size_t(Program::nd280)] = SCN_REC_SHADER(pcr_nd280_vert_placed, &placed_vert);
+        // (the placing: set 0 as the vertex shader's, the picture and the program's arena and records; set 1 the jobs
+        // and the placed vertices)
+        const std::array<std::pair<const uint32_t *, size_t>, 2> code = {{
+            {scn_spv_scn_place_000_comp, sizeof(scn_spv_scn_place_000_comp)},
+            {scn_spv_scn_place_280_comp, sizeof(scn_spv_scn_place_280_comp)},
+        }};
+        for (uint32_t p = 0; p < 2; p++) {
+            ResourceLayout layout = {};
+            layout.push_constant_size = sizeof(uint32_t);
+            layout.sets[0].storage_buffer_mask = 1u | 3u << (3 + 3 * p);
+            for (uint32_t b : {0u, 3 + 3 * p, 4 + 3 * p}) {
+                layout.sets[0].meta[b].array_size = 1;
+            }
+            layout.sets[1].storage_buffer_mask = 3u;
+            layout.sets[1].meta[0].array_size = 1;
+            layout.sets[1].meta[1].array_size = 1;
+            Shader *shader = device_.request_shader(code[p].first, code[p].second, &layout);
+            place_[p] = shader ? device_.request_program(shader) : nullptr;
+        }
+    }
+    if (getenv("KF4_SCN_ND_EMPTY") && atoi(getenv("KF4_SCN_ND_EMPTY")) != 0) {
+        // (developers': the bound of the native draws' maths, nothing drawn by them)
+        vs_rec[size_t(Program::nd000)] = SCN_REC_SHADER(pcr_nd000_vert_empty, &batch_vert);
+        vs_rec[size_t(Program::nd280)] = SCN_REC_SHADER(pcr_nd280_vert_empty, &batch_vert);
+    }
     // (slice 3d: program 0x280's two passes as one draw, pcr_prim.h's SCN_FUSE_280; the early tests: nothing discarded)
     fused_280_ = device_.request_program(SCN_REC_SHADER(pcr_nd280_vert_fuse, &batch_vert),
                                          SCN_REC_SHADER(pcr_prim_early_frag_fuse, &frag));
@@ -551,8 +586,10 @@ void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *pic
     counts_.scenes++;
     counts_.picture_scenes += picture ? 1 : 0;
     prepare(scene);
+    prepare_placing(scene);
     bool after_pass = false;
     full_barrier(c); // (what was submitted before: the targets' last scene, uploads into images)
+    place_vertices(c);
     for (const Step &step : scene.steps) {
         if (step.kind == Step::Kind::op) {
             if (after_pass) {
@@ -601,6 +638,145 @@ const Buffer *Drawer::picture_buffer(uint32_t binding) const {
 
 uint32_t Drawer::instance_of(const Draw &d) const {
     return picture_ && d.picture_instance != 0xFFFFFFFFu ? d.picture_instance : d.instance;
+}
+
+uint32_t Drawer::first_instance(uint32_t index, const Draw &d) const {
+    const uint32_t job = index < prepared_.job_of.size() ? prepared_.job_of[index] : no_record;
+    return job != no_record ? job : instance_of(d);
+}
+
+// The scene's jobs: each native draw of 0x000 or 0x280 drawn from the records (their programs the placed vertices'),
+// but a fused first pass (its own program), its run of vertices with the instance it is drawn with; a run met again
+// (the same draw in another pass: DATE's shadows, the first-draw image) the same job. Laid out by the program's
+// buffers, a dispatch each.
+void Drawer::prepare_placing(const Scene &scene) {
+    Prepared &p = prepared_;
+    p.job_of.assign(scene.draws.size(), no_record);
+    if (!placed_on_ || !place_[0] || !place_[1]) {
+        return;
+    }
+    struct Key {
+        const Buffer *arena, *records;
+        uint32_t first, count, instance;
+        bool operator==(const Key &o) const {
+            return arena == o.arena && records == o.records && first == o.first && count == o.count &&
+                   instance == o.instance;
+        }
+    };
+    struct KeyHash {
+        size_t operator()(const Key &k) const {
+            uint64_t h = uint64_t(k.first) * 0x9E3779B97F4A7C15ull ^ uint64_t(k.instance) * 0xC2B2AE3D27D4EB4Full ^
+                         uint64_t(k.count) << 40 ^ reinterpret_cast<uintptr_t>(k.records) ^
+                         reinterpret_cast<uintptr_t>(k.arena) >> 4;
+            return size_t(h ^ h >> 29);
+        }
+    };
+    struct Pending {
+        uint32_t slot;
+        Key key;
+    };
+    std::vector<Pending> pending;
+    std::vector<uint32_t> pending_of(scene.draws.size(), no_record);
+    std::unordered_map<Key, uint32_t, KeyHash> seen;
+    for (size_t di = 0; di < scene.draws.size(); di++) {
+        const Draw &d = scene.draws[di];
+        if (d.clear || !d.native || p.first_record[di] == no_record || d.native_vertex_count == 0 ||
+            scene.materials[d.material].fuse != no_material) {
+            continue;
+        }
+        uint32_t slot = native_slot(d.native_program);
+        if (slot > 1) {
+            continue;
+        }
+        Key key = {d.arena.get(), d.records.get(), d.native_first_vertex, d.native_vertex_count, instance_of(d)};
+        auto [it, fresh] = seen.try_emplace(key, uint32_t(pending.size()));
+        if (fresh) {
+            pending.push_back({slot, key});
+        } else {
+            counts_.place_shared++;
+        }
+        pending_of[di] = it->second;
+    }
+    if (pending.empty()) {
+        return;
+    }
+    // (in order of their buffers: a dispatch a program's arena and records)
+    std::vector<uint32_t> order(pending.size());
+    for (uint32_t i = 0; i < order.size(); i++) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+        const Pending &x = pending[a], &y = pending[b];
+        if (x.slot != y.slot) {
+            return x.slot < y.slot;
+        }
+        if (x.key.arena != y.key.arena) {
+            return x.key.arena < y.key.arena;
+        }
+        return x.key.records < y.key.records;
+    });
+    std::vector<uint32_t> job_at(pending.size());
+    std::vector<uint32_t> jobs;
+    jobs.reserve(pending.size() * 4);
+    uint32_t vertices = 0;
+    for (uint32_t i = 0; i < order.size(); i++) {
+        const Pending &e = pending[order[i]];
+        job_at[order[i]] = i;
+        if (p.placings.empty() || p.placings.back().slot != e.slot || p.placings.back().arena != e.key.arena ||
+            p.placings.back().records != e.key.records) {
+            p.placings.push_back({e.slot, e.key.arena, e.key.records, i, 0});
+        }
+        p.placings.back().count++;
+        jobs.insert(jobs.end(), {e.key.instance, e.key.first, vertices, e.key.count});
+        vertices += e.key.count;
+    }
+    BufferCreateInfo info = {};
+    info.domain = BufferDomain::LinkedDeviceHostPreferDevice;
+    info.size = jobs.size() * sizeof(uint32_t);
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    p.jobs = device_.create_buffer(info, jobs.data());
+    info.domain = BufferDomain::Device;
+    info.size = VkDeviceSize(vertices) * 80; // (scn_placed.h's Placed)
+    p.placed = p.jobs ? device_.create_buffer(info, nullptr) : BufferHandle();
+    if (!p.jobs || !p.placed) {
+        p.jobs.reset();
+        p.placed.reset();
+        p.placings.clear();
+        return;
+    }
+    for (size_t di = 0; di < scene.draws.size(); di++) {
+        if (pending_of[di] != no_record) {
+            p.job_of[di] = job_at[pending_of[di]];
+        }
+    }
+    counts_.place_jobs += pending.size();
+    counts_.placed_vertices += vertices;
+}
+
+// The jobs' vertices placed (scn_place_*.comp), before the passes' vertex shaders read them
+void Drawer::place_vertices(CommandBuffer &c) {
+    const Prepared &p = prepared_;
+    if (p.placings.empty()) {
+        return;
+    }
+    for (const Prepared::Placing &pl : p.placings) {
+        times_.begin(c, pl.slot == 0 ? pcr::GpuWork::native_000 : pcr::GpuWork::native_280);
+        uint32_t at = 3 + 3 * pl.slot;
+        c.set_program(place_[pl.slot]);
+        c.set_storage_buffer(0, 0, picture_ ? *picture_buffer(0) : *zeros_);
+        c.set_storage_buffer(0, at, *pl.arena);
+        c.set_storage_buffer(0, at + 1, *pl.records);
+        c.set_storage_buffer(1, 0, *p.jobs);
+        c.set_storage_buffer(1, 1, *p.placed);
+        for (uint32_t first = 0; first < pl.count; first += 65535) {
+            uint32_t job = pl.first_job + first;
+            c.push_constants(&job, 0, sizeof(job));
+            c.dispatch(std::min(pl.count - first, 65535u), 1, 1);
+            counts_.place_dispatches++;
+        }
+    }
+    c.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+              VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
 }
 
 void Drawer::record_op(const Op &op, CommandBuffer &c) {
@@ -693,6 +869,8 @@ void Drawer::bind_records(const Pass &pass, const Draw &d, CommandBuffer &c) {
     }
     c.set_storage_buffer(1, trace_binding, *no_trace_);
     c.set_storage_buffer(1, records_binding, *p.records);
+    c.set_storage_buffer(1, jobs_binding, p.jobs ? *p.jobs : *zeros_);
+    c.set_storage_buffer(1, placed_binding, p.placed ? *p.placed : *zeros_);
     c.set_storage_buffer(1, merged_binding, *zeros_);
     c.set_storage_buffer(1, planes_binding, *zeros_);
     c.set_texture(1, 0, dummy_uint_->get_view(), StockSampler::NearestClamp);
@@ -888,7 +1066,8 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
         counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
         counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
         const RunKey key = run_.call;
-        const VkDrawIndirectCommand command = {d.triangle_count * 3, 1, d.first_triangle * 3, instance_of(d)};
+        const VkDrawIndirectCommand command = {native_corners(d), 1, d.first_triangle * 3,
+                                               rec != no_record ? first_instance(index, d) : instance_of(d)};
         if (rec != no_record) {
             if (!joins(key, rec)) {
                 flush_run(c);
@@ -933,7 +1112,8 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
     size_t v = size_t(m.program);
     const bool records = rec != no_record;
     const VkDrawIndirectCommand command =
-        d.native ? VkDrawIndirectCommand{d.triangle_count * 3, 1, d.first_triangle * 3, instance_of(d)}
+        d.native ? VkDrawIndirectCommand{native_corners(d), 1, d.first_triangle * 3,
+                                         records ? first_instance(index, d) : instance_of(d)}
                  : VkDrawIndirectCommand{d.vertex_count, 1, records ? d.first_vertex : 0, 0};
     pcr::PrimPush push = m.push;
     if (d.shadow != no_shadow) {
