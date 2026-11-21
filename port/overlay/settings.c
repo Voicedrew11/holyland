@@ -18,7 +18,7 @@
                     "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
-       "mods":     {"door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false},
+       "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -79,6 +79,7 @@ PortSettings port_settings = {
     .frame_rate = 30,
     .door_speed = 1,
     .fov = 64,
+    .game_speed = 1.f,
     .volume = 100,
     .ui_scale = 1.0f,
     .presenter = PORT_PRESENTER_VULKAN,
@@ -455,6 +456,8 @@ void port_settings_load(void) {
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
     s->door_speed = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "door_speed", s->door_speed, 1, 8);
+    s->game_speed = (float)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "game_speed",
+        s->game_speed, PORT_GAME_SPEED_LOW, PORT_GAME_SPEED_HIGH);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
     s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
     s->auto_loot_gold = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "auto_loot_gold", s->auto_loot_gold);
@@ -496,6 +499,9 @@ void port_settings_load(void) {
     }
     if (!port_options.fov_forced) {
         port_options.fov = s->fov;
+    }
+    if (!port_options.game_speed_forced) {
+        port_options.game_speed = s->game_speed;
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
@@ -706,6 +712,7 @@ void port_settings_save(void) {
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));
     write_controls(section("controls"));
+    put(section("mods"), "game_speed", cJSON_CreateNumber(s->game_speed));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
     put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));

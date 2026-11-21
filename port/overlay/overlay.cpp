@@ -926,9 +926,9 @@ std::string bug_report() {
     text += line;
     text += "\n";
     std::snprintf(line, sizeof(line),
-                  "options: unpaced=%d fov=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
+                  "options: unpaced=%d game_speed=%.2f fov=%d deinterlace=%d progressive=%d anti_blur=%d adapt_width=%d "
                   "no_audio=%d device_clock=%d\n",
-                  port_options.fast, port_options.fov, port_options.deinterlace,
+                  port_options.fast, (double)port_game_speed(), port_options.fov, port_options.deinterlace,
                   port_options.progressive, port_options.anti_blur, port_options.adapt_width, port_options.no_audio,
                   port_audio_device_clock());
     text += line;

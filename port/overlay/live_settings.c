@@ -1,5 +1,6 @@
 /* The settings that change while the game runs (port/include/port/live_settings.h): one setter each, in a table by
-   name, which the overlay's switches and KF4_SET_AT's test changes both call. */
+   name, which the overlay's switches and KF4_SET_AT's test changes both call. A setter clamps what it was given to
+   the range that setting has, and returns the value that took effect. */
 #include "port/live_settings.h"
 
 #include <stdio.h>
@@ -11,61 +12,89 @@
 #include "port/platform.h"
 #include "port/settings.h"
 
-static void set_widescreen(int on) {
+static double set_widescreen(double on) {
     port_settings.widescreen = port_options.widescreen = on != 0;
     port_video_apply_settings();
+    return port_options.widescreen;
 }
 
-static void set_native_widescreen(int on) {
+static double set_native_widescreen(double on) {
     port_settings.native_widescreen = port_options.native_widescreen = on != 0;
     port_gs_set_native_scale(port_options.native_scale);
+    return port_options.native_widescreen;
 }
 
-static void set_native_scale(int scale) {
-    scale = scale < 0 ? 0 : scale > 4 ? 4 : scale;
-    port_settings.native_scale = scale;
-    port_gs_set_native_scale(scale);
+/* the rest below take a whole number: the value comes in as a double with the game speed's quarters, so
+   each one that wants a whole number says so */
+static double set_native_scale(double scale) {
+    int whole = scale < 0 ? 0 : scale > 4 ? 4 : (int)scale;
+    port_settings.native_scale = whole;
+    port_gs_set_native_scale(whole);
+    return whole;
 }
 
-static void set_frame_rate(int rate) {
-    port_settings.frame_rate = port_options.frame_rate = rate;
+static double set_frame_rate(double rate) {
+    port_settings.frame_rate = port_options.frame_rate = (int)rate;
+    return port_options.frame_rate;
 }
 
-static void set_draw_distance(int distance) {
-    distance = distance < 0 ? 0 : distance >= PORT_DRAW_DISTANCE_COUNT ? PORT_DRAW_DISTANCE_COUNT - 1 : distance;
-    port_settings.draw_distance = port_options.draw_distance = distance;
+/* settings.json and the player menu's 1x to 2x in quarters (PORT_GAME_SPEED_LOW to PORT_GAME_SPEED_HIGH), given
+   here as the speed itself (1.25: a quarter faster); --game-speed takes the same range, for one run.
+   port/platform/kernel.c re-anchors the vblank pacing when the clock a vblank takes changes. The clock
+   runs the speed only while the play simulates: a pause, a message, a menu or a movie keeps the PS2's
+   1x (the game's side marks the clock: game/frame_interp.c, port_clock_played in port/platform/video.c). */
+static double set_game_speed(double speed) {
+    speed = speed < PORT_GAME_SPEED_LOW ? PORT_GAME_SPEED_LOW : speed > PORT_GAME_SPEED_HIGH ? PORT_GAME_SPEED_HIGH : speed;
+    float made = (float)speed;
+
+    /* the game's and the renderer's threads read it (port_game_speed, port/platform/video.c) */
+    port_settings.game_speed = made;
+    __atomic_store(&port_options.game_speed, &made, __ATOMIC_RELAXED);
+    return made;
+}
+
+static double set_draw_distance(double distance) {
+    int whole = distance < 0 ? 0 : distance >= PORT_DRAW_DISTANCE_COUNT ? PORT_DRAW_DISTANCE_COUNT - 1 : (int)distance;
+    port_settings.draw_distance = port_options.draw_distance = whole;
+    return whole;
 }
 
 /* settings.json keeps on (every kind the renderer draws) or off; a choice of kinds is for this run */
-static void set_native_draw(int kinds) {
-    port_gs_set_native_draw(kinds);
+static double set_native_draw(double kinds) {
+    port_gs_set_native_draw((int)kinds);
     if (port_options.native_draw == 0 || port_options.native_draw == port_gs_native_kinds()) {
         port_settings.native_draw = port_options.native_draw != 0;
     }
+    return port_options.native_draw;
 }
 
-static void set_sky(int sky) {
+static double set_sky(double sky) {
     port_settings.native_sky = port_options.native_sky = sky == PORT_SKY_PS2 ? PORT_SKY_PS2 : PORT_SKY_MODERN;
+    return port_options.native_sky;
 }
 
-static void set_antialias(int method) {
-    port_settings.antialias = port_antialias(method) ? method : PORT_AA_OFF;
+static double set_antialias(double method) {
+    int whole = (int)method;
+    port_settings.antialias = port_antialias(whole) ? whole : PORT_AA_OFF;
     port_gs_set_antialias(port_settings.antialias);
+    return port_settings.antialias;
 }
 
-static void set_font(int font) {
+static double set_font(double font) {
     port_settings.font = font != 0;
     port_gs_set_font(port_settings.font);
+    return port_settings.font;
 }
 
-static void set_native_2d(int smooth) {
+static double set_native_2d(double smooth) {
     port_settings.native_2d = smooth != 0;
     port_gs_set_native_2d(smooth != 0);
+    return port_settings.native_2d;
 }
 
 typedef struct {
     const char *name;
-    void (*set)(int value);
+    double (*set)(double value); /* the value that took effect, after any clamp */
 } LiveSetting;
 
 static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
@@ -79,14 +108,16 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_ANTIALIAS] = {"antialias", set_antialias},
     [PORT_LIVE_NATIVE_2D] = {"native_2d", set_native_2d},
     [PORT_LIVE_FONT] = {"font", set_font},
+    [PORT_LIVE_GAME_SPEED] = {"game_speed", set_game_speed},
 };
 
-void port_live_set(PortLiveSetting setting, int value) {
+double port_live_set(PortLiveSetting setting, double value) {
     if ((unsigned)setting >= PORT_LIVE_COUNT) {
-        return;
+        return value;
     }
-    live_settings[setting].set(value);
+    double made = live_settings[setting].set(value);
     port_settings_changed();
+    return made;
 }
 
 /* ---- KF4_SET_AT ---- */
@@ -95,7 +126,7 @@ void port_live_set(PortLiveSetting setting, int value) {
 typedef struct {
     unsigned long long vblank;
     PortLiveSetting setting;
-    int value;
+    double value;
 } Change;
 
 static Change changes[MOST_CHANGES];
@@ -134,13 +165,13 @@ static int parse_change(const char *item, size_t length, Change *out) {
         return 0;
     }
     int setting = find_setting(colon + 1, (size_t)(sign - colon - 1));
-    long value = strtol(sign + 1, &end, 0);
+    double value = strtod(sign + 1, &end);
     if (setting < 0 || *end != 0 || sign[1] == 0) {
         fprintf(stderr, "[live] KF4_SET_AT: \"%s\": no such setting or not a number\n", text);
         return 0;
     }
     out->setting = (PortLiveSetting)setting;
-    out->value = (int)value;
+    out->value = value;
     return 1;
 }
 
@@ -171,7 +202,12 @@ void port_live_vblank(void) {
     unsigned long long now = (unsigned long long)port_vblank_count();
     while (change_next < change_count && changes[change_next].vblank <= now) {
         const Change *c = &changes[change_next++];
-        fprintf(stderr, "[live] vblank %llu: %s = %d\n", now, live_settings[c->setting].name, c->value);
-        port_live_set(c->setting, c->value);
+        double made = port_live_set(c->setting, c->value);
+        if (made != c->value) {
+            fprintf(stderr, "[live] vblank %llu: %s = %g, not the asked %g\n", now,
+                    live_settings[c->setting].name, made, c->value);
+        } else {
+            fprintf(stderr, "[live] vblank %llu: %s = %g\n", now, live_settings[c->setting].name, made);
+        }
     }
 }

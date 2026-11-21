@@ -14,6 +14,11 @@ extern "C" {
 #define ASPECT_4_3 0     /* the TV's 4:3, whatever the window's shape */
 #define ASPECT_STRETCH 1 /* the whole window */
 
+/* --game-speed, settings.json's mods.game_speed, the player menu's Game speed and KF4_SET_AT all take and
+   clamp the game's whole clock to this range, in quarters (1: the PS2's rate, 2: twice as fast) */
+#define PORT_GAME_SPEED_LOW  1.0
+#define PORT_GAME_SPEED_HIGH 2.0
+
 typedef struct {
     /* Display */
     int window_height;     /* the window's height in pixels; 896 by default */
@@ -58,6 +63,10 @@ typedef struct {
     int volume;            /* 0 to 100 */
     int mute;
     /* Mods */
+    float game_speed;      /* the whole game's clock, this many times the host's: PORT_GAME_SPEED_LOW to
+                              PORT_GAME_SPEED_HIGH, in quarters (port_options.game_speed;
+                              changed while the game runs, from the next vblank, and only while the
+                              game simulates: the menus, the pauses and the cinematics keep 1x) */
     int myus_necklace;     /* the effect of Myu's Necklace, always (port_options.myus_necklace) */
     int separate_run;      /* a run key apart from the action button (port_options.separate_run) */
     int no_hit_jolt;       /* a hard hit does not throw the view down (port_options.no_hit_jolt) */

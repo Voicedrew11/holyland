@@ -7,6 +7,13 @@
        --fast            do not hold the game to 59.94 vblanks a second
        --door-speed N    doors open and close this many times faster than on the PS2: 2 to 8, or 1
                          for the default speed
+       --game-speed N    the whole game this many times faster than the host (1, the PS2's, by
+                         default; 2: twice as fast, every vblank, timer, animation and control;
+                         the music and sounds keep their own speed)
+                         From 1 to 2; ignored with --fast (which holds the game to no clock)
+                         Only while the game simulates: the menus, the pauses and the cinematics
+                         run at the PS2's 1x whatever this says.
+                         The player menu's Gameplay page changes it in play, 1x to 2x in quarters (F1)
        --frames N        stop after N vblanks
        --input FILE      press the buttons a pad script says (port/sdk/libpad.c) instead of SDL's
        --log FILE        write the game's state each vblank, and what happens between ("-": stderr)
@@ -283,7 +290,7 @@ static FILE *log_file;
 
 static void usage(const char *program) {
     fprintf(stderr,
-            "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--door-speed N] [--frames N] [--input FILE] [--log FILE|-]\n"
+            "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--door-speed N] [--game-speed N] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
             "          [--audio-dump FILE] [--no-audio] [--saves DIR|none]\n"
@@ -355,6 +362,7 @@ static void parse_options(int argc, char **argv) {
     port_options.disc = getenv("KF4_DISC");
     port_options.door_speed = 1;
     port_options.fov = 64;
+    port_options.game_speed = 1.0f;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
     port_options.seamless_scroll = 1;
@@ -583,6 +591,16 @@ static void parse_options(int argc, char **argv) {
             }
             port_options.door_speed = (int)speed;
             port_options.door_speed_forced = 1;
+        } else if (strcmp(option, "--game-speed") == 0) {
+            char *end;
+            double speed = strtod(value, &end);
+
+            if (end == value || *end != 0 || !(speed >= PORT_GAME_SPEED_LOW && speed <= PORT_GAME_SPEED_HIGH)) {
+                fprintf(stderr, "--game-speed wants 1 to 2 (1.25: a quarter faster), not %s\n", value);
+                exit(2);
+            }
+            port_options.game_speed = (float)speed;
+            port_options.game_speed_forced = 1;
         } else if (strcmp(option, "--frame-rate-cap") == 0) {
             port_options.frame_rate_cap = atoi(value);
             if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap >= PORT_FRAME_RATE_MONITOR)) {

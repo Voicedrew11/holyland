@@ -628,6 +628,16 @@ void set_door_speed(int speed) {
 bool door_speed_overridden() {
     return port_options.door_speed != port_settings.door_speed;
 }
+const Choice game_speeds[] = {{"1x, as on the PS2", 100}, {"1.25x", 125}, {"1.5x", 150}, {"1.75x", 175}, {"2x", 200}};
+int get_game_speed() { // (the row's value in hundredths: the menu can only hold whole numbers)
+    return (int)std::lround(port_options.game_speed * 100.0f);
+}
+void set_game_speed(int hundreds) {
+    port_live_set(PORT_LIVE_GAME_SPEED, hundreds / 100.0); // (the live setter takes the speed itself)
+}
+bool game_speed_overridden() {
+    return port_options.game_speed != port_settings.game_speed;
+}
 
 int get_necklace() {
     return port_options.myus_necklace != 0;
@@ -971,6 +981,10 @@ const char cheat_help[] = "Applied once you are in play (not in a menu or messag
 const SettingRow gameplay_rows[] = {
     {"Door speed", "How fast doors and wall panels open and close. 1x is the PS2's.", RowKind::choice, door_speeds,
      {}, get_door_speed, set_door_speed, nullptr, nullptr, nullptr, nullptr, door_speed_overridden},
+    {"Game speed",
+     "The gameplay runs this many times faster. Music, sound, menus, and cinematics are unaffected.",
+     RowKind::choice, game_speeds, {}, get_game_speed, set_game_speed, nullptr, nullptr, nullptr, nullptr,
+     game_speed_overridden},
     {"Camera jolt on hit", "A hard hit throws the view down. Off: it still flashes, rumbles and knocks you back.",
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
     {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},

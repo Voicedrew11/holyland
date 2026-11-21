@@ -10,7 +10,8 @@
    vblank) and a little at the calls the game polls in loops; between two kernel calls it stands still.
    So the game sees the same timer counts, fields and interrupts on every run with the same input.
    --fast lets the host run ahead of 59.94 vblanks a second; otherwise each vblank waits for the
-   host's clock to catch up.
+   host's clock to catch up. --game-speed divides the host's time per EE time: 2, each vblank, timer
+   and animation twice as fast as on the PS2 (port_vblank_wall_seconds, the window's clock too).
 
    Interrupt handlers run in the kernel calls, on the stack of the thread that made the call, as the
    EE runs them on the interrupted thread's. What they make ready runs once they return.
@@ -303,8 +304,14 @@ static int bad_cause(int cause) {
 
 /* ---- Time ------------------------------------------------------------------------------------ */
 static double pace_start_wall;
+static double paced_speed; /* the game's clock pace_start_wall counts at (port_game_speed) */
 static int play_started; /* (the first native draw has been made: vblank_start) */
 static int precompile_waited; /* (the first vblank waited for the pipelines made before play) */
+
+/* The host's seconds that many of the game's (--game-speed: 2, half of them) */
+static double host_seconds(double game_seconds) {
+    return game_seconds / port_game_speed();
+}
 
 static void wake_vsync_waiters(void);
 static void frame_end(void);
@@ -404,12 +411,23 @@ static void vblank_start(void) {
     wake_vsync_waiters();
     port_audio_sync(ee_cycle);
     if (!port_options.fast) {
-        double due = pace_start_wall + (double)ee_cycle / (double)EE_BUS_HZ;
+        double game_s = (double)ee_cycle / (double)EE_BUS_HZ;
+        double speed = port_game_speed();
         double now = port_wall_seconds();
+
+        if (speed != paced_speed) {
+            /* the game's clock changed while it ran (the player menu's Game speed, the overlay's
+               KF4_SET_AT game_speed=, the play leaving off - a pause, a message, a menu or a movie
+               holding its own 1x): count the vblanks from here again, so the next one is a period of
+               the new speed away, not of the old one */
+            paced_speed = speed;
+            pace_start_wall = now - host_seconds(game_s);
+        }
+        double due = pace_start_wall + host_seconds(game_s);
 
         if (now - due > 0.25) {
             /* the host fell behind (a breakpoint, a slow load): start counting again from here */
-            pace_start_wall = now - (double)ee_cycle / (double)EE_BUS_HZ;
+            pace_start_wall = now - host_seconds(game_s);
             due = now;
         }
         /* the vblank's picture is shown at due; with --frame-rate above 60 the window shows the
@@ -457,7 +475,7 @@ static void vblank_start(void) {
                 port_video_present();
             }
             port_host_float_end(mode);
-            pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+            pace_start_wall = port_wall_seconds() - host_seconds((double)ee_cycle / (double)EE_BUS_HZ);
             fprintf(stderr, "[gs] the game waited %.2f s for the pipelines made before play\n", port_wall_seconds() - t0);
         }
     }
@@ -473,7 +491,7 @@ static void vblank_start(void) {
                 port_video_present();
             }
             port_host_float_end(mode);
-            pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+            pace_start_wall = port_wall_seconds() - host_seconds((double)ee_cycle / (double)EE_BUS_HZ);
             fprintf(stderr, "[gs] play waited %.2f s for the pipelines made ahead\n", port_wall_seconds() - t0);
         }
     }
@@ -485,7 +503,7 @@ static void vblank_start(void) {
             port_video_present();
         }
         port_host_float_end(mode);
-        pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+        pace_start_wall = port_wall_seconds() - host_seconds((double)ee_cycle / (double)EE_BUS_HZ);
     }
     zone_resume();
     /* A save state is taken here, between two fields, with every thread in a kernel call: the host's
@@ -709,6 +727,7 @@ void port_kernel_init(void) {
     next_vblank_start = FIELD_CYCLES_X5 / 5;
     next_vblank_end = UINT64_MAX;
     pace_start_wall = port_wall_seconds();
+    paced_speed = port_game_speed();
 }
 
 /* The main thread: the game's main, on a fiber of its own */
@@ -1173,6 +1192,6 @@ void port_kernel_state(PortStateIo *io) {
     PORT_STATE(io, intc_pending);
     if (io->loading) {
         /* the vblanks are paced from here on */
-        pace_start_wall = port_wall_seconds() - (double)ee_cycle / (double)EE_BUS_HZ;
+        pace_start_wall = port_wall_seconds() - host_seconds((double)ee_cycle / (double)EE_BUS_HZ);
     }
 }

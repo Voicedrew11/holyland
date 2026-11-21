@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "port/mouse_lead.h"
+#include "port/platform.h"
 
 void Packet_BeginGsRegisters(void);
 void Packet_AddGsRegister(int reg, s64 value);
@@ -41,9 +42,19 @@ static void add_float(int index, f32 value) {
 
 void NativeDraw_BeginFrame(void); /* (game/native_draw/native_draw.c) */
 void NativeDraw_MarkCamera(int projection, int mode);
+const char *Quick_WhyNotInPlay(void); /* (game/quicksave.c): NULL while the play has the player's control */
 
+/* The clock's mark: this is a frame of the play's own loop, so --game-speed may run the game's clock
+   fast here; when an event, the pause, a message or a menu has the player's control it may not, and
+   when a movie or the opening runs the loop is not here at all (port_clock_stopped keeps 1x: port/
+   platform/video.c). */
 void FrameInterp_BeginFrame(void) {
     NativeDraw_BeginFrame(); /* (native draw's side buffer: a frame's, as the marks here are) */
+    if (Quick_WhyNotInPlay() == NULL) {
+        port_clock_played();
+    } else {
+        port_clock_stopped();
+    }
     marking = port_frame_interp();
     sky = 0;
 }

@@ -166,12 +166,57 @@ static int times_set; /* (written under the lock; between_on reads it without: a
 static void sample_rates(void);
 #endif
 
+/* --game-speed: the chosen speed only while the game simulates, 1 otherwise. The game's side marks the
+   clock (port_clock_played / port_clock_stopped, game/frame_interp.c at its hook in the patched
+   GameLoop_DrawFrame): played while the play has the player in control, stopped while it does not - so
+   the game's own pause, an open message, a menu, a map or screen fade, and everything a movie does
+   outside the play's loop (the boot movies, the title's disc, the ending) run at the PS2's rate
+   whatever the setting says. A fresh mark is what matters: the play draws a frame every one or two
+   vblanks, so a mark a few vblanks old is a frame that has not come yet, and no mark at all means the
+   game is not drawing (its thread is held, as an open menu's pause does). --fast asks for no clock at
+   all, so 1 there; kf4-gsreplay links no game code, so it never marks and replays at 1x. */
+static uint64_t play_mark; /* the vblank the play's last frame moved on; 0: never marked */
+static uint64_t announced_vblank; /* the vblank the kernel last announced (port_video_vblank) */
+
+void port_clock_played(void) {
+    /* the game's thread writes it; the renderer's and the window's read it (as port_video_times does).
+       The vblank comes from the port's own bookkeeping, not from the kernel's counter: kf4-gsreplay
+       links this file with no kernel, and announcing nothing keeps the clock at 1x there. */
+    __atomic_store_n(&play_mark, __atomic_load_n(&announced_vblank, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+}
+
+void port_clock_stopped(void) {
+    __atomic_store_n(&play_mark, 0, __ATOMIC_RELAXED);
+}
+
+static int simulating(void) {
+    uint64_t mark = __atomic_load_n(&play_mark, __ATOMIC_RELAXED);
+
+    /* the play's frames come a vblank or two apart; six vblanks of slack is a tenth of a second */
+    return mark != 0 && __atomic_load_n(&announced_vblank, __ATOMIC_RELAXED) <= mark + 6;
+}
+
+double port_game_speed(void) {
+    float speed;
+
+    __atomic_load(&port_options.game_speed, &speed, __ATOMIC_RELAXED); /* (set_game_speed writes it from another thread) */
+
+    return speed > 0.0f && !port_options.fast && simulating() ? (double)speed : 1.0;
+}
+
+/* The host's seconds a vblank takes: VBLANK_SECONDS at 1x, half at 2x */
+double port_vblank_wall_seconds(void) {
+    return VBLANK_SECONDS / port_game_speed();
+}
+
 void port_video_vblank(uint64_t vblank, double wall) {
     LOCK();
     time_vblank[vblank % TIMES] = vblank;
     time_wall[vblank % TIMES] = wall;
     times_newest = vblank;
     __atomic_store_n(&times_set, 1, __ATOMIC_RELEASE);
+    /* what the game's clock compares its mark against (port_clock_played, simulating) */
+    __atomic_store_n(&announced_vblank, vblank, __ATOMIC_RELAXED);
     UNLOCK();
 #ifdef KF4_HAVE_SDL
     sample_rates();
@@ -181,7 +226,7 @@ void port_video_vblank(uint64_t vblank, double wall) {
 /* A picture's wall time: its vblank's, and its phase of a vblank after it */
 static double picture_time(uint64_t tag) {
     uint64_t v = PORT_PICTURE_VBLANK(tag);
-    double base;
+    double vblank_s = port_vblank_wall_seconds(), base;
 
     if (!times_set) {
         return 0;
@@ -189,9 +234,9 @@ static double picture_time(uint64_t tag) {
     if (time_vblank[v % TIMES] == v) {
         base = time_wall[v % TIMES];
     } else {
-        base = time_wall[times_newest % TIMES] + ((double)v - (double)times_newest) * VBLANK_SECONDS;
+        base = time_wall[times_newest % TIMES] + ((double)v - (double)times_newest) * vblank_s;
     }
-    return base + PORT_PICTURE_PHASE(tag) * VBLANK_SECONDS;
+    return base + PORT_PICTURE_PHASE(tag) * vblank_s;
 }
 
 static int refresh_rate; /* the window's screen's (port_video_refresh_rate) */
@@ -216,7 +261,7 @@ void port_video_refresh_seen(double seen_s) {
 /* The thread shows each picture a quarter of a vblank after its time (the vblank's own too): the
    renderer makes them one after another from the vblank on, and the first between is due a quarter of
    a vblank (at 240) after it; so each is there before it is due, and they are shown evenly. */
-#define THREAD_DELAY (0.25 * VBLANK_SECONDS)
+#define THREAD_DELAY (0.25 * port_vblank_wall_seconds())
 
 /* ---- Pictures timed by the screen's refreshes -------------------------------------------------------
    With --frame-rate monitor, once the refresh clock is sure of the screen's refreshes (by_refresh), each
@@ -303,7 +348,9 @@ double port_video_vblanks_at(double wall_s) {
     double at;
 
     LOCK();
-    at = times_set ? (double)times_newest + (wall_s - time_wall[times_newest % TIMES]) / VBLANK_SECONDS : -1;
+    at = times_set ? (double)times_newest +
+                         (wall_s - time_wall[times_newest % TIMES]) / port_vblank_wall_seconds()
+                   : -1;
     UNLOCK();
     return at;
 }
@@ -827,7 +874,7 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
             stat_sum += d;
             stat_sum2 += d * d;
             stat_max = d > stat_max ? d : stat_max;
-            stat_late += times_set && now - picture_time(tag) > 0.5 * VBLANK_SECONDS;
+            stat_late += times_set && now - picture_time(tag) > 0.5 * port_vblank_wall_seconds();
         }
         stat_last = now;
     }
@@ -953,7 +1000,7 @@ void port_video_present(void) {
        the window waits for it, up to half a vblank; not with --fast, which does not wait for the
        renderer (it is held at most two vblanks behind, pcr_vsync). */
     if (!port_options.fast && last_fresh && times_set) {
-        double until = port_wall_seconds() + 0.5 * VBLANK_SECONDS;
+        double until = port_wall_seconds() + 0.5 * port_vblank_wall_seconds();
 
         while (__atomic_load_n(&newest_in, __ATOMIC_ACQUIRE) <= times_newest && port_wall_seconds() < until) {
             port_sleep(0.00025);
@@ -1037,10 +1084,11 @@ int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {
     {
         /* a picture at each refresh's time less ahead_s */
         double period = refresh_clock_period_s(&refresh_clock), ahead = refresh_ahead_s();
-        double start = picture_time(PORT_PICTURE_TAG(vblank, 0)), end = start + VBLANK_SECONDS, t;
+        double vblank_s = port_vblank_wall_seconds();
+        double start = picture_time(PORT_PICTURE_TAG(vblank, 0)), end = start + vblank_s, t;
 
         for (t = refresh_clock_next_s(&refresh_clock, start + ahead) - ahead; t < end - 1e-6 && n < max; t += period) {
-            double phase = (t - start) / VBLANK_SECONDS;
+            double phase = (t - start) / vblank_s;
 
             phases[n++] = phase < 1e-6 ? 0 : phase;
         }
