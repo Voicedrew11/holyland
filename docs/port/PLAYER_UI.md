@@ -1,6 +1,6 @@
 # The player menu (RmlUi)
 
-The menu players use: Darker Reality's settings in King's Field IV's look, drawn with
+The menu players use: Holyland's settings in King's Field IV's look, drawn with
 [RmlUi](https://github.com/mikke89/RmlUi) over the game. **F1** (or a controller's **L3 + R3**) opens and closes it. The
 Dear ImGui overlay is now the developers' (**Shift+F1**), and the long-term goal is to retire ImGui entirely (the
 plan is below).

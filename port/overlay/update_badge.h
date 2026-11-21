@@ -16,5 +16,5 @@ void update_badge_menu_item();
 // The release's window, when the button opened it
 void update_badge_window();
 
-// "Darker Reality 0.2.0" or "Darker Reality (developer's build abc1234)"
+// "Holyland 0.2.0" or "Holyland (developer's build abc1234)"
 const char *update_badge_version_line();

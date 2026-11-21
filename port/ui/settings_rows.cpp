@@ -448,7 +448,7 @@ bool quick_slot_full() {
 const SettingRow saves_rows[] = {
     {"Quick saves", "", RowKind::heading},
     {"Quick save slot",
-     "Quick saves are the game's own save, taken where you stand, and load in any version of Darker Reality. The "
+     "Quick saves are the game's own save, taken where you stand, and load in any version of Holyland. The "
      "quick save and quick load keys (F2 and F4 unless changed) use this slot. The save points' three saves are "
      "left as they are.",
      RowKind::choice, quick_slots, {}, get_quick_slot, set_quick_slot, nullptr, describe_quick_slot},

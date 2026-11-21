@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Darker Reality's version, MAJOR.MINOR.PATCH, by the rule every release reads it by (docs/port/LAUNCHER.md,
+# Holyland's version, MAJOR.MINOR.PATCH, by the rule every release reads it by (docs/port/LAUNCHER.md,
 # "Versions"; Verdite's scripts/version.sh):
 #
-#   1. $DARKER_REALITY_VERSION, which the release workflow sets from the tag it was pushed for;
+#   1. $HOLYLAND_VERSION, which the release workflow sets from the tag it was pushed for;
 #   2. else the newest vMAJOR.MINOR.PATCH tag reachable from HEAD;
 #   3. else 0.0.0 (no tag yet).
 #
@@ -10,8 +10,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [ -n "${DARKER_REALITY_VERSION:-}" ]; then
-    v="${DARKER_REALITY_VERSION#v}"
+if [ -n "${HOLYLAND_VERSION:-}" ]; then
+    v="${HOLYLAND_VERSION#v}"
 else
     v="$( { git -C "$ROOT" tag --merged HEAD --list 'v*' --sort=-v:refname 2>/dev/null || true; } \
         | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/{s/^v//p;q;}')"

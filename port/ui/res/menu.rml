@@ -1,6 +1,6 @@
 <rml>
 <head>
-	<title>Darker Reality</title>
+	<title>Holyland</title>
 	<link type="text/rcss" href="kf4.rcss"/>
 </head>
 <!-- The player menu (port/ui/player_ui.cpp fills #tabs, #rows, #help and #prompts) -->
@@ -10,7 +10,7 @@
 		<div id="rule-outer">
 			<div id="rule-inner">
 				<div id="crest">
-					<div id="title">Darker Reality</div>
+					<div id="title">Holyland</div>
 					<div id="subtitle">King's Field IV</div>
 				</div>
 				<div id="tabs"></div>

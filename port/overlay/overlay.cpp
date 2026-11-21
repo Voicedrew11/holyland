@@ -1397,7 +1397,7 @@ void about_window() {
         ImGui::End();
         return;
     }
-    ImGui::Text("Darker Reality: King's Field IV on the PC, built from the kfiv-decomp decompilation");
+    ImGui::Text("Holyland: King's Field IV on the PC, built from the kfiv-decomp decompilation");
     ImGui::TextDisabled("%s", update_badge_version_line());
     ImGui::Separator();
     ImGui::BulletText("The game's code: kfiv-decomp (Voicedrew11 and contributors)");

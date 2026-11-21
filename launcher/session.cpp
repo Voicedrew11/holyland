@@ -23,14 +23,14 @@
 #include "update_check.h"
 #include "window.h"
 
-#ifndef DARKER_REALITY_VERSION
-#define DARKER_REALITY_VERSION ""
+#ifndef HOLYLAND_VERSION
+#define HOLYLAND_VERSION ""
 #endif
 
 namespace launcher {
 
 const char *launcher_version() {
-    return DARKER_REALITY_VERSION;
+    return HOLYLAND_VERSION;
 }
 
 namespace {

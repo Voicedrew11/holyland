@@ -29,7 +29,7 @@ extern "C" {
 
 namespace {
 
-constexpr const char *kProductName = "Darker Reality"; // what players see it called (launcher/product.h)
+constexpr const char *kProductName = "Holyland"; // what players see it called (launcher/product.h)
 constexpr unsigned kPollEveryMs = 5000;
 constexpr unsigned kPollForMs = 60000;
 

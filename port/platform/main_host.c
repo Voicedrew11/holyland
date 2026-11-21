@@ -1017,7 +1017,7 @@ int main(int argc, char **argv) {
     SetUnhandledExceptionFilter(crash_report);
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
-    data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, holyland, before any use */
+    data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, darker-reality, before any use */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();

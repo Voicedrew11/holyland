@@ -1,4 +1,4 @@
-/* The player menu (port/ui/): Darker Reality's own settings, drawn with RmlUi in King's Field IV's look, over the
+/* The player menu (port/ui/): Holyland's own settings, drawn with RmlUi in King's Field IV's look, over the
    game's picture. F1 (or a controller's L3 + R3) opens and closes it; the developers' overlay (Dear ImGui,
    port/include/port/overlay.h) moved to Shift+F1. Like the overlay it exists only with a window and settings.json
    (port_settings_active): never in a headless run or with a pad script, so tests stay the same. KF4_OVERLAY_SHOT's

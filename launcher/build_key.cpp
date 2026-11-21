@@ -108,7 +108,7 @@ std::string to_hex(const Sha256 &digest) {
 std::string build_key(std::string_view version, std::string_view manifest, std::string_view toolchain_id) {
     Sha256Hasher hasher;
     // each part's length first, so that no two different sets of parts hash the same text
-    for (std::string_view part : {std::string_view("darker-reality build 1"), version, manifest, toolchain_id}) {
+    for (std::string_view part : {std::string_view("holyland build 2"), version, manifest, toolchain_id}) {
         hasher.add(std::to_string(part.size()));
         hasher.add(":");
         hasher.add(part);

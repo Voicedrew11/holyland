@@ -330,7 +330,7 @@ Steps (`--steps`; each skips what is done, `--force` does it again):
   a buffer; 2x1: 1x; 6x4: 4x), FXAA, 16x anisotropic, `--repeat` times with `--gpu-draws`: each draw's GPU ms, the
   median of the repeats after the first two.
 - `live`: each scenario with a live moment in a **real window** with the owner's settings (a copy of
-  `~/.config/darker-reality` with `frame_rate` set, `KF4_READ_SETTINGS=1`, native draw as the owner has it), at
+  `~/.config/holyland` with `frame_rate` set, `KF4_READ_SETTINGS=1`, native draw as the owner has it), at
   `--live-rates` (60, 30), with a `--live-seconds` profile (`KF4_GPU_DETAIL=1`): the GPU's ms by kind and shader state.
   Takes the screen: about 45 s a run. Run it on mains power, with nothing else on the GPU.
 - `report`: `report.md` and `report.json`.
@@ -403,7 +403,7 @@ headless at 30 with native draw on at 2x, with the PC renderer's frame census (`
 (DATE's fragments). `census.md` is each scene's median frame; `census.json` the same as data.
 
 ```sh
-python3 tools/scene_census.py --out ~/Documents/darker-reality-measurements/DATE-census --disc kfiv_us.iso
+python3 tools/scene_census.py --out ~/Documents/holyland-measurements/DATE-census --disc kfiv_us.iso
 python3 tools/scene_census.py --out ... --report-only
 ```
 

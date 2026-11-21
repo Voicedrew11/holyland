@@ -154,9 +154,9 @@ int port_state_wanted(void) {
 }
 
 /* ---- Where states go ------------------------------------------------------------------------------
-   <the user's data folder>/<the port's folder>/states/slot<N>.kf4state: %APPDATA%\darker-reality on Windows,
-   $XDG_DATA_HOME/darker-reality (or ~/.local/share/darker-reality) elsewhere: the folders of
-   port/platform/data_dir.c, which also moves them from their old name (holyland). */
+   <the user's data folder>/<the port's folder>/states/slot<N>.kf4state: %APPDATA%\holyland on Windows,
+   $XDG_DATA_HOME/holyland (or ~/.local/share/holyland) elsewhere: the folders of
+   port/platform/data_dir.c, which also moves them from their old name (darker-reality). */
 static void make_folder(const char *path) {
 #ifdef _WIN32
     _mkdir(path);
@@ -166,7 +166,7 @@ static void make_folder(const char *path) {
 }
 
 static void state_folder(char *out, size_t size, int create) {
-    const char *parts[] = {"darker-reality", "states"};
+    const char *parts[] = {"holyland", "states"};
     const char *data_dir = getenv("KF4_DATA_DIR");
     size_t i;
 

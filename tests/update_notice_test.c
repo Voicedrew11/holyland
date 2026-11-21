@@ -140,14 +140,14 @@ static void test_data_dir(void) {
     static const char *const nothing[] = {NULL};
     char tiny[8];
 
-    check("linux home", resolves(DATA_DIR_POSIX, linux_home, "/home/p/.config/darker-reality", "/home/p/.local/share/darker-reality/builds"));
-    check("linux xdg", resolves(DATA_DIR_POSIX, linux_xdg, "/c/darker-reality", "/d/darker-reality/builds"));
-    check("empty xdg is unset", resolves(DATA_DIR_POSIX, linux_empty_xdg, "/home/p/.config/darker-reality",
-                                         "/home/p/.local/share/darker-reality/builds"));
+    check("linux home", resolves(DATA_DIR_POSIX, linux_home, "/home/p/.config/holyland", "/home/p/.local/share/holyland/builds"));
+    check("linux xdg", resolves(DATA_DIR_POSIX, linux_xdg, "/c/holyland", "/d/holyland/builds"));
+    check("empty xdg is unset", resolves(DATA_DIR_POSIX, linux_empty_xdg, "/home/p/.config/holyland",
+                                         "/home/p/.local/share/holyland/builds"));
     check("KF4_DATA_DIR keeps builds with it", resolves(DATA_DIR_POSIX, given, "/tmp/run", "/tmp/run/builds"));
-    check("KF4_BUILDS_DIR", resolves(DATA_DIR_POSIX, given_builds, "/home/p/.config/darker-reality", "/b"));
-    check("windows", resolves(DATA_DIR_WINDOWS, windows, "C:\\U\\R\\darker-reality", "C:\\U\\L\\darker-reality\\builds"));
-    check("nothing set", resolves(DATA_DIR_POSIX, nothing, "darker-reality", "darker-reality/builds"));
+    check("KF4_BUILDS_DIR", resolves(DATA_DIR_POSIX, given_builds, "/home/p/.config/holyland", "/b"));
+    check("windows", resolves(DATA_DIR_WINDOWS, windows, "C:\\U\\R\\holyland", "C:\\U\\L\\holyland\\builds"));
+    check("nothing set", resolves(DATA_DIR_POSIX, nothing, "holyland", "holyland/builds"));
     test_env = linux_home;
     check("too long", !data_dir_resolve(DATA_DIR_POSIX, lookup, tiny, sizeof(tiny)));
 }
@@ -164,10 +164,10 @@ static void test_move_old_folders(void) {
     char home[] = "/tmp/data_dir_test_XXXXXX";
     char env_home[64], path[128];
     const char *env[] = {env_home, NULL};
-    static const char *const made[] = {"/.config", "/.config/holyland", "/.local", "/.local/share",
-                                       "/.local/share/holyland", "/.local/share/holyland/builds"};
-    static const char *const left[] = {"/.config/holyland", "/.config/darker-reality", "/.config",
-                                       "/.local/share/darker-reality/builds", "/.local/share/darker-reality",
+    static const char *const made[] = {"/.config", "/.config/darker-reality", "/.local", "/.local/share",
+                                       "/.local/share/darker-reality", "/.local/share/darker-reality/builds"};
+    static const char *const left[] = {"/.config/darker-reality", "/.config/holyland", "/.config",
+                                       "/.local/share/holyland/builds", "/.local/share/holyland",
                                        "/.local/share", "/.local"};
     size_t i;
 
@@ -182,11 +182,11 @@ static void test_move_old_folders(void) {
     }
     test_env = env;
     check("both moved", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 2);
-    snprintf(path, sizeof(path), "%s/.config/darker-reality", home);
-    check("data folder has its new name", is_folder(path));
-    snprintf(path, sizeof(path), "%s/.local/share/darker-reality/builds", home);
-    check("builds came along", is_folder(path));
     snprintf(path, sizeof(path), "%s/.config/holyland", home);
+    check("data folder has its new name", is_folder(path));
+    snprintf(path, sizeof(path), "%s/.local/share/holyland/builds", home);
+    check("builds came along", is_folder(path));
+    snprintf(path, sizeof(path), "%s/.config/darker-reality", home);
     mkdir(path, 0755);
     check("a new folder is never replaced", data_dir_move_old_folders(DATA_DIR_POSIX, lookup) == 0 && is_folder(path));
     for (i = 0; i < sizeof(left) / sizeof(left[0]); i++) {
