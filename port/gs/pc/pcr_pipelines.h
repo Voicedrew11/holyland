@@ -73,6 +73,15 @@ struct WarmDevice {
 void warm_watch(Vulkan::Device &device, Vulkan::Program *const *programs, uint32_t count, const WarmDevice &traits,
                 std::span<Vulkan::Program *const> compute_programs);
 
+// (any thread) A renderer under the shell other than the canvas (pcr_shell.h: the scene renderer) instead of
+// warm_watch: every pipeline it can draw with, each as Granite looks it up at the draw (set by the renderer's own state
+// setters on a command buffer: CommandBuffer::extract_pipeline_state), and its compute programs, dispatched with a
+// fresh command buffer's default compute state. Listed from its code, not from tours: no seed or list is used (they
+// name the canvas's programs). Made before play as the canvas's are (precompile), or ahead while the game runs where
+// precompile is off.
+void warm_drawing(Vulkan::Device &device, std::vector<Vulkan::DeferredPipelineCompile> graphics,
+                  std::span<Vulkan::Program *const> compute_programs);
+
 // (any thread, after the settings are set, before the game draws) The pipelines made before play: the seed's (every
 // pipeline the canvas draws with in a tour of the game, for these settings), the list's, the plane pass's, and
 // active post-processing (fullscreen passes, and compute programs dispatched with a fresh command buffer's default

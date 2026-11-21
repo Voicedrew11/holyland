@@ -25,6 +25,7 @@
 #include <stdio.h>
 
 #include <array>
+#include <span>
 #include <unordered_map>
 #include <cstdint>
 #include <vector>
@@ -59,6 +60,15 @@ public:
     using Substitutes = std::unordered_map<const Vulkan::Image *, Vulkan::ImageHandle>;
     void record(const Scene &scene, Vulkan::CommandBuffer &cmd, const PictureDraw *picture = nullptr,
                 const std::vector<uint8_t> *left_out = nullptr, const Substitutes *substitutes = nullptr);
+
+    // Every pipeline record() can draw with (for pcr::warm_drawing), worked out from the drawer's programs and the
+    // states its calls can have (with the device's dynamic state, the program and the pass's formats alone), into
+    // passes of these formats: colour_formats the targets' (Drawer::first_format: the first-draw passes', drawn by
+    // the first-draw programs alone), depth_formats the depth surfaces'. Each as the draw looks it up (set by the same
+    // setters on a command buffer of the caller's thread, submitted empty). Plus the compute programs it dispatches.
+    std::vector<Vulkan::DeferredPipelineCompile> pipeline_set(std::span<const VkFormat> colour_formats,
+                                                              std::span<const VkFormat> depth_formats);
+    std::vector<Vulkan::Program *> compute_programs() const;
 
     // DATE by the first-draw image is possible here: an R32F colour target that blends (MIN)
     bool first_draw_ok() const {
@@ -192,6 +202,13 @@ private:
     void set_draw_state(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, bool records,
                         Vulkan::CommandBuffer &c);
     void set_call_state(const RunKey &key, Vulkan::CommandBuffer &c);
+    // The pipeline's part of the state a draw's calls share (set_draw_state's, pipeline_set's): fixed state, the depth
+    // compare and the blend constants; and the GIF's vertex input (its corners in vertices)
+    static void set_shared_pipeline_state(VkCompareOp zcompare, const float constants[4], Vulkan::CommandBuffer &c);
+    static void set_vertex_input(const Vulkan::Buffer &vertices, Vulkan::CommandBuffer &c);
+    // (pipeline_set) every call key a pass's calls can have, as record_draw makes them, by what the device's dynamic
+    // state leaves in a pipeline: the first-draw passes' (first_draw) or the others'
+    std::vector<RunKey> call_keys(bool first_draw) const;
     void log_scene(const Scene &scene, const Counts &before);
     void record_op(const Op &op, Vulkan::CommandBuffer &c);
     void record_pass(const Scene &scene, const Pass &pass, Vulkan::CommandBuffer &c);

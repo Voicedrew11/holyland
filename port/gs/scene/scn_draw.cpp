@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "pcr_shaders.h"
 #include "scn_shaders.h"
@@ -1053,23 +1054,34 @@ void Drawer::set_draw_state(const Scene &scene, const Pass &pass, const Draw &d,
     } else {
         bind_own(scene, pass, d, m, c);
     }
-    c.set_opaque_state();
-    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    c.set_cull_mode(VK_CULL_MODE_NONE);
-    c.set_depth_compare(m.zcompare);
-    c.set_blend_constants(m.constants);
+    set_shared_pipeline_state(m.zcompare, m.constants, c);
     if (!d.native) {
         if (records) {
             // (the scene's corners: the draw's first is its command's first vertex)
-            c.set_vertex_binding(0, *prepared_.vertices, 0, sizeof(pcr::Vertex));
+            set_vertex_input(*prepared_.vertices, c);
         } else {
             size_t bytes = size_t(d.vertex_count) * sizeof(pcr::Vertex);
             memcpy(c.allocate_vertex_data(0, bytes, sizeof(pcr::Vertex)), scene.vertices.data() + d.first_vertex,
                    bytes);
+            for (uint32_t i = 0; i < vertex_input_count; i++) {
+                c.set_vertex_attrib(i, 0, pcr::vertex_inputs[i].format, pcr::vertex_inputs[i].offset);
+            }
         }
-        for (uint32_t i = 0; i < vertex_input_count; i++) {
-            c.set_vertex_attrib(i, 0, pcr::vertex_inputs[i].format, pcr::vertex_inputs[i].offset);
-        }
+    }
+}
+
+void Drawer::set_shared_pipeline_state(VkCompareOp zcompare, const float constants[4], CommandBuffer &c) {
+    c.set_opaque_state();
+    c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.set_cull_mode(VK_CULL_MODE_NONE);
+    c.set_depth_compare(zcompare);
+    c.set_blend_constants(constants);
+}
+
+void Drawer::set_vertex_input(const Buffer &vertices, CommandBuffer &c) {
+    c.set_vertex_binding(0, vertices, 0, sizeof(pcr::Vertex));
+    for (uint32_t i = 0; i < vertex_input_count; i++) {
+        c.set_vertex_attrib(i, 0, pcr::vertex_inputs[i].format, pcr::vertex_inputs[i].offset);
     }
 }
 
@@ -1077,7 +1089,9 @@ void Drawer::set_call_state(const RunKey &key, CommandBuffer &c) {
     c.set_program(key.program);
     c.set_depth_test(key.ztest, key.zwrite);
     c.set_blend_enable(key.blend);
-    if (key.blend) {
+    // (an unblended call's factors set too without dynamic blend, canonical's: they are in the pipeline's state then,
+    // and a call's pipeline is its key's alone, not the call before's too, as pipeline_set lists them)
+    if (key.blend || !dynamic_blend_) {
         c.set_blend_factors(key.src, key.src_alpha, key.dst, key.dst_alpha);
         c.set_blend_op(key.op, key.op_alpha);
     }
@@ -1229,6 +1243,170 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
         counts_.draw_calls++;
         counts_.draw_calls_by[slot]++;
     }
+}
+
+// ---- The pipelines drawn with, listed (pipeline_set) ----
+
+std::vector<Drawer::RunKey> Drawer::call_keys(bool first_draw) const {
+    // The depth's states (record_draw's: ztest, zwrite only where ztest; the compare a material's, from ZTST), in a
+    // pipeline only without dynamic depth state
+    struct Depth {
+        bool test, write;
+        VkCompareOp compare;
+    };
+    std::vector<Depth> depths;
+    if (dynamic_ds_) {
+        depths.push_back({false, false, VK_COMPARE_OP_ALWAYS});
+    } else {
+        for (VkCompareOp compare : {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL,
+                                    VK_COMPARE_OP_GREATER}) {
+            depths.push_back({false, false, compare});
+            depths.push_back({true, false, compare});
+            if (!first_draw) {
+                depths.push_back({true, true, compare}); // (the first-draw passes write no Z)
+            }
+        }
+    }
+    // The blends and write masks: the first-draw passes' one (record_draw's), else every blend choose_blend makes
+    // (ALPHA's A, B, C and D, FIX 0 or not, ABE on or off: scn_build.cpp's material; the blends left out, unblended)
+    // with every write mask a pass can have (scn_build.cpp: 0x7 the colour, 0x8 the alpha), in canonical's form; one
+    // where the blend is dynamic state. (Without dynamic depth state the blend constants are in the pipeline too: a
+    // blend by FIX has a pipeline for each FIX, not listed, made at the draw as before; Vulkan 1.3 has it.)
+    std::vector<RunKey> blends;
+    auto add_blend = [&](const RunKey &k) {
+        for (const RunKey &b : blends) {
+            if (b.blend == k.blend && b.src == k.src && b.src_alpha == k.src_alpha && b.dst == k.dst &&
+                b.dst_alpha == k.dst_alpha && b.op == k.op && b.op_alpha == k.op_alpha && b.mask == k.mask) {
+                return;
+            }
+        }
+        blends.push_back(k);
+    };
+    if (first_draw) {
+        RunKey k;
+        k.blend = true;
+        k.src = k.src_alpha = k.dst = k.dst_alpha = VK_BLEND_FACTOR_ONE;
+        k.op = k.op_alpha = VK_BLEND_OP_MIN;
+        k.mask = 0x1;
+        canonical(k);
+        add_blend(k);
+    } else if (dynamic_blend_) {
+        RunKey k;
+        k.mask = 0xF;
+        canonical(k);
+        add_blend(k);
+    } else {
+        for (bool abe : {false, true}) {
+            for (uint64_t alpha = 0; alpha < 256; alpha++) {
+                for (uint64_t fix : {0u, 0x80u}) {
+                    const pcr::BlendChoice b = pcr::choose_blend(alpha | fix << 32, abe);
+                    for (uint32_t mask : {0x0u, 0x7u, 0x8u, 0xFu}) {
+                        RunKey k;
+                        k.blend = b.enable;
+                        k.src = b.src;
+                        k.src_alpha = b.src_alpha;
+                        k.dst = b.dst;
+                        k.dst_alpha = VK_BLEND_FACTOR_ZERO;
+                        k.op = b.op;
+                        k.op_alpha = VK_BLEND_OP_ADD;
+                        k.mask = mask;
+                        canonical(k);
+                        add_blend(k);
+                    }
+                }
+            }
+        }
+    }
+    std::vector<RunKey> keys;
+    keys.reserve(depths.size() * blends.size());
+    for (const Depth &d : depths) {
+        for (RunKey k : blends) {
+            k.ztest = d.test;
+            k.zwrite = d.write;
+            k.zcompare = d.compare;
+            keys.push_back(k);
+        }
+    }
+    return keys;
+}
+
+std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkFormat> colour_formats,
+                                                          std::span<const VkFormat> depth_formats) {
+    // The programs record_draw draws with: the first-draw passes' (first_id_: in them, and only there), the others'
+    std::vector<Vulkan::Program *> firsts, others;
+    for (size_t v = 0; v < size_t(Program::count); v++) {
+        firsts.insert(firsts.end(), {first_id_[v], first_id_rec_[v]});
+        others.insert(others.end(), {plain_[v], early_[v], first_[v], plain_rec_[v], early_rec_[v], first_rec_[v]});
+        if (flat_on_) {
+            others.insert(others.end(), {flat_[v], flat_rec_[v]});
+        }
+    }
+    others.insert(others.end(), {fused_280_, picture_layer_});
+    std::erase(firsts, nullptr);
+    std::erase(others, nullptr);
+    const std::vector<RunKey> first_keys = call_keys(true), other_keys = call_keys(false);
+
+    // A pass of every pair of formats (none of either, but not both): attachments of one pixel (a compatible render
+    // pass is named by its attachments' formats and samples, not their sizes or layouts)
+    std::vector<VkFormat> colours = {VK_FORMAT_UNDEFINED}, depths = {VK_FORMAT_UNDEFINED};
+    colours.insert(colours.end(), colour_formats.begin(), colour_formats.end());
+    depths.insert(depths.end(), depth_formats.begin(), depth_formats.end());
+    auto attachment = [&](VkFormat format, bool depth) {
+        ImageCreateInfo info = ImageCreateInfo::render_target(1, 1, format);
+        info.usage = depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        return device_.create_image(info, nullptr);
+    };
+    std::vector<DeferredPipelineCompile> out;
+    std::unordered_set<Util::Hash> seen;
+    CommandBufferHandle cmd = device_.request_command_buffer();
+    cmd->set_dynamic_state(dynamic_ds_, dynamic_blend_);
+    for (VkFormat colour : colours) {
+        for (VkFormat depth : depths) {
+            if (colour == VK_FORMAT_UNDEFINED && depth == VK_FORMAT_UNDEFINED) {
+                continue;
+            }
+            ImageHandle colour_image = colour != VK_FORMAT_UNDEFINED ? attachment(colour, false) : ImageHandle();
+            ImageHandle depth_image = depth != VK_FORMAT_UNDEFINED ? attachment(depth, true) : ImageHandle();
+            if ((colour != VK_FORMAT_UNDEFINED && !colour_image) || (depth != VK_FORMAT_UNDEFINED && !depth_image)) {
+                continue; // (not a format this device draws into: no pass of it)
+            }
+            RenderPassInfo rp;
+            if (colour_image) {
+                rp.num_color_attachments = 1;
+                rp.color_attachments[0] = &colour_image->get_view();
+            }
+            rp.depth_stencil = depth_image ? &depth_image->get_view() : nullptr;
+            rp.render_area = {{0, 0}, {1, 1}};
+            cmd->begin_render_pass(rp);
+            const bool first = colour == first_format;
+            for (Vulkan::Program *program : first ? firsts : others) {
+                for (RunKey key : first ? first_keys : other_keys) {
+                    key.program = program;
+                    set_shared_pipeline_state(key.zcompare, key.constants, *cmd);
+                    set_vertex_input(*zeros_, *cmd); // (read only by the GIF's programs: in the others' no input)
+                    set_call_state(key, *cmd);
+                    DeferredPipelineCompile compile;
+                    cmd->extract_pipeline_state(compile);
+                    if (seen.insert(compile.hash).second) {
+                        out.push_back(compile);
+                    }
+                }
+            }
+            cmd->end_render_pass();
+        }
+    }
+    device_.submit(cmd);
+    return out;
+}
+
+std::vector<Vulkan::Program *> Drawer::compute_programs() const {
+    std::vector<Vulkan::Program *> out;
+    for (Vulkan::Program *p : place_) {
+        if (p) {
+            out.push_back(p);
+        }
+    }
+    return out;
 }
 
 } // namespace scn
