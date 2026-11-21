@@ -9,6 +9,14 @@
 	<div id="hint"><key>F1</key>or<key>L3</key>+<key>R3</key><span id="hint-what">Holyland's settings</span></div>
 	<div id="shade"></div>
 	<div id="window">
+		<!-- the game's own panel and frame, from the disc's menu/menu.tmx (body.game-art; port/ui/game_menu_art.hpp) -->
+		<div id="game-frame">
+			<div id="game-panel"></div>
+			<div id="game-edge-top"></div>
+			<div id="game-edge-bottom"></div>
+			<div id="game-edge-left"></div>
+			<div id="game-edge-right"></div>
+		</div>
 		<div id="rule-outer">
 			<div id="rule-inner">
 				<div id="main">

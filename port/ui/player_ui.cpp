@@ -22,6 +22,7 @@
 #include <string_view>
 
 #include "menu_model.hpp"
+#include "game_menu_art.hpp"
 #include "settings_rows.hpp"
 #include "ui_frame.hpp"
 #include "ui_render.hpp"
@@ -702,6 +703,8 @@ extern "C" void port_player_ui_init(void *sdl_window) {
         Rml::Shutdown();
         return;
     }
+    // the window in the game's own panel and frame when the disc has them (kf4.rcss: body.game-art)
+    menu.document->SetClass("game-art", ui::game_menu_art_on_disc());
     menu.document->AddEventListener(Rml::EventId::Mouseover, &menu.pointer);
     menu.document->AddEventListener(Rml::EventId::Mousedown, &menu.pointer);
     menu.document->Show();

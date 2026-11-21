@@ -63,6 +63,7 @@ is not borrowed.
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
 | `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
 | `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
@@ -131,5 +132,9 @@ Still in ImGui (`port/overlay/`), to move over one at a time:
    this already: `launcher/window.cpp`, `Window::State::draw`) (premultiplied blend
    mode), so the menu exists there too.
 
-Not started yet: the game's own art from the disc (the menu frames and fonts KF4 draws with), read at run time like
-the rest of the game's data, to make the menu look even more like the game's own.
+The game's own art from the disc (2026-11-21, a trial on `feat/ui-game-art`): when the disc has `menu/menu.tmx`, the
+window is dressed in King's Field IV's own menu window (`body.game-art` in `kf4.rcss`): its soft black panel and the four
+wisps of ice added along its sides, the pieces and places of the game's Settings screen (`menu/option_para.dat`, parts 0
+and 31 to 34). Each part of a `menu/*_para.dat` is a 0x60-byte `TexturedRectDef` (two corners in 12.4 with 0x6C00 and
+0x7900 off, ST, colour, TEX0) whose TBP0 and CBP name one of `menu.tmx`'s textures; `Menu_SetBlendMode` 0 blends
+over, 1 adds. Not yet: the game's font, the title and line glows (their words are drawn into the textures).

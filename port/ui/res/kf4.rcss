@@ -477,3 +477,94 @@ scrollbarvertical sliderbar {
 scrollbarvertical sliderbar:hover {
 	background-color: #6b6255;
 }
+
+/* ---- The game's own window (body.game-art: the disc has menu/menu.tmx) ---------------------------------------------
+   King's Field IV's menu window, from its own textures on the player's disc (port/ui/game_menu_art.hpp): a soft black
+   panel, and four wisps of ice added over it along the sides. The pieces and their places are those of the game's
+   Settings screen (menu/option_para.dat: parts 0 and 31 to 34), at 1.5dp a game pixel (2 lines a game line). The
+   sprites are in the textures' pixels; the edges are 0.75 bright (the parts' alpha, 0x60). */
+@spritesheet game-panel {
+	src: game-menu/10944-over.tex;
+	game-panel: 0px 0px 128px 128px;
+}
+
+@spritesheet game-edges {
+	src: game-menu/11584-add.tex;
+	game-edge-side: 7px 54px 51px 458px;
+	game-edge-bottom: 0px 1px 511px 56px;
+}
+
+@spritesheet game-edges-top {
+	src: game-menu/11584-add_alpha.tex;
+	game-edge-top: 0px 5px 510px 51px;
+}
+
+#game-frame {
+	display: none;
+}
+
+body.game-art #game-frame {
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+#game-frame div {
+	position: absolute;
+	image-color: #ffffffc0;
+}
+
+#game-frame #game-panel {
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	decorator: image(game-panel);
+	image-color: #000000;
+}
+
+#game-edge-left, #game-edge-right {
+	top: 0;
+	width: 32dp;
+	height: 100%;
+	decorator: image(game-edge-side);
+}
+
+#game-edge-left { left: 40dp; }
+#game-edge-right { right: 44dp; }
+
+#game-edge-top {
+	top: 16dp;
+	left: 9dp;
+	right: 0;
+	height: 36dp;
+	decorator: image(game-edge-top);
+}
+
+#game-edge-bottom {
+	bottom: 20dp;
+	left: 0;
+	right: 0;
+	height: 36dp;
+	decorator: image(game-edge-bottom flip-horizontal);
+}
+
+/* the window's own frame and corners give way to the game's; its rows stay inside the wisps */
+body.game-art #rule-outer {
+	position: relative;
+	border-width: 0;
+	padding: 52dp 76dp 56dp 72dp;
+	decorator: none;
+}
+
+body.game-art #rule-inner {
+	border-width: 0;
+	decorator: none;
+}
+
+body.game-art img.corner {
+	display: none;
+}

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "game_menu_art.hpp"
 #include "ui_assets.hpp"
 
 namespace ui {
@@ -105,9 +106,22 @@ void Recorder::ReleaseGeometry(Rml::CompiledGeometryHandle handle) {
     geometries_.erase(uintptr_t(handle));
 }
 
-// Only the menu's own alpha masks (.alpha, tools/ui_masks.py): white, premultiplied, coloured by the sheet's image-color
+// The game's menu art from the disc (game_menu_art.hpp), and the menu's own alpha masks (.alpha, tools/ui_masks.py):
+// white, premultiplied, coloured by the sheet's image-color
 Rml::TextureHandle Recorder::LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) {
     dimensions = {0, 0};
+    if (is_game_menu_source(source)) {
+        std::optional<MenuArtImage> image = load_game_menu_art(source);
+        if (!image) {
+            return 0;
+        }
+        TextureUpload upload;
+        upload.width = image->width;
+        upload.height = image->height;
+        upload.rgba = std::move(image->rgba);
+        dimensions = {upload.width, upload.height};
+        return Rml::TextureHandle(add_upload(std::move(upload)));
+    }
     const UiAsset *file = ui_asset(source);
     if (file == nullptr || file->size < MASK_HEADER || std::memcmp(file->data, "KF4A", 4) != 0) {
         not_drawn("an image other than the menu's alpha masks");
