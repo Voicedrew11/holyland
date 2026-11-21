@@ -19,7 +19,7 @@
        TEX0_2 from the part's first data block, ALPHA_2 with the block's A, B and D and C = FIX, the fade
        as FIX (fade_alpha), TEST_2, and ZBUF_2 masked while fade_alpha is below 0x80;
    - after the parts: PRMODECONT 1 and ZBUF_2 twice.
-   The batches' own A+D packets (TEX0_1 ...) and PRIM go through the GS front end (port/gs/pc/pcr_gif.cpp) as VU1's
+   The batches' own A+D packets (TEX0_1 ...) and PRIM go through the GS front end (port/gs/shared/pcr_gif.cpp) as VU1's
    kicks would, so with PRMODECONT 0 the GS draws them in context 2 with the fade, as on the
    PS2 path.
 

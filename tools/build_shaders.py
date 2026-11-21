@@ -42,15 +42,27 @@ def find_glslang(given):
     sys.exit("no glslang: pass --glslang PATH or set GLSLANG")
 
 
+# The scene renderer's (port/gs/scene/shaders/, written into port/gs/scene/scn_shaders.h): its own, and the PC renderer's
+# built again for it, (source, symbol, defines) each
+SCENE_SHADERS = os.path.join(ROOT, "port", "gs", "scene", "shaders")
+SCENE_OUT = os.path.join(ROOT, "port", "gs", "scene", "scn_shaders.h")
+SCENE_AGAIN = [
+    # (DATE's shadows drawn where their triangle came first: pcr_prim.h's SCN_FIRST_DRAW)
+    (os.path.join(PC_SHADERS, "pcr_prim.frag"), "scn_prim_first_frag", ["-DSCN_FIRST_DRAW"]),
+]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--glslang")
     args = parser.parse_args()
     glslang = find_glslang(args.glslang)
     build(glslang, PC_SHADERS, PC_OUT, "pcr_spv_", "The PC renderer's shaders", "port/gs/pc/shaders/")
+    build(glslang, SCENE_SHADERS, SCENE_OUT, "scn_spv_", "The scene renderer's shaders", "port/gs/scene/shaders/",
+          again=SCENE_AGAIN, includes=[PC_SHADERS])
 
 
-def build(glslang, folder, target, prefix, what, where):
+def build(glslang, folder, target, prefix, what, where, again=(), includes=()):
     sources = sorted(f for f in os.listdir(folder) if f.endswith((".vert", ".frag", ".comp")))
     lines = [
         "/* %s as SPIR-V, made by tools/build_shaders.py from %s." % (what, where),
@@ -62,6 +74,7 @@ def build(glslang, folder, target, prefix, what, where):
     ]
     with tempfile.TemporaryDirectory() as tmp:
         made = [(name, name.replace(".", "_"), []) for name in sources]
+        made += [(path, symbol, defines) for path, symbol, defines in again]
         made += [(name, name.replace(".", "_") + "_rec", ["-DPCR_RECORDS"]) for name in sources if name in RECORDS]
         made += [(name, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for name, symbol, defines in list(made)
                  if name in EXACT_Z]
@@ -75,8 +88,8 @@ def build(glslang, folder, target, prefix, what, where):
             out = os.path.join(tmp, symbol + ".spv")
             if name.endswith(".vert"):
                 defines = defines + ["-DPCR_STAGE_VERTEX"]
-            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder, "-I" + SHARED, "-I" + SMAA] + defines + [
-                "-o", out, os.path.join(folder, name)]
+            cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder] + ["-I" + i for i in includes] + [
+                "-I" + SHARED, "-I" + SMAA] + defines + ["-o", out, os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 sys.exit("%s failed:\n%s%s" % (symbol, result.stdout, result.stderr))

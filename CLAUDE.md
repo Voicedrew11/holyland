@@ -79,7 +79,9 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   with PS2-exact results, MPEG). `port/include/`: their headers. `port/audio/`: the IOP sound side.
 - `port/gs/`: the Graphics Synthesizer, behind `port/platform/gs_api.h`:
   - `pc/` (`pcr*`): the PC renderer, the only one players get (the default). It draws the GS's input
-    with its own Vulkan code on Granite. The plan and where it stands: `docs/port/PC_RENDERER.md`.
+    with its own Vulkan code on Granite. The plan and where it stands: `docs/port/PC_RENDERER.md`. It is to be
+    replaced by a scene renderer, not sped up: `docs/plans/renderer-scene-not-gs.md` (the direction, the
+    measurements behind it, and the design's handoff).
   - `gs_parallel.cpp`: paraLLEl-GS (`third_party/parallel-gs`), the accurate GS emulator. Developers
     only (`--renderer gs`), to compare pictures against; never chosen by settings, the overlay or a
     fallback.

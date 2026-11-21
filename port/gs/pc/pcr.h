@@ -46,6 +46,10 @@ int pcr_gpu_kind(void);
    done everything sent before */
 void pcr_gif(int path, const void *data, size_t bytes);
 void pcr_wait(void);
+/* Before the process exits: everything sent done, as pcr_wait, two seconds at most (and the pump's likewise), so that
+   the renderer's thread is not drawing while exit's handlers tear down what it uses (the statics of Mesa, Granite or a
+   Vulkan layer made after pcr_open, which go before its own handler stops the thread) */
+void pcr_settle(void);
 void pcr_read_fifo(void *dst, uint32_t qwords);
 int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
@@ -114,6 +118,10 @@ void pcr_print_stats(void);
 int pcr_debug_trace(const PcrTraceSpot *spot);
 void pcr_debug_trace_draw(uint32_t draw);
 void pcr_debug_trace_probe(void);
+/* The GPU's time by GS draw (KF4_GPU_DRAWS=FILE, set before pcr_open, with KF4_GSN_GPU_TIME and the profiler's GPU detail
+   on: kf4-gsreplay --gpu-draws): the draw sent next is numbered draw, and every GPU interval is written to FILE with the
+   draws it was for. Batches are made as without it (no flush), each timed on its own. */
+void pcr_debug_gpu_draw(uint32_t draw);
 size_t pcr_debug_trace_take(PcrTraceFragment *fragments, size_t room, PcrTraceProbe *probes, size_t probe_room,
                             size_t *probes_taken);
 

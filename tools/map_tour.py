@@ -2,8 +2,8 @@
 """A tour of the game's maps: every map visited and pictured, without playing there.
 
     tools/map_tour.py --out DIR [--disc ISO] [--exe PATH] [--maps 0,99,...] [--positions N]
-                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc]
-                      [--extra "ARGS"] [--turn] [--keep-lists DIR]
+                      [--headings N] [--jobs N] [--base FILE] [--no-capture] [--renderer gs|pc|scene]
+                      [--extra "ARGS"] [--turn] [--keep-lists DIR] [--ties]
 
 A quick save is the game's own save image with the map and the player's place in it, loaded through the
 game's card-load path (docs/port/README.md, "Quick saves"). This makes one for any map and any place:
@@ -451,6 +451,11 @@ def run_map(args, base, number, name, places, folder):
     if not args.no_capture:
         cmd += ["--gs-capture-at", str(views[0]["picture_at"])]
     env = dict(os.environ, KF4_DATA_DIR=data_dir)
+    if args.ties:
+        # (the PC renderer's developers' counters at each view's picture: docs/plans/depth-by-layers.md)
+        env["KF4_PC_TIES"] = os.path.join(folder, "ties.txt")
+        env["KF4_PC_TIES_AT"] = ",".join(str(v["picture_at"]) for v in views)
+        env["KF4_PC_OVERDRAW"] = os.path.join(folder, "overdraw.txt")
     started = time.time()
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
                             env=env)
@@ -636,9 +641,13 @@ def main():
     parser.add_argument("--jobs", type=int, default=3, help="maps run at once (default 3)")
     parser.add_argument("--base", help="the quick save to start from (default: made from tests/newgame.pad)")
     parser.add_argument("--no-capture", action="store_true", help="no GS capture, so no census")
-    parser.add_argument("--renderer", default="pc", choices=("gs", "pc"),
-                        help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS)")
+    parser.add_argument("--renderer", default="pc", choices=("gs", "pc", "scene"),
+                        help="who draws the pictures (default pc, the PC renderer; gs: paraLLEl-GS; scene: the scene "
+                             "renderer, docs/plans/scene-renderer-design.md)")
     parser.add_argument("--extra", help="more arguments for each run, e.g. \"--native-scale 3 --antialias fxaa\"")
+    parser.add_argument("--ties", action="store_true",
+                        help="(pc) the depth rule's ties and each native batch's fragments counted at each view's picture: "
+                        "NNN/ties.txt and NNN/overdraw.txt (KF4_PC_TIES, KF4_PC_OVERDRAW; tools/depth_ties.py reads them)")
     parser.add_argument("--keep-lists", help="a folder for each map's pc_pipeline_list.bin (NNN.bin), the pipelines "
                         "the PC renderer drew with (tools/pipeline_seed.py)")
     parser.add_argument("--turn", action="store_true", help="turn right all along (the views are then not the same "

@@ -14,6 +14,11 @@
 | `gsreplay/` | `kf4-gsreplay` (below) |
 | `replay_compare.py` | a GS capture of many frames drawn by the PC renderer (at a player's settings) and by paraLLEl-GS, compared frame by frame (`kf4-gsreplay`, below): the frames where the PC renderer's picture differs most, and with `--decal-losses` where decals lost a near tie (below) |
 | `flash_find.py` | the pictures of a flash recorder folder (F8) or a `--dump-frames` folder that differ from both their neighbours, a list and a contact sheet (`flashes.png`); docs/port/README.md, "Debugging" |
+| `layer_inventory.py` | the game's full-screen layers in a tour of play (scenes, actions, `KF4_FX`, every map): each one's GS state, its GPU time by draw (`kf4-gsreplay --gpu-draws`), what reads each channel it writes, and its class (clear, dead, foldable into scanout, must stay in memory); real-window totals at the owner's settings; `report.md` (below; docs/plans/fullscreen-layers-inventory.md) |
+| `world_plain.py` | the world's GPU time drawn the GS's way and with each GS-exact mechanism switched off (`KF4_PC_*` switches, the prototype plain path `KF4_PC_PLAIN_WORLD`, RADV's compression and HiZ off), a few scenes at 1x, 2x and 4x in a real window with the owner's settings, by `layer_inventory.py`'s live step (below; docs/plans/world-plain.md) |
+| `scene_census.py` | what each game frame hands the renderer at a few scenes (native draws by kind, GIF primitives by path and class, the draws in order and their runs, uploads, copies, DATE's fragments), headless with the PC renderer's frame census (`KF4_PC_FRAME_CENSUS`); docs/plans/scene-renderer-design.md |
+| `scene_scenarios.py` | the scene renderer (`--renderer scene`) against the PC renderer in `layer_inventory.py`'s scenarios, headless, picture by picture at each scenario's moments (2x with native widescreen); `--gs` (with `--scale 1`) plays paraLLEl-GS too and measures both against it; docs/plans/scene-slice1-results.md |
+| `depth_ties.py` | the PC renderer's developers' counters read (`map_tour.py --ties`, `motion_compare.py --ties`): the depth rule's ties by map and by class of draw, the draws with the most, and the world's fragments a pixel; `--scenes` the overdraw and draw order by depth mode (below; docs/plans/depth-by-layers.md) |
 | `screen_fx_test.py` | every full-screen and screen-reading effect made to happen headless (`KF4_FX`, saves, teleports, pad presses), measured at the owner's settings at 240 (pictures and game frames a second, cuts, hitches, GPU time a picture) and its pictures between checked with `flash_find.py --frames`; a table of OK / slow / corrupt (docs/port/SCREEN_EFFECTS.md) |
 | `vif_replay_all.py` | `kf4-gsreplay --mode vif` over many captures (files, or folders searched for `*.kf4gs`), a line each and a total; `--vu1 check` compares the HLEs of the VU1 programs (0x000, 0x280, 0x5A0, 0x700; 0x276 passes packets through) with the interpreter on all of them (fails if anything differs) |
 | `pace_test.py` | the pictures a second in play at a few maps at the owner's settings, and the GPU time a picture (docs/port/RENDERER.md, "Measuring the pace") |
@@ -163,6 +168,8 @@ kf4-gsreplay FILE.kf4gs [options]
 | `--zbuf` | with them, its Z buffer too, as `draw_NNNNN_z.png`: grey from the nearest to the farthest Z in the picture, black where Z is 0 |
 | `--pixel X,Y` | the draws whose box and scissor cover frame buffer pixel (X,Y), each with the pixel's colour (ABGR) and Z after it, and `changed` where either changed; `--fbp N` keeps only those drawing into frame buffer page N |
 | `--vertices N` | draw N's vertices: X, Y (12.4, as sent, before XYOFFSET), Z, RGBA, STQ, UV, fog, and whether it kicked a primitive |
+| `--events` | after the draws, the capture's transfers (each TRXDIR write: uploads, local copies such as the frame's to 0x2BC0, read-backs; BITBLTBUF, TRXPOS, TRXREG) and vblanks (the buffers DISPFB1 and DISPFB2 show), each with the draw it comes before: `event transfer rec R before D dir 2 sbp ... dbp ... src X,Y dst X,Y size WxH`, `event vblank rec R before D vblank V field F dispfb1 fbp ... dispfb2 fbp ...` |
+| `--gpu-draws FILE` | (pc) the GPU's time by draw: each draw is numbered for the PC renderer as it is sent, and every GPU interval (each batch one, `KF4_GPU_DRAWS`) is written to FILE as `interval picture work state first_draw last_draw ns`: a batch's draws (a batch of several shares its time), other work the draw it came before (a local copy, an upload). With `--repeat`, the numbers start again at 0 each time. Batches are made as without it |
 | `--compare OTHER` | another capture's draws against these, one by one: the GS state, and the vertices (the first that differs, and the largest Z difference) |
 | `--compare-mode gif\|vif` | compare this capture with itself in that mode (with `--vu-round`: the VU1 variant against the recorded packets, draw by draw) |
 | `--limit N` | how many differing draws `--compare` prints (50) |
@@ -184,7 +191,10 @@ instructions, as `tools/vu1_disasm.py` numbers them) and which of its XGKICKs, P
 alpha blending, `fog`, the context), the vertices and the drawing kicks, the box in frame buffer pixels,
 the Z range, and the GS state it drew with: FRAME, ZBUF, TEST (alpha test, destination alpha test, the
 depth test: ZTST 0 never, 1 always, 2 greater or equal, 3 greater), ALPHA (A B C D and FIX), FBA,
-PABE, TEX0, TEX1, CLAMP, SCISSOR and XYOFFSET.
+PABE, TEX0, TEX1, CLAMP, SCISSOR and XYOFFSET; then, textured, `| UV u0,v0-u1,v1` (the texels its vertices
+name: UV, or S/Q and T/Q times the texture's size), and `| RGBA AABBGGRR` (its first vertex's colour, RGBAQ's
+low word as a number: alpha first, red last), and `| DTHE d COLCLAMP c` (dithering on, and the colour clamped rather
+than wrapped).
 
 Pictures need a Vulkan GPU; `--info`, `--list`, `--vertices` and `--compare` do not.
 
@@ -278,6 +288,7 @@ same in both runs, and a vblank where it is not is left out and named.
 python3 tools/motion_compare.py --disc kfiv_us.iso --out /tmp/motion                 # every case, 1x and 4xw, 240
 python3 tools/motion_compare.py --out /tmp/motion --cases menus,combat --profiles 1x --no-240
 python3 tools/motion_compare.py --cases list
+python3 tools/motion_compare.py --out /tmp/motion --profiles 1x --no-240 --renderer scene --pc-extra "--native-draw on --frame-rate 30"
 ```
 
 For each case and profile (`1x`: `--native-scale 1 --no-native-widescreen`; `4xw`: `--native-scale 4 --widescreen
@@ -294,6 +305,136 @@ Into `--out`: `report.md` (a line a case and profile, then each one's worst vbla
 vblank), `evidence/` (the worst `--top` pairs of each, 640 wide: PC | GS | the difference x4, red over 24; and
 flash_find's sheet of flagged pictures between). The runs' pictures (about 20 MB each at 4x) are deleted as it goes
 (`--keep` keeps them). A full run (12 cases, both profiles, 240) is about an hour and a half; one game at a time.
+
+## layer_inventory.py
+
+The inventory of full-screen layers (docs/plans/fullscreen-layers-inventory.md), made again after each step of the
+renderer's redesign. Each **scenario** is a piece of play: a New Game and a pad script (`tests/newgame.pad`,
+`tests/motion/`), teleports, `KF4_FX` (`game/screen_fx.c`: forced effects, `mapchange=N`, `savepoint`), or a quick save
+made up at a map's start (`--maps`, map_tour's). `--scenarios list` names them.
+
+```sh
+python3 tools/layer_inventory.py --out /tmp/layers --disc kfiv_us.iso                     # capture, time, report
+python3 tools/layer_inventory.py --out /tmp/layers --maps all --scenarios ""               # every map's start
+python3 tools/layer_inventory.py --out /tmp/layers --steps live                            # real window (below)
+python3 tools/layer_inventory.py --out /tmp/layers --steps time --scales 3x2,2x1,6x4 --scale-scenarios start,pond
+python3 tools/layer_inventory.py --out /tmp/layers --steps report --scales 3x2,2x1,6x4
+```
+
+Steps (`--steps`; each skips what is done, `--force` does it again):
+- `capture`: each scenario headless with native draw off (the GS stream as the PS2 had it: every pass a GIF packet),
+  `--widescreen`, a GS capture of 4 vblanks at each of its moments (two game frames at 30, so that the next frame's
+  reads show), `kf4-gsreplay --list --events` of each, a picture of each.
+- `list`: the lists made again from the captures (after kf4-gsreplay's list changes).
+- `time`: each capture replayed by the PC renderer at `--scales` (3x2: the owner's 2x with native widescreen, 1920x896
+  a buffer; 2x1: 1x; 6x4: 4x), FXAA, 16x anisotropic, `--repeat` times with `--gpu-draws`: each draw's GPU ms, the
+  median of the repeats after the first two.
+- `live`: each scenario with a live moment in a **real window** with the owner's settings (a copy of
+  `~/.config/darker-reality` with `frame_rate` set, `KF4_READ_SETTINGS=1`, native draw as the owner has it), at
+  `--live-rates` (60, 30), with a `--live-seconds` profile (`KF4_GPU_DETAIL=1`): the GPU's ms by kind and shader state.
+  Takes the screen: about 45 s a run. Run it on mains power, with nothing else on the GPU.
+- `report`: `report.md` and `report.json`.
+
+How a layer is found and judged (the analysis, in the tool):
+- A **layer** is a run of draws in one GS state (all but box, vertices and an untextured TEX0) of sprites or a few
+  vertices whose boxes cover 90% or more of their buffer's scissor: of a buffer some vblank shows (the frame), or of
+  another target 256 x 256 or more (the reflection). A local copy (BITBLT, `GsDraw_CopyFrame`) is one too.
+- What a draw **reads and writes** follows the GS: the alpha test's AFAIL, FBMSK, ZMSK and ZTST, a blend reading Cd
+  or Ad, DATE, a texture's pages (from its UV), a copy's source; it **kills** a channel (writes it at every pixel
+  whatever was there) only as one sprite with no blend, no Z test but ALWAYS, no DATE and no alpha test that the pixels
+  decide. Each channel a layer writes is followed forward in 8 x 8 pixel cells through the draws, transfers and
+  scanouts after it, the next game frame's included, until killed. A channel left at the capture's end is taken as
+  killed if the draws before the layer in its frame killed it (the buffer's next use begins as its frame did).
+- A layer is judged only in a game frame whose buffer a vblank in the capture shows.
+- **Classes**: (a) a flat colour or Z over the whole buffer, nothing tested (a fast clear once buffers are images of
+  their own); (b) dead: everything it writes is written over before anything reads it; (c) foldable into the scanout:
+  a per-pixel colour op (untextured, or reading its own buffer at its own pixel), its alpha and Z unread, its colour
+  read only by the scanout and by later such layers, and no other draw over it before the scanout; (d) must stay in
+  memory: read as a texture, copied, or read by the next frame; (e) other, with the reason (alpha only, foldable at its
+  place but drawn over by the HUD, reading a texture at other pixels).
+- The **name** is told from the state (`layer_name`: the swap's clears, `GsDraw_ClearDepth`, `GsDraw_SetScreenAlpha`,
+  `GsDraw_FillScreen` and its colour, `Game_ApplyBrightness` and `Game_TintScreen` by colour, the previous frame, the
+  wobble, the menus' grab): check a new one against the decomp.
+- **Live**: a game frame's ms is twice the 30 run's ms a picture, a picture between's twice the 60 run's less the 30
+  run's, by shader state (when both ran 30 game frames a second).
+
+Into `--out`: `scenarios/NAME/` (the captures, their lists and `--gpu-draws` files, the pictures, the live profiles),
+`report.md`, `report.json`.
+
+## world_plain.py
+
+What the world costs on the GPU (docs/plans/world-plain.md): `layer_inventory.py`'s scenes (`start`, `pond`,
+`palace`, any with a live moment) played in a **real window** with the owner's settings by its live step, once for
+each **variant** at each native scale. A variant is a set of developers' switches, each off the exact path (the
+picture may differ; for timing only): `--variants list` names them. `--rounds` runs the whole matrix again in the same
+order, so that a drift of the GPU's clocks shows as a spread, not as a variant's cost; a variant's files already made
+are kept (delete them to run it again).
+
+```sh
+python3 tools/world_plain.py --out /tmp/world --disc kfiv_us.iso --rounds 2                 # 3 scenes, 7 variants, 1x/2x/4x
+python3 tools/world_plain.py --out /tmp/world --scales 2 --variants gpu_nodcc,gpu_nohiz,plainworld,plainopaque
+python3 tools/world_plain.py --out /tmp/world --scales 2 --rates 60 --variants exact,gpu    # pictures between
+python3 tools/world_plain.py --out /tmp/world --report-only --variants exact,gpu
+python3 tools/world_plain.py --out /tmp/world --scales 2 --rounds 2 --variants unorm,scene  # the scene renderer
+```
+
+- **The world**: the native draws (programs 0x000, 0x280 the skinned models, 0x700), less program 0x000's DATE draws
+  (the entity pool's) and the sky (read from a target's copy), with exact Z's planes pass. Every figure is GPU ms a
+  game frame: the run's GPU time over its game frames (at 60, a game frame and a picture between).
+- The plain path, `KF4_PC_PLAIN_WORLD=1` with `KF4_PC_DEPTH=gpu` (`pcr_canvas.cpp`): the world's batches drawn into
+  images of their own, the size of the surface they were for, optimal layouts, attachment use alone, cleared by their
+  pass's load op after each clear of the frame buffer; `=unblended` draws them without their blend too, `=opaque`
+  without their blend in the frame's surfaces. The picture lacks the world (or its see-through parts): timing only.
+  `--stats` counts its batches and clears.
+- A run is about 14 s (4 s profiled, from `layer_inventory.py`'s base quick save); the full matrix of 3 scenes, 7
+  variants, 3 scales and 2 rounds about 35 minutes. Mains power, nothing else on the GPU.
+
+Into `--out`: `scenarios/NAME/live_VARIANT_sSCALE_rROUND_RATE.*` (the profile, the log, stderr, the result),
+`world_plain.md` and `world_plain.json` (the medians by scene, scale, rate and variant).
+
+## scene_census.py
+
+What each game frame hands the renderer (docs/plans/scene-renderer-design.md, "The frame as a scene"): each scene
+(`layer_inventory.py`'s scenarios: 099's start, the pond, the palace, combat, under water, the menus, the title) played
+headless at 30 with native draw on at 2x, with the PC renderer's frame census (`KF4_PC_FRAME_CENSUS=FILE`,
+`KF4_PC_FRAME_CENSUS_AT="A-B"`: `port/gs/pc/pcr_frame_census.h`, one JSON line a frame) and its overdraw counter
+(DATE's fragments). `census.md` is each scene's median frame; `census.json` the same as data.
+
+```sh
+python3 tools/scene_census.py --out ~/Documents/darker-reality-measurements/DATE-census --disc kfiv_us.iso
+python3 tools/scene_census.py --out ... --report-only
+```
+
+The title and the menus' loops give their pictures no game vblank: their frames are all counted, those without native
+draws kept.
+
+## depth_ties.py
+
+The depth rule's ties and the world's overdraw (docs/plans/depth-by-layers.md), from the PC renderer's developers'
+counters (`pcr_canvas.cpp`'s `Counters`):
+- `KF4_PC_TIES=FILE` (the depth rule on): every draw the rule tests counts what it decided for each fragment in a slot
+  of its own (`pcr_prim.h`'s `pcr_count_ties`): tested, passed, the ties (within the rule's tolerance) passed at the same
+  depth exactly, passed from behind or ahead, lost; those lost or passed within 2 Z past the tie; its Z's range. FILE's
+  lines: `V` a vblank's totals, `W` a program's, `T` a draw's (its program, kind, owner, part, GS state and counts) at
+  the vblanks `KF4_PC_TIES_AT` lists (every one without it), only those with ties unless `KF4_PC_TIES_ORDER=1`.
+- `KF4_PC_OVERDRAW=FILE`: each native batch's fragment shader invocations (a pipeline statistics query), `Q` lines by
+  program, frame buffer and kind a vblank.
+- The game's canvas only (not the pump's); a kept walk's runs are not drawn while counting. Slow: developers' only.
+
+```sh
+python3 tools/map_tour.py --out /tmp/t --positions 3 --ties --renderer pc \
+    --extra "--native-scale 1 --no-native-widescreen --native-draw on --frame-rate 30"   # NNN/ties.txt, overdraw.txt
+python3 tools/motion_compare.py --out /tmp/m --profiles 1x --no-240 --ties --pc-extra "--native-draw on --frame-rate 30"
+python3 tools/depth_ties.py /tmp/t            # /tmp/t/depth_ties.md and .json
+python3 tools/depth_ties.py --scenes DIR      # DIR/MODE/SCENE/{overdraw,ties}.txt: invocations and passes a pixel by mode
+```
+
+`motion_compare.py --pc-extra "ARGS"` adds arguments to its pc runs (`--native-draw on`: its runs read no settings, so
+the native draws are off without it). The depth modes to compare (`KF4_PC_DEPTH`): `rule` (the default), `exact`,
+`gpu`, `layers` (the GPU's depth, Z clamped at each pixel, the decals `KF4_PC_LAYER_BIAS` nearer; `KF4_PC_LAYERS`,
+`KF4_PC_PIXEL_CLAMP`) and `unorm` (the GPU's depth in the GS's 16-bit whole steps, `D16_UNORM`, DATE by a copy);
+`world_plain.py`'s variants `layers` and `unorm` time them, and `gsexact` (`KF4_PC_DEPTH=gsexact`: exact Z's whole Z alone
+at each pixel, the GS's arithmetic in the shader as a ceiling: docs/plans/scene-renderer-design.md).
 
 ## kf4-layerbench: what a full-screen layer costs on this GPU
 

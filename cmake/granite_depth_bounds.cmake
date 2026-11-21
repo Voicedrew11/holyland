@@ -81,6 +81,9 @@ function(kf4_granite_depth_bounds granite)
     # pixel trace, pcr_prim.h), which needs it (the Vulkan validation layer's VUID-VkShaderModuleCreateInfo-pCode-08740)
     kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
         "\t\tif (pdf2.features.geometryShader) enabled_features.geometryShader = VK_TRUE; // (darker-reality)" TRUE)
+    # and pipeline statistics queries (the developers' overdraw count, KF4_PC_OVERDRAW: pcr_canvas.cpp's Counters)
+    kf4_granite_edit(${ctx} "\t\tif (pdf2.features.multiDrawIndirect)"
+        "\t\tif (pdf2.features.pipelineStatisticsQuery) enabled_features.pipelineStatisticsQuery = VK_TRUE; // (darker-reality)" TRUE)
     kf4_granite_edit(${cpp} "\traster.depthBiasEnable = compile.static_state.state.depth_bias_enable != 0;"
         "\traster.depthClampEnable = device->get_device_features().enabled_features.depthClamp; // (darker-reality)" FALSE)
 endfunction()

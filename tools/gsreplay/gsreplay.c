@@ -31,6 +31,9 @@
      --pixel X,Y        the draws whose box covers frame buffer pixel (X,Y), with the pixel's colour and
                         Z after each (--fbp N: only those drawing into frame buffer page N)
      --vertices N       draw N's vertices
+     --events           the transfers (TRXDIR written: uploads, local copies such as the frame's to 0x2BC0,
+                        read-backs) and the vblanks (the shown buffers, DISPFB1 and 2), each with the draw that
+                        comes after it, as "event ..." lines after the draws
      --compare OTHER    the draws of another capture (or of --mode vif against --mode gif of the same
                         one, with --compare-mode), compared one by one: state and vertices
      --vu-round nearest VU1's float arithmetic rounds to nearest instead of toward zero (--mode vif)
@@ -39,8 +42,9 @@
                         (port/platform/vu1_hle*.c) or check (both, compared run by run: memory,
                         packets, registers, flags and clock)
      --diff N           with --mode vif: show up to N differing vertices of each differing packet (8)
-     --renderer gs|pc   who draws: paraLLEl-GS, the accurate GS (the default), or the PC renderer
-                        (port/gs/pc/), the one players get. With pc, --frames are at its scale, and
+     --renderer gs|pc|scene  who draws: paraLLEl-GS, the accurate GS (the default), the PC renderer
+                        (port/gs/pc/), the one players get, or the scene renderer (port/gs/scene/, under the PC
+                        renderer's shell: what pc takes below, but not the pixel trace). With pc, --frames are at its scale, and
                         these set it up as a player's settings.json does (the PC renderer's defaults
                         otherwise):
        --scale X[xY]    the surfaces' pixels a GS pixel is, across and down (settings' native_scale;
@@ -54,6 +58,9 @@
                         test discarded it, a decal), each sample's Z against the Z stored before, and the
                         samples' Z and colour after the draw (read back by the GPU in a pass of its own)
        --decal-losses   (pc) each decal drawn again in magenta where it lost its depth test
+       --gpu-draws FILE (pc) the GPU's time by draw: every GPU interval (each batch one) written to FILE with
+                        the --list draws it was for (KF4_GPU_DRAWS, pcr.h's pcr_debug_gpu_draw); with --repeat,
+                        the numbers start again at 0 each time (tools/layer_inventory.py reads it)
    Pictures need a Vulkan GPU; --info, --list, --vertices and --compare do not. */
 #include <math.h>
 #include <stdarg.h>
@@ -69,8 +76,10 @@
 #include "port/lz4_block.h"
 #include "port/mouse_lead.h"
 #include "port/platform.h"
+#include "port/profile.h"
 #include "port/render.h"
 #include "pcr.h"
+#include "scn.h"
 
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
@@ -230,8 +239,9 @@ static int gs_open(const PcSettings *settings) {
 static const Drawer gs_drawer = {"paraLLEl-GS",      gs_open,        port_gs_backend_gif, port_gs_backend_read_fifo,
                                  port_gs_backend_vsync, port_gs_backend_restore, port_gs_backend_vram};
 
-static int pc_open(const PcSettings *s) {
-    if (!pcr_open(NULL)) {
+/* (scene: the scene renderer under the PC renderer's shell, port/gs/scene/scn.h) */
+static int pc_open_as(const PcSettings *s, int scene) {
+    if (!(scene ? scn_open(NULL) : pcr_open(NULL))) {
         return 0;
     }
     pcr_set_native_draw(GSN_NATIVE_DRAW_PS2); /* (a capture's native draws are not fed to the PC renderer) */
@@ -271,6 +281,10 @@ static int pc_open(const PcSettings *s) {
     return 1;
 }
 
+static int pc_open(const PcSettings *s) {
+    return pc_open_as(s, 0);
+}
+
 static int pc_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame) {
     return pcr_vsync(privileged, field, want_pixels ? GSN_WANT_PIXELS : 0, want_pixels ? frame : NULL);
 }
@@ -285,6 +299,14 @@ static int pc_restore(uint32_t type, const void *data, size_t size) {
 }
 
 static const Drawer pc_drawer = {"the PC renderer", pc_open, pcr_gif, pcr_read_fifo, pc_vsync, pc_restore, NULL};
+
+/* The scene renderer (port/gs/scene/scn.h): the PC renderer's shell with the scene renderer under it, the same calls */
+static int scene_open(const PcSettings *s) {
+    return pc_open_as(s, 1);
+}
+
+static const Drawer scene_drawer = {"the scene renderer", scene_open, pcr_gif, pcr_read_fifo, pc_vsync, pc_restore,
+                                    NULL};
 
 /* ---- The file ------------------------------------------------------------------------------------ */
 typedef struct {
@@ -518,7 +540,29 @@ typedef struct {
     int differs;
     /* a draw closed: its index (-1: none) */
     long closed;
+    /* --events: the transfers and vblanks, each with the draw that comes after it */
+    struct GifEvent {
+        uint32_t record, kind; /* 0 a transfer (TRXDIR written), 1 a vblank */
+        size_t before_draw;
+        uint64_t a, b, c, d;   /* transfer: BITBLTBUF, TRXPOS, TRXREG, TRXDIR; vblank: vblank, field, DISPFB1, DISPFB2 */
+    } *events;
+    size_t event_count, event_room;
 } Gif;
+
+static void add_event(Gif *g, uint32_t kind, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+    if (g->event_count == g->event_room) {
+        g->event_room = g->event_room ? g->event_room * 2 : 256;
+        g->events = realloc(g->events, g->event_room * sizeof(g->events[0]));
+    }
+    g->events[g->event_count].record = g->record;
+    g->events[g->event_count].kind = kind;
+    g->events[g->event_count].before_draw = g->count;
+    g->events[g->event_count].a = a;
+    g->events[g->event_count].b = b;
+    g->events[g->event_count].c = c;
+    g->events[g->event_count].d = d;
+    g->event_count++;
+}
 
 static void gif_init(Gif *g, const Capture *c) {
     size_t i;
@@ -655,6 +699,9 @@ static void gs_write(Gif *g, uint32_t address, uint64_t value) {
     }
     close_draw(g);
     g->reg[address & 0xFF] = value;
+    if (address == 0x53) {
+        add_event(g, 0, g->reg[0x50], g->reg[0x51], g->reg[0x52], value);
+    }
 }
 
 /* A PACKED qword written by descriptor `desc`, as its register's value */
@@ -770,6 +817,7 @@ typedef struct {
     const Capture *capture;
     int mode;
     int render;           /* 1: drawer draws the packets (and the pictures asked for) */
+    int gpu_draws;        /* --gpu-draws: each draw numbered for the PC renderer's GPU times */
     const Drawer *drawer;
     Gif gif;
     size_t cursor;        /* --mode vif: the next record not yet matched */
@@ -1024,7 +1072,7 @@ static void pixel_after(Run *r, long index) {
 }
 
 static int wants_draw_end(const Run *r) {
-    return r->draw_from >= 0 || r->pixel;
+    return r->draw_from >= 0 || r->pixel || r->gpu_draws;
 }
 
 static void draw_ended(Run *r, long index) {
@@ -1035,6 +1083,9 @@ static void draw_ended(Run *r, long index) {
     }
     if (r->pixel) {
         pixel_after(r, index);
+    }
+    if (r->gpu_draws) {
+        pcr_debug_gpu_draw((uint32_t)index + 1);
     }
 }
 
@@ -1082,6 +1133,17 @@ static void vsync(Run *r, const Record *rec) {
     memcpy(&vblank, rec->data, 8);
     memcpy(&field, rec->data + 8, 4);
     r->last_vsync = rec;
+    {
+        /* (--events: the shown buffers, DISPFB1 and DISPFB2 of the register page after the 16-byte head) */
+        uint64_t dispfb1 = 0, dispfb2 = 0;
+
+        if (rec->size >= 16 + 0xA0) {
+            memcpy(&dispfb1, rec->data + 16 + 0x70, 8);
+            memcpy(&dispfb2, rec->data + 16 + 0x90, 8);
+        }
+        r->gif.record = (uint32_t)(rec - r->capture->records);
+        add_event(&r->gif, 1, vblank, field, dispfb1, dispfb2);
+    }
     if (!r->render) {
         return;
     }
@@ -1397,10 +1459,51 @@ static void list_draw(const Run *r, long i) {
            (unsigned)(d->fba & 1), (unsigned)(d->pabe & 1));
     printf(" | TEX0 %016llX TEX1 %016llX CLAMP %011llX", (unsigned long long)d->tex0, (unsigned long long)d->tex1,
            (unsigned long long)d->clamp);
-    printf(" | SCISSOR %u,%u-%u,%u XYOFFSET %.4g,%.4g%s\n", (unsigned)(d->scissor & 0x7FF),
+    printf(" | SCISSOR %u,%u-%u,%u XYOFFSET %.4g,%.4g", (unsigned)(d->scissor & 0x7FF),
            (unsigned)((d->scissor >> 32) & 0x7FF), (unsigned)((d->scissor >> 16) & 0x7FF),
            (unsigned)((d->scissor >> 48) & 0x7FF), (d->xyoffset & 0xFFFF) / 16.0,
-           ((d->xyoffset >> 32) & 0xFFFF) / 16.0, d->differs ? " | DIFFERS from the recorded packet" : "");
+           ((d->xyoffset >> 32) & 0xFFFF) / 16.0);
+    if (d->prim & 0x10) {
+        /* the texels the vertices name: UV (FST), else S/Q and T/Q times the texture's size */
+        double u0 = 1e30, v0 = 1e30, u1 = -1e30, v1 = -1e30;
+        double tw = (double)(1u << ((d->tex0 >> 26) & 0xF)), th = (double)(1u << ((d->tex0 >> 30) & 0xF));
+        uint32_t k;
+
+        for (k = 0; k < d->vertices; k++) {
+            const Vertex *v = &r->gif.vertices[d->first_vertex + k];
+            double u, w;
+
+            if (d->prim & 0x100) {
+                u = v->u / 16.0;
+                w = v->v / 16.0;
+            } else {
+                float s, t, q;
+
+                memcpy(&s, &v->s, 4);
+                memcpy(&t, &v->t, 4);
+                memcpy(&q, &v->q, 4);
+                if (q == 0.0f || q != q) {
+                    q = 1.0f;
+                }
+                u = s / q * tw;
+                w = t / q * th;
+            }
+            if (u < u0) u0 = u;
+            if (u > u1) u1 = u;
+            if (w < v0) v0 = w;
+            if (w > v1) v1 = w;
+        }
+        if (d->vertices) {
+            printf(" | UV %.1f,%.1f-%.1f,%.1f", u0, v0, u1, v1);
+        }
+    }
+    if (d->vertices) {
+        /* the first vertex's colour (R G B A as RGBAQ holds them: a fill's, a tint's or the brightness') */
+        printf(" | RGBA %08X", r->gif.vertices[d->first_vertex].rgbaq);
+    }
+    /* what a full-screen pass's arithmetic depends on besides ALPHA: dithering and the colour's clamp */
+    printf(" | DTHE %u COLCLAMP %u", (unsigned)(d->dthe & 1), (unsigned)(d->colclamp & 1));
+    printf("%s\n", d->differs ? " | DIFFERS from the recorded packet" : "");
 }
 
 static void list_vertices(const Run *r, long i) {
@@ -1504,10 +1607,10 @@ static void usage(void) {
             "usage: kf4-gsreplay FILE.kf4gs [--info] [--mode gif|vif] [--frames] [--end-picture] [--out DIR] [--list]\n"
             "                    [--draw N | --draws A-B] [--zbuf] [--pixel X,Y [--fbp N]] [--vertices N]\n"
             "                    [--compare OTHER.kf4gs] [--compare-mode gif|vif] [--vu-round nearest]\n"
-            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc]\n"
+            "                    [--vu1 interp|hle|check] [--diff N] [--limit N] [--repeat N] [--renderer gs|pc|scene]\n"
             "                    [--scale X[xY]] [--aniso N] [--lod ps2|scale|full]\n"
             "                    [--2d ps2|smooth] [--antialias off|fxaa|smaa|smaa_t2x]\n"
-            "                    [--sub SX,SY] [--decal-losses]\n"
+            "                    [--sub SX,SY] [--decal-losses] [--gpu-draws FILE] [--events]\n"
             "(tools/README.md; the top of tools/gsreplay/gsreplay.c says what each does)\n");
     exit(2);
 }
@@ -1518,7 +1621,7 @@ int main(int argc, char **argv) {
     const char *file = NULL, *compare_file = NULL;
     int list = 0, show_info = 0, compare_mode = -1, limit = 50, i;
     PcSettings pc = {0};
-    int repeat = 1, decal_losses = 0;
+    int repeat = 1, decal_losses = 0, events = 0;
     long vertices = -1;
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
@@ -1536,10 +1639,18 @@ int main(int argc, char **argv) {
             show_info = 1;
         } else if (strcmp(a, "--list") == 0) {
             list = 1;
+        } else if (strcmp(a, "--events") == 0) {
+            events = 1;
         } else if (strcmp(a, "--frames") == 0) {
             run.frames = 1;
         } else if (strcmp(a, "--decal-losses") == 0) {
             decal_losses = 1;
+        } else if (strcmp(a, "--gpu-draws") == 0 && v != NULL) {
+            /* (read by the PC renderer's GPU times as they are made: before it opens) */
+            setenv("KF4_GPU_DRAWS", v, 1);
+            setenv("KF4_GSN_GPU_TIME", "1", 1);
+            run.gpu_draws = 1;
+            i++;
         } else if (strcmp(a, "--end-picture") == 0) {
             run.frames = 1;
             run.end_picture = 1;
@@ -1550,6 +1661,8 @@ int main(int argc, char **argv) {
                 run.drawer = &gs_drawer;
             } else if (strcmp(v, "pc") == 0) {
                 run.drawer = &pc_drawer;
+            } else if (strcmp(v, "scene") == 0) {
+                run.drawer = &scene_drawer;
             } else {
                 usage();
             }
@@ -1682,7 +1795,13 @@ int main(int argc, char **argv) {
     port_options.adapt_width = (int)meta_int(&capture, "adapt_width", 1);
     port_options.whole_frame = (int)meta_int(&capture, "whole_frame", 0);
     port_options.dump_dir = run.out;
-    run.render = run.frames || run.draw_from >= 0 || run.pixel;
+    run.render = run.frames || run.draw_from >= 0 || run.pixel || run.gpu_draws;
+    if (run.gpu_draws && run.drawer->vram != NULL) {
+        die("--gpu-draws times the PC renderer: add --renderer pc");
+    }
+    if (run.gpu_draws) {
+        port_profile_gpu_set_detail(1); /* (each batch's shader state, as KF4_GPU_DETAIL=1 names them) */
+    }
     if (run.render) {
         if (run.drawer->vram == NULL && run.draw_from >= 0) {
             die("--draw and --draws read the GS's memory, which %s does not keep: use --frames", run.drawer->name);
@@ -1716,10 +1835,14 @@ int main(int argc, char **argv) {
     for (i = 0; i < repeat; i++) {
         if (i > 0) {
             free(run.gif.draws);
+            free(run.gif.events);
             free(run.gif.vertices);
         }
         if (run.pixel && run.drawer->vram == NULL) {
             pcr_debug_trace_draw(0);
+        }
+        if (run.gpu_draws) {
+            pcr_debug_gpu_draw(0);
         }
         run_capture(&run);
         if (run.pixel && run.drawer->vram == NULL) {
@@ -1729,12 +1852,39 @@ int main(int argc, char **argv) {
             end_picture(&run, repeat > 1 ? i : -1);
         }
     }
+    if (run.render && run.drawer->vram == NULL && (run.gpu_draws || getenv("KF4_GSN_GPU_TIME") != NULL)) {
+        pcr_print_stats(); /* (waits for the GPU: every interval written; the GPU time by kind) */
+    }
     printf("%zu draws, %zu vertices\n", run.gif.count, run.gif.vertex_count);
     if (list) {
         long d;
 
         for (d = 0; d < (long)run.gif.count; d++) {
             list_draw(&run, d);
+        }
+    }
+    if (events) {
+        size_t e;
+
+        for (e = 0; e < run.gif.event_count; e++) {
+            const struct GifEvent *ev = &run.gif.events[e];
+
+            if (ev->kind == 1) {
+                printf("event vblank rec %6u before %6zu vblank %llu field %llu dispfb1 fbp %u fbw %u psm %02X "
+                       "dispfb2 fbp %u fbw %u psm %02X\n",
+                       ev->record, ev->before_draw, (unsigned long long)ev->a, (unsigned long long)ev->b,
+                       (unsigned)(ev->c & 0x1FF), (unsigned)((ev->c >> 9) & 0x3F), (unsigned)((ev->c >> 15) & 0x1F),
+                       (unsigned)(ev->d & 0x1FF), (unsigned)((ev->d >> 9) & 0x3F), (unsigned)((ev->d >> 15) & 0x1F));
+            } else {
+                printf("event transfer rec %6u before %6zu dir %u sbp %u sbw %u spsm %02X dbp %u dbw %u dpsm %02X "
+                       "src %u,%u dst %u,%u size %ux%u\n",
+                       ev->record, ev->before_draw, (unsigned)(ev->d & 3), (unsigned)(ev->a & 0x3FFF),
+                       (unsigned)((ev->a >> 16) & 0x3F), (unsigned)((ev->a >> 24) & 0x3F),
+                       (unsigned)((ev->a >> 32) & 0x3FFF), (unsigned)((ev->a >> 48) & 0x3F),
+                       (unsigned)((ev->a >> 56) & 0x3F), (unsigned)(ev->b & 0x7FF), (unsigned)((ev->b >> 16) & 0x7FF),
+                       (unsigned)((ev->b >> 32) & 0x7FF), (unsigned)((ev->b >> 48) & 0x7FF),
+                       (unsigned)(ev->c & 0xFFF), (unsigned)((ev->c >> 32) & 0xFFF));
+            }
         }
     }
     if (vertices >= 0) {

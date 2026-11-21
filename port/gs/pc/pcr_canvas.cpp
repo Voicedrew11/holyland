@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <list>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <variant>
@@ -25,6 +26,7 @@
 #include "pcr_pipelines.h"
 #include "pcr_plane_pass.h"
 #include "pcr_blend.h"
+#include "pcr_prim_layout.h"
 #include "pcr_dead_writes.h"
 #include "pcr_copy_pool.h"
 #include "pcr_spares.h"
@@ -78,40 +80,6 @@ uint32_t bits(uint64_t v, int at, int count) {
     return uint32_t((v >> at) & ((uint64_t(1) << count) - 1));
 }
 
-// ---- What the shaders are given (shaders/pcr_common.h: the two must agree) -----------------------------------
-struct PrimPush {
-    float inv_size[2];
-    float zscale;
-    uint32_t zmax;
-    uint32_t flags;
-    uint32_t tex_size;
-    uint32_t clamp_lo, clamp_hi;
-    uint32_t test;
-    uint32_t fogcol;
-    uint32_t texa;
-    uint32_t tex1;
-    float lod_k;
-    uint32_t levels;
-    int32_t src_offset[2];
-    int32_t src_scale[2];
-    int32_t place[2];
-    int32_t dest_offset[2];
-    uint32_t alpha;
-    uint32_t clut_at;
-    uint32_t table;
-    uint32_t record; // (a run's programs, PCR_RECORDS: its first record in the picture's records, Impl::Runs)
-    uint32_t factors; // (a run's draw, PCR_RECORDS: its blend's factors from the shader, dual-source: F_DUAL | ...)
-    uint32_t trace_xy;   // (developers' pixel trace) the target's pixel traced: x | y << 16, or no_trace
-    uint32_t trace_draw; // ... the draw its fragments are recorded as
-    uint32_t merged;     // (a merged run's, PCR_RECORDS: not 0, its triangles from the picture's entries, Impl::Runs)
-    uint32_t plane_at = 0xFFFFFFFFu; // (a native draw's, exact Z: its triangle n's plane the planes buffer's n + this,
-                                     // n gl_VertexIndex / 3; no_plane none: pcr_exact_z.h's pcr_plane_of_draw)
-    uint32_t jitter = 0; // (the frame's 3D with a temporal anti-aliasing method: pcr_jitter.h's jitter_packed)
-};
-static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
-static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
-constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
-constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
 constexpr uint32_t no_zbuf = 0xFFFFFFFFu;  // (Surface::zbuf_page: none)
 
 // The developers' pixel trace's buffer (pcr_prim.h's Trace, pcr_probe.h's): a head of 16 bytes (the fragments
@@ -122,31 +90,6 @@ constexpr size_t trace_bytes = trace_probe_offset + trace_probes * sizeof(PcrTra
 static_assert(sizeof(PcrTraceFragment) == 48 && sizeof(PcrTraceProbe) == 80, "pcr_prim.h's and pcr_probe.h's records");
 static_assert(trace_probe_offset == (1 + 4096 * 3) * 16, "pcr_probe.h's PCR_PROBE_FIRST");
 
-enum : uint32_t {
-    F_TME = 0x1,
-    F_FST = 0x2,
-    F_TFX_SHIFT = 2,
-    F_TCC = 0x10,
-    F_FGE = 0x20,
-    F_SRC_SHIFT = 6,
-    F_PASS_SHIFT = 9,
-    F_FBA = 0x800,
-    F_DATE = 0x8000,
-    F_DATM = 0x10000,
-    F_SHADER_BLEND = 0x20000,
-    F_SURFACE_CT16 = 0x40000,
-    F_SMOOTH_2D = 0x100000,
-    F_DECAL = 0x400000,
-    F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
-    F_DECAL_LOSS_FAR = 0x1000000,
-    F_EXACT_Z = 0x2000000, // (pcr_common.h's exact Z)
-    F_FULL_DEPTH = 0x4000000, // (the depth rule: pcr_common.h)
-    F_ZGREATER = 0x8000000,
-    F_ZWRITE = 0x10000000,
-    F_ZALWAYS = 0x20000000,
-    F_DATE_MARK = 0x40000000,
-    F_DATE_CLEARS = 0x200000,
-};
 // PrimPush::factors (pcr_prim.h's o_factor): the blend's colour factors, source (bits 0-2) and destination (4-6), as
 // the shader gives them (FACTOR_*), the alpha written as the blend would have made it
 constexpr uint32_t F_DUAL = 0x80000000u;
@@ -164,7 +107,6 @@ uint32_t factor_code(VkBlendFactor f) {
     default: return FACTOR_NONE;
     }
 }
-enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
 // (PrimPush::clut_at, Batch::clut_at: the CLUT is set 1's, not the kept walk's)
 constexpr uint32_t no_walk_clut = 0xFFFFFFFFu;
@@ -172,50 +114,6 @@ constexpr uint32_t no_walk_clut = 0xFFFFFFFFu;
 constexpr uint32_t no_table = 0xFFFFu;
 // (a kept walk's samplers, u_samplers: the stock nearest one and 15 of the walk's)
 constexpr uint32_t walk_samplers = 16;
-
-// Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
-enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
-
-// (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
-constexpr uint32_t no_rect = 0xFFFFFFFFu;
-
-struct Vertex {
-    float x, y;
-    uint32_t z;
-    uint8_t rgba[4];
-    float s, t, q;
-    float fog;
-    // (a picture between's corner, pcr_prim.vert's a_kicks: the kicks it is made of and how, K_* below; no_kick: as
-    // it is)
-    uint32_t kicks[4] = {no_kick, no_kick, no_kick, 0};
-    // (the 2D mode's smooth: the texels its primitive covers across, rect[0], and down, rect[1], each first | last << 16,
-    // of a sprite's or a 2D triangle's corners (FST, or one Z and Q); no_rect for the rest: texel_rect)
-    uint32_t rect[2] = {no_rect, no_rect};
-    // (exact Z, pcr_common.h) a whole Z its triangle's three corners share: the first corner's (link_corners)
-    uint32_t zref = 0;
-    // (exact Z by the plane, port/gs/pc/shaders/pcr_exact_z.h) its triangle's two other corners (link_corners): their
-    // X and Y and Z as this corner's are, and in a picture between what each is made of: a triangle's corner its own
-    // kick (kicks[0]), a sprite's its corner (kicks[3]'s K_CORNER bits; the sprite's two kicks are this corner's)
-    float other_xy[2][2] = {};
-    uint32_t other_z[2] = {};
-    uint32_t other_kick[2] = {no_kick, no_kick};
-};
-static_assert(sizeof(Vertex) == 92, "Vertex: the vertex shader's inputs, packed");
-
-// pcr_prim.vert's inputs, a location each (0-10): Vertex's fields, binding 0
-struct VertexInput {
-    VkFormat format;
-    uint32_t offset;
-};
-constexpr VertexInput vertex_inputs[] = {
-    {VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, x)},           {VK_FORMAT_R32_UINT, offsetof(Vertex, z)},
-    {VK_FORMAT_R8G8B8A8_UINT, offsetof(Vertex, rgba)},        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, s)},
-    {VK_FORMAT_R32_SFLOAT, offsetof(Vertex, fog)},            {VK_FORMAT_R32G32B32A32_UINT, offsetof(Vertex, kicks)},
-    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, rect)},          {VK_FORMAT_R32_UINT, offsetof(Vertex, zref)},
-    {VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, other_xy)}, {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_z)},
-    {VK_FORMAT_R32G32_UINT, offsetof(Vertex, other_kick)},
-};
-constexpr uint32_t vertex_input_count = sizeof(vertex_inputs) / sizeof(vertex_inputs[0]);
 
 // Each triangle's corners given its first corner's Z as the Z they share (Vertex::zref) and its two other corners
 // (Vertex::other_*: the triangle's plane, the same from each corner); vertices three a triangle
@@ -397,7 +295,13 @@ public:
         dual_cut_ = maker == 0x10DE;
         merged_dual_ok_ = merged_ok_ && f.enabled_features.dualSrcBlend && !merged_plain_ &&
                           (maker == 0x10DE || maker == 0x1002);
-        if (!exact_z_) {
+        if (layers_on_) {
+            fprintf(stderr, "[pcr] depth: the GPU's%s, layers (%s) drawn %.3g Z nearer, slope %.3g, Z clamped at %s "
+                            "(KF4_PC_DEPTH=layers|unorm: developers' only)\n",
+                    unorm_on_ ? " in 16-bit steps (D16_UNORM)" : "",
+                    layers_which_ == LayersWhich::blended ? "blended" : "decals", layer_bias_.z256 / 256.0,
+                    layer_bias_.slope, pixel_clamp_ ? "each pixel" : "the corners");
+        } else if (!exact_z_) {
             fprintf(stderr, "[pcr] exact Z off (%s): decals may lose to the surface under them here and there\n",
                     depth_asked() == DepthAsked::gpu   ? "KF4_PC_DEPTH=gpu"
                     : getenv("KF4_PC_EXACT_Z")         ? "KF4_PC_EXACT_Z=0"
@@ -405,6 +309,9 @@ public:
                                                      : "this GPU has no 64-bit integers in shaders");
         } else if (rule_on_) {
             fprintf(stderr, "[pcr] depth: the depth rule (the shader tests the depth: fragment shader interlock)\n");
+        } else if (gs_whole_) {
+            fprintf(stderr, "[pcr] depth: the GS's whole Z at each pixel, no fraction (KF4_PC_DEPTH=gsexact: developers' "
+                            "only)\n");
         } else {
             fprintf(stderr, "[pcr] depth: exact Z with decals settled (%s)\n",
                     depth_asked() == DepthAsked::exact ? "KF4_PC_DEPTH=exact" : "this GPU has no fragment shader interlock");
@@ -418,11 +325,15 @@ public:
             submit_planes();
             device_.submit(cmd_);
         }
+        end_counters();
     }
 
     void watch_hangs(HangNotes &notes, const char *who) {
         hang_notes_ = &notes;
         hang_who_ = who;
+        if (strcmp(who, "kf4-pc") == 0 && !counting()) {
+            start_counters(); // (the developers' counters: the game's frames, not the pump's pictures between)
+        }
     }
 
     void set_scale(uint32_t x, uint32_t y) {
@@ -461,9 +372,15 @@ public:
             open_batch(s, p);
         }
         add_primitive(p);
+        batch_.draw_last = gpu_draw_;
     }
 
+    std::function<void(const GsRegisterFile &, uint32_t, const NativeBatch &)> native_observer_;
+
     void native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &nb) {
+        if (native_observer_) {
+            native_observer_(file, prim, nb);
+        }
         counts_.native_batches++;
         counts_.triangles += nb.triangle_count;
         DrawState s = state_of(file, prim);
@@ -480,8 +397,10 @@ public:
             batch_.runs.back().first + batch_.runs.back().count == nb.first_triangle) {
             batch_.runs.back().count += nb.triangle_count;
         } else {
-            batch_.runs.push_back({nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance});
+            batch_.runs.push_back(
+                {nb.first_triangle, nb.triangle_count, nb.instance, nb.picture_instance, nb.kind, nb.id[0], nb.id[1]});
         }
+        batch_.draw_last = gpu_draw_;
     }
 
     void texture_written(uint64_t tex0, uint64_t texclut) {
@@ -551,6 +470,13 @@ public:
     void trace_draw(uint32_t draw) {
         flush_batch();
         trace_.draw = draw;
+    }
+
+    // (KF4_GPU_DRAWS) The GS draw sent next, as kf4-gsreplay numbers them: the GPU's intervals are written with the
+    // draws they were for (a batch's, its first and last; other work, the draw it came before). Batches are as without.
+    void gpu_draw(uint32_t draw) {
+        gpu_draw_ = draw;
+        times_.set_draws(draw, draw);
     }
 
     // In a pass of its own: the traced pixel in the surfaces its last draw drew into
@@ -624,6 +550,7 @@ public:
         flush_batch();
         decal_losses_ = on;
     }
+
 
     bool settled() const {
         return pending_scale_ == scale_;
@@ -733,7 +660,7 @@ public:
         }
     }
 
-    void vblank() {
+    void vblank(uint64_t game_vblank) {
         surface_writes_++; // (same_as_last_clear)
         ZoneScope zone(canvas_vblank_zone);
         flush_batch();
@@ -746,6 +673,7 @@ public:
         // native widescreen switched off with the pump drawing)
         apply_scale();
         submit();
+        count_vblank(game_vblank); // (developers' counters)
         // (Granite lets go of a frame context's allocations, images and buffers only when frames move on: each
         // vblank, pictures or none, or a run that shows nothing holds all it ever drew)
         {
@@ -1084,6 +1012,48 @@ private:
     enum class PassReads { nothing, target };
 
     // The pass drawing into colour (and depth): the open one when it is that, else a new one
+    // (developers' KF4_PC_PLAIN_WORLD) The plain images for a world batch drawn for like: made at like's image's size
+    // (with a depth image of that size), marked to be cleared after each clear of the frame buffer. nullptr when they could not be made.
+    Surface *plain_surfaces(const Surface &like) {
+        const Image &li = *like.image;
+        if (!plain_colour_ || plain_colour_->image->get_width() != li.get_width() ||
+            plain_colour_->image->get_height() != li.get_height()) {
+            if (pass_colour_ == plain_colour_.get() && plain_colour_) {
+                end_pass();
+            }
+            auto make = [&](bool depth) {
+                auto s = std::make_unique<Surface>();
+                s->base_page = like.base_page;
+                s->fbw = like.fbw;
+                s->psm = like.psm;
+                s->height = like.height;
+                s->depth = depth;
+                ImageCreateInfo info =
+                    ImageCreateInfo::render_target(li.get_width(), li.get_height(),
+                                                   depth ? depth_format_for(like.psm) : colour_format);
+                info.usage = depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                s->image = device_.create_image(info, nullptr);
+                return s;
+            };
+            plain_colour_ = make(false);
+            plain_depth_ = make(true);
+            plain_stale_ = true;
+            fprintf(stderr, "[pcr] plain world: images %ux%u%s\n", li.get_width(), li.get_height(),
+                    plain_colour_->image && plain_depth_->image ? "" : " (not made)");
+        }
+        if (!plain_colour_->image || !plain_depth_->image) {
+            return nullptr;
+        }
+        if (plain_stale_) {
+            plain_stale_ = false;
+            plain_clear_ = true;
+            if (pass_colour_ == plain_colour_.get()) {
+                end_pass(); // (so that the next pass clears)
+            }
+        }
+        return plain_colour_.get();
+    }
+
     void begin_pass(Surface &colour, Surface *depth, PassReads reads) {
         ZoneScope zone(canvas_begin_pass_zone);
         if (pass_colour_ == &colour && (depth == nullptr || pass_depth_ == depth) &&
@@ -1099,6 +1069,19 @@ private:
         if (depth) {
             rp.depth_stencil = &depth->image->get_view();
             rp.op_flags = RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+        }
+        // (developers' KF4_PC_PLAIN_WORLD: the plain images' first pass after the frame buffer's clear clears them, colour and depth,
+        // with the pass's load op: a fast clear. Its depth is attached whether this batch tests it or not.)
+        if (&colour == plain_colour_.get() && plain_clear_) {
+            rp.load_attachments = 0;
+            rp.clear_attachments = 1;
+            rp.clear_color[0] = {};
+            rp.depth_stencil = &plain_depth_->image->get_view();
+            rp.op_flags = RENDER_PASS_OP_CLEAR_DEPTH_STENCIL_BIT | RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT;
+            rp.clear_depth_stencil = {0.0f, 0};
+            depth = plain_depth_.get();
+            plain_clear_ = false;
+            counts_plain_clears_++;
         }
         RenderPassInfo::Subpass subpass = {};
         if (reads == PassReads::target) {
@@ -1212,10 +1195,19 @@ private:
     }
 
     // ---- Surfaces ----
-    ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth) {
+    // (a depth surface's format: the device's with a stencil, or with KF4_PC_DEPTH=unorm D16_UNORM for the GS's 16-bit
+    // Z formats, PSMZ16 and PSMZ16S, and D32F for the others)
+    VkFormat depth_format_for(uint32_t psm) const {
+        if (unorm_on_) {
+            return unorm_16_ && (psm == 0x32 || psm == 0x3A) ? VK_FORMAT_D16_UNORM : VK_FORMAT_D32_SFLOAT;
+        }
+        return depth_format_;
+    }
+
+    ImageHandle make_surface_image(uint32_t width, uint32_t height, bool depth, uint32_t psm) {
         surface_writes_++; // (same_as_last_clear: a new image, perhaps where a surface's last was)
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1],
-                                                              depth ? depth_format_ : colour_format);
+                                                              depth ? depth_format_for(psm) : colour_format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -1245,7 +1237,7 @@ private:
             counts_.surface_copies_into_spares++;
             return spare;
         }
-        return make_surface_image(s.width(), s.height, s.depth);
+        return make_surface_image(s.width(), s.height, s.depth, s.psm);
     }
 
     // A rectangle of a colour surface's pixels (at the canvas's scale) copied into dst at dst_at (outside a render
@@ -1313,7 +1305,7 @@ private:
             made->image = reuse_image(made->width() * scale_[0], made->height * scale_[1]);
         }
         if (!made->image) {
-            made->image = make_surface_image(made->width(), made->height, false);
+            made->image = make_surface_image(made->width(), made->height, false, made->psm);
         }
         if (!made->image) {
             return {};
@@ -1368,7 +1360,7 @@ private:
         made->height = height;
         made->depth = true;
         made->used = frame_;
-        made->image = make_surface_image(made->width(), height, true);
+        made->image = make_surface_image(made->width(), height, true, made->psm);
         if (!made->image) {
             return nullptr;
         }
@@ -1445,7 +1437,7 @@ private:
     void grow(Surface &s, uint32_t height) {
         ZoneScope zone(canvas_grow_zone);
         end_pass();
-        ImageHandle bigger = make_surface_image(s.width(), height, s.depth);
+        ImageHandle bigger = make_surface_image(s.width(), height, s.depth, s.psm);
         if (!bigger) {
             return;
         }
@@ -2224,6 +2216,7 @@ private:
         struct Run {
             uint32_t first, count, instance;
             uint32_t picture_instance; // (NativeBatch's: no_instance, or the record its pictures between draw it with)
+            uint32_t kind = 0, owner = 0, part = 0; // (NativeBatch's draw: the developers' counters, Counters)
         };
         bool native = false;
         bool native_alpha_is_one = false; // (a native batch: every one of its NativeBatch's alpha_is_one)
@@ -2250,6 +2243,7 @@ private:
         // (a kept walk's batch: its texture's place in the walk's table, Kept::table, and its sampler's in Kept::samplers;
         // no_table: set 1's)
         uint32_t table_at = no_table, sampler_at = 0;
+        uint32_t draw_first = 0, draw_last = 0; // (Canvas::gpu_draw's numbers: the GS draws it holds)
     };
 
     // The batch's shader state, for the profiler's GPU time by state (port_profile_gpu_detail; 0 when off)
@@ -3094,6 +3088,7 @@ private:
         batch_.boxes.clear();
         batch_.sprites = true;
         batch_.shader_blend = shader_blend_on_ && !choose_blend(s.alpha, bits(s.prim, 6, 1) != 0).supported;
+        batch_.draw_first = batch_.draw_last = gpu_draw_;
         if (bits(s.prim, 4, 1)) {
             batch_.texture = bind_texture(s, cols, rows);
             if (batch_.texture.src == SRC_INDEX) {
@@ -3430,14 +3425,13 @@ private:
                 continue;
             }
             uint32_t zmax = o->psm == 0x30 ? 0xFFFFFFFFu : o->psm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
-            float zscale = o->psm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f; // (pcr_prim.vert's depth)
             if (o->cleared && o->cleared_z == std::min(z, zmax)) {
                 continue; // (as the clear before left it: the frame's two contexts clear one after the other)
             }
             end_pass();
             CommandBuffer &c = cmd(GpuWork::surface);
             full_barrier(c);
-            clear_depth_image(c, *o->image, o->zcopy, float(std::min(z, zmax)) * zscale);
+            clear_depth_image(c, *o->image, o->zcopy, depth_of(z, o->psm));
             full_barrier(c);
             o->cleared = true;
             o->cleared_z = std::min(z, zmax);
@@ -3711,6 +3705,292 @@ private:
         return c == 0 && vertices_known && alpha_range(b).lo >= 0x80;
     }
 
+    // (the developers' counters' records: Counters below)
+    struct CountSlot {
+        uint32_t draw = 0, v = 0, kind = 0, owner = 0, part = 0, record = 0, triangles = 0, fbp = 0;
+        uint64_t test = 0, alpha = 0, tex0 = 0, zbuf = 0;
+        uint32_t prim = 0;
+        bool decal = false, covers = false, layer = false, sprites = false;
+        uint8_t passes = 0;
+    };
+    struct CountQuery {
+        uint32_t v = 0, fbp = 0, pixels = 0;
+        bool date = false, from_surface = false, decal = false, blended = false;
+    };
+    struct CountFrame {
+        BufferHandle buffer; // (the slots' counters: 3 uvec4 a slot after a head of 16 bytes, pcr_prim.h's u_trace)
+        VkQueryPool pool = VK_NULL_HANDLE;
+        Fence fence;
+        uint64_t vblank = 0;
+        std::vector<CountSlot> slots;
+        std::vector<CountQuery> queries;
+        bool pending = false;
+    };
+
+
+    // ---- Developers' counters (Counters below) ----
+    void start_counters() {
+        const char *ties = getenv("KF4_PC_TIES"), *overdraw = getenv("KF4_PC_OVERDRAW");
+        if (ties && *ties) {
+            if (!rule_on_) {
+                fprintf(stderr, "[pcr] KF4_PC_TIES: the tie counter needs the depth rule; not counted\n");
+            } else if (!(ties_out_ = fopen(ties, "w"))) {
+                fprintf(stderr, "[pcr] KF4_PC_TIES: cannot write %s\n", ties);
+            }
+        }
+        if (overdraw && *overdraw) {
+            if (!device_.get_device_features().enabled_features.pipelineStatisticsQuery) {
+                fprintf(stderr, "[pcr] KF4_PC_OVERDRAW: this GPU has no pipeline statistics queries; not counted\n");
+            } else if (!device_.get_device_features().vk12_features.hostQueryReset) {
+                fprintf(stderr, "[pcr] KF4_PC_OVERDRAW: no host query reset; not counted\n");
+            } else if (!(overdraw_out_ = fopen(overdraw, "w"))) {
+                fprintf(stderr, "[pcr] KF4_PC_OVERDRAW: cannot write %s\n", overdraw);
+            }
+        }
+        if (const char *at = getenv("KF4_PC_TIES_AT")) {
+            for (const char *p = at; *p;) {
+                char *end = nullptr;
+                unsigned long long v = strtoull(p, &end, 10);
+                if (end == p) {
+                    break;
+                }
+                ties_at_.push_back(v);
+                p = *end ? end + 1 : end;
+            }
+            std::sort(ties_at_.begin(), ties_at_.end());
+        }
+        ties_order_ = getenv("KF4_PC_TIES_ORDER") && strcmp(getenv("KF4_PC_TIES_ORDER"), "0") != 0;
+        if (ties_out_) {
+            fprintf(ties_out_, "# KF4_PC_TIES (pcr_canvas.cpp's Counters): V vblank slots tested passed equal behind ahead "
+                               "lost near_lost near_won; W vblank v (the program: 0 GIF, 1 000, 2 280, 3 700, 4 ripple) tested passed "
+                               "equal behind ahead lost near_lost near_won; T vblank slot draw v kind owner part record decal covers layer "
+                               "sprites passes test alpha prim tex0 zbuf fbp triangles tested passed equal behind ahead "
+                               "lost near_lost near_won zmin zmax\n");
+        }
+        if (overdraw_out_) {
+            fprintf(overdraw_out_, "# KF4_PC_OVERDRAW (pcr_canvas.cpp's Counters): Q vblank v fbp pixels date "
+                                   "from_surface decal blended batches invocations\n");
+        }
+        if (!ties_out_ && !overdraw_out_) {
+            return;
+        }
+        auto &table = device_.get_device_table();
+        for (CountFrame &f : count_frames_) {
+            if (ties_out_) {
+                BufferCreateInfo info = {};
+                info.domain = BufferDomain::CachedHost;
+                info.size = 16 + VkDeviceSize(count_slots) * 48;
+                info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                f.buffer = device_.create_buffer(info, nullptr);
+                reset_count_buffer(f);
+            }
+            if (overdraw_out_) {
+                VkQueryPoolCreateInfo q = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+                q.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+                q.queryCount = count_queries;
+                q.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
+                table.vkCreateQueryPool(device_.get_device(), &q, nullptr, &f.pool);
+                table.vkResetQueryPool(device_.get_device(), f.pool, 0, count_queries);
+            }
+        }
+        fprintf(stderr, "[pcr] developers' counters on:%s%s\n", ties_out_ ? " ties (KF4_PC_TIES)" : "",
+                overdraw_out_ ? " overdraw (KF4_PC_OVERDRAW)" : "");
+    }
+
+    void reset_count_buffer(CountFrame &f) {
+        auto *words = static_cast<uint32_t *>(device_.map_host_buffer(*f.buffer, MEMORY_ACCESS_WRITE_BIT));
+        if (!words) {
+            return;
+        }
+        size_t n = std::max<size_t>(f.slots.size(), f.pending ? 0 : count_slots);
+        memset(words, 0, 16 + n * 48);
+        for (size_t i = 0; i < n; i++) {
+            words[4 + i * 12 + 8] = 0xFFFFFFFFu; // (the Z range's least: atomicMin)
+        }
+        device_.unmap_host_buffer(*f.buffer, MEMORY_ACCESS_WRITE_BIT);
+    }
+
+    bool counting() const {
+        return ties_out_ || overdraw_out_;
+    }
+
+    // A slot for a batch's draw (or one run of a native batch's), or trace_.draw where there is none
+    uint32_t count_slot(const Batch &b, const Batch::Run *run, uint32_t v, bool layer, int pass_count) {
+        CountFrame &f = count_frames_[count_at_];
+        if (f.slots.size() >= count_slots) {
+            return trace_.draw;
+        }
+        CountSlot slot;
+        const DrawState &s = b.state;
+        slot.draw = b.draw_first;
+        slot.v = v;
+        if (run) {
+            slot.kind = run->kind;
+            slot.owner = run->owner;
+            slot.part = run->part;
+            slot.record = run->instance;
+            slot.triangles = run->count;
+        } else {
+            slot.triangles = uint32_t(b.vertices.size());
+        }
+        slot.fbp = bits(s.frame, 0, 9);
+        slot.test = s.test;
+        slot.alpha = s.alpha;
+        slot.tex0 = s.tex0;
+        slot.zbuf = s.zbuf;
+        slot.prim = uint32_t(s.prim);
+        slot.decal = is_decal(b);
+        slot.covers = blend_covers(b);
+        slot.layer = layer;
+        slot.sprites = b.sprites && !b.native;
+        slot.passes = uint8_t(pass_count);
+        f.slots.push_back(slot);
+        return uint32_t(f.slots.size() - 1) | count_bit;
+    }
+
+    // Each vblank (after the frame's submit): the frame's counts fenced, the ring moved on, and the frame drawn
+    // count_ring - 1 vblanks ago written once the GPU is done with it
+    void count_vblank(uint64_t game_vblank) {
+        if (!counting()) {
+            return;
+        }
+        CountFrame &f = count_frames_[count_at_];
+        f.vblank = game_vblank != UINT64_MAX ? game_vblank : frame_;
+        if (!f.slots.empty() || !f.queries.empty()) {
+            f.fence.reset();
+            device_.submit_empty(CommandBuffer::Type::Generic, &f.fence, nullptr);
+            f.pending = true;
+        }
+        count_at_ = (count_at_ + 1) % count_ring;
+        take_counts(count_frames_[count_at_]);
+        // (the last vblank KF4_PC_TIES_AT asks for: everything written now, the run may end before the ring comes round)
+        if (!ties_at_.empty() && f.vblank == ties_at_.back()) {
+            for (uint32_t i = 1; i < count_ring; i++) {
+                take_counts(count_frames_[(count_at_ + i) % count_ring]);
+            }
+            fflush(ties_out_ ? ties_out_ : overdraw_out_);
+            if (overdraw_out_) {
+                fflush(overdraw_out_);
+            }
+        }
+    }
+
+    void take_counts(CountFrame &f) {
+        if (f.pending) {
+            if (f.fence) {
+                GpuWait wait(hang_notes_, "the developers' counters' fence", hang_clock_s());
+                f.fence->wait();
+            }
+            write_counts(f);
+        }
+        if (f.buffer && (f.pending || !f.slots.empty())) {
+            reset_count_buffer(f);
+        }
+        if (f.pool && !f.queries.empty()) {
+            device_.get_device_table().vkResetQueryPool(device_.get_device(), f.pool, 0, uint32_t(f.queries.size()));
+        }
+        f.slots.clear();
+        f.queries.clear();
+        f.pending = false;
+        f.fence.reset();
+    }
+
+    void write_counts(const CountFrame &f) {
+        if (ties_out_ && f.buffer) {
+            auto *words = static_cast<const uint32_t *>(device_.map_host_buffer(*f.buffer, MEMORY_ACCESS_READ_BIT));
+            if (words) {
+                bool detail = ties_at_.empty() || std::binary_search(ties_at_.begin(), ties_at_.end(), f.vblank);
+                uint64_t total[8] = {}, by_program[5][8] = {};
+                for (size_t i = 0; i < f.slots.size(); i++) {
+                    const uint32_t *c = words + 4 + i * 12;
+                    for (int k = 0; k < 8; k++) {
+                        total[k] += c[k];
+                        by_program[std::min<uint32_t>(f.slots[i].v, 4)][k] += c[k];
+                    }
+                    bool ties = c[2] | c[3] | c[4] | c[5] | c[6] | c[7];
+                    if (!detail || c[0] == 0 || !(ties || ties_order_)) {
+                        continue;
+                    }
+                    const CountSlot &k = f.slots[i];
+                    float zmin, zmax;
+                    memcpy(&zmin, &c[8], 4);
+                    memcpy(&zmax, &c[9], 4);
+                    fprintf(ties_out_,
+                            "T %llu %zu %u %u %u %08x %u %08x %d %d %d %d %d %08llx %010llx %03x %016llx %011llx %u %u "
+                            "%u %u %u %u %u %u %u %u %.1f %.1f\n",
+                            (unsigned long long)f.vblank, i, k.draw, k.v, k.kind, k.owner, k.part, k.record, k.decal,
+                            k.covers, k.layer, k.sprites, k.passes, (unsigned long long)k.test,
+                            (unsigned long long)k.alpha, k.prim, (unsigned long long)k.tex0,
+                            (unsigned long long)k.zbuf, k.fbp, k.triangles, c[0], c[1], c[2], c[3], c[4], c[5], c[6],
+                            c[7], double(zmin), double(zmax));
+                }
+                for (uint32_t v = 0; v < 5; v++) {
+                    const uint64_t *c = by_program[v];
+                    if (c[0]) {
+                        fprintf(ties_out_, "W %llu %u %llu %llu %llu %llu %llu %llu %llu %llu\n",
+                                (unsigned long long)f.vblank, v, (unsigned long long)c[0], (unsigned long long)c[1],
+                                (unsigned long long)c[2], (unsigned long long)c[3], (unsigned long long)c[4],
+                                (unsigned long long)c[5], (unsigned long long)c[6], (unsigned long long)c[7]);
+                    }
+                }
+                fprintf(ties_out_, "V %llu %zu %llu %llu %llu %llu %llu %llu %llu %llu\n", (unsigned long long)f.vblank,
+                        f.slots.size(), (unsigned long long)total[0], (unsigned long long)total[1],
+                        (unsigned long long)total[2], (unsigned long long)total[3], (unsigned long long)total[4],
+                        (unsigned long long)total[5], (unsigned long long)total[6], (unsigned long long)total[7]);
+                device_.unmap_host_buffer(*f.buffer, MEMORY_ACCESS_READ_BIT);
+            }
+        }
+        if (overdraw_out_ && f.pool && !f.queries.empty()) {
+            std::vector<uint64_t> results(f.queries.size());
+            VkResult r = device_.get_device_table().vkGetQueryPoolResults(
+                device_.get_device(), f.pool, 0, uint32_t(f.queries.size()), results.size() * sizeof(uint64_t),
+                results.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            if (r == VK_SUCCESS) {
+                struct Sum {
+                    uint64_t batches = 0, invocations = 0;
+                };
+                std::map<std::array<uint32_t, 7>, Sum> sums;
+                for (size_t i = 0; i < f.queries.size(); i++) {
+                    const CountQuery &q = f.queries[i];
+                    Sum &sum = sums[{q.v, q.fbp, q.pixels, q.date, q.from_surface, q.decal, q.blended}];
+                    sum.batches++;
+                    sum.invocations += results[i];
+                }
+                for (const auto &[k, sum] : sums) {
+                    fprintf(overdraw_out_, "Q %llu %u %03x %u %u %u %u %u %llu %llu\n", (unsigned long long)f.vblank,
+                            k[0], k[1], k[2], k[3], k[4], k[5], k[6], (unsigned long long)sum.batches,
+                            (unsigned long long)sum.invocations);
+                }
+            }
+        }
+    }
+
+    // At the end: what is left counted written
+    void end_counters() {
+        if (!counting()) {
+            return;
+        }
+        for (uint32_t i = 0; i < count_ring; i++) {
+            count_at_ = (count_at_ + 1) % count_ring;
+            take_counts(count_frames_[count_at_]);
+        }
+        for (CountFrame &f : count_frames_) {
+            if (f.pool) {
+                device_.get_device_table().vkDestroyQueryPool(device_.get_device(), f.pool, nullptr);
+                f.pool = VK_NULL_HANDLE;
+            }
+        }
+        if (ties_out_) {
+            fclose(ties_out_);
+            ties_out_ = nullptr;
+        }
+        if (overdraw_out_) {
+            fclose(overdraw_out_);
+            overdraw_out_ = nullptr;
+        }
+    }
+
+
     // A batch drawn (the open one, or a kept walk's again); the batch is not changed
     // (exact Z, a native batch) Room for its triangles' planes in the plane pass, an entry a triangle written:
     // run_plane_at_ each of its runs' plane_at and batch_planes_ its first plane (no_plane: none). True: a new chunk
@@ -3755,12 +4035,23 @@ private:
                 uint32_t at = i < run_plane_at_.size() ? run_plane_at_[i] : no_plane;
                 c.push_constants(&at, offsetof(PrimPush, plane_at), sizeof(at));
             }
+            if (i < run_count_slot_.size()) {
+                // (developers' tie counter: the run's slot)
+                c.push_constants(&run_count_slot_[i], offsetof(PrimPush, trace_draw), sizeof(uint32_t));
+            }
             c.draw(r.count * 3, 1, r.first * 3, r.instance);
         }
     }
 
     void draw_batch(const Batch &b) {
         ZoneScope zone(canvas_draw_batch_zone);
+        // (KF4_GPU_DRAWS: what this records is for the batch's draws, its copies too; the draw sent next after)
+        times_.set_draws(b.draw_first, b.draw_last);
+        struct DrawsBack {
+            GpuTimes &times;
+            uint32_t next;
+            ~DrawsBack() { times.set_draws(next, next); }
+        } draws_back{times_, gpu_draw_};
         const DrawState &s = b.state;
         counts_.batches++;
         uint32_t fbp = bits(s.frame, 0, 9), fbw = bits(s.frame, 16, 6), fpsm = bits(s.frame, 24, 6);
@@ -3840,6 +4131,21 @@ private:
                    std::min(int32_t(scay1), int32_t(colour->height) - 1 - int32_t(placed.y))};
         }
         date_stencil = date_stencil && depth != nullptr;
+        // (developers' KF4_PC_PLAIN_WORLD: the world's batch into the plain images instead)
+        bool plain_batch = false;
+        if (plain_on_ && b.native && b.program != NativeProgram::ripple && !date && !b.shader_blend &&
+            colour->psm == GSN_PSMCT32 && colour->width() >= 640 &&
+            !(bits(s.prim, 4, 1) != 0 && b.texture.ok && b.texture.src == SRC_SURFACE)) {
+            if (!plain_images_) {
+                plain_batch = true;
+                counts_plain_++;
+            } else if (Surface *plain = plain_surfaces(*colour)) {
+                colour = plain;
+                depth = depth ? plain_depth_.get() : nullptr;
+                plain_batch = true;
+                counts_plain_++;
+            }
+        }
         // (KF4_PC_STENCIL=0: the destination as it is before the draw, which the shader reads: a copy, as the draw
         // writes it)
         ImageHandle dest_copy;
@@ -3885,6 +4191,12 @@ private:
         bool clear_z_only = false;
         bool clear = as_clear(b, *colour, placed, zte, zwrite, ztst, date, passes[0], pass_count, scissor_px, clear_rect,
                               clear_z_only);
+        // (developers' KF4_PC_PLAIN_WORLD: the frame buffer cleared, the game's frame begun: the plain images cleared
+        // at their next pass)
+        if (plain_images_ && clear && !clear_z_only && !plain_batch && colour->psm == GSN_PSMCT32 &&
+            colour->width() >= 640) {
+            plain_stale_ = true;
+        }
         // (developers' knock-outs, KF4_PC_KNOCK: one kind of work left out of the pictures between, to time the rest:
         // the picture is wrong, the GPU time a picture less is what that work costs)
         if (knock_ && between_ && between_->active() &&
@@ -3898,6 +4210,9 @@ private:
                                                        : 1;
         BlendChoice blend = choose_blend(s.alpha, bits(s.prim, 6, 1) != 0);
         bool blend_supported = blend.supported;
+        if (plain_batch && plain_unblended_) {
+            blend = BlendChoice(); // (developers' KF4_PC_PLAIN_WORLD=unblended)
+        }
         if (blend.enable && unblend_on_ && blend_is_source(b)) {
             // (the blend's result is its source at every pixel, and the alpha written the same: drawn without the
             // blend, which reads every pixel it writes: at 4x with 16 bits a channel that read is most of what the map
@@ -3934,6 +4249,19 @@ private:
                      : 0;
         flags |= is_decal(b) ? F_DECAL : 0;
         flags |= exact_z_ ? F_EXACT_Z : 0;
+        // (developers' KF4_PC_DEPTH=layers: a layer's corners nearer, layer_bias_, and its slope bias if asked)
+        bool layer = layers_on_ && zte && is_layer(b);
+        bool layer_slope = layer && layer_bias_.slope > 0.0f;
+        if (layer) {
+            flags |= F_LAYER;
+            push.plane_at = layer_bias_.z256;
+            counts_layers_++;
+        }
+        if (pixel_clamp_ || unorm_on_) {
+            flags |= F_PIXEL_CLAMP;
+            vp.maxDepth = unorm_on_ ? 1.0f : float(push.zmax) * push.zscale;
+        }
+        flags |= gs_whole_ ? F_PIXEL_CLAMP : 0; // (with exact Z: the whole Z alone, KF4_PC_DEPTH=gsexact)
         // (the depth rule: a draw that tests Z GEQUAL or GREATER tests it in its shader against the depth surface's copy,
         // and one that tests ALWAYS and writes Z writes the copy as the depth; every exact Z draw writes the Z with its
         // fraction)
@@ -4042,6 +4370,7 @@ private:
             }
         }
         bool in_run = runs_.map && between_ && between_->active() && !traced && !clear && !date && !settle && !b.shader_blend && !texels &&
+                      !counting() && !layer_slope &&
                       !sampled && !from_surface && !dest_copy && !(indexed && !walk_clut) &&
                       (merged     ? runs_.merged_used + batch_triangles * uint32_t(pass_count) <= runs_.merged_capacity
                        : b.native ? native_runs_ok_
@@ -4145,7 +4474,9 @@ private:
                 za = {};
                 za.aspectMask = stencil_on_ ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
                                             : VK_IMAGE_ASPECT_DEPTH_BIT;
-                za.clearValue.depthStencil.depth = float(std::min(v0.z, zmax)) * zscale;
+                za.clearValue.depthStencil.depth = depth_of(v0.z, zp);
+                (void)zmax;
+                (void)zscale;
                 count++;
             }
             const Image *zcopy = zwrite && rule_on_ && depth->zcopy ? depth->zcopy.get() : nullptr;
@@ -4170,6 +4501,26 @@ private:
         if (settle) {
             counts_.decals_settled++;
         }
+        // (developers' counters: the batch's slots, a run's each, and its query)
+        run_count_slot_.clear();
+        if (ties_out_ && rule && !trace_.on) {
+            if (b.native) {
+                for (const Batch::Run &r : b.runs) {
+                    run_count_slot_.push_back(count_slot(b, &r, uint32_t(v), layer, pass_count));
+                }
+            } else {
+                push.trace_draw = count_slot(b, nullptr, uint32_t(v), layer, pass_count);
+            }
+        }
+        VkQueryPool count_pool = VK_NULL_HANDLE;
+        uint32_t count_query = 0;
+        if (overdraw_out_ && b.native && count_frames_[count_at_].queries.size() < count_queries) {
+            CountFrame &f = count_frames_[count_at_];
+            count_pool = f.pool;
+            count_query = uint32_t(f.queries.size());
+            f.queries.push_back({uint32_t(v), fbp, colour->image->get_width() * colour->image->get_height(), date,
+                                 from_surface, (flags & F_DECAL) != 0, blend.enable || b.shader_blend});
+        }
         c.set_opaque_state();
         c.set_primitive_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         c.set_cull_mode(VK_CULL_MODE_NONE);
@@ -4177,7 +4528,8 @@ private:
                             : ztst == 1 ? VK_COMPARE_OP_ALWAYS
                             : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                         : VK_COMPARE_OP_GREATER);
-        c.set_storage_buffer(1, 6, *trace_buf_); // (pcr_prim.h's u_trace)
+        // (pcr_prim.h's u_trace; the developers' tie counter's slots where it counts)
+        c.set_storage_buffer(1, 6, ties_out_ && !trace_.on ? *count_frames_[count_at_].buffer : *trace_buf_);
         if (rule) {
             c.set_storage_texture(1, depth_input_binding, depth->zcopy->get_view());
         }
@@ -4204,6 +4556,14 @@ private:
             c.set_vertex_binding(0, *walk_vertices_, 0, sizeof(Vertex));
         } else if (!b.native) {
             bind_vertices(c, b);
+        }
+        if (count_pool) {
+            device_.get_device_table().vkCmdBeginQuery(c.get_command_buffer(), count_pool, count_query, 0);
+        }
+        // (developers' KF4_PC_DEPTH=layers: the slope's bias, layer_bias_)
+        if (layer_slope) {
+            c.set_depth_bias(true);
+            c.set_depth_bias(0.0f, layer_bias_.slope * float(std::max(scale_[0], scale_[1])));
         }
         // (a decal of a program whose decals are given their depth first, decal_depth_first, rather than settled after)
         bool depth_first = settle && depth_first_program(v);
@@ -4269,6 +4629,12 @@ private:
         }
         if (settle && !depth_first) {
             settle_decal_depth(c, b, push, passes, pass_count, v, vp);
+        }
+        if (layer_slope) {
+            c.set_depth_bias(false);
+        }
+        if (count_pool) {
+            device_.get_device_table().vkCmdEndQuery(c.get_command_buffer(), count_pool, count_query);
         }
         drawn_over(b, box, zte && zwrite);
     }
@@ -4721,6 +5087,14 @@ private:
         const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
                                            VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
         bool asked = !getenv("KF4_PC_STENCIL") || strcmp(getenv("KF4_PC_STENCIL"), "0") != 0;
+        if (unorm_on_) {
+            // (developers' KF4_PC_DEPTH=unorm: the GS's 16-bit whole Z, no stencil)
+            unorm_16_ = device_.image_format_is_supported(VK_FORMAT_D16_UNORM, need);
+            if (!unorm_16_) {
+                fprintf(stderr, "[pcr] KF4_PC_DEPTH=unorm: no D16_UNORM depth here; D32F\n");
+            }
+            return;
+        }
         for (VkFormat f : {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}) {
             if (asked && device_.image_format_is_supported(f, need)) {
                 depth_format_ = f;
@@ -4748,7 +5122,7 @@ private:
         scale_ = pending_scale_;
         for (auto *list : {&colour_, &depth_}) {
             for (auto &s : *list) {
-                ImageHandle image = make_surface_image(s->width(), s->height, s->depth);
+                ImageHandle image = make_surface_image(s->width(), s->height, s->depth, s->psm);
                 if (!image) {
                     continue;
                 }
@@ -5035,6 +5409,7 @@ private:
     // (the temporal anti-aliasing) the jitter of what is drawn now, packed (set_jitter); the frame's buffers, the pages
     // the last two pictures showed (scanout); the buffer scanout_depth copies through
     uint32_t jitter_packed_ = 0;
+    uint32_t gpu_draw_ = 0; // (gpu_draw's)
     uint64_t drawing_ = 0; // (begin_drawing's: stamped on the colour surfaces its 3D draws into, Surface::drawing)
     std::array<uint32_t, 2> shown_pages_ = {no_zbuf, no_zbuf};
     BufferHandle depth_staging_;
@@ -5048,12 +5423,21 @@ private:
     // with KF4_PC_EXACT_Z=0, the GPU's interpolated depth: decals drawn over a surface cut into other triangles lose to
     // it here and there.
     // (and 64-bit integers: the plane's exact arithmetic, pcr_exact_z.h)
-    // (developers' KF4_PC_DEPTH=rule|exact|gpu: the depth rule where the GPU has it, exact Z with decals settled, or the
-    // GPU's interpolated depth; to compare in one build. Unset: the depth rule where the GPU has it, else exact Z)
-    enum class DepthAsked { rule, exact, gpu };
+    // (developers' KF4_PC_DEPTH=rule|exact|gpu|layers: the depth rule where the GPU has it, exact Z with decals settled,
+    // the GPU's interpolated depth, or that with the layers drawn nearer (layers_on_); to compare in one build. Unset:
+    // the depth rule where the GPU has it, else exact Z)
+    // gsexact: exact Z's whole Z alone at each pixel (no fine part, no decal settled, no rule): the GS's arithmetic in the
+    // shader, every tie a tie in the GPU's own GEQUAL; the ceiling docs/plans/scene-renderer-design.md measures)
+    enum class DepthAsked { rule, exact, gpu, layers, unorm, gsexact };
     static DepthAsked depth_asked() {
         const char *v = getenv("KF4_PC_DEPTH");
-        return !v ? DepthAsked::rule : strcmp(v, "exact") == 0 ? DepthAsked::exact : strcmp(v, "gpu") == 0 ? DepthAsked::gpu : DepthAsked::rule;
+        return !v                         ? DepthAsked::rule
+               : strcmp(v, "exact") == 0  ? DepthAsked::exact
+               : strcmp(v, "gsexact") == 0 ? DepthAsked::gsexact
+               : strcmp(v, "gpu") == 0    ? DepthAsked::gpu
+               : strcmp(v, "layers") == 0 ? DepthAsked::layers
+               : strcmp(v, "unorm") == 0  ? DepthAsked::unorm
+                                          : DepthAsked::rule;
     }
     static bool interlock(const Device &device) {
         const auto &f = device.get_device_features();
@@ -5064,7 +5448,8 @@ private:
     const bool exact_z_ = device_.get_device_features().enabled_features.depthClamp &&
                           device_.get_device_features().enabled_features.shaderInt64 &&
                           !(getenv("KF4_PC_EXACT_Z") && strcmp(getenv("KF4_PC_EXACT_Z"), "0") == 0) &&
-                          depth_asked() != DepthAsked::gpu;
+                          depth_asked() != DepthAsked::gpu && depth_asked() != DepthAsked::layers &&
+                          depth_asked() != DepthAsked::unorm;
     // The depth rule (pcr_prim.h's pcr_depth_rule): exact Z's draws that test Z GEQUAL or GREATER (and ALWAYS writing
     // it) test it in the fragment shader, with a tolerance: one test for every draw, no decals singled out, nothing
     // settled. The shader reads and writes each depth surface's own copy of its depth (Surface::zcopy) in its critical
@@ -5075,7 +5460,10 @@ private:
     // (exact Z: decals given back their own depth where they won, settle_decal_depth. Developers' KF4_PC_DECAL_SETTLE=0:
     // not, the top fine part written, to compare)
     const bool settle_on_ =
-        exact_z_ && !rule_on_ && !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
+        exact_z_ && !rule_on_ && depth_asked() != DepthAsked::gsexact &&
+        !(getenv("KF4_PC_DECAL_SETTLE") && strcmp(getenv("KF4_PC_DECAL_SETTLE"), "0") == 0);
+    // (developers' KF4_PC_DEPTH=gsexact: the whole Z alone, pcr_prim.h's pcr_whole_depth by PCR_F_PIXEL_CLAMP)
+    const bool gs_whole_ = exact_z_ && depth_asked() == DepthAsked::gsexact;
     // (exact Z: the native draws' planes, worked out before the command buffer's draws; pcr_plane_pass.h. Developers'
     // KF4_PC_PLANES=0: none, the native draws' Z the interpolated one, to time the planes' cost)
     const std::unique_ptr<PlanePass> planes_ =
@@ -5083,6 +5471,75 @@ private:
             ? std::make_unique<PlanePass>(device_)
             : nullptr;
     const Buffer *planes_bound_ = nullptr; // (the planes buffer of the last batch's room: set 1's, bind_between)
+    // Developers' KF4_PC_DEPTH=layers (docs/plans/depth-by-layers.md): the depth by layers' proof of concept. The GPU's
+    // own depth test for every draw (as KF4_PC_DEPTH=gpu: no exact Z, no rule, no planes), and the draws that lie on a
+    // surface drawn before them (is_layer) drawn a little nearer, so that they win against their own surface and lose to
+    // anything really nearer: KF4_PC_LAYER_BIAS="Z[,SLOPE]", Z in the GS's Z (added to each corner's depth in the
+    // vertex shader, pcr_common.h's PCR_F_LAYER; 1 by default) and SLOPE Vulkan's depth bias slope factor in GS pixels
+    // (times the scale: the depth's steps a GS pixel times SLOPE; 0 by default). KF4_PC_LAYERS=decal (is_decal, the
+    // default) or blended (every blended draw testing GEQUAL, a covering blend's too). (Every draw so would be no change:
+    // the surface would move with its layer.)
+    const bool layers_on_ = (depth_asked() == DepthAsked::layers || depth_asked() == DepthAsked::unorm) && !exact_z_;
+    // (KF4_PC_DEPTH=unorm: as layers, with no bias unless KF4_PC_LAYER_BIAS asks for one, and the depth surfaces
+    // D16_UNORM: the GPU rounds each pixel's depth to a whole step of 1 / 65535, which for the game's 16-bit Z buffers is
+    // the GS's whole Z, so that two surfaces on one whole Z tie as on the GS and the later draw wins, early tests kept.
+    // The depth is Z / zmax for every format; the 16-bit Z formats' surfaces D16_UNORM, the others' D32F (the menus'
+    // 32-bit Z in 16 bits lost the world behind the menu: depth_format_for); no stencil, so DATE by a copy. A proof of
+    // concept, docs/plans/depth-by-layers.md)
+    const bool unorm_on_ = depth_asked() == DepthAsked::unorm && !exact_z_;
+    bool unorm_16_ = false; // (... and the device has D16_UNORM depth: choose_depth_format)
+    // (a Z's depth as every draw and clear gives it: Z * zscale, or Z / zmax at each pixel with KF4_PC_DEPTH=unorm)
+    float depth_of(uint32_t z, uint32_t zpsm) const {
+        uint32_t zmax = zpsm == 0x30 ? 0xFFFFFFFFu : zpsm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
+        if (unorm_on_) {
+            return float(double(std::min(z, zmax)) / double(zmax));
+        }
+        return float(std::min(z, zmax)) * (zpsm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f);
+    }
+    // (and every draw's Z clamped to its Z buffer's largest at each pixel, as the GS clamps it, by the GPU's depth clamp
+    // to the viewport's depth range, rather than at its corners, which lowers a near triangle's Z across it: map 112's
+    // rock, 013's tree through a rock near the eye. KF4_PC_PIXEL_CLAMP=0: at the corners, as KF4_PC_DEPTH=gpu)
+    const bool pixel_clamp_ = layers_on_ && device_.get_device_features().enabled_features.depthClamp &&
+                              !(getenv("KF4_PC_PIXEL_CLAMP") && strcmp(getenv("KF4_PC_PIXEL_CLAMP"), "0") == 0);
+    struct LayerBias {
+        uint32_t z256 = depth_asked() == DepthAsked::unorm ? 0 : 256; // (the corners' Z more, in 1/256 of a Z: PrimPush::plane_at's place)
+        float slope = 0.0f;
+    };
+    static LayerBias layer_bias() {
+        LayerBias b;
+        if (const char *v = getenv("KF4_PC_LAYER_BIAS")) {
+            float z = 1.0f, slope = 0.0f;
+            int n = sscanf(v, "%f,%f", &z, &slope);
+            if (n >= 1) {
+                b.z256 = uint32_t(std::clamp(z, 0.0f, 65535.0f) * 256.0f + 0.5f);
+            }
+            if (n >= 2) {
+                b.slope = std::max(slope, 0.0f);
+            }
+        }
+        return b;
+    }
+    const LayerBias layer_bias_ = layer_bias();
+    enum class LayersWhich { decal, blended };
+    static LayersWhich layers_which() {
+        const char *v = getenv("KF4_PC_LAYERS");
+        return !v                          ? LayersWhich::decal
+               : strcmp(v, "blended") == 0 ? LayersWhich::blended
+                                           : LayersWhich::decal;
+    }
+    const LayersWhich layers_which_ = layers_which();
+    uint64_t counts_layers_ = 0; // (batches drawn as layers)
+    // (KF4_PC_DEPTH=layers) Whether a batch is drawn as a layer over its surface
+    bool is_layer(const Batch &b) const {
+        const DrawState &s = b.state;
+        bool geq = bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2;
+        switch (layers_which_) {
+        case LayersWhich::blended:
+            return geq && bits(s.prim, 6, 1) != 0;
+        default:
+            return is_decal(b);
+        }
+    }
     std::vector<uint32_t> run_plane_at_;   // (the batch drawn: each of its runs' plane_at, or no_plane)
     uint32_t batch_planes_ = no_plane;     // (... its first plane in planes_bound_)
     // the depth surfaces' format, and whether DATE is by its stencil (KF4_PC_STENCIL=0: by a copy, as before)
@@ -5103,6 +5560,23 @@ private:
         float zscale = 1.0f / 16777216.0f;
     } trace_;
     BufferHandle trace_buf_;
+    // ---- Developers' counters (docs/plans/depth-by-layers.md) ----
+    // KF4_PC_TIES=FILE (the depth rule on): each batch the rule tests (each run of a native batch: one draw's) counts
+    // what the rule decided for its fragments in a slot of its own (pcr_prim.h's pcr_count_ties: tested, passed, the
+    // ties, the near losses and wins, its Z's range), the slot named by trace_draw with PCR_COUNT_BIT and the slots
+    // bound where the trace's buffer is. KF4_PC_OVERDRAW=FILE: each native batch's fragment shader invocations, a
+    // pipeline statistics query around its draws. Both read back once the GPU is done with the vblank's frame (a ring of
+    // count_ring, a fence each) and written: FILE's lines (count_vblank's write_counts say what) for each vblank, the
+    // ties' details only at the vblanks KF4_PC_TIES_AT lists (every one without it; KF4_PC_TIES_ORDER=1: every slot,
+    // not only those with ties). A kept walk's runs are not drawn while counting. Developers' only: slow.
+    static constexpr uint32_t count_slots = 1u << 16, count_queries = 1u << 14, count_ring = 4;
+    static constexpr uint32_t count_bit = 0x80000000u; // (pcr_common.h's PCR_COUNT_BIT)
+    FILE *ties_out_ = nullptr, *overdraw_out_ = nullptr;
+    std::vector<uint64_t> ties_at_;
+    bool ties_order_ = false;
+    std::array<CountFrame, count_ring> count_frames_;
+    uint32_t count_at_ = 0;
+    std::vector<uint32_t> run_count_slot_; // (the batch drawn: each of its runs' slot | count_bit, or trace_.draw)
     Program *probe_program_ = nullptr;
     bool decal_losses_ = false;
     const Between *between_ = nullptr;
@@ -5125,6 +5599,23 @@ private:
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
     // KF4_PC_SHADER_BLEND=0: a blend with no Vulkan form drawn as the nearest Vulkan blend, as before (counted)
     const bool shader_blend_on_ = !getenv("KF4_PC_SHADER_BLEND") || strcmp(getenv("KF4_PC_SHADER_BLEND"), "0") != 0;
+    // Developers' KF4_PC_PLAIN_WORLD=1, with KF4_PC_DEPTH=gpu: the world drawn as a PC game draws it, to time the floor
+    // (docs/plans/world-plain.md). The world's batches (native programs 0x000, 0x280 and 0x700 into a 32-bit colour
+    // surface; not DATE's, not one read from a surface such as the sky, none blended in the shader) go to images of
+    // their own, the size of the surface they were for: optimal layouts, attachment use alone (so compressible: DCC
+    // and HiZ), cleared by their pass's load op after each clear of the frame buffer, the GPU's depth test. The frame's surfaces never get the world, so the picture lacks it: for
+    // timing only.
+    const bool plain_asked_ = getenv("KF4_PC_PLAIN_WORLD") && strcmp(getenv("KF4_PC_PLAIN_WORLD"), "0") != 0;
+    const bool plain_on_ = plain_asked_ && !exact_z_;
+    // (=unblended: the world's batches drawn without their blend too, as a PC game draws opaque geometry, the picture's
+    // see-through parts then wrong as well; =opaque: without their blend, in the frame's surfaces as before)
+    const bool plain_unblended_ = plain_asked_ && (strcmp(getenv("KF4_PC_PLAIN_WORLD"), "unblended") == 0 ||
+                                                   strcmp(getenv("KF4_PC_PLAIN_WORLD"), "opaque") == 0);
+    const bool plain_images_ = plain_asked_ && strcmp(getenv("KF4_PC_PLAIN_WORLD"), "opaque") != 0;
+    std::unique_ptr<Surface> plain_colour_, plain_depth_;
+    bool plain_stale_ = true;             // (the frame buffer cleared since the plain images were: draw_batch)
+    bool plain_clear_ = false;            // (the plain images' next pass clears them)
+    uint64_t counts_plain_ = 0, counts_plain_clears_ = 0;
     uint64_t clut_serial_ = 0, frame_ = 0;
     HangNotes *hang_notes_ = nullptr; // (watch_hangs)
     const char *hang_who_ = "";
@@ -5240,6 +5731,15 @@ public:
                 (unsigned long long)counts_clut_not_uploads_);
         fprintf(out, "[stats] pc canvas: %llu depth surfaces let go, not drawn with for %llu vblanks\n",
                 (unsigned long long)counts_idle_depth_let_go_, (unsigned long long)IDLE_DEPTH_VBLANKS);
+        if (layers_on_) {
+            fprintf(out, "[stats] pc canvas, depth by layers (KF4_PC_DEPTH=layers): %llu batches drawn as layers\n",
+                    (unsigned long long)counts_layers_);
+        }
+        if (plain_asked_) {
+            fprintf(out, "[stats] pc canvas, plain world (KF4_PC_PLAIN_WORLD): %s; %llu batches drawn plainly, %llu clears\n",
+                    plain_on_ ? "on" : "off (it needs KF4_PC_DEPTH=gpu)", (unsigned long long)counts_plain_,
+                    (unsigned long long)counts_plain_clears_);
+        }
         // (what the GPU memory of the surfaces is made of: each surface's place in the GS's memory and its images)
         for (const auto *list : {&colour_, &depth_}) {
             for (const auto &sf : *list) {
@@ -5367,6 +5867,11 @@ void Canvas::read_fifo(void *dst, uint32_t qwords) {
 void Canvas::forget() {
     impl_->forget();
 }
+void Canvas::observe_native_batches(
+    std::function<void(const GsRegisterFile &, uint32_t, const NativeBatch &)> observer) {
+    impl_->native_observer_ = std::move(observer);
+}
+
 void Canvas::native_batch(const GsRegisterFile &file, uint32_t prim, const NativeBatch &batch) {
     impl_->native_batch(file, prim, batch);
 }
@@ -5378,6 +5883,9 @@ bool Canvas::trace_pixel(const PcrTraceSpot &spot) {
 }
 void Canvas::trace_draw(uint32_t draw) {
     impl_->trace_draw(draw);
+}
+void Canvas::gpu_draw(uint32_t draw) {
+    impl_->gpu_draw(draw);
 }
 void Canvas::trace_probe() {
     impl_->trace_probe();
@@ -5415,8 +5923,8 @@ void Canvas::begin_drawing(uint64_t drawing, Jitter jitter) {
 void Canvas::submit() {
     impl_->submit();
 }
-void Canvas::vblank() {
-    impl_->vblank();
+void Canvas::vblank(uint64_t game_vblank) {
+    impl_->vblank(game_vblank);
 }
 void Canvas::frame_taken() {
     impl_->frame_taken();

@@ -58,6 +58,11 @@ layout(set = 1, binding = 1) uniform sampler2D u_surface;  // a texture that is 
 layout(set = 1, binding = 3) uniform sampler2D u_dest;     // (PCR_F_DATE, PCR_F_SHADER_BLEND) the destination before
                                                            // the draw, from pc.dest_offset
 layout(set = 1, binding = 4) uniform sampler2D u_sampled;  // (PCR_SRC_SAMPLED) the texture's colours, RGBA8
+#ifdef SCN_FIRST_DRAW
+// (the scene renderer's DATE, port/gs/scene/scn_draw.cpp: the shadows' first-draw image, scn_first_draw.frag's) The
+// number of the first triangle drawn at each pixel; this draw's triangle n is pc.record + n
+layout(set = 1, binding = 10) uniform sampler2D u_first;
+#endif
 layout(set = 1, binding = 2) uniform Clut {
     uvec4 entries[64]; // the 256 colours the indices look up: R | G << 8 | B << 16 | A << 24
 } u_clut;
@@ -460,7 +465,12 @@ void pcr_whole_depth() {
         z = pc.zmax;
         fine = 0u;
     }
-    if ((pc.flags & PCR_F_DECAL) != 0u) {
+    // (developers' KF4_PC_DEPTH=gsexact, PCR_F_PIXEL_CLAMP with exact Z, which it means nothing to otherwise: the GS's
+    // whole Z alone, no fine part, so that every two surfaces on one whole Z tie and the later draw wins, as on the GS;
+    // docs/plans/scene-renderer-design.md)
+    if ((pc.flags & PCR_F_PIXEL_CLAMP) != 0u) {
+        fine = 0u;
+    } else if ((pc.flags & PCR_F_DECAL) != 0u) {
         fine = pz_fine_top(z);
     }
     gl_FragDepth = (float(z + pcr_loss_margin()) + float(fine) * (1.0 / 256.0)) * pc.zscale;
@@ -481,6 +491,47 @@ void pcr_full_depth(out float z, out float tolerance) {
 }
 
 #ifdef PCR_DEPTH_RULE
+// (developers' tie counter: pcr_depth_rule's last test, in Z, for pcr_count_ties)
+bool count_tested = false;
+float count_ahead = 0.0, count_tie = 0.0, count_z = 0.0;
+
+// The developers' tie counter (KF4_PC_TIES, pcr_canvas.cpp's Counters; docs/plans/depth-by-layers.md): a draw whose
+// trace_draw has PCR_COUNT_BIT counts what the depth rule decided for each of its fragments it tested (not ALWAYS, not
+// failed by DATE) into its slot of u_trace (three uvec4 a slot, after the head): tested, passed; the ties (within the
+// rule's tolerance) passed at the same depth exactly, passed from behind, passed from ahead, and lost (GREATER, or
+// past the corners' bound); the fragments lost by at most 2 Z more than the tie and those passed by at most 2 Z more
+// (a bias of 2 Z would turn the first, and the GPU's interpolation of rounded corners may turn either); and the range
+// of its Z (the bits of a positive float: atomicMin and atomicMax keep its order).
+void pcr_count_ties(bool passed) {
+    if ((pc.trace_draw & PCR_COUNT_BIT) == 0u || pc.trace_xy != PCR_NO_TRACE || !count_tested) {
+        return;
+    }
+    uint at = (pc.trace_draw & ~PCR_COUNT_BIT) * 3u;
+    atomicAdd(u_trace.rec[at].x, 1u);
+    if (passed) {
+        atomicAdd(u_trace.rec[at].y, 1u);
+    }
+    bool tie = abs(count_ahead) <= count_tie;
+    if (tie && passed) {
+        if (count_ahead == 0.0) {
+            atomicAdd(u_trace.rec[at].z, 1u);
+        } else if (count_ahead < 0.0) {
+            atomicAdd(u_trace.rec[at].w, 1u);
+        } else {
+            atomicAdd(u_trace.rec[at + 1u].x, 1u);
+        }
+    } else if (tie) {
+        atomicAdd(u_trace.rec[at + 1u].y, 1u);
+    } else if (!passed && count_ahead >= -count_tie - 2.0) {
+        atomicAdd(u_trace.rec[at + 1u].z, 1u);
+    } else if (passed && count_ahead <= count_tie + 2.0) {
+        atomicAdd(u_trace.rec[at + 1u].w, 1u);
+    }
+    uint zb = floatBitsToUint(max(count_z, 0.0));
+    atomicMin(u_trace.rec[at + 2u].x, zb);
+    atomicMax(u_trace.rec[at + 2u].y, zb);
+}
+
 // The depth rule: one test for every draw, the GS's picture without its depth's faults. Against the depth drawn, the
 // fragment's Z with its fraction (z) and tolerance:
 // - within the two tolerances of each other (ours stands for the stored one's too: the same for two layers of one
@@ -507,6 +558,10 @@ bool pcr_depth_rule(float z, float tolerance) {
     float tie = 2.0 * tolerance * pc.zscale + max(depth, stored) * (1.0 / 8388608.0);
     float ahead = depth - stored;
     bool passed = !date_fails && (always || ahead > tie || (ahead >= -tie && !greater));
+    count_tested = !always && !date_fails;
+    count_ahead = ahead / pc.zscale;
+    count_tie = tie / pc.zscale;
+    count_z = depth / pc.zscale;
     float written = passed && !always ? max(depth, stored) : depth;
     written = min(written, gl_FragCoord.z);
     // (passed only where the GPU's own test, GEQUAL, GREATER or ALWAYS on what is written, passes too: a tie past
@@ -553,6 +608,12 @@ bool pcr_exact_depth() {
 void main() {
 #ifdef PCR_RECORDS
     pcr_take_record();
+#endif
+#ifdef SCN_FIRST_DRAW
+    // (drawn only where this triangle was the first drawn: the pixel the GS's DATE lets it draw)
+    if (texelFetch(u_first, ivec2(gl_FragCoord.xy), 0).r != float(pc.record + uint(gl_PrimitiveID))) {
+        discard;
+    }
 #endif
 #ifdef PCR_EXACT_Z
     if (!pcr_exact_depth()) {
@@ -650,6 +711,7 @@ void main() {
     beginInvocationInterlockARB();
     bool drawn = pcr_depth_rule(rule_z, rule_tolerance);
     endInvocationInterlockARB();
+    pcr_count_ties(drawn);
     if (!drawn) {
         trace(PCR_TRACE_DEPTH_DISCARD, uvec4(0u));
         discard;

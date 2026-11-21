@@ -33,7 +33,7 @@
 
 #include "device.hpp"
 #include "gsn.h"
-#include "pcr_canvas.h"
+#include "gs_drawing.h"
 #include "pcr_gif.h"
 
 namespace pcr {
@@ -56,7 +56,7 @@ public:
 
     // PORT_GS_REG_NATIVE_DRAW's value, met in the chain (the front end's native_draw event): a draw drawn, its batches'
     // registers written through front; a frame's mark said to the renderer core
-    void met(uint64_t value, GifFrontEnd &front, Canvas &canvas);
+    void met(uint64_t value, GifFrontEnd &front, NativeSink &canvas);
     // PORT_GS_REG_FRAME_INTERP's value (the front end's frame_mark event): which part of the frame the draws after are in
     void frame_mark(uint64_t value);
     // A picture between's walk begins (its time) or ends (nullptr)

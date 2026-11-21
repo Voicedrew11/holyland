@@ -1,4 +1,4 @@
-// The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.cpp) against VRAM as gsn_vram.c
+// The PC renderer's textures from their uploads (port/gs/shared/pcr_textures.cpp) against VRAM as gsn_vram.c
 // has it: the same uploads written into a 4 MB VRAM in order, the same draws (random pixels) and copies,
 // and a CLUT buffer loaded from that VRAM as the GS loads it (gsn.cpp's clut_load, clut_read_entries and
 // clut_colours, written again here from gsn_vram.c's functions).

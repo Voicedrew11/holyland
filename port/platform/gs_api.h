@@ -5,6 +5,7 @@
 #define PORT_PLATFORM_GS_API_H
 
 #include "pcr.h"
+#include "scn.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,11 +14,19 @@ extern "C" {
 static inline int gsr_open(void *shared_context) {
     return pcr_open(shared_context);
 }
+/* The scene renderer (port/gs/scene/scn.h, --renderer scene) in the PC renderer's place, under its shell: every other
+   call as the PC renderer's */
+static inline int gsr_open_scene(void *shared_context) {
+    return scn_open(shared_context);
+}
 static inline void gsr_hang_reports_in(const char *folder) {
     pcr_hang_reports_in(folder);
 }
 static inline void gsr_gif(int path, const void *data, size_t bytes) {
     pcr_gif(path, data, bytes);
+}
+static inline void gsr_settle(void) {
+    pcr_settle();
 }
 static inline void gsr_pipeline_cache(const char *path) {
     pcr_pipeline_cache(path);

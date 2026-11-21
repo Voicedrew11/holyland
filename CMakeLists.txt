@@ -373,11 +373,11 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     set_target_properties(kf4_gs PROPERTIES CXX_STANDARD 14)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_PARALLEL_GS)
     target_link_libraries(kf4_port PUBLIC kf4_gs)
-    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md), on Granite as well: of port/gs/shared it takes
-    # gsn.h's plain types only
+    # the PC renderer (port/gs/pc/, docs/port/PC_RENDERER.md), on Granite as well, with what it shares with the scene
+    # renderer in port/gs/shared (gs_drawing.h, the native draws: pcr_native.cpp) and gsn.h's plain types
     # (its parts without Vulkan, kf4_pc_gif and kf4_pc_textures, are libraries of their own with tests, below)
     file(GLOB KF4_PC_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/*.cpp)
-    list(FILTER KF4_PC_SOURCES EXCLUDE REGEX "pcr_(gif|textures)\\.cpp$")
+    list(APPEND KF4_PC_SOURCES ${CMAKE_SOURCE_DIR}/port/gs/shared/pcr_native.cpp)
     # (the pipeline seed, port/gs/pc/pipeline_seed.bin, as an array: cmake/pipeline_seed.cmake)
     set(KF4_PIPELINE_SEED ${CMAKE_SOURCE_DIR}/port/gs/pc/pipeline_seed.bin)
     add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp
@@ -387,12 +387,21 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         COMMENT "The PC renderer's pipeline seed" VERBATIM)
     list(APPEND KF4_PC_SOURCES ${CMAKE_BINARY_DIR}/pcr_pipeline_seed.cpp)
     add_library(kf4_pc STATIC ${KF4_PC_SOURCES})
-    target_include_directories(kf4_pc PRIVATE port/include port/gs/shared third_party/smaa PUBLIC port/gs/pc)
+    target_include_directories(kf4_pc PRIVATE port/include third_party/smaa PUBLIC port/gs/pc port/gs/shared)
     target_link_libraries(kf4_pc PRIVATE parallel-gs kf4_pc_gif kf4_pc_textures kf4_render kf4_part_moves
                           kf4_profile) # (port_crash_note_set: pcr_pipelines.cpp)
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
+    # the scene renderer (port/gs/scene/, docs/plans/scene-renderer-design.md: --renderer scene, developers' only), under
+    # the PC renderer's shell
+    file(GLOB KF4_SCENE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/scene/*.cpp)
+    add_library(kf4_scene STATIC ${KF4_SCENE_SOURCES})
+    target_include_directories(kf4_scene PRIVATE port/include PUBLIC port/gs/scene)
+    target_link_libraries(kf4_scene PRIVATE parallel-gs kf4_pc kf4_pc_gif kf4_pc_textures kf4_profile)
+    target_compile_options(kf4_scene PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+    set_target_properties(kf4_scene PROPERTIES CXX_STANDARD 20)
+    target_link_libraries(kf4_port PUBLIC kf4_scene)
     # --presenter vulkan (port/platform/present_vk.cpp): the window's swapchain on the PC renderer's
     # device, with the overlay drawn by Dear ImGui's Vulkan backend (functions loaded at run time)
     if(TARGET imgui)
@@ -629,9 +638,9 @@ target_include_directories(kf4_port PRIVATE ${CMAKE_BINARY_DIR})
 if(TARGET kf4_gs)
     add_executable(kf4-gsreplay tools/gsreplay/gsreplay.c port/platform/vif1.c port/platform/vu1.c
         port/platform/vu1_hle.c port/platform/vu1_hle_280.c port/platform/vu1_hle_5a0.c port/platform/vu1_hle_700.c port/platform/video.c port/platform/refresh_clock.c port/platform/adaptive_sync.c port/platform/lz4_block.c)
-    target_include_directories(kf4-gsreplay PRIVATE port/include port/gs/shared port/gs/pc)
+    target_include_directories(kf4-gsreplay PRIVATE port/include port/gs/shared port/gs/pc port/gs/scene)
     target_compile_options(kf4-gsreplay PRIVATE ${KF4_GAME_FLAGS})
-    target_link_libraries(kf4-gsreplay PRIVATE kf4_gs kf4_pc Threads::Threads)
+    target_link_libraries(kf4-gsreplay PRIVATE kf4_gs kf4_scene kf4_pc Threads::Threads)
     if(NOT WIN32)
         target_link_libraries(kf4-gsreplay PRIVATE m)
     endif()
@@ -897,8 +906,8 @@ if(KF4_TESTS)
     add_test(NAME flash_ring COMMAND flash_ring_test)
 endif()
 
-# The PC renderer's GIF front end (port/gs/pc/pcr_gif.cpp): GIF packets into events, no VRAM, no drawing
-add_library(kf4_pc_gif STATIC port/gs/pc/pcr_gif.cpp)
+# The GIF front end (port/gs/shared/pcr_gif.cpp; the PC and scene renderers'): GIF packets into events, no VRAM, no drawing
+add_library(kf4_pc_gif STATIC port/gs/shared/pcr_gif.cpp)
 target_include_directories(kf4_pc_gif PUBLIC port/gs/pc port/gs/shared PRIVATE port/include)
 set_target_properties(kf4_pc_gif PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_executable(pcr_gif_test tests/pcr_gif_test.cpp)
@@ -935,9 +944,9 @@ if(KF4_TESTS)
     add_test(NAME pcr_dead_writes COMMAND pcr_dead_writes_test)
 endif()
 
-# The GS's blend as Vulkan's (port/gs/pc/pcr_blend.h, header only)
+# The GS's blend as Vulkan's (port/gs/shared/pcr_blend.h, header only)
 add_executable(pcr_blend_test tests/pcr_blend_test.cpp)
-target_include_directories(pcr_blend_test PRIVATE port/gs/pc
+target_include_directories(pcr_blend_test PRIVATE port/gs/shared
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
 set_target_properties(pcr_blend_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(NOT MSVC)
@@ -963,12 +972,12 @@ if(KF4_TESTS)
              ${CMAKE_CURRENT_BINARY_DIR}/pcr_hang_watch_out)
 endif()
 
-# The PC renderer's textures from their uploads (port/gs/pc/pcr_textures.h), with the GS's memory model
+# The texture store, the GS's textures from their uploads (port/gs/shared/pcr_textures.h; the PC and scene renderers'), with the GS's memory model
 # (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
 add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)
 target_include_directories(kf4_gsn_vram PUBLIC port/gs/shared)
-add_library(kf4_pc_textures STATIC port/gs/pc/pcr_textures.cpp)
-target_include_directories(kf4_pc_textures PUBLIC port/gs/pc)
+add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp)
+target_include_directories(kf4_pc_textures PUBLIC port/gs/shared)
 target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
 set_target_properties(kf4_pc_textures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 # against the same uploads written into a 4 MB VRAM with gsn_vram.c in order

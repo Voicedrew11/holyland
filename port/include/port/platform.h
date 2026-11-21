@@ -28,7 +28,8 @@ typedef struct {
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
     /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_PC, the PC renderer (port/gs/pc/), is the
        default and the only one a player gets; PORT_RENDERER_GS is paraLLEl-GS, for comparing pictures
-       against (developers only). gs.c sets it to what started. */
+       against, and PORT_RENDERER_SCENE the scene renderer (port/gs/scene/) being built to replace the PC
+       renderer, under its shell (developers only). gs.c sets it to what started. */
     int renderer;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the renderer's own device (port/platform/present_vk.cpp), with the
@@ -348,6 +349,7 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
 /* port_options.renderer: what draws. PORT_RENDERER_GS (paraLLEl-GS, --renderer gs) is for comparing against only */
 #define PORT_RENDERER_GS 0
 #define PORT_RENDERER_PC 1
+#define PORT_RENDERER_SCENE 2 /* (the scene renderer, --renderer scene: developers' only; the PC renderer's shell) */
 /* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
 enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
        PORT_DRAW_DISTANCE_COUNT };
@@ -418,6 +420,8 @@ void port_gs_read_fifo(void *dst, uint32_t qwords);
 void port_gs_post_vsync(void);
 /* Waits until every queued vblank is scanned out (before the program stops). */
 void port_gs_finish(void);
+/* --stats printed now, once (main_host.c): before a run's own exit, while the Vulkan device is whole */
+void port_print_stats(void);
 /* The controller's side: a vblank is queued; scan it out. */
 int port_gs_vsync_pending(void);
 /* The renderer's pipelines made ahead at the start (docs/port/RENDERER.md, "Pipelines made ahead"): 1 while they

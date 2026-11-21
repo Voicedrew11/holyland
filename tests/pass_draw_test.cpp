@@ -3,7 +3,7 @@
 // Game_DrawFade, Game_BlendScreenOffsetDown and _UpDown, Game_BlendPreviousFrame, Game_DrawHazeLayers,
 // Game_ShiftScreenByViewTurn's strips, Game_DrawWobblingScreen's cells), their packets written out here as the game
 // builds them (GsDraw_QueueTexturedSprite's and _QueueFlatSprite's layouts, the register lists, the loops). Both go
-// through the PC renderer's GIF front end (port/gs/pc/pcr_gif.h): the register file they leave must be the same, and so
+// through the PC renderer's GIF front end (port/gs/shared/pcr_gif.h): the register file they leave must be the same, and so
 // must the GS pixels their primitives cover with what colour and texel (a sprite drawn as the game's strips or as one).
 // Then the pictures between's moves against port/render/shaders/gif_moves.h's kick_now (the PS2 path's 2D moved on the
 // GPU): a colour t of the way, the frame shown before by A^t, a texel t of the way in 12.4, the pairing by identity.

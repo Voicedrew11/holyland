@@ -57,6 +57,8 @@ struct ShaderState {
     uint8_t depth;        // 0: no Z test; else ZTST (1 always, 2 greater or equal, 3 greater)
     bool depth_write;
     uint8_t passes;       // the alpha test's passes (1 or 2)
+    uint8_t first_draw;   // (the scene renderer's) 0: a draw; 1: DATE's shadows' numbers into the first-draw image;
+                          // 2: the darkening by it; 3: a clear in a pass (vkCmdClearAttachments)
 };
 // The state in 32 bits (never 0), and back as text for the profiler's row
 uint32_t shader_state_key(const ShaderState &state);
@@ -75,6 +77,9 @@ public:
     // The same for a draw of shader state key (shader_state_key): with the profiler's detail on, a change of state
     // begins an interval of its own
     void begin_draw(Vulkan::CommandBuffer &cmd, GpuWork work, uint32_t state_key);
+    // (developers', KF4_GPU_DRAWS) The GS draws what is recorded from here on is for, as kf4-gsreplay numbers them
+    // (Canvas::gpu_draw): written with each interval
+    void set_draws(uint32_t first, uint32_t last);
     // cmd about to be submitted: its open interval closed (no-op if cmd has none). Every submit is preceded by it.
     void end(Vulkan::CommandBuffer &cmd);
 

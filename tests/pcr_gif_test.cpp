@@ -1,4 +1,4 @@
-// The PC renderer's GIF front end (port/gs/pc/pcr_gif.h): hand-built packets with the events worked out by hand,
+// The PC renderer's GIF front end (port/gs/shared/pcr_gif.h): hand-built packets with the events worked out by hand,
 // the same packets split at every qword, and random packet streams on three paths, fed in random pieces and
 // interleaved, against a reference walk written here from the packets' structure (gsn.cpp's front end cannot be
 // linked alone). Then random bytes, for no crash and no read past the data (run it under ASan and UBSan).

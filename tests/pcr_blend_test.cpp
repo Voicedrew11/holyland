@@ -1,4 +1,4 @@
-// The GS's blend as Vulkan's (port/gs/pc/pcr_blend.h)
+// The GS's blend as Vulkan's (port/gs/shared/pcr_blend.h)
 #include "pcr_blend.h"
 
 #include <cstdio>

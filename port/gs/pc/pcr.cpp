@@ -43,9 +43,11 @@
 #include "pcr_hang_watch.h"
 #include "pcr_native.h"
 #include "pcr_census.h"
+#include "pcr_frame_census.h"
 #include "pcr_gif.h"
 #include "pcr_late.h"
 #include "pcr_pipelines.h"
+#include "pcr_shell.h"
 #include "pcr_shaders.h"
 #include "port/gs_capture_format.h"
 #include "port/zone_scope.hpp"
@@ -85,6 +87,9 @@ const ZoneId pump_frame_taken_zone = port_zone_id("pump frame taken", ZONE_WORK)
 const ZoneId pump_picture_between_zone = port_zone_id("pump picture between", ZONE_WORK);
 const ZoneId pump_picture_zone = port_zone_id("pump picture", ZONE_WORK);
 const ZoneId pc_take_picture_between_zone = port_zone_id("pc take_picture_between", ZONE_WORK);
+const ZoneId pc_inbox_waits_for_room_zone = port_zone_id("pc inbox: the sender waits for room", ZONE_WAIT);
+const ZoneId pc_inbox_waits_for_a_reply_zone = port_zone_id("pc inbox: the sender waits for its picture", ZONE_WAIT);
+const ZoneId pc_inbox_waits_behind_zone = port_zone_id("pc inbox: the sender waits for the renderer (2 vblanks behind)", ZONE_WAIT);
 
 namespace {
 
@@ -194,7 +199,11 @@ public:
     // Any thread. False once the PC renderer's thread has stopped (the message is dropped).
     bool put(Message message, size_t bytes, bool vblank) {
         std::unique_lock<std::mutex> hold(lock_);
-        room_.wait(hold, [&] { return stopping_ || held_bytes_ == 0 || held_bytes_ + bytes <= MAX_HELD_BYTES; });
+        auto room = [&] { return stopping_ || held_bytes_ == 0 || held_bytes_ + bytes <= MAX_HELD_BYTES; };
+        if (!room()) {
+            ZoneScope zone(pc_inbox_waits_for_room_zone);
+            room_.wait(hold, room);
+        }
         if (stopping_) {
             return false;
         }
@@ -260,6 +269,7 @@ public:
     // The sender: its picture's answer (0 if the thread went first)
     int wait_reply(const Reply &reply) {
         std::unique_lock<std::mutex> hold(lock_);
+        ZoneScope zone(pc_inbox_waits_for_a_reply_zone);
         idle_.wait(hold, [&] { return gone_ || reply.done; });
         return reply.done ? reply.result : 0;
     }
@@ -267,7 +277,13 @@ public:
     // The sender of a window's picture: at most two vblanks ahead of their pictures handed out
     void wait_behind_at_most(uint64_t vblanks) {
         std::unique_lock<std::mutex> hold(lock_);
-        idle_.wait(hold, [&] { return gone_ || vblanks_sent_ - vblanks_done_ <= vblanks; });
+        auto caught_up = [&] { return gone_ || vblanks_sent_ - vblanks_done_ <= vblanks; };
+        if (!caught_up()) {
+            // (the wait that holds the DMA controller's thread, and so the game, when the GPU is too slow: without
+            // its zone the profiler counted it as the "dma GS vsync" zone's own work)
+            ZoneScope zone(pc_inbox_waits_behind_zone);
+            idle_.wait(hold, caught_up);
+        }
     }
 
     int backlog() {
@@ -654,10 +670,21 @@ private:
     std::vector<Frame> frames_;
 };
 
-// KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before)
+// (pcr_shell.h) The renderer under the shell other than the canvas, set before pcr_open; nullptr: the canvas
+pcr::DrawingMaker &drawing_maker() {
+    static pcr::DrawingMaker maker = nullptr;
+    return maker;
+}
+const char *&drawing_name() {
+    static const char *name = "the PC renderer";
+    return name;
+}
+
+// KF4_PC_PUMP=0: no pump (every picture between drawn on kf4-pc, as before). None under another renderer than the
+// canvas (pcr_shell.h).
 bool pump_wanted() {
     const char *v = getenv("KF4_PC_PUMP");
-    return !(v && strcmp(v, "0") == 0);
+    return !(v && strcmp(v, "0") == 0) && drawing_maker() == nullptr;
 }
 
 // ---- What the GIF packets make ------------------------------------------------------------------------
@@ -667,8 +694,23 @@ public:
     // (on the thread, once the device is there)
     void attach(Device &device, pcr::HangNotes &hang_notes) {
         times_ = std::make_unique<pcr::GpuTimes>(device);
-        canvas_ = std::make_unique<pcr::Canvas>(device, *times_);
+        if (pcr::DrawingMaker maker = drawing_maker()) {
+            // (another renderer under the shell, pcr_shell.h: no canvas, no pictures between of its own, no census)
+            drawing_ = maker(device, *times_, hang_notes);
+            natives_ = std::make_unique<pcr::NativeDraws>(device);
+            return;
+        }
+        auto canvas = std::make_unique<pcr::Canvas>(device, *times_);
+        canvas_ = canvas.get();
+        drawing_ = std::move(canvas);
         canvas_->watch_hangs(hang_notes, "kf4-pc");
+        if (frame_census_) {
+            canvas_->observe_native_batches([this](const pcr::GsRegisterFile &file, uint32_t prim, const pcr::NativeBatch &nb) {
+                if (census_now()) {
+                    frame_census_->native_batch(file, prim, nb);
+                }
+            });
+        }
         natives_ = std::make_unique<pcr::NativeDraws>(device);
         between_ = std::make_unique<pcr::Between>(device);
     }
@@ -820,7 +862,12 @@ public:
     }
 
     pcr::Canvas *canvas() {
-        return canvas_.get();
+        return canvas_;
+    }
+
+    // What draws the frame: the canvas, or the renderer pcr_shell.h's use_drawing named
+    pcr::Drawing *drawing() {
+        return drawing_.get();
     }
 
     pcr::GpuTimes *gpu_times() {
@@ -845,6 +892,7 @@ public:
         if (census && strcmp(census, "1") == 0) {
             census_ = std::make_unique<pcr::Census>();
         }
+        frame_census_ = pcr::FrameCensus::from_env();
     }
 
     void feed(int path, const std::vector<uint8_t> &bytes) {
@@ -854,7 +902,12 @@ public:
         }
         stretch_bytes_ += bytes.size();
         since_vblank_bytes_ += bytes.size();
+        if (frame_census_ && census_now()) {
+            frame_census_->bytes(path, bytes.size());
+        }
+        feeding_path_ = path;
         front_.feed(path, bytes);
+        feeding_path_ = 0;
     }
 
     // A state loaded: no stretch kept from before it, nor the temporal anti-aliasing's history
@@ -868,28 +921,32 @@ public:
 
     // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d:
     // Canvas::set_2d's
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d) {
+    // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, uint64_t game_vblank) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
             last_stretch_ = close_stretch();
         }
-        if (canvas_) {
-            canvas_->set_scale(scale & 0xFF, scale >> 8);
-            canvas_->set_sampling(lod, uint32_t(aniso));
-            canvas_->set_2d(mode_2d);
-            canvas_->vblank();
+        if (drawing_) {
+            drawing_->set_scale(scale & 0xFF, scale >> 8);
+            drawing_->set_sampling(lod, uint32_t(aniso));
+            drawing_->set_2d(mode_2d);
+            drawing_->vblank(game_vblank);
             ZoneScope collect_zone(gpu_times_collected_zone);
             times_->collect();
         }
         if (census_) {
             census_->display(privileged[0], privileged[14], privileged[18]);
         }
+        if (frame_census_ && canvas_) {
+            frame_census_->vblank(game_vblank, canvas_->counts());
+        }
     }
 
     void print_census() const {
-        if (canvas_) {
-            canvas_->print_counts();
+        if (drawing_) {
+            drawing_->print_counts();
         }
         if (natives_) {
             natives_->print_counts(stderr);
@@ -905,48 +962,65 @@ public:
 private:
     void register_written(uint32_t, uint64_t, uint64_t) override {}
     void texture_written(uint32_t, uint64_t tex0, uint64_t texclut) override {
-        if (canvas_) {
-            canvas_->texture_written(tex0, texclut);
+        if (drawing_) {
+            drawing_->texture_written(tex0, texclut);
         }
     }
     void primitive(const pcr::GifPrimitive &primitive) override {
         if (census_) {
             census_->primitive(front_.registers(), primitive);
         }
-        if (canvas_) {
-            canvas_->primitive(front_.registers(), primitive);
+        if (frame_census_ && census_now()) {
+            frame_census_->primitive(feeding_path_, in_native_, front_.registers(), primitive);
+        }
+        if (drawing_) {
+            drawing_->primitive(front_.registers(), primitive);
         }
     }
     void image_upload(const pcr::TransferRegisters &transfer, std::span<const uint8_t> bytes, pcr::UploadEnd) override {
         if (census_) {
             census_->upload(transfer, bytes.size());
         }
-        if (canvas_) {
-            canvas_->upload(transfer, bytes);
+        if (frame_census_ && census_now()) {
+            frame_census_->upload(transfer, bytes.size());
+        }
+        if (drawing_) {
+            drawing_->upload(transfer, bytes);
         }
     }
     void local_copy(const pcr::TransferRegisters &transfer) override {
         if (census_) {
             census_->copy(transfer, "local");
         }
-        if (canvas_) {
-            canvas_->local_copy(transfer);
+        if (frame_census_ && census_now()) {
+            frame_census_->local_copy(transfer);
+        }
+        if (drawing_) {
+            drawing_->local_copy(transfer);
         }
     }
     void local_to_host(const pcr::TransferRegisters &transfer) override {
         if (census_) {
             census_->copy(transfer, "read-back");
         }
-        if (canvas_) {
-            canvas_->local_to_host(transfer);
+        if (frame_census_ && census_now()) {
+            frame_census_->read_back(transfer);
+        }
+        if (drawing_) {
+            drawing_->local_to_host(transfer);
         }
     }
     void native_draw(uint64_t value) override {
         if (census_) {
             census_->other("native draw (0x7B)");
         }
-        if (natives_ && canvas_) {
-            natives_->met(value, front_, *canvas_);
+        if (frame_census_ && census_now()) {
+            frame_census_->native_draw(value);
+        }
+        if (natives_ && drawing_) {
+            in_native_ = true;
+            natives_->met(value, front_, *drawing_);
+            in_native_ = false;
         } else if (RD_ND_COMMAND(value) == RD_ND_FRAME) {
             rd_consumer_frame(value); // (the core waits for the frames' marks to be met)
         }
@@ -955,13 +1029,19 @@ private:
         if (census_) {
             census_->other("upload again (0x7C)");
         }
-        if (canvas_) {
-            canvas_->upload_again(front_.registers(), value);
+        if (frame_census_ && census_now()) {
+            frame_census_->upload_again();
+        }
+        if (drawing_) {
+            drawing_->upload_again(front_.registers(), value);
         }
     }
     void frame_mark(uint64_t value) override {
         if (census_) {
             census_->other("frame mark (0x7D)");
+        }
+        if (frame_census_ && census_now()) {
+            frame_census_->frame_mark(value);
         }
         // (frame_interp.c's replays sent as packets, between 0xF0 and 0xF1 (the exact restore): not the game's, no
         // stretch of them kept)
@@ -972,8 +1052,8 @@ private:
         } else if (index == 0xF1 && !between_active()) {
             in_replay_ = false;
         }
-        if (canvas_) {
-            canvas_->frame_mark(value);
+        if (drawing_) {
+            drawing_->frame_mark(value);
         }
         if (natives_) {
             natives_->frame_mark(value);
@@ -1054,8 +1134,16 @@ private:
 
     pcr::GifFrontEnd front_;
     std::unique_ptr<pcr::Census> census_;
+    // (KF4_PC_FRAME_CENSUS: the game's own packets, not a picture between's walk or frame_interp.c's replays)
+    std::unique_ptr<pcr::FrameCensus> frame_census_;
+    int feeding_path_ = 0;
+    bool in_native_ = false;
+    bool census_now() const {
+        return !in_replay_ && !between_active();
+    }
     std::unique_ptr<pcr::GpuTimes> times_; // (before the canvas: it outlives it)
-    std::unique_ptr<pcr::Canvas> canvas_;
+    std::unique_ptr<pcr::Drawing> drawing_;
+    pcr::Canvas *canvas_ = nullptr; // (drawing_ when it is the canvas, else nullptr)
     std::unique_ptr<pcr::NativeDraws> natives_;
     std::unique_ptr<pcr::Between> between_;
     // (step 5b) where the frame's walks start, the frame's kept walk, and KF4_PC_KEPT_WALK (0: every picture walks)
@@ -1305,7 +1393,7 @@ public:
     // (this one's thread, as canvas begins a drawing a picture will show: a picture between's, between; the game's
     // frame, nullptr) Its 3D jittered as the temporal anti-aliasing wants (none when it is not wanted), and what the
     // pictures that show it are kept for them (the canvas stamps the buffers it draws into with its number)
-    void begin_drawing(pcr::Canvas *canvas, const GsnInterpPicture *between) {
+    void begin_drawing(pcr::Drawing *canvas, const GsnInterpPicture *between) {
         pcr::JitterSequence sequence = history_.wanted()
                                            ? antialiasing_.jitter_of(settings().antialias.load(std::memory_order_relaxed))
                                            : pcr::JitterSequence::none;
@@ -1331,7 +1419,7 @@ public:
     // (kf4-pc, as frame_interp.c hands over a game frame: after its packets were drawn) The frame's drawing given the
     // frame's own camera (its pictures, the vblanks' own, have it then), and the next frame's drawing begun on canvas.
     // (Frames are drawn at a frame's boundary, not a vblank's, so that one frame's 3D has one jitter.)
-    void frame_taken(pcr::Canvas *canvas, const GsnInterpFrame &frame) {
+    void frame_taken(pcr::Drawing *canvas, const GsnInterpFrame &frame) {
         Drawing &d = drawings_[frame_drawing_.number % drawings_.size()];
         if (frame_drawing_.number != 0 && d.number == frame_drawing_.number) {
             pcr::PictureFacts &f = d.facts;
@@ -1345,7 +1433,7 @@ public:
     }
 
     // (kf4-pc, after a picture between it walked or gave to the pump) canvas back on the game's frame's drawing
-    void resume_frame_drawing(pcr::Canvas *canvas) {
+    void resume_frame_drawing(pcr::Drawing *canvas) {
         if (canvas) {
             canvas->begin_drawing(frame_drawing_.number, frame_drawing_.facts.jitter);
         }
@@ -1353,7 +1441,7 @@ public:
 
     // A vblank's picture, or with GSN_EXTRA one more between two (the buffer shown again: a picture between drawn into
     // it before), from canvas at scale (across | down << 8, the vblank's)
-    MadePicture make(const VblankPicture &v, uint32_t scale, pcr::Canvas *canvas, pcr::GpuTimes &times) {
+    MadePicture make(const VblankPicture &v, uint32_t scale, pcr::Drawing *canvas, pcr::GpuTimes &times) {
         ZoneScope zone(picture_made_zone);
         MadePicture m;
         bool extra = (v.want & GSN_EXTRA) != 0;
@@ -1475,7 +1563,7 @@ private:
 
     // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
     // there is none). False if the image cannot be made.
-    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Canvas *canvas) {
+    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Drawing *canvas) {
         if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
             picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height, true);
             if (!picture_) {
@@ -1521,7 +1609,7 @@ private:
         pcr::PicturePlace place;
         uint64_t drawing = 0;
     };
-    ShownPicture picture_place(CommandBuffer &cmd, pcr::Canvas &canvas, const pcr::ShownRect &rect) {
+    ShownPicture picture_place(CommandBuffer &cmd, pcr::Drawing &canvas, const pcr::ShownRect &rect) {
         ShownPicture shown;
         pcr::PicturePlace &place = shown.place;
         uint32_t w = picture_->get_width(), h = picture_->get_height();
@@ -1530,7 +1618,7 @@ private:
         }
         place.scale = {float(w) / float(rect.w), float(h) / float(rect.h)};
         const Image *depth = antialiasing_.depth_image(w, h);
-        std::optional<pcr::Canvas::ShownDepth> d;
+        std::optional<pcr::ShownDepth> d;
         if (depth) {
             d = canvas.scanout_depth(cmd, rect, *depth);
         }
@@ -2039,14 +2127,19 @@ public:
         thread_ = std::thread([this] { run(); });
         // (the driver too: a crash or a wrong picture on one driver is told apart by it in a player's log)
         const VkPhysicalDeviceVulkan12Properties &v12 = device_->get_device_features().vk12_props;
-        fprintf(stderr, "[pcr] the PC renderer on %s (vendor %04x device %04x, driver %s %s, version %08x, Vulkan %u.%u)\n",
-                props.deviceName, props.vendorID, props.deviceID, v12.driverName[0] ? v12.driverName : "?",
+        fprintf(stderr, "[pcr] %s on %s (vendor %04x device %04x, driver %s %s, version %08x, Vulkan %u.%u)\n",
+                drawing_name(), props.deviceName, props.vendorID, props.deviceID, v12.driverName[0] ? v12.driverName : "?",
                 v12.driverInfo, props.driverVersion, VK_API_VERSION_MAJOR(props.apiVersion),
                 VK_API_VERSION_MINOR(props.apiVersion));
         return true;
     }
 
     void precompile(bool scaling, bool sharpen) {
+        if (drawing_maker() != nullptr) {
+            // (the pipelines made before play are the canvas's, started by its programs (warm_watch): under another
+            // renderer they never start, and the game would wait the 20 s precompile_running gives them)
+            return;
+        }
         std::vector<pcr::FullscreenPipeline> passes;
         pcr::AntiAliasing::warm_pipelines(*device_, settings.antialias.load(), passes);
         if (scaling) {
@@ -2056,14 +2149,19 @@ public:
         pcr::precompile(std::move(passes));
     }
 
-    // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
-    // seconds more it is left (the process ends with it)
-    // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
-    void stop() {
+    // What was sent done, two seconds at most (the pump's likewise, after kf4-pc's: kf4-pc may wait for it)
+    void settle() {
         inbox_.wait_idle_for(std::chrono::seconds(2));
         if (pump_) {
             pump_->wait_idle_for(std::chrono::seconds(2));
         }
+    }
+
+    // At exit: what was sent is done (two seconds at most), then the thread stops; if it does not within two
+    // seconds more it is left (the process ends with it)
+    // (the pump's thread likewise, after kf4-pc's: kf4-pc may wait for it)
+    void stop() {
+        settle();
         inbox_.stop();
         if (inbox_.wait_gone_for(std::chrono::seconds(2))) {
             thread_.join();
@@ -2253,9 +2351,9 @@ public:
 
     // The canvas, once everything sent before is done (the thread idle until more is sent: the read-back FIFO's
     // caller, the DMA controller's thread, sends nothing meanwhile)
-    pcr::Canvas *canvas_after_wait() {
+    pcr::Drawing *drawing_after_wait() {
         inbox_.wait_idle();
-        return intake_.canvas();
+        return intake_.drawing();
     }
 
     // (after wait: the threads are idle)
@@ -2369,7 +2467,7 @@ private:
             } else if (InterpFrame *frame = std::get_if<InterpFrame>(&*message)) {
                 stats.interp_frames++;
                 direct_serial_.store(0, std::memory_order_release); // (a new frame: its walk not the pump's yet)
-                out_->frame_taken(intake_.canvas(), **frame);
+                out_->frame_taken(intake_.drawing(), **frame);
                 intake_.take_frame(std::move(*frame));
                 intake_times.frame_taken(IntakeTimes::Clock::now());
                 inbox_.done(0);
@@ -2394,7 +2492,7 @@ private:
         bool extra = (v.want & GSN_EXTRA) != 0;
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           settings.mode_2d.load());
+                           settings.mode_2d.load(), v.tag >> 16);
         }
         uint32_t scale = picture_scale_;
         if (!extra) {
@@ -2412,8 +2510,8 @@ private:
             // pictures they were never freed, 6 MB a picture, and filled the GPU's memory and the system's at 500 a
             // second, 2026-11-07. Moving it on waits for the pump's open command buffer, which it submits every 128
             // batches, and for kf4-pc's own: submitted first, or kf4-pc waits for itself for good.)
-            if (pcr::Canvas *canvas = intake_.canvas()) {
-                canvas->submit();
+            if (pcr::Drawing *drawing = intake_.drawing()) {
+                drawing->submit();
             }
             frame_context_owed();
             return;
@@ -2426,7 +2524,7 @@ private:
             // as it is handed out after them)
             pump_->wait_idle();
         }
-        MadePicture made = out_->make(v, scale, intake_.canvas(), *intake_.gpu_times());
+        MadePicture made = out_->make(v, scale, intake_.drawing(), *intake_.gpu_times());
         if (extra) {
             stats.interp_late += uint64_t(not_shown_when_late(made, last_between_));
         }
@@ -2528,13 +2626,13 @@ private:
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
-        out_->begin_drawing(intake_.canvas(), &p.picture); // (drawn here unless it goes to the pump, which begins its own)
+        out_->begin_drawing(intake_.drawing(), &p.picture); // (drawn here unless it goes to the pump, which begins its own)
         std::optional<Intake::ForPump> for_pump = intake_.walk_picture(p.picture);
         shows_pumped_ = for_pump.has_value();
         if (for_pump) {
             aa_history_.drawing_not_made();
         }
-        out_->resume_frame_drawing(intake_.canvas());
+        out_->resume_frame_drawing(intake_.drawing());
         if (!for_pump) {
             direct_serial_.store(0, std::memory_order_release);
             turned_before(turn_lead_, before_s); // (drawn here: this turn was its last)
@@ -2640,6 +2738,11 @@ extern "C" int pcr_open(void *shared_context) {
     return 1;
 }
 
+void pcr::use_drawing(DrawingMaker maker, const char *name) {
+    drawing_maker() = maker;
+    drawing_name() = maker && name ? name : "the PC renderer";
+}
+
 extern "C" void pcr_enable_present(void) {
     present_asked = true;
 }
@@ -2660,9 +2763,15 @@ extern "C" void pcr_wait(void) {
     renderer()->wait();
 }
 
+extern "C" void pcr_settle(void) {
+    if (renderer()) {
+        renderer()->settle();
+    }
+}
+
 extern "C" void pcr_read_fifo(void *dst, uint32_t qwords) {
     // (the transfer's packet was sent before: once the thread has done it, the canvas has the pixels ready)
-    pcr::Canvas *canvas = renderer() ? renderer()->canvas_after_wait() : nullptr;
+    pcr::Drawing *canvas = renderer() ? renderer()->drawing_after_wait() : nullptr;
     if (!canvas) {
         memset(dst, 0, size_t(qwords) * 16);
         return;
@@ -2825,7 +2934,7 @@ extern "C" void pcr_capture(void (*emit)(uint32_t type, const void *data, size_t
     std::vector<uint8_t> vram;
     pcr::GsRegisterFile file;
     r.run_job([&] {
-        pcr::Canvas *canvas = r.intake().canvas();
+        pcr::Drawing *canvas = r.intake().drawing();
         vram = canvas ? canvas->vram_image() : std::vector<uint8_t>(STATE_VRAM_BYTES);
         file = r.intake().front().registers();
     });
@@ -2862,7 +2971,7 @@ extern "C" int pcr_restore(uint32_t type, const void *data, size_t size) {
         clut.unloaded.fill(1);
         clut.cbp = {UINT32_MAX, UINT32_MAX};
         r.intake().forget();
-        if (pcr::Canvas *canvas = r.intake().canvas()) {
+        if (pcr::Drawing *canvas = r.intake().drawing()) {
             canvas->restore(vram, clut);
         }
     });
@@ -2882,7 +2991,7 @@ extern "C" void pcr_state(PortStateIo *io) {
     pcr::TextureStore::ClutState clut;
     if (!io->loading) {
         r.run_job([&] {
-            pcr::Canvas *canvas = r.intake().canvas();
+            pcr::Drawing *canvas = r.intake().drawing();
             vram = canvas ? canvas->vram_image() : std::vector<uint8_t>(STATE_VRAM_BYTES);
             if (canvas) {
                 clut = canvas->clut_state();
@@ -2900,7 +3009,7 @@ extern "C" void pcr_state(PortStateIo *io) {
     if (io->loading) {
         r.run_job([&] {
             r.intake().forget();
-            if (pcr::Canvas *canvas = r.intake().canvas()) {
+            if (pcr::Drawing *canvas = r.intake().drawing()) {
                 canvas->restore(vram, clut);
             }
             r.intake().front().restore(file);
@@ -2971,6 +3080,10 @@ extern "C" void pcr_debug_trace_draw(uint32_t draw) {
     on_canvas([&](pcr::Canvas &canvas) { canvas.trace_draw(draw); });
 }
 
+extern "C" void pcr_debug_gpu_draw(uint32_t draw) {
+    on_canvas([&](pcr::Canvas &canvas) { canvas.gpu_draw(draw); });
+}
+
 extern "C" void pcr_debug_trace_probe(void) {
     on_canvas([](pcr::Canvas &canvas) { canvas.trace_probe(); });
 }
@@ -2994,6 +3107,13 @@ extern "C" void pcr_debug_decal_losses(int on) {
 
 extern "C" int pcr_debug_settled(void) {
     bool settled = false;
-    on_canvas([&](pcr::Canvas &canvas) { settled = canvas.settled(); });
+    if (renderer()) {
+        Renderer &r = *renderer();
+        r.run_job([&] {
+            if (pcr::Drawing *drawing = r.intake().drawing()) {
+                settled = drawing->settled();
+            }
+        });
+    }
     return settled ? 1 : 0;
 }

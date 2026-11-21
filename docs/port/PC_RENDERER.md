@@ -7,6 +7,9 @@ out at 170 Hz, where every spot kept up, and the smooth play plan took the GPU f
 parts are kept below as they were written and measured, each with its corrections marked; this top says where the
 whole stands.
 
+**2026-11-19: the PC renderer is to be replaced by a scene renderer** (`docs/plans/renderer-scene-not-gs.md`): it is
+fixed where broken but no longer sped up; its successor's design is `docs/plans/HANDOFF_scene_renderer_design.md`.
+
 **2026-11-07: the PC renderer is the only renderer.** The native GS (`port/gs/native/`: `native`, `modern`, `fast`,
 `both`, scene scale, FSR/DLSS) is removed; players get the PC renderer, and paraLLEl-GS stays as `--renderer gs` for
 developers to compare pictures against. Everything below that speaks of `fast` or the native GS is history. Still open

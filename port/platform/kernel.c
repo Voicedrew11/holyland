@@ -1145,6 +1145,7 @@ static void frame_end(void) {
     if (port_options.frames > 0 && vblank_count >= (uint64_t)port_options.frames) {
         port_event("stop: %lld vblanks run", port_options.frames);
         port_gs_finish();
+        port_print_stats();
 #ifdef KF4_PGO_GENERATE
         write_profile();
 #endif
