@@ -92,6 +92,12 @@ typedef struct {
     uint64_t scaled; /* the picture at the window's size (VkImage, GENERAL), 0: none */
     uint32_t scaled_width, scaled_height;
     GsnPictureTurn turn;
+    /* (the Vulkan presenter's, pcr_present_sharpens) scaled not sharpened yet: the presenter sharpens it by this strength
+       (pcr_present_sharpen.frag) as it draws it into the window, reading it through scaled_view (VkImageView); 0: as it
+       is */
+    float sharpen;
+    uint64_t scaled_view;
+    uint64_t check; /* (KF4_PRESENT_FOLD_CHECK) scaled as the renderer sharpens it (VkImage, GENERAL), to compare; 0: none */
 } GsnScanout;
 
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"). The DMA controller's

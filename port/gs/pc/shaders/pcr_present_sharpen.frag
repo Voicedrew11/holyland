@@ -1,6 +1,8 @@
 #version 450
 // Sharpening of the scaled picture for the presenter (port/gs/pc/pcr.cpp, PresentScaler;
-// --present-sharpen), drawn over the whole output image with pcr_present.vert's triangle.
+// --present-sharpen), drawn over the whole output image with pcr_present.vert's triangle: by the renderer into the
+// picture it hands over, or by the Vulkan presenter (port/platform/present_vk.cpp) straight into the window's image at
+// the picture's place, in place of its copy (the picture handed over not sharpened: GsnScanout's sharpen).
 //
 // Contrast-adaptive, after the idea AMD published as CAS: each pixel is pushed away from its four
 // neighbours (an unsharp mask with a negative weight w on them), by an amount that follows how much
@@ -11,6 +13,7 @@
 layout(set = 0, binding = 0) uniform sampler2D u_src;
 layout(push_constant) uniform Push {
     ivec2 size;
+    ivec2 origin;   // (the presenter's: the picture's place in the window it draws into; the renderer's 0)
     float strength; // 0 to 1
 } push;
 layout(location = 0) out vec4 o_color;
@@ -20,7 +23,7 @@ vec3 at(ivec2 p) {
 }
 
 void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 p = ivec2(gl_FragCoord.xy) - push.origin;
     vec3 e = at(p);
     vec3 b = at(p + ivec2(0, -1)), d = at(p + ivec2(-1, 0)), f = at(p + ivec2(1, 0)), h = at(p + ivec2(0, 1));
     vec3 mn = min(e, min(min(b, d), min(f, h)));

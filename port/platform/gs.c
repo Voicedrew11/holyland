@@ -663,7 +663,7 @@ static void replay_gif(int path, const void *data, size_t bytes) {
         port_gs_backend_gif(path, data, bytes);
     }
     if (have_pc) {
-        gsr_gif(path, data, bytes);
+        gsr_gif_vblank(path, data, bytes);
     }
 }
 
@@ -747,15 +747,20 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
     int images = shown && (port_video_takes_images() || port_options.headless);
 
     if (dump) {
-        int got = gsr_picture(request->privileged, request->field,
-                              GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
-                                  (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
-                              &pc_frame, tag);
+        int want = GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
+                   (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0);
         char name[64];
+        int got;
 
+        snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
+                 (int)(phase * 1000.0 + 0.5));
+        if (!shown && want == (GSN_EXTRA | GSN_WANT_PIXELS) && gsr_pictures_later()) {
+            /* (developers', KF4_SCN_AHEAD_FORCE=1) sent after the game's next packets, dumped once made */
+            gsr_picture_later(request->privileged, request->field, want, tag, name);
+            return;
+        }
+        got = gsr_picture(request->privileged, request->field, want, &pc_frame, tag);
         if (got & GSN_WANT_PIXELS) {
-            snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
-                     (int)(phase * 1000.0 + 0.5));
             port_video_dump_named(&pc_frame, name);
             if (shown) {
                 if (images) {

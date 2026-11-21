@@ -595,9 +595,11 @@ measured cost (`pcr_budget.h`: by kind, the vblank's scene timed as GPU work of 
 not be ready by its time, or that would make a game frame's own picture late, is left out, and gs.c's cut is off under
 it. A vblank with nothing new is its last picture published again. The spin holds 30 game frames a second at 60, 240 and
 unlocked, every picture on time after the first two seconds. The late turn at 60 is 6.6 ms (was 12.2), the picture's own
-cost. A repeated vblank costs the renderer no GPU work. The design's drawing thread is not built: kf4-pc waits for each
-picture's time between building scenes, enough at 60, but at 240 one picture in seven or so is begun late. The
-presenter's copy into the swapchain is not yet in the final pass.
+cost. A repeated vblank costs the renderer no GPU work. The drawing thread is done another way: kf4-pc
+takes in the game's packets queued behind a picture between while it waits for its time, the builder keeping them out
+of the pictures sent before them (exact: 0 of 9,834 pictures differ with it forced as far as it goes); at 240 pictures
+begun late fall from 443 to 56 and 117 new pictures a second are made against 101. The presenter draws the sharpening
+straight into the window in place of its copy, byte for byte, 0.13 ms a picture less.
 
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.

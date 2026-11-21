@@ -192,6 +192,7 @@ constexpr uint32_t first_generations = 1u << (24 - first_shadow_bits);
 
 class Builder final : public Drawing {
     struct Placed; // (below)
+    struct Layer;  // (below)
 
 public:
     Builder(Device &device, GpuTimes &times, HangNotes &notes)
@@ -558,7 +559,8 @@ public:
     }
 
     bool scanout(CommandBuffer &out, const ShownRect &shown_rect, const Image &dst) override {
-        flush_batch();
+        last_rect_ = shown_rect;
+        last_rect_known_ = true;
         // (a picture between drawn since the last picture: the frame's buffer shown from its stand-in, where the
         // display shows the buffer the stream would have drawn it into, or the frame's)
         bool picture = picture_pending_;
@@ -569,6 +571,17 @@ public:
             picture = rect.bp % 32 == 0 && (fbp == kept_shape_.shown_fbp || fbp == kept_shape_.draw_fbp);
             rect.bp = kept_shape_.draw_fbp * 32;
         }
+        if (ahead_.open) {
+            // (packets taken ahead of this picture: shown from the stand-in, the frame's buffer placed and its layers as
+            // they were when they began, the scene they add to left open)
+            auto it = stand_ins_.find(ahead_.target.image.get());
+            if (picture && rect.w != 0 && rect.h != 0 && rect.psm == GSN_PSMCT32 && it != stand_ins_.end()) {
+                last_scanout_ = {};
+                return scanout_picture(out, rect, ahead_.target, ahead_.x, ahead_.y, *it->second, dst, ahead_.layers);
+            }
+            counts_.ahead_unshown++; // (the buffer as it is now, packets taken ahead and all)
+        }
+        flush_batch();
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
             close_scene(false);
             return false;
@@ -587,7 +600,7 @@ public:
         }
         last_scanout_ = {}; // (made again below where it is the buffer as it is)
         if (stand_in) {
-            return scanout_picture(out, rect, placed, *stand_in, dst);
+            return scanout_picture(out, rect, *s, placed.x, placed.y, *stand_in, dst, layers_);
         }
         int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         std::vector<Layer> drawn;
@@ -605,7 +618,7 @@ public:
                 VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
                 touch(s->image, false, shown, false);
                 bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
-                if (!lower && same_size && composable(s->image.get(), shown)) {
+                if (!lower && same_size && composable(layers_, s->image.get(), shown)) {
                     for (const Layer &l : layers_) {
                         if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
                             drawn.push_back(l);
@@ -651,17 +664,20 @@ public:
         return true;
     }
 
-    // A picture between shown: rect of the frame's buffer (placed) from its stand-in, the layers kept on the frame's
-    // buffer (the brightness) drawn over it where they can be (composable, picture_draws), reading the stand-in. Nothing
-    // of the GS's memory is drawn or touched.
-    bool scanout_picture(CommandBuffer &out, const ShownRect &rect, const Placed &placed, const Image &from,
-                         const Image &dst) {
-        Target *s = placed.target;
-        uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
+    // A picture between shown: rect of the frame's buffer (its target s, the frame at px, py in it) from its stand-in,
+    // the layers kept on the frame's buffer (the brightness) drawn over it where they can be (composable, picture_draws),
+    // reading the stand-in. Nothing of the GS's memory is drawn or touched. (Packets taken ahead: s and layers as they
+    // were before them, and the scene they add to not closed.)
+    bool scanout_picture(CommandBuffer &out, const ShownRect &rect, const Target &target, uint32_t px, uint32_t py,
+                         const Image &from, const Image &dst, const std::vector<Layer> &layers) {
+        const Target *s = &target;
+        uint32_t rx = rect.x + px, ry = rect.y + py;
         int32_t x0 = int32_t(rx * scale_[0]), y0 = int32_t(ry * scale_[1]);
         int32_t x1 = int32_t(std::min(rx + rect.w, s->width()) * scale_[0]);
         int32_t y1 = int32_t(std::min(ry + rect.h, s->height) * scale_[1]);
-        close_scene(false);
+        if (!ahead_.open) {
+            close_scene(false);
+        }
         times_.begin(out, GpuWork::picture);
         out.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
@@ -672,8 +688,8 @@ public:
         const VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
         std::vector<Layer> drawn;
         const bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
-        if (same_size && composable(s->image.get(), shown)) {
-            for (const Layer &l : layers_) {
+        if (same_size && composable(layers, s->image.get(), shown)) {
+            for (const Layer &l : layers) {
                 if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
                     drawn.push_back(l);
                 }
@@ -688,7 +704,7 @@ public:
             compose(out, *s, shown, dst, drawn, &pd);
             return true;
         }
-        if (!layers_.empty() && std::any_of(layers_.begin(), layers_.end(), [&](const Layer &l) {
+        if (!layers.empty() && std::any_of(layers.begin(), layers.end(), [&](const Layer &l) {
                 return l.image.get() == s->image.get() && rects_meet(l.rect, shown);
             })) {
             counts_.pictures_without_layers++;
@@ -749,6 +765,77 @@ public:
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
+    }
+
+    // ---- (slice 5) The packets taken ahead of the pictures between (docs/plans/scene-slice5-results.md) ----
+    // The scene so far closed, and the stream's packets from here kept out of this vblank's pictures between and the
+    // extra pictures that show them: the scene they add to is closed by none of those pictures (nor its batch flushed),
+    // so that the GPU draws it after them; each draws the frame kept into its stand-ins, from the GS's memory as it was
+    // here, and is shown from them with the frame's buffer placed and its layers as they were here (Ahead). Only while
+    // the pictures to come are drawn from a frame kept and shown from its stand-in; until the scene's next close (the
+    // vblank's, the next frame's, or one the packets make: a read-back, a state saved).
+    struct Ahead {
+        bool open = false;
+        Target target;             // the frame's buffer's target (scanout's placement), as it was
+        uint32_t x = 0, y = 0;     // the frame in it
+        std::vector<Layer> layers; // the layers kept on it, as they were
+    };
+    Ahead ahead_;
+    ShownRect last_rect_{}; // (the last picture's shown rectangle: a vblank's pictures between show the same)
+    bool last_rect_known_ = false;
+
+    bool packets_ahead() override {
+        if (ahead_.open) {
+            return true;
+        }
+        ShownRect rect = last_rect_;
+        const uint32_t fbp = rect.bp / 32;
+        if (kept_.empty() || between_bound_ || !last_rect_known_ || rect.bp % 32 != 0 ||
+            (fbp != kept_shape_.shown_fbp && fbp != kept_shape_.draw_fbp) || rect.w == 0 || rect.h == 0 ||
+            rect.psm != GSN_PSMCT32) {
+            counts_.ahead_refused++;
+            return false;
+        }
+        rect.bp = kept_shape_.draw_fbp * 32;
+        // (colour_target's placement, found only: none made or grown here)
+        Placed placed;
+        for (auto &t : colour_) {
+            uint32_t x, y;
+            if (t->fbw == rect.bw && t->page_place(rect.bp / 32, x, y) && x == 0) {
+                if (t->height >= rounded_height(y + rect.y + rect.h, GSN_PSMCT32)) {
+                    placed = {t.get(), 0, y};
+                }
+                break;
+            }
+        }
+        if (!placed.target || !stand_ins_.count(placed.target->image.get())) {
+            counts_.ahead_refused++;
+            return false;
+        }
+        flush_batch();
+        close_scene(false);
+        ahead_.open = true;
+        ahead_.target = *placed.target;
+        ahead_.x = placed.x;
+        ahead_.y = placed.y;
+        for (const Layer &l : layers_) {
+            if (l.image.get() == ahead_.target.image.get()) {
+                ahead_.layers.push_back(l);
+            }
+        }
+        counts_.aheads++;
+        return true;
+    }
+
+    bool packets_ahead_open() const override {
+        return ahead_.open;
+    }
+
+    void packets_ahead_end() override {
+        if (ahead_.open) {
+            flush_batch();
+            close_scene(false);
+        }
     }
 
     // ---- Pictures between (slice 4, docs/plans/scene-slice4-results.md) ----
@@ -1619,8 +1706,10 @@ public:
             counts_.pictures_not_drawn++;
             return false;
         }
-        flush_batch();
-        close_scene(false);
+        if (!ahead_.open) {
+            flush_batch();
+            close_scene(false);
+        }
         if (between_bound_) {
             for (const auto &scp : kept_) {
                 const Scene &sc = *scp;
@@ -1785,6 +1874,14 @@ public:
                     (unsigned long long)counts_.stand_ins_made, (unsigned long long)counts_.stand_in_copies,
                     between_bound_ ? " (KF4_SCN_BETWEEN_BOUND: the frame's scenes again, unmoved)" : "");
         }
+        if (counts_.aheads || counts_.ahead_refused) {
+            fprintf(stderr,
+                    "[stats] scene renderer packets taken ahead of the pictures between: %llu times, %llu refused (no "
+                    "frame kept, or not shown from its stand-in); %llu pictures after them shown from the buffer as it "
+                    "is\n",
+                    (unsigned long long)counts_.aheads, (unsigned long long)counts_.ahead_refused,
+                    (unsigned long long)counts_.ahead_unshown);
+        }
         if (drop_frame_) {
             fprintf(stderr, "[stats] scene renderer KF4_SCN_DROP_FRAME: %llu of the frames' steps left out\n",
                     (unsigned long long)counts_.frame_steps_dropped);
@@ -1896,6 +1993,11 @@ private:
     // ---- The scene ----
     // The scene drawn and submitted (flush: put on the GPU's queue now, else with the next submit that flushes)
     void close_scene(bool flush) {
+        if (ahead_.open) {
+            ahead_.open = false; // (packets_ahead's end: their scene drawn)
+            ahead_.layers.clear();
+            ahead_.target = {};
+        }
         end_shadow_run();
         pass_.open = false;
         fuse_.valid = false;
@@ -2741,9 +2843,9 @@ private:
     }
 
     // The layer kept on image that meets shown can be drawn by the picture: inside it
-    bool composable(const Image *image, const VkRect2D &shown) const {
+    bool composable(const std::vector<Layer> &layers, const Image *image, const VkRect2D &shown) const {
         bool any = false;
-        for (const Layer &l : layers_) {
+        for (const Layer &l : layers) {
             if (l.image.get() != image || !rects_meet(l.rect, shown)) {
                 continue;
             }
@@ -5197,7 +5299,7 @@ private:
                  held_depth_read_late = 0, hold_refused_none = 0, hold_refused_target = 0, hold_refused_depth = 0,
                  hold_refused_first = 0;
         uint64_t scenes = 0, bound_pictures = 0, frames_kept = 0, frames_not_kept = 0, pictures_between = 0,
-                 pictures_not_drawn = 0, scanouts_unchanged = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
+                 pictures_not_drawn = 0, scanouts_unchanged = 0, aheads = 0, ahead_refused = 0, ahead_unshown = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;

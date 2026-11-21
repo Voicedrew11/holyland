@@ -25,6 +25,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -115,7 +116,27 @@ namespace {
     X(vkCmdResetQueryPool)                                                                                 \
     X(vkCmdWriteTimestamp)                                                                                 \
     X(vkGetQueryPoolResults)                                                                               \
-    X(vkResetCommandPool)
+    X(vkResetCommandPool)                                                                                  \
+    X(vkCreateShaderModule)                                                                                \
+    X(vkDestroyShaderModule)                                                                               \
+    X(vkCreateSampler)                                                                                     \
+    X(vkDestroySampler)                                                                                    \
+    X(vkCreateDescriptorSetLayout)                                                                         \
+    X(vkDestroyDescriptorSetLayout)                                                                        \
+    X(vkCreateDescriptorPool)                                                                              \
+    X(vkDestroyDescriptorPool)                                                                             \
+    X(vkAllocateDescriptorSets)                                                                            \
+    X(vkUpdateDescriptorSets)                                                                              \
+    X(vkCreatePipelineLayout)                                                                              \
+    X(vkDestroyPipelineLayout)                                                                             \
+    X(vkCreateGraphicsPipelines)                                                                           \
+    X(vkDestroyPipeline)                                                                                   \
+    X(vkCmdBindPipeline)                                                                                   \
+    X(vkCmdBindDescriptorSets)                                                                             \
+    X(vkCmdPushConstants)                                                                                  \
+    X(vkCmdSetViewport)                                                                                    \
+    X(vkCmdSetScissor)                                                                                     \
+    X(vkCmdDraw)
 
 #define DECLARE(name) PFN_##name name = nullptr;
 struct Functions {
@@ -144,6 +165,14 @@ struct Frame {
     // swapchain's image, at its end; read when the frame comes round
     VkQueryPool own_timer = VK_NULL_HANDLE;
     bool own_timed = false;
+    // (KF4_PRESENT_FOLD_CHECK) the picture as sharpened here (a, the swapchain's format) and as the PC renderer
+    // sharpens it (b, RGBA), read back to compare when the frame comes round (fold_check_read)
+    VkBuffer check_a = VK_NULL_HANDLE, check_b = VK_NULL_HANDLE;
+    VkDeviceMemory check_a_memory = VK_NULL_HANDLE, check_b_memory = VK_NULL_HANDLE;
+    void *check_a_map = nullptr, *check_b_map = nullptr;
+    VkDeviceSize check_size = 0;
+    uint32_t check_w = 0, check_h = 0;
+    bool check_pending = false;
 };
 
 struct SwapImage {
@@ -201,8 +230,21 @@ struct Presenter {
     VkDeviceSize readback_size = 0;
 
     bool imgui = false;
+
+    // The sharpening drawn here (make_sharpen): the PC renderer's pcr_present_sharpen.frag straight into the swapchain's
+    // image at the picture's place, in place of the copy of a picture it sharpened itself (GsnScanout's sharpen)
+    struct Sharpen {
+        VkSampler sampler = VK_NULL_HANDLE;
+        VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        VkDescriptorSet sets[FRAMES] = {};
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+    } sharpen;
 };
 Presenter pr;
+
+void fold_check_print(); // (KF4_PRESENT_FOLD_CHECK's, below)
 
 void check(VkResult result) {
     if (result < 0) {
@@ -540,6 +582,162 @@ bool make_render_pass() {
     return vk.vkCreateRenderPass(pr.device, &info, nullptr, &pr.pass) == VK_SUCCESS;
 }
 
+// The sharpening's pipeline (Presenter::Sharpen), in the render pass, for each frame a set (the picture's view)
+bool make_sharpen() {
+    Presenter::Sharpen &sh = pr.sharpen;
+    size_t vert_bytes = 0, frag_bytes = 0;
+    const uint32_t *frag_code = nullptr;
+    const uint32_t *vert_code = gsr_present_sharpen_spirv(&vert_bytes, &frag_code, &frag_bytes);
+    VkSamplerCreateInfo sampler = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST; // (texelFetch: unused but for its being there)
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VkDescriptorSetLayoutBinding binding = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                            nullptr};
+    VkDescriptorSetLayoutCreateInfo set_layout = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    set_layout.bindingCount = 1;
+    set_layout.pBindings = &binding;
+    VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FRAMES};
+    VkDescriptorPoolCreateInfo pool = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.maxSets = FRAMES;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &pool_size;
+    // (pcr_present_sharpen.frag's: the size, the origin, the strength)
+    VkPushConstantRange push = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 5 * sizeof(int32_t)};
+    if (vk.vkCreateSampler(pr.device, &sampler, nullptr, &sh.sampler) != VK_SUCCESS ||
+        vk.vkCreateDescriptorSetLayout(pr.device, &set_layout, nullptr, &sh.set_layout) != VK_SUCCESS ||
+        vk.vkCreateDescriptorPool(pr.device, &pool, nullptr, &sh.pool) != VK_SUCCESS) {
+        return false;
+    }
+    VkDescriptorSetLayout layouts[FRAMES];
+    for (uint32_t i = 0; i < FRAMES; i++) {
+        layouts[i] = sh.set_layout;
+    }
+    VkDescriptorSetAllocateInfo alloc = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    alloc.descriptorPool = sh.pool;
+    alloc.descriptorSetCount = FRAMES;
+    alloc.pSetLayouts = layouts;
+    VkPipelineLayoutCreateInfo layout = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layout.setLayoutCount = 1;
+    layout.pSetLayouts = &sh.set_layout;
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges = &push;
+    if (vk.vkAllocateDescriptorSets(pr.device, &alloc, sh.sets) != VK_SUCCESS ||
+        vk.vkCreatePipelineLayout(pr.device, &layout, nullptr, &sh.layout) != VK_SUCCESS) {
+        return false;
+    }
+    auto module = [](const uint32_t *code, size_t bytes) {
+        VkShaderModuleCreateInfo info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        info.codeSize = bytes;
+        info.pCode = code;
+        VkShaderModule m = VK_NULL_HANDLE;
+        return vk.vkCreateShaderModule(pr.device, &info, nullptr, &m) == VK_SUCCESS ? m : VK_NULL_HANDLE;
+    };
+    VkShaderModule vert = module(vert_code, vert_bytes), frag = module(frag_code, frag_bytes);
+    VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                                 {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo input = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewport.viewportCount = 1;
+    viewport.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo raster = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo multisample = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState blend = {};
+    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                           VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blending = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blending.attachmentCount = 1;
+    blending.pAttachments = &blend;
+    VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamic_states;
+    VkGraphicsPipelineCreateInfo info = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &input;
+    info.pInputAssemblyState = &assembly;
+    info.pViewportState = &viewport;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState = &multisample;
+    info.pColorBlendState = &blending;
+    info.pDynamicState = &dynamic;
+    info.layout = sh.layout;
+    info.renderPass = pr.pass;
+    info.subpass = 0;
+    bool made = vert != VK_NULL_HANDLE && frag != VK_NULL_HANDLE &&
+                vk.vkCreateGraphicsPipelines(pr.device, VK_NULL_HANDLE, 1, &info, nullptr, &sh.pipeline) == VK_SUCCESS;
+    if (vert != VK_NULL_HANDLE) {
+        vk.vkDestroyShaderModule(pr.device, vert, nullptr);
+    }
+    if (frag != VK_NULL_HANDLE) {
+        vk.vkDestroyShaderModule(pr.device, frag, nullptr);
+    }
+    if (!made) {
+        sh.pipeline = VK_NULL_HANDLE;
+    }
+    return made;
+}
+
+void free_sharpen() {
+    Presenter::Sharpen &sh = pr.sharpen;
+    if (sh.pipeline != VK_NULL_HANDLE) {
+        vk.vkDestroyPipeline(pr.device, sh.pipeline, nullptr);
+    }
+    if (sh.layout != VK_NULL_HANDLE) {
+        vk.vkDestroyPipelineLayout(pr.device, sh.layout, nullptr);
+    }
+    if (sh.pool != VK_NULL_HANDLE) {
+        vk.vkDestroyDescriptorPool(pr.device, sh.pool, nullptr);
+    }
+    if (sh.set_layout != VK_NULL_HANDLE) {
+        vk.vkDestroyDescriptorSetLayout(pr.device, sh.set_layout, nullptr);
+    }
+    if (sh.sampler != VK_NULL_HANDLE) {
+        vk.vkDestroySampler(pr.device, sh.sampler, nullptr);
+    }
+    sh = Presenter::Sharpen();
+}
+
+// The picture (view, w x h, not sharpened) sharpened by strength into the render pass's image at x, y (the pass begun)
+void draw_sharpened(VkCommandBuffer cmd, uint32_t frame, VkImageView view, int x, int y, int w, int h, float strength) {
+    Presenter::Sharpen &sh = pr.sharpen;
+    VkDescriptorImageInfo image = {sh.sampler, view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = sh.sets[frame];
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &image;
+    vk.vkUpdateDescriptorSets(pr.device, 1, &write, 0, nullptr);
+    vk.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sh.pipeline);
+    vk.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sh.layout, 0, 1, &sh.sets[frame], 0, nullptr);
+    VkViewport viewport = {float(x), float(y), float(w), float(h), 0.0f, 1.0f};
+    vk.vkCmdSetViewport(cmd, 0, 1, &viewport);
+    const int x0 = std::max(x, 0), y0 = std::max(y, 0);
+    const int x1 = std::min(x + w, int(pr.extent.width)), y1 = std::min(y + h, int(pr.extent.height));
+    VkRect2D scissor = {{x0, y0}, {uint32_t(std::max(x1 - x0, 0)), uint32_t(std::max(y1 - y0, 0))}};
+    vk.vkCmdSetScissor(cmd, 0, 1, &scissor);
+    struct {
+        int32_t size[2], origin[2];
+        float strength;
+    } push = {{w, h}, {x, y}, strength};
+    vk.vkCmdPushConstants(cmd, sh.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vk.vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 bool make_frames() {
     VkCommandPoolCreateInfo pool = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -837,8 +1035,9 @@ void flash_start_writer() {
     }
 }
 
-// (the presenter) the picture, source (sw x sh, GENERAL), into the ring's next layer
-void flash_take(VkCommandBuffer cmd, Frame &f, VkImage source, uint32_t sw, uint32_t sh, int w, int h) {
+// (the presenter) the picture, source's sw x sh at sx, sy (GENERAL), into the ring's next layer
+void flash_take(VkCommandBuffer cmd, Frame &f, VkImage source, int32_t sx, int32_t sy, uint32_t sw, uint32_t sh, int w,
+                int h) {
     if (fl.writing.load() || source == VK_NULL_HANDLE || !flash_ring(w, h)) {
         return;
     }
@@ -872,7 +1071,8 @@ void flash_take(VkCommandBuffer cmd, Frame &f, VkImage source, uint32_t sw, uint
     fl.fresh = false;
     VkImageBlit blit = {};
     blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    blit.srcOffsets[1] = {int32_t(sw), int32_t(sh), 1};
+    blit.srcOffsets[0] = {sx, sy, 0};
+    blit.srcOffsets[1] = {sx + int32_t(sw), sy + int32_t(sh), 1};
     blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
     blit.dstOffsets[1] = {int32_t(fl.width), int32_t(fl.height), 1};
     vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, fl.image, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
@@ -1008,6 +1208,13 @@ void close_all() {
         if (pr.pool != VK_NULL_HANDLE) {
             vk.vkDestroyCommandPool(pr.device, pr.pool, nullptr);
         }
+        gsr_present_sharpens(0);
+        free_sharpen();
+        fold_check_print();
+        for (Frame &f : pr.frames) {
+            free_buffer(&f.check_a, &f.check_a_memory);
+            free_buffer(&f.check_b, &f.check_b_memory);
+        }
         if (pr.pass != VK_NULL_HANDLE) {
             vk.vkDestroyRenderPass(pr.device, pr.pass, nullptr);
         }
@@ -1016,6 +1223,76 @@ void close_all() {
         vk.vkDestroySurfaceKHR(pr.instance, pr.surface, nullptr);
     }
     pr = Presenter();
+}
+
+// (developers', KF4_PRESENT_FOLD_CHECK=1: the PC renderer also sharpens each picture it leaves to the presenter, as
+// before, into GsnScanout's check) Every 15th such picture, the presenter's own sharpening read back from the swapchain's
+// image and compared with it, byte for byte
+struct FoldCheck {
+    int on = -1;
+    uint64_t seen = 0, compared = 0, differ = 0, pixels = 0;
+} fold_check;
+
+bool fold_checking() {
+    if (fold_check.on < 0) {
+        const char *e = getenv("KF4_PRESENT_FOLD_CHECK");
+        fold_check.on = e && std::strcmp(e, "0") != 0;
+    }
+    return fold_check.on != 0;
+}
+
+void fold_check_print() {
+    if (fold_check.compared) {
+        std::fprintf(stderr, "[present] the sharpening here against the PC renderer's (KF4_PRESENT_FOLD_CHECK): %llu "
+                     "pictures compared, %llu differ (%llu pixels)\n",
+                     (unsigned long long)fold_check.compared, (unsigned long long)fold_check.differ,
+                     (unsigned long long)fold_check.pixels);
+    }
+}
+
+// (the frame's fence waited for) its pictures compared
+void fold_check_read(Frame &f) {
+    if (!f.check_pending) {
+        return;
+    }
+    f.check_pending = false;
+    const uint32_t *a = static_cast<const uint32_t *>(f.check_a_map), *b = static_cast<const uint32_t *>(f.check_b_map);
+    const bool bgra = pr.format.format == VK_FORMAT_B8G8R8A8_UNORM;
+    uint64_t wrong = 0;
+    for (size_t i = 0, n = size_t(f.check_w) * f.check_h; i < n; i++) {
+        uint32_t v = a[i];
+        if (bgra) {
+            v = (v & 0xFF00FF00u) | ((v >> 16) & 0xFF) | ((v & 0xFF) << 16);
+        }
+        wrong += (v & 0xFFFFFFu) != (b[i] & 0xFFFFFFu) ? 1 : 0;
+    }
+    fold_check.compared++;
+    fold_check.differ += wrong ? 1 : 0;
+    fold_check.pixels += wrong;
+    if (fold_check.compared % 20 == 0) {
+        fold_check_print();
+    }
+}
+
+// Whether this picture is compared: its buffers ready (w x h), the copies to do once the pass is ended
+bool fold_check_now(Frame &f, const GsnScanout &scanout, int w, int h) {
+    if (!fold_checking() || scanout.check == 0 || fold_check.seen++ % 15 != 0) {
+        return false;
+    }
+    VkDeviceSize size = VkDeviceSize(w) * h * 4;
+    if (f.check_size < size) {
+        free_buffer(&f.check_a, &f.check_a_memory);
+        free_buffer(&f.check_b, &f.check_b_memory);
+        f.check_size = 0;
+        if (!make_host_buffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &f.check_a, &f.check_a_memory, &f.check_a_map) ||
+            !make_host_buffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &f.check_b, &f.check_b_memory, &f.check_b_map)) {
+            return false;
+        }
+        f.check_size = size;
+    }
+    f.check_w = uint32_t(w);
+    f.check_h = uint32_t(h);
+    return true;
 }
 
 // ---- A picture -----------------------------------------------------------------------------------
@@ -1174,6 +1451,12 @@ extern "C" int port_vk_open(void *sdl_window) {
         return 0;
     }
     pr.up = true;
+    if (make_sharpen()) {
+        gsr_present_sharpens(1); // (the PC renderer leaves its pictures to sharpen here)
+    } else {
+        std::fprintf(stderr, "[present] no pipeline for the sharpening: the PC renderer sharpens the pictures\n");
+        free_sharpen();
+    }
 #ifdef KF4_HAVE_PLAYER_UI
     UiVkSetup ui_setup = {pr.get_instance_proc_addr, pr.instance, pr.gpu, pr.device, pr.pass, FRAMES};
     ui_vk_open(ui_setup); // (logged when it cannot: the player menu is then not drawn)
@@ -1263,6 +1546,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
     flash_read_timer(f);
     own_read_timer(f);
+    fold_check_read(f);
     uint32_t index = 0;
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
     if (waiting) {
@@ -1379,8 +1663,6 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         image_barrier(cmd, pr.upload, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     }
-    image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     VkImage source = VK_NULL_HANDLE;
     uint32_t source_w = 0, source_h = 0;
     if (pr.source == SOURCE_UPLOAD && !pr.upload_new) {
@@ -1401,32 +1683,98 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     // the whole image when there is none. Nothing when the picture covers the window.)
     const bool pictured = source != VK_NULL_HANDLE && w > 0 && h > 0;
     const bool covered = pictured && x <= 0 && y <= 0 && x + w >= int(pr.extent.width) && y + h >= int(pr.extent.height);
-    if (!pictured) {
-        VkClearColorValue black = {};
-        black.float32[3] = 1.0f;
-        VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vk.vkCmdClearColorImage(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+    // The picture left to sharpen here (GsnScanout's sharpen): drawn sharpened straight into the swapchain's image, in
+    // place of the copy (one full window's write and read fewer than the PC renderer sharpening it into its own image)
+    const bool sharpen_here = pictured && source == VkImage(scanout.scaled) && scanout.sharpen > 0 &&
+                              scanout.scaled_view != 0 && pr.sharpen.pipeline != VK_NULL_HANDLE;
+    const bool inside = x >= 0 && y >= 0 && x + w <= int(pr.extent.width) && y + h <= int(pr.extent.height);
+    bool pass_open = false;
+    auto begin_pass = [&] {
+        VkRenderPassBeginInfo pass = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        pass.renderPass = pr.pass;
+        pass.framebuffer = target.framebuffer;
+        pass.renderArea.extent = pr.extent;
+        vk.vkCmdBeginRenderPass(cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+        pass_open = true;
+    };
+    if (sharpen_here) {
+        image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        // (the PC renderer's picture written before, read by the fragment shader)
+        VkMemoryBarrier read = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        read.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &read,
+                                0, nullptr, 0, nullptr);
+        begin_pass();
+        draw_sharpened(cmd, pr.frame, VkImageView(scanout.scaled_view), x, y, w, h, scanout.sharpen);
+        const bool readable = inside && pr.can_read;
+        const bool check = readable && fold_check_now(f, scanout, w, h);
+        if ((fresh && readable) || check) {
+            // (the flash recorder's ring: the picture as it is shown, sharpened, from the swapchain's image)
+            vk.vkCmdEndRenderPass(cmd);
+            pass_open = false;
+            image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            if (fresh) {
+                flash_take(cmd, f, target.image, x, y, uint32_t(w), uint32_t(h), w, h);
+            }
+            if (check) {
+                VkBufferImageCopy copy = {};
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.imageOffset = {x, y, 0};
+                copy.imageExtent = {uint32_t(w), uint32_t(h), 1};
+                vk.vkCmdCopyImageToBuffer(cmd, target.image, VK_IMAGE_LAYOUT_GENERAL, f.check_a, 1, &copy);
+                copy.imageOffset = {0, 0, 0};
+                vk.vkCmdCopyImageToBuffer(cmd, VkImage(scanout.check), VK_IMAGE_LAYOUT_GENERAL, f.check_b, 1, &copy);
+                VkMemoryBarrier host = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0,
+                                        nullptr, 0, nullptr);
+                f.check_pending = true;
+            }
+            image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        } else if (fresh) {
+            flash_take(cmd, f, source, 0, 0, source_w, source_h, w, h); // (not sharpened: no other way)
+        }
+        own_timer_mark(cmd, f, 1);
+    } else {
+        image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        if (!pictured) {
+            VkClearColorValue black = {};
+            black.float32[3] = 1.0f;
+            VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vk.vkCmdClearColorImage(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        }
+        if (pictured) {
+            image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkImageBlit blit = {};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1] = {int32_t(source_w), int32_t(source_h), 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.dstOffsets[0] = {x, y, 0};
+            blit.dstOffsets[1] = {x + w, y + h, 1};
+            vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                              &blit, !scaled && port_video_scaling() != PORT_SCALING_SHARP ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+        }
+        if (fresh && source != VK_NULL_HANDLE) {
+            flash_take(cmd, f, source, 0, 0, source_w, source_h, w, h); // (the flash recorder's ring)
+        }
+        own_timer_mark(cmd, f, 1);
+        image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     }
-    if (source != VK_NULL_HANDLE && w > 0 && h > 0) {
-        image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                      VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkImageBlit blit = {};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {int32_t(source_w), int32_t(source_h), 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[0] = {x, y, 0};
-        blit.dstOffsets[1] = {x + w, y + h, 1};
-        vk.vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                          !scaled && port_video_scaling() != PORT_SCALING_SHARP ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
-    }
-    if (fresh && source != VK_NULL_HANDLE) {
-        flash_take(cmd, f, source, source_w, source_h, w, h); // (the flash recorder's ring)
-    }
-    own_timer_mark(cmd, f, 1);
-    image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     // the frame-rate counter (either thread), then the overlay over it (the game's thread)
     static Squares squares; // (under the window's present lock, port/platform/video.c)
     squares.count = 0;
@@ -1439,11 +1787,9 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
     port_video_counter_draw(add_square, &squares, x, y, w, h);
     if (draw != nullptr || menu != nullptr || squares.count > 0) {
-        VkRenderPassBeginInfo pass = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        pass.renderPass = pr.pass;
-        pass.framebuffer = target.framebuffer;
-        pass.renderArea.extent = pr.extent;
-        vk.vkCmdBeginRenderPass(cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
+        if (!pass_open) {
+            begin_pass();
+        }
         for (uint32_t i = 0; i < squares.count; i++) {
             vk.vkCmdClearAttachments(cmd, 1, &squares.clears[i], 1, &squares.rects[i]);
         }
@@ -1462,6 +1808,8 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
                 gsr_queue_unlock();
             }
         }
+    }
+    if (pass_open) {
         vk.vkCmdEndRenderPass(cmd);
     }
     own_timer_mark(cmd, f, 2);
@@ -1487,7 +1835,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     }
     vk.vkEndCommandBuffer(cmd);
 
-    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.waitSemaphoreCount = 1;
     submit.pWaitSemaphores = &f.acquired;

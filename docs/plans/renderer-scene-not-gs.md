@@ -113,8 +113,10 @@ Slice 5 (2026-11-21, `scene-slice5-results.md`): the pictures by budget. Each pi
 measured cost, and a picture between that would be late is left out (gs.c's cut off under it). A vblank with nothing new
 is the last picture again, with no GPU work. The spin holds 30 game frames a second at 60, 240 and unlocked, with every
 picture on time (before, 596 shown late at 240). The late turn at 60 halves (12.2 to 6.6 ms), and at 30 the renderer's GPU
-time is 27% less. Not built: the drawing thread (at 240, 256-522 of 3,500 pictures begun late while kf4-pc built a
-scene) and the presenter's copy folded into the final pass. The late turn left is the picture's own cost: 3f's to take
+time is 27% less. In place of the design's drawing thread, kf4-pc takes in the packets queued behind a picture
+between while it waits for its time, exact (0 of 9,834 pictures differ forced): at 240, 117 new pictures a second
+against 101, 56 begun late against 443. The presenter draws the sharpening into the window in place of its copy (0.13
+ms a picture, byte for byte). The late turn left is the picture's own cost: 3f's to take
 down next, then the reprojection judged again.
 
 ## Order

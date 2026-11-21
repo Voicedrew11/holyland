@@ -4,11 +4,13 @@ closes: every motion case of tools/motion_compare.py played twice by the scene r
 and their pictures compared byte for byte (held back, the pictures must not change).
 
     tools/hold_compare.py --out DIR [--exe EXE] [--disc ISO] [--cases a,b] [--rates 60,240] [--profiles 1x,2xw]
-                          [--jobs N] [--env K=V,...]
+                          [--jobs N] [--env K=V,...] [--var NAME] [--stat TEXT]
 
 KF4_INTERP_T0=1 (frame_interp.c's): each game frame's own vblank drawn as a picture between at t 0, as with the mouse
 turned, so that the frame is taken at its own vblank and held back under a pad script that repeats (the mouse's own
 turns go by the wall clock). --env adds variables to both runs (KF4_INTERP_T0=0: the frames taken as without the mouse).
+--var: the variable set to 1 and 0 instead of KF4_SCN_HOLD_FRAME (KF4_SCN_AHEAD_FORCE: the packets taken ahead of the
+pictures between as far as they go, docs/plans/scene-slice5-results.md), --stat the --stats line reported (text in it).
 Into DIR: report.md (a line a case, profile and rate: pictures, those that differ, the held runs' --stats line). The
 pictures hold the game's data: keep DIR outside the repository.
 """
@@ -45,7 +47,8 @@ def play(a, name, case, profile, rate, hold):
            "--frames", str(max(frames) + 2), "--renderer", "scene", "--dump-frames", ",".join(map(str, frames)),
            "--dump-dir", d, "--log", os.path.join(d, "log.txt"), "--stats", "--frame-rate", str(rate)] + \
         case["args"] + PROFILES[profile]
-    env = dict(os.environ, KF4_DATA_DIR=os.path.join(d, "data"), KF4_SCN_HOLD_FRAME=str(hold), **a.env)
+    env = dict(os.environ, KF4_DATA_DIR=os.path.join(d, "data"), **a.env)
+    env[a.var] = str(hold)
     env.pop("KF4_FX", None)
     if case["fx"]:
         env["KF4_FX"] = case["fx"]
@@ -66,7 +69,7 @@ def compare(a, name, case, profile, rate):
     out = os.path.join(runs[1][0], "out.txt")
     if os.path.exists(out):
         for line in open(out, errors="replace"):
-            if "frames held back" in line:
+            if a.stat in line:
                 held = re.sub(r"^\[stats\] scene renderer ", "", line.strip())
     return dict(case=name, profile=profile, rate=rate, pictures=len(pictures), differ=len(differ),
                 first=differ[:5], rc=(runs[1][1], runs[0][1]), held=held)
@@ -82,6 +85,8 @@ def main():
     ap.add_argument("--profiles", default="1x,2xw")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--env", default="KF4_INTERP_T0=1")
+    ap.add_argument("--var", default="KF4_SCN_HOLD_FRAME")
+    ap.add_argument("--stat", default="frames held back")
     a = ap.parse_args()
     if not a.disc:
         sys.exit("hold_compare: pass --disc or set KF4_DISC")
@@ -103,7 +108,7 @@ def main():
                 " (" + ", ".join(res["first"]) + ")" if res["differ"] else ""), flush=True)
     results.sort(key=lambda x: (names.index(x["case"]), x["profile"], x["rate"]))
     with open(os.path.join(a.out, "report.md"), "w") as f:
-        f.write("| Case | Profile | Rate | Pictures | Differ | Held (the held run's --stats) |\n|---|---|---|---|---|---|\n")
+        f.write("| Case | Profile | Rate | Pictures | Differ | %s=1's --stats |\n|---|---|---|---|---|---|\n" % a.var)
         for res in results:
             f.write("| %s | %s | %d | %d | %d | %s |\n" % (res["case"], res["profile"], res["rate"], res["pictures"],
                                                          res["differ"], res["held"] or "none"))

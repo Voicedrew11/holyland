@@ -1,7 +1,9 @@
 # The scene renderer, slice 5: results (branch `scene/slice5`, 2026-11-21)
 
 Slice 5 of `scene-renderer-design.md` ("The slices", and "8. Scheduling and present"): the pictures by budget, never
-holding the game, a repeated vblank not made again. On `scene/slice5` from `scene/slice4b`.
+holding the game, a repeated vblank not made again; the game's packets taken in while a picture waits for its time
+(the design's drawing thread, done another way); the sharpening drawn by the presenter. On `scene/slice5` from
+`scene/slice4b`.
 
 All figures: the owner's settings in a real window (2x, a 1920 x 896 picture scaled to 1920 x 1080, FXAA, sharpening
 0.5, tearing, no vsync), Vega 7, the quick save at 099 (`base.kf4quick`), 1,100 vblanks a run, `--stats`. Measurements
@@ -110,7 +112,7 @@ frame's picture 0.1 + 3.4; a picture between 0.6-0.9 + 7.9-8.7; the vblank's sce
 
 **A vblank shown again costs the renderer no GPU work** (and no command buffer: its slot is published again); the run's
 GPU time is 27% less, 2.9 ms for each vblank shown again (the final pass it no longer makes). The presenter's own copy of
-the picture into the swapchain is paid as for any picture (about 0.5 ms; `presenter-sharpen-into-swapchain` below).
+the picture into the window is paid as for any picture (since the end of slice 5 its sharpening, below).
 
 ## Found on the way
 
@@ -126,28 +128,99 @@ the picture into the swapchain is paid as for any picture (about 0.5 ms; `presen
   added to the GPU's queue, the pictures' own time is clean, and they are done 2.3 ms before their time (median) instead
   of 4.75.
 
-## What is not built, and what it would give
+## Finished: the packets taken ahead, and the sharpening in the presenter
 
-- **The drawing thread** (the design's "a drawing thread records and submits every picture"). kf4-pc builds the scenes
-  and draws the pictures, waiting for each picture's time between. At 60 that is enough (28-30 pictures of about 1,060
-  begun more than a millisecond after their time); at 240, 256-522 of about 3,500 were, kf4-pc still taking a scene's
-  packets in when a picture's time came, and some of those were left out for it. A thread of its own would let them be
-  begun on time; it needs the builder's scenes and images shared with it (the builder is one thread's today). Worth it
-  once the pictures are cheap enough for more of them to fit.
-- **The final pass in one with the presenter**: the presenter's 1:1 copy into the swapchain (about 0.5 ms a picture,
-  every picture, a repeated one too), the sharpening drawn by the presenter into the swapchain image instead
-  (`scene-final-pass-results.md`, "What is left").
-- **The reprojection** (decision 3, moved after slice 5 by 4b). The late turn left is the picture's own cost: 6.6 ms at
-  60, 2.4 degrees at 6 rad/s, 42 mrad (16 GS pixels). A reprojection at the presenter would take most of it, but it moves
-  the HUD with the world unless the HUD is an image of its own (decision 4); a cheaper picture (3f: the GS's pixel in the
-  shader, 0x700 placed) takes it down for every picture and lets more fit at 240. The second is the next step; the
-  reprojection can be judged after it.
+### Why pictures were begun late (`why/`)
+
+What kf4-pc was doing when a picture's time came and it was not there (the stretches of kf4-pc's time by what it did,
+against each late begin, after the first two seconds; the counts first given here, 256-522 at 240, were mostly the
+load's):
+
+| after the first 2 s | pictures begun more than 1 ms late | late in all | kf4-pc meanwhile |
+|---|---|---|---|
+| 60 | 3 | 35 ms | taking packets in 26 ms |
+| 240 | 268 | 519 ms | taking packets in 397 ms, a frame taken 96 ms, idle 20 |
+| unlocked | 26 | 35 ms | recording the picture before 27 ms |
+
+At 240 it was the build. gs.c posts all of a vblank's pictures at once and the next frame's packets queue behind them;
+kf4-pc waited for each picture's time, idle, and took the packets in only after the last, when the next vblank's first
+picture was already due.
+
+### The packets taken ahead (`KF4_SCN_AHEAD=0`: not)
+
+In place of the design's drawing thread (which would share the builder between two threads): while kf4-pc waits for a
+picture between's time, it takes in the game's packets queued behind it (`Inbox::take_packet_ahead`: past pictures
+between and the extra pictures that show them only; never past a vblank's own picture, a frame, a job, or gs.c's own
+packets at a vblank, `GifPacket::vblanks`), each while its cost (the packets' high percentile, at least 0.5 ms) fits
+before the wait's end, and waits for more meanwhile. The pictures must not see those packets, which were sent after
+them:
+
+- **The builder** (`Drawing::packets_ahead`, scn_build.cpp's `Ahead`): the scene so far is closed, and the scene the
+  packets add to is closed by none of the pictures (nor its batch flushed), so the GPU draws it after them; a picture
+  draws the kept frame into its stand-ins from the GS's memory as it was, and is shown with the frame's buffer placed
+  and its layers as they were. Only while the pictures to come are drawn from a kept frame and shown from its stand-in
+  (else refused, nothing taken ahead).
+- **The shell** counts how many pictures each packet taken ahead passed; the first picture sent after them closes the
+  scene first (`packets_ahead_end`), as it would in its turn. A picture between ahead of the packets keeps the intake's
+  stretch (the next frame's packets, from which it is taken) instead of dropping it.
+
+Both were found by the check below. Without them, the first version showed three black pictures between at the
+teleport in `combat` (a flash), and the next frame was then not kept for its pictures between.
+
+**Exact, checked as far as it goes**: `KF4_SCN_AHEAD_FORCE=1` (developers', headless) holds every picture between and
+its extra picture back until the game's next packets are sent, which kf4-pc then takes ahead of them as above (or holds
+back to their turn where the builder refuses); `tools/hold_compare.py --var KF4_SCN_AHEAD_FORCE`. Every motion case at
+1x and 2x widescreen, 60 and 240, with `KF4_INTERP_T0=1` (the frames held as under the mouse) and at 2x widescreen
+without: **0 of 9,834 pictures differ** (`ahead/t0`, `ahead/plain`; `combat` at 240 alone: 54,027 packets taken ahead,
+none refused). The final build again on `combat`, `spell 3` and `watchers` at 240: 0 of 804 (`ahead/final`).
+
+| the spin, real window (`spin/a*`, `n*`: `KF4_SCN_AHEAD=0`) | new pictures a second | pictures begun late after 2 s (late in all; kf4-pc taking packets meanwhile) |
+|---|---|---|
+| 240, not taken ahead | 100.7 | 443 (1,360 ms; 1,038 ms) |
+| 240, taken ahead | **116.6** | **56** (523 ms; 289 ms) |
+| unlocked, not taken ahead (three runs) | 101.3, 103.4, 103.7 | 36, 72, 117 |
+| unlocked, taken ahead | **104.3, 106.2, 105.4** | 137, 152, 211 (mostly recording the picture before) |
+| 60, either | 60.0 | 0-3 |
+
+At 240, 401,862 packets (934 MB) were taken ahead in the run, none done after the wait's end, none that drew the scene
+so far. The walk at 240 (`aw240`, `nw240`) makes no more pictures (60 a second either way; its pictures between are left
+out for the game frame's own, not for the build) and begins 761 late against 905. At 60 nothing is queued behind a
+picture between (`a60`: 0 taken ahead). The late turn and the pictures shown late are as before. (The figures before
+vary from slice 5's first runs, 109.6 a second at 240 then: the runs are from another session.)
+
+### The sharpening in the presenter (`KF4_PRESENT_FOLD=0`: not)
+
+The renderer scales the picture into the slot and leaves it unsharpened (`GsnScanout`'s `sharpen`, `scaled_view`); the
+Vulkan presenter draws `pcr_present_sharpen.frag` (an `origin` added) straight into the swapchain's image at the
+picture's place, in place of its 1:1 copy, and the flash recorder takes the sharpened picture from there. A picture
+whose pixels are read back (`--dump-present`, SDL_Renderer's) is sharpened by the renderer as before.
+
+- **Exact**: `KF4_PRESENT_FOLD_CHECK=1` (developers') has the renderer sharpen each picture as before into a check
+  image as well, and the presenter compares every 15th picture's pixels in the window with it: **0 of 100 differ** in
+  the spin at 240 (`spin/foldcheck`), 0 of 20 at 60 (`fold/check60`).
+- **Smaller than estimated**: 0.13 ms a picture, not 0.5. The renderer's sharpening pass goes (6.85 to 6.19 ms a
+  picture at 240), but the presenter's draw into the swapchain's image costs more than its copy did (1.17 against 0.63
+  ms with the flash recorder, 0.91 against 0.40 without): writing the window's image from a shader costs about 0.25 ms
+  more than writing the renderer's own image. At 60 likewise 0.14. The budget's estimate of a picture between's GPU
+  time falls from 8.2 to 7.3 ms, and 117.8 pictures a second fit at 240 against 115.2 (`spin/gpu_fold`, `gpu_nofold`).
+
+## Not built
+
+- **The design's drawing thread**: replaced by the packets taken ahead, which take the build out of the pictures' way at
+  240 without a second thread on the builder. What neither does: a picture whose frame's packets are not yet sent
+  waits for them.
+- **The reprojection** (decision 3, moved after slice 5 by 4b). The late turn left is the picture's own cost: 6.0-6.6 ms
+  at 60, 2.4 degrees at 6 rad/s, about 40 mrad (16 GS pixels). A reprojection at the presenter would take most of it,
+  but it moves the HUD with the world unless the HUD is an image of its own (decision 4); a cheaper picture (3f: the
+  GS's pixel in the shader, 0x700 placed) takes it down for every picture and lets more fit at 240. The second is the
+  next step; the reprojection can be judged after it.
 
 ## The criteria
 
 | slice 5 passes when | measured | |
 |---|---|---|
 | the mouse spin at the owner's settings holds 30 game frames a second | 30.0 at 60 (and at 240 and unlocked) | yes |
-| ... with as many pictures between as fit | 60 a second at 60; 110 at 240 and 98 unlocked, all on time (before: as many at 240, 596 late) | yes |
-| a repeated vblank under 0.3 ms | no GPU work in the renderer (the presenter's copy as for any picture) | yes |
+| ... with as many pictures between as fit | 60 a second at 60; 117 at 240 (101 with the packets not taken ahead) and 104-106 unlocked, on time (before slice 5: 110 at 240, 596 late) | yes |
+| a picture's GPU time, the final pass with the presenter | the presenter sharpens straight into the window: 0.13 ms a picture less, byte for byte | yes |
+| a repeated vblank under 0.3 ms | no GPU work in the renderer (the presenter's sharpening as for any picture) | yes |
 | (4b) the late turn after slice 5's scheduling, sized again | 6.6 ms at 60, 2.4 degrees at 6 rad/s: the picture's own cost | measured |

@@ -166,6 +166,18 @@ public:
         (void)buffers;
         return false;
     }
+    // (the scene renderer's slice 5, docs/plans/scene-slice5-results.md) What the stream adds from here comes before this
+    // vblank's pictures between still to be drawn and the extra pictures that show them, which are drawn as if it came
+    // after them (as it was sent). False when that cannot be (nothing is to be taken ahead). Open until the drawing must
+    // draw what was added (packets_ahead_open false): the vblank, a frame taken, a read-back.
+    virtual bool packets_ahead() {
+        return false;
+    }
+    virtual bool packets_ahead_open() const {
+        return false;
+    }
+    // A picture sent after the packets taken ahead: what was added drawn first, as the picture would in its turn
+    virtual void packets_ahead_end() {}
 };
 
 } // namespace pcr
