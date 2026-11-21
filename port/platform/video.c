@@ -197,7 +197,9 @@ static int simulating(void) {
 }
 
 double port_game_speed(void) {
-    float speed = port_options.game_speed;
+    float speed;
+
+    __atomic_load(&port_options.game_speed, &speed, __ATOMIC_RELAXED); /* (set_game_speed writes it from another thread) */
 
     return speed > 0.0f && !port_options.fast && simulating() ? (double)speed : 1.0;
 }

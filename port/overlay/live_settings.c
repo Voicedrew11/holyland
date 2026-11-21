@@ -45,8 +45,12 @@ static double set_frame_rate(double rate) {
    1x (the game's side marks the clock: game/frame_interp.c, port_clock_played in port/platform/video.c). */
 static double set_game_speed(double speed) {
     speed = speed < PORT_GAME_SPEED_LOW ? PORT_GAME_SPEED_LOW : speed > PORT_GAME_SPEED_HIGH ? PORT_GAME_SPEED_HIGH : speed;
-    port_settings.game_speed = port_options.game_speed = (float)speed;
-    return port_options.game_speed;
+    float made = (float)speed;
+
+    /* the game's and the renderer's threads read it (port_game_speed, port/platform/video.c) */
+    port_settings.game_speed = made;
+    __atomic_store(&port_options.game_speed, &made, __ATOMIC_RELAXED);
+    return made;
 }
 
 static double set_draw_distance(double distance) {
