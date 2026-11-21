@@ -3,6 +3,7 @@
 // the vblank's own pictures are never late.
 #include "pcr_budget.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -87,9 +88,20 @@ void queue_time() {
 struct Run {
     int made = 0, left_out = 0, frames_late = 0, late = 0;
     double most_gap_ms = 0; // (the longest between two pictures made, once measured)
+    int own_after = -1;     // (the vblank of the first picture between shown by a vblank's own made after the spike)
 };
 
-Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks) {
+struct Spike {
+    int from = -1, to = -1; // (vblanks) where a picture between costs ms: a change of settings, a load
+    double ms = 0;
+};
+
+// per: pictures a vblank (4: 240 a second; 1: 60, every picture a vblank's own); asked: a picture is begun no sooner
+// than a vblank before its time, when it is asked for (as gs.c gets the vblank), not as soon as its begin time says;
+// clocks: a GPU that lowers its clocks when it has been busy less than 30% of the time lately (over about 200 ms), its
+// work then 1.8 times as long (an AMD APU's 400 MHz for 1800: busy half the time it kept 1800, a sixth 400)
+Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks, Spike spike = {}, int per = 4,
+             bool asked = false, bool clocks = false) {
     const double v = 1001.0 / 60000.0, cpu = 0.001;
     PictureBudget b;
     GpuQueueTime q;
@@ -98,34 +110,44 @@ Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks) {
         double done;
     };
     std::vector<Flight> flights;
-    double now = 0, gpu_free = 0, last_shown = -1;
+    double now = 0, gpu_free = 0, last_shown = -1, busy = 1.0;
     uint64_t serial = 0;
     Run r;
     for (int n = 0; n < vblanks; n++) {
-        for (int k = 0; k < 4; k++) {
-            const double phase = 0.25 * k, shown = (n + 1) * v + phase * v + 0.25 * v;
+        for (int k = 0; k < per; k++) {
+            const double phase = double(k) / per, shown = (n + 1) * v + phase * v + 0.25 * v;
             const bool frame = !turning && k == 0 && n % 2 == 0;
             const bool next_frame = !turning && n % 2 == 1;
             const PictureKind kind = frame ? PictureKind::frame : k == 0 ? PictureKind::between_own : PictureKind::between;
             // (the wait wakes up to 0.4 ms late)
             const double woke = 0.0001 * double((n * 7 + k * 3) % 5);
-            now = std::max(now, (frame ? b.begin_at_s(kind, shown)
+            now = std::max({now, asked ? shown - v : 0.0, (frame ? b.begin_at_s(kind, shown)
                                        : b.between_begin_at_s(kind, shown, phase, v, next_frame)) +
-                                    woke);
+                                    woke});
             while (!flights.empty() && flights.front().done <= now) {
                 q.done(flights.front().serial, flights.front().done);
                 flights.erase(flights.begin());
             }
-            if (!frame && !b.fits(kind, now, q.free_s(), shown, phase, v, next_frame)) {
+            if (!frame && !b.admit(kind, now, q.free_s(), shown, phase, v, next_frame)) {
                 r.left_out += n >= 8;
                 continue;
             }
-            const double gpu = (frame ? frame_ms : gpu_ms) / 1000.0;
-            double submitted = now + cpu, start = std::max(submitted, gpu_free), done = start + gpu;
+            const bool spiked = !frame && n >= spike.from && n < spike.to;
+            const double gpu = (frame ? frame_ms : spiked ? spike.ms : gpu_ms) / 1000.0;
+            if (kind == PictureKind::between_own && spike.to >= 0 && n >= spike.to && r.own_after < 0) {
+                r.own_after = n;
+            }
+            double submitted = now + cpu, start = std::max(submitted, gpu_free), slow = 1.0;
+            if (clocks) {
+                busy *= std::exp(-(start - gpu_free) / 0.2); // (idle since the last)
+                slow = busy < 0.3 ? 1.8 : 1.0;
+                busy = 1.0 - (1.0 - busy) * std::exp(-gpu * slow / 0.2);
+            }
+            double done = start + gpu * slow;
             gpu_free = done;
             q.submitted(++serial, submitted, b.gpu_s(kind));
             flights.push_back({serial, done});
-            b.made(kind, cpu, done - start);
+            b.made(kind, cpu, done - start, now);
             now = submitted;
             if (n >= 8) { // (once measured)
                 r.made++;
@@ -149,22 +171,55 @@ void slow_gpu() {
     // a GPU that makes every picture: none left out
     Run fast = simulate(2.0, 1.0, true, 200);
     CHECK(fast.left_out == 0 && fast.late == 0);
-    // turning, about two pictures' time a vblank: about one in three phases, evenly, none late
+    // turning, about two pictures' time a vblank: about one in three phases, evenly; late only in the retries of a kind
+    // left out a second (admit: at 1 s and 3 s here, a run of 0.25 s each)
+    const double v = 1001.0 / 60000.0;
     Run slow = simulate(7.0, 3.0, true, 200);
-    CHECK(slow.late == 0);
+    CHECK(slow.late <= 2 * int(PictureBudget::RETRY_RUN_S / v * 4 + 1));
     CHECK(slow.made >= counted * 4 / 3 - 4);
     CHECK(slow.most_gap_ms < 13.0);
-    // slower than a vblank: fewer than one a vblank, none late
+    // slower than a vblank: fewer than one a vblank, late only in retries
     Run slower = simulate(20.0, 3.0, true, 200);
-    CHECK(slower.late == 0);
+    CHECK(slower.late <= 2 * int(PictureBudget::RETRY_RUN_S / v * 4 + 1));
     CHECK(slower.made >= counted * 2 / 3 - 4 && slower.made <= counted);
     // not turning: every game frame's own picture made and on time, the pictures between around them
     Run walk = simulate(7.0, 3.0, false, 200);
     CHECK(walk.frames_late == 0 && walk.late == 0);
     CHECK(walk.made >= counted / 2 + counted / 2);
-    std::printf("made a vblank: %.2f (2 ms), %.2f (7 ms, most %.1f ms apart), %.2f (20 ms), %.2f (7 ms, not turning)\n",
-                fast.made / double(counted), slow.made / double(counted), slow.most_gap_ms,
-                slower.made / double(counted), walk.made / double(counted));
+    std::printf("made a vblank: %.2f (2 ms), %.2f (7 ms, most %.1f ms apart, %d late), %.2f (20 ms, %d late), %.2f (7 "
+                "ms, not turning)\n",
+                fast.made / double(counted), slow.made / double(counted), slow.most_gap_ms, slow.late,
+                slower.made / double(counted), slower.late, walk.made / double(counted));
+}
+
+// A cost met for a moment (half a second of pictures between at 25 ms: the scene renderer's first pictures after a
+// change of its scale) does not leave the pictures between out for good once they cost what they did again. At 60 a
+// second with the mouse turning every picture is a vblank's own picture between: left out for good, the view stood
+// still while the mouse moved. Made again within the first retry (a second); then as before the spike.
+void spike_recovers() {
+    const double v = 1001.0 / 60000.0;
+    const int retry_vblanks = int(std::min(PictureBudget::RETRY_FIRST_S, 100.0) / v) + 2, vblanks = 600;
+    const Spike spike{100, 130, 25.0};
+    Run before = simulate(12.0, 3.0, true, vblanks, {}, 1, true);
+    Run r = simulate(12.0, 3.0, true, vblanks, spike, 1, true);
+    CHECK(before.made >= vblanks - 8 - 4);
+    CHECK(r.own_after >= spike.to && r.own_after <= spike.to + retry_vblanks);
+    CHECK(r.made >= vblanks - 8 - (spike.to - spike.from) - retry_vblanks - 4);
+    std::printf("after a spike (60 a second, turning): pictures between again %d vblanks after it; made a vblank %.2f "
+                "(%.2f without the spike), %d late\n",
+                r.own_after - spike.to, r.made / double(vblanks - 8), before.made / double(vblanks - 8), r.late);
+    // a GPU that lowers its clocks when it has less to do: one picture alone costs too much to fit (22 ms), a run of
+    // them what they did (12): the retry's run
+    Run clocked = simulate(12.0, 3.0, true, vblanks, spike, 1, true, true);
+    CHECK(clocked.own_after >= spike.to && clocked.own_after <= spike.to + retry_vblanks);
+    CHECK(clocked.made >= vblanks - 8 - (spike.to - spike.from) - retry_vblanks - 16);
+    std::printf("after a spike, the GPU's clocks lowered as it idles: made a vblank %.2f, %d late\n",
+                clocked.made / double(vblanks - 8), clocked.late);
+    // 240 a second, turning or not: the vblank's own pictures between again too
+    for (bool turning : {true, false}) {
+        Run fast = simulate(7.0, 3.0, turning, vblanks, {100, 130, 40.0}, 4, true);
+        CHECK(fast.own_after >= spike.to && fast.own_after <= spike.to + retry_vblanks);
+    }
 }
 
 } // namespace
@@ -174,6 +229,7 @@ int main() {
     begin_and_done();
     queue_time();
     slow_gpu();
+    spike_recovers();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;
