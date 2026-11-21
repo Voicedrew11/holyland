@@ -76,6 +76,7 @@ int DrawDistance_KeepBehind(s32 flags) {
 static uintptr_t behind_records[BEHIND_ROOM];
 static u32 behind_generation[BEHIND_ROOM];
 static u32 behind_now = 1;
+static u32 behind_object_generation[2 * 0x200]; /* (DrawDistance_MarkObjectBehind) */
 
 static u32 behind_slot(uintptr_t record) {
     return (u32)((record >> 4) * 2654435761u) & (BEHIND_ROOM - 1);
@@ -86,6 +87,7 @@ void DrawDistance_BeginBehind(void) {
     behind_now++;
     if (behind_now == 0) { /* (wrapped: every slot's generation is old again) */
         memset(behind_generation, 0, sizeof(behind_generation));
+        memset(behind_object_generation, 0, sizeof(behind_object_generation));
         behind_now = 1;
     }
 }
@@ -108,21 +110,63 @@ void DrawDistance_NoteBehind(const void *record) {
     }
 }
 
-/* MapObject_DrawAll: an object not in view drawn all the same, for the pictures between: one in view with its map
-   record (no linked point owner of its own, as MapObject_UpdateAll decides) whose record is drawn behind the player */
-int DrawDistance_ObjectBehind(const MapObject *object) {
-    uintptr_t key = (uintptr_t)object->map_record;
-    u32 i;
+/* MapObject_UpdateAll (map_object.patch): whether its record is one kept behind the player this frame */
+int DrawDistance_RecordBehind(const void *record) {
+    uintptr_t key = (uintptr_t)record;
+    u32 i = behind_slot(key);
     int n;
 
-    if (key == 0 || (object->source->linked_point_owner != 0 && object->source->linked_point_owner != 0xFF)) {
-        return 0;
-    }
-    i = behind_slot(key);
     for (n = 0; n < BEHIND_ROOM && behind_generation[i] == behind_now; n++, i = (i + 1) & (BEHIND_ROOM - 1)) {
         if (behind_records[i] == key) {
             return 1;
         }
     }
     return 0;
+}
+
+/* The map objects that would be in view this frame but for being behind the player, drawn for the pictures between.
+   MapObject_UpdateAll decides it (map_object.patch), at the one branch where it marks an object in view because its
+   record is (MapRecord flags bit 26, set by func_00112BD0 for a record that passes both its line through the player
+   and the visibility table): a record kept behind (it passes the table, not the line) marks the object here instead.
+   So the rest of the PS2's decision holds as it is: an object out of use is passed over, as is one its step handler
+   has just taken out of use; the floor the player stands on is in view already; one with a linked point owner goes by
+   its owner's visibility alone, with no line to bypass; and while the updates are suspended the marks stay as they
+   were, as the in-view bits do.
+   Out of use matters most: such a model keeps the matrix MapObject_InitMap built from the map file's own place, since
+   moving the map (MapObject_OffsetAll) moves only the position and only an update rebuilds the matrix. In a map
+   loaded beside another, that place can be far off in the sky: map 008's spare broken barrel (and, once broken, its
+   whole barrel and its barricade's boards) showed in the sky over map 099 when only the record was looked at.
+   Marked with the frame's generation (DrawDistance_BeginBehind), one mark per object of map_slot_objects. */
+extern MapObject map_slot_objects[2][0x200];
+
+static int object_number(const MapObject *object) {
+    ptrdiff_t n = object - &map_slot_objects[0][0];
+
+    return n >= 0 && n < 2 * 0x200 ? (int)n : -1;
+}
+
+void DrawDistance_MarkObjectBehind(const MapObject *object) {
+    int n = object_number(object);
+
+    if (n >= 0) {
+        behind_object_generation[n] = behind_now;
+    }
+}
+
+/* MapObject_UpdateAll with the updates suspended: last frame's marks carried on to this one */
+void DrawDistance_KeepObjectsBehind(void) {
+    int n;
+
+    for (n = 0; n < 2 * 0x200 && behind_now > 1; n++) { /* (none just after the generation wrapped) */
+        if (behind_object_generation[n] == behind_now - 1) {
+            behind_object_generation[n] = behind_now;
+        }
+    }
+}
+
+/* MapObject_DrawAll: an object not in view drawn all the same (MapObject_UpdateAll marked it this frame) */
+int DrawDistance_ObjectBehind(const MapObject *object) {
+    int n = object_number(object);
+
+    return n >= 0 && behind_object_generation[n] == behind_now;
 }
