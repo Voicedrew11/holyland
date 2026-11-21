@@ -30,7 +30,7 @@ public:
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation,
                         Rml::TextureHandle texture) override;
     void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
-    // Only the menu's alpha masks (port/ui/res/*.alpha, tools/ui_logo.py); other images are not drawn (0, nothing)
+    // Only the menu's alpha masks (port/ui/res/*.alpha, tools/ui_masks.py); other images are not drawn (0, nothing)
     Rml::TextureHandle LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) override;
     Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions) override;
     void ReleaseTexture(Rml::TextureHandle texture) override;

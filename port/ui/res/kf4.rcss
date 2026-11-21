@@ -1,11 +1,12 @@
-/* The player menu's look: King's Field IV's. A sidebar with the Holyland logo and the sections, the section's rows,
-   the focused row's help; the keys along the bottom. Windows of near-black blue-grey with a double steel rule, as the
-   game's own menus; titles in an old print face in pale gold; the chosen line a cold blue band; text in bone white.
-   Only borders, colours, straight gradients and the menu's alpha masks (port/ui/ui_render.hpp draws no shaders,
-   layers or transforms).
+/* The player menu's look: dark iron and amber. A sidebar with the Holyland logo and the sections, the section's rows,
+   the focused row's help; the keys along the bottom. Windows of charcoal in a double iron frame with bracketed
+   corners; titles in Cinzel in amber over an ornamented rule; the chosen line lit by an amber edge and glow; text in
+   bone white. One accent (amber) throughout; ember only for warnings and a key being listened for. Only borders,
+   colours, straight gradients and the menu's alpha masks (port/ui/ui_render.hpp draws no shaders, layers or
+   transforms; the corners and rules are masks made by tools/ui_ornaments.py and tools/ui_masks.py).
 
-   Colours:  window #0a0f17 to #05080d   rule #7a879c / #263042   gold #c8b07a   text #d9d3c3
-             dim #8d95a3   off #5a616d   band #2b4673 to #142238   band edge #b9c7e0   note #d39a6a */
+   Colours:  window #13110f to #070606   sidebar #181512 to #0a0908   frame #6b6255 / #2a2620   amber #d4a95a
+             text #e2dccf   dim #948b7c   off #5e574c   key #4a443a   ember #c46a4a   chosen amber edge, #d4a95a glow */
 
 /* (RmlUi has no default style sheet: every element is inline until it says otherwise) */
 div, h2, p {
@@ -17,7 +18,7 @@ body {
 	font-family: Spectral;
 	font-weight: normal;
 	font-size: 17dp;
-	color: #d9d3c3;
+	color: #e2dccf;
 	width: 100%;
 	height: 100%;
 }
@@ -47,9 +48,9 @@ body.closed #shade, body.closed #window {
 	padding: 7dp 14dp 7dp 14dp;
 	text-align: center;
 	font-size: 15dp;
-	color: #bdb6a6;
-	border: 1dp #7a879c;
-	decorator: vertical-gradient(#0a0f17e8 #05080df0);
+	color: #bfb6a6;
+	border: 1dp #6b6255;
+	decorator: vertical-gradient(#13110fe8 #070606f0);
 }
 
 body.closed #hint.shown {
@@ -61,9 +62,10 @@ body.closed #hint.shown {
 }
 
 #hint-what {
-	font-family: "IM FELL English";
+	font-family: Cinzel;
+	letter-spacing: 1dp;
 	font-size: 17dp;
-	color: #c8b07a;
+	color: #d4a95a;
 	margin-left: 10dp;
 }
 
@@ -82,9 +84,9 @@ body.closed #hint.shown {
 	width: 100%;
 	height: 100%;
 	box-sizing: border-box;
-	border: 1dp #7a879c;
-	padding: 3dp;
-	decorator: vertical-gradient(#0a0f17f2 #05080df5);
+	border: 2dp #6b6255;
+	padding: 4dp;
+	decorator: vertical-gradient(#13110ff4 #070606f7);
 }
 
 #rule-inner {
@@ -93,9 +95,25 @@ body.closed #hint.shown {
 	width: 100%;
 	height: 100%;
 	box-sizing: border-box;
-	border: 1dp #263042;
+	border: 1dp #3a342b;
+	border-top-color: #4a4337;
 	padding-bottom: 10dp;
+	decorator: vertical-gradient(#ffffff08 #ffffff00);
 }
+
+/* the window's iron corners, over the frame */
+img.corner {
+	display: block;
+	position: absolute;
+	width: 64dp;
+	height: 64dp;
+	image-color: #a8916a;
+}
+
+#corner-tl { left: -4dp; top: -4dp; }
+#corner-tr { right: -4dp; top: -4dp; }
+#corner-bl { left: -4dp; bottom: -4dp; }
+#corner-br { right: -4dp; bottom: -4dp; }
 
 #main {
 	display: flex;
@@ -111,29 +129,44 @@ body.closed #hint.shown {
 	width: 270dp;
 	box-sizing: border-box;
 	padding: 22dp 0 12dp 0;
-	border-right: 1dp #263042;
-	decorator: vertical-gradient(#0e1522c0 #060a10c0);
+	border-right: 1dp #2a2620;
+	decorator: vertical-gradient(#181512c8 #0a0908c8);
 }
 
 #crest {
 	text-align: center;
-	padding: 0 18dp 14dp 18dp;
-	margin-bottom: 8dp;
-	border-bottom: 1dp #263042;
+	padding: 0 18dp 12dp 18dp;
+	margin-bottom: 10dp;
 }
 
 #logo {
 	width: 228dp;
-	image-color: #c8b07a;
+	image-color: #d4a95a;
 }
 
 #subtitle {
-	font-family: "IM FELL English";
-	font-style: italic;
-	font-size: 16dp;
-	color: #8d95a3;
-	margin-top: 4dp;
-	letter-spacing: 1dp;
+	font-family: Cinzel;
+	font-size: 13dp;
+	color: #948b7c;
+	margin-top: 6dp;
+	letter-spacing: 3dp;
+}
+
+/* the ornamented rules: under the crest, centred; under the section's title, from the left */
+#crest-rule {
+	display: block;
+	width: 220dp;
+	height: 12dp;
+	margin: 12dp auto 0 auto;
+	image-color: #8a7344;
+}
+
+#heading-rule {
+	display: block;
+	width: 420dp;
+	height: 8dp;
+	margin-bottom: 10dp;
+	image-color: #8a7344;
 }
 
 #tabs {
@@ -143,41 +176,42 @@ body.closed #hint.shown {
 
 tab {
 	display: block;
-	font-family: "IM FELL English SC";
-	font-size: 20dp;
-	color: #8d95a3;
-	padding: 4dp 18dp 4dp 26dp;
+	font-family: Cinzel;
+	font-size: 17dp;
+	letter-spacing: 1dp;
+	color: #948b7c;
+	padding: 6dp 18dp 6dp 26dp;
 	border-left: 3dp #00000000;
 }
 
 tab:hover {
-	color: #d9d3c3;
+	color: #e2dccf;
 }
 
 tab.selected {
-	color: #efe7d2;
-	border-left: 3dp #c8b07a;
-	decorator: horizontal-gradient(#c8b07a38 #c8b07a00);
+	color: #f2ead8;
+	border-left: 3dp #d4a95a;
+	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
 }
 
 /* the keys that change the section, above and below them */
 tab.end {
 	font-family: Spectral;
 	font-size: 12dp;
-	color: #5a616d;
+	color: #5e574c;
 	padding-top: 2dp;
 	padding-bottom: 2dp;
 }
 
 #version {
 	font-size: 12dp;
-	color: #5a616d;
+	color: #5e574c;
 	padding: 8dp 18dp 0 26dp;
 }
 
 #version update {
 	display: block;
-	color: #c8b07a;
+	color: #d4a95a;
 }
 
 /* ---- The section: its title and rows ------------------------------------------------------------------------------- */
@@ -190,11 +224,12 @@ tab.end {
 }
 
 #heading {
-	font-family: "IM FELL English SC";
-	font-size: 30dp;
-	color: #c8b07a;
-	letter-spacing: 1dp;
-	padding-bottom: 6dp;
+	font-family: Cinzel;
+	font-weight: bold;
+	font-size: 28dp;
+	color: #d4a95a;
+	letter-spacing: 2dp;
+	padding-bottom: 4dp;
 }
 
 #rows {
@@ -213,22 +248,23 @@ row {
 }
 
 row.focused {
-	decorator: horizontal-gradient(#2b4673e0 #14223850);
-	border-left: 3dp #b9c7e0;
+	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
+	border-left: 3dp #d4a95a;
 }
 
 row.disabled {
-	color: #5a616d;
+	color: #5e574c;
 }
 
 row.heading {
 	height: 30dp;
 	margin-top: 10dp;
 	padding-left: 2dp;
-	font-family: "IM FELL English SC";
-	font-size: 17dp;
-	color: #c8b07a;
-	border-bottom: 1dp #263042;
+	font-family: Cinzel;
+	font-size: 15dp;
+	letter-spacing: 1dp;
+	color: #b89350;
+	border-bottom: 1dp #2a2620;
 	border-left: 0;
 }
 
@@ -244,20 +280,20 @@ label {
 value {
 	display: block;
 	text-align: right;
-	color: #e3dabf;
+	color: #e8dcc0;
 	white-space: nowrap;
 }
 
 row.disabled value {
-	color: #5a616d;
+	color: #5e574c;
 }
 
 value.off {
-	color: #8d95a3;
+	color: #948b7c;
 }
 
 row.action value {
-	color: #8d95a3;
+	color: #948b7c;
 	font-style: italic;
 }
 
@@ -266,7 +302,7 @@ arrow {
 	display: inline-block;
 	width: 20dp;
 	text-align: center;
-	color: #b9c7e0;
+	color: #d4a95a;
 }
 
 arrow.end {
@@ -284,18 +320,18 @@ bar {
 	height: 3dp;
 	margin-right: 10dp;
 	vertical-align: middle;
-	background-color: #263042;
+	background-color: #2a2620;
 }
 
 fill {
 	display: block;
 	height: 3dp;
-	background-color: #c8b07a;
+	background-color: #d4a95a;
 }
 
 note {
 	display: inline;
-	color: #d39a6a;
+	color: #c46a4a;
 	font-size: 14dp;
 	margin-right: 10dp;
 }
@@ -307,7 +343,7 @@ row.binding label {
 }
 
 row.binding.changed label {
-	color: #e3dabf;
+	color: #e8dcc0;
 }
 
 slot {
@@ -317,30 +353,30 @@ slot {
 	padding: 2dp 4dp;
 	text-align: center;
 	font-size: 13dp;
-	color: #bdb6a6;
-	border: 1dp #263042;
+	color: #bfb6a6;
+	border: 1dp #2a2620;
 	white-space: nowrap;
 	overflow: hidden;
 }
 
 slot.empty {
-	color: #5a616d;
+	color: #5e574c;
 }
 
 slot:hover {
-	border: 1dp #7a879c;
+	border: 1dp #6b6255;
 }
 
 row.focused slot.chosen {
-	color: #efe7d2;
-	border: 1dp #b9c7e0;
-	decorator: vertical-gradient(#2b4673 #142238);
+	color: #f2ead8;
+	border: 1dp #d4a95a;
+	decorator: vertical-gradient(#3a3020 #1c170f);
 }
 
 slot.listening, row.focused slot.listening {
-	color: #f0c49a;
-	border: 1dp #d39a6a;
-	decorator: vertical-gradient(#5a3a22 #2a1a10);
+	color: #f0b49a;
+	border: 1dp #c46a4a;
+	decorator: vertical-gradient(#4a2418 #24110b);
 }
 
 /* ---- A choice's list, open under its row --------------------------------------------------------------------------- */
@@ -351,9 +387,9 @@ row.open {
 list {
 	display: block;
 	margin: 0 12dp 6dp 40dp;
-	border: 1dp #7a879c;
+	border: 1dp #6b6255;
 	padding: 2dp;
-	background-color: #070b12f8;
+	background-color: #0c0a09f8;
 }
 
 choice {
@@ -363,49 +399,51 @@ choice {
 }
 
 choice.chosen {
-	color: #c8b07a;
+	color: #d4a95a;
 }
 
 choice.highlighted {
-	decorator: horizontal-gradient(#2b4673e0 #14223850);
-	border-left: 3dp #b9c7e0;
+	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
+	border-left: 3dp #d4a95a;
 }
 
 /* ---- Help ---------------------------------------------------------------------------------------------------------- */
 #help {
 	width: 280dp;
 	padding: 26dp 22dp 0 20dp;
-	border-left: 1dp #263042;
+	border-left: 1dp #2a2620;
 	overflow-y: auto;
 }
 
 #help h2 {
 	display: block;
-	font-family: "IM FELL English";
-	font-size: 22dp;
-	color: #c8b07a;
-	margin-bottom: 8dp;
+	font-family: Cinzel;
+	font-size: 19dp;
+	color: #d4a95a;
+	padding-bottom: 6dp;
+	border-bottom: 1dp #2a2620;
+	margin-bottom: 10dp;
 }
 
 #help p {
 	display: block;
 	font-size: 15dp;
 	line-height: 1.45;
-	color: #bdb6a6;
+	color: #bfb6a6;
 	margin-bottom: 8dp;
 }
 
 #help p.note {
-	color: #d39a6a;
+	color: #c46a4a;
 }
 
 /* ---- What the keys do ---------------------------------------------------------------------------------------------- */
 #prompts {
 	text-align: center;
 	font-size: 14dp;
-	color: #8d95a3;
+	color: #948b7c;
 	padding-top: 9dp;
-	border-top: 1dp #263042;
+	border-top: 1dp #2a2620;
 }
 
 prompt {
@@ -416,8 +454,8 @@ prompt {
 key {
 	display: inline-block;
 	font-size: 13dp;
-	color: #d9d3c3;
-	border: 1dp #4b566b;
+	color: #e2dccf;
+	border: 1dp #4a443a;
 	padding: 0 6dp;
 	margin-right: 5dp;
 }
@@ -429,13 +467,13 @@ scrollbarvertical {
 }
 
 scrollbarvertical slidertrack {
-	background-color: #11182400;
+	background-color: #00000000;
 }
 
 scrollbarvertical sliderbar {
-	background-color: #4b566b;
+	background-color: #4a443a;
 }
 
 scrollbarvertical sliderbar:hover {
-	background-color: #7a879c;
+	background-color: #6b6255;
 }

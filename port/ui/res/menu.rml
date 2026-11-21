@@ -16,12 +16,14 @@
 						<div id="crest">
 							<img id="logo" src="logo.alpha"/>
 							<div id="subtitle">King's Field IV</div>
+							<img id="crest-rule" src="rule_centred.alpha"/>
 						</div>
 						<div id="tabs"></div>
 						<div id="version"></div>
 					</div>
 					<div id="content">
 						<div id="heading"></div>
+						<img id="heading-rule" src="rule_left.alpha"/>
 						<div id="rows"></div>
 					</div>
 					<div id="help"></div>
@@ -29,6 +31,10 @@
 				<div id="prompts"></div>
 			</div>
 		</div>
+		<img class="corner" id="corner-tl" src="corner_tl.alpha"/>
+		<img class="corner" id="corner-tr" src="corner_tr.alpha"/>
+		<img class="corner" id="corner-bl" src="corner_bl.alpha"/>
+		<img class="corner" id="corner-br" src="corner_br.alpha"/>
 	</div>
 </body>
 </rml>

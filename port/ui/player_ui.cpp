@@ -760,12 +760,8 @@ bool load_fonts() {
         {"fonts/Spectral-Regular.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
         {"fonts/Spectral-SemiBold.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
         {"fonts/Spectral-Italic.ttf", "Spectral", Rml::Style::FontStyle::Italic, Rml::Style::FontWeight::Normal},
-        {"fonts/IMFellEnglish-Regular.ttf", "IM FELL English", Rml::Style::FontStyle::Normal,
-         Rml::Style::FontWeight::Normal},
-        {"fonts/IMFellEnglish-Italic.ttf", "IM FELL English", Rml::Style::FontStyle::Italic,
-         Rml::Style::FontWeight::Normal},
-        {"fonts/IMFellEnglishSC-Regular.ttf", "IM FELL English SC", Rml::Style::FontStyle::Normal,
-         Rml::Style::FontWeight::Normal},
+        {"fonts/Cinzel-Regular.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
+        {"fonts/Cinzel-SemiBold.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
     };
     for (const Face &face : faces) {
         const UiAsset *file = ui_asset(face.path);

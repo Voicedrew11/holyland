@@ -62,8 +62,8 @@ is not borrowed.
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
-| `port/ui/art/holyland.png`, `tools/ui_logo.py`, `port/ui/res/logo.alpha` | the logo: the tool makes the alpha mask the game carries (committed; run it after changing the picture) |
-| `port/ui/res/fonts/` | IM FELL English (titles) and Spectral (text), SIL OFL 1.1 |
+| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
 
@@ -82,8 +82,10 @@ else changes: the model and the page take any row.
 
 ## The look
 
-`kf4.rcss` has the palette at its top. Windows of near-black blue-grey with a double steel rule, titles in pale gold
-in IM FELL English SC, a cold blue band for the focused line, text in bone white. RmlUi has no default style sheet:
+`kf4.rcss` has the palette at its top: dark iron and amber (2026-11-21, replacing blue-grey, a cold blue band and
+IM FELL English). Charcoal windows in a double iron frame with bracketed corners, titles in Cinzel in amber over an
+ornamented rule, an amber edge and glow for the focused line, text in bone white; one accent throughout, ember only for
+warnings and a key being listened for. RmlUi has no default style sheet:
 every element is inline until the sheet says otherwise (hence `div, h2, p { display: block }`).
 
 The recorder draws triangles, textures and scissor clipping only. So the sheet uses borders, colours and the
@@ -91,7 +93,7 @@ straight gradients (`horizontal-gradient`, `vertical-gradient`, made of vertex c
 `linear-gradient` and the other shader gradients, `box-shadow`, `filter`, `transform` or `mask-image`: RmlUi then
 leaves them out, and the recorder logs the first of each kind. The only images are the menu's own alpha masks
 (`res/*.alpha`: "KF4A", width, height, a byte of alpha a pixel), white and coloured by `image-color`, so the game needs
-no image decoder; the logo is one. Textures RmlUi makes between pictures (loading the document) go with the next
+no image decoder; the logo, the corners and the rules are. Textures RmlUi makes between pictures (loading the document) go with the next
 picture.
 
 ## Testing

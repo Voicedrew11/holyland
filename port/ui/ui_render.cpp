@@ -25,7 +25,7 @@ void not_drawn(const char *what) {
     std::fprintf(stderr, "[ui] RmlUi asked for %s, which the menu does not draw\n", what);
 }
 
-// An alpha mask's header (tools/ui_logo.py): "KF4A", the width and the height, little-endian
+// An alpha mask's header (tools/ui_masks.py): "KF4A", the width and the height, little-endian
 const size_t MASK_HEADER = 12;
 const uint32_t MASK_SIDE_MAX = 8192;
 
@@ -105,7 +105,7 @@ void Recorder::ReleaseGeometry(Rml::CompiledGeometryHandle handle) {
     geometries_.erase(uintptr_t(handle));
 }
 
-// Only the menu's own alpha masks (.alpha, tools/ui_logo.py): white, premultiplied, coloured by the sheet's image-color
+// Only the menu's own alpha masks (.alpha, tools/ui_masks.py): white, premultiplied, coloured by the sheet's image-color
 Rml::TextureHandle Recorder::LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) {
     dimensions = {0, 0};
     const UiAsset *file = ui_asset(source);
