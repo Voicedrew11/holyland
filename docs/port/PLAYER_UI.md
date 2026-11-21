@@ -83,10 +83,11 @@ else changes: the model and the page take any row.
 
 ## The look
 
-`kf4.rcss` has the palette at its top: dark iron and amber (2026-11-21, replacing blue-grey, a cold blue band and
-IM FELL English). Charcoal windows in a double iron frame with bracketed corners, titles in Cinzel in amber over an
-ornamented rule, an amber edge and glow for the focused line, text in bone white; one accent throughout, ember only for
-warnings and a key being listened for. RmlUi has no default style sheet:
+`kf4.rcss` has the palette at its top: cold iron and ice, taken from the game's own window frame (2026-11-21; before
+it dark iron and amber, and before that blue-grey and IM FELL English). The game's black panel and wisps of ice for the
+window (the iron frame and corners only when the disc lacks them), titles in Cinzel in ice blue over an ornamented
+rule, an ice edge and glow for the focused line, text in cool white; one accent throughout, ember only for warnings and
+a key being listened for. RmlUi has no default style sheet:
 every element is inline until the sheet says otherwise (hence `div, h2, p { display: block }`).
 
 The recorder draws triangles, textures and scissor clipping only. So the sheet uses borders, colours and the
