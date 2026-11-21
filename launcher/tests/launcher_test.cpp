@@ -1,6 +1,6 @@
 // The launcher's parts that need no window or network (docs/port/LAUNCHER.md): SHA-256 and the build key,
-// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, and the local
-// build's steps run against a pretend system.
+// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, the logo's mask, the
+// first start's order of pages, and the local build's steps run against a pretend system.
 //
 //   launcher_test
 #include <cstdio>
@@ -10,12 +10,14 @@
 #include <system_error>
 #include <vector>
 
+#include "alpha_mask.h"
 #include "build_key.h"
 #include "build_log.h"
 #include "build_strategy.h"
 #include "disc_check.h"
 #include "launcher_files.h"
 #include "platform.h"
+#include "setup_flow.h"
 
 using namespace launcher;
 
@@ -124,14 +126,63 @@ void test_choices() {
     LauncherChoices none = read_choices(file);
     check("defaults", none.disc.empty() && none.update_check && none.skipped.empty());
     write(file, "{\"future_key\": 7, \"disc\": \"/old\"}");
-    LauncherChoices mine{"/d/kf4.iso", false, "v0.2.0"};
+    check("setup not done at first", !none.setup_done);
+    LauncherChoices mine{"/d/kf4.iso", false, "v0.2.0", true};
     check("written", write_choices(file, mine));
     LauncherChoices back = read_choices(file);
-    check("read back", back.disc == mine.disc && !back.update_check && back.skipped == "v0.2.0");
+    check("read back", back.disc == mine.disc && !back.update_check && back.skipped == "v0.2.0" && back.setup_done);
     check("unknown keys kept", read_file(file).value_or("").find("future_key") != std::string::npos);
     write(file, "{broken");
     check("broken means defaults", read_choices(file).update_check && read_choices(file).disc.empty());
     fs::remove_all(dir);
+}
+
+void test_alpha_mask() {
+    std::string two_by_one = std::string("KF4A") + std::string("\x02\0\0\0\x01\0\0\0", 8) + "\x10\xff";
+    auto mask = read_alpha_mask(two_by_one);
+    check("mask read", mask && mask->width == 2 && mask->height == 1 && mask->alpha[0] == 0x10 && mask->alpha[1] == 0xff);
+    check("mask a byte short", !read_alpha_mask(two_by_one.substr(0, two_by_one.size() - 1)));
+    check("mask a byte over", !read_alpha_mask(two_by_one + "x"));
+    check("mask another tag", !read_alpha_mask("KF4B" + two_by_one.substr(4)));
+    check("mask header only", !read_alpha_mask(two_by_one.substr(0, 11)));
+    std::string empty = std::string("KF4A") + std::string(8, '\0');
+    check("mask with no pixels", !read_alpha_mask(empty));
+    // 65536 x 65537 would be 2^32 + 65536 bytes: a 32-bit product would wrap to 65536
+    std::string huge = std::string("KF4A") + std::string("\0\0\x01\0\x01\0\x01\0", 8) + std::string(65536, 'a');
+    check("mask whose sizes overflow", !read_alpha_mask(huge));
+}
+
+struct CountingPage final : SetupPage {
+    PageAnswer next_answer = PageAnswer::stay;
+    int drawn = 0;
+    PageAnswer draw(Window &) override {
+        drawn++;
+        return next_answer;
+    }
+};
+
+void test_setup_flow() {
+    check("no pages: finished at once", SetupFlow({}).finished());
+    std::vector<std::unique_ptr<SetupPage>> pages;
+    pages.push_back(std::make_unique<CountingPage>());
+    pages.push_back(std::make_unique<CountingPage>());
+    auto *first = static_cast<CountingPage *>(pages[0].get());
+    SetupFlow flow(std::move(pages));
+    check("starts on the first page", !flow.finished() && &flow.page() == first && flow.page_number() == 0);
+    check("two pages", flow.page_count() == 2);
+    check("no going back from the first", !flow.can_go_back());
+    flow.answer(PageAnswer::stay);
+    check("stay stays", flow.page_number() == 0);
+    flow.answer(PageAnswer::next);
+    check("next goes on", flow.page_number() == 1 && &flow.page() != first && flow.can_go_back());
+    flow.back();
+    check("back goes back", flow.page_number() == 0 && &flow.page() == first);
+    flow.answer(PageAnswer::next);
+    flow.answer(PageAnswer::next);
+    check("the last answer finishes", flow.finished() && !flow.can_go_back());
+    flow.answer(PageAnswer::next);
+    flow.back();
+    check("finished stays finished", flow.finished());
 }
 
 // ---- The local build against a pretend system ----------------------------------------------------
@@ -313,6 +364,8 @@ int main() {
     test_disc_folder();
     test_disc_chd();
     test_choices();
+    test_alpha_mask();
+    test_setup_flow();
     test_local_build();
     std::printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;

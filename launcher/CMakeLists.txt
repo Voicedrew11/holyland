@@ -29,11 +29,13 @@ add_library(launcher_core STATIC
     ${ROOT}/port/platform/iso9660.c
     ${ROOT}/port/platform/update_notice.c
     ${ROOT}/third_party/cjson/cJSON.c
+    alpha_mask.cpp
     build_key.cpp
     build_log.cpp
     build_local.cpp
     disc_check.cpp
     launcher_files.cpp
+    setup_flow.cpp
     update_check.cpp)
 target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson)
 target_compile_options(launcher_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${LAUNCHER_WARNINGS}>)
@@ -68,7 +70,17 @@ add_library(launcher_imgui STATIC
 target_include_directories(launcher_imgui PUBLIC ${ROOT}/third_party/imgui)
 target_link_libraries(launcher_imgui PUBLIC SDL3::SDL3)
 
-add_executable(launcher main.cpp session.cpp window.cpp)
+# The look's files, carried inside the launcher as the game carries them (port/ui/res/: the logo's mask, the fonts)
+set(LAUNCHER_UI_FILES logo.alpha fonts/Cinzel-Regular.ttf fonts/Spectral-Regular.ttf)
+list(TRANSFORM LAUNCHER_UI_FILES PREPEND ${ROOT}/port/ui/res/ OUTPUT_VARIABLE LAUNCHER_UI_FILE_PATHS)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
+    COMMAND ${CMAKE_COMMAND} -DROOT=${ROOT}/port/ui/res "-DFILES=${LAUNCHER_UI_FILES}"
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp -P ${ROOT}/cmake/ui_assets.cmake
+    DEPENDS ${LAUNCHER_UI_FILE_PATHS} ${ROOT}/cmake/ui_assets.cmake
+    COMMENT "The launcher's look: the logo and the fonts" VERBATIM)
+
+add_executable(launcher main.cpp session.cpp setup_pages.cpp window.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp)
+target_include_directories(launcher PRIVATE ${ROOT}/port/ui) # ui_assets.hpp
 set_target_properties(launcher PROPERTIES OUTPUT_NAME holyland) # launcher/product.h: kProductId
 target_compile_definitions(launcher PRIVATE HOLYLAND_VERSION="${HOLYLAND_VERSION}")
 target_compile_options(launcher PRIVATE ${LAUNCHER_WARNINGS})

@@ -15,6 +15,7 @@ struct LauncherChoices {
     std::string disc;          // "" until chosen
     bool update_check = true;  // "Check for updates at launch"
     std::string skipped;       // the release the player chose to skip
+    bool setup_done = false;   // the first start's setup (setup_flow.h) was gone through: its option pages are not shown again
 };
 
 struct DataPaths {

@@ -8,7 +8,7 @@
    "checked" is when GitHub was last asked (seconds since 1970). An empty tag means none was found.
 
    launcher.json, in the data folder, holds the player's choices:
-     {"disc": "/path/to/kf4.iso", "update_check": true, "skipped": "v0.2.0"}
+     {"disc": "/path/to/kf4.iso", "update_check": true, "skipped": "v0.2.0", "setup_done": true}
    The launcher writes it while its window is open, the overlay only to set "skipped", and the game
    runs only after the launcher's window has closed: the two never write it at once. */
 #ifndef PORT_UPDATE_NOTICE_H

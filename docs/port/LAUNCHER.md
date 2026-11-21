@@ -14,26 +14,38 @@ first start after the rename moves the `darker-reality` data and local folders b
 
 1. Windows: prints into the console it was started from, if any.
 2. Starts the update check on a thread of its own (below).
-3. The disc: the one given (`--disc PATH` or a path alone), else the one chosen last time (`launcher.json`), else
-   it asks: the system's file chooser (Windows: IFileOpenDialog; Linux: kdialog or zenity) or a typed path. The
-   disc is checked as the game checks it (`SYSTEM.CNF`, `DATA\KF4.DAT`, read with the game's own readers: an
-   `.iso` or `.chd` image through `port/platform/disc_image.c`, its files through `iso9660.c`) and must boot `SLUS_203.18`, the USA release the decomp is of; a wrong disc says why.
+3. The first start's setup (`launcher/setup_flow.h`, `setup_pages.h`): the Holyland logo over one page at a time.
+   The disc's page comes first, when there is no disc to use: the disc given (`--disc PATH` or a path alone), else
+   the one chosen last time (`launcher.json`), else it asks. The player drops the disc on the window, or clicks the
+   drop area for the system's own file chooser (SDL's: the desktop's portal on Linux, IFileOpenDialog on Windows;
+   where SDL has none, kdialog or zenity as before), or types a path. The disc is checked as the game checks it
+   (`SYSTEM.CNF`, `DATA\KF4.DAT`, read with the game's own readers: an `.iso` or `.chd` image through
+   `port/platform/disc_image.c`, its files through `iso9660.c`) and must boot `SLUS_203.18`, the USA release the
+   decomp is of; a wrong disc says why under the drop area.
+   Options to pick before the first game go after the disc, a page each (`make_..._page` in `setup_pages.h` and a
+   line in `Session::setup_pages`); none exist yet. They show until the setup is gone through once
+   (`setup_done` in `launcher.json`).
 4. The build key (`launcher/build_key.h`): SHA-256 of the version, `content/manifest.txt` and the tools' `ID`.
-   No `builds/<key>/kf4` yet: the build runs with a progress window; a failure keeps the window up with the end of
-   `build.log`, Try again, Copy the log.
+   No `builds/<key>/kf4` yet: the build starts as the setup opens (it needs no disc), so it runs while the player
+   is on the setup's pages; then a progress window if it is still going. A failure keeps the window up with the
+   end of `build.log`, Try again, Copy the log.
 5. Play: the window closes, `kf4 --disc <disc> [what came after --]` runs in the player's working folder, its
    output goes to the console and to `game.log`. A crash shows "The game stopped" with the log's end.
 
 Later starts go straight into the game. `holyland --launcher` (Start menu: "Holyland (disc, rebuild,
-updates)"; the desktop entry's action) shows the launcher instead: Play, Change disc, Rebuild, Open data folder,
-"Check for updates at launch". `--build-only` builds with no window and no disc (CI, tests).
+updates)"; the desktop entry's action) shows the launcher instead: Play, Change disc (the setup's disc page),
+Rebuild, Open data folder, "Check for updates at launch".
+
+The window (`launcher/window.h`) is Dear ImGui on SDL's renderer, in the player menu's colours, with its logo and
+fonts (`port/ui/res/`, carried in the launcher by `cmake/ui_assets.cmake`). On a screen the desktop scales (115%)
+ImGui's drawing is scaled to the window's pixels. `--build-only` builds with no window and no disc (CI, tests).
 
 ## The files
 
 | Where | What | Written by |
 |---|---|---|
 | data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.local/share/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
-| | `launcher.json`: disc, `update_check`, `skipped` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
+| | `launcher.json`: disc, `update_check`, `skipped`, `setup_done` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
 | | `build.log`, `game.log` | the launcher |
 | builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |

@@ -20,6 +20,8 @@
 #include "launcher_files.h"
 #include "platform.h"
 #include "product.h"
+#include "setup_flow.h"
+#include "setup_pages.h"
 #include "update_check.h"
 #include "window.h"
 
@@ -38,9 +40,8 @@ namespace {
 constexpr std::size_t kLogLinesShown = 14;
 constexpr int kUpdateWaitMs = 3000;
 
-constexpr ImVec4 kGold(1.0f, 0.82f, 0.3f, 1.0f);
-constexpr ImVec4 kRed(1.0f, 0.45f, 0.4f, 1.0f);
-constexpr ImVec4 kDim(0.65f, 0.68f, 0.65f, 1.0f);
+constexpr float kLogoDp = 380.0f;      // the logo over the setup
+constexpr float kSmallLogoDp = 240.0f; // and over the build
 
 // The build's progress, written by the build's thread and read by the window
 class BuildRun final : public BuildProgress {
@@ -128,9 +129,9 @@ private:
     int last_tenth_ = -1;
 };
 
-enum class Screen { choose_disc, building, build_failed, home, play, quit };
+enum class Screen { setup, building, build_failed, home, play, quit };
 
-class Session {
+class Session final : private DiscKeeper {
 public:
     Session(const Platform &platform, DataPaths paths, const LaunchOptions &options)
         : platform_(platform), paths_(std::move(paths)), options_(options) {}
@@ -141,20 +142,28 @@ public:
 private:
     // what is needed before play; the screen to show, or play when nothing is
     Screen first_screen();
+    // the setup's pages this start needs: the disc when there is none to use, the options before the first game
+    std::vector<std::unique_ptr<SetupPage>> setup_pages();
+    // after the setup: on to the build, the game, or the launcher's home
+    Screen after_setup();
     bool build_ready() const;
     fs::path build_dir() const { return paths_.builds / key_; }
     fs::path game_path() const { return build_dir() / platform_.game_program(); }
 
-    void use_disc(const fs::path &path);
+    // DiscKeeper, for the setup's disc page
+    bool keep_disc(const fs::path &disc) override;
+    const std::string &why_not() const override { return disc_error_; }
+    std::optional<fs::path> pick_disc_the_old_way() override { return platform_.pick_disc(); }
+
     void start_build();
     void remove_old_builds();
     int play();
     void show_game_stopped(int code);
 
     // a frame of each screen; returns the next screen
-    Screen draw(Screen screen);
-    Screen draw_choose_disc();
-    Screen draw_building();
+    Screen draw(Screen screen, Window &window);
+    Screen draw_setup(Window &window);
+    Screen draw_building(Window &window);
     Screen draw_build_failed();
     Screen draw_home();
     void draw_menu_bar();
@@ -168,7 +177,7 @@ private:
     fs::path content_;
     std::string key_;
     std::string disc_error_;
-    std::string typed_disc_;
+    std::unique_ptr<SetupFlow> setup_;
     bool update_window_ = false;
     bool update_window_shown_ = false;
     bool update_hidden_ = false;
@@ -191,10 +200,9 @@ int Session::run() {
     auto tools = platform_.toolchain(content_, why);
     key_ = build_key(launcher_version(), manifest_of(content_), tools ? tools->id : "none");
     if (!options_.disc.empty()) {
-        use_disc(fs::u8path(options_.disc));
+        keep_disc(fs::u8path(options_.disc));
     } else if (!choices_.disc.empty()) {
-        use_disc(fs::u8path(choices_.disc));
-        if (!disc_error_.empty())
+        if (!keep_disc(fs::u8path(choices_.disc)))
             disc_error_ = "The disc you chose last time is gone or changed. " + disc_error_;
     }
 
@@ -206,7 +214,8 @@ int Session::run() {
             std::fprintf(stderr, "[%s] cannot open the launcher's window: %s\n", kProductId, why.c_str());
             return 1;
         }
-        if (screen == Screen::building)
+        // (the build needs no disc: it runs while the player goes through the setup)
+        if (screen == Screen::building || (screen == Screen::setup && !build_ready()))
             start_build();
         while (screen != Screen::play && screen != Screen::quit) {
             if (!window->begin_frame()) {
@@ -214,9 +223,7 @@ int Session::run() {
                     build_->cancel();
                 screen = Screen::quit;
             } else {
-                window->begin_panel();
-                screen = draw(screen);
-                window->end_panel();
+                screen = draw(screen, *window);
                 draw_update_window();
                 window->end_frame();
             }
@@ -255,11 +262,39 @@ int Session::build_only() {
 }
 
 Screen Session::first_screen() {
-    if (!disc_error_.empty() || choices_.disc.empty())
-        return Screen::choose_disc;
+    setup_ = std::make_unique<SetupFlow>(setup_pages());
+    if (!setup_->finished())
+        return Screen::setup;
     if (options_.show_launcher)
         return Screen::home;
     return build_ready() ? Screen::play : Screen::building;
+}
+
+// The pages, in order: a new page is a line here (setup_pages.h)
+std::vector<std::unique_ptr<SetupPage>> Session::setup_pages() {
+    std::vector<std::unique_ptr<SetupPage>> pages;
+    if (!disc_error_.empty() || choices_.disc.empty())
+        pages.push_back(make_disc_page(*this));
+    if (!choices_.setup_done) {
+        // the options to pick before the first game: a line each, such as pages.push_back(make_..._page(...));
+    }
+    return pages;
+}
+
+Screen Session::after_setup() {
+    setup_.reset();
+    if (!choices_.setup_done) {
+        choices_.setup_done = true;
+        write_choices(paths_.choices(), choices_);
+    }
+    if (options_.show_launcher)
+        return Screen::home;
+    if (build_) // started with the setup: done, failed or still going, its screen says which
+        return Screen::building;
+    if (build_ready())
+        return Screen::play;
+    start_build();
+    return Screen::building;
 }
 
 bool Session::build_ready() const {
@@ -267,12 +302,11 @@ bool Session::build_ready() const {
     return fs::is_regular_file(game_path(), error);
 }
 
-void Session::use_disc(const fs::path &path) {
+bool Session::keep_disc(const fs::path &path) {
     DiscCheck check = check_disc(path);
     if (check.verdict != DiscVerdict::ok) {
         disc_error_ = check.message;
-        typed_disc_ = path.u8string();
-        return;
+        return false;
     }
     disc_error_.clear();
     std::string meant = disc_meant(path).u8string();
@@ -280,9 +314,14 @@ void Session::use_disc(const fs::path &path) {
         choices_.disc = meant;
         write_choices(paths_.choices(), choices_);
     }
+    return true;
 }
 
 void Session::start_build() {
+    if (build_thread_.joinable()) { // a build already going (Rebuild from home while the setup's runs): it starts over
+        build_->cancel();
+        build_thread_.join();
+    }
     std::error_code error;
     fs::remove_all(build_dir(), error);
     build_ = std::make_unique<BuildRun>(paths_.build_log());
@@ -359,11 +398,12 @@ void Session::show_game_stopped(int code) {
     }
     bool open = true;
     while (open && window->begin_frame()) {
+        if (ImGui::BeginMainMenuBar()) {
+            ImGui::TextUnformatted(kProductName);
+            ImGui::EndMainMenuBar();
+        }
         window->begin_panel();
-        ImGui::BeginMenuBar();
-        ImGui::TextUnformatted(kProductName);
-        ImGui::EndMenuBar();
-        ImGui::TextColored(kRed, "The game stopped unexpectedly (%s).", platform_.describe_exit(code).c_str());
+        ImGui::TextColored(kEmber, "The game stopped unexpectedly (%s).", platform_.describe_exit(code).c_str());
         ImGui::TextWrapped("Its last messages are below; all of them are in %s. Please include that file in a "
                            "bug report.", paths_.game_log().u8string().c_str());
         ImGui::BeginChild("log", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
@@ -380,26 +420,34 @@ void Session::show_game_stopped(int code) {
     }
 }
 
-Screen Session::draw(Screen screen) {
-    draw_menu_bar();
+Screen Session::draw(Screen screen, Window &window) {
+    if (screen != Screen::setup) // (the setup is the logo and its page alone)
+        draw_menu_bar();
+    window.begin_panel();
+    Screen next = screen;
     switch (screen) {
-    case Screen::choose_disc:
-        return draw_choose_disc();
+    case Screen::setup:
+        next = draw_setup(window);
+        break;
     case Screen::building:
-        return draw_building();
+        next = draw_building(window);
+        break;
     case Screen::build_failed:
-        return draw_build_failed();
+        next = draw_build_failed();
+        break;
     case Screen::home:
-        return draw_home();
+        next = draw_home();
+        break;
     case Screen::play:
     case Screen::quit:
         break;
     }
-    return screen;
+    window.end_panel();
+    return next;
 }
 
 void Session::draw_menu_bar() {
-    if (!ImGui::BeginMenuBar())
+    if (!ImGui::BeginMainMenuBar())
         return;
     ImGui::TextUnformatted(kProductName);
     ImGui::TextColored(kDim, "%s", launcher_version()[0] ? launcher_version() : "developer's build");
@@ -410,7 +458,7 @@ void Session::draw_menu_bar() {
             update_window_shown_ = true;
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Update available!").x - 40);
-        ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+        ImGui::PushStyleColor(ImGuiCol_Text, kAmber);
         if (ImGui::BeginMenu("Update available!")) {
             ImGui::PopStyleColor();
             if (ImGui::MenuItem("Open download page"))
@@ -427,7 +475,7 @@ void Session::draw_menu_bar() {
             ImGui::PopStyleColor();
         }
     }
-    ImGui::EndMenuBar();
+    ImGui::EndMainMenuBar();
 }
 
 void Session::draw_update_window() {
@@ -460,39 +508,33 @@ void Session::draw_update_window() {
     ImGui::End();
 }
 
-Screen Session::draw_choose_disc() {
-    ImGui::TextUnformatted("Choose your King's Field IV disc");
-    ImGui::TextWrapped("%s plays the game from your own copy of the disc: King's Field: The Ancient City, "
-                       "the USA release (SLUS-20318). Choose an ISO or CHD image of it, or the SYSTEM.CNF of a "
-                       "disc you copied into a folder.", kProductName);
-    if (!disc_error_.empty())
-        ImGui::TextColored(kRed, "%s", disc_error_.c_str());
-    ImGui::Spacing();
-    if (ImGui::Button("Choose the disc...")) {
-        if (auto chosen = platform_.pick_disc())
-            use_disc(*chosen);
+// The logo, the page, and under it the page's place in the row and the way back
+Screen Session::draw_setup(Window &window) {
+    ImGui::Dummy(ImVec2(0, 18.0f * window.scale()));
+    window.draw_logo(kLogoDp);
+    ImGui::Dummy(ImVec2(0, 22.0f * window.scale()));
+    setup_->answer(setup_->page().draw(window));
+    if (setup_->finished())
+        return after_setup();
+    if (setup_->page_count() > 1) {
+        // a dot a page, the page shown in amber, at the panel's foot
+        float scale = window.scale(), gap = 14.0f * scale, radius = 3.5f * scale;
+        ImVec2 panel = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+        float y = panel.y + size.y - 22.0f * scale;
+        float x = panel.x + size.x * 0.5f - gap * float(setup_->page_count() - 1) * 0.5f;
+        for (std::size_t i = 0; i < setup_->page_count(); i++)
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(x + gap * float(i), y), radius,
+                                                        ImGui::GetColorU32(i == setup_->page_number() ? kAmber : kFrame));
     }
-    ImGui::Spacing();
-    ImGui::TextColored(kDim, "Or type its path:");
-    char buffer[1024];
-    std::snprintf(buffer, sizeof(buffer), "%s", typed_disc_.c_str());
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Use this").x - 40);
-    if (ImGui::InputText("##path", buffer, sizeof(buffer)))
-        typed_disc_ = buffer;
-    ImGui::SameLine();
-    if (ImGui::Button("Use this") && !typed_disc_.empty())
-        use_disc(fs::u8path(typed_disc_));
-    if (!disc_error_.empty() || choices_.disc.empty())
-        return Screen::choose_disc;
-    if (options_.show_launcher)
-        return Screen::home;
-    if (build_ready())
-        return Screen::play;
-    start_build();
-    return Screen::building;
+    if (setup_->can_go_back()) {
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - ImGui::GetFrameHeight() - ImGui::GetStyle().WindowPadding.y);
+        if (ImGui::Button("Back"))
+            setup_->back();
+    }
+    return Screen::setup;
 }
 
-Screen Session::draw_building() {
+Screen Session::draw_building(Window &window) {
     BuildRun::View view = build_->view();
     if (view.result) {
         if (build_thread_.joinable())
@@ -502,7 +544,11 @@ Screen Session::draw_building() {
         remove_old_builds();
         return options_.show_launcher ? Screen::home : Screen::play;
     }
+    window.draw_logo(kSmallLogoDp);
+    ImGui::Spacing();
+    ImGui::PushFont(window.title_font(), 28.0f);
     ImGui::TextUnformatted("Building the game on your computer");
+    ImGui::PopFont();
     ImGui::TextWrapped("This happens once for each release and takes a few minutes. The game's code is "
                        "compiled here from source, so no part of the game is downloaded.");
     ImGui::Spacing();
@@ -530,7 +576,7 @@ Screen Session::draw_building() {
 
 Screen Session::draw_build_failed() {
     BuildRun::View view = build_->view();
-    ImGui::TextColored(kRed, "The game could not be built.");
+    ImGui::TextColored(kEmber, "The game could not be built.");
     ImGui::TextWrapped("%s", view.result ? view.result->message.c_str() : "");
     ImGui::TextWrapped("The whole build's output is in %s. Please include that file in a bug report.",
                        paths_.build_log().u8string().c_str());
@@ -565,14 +611,16 @@ Screen Session::draw_home() {
         if (build_ready())
             return Screen::play;
         options_.show_launcher = false; // after the build, play
-        start_build();
+        if (!build_thread_.joinable()) // (else the setup's build is going, or done and not yet seen)
+            start_build();
         return Screen::building;
     }
     ImGui::SameLine();
     if (ImGui::Button("Change disc")) {
-        typed_disc_ = choices_.disc;
-        choices_.disc.clear();
-        return Screen::choose_disc;
+        std::vector<std::unique_ptr<SetupPage>> disc_only;
+        disc_only.push_back(make_disc_page(*this));
+        setup_ = std::make_unique<SetupFlow>(std::move(disc_only));
+        return Screen::setup;
     }
     ImGui::SameLine();
     if (ImGui::Button("Rebuild")) {
