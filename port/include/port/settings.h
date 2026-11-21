@@ -80,7 +80,6 @@ typedef struct {
     float ui_scale;        /* the overlay's size, 0.75 to 2 */
     int save_slot;         /* the slot the Save states page has chosen */
     int quick_slot;        /* the slot of the quick save and quick load keys (port/include/port/quicksave.h) */
-    int menu_found;        /* the player menu was opened once: its hint (F1, or L3 + R3) no longer shows */
 } PortSettings;
 extern PortSettings port_settings;
 

@@ -46,9 +46,10 @@ namespace {
 // ---- The menu's state -----------------------------------------------------------------------------------------------
 enum class Device { keyboard, pad };
 
-// The hint of the keys that open the menu, until the player has found the menu (settings.json: menu_found): at the
-// start of play, and again for a while when a controller is connected
+// The hint of the keys that open the menu, each run until the player opens the menu: at the start of play, and again
+// for a while when a controller is connected
 struct Hint {
+    bool found = false;    // the menu was opened this run: no more hint
     bool waiting = false;  // to show once the game's clock reaches HINT_START_VBLANK (the start of play)
     uint64_t from_ms = 0;  // showing from then (fading in) until then (fading out); until 0: not showing
     uint64_t until_ms = 0;
@@ -143,11 +144,8 @@ void set_open(bool open) {
         return;
     }
     menu.open = open;
-    menu.hint = {}; // (the menu was found: the hint has done its job, now and in later runs)
-    if (open && !port_settings.menu_found) {
-        port_settings.menu_found = 1;
-        port_settings_changed();
-    }
+    menu.hint = {}; // (the menu was found: the hint has done its job for this run)
+    menu.hint.found = true;
     // (the game's input and the mouse follow: port_overlay_holds_input)
     if (port_controls_listening(nullptr, nullptr)) {
         port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
@@ -717,7 +715,7 @@ float hint_opacity() {
 // The hint shown for this long from now, unless the player has found the menu (or a pad script plays: the test
 // runs' pictures stay as they were)
 void show_hint(uint64_t ms) {
-    if (port_settings.menu_found || port_options.input != nullptr || menu.open) {
+    if (menu.hint.found || port_options.input != nullptr || menu.open) {
         return;
     }
     uint64_t now = SDL_GetTicks();
@@ -844,8 +842,8 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.model.open_at(0);
     menu.ready = true;
-    // the hint from the start of play (show_hint: not once the menu was found, nor under a pad script)
-    menu.hint.waiting = !port_settings.menu_found && port_options.input == nullptr;
+    // the hint from the start of play (show_hint: not under a pad script)
+    menu.hint.waiting = port_options.input == nullptr;
     std::atexit(quit);
     std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 the developers' overlay\n");
 }
