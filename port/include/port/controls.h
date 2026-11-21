@@ -129,7 +129,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 /* (the game's thread) Between vblanks, as it waits and works: the mouse's motion read now for instant mouse look's
    readings (port/include/port/mouse_lead.h), at most every half millisecond; nothing outside play */
 void port_controls_sample_mouse(void);
-/* While the overlay is open the game gets nothing; what is held when it closes is ignored until let go */
-void port_controls_block(int blocked);
+/* (While a layer over the game holds the input, port_overlay_holds_input, the game gets nothing, and what is held when
+   the last one closes is ignored until let go: port_controls_read asks at each vblank, the one place that decides.) */
 
 #endif

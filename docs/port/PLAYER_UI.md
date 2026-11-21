@@ -45,6 +45,11 @@ is not borrowed.
 - A row whose value came from the command line says so ("command line"), and its help explains it.
 - While it is open the game sees no input, and is paused if "Pause while open" is on (the same setting the overlay
   used).
+- It is the top layer: drawn over the ImGui layers (the full map, the extended stats beside the game's menus), and it
+  has the input over them. Opened over the full map, the map waits under it and has the keys (M, Esc) back when it
+  closes. Who has the input, and so whether the game is blocked and the mouse let go, is decided in one place,
+  `port_overlay_holds_input` (port/overlay/overlay.cpp), which port/sdk/controls.c asks at each vblank; the layers
+  only open and close.
 - Changes apply as the overlay's did (`port_live_set`, `port_settings`, `port_options`) and settings.json is written
   as before. The menu itself saves nothing of its own.
 

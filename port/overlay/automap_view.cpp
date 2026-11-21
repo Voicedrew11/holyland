@@ -1355,9 +1355,9 @@ void automap_view_open_for_shot(bool open) {
 
 void automap_view_draw(int x, int y, int width, int height) {
     bool full = port_automap_full_open();
-    // the game gets no input while the full map is open (and the mouse is let go)
+    // (the game gets no input while the full map is open, and the mouse is let go: port_overlay_holds_input decides
+    // that at each vblank, since this runs only while the overlay draws something)
     if (full != full_was_open) {
-        port_controls_block(full ? 1 : 0);
         if (full) {
             zoom = 1.0f;
             centred = false;

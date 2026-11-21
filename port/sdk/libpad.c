@@ -473,9 +473,9 @@ static void sdl_read(void) {
     memset(&live, 0, sizeof(live));
     live.axis[0] = live.axis[1] = live.axis[2] = live.axis[3] = 0x80;
     live.twin = live.run = -1;
-    /* the buttons, and the sticks' keys; nothing while the overlay is open */
+    /* the buttons, and the sticks' keys; nothing while a layer over the game (a menu, the full map) has the input */
     port_controls_read(&live.buttons, live.axis, controller);
-    if (controller == NULL || port_overlay_open()) {
+    if (controller == NULL || port_overlay_holds_input()) {
         return;
     }
     {

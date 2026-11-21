@@ -1793,11 +1793,8 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         for (uint32_t i = 0; i < squares.count; i++) {
             vk.vkCmdClearAttachments(cmd, 1, &squares.clears[i], 1, &squares.rects[i]);
         }
-#ifdef KF4_HAVE_PLAYER_UI
-        if (menu != nullptr) {
-            ui_vk_draw(cmd, pr.frame, *menu, pr.extent.width, pr.extent.height);
-        }
-#endif
+        // ImGui (the full map, the minimap, the extended stats beside the game's menus, messages; the developers'
+        // overlay) first, then the player menu over all of it: the menu is the top layer, as it has the input
         if (draw != nullptr) {
             bool textures = imgui_textures_pending(draw);
             if (textures) {
@@ -1808,6 +1805,11 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
                 gsr_queue_unlock();
             }
         }
+#ifdef KF4_HAVE_PLAYER_UI
+        if (menu != nullptr) {
+            ui_vk_draw(cmd, pr.frame, *menu, pr.extent.width, pr.extent.height);
+        }
+#endif
     }
     if (pass_open) {
         vk.vkCmdEndRenderPass(cmd);

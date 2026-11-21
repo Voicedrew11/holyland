@@ -158,8 +158,7 @@ void tooltip(const char *text) {
 void set_open(bool value) {
     if (overlay_open == value)
         return;
-    overlay_open = value;
-    port_controls_block(overlay_open);
+    overlay_open = value; // (the game's input and the mouse follow: port_overlay_holds_input)
     if (overlay_open) {
         port_player_ui_show(nullptr); // one menu at a time: the player menu closes under this one
     } else {
@@ -1798,6 +1797,17 @@ extern "C" int port_overlay_holds_mouse(void) {
     return ready && !overlay_open && profiler_visible();
 }
 
+extern "C" int port_overlay_holds_input(void) {
+    // The layers over the game, top first. The player menu (F1) is over everything, the full map and the extended
+    // stats included (the Vulkan presenter draws it after ImGui), and has the input while it is open; under it the
+    // map keeps its own state and has the input back when the menu closes.
+    if (port_player_ui_open())
+        return 1;
+    if (!ready)
+        return 0; // (no ImGui: the full map is not drawn, and its key alone closes it, through the game's input)
+    return overlay_open || port_automap_full_open() || (profiler_visible() && imgui_typing.load());
+}
+
 extern "C" const char *port_overlay_key(void) {
     return port_player_ui_ready() ? "Shift+F1" : "F1";
 }
@@ -1827,14 +1837,7 @@ extern "C" void port_overlay_vblank(void) {
         return;
     port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
     profiler_step();             // Shift+P (port/overlay/profiler.cpp)
-    // typing in the profiler's text field (the overlay and the player menu closed): the game gets no keys meanwhile
-    static bool typing;
-    bool now_typing = port_overlay_holds_mouse() && !port_player_ui_open() && imgui_typing.load();
-    if (now_typing != typing) {
-        typing = now_typing;
-        if (!overlay_open && !port_player_ui_open()) // (those block the game themselves, and let go when closed)
-            port_controls_block(typing);
-    }
+    // (typing in the profiler's text field blocks the game's keys: port_overlay_holds_input)
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
