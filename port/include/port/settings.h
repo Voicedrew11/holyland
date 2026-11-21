@@ -61,6 +61,8 @@ typedef struct {
     int no_hit_jolt;       /* a hard hit does not throw the view down (port_options.no_hit_jolt) */
     int door_speed;        /* doors run their opening and closing animation this many times a game frame, 1 (the
                               PS2's) to 8 (port_door_speed; 1, the PS2's, by default) */
+    int auto_loot_gold;    /* the gold an enemy drops when the player kills it goes into his purse at once, with the
+                              pickup's notice (port_auto_loot_gold; off by default) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

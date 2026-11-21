@@ -1,5 +1,5 @@
 diff --git a/src/game/item/gold.c b/src/game/item/gold.c
-index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..c0981fc93bb3caac1655debb5e7e34e1a4f0fc5c 100644
+index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..b54be4758d1146ffc662c22b7c44a5511a69c00d 100644
 --- a/src/game/item/gold.c
 +++ b/src/game/item/gold.c
 @@ -7,12 +7,12 @@
@@ -105,7 +105,19 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..c0981fc93bb3caac1655debb5e7e34e1
          } else {
              DrawList_Add(actor->body, 0, list);
          }
-@@ -320,7 +334,7 @@ int Gold_DropFromEntity(Entity *entity) {
+@@ -308,7 +322,10 @@ int Gold_Drop(Vector4 *position, Vector4 *rotation, int map, int amount, int obj
+     return TRUE;
+ }
+ 
+-/* Drops the gold of an entity near it: half of EntityParams.gold for sure, the rest by chance. */
++/* Drops the gold of an entity near it: half of EntityParams.gold for sure, the rest by chance. PC: with the
++   Gameplay setting on, the gold of a kill the player made is looted at once, with the pickup's own notice,
++   rather than a pile to press the action button for (the rolls below are still made, so the game's random
++   sequence is unchanged). */
+ int Gold_DropFromEntity(Entity *entity) {
+     Vector4 position;
+     Vector4 rotation;
+@@ -320,7 +337,7 @@ int Gold_DropFromEntity(Entity *entity) {
      f32 angle;
  
      if (entity->params->gold == 0) {
@@ -114,7 +126,23 @@ index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..c0981fc93bb3caac1655debb5e7e34e1
      }
      amount = 1;
      if (entity->params->gold >= 2) {
-@@ -431,7 +445,7 @@ void Gold_ClearMark(MapActor *actor) {
+@@ -337,6 +354,15 @@ int Gold_DropFromEntity(Entity *entity) {
+     rotation.x = 0.0f;
+     rotation.y = rand() * 6.2831855f * 4.656613e-10f - 3.1415927f;
+     rotation.z = 0.0f;
++    if (port_auto_loot_gold() && ((s32)(entity->flags >> 38) & 3)) {
++        /* (the player's kill, the Gameplay setting on: his at once, as Gold_Update's pickup gives it, text and cap) */
++        player_state.gold += amount;
++        if (player_state.gold >= GOLD_MAX) {
++            player_state.gold = GOLD_MAX;
++        }
++        Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_GOLD, amount);
++        return TRUE;
++    }
+     return Gold_Drop(&position, &rotation, entity->group_id, amount, 0, TRUE, TRUE);
+ }
+ 
+@@ -431,7 +457,7 @@ void Gold_ClearMark(MapActor *actor) {
  
      map_slot = (actor->flags >> 2) & 1;
      entry = &map_slots[map_slot];

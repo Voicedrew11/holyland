@@ -161,6 +161,10 @@ int port_seamless_scroll(void);
    PS2's) to 8 (settings.json's mods.door_speed, the Gameplay page, or --door-speed; 1 by default). The
    patched MapObject_UpdateOpeningDoor and MapObject_UpdateClosingDoor step a door this many times. */
 int port_door_speed(void);
+/* port_auto_loot_gold(): 1 while the gold an enemy drops when the player kills it goes into his purse at once,
+   with the pickup's own notice, rather than a pile to press the action button for (settings.json's
+   mods.auto_loot_gold, the Gameplay page; off by default). */
+int port_auto_loot_gold(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

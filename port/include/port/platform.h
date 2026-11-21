@@ -141,6 +141,10 @@ typedef struct {
        PS2's) to 8 (port_door_speed()); settings.json's mods.door_speed, live from the player menu */
     int door_speed;
     int door_speed_forced; /* --door-speed: this run's, whatever settings.json says */
+    /* the gold an enemy drops when the player kills it goes into his purse at once, with the pickup's notice
+       (port_auto_loot_gold()); settings.json's mods.auto_loot_gold, off by default */
+    int auto_loot_gold;
+    int auto_loot_gold_forced; /* --auto-loot-gold: on for this run whatever settings.json says */
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
     int show_fps;

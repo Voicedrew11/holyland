@@ -18,7 +18,7 @@
                     "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
-       "mods":     {"door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false},
+       "mods":     {"door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -98,6 +98,11 @@ int port_door_speed(void) {
     int speed = port_options.door_speed;
 
     return speed >= 2 && speed <= 8 ? speed : 1;
+}
+
+/* (the game's gold drop: game/item/gold.c, via port/host.h) */
+int port_auto_loot_gold(void) {
+    return port_options.auto_loot_gold != 0;
 }
 
 static int active;
@@ -442,6 +447,7 @@ void port_settings_load(void) {
     s->door_speed = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "door_speed", s->door_speed, 1, 8);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
     s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
+    s->auto_loot_gold = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "auto_loot_gold", s->auto_loot_gold);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
@@ -489,6 +495,9 @@ void port_settings_load(void) {
     }
     if (!port_options.door_speed_forced) {
         port_options.door_speed = s->door_speed;
+    }
+    if (!port_options.auto_loot_gold_forced) {
+        port_options.auto_loot_gold = s->auto_loot_gold;
     }
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
@@ -683,6 +692,7 @@ void port_settings_save(void) {
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
     put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));
     put(section("mods"), "door_speed", cJSON_CreateNumber(s->door_speed));
+    put(section("mods"), "auto_loot_gold", cJSON_CreateBool(s->auto_loot_gold));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */
