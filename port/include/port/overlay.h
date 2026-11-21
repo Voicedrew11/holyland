@@ -55,6 +55,11 @@ int port_overlay_open(void);
 /* 1 while the profiler (Shift+P) is shown with the overlay closed: the mouse is its (port/sdk/controls.c lets it go
    and reads no mouse), the keyboard and controller still the game's */
 int port_overlay_holds_mouse(void);
+/* 1 while a layer over the game has the keyboard, mouse and controller: the player menu, this overlay, the automap's
+   full map, or the profiler's text field being typed in. The one place that decides (port/sdk/controls.c blocks the
+   game and lets the mouse go from it at each vblank; port/sdk/libpad.c leaves out the controller's sticks): the
+   layers only open and close. */
+int port_overlay_holds_input(void);
 /* The key that opens it, and so gives its windows (the profiler, the extended stats) the mouse: "Shift+F1" where
    the player menu has F1, else "F1" */
 const char *port_overlay_key(void);
@@ -70,6 +75,9 @@ void port_overlay_notify_debug(void);
 static inline void port_overlay_vblank(void) {
 }
 static inline int port_overlay_open(void) {
+    return 0;
+}
+static inline int port_overlay_holds_input(void) {
     return 0;
 }
 static inline int port_overlay_visible(void) {

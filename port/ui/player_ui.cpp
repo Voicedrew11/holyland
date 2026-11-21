@@ -111,7 +111,7 @@ void set_open(bool open) {
     }
     menu.open = open;
     menu.hint_until_ms = 0; // (the menu was found: the hint has done its job)
-    port_controls_block(open);
+    // (the game's input and the mouse follow: port_overlay_holds_input)
     if (port_controls_listening(nullptr, nullptr)) {
         port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
     }

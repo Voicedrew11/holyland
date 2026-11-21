@@ -513,10 +513,6 @@ int port_controls_listening(int *action, int *slot) {
 void port_controls_listen_cancel(void) {
 }
 
-void port_controls_block(int blocked) {
-    (void)blocked;
-}
-
 void port_controls_sample_mouse(void) {
 }
 #else
@@ -776,7 +772,11 @@ static void set_captured(int captured) {
     update_cursor();
 }
 
-void port_controls_block(int blocked) {
+/* The game blocked while a layer over it (the player menu, the developers' overlay, the full map, the profiler's
+   text field) holds the input, and the mouse let go. Only port_controls_read sets it, from port_overlay_holds_input
+   at each vblank: one place decides, so a layer opened over another (F1 over the map) and closed again, or one that
+   closes while nothing is drawn, cannot leave it wrong. */
+static void set_blocked(int blocked) {
     if (blocked && !pc.blocked) {
         set_captured(0);
     }
@@ -1001,6 +1001,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     int slot;
     int bit;
 
+    set_blocked(port_overlay_holds_input()); /* (after this poll's events: a layer they opened or closed counts) */
     state = SDL_GetRelativeMouseState(&dx, &dy);
     if (pc.blocked) {
         pc.wheel = 0;
