@@ -31,6 +31,42 @@ body {
 	decorator: vertical-gradient(#000000a8 #000000d8);
 }
 
+/* ---- While the menu is closed: only the hint of the keys that open it --------------------------------------------- */
+body.closed #shade, body.closed #window {
+	display: none;
+}
+
+#hint {
+	display: none;
+	position: absolute;
+	top: 28dp;
+	left: 50%;
+	width: 420dp;
+	margin-left: -210dp;
+	box-sizing: border-box;
+	padding: 7dp 14dp 7dp 14dp;
+	text-align: center;
+	font-size: 15dp;
+	color: #bdb6a6;
+	border: 1dp #7a879c;
+	decorator: vertical-gradient(#0a0f17e8 #05080df0);
+}
+
+body.closed #hint.shown {
+	display: block;
+}
+
+#hint key {
+	margin: 0 5dp;
+}
+
+#hint-what {
+	font-family: "IM FELL English";
+	font-size: 17dp;
+	color: #c8b07a;
+	margin-left: 10dp;
+}
+
 /* ---- The window ---------------------------------------------------------------------------------------------------- */
 #window {
 	position: absolute;

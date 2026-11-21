@@ -28,6 +28,7 @@
 
 extern "C" {
 #include "port/controls.h"
+#include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/settings.h"
 }
@@ -139,12 +140,16 @@ struct Menu {
     int stick_direction = -1; // the left stick's, as a MenuInput (or -1)
     bool l3 = false, r3 = false;
     bool was_listening = false; // a binding's slot waited for a key last picture
+    // the hint of the keys that open the menu, shown from the start until then (0: never, or no longer)
+    uint64_t hint_until_ms = 0;
     // the window's pixels for each of SDL's window units (a HiDPI screen: 2)
     float pixels_per_unit = 1.0f;
     bool drawn = false;
 };
 Menu menu;
 
+const uint64_t HINT_MS = 10000;     // the start's hint, from the menu's start (the window's)
+const uint64_t HINT_FADE_MS = 1000; // its fading at the end
 const uint64_t PAD_DELAY_MS = 350;  // a held direction repeats after this
 const uint64_t PAD_REPEAT_MS = 85;  // every this
 
@@ -153,6 +158,7 @@ void set_open(bool open) {
         return;
     }
     menu.open = open;
+    menu.hint_until_ms = 0; // (the menu was found: the hint has done its job)
     port_controls_block(open);
     if (port_controls_listening(nullptr, nullptr)) {
         port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
@@ -645,6 +651,28 @@ bool pad_chord(const SDL_Event &event) {
     return menu.open;
 }
 
+// The start's hint: how much of it shows now, 0 to 1
+float hint_opacity() {
+    uint64_t now = SDL_GetTicks();
+    if (menu.hint_until_ms == 0 || now >= menu.hint_until_ms) {
+        return 0.0f;
+    }
+    uint64_t left = menu.hint_until_ms - now;
+    return left >= HINT_FADE_MS ? 1.0f : float(left) / float(HINT_FADE_MS);
+}
+
+// The document as the menu is now: closed, only the hint (or nothing); open, the window
+void show_state(float hint) {
+    Rml::ElementDocument &document = *menu.document;
+    document.SetClass("closed", !menu.open);
+    if (Rml::Element *element = document.GetElementById("hint")) {
+        element->SetClass("shown", hint > 0.0f);
+        char opacity[16];
+        std::snprintf(opacity, sizeof(opacity), "%.3f", double(hint));
+        element->SetProperty("opacity", opacity);
+    }
+}
+
 // The right button: on a binding's slot, clears it; anywhere else, Back
 void right_click() {
     int slot = 0, row = 0;
@@ -747,6 +775,8 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.model.open_at(0);
     menu.ready = true;
+    // (not under a pad script: the test runs' pictures stay as they were)
+    menu.hint_until_ms = port_options.input == nullptr ? SDL_GetTicks() + HINT_MS : 0;
     std::atexit(quit);
     std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 the developers' overlay\n");
 }
@@ -836,7 +866,7 @@ extern "C" int port_player_ui_open(void) {
 }
 
 extern "C" int port_player_ui_visible(void) {
-    return menu.ready && menu.open;
+    return menu.ready && (menu.open || hint_opacity() > 0.0f);
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -884,14 +914,19 @@ extern "C" void port_player_ui_draw(int width, int height) {
     // the menu's 1200 x 740 dp window fitted to the game's window, with a margin
     float dp = std::max(std::min(float(width) / 1260.0f, float(height) / 780.0f), 0.4f);
 
-    pad_repeat();
-    watch_listening();
     menu.recorder.begin_frame(width, height);
     menu.context->SetDimensions(Rml::Vector2i(width, height));
     menu.context->SetDensityIndependentPixelRatio(dp);
-    write_page();
+    show_state(hint_opacity());
+    if (menu.open) {
+        pad_repeat();
+        watch_listening();
+        write_page();
+    }
     menu.context->Update();
-    scroll_to_focus();
+    if (menu.open) {
+        scroll_to_focus();
+    }
     menu.context->Render();
     menu.recorder.end_frame();
     menu.drawn = true;

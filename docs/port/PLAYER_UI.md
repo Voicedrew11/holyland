@@ -30,6 +30,9 @@ is not borrowed.
   binding's slot, L1 / R1 change the section, Start or L3 + R3 close it.
 - **Mouse**: over a row focuses it; a click is Enter; the arrows either side of a value step it; a click on a list's
   choice picks it; a click on a tab shows it; the right button is Back; the wheel scrolls.
+- At the start, a small panel at the top of the screen says "F1 or L3 + R3: Holyland's settings" for ten seconds
+  (fading over the last one), and goes as soon as the menu is opened. Not under a pad script (`--input`), so test
+  runs' pictures are as they were. It is the menu's document with `body.closed`: only `#hint` shows.
 - A row whose value came from the command line says so ("command line"), and its help explains it.
 - While it is open the game sees no input, and is paused if "Pause while open" is on (the same setting the overlay
   used).

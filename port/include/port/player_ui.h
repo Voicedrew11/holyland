@@ -23,7 +23,7 @@ int port_player_ui_event(const void *sdl_event);
 int port_player_ui_ready(void);
 /* 1 while the menu is open: the keyboard, mouse and controller are its */
 int port_player_ui_open(void);
-/* 1 when the menu draws something this picture */
+/* 1 when the menu draws something this picture: open, or its hint at the start ("F1 or L3 + R3: settings") */
 int port_player_ui_visible(void);
 /* (port/overlay/overlay.cpp's test pictures) opens the menu on the tab of that id ("display", ...), then presses
    the keys after a colon, by name ("display:down.confirm": up down left right confirm back next previous); or closes
