@@ -69,6 +69,11 @@ struct AntiAliasFrame {
                                               // wanted)
     Jitter jitter;                            // this picture's 3D's
     uint32_t jitter_index = 0;                // its place in the method's sequence
+    const Vulkan::Image *into = nullptr;      // RGBA8, the picture's size and kind: where a method that reads the
+                                              // picture whole may write the anti-aliased picture instead of in place
+                                              // (FXAA: no copy of the picture to read from), saying so in wrote_into;
+                                              // nullptr: in place
+    mutable bool wrote_into = false;
 };
 
 // One anti-aliasing method. (A picture's thread: kf4-pc's or the pump's, each with its own.)
@@ -138,9 +143,14 @@ public:
     // cannot be made
     const Vulkan::Image *depth_image(uint32_t width, uint32_t height);
     // picture anti-aliased by method (PORT_AA_*: nothing for PORT_AA_OFF or a number past the last), with facts and
-    // place (place.zscale 0: depth_image holds nothing of this picture); false where it is left as drawn
+    // place (place.zscale 0: depth_image holds nothing of this picture); false where it is left as drawn. into (as
+    // AntiAliasFrame's, a method of one picture's): written in place of the picture, *wrote_into true, when the
+    // method does that.
     bool apply(Vulkan::CommandBuffer &cmd, const Vulkan::Image &picture, int method, const PictureFacts &facts,
-               const PicturePlace &place);
+               const PicturePlace &place, const Vulkan::Image *into = nullptr, bool *wrote_into = nullptr);
+    // Whether method is FXAA or none, a picture alone (no debug view, no jitter asked, no history wanted): the final
+    // pass in one (pcr.cpp's PresentScaler::fused) may do it in place of apply, which then has nothing else to do
+    bool fusable(int method) const;
     // The jitter method draws with (none for none)
     JitterSequence jitter_of(int method);
 

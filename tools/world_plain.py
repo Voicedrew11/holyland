@@ -148,10 +148,28 @@ VARIANTS = {
                              ["--renderer", "scene"]),
     "scene_nohiz_nodetail": ("the scene renderer, RADV's HiZ off", {"RADV_DEBUG": "nohiz", "KF4_GPU_DETAIL": "0"}, {},
                              ["--renderer", "scene"]),
+    # The final pass's parts left out one at a time (docs/plans/scene-final-pass-results.md): measurements of what each
+    # costs, never an answer (the owner's settings are the ones to make fast)
+    "scene_noaa": ("the scene renderer, by kind alone, anti-aliasing off (a measurement)", {"KF4_GPU_DETAIL": "0"},
+                   {"antialias": "off"}, ["--renderer", "scene"]),
+    "scene_nosharpen": ("the scene renderer, by kind alone, sharpen 0 (a measurement)", {"KF4_GPU_DETAIL": "0"},
+                        {"sharpen": 0}, ["--renderer", "scene"]),
+    "scene_sharp": ("the scene renderer, by kind alone, scaling sharp and sharpen 0: the presenter's blit alone (a "
+                    "measurement)", {"KF4_GPU_DETAIL": "0"}, {"scaling": "sharp", "sharpen": 0}, ["--renderer", "scene"]),
+    "scene_passes": ("the scene renderer, by kind alone, the final pass's passes one by one (KF4_PC_FUSED=0: as before "
+                     "the final pass in one)", {"KF4_GPU_DETAIL": "0", "KF4_PC_FUSED": "0"}, {}, ["--renderer", "scene"]),
+    "scene_noflash": ("the scene renderer, by kind alone, the flash recorder off (a measurement)", {"KF4_GPU_DETAIL": "0"},
+                      {}, ["--renderer", "scene", "--flash-recorder", "off"]),
     "scene_fuse_nodetail": ("the scene renderer, 0x280's two passes as one draw, the GPU's time by kind alone",
                             {"KF4_SCN_FUSE_280": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }
 MAIN = "exact,exactz,nosettle,noplanes,gpu,noblend,plain"
+
+# The final pass's GPU kinds (docs/plans/scene-final-pass-results.md): the PC renderer's (in "Scanout") and the
+# presenter's own (its column)
+FINAL = ("picture", "picture layers", "antialias", "scale across", "scale down", "sharpen", "slot copy", "final in one",
+         "present")
+PRESENTER = ("presenter copy", "presenter overlay")
 
 NATIVE = re.compile(r"\[stats\] pc native draws: (\d+) draws, (\d+) batches \((\d+) triangles\)")
 
@@ -164,7 +182,9 @@ def world_split(r):
         return None
     ms = lambda ns: ns / 1e6 / frames  # noqa: E731
     parts = dict(world=0.0, planes=0.0, date=0.0, sky=0.0, n280=0.0, n280_only=0.0, d2=0.0, copies=0.0, scanout=0.0,
-                 other=0.0)
+                 presenter=0.0, other=0.0)
+    for k in FINAL + PRESENTER:
+        parts["f:" + k] = 0.0
     for state, (ns, _) in r.get("shaders", {}).items():
         if state.startswith("native 000"):
             parts["date" if "DATE" in state else "sky" if "surface copy" in state else "world"] += ms(ns)
@@ -185,8 +205,12 @@ def world_split(r):
             parts["d2"] += ms(ns)
         elif k in ("texture copy", "surface", "upload"):
             parts["copies"] += ms(ns)
-        elif k in ("picture", "present"):
+        elif k in FINAL:
             parts["scanout"] += ms(ns)
+            parts["f:" + k] += ms(ns)
+        elif k in PRESENTER:
+            parts["presenter"] += ms(ns)
+            parts["f:" + k] += ms(ns)
         else:
             parts["other"] += ms(ns)
     parts["world_all"] = parts["world"] + parts["n280"] + parts["planes"]
@@ -292,15 +316,23 @@ def report(a, scenes, variants, scales, rates):
                     rows.append(dict(scene=scene, scale=scale, rate=rate, variant=v, native=nat, **med))
     json.dump(rows, open(os.path.join(a.out, "world_plain.json"), "w"), indent=1)
     head = ("| Scene | Scale | Rate | Variant | 0x000 | 0x280, 0x700 | 0x280 | Planes | World | DATE | Sky | 2D | Copies | "
-            "Scanout | All | Runs (spread) | All's spread |")
+            "Scanout | Presenter | All | Runs (spread) | All's spread |")
     lines = [head, "|" + "---|" * (head.count("|") - 1)]
     for r in rows:
-        lines.append("| %s | %dx | %d | %s | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %d (%.2f) "
-                     "| %.2f |"
+        lines.append("| %s | %dx | %d | %s | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f "
+                     "| %d (%.2f) | %.2f |"
                      % (r["scene"], r["scale"], r["rate"], r["variant"], r["world"], r["n280"], r.get("n280_only", 0.0),
                         r["planes"],
-                        r["world_all"], r["date"], r["sky"], r["d2"], r["copies"], r["scanout"], r["total"], r["n"],
-                        r["spread"], r.get("spread_all", 0.0)))
+                        r["world_all"], r["date"], r["sky"], r["d2"], r["copies"], r["scanout"], r.get("presenter", 0.0),
+                        r["total"], r["n"], r["spread"], r.get("spread_all", 0.0)))
+    # the final pass by its parts, ms a game frame
+    kinds = [k for k in FINAL + PRESENTER if any(r.get("f:" + k, 0.0) > 0.0 for r in rows)]
+    if kinds:
+        head = "| Scene | Scale | Rate | Variant | " + " | ".join(kinds) + " |"
+        lines += ["", "The final pass by its parts (ms a game frame):", "", head, "|" + "---|" * (head.count("|") - 1)]
+        for r in rows:
+            lines.append("| %s | %dx | %d | %s | " % (r["scene"], r["scale"], r["rate"], r["variant"]) +
+                         " | ".join("%.3f" % r.get("f:" + k, 0.0) for k in kinds) + " |")
     text = "\n".join(lines) + "\n"
     open(os.path.join(a.out, "world_plain.md"), "w").write(text)
     print(text)

@@ -37,8 +37,16 @@ enum class GpuWork : uint8_t {
     upload,       // uploads written into surfaces
     copy,         // local copies between surfaces, read-backs
     picture,      // the picture: the scanout, its copy into the ring, read back
-    present,      // the picture scaled to the window and sharpened (pcr.cpp's PresentScaler)
+    present,      // (no longer used: scale_across, scale_down and sharpen)
     planes,       // the native draws' planes worked out (exact Z: pcr_plane_pass.h)
+    // The final pass's parts (once all "picture" or "present"; docs/plans/scene-final-pass-results.md)
+    picture_layers, // the frame's kept layers drawn over the picture (the scene renderer's slice 2)
+    antialias,      // the picture's anti-aliasing (pcr_antialias.h)
+    scale_across,   // PresentScaler's pass across (or its one pass)
+    scale_down,     // its pass down
+    sharpen,        // its sharpening
+    slot_copy,      // the picture copied whole into the scanout ring's slot (not scaled)
+    final_in_one,   // the final pass in one: FXAA, scaling and sharpening (PresentScaler::fused)
     count,
 };
 

@@ -118,6 +118,7 @@ struct Store {
     std::chrono::steady_clock::time_point pre_asked_at;
     size_t pre_seed = 0, pre_list = 0; // (the pipelines asked for: from the seed for these settings, from the list)
     std::vector<FullscreenPipeline> pre_fullscreen;
+    std::vector<Program *> pre_compute; // (post-processing's compute programs)
     // attachments of the formats the list's passes have (made by the threads making ahead)
     std::mutex images_lock;
     std::map<std::pair<VkFormat, VkFormat>, std::pair<ImageHandle, ImageHandle>> images;
@@ -826,8 +827,11 @@ void start_precompile() {
                         "%zu post-processing\n",
                 store.pre_seed, store.pre_list, warm.compute_programs.size(), store.pre_fullscreen.size());
     }
-    start_ahead(list, warm.compute_programs, store.pre_fullscreen, cores > 2 ? cores - 1 : 1);
+    std::vector<Program *> compute = warm.compute_programs;
+    compute.insert(compute.end(), store.pre_compute.begin(), store.pre_compute.end());
+    start_ahead(list, std::move(compute), store.pre_fullscreen, cores > 2 ? cores - 1 : 1);
     store.pre_fullscreen.clear();
+    store.pre_compute.clear();
     if (!store.ahead_started) {
         store.pre_wanted = false; // (nothing to make)
     }
@@ -862,7 +866,7 @@ void warm_watch(Device &device, Program *const *programs, uint32_t count, const 
     }
 }
 
-void precompile(std::vector<FullscreenPipeline> fullscreen) {
+void precompile(std::vector<FullscreenPipeline> fullscreen, std::vector<Program *> compute) {
     std::lock_guard<std::mutex> hold_store(store.lock);
     std::lock_guard<std::mutex> hold(warm.lock);
     if (!store.open || !store.pre_on || store.pre_asked) {
@@ -870,6 +874,7 @@ void precompile(std::vector<FullscreenPipeline> fullscreen) {
     }
     store.pre_asked = true;
     store.pre_fullscreen = std::move(fullscreen);
+    store.pre_compute = std::move(compute);
     store.pre_wanted = true;
     store.pre_asked_at = std::chrono::steady_clock::now();
     start_precompile(); // (when the programs came first)
