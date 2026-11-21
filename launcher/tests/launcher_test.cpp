@@ -82,6 +82,16 @@ void test_disc_verdict() {
     check("another release, named", other.verdict == DiscVerdict::other_release &&
                                         other.message.find("SLPS_250.00") != std::string::npos);
     check("no BOOT2", judge_disc("VER = 1.00", true).verdict == DiscVerdict::other_release);
+    check("its region said", other.message.find("Japanese") != std::string::npos &&
+                                 other.message.find("SLUS-20318") != std::string::npos);
+    check("European", judge_disc("BOOT2 = cdrom0:\\SLES_512.34;1", true).message.find("European") != std::string::npos);
+    DiscCheck incomplete = judge_disc(us, false);
+    check("the USA disc without KF4.DAT: an incomplete copy", incomplete.verdict == DiscVerdict::not_kf4 &&
+                                                                 incomplete.message.find("incomplete") != std::string::npos);
+    DiscCheck another_game = judge_disc("BOOT2 = cdrom0:\\SLUS_209.46;1", false);
+    check("another game, named", another_game.verdict == DiscVerdict::not_kf4 &&
+                                     another_game.message.find("not King's Field IV") != std::string::npos &&
+                                     another_game.message.find("SLUS_209.46") != std::string::npos);
 }
 
 fs::path temp_dir(const char *name) {

@@ -21,7 +21,7 @@ namespace launcher {
 inline constexpr ImVec4 kAmber(0.831f, 0.663f, 0.353f, 1.0f); // #d4a95a
 inline constexpr ImVec4 kEmber(0.906f, 0.533f, 0.408f, 1.0f); // #e78868, warnings (the menu's ember, lifted to read on black)
 inline constexpr ImVec4 kDim(0.753f, 0.725f, 0.675f, 1.0f);   // #c0b9ac, secondary text (lighter than the menu's: readable)
-inline constexpr ImVec4 kFrame(0.420f, 0.384f, 0.333f, 1.0f); // #6b6255
+inline constexpr ImVec4 kFrame(0.541f, 0.498f, 0.431f, 1.0f); // #8a7f6e, borders (lighter than the menu's #6b6255: seen on black)
 
 class Window {
 public:

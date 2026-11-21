@@ -138,16 +138,49 @@ fs::path disc_meant(const fs::path &path) {
     return path;
 }
 
+namespace {
+
+constexpr const char *kNeeded = "Holyland needs the USA release, King's Field: The Ancient City (SLUS-20318).";
+
+// the region a PS2 product code's prefix names ("SLPS_250.57": "Japanese"), or "" when it is not one known
+std::string region_of(std::string_view boot) {
+    struct Prefix {
+        std::string_view code, region;
+    };
+    static const Prefix kPrefixes[] = {{"SLUS", "North American"}, {"SCUS", "North American"},
+                                       {"SLES", "European"},       {"SCES", "European"},
+                                       {"SLPS", "Japanese"},       {"SLPM", "Japanese"},
+                                       {"SCPS", "Japanese"},       {"SLKA", "Korean"}};
+    std::string code = upper(std::string(boot.substr(0, 4)));
+    for (const Prefix &prefix : kPrefixes)
+        if (code == prefix.code)
+            return std::string(prefix.region);
+    return {};
+}
+
+} // namespace
+
 DiscCheck judge_disc(std::string_view system_cnf, bool has_kf4_dat) {
     std::string boot = boot_of(system_cnf);
-    if (system_cnf.empty() || !has_kf4_dat)
-        return {DiscVerdict::not_kf4, "This is not King's Field IV's disc: it has no SYSTEM.CNF or DATA\\KF4.DAT.", boot};
-    if (boot != kBoot)
-        return {DiscVerdict::other_release,
-                "This is King's Field IV, but not the USA release (SLUS-20318, \"King's Field: The Ancient City\"), "
-                "the one the PC port is built from. This disc boots " +
-                    (boot.empty() ? std::string("an unknown program") : boot) + ".",
+    if (boot == kBoot && !has_kf4_dat)
+        return {DiscVerdict::not_kf4,
+                "This is King's Field IV's disc, but DATA\\KF4.DAT is missing from it: the copy is incomplete. "
+                "Copy the whole disc again.",
                 boot};
+    if (system_cnf.empty())
+        return {DiscVerdict::not_kf4, "This is not a PlayStation 2 disc: it has no SYSTEM.CNF.", boot};
+    if (!has_kf4_dat)
+        return {DiscVerdict::not_kf4,
+                "This is a PlayStation 2 disc, but not King's Field IV" +
+                    (boot.empty() ? std::string(".") : " (it starts " + boot + ").") + " " + kNeeded,
+                boot};
+    if (boot != kBoot) {
+        std::string region = region_of(boot);
+        std::string which = region.empty() ? "a release of King's Field IV Holyland does not know" +
+                                                 (boot.empty() ? std::string() : " (" + boot + ")")
+                                           : "the " + region + " release of King's Field IV (" + boot + ")";
+        return {DiscVerdict::other_release, "This is " + which + ". " + kNeeded, boot};
+    }
     return {DiscVerdict::ok, {}, boot};
 }
 

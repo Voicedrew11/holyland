@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <deque>
@@ -178,6 +179,7 @@ private:
     std::string key_;
     std::string disc_error_;
     std::unique_ptr<SetupFlow> setup_;
+    float setup_height_ = 0.0f; // the setup's column at the last frame, to centre it
     bool update_window_ = false;
     bool update_window_shown_ = false;
     bool update_hidden_ = false;
@@ -510,12 +512,22 @@ void Session::draw_update_window() {
 
 // The logo, the page, and under it the page's place in the row and the way back
 Screen Session::draw_setup(Window &window) {
-    ImGui::Dummy(ImVec2(0, 18.0f * window.scale()));
+    // the column (logo and page) centred on the window's height, as measured at the frame before
+    float top = std::max(18.0f * window.scale(), (ImGui::GetWindowHeight() - setup_height_) * 0.5f);
+    ImGui::SetCursorPosY(top);
     window.draw_logo(kLogoDp);
     ImGui::Dummy(ImVec2(0, 22.0f * window.scale()));
     setup_->answer(setup_->page().draw(window));
     if (setup_->finished())
         return after_setup();
+    setup_height_ = ImGui::GetCursorPosY() - top;
+    // the version at the foot, small
+    const char *version = launcher_version()[0] ? launcher_version() : "developer's build";
+    ImGui::SetWindowFontScale(0.8f);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x,
+                               ImGui::GetWindowHeight() - ImGui::GetTextLineHeight() - ImGui::GetStyle().WindowPadding.y));
+    ImGui::TextColored(kDim, "%s %s", kProductName, version);
+    ImGui::SetWindowFontScale(1.0f);
     if (setup_->page_count() > 1) {
         // a dot a page, the page shown in amber, at the panel's foot
         float scale = window.scale(), gap = 14.0f * scale, radius = 3.5f * scale;
@@ -527,7 +539,9 @@ Screen Session::draw_setup(Window &window) {
                                                         ImGui::GetColorU32(i == setup_->page_number() ? kAmber : kFrame));
     }
     if (setup_->can_go_back()) {
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - ImGui::GetFrameHeight() - ImGui::GetStyle().WindowPadding.y);
+        ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Back").x -
+                                       ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().WindowPadding.x,
+                                   ImGui::GetWindowHeight() - ImGui::GetFrameHeight() - ImGui::GetStyle().WindowPadding.y));
         if (ImGui::Button("Back"))
             setup_->back();
     }
