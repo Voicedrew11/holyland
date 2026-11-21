@@ -1,6 +1,8 @@
 // The player menu's moving about (port/ui/menu_model.hpp)
 #include "menu_model.hpp"
 
+#include <algorithm>
+
 namespace ui {
 
 bool MenuModel::usable(int row) const {
@@ -56,84 +58,116 @@ void MenuModel::open_at(int tab) {
     row_ = first_usable();
 }
 
-void MenuModel::step_row(int delta) {
+// (the last cue made wins: Right then Clear on a slot is the clear's)
+void MenuModel::cue(MenuCue cue) {
+    if (cue != MenuCue::none) {
+        cue_ = cue;
+    }
+}
+
+MenuCue MenuModel::take_cue() {
+    MenuCue taken = cue_;
+    cue_ = MenuCue::none;
+    return taken;
+}
+
+bool MenuModel::step_row(int delta) {
     if (row_ < 0) {
-        return;
+        return false;
     }
     RowShape shape = rows_.shape(tab_, row_);
     switch (shape.kind) {
     case RowKind::choice: {
         int next = (shape.current < 0 ? (delta > 0 ? -1 : shape.choice_count) : shape.current) + delta;
-        if (next >= 0 && next < shape.choice_count) {
-            rows_.choose(tab_, row_, next);
+        if (next < 0 || next >= shape.choice_count) {
+            return false;
         }
-        break;
+        rows_.choose(tab_, row_, next);
+        return true;
     }
-    case RowKind::toggle:
-        rows_.choose(tab_, row_, delta > 0 ? 1 : 0);
-        break;
+    case RowKind::toggle: {
+        int wanted = delta > 0 ? 1 : 0;
+        if (shape.current == wanted) {
+            return false;
+        }
+        rows_.choose(tab_, row_, wanted);
+        return true;
+    }
     case RowKind::number:
         rows_.step(tab_, row_, delta);
-        break;
-    case RowKind::binding:
-        slot_ = slot_ + delta < 0 ? 0 : slot_ + delta >= shape.choice_count ? shape.choice_count - 1 : slot_ + delta;
-        break;
+        return true;
+    case RowKind::binding: {
+        int next = std::clamp(slot_ + delta, 0, shape.choice_count > 0 ? shape.choice_count - 1 : 0);
+        bool moved = next != slot_;
+        slot_ = next;
+        return moved;
+    }
     case RowKind::action:
     case RowKind::heading:
         break;
     }
+    return false;
 }
 
-void MenuModel::confirm_row() {
+bool MenuModel::confirm_row() {
     if (row_ < 0) {
-        return;
+        return false;
     }
     RowShape shape = rows_.shape(tab_, row_);
     switch (shape.kind) {
     case RowKind::choice:
-        if (shape.choice_count > 0) {
-            list_open_ = true;
-            list_choice_ = shape.current >= 0 ? shape.current : 0;
+        if (shape.choice_count <= 0) {
+            return false;
         }
-        break;
+        list_open_ = true;
+        list_choice_ = shape.current >= 0 ? shape.current : 0;
+        return true;
     case RowKind::toggle:
         rows_.choose(tab_, row_, shape.current ? 0 : 1);
-        break;
+        return true;
     case RowKind::action:
         rows_.activate(tab_, row_);
-        break;
+        return true;
     case RowKind::binding:
         rows_.listen(tab_, row_, slot_);
-        break;
+        return true;
     case RowKind::number:
     case RowKind::heading:
         break;
     }
+    return false;
 }
 
-void MenuModel::clear_row() {
-    if (row_ >= 0 && rows_.shape(tab_, row_).kind == RowKind::binding) {
-        rows_.clear(tab_, row_, slot_);
+bool MenuModel::clear_row() {
+    if (row_ < 0 || rows_.shape(tab_, row_).kind != RowKind::binding) {
+        return false;
     }
+    rows_.clear(tab_, row_, slot_);
+    return true;
 }
 
 MenuResult MenuModel::press(MenuInput input) {
     settle();
     if (list_open_) {
         int count = rows_.shape(tab_, row_).choice_count;
+        int was = list_choice_;
         switch (input) {
         case MenuInput::up:
             list_choice_ = list_choice_ > 0 ? list_choice_ - 1 : 0;
+            cue(list_choice_ != was ? MenuCue::move : MenuCue::none);
             break;
         case MenuInput::down:
             list_choice_ = list_choice_ + 1 < count ? list_choice_ + 1 : count - 1;
+            cue(list_choice_ != was ? MenuCue::move : MenuCue::none);
             break;
         case MenuInput::confirm:
             list_open_ = false;
             rows_.choose(tab_, row_, list_choice_);
+            cue(MenuCue::confirm);
             break;
         case MenuInput::back:
             list_open_ = false;
+            cue(MenuCue::back);
             break;
         case MenuInput::next_tab:
         case MenuInput::previous_tab:
@@ -151,25 +185,28 @@ MenuResult MenuModel::press(MenuInput input) {
     case MenuInput::up:
     case MenuInput::down: {
         int next = row_ < 0 ? first_usable() : usable_from(row_, input == MenuInput::up ? -1 : 1);
+        cue(next >= 0 && next != row_ ? MenuCue::move : MenuCue::none);
         row_ = next >= 0 ? next : row_;
         break;
     }
     case MenuInput::left:
     case MenuInput::right:
-        step_row(input == MenuInput::left ? -1 : 1);
+        cue(step_row(input == MenuInput::left ? -1 : 1) ? MenuCue::move : MenuCue::none);
         break;
     case MenuInput::confirm:
-        confirm_row();
+        cue(confirm_row() ? MenuCue::confirm : MenuCue::refused);
         break;
     case MenuInput::clear:
-        clear_row();
+        cue(clear_row() ? MenuCue::back : MenuCue::none);
         break;
     case MenuInput::back:
+        cue(MenuCue::back);
         return MenuResult::close;
     case MenuInput::next_tab:
     case MenuInput::previous_tab: {
         int count = rows_.tab_count();
         open_at((tab_ + (input == MenuInput::next_tab ? 1 : count - 1)) % count);
+        cue(count > 1 ? MenuCue::move : MenuCue::none);
         break;
     }
     }
@@ -179,8 +216,9 @@ MenuResult MenuModel::press(MenuInput input) {
 
 void MenuModel::point_at_row(int row) {
     settle();
-    if (!list_open_ && usable(row)) {
+    if (!list_open_ && usable(row) && row != row_) {
         row_ = row;
+        cue(MenuCue::move);
     }
 }
 
@@ -188,11 +226,14 @@ void MenuModel::click_row(int row) {
     settle();
     if (list_open_) {
         list_open_ = false; // a click outside the list closes it
+        cue(MenuCue::back);
         return;
     }
     if (usable(row)) {
         row_ = row;
-        confirm_row();
+        cue(confirm_row() ? MenuCue::confirm : MenuCue::refused);
+    } else if (row >= 0 && row < rows_.row_count(tab_) && !rows_.shape(tab_, row).enabled) {
+        cue(MenuCue::refused);
     }
     settle();
 }
@@ -202,7 +243,7 @@ void MenuModel::click_step(int row, int delta) {
     list_open_ = false;
     if (usable(row)) {
         row_ = row;
-        step_row(delta);
+        cue(step_row(delta) ? MenuCue::move : MenuCue::none);
     }
     settle();
 }
@@ -212,6 +253,7 @@ void MenuModel::click_choice(int choice) {
     if (list_open_ && choice >= 0 && choice < rows_.shape(tab_, row_).choice_count) {
         list_open_ = false;
         rows_.choose(tab_, row_, choice);
+        cue(MenuCue::confirm);
     }
     settle();
 }
@@ -224,6 +266,7 @@ void MenuModel::click_slot(int row, int slot) {
         row_ = row;
         slot_ = slot;
         rows_.listen(tab_, row_, slot_);
+        cue(MenuCue::confirm);
     }
     settle();
 }
@@ -231,6 +274,7 @@ void MenuModel::click_slot(int row, int slot) {
 void MenuModel::click_tab(int tab) {
     if (tab >= 0 && tab < rows_.tab_count() && tab != tab_) {
         open_at(tab);
+        cue(MenuCue::move);
     }
 }
 
