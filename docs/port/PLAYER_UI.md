@@ -33,6 +33,15 @@ is not borrowed.
 - At the start, a small panel at the top of the screen says "F1 or L3 + R3: Holyland's settings" for ten seconds
   (fading over the last one), and goes as soon as the menu is opened. Not under a pad script (`--input`), so test
   runs' pictures are as they were. It is the menu's document with `body.closed`: only `#hint` shows.
+- **Sounds**: the game's own menu sounds, the first four of its se_com bank, as King's Field IV's menus play them
+  (`Sound_PlayMenu`) and at its sound volume option: the cursor's for a move, a list's highlight, a tab or a value
+  that changed; Cross's for opening the menu or a list, a choice, a toggle, an action, a slot listened for (and the
+  key that filled it); Circle's for closing the menu or a list and emptying a slot; the refusal for Confirm on a
+  row with nothing to do and a click on a dimmed row. Nothing when nothing changed (Up at the top). The model gives
+  each input its cue (`MenuCue`, tested in `ui_menu_test`); `game/menu_sounds.c` plays it and sends it to the
+  sound driver at once, so it is heard while the menu holds the game paused. Nothing plays before the game has
+  loaded its sounds or while it loads them again (`Sound_Loaded`, patched into `sound/sound_game.c`). The test
+  pictures' presses make no sound.
 - A row whose value came from the command line says so ("command line"), and its help explains it.
 - While it is open the game sees no input, and is paused if "Pause while open" is on (the same setting the overlay
   used).
@@ -45,7 +54,8 @@ is not borrowed.
 | --- | --- |
 | `port/include/port/player_ui.h` | the C entry points: init, events, open / visible, draw, test pictures |
 | `port/ui/player_ui.cpp` | RmlUi set up; the page written as RML from the rows and the model; input |
-| `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, binding slots, the pointer (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
+| `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, binding slots, the pointer, each input's sound cue (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
+| `port/include/port/menu_sounds.h`, `game/menu_sounds.c` | the game's menu sounds, played for the menu |
 | `port/ui/settings_rows.hpp/.cpp` | **the settings, as data**: tabs and rows |
 | `port/ui/ui_render.hpp/.cpp` | `ui::Recorder`, RmlUi's `RenderInterface`: geometry and textures recorded into a `ui::Frame` |
 | `port/ui/ui_frame.hpp` | `ui::Frame`: one picture's triangles, draws, texture uploads and releases (no Vulkan) |

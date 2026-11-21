@@ -264,6 +264,80 @@ void bindings() {
     CHECK(menu.row() == 1);
 }
 
+// The sound each input makes: a move only when something moved or changed, refused for Confirm with nothing to do
+void cues() {
+    FakeRows rows = make_rows();
+    MenuModel menu(rows);
+    menu.open_at(0);
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::up); // already the first usable row
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::down);
+    CHECK(menu.row() == 2 && menu.take_cue() == MenuCue::move);
+    CHECK(menu.take_cue() == MenuCue::none); // taken once
+    menu.press(MenuInput::left); // the toggle is off already
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::right);
+    CHECK(rows.tabs[0][2].value == 1 && menu.take_cue() == MenuCue::move);
+    menu.press(MenuInput::confirm);
+    CHECK(rows.tabs[0][2].value == 0 && menu.take_cue() == MenuCue::confirm);
+    menu.press(MenuInput::down); // past the disabled row to the number
+    CHECK(menu.row() == 4 && menu.take_cue() == MenuCue::move);
+    menu.press(MenuInput::confirm); // a number: nothing to do
+    CHECK(menu.take_cue() == MenuCue::refused);
+    menu.press(MenuInput::clear); // not a binding
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::down);
+    menu.press(MenuInput::down); // the last row: stays
+    CHECK(menu.row() == 5 && menu.take_cue() == MenuCue::move);
+    menu.press(MenuInput::confirm);
+    CHECK(rows.tabs[0][5].activated == 1 && menu.take_cue() == MenuCue::confirm);
+
+    // a choice's list
+    menu.open_at(0);
+    menu.press(MenuInput::confirm);
+    CHECK(menu.list_open() && menu.take_cue() == MenuCue::confirm);
+    menu.press(MenuInput::down);
+    CHECK(menu.take_cue() == MenuCue::move);
+    menu.press(MenuInput::down); // the last choice
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::back);
+    CHECK(!menu.list_open() && menu.take_cue() == MenuCue::back);
+    menu.press(MenuInput::right);
+    CHECK(rows.tabs[0][1].value == 2 && menu.take_cue() == MenuCue::move);
+    menu.press(MenuInput::right); // the last choice
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::confirm);
+    menu.press(MenuInput::confirm);
+    CHECK(!menu.list_open() && menu.take_cue() == MenuCue::confirm);
+    CHECK(menu.press(MenuInput::back) == MenuResult::close && menu.take_cue() == MenuCue::back);
+
+    // tabs and the pointer
+    menu.press(MenuInput::next_tab);
+    CHECK(menu.tab() == 1 && menu.take_cue() == MenuCue::move);
+    menu.click_tab(1); // the tab shown
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.click_tab(0);
+    CHECK(menu.take_cue() == MenuCue::move);
+    menu.point_at_row(1); // the row with the focus
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.point_at_row(4);
+    CHECK(menu.row() == 4 && menu.take_cue() == MenuCue::move);
+    menu.point_at_row(0); // a heading
+    CHECK(menu.take_cue() == MenuCue::none);
+    menu.click_row(3); // dimmed
+    CHECK(menu.row() == 4 && menu.take_cue() == MenuCue::refused);
+    menu.click_step(4, 1);
+    CHECK(rows.tabs[0][4].value == 11 && menu.take_cue() == MenuCue::move);
+    menu.click_row(1);
+    CHECK(menu.list_open() && menu.take_cue() == MenuCue::confirm);
+    menu.click_choice(0);
+    CHECK(rows.tabs[0][1].value == 0 && menu.take_cue() == MenuCue::confirm);
+    menu.click_row(1);
+    menu.click_row(-1); // outside: closes the list
+    CHECK(!menu.list_open() && menu.take_cue() == MenuCue::back);
+}
+
 int main() {
     focus_skips_and_stops();
     left_right();
@@ -272,6 +346,7 @@ int main() {
     rows_change_under_the_focus();
     pointer();
     bindings();
+    cues();
     if (failures != 0) {
         std::printf("%d failures\n", failures);
         return 1;

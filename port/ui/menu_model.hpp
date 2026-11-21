@@ -12,6 +12,11 @@
 //   Next / previous tab   the tab after / before (round), on its first row that can be used
 // The pointer: over a row gives it the focus, a click on it is Confirm, a click on a row's arrow is Left or Right,
 // a click on a list's choice chooses it, a click on a tab shows it, a click on a binding's slot listens there.
+//
+// Each input leaves a cue, the sound the game's menus would make for it (take_cue): a move for the focus, a list's
+// highlight, a tab or a value that changed; confirm for a list opened or chosen from, a toggle turned, an action
+// done, a slot listened for; back for a list closed, the menu asked to close or a slot emptied; refused for
+// Confirm on a row with nothing to do or a click on a dimmed row; none when nothing changed (Up at the top).
 #pragma once
 
 namespace ui {
@@ -54,6 +59,9 @@ enum class MenuInput { up, down, left, right, confirm, back, next_tab, previous_
 // What the menu is to do after an input
 enum class MenuResult { stay, close };
 
+// The sound for what an input did (the game's menu sounds: port/include/port/menu_sounds.h)
+enum class MenuCue { none, move, confirm, back, refused };
+
 class MenuModel {
 public:
     explicit MenuModel(MenuRows &rows) : rows_(rows) {
@@ -88,15 +96,19 @@ public:
     int slot() const {
         return slot_;
     }
+    // the cue of the last input that made one since the last take, and none from then on
+    MenuCue take_cue();
 
 private:
     bool usable(int row) const;
     int first_usable() const;
     int usable_from(int row, int direction) const;
     void settle(); // the focus and list kept to what the rows are now
-    void step_row(int delta);
-    void confirm_row();
-    void clear_row();
+    // each true when it changed something
+    bool step_row(int delta);
+    bool confirm_row();
+    bool clear_row();
+    void cue(MenuCue cue);
 
     MenuRows &rows_;
     int tab_ = 0;
@@ -104,6 +116,7 @@ private:
     bool list_open_ = false;
     int list_choice_ = 0;
     int slot_ = 0;
+    MenuCue cue_ = MenuCue::none;
 };
 
 } // namespace ui

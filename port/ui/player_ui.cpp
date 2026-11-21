@@ -6,6 +6,9 @@
 // and the model, and given to RmlUi only when their text changed. The keyboard and the controller go to the model;
 // the mouse goes to RmlUi, whose events on the rows (data-row, data-step, data-choice, data-tab) go to the model. All
 // on the game's thread.
+//
+// The menu makes the game's own menu sounds (port/include/port/menu_sounds.h): the model's cue for each input
+// (menu_model.hpp), confirm when the menu opens and back when it closes.
 #include <SDL3/SDL.h>
 
 #include <RmlUi/Core.h>
@@ -28,6 +31,7 @@
 
 extern "C" {
 #include "port/controls.h"
+#include "port/menu_sounds.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/settings.h"
@@ -170,6 +174,35 @@ void set_open(bool open) {
         menu.pad_held = -1;
         port_settings_save();
     }
+}
+
+// The sound for the inputs since the last one played
+void play_cue() {
+    switch (menu.model.take_cue()) {
+    case ui::MenuCue::move:
+        port_menu_sound(PORT_MENU_SOUND_MOVE);
+        break;
+    case ui::MenuCue::confirm:
+        port_menu_sound(PORT_MENU_SOUND_CONFIRM);
+        break;
+    case ui::MenuCue::back:
+        port_menu_sound(PORT_MENU_SOUND_BACK);
+        break;
+    case ui::MenuCue::refused:
+        port_menu_sound(PORT_MENU_SOUND_REFUSED);
+        break;
+    case ui::MenuCue::none:
+        break;
+    }
+}
+
+// F1, L3 + R3 or Start: the menu opened or closed, with its sound
+void toggle_open(bool open) {
+    if (open == menu.open || !menu.ready) {
+        return;
+    }
+    set_open(open);
+    port_menu_sound(open ? PORT_MENU_SOUND_CONFIRM : PORT_MENU_SOUND_BACK);
 }
 
 void apply(ui::MenuResult result) {
@@ -645,7 +678,7 @@ bool pad_chord(const SDL_Event &event) {
     }
     if (down && menu.l3 && menu.r3) {
         menu.device = Device::pad;
-        set_open(!menu.open);
+        toggle_open(!menu.open);
         return true;
     }
     return menu.open;
@@ -698,6 +731,7 @@ void watch_listening() {
     bool listening = port_controls_listening(nullptr, nullptr) != 0;
     if (menu.was_listening && !listening) {
         port_settings_changed();
+        port_menu_sound(PORT_MENU_SOUND_CONFIRM);
     }
     menu.was_listening = listening;
 }
@@ -792,7 +826,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         }
         if (!event.key.repeat) {
             menu.device = Device::keyboard;
-            set_open(!menu.open);
+            toggle_open(!menu.open);
         }
         return 1;
     }
@@ -817,7 +851,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
         menu.device = Device::pad;
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
-            set_open(false);
+            toggle_open(false);
             break;
         }
         int input = pad_input(event.gbutton.button);
@@ -854,6 +888,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     default:
         break;
     }
+    play_cue();
     return is_input(event.type);
 }
 
@@ -900,6 +935,7 @@ extern "C" int port_player_ui_show(const char *tab_id) {
         }
         spec = end == std::string_view::npos ? std::string_view() : spec.substr(end + 1);
     }
+    menu.model.take_cue(); // (the test pictures' presses make no sound)
     return 1;
 }
 
@@ -920,6 +956,7 @@ extern "C" void port_player_ui_draw(int width, int height) {
     show_state(hint_opacity());
     if (menu.open) {
         pad_repeat();
+        play_cue();
         watch_listening();
         write_page();
     }
