@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <deque>
 #include <fstream>
@@ -512,8 +513,10 @@ void Session::draw_update_window() {
 
 // The logo, the page, and under it the page's place in the row and the way back
 Screen Session::draw_setup(Window &window) {
-    // the column (logo and page) centred on the window's height, as measured at the frame before
-    float top = std::max(18.0f * window.scale(), (ImGui::GetWindowHeight() - setup_height_) * 0.5f);
+    // the column (logo and page) centred on the window's height, as measured at the frame before. On whole
+    // pixels: ImGui puts items on whole pixels, so from a fraction the height measured would change with it and
+    // the column would bob up and down a little every frame.
+    float top = std::floor(std::max(18.0f * window.scale(), (ImGui::GetWindowHeight() - setup_height_) * 0.5f));
     ImGui::SetCursorPosY(top);
     window.draw_logo(kLogoDp);
     ImGui::Dummy(ImVec2(0, 22.0f * window.scale()));
