@@ -137,6 +137,10 @@ typedef struct {
     int separate_run_forced; /* --separate-run: on for this run whatever settings.json says */
     int no_hit_jolt;         /* a hard hit does not throw the view down (port_no_hit_jolt()) */
     int no_hit_jolt_forced;  /* --no-hit-jolt: on for this run whatever settings.json says */
+    /* --door-speed: doors run their opening and closing animation this many times a game frame, 1 (the
+       PS2's) to 8 (port_door_speed()); settings.json's mods.door_speed, live from the player menu */
+    int door_speed;
+    int door_speed_forced; /* --door-speed: this run's, whatever settings.json says */
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
     int show_fps;

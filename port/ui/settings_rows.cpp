@@ -601,6 +601,19 @@ const auto binding_rows = [] {
 
 
 // ---- Gameplay -------------------------------------------------------------------------------------------------------
+const Choice door_speeds[] = {{"Normal, as on the PS2", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4},
+                              {"5x", 5},                    {"6x", 6}, {"7x", 7}, {"8x", 8}};
+int get_door_speed() {
+    return port_options.door_speed;
+}
+void set_door_speed(int speed) {
+    port_settings.door_speed = port_options.door_speed = speed;
+    changed();
+}
+bool door_speed_overridden() {
+    return port_options.door_speed != port_settings.door_speed;
+}
+
 int get_necklace() {
     return port_options.myus_necklace != 0;
 }
@@ -667,6 +680,10 @@ void set_stats_panel(int on) {
 
 const SettingRow gameplay_rows[] = {
     {"Changes to how the game plays", "", RowKind::heading},
+    {"Door speed",
+     "Doors open and close this many times faster than on the PS2. Also affects wall panels.",
+     RowKind::choice, door_speeds, {}, get_door_speed, set_door_speed, nullptr, nullptr, nullptr, nullptr,
+     door_speed_overridden},
     {"Myu's Necklace always",
      "What glows while Myu's Necklace is worn always glows, so the amulet slot is free for another.", RowKind::toggle,
      on_off, {}, get_necklace, set_necklace, nullptr, nullptr, nullptr, nullptr, necklace_overridden},

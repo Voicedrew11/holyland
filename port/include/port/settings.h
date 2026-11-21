@@ -59,6 +59,8 @@ typedef struct {
     int myus_necklace;     /* the effect of Myu's Necklace, always (port_options.myus_necklace) */
     int separate_run;      /* a run key apart from the action button (port_options.separate_run) */
     int no_hit_jolt;       /* a hard hit does not throw the view down (port_options.no_hit_jolt) */
+    int door_speed;        /* doors run their opening and closing animation this many times a game frame, 1 (the
+                              PS2's) to 8 (port_door_speed; 1, the PS2's, by default) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

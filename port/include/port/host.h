@@ -156,6 +156,12 @@ int port_flicker_filter(void);
    --native-scale. On, the sprite ends on the target's edge (MapScroll_UpdateDraw,
    GsDraw_DrawScrollingTexture): the same pixels covered, its texels a whole one apart. */
 int port_seamless_scroll(void);
+
+/* port_door_speed(): how many steps a door's opening or closing animation takes each game frame, 1 (the
+   PS2's) to 8 (settings.json's mods.door_speed, the Gameplay page, or --door-speed; 1 by default). The
+   patched MapObject_UpdateOpeningDoor and MapObject_UpdateClosingDoor step a door this many times. */
+int port_door_speed(void);
+
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
 #define PORT_WIDESCREEN_HUD_RIGHT 3 /* 2D laid out against the 4:3 frame's right edge (the hands mod's cross in a

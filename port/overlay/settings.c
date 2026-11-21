@@ -18,7 +18,7 @@
                     "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
-       "mods":     {"myus_necklace": false, "separate_run": false, "no_hit_jolt": false},
+       "mods":     {"door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -77,6 +77,7 @@ PortSettings port_settings = {
     .whole_frame = 1,
     .seamless_scroll = 1,
     .frame_rate = 30,
+    .door_speed = 1,
     .volume = 100,
     .ui_scale = 1.0f,
     .presenter = PORT_PRESENTER_VULKAN,
@@ -91,6 +92,13 @@ PortSettings port_settings = {
     .native_sky = PORT_SKY_MODERN,
     .reflection_clip = 1,
 };
+
+/* (the doors' animation: src/game/map_object/door.c, via port/host.h) */
+int port_door_speed(void) {
+    int speed = port_options.door_speed;
+
+    return speed >= 2 && speed <= 8 ? speed : 1;
+}
 
 static int active;
 static cJSON *document;
@@ -431,6 +439,7 @@ void port_settings_load(void) {
     s->mute = read_bool(audio, "mute", s->mute);
     read_controls(cJSON_GetObjectItemCaseSensitive(document, "controls"));
     s->myus_necklace = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "myus_necklace", s->myus_necklace);
+    s->door_speed = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "door_speed", s->door_speed, 1, 8);
     s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
     s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
@@ -477,6 +486,9 @@ void port_settings_load(void) {
     }
     if (!port_options.no_hit_jolt_forced) {
         port_options.no_hit_jolt = s->no_hit_jolt;
+    }
+    if (!port_options.door_speed_forced) {
+        port_options.door_speed = s->door_speed;
     }
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
@@ -670,6 +682,7 @@ void port_settings_save(void) {
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
     put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
     put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));
+    put(section("mods"), "door_speed", cJSON_CreateNumber(s->door_speed));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */

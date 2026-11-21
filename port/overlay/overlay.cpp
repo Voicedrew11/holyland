@@ -1180,6 +1180,23 @@ void gameplay_page() {
 
     ImGui::TextWrapped("Optional changes to how the game plays. All are off by default; with them off, the game plays as it does on the PS2.");
     ImGui::SeparatorText("Tweaks");
+    {
+        static const char *speeds[] = {"Normal, as on the PS2", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+        int speed = port_options.door_speed - 1;
+
+        if (speed < 0 || speed >= (int)(sizeof(speeds) / sizeof(speeds[0]))) {
+            speed = 0;
+        }
+        if (ImGui::Combo("Door speed", &speed, speeds, (int)(sizeof(speeds) / sizeof(speeds[0])))) {
+            s.door_speed = port_options.door_speed = speed + 1;
+            changed();
+        }
+        tooltip("Doors open and close this many times faster than on the PS2. Also affects wall panels.\n"
+                "Applies at once. (--door-speed)");
+        if (port_options.door_speed != s.door_speed) {
+            ImGui::TextColored(colour_note, "(for this run: command line)");
+        }
+    }
     mod_checkbox("Myu's Necklace effect without wearing it", &s.myus_necklace, &port_options.myus_necklace,
                  "Objects that glow while Myu's Necklace is worn always glow, so the amulet slot\nis free for another "
                  "amulet. Applies at once. (--myus-necklace)");
