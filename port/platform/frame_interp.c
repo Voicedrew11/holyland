@@ -3536,7 +3536,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
    read them.) Also after a frame with a COPY_RESTORE copy (the map change's last frame): the uploads go
    again in their order, then the copy, from the game's frame. */
 void port_interp_end_vblank(void (*send)(int path, const void *data, size_t bytes)) {
-    if (pending.size != 0 && pending.age == 1 && pending.dirty) {
+    if (pending.size != 0 && pending.age == 1 && pending.dirty && !(pending.gpu > 0 && port_gs_between_leaves_memory())) {
         replay_pending(&pending.scan.camera, 1.0, 1, send, 0);
         pending.dirty = 0;
     }

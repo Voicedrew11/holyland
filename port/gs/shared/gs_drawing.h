@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "device.hpp"
+#include "gsn.h"
 #include "pcr_gif.h"
 #include "pcr_textures.h"
 
@@ -126,6 +127,36 @@ public:
     virtual void print_counts() const = 0;
     // Whether the scale last set is drawn with (it is taken at a vblank: kf4-gsreplay waits for it)
     virtual bool settled() const = 0;
+
+    // Pictures between (a renderer with its own way of drawing them: the scene renderer's; the canvas's are the shell's,
+    // pcr_between.h). frame_taken: frame_interp.c hands over a game frame (its GsnInterpFrame), whose packets are those
+    // taken in since the last vblank (open), those between the two vblanks before (last: the frame is mostly taken at
+    // its first picture between, a vblank after its packets), or neither (none: no picture between of it is drawn).
+    // While a frame's packets may be (frames taken lately) their kicks are numbered and the native draws' records are
+    // put twice, the frame's and its pictures' (NativeBatch::picture_instance); the trail's and the passes' kicks
+    // numbered from native_kick_base are the frame's kicks' count on.
+    enum class FrameStretch : uint8_t { none, open, last };
+    struct FrameShape {
+        uint32_t draw_fbp = 0, shown_fbp = 0; // (GsnInterpFrame's: the buffer drawn, the one shown, FBP in pages)
+        uint32_t kicks = 0;                    // the frame's stream's kicks (native_kick_base's are numbered on from it)
+    };
+    virtual void frame_taken(FrameStretch stretch, const FrameShape &shape) {
+        (void)stretch;
+        (void)shape;
+    }
+    // A picture between of the frame taken: its buffers (pcr_between.h's picture, kicks and moves: the shaders' set 0
+    // bindings 0 to 2) while it is drawn. True when drawn (the next picture shows it).
+    struct PictureBuffers {
+        const Vulkan::Buffer *picture = nullptr, *kicks = nullptr, *moves = nullptr;
+    };
+    // A picture made (a vblank's or an extra one), whether it was drawn (scanout) or not: a picture between drawn
+    // before it was its to show, and is not the next one's
+    virtual void picture_made() {}
+    virtual bool picture_between(const GsnInterpPicture &picture, const PictureBuffers &buffers) {
+        (void)picture;
+        (void)buffers;
+        return false;
+    }
 };
 
 } // namespace pcr

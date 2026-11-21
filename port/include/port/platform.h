@@ -408,6 +408,9 @@ int port_gs_replay_uploads(void);
    the PC renderer draws them (not KF4_PC_BETWEEN=0); the frame (a GsnInterpFrame, handed over: the
    renderer frees it) and each picture (a GsnInterpPicture) of gsn.h */
 int port_gs_interp_gpu(void);
+/* 1 when the renderer's pictures between leave the GS's memory as the game's frame left it (the scene renderer's: drawn
+   into images of their own, docs/plans/scene-slice4-results.md), so that no exact restore is drawn after them */
+int port_gs_between_leaves_memory(void);
 void port_gs_interp_frame(void *frame);
 void port_gs_interp_picture(const void *picture);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */

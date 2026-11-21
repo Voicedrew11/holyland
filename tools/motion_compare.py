@@ -129,17 +129,18 @@ def game_frame(log, v):
     return int(m.group(1)) if m else None
 
 
-def run(a, case, d, renderer, opts, frames, rate=None):
+def run(a, case, d, renderer, opts, frames, rate=None, renderer_arg=None):
     if os.path.isdir(d):
         shutil.rmtree(d)
     os.makedirs(os.path.join(d, "data"))
     pad = os.path.join(d, "case.pad")
     write_pad(pad, case)
     cmd = [a.exe, "--disc", a.disc, "--headless", "--no-audio", "--fast", "--saves", "none", "--input", pad,
-           "--frames", str(max(frames) + 2), "--renderer", a.renderer if renderer == "pc" else renderer,
+           "--frames", str(max(frames) + 2),
+           "--renderer", renderer_arg or (a.renderer if renderer == "pc" else renderer),
            "--dump-frames", ",".join(map(str, frames)),
            "--dump-dir", d, "--log", os.path.join(d, "log.txt")] + case["args"] + opts
-    if renderer == "pc" and a.pc_extra:
+    if renderer != "gs" and a.pc_extra:
         cmd += a.pc_extra.split()
     if rate:
         cmd += ["--frame-rate", str(rate)]
@@ -254,6 +255,66 @@ def compare_case(a, name, case, profile):
     return res
 
 
+def compare_case_rate(a, name, case, profile):
+    """--rate: paraLLEl-GS and each renderer at the rate, every picture dumped (the vblanks' and, above 60, the pictures
+    between's frame_V_P.png) paired by name with paraLLEl-GS's; a picture between is one of a phase, or a vblank's own
+    whose game frame (the log's) is the vblank before's"""
+    base = os.path.join(a.out, "runs", "%s_%s_%d" % (slug(name), profile, a.rate))
+    frames = sorted(set(case["frames"]))
+    gs_d = os.path.join(base, "gs")
+    res = {"case": name, "profile": profile, "rate": a.rate}
+    res["gs_rc"] = run(a, case, gs_d, "gs", PROFILES[profile]["gs"], frames, rate=a.rate)
+    gl = read_log(os.path.join(gs_d, "log.txt"))
+    pics = sorted(f for f in os.listdir(gs_d) if f.startswith("frame_") and f.endswith(".png")) \
+        if os.path.isdir(gs_d) else []
+    for r in a.renderers:
+        d = os.path.join(base, r)
+        res[r + "_rc"] = run(a, case, d, r, PROFILES[profile]["pc"], frames, rate=a.rate, renderer_arg=r)
+        rl = read_log(os.path.join(d, "log.txt"))
+        rows = []
+        for f in pics:
+            nums = [int(x) for x in re.findall(r"\d+", f)]
+            v, phase = nums[0], (nums[1] if len(nums) > 1 else 0)
+            p = os.path.join(d, f)
+            if gl.get(v) != rl.get(v) or not os.path.isfile(p):
+                continue
+            between = phase != 0 or (game_frame(gl, v) is not None and game_frame(gl, v) == game_frame(gl, v - 1))
+            x, y = pictures_at_one_size(p, os.path.join(gs_d, f))
+            m, _ = measure(x, y, a.level)
+            rows.append(dict(m, picture=f, between=between))
+        for part, sel in (("all", rows), ("between", [x for x in rows if x["between"]]),
+                          ("frames", [x for x in rows if not x["between"]])):
+            res["%s_%s" % (r, part)] = dict(
+                n=len(sel), blurred_sum=sum(x["blurred"] for x in sel), mean_sum=sum(x["mean"] for x in sel),
+                blurred_max=max((x["blurred"] for x in sel), default=0.0),
+                over_04=sum(1 for x in sel if x["blurred"] > 0.004))
+        res[r + "_rows"] = rows
+        if not a.keep:
+            shutil.rmtree(d, ignore_errors=True)
+    if not a.keep:
+        shutil.rmtree(gs_d, ignore_errors=True)
+    return res
+
+
+def report_rate(a, results):
+    md = ["# Pictures at %d against paraLLEl-GS's at %d" % (a.rate, a.rate), "",
+          "Every picture dumped paired by name; `blurred` the share of pixels over %d levels after a 3 x 3 blur, summed "
+          "over the case's pictures (and its largest), `mean` the mean difference summed; pictures between apart from "
+          "game frames." % a.level, "",
+          "| case | profile | renderer | pictures (between) | blurred sum, between | max | mean sum, between | "
+          "blurred sum, frames | mean sum, frames | >0.4%, between |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for x in results:
+        for r in a.renderers:
+            b, f = x.get(r + "_between"), x.get(r + "_frames")
+            if not b:
+                continue
+            md.append("| %s | %s | %s | %d (%d) | %.3f%% | %.2f%% | %.2f | %.3f%% | %.2f | %d |" % (
+                x["case"], x["profile"], r, b["n"] + f["n"], b["n"], b["blurred_sum"] * 100, b["blurred_max"] * 100,
+                b["mean_sum"], f["blurred_sum"] * 100, f["mean_sum"], b["over_04"]))
+    open(os.path.join(a.out, "report_%d.md" % a.rate), "w", encoding="utf-8").write("\n".join(md) + "\n")
+    json.dump(results, open(os.path.join(a.out, "report_%d.json" % a.rate), "w"), indent=1)
+
+
 def report(a, results):
     md = ["# PC renderer against paraLLEl-GS in motion", "",
           "Each vblank's pictures paired; `blurred` is the share of pixels over %d levels after a 3 x 3 blur (what "
@@ -298,9 +359,19 @@ def main():
     ap.add_argument("--ties", action="store_true", help="(pc) the depth rule's ties and the native batches' fragments "
                     "counted at each compared vblank: runs/CASE_PROFILE/pc/ties.txt, overdraw.txt (tools/depth_ties.py; "
                     "kept with --keep)")
-    ap.add_argument("--renderer", default="pc", choices=("pc", "scene"),
-                    help="the renderer compared against paraLLEl-GS (the \"pc\" side; default pc)")
+    ap.add_argument("--renderer", default="pc",
+                    help="the renderer compared against paraLLEl-GS (the \"pc\" side; default pc); with --rate, a "
+                         "comma-separated list (pc,scene), each against one paraLLEl-GS run")
+    ap.add_argument("--rate", type=int, default=0,
+                    help="paraLLEl-GS and the renderers all at this frame rate (60, 240), every picture (pictures "
+                         "between too) compared with paraLLEl-GS's: report_RATE.md (the pictures between of "
+                         "frame_interp.c's stream drawn by paraLLEl-GS are the reference)")
     a = ap.parse_args()
+    a.renderers = [r.strip() for r in a.renderer.split(",") if r.strip()]
+    for r in a.renderers:
+        if r not in ("pc", "scene"):
+            sys.exit("--renderer: pc or scene, not %r" % r)
+    a.renderer = a.renderers[0]
     if a.cases == "list":
         print("\n".join(CASES))
         return 0
@@ -317,6 +388,19 @@ def main():
     a.exe = os.path.abspath(a.exe)
     os.makedirs(a.out, exist_ok=True)
     results = []
+    if a.rate:
+        for n in names:
+            for p in profiles:
+                x = compare_case_rate(a, n, CASES[n], p)
+                results.append(x)
+                print("%-16s %-4s %d: %s" % (n, p, a.rate, ", ".join(
+                    "%s between %d blurred %.3f%% mean %.2f, frames %d blurred %.3f%%" % (
+                        r, x[r + "_between"]["n"], x[r + "_between"]["blurred_sum"] * 100,
+                        x[r + "_between"]["mean_sum"], x[r + "_frames"]["n"], x[r + "_frames"]["blurred_sum"] * 100)
+                    for r in a.renderers)), flush=True)
+                report_rate(a, results)
+        print("motion_compare: %s" % os.path.join(a.out, "report_%d.md" % a.rate))
+        return 0
     for n in names:
         for p in profiles:
             x = compare_case(a, n, CASES[n], p)

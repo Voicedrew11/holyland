@@ -176,6 +176,11 @@ void Drawer::make_programs() {
     Shader *layerfs = device_.request_shader(scn_spv_scn_picture_layer_frag, sizeof(scn_spv_scn_picture_layer_frag),
                                              &frag);
     picture_layer_ = device_.request_program(vs[size_t(Program::gif)], layerfs);
+    Shader *flatfs = device_.request_shader(scn_spv_scn_flat_frag, sizeof(scn_spv_scn_flat_frag), &frag);
+    for (size_t v = 0; v < size_t(Program::count); v++) {
+        flat_[v] = device_.request_program(vs[v], flatfs);
+        flat_rec_[v] = device_.request_program(vs_rec[v], flatfs);
+    }
     for (size_t v = 0; v < size_t(Program::count); v++) {
         plain_[v] = device_.request_program(vs[v], fs);
         early_[v] = device_.request_program(vs[v], efs);
@@ -540,9 +545,11 @@ void Drawer::log_scene(const Scene &scene, const Counts &b) {
     fprintf(runs_log_, "\n");
 }
 
-void Drawer::record(const Scene &scene, CommandBuffer &c) {
+void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *picture) {
+    picture_ = picture;
     const Counts before = counts_;
     counts_.scenes++;
+    counts_.picture_scenes += picture ? 1 : 0;
     prepare(scene);
     bool after_pass = false;
     full_barrier(c); // (what was submitted before: the targets' last scene, uploads into images)
@@ -570,9 +577,30 @@ void Drawer::record(const Scene &scene, CommandBuffer &c) {
         device_.unmap_host_buffer(*prepared_.commands, MEMORY_ACCESS_WRITE_BIT);
         prepared_.command_map = nullptr;
     }
-    if (runs_log_) {
+    if (runs_log_ && !picture) {
         log_scene(scene, before);
     }
+    picture_ = nullptr;
+}
+
+const Image &Drawer::image(const ImageHandle &h) const {
+    if (picture_ && picture_->stand_ins) {
+        auto it = picture_->stand_ins->find(h.get());
+        if (it != picture_->stand_ins->end()) {
+            return *it->second;
+        }
+    }
+    return *h;
+}
+
+const Buffer *Drawer::picture_buffer(uint32_t binding) const {
+    const pcr::Drawing::PictureBuffers &b = picture_->buffers;
+    const Buffer *buffer = binding == 0 ? b.picture : binding == 1 ? b.kicks : b.moves;
+    return buffer ? buffer : zeros_.get();
+}
+
+uint32_t Drawer::instance_of(const Draw &d) const {
+    return picture_ && d.picture_instance != 0xFFFFFFFFu ? d.picture_instance : d.instance;
 }
 
 void Drawer::record_op(const Op &op, CommandBuffer &c) {
@@ -583,16 +611,16 @@ void Drawer::record_op(const Op &op, CommandBuffer &c) {
     switch (op.kind) {
     case Op::Kind::clear:
         if (op.depth) {
-            c.clear_image(*op.dst, op.value, VK_IMAGE_ASPECT_DEPTH_BIT);
+            c.clear_image(image(op.dst), op.value, VK_IMAGE_ASPECT_DEPTH_BIT);
         } else {
-            c.clear_image(*op.dst, op.value);
+            c.clear_image(image(op.dst), op.value);
         }
         break;
     case Op::Kind::copy:
-        c.copy_image(*op.dst, *op.src, op.dst_at, op.src_at, op.extent, layers, layers);
+        c.copy_image(image(op.dst), image(op.src), op.dst_at, op.src_at, op.extent, layers, layers);
         break;
     case Op::Kind::blit:
-        c.blit_image(*op.dst, *op.src, op.dst_at,
+        c.blit_image(image(op.dst), image(op.src), op.dst_at,
                      {int32_t(op.extent.width), int32_t(op.extent.height), int32_t(op.extent.depth)}, op.src_at,
                      {int32_t(op.src_extent.width), int32_t(op.src_extent.height), int32_t(op.src_extent.depth)}, 0, 0,
                      0, 0, 1, VK_FILTER_NEAREST);
@@ -605,7 +633,7 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
     RenderPassInfo rp;
     if (pass.colour) {
         rp.num_color_attachments = 1;
-        rp.color_attachments[0] = &pass.colour->get_view();
+        rp.color_attachments[0] = &image(pass.colour).get_view();
         rp.store_attachments = 1;
         if (pass.clear_colour) {
             rp.clear_attachments = 1;
@@ -615,7 +643,7 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
         }
     }
     if (pass.depth) {
-        rp.depth_stencil = &pass.depth->get_view();
+        rp.depth_stencil = &image(pass.depth).get_view();
         rp.op_flags = RENDER_PASS_OP_STORE_DEPTH_STENCIL_BIT |
                       (pass.clear_depth ? RENDER_PASS_OP_CLEAR_DEPTH_STENCIL_BIT : RENDER_PASS_OP_LOAD_DEPTH_STENCIL_BIT);
         rp.clear_depth_stencil = {pass.depth_value, 0};
@@ -645,7 +673,7 @@ void Drawer::record_pass(const Scene &scene, const Pass &pass, CommandBuffer &c)
 void Drawer::bind_records(const Pass &pass, const Draw &d, CommandBuffer &c) {
     const Prepared &p = prepared_;
     for (uint32_t b = 0; b < 3; b++) {
-        c.set_storage_buffer(0, b, *zeros_);
+        c.set_storage_buffer(0, b, picture_ ? *picture_buffer(b) : *zeros_);
     }
     uint32_t mine = d.native ? native_slot(d.native_program) : native_slots;
     for (uint32_t slot = 0; slot < native_slots; slot++) {
@@ -671,7 +699,7 @@ void Drawer::bind_records(const Pass &pass, const Draw &d, CommandBuffer &c) {
     c.set_texture(1, 1, dummy_float_->get_view(), StockSampler::NearestClamp);
     c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
     c.set_texture(1, 3, dummy_float_->get_view(), StockSampler::NearestClamp);
-    c.set_texture(1, first_binding, pass.first ? pass.first->get_view() : dummy_float_->get_view(),
+    c.set_texture(1, first_binding, pass.first ? image(pass.first).get_view() : dummy_float_->get_view(),
                   StockSampler::NearestClamp);
     c.set_uniform_buffer(1, 2, *no_clut_);
     if (p.table) {
@@ -686,7 +714,7 @@ void Drawer::bind_own(const Scene &scene, const Pass &pass, const Draw &d, const
     // Set 0: the pictures between's buffers (zeros: none), the native programs' buffers, a kept walk's CLUTs and
     // samplers (never read here)
     for (uint32_t b = 0; b < 3; b++) {
-        c.set_storage_buffer(0, b, *zeros_);
+        c.set_storage_buffer(0, b, picture_ ? *picture_buffer(b) : *zeros_);
     }
     uint32_t mine = d.native ? native_slot(d.native_program) : native_slots;
     for (uint32_t slot = 0; slot < native_slots; slot++) {
@@ -711,14 +739,14 @@ void Drawer::bind_own(const Scene &scene, const Pass &pass, const Draw &d, const
     c.set_storage_buffer(1, merged_binding, *zeros_);
     c.set_storage_buffer(1, planes_binding, *zeros_);
     c.set_texture(1, 0, m.texels ? m.texels->get_view() : dummy_uint_->get_view(), StockSampler::NearestClamp);
-    c.set_texture(1, 1, m.surface ? m.surface->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
+    c.set_texture(1, 1, m.surface ? image(m.surface).get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
     if (m.sampled && m.sampler) {
         c.set_texture(1, 4, m.sampled->get_view(), *m.sampler);
     } else {
         c.set_texture(1, 4, dummy_float_->get_view(), StockSampler::NearestClamp);
     }
-    c.set_texture(1, 3, m.dest ? m.dest->get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
-    c.set_texture(1, first_binding, pass.first ? pass.first->get_view() : dummy_float_->get_view(),
+    c.set_texture(1, 3, m.dest ? image(m.dest).get_view() : dummy_float_->get_view(), StockSampler::NearestClamp);
+    c.set_texture(1, first_binding, pass.first ? image(pass.first).get_view() : dummy_float_->get_view(),
                   StockSampler::NearestClamp);
     if (m.clut != no_clut) {
         void *clut = c.allocate_constant_data(1, 2, sizeof(scene.cluts[m.clut]));
@@ -806,7 +834,8 @@ void Drawer::set_draw_state(const Scene &scene, const Pass &pass, const Draw &d,
                             CommandBuffer &c) {
     counts_.state_set++;
     c.set_viewport(d.viewport);
-    c.set_scissor(d.scissor);
+    c.set_scissor(tiny_on_ && pass.kind == PassKind::plain && !m.picture_layer ? VkRect2D{d.scissor.offset, {1, 1}}
+                                                                             : d.scissor);
     pcr::ShaderState st = m.state;
     st.first_draw = pass.kind == PassKind::first_draw ? 1 : pass.kind == PassKind::darken ? 2 : 0;
     times_.begin_draw(c, pass.picture ? pcr::GpuWork::picture : work_of(d), pcr::shader_state_key(st));
@@ -859,7 +888,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
         counts_.first_draws += pass.kind == PassKind::first_draw ? 1 : 0;
         counts_.darkened += pass.kind == PassKind::darken ? 1 : 0;
         const RunKey key = run_.call;
-        const VkDrawIndirectCommand command = {d.triangle_count * 3, 1, d.first_triangle * 3, d.instance};
+        const VkDrawIndirectCommand command = {d.triangle_count * 3, 1, d.first_triangle * 3, instance_of(d)};
         if (rec != no_record) {
             if (!joins(key, rec)) {
                 flush_run(c);
@@ -904,7 +933,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
     size_t v = size_t(m.program);
     const bool records = rec != no_record;
     const VkDrawIndirectCommand command =
-        d.native ? VkDrawIndirectCommand{d.triangle_count * 3, 1, d.first_triangle * 3, d.instance}
+        d.native ? VkDrawIndirectCommand{d.triangle_count * 3, 1, d.first_triangle * 3, instance_of(d)}
                  : VkDrawIndirectCommand{d.vertex_count, 1, records ? d.first_vertex : 0, 0};
     pcr::PrimPush push = m.push;
     if (d.shadow != no_shadow) {
@@ -952,6 +981,9 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.op = m.blend.op;
             key.op_alpha = VK_BLEND_OP_ADD;
             key.mask = ap.mask;
+        }
+        if (flat_on_ && pass.kind == PassKind::plain && !m.picture_layer) {
+            key.program = records ? flat_rec_[v] : flat_[v]; // (developers': KF4_SCN_FLAT, the shading's bound)
         }
         key.alpha_one = records && blend_runs_ && alpha_one(m, i) && pass.kind != PassKind::first_draw &&
                         !m.picture_layer && m.fuse == no_material;

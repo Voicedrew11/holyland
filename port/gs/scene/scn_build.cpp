@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "pcr_blend.h"
@@ -189,6 +190,8 @@ constexpr uint32_t first_generations = 1u << (24 - first_shadow_bits);
 } // namespace
 
 class Builder final : public Drawing {
+    struct Placed; // (below)
+
 public:
     Builder(Device &device, GpuTimes &times, HangNotes &notes)
         : device_(device), times_(times), notes_(notes), drawer_(device, times), store_(store_limits()) {
@@ -503,6 +506,13 @@ public:
         pending_.clear();
         layers_.clear();
         folds_.clear();
+        kept_.clear();
+        stretch_.clear();
+        last_stretch_.clear();
+        stand_in_plan_.clear();
+        stand_ins_.clear();
+        stand_in_pool_.clear();
+        picture_pending_ = false;
     }
 
     std::vector<uint8_t> vram_image() override {
@@ -543,14 +553,37 @@ public:
         store_.set_clut_state(clut);
     }
 
-    bool scanout(CommandBuffer &out, const ShownRect &rect, const Image &dst) override {
+    bool scanout(CommandBuffer &out, const ShownRect &shown_rect, const Image &dst) override {
         flush_batch();
+        // (a picture between drawn since the last picture: the frame's buffer shown from its stand-in, where the
+        // display shows the buffer the stream would have drawn it into, or the frame's)
+        bool picture = picture_pending_;
+        picture_pending_ = false;
+        ShownRect rect = shown_rect;
+        if (picture) {
+            const uint32_t fbp = rect.bp / 32;
+            picture = rect.bp % 32 == 0 && (fbp == kept_shape_.shown_fbp || fbp == kept_shape_.draw_fbp);
+            rect.bp = kept_shape_.draw_fbp * 32;
+        }
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
             close_scene(false);
             return false;
         }
         Placed placed = colour_target(rect.bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
         Target *s = placed.target;
+        const Image *stand_in = nullptr;
+        if (picture && s) {
+            auto it = stand_ins_.find(s->image.get());
+            stand_in = it != stand_ins_.end() ? it->second.get() : nullptr;
+        }
+        if (picture && !stand_in) {
+            // (the frame's buffer not one the kept scenes draw: the buffer shown, as before)
+            counts_.pictures_unshown++;
+            return scanout(out, shown_rect, dst);
+        }
+        if (stand_in) {
+            return scanout_picture(out, rect, placed, *stand_in, dst);
+        }
         int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         std::vector<Layer> drawn;
         bool lower = false;
@@ -611,6 +644,58 @@ public:
         return true;
     }
 
+    // A picture between shown: rect of the frame's buffer (placed) from its stand-in, the layers kept on the frame's
+    // buffer (the brightness) drawn over it where they can be (composable, picture_draws), reading the stand-in. Nothing
+    // of the GS's memory is drawn or touched.
+    bool scanout_picture(CommandBuffer &out, const ShownRect &rect, const Placed &placed, const Image &from,
+                         const Image &dst) {
+        Target *s = placed.target;
+        uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
+        int32_t x0 = int32_t(rx * scale_[0]), y0 = int32_t(ry * scale_[1]);
+        int32_t x1 = int32_t(std::min(rx + rect.w, s->width()) * scale_[0]);
+        int32_t y1 = int32_t(std::min(ry + rect.h, s->height) * scale_[1]);
+        close_scene(false);
+        times_.begin(out, GpuWork::picture);
+        out.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        if (x1 <= x0 || y1 <= y0) {
+            return false;
+        }
+        counts_.pictures_shown++;
+        const VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+        std::vector<Layer> drawn;
+        const bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
+        if (same_size && composable(s->image.get(), shown)) {
+            for (const Layer &l : layers_) {
+                if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
+                    drawn.push_back(l);
+                }
+            }
+            if (!drawn.empty() && !picture_draws(drawn, shown)) {
+                drawn.clear();
+            }
+        }
+        if (!drawn.empty()) {
+            Drawer::PictureDraw pd;
+            pd.stand_ins = &stand_ins_;
+            compose(out, *s, shown, dst, drawn, &pd);
+            return true;
+        }
+        if (!layers_.empty() && std::any_of(layers_.begin(), layers_.end(), [&](const Layer &l) {
+                return l.image.get() == s->image.get() && rects_meet(l.rect, shown);
+            })) {
+            counts_.pictures_without_layers++;
+        }
+        if (same_size) {
+            const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            out.copy_image(dst, from, {0, 0, 0}, {x0, y0, 0}, {dst.get_width(), dst.get_height(), 1}, colour, colour);
+        } else {
+            out.blit_image(dst, from, {0, 0, 0}, {int32_t(dst.get_width()), int32_t(dst.get_height()), 1}, {x0, y0, 0},
+                           {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
+        }
+        return true;
+    }
+
     // (the temporal anti-aliasing's depth: not the scene renderer's yet)
     std::optional<ShownDepth> scanout_depth(CommandBuffer &, const ShownRect &, const Image &) override {
         return std::nullopt;
@@ -627,6 +712,8 @@ public:
         apply_scale();
         vblank_ = game_vblank;
         close_scene(true);
+        last_stretch_ = std::move(stretch_);
+        stretch_.clear();
         {
             GpuWait wait(&notes_, "the scene renderer's next_frame_context", hang_clock_s());
             device_.next_frame_context();
@@ -634,6 +721,259 @@ public:
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
+    }
+
+    // ---- Pictures between (slice 4, docs/plans/scene-slice4-results.md) ----
+    // The scenes closed between two vblanks are kept (a stretch) while frames are being taken; the frame frame_interp.c
+    // hands over is one of them (the shell says which: FrameStretch), kept as it was drawn. A picture between draws it
+    // again at the picture's time: the same steps, with the picture's buffers (its camera, t, the kicks and their moves),
+    // each native draw by its picture's record, and every image the frame's steps write (its targets, the target copies,
+    // the first-draw image, the history) drawn into a stand-in of its own: the GS's memory is never drawn into by a
+    // picture, so no exact restore is needed (gs.c's port_gs_between_leaves_memory). The next picture shows the frame's
+    // buffer from its stand-in, with the frame's layers kept (the brightness) drawn over it.
+    //
+    // (developers', KF4_SCN_BETWEEN_BOUND=1: slice 4's bound) each picture between records the frame's scenes again,
+    // unmoved and into the same targets: what a picture between costs at most; the pictures are wrong.
+    void frame_taken(FrameStretch which, const FrameShape &shape) override {
+        flush_batch();
+        kept_.clear();
+        kept_shape_ = shape;
+        picture_pending_ = false;
+        taken_at_ = frame_;
+        if (which == FrameStretch::open) {
+            close_scene(true);
+            kept_ = std::move(stretch_);
+            stretch_.clear();
+        } else if (which == FrameStretch::last) {
+            kept_ = std::move(last_stretch_);
+            last_stretch_.clear();
+        }
+        if (kept_.empty()) {
+            counts_.frames_not_kept++;
+            return;
+        }
+        counts_.frames_kept++;
+        if (between_bound_) {
+            return;
+        }
+        // (the native draws' kicks, numbered from native_kick_base: the frame's kicks' count on, as Between's)
+        for (Scene &sc : kept_) {
+            for (Vertex &v : sc.vertices) {
+                for (int k = 0; k < 3; k++) {
+                    if (v.kicks[k] != no_kick && v.kicks[k] >= native_kick_base) {
+                        v.kicks[k] = v.kicks[k] - native_kick_base + shape.kicks;
+                    }
+                }
+            }
+        }
+        plan_stand_ins();
+    }
+
+    // How each image the kept scenes write starts in a picture: the first-draw image cleared (no triangle yet); one whose
+    // first use is a clear of all of it as it is; one first cleared in part (a frame buffer of two in one image), the live
+    // image's pixels around that part copied where an op of the frame copies from the image (the frame before blended
+    // in), else as it is; any other (first read, or copied into), the live image copied whole. The
+    // stand-ins are images of the same size and format, kept a size and format across frames: each picture sets what
+    // it starts from, so any of them will do.
+    struct StandIn {
+        ImageHandle image;
+        enum class Start : uint8_t { as_is, first_draw, copy_whole, copy_around } start = Start::copy_whole;
+        VkRect2D cleared{};
+        bool depth = false;
+    };
+    void plan_stand_ins() {
+        // (the stand-ins of the frame before back in the pool)
+        for (auto &[k, si] : stand_in_plan_) {
+            stand_in_pool_.push_back(std::move(si.image));
+        }
+        stand_in_plan_.clear();
+        stand_ins_.clear();
+        std::unordered_set<const Image *> written, read_by_op;
+        using Start = StandIn::Start;
+        auto whole = [](const Image &im, const VkRect2D &r) {
+            return r.offset.x <= 0 && r.offset.y <= 0 && int64_t(r.offset.x) + r.extent.width >= im.get_width() &&
+                   int64_t(r.offset.y) + r.extent.height >= im.get_height();
+        };
+        auto meet = [&](const ImageHandle &h, bool write, Start start, VkRect2D cleared, bool depth) {
+            if (!h) {
+                return;
+            }
+            auto [it, fresh] = stand_in_plan_.try_emplace(h.get());
+            if (fresh) {
+                it->second.start = write ? start : Start::copy_whole;
+                it->second.cleared = cleared;
+                it->second.depth = depth;
+            }
+            if (write) {
+                written.insert(h.get());
+            }
+        };
+        for (const Scene &sc : kept_) {
+            for (const Step &st : sc.steps) {
+                if (st.kind == Step::Kind::op) {
+                    const Op &op = sc.ops[st.index];
+                    if (op.src) {
+                        read_by_op.insert(op.src.get());
+                    }
+                    meet(op.src, false, Start::copy_whole, {}, op.depth);
+                    meet(op.dst, true, op.kind == Op::Kind::clear ? Start::as_is : Start::copy_whole, {}, op.depth);
+                    continue;
+                }
+                const Pass &pass = sc.passes[st.index];
+                meet(pass.first, false, Start::first_draw, {}, false);
+                for (int a = 0; a < 2; a++) {
+                    const ImageHandle &h = a == 0 ? pass.colour : pass.depth;
+                    if (!h) {
+                        continue;
+                    }
+                    VkRect2D area = pass.area;
+                    area.extent.width = std::min<uint32_t>(area.extent.width, h->get_width());
+                    area.extent.height = std::min<uint32_t>(area.extent.height, h->get_height());
+                    Start start = Start::copy_whole;
+                    if (pass.kind == PassKind::first_draw && a == 0) {
+                        start = Start::first_draw;
+                    } else if (a == 0 ? pass.clear_colour : pass.clear_depth) {
+                        start = whole(*h, area) ? Start::as_is : Start::copy_around;
+                    }
+                    meet(h, true, start, area, a == 1);
+                }
+            }
+        }
+        for (auto it = stand_in_plan_.begin(); it != stand_in_plan_.end();) {
+            if (!written.count(it->first)) {
+                it = stand_in_plan_.erase(it); // (read only: the live image, which nothing here writes)
+                continue;
+            }
+            const Image &live = *it->first;
+            StandIn &si = it->second;
+            if (si.start == Start::first_draw) {
+                si.depth = false;
+            }
+            if (si.start == Start::copy_around && !read_by_op.count(it->first)) {
+                // (a frame buffer of two in one image, and its Z: the rows around the frame's are the other buffer's,
+                // which the picture neither shows nor, unless an op of the frame copies from the image, reads; 1.8 ms
+                // a picture at the pond at 2x copied)
+                si.start = Start::as_is;
+            }
+            for (size_t k = 0; k < stand_in_pool_.size(); k++) {
+                const ImageHandle &c = stand_in_pool_[k];
+                if (c && c->get_width() == live.get_width() && c->get_height() == live.get_height() &&
+                    c->get_format() == live.get_format() &&
+                    c->get_create_info().usage == (live.get_create_info().usage | stand_in_usage)) {
+                    si.image = std::move(stand_in_pool_[k]);
+                    stand_in_pool_.erase(stand_in_pool_.begin() + std::ptrdiff_t(k));
+                    break;
+                }
+            }
+            if (!si.image) {
+                ImageCreateInfo info = live.get_create_info();
+                info.usage |= stand_in_usage; // (started by a clear or a copy, copied from to the picture)
+                info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+                si.image = device_.create_image(info, nullptr);
+                counts_.stand_ins_made++;
+            }
+            if (!si.image) {
+                fprintf(stderr, "[scn] no stand-in image for a picture between (%ux%u)\n", live.get_width(),
+                        live.get_height());
+                stand_in_plan_.clear();
+                stand_ins_.clear();
+                kept_.clear();
+                return;
+            }
+            stand_ins_[it->first] = si.image;
+            ++it;
+        }
+        if (between_log_ && logged_plans_ < 3) {
+            logged_plans_++;
+            static const char *starts[] = {"as is", "first-draw cleared", "copied whole", "copied around"};
+            for (const auto &[k, si] : stand_in_plan_) {
+                fprintf(stderr, "[scn] stand-in %ux%u format %d: %s (cleared %d,%d %ux%u)\n", k->get_width(),
+                        k->get_height(), int(k->get_format()), starts[int(si.start)], si.cleared.offset.x,
+                        si.cleared.offset.y, si.cleared.extent.width, si.cleared.extent.height);
+            }
+        }
+        // (a pool a few frames' images deep: the rest let go)
+        if (stand_in_pool_.size() > 16) {
+            stand_in_pool_.erase(stand_in_pool_.begin(), stand_in_pool_.end() - 16);
+        }
+    }
+
+    bool picture_between(const GsnInterpPicture &, const PictureBuffers &buffers) override {
+        if (kept_.empty()) {
+            counts_.pictures_not_drawn++;
+            return false;
+        }
+        flush_batch();
+        close_scene(false);
+        if (between_bound_) {
+            for (const Scene &sc : kept_) {
+                CommandBufferHandle cmd = device_.request_command_buffer();
+                cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
+                drawer_.record(sc, *cmd);
+                times_.end(*cmd);
+                notes_.submitted("kf4-pc", "a picture between's bound (the frame's scene again)", hang_clock_s());
+                device_.submit(cmd);
+            }
+            device_.flush_frame();
+            counts_.bound_pictures++;
+            return true;
+        }
+        CommandBufferHandle cmd = device_.request_command_buffer();
+        cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
+        times_.begin(*cmd, GpuWork::surface);
+        cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        for (auto &[key, si] : stand_in_plan_) {
+            const Image &live = *key;
+            const Image &to = *si.image;
+            const VkImageSubresourceLayers layers = {
+                VkImageAspectFlags(si.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+            switch (si.start) {
+            case StandIn::Start::as_is:
+                break;
+            case StandIn::Start::first_draw: {
+                VkClearValue none = {};
+                none.color.float32[0] = first_none;
+                cmd->clear_image(to, none);
+                break;
+            }
+            case StandIn::Start::copy_whole:
+                cmd->copy_image(to, live, {0, 0, 0}, {0, 0, 0}, {live.get_width(), live.get_height(), 1}, layers, layers);
+                counts_.stand_in_copies++;
+                break;
+            case StandIn::Start::copy_around:
+                copy_around({{0, 0}, {live.get_width(), live.get_height()}}, si.cleared,
+                            [&](int32_t x, int32_t y, int32_t w, int32_t h) {
+                                if (w > 0 && h > 0) {
+                                    cmd->copy_image(to, live, {x, y, 0}, {x, y, 0}, {uint32_t(w), uint32_t(h), 1}, layers,
+                                                    layers);
+                                }
+                            });
+                counts_.stand_in_copies++;
+                break;
+            }
+        }
+        Drawer::PictureDraw pd;
+        pd.buffers = buffers;
+        pd.stand_ins = &stand_ins_;
+        for (const Scene &sc : kept_) {
+            drawer_.record(sc, *cmd, &pd);
+        }
+        times_.end(*cmd);
+        notes_.submitted("kf4-pc", "a picture between (the frame's scenes again)", hang_clock_s());
+        device_.submit(cmd); // (with the picture's commands that show it, in one vkQueueSubmit)
+        picture_pending_ = true;
+        counts_.pictures_between++;
+        return true;
+    }
+
+    void picture_made() override {
+        picture_pending_ = false;
+    }
+
+    // While frames are taken (and a few vblanks after): the scenes closed kept as the stretch they are of
+    bool keeping_stretches() const {
+        return between_bound_ || (taken_at_ != UINT64_MAX && frame_ <= taken_at_ + 8);
     }
 
     bool settled() const override {
@@ -714,6 +1054,18 @@ public:
                     (unsigned long long)counts_.fused, (unsigned long long)counts_.fuse_firsts,
                     (unsigned long long)counts_.fused_same, why.empty() ? ": none" : why.c_str(),
                     (unsigned long long)drawer_.counts().fused_unrecorded);
+        }
+        if (counts_.frames_kept || counts_.frames_not_kept) {
+            fprintf(stderr,
+                    "[stats] scene renderer pictures between: %llu frames kept, %llu not; %llu pictures between drawn "
+                    "(%llu shown, %llu of them without the frame's layers; %llu not shown, the frame's buffer not drawn), "
+                    "%llu not (no frame kept); %llu stand-in images made, %llu copied from the live image%s\n",
+                    (unsigned long long)counts_.frames_kept, (unsigned long long)counts_.frames_not_kept,
+                    (unsigned long long)(counts_.pictures_between + counts_.bound_pictures),
+                    (unsigned long long)counts_.pictures_shown, (unsigned long long)counts_.pictures_without_layers,
+                    (unsigned long long)counts_.pictures_unshown, (unsigned long long)counts_.pictures_not_drawn,
+                    (unsigned long long)counts_.stand_ins_made, (unsigned long long)counts_.stand_in_copies,
+                    between_bound_ ? " (KF4_SCN_BETWEEN_BOUND: the frame's scenes again, unmoved)" : "");
         }
         const Drawer::Counts &d = drawer_.counts();
         fprintf(stderr,
@@ -828,7 +1180,13 @@ private:
             device_.flush_frame();
         }
         counts_.scenes++;
-        scene_.clear();
+        if (keeping_stretches()) {
+            // (the stretch: the scenes closed since the last vblank, a frame's when frame_interp.c takes it)
+            stretch_.push_back(std::move(scene_));
+            scene_ = Scene();
+        } else {
+            scene_.clear();
+        }
         clut_at_ = no_clut;
     }
 
@@ -1709,8 +2067,9 @@ private:
 
     // The picture: shown (the target's pixels) into dst, the same size, with the layer kept there drawn over it (the
     // final pass): the target copied where the layer does not surely draw, then the layer, reading the target
+    // (picture: a picture between's, the target read from its stand-in)
     void compose(CommandBuffer &out, const Target &s, const VkRect2D &shown, const Image &dst,
-                 const std::vector<Layer> &layers) {
+                 const std::vector<Layer> &layers, const Drawer::PictureDraw *picture = nullptr) {
         Scene sc;
         Image &dst_image = const_cast<Image &>(dst);
         dst_image.add_reference(); // (the shell's picture: held by the pass and ops below while they are recorded)
@@ -1797,7 +2156,7 @@ private:
         }
         sc.steps.push_back({Step::Kind::pass, uint32_t(sc.passes.size())});
         sc.passes.push_back(std::move(p));
-        drawer_.record(sc, out);
+        drawer_.record(sc, out, picture);
         counts_.pictures_composed++;
     }
 
@@ -2743,7 +3102,8 @@ private:
         if (!kept.image) {
             ImageCreateInfo info =
                 ImageCreateInfo::render_target(cols * scale_[0], rows * scale_[1], from->image->get_format());
-            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            // (TRANSFER_SRC: a picture between's stand-in starts as a copy of it)
+            info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             info.layout = ImageLayout::General;
             info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
             kept.image = device_.create_image(info, nullptr);
@@ -2989,20 +3349,51 @@ private:
             batch_.y1 = std::max(batch_.y1, int32_t(std::ceil(v.y)));
         };
         batch_.sprites = batch_.sprites && p.shape != PrimitiveShape::triangle;
+        // (pictures between, slice 4: a primitive whose every kick is numbered, the frame's packets kept for them, names
+        // its kicks in its corners as the canvas's add_primitive does; pcr_prim.vert makes them again at the picture's
+        // time, and outside a picture draws them where they are)
+        const uint32_t corners = p.shape == PrimitiveShape::triangle ? 3 : 2;
+        bool numbered = true;
+        for (uint32_t i = 0; i < corners; i++) {
+            numbered = numbered && p.vertices[i].kick != no_kick;
+        }
+        const uint32_t fst_bit = fst ? K_FST : 0;
         if (p.shape == PrimitiveShape::triangle) {
             const GifVertex &last = p.vertices[2];
+            auto name_kicks = [&](Vertex &v, uint32_t i) {
+                const GifVertex &colour = gouraud ? p.vertices[i] : last;
+                v.kicks[0] = p.vertices[i].kick;
+                v.kicks[1] = colour.kick;
+                v.kicks[2] = last.kick;
+                v.kicks[3] = fst_bit;
+            };
             uint32_t zmax = zmax_of(z_psm(batch_.state.zbuf));
             if (p.vertices[0].z > zmax || p.vertices[1].z > zmax || p.vertices[2].z > zmax) {
                 std::array<Vertex, 3> v = {make(p.vertices[0], last), make(p.vertices[1], last), make(p.vertices[2], last)};
+                const size_t pieces = batch_.vertices.size();
                 add_cut_at_zmax(v, zmax);
                 for (const Vertex &corner : v) {
                     touch(corner);
+                }
+                if (numbered) {
+                    // (the pieces the frame's alone; its pictures draw the whole triangle of its kicks)
+                    for (size_t i = pieces; i < batch_.vertices.size(); i++) {
+                        batch_.vertices[i].kicks[3] |= K_FRAME_ONLY;
+                    }
+                    for (uint32_t i = 0; i < 3; i++) {
+                        name_kicks(v[i], i);
+                        v[i].kicks[3] |= K_PICTURE_ONLY;
+                        batch_.vertices.push_back(v[i]);
+                    }
                 }
                 return;
             }
             size_t first_vertex = batch_.vertices.size();
             for (uint32_t i = 0; i < 3; i++) {
                 batch_.vertices.push_back(make(p.vertices[i], last));
+                if (numbered) {
+                    name_kicks(batch_.vertices.back(), i);
+                }
                 touch(batch_.vertices.back());
             }
             if (bits(batch_.state.prim, 4, 1)) {
@@ -3040,6 +3431,16 @@ private:
         c.s = vb.s;
         d.y = vb.y;
         d.t = vb.t;
+        if (numbered) {
+            // (corner 0 a's X and Y, 1 b's X a's Y, 2 a's X b's Y, 3 b's)
+            Vertex *corner[4] = {&va, &c, &d, &vb};
+            for (uint32_t i = 0; i < 4; i++) {
+                corner[i]->kicks[0] = a.kick;
+                corner[i]->kicks[1] = b.kick;
+                corner[i]->kicks[2] = no_kick;
+                corner[i]->kicks[3] = i | K_SPRITE | fst_bit;
+            }
+        }
         batch_.vertices.insert(batch_.vertices.end(), {va, c, d, c, vb, d});
         touch(va);
         touch(vb);
@@ -3137,7 +3538,8 @@ private:
     ImageHandle copy_of_rect(const Target &s, const VkRect2D &rect, GpuWork work) {
         ImageCreateInfo info = ImageCreateInfo::render_target(rect.extent.width, rect.extent.height,
                                                               s.image->get_format());
-        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // (TRANSFER_SRC: a picture between's stand-in starts as a copy of it)
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         ImageHandle copy = device_.create_image(info, nullptr);
@@ -3540,6 +3942,7 @@ private:
             d.first_triangle = b.nb.first_triangle;
             d.triangle_count = b.nb.triangle_count;
             d.instance = b.nb.instance;
+            d.picture_instance = b.nb.picture_instance;
             d.kind = b.nb.kind;
             memcpy(d.id, b.nb.id, sizeof(d.id));
         }
@@ -3873,6 +4276,20 @@ private:
     Drawer drawer_;
     TextureStore store_;
     Scene scene_;
+    // (KF4_SCN_BETWEEN_BOUND) the frame's scene kept for its pictures between's bound
+    const bool between_bound_ = getenv("KF4_SCN_BETWEEN_BOUND") && strcmp(getenv("KF4_SCN_BETWEEN_BOUND"), "0") != 0;
+    std::vector<Scene> kept_, stretch_, last_stretch_;
+    FrameShape kept_shape_;
+    uint64_t taken_at_ = UINT64_MAX; // (frame_ when a frame was last taken)
+    // the kept scenes' written images' stand-ins (plan_stand_ins), and the stand-in of each (Drawer::PictureDraw's)
+    std::unordered_map<const Image *, StandIn> stand_in_plan_;
+    std::unordered_map<const Image *, ImageHandle> stand_ins_;
+    std::vector<ImageHandle> stand_in_pool_;
+    static constexpr VkImageUsageFlags stand_in_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    // (developers', KF4_SCN_BETWEEN_LOG=1: the first frames' stand-ins on stderr)
+    const bool between_log_ = getenv("KF4_SCN_BETWEEN_LOG") && strcmp(getenv("KF4_SCN_BETWEEN_LOG"), "0") != 0;
+    int logged_plans_ = 0;
+    bool picture_pending_ = false; // (a picture between drawn: the next picture shows it)
     bool d16_ = false, first_draw_on_ = false;
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = 0, mode_2d_ = 0;
@@ -3963,7 +4380,8 @@ private:
     std::map<std::string, uint64_t> census_;
     uint64_t census_pairs_ = 0, census_singles_ = 0;
     struct Counts {
-        uint64_t scenes = 0, primitives = 0, native_batches = 0, load_clears = 0;
+        uint64_t scenes = 0, bound_pictures = 0, frames_kept = 0, frames_not_kept = 0, pictures_between = 0,
+                 pictures_not_drawn = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;

@@ -76,7 +76,8 @@ enum : uint32_t {
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
 // Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
-enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8 };
+// (the scene renderer's) a corner of the frame only, or of its pictures between only (pcr_prim.vert's PCR_K_FRAME_ONLY)
+enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8, K_FRAME_ONLY = 0x10, K_PICTURE_ONLY = 0x20 };
 
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
