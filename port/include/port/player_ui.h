@@ -26,8 +26,8 @@ int port_player_ui_open(void);
 /* 1 when the menu draws something this picture: open, or its hint at the start ("F1 or L3 + R3: settings") */
 int port_player_ui_visible(void);
 /* (port/overlay/overlay.cpp's test pictures) opens the menu on the tab of that id ("display", ...), then presses
-   the keys after a colon, by name ("display:down.confirm": up down left right confirm back next previous); or closes
-   it (NULL). 0 when there is no such tab. */
+   the keys after a colon, by name ("display:down.confirm": up down left right confirm back next previous; xbox, playstation,
+   nintendo or keyboard: the prompts as if that was used last); or closes it (NULL). 0 when there is no such tab. */
 int port_player_ui_show(const char *tab_id);
 /* (the presenter, before it draws) lays the menu out for a window of width x height pixels and records its
    triangles: player_ui_frame */

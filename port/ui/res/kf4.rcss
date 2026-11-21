@@ -443,6 +443,44 @@ key {
 	margin-right: 5dp;
 }
 
+/* A controller's button, as its picture (pad_glyphs.hpp): Kenney's fonts, one for each family of controllers */
+pad {
+	display: inline-block;
+	font-size: 38dp; /* (Kenney's pictures fill about half the letter's height) */
+	line-height: 14dp;
+	vertical-align: middle;
+	margin-right: 5dp;
+}
+
+prompt pad {
+	color: #c8d6ea;
+}
+
+pad.xbox {
+	font-family: pad-xbox;
+}
+
+pad.playstation {
+	font-family: pad-playstation;
+}
+
+pad.nintendo {
+	font-family: pad-nintendo;
+}
+
+tab.end pad {
+	font-size: 34dp;
+	line-height: 22dp;
+	color: #8790a0;
+	margin-right: 0;
+}
+
+slot pad {
+	font-size: 32dp;
+	vertical-align: -3dp;
+	margin-right: 0;
+}
+
 /* ---- Scrollbars ---------------------------------------------------------------------------------------------------- */
 scrollbarvertical {
 	width: 5dp;
