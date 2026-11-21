@@ -230,6 +230,45 @@ public:
         return message;
     }
 
+    // (the PC renderer's thread, before it takes the next message) --frame-rate unlocked: the pictures between at the
+    // front that it would have ready after their time (cost: what its last ones took), each with the extra picture that
+    // shows it, left out while a later picture between waits (pcr_late.h), as the pump leaves out its own. Without it, a
+    // picture that came late (a slow one) left every one after it late as well: drawn, then not shown, for as long as the
+    // pictures were asked for as fast as they were drawn (up to 470 ms with no picture at 063, 2026-11-20). What was left
+    // out: the pictures between, and the messages of them that were counted (Renderer::routed_)
+    struct LeftOut {
+        uint64_t pictures = 0, counted = 0;
+    };
+    LeftOut leave_out_late(const pcr::PictureCost &cost) {
+        LeftOut left;
+        std::lock_guard<std::mutex> hold(lock_);
+        double now_s = port_wall_seconds();
+        while (messages_.size() >= 2) {
+            const InterpPicture *p = std::get_if<InterpPicture>(&messages_[0]);
+            const VblankPicture *shows = std::get_if<VblankPicture>(&messages_[1]);
+            if (p == nullptr || shows == nullptr || p->direct || shows->direct || (shows->want & GSN_EXTRA) == 0 ||
+                shows->reply != nullptr) {
+                break;
+            }
+            bool later_waiting = false;
+            for (size_t i = 2; i < messages_.size() && !later_waiting; i++) {
+                later_waiting = std::holds_alternative<InterpPicture>(messages_[i]);
+            }
+            if (!p->picture.leave_out_late || !pcr::leave_out(p->picture.shown_s, now_s, cost, later_waiting)) {
+                break;
+            }
+            left.counted += uint64_t(p->counted) + uint64_t(shows->counted);
+            left.pictures++;
+            messages_.pop_front();
+            messages_.pop_front();
+        }
+        if (left.pictures > 0) {
+            room_.notify_all();
+            idle_.notify_all();
+        }
+        return left;
+    }
+
     // (the PC renderer's thread) The message taken is done
     void done(size_t bytes) {
         std::lock_guard<std::mutex> hold(lock_);
@@ -603,7 +642,7 @@ struct Settings {
 // ---- --stats ---------------------------------------------------------------------------------------
 struct Stats {
     std::atomic<uint64_t> packets{0}, bytes{0}, vblanks{0}, pictures{0}, extras{0}, interp_frames{0},
-        interp_pictures{0}, interp_late{0};
+        interp_pictures{0}, interp_late{0}, interp_left_out{0};
     // (Renderer::interp_picture) pictures between sent to the pump directly, and of them those kf4-pc then found
     // the frame's kept walk no longer fitting for (the store changed by the next frame's packets before them)
     std::atomic<uint64_t> direct{0}, direct_stale{0};
@@ -2677,7 +2716,12 @@ private:
 #ifdef __linux__
         pthread_setname_np(pthread_self(), "kf4-pc");
 #endif
-        while (std::optional<Message> message = inbox_.take()) {
+        for (;;) {
+            leave_out_late();
+            std::optional<Message> message = inbox_.take();
+            if (!message) {
+                break;
+            }
             if (GifPacket *packet = std::get_if<GifPacket>(&*message)) {
                 stats.packets++;
                 stats.bytes += packet->bytes.size();
@@ -2715,6 +2759,17 @@ private:
             }
         }
         inbox_.gone();
+    }
+
+    // (kf4-pc) Pictures between it would be late for left out, as Inbox::leave_out_late says
+    void leave_out_late() {
+        Inbox::LeftOut left = inbox_.leave_out_late(cost_here_);
+        if (left.pictures == 0) {
+            return;
+        }
+        stats.interp_pictures += left.pictures;
+        stats.interp_left_out += left.pictures;
+        routed_done_.fetch_add(left.counted, std::memory_order_release); // (as if taken: Renderer::run)
     }
 
     // (kf4-pc) A vblank's picture, or an extra one: the pump's when it shows the picture between the pump drew (the
@@ -2757,6 +2812,7 @@ private:
             // as it is handed out after them)
             pump_->wait_idle();
         }
+        const double began_s = port_wall_seconds();
         MadePicture made = out_->make(v, scale, intake_.drawing(), *intake_.gpu_times());
         if (pcr::Drawing *drawing = intake_.drawing()) {
             drawing->picture_made();
@@ -2769,6 +2825,11 @@ private:
             next_frame_context();
         }
         hand_out_in_order(made);
+        if (extra && between_took_s_ > 0) {
+            // (the picture between drawn here and this, which shows it: what leave_out_late counts on)
+            cost_here_.made(between_took_s_ + port_wall_seconds() - began_s);
+        }
+        between_took_s_ = 0;
     }
 
     // (kf4-pc) Granite's frame context moved on: waits for the GPU's work of the context it comes round to
@@ -2859,6 +2920,7 @@ private:
             }
             return;
         }
+        const double began_s = port_wall_seconds();
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
@@ -2872,6 +2934,7 @@ private:
         if (!for_pump) {
             direct_serial_.store(0, std::memory_order_release);
             turned_before(turn_lead_, before_s); // (drawn here: this turn was its last)
+            between_took_s_ = port_wall_seconds() - began_s;
             return;
         }
         if (for_pump->frame) {
@@ -2923,6 +2986,10 @@ private:
     // and the pictures counted (counted set) it has taken: everything it gives the pump of them sent
     std::atomic<uint64_t> direct_serial_{0}, routed_done_{0};
     GsnInterpPicture last_between_{}; // (kf4-pc's) the picture between last taken (its run bits not kept)
+    // (kf4-pc's) what the pictures between drawn here take (with the picture that shows each), and the last one's
+    // drawing until that picture (0: none drawn here since): leave_out_late
+    pcr::PictureCost cost_here_;
+    double between_took_s_ = 0;
     SharedTurnLead turn_lead_;   // (before the pump, which holds it)
     UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
@@ -3269,11 +3336,13 @@ extern "C" void pcr_print_stats(void) {
     const Stats &s = renderer()->stats;
     fprintf(stderr,
             "[stats] pc renderer: %llu packets (%.1f MB), %llu vblanks, %llu pictures (%llu between); pictures "
-            "between: %llu frames taken, %llu pictures asked for (%llu drawn here not shown as made too late)\n",
+            "between: %llu frames taken, %llu pictures asked for (%llu drawn here not shown as made too late, %llu left "
+            "out here as too late)\n",
             (unsigned long long)s.packets.load(), double(s.bytes.load()) / 1048576.0,
             (unsigned long long)s.vblanks.load(), (unsigned long long)s.pictures.load(),
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
-            (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load());
+            (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load(),
+            (unsigned long long)s.interp_left_out.load());
     fprintf(stderr, "[stats] pc pictures between straight to the pump: %llu (%llu then found not fitting)\n",
             (unsigned long long)s.direct.load(), (unsigned long long)s.direct_stale.load());
     renderer()->intake_times.print(stderr);
