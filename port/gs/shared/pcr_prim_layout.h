@@ -45,6 +45,8 @@ static_assert(sizeof(PrimPush) <= 128, "push constants: 128 bytes at most");
 static_assert(sizeof(PrimPush) % 8 == 0, "a record: std430's stride of pcr_common.h's PcrRecord");
 constexpr uint32_t no_trace = 0xFFFFFFFFu; // (pcr_common.h's PCR_NO_TRACE)
 constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
+// (tex1) the sampled texture read at the GPU's own level, its levels made on the PC (pcr_common.h's PCR_TEX1_GPU_LEVELS)
+constexpr uint32_t tex1_gpu_levels = 0x2000u;
 
 enum : uint32_t {
     F_TME = 0x1,

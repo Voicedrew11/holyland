@@ -303,6 +303,12 @@ uint aniso_log2() {
     return (pc.tex1 >> 10) & 7u;
 }
 
+// Whether the texture's change a pixel across and down is wanted (uv_dx, uv_dy)
+bool wants_uv_change() {
+    return (pc.flags & PCR_F_TME) != 0u &&
+           (aniso_log2() != 0u || (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u);
+}
+
 // The sampled texture read with the sampler's anisotropy (aniso_log2 above 0: a mipmapped texture filtered bilinear).
 // The GS picks the level from the distance alone, the same along a surface and across it, so a floor or wall seen at
 // a grazing angle gets a level coarser than its texels across the pixel want. The pixel's footprint on the texture
@@ -383,6 +389,12 @@ uvec4 sample_texture() {
     float bias = float(int(pc.tex1) >> 16) / 256.0;
     if (smooth_2d_applies(lod)) {
         return smooth_2d(uv);
+    }
+    if (src_kind() == PCR_SRC_SAMPLED && (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u) {
+        // (the GPU's level from the footprint, the sampler's anisotropy: no GS level, bias or MMAG/MMIN choice; the
+        // sampler is bilinear and trilinear over the texture's levels made on the PC)
+        vec2 size = vec2(sampled_size());
+        return uvec4(round(sampled_grad(uv / size, uv_dx / size, uv_dy / size) * 255.0));
     }
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
@@ -693,7 +705,7 @@ void main() {
 #ifdef SCN_FUSE_280
     pcr_stq = v_stq;
 #endif
-    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
+    if (wants_uv_change()) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
@@ -726,7 +738,7 @@ void main() {
     uvec4 cd = uvec4(c.rgb, (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a);
     pcr_record_at = pc.merged;
     pcr_stq = v_sphere.xyz;
-    if ((pc.flags & PCR_F_TME) != 0u && (aniso_log2() != 0u || (pc.flags & PCR_F_SMOOTH_2D) != 0u)) {
+    if (wants_uv_change()) {
         vec2 uv = texture_uv();
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);

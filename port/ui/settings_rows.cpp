@@ -433,11 +433,14 @@ const SettingRow graphics_rows[] = {
      antialias_overridden},
     {"Sharpening", "Applied after scaling to the window; brings back detail anti-aliasing softens.", RowKind::number,
      {}, {0, 100, 5}, get_sharpen, set_sharpen, nullptr, describe_sharpen, pc_renderer},
-    {"Anisotropic filtering", "Keeps textures sharp on surfaces seen at a grazing angle.", RowKind::choice,
-     anisotropies, {}, get_aniso, set_aniso, nullptr, nullptr, pc_renderer},
+    {"Anisotropic filtering",
+     "Smooth, sharp textures on floors and walls seen at a grazing angle or far off, without shimmer.\nOff: as the PS2 "
+     "draws them.",
+     RowKind::choice, anisotropies, {}, get_aniso, set_aniso, nullptr, nullptr, pc_renderer},
     {"Texture LOD",
      "Which mipmap level textures use with distance.\nPS2: blurry far away at high resolutions.\nAuto: the level for "
-     "this resolution.\nHighest: always the full texture; far surfaces can shimmer.",
+     "this resolution.\nHighest: always the full texture; far surfaces can shimmer.\nWith anisotropic filtering on, "
+     "the 3D's textures pick their own level.",
      RowKind::choice, texture_lods, {}, get_texture_lod, set_texture_lod, nullptr, nullptr, pc_renderer},
     {"Font", "IPA Mincho: a sharp font in the same style.\nOriginal: the game's own, blurry when enlarged.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "font_sheet.h"
+#include "mip_chain.h"
 #include "pcr_blend.h"
 #include "pcr_gpu_time.h"
 #include "pcr_hang_notes.h"
@@ -127,7 +128,8 @@ struct SampledTexture {
     uint64_t texa = 0;
     std::array<uint32_t, 256> clut{};
     ImageHandle image;
-    uint32_t levels = 1;
+    uint32_t levels = 1;       // the game's (read as the GS reads them)
+    uint32_t image_levels = 1; // the image's: the game's and below them those made on the PC (gpu_levels_for)
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: a font sheet, font_sheet.h)
     bool sharp_font = false; // (made with the sharper font asked, where it may be a font sheet: may_be_font_sheet)
     uint64_t used = 0;
@@ -1956,7 +1958,8 @@ public:
         fprintf(stderr,
                 "[stats] scene renderer targets and textures: %llu targets made, %llu grown, %llu filled from uploads, "
                 "%llu uploads written into them, %llu copies between them, %llu depth aliases cleared; textures %llu "
-                "decoded, %llu sampled (%llu font sheets made finer), %llu from targets (%llu into a kept image), "
+                "decoded, %llu sampled (%llu font sheets made finer, %llu at the GPU's own level), %llu from targets "
+                "(%llu into a kept image), "
                 "%llu missing, %llu reused; "
                 "%llu shader blends, %llu read-backs; "
                 "not drawn: %llu shapes, %llu blends, %llu textures on targets, %llu copies, %llu uploads into targets, "
@@ -1965,7 +1968,8 @@ public:
                 (unsigned long long)counts_.filled_from_uploads, (unsigned long long)counts_.uploads_into_targets,
                 (unsigned long long)counts_.copies_between_targets, (unsigned long long)counts_.depth_aliases_cleared,
                 (unsigned long long)counts_.textures_uploaded, (unsigned long long)counts_.textures_sampled,
-                (unsigned long long)counts_.font_sheets, (unsigned long long)counts_.textures_from_targets,
+                (unsigned long long)counts_.font_sheets, (unsigned long long)counts_.textures_gpu_levels,
+                (unsigned long long)counts_.textures_from_targets,
                 (unsigned long long)counts_.target_copies_reused,
                 (unsigned long long)counts_.textures_missing,
                 (unsigned long long)counts_.textures_reused, (unsigned long long)counts_.shader_blends,
@@ -3783,9 +3787,15 @@ private:
                 b.image = t->image;
                 b.src = SRC_SAMPLED;
                 b.levels = t->levels;
-                uint32_t aniso = anisotropy_for(s.tex1, t->levels);
-                b.sampler = &sampler_for(s.tex1, s.clamp, t->levels, aniso);
-                b.sampling = sampling_bits(aniso);
+                if (gpu_levels_for(s, *t)) {
+                    b.sampler = &gpu_levels_sampler(s.clamp, t->image_levels);
+                    b.sampling = sampling_bits(aniso_) | tex1_gpu_levels;
+                    counts_.textures_gpu_levels++;
+                } else {
+                    uint32_t aniso = anisotropy_for(s.tex1, t->levels);
+                    b.sampler = &sampler_for(s.tex1, s.clamp, t->levels, aniso);
+                    b.sampling = sampling_bits(aniso);
+                }
                 b.alpha_lo = t->alpha_lo;
                 b.alpha_hi = t->alpha_hi;
                 b.cols = std::max(cols, a.texture->read_cols);
@@ -3904,16 +3914,28 @@ private:
                 counts_.font_sheets++;
             }
         }
-        ImageCreateInfo info =
-            ImageCreateInfo::immutable_2d_image(d.width_px * finer, d.height_px * finer, VK_FORMAT_R8G8B8A8_UNORM);
-        info.levels = d.levels;
-        info.misc = 0;
-        std::array<ImageInitialData, 7> data{};
+        // (below the game's levels, the rest down to 1 x 1 made here, for the GPU's own level: gpu_levels_for)
+        std::vector<ImageInitialData> data(d.levels);
         for (uint32_t l = 0; l < d.levels; l++) {
             data[l].data = colours.data() + d.level_start[l] * finer * finer;
             data[l].row_length = d.level_width(l) * finer;
             data[l].image_height = d.level_height(l) * finer;
         }
+        const ImageInitialData &last = data.back();
+        std::vector<uint32_t> below = mip_chain_below(
+            std::span(static_cast<const uint32_t *>(last.data), size_t(last.row_length) * last.image_height),
+            last.row_length, last.image_height);
+        size_t at = 0;
+        for (uint32_t w = last.row_length, h = last.image_height; at < below.size();) {
+            w = std::max(w / 2, 1u);
+            h = std::max(h / 2, 1u);
+            data.push_back({below.data() + at, w, h});
+            at += size_t(w) * h;
+        }
+        ImageCreateInfo info =
+            ImageCreateInfo::immutable_2d_image(d.width_px * finer, d.height_px * finer, VK_FORMAT_R8G8B8A8_UNORM);
+        info.levels = uint32_t(data.size());
+        info.misc = 0;
         ImageHandle image = device_.create_image(info, data.data());
         if (!image) {
             return nullptr;
@@ -3925,6 +3947,7 @@ private:
         t.clut = clut.rgba;
         t.image = image;
         t.levels = d.levels;
+        t.image_levels = uint32_t(data.size());
         t.finer = finer;
         t.sharp_font = sharp;
         t.used = frame_;
@@ -3935,6 +3958,47 @@ private:
             t.alpha_hi = std::max(t.alpha_hi, uint8_t(c >> 24));
         }
         return &t;
+    }
+
+    // Whether a sampled texture is read at the GPU's own level (PCR_TEX1_GPU_LEVELS) with the anisotropy asked: with
+    // anisotropic filtering on (2x to 16x; off, the GS's), a 3D draw's (not FST: the 2D's sprites stay the GS's) texture
+    // the GS reads bilinear, its levels or not (MMAG LINEAR, MMIN LINEAR or LINEAR_MIPMAP_*). Most of the game's have one
+    // level, read bilinear at every distance: at a grazing angle or far off they shimmer.
+    bool gpu_levels_for(const DrawState &s, const SampledTexture &t) const {
+        uint32_t mmag = bits(s.tex1, 5, 1), mmin = bits(s.tex1, 6, 3);
+        return aniso_ > 1 && !bits(s.prim, 8, 1) && t.image_levels > 1 && mmag == 1 &&
+               (mmin == 1 || mmin == 4 || mmin == 5);
+    }
+
+    // The sampler of a texture read at the GPU's own level: bilinear, trilinear over all its levels, the anisotropy
+    // asked (where the GPU has it)
+    const Sampler &gpu_levels_sampler(uint64_t clamp, uint32_t image_levels) {
+        uint32_t wrap = bits(clamp, 0, 4);
+        uint32_t aniso = device_.get_device_features().enabled_features.samplerAnisotropy ? aniso_ : 1;
+        uint32_t key = wrap | image_levels << 4 | aniso << 8;
+        auto found = gpu_levels_samplers_.find(key);
+        if (found != gpu_levels_samplers_.end()) {
+            return *found->second;
+        }
+        SamplerCreateInfo info = {};
+        info.mag_filter = VK_FILTER_LINEAR;
+        info.min_filter = VK_FILTER_LINEAR;
+        info.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        info.address_mode_u = (wrap & 3) == 0 ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.address_mode_v = (wrap >> 2) == 0 ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.min_lod = 0.0f;
+        info.max_lod = float(image_levels - 1);
+        if (aniso > 1) {
+            info.anisotropy_enable = VK_TRUE;
+            info.max_anisotropy = std::min(float(aniso), device_.get_gpu_properties().limits.maxSamplerAnisotropy);
+        }
+        info.border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+        SamplerHandle made = device_.create_sampler(info);
+        if (!made) {
+            return device_.get_stock_sampler(StockSampler::LinearWrap);
+        }
+        return *gpu_levels_samplers_.emplace(key, made).first->second;
     }
 
     uint32_t anisotropy_for(uint64_t tex1, uint32_t levels) const {
@@ -5254,6 +5318,7 @@ private:
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
     std::unordered_map<uint32_t, SamplerHandle> samplers_;
+    std::unordered_map<uint32_t, SamplerHandle> gpu_levels_samplers_; // (gpu_levels_sampler's)
     Batch batch_;
     bool batch_open_ = false;
     struct LastNative {
@@ -5348,6 +5413,7 @@ private:
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0, font_sheets = 0;
+        uint64_t textures_gpu_levels = 0; // (of textures_sampled: read at the GPU's own level, gpu_levels_for)
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
                                                              // pair before's materials again)
