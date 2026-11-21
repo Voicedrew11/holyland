@@ -21,6 +21,7 @@ extern "C" {
 #include "port/settings.h"
 #include "port/stats.h"
 #include "port/twin_stick.h"
+#include "port/walk_keys.h"
 }
 
 #include "../overlay/update_badge.h"
@@ -488,6 +489,14 @@ void set_twin_stick(int on) {
     changed();
 }
 
+int get_instant_wasd() {
+    return port_walk_keys_instant_setting() != 0;
+}
+void set_instant_wasd(int on) {
+    port_walk_keys_set_instant(on);
+    changed();
+}
+
 int get_separate_run() {
     return port_options.separate_run != 0;
 }
@@ -557,6 +566,10 @@ const char menu_mouse_help[] =
 const SettingRow controls_rows[] = {
     {"Twin-stick controls", "Left stick moves and strafes, right stick turns and looks. Off: the PS2's layout.",
      RowKind::toggle, on_off, {}, get_twin_stick, set_twin_stick},
+    {"Instant WASD acceleration",
+     "W A S D walk at full speed at once and turn round at once (the left stick pushed all the way, with twin-stick "
+     "controls). Off: they speed up and slow down as the game's walking always has. The keyboard only.",
+     RowKind::toggle, on_off, {}, get_instant_wasd, set_instant_wasd},
     {"Separate run key",
      "Run while Left Shift (or the left stick press) is held. The action button then only talks, picks up and opens.",
      RowKind::toggle, on_off, {}, get_separate_run, set_separate_run, nullptr, nullptr, nullptr, nullptr,
@@ -592,7 +605,7 @@ struct BindingGroup {
     const char *title;
 };
 const BindingGroup binding_groups[] = {
-    {ACTION_UP, "PS2 buttons"},   {ACTION_LEFT_STICK_UP, "Sticks"}, {ACTION_RUN, "Play"},
+    {ACTION_UP, "PS2 buttons"},   {ACTION_LEFT_STICK_UP, "Walking and looking"}, {ACTION_RUN, "Play"},
     {ACTION_QUICK_SAVE, "Saves"}, {ACTION_GS_CAPTURE, "Debugging"}, {ACTION_SHOW_FPS, "Display and mods"},
 };
 
