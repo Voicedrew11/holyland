@@ -139,6 +139,10 @@ struct Frame {
     // KF4_FLASH_TIME: the flash recorder's copy timed (two timestamps), read when the frame comes round
     VkQueryPool timer = VK_NULL_HANDLE;
     bool timed = false;
+    // The presenter's own GPU time (own_timing): three timestamps, at its start, after the picture's copy into the
+    // swapchain's image, at its end; read when the frame comes round
+    VkQueryPool own_timer = VK_NULL_HANDLE;
+    bool own_timed = false;
 };
 
 struct SwapImage {
@@ -881,6 +885,77 @@ void flash_take(VkCommandBuffer cmd, Frame &f, VkImage source, uint32_t sw, uint
 }
 
 // (the presenter, its frame's fence waited for) the last copy's GPU time, with KF4_FLASH_TIME
+// The presenter's own GPU time, which the PC renderer's GpuTimes does not see: with KF4_PRESENT_TIME=1 printed now and
+// then, and while a profile run records added to its GPU table as the kinds "presenter copy" (the picture into the
+// swapchain's image, the flash recorder's copy, the menu's uploads) and "presenter overlay" (the counter, menu and
+// overlay drawn over it). (The first timestamp is at the top of the pipe, before the wait for the swapchain's image:
+// with vsync off that wait is next to none.)
+struct OwnTiming {
+    int printing = -1; // (KF4_PRESENT_TIME, read once)
+    double period = 0;
+    double ns_copy = 0, ns_overlay = 0;
+    uint64_t timed = 0;
+} own;
+
+bool own_timing() {
+    if (own.printing < 0) {
+        own.printing = getenv("KF4_PRESENT_TIME") != nullptr && atoi(getenv("KF4_PRESENT_TIME")) >= 1;
+        VkPhysicalDeviceProperties props;
+        vk.vkGetPhysicalDeviceProperties(pr.gpu, &props);
+        own.period = props.limits.timestampPeriod;
+    }
+    return own.printing || port_profile_gpu_recording();
+}
+
+void own_timer_begin(VkCommandBuffer cmd, Frame &f) {
+    if (!own_timing()) {
+        return;
+    }
+    if (f.own_timer == VK_NULL_HANDLE) {
+        VkQueryPoolCreateInfo q = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = 3;
+        if (vk.vkCreateQueryPool(pr.device, &q, nullptr, &f.own_timer) != VK_SUCCESS) {
+            f.own_timer = VK_NULL_HANDLE;
+            return;
+        }
+    }
+    vk.vkCmdResetQueryPool(cmd, f.own_timer, 0, 3);
+    vk.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, f.own_timer, 0);
+    f.own_timed = true;
+}
+
+void own_timer_mark(VkCommandBuffer cmd, Frame &f, uint32_t query) {
+    if (f.own_timed) {
+        vk.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, f.own_timer, query);
+    }
+}
+
+void own_read_timer(Frame &f) {
+    if (!f.own_timed) {
+        return;
+    }
+    f.own_timed = false;
+    uint64_t t[3];
+    if (vk.vkGetQueryPoolResults(pr.device, f.own_timer, 0, 3, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) !=
+        VK_SUCCESS) {
+        return;
+    }
+    double copy = double(t[1] - t[0]) * own.period, overlay = double(t[2] - t[1]) * own.period;
+    if (port_profile_gpu_recording()) {
+        port_profile_gpu_add(0x50524553454E5401ull, "presenter copy", PROFILE_GPU_KIND, uint64_t(copy), 1);
+        port_profile_gpu_add(0x50524553454E5402ull, "presenter overlay", PROFILE_GPU_KIND, uint64_t(overlay), 1);
+    }
+    own.ns_copy += copy;
+    own.ns_overlay += overlay;
+    own.timed++;
+    if (own.printing && own.timed % 500 == 0) {
+        std::fprintf(stderr, "[present] the presenter's GPU time: copy %.3f, overlay %.3f ms a picture (%llu pictures)\n",
+                     own.ns_copy / double(own.timed) / 1e6, own.ns_overlay / double(own.timed) / 1e6,
+                     (unsigned long long)own.timed);
+    }
+}
+
 void flash_read_timer(Frame &f) {
     if (!f.timed) {
         return;
@@ -905,6 +980,9 @@ void close_all() {
         for (Frame &f : pr.frames) {
             if (f.timer != VK_NULL_HANDLE) {
                 vk.vkDestroyQueryPool(pr.device, f.timer, nullptr);
+            }
+            if (f.own_timer != VK_NULL_HANDLE) {
+                vk.vkDestroyQueryPool(pr.device, f.own_timer, nullptr);
             }
         }
     }
@@ -1161,6 +1239,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     int waiting = port_zone_begin(present_wait_zone);
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
     flash_read_timer(f);
+    own_read_timer(f);
     uint32_t index = 0;
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
     if (waiting) {
@@ -1249,6 +1328,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vk.vkBeginCommandBuffer(cmd, &begin);
+    own_timer_begin(cmd, f);
     // what the queue wrote before (the PC renderer's picture, this presenter's copies) before it is read
     VkMemoryBarrier memory = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
@@ -1290,11 +1370,12 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         source_w = scanout.width;
         source_h = scanout.height;
     }
-    // (the bars beside or above the picture black; the whole image when no picture covers it all. Not cleared when one
-    // does, a 16:9 picture in a 16:9 window: a whole window's write a picture less, 0.2 ms on a Vega 7 at 1080p)
-    const bool covered = source != VK_NULL_HANDLE && x <= 0 && y <= 0 && x + w >= int(pr.extent.width) &&
-                         y + h >= int(pr.extent.height);
-    if (!covered) {
+    // (the bars beside or above the picture black: with a picture, the bars alone, in the render pass below (a 16:9
+    // picture in a 16:10 window, 1920 x 1200: the whole image cleared was 0.2 ms a picture on a Vega 7, 2026-11-20);
+    // the whole image when there is none. Nothing when the picture covers the window.)
+    const bool pictured = source != VK_NULL_HANDLE && w > 0 && h > 0;
+    const bool covered = pictured && x <= 0 && y <= 0 && x + w >= int(pr.extent.width) && y + h >= int(pr.extent.height);
+    if (!pictured) {
         VkClearColorValue black = {};
         black.float32[3] = 1.0f;
         VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -1316,12 +1397,20 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     if (fresh && source != VK_NULL_HANDLE) {
         flash_take(cmd, f, source, source_w, source_h, w, h); // (the flash recorder's ring)
     }
+    own_timer_mark(cmd, f, 1);
     image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     // the frame-rate counter (either thread), then the overlay over it (the game's thread)
     static Squares squares; // (under the window's present lock, port/platform/video.c)
     squares.count = 0;
+    if (pictured && !covered) {
+        const int ew = int(pr.extent.width), eh = int(pr.extent.height);
+        add_square(&squares, 0, 0, ew, y, 0xFF000000u);                     // above
+        add_square(&squares, 0, y + h, ew, eh - (y + h), 0xFF000000u);     // below
+        add_square(&squares, 0, y, x, h, 0xFF000000u);                      // left
+        add_square(&squares, x + w, y, ew - (x + w), h, 0xFF000000u);       // right
+    }
     port_video_counter_draw(add_square, &squares, x, y, w, h);
     if (draw != nullptr || menu != nullptr || squares.count > 0) {
         VkRenderPassBeginInfo pass = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -1349,6 +1438,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         }
         vk.vkCmdEndRenderPass(cmd);
     }
+    own_timer_mark(cmd, f, 2);
     if (shot) {
         image_barrier(cmd, target.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

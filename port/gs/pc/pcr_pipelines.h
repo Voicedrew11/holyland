@@ -75,10 +75,11 @@ void warm_watch(Vulkan::Device &device, Vulkan::Program *const *programs, uint32
 
 // (any thread, after the settings are set, before the game draws) The pipelines made before play: the seed's (every
 // pipeline the canvas draws with in a tour of the game, for these settings), the list's, the plane pass's, and
-// active post-processing, on every core but one,
+// active post-processing (fullscreen passes, and compute programs dispatched with a fresh command buffer's default
+// compute state: the final pass in one), on every core but one,
 // through the cache; precompile_running is true until they are made (the game waits, "Building shaders"). Not with
 // KF4_PC_PRECOMPILE=0 (the list made ahead while the game runs, as before) or without the cache.
-void precompile(std::vector<FullscreenPipeline> fullscreen);
+void precompile(std::vector<FullscreenPipeline> fullscreen, std::vector<Vulkan::Program *> compute = {});
 bool precompile_running();
 bool precompile_progress(int *done, int *total);
 

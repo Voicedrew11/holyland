@@ -389,7 +389,7 @@ public:
         }
         ImageHandle made, old, old_whole;
         if (fresh) {
-            made = make_picture_image(device, width, height);
+            made = make_picture_image(device, width, height, false, true);
             if (!made) {
                 fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", width, height);
                 return nullptr;
@@ -465,10 +465,12 @@ public:
     // An RGBA8 image in the GENERAL layout, for the scanout and the picture: copied into and out of, and read by
     // the presenter (a copy, a blit or a shader)
     // (srgb_view: read as sRGB too, the sampler decoding it to linear light: PresentScaler's source)
-    static ImageHandle make_picture_image(Device &device, uint32_t width, uint32_t height, bool srgb_view = false) {
+    // (storage: written by a compute shader too, PresentScaler::fused's)
+    static ImageHandle make_picture_image(Device &device, uint32_t width, uint32_t height, bool srgb_view = false,
+                                          bool storage = false) {
         ImageCreateInfo info = ImageCreateInfo::render_target(width, height, VK_FORMAT_R8G8B8A8_UNORM);
         info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (storage ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
         if (srgb_view) {
             info.misc |= IMAGE_MISC_MUTABLE_SRGB_BIT;
         }
@@ -1264,8 +1266,13 @@ class PresentScaler {
 public:
     explicit PresentScaler(Device &device) : device_(device) {}
 
-    void warm_pipelines(std::vector<pcr::FullscreenPipeline> &passes, bool sharpen) {
+    // (compute: the final pass in one's program, where it may be used)
+    void warm_pipelines(std::vector<pcr::FullscreenPipeline> &passes, std::vector<Program *> &compute, bool sharpen) {
         make_programs();
+        if (fused_on_ && two_passes_ && srgb_decode_) {
+            make_fused();
+            compute.push_back(fused_);
+        }
         passes.push_back({scale_, VK_FORMAT_R8G8B8A8_UNORM});
         if (two_passes_) {
             passes.push_back({scale_1d_, VK_FORMAT_R16G16B16A16_SFLOAT});
@@ -1278,7 +1285,8 @@ public:
 
     // picture into scaled, or with sharpen above 0 into work and sharpened from it into scaled. A picture made with an
     // sRGB view (ScanoutRing::make_picture_image's srgb_view) is decoded to linear light by the sampler as it is read.
-    void scale(CommandBuffer &cmd, const Image &picture, const Image &scaled, const Image *work, float sharpen) {
+    void scale(CommandBuffer &cmd, const Image &picture, const Image &scaled, const Image *work, float sharpen,
+               pcr::GpuTimes &times) {
         if (!scale_) {
             make_programs();
         }
@@ -1310,11 +1318,14 @@ public:
                                       decoded ? 0 : 1,
                                       1};
             across_.reset(); // (not needed while the sizes stay)
+            times.begin(cmd, down ? pcr::GpuWork::scale_down : pcr::GpuWork::scale_across);
             pass(cmd, to, scale_1d_, picture.get_view(), decoded, &one, sizeof(one));
         } else if (two_passes_ && across_image(w, ph)) {
             const OneDirection across = {{int32_t(pw), int32_t(ph)}, {1, 0}, float(pw) / float(w), decoded ? 0 : 1, 0},
                                down = {{int32_t(w), int32_t(ph)}, {0, 1}, float(ph) / float(h), 0, 1};
+            times.begin(cmd, pcr::GpuWork::scale_across);
             pass(cmd, *across_, scale_1d_, picture.get_view(), decoded, &across, sizeof(across));
+            times.begin(cmd, pcr::GpuWork::scale_down);
             pass(cmd, to, scale_1d_, across_->get_view(), false, &down, sizeof(down));
         } else {
             struct {
@@ -1322,6 +1333,7 @@ public:
                 float ratio[2];
                 int32_t linear;
             } scaling = {{int32_t(pw), int32_t(ph)}, {float(pw) / float(w), float(ph) / float(h)}, 1};
+            times.begin(cmd, pcr::GpuWork::scale_across);
             pass(cmd, to, scale_, picture.get_view(), false, &scaling, sizeof(scaling));
         }
         if (sharpened) {
@@ -1329,11 +1341,117 @@ public:
                 int32_t size[2];
                 float strength;
             } sharpening = {{int32_t(w), int32_t(h)}, sharpen};
+            times.begin(cmd, pcr::GpuWork::sharpen);
             pass(cmd, scaled, sharpen_, work->get_view(), false, &sharpening, sizeof(sharpening));
         }
     }
 
+    // Whether fused can make a picture of pw x ph into w x h: a tile's source pixels within the shader's shared memory
+    // (pcr_present_fused.comp's SRC_MOST), and the two passes' way (not KF4_PC_SCALE_PASSES=1 or KF4_PC_SCALE_SRGB=0,
+    // which compare other ways). Developers' only, KF4_PC_FUSED=1: slower than the passes on a Vega 7 (below).
+    bool fits(uint32_t pw, uint32_t ph, uint32_t w, uint32_t h) const {
+        if (!fused_on_ || !two_passes_ || !srgb_decode_ || pw == 0 || ph == 0 || w == 0 || h == 0) {
+            return false;
+        }
+        // (the most source pixels 18 output pixels' kernels span along a direction, with a pixel to spare each side)
+        auto most = [](uint32_t from, uint32_t to) {
+            float ratio = float(from) / float(to);
+            return 17.0f * ratio + 4.0f * std::max(ratio, 1.0f) + 3.0f;
+        };
+        const float SRC_MOST = 24.0f;
+        const bool down = pw == w || ph != h, across = pw != w; // (as fused has them)
+        return (!across || most(pw, w) <= SRC_MOST) && (!down || most(ph, h) <= SRC_MOST);
+    }
+
+    // The final pass in one (pcr_present_fused.comp): picture FXAA'd (fxaa) or as it is, scaled and, with sharpen above
+    // 0, sharpened, into scaled; the same picture as the passes one by one (scale, after the FXAA pass) but for a level
+    // of 255 now and then. Only where fits.
+    void fused(CommandBuffer &cmd, const Image &picture, const Image &scaled, bool fxaa, float sharpen,
+               pcr::GpuTimes &times) {
+        if (!fused_) {
+            make_fused();
+        }
+        uint32_t pw = picture.get_width(), ph = picture.get_height();
+        uint32_t w = scaled.get_width(), h = scaled.get_height();
+        // (as scale: one direction where the other is the picture's own, down when both are)
+        const bool down = pw == w || ph != h, across = pw != w;
+        struct {
+            int32_t src_size[2], dst_size[2];
+            float ratio[2], texel[2];
+            float strength;
+            int32_t flags;
+        } push = {{int32_t(pw), int32_t(ph)},
+                  {int32_t(w), int32_t(h)},
+                  {float(pw) / float(w), float(ph) / float(h)},
+                  {1.0f / float(pw), 1.0f / float(ph)},
+                  sharpen,
+                  (fxaa ? 1 : 0) | (across ? 2 : 0) | (down ? 4 : 0) | (sharpen > 0 ? 8 : 0) |
+                      (across && down ? 16 : 0)};
+        push.flags &= ~drop_flags_; // (KF4_PC_FUSED_DROP: a measurement)
+        times.begin(cmd, pcr::GpuWork::final_in_one);
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+        cmd.set_program(fused_);
+        cmd.set_texture(0, 0, picture.get_view(), StockSampler::LinearClamp);
+        cmd.set_storage_texture(0, 1, scaled.get_view());
+        cmd.set_srgb_texture(0, 2, values_->get_view());
+        cmd.set_sampler(0, 2, StockSampler::NearestClamp);
+        cmd.set_texture(0, 3, values_->get_view(), StockSampler::NearestClamp);
+        cmd.set_uniform_buffer(0, 4, *least_);
+        cmd.push_constants(&push, 0, sizeof(push));
+        cmd.dispatch((w + 15) / 16, (h + 15) / 16, 1);
+        cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    }
+
 private:
+    // A half float's value (positive, normal or subnormal: the 8-bit range's)
+    static float half_to_float(uint16_t h) {
+        const int exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+        return exponent == 0 ? std::ldexp(float(mantissa), -24) : std::ldexp(float(mantissa | 0x400), exponent - 25);
+    }
+
+    void make_fused() {
+        ResourceLayout layout = {};
+        layout.sets[0].sampled_image_mask = 1u | 4u | 8u;
+        layout.sets[0].storage_image_mask = 2u;
+        layout.sets[0].uniform_buffer_mask = 16u;
+        layout.sets[0].fp_mask = 15u;
+        for (int b : {0, 1, 2, 3, 4}) {
+            layout.sets[0].meta[b].array_size = 1;
+        }
+        layout.push_constant_size = 10 * sizeof(int32_t);
+        fused_ = device_.request_program(
+            device_.request_shader(pcr_spv_pcr_present_fused_comp, sizeof(pcr_spv_pcr_present_fused_comp), &layout));
+        // (each 8-bit value v at (v, 0), to be read through the image's sRGB view, decoded by the sampler as the passes'
+        // reads are, and through its UNORM view)
+        uint32_t values[256];
+        for (uint32_t v = 0; v < 256; v++) {
+            values[v] = v | v << 8 | v << 16 | 0xFF000000u;
+        }
+        ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(256, 1, VK_FORMAT_R8G8B8A8_UNORM);
+        info.misc |= IMAGE_MISC_MUTABLE_SRGB_BIT;
+        ImageInitialData initial = {values, 0, 0};
+        values_ = device_.create_image(info, &initial);
+        // (each 8-bit value k's least float an 8-bit attachment holds as k, not k - 1: the least half float at or over
+        // (k - 0.5) / 255, the export's half floats being rounded toward zero; 0's none)
+        float least[256];
+        least[0] = -1.0f;
+        uint16_t half = 0;
+        for (int k = 1; k < 256; k++) {
+            const double boundary = (double(k) - 0.5) / 255.0;
+            while (half_to_float(half) < boundary) {
+                half++;
+            }
+            least[k] = half_to_float(half);
+        }
+        BufferCreateInfo buffer = {};
+        buffer.domain = BufferDomain::Device;
+        buffer.size = sizeof(least);
+        buffer.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        least_ = device_.create_buffer(buffer, least);
+    }
+
     void make_programs() {
         ResourceLayout vert = {};
         Shader *vs = device_.request_shader(pcr_spv_pcr_present_vert, sizeof(pcr_spv_pcr_present_vert), &vert);
@@ -1397,8 +1515,18 @@ private:
     }
 
     Device &device_;
-    Program *scale_ = nullptr, *scale_1d_ = nullptr, *sharpen_ = nullptr;
+    Program *scale_ = nullptr, *scale_1d_ = nullptr, *sharpen_ = nullptr, *fused_ = nullptr;
     ImageHandle across_;
+    ImageHandle values_;  // (fused's: each 8-bit value)
+    BufferHandle least_;  // (fused's: each 8-bit value's least float as an attachment holds it)
+    // KF4_PC_FUSED=1: the final pass in one (fused), developers' only. The same pictures byte for byte, but on a Vega 7
+    // 3.5 ms a picture against the passes' 2.3 at 1920 x 896 into 1920 x 1080 (2026-11-20,
+    // docs/plans/scene-final-pass-results.md): a compute pass of tiles in steps waits on each step's memory with too few
+    // waves to hide it, where the fragment passes run many.
+    const bool fused_on_ = getenv("KF4_PC_FUSED") && strcmp(getenv("KF4_PC_FUSED"), "1") == 0;
+    // KF4_PC_FUSED_DROP=N: the final pass in one without the parts whose flags N has (pcr_present_fused.comp's FUSED_*:
+    // 1 FXAA, 8 the sharpening): what each costs, a measurement (wrong pictures)
+    const int32_t drop_flags_ = getenv("KF4_PC_FUSED_DROP") ? atoi(getenv("KF4_PC_FUSED_DROP")) : 0;
     const bool two_passes_ = !(getenv("KF4_PC_SCALE_PASSES") && strcmp(getenv("KF4_PC_SCALE_PASSES"), "1") == 0);
     // KF4_PC_SCALE_SRGB=0: the shader decodes the picture's sRGB itself (to compare)
     const bool srgb_decode_ = !(getenv("KF4_PC_SCALE_SRGB") && strcmp(getenv("KF4_PC_SCALE_SRGB"), "0") == 0);
@@ -1527,10 +1655,17 @@ public:
             device_.flush_frame(); // (a picture between submitted for this picture to flush: on the GPU's queue now)
             return m; // (no picture shown, or none wanted)
         }
+        // (the final pass in one, PresentScaler::fused: the picture's FXAA left to it, when the picture wanted is the one
+        // scaled to the window)
+        const uint32_t present_size = settings().present_size.load(std::memory_order_relaxed);
+        const int aa = settings().antialias.load(std::memory_order_relaxed);
+        const bool fuse = (want & GSN_WANT_IMAGE) && (!(want & GSN_WANT_PIXELS) || (want & GSN_WANT_SCALED)) &&
+                          window_size(present_size) && antialiasing_.fusable(aa) &&
+                          scaler_.fits(size->width, size->height, present_size >> 16, present_size & 0xFFFF);
         CommandBufferHandle cmd = device_.request_command_buffer();
         times.begin(*cmd, pcr::GpuWork::picture);
         m.drawn = true;
-        if (!draw_picture(*cmd, *size, v, canvas)) {
+        if (!draw_picture(*cmd, *size, v, canvas, times, fuse)) {
             times.end(*cmd);
             submit_now(cmd);
             return m;
@@ -1541,11 +1676,19 @@ public:
         if (want & GSN_WANT_IMAGE) {
             // (the slot holds the picture at the window's size when the presenter asks for that, else the picture whole)
             int slot = scanout_.claim();
-            scaled = scale_for_window(*cmd, slot, times);
+            scaled = scale_for_window(*cmd, slot, times, present_size, fuse ? aa : -1);
+            if (fuse && !scaled) {
+                // (no scaled image after all: the picture's FXAA as it would have been)
+                times.begin(*cmd, pcr::GpuWork::antialias);
+                antialiasing_.apply(*cmd, *picture_, aa, {}, {});
+                times.begin(*cmd, pcr::GpuWork::picture);
+            }
             const Image *whole = scaled ? nullptr
                                         : scanout_.whole_image(device_, slot, picture_->get_width(), picture_->get_height());
             if (whole) {
+                times.begin(*cmd, pcr::GpuWork::slot_copy);
                 copy_to_scanout(*cmd, *whole);
+                times.begin(*cmd, pcr::GpuWork::picture);
             }
             if (scaled || whole) {
                 m.slot = slot;
@@ -1618,7 +1761,9 @@ private:
 
     // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
     // there is none). False if the image cannot be made.
-    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Drawing *canvas) {
+    // (leave_aa: the anti-aliasing left to the final pass in one)
+    bool draw_picture(CommandBuffer &cmd, PictureSize size, const VblankPicture &v, pcr::Drawing *canvas,
+                      pcr::GpuTimes &times, bool leave_aa) {
         if (!picture_ || picture_->get_width() != size.width || picture_->get_height() != size.height) {
             picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height, true);
             if (!picture_) {
@@ -1641,7 +1786,7 @@ private:
         }
         if (!shown) {
             cmd.clear_image(*picture_, clear_.value);
-        } else {
+        } else if (!leave_aa) {
             // (the picture's anti-aliasing, at the canvas's scale: pcr_antialias.h; with its depth and place when the
             // temporal inputs are wanted)
             pcr::PicturePlace place;
@@ -1651,7 +1796,20 @@ private:
                 place = shown_picture.place;
                 facts = facts_of(shown_picture.drawing);
             }
-            antialiasing_.apply(cmd, *picture_, settings().antialias.load(std::memory_order_relaxed), facts, place);
+            // (a method of one picture, FXAA, draws into the spare picture, which is the picture from then on: no copy
+            // of the picture to read from)
+            if (!spare_picture_ || spare_picture_->get_width() != size.width ||
+                spare_picture_->get_height() != size.height) {
+                spare_picture_ = ScanoutRing::make_picture_image(device_, size.width, size.height, true);
+            }
+            times.begin(cmd, pcr::GpuWork::antialias);
+            bool wrote_spare = false;
+            antialiasing_.apply(cmd, *picture_, settings().antialias.load(std::memory_order_relaxed), facts, place,
+                                spare_picture_.get(), &wrote_spare);
+            if (wrote_spare) {
+                std::swap(picture_, spare_picture_);
+            }
+            times.begin(cmd, pcr::GpuWork::picture);
         }
         cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
                     VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1686,18 +1844,24 @@ private:
         return shown;
     }
 
-    // The picture scaled to the window's size into the slot's scaled image (PresentScaler), when the presenter asks for
-    // it (pcr_set_present_scale); that image, or null
-    const Image *scale_for_window(CommandBuffer &cmd, int slot, pcr::GpuTimes &times) {
-        uint32_t size = settings().present_size.load(std::memory_order_relaxed);
+    // Whether size (pcr_set_present_scale's, width << 16 | height) is a window's to scale to
+    static bool window_size(uint32_t size) {
         uint32_t w = size >> 16, h = size & 0xFFFF;
-        if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+        return w != 0 && h != 0 && w <= 8192 && h <= 8192;
+    }
+
+    // The picture scaled to the window's size into the slot's scaled image (PresentScaler), when the presenter asks for
+    // it (size, pcr_set_present_scale's); that image, or null. fused_aa: the final pass in one (PresentScaler::fused)
+    // with the anti-aliasing method it does (PORT_AA_OFF or PORT_AA_FXAA); -1, the passes one by one.
+    const Image *scale_for_window(CommandBuffer &cmd, int slot, pcr::GpuTimes &times, uint32_t size, int fused_aa) {
+        if (!window_size(size)) {
             return nullptr;
         }
+        uint32_t w = size >> 16, h = size & 0xFFFF;
         float sharpen = float(settings().present_sharpen.load(std::memory_order_relaxed)) / 1000.0f;
         // (the image the scaling writes before the sharpening: one for every slot, written and read within a picture's
         // commands)
-        if (sharpen > 0 && (!scaled_work_ || scaled_work_->get_width() != w || scaled_work_->get_height() != h)) {
+        if (fused_aa < 0 && sharpen > 0 && (!scaled_work_ || scaled_work_->get_width() != w || scaled_work_->get_height() != h)) {
             scaled_work_ = ScanoutRing::make_picture_image(device_, w, h);
             if (!scaled_work_) {
                 fprintf(stderr, "[pcr] no image for a %ux%u scaled picture\n", w, h);
@@ -1708,8 +1872,18 @@ private:
         if (!scaled) {
             return nullptr;
         }
-        times.begin(cmd, pcr::GpuWork::present);
-        scaler_.scale(cmd, *picture_, *scaled, sharpen > 0 ? scaled_work_.get() : nullptr, sharpen);
+        const uint64_t sizes = uint64_t(picture_->get_width()) << 48 | uint64_t(picture_->get_height()) << 32 | size;
+        if (sizes != scaled_sizes_ || (fused_aa >= 0) != scaled_fused_) {
+            scaled_sizes_ = sizes;
+            scaled_fused_ = fused_aa >= 0;
+            fprintf(stderr, "[pcr] pictures of %ux%u scaled to %ux%u for the window (%s)\n", picture_->get_width(),
+                    picture_->get_height(), w, h, scaled_fused_ ? "the final pass in one" : "pass by pass");
+        }
+        if (fused_aa >= 0) {
+            scaler_.fused(cmd, *picture_, *scaled, fused_aa == PORT_AA_FXAA, sharpen, times);
+        } else {
+            scaler_.scale(cmd, *picture_, *scaled, sharpen > 0 ? scaled_work_.get() : nullptr, sharpen, times);
+        }
         times.begin(cmd, pcr::GpuWork::picture);
         return scaled;
     }
@@ -1795,6 +1969,8 @@ private:
     Stats &stats_;
     const ClearColour &clear_;
     PresentScaler scaler_;
+    uint64_t scaled_sizes_ = 0; // (the sizes scale_for_window last logged, and the way)
+    bool scaled_fused_ = false;
     pcr::AntiAliasing antialiasing_;
     pcr::AntiAliasHistory &history_; // (both threads')
     // (the temporal anti-aliasing) The last drawings begun (begin_drawing), by their number, and the game frame's
@@ -1815,6 +1991,7 @@ private:
     std::array<Fence, PICTURES_FENCED> fences_; // (submit_now's, the last PICTURES_FENCED pictures')
     uint64_t submitted_ = 0;
     ImageHandle picture_;
+    ImageHandle spare_picture_; // (the picture's kind and size: what FXAA draws into, swapped with picture_)
     ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
     BufferHandle readback_;
     std::vector<uint32_t> presented_pixels_;
@@ -2196,12 +2373,13 @@ public:
             return;
         }
         std::vector<pcr::FullscreenPipeline> passes;
+        std::vector<Program *> compute;
         pcr::AntiAliasing::warm_pipelines(*device_, settings.antialias.load(), passes);
         if (scaling) {
             PresentScaler scaler(*device_);
-            scaler.warm_pipelines(passes, sharpen);
+            scaler.warm_pipelines(passes, compute, sharpen);
         }
-        pcr::precompile(std::move(passes));
+        pcr::precompile(std::move(passes), std::move(compute));
     }
 
     // What was sent done, two seconds at most (the pump's likewise, after kf4-pc's: kf4-pc may wait for it)

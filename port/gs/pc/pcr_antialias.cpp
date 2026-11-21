@@ -94,7 +94,9 @@ Program *over_program(Device &device, const uint32_t *frag, size_t frag_bytes, u
 const VkImageUsageFlags TARGET_USAGE = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 const VkImageUsageFlags COPY_USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-// FXAA (shaders/pcr_fxaa.frag): the picture copied, then drawn over whole from the copy
+// FXAA (shaders/pcr_fxaa.frag): drawn from the picture into frame.into where there is one; else the picture copied,
+// then drawn over whole from the copy. (The copy was a third of FXAA's time on a Vega 7: a picture read and written
+// at the renderer's scale, 2026-11-20.)
 class Fxaa final : public AntiAliasMethod {
 public:
     explicit Fxaa(Device &device) : device_(device), program_(make_program(device)) {}
@@ -106,13 +108,24 @@ public:
     bool apply(CommandBuffer &cmd, const AntiAliasFrame &frame) override {
         const Image &picture = frame.picture;
         uint32_t w = picture.get_width(), h = picture.get_height();
+        const float texel[2] = {1.0f / float(w), 1.0f / float(h)};
+        if (frame.into && frame.into->get_width() == w && frame.into->get_height() == h) {
+            // (after whatever wrote the picture, and whatever read or wrote into before: the last picture's)
+            cmd.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+            begin_over(cmd, *frame.into, program_, false);
+            cmd.set_texture(0, 0, picture.get_view(), StockSampler::LinearClamp);
+            cmd.push_constants(texel, 0, sizeof(texel));
+            draw_over(cmd);
+            frame.wrote_into = true;
+            return true;
+        }
         if (!keep_image(device_, copy_, w, h, VK_FORMAT_R8G8B8A8_UNORM, COPY_USAGE, "FXAA's copy")) {
             return false;
         }
         copy_picture(cmd, picture, *copy_);
         begin_over(cmd, picture, program_, false);
         cmd.set_texture(0, 0, copy_->get_view(), StockSampler::LinearClamp);
-        const float texel[2] = {1.0f / float(w), 1.0f / float(h)};
         cmd.push_constants(texel, 0, sizeof(texel));
         draw_over(cmd);
         return true;
@@ -512,8 +525,18 @@ JitterSequence AntiAliasing::jitter_of(int method_number) {
     return own != JitterSequence::none ? own : jitter_asked();
 }
 
+bool AntiAliasing::fusable(int method_number) const {
+    return (method_number == PORT_AA_OFF || method_number == PORT_AA_FXAA) && debug_view() == 0 &&
+           jitter_asked() == JitterSequence::none && !history_.wanted();
+    // (a cut asked for, pcr_antialias_cut, stays asked for until a temporal method's picture: with no history wanted,
+    // there is none to cut)
+}
+
 bool AntiAliasing::apply(CommandBuffer &cmd, const Image &picture, int method_number, const PictureFacts &facts,
-                         const PicturePlace &place) {
+                         const PicturePlace &place, const Image *into, bool *wrote_into) {
+    if (wrote_into) {
+        *wrote_into = false;
+    }
     AntiAliasMethod *m = method(method_number);
     uint32_t view = debug_view();
     bool temporal = (m && m->jitter() != JitterSequence::none) || view != 0;
@@ -525,7 +548,12 @@ bool AntiAliasing::apply(CommandBuffer &cmd, const Image &picture, int method_nu
     frame.jitter = facts.jitter;
     frame.jitter_index = facts.jitter_index;
     if (!temporal) {
-        return m && m->apply(cmd, frame);
+        frame.into = into;
+        bool done = m && m->apply(cmd, frame);
+        if (wrote_into) {
+            *wrote_into = done && frame.wrote_into;
+        }
+        return done;
     }
     std::lock_guard<std::mutex> hold(history_.lock_);
     uint32_t w = picture.get_width(), h = picture.get_height();

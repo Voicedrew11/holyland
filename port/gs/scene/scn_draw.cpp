@@ -1016,7 +1016,7 @@ void Drawer::set_draw_state(const Scene &scene, const Pass &pass, const Draw &d,
                                                                              : d.scissor);
     pcr::ShaderState st = m.state;
     st.first_draw = pass.kind == PassKind::first_draw ? 1 : pass.kind == PassKind::darken ? 2 : 0;
-    times_.begin_draw(c, pass.picture ? pcr::GpuWork::picture : work_of(d), pcr::shader_state_key(st));
+    times_.begin_draw(c, pass.picture ? pcr::GpuWork::picture_layers : work_of(d), pcr::shader_state_key(st));
     if (records) {
         bind_records(pass, d, c);
     } else {

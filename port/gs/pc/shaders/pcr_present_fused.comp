@@ -1,0 +1,296 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// The final pass in one (port/gs/pc/pcr.cpp, PresentScaler::fused; docs/plans/scene-final-pass-results.md): the
+// picture's FXAA, its scaling to the window (pcr_present_scale_1d.frag's Catmull-Rom, across then down) and the
+// sharpening (pcr_present_sharpen.frag), reading the picture once and writing the window's picture once, where the
+// passes it stands in for write and read pictures at the window's size three to five times over. Developers' only
+// (KF4_PC_FUSED=1): on a Vega 7 it is slower than those passes, 3.5 ms a picture against 2.3 (2026-11-20,
+// docs/plans/scene-final-pass-results.md), its tiles' steps each waiting on memory with too few waves to hide it.
+//
+// Each work group makes a 16 x 16 tile of the output, in shared memory, each step from the last:
+//   1. the picture's pixels the tile needs, FXAA'd (or as they are), rounded to 8 bits as the FXAA pass's image holds
+//      them;
+//   2. when the picture is scaled across, the cubic across for each of those rows at each output column, in linear
+//      light, rounded to half floats as the image between the two passes holds them (when it is scaled down too);
+//   3. the cubic down (or the one direction's), encoded to sRGB and rounded to 8 bits as the scaled image holds it,
+//      for the tile and, when sharpened, the pixel around it;
+//   4. the sharpening, and the tile written.
+// The same arithmetic as the passes', in the same order and rounded at the same places, and the 8-bit values read as
+// the sampler reads them: the same pictures, byte for byte (tools/final_pass_compare.py).
+//
+// It is made lean for a small GPU's arithmetic (a Vega 7's 7 CUs), which a first form of it, with an item's place by
+// integer division, the cubic's weights worked out at every tap and the attachments' rounding emulated in full, spent
+// twice the passes' time in (2026-11-20): an item's place is by a float reciprocal, the weights are worked out once for
+// each of the tile's rows and columns, and an 8-bit attachment's rounding is a compare with a table. (The items stay
+// numbered in one run, not walked in two dimensions: 18 columns over a wave's 16 lanes across ran a second, nearly
+// empty FXAA for every wave.)
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_src; // the picture (its UNORM view), bilinear, clamped: FXAA's reads
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D u_dst; // the window's picture
+// Each 8-bit value v at (v, 0) of a 256 x 1 image, read as the passes read their images: its sRGB view, decoded by the
+// sampler (not the correctly rounded decode: a table worked out on the CPU differed from it in a few pixels of a
+// hundred), and its UNORM view
+layout(set = 0, binding = 2) uniform sampler2D u_decode;
+layout(set = 0, binding = 3) uniform sampler2D u_unorm;
+// (the CPU's) Value k's least float that the passes' 8-bit attachments hold as k and not k - 1: the least half float
+// at or over (k - 0.5) / 255. (RADV exports a fragment shader's colour to an 8-bit UNORM or a 16-bit float attachment
+// as half floats rounded toward zero, v_cvt_pkrtz_f16_f32, and the colour block rounds those to the attachment's: a
+// float rounded straight to 8 bits differs from it in a few pixels of a hundred, by a level.) Index k at [k / 4][k % 4].
+layout(set = 0, binding = 4) uniform Rounding {
+    vec4 least[64];
+} rounding;
+layout(push_constant) uniform Push {
+    ivec2 src_size;
+    ivec2 dst_size;
+    vec2 ratio;     // source pixels an output pixel spans, across and down
+    vec2 texel;     // 1 / src_size (FXAA's)
+    float strength; // the sharpening's (0 to 1)
+    int flags;      // FUSED_*
+} push;
+
+const int FUSED_FXAA = 1;
+const int FUSED_ACROSS = 2;  // the across pass (the source's width differs from the output's, or alone)
+const int FUSED_DOWN = 4;    // the down pass
+const int FUSED_SHARPEN = 8;
+const int FUSED_HALF = 16;   // both passes: the across pass's sums rounded to half floats between them
+
+#define FXAA_SRC u_src
+#define FXAA_TEXEL push.texel
+#include "pcr_fxaa.h"
+
+const int TILE = 16;
+const int OUT_MOST = TILE + 2;   // the tile and the pixel around it (the sharpening's neighbours)
+const int SRC_MOST = 24;         // source rows or columns a tile may need (the CPU keeps ratios within it: fits)
+const int TAPS_MOST = 9;         // a cubic's taps, at a ratio of 2 at most
+shared uint src_px[SRC_MOST * SRC_MOST];    // 1: the source's pixels, 8 bits a channel
+shared vec3 across_px[SRC_MOST * OUT_MOST]; // 2: the across pass's, by source row and output column
+shared uint out_px[OUT_MOST * OUT_MOST];    // 3: the scaled picture, 8 bits a channel
+shared float decode_lut[256], unorm_lut[256], least_lut[256];
+// The cubic's taps for each output column (across, [0]) and row (down, [1]) the tile makes: the first source pixel
+// (from the tile's first), how many, each one's weight, which are within the kernel's middle (its min and max), the
+// weights' sum
+shared int span_first[2][OUT_MOST], span_taps[2][OUT_MOST];
+shared float span_w[2][OUT_MOST][TAPS_MOST];
+shared uint span_mid[2][OUT_MOST];
+shared float span_total[2][OUT_MOST];
+
+// Item i of a run of rows of width w (inv: 1 / w) as (column, row): exact while i is small (well under 2^20)
+ivec2 item(int i, int w, float inv) {
+    int y = int((float(i) + 0.5) * inv);
+    return ivec2(i - y * w, y);
+}
+
+vec3 decode(uint p) {
+    return vec3(decode_lut[p & 0xFFu], decode_lut[(p >> 8) & 0xFFu], decode_lut[(p >> 16) & 0xFFu]);
+}
+
+vec3 unorm(uint p) {
+    return vec3(unorm_lut[p & 0xFFu], unorm_lut[(p >> 8) & 0xFFu], unorm_lut[(p >> 16) & 0xFFu]);
+}
+
+// c as an 8-bit attachment holds it: rounded to nearest, or one less where the half float rounded toward zero is
+// under the rounding's boundary (least_lut)
+uint attachment(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    uvec3 k = uvec3(c * 255.0 + 0.5);
+    k -= uvec3(c.r < least_lut[k.r] ? 1u : 0u, c.g < least_lut[k.g] ? 1u : 0u, c.b < least_lut[k.b] ? 1u : 0u);
+    return k.r | k.g << 8 | k.b << 16 | 0xFF000000u;
+}
+
+// x as a 16-bit float attachment holds it
+float rtz_half(float x) {
+    uint b = packHalf2x16(vec2(x, 0.0)) & 0xFFFFu;
+    float h = unpackHalf2x16(b).x;
+    if (abs(h) > abs(x)) {
+        b -= 1u;
+        h = unpackHalf2x16(b).x;
+    }
+    return h;
+}
+
+float cubic(float x) {
+    // Catmull-Rom: B 0, C 0.5
+    x = abs(x);
+    if (x < 1.0) {
+        return 1.5 * x * x * x - 2.5 * x * x + 1.0;
+    }
+    if (x < 2.0) {
+        return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
+    }
+    return 0.0;
+}
+
+vec3 to_srgb(vec3 c) {
+    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+
+// Output pixel o's cubic along a direction: its middle, stretch, first and last source pixels
+struct Span {
+    float at, stretch;
+    int lo, hi;
+};
+Span span_of(int o, float ratio, int last) {
+    Span s;
+    s.at = (float(o) + 0.5) * ratio - 0.5;
+    s.stretch = max(ratio, 1.0);
+    s.lo = clamp(int(ceil(s.at - 2.0 * s.stretch)), 0, last);
+    s.hi = clamp(int(floor(s.at + 2.0 * s.stretch)), 0, last);
+    return s;
+}
+
+// (into span_*[d][i]) output pixel o's taps along direction d, numbered from source pixel first
+void keep_span(int d, int i, int o, float ratio, int last, int first) {
+    Span s = span_of(o, ratio, last);
+    float total = 0.0;
+    uint mid = 0u;
+    for (int k = s.lo; k <= s.hi; k++) {
+        float w = cubic((float(k) - s.at) / s.stretch);
+        span_w[d][i][k - s.lo] = w;
+        total += w;
+        if (abs(float(k) - s.at) <= s.stretch) {
+            mid |= 1u << (k - s.lo);
+        }
+    }
+    span_first[d][i] = s.lo - first;
+    span_taps[d][i] = s.hi - s.lo + 1;
+    span_mid[d][i] = mid;
+    span_total[d][i] = total;
+}
+
+void main() {
+    const bool fxaa = (push.flags & FUSED_FXAA) != 0, across = (push.flags & FUSED_ACROSS) != 0;
+    const bool down = (push.flags & FUSED_DOWN) != 0, sharpen = (push.flags & FUSED_SHARPEN) != 0;
+    const bool half_between = (push.flags & FUSED_HALF) != 0;
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    const int tid = int(gl_LocalInvocationIndex);
+    const ivec2 origin = ivec2(gl_WorkGroupID.xy) * TILE;
+    const int halo = sharpen ? 1 : 0;
+    // the output pixels made (the tile and its ring, within the output) and the source's they read
+    const ivec2 o0 = max(origin - halo, ivec2(0)), o1 = min(origin + TILE - 1 + halo, push.dst_size - 1);
+    const ivec2 on = o1 - o0 + 1;
+    const ivec2 last = push.src_size - 1;
+    const ivec2 s0 = ivec2(across ? span_of(o0.x, push.ratio.x, last.x).lo : o0.x,
+                           down ? span_of(o0.y, push.ratio.y, last.y).lo : o0.y);
+    const ivec2 s1 = ivec2(across ? span_of(o1.x, push.ratio.x, last.x).hi : o1.x,
+                           down ? span_of(o1.y, push.ratio.y, last.y).hi : o1.y);
+    const ivec2 sn = s1 - s0 + 1;
+
+    // 0. the tables, and the tile's columns' and rows' taps
+    decode_lut[tid] = texelFetch(u_decode, ivec2(tid, 0), 0).r; // (TILE * TILE threads: an entry each)
+    unorm_lut[tid] = texelFetch(u_unorm, ivec2(tid, 0), 0).r;
+    least_lut[tid] = rounding.least[tid >> 2][tid & 3];
+    if (l.y == 0 && across) {
+        for (int i = l.x; i < on.x; i += TILE) {
+            keep_span(0, i, o0.x + i, push.ratio.x, last.x, s0.x);
+        }
+    } else if (l.y == 1 && down) {
+        for (int i = l.x; i < on.y; i += TILE) {
+            keep_span(1, i, o0.y + i, push.ratio.y, last.y, s0.y);
+        }
+    }
+    barrier(); // (the tables before step 1's rounding)
+
+    const int threads = TILE * TILE;
+    // 1. the source's pixels
+    const float inv_sn = 1.0 / float(sn.x), inv_on = 1.0 / float(on.x);
+    for (int i = tid; i < sn.x * sn.y; i += threads) {
+        ivec2 q = item(i, sn.x, inv_sn);
+        ivec2 p = s0 + q;
+        vec3 c = fxaa ? fxaa_at((vec2(p) + 0.5) * push.texel) : texelFetch(u_src, p, 0).rgb;
+        src_px[q.y * SRC_MOST + q.x] = attachment(c);
+    }
+    barrier();
+
+    // 2. across: each source row at each output column
+    if (across) {
+        for (int i = tid; i < on.x * sn.y; i += threads) {
+            {
+                ivec2 q = item(i, on.x, inv_on);
+                int x = q.x, y = q.y;
+                int first = span_first[0][x], taps = span_taps[0][x];
+                uint mid = span_mid[0][x];
+                vec3 sum = vec3(0.0);
+                vec3 mn = vec3(1e9), mx = vec3(-1e9);
+                for (int t = 0; t < taps; t++) {
+                    vec3 c = decode(src_px[y * SRC_MOST + first + t]);
+                    sum += c * span_w[0][x][t];
+                    if ((mid & (1u << t)) != 0u) {
+                        mn = min(mn, c);
+                        mx = max(mx, c);
+                    }
+                }
+                float total = span_total[0][x];
+                vec3 c = total != 0.0 ? sum / total : vec3(0.0);
+                if (mx.x >= mn.x) {
+                    c = clamp(c, mn, mx);
+                }
+                if (half_between) {
+                    c = vec3(rtz_half(c.r), rtz_half(c.g), rtz_half(c.b));
+                }
+                across_px[y * OUT_MOST + x] = c;
+            }
+        }
+        barrier();
+    }
+
+    // 3. down (or the one direction's result, encoded): the output pixels
+    for (int i = tid; i < on.x * on.y; i += threads) {
+        {
+            ivec2 q = item(i, on.x, inv_on);
+            int x = q.x, y = q.y;
+            vec3 c;
+            if (down) {
+                int first = span_first[1][y], taps = span_taps[1][y];
+                uint mid = span_mid[1][y];
+                vec3 sum = vec3(0.0);
+                vec3 mn = vec3(1e9), mx = vec3(-1e9);
+                for (int t = 0; t < taps; t++) {
+                    int row = first + t;
+                    vec3 v = across ? across_px[row * OUT_MOST + x] : decode(src_px[row * SRC_MOST + x]);
+                    sum += v * span_w[1][y][t];
+                    if ((mid & (1u << t)) != 0u) {
+                        mn = min(mn, v);
+                        mx = max(mx, v);
+                    }
+                }
+                float total = span_total[1][y];
+                c = total != 0.0 ? sum / total : vec3(0.0);
+                if (mx.x >= mn.x) {
+                    c = clamp(c, mn, mx);
+                }
+            } else {
+                c = across_px[y * OUT_MOST + x]; // (across alone: the source's rows are the output's)
+            }
+            out_px[y * OUT_MOST + x] = attachment(clamp(to_srgb(max(c, vec3(0.0))), 0.0, 1.0));
+        }
+    }
+    barrier();
+
+    // 4. the sharpening (pcr_present_sharpen.frag's), and the tile written
+    ivec2 p = origin + l;
+    if (p.x >= push.dst_size.x || p.y >= push.dst_size.y) {
+        return;
+    }
+    ivec2 at = p - o0;
+    vec3 e = unorm(out_px[at.y * OUT_MOST + at.x]);
+    if (!sharpen) {
+        imageStore(u_dst, p, vec4(e, 1.0)); // (a value of 255 exactly: stored as it is)
+        return;
+    }
+    // (the neighbours clamped to the output, as the sharpening pass's texelFetch reads were)
+    ivec2 up = clamp(p + ivec2(0, -1), ivec2(0), push.dst_size - 1) - o0;
+    ivec2 left = clamp(p + ivec2(-1, 0), ivec2(0), push.dst_size - 1) - o0;
+    ivec2 right = clamp(p + ivec2(1, 0), ivec2(0), push.dst_size - 1) - o0;
+    ivec2 below = clamp(p + ivec2(0, 1), ivec2(0), push.dst_size - 1) - o0;
+    vec3 b = unorm(out_px[up.y * OUT_MOST + up.x]), d = unorm(out_px[left.y * OUT_MOST + left.x]);
+    vec3 f = unorm(out_px[right.y * OUT_MOST + right.x]), h = unorm(out_px[below.y * OUT_MOST + below.x]);
+    vec3 mn = min(e, min(min(b, d), min(f, h)));
+    vec3 mx = max(e, max(max(b, d), max(f, h)));
+    vec3 room = clamp(min(mn, 1.0 - mx) / max(mx, vec3(1.0 / 1024.0)), 0.0, 1.0);
+    vec3 amount = sqrt(room);
+    float most = -mix(1.0 / 8.0, 1.0 / 5.0, clamp(push.strength, 0.0, 1.0));
+    vec3 w = amount * most * clamp(push.strength * 4.0, 0.0, 1.0);
+    vec3 c = (e + (b + d + f + h) * w) / (1.0 + 4.0 * w);
+    imageStore(u_dst, p, vec4(unorm(attachment(c)), 1.0)); // (rounded as the sharpening's attachment)
+}
