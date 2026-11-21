@@ -156,23 +156,18 @@ int Automap_PersonPage(int record) {
 }
 
 /* ---- What a hazard is -----------------------------------------------------------------------------
-   Hazard effect 4 (Collision_GetSurfaceEffect; Player_UpdateStatus takes 10 HP a frame) is lava in the Forge,
-   the Cavern of Lava and the Fire Lord's Domain, and the sea in these maps (seen in the game): */
-static const int sea_maps[] = {
-    0,  /* Village Ruins: the sea north of the village */
-    99, /* Palace of Oath Exterior: the inlets beside the path from the shore */
-};
-
-int Automap_HazardIsWater(int map) {
-    size_t i;
-
-    for (i = 0; i < sizeof(sea_maps) / sizeof(sea_maps[0]); i++) {
-        if (sea_maps[i] == map) {
-            return 1;
-        }
-    }
-    return 0;
-}
+   Hazard effect 4 (CollisionMesh.hazard_strips, Collision_GetSurfaceEffect) is lava on every map that has it,
+   and the automap draws it as lava (PORT_AUTOMAP_FIRE) everywhere. The game has no "sea" kind of it: the
+   player standing in it (Player_CollideWithMap sets ground_effect_kind) takes 10 HP a frame
+   (Player_UpdateStatus), moves and sinks slowly (Player_Move's row 4 of player_top_speed and player_gravity:
+   6 and 0.03), and steps with footstep sound 0x27; an entity in it takes up to 50 less its fire resistance
+   (EntityCollision_ApplySurfaceEffect: EntityParams.resist_fire). Water is another strip list
+   (CollisionMesh.water_strips: swimming, status bits 38-39), drawn blue; poisoned or corroding water is
+   hazard effects 1-3 or 5 laid on water strips.
+   The maps with effect 4, each looked at in the game standing in it (November 2026): 000 Village Ruins (the
+   lava north and east of the save point's ruin), 018 and 019 The Forge, 024 The Cavern of Lava, 025 The Fire
+   Lord's Domain, 099 Palace of Oath Exterior (the pools beside the path), 102 The Ancient City, Level 3,
+   East, and 116 The Treasury. 000 and 099 were listed here as the sea until then, and drawn as deep water. */
 
 /* ---- Hints ------------------------------------------------------------------------------------------
    AUTOMAP_OBJECT: a map object (map, object index); AUTOMAP_SPAWN: an entity (map, spawn index). */

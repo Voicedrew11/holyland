@@ -64,10 +64,9 @@ enum {
     PORT_AUTOMAP_FLOOR,
     PORT_AUTOMAP_WATER,  /* CollisionMesh.water_strips */
     PORT_AUTOMAP_POISON, /* hazard_strips, effects 1 to 3 (ground_effect_kind) */
-    PORT_AUTOMAP_FIRE,   /* effect 4: 10 HP a frame (lava; the sea on some maps, DEEP) */
+    PORT_AUTOMAP_FIRE,   /* effect 4: 10 HP a frame (lava, on every map that has it: game/automap_guide.c) */
     PORT_AUTOMAP_HURT,   /* effect 5 and others: 1 HP a frame and wears what is worn (acid) */
     PORT_AUTOMAP_DEATH,  /* effect 0: falling onto it kills (the void under the map, deep water) */
-    PORT_AUTOMAP_DEEP,   /* effect 4 where it is the sea (game/automap_guide.c): it drowns */
 };
 #define PORT_AUTOMAP_WALL 1   /* layer flag: a wall rises from this floor here */
 #define PORT_AUTOMAP_WALKED 2 /* layer flag: the player has stood here */
