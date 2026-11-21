@@ -681,9 +681,12 @@ bool pcr_exact_depth() {
         } \
     } \
     if ((pc.flags & PCR_F_FGE) != 0u) { \
-        uint f = uint(clamp(v_fog, 0.0, 255.0)); \
-        uvec3 fog = uvec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
-        c.rgb = (f * c.rgb + (255u - f) * fog) >> 8; \
+        /* the GS's fog as paraLLEl-GS has it: F rounded, the colour the fog colour plus (C - FOGCOL) * F / 256 \
+           rounded (F 255 leaves a colour as it is). Truncated, every fogged pixel came out a step darker than the \
+           GS's: at map 000 against --renderer gs, 11% of pixels exact before, 46% after, 2026-11-21 */ \
+        int f = int(roundEven(clamp(v_fog, 0.0, 255.0))); \
+        ivec3 fog = ivec3(pc.fogcol & 0xFFu, (pc.fogcol >> 8) & 0xFFu, (pc.fogcol >> 16) & 0xFFu); \
+        c.rgb = uvec3(fog + (((ivec3(c.rgb) - fog) * f + 128) >> 8)); \
     }
 
 #ifdef SCN_FUSE_280
