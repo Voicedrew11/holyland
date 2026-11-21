@@ -11,5 +11,8 @@
 layout(location = 0) out float o_first;
 
 void main() {
+#ifdef PCR_RECORDS
+    pcr_take_record(); // (the draw's fields from its record: pcr_common.h)
+#endif
     o_first = float(pc.record + uint(gl_PrimitiveID)) * (1.0 / 16777216.0);
 }

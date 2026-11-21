@@ -94,6 +94,11 @@ In short:
   lets happen); the scene renderer decides each picture between by its predicted cost and never holds the game.
 - **Six slices**, beside today's renderer as `--renderer scene`; the first: `HANDOFF_scene_slice1.md`.
 
+### Where it stands (2026-11-20)
+
+Slices 1 and 2 are built and measured (`scene-slice1-results.md`, `scene-slice2-results.md`, `scene-slice2-after.md`).
+Slice 3 (batching) is next, cut into five parts of a session or so each: `HANDOFF_scene_slice3.md`.
+
 ## Order
 
 1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,

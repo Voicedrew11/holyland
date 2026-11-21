@@ -71,9 +71,20 @@ layout(set = 1, binding = 7, std430) readonly buffer Records {
 // (a merged run's draw, pcr_canvas.cpp's Runs: several native batches' triangles as one vkCmdDraw. Each triangle of
 // the draw has an entry in u_merged, at its number in the draw: its triangle in the program's tris, its instance (what
 // gl_InstanceIndex is to a batch drawn alone) and its batch's record in u_records)
+#ifdef PCR_DRAWS_APART
+// (PCR_DRAWS_APART, the scene renderer's records, port/gs/scene/scn_draw.cpp: no merged runs, so the record's place is
+// the push constants' and gl_DrawID alone, the same across the draw, and its fields are loaded once a draw)
+#define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB))
+#else
 uint pcr_merged_record = 0u;
 #define PCR_RECORD (pcr_push.record + uint(gl_DrawIDARB) + pcr_merged_record)
-#ifdef PCR_ND
+#endif
+#if defined(PCR_ND) && defined(PCR_DRAWS_APART)
+void pcr_triangle(out uint triangle, out uint instance) {
+    triangle = uint(gl_VertexIndex) / 3u;
+    instance = uint(gl_InstanceIndex);
+}
+#elif defined(PCR_ND)
 layout(set = 1, binding = 8, std430) readonly buffer Merged {
     uvec4 m[]; // (the triangle in tris, the instance, the record, unused)
 } u_merged;
@@ -90,6 +101,9 @@ void pcr_triangle(out uint triangle, out uint instance) {
 }
 #endif
 #define pc u_records.r[PCR_RECORD]
+#ifdef PCR_DRAWS_APART
+void pcr_pass_record() {} // (the fragment stage reads the record itself: below)
+#else
 // (the fields the fragment stage reads, flat: read there from the record, each a load a pixel, the pictures between
 // took the GPU 6% longer)
 layout(location = 4) flat out uvec4 v_record[6];
@@ -101,6 +115,15 @@ void pcr_pass_record() {
     v_record[4] = uvec4(uvec2(pc.src_scale), uvec2(pc.dest_offset));
     v_record[5] = uvec4(pc.trace_xy, pc.trace_draw, floatBitsToUint(pc.zscale), pc.zmax);
 }
+#endif
+#elif defined(PCR_DRAWS_APART)
+// (PCR_DRAWS_APART, the fragment stage: each draw a call of its own (slice 3a: gl_DrawID 0), its record the push
+// constants' place, the same across the draw, its fields loaded once a draw. Handed down from the vertex stage as the
+// PC renderer's runs have them, 25 flat values a vertex, the scene's world took the GPU 20% longer at 2x on the Vega 7:
+// 0.5-0.8 ms a game frame, docs/plans/scene-slice3-results.md. An indirect draw of several records (3b) has no
+// gl_DrawID here: it must find its own way.)
+void pcr_take_record() {}
+#define pc u_records.r[pcr_push.record]
 #else
 layout(location = 4) flat in uvec4 v_record[6];
 PcrRecord pcr_record;

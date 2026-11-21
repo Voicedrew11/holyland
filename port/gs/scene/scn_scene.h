@@ -68,6 +68,9 @@ struct Draw {
     uint32_t first_triangle = 0, triangle_count = 0, instance = 0;
     // The GIF's primitives: their corners in Scene::vertices, three a triangle
     uint32_t first_vertex = 0, vertex_count = 0;
+    // (the GIF's triangles Z tested: 3D the native draw does not take, program 0x000's triangles cut up where they cross
+    // the GS's range, scene-renderer-design.md "What still comes as GIF"; counted as what ends a run)
+    bool gif_3d = false;
     // A clear (vkCmdClearAttachments over clear_rect: the colour, the depth or both) rather than a draw
     bool clear = false;
     VkClearRect clear_rect{};
