@@ -28,11 +28,22 @@ is not borrowed.
   Up / Down, Tab / Shift+Tab) change the section; Delete empties a binding's slot; F1 closes. F11 still switches full screen.
 - **Controller**: d-pad or left stick (held: repeats), Cross (A) chooses, Circle (B) backs out, Square (X) empties a
   binding's slot, L1 / R1 change the section, Start or L3 + R3 close it.
+- **Controller pictures** (2026-11-21): once a controller was used, the prompts along the bottom, the section keys
+  in the sidebar and the controller slot of each key binding show its buttons as pictures, in its own family's look:
+  PlayStation's (Cross, Circle, L1), Xbox's (A, B, LB; also Steam Deck and other controllers) or a Switch's (B, A, L,
+  where SDL's south, east and left shoulder sit). The family comes from SDL's type of the controller that was pressed
+  (`SDL_GetGamepadTypeForID`), and of the first one open when the menu opens. Pictures from Kenney's Input Prompts
+  fonts (CC0), outlined; `port/ui/pad_glyphs.hpp` holds each family's table. Keyboard keys keep their boxes.
 - **Mouse**: over a row focuses it; a click is Enter; the arrows either side of a value step it; a click on a list's
   choice picks it; a click on a tab shows it; the right button is Back; the wheel scrolls.
-- At the start, a small panel at the top of the screen says "F1 or L3 + R3: Holyland's settings" for ten seconds
-  (fading over the last one), and goes as soon as the menu is opened. Not under a pad script (`--input`), so test
-  runs' pictures are as they were. It is the menu's document with `body.closed`: only `#hint` shows.
+- **The hint** (2026-11-21): at each start, until the player opens the menu, a small plate in the top right corner shows its
+  keys and "Settings", on a soft dark box: F1 for the keyboard, or L3 + R3 as the controller's own pictures. It
+  follows the input in use while it shows (a key: F1; a controller's button: that controller's). It shows for 8 s
+  from the start of play (two seconds of the game's own clock: the pictures start earlier, while the renderer's
+  pipelines are made), with the controller's keys if one is connected, and for 5 s whenever a controller is
+  connected later. Opening the menu hides it for the rest of the run; the next start shows it again.
+  Not under a pad script (`--input`), so test runs' pictures are as they were. It is the menu's document with
+  `body.closed`: only `#hint` shows, written by `hint_rml()` in `player_ui.cpp`.
 - **Sounds**: the game's own menu sounds, the first four of its se_com bank, as King's Field IV's menus play them
   (`Sound_PlayMenu`) and at its sound volume option: the cursor's for a move, a list's highlight, a tab or a value
   that changed; Cross's for opening the menu or a list, a choice, a toggle, an action, a slot listened for (and the
@@ -68,6 +79,7 @@ is not borrowed.
 | `port/ui/player_ui.cpp` | RmlUi set up; the page written as RML from the rows and the model; input |
 | `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, binding slots, the pointer, each input's sound cue (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
 | `port/include/port/menu_sounds.h`, `game/menu_sounds.c` | the game's menu sounds, played for the menu |
+| `port/ui/pad_glyphs.hpp/.cpp` | a controller's buttons as pictures: the family of an SDL controller type, each family's code points in Kenney's fonts, a binding's button: `tests/ui_pad_glyphs_test.cpp` (checks the face buttons against SDL's own labels) |
 | `port/ui/settings_rows.hpp/.cpp` | **the settings, as data**: tabs and rows |
 | `port/ui/ui_render.hpp/.cpp` | `ui::Recorder`, RmlUi's `RenderInterface`: geometry and textures recorded into a `ui::Frame` |
 | `port/ui/ui_frame.hpp` | `ui::Frame`: one picture's triangles, draws, texture uploads and releases (no Vulkan) |
@@ -76,7 +88,7 @@ is not borrowed.
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
 | `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
 | `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
-| `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
+| `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1; `kenney_input_{xbox_series,playstation_series,nintendo_switch}.ttf` (controller pictures, Kenney's Input Prompts 1.5, CC0: `CC0-Kenney-Input-Prompts.txt`; their glyphs are in the private use area from U+E000, so each is its own family) |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
 
@@ -114,7 +126,8 @@ picture.
 
 - `ctest -R ui_menu`: the model.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
-  presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; the sections are `display graphics controls keys gameplay interface general cheats`), and writes
+  presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; `xbox`,
+  `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; the sections are `display graphics controls keys gameplay interface general cheats`), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 

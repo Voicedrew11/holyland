@@ -424,7 +424,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
             DEPENDS ${KF4_UI_FILE_PATHS} ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
             COMMENT "The player menu's files" VERBATIM)
         add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
-                    port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
+                    port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp port/ui/pad_glyphs.cpp
                     ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
@@ -895,6 +895,21 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME ui_game_art COMMAND ui_game_art_test)
+endif()
+
+# A controller's buttons as the player menu's pictures (port/ui/pad_glyphs.hpp): each family's buttons against SDL's
+# own labels, bindings to buttons, the RML written
+if(TARGET SDL3::SDL3)
+    add_executable(ui_pad_glyphs_test tests/ui_pad_glyphs_test.cpp port/ui/pad_glyphs.cpp)
+    target_include_directories(ui_pad_glyphs_test PRIVATE port/ui port/include)
+    target_link_libraries(ui_pad_glyphs_test PRIVATE SDL3::SDL3)
+    set_target_properties(ui_pad_glyphs_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    if(NOT MSVC)
+        target_compile_options(ui_pad_glyphs_test PRIVATE -Wall -Wextra -Wshadow)
+    endif()
+    if(KF4_TESTS)
+        add_test(NAME ui_pad_glyphs COMMAND ui_pad_glyphs_test)
+    endif()
 endif()
 
 # The PC renderer's spare surface images (port/gs/pc/pcr_spares.h): which image a copy is made into, which are let go

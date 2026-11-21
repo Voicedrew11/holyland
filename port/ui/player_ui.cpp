@@ -18,12 +18,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 
-#include "menu_model.hpp"
 #include "game_menu_art.hpp"
+#include "menu_model.hpp"
+#include "pad_glyphs.hpp"
 #include "settings_rows.hpp"
+#include "ui_assets.hpp"
 #include "ui_frame.hpp"
 #include "ui_render.hpp"
 #include "ui_ties.hpp"
@@ -42,6 +45,15 @@ namespace {
 
 // ---- The menu's state -----------------------------------------------------------------------------------------------
 enum class Device { keyboard, pad };
+
+// The hint of the keys that open the menu, each run until the player opens the menu: at the start of play, and again
+// for a while when a controller is connected
+struct Hint {
+    bool found = false;    // the menu was opened this run: no more hint
+    bool waiting = false;  // to show once the game's clock reaches HINT_START_VBLANK (the start of play)
+    uint64_t from_ms = 0;  // showing from then (fading in) until then (fading out); until 0: not showing
+    uint64_t until_ms = 0;
+};
 
 struct Menu;
 class PointerEvents final : public Rml::EventListener {
@@ -82,40 +94,68 @@ struct Menu {
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
-    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml;
+    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml;
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
     Device device = Device::keyboard;
+    ui::PadFamily pad_family = ui::PadFamily::xbox; // the controller last used: whose pictures the prompts show
     // the controller's held direction, pressed again while held
     int pad_held = -1; // a MenuInput, or -1
     uint64_t pad_next_ms = 0;
     int stick_direction = -1; // the left stick's, as a MenuInput (or -1)
     bool l3 = false, r3 = false;
     bool was_listening = false; // a binding's slot waited for a key last picture
-    // the hint of the keys that open the menu, shown from the start until then (0: never, or no longer)
-    uint64_t hint_until_ms = 0;
+    Hint hint;
     // the window's pixels for each of SDL's window units (a HiDPI screen: 2)
     float pixels_per_unit = 1.0f;
     bool drawn = false;
 };
 Menu menu;
 
-const uint64_t HINT_MS = 10000;     // the start's hint, from the menu's start (the window's)
-const uint64_t HINT_FADE_MS = 1000; // its fading at the end
+const uint64_t HINT_START_VBLANK = 120; // the start of play: two seconds of the game's own clock (the pictures start
+                                        // before the game does, while the renderer's pipelines are made)
+const uint64_t HINT_MS = 8000;          // the hint at the start of play
+const uint64_t HINT_AGAIN_MS = 5000;    // the hint when a controller is connected
+const uint64_t HINT_FADE_IN_MS = 400;
+const uint64_t HINT_FADE_OUT_MS = 1000;
 const uint64_t PAD_DELAY_MS = 350;  // a held direction repeats after this
 const uint64_t PAD_REPEAT_MS = 85;  // every this
+
+// The first controller libpad opened (SDL_GetGamepadFromID finds only an open one), or nullptr
+SDL_Gamepad *first_pad() {
+    SDL_Gamepad *pad = nullptr;
+    int count = 0;
+    SDL_JoystickID *pads = SDL_GetGamepads(&count);
+    for (int i = 0; pads != nullptr && i < count && pad == nullptr; i++) {
+        pad = SDL_GetGamepadFromID(pads[i]);
+    }
+    SDL_free(pads);
+    return pad;
+}
+
+// A controller was used: the prompts show its buttons
+void use_pad(SDL_JoystickID id) {
+    menu.device = Device::pad;
+    menu.pad_family = ui::pad_family(SDL_GetGamepadTypeForID(id));
+}
 
 void set_open(bool open) {
     if (open == menu.open || !menu.ready) {
         return;
     }
     menu.open = open;
-    menu.hint_until_ms = 0; // (the menu was found: the hint has done its job)
+    menu.hint = {}; // (the menu was found: the hint has done its job for this run)
+    menu.hint.found = true;
     // (the game's input and the mouse follow: port_overlay_holds_input)
     if (port_controls_listening(nullptr, nullptr)) {
         port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
     }
     if (open) {
+        SDL_Gamepad *pad = menu.device == Device::keyboard ? first_pad() : nullptr;
+        if (pad != nullptr) {
+            // (the slots' buttons before any is pressed; a pressed one has set its own family: use_pad)
+            menu.pad_family = ui::pad_family(SDL_GetGamepadType(pad));
+        }
         menu.model.open_at(menu.model.tab());
         menu.scrolled_row = -2;
     } else {
@@ -162,6 +202,19 @@ void apply(ui::MenuResult result) {
 
 void press(ui::MenuInput input) {
     apply(menu.model.press(input));
+}
+
+// Kenney's controller fonts, one family each (pad_glyphs.hpp)
+bool load_pad_fonts() {
+    for (const ui::PadFont &font : ui::pad_fonts) {
+        const UiAsset *file = ui_asset(font.path);
+        if (file == nullptr || !Rml::LoadFontFace(Rml::Span<const Rml::byte>(file->data, file->size), font.family,
+                                                  Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal)) {
+            std::fprintf(stderr, "[ui] the font %s did not load\n", font.path);
+            return false;
+        }
+    }
+    return true;
 }
 
 // ---- The pointer ----------------------------------------------------------------------------------------------------
@@ -229,16 +282,26 @@ void escaped(std::string &out, std::string_view text) {
     }
 }
 
+// A key's name in its box
+std::string key_rml(const char *name) {
+    return std::string("<key>") + name + "</key>";
+}
+
+// The controller's button as its picture when the controller was used last, else the key's name in its box
+std::string input_rml(ui::PadButton button, const char *key) {
+    return menu.device == Device::pad ? ui::pad_glyph_rml(menu.pad_family, button) : key_rml(key);
+}
+
 // The sections down the sidebar, with the keys that move between them above and below
 std::string tabs_rml() {
-    std::string out = menu.device == Device::pad ? "<tab class=\"end\">L1</tab>" : "<tab class=\"end\">Q</tab>";
+    std::string out = "<tab class=\"end\">" + input_rml(ui::PadButton::left_shoulder, "Q") + "</tab>";
     for (int t = 0; t < menu.rows.tab_count(); t++) {
         out += "<tab data-tab=\"" + std::to_string(t) + "\"";
         out += t == menu.model.tab() ? " class=\"selected\">" : ">";
         escaped(out, menu.rows.tab(t).name);
         out += "</tab>";
     }
-    out += menu.device == Device::pad ? "<tab class=\"end\">R1</tab>" : "<tab class=\"end\">E</tab>";
+    out += "<tab class=\"end\">" + input_rml(ui::PadButton::right_shoulder, "E") + "</tab>";
     return out;
 }
 
@@ -266,7 +329,15 @@ void slots_rml(std::string &out, int tab, int row, bool focused) {
         out += menu.rows.listening(tab, row, slot) ? "listening " : "";
         out += text == "-" ? "empty" : "";
         out += "\">";
-        escaped(out, text);
+        std::optional<ui::PadButton> button;
+        if (!menu.rows.listening(tab, row, slot)) {
+            button = ui::pad_button_of_binding(port_controls_binding(menu.rows.row(tab, row).action, slot));
+        }
+        if (button) {
+            out += ui::pad_glyph_rml(menu.pad_family, *button);
+        } else {
+            escaped(out, text);
+        }
         out += "</slot>";
     }
 }
@@ -384,52 +455,53 @@ std::string help_rml() {
     return out;
 }
 
-void prompt(std::string &out, const char *key_a, const char *key_b, const char *what) {
-    out += "<prompt>";
-    if (key_a[0] != 0) {
-        out += "<key>";
-        out += key_a;
-        out += "</key>";
-    }
-    if (key_b != nullptr) {
-        out += "<key>";
-        out += key_b;
-        out += "</key>";
-    }
+void prompt(std::string &out, const std::string &keys, const char *what) {
+    out += "<prompt>" + keys;
     out += what;
     out += "</prompt>";
 }
 
 std::string prompts_rml() {
+    using ui::PadButton;
     std::string out;
-    bool pad = menu.device == Device::pad;
+    std::string up_down = input_rml(PadButton::dpad_vertical, "&#x2191;");
+    if (menu.device != Device::pad) {
+        up_down += key_rml("&#x2193;");
+    }
+    std::string left_right = input_rml(PadButton::dpad_horizontal, "&#x2190;");
+    if (menu.device != Device::pad) {
+        left_right += key_rml("&#x2192;");
+    }
+    std::string confirm = input_rml(PadButton::south, "Enter");
+    std::string back = input_rml(PadButton::east, "Esc");
+    std::string sections = input_rml(PadButton::left_shoulder, "Q") + input_rml(PadButton::right_shoulder, "E");
     if (port_controls_listening(nullptr, nullptr)) {
-        prompt(out, "", nullptr, menu.model.slot() == BINDING_PAD_SLOT ? "Press a controller button" : "Press a key or mouse button");
-        prompt(out, "Del", nullptr, "Clear");
-        prompt(out, "F1", nullptr, "Cancel");
+        prompt(out, "", menu.model.slot() == BINDING_PAD_SLOT ? "Press a controller button" : "Press a key or mouse button");
+        prompt(out, key_rml("Del"), "Clear");
+        prompt(out, key_rml("F1"), "Cancel");
         return out;
     }
     int row = menu.model.row();
     if (row >= 0 && menu.rows.shape(menu.model.tab(), row).kind == ui::RowKind::binding) {
-        prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Move");
-        prompt(out, "&#x2190;", "&#x2192;", "Slot");
-        prompt(out, pad ? "Cross" : "Enter", nullptr, "Change");
-        prompt(out, pad ? "Square" : "Del", nullptr, "Clear");
-        prompt(out, pad ? "L1" : "Q", pad ? "R1" : "E", "Sections");
-        prompt(out, pad ? "Circle" : "Esc", nullptr, "Close");
+        prompt(out, up_down, "Move");
+        prompt(out, left_right, "Slot");
+        prompt(out, confirm, "Change");
+        prompt(out, input_rml(PadButton::west, "Del"), "Clear");
+        prompt(out, sections, "Sections");
+        prompt(out, back, "Close");
         return out;
     }
     if (menu.model.list_open()) {
-        prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Choose");
-        prompt(out, pad ? "Cross" : "Enter", nullptr, "Pick");
-        prompt(out, pad ? "Circle" : "Esc", nullptr, "Cancel");
+        prompt(out, up_down, "Choose");
+        prompt(out, confirm, "Pick");
+        prompt(out, back, "Cancel");
         return out;
     }
-    prompt(out, pad ? "D-pad" : "&#x2191;", pad ? nullptr : "&#x2193;", "Move");
-    prompt(out, "&#x2190;", "&#x2192;", "Change");
-    prompt(out, pad ? "Cross" : "Enter", nullptr, "Select");
-    prompt(out, pad ? "L1" : "Q", pad ? "R1" : "E", "Sections");
-    prompt(out, pad ? "Circle" : "Esc", nullptr, "Close");
+    prompt(out, up_down, "Move");
+    prompt(out, left_right, "Change");
+    prompt(out, confirm, "Select");
+    prompt(out, sections, "Sections");
+    prompt(out, back, "Close");
     return out;
 }
 
@@ -545,14 +617,7 @@ void pad_hold(int input) {
 
 // The left stick past half way, as a direction
 int stick_direction() {
-    // (the first controller libpad opened: SDL_GetGamepadFromID finds only an open one)
-    SDL_Gamepad *pad = nullptr;
-    int count = 0;
-    SDL_JoystickID *pads = SDL_GetGamepads(&count);
-    for (int i = 0; pads != nullptr && i < count && pad == nullptr; i++) {
-        pad = SDL_GetGamepadFromID(pads[i]);
-    }
-    SDL_free(pads);
+    SDL_Gamepad *pad = first_pad();
     if (pad == nullptr) {
         return -1;
     }
@@ -580,7 +645,9 @@ void pad_repeat() {
     if (stick != menu.stick_direction) {
         menu.stick_direction = stick;
         if (stick >= 0) {
-            menu.device = Device::pad;
+            if (SDL_Gamepad *pad = first_pad()) {
+                use_pad(SDL_GetGamepadID(pad));
+            }
             press(ui::MenuInput(stick));
         }
         pad_hold(stick);
@@ -625,21 +692,62 @@ bool pad_chord(const SDL_Event &event) {
         return false;
     }
     if (down && menu.l3 && menu.r3) {
-        menu.device = Device::pad;
+        use_pad(event.gbutton.which);
         toggle_open(!menu.open);
         return true;
     }
     return menu.open;
 }
 
-// The start's hint: how much of it shows now, 0 to 1
+// The hint: how much of it shows now, 0 to 1
 float hint_opacity() {
     uint64_t now = SDL_GetTicks();
-    if (menu.hint_until_ms == 0 || now >= menu.hint_until_ms) {
+    const Hint &hint = menu.hint;
+    if (hint.until_ms == 0 || now >= hint.until_ms || now < hint.from_ms) {
         return 0.0f;
     }
-    uint64_t left = menu.hint_until_ms - now;
-    return left >= HINT_FADE_MS ? 1.0f : float(left) / float(HINT_FADE_MS);
+    uint64_t shown = now - hint.from_ms, left = hint.until_ms - now;
+    float in = shown >= HINT_FADE_IN_MS ? 1.0f : float(shown) / float(HINT_FADE_IN_MS);
+    float out = left >= HINT_FADE_OUT_MS ? 1.0f : float(left) / float(HINT_FADE_OUT_MS);
+    return std::min(in, out);
+}
+
+// The hint shown for this long from now, unless the player has found the menu (or a pad script plays: the test
+// runs' pictures stay as they were)
+void show_hint(uint64_t ms) {
+    if (menu.hint.found || port_options.input != nullptr || menu.open) {
+        return;
+    }
+    uint64_t now = SDL_GetTicks();
+    if (hint_opacity() <= 0.0f) {
+        menu.hint.from_ms = now; // (fading in; one already showing stays)
+    }
+    menu.hint.until_ms = now + ms;
+}
+
+// The hint's keys, for the input in use: F1, or the controller's L3 + R3 as its family's pictures
+std::string hint_rml() {
+    std::string out;
+    if (menu.device == Device::pad) {
+        out += ui::pad_glyph_rml(menu.pad_family, ui::PadButton::left_stick);
+        out += "<plus>+</plus>";
+        out += ui::pad_glyph_rml(menu.pad_family, ui::PadButton::right_stick);
+    } else {
+        out += key_rml("F1");
+    }
+    return out + "<what>Settings</what>";
+}
+
+// While the hint shows, it follows the input the player uses
+void hint_follows(const SDL_Event &event) {
+    if (menu.open || hint_opacity() <= 0.0f) {
+        return;
+    }
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+        menu.device = Device::keyboard;
+    } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        use_pad(event.gbutton.which);
+    }
 }
 
 // The document as the menu is now: closed, only the hint (or nothing); open, the window
@@ -647,6 +755,9 @@ void show_state(float hint) {
     Rml::ElementDocument &document = *menu.document;
     document.SetClass("closed", !menu.open);
     if (Rml::Element *element = document.GetElementById("hint")) {
+        if (hint > 0.0f) {
+            set_part("hint", menu.hint_rml, hint_rml());
+        }
         element->SetClass("shown", hint > 0.0f);
         char opacity[16];
         std::snprintf(opacity, sizeof(opacity), "%.3f", double(hint));
@@ -718,7 +829,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
         return;
     }
     menu.context = Rml::CreateContext("menu", Rml::Vector2i(1280, 720));
-    if (menu.context == nullptr || !ui::load_fonts() ||
+    if (menu.context == nullptr || !ui::load_fonts() || !load_pad_fonts() ||
         (menu.document = menu.context->LoadDocument("menu.rml")) == nullptr) {
         std::fprintf(stderr, "[ui] the menu's document did not load: no player menu\n");
         Rml::Shutdown();
@@ -731,8 +842,8 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.model.open_at(0);
     menu.ready = true;
-    // (not under a pad script: the test runs' pictures stay as they were)
-    menu.hint_until_ms = port_options.input == nullptr ? SDL_GetTicks() + HINT_MS : 0;
+    // the hint from the start of play (show_hint: not under a pad script)
+    menu.hint.waiting = port_options.input == nullptr;
     std::atexit(quit);
     std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 the developers' overlay\n");
 }
@@ -742,6 +853,15 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     if (!menu.ready) {
         return 0;
     }
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+        // a controller connected: its own keys for the menu (L3 + R3), for a while (from the start of play, if
+        // play has not started: the controllers connected at the start come as these too)
+        use_pad(event.gdevice.which);
+        if (!menu.hint.waiting) {
+            show_hint(HINT_AGAIN_MS);
+        }
+    }
+    hint_follows(event);
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
         if (event.key.mod & SDL_KMOD_SHIFT) {
             return 0; // (the developers' overlay)
@@ -771,7 +891,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         break;
     }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
-        menu.device = Device::pad;
+        use_pad(event.gbutton.which);
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
             toggle_open(false);
             break;
@@ -823,7 +943,8 @@ extern "C" int port_player_ui_open(void) {
 }
 
 extern "C" int port_player_ui_visible(void) {
-    return menu.ready && (menu.open || hint_opacity() > 0.0f);
+    // (a hint waiting for the start of play: port_player_ui_draw watches for it)
+    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f);
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -850,6 +971,22 @@ extern "C" int port_player_ui_show(const char *tab_id) {
     for (spec = colon == std::string_view::npos ? std::string_view() : spec.substr(colon + 1); !spec.empty();) {
         size_t end = spec.find('.');
         std::string_view name = spec.substr(0, end);
+        // as if that controller (or the keyboard) were used last: whose buttons the prompts show
+        static const struct {
+            const char *name;
+            ui::PadFamily family;
+        } pads[] = {{"xbox", ui::PadFamily::xbox},
+                    {"playstation", ui::PadFamily::playstation},
+                    {"nintendo", ui::PadFamily::nintendo}};
+        for (const auto &pad : pads) {
+            if (name == pad.name) {
+                menu.device = Device::pad;
+                menu.pad_family = pad.family;
+            }
+        }
+        if (name == "keyboard") {
+            menu.device = Device::keyboard;
+        }
         for (size_t i = 0; i < std::size(names); i++) {
             if (name == names[i]) {
                 press(ui::MenuInput(i));
@@ -865,6 +1002,17 @@ extern "C" void port_player_ui_draw(int width, int height) {
     menu.drawn = false;
     if (!port_player_ui_visible() || width <= 0 || height <= 0) {
         return;
+    }
+    if (menu.hint.waiting) {
+        if (port_vblank_count() < HINT_START_VBLANK) {
+            return;
+        }
+        menu.hint.waiting = false;
+        // play has started: the hint for the controller already connected, if one is (L3 + R3 is the harder to guess)
+        if (SDL_Gamepad *pad = first_pad()) {
+            use_pad(SDL_GetGamepadID(pad));
+        }
+        show_hint(HINT_MS);
     }
     int units_w = 0, units_h = 0;
     SDL_GetWindowSize(menu.window, &units_w, &units_h);
