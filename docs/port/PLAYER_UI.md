@@ -102,7 +102,7 @@ picture.
 
 - `ctest -R ui_menu`: the model.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
-  presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; the sections are `display graphics controls keys gameplay map hands saves general cheats`), and writes
+  presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; the sections are `display graphics controls keys gameplay interface general cheats`), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 
