@@ -3961,12 +3961,15 @@ private:
     }
 
     // Whether a sampled texture is read at the GPU's own level (PCR_TEX1_GPU_LEVELS) with the anisotropy asked: with
-    // anisotropic filtering on (2x to 16x; off, the GS's), a 3D draw's (not FST: the 2D's sprites stay the GS's) texture
-    // the GS reads bilinear, its levels or not (MMAG LINEAR, MMIN LINEAR or LINEAR_MIPMAP_*). Most of the game's have one
-    // level, read bilinear at every distance: at a grazing angle or far off they shimmer.
+    // anisotropic filtering on (2x to 16x; off, the GS's), a 3D draw's texture the GS reads bilinear, its levels or not
+    // (MMAG LINEAR, MMIN LINEAR or LINEAR_MIPMAP_*). Most of the game's have one level, read bilinear at every distance:
+    // at a grazing angle or far off they shimmer. A 3D draw is one Z tests (ZTE, ZTST GEQUAL or GREATER), FST or not:
+    // the game draws the ground near the camera FST (by texel, as the 2D's), and left out it showed a seam where the
+    // ground's levels changed to the GS's, 2026-11-21. The 2D's sprites and letters test no Z and stay the GS's.
     bool gpu_levels_for(const DrawState &s, const SampledTexture &t) const {
         uint32_t mmag = bits(s.tex1, 5, 1), mmin = bits(s.tex1, 6, 3);
-        return aniso_ > 1 && !bits(s.prim, 8, 1) && t.image_levels > 1 && mmag == 1 &&
+        bool z_tested = bits(s.test, 16, 1) && bits(s.test, 17, 2) >= 2;
+        return aniso_ > 1 && z_tested && t.finer == 1 && t.image_levels > 1 && mmag == 1 &&
                (mmin == 1 || mmin == 4 || mmin == 5);
     }
 
