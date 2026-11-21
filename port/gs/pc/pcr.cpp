@@ -232,10 +232,10 @@ public:
 
     // (the PC renderer's thread, before it takes the next message) --frame-rate unlocked: the pictures between at the
     // front that it would have ready after their time (cost: what its last ones took), each with the extra picture that
-    // shows it, left out while a later picture between waits (pcr_late.h), as the pump leaves out its own. Without it, a
-    // picture that came late (a slow one) left every one after it late as well: drawn, then not shown, for as long as the
-    // pictures were asked for as fast as they were drawn (up to 470 ms with no picture at 063, 2026-11-20). What was left
-    // out: the pictures between, and the messages of them that were counted (Renderer::routed_)
+    // shows it, left out while a later picture between waits (pcr_late.h), as the pump leaves out its own. Rare since
+    // unlocked asks for no more than kf4-pc has room for (PictureRoom): asked for more, each picture after one begun late
+    // was late as well, drawn and then not shown (up to 470 ms with no picture at 063, 2026-11-20). What was left out:
+    // the pictures between, and the messages of them that were counted (Renderer::routed_)
     struct LeftOut {
         uint64_t pictures = 0, counted = 0;
     };
@@ -2722,6 +2722,8 @@ private:
             if (!message) {
                 break;
             }
+            const double began_s = port_wall_seconds();
+            const Spent what = spent_on(*message);
             if (GifPacket *packet = std::get_if<GifPacket>(&*message)) {
                 stats.packets++;
                 stats.bytes += packet->bytes.size();
@@ -2757,9 +2759,51 @@ private:
                 }
                 inbox_.done(0);
             }
+            spent(began_s, what);
         }
         inbox_.gone();
     }
+
+    // (kf4-pc) What a message is to PictureRoom: a picture between, the extra picture that shows one, or other work
+    enum class Spent { between, shows_between, other };
+    Spent spent_on(const Message &message) const {
+        if (std::holds_alternative<InterpPicture>(message)) {
+            return Spent::between;
+        }
+        const VblankPicture *v = std::get_if<VblankPicture>(&message);
+        return v != nullptr && (v->want & GSN_EXTRA) != 0 && between_open_ ? Spent::shows_between : Spent::other;
+    }
+
+    // (kf4-pc) A message's time since began_s counted toward the pictures between it has room for, and the room given
+    // out each window (pcr_pictures_room_hz). A picture between's own time and its extra picture's are counted as one.
+    void spent(double began_s, Spent what) {
+        const double now_s = port_wall_seconds();
+        const double took_s = now_s - began_s;
+        if (what != Spent::shows_between && between_open_) {
+            room_.picture(between_s_); // (shown by no extra picture: counted alone)
+            between_open_ = false;
+        }
+        if (what == Spent::between) {
+            between_open_ = true;
+            between_s_ = took_s;
+        } else if (what == Spent::shows_between) {
+            room_.picture(between_s_ + took_s);
+            between_open_ = false;
+        } else {
+            room_.other(took_s);
+        }
+        if (room_.close_window(now_s)) {
+            room_hz_.store(room_.room_hz(), std::memory_order_relaxed);
+        }
+    }
+
+public:
+    // (any thread) Pictures between a second kf4-pc has time for (PictureRoom; 0: not known)
+    double pictures_room_hz() const {
+        return room_hz_.load(std::memory_order_relaxed);
+    }
+
+private:
 
     // (kf4-pc) Pictures between it would be late for left out, as Inbox::leave_out_late says
     void leave_out_late() {
@@ -2990,6 +3034,11 @@ private:
     // drawing until that picture (0: none drawn here since): leave_out_late
     pcr::PictureCost cost_here_;
     double between_took_s_ = 0;
+    // (kf4-pc's) its time, for the pictures between it has room for (spent), and the last window's room (any thread's)
+    pcr::PictureRoom room_;
+    bool between_open_ = false; // (a picture between drawn here, its extra picture still to come)
+    double between_s_ = 0;
+    std::atomic<double> room_hz_{0};
     SharedTurnLead turn_lead_;   // (before the pump, which holds it)
     UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
@@ -3092,6 +3141,10 @@ extern "C" int pcr_picture(const uint64_t *privileged, int field, int want_pixel
 
 extern "C" int pcr_backlog(void) {
     return renderer() ? renderer()->backlog() : 0;
+}
+
+extern "C" double pcr_pictures_room_hz(void) {
+    return renderer() ? renderer()->pictures_room_hz() : 0;
 }
 
 extern "C" void pcr_interp_frame(GsnInterpFrame *frame) {
@@ -3343,6 +3396,8 @@ extern "C" void pcr_print_stats(void) {
             (unsigned long long)s.extras.load(), (unsigned long long)s.interp_frames.load(),
             (unsigned long long)s.interp_pictures.load(), (unsigned long long)s.interp_late.load(),
             (unsigned long long)s.interp_left_out.load());
+    fprintf(stderr, "[stats] pc renderer's thread: room for %.0f pictures between a second (the last half second)\n",
+            renderer()->pictures_room_hz());
     fprintf(stderr, "[stats] pc pictures between straight to the pump: %llu (%llu then found not fitting)\n",
             (unsigned long long)s.direct.load(), (unsigned long long)s.direct_stale.load());
     renderer()->intake_times.print(stderr);

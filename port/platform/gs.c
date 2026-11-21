@@ -1017,6 +1017,14 @@ void port_gs_interp_picture(const void *picture) {
 #endif
 }
 
+double port_gs_pictures_room_hz(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    return have_pc ? gsr_pictures_room_hz() : 0;
+#else
+    return 0;
+#endif
+}
+
 int port_gs_shaders_building(int *done, int *total) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_pc) {
