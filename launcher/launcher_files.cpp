@@ -45,7 +45,7 @@ struct JsonDeleter {
 std::optional<DataPaths> data_paths() {
     char data[1024], builds[1024];
     DataDirSystem system = data_dir_this_system();
-    data_dir_move_old_folders(system, read_env); // the folders' old name, holyland (does nothing once moved)
+    data_dir_move_old_folders(system, read_env); // the folders' old name, darker-reality (does nothing once moved)
     if (!data_dir_resolve(system, read_env, data, sizeof(data)) ||
         !data_dir_resolve_builds(system, read_env, builds, sizeof(builds)))
         return std::nullopt;

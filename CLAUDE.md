@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Darker Reality (called holyland until 2026-11-18) is a native PC port (Windows, Linux; 64-bit) of King's Field IV, built from the
+Holyland (named Darker Reality from 2026-11-18 to 2026-11-20) is a native PC port (Windows, Linux; 64-bit) of King's Field IV, built from the
 [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PS2 game. The game's own
 C is compiled as is (with patches); `port/` stands in for the PS2 beneath it. No game data is in the repo:
 running needs the owner's disc image (`--disc <iso, chd or folder>` or `KF4_DISC`).
@@ -42,7 +42,7 @@ only `--headless`. A headless run or one with a pad script (`--input`) does not 
 screen, and sizes things for 60 pictures a second: on 2026-11-13 headless runs at a simulated 240 Hz showed 3.7 GB of
 GPU memory and no hang where the owner's real play (unlocked, cap 500) held 8 GB and hung the card.
 
-- A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.config/darker-reality`
+- A scripted run reads settings with `KF4_READ_SETTINGS=1`. Point `KF4_DATA_DIR` at a copy of `~/.config/holyland`
   so the owner's files are not written. Not `KF4_OVERLAY_SHOT`: it reads settings too but hides the window.
 - The window must be on the screen: the owner should be able to see the run.
 - Leave out `--headless`; keep `--input tests/newgame.pad --teleport ... --invincible --no-audio --saves none`.
@@ -78,10 +78,11 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
 - `port/sdk/`: the PS2 SDK libraries the game links against (libgraph, libpad, libcdvd, libc/libm
   with PS2-exact results, MPEG). `port/include/`: their headers. `port/audio/`: the IOP sound side.
 - `port/gs/`: the Graphics Synthesizer, behind `port/platform/gs_api.h`:
-  - `pc/` (`pcr*`): the PC renderer, the only one players get (the default). It draws the GS's input
-    with its own Vulkan code on Granite. The plan and where it stands: `docs/port/PC_RENDERER.md`. It is to be
-    replaced by a scene renderer, not sped up: `docs/plans/renderer-scene-not-gs.md` (the direction, the
-    measurements behind it, and the design's handoff).
+  - `scene/` (`scn*`): the scene renderer, the only one players get (the default since 2026-11-20). It runs
+    under the PC renderer's shell and draws from the scene's records: `docs/plans/renderer-scene-not-gs.md`
+    (the direction, the measurements behind it, and the design's handoff).
+  - `pc/` (`pcr*`): the PC renderer the scene renderer replaces, now developers' only (`--renderer pc`). It
+    draws the GS's input with its own Vulkan code on Granite: `docs/port/PC_RENDERER.md`.
   - `gs_parallel.cpp`: paraLLEl-GS (`third_party/parallel-gs`), the accurate GS emulator. Developers
     only (`--renderer gs`), to compare pictures against; never chosen by settings, the overlay or a
     fallback.
@@ -95,11 +96,11 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   retire ImGui.
 - `port/overlay/`: the ImGui overlay, now the developers' (Shift+F1 where the player menu is): settings, stats
   panels, profiler, automap view.
-- `launcher/`: **Darker Reality**, the launcher players get (its own CMake project, `cd launcher && cmake --preset
+- `launcher/`: **Holyland**, the launcher players get (its own CMake project, `cd launcher && cmake --preset
   linux`): builds the game on the player's computer from a release's source and shipped tools, then plays it;
   update notices. `packaging/` makes the releases (AppImage, Windows zip and installer), `.github/workflows/release.yml`
-  on a `v*` tag. All in `docs/port/LAUNCHER.md`. The data folder is `darker-reality/`
-  (on Windows too); the first start moves an old `holyland/` folder there (`port/platform/data_dir.c`).
+  on a `v*` tag. All in `docs/port/LAUNCHER.md`. The data folder is `holyland/`
+  (on Windows too); the first start moves an old `darker-reality/` folder there (`port/platform/data_dir.c`).
 - `cmake/granite_*.cmake`: patches written into paraLLEl-GS's Granite at each configure (the list:
   `cmake/granite_edits.cmake`; a file is written only when its text changes, since a release's source is read-only). The submodule
   shows as dirty because of them (`ignore = dirty`); that's expected.

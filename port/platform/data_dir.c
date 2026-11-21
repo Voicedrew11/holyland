@@ -12,7 +12,7 @@ typedef struct {
     RuleSystem system;
     const char *variable;   /* NULL: always applies */
     const char *format;     /* the path, from the variable's value */
-    const char *old_format; /* the path before the port was named Darker Reality (holyland); NULL: none */
+    const char *old_format; /* the path while the port was named Darker Reality (2026-11-18 to 11-20); NULL: none */
 } Rule;
 
 typedef enum { NAME_NOW, NAME_BEFORE } FolderName;
@@ -21,17 +21,17 @@ typedef enum { NAME_NOW, NAME_BEFORE } FolderName;
    takes the data folder (data_dir_resolve_builds) */
 static const Rule data_rules[] = {
     {ANY_SYSTEM, "KF4_DATA_DIR", "%s", NULL},
-    {WINDOWS_ONLY, "APPDATA", "%s\\darker-reality", "%s\\holyland"},
-    {POSIX_ONLY, "XDG_CONFIG_HOME", "%s/darker-reality", "%s/holyland"},
-    {POSIX_ONLY, "HOME", "%s/.config/darker-reality", "%s/.config/holyland"},
-    {ANY_SYSTEM, NULL, "darker-reality", "holyland"},
+    {WINDOWS_ONLY, "APPDATA", "%s\\holyland", "%s\\darker-reality"},
+    {POSIX_ONLY, "XDG_CONFIG_HOME", "%s/holyland", "%s/darker-reality"},
+    {POSIX_ONLY, "HOME", "%s/.config/holyland", "%s/.config/darker-reality"},
+    {ANY_SYSTEM, NULL, "holyland", "darker-reality"},
 };
 
 /* the local folder: it holds the builds folder, and on Linux the save states (port/platform/savestate.c) */
 static const Rule local_rules[] = {
-    {WINDOWS_ONLY, "LOCALAPPDATA", "%s\\darker-reality", "%s\\holyland"},
-    {POSIX_ONLY, "XDG_DATA_HOME", "%s/darker-reality", "%s/holyland"},
-    {POSIX_ONLY, "HOME", "%s/.local/share/darker-reality", "%s/.local/share/holyland"},
+    {WINDOWS_ONLY, "LOCALAPPDATA", "%s\\holyland", "%s\\darker-reality"},
+    {POSIX_ONLY, "XDG_DATA_HOME", "%s/holyland", "%s/darker-reality"},
+    {POSIX_ONLY, "HOME", "%s/.local/share/holyland", "%s/.local/share/darker-reality"},
 };
 
 static int applies(RuleSystem rule, DataDirSystem system) {

@@ -1,6 +1,6 @@
 # The player menu (RmlUi)
 
-The menu players use: Darker Reality's settings in King's Field IV's look, drawn with
+The menu players use: Holyland's settings in King's Field IV's look, drawn with
 [RmlUi](https://github.com/mikke89/RmlUi) over the game. **F1** (or a controller's **L3 + R3**) opens and closes it. The
 Dear ImGui overlay is now the developers' (**Shift+F1**), and the long-term goal is to retire ImGui entirely (the
 plan is below).
@@ -11,16 +11,28 @@ is not borrowed.
 
 ## What it does now
 
-- Tabs: Display, Graphics, Controls, Gameplay, Saves, Sound & Menu. The rows on the left, and the focused row's
-  help on the right. Under the rows, the keys for what you can do now: the keyboard's, or the controller's once it was
-  used.
+- Laid out (since 2026-11-20) as a sidebar, the rows and the help: the Holyland logo at the top left over the
+  sections (Display, Graphics, Controls, Key Bindings, Gameplay, Map, Hands, Saves, Sound & Menu, Cheats) and the
+  version; the section's title and rows in the middle; the focused row's help on the right. Along the bottom, the keys
+  for what you can do now: the keyboard's, or the controller's once it was used.
+- Every player's setting the overlay had is here: the window size, the PS2's picture fixes, instant mouse look and
+  the mouse in menus, the key bindings, the extended stats, the automap and its map help, the hands, the update notice
+  (shown only when one is due) and the cheats. Left in the overlay only: the overlay's size, the presenter, save states,
+  native draw kinds, the debugging tools and teleport.
+- **Key bindings**: a row for each action in use, with its three slots (two keys or mouse buttons, a controller
+  button). Left / Right choose the slot, Enter (or a click on a slot) waits for the next key or button
+  (`port_controls_listen`; `port/sdk/controls.c` takes it before the menu sees it), Delete (a controller's Square,
+  a right click on a slot) empties it, F1 or five seconds stop the waiting.
 - **Keyboard**: Up / Down (or W / S) move; Left / Right (A / D) change the value in place; Enter (or Space) opens a
   choice's list, turns a toggle over, or does an action; Esc (Backspace) closes the list, then the menu; Q / E (Page
-  Up / Down, Tab / Shift+Tab) change the tab; F1 closes. F11 still switches full screen.
-- **Controller**: d-pad or left stick (held: repeats), Cross (A) chooses, Circle (B) backs out, L1 / R1 change the
-  tab, Start or L3 + R3 close it.
+  Up / Down, Tab / Shift+Tab) change the section; Delete empties a binding's slot; F1 closes. F11 still switches full screen.
+- **Controller**: d-pad or left stick (held: repeats), Cross (A) chooses, Circle (B) backs out, Square (X) empties a
+  binding's slot, L1 / R1 change the section, Start or L3 + R3 close it.
 - **Mouse**: over a row focuses it; a click is Enter; the arrows either side of a value step it; a click on a list's
   choice picks it; a click on a tab shows it; the right button is Back; the wheel scrolls.
+- At the start, a small panel at the top of the screen says "F1 or L3 + R3: Holyland's settings" for ten seconds
+  (fading over the last one), and goes as soon as the menu is opened. Not under a pad script (`--input`), so test
+  runs' pictures are as they were. It is the menu's document with `body.closed`: only `#hint` shows.
 - A row whose value came from the command line says so ("command line"), and its help explains it.
 - While it is open the game sees no input, and is paused if "Pause while open" is on (the same setting the overlay
   used).
@@ -33,13 +45,14 @@ is not borrowed.
 | --- | --- |
 | `port/include/port/player_ui.h` | the C entry points: init, events, open / visible, draw, test pictures |
 | `port/ui/player_ui.cpp` | RmlUi set up; the page written as RML from the rows and the model; input |
-| `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, the pointer (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
+| `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, binding slots, the pointer (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
 | `port/ui/settings_rows.hpp/.cpp` | **the settings, as data**: tabs and rows |
 | `port/ui/ui_render.hpp/.cpp` | `ui::Recorder`, RmlUi's `RenderInterface`: geometry and textures recorded into a `ui::Frame` |
 | `port/ui/ui_frame.hpp` | `ui::Frame`: one picture's triangles, draws, texture uploads and releases (no Vulkan) |
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
+| `port/ui/art/holyland.png`, `tools/ui_logo.py`, `port/ui/res/logo.alpha` | the logo: the tool makes the alpha mask the game carries (committed; run it after changing the picture) |
 | `port/ui/res/fonts/` | IM FELL English (titles) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
@@ -50,9 +63,12 @@ is no player menu and F1 opens the overlay as before.
 ## Adding a setting
 
 Add a `SettingRow` to its tab's array in `port/ui/settings_rows.cpp`: label, help, kind (`choice`, `toggle`,
-`number`, `action`, `heading`), its choices or range, and `get` / `set` (or `act`). Optional: `describe` (text for
-the value: "Auto (2x)"), `shown` (hide the row), `enabled` (dim it), `overridden` (the command line chose this run's
-value). Nothing else changes: the model and the page take any row.
+`number`, `action`, `heading`, `binding`), its choices or range, and `get` / `set` (or `act`). Optional: `describe`
+(text for the value: "Auto (2x)"), `shown` (hide the row), `enabled` (dim it), `overridden` (the command line chose
+this run's value), `note` (a changing line under the help: the cheats' last message). A `binding` row names its
+`action` (a `PortAction`) and is shown while `port_controls_action_used`; the Key Bindings rows are made from
+`ACTION_COUNT`, with a heading before each group in `binding_groups`. A new section is a new entry in `tabs`. Nothing
+else changes: the model and the page take any row.
 
 ## The look
 
@@ -62,14 +78,17 @@ every element is inline until the sheet says otherwise (hence `div, h2, p { disp
 
 The recorder draws triangles, textures and scissor clipping only. So the sheet uses borders, colours and the
 straight gradients (`horizontal-gradient`, `vertical-gradient`, made of vertex colours). It does not use
-`linear-gradient` and the other shader gradients, `box-shadow`, `filter`, `transform`, `mask-image` or images from
-files: RmlUi then leaves them out, and the recorder logs the first of each kind.
+`linear-gradient` and the other shader gradients, `box-shadow`, `filter`, `transform` or `mask-image`: RmlUi then
+leaves them out, and the recorder logs the first of each kind. The only images are the menu's own alpha masks
+(`res/*.alpha`: "KF4A", width, height, a byte of alpha a pixel), white and coloured by `image-color`, so the game needs
+no image decoder; the logo is one. Textures RmlUi makes between pictures (loading the document) go with the next
+picture.
 
 ## Testing
 
 - `ctest -R ui_menu`: the model.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
-  presses the keys once (`up down left right confirm back next previous`, separated by `.`), and writes
+  presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; the sections are `display graphics controls keys gameplay map hands saves general cheats`), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 
@@ -85,11 +104,9 @@ files: RmlUi then leaves them out, and the recorder logs the first of each kind.
 
 Still in ImGui (`port/overlay/`), to move over one at a time:
 
-1. **Key bindings** (Controls: the table with listening for a key). It needs a "press a key" row kind and a
-   bindings page.
-2. **The mods' own settings**: the extended stats (`stats_panel.cpp`), the automap (`automap_view.cpp`) and the hands
-   (`hands_view.cpp`) sections. They become rows on Gameplay.
-3. **Window size** (the list of sizes the screen fits) and the PS2 picture fixes (Developer > Renderer).
+1. ~~**Key bindings**~~, 2. ~~**the mods' own settings**~~, 3. ~~**window size and the PS2 picture fixes**~~: moved
+   on 2026-11-20 (the Key Bindings, Gameplay, Map, Hands, Display and Graphics sections). The overlay still has them
+   too, for developers, until it goes.
 4. **Notices**: the save-state, quick-save and debug toasts, the "building pipelines" notice, the update note and
    badge (`update_badge.cpp`). These are a toast layer in RmlUi, visible while the menu is closed
    (`port_player_ui_visible`).

@@ -1,4 +1,4 @@
-# Every edit Darker Reality makes to Granite (third_party/parallel-gs/Granite), in order: the game's configure makes them
+# Every edit Holyland makes to Granite (third_party/parallel-gs/Granite), in order: the game's configure makes them
 # (CMakeLists.txt), and so does a release's packaging (packaging/payload.sh, through cmake/apply_granite_edits.cmake),
 # whose source is then read-only on the player's computer. Each edit is made once: a checkout that has it is left alone.
 set(KF4_GRANITE_EDITS_DIR ${CMAKE_CURRENT_LIST_DIR}) # (inside the function, CMAKE_CURRENT_LIST_DIR is the caller's)

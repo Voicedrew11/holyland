@@ -17,7 +17,7 @@ rem key, save states and changing settings in the overlay mid-run (those are not
 rem the full map is fine.
 rem
 rem It goes to <data folder>\captures\input-DATE-TIME\ (beside F8's and F9's captures; the data folder is
-rem %KF4_DATA_DIR%, else %APPDATA%\darker-reality; %KF4_REC% names another folder):
+rem %KF4_DATA_DIR%, else %APPDATA%\holyland; %KF4_REC% names another folder):
 rem   input.pad  the recording        start\  your settings, quick saves, automap, hands, weapon sets and saves as
 rem   info.txt   program, quick save, clock    they were at the start (copied; nothing in the data folder changes)
 rem Send the whole folder (and your F8 pictures from captures\). It holds your saves: it is not for the repository.
@@ -40,7 +40,7 @@ set "DISCARG="
 if defined DISC set DISCARG=--disc "%DISC%"
 
 set "DATA=%KF4_DATA_DIR%"
-if not defined DATA set "DATA=%APPDATA%\darker-reality"
+if not defined DATA set "DATA=%APPDATA%\holyland"
 set "CLOCK=2026-01-01T12:00:00"
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%i"
 set "REC=%KF4_REC%"

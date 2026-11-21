@@ -58,7 +58,7 @@ jobs:
             libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
       - name: The version
         run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "DARKER_REALITY_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
+          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - name: Restore the tools
         id: tools
@@ -68,7 +68,7 @@ jobs:
           key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl3.sh') }}
       - name: The AppImage
         env:
-          DARKER_REALITY_TOOLCHAIN_CACHE: ${{ github.workspace }}/out/toolchain-linux
+          HOLYLAND_TOOLCHAIN_CACHE: ${{ github.workspace }}/out/toolchain-linux
         run: packaging/linux/build-appimage.sh
       - name: Save the tools
         if: github.ref == 'refs/heads/main' && steps.tools.outputs.cache-hit != 'true'
@@ -108,7 +108,7 @@ jobs:
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: The version
         run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "DARKER_REALITY_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
+          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
           bash tools/version.sh
       - name: Inno Setup on PATH
         run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
@@ -129,7 +129,7 @@ jobs:
       - name: A player's build from it
         run: |
           stage="dist/win-x64"
-          KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/darker-reality.exe --build-only
+          KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/holyland.exe --build-only
           ls "$RUNNER_TEMP"/player/builds/*/kf4.exe "$RUNNER_TEMP"/player/builds/*/SDL3.dll
       - uses: actions/upload-artifact@v4
         with:
@@ -197,7 +197,7 @@ jobs:
           cat > notes.md <<'NOTES'
           **Preview builds are password protected.** Join the [Verdite Project Discord](https://discord.gg/R4EKCs8RWH) for access.
 
-          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\darker-reality\saves` on Windows and `~/.config/darker-reality/saves` on Linux (quick saves beside them, in `quicksaves`).
+          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\holyland\saves` on Windows and `~/.config/holyland/saves` on Linux (quick saves beside them, in `quicksaves`).
 
           The first start asks for your King's Field IV disc (the USA release, SLUS-20318) and builds the game on your computer, which takes a few minutes and happens once.
           NOTES

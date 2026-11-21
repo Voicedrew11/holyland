@@ -1,4 +1,4 @@
-# Darker Reality
+# Holyland
 
 A native PC port of **King's Field: The Ancient City** (*King's Field IV*; FromSoftware, 2001), built
 from the [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PlayStation 2

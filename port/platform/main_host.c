@@ -12,10 +12,9 @@
        --headless        no SDL at all: no window, and the GS draws only for --dump-frames and
                          GS captures (--gs-capture-at, KF4_DEBUG_AT)
        --no-gs           draw nothing (VIF1 and VU1 still run)
-       --renderer NAME   who draws: pc (the default: the PC renderer, port/gs/pc/), gs (paraLLEl-GS,
-                         the accurate GS, for comparing pictures against) or scene (the scene renderer
-                         being built to replace the PC renderer, port/gs/scene/); the last two
-                         developers' only
+       --renderer NAME   who draws: scene (the default: the scene renderer, port/gs/scene/), pc (the
+                         PC renderer it replaces, port/gs/pc/) or gs (paraLLEl-GS, the accurate GS,
+                         for comparing pictures against); the last two developers' only
        --presenter NAME  how the picture reaches the window: vulkan (the default: a swapchain on
                          the renderer's device, the picture kept on the GPU;
                          port/platform/present_vk.cpp) or sdl (SDL_Renderer); without the renderer,
@@ -283,7 +282,7 @@ static void usage(const char *program) {
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
-            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer pc|gs|scene]\n"
+            "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
@@ -362,7 +361,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
     port_options.reflection_clip = 1;
-    port_options.renderer = PORT_RENDERER_PC;
+    port_options.renderer = PORT_RENDERER_SCENE;
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */
     for (i = 1; i < argc; i++) {
@@ -492,10 +491,10 @@ static void parse_options(int argc, char **argv) {
             } else if (strcmp(value, "scene") == 0) {
                 port_options.renderer = PORT_RENDERER_SCENE;
             } else if (strcmp(value, "native") == 0 || strcmp(value, "modern") == 0 || strcmp(value, "fast") == 0) {
-                port_options.renderer = PORT_RENDERER_PC;
-                fprintf(stderr, "[options] --renderer %s: the PC renderer draws now\n", value);
+                port_options.renderer = PORT_RENDERER_SCENE;
+                fprintf(stderr, "[options] --renderer %s: the scene renderer draws now\n", value);
             } else {
-                fprintf(stderr, "--renderer wants pc, gs or scene, not %s\n", value);
+                fprintf(stderr, "--renderer wants scene, pc or gs, not %s\n", value);
                 exit(2);
             }
         } else if (strcmp(option, "--presenter") == 0) {
@@ -542,19 +541,18 @@ static void parse_options(int argc, char **argv) {
                                       : strcmp(value, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
                                                                        : atoi(value);
             if (port_options.frame_rate != PORT_FRAME_RATE_MONITOR && port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED &&
-                (port_options.frame_rate < 30 || port_options.frame_rate > 500)) {
-                fprintf(stderr, "--frame-rate wants 30 to 500 (30, 60, 120, 144, 240 ...), monitor or unlocked, not %s\n",
+                (port_options.frame_rate < 30 || port_options.frame_rate >= PORT_FRAME_RATE_MONITOR)) {
+                fprintf(stderr, "--frame-rate wants 30 or more (30, 60, 120, 144, 240 ...), monitor or unlocked, not %s\n",
                         value);
                 exit(2);
             }
             port_options.frame_rate_forced = 1;
         } else if (strcmp(option, "--frame-rate-cap") == 0) {
             port_options.frame_rate_cap = atoi(value);
-            if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap > 1000)) {
-                fprintf(stderr, "--frame-rate-cap wants 60 to 1000, or 0 for none, not %s\n", value);
+            if (port_options.frame_rate_cap != 0 && (port_options.frame_rate_cap < 60 || port_options.frame_rate_cap >= PORT_FRAME_RATE_MONITOR)) {
+                fprintf(stderr, "--frame-rate-cap wants 60 or more, or 0 for none, not %s\n", value);
                 exit(2);
             }
-            port_options.frame_rate_cap_forced = 1;
         } else if (strcmp(option, "--draw-distance") == 0) {
             port_options.draw_distance = port_draw_distance_parse(value);
             if (port_options.draw_distance < 0) {
@@ -1019,7 +1017,7 @@ int main(int argc, char **argv) {
     SetUnhandledExceptionFilter(crash_report);
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
-    data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, holyland, before any use */
+    data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, darker-reality, before any use */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     start_seconds = port_wall_seconds();
     open_log();

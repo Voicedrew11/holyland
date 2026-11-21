@@ -2798,7 +2798,8 @@ today's schedule: the pictures between a vblank are still worked out ahead (`por
 vblank) and shown at their times, at a rate that follows the renderer.
 
 - `--frame-rate unlocked` (`settings.json` `"frame_rate": "unlocked"`, the Display page's "Unlocked"),
-  `--frame-rate-cap N` (`frame_rate_cap`, 0 none; a slider under it), `--tearing` (`tearing`, off).
+  `--frame-rate-cap N` (0 none; a slider under it until 2026-11-20, when the owner took the setting out: now the
+  command line's alone, for test runs), `--tearing` (`tearing`, off).
 - **The rate** (`port/include/port/unlocked_rate.h`, `unlocked_rate.c`; `unlocked_rate_test`, ctest
   `unlocked_rate`): between 60 and the cap (or 16 a vblank, 959). At each game vblank gs.c says whether the native
   GS was behind, as the cut judges it, or left pictures between of the vblank before out; and frame_interp.c gives

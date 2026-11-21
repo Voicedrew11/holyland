@@ -112,7 +112,7 @@ int port_frame_interp(void) {
    mailbox, so that each refresh shows the newest, or immediate with --tearing.
    With adaptive sync (port/include/port/adaptive_sync.h) every rate over 30 is kept under its cap, the screen's
    rate too, and is timed as a fixed rate is: the screen refreshes at each picture's time. */
-#define UNLOCKED_MOST_A_VBLANK 16 /* (gs.c's schedule's room) */
+#define UNLOCKED_MOST_A_VBLANK PORT_INTERP_MOST_A_VBLANK /* (gs.c's schedule's room) */
 
 /* Unlocked's pictures asked for a second. They follow what the window shows: a quarter more than it showed in the
    last half second (port_video_pictures_per_second), so the renderer always has a picture to make next and few are
@@ -170,7 +170,7 @@ int port_frame_rate_hz(void) {
         hz = unlocked_asked_hz();
     }
     hz = hz > 30 ? under_adaptive_sync_cap(hz) : hz; /* (the PS2's 30 is a second vblank's, as it was) */
-    return hz < 30 ? 30 : hz > 1000 ? 1000 : hz;
+    return hz < 30 ? 30 : hz;
 }
 
 static double pictures_a_vblank(void) {

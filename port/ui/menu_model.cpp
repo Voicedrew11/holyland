@@ -34,6 +34,12 @@ void MenuModel::settle() {
         int next = usable_from(row_, 1);
         row_ = next >= 0 ? next : usable_from(row_ < rows_.row_count(tab_) ? row_ : rows_.row_count(tab_), -1);
     }
+    if (row_ >= 0) {
+        RowShape shape = rows_.shape(tab_, row_);
+        if (shape.kind == RowKind::binding && slot_ >= shape.choice_count) {
+            slot_ = shape.choice_count > 0 ? shape.choice_count - 1 : 0;
+        }
+    }
     if (list_open_) {
         RowShape shape = row_ >= 0 ? rows_.shape(tab_, row_) : RowShape{};
         if (row_ < 0 || shape.kind != RowKind::choice || shape.choice_count <= 0) {
@@ -69,6 +75,9 @@ void MenuModel::step_row(int delta) {
     case RowKind::number:
         rows_.step(tab_, row_, delta);
         break;
+    case RowKind::binding:
+        slot_ = slot_ + delta < 0 ? 0 : slot_ + delta >= shape.choice_count ? shape.choice_count - 1 : slot_ + delta;
+        break;
     case RowKind::action:
     case RowKind::heading:
         break;
@@ -93,9 +102,18 @@ void MenuModel::confirm_row() {
     case RowKind::action:
         rows_.activate(tab_, row_);
         break;
+    case RowKind::binding:
+        rows_.listen(tab_, row_, slot_);
+        break;
     case RowKind::number:
     case RowKind::heading:
         break;
+    }
+}
+
+void MenuModel::clear_row() {
+    if (row_ >= 0 && rows_.shape(tab_, row_).kind == RowKind::binding) {
+        rows_.clear(tab_, row_, slot_);
     }
 }
 
@@ -123,6 +141,7 @@ MenuResult MenuModel::press(MenuInput input) {
             return press(input);
         case MenuInput::left:
         case MenuInput::right:
+        case MenuInput::clear:
             break;
         }
         settle();
@@ -141,6 +160,9 @@ MenuResult MenuModel::press(MenuInput input) {
         break;
     case MenuInput::confirm:
         confirm_row();
+        break;
+    case MenuInput::clear:
+        clear_row();
         break;
     case MenuInput::back:
         return MenuResult::close;
@@ -190,6 +212,18 @@ void MenuModel::click_choice(int choice) {
     if (list_open_ && choice >= 0 && choice < rows_.shape(tab_, row_).choice_count) {
         list_open_ = false;
         rows_.choose(tab_, row_, choice);
+    }
+    settle();
+}
+
+void MenuModel::click_slot(int row, int slot) {
+    settle();
+    list_open_ = false;
+    if (usable(row) && rows_.shape(tab_, row).kind == RowKind::binding && slot >= 0 &&
+        slot < rows_.shape(tab_, row).choice_count) {
+        row_ = row;
+        slot_ = slot;
+        rows_.listen(tab_, row_, slot_);
     }
     settle();
 }
