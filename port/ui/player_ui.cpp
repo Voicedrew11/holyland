@@ -22,10 +22,11 @@
 #include <string_view>
 
 #include "menu_model.hpp"
+#include "game_menu_art.hpp"
 #include "settings_rows.hpp"
-#include "ui_assets.hpp"
 #include "ui_frame.hpp"
 #include "ui_render.hpp"
+#include "ui_ties.hpp"
 
 #include "../overlay/update_badge.h"
 
@@ -39,79 +40,6 @@ extern "C" {
 
 namespace {
 
-// ---- RmlUi's ties to the program ------------------------------------------------------------------------------------
-class SystemTies final : public Rml::SystemInterface {
-public:
-    double GetElapsedTime() override {
-        return double(SDL_GetTicks()) / 1000.0;
-    }
-    bool LogMessage(Rml::Log::Type type, const Rml::String &message) override {
-        if (type <= Rml::Log::LT_WARNING) {
-            std::fprintf(stderr, "[ui] %s\n", message.c_str());
-        }
-        return true;
-    }
-};
-
-// The menu's files, from the arrays the game carries (ui_assets.hpp)
-class AssetFiles final : public Rml::FileInterface {
-public:
-    Rml::FileHandle Open(const Rml::String &path) override {
-        if (const UiAsset *file = ui_asset(path)) {
-            open_.push_back({file, 0});
-            return Rml::FileHandle(open_.size());
-        }
-        std::fprintf(stderr, "[ui] no file %s in the menu's files\n", path.c_str());
-        return 0;
-    }
-    void Close(Rml::FileHandle file) override {
-        if (Reading *r = reading(file)) {
-            r->asset = nullptr;
-        }
-    }
-    size_t Read(void *buffer, size_t size, Rml::FileHandle file) override {
-        Reading *r = reading(file);
-        if (r == nullptr) {
-            return 0;
-        }
-        size_t left = r->asset->size - r->at;
-        size = size < left ? size : left;
-        std::memcpy(buffer, r->asset->data + r->at, size);
-        r->at += size;
-        return size;
-    }
-    bool Seek(Rml::FileHandle file, long offset, int origin) override {
-        Reading *r = reading(file);
-        if (r == nullptr) {
-            return false;
-        }
-        long base = origin == SEEK_SET ? 0 : origin == SEEK_CUR ? long(r->at) : long(r->asset->size);
-        long at = base + offset;
-        if (at < 0 || size_t(at) > r->asset->size) {
-            return false;
-        }
-        r->at = size_t(at);
-        return true;
-    }
-    size_t Tell(Rml::FileHandle file) override {
-        Reading *r = reading(file);
-        return r != nullptr ? r->at : 0;
-    }
-
-private:
-    struct Reading {
-        const UiAsset *asset;
-        size_t at;
-    };
-    Reading *reading(Rml::FileHandle file) {
-        if (file == 0 || file > open_.size() || open_[file - 1].asset == nullptr) {
-            return nullptr;
-        }
-        return &open_[file - 1];
-    }
-    std::vector<Reading> open_; // (a handle is its place plus one; the menu opens a handful of files, once)
-};
-
 // ---- The menu's state -----------------------------------------------------------------------------------------------
 enum class Device { keyboard, pad };
 
@@ -121,12 +49,32 @@ public:
     void ProcessEvent(Rml::Event &event) override;
 };
 
+// The game's menu art from the disc (game_menu_art.hpp), for the recorder
+class GameMenuArt final : public ui::ImageSource {
+public:
+    bool has(const std::string &source) const override {
+        return ui::is_game_menu_source(source);
+    }
+    std::optional<ui::TextureUpload> load(const std::string &source) const override {
+        std::optional<ui::MenuArtImage> image = ui::load_game_menu_art(source);
+        if (!image) {
+            return std::nullopt;
+        }
+        ui::TextureUpload upload;
+        upload.width = image->width;
+        upload.height = image->height;
+        upload.rgba = std::move(image->rgba);
+        return upload;
+    }
+};
+
 struct Menu {
     bool ready = false;
     bool open = false;
     SDL_Window *window = nullptr;
-    SystemTies system;
-    AssetFiles files;
+    ui::SystemTies system;
+    ui::AssetFiles files;
+    GameMenuArt game_art;
     ui::Recorder recorder;
     ui::SettingsRows rows;
     ui::MenuModel model{rows};
@@ -749,31 +697,6 @@ void quit() {
     Rml::Shutdown();
 }
 
-bool load_fonts() {
-    struct Face {
-        const char *path;
-        const char *family;
-        Rml::Style::FontStyle style;
-        Rml::Style::FontWeight weight;
-    };
-    static const Face faces[] = {
-        {"fonts/Spectral-Regular.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
-        {"fonts/Spectral-SemiBold.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
-        {"fonts/Spectral-Italic.ttf", "Spectral", Rml::Style::FontStyle::Italic, Rml::Style::FontWeight::Normal},
-        {"fonts/Cinzel-Regular.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
-        {"fonts/Cinzel-SemiBold.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
-    };
-    for (const Face &face : faces) {
-        const UiAsset *file = ui_asset(face.path);
-        if (file == nullptr ||
-            !Rml::LoadFontFace(Rml::Span<const Rml::byte>(file->data, file->size), face.family, face.style, face.weight)) {
-            std::fprintf(stderr, "[ui] the font %s did not load\n", face.path);
-            return false;
-        }
-    }
-    return true;
-}
-
 } // namespace
 
 // ---- The port's side ------------------------------------------------------------------------------------------------
@@ -788,18 +711,21 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.window = static_cast<SDL_Window *>(sdl_window);
     Rml::SetSystemInterface(&menu.system);
     Rml::SetFileInterface(&menu.files);
+    menu.recorder.set_images(&menu.game_art);
     Rml::SetRenderInterface(&menu.recorder);
     if (!Rml::Initialise()) {
         std::fprintf(stderr, "[ui] RmlUi did not start: no player menu\n");
         return;
     }
     menu.context = Rml::CreateContext("menu", Rml::Vector2i(1280, 720));
-    if (menu.context == nullptr || !load_fonts() ||
+    if (menu.context == nullptr || !ui::load_fonts() ||
         (menu.document = menu.context->LoadDocument("menu.rml")) == nullptr) {
         std::fprintf(stderr, "[ui] the menu's document did not load: no player menu\n");
         Rml::Shutdown();
         return;
     }
+    // the window in the game's own panel and frame when the disc has them (kf4.rcss: body.game-art)
+    menu.document->SetClass("game-art", ui::game_menu_art_on_disc());
     menu.document->AddEventListener(Rml::EventId::Mouseover, &menu.pointer);
     menu.document->AddEventListener(Rml::EventId::Mousedown, &menu.pointer);
     menu.document->Show();

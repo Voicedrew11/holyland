@@ -109,6 +109,9 @@ LauncherChoices read_choices(const fs::path &file) {
     const cJSON *check = cJSON_GetObjectItemCaseSensitive(root.get(), "update_check");
     if (cJSON_IsBool(check))
         choices.update_check = cJSON_IsTrue(check);
+    const cJSON *setup = cJSON_GetObjectItemCaseSensitive(root.get(), "setup_done");
+    if (cJSON_IsBool(setup))
+        choices.setup_done = cJSON_IsTrue(setup);
     return choices;
 }
 
@@ -122,6 +125,7 @@ bool write_choices(const fs::path &file, const LauncherChoices &choices) {
     set_item(root.get(), "disc", cJSON_CreateString(choices.disc.c_str()));
     set_item(root.get(), "update_check", cJSON_CreateBool(choices.update_check));
     set_item(root.get(), "skipped", cJSON_CreateString(choices.skipped.c_str()));
+    set_item(root.get(), "setup_done", cJSON_CreateBool(choices.setup_done));
     char *text = cJSON_Print(root.get());
     if (text == nullptr)
         return false;

@@ -83,8 +83,8 @@ void port_settings_changed(void);
 /* (once a vblank, the game's thread) writes settings.json if it changed a while ago */
 void port_settings_poll(void);
 void port_settings_save(void);
-/* The user's data folder: KF4_DATA_DIR, else %APPDATA%\holyland on Windows, $XDG_CONFIG_HOME/holyland
-   (or ~/.config/holyland) elsewhere. Made when first written to. */
+/* The user's data folder: KF4_DATA_DIR, else %APPDATA%\holyland on Windows, $XDG_DATA_HOME/holyland
+   (or ~/.local/share/holyland) elsewhere (port/include/port/data_dir.h). Made when first written to. */
 const char *port_data_dir(void);
 /* settings.json's path */
 const char *port_settings_path(void);

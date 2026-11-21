@@ -1,0 +1,15 @@
+<rml>
+<head>
+	<title>Setup</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<img id="logo" src="logo.alpha"/>
+	<div id="page"></div>
+	<div id="foot">
+		<span id="version"></span>
+		<div id="dots"></div>
+		<div id="back" class="button hidden" data-action="back">Back</div>
+	</div>
+</body>
+</rml>

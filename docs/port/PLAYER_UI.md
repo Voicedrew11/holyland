@@ -62,7 +62,8 @@ is not borrowed.
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
-| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
 | `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
@@ -82,10 +83,11 @@ else changes: the model and the page take any row.
 
 ## The look
 
-`kf4.rcss` has the palette at its top: dark iron and amber (2026-11-21, replacing blue-grey, a cold blue band and
-IM FELL English). Charcoal windows in a double iron frame with bracketed corners, titles in Cinzel in amber over an
-ornamented rule, an amber edge and glow for the focused line, text in bone white; one accent throughout, ember only for
-warnings and a key being listened for. RmlUi has no default style sheet:
+`kf4.rcss` has the palette at its top: cold iron and ice, taken from the game's own window frame (2026-11-21; before
+it dark iron and amber, and before that blue-grey and IM FELL English). The game's black panel and wisps of ice for the
+window (the iron frame and corners only when the disc lacks them), titles in Cinzel in ice blue, a soft glow fading in
+from the left for the focused line (no bars or diamond rules, 2026-11-21), text in cool white; one accent throughout, ember only for warnings and
+a key being listened for. RmlUi has no default style sheet:
 every element is inline until the sheet says otherwise (hence `div, h2, p { display: block }`).
 
 The recorder draws triangles, textures and scissor clipping only. So the sheet uses borders, colours and the
@@ -93,7 +95,7 @@ straight gradients (`horizontal-gradient`, `vertical-gradient`, made of vertex c
 `linear-gradient` and the other shader gradients, `box-shadow`, `filter`, `transform` or `mask-image`: RmlUi then
 leaves them out, and the recorder logs the first of each kind. The only images are the menu's own alpha masks
 (`res/*.alpha`: "KF4A", width, height, a byte of alpha a pixel), white and coloured by `image-color`, so the game needs
-no image decoder; the logo, the corners and the rules are. Textures RmlUi makes between pictures (loading the document) go with the next
+no image decoder; the logo, the corners and the soft box are. Textures RmlUi makes between pictures (loading the document) go with the next
 picture.
 
 ## Testing
@@ -127,8 +129,13 @@ Still in ImGui (`port/overlay/`), to move over one at a time:
 6. **Developer tools**: the Developer page, the profiler (Shift+P) and the frame views. These can stay in ImGui
    longest, or become an RmlUi developer tab. Once they are moved, `third_party/imgui` and the ImGui backends
    go.
-7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (premultiplied blend
+7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (the launcher does
+   this already: `launcher/window.cpp`, `Window::State::draw`) (premultiplied blend
    mode), so the menu exists there too.
 
-Not started yet: the game's own art from the disc (the menu frames and fonts KF4 draws with), read at run time like
-the rest of the game's data, to make the menu look even more like the game's own.
+The game's own art from the disc (2026-11-21, a trial on `feat/ui-game-art`): when the disc has `menu/menu.tmx`, the
+window is dressed in King's Field IV's own menu window (`body.game-art` in `kf4.rcss`): its soft black panel and the four
+wisps of ice added along its sides, the pieces and places of the game's Settings screen (`menu/option_para.dat`, parts 0
+and 31 to 34). Each part of a `menu/*_para.dat` is a 0x60-byte `TexturedRectDef` (two corners in 12.4 with 0x6C00 and
+0x7900 off, ST, colour, TEX0) whose TBP0 and CBP name one of `menu.tmx`'s textures; `Menu_SetBlendMode` 0 blends
+over, 1 adds. Not yet: the game's font, the title and line glows (their words are drawn into the textures).

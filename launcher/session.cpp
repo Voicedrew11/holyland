@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <deque>
@@ -16,10 +17,12 @@
 #include "build_key.h"
 #include "build_strategy.h"
 #include "disc_check.h"
-#include "imgui.h"
 #include "launcher_files.h"
 #include "platform.h"
 #include "product.h"
+#include "rml_text.h"
+#include "setup_flow.h"
+#include "setup_pages.h"
 #include "update_check.h"
 #include "window.h"
 
@@ -38,9 +41,6 @@ namespace {
 constexpr std::size_t kLogLinesShown = 14;
 constexpr int kUpdateWaitMs = 3000;
 
-constexpr ImVec4 kGold(1.0f, 0.82f, 0.3f, 1.0f);
-constexpr ImVec4 kRed(1.0f, 0.45f, 0.4f, 1.0f);
-constexpr ImVec4 kDim(0.65f, 0.68f, 0.65f, 1.0f);
 
 // The build's progress, written by the build's thread and read by the window
 class BuildRun final : public BuildProgress {
@@ -128,9 +128,9 @@ private:
     int last_tenth_ = -1;
 };
 
-enum class Screen { choose_disc, building, build_failed, home, play, quit };
+enum class Screen { setup, building, build_failed, home, play, quit };
 
-class Session {
+class Session final : private DiscKeeper {
 public:
     Session(const Platform &platform, DataPaths paths, const LaunchOptions &options)
         : platform_(platform), paths_(std::move(paths)), options_(options) {}
@@ -141,24 +141,32 @@ public:
 private:
     // what is needed before play; the screen to show, or play when nothing is
     Screen first_screen();
+    // the setup's pages this start needs: the disc when there is none to use, the options before the first game
+    std::vector<std::unique_ptr<SetupPage>> setup_pages();
+    // after the setup: on to the build, the game, or the launcher's home
+    Screen after_setup();
     bool build_ready() const;
     fs::path build_dir() const { return paths_.builds / key_; }
     fs::path game_path() const { return build_dir() / platform_.game_program(); }
 
-    void use_disc(const fs::path &path);
+    // DiscKeeper, for the setup's disc page
+    bool keep_disc(const fs::path &disc) override;
+    const std::string &why_not() const override { return disc_error_; }
+    std::optional<fs::path> pick_disc_the_old_way() override { return platform_.pick_disc(); }
+
     void start_build();
     void remove_old_builds();
     int play();
     void show_game_stopped(int code);
 
     // a frame of each screen; returns the next screen
-    Screen draw(Screen screen);
-    Screen draw_choose_disc();
-    Screen draw_building();
-    Screen draw_build_failed();
-    Screen draw_home();
-    void draw_menu_bar();
-    void draw_update_window();
+    Screen draw(Screen screen, Window &window);
+    Screen draw_setup(Window &window);
+    Screen draw_building(Window &window);
+    Screen draw_build_failed(Window &window);
+    Screen draw_home(Window &window);
+    // the update's notice at the top of the page (its #update), and what the player chose in it
+    void draw_update_notice(Window &window);
 
     const Platform &platform_;
     DataPaths paths_;
@@ -168,9 +176,7 @@ private:
     fs::path content_;
     std::string key_;
     std::string disc_error_;
-    std::string typed_disc_;
-    bool update_window_ = false;
-    bool update_window_shown_ = false;
+    std::unique_ptr<SetupFlow> setup_;
     bool update_hidden_ = false;
     std::unique_ptr<BuildRun> build_;
     std::thread build_thread_;
@@ -191,10 +197,9 @@ int Session::run() {
     auto tools = platform_.toolchain(content_, why);
     key_ = build_key(launcher_version(), manifest_of(content_), tools ? tools->id : "none");
     if (!options_.disc.empty()) {
-        use_disc(fs::u8path(options_.disc));
+        keep_disc(fs::u8path(options_.disc));
     } else if (!choices_.disc.empty()) {
-        use_disc(fs::u8path(choices_.disc));
-        if (!disc_error_.empty())
+        if (!keep_disc(fs::u8path(choices_.disc)))
             disc_error_ = "The disc you chose last time is gone or changed. " + disc_error_;
     }
 
@@ -206,7 +211,8 @@ int Session::run() {
             std::fprintf(stderr, "[%s] cannot open the launcher's window: %s\n", kProductId, why.c_str());
             return 1;
         }
-        if (screen == Screen::building)
+        // (the build needs no disc: it runs while the player goes through the setup)
+        if (screen == Screen::building || (screen == Screen::setup && !build_ready()))
             start_build();
         while (screen != Screen::play && screen != Screen::quit) {
             if (!window->begin_frame()) {
@@ -214,10 +220,7 @@ int Session::run() {
                     build_->cancel();
                 screen = Screen::quit;
             } else {
-                window->begin_panel();
-                screen = draw(screen);
-                window->end_panel();
-                draw_update_window();
+                screen = draw(screen, *window);
                 window->end_frame();
             }
         }
@@ -254,12 +257,58 @@ int Session::build_only() {
     return 0;
 }
 
+// "Holyland 0.2.0", or "Holyland (developer's build)"
+std::string version_line() {
+    return std::string(kProductName) + (launcher_version()[0] ? std::string(" ") + launcher_version() : " (developer's build)");
+}
+
+// a log's lines as paragraphs
+template <typename Lines> std::string log_rml(const Lines &lines) {
+    std::string rml;
+    for (const std::string &line : lines)
+        rml += "<p>" + rml_escaped(line) + "</p>";
+    return rml;
+}
+
+void open_folder(const fs::path &folder) {
+    if (!SDL_OpenURL(("file:///" + folder.generic_u8string()).c_str()))
+        std::fprintf(stderr, "[%s] cannot open %s: %s\n", kProductId, folder.u8string().c_str(), SDL_GetError());
+}
+
 Screen Session::first_screen() {
-    if (!disc_error_.empty() || choices_.disc.empty())
-        return Screen::choose_disc;
+    setup_ = std::make_unique<SetupFlow>(setup_pages());
+    if (!setup_->finished())
+        return Screen::setup;
     if (options_.show_launcher)
         return Screen::home;
     return build_ready() ? Screen::play : Screen::building;
+}
+
+// The pages, in order: a new page is a line here (setup_pages.h)
+std::vector<std::unique_ptr<SetupPage>> Session::setup_pages() {
+    std::vector<std::unique_ptr<SetupPage>> pages;
+    if (!disc_error_.empty() || choices_.disc.empty())
+        pages.push_back(make_disc_page(*this));
+    if (!choices_.setup_done) {
+        // the options to pick before the first game: a line each, such as pages.push_back(make_..._page(...));
+    }
+    return pages;
+}
+
+Screen Session::after_setup() {
+    setup_.reset();
+    if (!choices_.setup_done) {
+        choices_.setup_done = true;
+        write_choices(paths_.choices(), choices_);
+    }
+    if (options_.show_launcher)
+        return Screen::home;
+    if (build_) // started with the setup: done, failed or still going, its screen says which
+        return Screen::building;
+    if (build_ready())
+        return Screen::play;
+    start_build();
+    return Screen::building;
 }
 
 bool Session::build_ready() const {
@@ -267,12 +316,11 @@ bool Session::build_ready() const {
     return fs::is_regular_file(game_path(), error);
 }
 
-void Session::use_disc(const fs::path &path) {
+bool Session::keep_disc(const fs::path &path) {
     DiscCheck check = check_disc(path);
     if (check.verdict != DiscVerdict::ok) {
         disc_error_ = check.message;
-        typed_disc_ = path.u8string();
-        return;
+        return false;
     }
     disc_error_.clear();
     std::string meant = disc_meant(path).u8string();
@@ -280,9 +328,14 @@ void Session::use_disc(const fs::path &path) {
         choices_.disc = meant;
         write_choices(paths_.choices(), choices_);
     }
+    return true;
 }
 
 void Session::start_build() {
+    if (build_thread_.joinable()) { // a build already going (Rebuild from home while the setup's runs): it starts over
+        build_->cancel();
+        build_thread_.join();
+    }
     std::error_code error;
     fs::remove_all(build_dir(), error);
     build_ = std::make_unique<BuildRun>(paths_.build_log());
@@ -357,40 +410,31 @@ void Session::show_game_stopped(int code) {
             at = end + 1;
         }
     }
-    bool open = true;
-    while (open && window->begin_frame()) {
-        window->begin_panel();
-        ImGui::BeginMenuBar();
-        ImGui::TextUnformatted(kProductName);
-        ImGui::EndMenuBar();
-        ImGui::TextColored(kRed, "The game stopped unexpectedly (%s).", platform_.describe_exit(code).c_str());
-        ImGui::TextWrapped("Its last messages are below; all of them are in %s. Please include that file in a "
-                           "bug report.", paths_.game_log().u8string().c_str());
-        ImGui::BeginChild("log", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
-        for (const std::string &line : tail)
-            ImGui::TextUnformatted(line.c_str());
-        ImGui::EndChild();
-        if (ImGui::Button("Open the log's folder"))
-            SDL_OpenURL(("file:///" + paths_.data.generic_u8string()).c_str());
-        ImGui::SameLine();
-        if (ImGui::Button("Close"))
-            open = false;
-        window->end_panel();
+    while (window->begin_frame()) {
+        window->show_page("stopped.rml");
+        window->set_text("why", "(" + platform_.describe_exit(code) + ")");
+        window->set_text("where", "Its last messages are below; all of them are in " + paths_.game_log().u8string() +
+                                      ". Please include that file in a bug report.");
+        window->set_rml("log", log_rml(tail));
+        window->scroll_to_end("log");
+        if (window->take_action("open-folder"))
+            open_folder(paths_.data);
+        if (window->take_action("close"))
+            break;
         window->end_frame();
     }
 }
 
-Screen Session::draw(Screen screen) {
-    draw_menu_bar();
+Screen Session::draw(Screen screen, Window &window) {
     switch (screen) {
-    case Screen::choose_disc:
-        return draw_choose_disc();
+    case Screen::setup:
+        return draw_setup(window);
     case Screen::building:
-        return draw_building();
+        return draw_building(window);
     case Screen::build_failed:
-        return draw_build_failed();
+        return draw_build_failed(window);
     case Screen::home:
-        return draw_home();
+        return draw_home(window);
     case Screen::play:
     case Screen::quit:
         break;
@@ -398,101 +442,48 @@ Screen Session::draw(Screen screen) {
     return screen;
 }
 
-void Session::draw_menu_bar() {
-    if (!ImGui::BeginMenuBar())
-        return;
-    ImGui::TextUnformatted(kProductName);
-    ImGui::TextColored(kDim, "%s", launcher_version()[0] ? launcher_version() : "developer's build");
+void Session::draw_update_notice(Window &window) {
     auto notice = updates_.notice();
-    if (notice && !update_hidden_) {
-        if (!update_window_shown_) {
-            update_window_ = true; // once per start, as Verdite's
-            update_window_shown_ = true;
-        }
-        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Update available!").x - 40);
-        ImGui::PushStyleColor(ImGuiCol_Text, kGold);
-        if (ImGui::BeginMenu("Update available!")) {
-            ImGui::PopStyleColor();
-            if (ImGui::MenuItem("Open download page"))
-                SDL_OpenURL(notice->url);
-            if (ImGui::MenuItem("Skip this version")) {
-                updates_.skip();
-                choices_.skipped = notice->tag;
-                write_choices(paths_.choices(), choices_);
-            }
-            if (ImGui::MenuItem("Hide until next start"))
-                update_hidden_ = true;
-            ImGui::EndMenu();
-        } else {
-            ImGui::PopStyleColor();
-        }
-    }
-    ImGui::EndMenuBar();
-}
-
-void Session::draw_update_window() {
-    auto notice = updates_.notice();
-    if (!update_window_ || !notice || update_hidden_)
-        return;
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (!ImGui::Begin("Update available", &update_window_,
-                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::End();
+    if (!notice || update_hidden_) {
+        window.set_rml("update", "");
         return;
     }
-    ImGui::Text("%s %s is out. You have %s.", kProductName, notice->tag, launcher_version());
-    ImGui::TextColored(kDim, "Download it from the release page and install it over this one.");
-    ImGui::TextColored(kDim, "Your settings and saves are kept.");
-    if (ImGui::Button("Download page")) {
+    if (window.take_action("update-download"))
         SDL_OpenURL(notice->url);
-        update_window_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Skip this version")) {
+    if (window.take_action("update-skip")) {
         updates_.skip();
         choices_.skipped = notice->tag;
         write_choices(paths_.choices(), choices_);
-        update_window_ = false;
+        update_hidden_ = true;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Later"))
-        update_window_ = false;
-    ImGui::End();
+    if (window.take_action("update-later"))
+        update_hidden_ = true;
+    window.set_rml("update", update_hidden_ ? std::string() :
+        "<div class=\"notice\">" + rml_escaped(std::string(kProductName) + " " + notice->tag + " is out (you have " +
+                                               launcher_version() + "). Your settings and saves are kept.") +
+        "<span class=\"link\" data-action=\"update-download\">Download page</span>"
+        "<span class=\"link\" data-action=\"update-skip\">Skip this version</span>"
+        "<span class=\"link\" data-action=\"update-later\">Later</span></div>");
 }
 
-Screen Session::draw_choose_disc() {
-    ImGui::TextUnformatted("Choose your King's Field IV disc");
-    ImGui::TextWrapped("%s plays the game from your own copy of the disc: King's Field: The Ancient City, "
-                       "the USA release (SLUS-20318). Choose an ISO or CHD image of it, or the SYSTEM.CNF of a "
-                       "disc you copied into a folder.", kProductName);
-    if (!disc_error_.empty())
-        ImGui::TextColored(kRed, "%s", disc_error_.c_str());
-    ImGui::Spacing();
-    if (ImGui::Button("Choose the disc...")) {
-        if (auto chosen = platform_.pick_disc())
-            use_disc(*chosen);
-    }
-    ImGui::Spacing();
-    ImGui::TextColored(kDim, "Or type its path:");
-    char buffer[1024];
-    std::snprintf(buffer, sizeof(buffer), "%s", typed_disc_.c_str());
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Use this").x - 40);
-    if (ImGui::InputText("##path", buffer, sizeof(buffer)))
-        typed_disc_ = buffer;
-    ImGui::SameLine();
-    if (ImGui::Button("Use this") && !typed_disc_.empty())
-        use_disc(fs::u8path(typed_disc_));
-    if (!disc_error_.empty() || choices_.disc.empty())
-        return Screen::choose_disc;
-    if (options_.show_launcher)
-        return Screen::home;
-    if (build_ready())
-        return Screen::play;
-    start_build();
-    return Screen::building;
+// The logo, the page, and at the foot the version, the page's place in the row and the way back
+Screen Session::draw_setup(Window &window) {
+    window.show_page("setup.rml");
+    if (window.take_action("back"))
+        setup_->back();
+    setup_->answer(setup_->page().draw(window));
+    if (setup_->finished())
+        return after_setup();
+    window.set_text("version", version_line());
+    std::string dots;
+    for (std::size_t i = 0; setup_->page_count() > 1 && i < setup_->page_count(); i++)
+        dots += i == setup_->page_number() ? "<span class=\"dot here\"></span>" : "<span class=\"dot\"></span>";
+    window.set_rml("dots", dots);
+    window.set_classes("back", setup_->can_go_back() ? "button" : "button hidden");
+    return Screen::setup;
 }
 
-Screen Session::draw_building() {
+Screen Session::draw_building(Window &window) {
     BuildRun::View view = build_->view();
     if (view.result) {
         if (build_thread_.joinable())
@@ -502,89 +493,82 @@ Screen Session::draw_building() {
         remove_old_builds();
         return options_.show_launcher ? Screen::home : Screen::play;
     }
-    ImGui::TextUnformatted("Building the game on your computer");
-    ImGui::TextWrapped("This happens once for each release and takes a few minutes. The game's code is "
-                       "compiled here from source, so no part of the game is downloaded.");
-    ImGui::Spacing();
-    ImGui::TextUnformatted(view.stage.c_str());
-    if (view.total > 0) {
-        char label[32];
-        std::snprintf(label, sizeof(label), "%d / %d", view.done, view.total);
-        ImGui::ProgressBar((float)view.done / (float)view.total, ImVec2(-1, 0), label);
-    } else {
-        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0), "");
-    }
-    ImGui::BeginChild("log", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
-    for (const std::string &line : view.tail)
-        ImGui::TextColored(kDim, "%s", line.c_str());
-    ImGui::SetScrollHereY(1.0f);
-    ImGui::EndChild();
-    if (ImGui::Button("Cancel")) {
+    if (window.take_action("cancel")) {
         build_->cancel();
         if (build_thread_.joinable())
             build_thread_.join();
         return Screen::quit;
     }
+    window.show_page("building.rml");
+    draw_update_notice(window);
+    if (view.total > 0) {
+        window.set_text("stage", view.stage + ": " + std::to_string(view.done) + " of " + std::to_string(view.total));
+        window.set_rml("bar", "<div style=\"width: " + std::to_string(view.done * 100 / view.total) + "%\"></div>");
+    } else {
+        window.set_text("stage", view.stage);
+        window.set_rml("bar", "");
+    }
+    window.set_rml("log", log_rml(view.tail));
+    window.scroll_to_end("log");
     return Screen::building;
 }
 
-Screen Session::draw_build_failed() {
+Screen Session::draw_build_failed(Window &window) {
     BuildRun::View view = build_->view();
-    ImGui::TextColored(kRed, "The game could not be built.");
-    ImGui::TextWrapped("%s", view.result ? view.result->message.c_str() : "");
-    ImGui::TextWrapped("The whole build's output is in %s. Please include that file in a bug report.",
-                       paths_.build_log().u8string().c_str());
-    ImGui::BeginChild("log", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
-    for (const std::string &line : view.tail)
-        ImGui::TextUnformatted(line.c_str());
-    ImGui::EndChild();
-    if (ImGui::Button("Try again")) {
+    if (window.take_action("try-again")) {
         start_build();
         return Screen::building;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Copy the log")) {
+    if (window.take_action("copy-log")) {
         if (auto text = read_file(paths_.build_log()))
             SDL_SetClipboardText(text->c_str());
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Open the log's folder"))
-        SDL_OpenURL(("file:///" + paths_.data.generic_u8string()).c_str());
-    ImGui::SameLine();
-    if (ImGui::Button("Close"))
+    if (window.take_action("open-folder"))
+        open_folder(paths_.data);
+    if (window.take_action("close"))
         return Screen::quit;
+    window.show_page("failed.rml");
+    draw_update_notice(window);
+    window.set_text("message", view.result ? view.result->message : "");
+    window.set_text("where", "The whole build's output is in " + paths_.build_log().u8string() +
+                                 ". Please include that file in a bug report.");
+    window.set_rml("log", log_rml(view.tail));
+    window.scroll_to_end("log");
     return Screen::build_failed;
 }
 
-Screen Session::draw_home() {
-    ImGui::TextUnformatted("King's Field IV");
-    ImGui::TextColored(kDim, "Disc: %s", choices_.disc.c_str());
-    ImGui::TextColored(kDim, build_ready() ? "Built for this release." : "Not built yet: Play builds it first.");
-    ImGui::Spacing();
-    if (ImGui::Button("Play", ImVec2(160 * ImGui::GetIO().FontGlobalScale, 0))) {
+Screen Session::draw_home(Window &window) {
+    if (window.take_action("play")) {
         if (build_ready())
             return Screen::play;
         options_.show_launcher = false; // after the build, play
+        if (!build_thread_.joinable()) // (else the setup's build is going, or done and not yet seen)
+            start_build();
+        return Screen::building;
+    }
+    if (window.take_action("change-disc")) {
+        std::vector<std::unique_ptr<SetupPage>> disc_only;
+        disc_only.push_back(make_disc_page(*this));
+        setup_ = std::make_unique<SetupFlow>(std::move(disc_only));
+        return Screen::setup;
+    }
+    if (window.take_action("rebuild")) {
         start_build();
         return Screen::building;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Change disc")) {
-        typed_disc_ = choices_.disc;
-        choices_.disc.clear();
-        return Screen::choose_disc;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Rebuild")) {
-        start_build();
-        return Screen::building;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Open data folder"))
-        SDL_OpenURL(("file:///" + paths_.data.generic_u8string()).c_str());
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Check for updates at launch", &choices_.update_check))
+    if (window.take_action("open-folder"))
+        open_folder(paths_.data);
+    if (window.take_action("toggle-updates")) {
+        choices_.update_check = !choices_.update_check;
         write_choices(paths_.choices(), choices_);
+    }
+    window.show_page("home.rml");
+    draw_update_notice(window);
+    window.set_text("disc", "Disc: " + choices_.disc);
+    window.set_text("built", build_ready() ? "Built for this release." : "Not built yet: Play builds it first.");
+    window.set_text("updates-check", choices_.update_check ? "Checking for updates at launch: on"
+                                                           : "Checking for updates at launch: off");
+    window.set_text("version", version_line());
     return Screen::home;
 }
 

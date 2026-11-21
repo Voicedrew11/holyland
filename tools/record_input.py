@@ -8,7 +8,7 @@ record: copies what the run starts from out of the data folder (settings.json, o
 hands, saves) into REC/start, then starts the game in its window with the player's settings, a fixed
 clock, the newest quick save (loaded by itself) and --record-input REC/input.pad. Play as usual; the recording is
 complete when the game is closed. REC is <data folder>/captures/input-YYYYMMDD-HHMMSS by default, beside F8's and
-F9's captures (the data folder: KF4_DATA_DIR, else %APPDATA%\\holyland or ~/.config/holyland). REC/info.txt names the
+F9's captures (the data folder: KF4_DATA_DIR, else %APPDATA%\\holyland or ~/.local/share/holyland). REC/info.txt names the
 program, the quick save, the clock and the options.
 
 replay: plays REC/input.pad again headless and silent (--no-audio), with KF4_DATA_DIR at a copy of REC/start
@@ -56,9 +56,9 @@ def data_dir():
         return os.environ["KF4_DATA_DIR"]
     if os.name == "nt" and os.environ.get("APPDATA"):
         return os.path.join(os.environ["APPDATA"], "holyland")
-    if os.environ.get("XDG_CONFIG_HOME"):
-        return os.path.join(os.environ["XDG_CONFIG_HOME"], "holyland")
-    return os.path.join(os.path.expanduser("~"), ".config", "holyland")
+    if os.environ.get("XDG_DATA_HOME"):
+        return os.path.join(os.environ["XDG_DATA_HOME"], "holyland")
+    return os.path.join(os.path.expanduser("~"), ".local", "share", "holyland")
 
 
 def read_info(rec):

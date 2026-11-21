@@ -197,7 +197,7 @@ jobs:
           cat > notes.md <<'NOTES'
           **Preview builds are password protected.** Join the [Verdite Project Discord](https://discord.gg/R4EKCs8RWH) for access.
 
-          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\holyland\saves` on Windows and `~/.config/holyland/saves` on Linux (quick saves beside them, in `quicksaves`).
+          **Always back up your saves before installing a preview build!** They are in `%APPDATA%\holyland\saves` on Windows and `~/.local/share/holyland/saves` on Linux (quick saves beside them, in `quicksaves`).
 
           The first start asks for your King's Field IV disc (the USA release, SLUS-20318) and builds the game on your computer, which takes a few minutes and happens once.
           NOTES

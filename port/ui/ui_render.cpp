@@ -105,9 +105,18 @@ void Recorder::ReleaseGeometry(Rml::CompiledGeometryHandle handle) {
     geometries_.erase(uintptr_t(handle));
 }
 
-// Only the menu's own alpha masks (.alpha, tools/ui_masks.py): white, premultiplied, coloured by the sheet's image-color
+// The owner's images (set_images: the player menu's game art), and the menu's own alpha masks (.alpha,
+// tools/ui_masks.py): white, premultiplied, coloured by the sheet's image-color
 Rml::TextureHandle Recorder::LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) {
     dimensions = {0, 0};
+    if (images_ != nullptr && images_->has(source)) {
+        std::optional<TextureUpload> upload = images_->load(source);
+        if (!upload) {
+            return 0;
+        }
+        dimensions = {upload->width, upload->height};
+        return Rml::TextureHandle(add_upload(std::move(*upload)));
+    }
     const UiAsset *file = ui_asset(source);
     if (file == nullptr || file->size < MASK_HEADER || std::memcmp(file->data, "KF4A", 4) != 0) {
         not_drawn("an image other than the menu's alpha masks");

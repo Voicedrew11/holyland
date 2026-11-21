@@ -2633,6 +2633,12 @@ public:
         return f(static_cast<const pcr::PictureBudget &>(budget_), static_cast<const pcr::GpuQueueTime &>(queue_));
     }
 
+    // (kf4-pc) Whether a picture between is made (PictureBudget::admit, under the lock)
+    bool admit(pcr::PictureKind kind, double now_s, double shown_s, double phase, double vblank_s, bool next_frame) {
+        std::lock_guard<std::mutex> hold(lock_);
+        return budget_.admit(kind, now_s, queue_.free_s(), shown_s, phase, vblank_s, next_frame);
+    }
+
     // --stats (the threads idle)
     void print(FILE *out) {
         std::lock_guard<std::mutex> hold(lock_);
@@ -2682,7 +2688,8 @@ private:
                         done, sent.shown_s, last_done_s_, budget_.cpu_s(sent.kind) * 1e3,
                         budget_.gpu_s(sent.kind) * 1e3);
             }
-            budget_.made(sent.kind, sent.submitted_s - sent.begun_s, done - std::max(sent.submitted_s, last_done_s_));
+            budget_.made(sent.kind, sent.submitted_s - sent.begun_s, done - std::max(sent.submitted_s, last_done_s_),
+                         sent.begun_s);
             queue_.done(sent.serial, done);
             last_done_s_ = done;
             if (sent.shown_s > 0 && ahead_ms_.size() < MOST) {
@@ -3362,6 +3369,16 @@ private:
             hand_out_in_order(none);
             return;
         }
+        if (!extra && between_left_out_ && left_out_frame_own_) {
+            // (the game frame's first vblank, the mouse turned: the picture between left out showed the frame at t 0)
+            // the frame's own picture instead, as without the mouse: its steps held back (slice 4b) drawn late by it. Not
+            // the last picture again: where no picture between fits (a GPU slower than the scale asks), nothing new was
+            // shown while the mouse turned, the view stood still until it stopped (walking, the frames' own pictures
+            // showed it at 30 a second).
+            between_left_out_ = false;
+            left_out_frame_own_ = false;
+            budget_frame_instead_++;
+        }
         if (!extra && between_left_out_) {
             // (slice 5: the vblank's own picture, a picture between left out by the budget) the last picture again, so
             // that the window has this vblank's (at 60 and below it waits for one a while)
@@ -3550,10 +3567,9 @@ private:
                        }),
                        true);
             const double now = port_wall_seconds();
-            if (!watch_.with([&](const pcr::PictureBudget &b, const pcr::GpuQueueTime &q) {
-                    return b.fits(kind, now, q.free_s(), shown, phase, VBLANK_S, next_frame);
-                })) {
+            if (!watch_.admit(kind, now, shown, phase, VBLANK_S, next_frame)) {
                 between_left_out_ = true;
+                left_out_frame_own_ = phase == 0 && p.picture.t == 0;
                 budget_left_out_++;
                 budget_left_out_own_ += phase == 0 ? 1 : 0;
                 direct_serial_.store(0, std::memory_order_release);
@@ -3759,10 +3775,11 @@ public:
             fprintf(out,
                     "[stats] scene renderer pictures by budget: %llu waits for a picture's time (%.1f ms on average), "
                     "%llu begun more than 1 ms after it; %llu pictures between left out (not ready by their time), %llu of them "
-                    "a vblank's own (the last picture shown again)\n",
+                    "a vblank's own (%llu the game frame's first, its own picture shown instead; the others the last picture "
+                    "shown again)\n",
                     (unsigned long long)budget_waits_, budget_waits_ ? budget_waited_s_ * 1e3 / double(budget_waits_) : 0.0,
                     (unsigned long long)budget_begun_late_, (unsigned long long)budget_left_out_,
-                    (unsigned long long)budget_left_out_own_);
+                    (unsigned long long)budget_left_out_own_, (unsigned long long)budget_frame_instead_);
             watch_.print(out);
             if (ahead_on_) {
                 fprintf(out,
@@ -3858,8 +3875,10 @@ private:
     Timing timing_;
     uint64_t timed_serial_ = 0;
     bool between_left_out_ = false;
+    bool left_out_frame_own_ = false; // (the one left out was the game frame's first vblank's own, at t 0)
     bool frames_shown_lately_ = true; // (the game frames' own pictures are shown: not with the mouse turning them)
-    uint64_t budget_waits_ = 0, budget_begun_late_ = 0, budget_left_out_ = 0, budget_left_out_own_ = 0;
+    uint64_t budget_waits_ = 0, budget_begun_late_ = 0, budget_left_out_ = 0, budget_left_out_own_ = 0,
+             budget_frame_instead_ = 0;
     double budget_waited_s_ = 0, budget_late_s_ = 0;
     UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)

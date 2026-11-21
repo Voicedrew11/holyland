@@ -37,6 +37,11 @@ public:
 
     explicit RecentTimes(double start_s) : high_s_(start_s) {}
 
+    // (the times kept forgotten: the next one added is the only one)
+    void restart() {
+        next_ = 0;
+        count_ = 0;
+    }
     void add(double seconds) {
         if (!(seconds >= 0)) {
             return;
@@ -73,10 +78,22 @@ public:
     static constexpr double MARGIN = 1.1;         // the high percentile, this many times over
     static constexpr double SLACK_S = 0.0008;     // the wait's waking late, and the hand-out after the submit
 
-    // A picture of kind made: cpu_s from begun to submitted, gpu_s its own GPU time
-    void made(PictureKind kind, double cpu_s, double gpu_s) {
-        cpu_[size_t(kind)].add(cpu_s);
-        gpu_[size_t(kind)].add(gpu_s);
+    // A picture of kind made: cpu_s from begun to submitted, gpu_s its own GPU time; begun_s when it was begun (-1: not
+    // said, counted as after any retry's warming)
+    void made(PictureKind kind, double cpu_s, double gpu_s, double begun_s = -1) {
+        const size_t k = size_t(kind);
+        if (retry_from_s_[k] >= 0 && begun_s >= 0 && begun_s >= retry_from_s_[k] &&
+            begun_s < retry_from_s_[k] + RETRY_WARM_S) {
+            return; // (a retry's first pictures: the GPU's clocks still waking)
+        }
+        if (retried_[k]) {
+            // (made again after it was left out for a while: its times now, not those that left it out)
+            retried_[k] = false;
+            cpu_[k].restart();
+            gpu_[k].restart();
+        }
+        cpu_[k].add(cpu_s);
+        gpu_[k].add(gpu_s);
     }
 
     // (a picture between shown by the vblank's own not measured yet: one shown by an extra picture and the scene alone,
@@ -136,12 +153,56 @@ public:
               bool next_frame) const {
         return done_s(kind, now_s, gpu_free_s) <= deadline_s(shown_s, phase, vblank_s, next_frame);
     }
+    // Whether a picture between of kind begun at now_s is made: when it fits; and, left out for retry_after_s, for
+    // RETRY_RUN_S anyway where the GPU is done with the work before it by its time (a retry), the kind's times then
+    // those of the retry's pictures begun after RETRY_WARM_S into it.
+    // Otherwise a cost met for a moment (a change of settings, a load, a spell) left the kind out for good: never made,
+    // never measured again, its last times kept; with the mouse turning every picture is a picture between, and the view
+    // stood still while the mouse moved. A run, not one picture: the GPU left with less work lowers its clocks (an AMD
+    // APU's 1800 MHz to 400), and one picture alone then costs nearly twice what it does in a run (23 ms, not 13), which
+    // left it out again. Each retry that does not fit waits twice as long as the one before, to RETRY_MOST_S: a GPU too
+    // slow for the kind has a retry's late pictures that seldom.
+    bool admit(PictureKind kind, double now_s, double gpu_free_s, double shown_s, double phase, double vblank_s,
+               bool next_frame) {
+        const size_t k = size_t(kind);
+        if (retry_from_s_[k] >= 0 && now_s >= retry_from_s_[k] && now_s < retry_from_s_[k] + RETRY_RUN_S) {
+            return gpu_free_s <= shown_s; // (a retry: made where the GPU is done before its time, so that one late is
+                                          // not queued behind another)
+        }
+        if (fits(kind, now_s, gpu_free_s, shown_s, phase, vblank_s, next_frame)) {
+            left_since_s_[k] = -1;
+            retry_after_s_[k] = RETRY_FIRST_S;
+            return true;
+        }
+        if (left_since_s_[k] < 0 || now_s < left_since_s_[k]) {
+            left_since_s_[k] = now_s;
+            return false;
+        }
+        if (now_s - left_since_s_[k] < retry_after_s_[k]) {
+            return false;
+        }
+        left_since_s_[k] = -1;
+        retry_after_s_[k] = std::min(retry_after_s_[k] * 2, RETRY_MOST_S);
+        retry_from_s_[k] = now_s;
+        retried_[k] = true;
+        return true;
+    }
+    static constexpr double RETRY_FIRST_S = 1.0;  // a kind left out this long is retried (admit)
+    static constexpr double RETRY_MOST_S = 16.0;  // (the longest between retries)
+    static constexpr double RETRY_RUN_S = 0.25;   // a retry: the kind made this long, whether it fits or not
+    static constexpr double RETRY_WARM_S = 0.125; // its pictures begun this soon not measured (the GPU's clocks waking)
 
 private:
     std::array<RecentTimes, PICTURE_KINDS> cpu_{RecentTimes(START_CPU_S), RecentTimes(START_CPU_S),
                                                 RecentTimes(START_CPU_S), RecentTimes(0)};
     std::array<RecentTimes, PICTURE_KINDS> gpu_{RecentTimes(START_GPU_S), RecentTimes(START_GPU_S),
                                                 RecentTimes(START_GPU_S), RecentTimes(START_SCENE_S)};
+    // (admit) since when each kind has been left out (-1: made since), how long until it is retried, when its last
+    // retry began (-1: none), and whether the next measured is a retry's
+    std::array<double, PICTURE_KINDS> left_since_s_{-1, -1, -1, -1};
+    std::array<double, PICTURE_KINDS> retry_after_s_{RETRY_FIRST_S, RETRY_FIRST_S, RETRY_FIRST_S, RETRY_FIRST_S};
+    std::array<double, PICTURE_KINDS> retry_from_s_{-1, -1, -1, -1};
+    std::array<bool, PICTURE_KINDS> retried_{};
 };
 
 // The GPU's work for the pictures submitted and not seen done, as predicted: when it will be done with all of them.

@@ -1,6 +1,6 @@
 // The launcher's parts that need no window or network (docs/port/LAUNCHER.md): SHA-256 and the build key,
-// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, and the local
-// build's steps run against a pretend system.
+// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, text put in the pages, the
+// first start's order of pages, and the local build's steps run against a pretend system.
 //
 //   launcher_test
 #include <cstdio>
@@ -16,6 +16,8 @@
 #include "disc_check.h"
 #include "launcher_files.h"
 #include "platform.h"
+#include "rml_text.h"
+#include "setup_flow.h"
 
 using namespace launcher;
 
@@ -80,6 +82,16 @@ void test_disc_verdict() {
     check("another release, named", other.verdict == DiscVerdict::other_release &&
                                         other.message.find("SLPS_250.00") != std::string::npos);
     check("no BOOT2", judge_disc("VER = 1.00", true).verdict == DiscVerdict::other_release);
+    check("its region said", other.message.find("Japanese") != std::string::npos &&
+                                 other.message.find("SLUS-20318") != std::string::npos);
+    check("European", judge_disc("BOOT2 = cdrom0:\\SLES_512.34;1", true).message.find("European") != std::string::npos);
+    DiscCheck incomplete = judge_disc(us, false);
+    check("the USA disc without KF4.DAT: an incomplete copy", incomplete.verdict == DiscVerdict::not_kf4 &&
+                                                                 incomplete.message.find("incomplete") != std::string::npos);
+    DiscCheck another_game = judge_disc("BOOT2 = cdrom0:\\SLUS_209.46;1", false);
+    check("another game, named", another_game.verdict == DiscVerdict::not_kf4 &&
+                                     another_game.message.find("not King's Field IV") != std::string::npos &&
+                                     another_game.message.find("SLUS_209.46") != std::string::npos);
 }
 
 fs::path temp_dir(const char *name) {
@@ -124,14 +136,54 @@ void test_choices() {
     LauncherChoices none = read_choices(file);
     check("defaults", none.disc.empty() && none.update_check && none.skipped.empty());
     write(file, "{\"future_key\": 7, \"disc\": \"/old\"}");
-    LauncherChoices mine{"/d/kf4.iso", false, "v0.2.0"};
+    check("setup not done at first", !none.setup_done);
+    LauncherChoices mine{"/d/kf4.iso", false, "v0.2.0", true};
     check("written", write_choices(file, mine));
     LauncherChoices back = read_choices(file);
-    check("read back", back.disc == mine.disc && !back.update_check && back.skipped == "v0.2.0");
+    check("read back", back.disc == mine.disc && !back.update_check && back.skipped == "v0.2.0" && back.setup_done);
     check("unknown keys kept", read_file(file).value_or("").find("future_key") != std::string::npos);
     write(file, "{broken");
     check("broken means defaults", read_choices(file).update_check && read_choices(file).disc.empty());
     fs::remove_all(dir);
+}
+
+void test_rml_escaped() {
+    check("plain text kept", rml_escaped("King's Field IV") == "King's Field IV");
+    check("markup escaped", rml_escaped("<p a=\"b\">x & y</p>") == "&lt;p a=&quot;b&quot;&gt;x &amp; y&lt;/p&gt;");
+    check("empty", rml_escaped("").empty());
+}
+
+struct CountingPage final : SetupPage {
+    PageAnswer next_answer = PageAnswer::stay;
+    int drawn = 0;
+    PageAnswer draw(Window &) override {
+        drawn++;
+        return next_answer;
+    }
+};
+
+void test_setup_flow() {
+    check("no pages: finished at once", SetupFlow({}).finished());
+    std::vector<std::unique_ptr<SetupPage>> pages;
+    pages.push_back(std::make_unique<CountingPage>());
+    pages.push_back(std::make_unique<CountingPage>());
+    auto *first = static_cast<CountingPage *>(pages[0].get());
+    SetupFlow flow(std::move(pages));
+    check("starts on the first page", !flow.finished() && &flow.page() == first && flow.page_number() == 0);
+    check("two pages", flow.page_count() == 2);
+    check("no going back from the first", !flow.can_go_back());
+    flow.answer(PageAnswer::stay);
+    check("stay stays", flow.page_number() == 0);
+    flow.answer(PageAnswer::next);
+    check("next goes on", flow.page_number() == 1 && &flow.page() != first && flow.can_go_back());
+    flow.back();
+    check("back goes back", flow.page_number() == 0 && &flow.page() == first);
+    flow.answer(PageAnswer::next);
+    flow.answer(PageAnswer::next);
+    check("the last answer finishes", flow.finished() && !flow.can_go_back());
+    flow.answer(PageAnswer::next);
+    flow.back();
+    check("finished stays finished", flow.finished());
 }
 
 // ---- The local build against a pretend system ----------------------------------------------------
@@ -313,6 +365,8 @@ int main() {
     test_disc_folder();
     test_disc_chd();
     test_choices();
+    test_rml_escaped();
+    test_setup_flow();
     test_local_build();
     std::printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;

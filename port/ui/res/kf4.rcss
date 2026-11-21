@@ -1,12 +1,13 @@
-/* The player menu's look: dark iron and amber. A sidebar with the Holyland logo and the sections, the section's rows,
-   the focused row's help; the keys along the bottom. Windows of charcoal in a double iron frame with bracketed
-   corners; titles in Cinzel in amber over an ornamented rule; the chosen line lit by an amber edge and glow; text in
-   bone white. One accent (amber) throughout; ember only for warnings and a key being listened for. Only borders,
-   colours, straight gradients and the menu's alpha masks (port/ui/ui_render.hpp draws no shaders, layers or
-   transforms; the corners and rules are masks made by tools/ui_ornaments.py and tools/ui_masks.py).
+/* The player menu's look: King's Field IV's own, cold iron and ice. A sidebar with the Holyland logo and the sections,
+   the section's rows, the focused row's help; the keys along the bottom. The window is the game's own (its black panel
+   and wisps of ice, read from the disc: "The game's own window" at the end); titles in Cinzel in ice blue; the
+   chosen line lit by a soft glow fading in from the left, no bars or ornaments; text in cool white. One accent (ice) throughout, taken
+   from the game's frame; ember only for warnings and a key being listened for. Only borders, colours, straight
+   gradients and images (port/ui/ui_render.hpp draws no shaders, layers or transforms; the corners and the soft box are masks
+   made by tools/ui_ornaments.py and tools/ui_masks.py).
 
-   Colours:  window #13110f to #070606   sidebar #181512 to #0a0908   frame #6b6255 / #2a2620   amber #d4a95a
-             text #e2dccf   dim #948b7c   off #5e574c   key #4a443a   ember #c46a4a   chosen amber edge, #d4a95a glow */
+   Colours:  window #0f1114 to #060708   sidebar #121418 to #08090b   frame #5a6474 / #22272f   ice #a8c4e8
+             text #dde3ec   dim #8790a0   off #555d6b   key #3e4654   ember #c46a4a   chosen #a8c4e8 glow */
 
 /* (RmlUi has no default style sheet: every element is inline until it says otherwise) */
 div, h2, p {
@@ -18,7 +19,7 @@ body {
 	font-family: Spectral;
 	font-weight: normal;
 	font-size: 17dp;
-	color: #e2dccf;
+	color: #dde3ec;
 	width: 100%;
 	height: 100%;
 }
@@ -48,9 +49,9 @@ body.closed #shade, body.closed #window {
 	padding: 7dp 14dp 7dp 14dp;
 	text-align: center;
 	font-size: 15dp;
-	color: #bfb6a6;
-	border: 1dp #6b6255;
-	decorator: vertical-gradient(#13110fe8 #070606f0);
+	color: #b4bccb;
+	border: 1dp #5a6474;
+	decorator: vertical-gradient(#0f1114e8 #060708f0);
 }
 
 body.closed #hint.shown {
@@ -65,7 +66,7 @@ body.closed #hint.shown {
 	font-family: Cinzel;
 	letter-spacing: 1dp;
 	font-size: 17dp;
-	color: #d4a95a;
+	color: #a8c4e8;
 	margin-left: 10dp;
 }
 
@@ -84,9 +85,9 @@ body.closed #hint.shown {
 	width: 100%;
 	height: 100%;
 	box-sizing: border-box;
-	border: 2dp #6b6255;
+	border: 2dp #5a6474;
 	padding: 4dp;
-	decorator: vertical-gradient(#13110ff4 #070606f7);
+	decorator: vertical-gradient(#0f1114f4 #060708f7);
 }
 
 #rule-inner {
@@ -95,8 +96,8 @@ body.closed #hint.shown {
 	width: 100%;
 	height: 100%;
 	box-sizing: border-box;
-	border: 1dp #3a342b;
-	border-top-color: #4a4337;
+	border: 1dp #2f3540;
+	border-top-color: #3c4452;
 	padding-bottom: 10dp;
 	decorator: vertical-gradient(#ffffff08 #ffffff00);
 }
@@ -107,7 +108,7 @@ img.corner {
 	position: absolute;
 	width: 64dp;
 	height: 64dp;
-	image-color: #a8916a;
+	image-color: #8ea6c4;
 }
 
 #corner-tl { left: -4dp; top: -4dp; }
@@ -129,8 +130,8 @@ img.corner {
 	width: 270dp;
 	box-sizing: border-box;
 	padding: 22dp 0 12dp 0;
-	border-right: 1dp #2a2620;
-	decorator: vertical-gradient(#181512c8 #0a0908c8);
+	border-right: 1dp #22272f;
+	decorator: vertical-gradient(#121418c8 #08090bc8);
 }
 
 #crest {
@@ -141,32 +142,16 @@ img.corner {
 
 #logo {
 	width: 228dp;
-	image-color: #d4a95a;
+	image-color: #a8c4e8;
 }
 
 #subtitle {
 	font-family: Cinzel;
 	font-size: 13dp;
-	color: #948b7c;
+	color: #8790a0;
 	margin-top: 6dp;
+	margin-bottom: 12dp;
 	letter-spacing: 3dp;
-}
-
-/* the ornamented rules: under the crest, centred; under the section's title, from the left */
-#crest-rule {
-	display: block;
-	width: 220dp;
-	height: 12dp;
-	margin: 12dp auto 0 auto;
-	image-color: #8a7344;
-}
-
-#heading-rule {
-	display: block;
-	width: 420dp;
-	height: 8dp;
-	margin-bottom: 10dp;
-	image-color: #8a7344;
 }
 
 #tabs {
@@ -179,39 +164,38 @@ tab {
 	font-family: Cinzel;
 	font-size: 17dp;
 	letter-spacing: 1dp;
-	color: #948b7c;
+	color: #8790a0;
 	padding: 6dp 18dp 6dp 26dp;
 	border-left: 3dp #00000000;
 }
 
 tab:hover {
-	color: #e2dccf;
+	color: #dde3ec;
 }
 
 tab.selected {
-	color: #f2ead8;
-	border-left: 3dp #d4a95a;
-	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
+	color: #f0f4fa;
+	decorator: horizontal-gradient(#a8c4e830 #a8c4e800);
 }
 
 /* the keys that change the section, above and below them */
 tab.end {
 	font-family: Spectral;
 	font-size: 12dp;
-	color: #5e574c;
+	color: #555d6b;
 	padding-top: 2dp;
 	padding-bottom: 2dp;
 }
 
 #version {
 	font-size: 12dp;
-	color: #5e574c;
+	color: #555d6b;
 	padding: 8dp 18dp 0 26dp;
 }
 
 #version update {
 	display: block;
-	color: #d4a95a;
+	color: #a8c4e8;
 }
 
 /* ---- The section: its title and rows ------------------------------------------------------------------------------- */
@@ -227,9 +211,10 @@ tab.end {
 	font-family: Cinzel;
 	font-weight: bold;
 	font-size: 28dp;
-	color: #d4a95a;
+	color: #a8c4e8;
 	letter-spacing: 2dp;
 	padding-bottom: 4dp;
+	margin-bottom: 18dp;
 }
 
 #rows {
@@ -248,12 +233,11 @@ row {
 }
 
 row.focused {
-	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
-	border-left: 3dp #d4a95a;
+	decorator: horizontal-gradient(#a8c4e830 #a8c4e800);
 }
 
 row.disabled {
-	color: #5e574c;
+	color: #555d6b;
 }
 
 row.heading {
@@ -263,8 +247,8 @@ row.heading {
 	font-family: Cinzel;
 	font-size: 15dp;
 	letter-spacing: 1dp;
-	color: #b89350;
-	border-bottom: 1dp #2a2620;
+	color: #8fb0d8;
+	border-bottom: 1dp #22272f;
 	border-left: 0;
 }
 
@@ -280,20 +264,20 @@ label {
 value {
 	display: block;
 	text-align: right;
-	color: #e8dcc0;
+	color: #e4ecf6;
 	white-space: nowrap;
 }
 
 row.disabled value {
-	color: #5e574c;
+	color: #555d6b;
 }
 
 value.off {
-	color: #948b7c;
+	color: #8790a0;
 }
 
 row.action value {
-	color: #948b7c;
+	color: #8790a0;
 	font-style: italic;
 }
 
@@ -302,7 +286,7 @@ arrow {
 	display: inline-block;
 	width: 20dp;
 	text-align: center;
-	color: #d4a95a;
+	color: #a8c4e8;
 }
 
 arrow.end {
@@ -320,13 +304,13 @@ bar {
 	height: 3dp;
 	margin-right: 10dp;
 	vertical-align: middle;
-	background-color: #2a2620;
+	background-color: #22272f;
 }
 
 fill {
 	display: block;
 	height: 3dp;
-	background-color: #d4a95a;
+	background-color: #a8c4e8;
 }
 
 note {
@@ -343,7 +327,7 @@ row.binding label {
 }
 
 row.binding.changed label {
-	color: #e8dcc0;
+	color: #e4ecf6;
 }
 
 slot {
@@ -353,24 +337,24 @@ slot {
 	padding: 2dp 4dp;
 	text-align: center;
 	font-size: 13dp;
-	color: #bfb6a6;
-	border: 1dp #2a2620;
+	color: #b4bccb;
+	border: 1dp #22272f;
 	white-space: nowrap;
 	overflow: hidden;
 }
 
 slot.empty {
-	color: #5e574c;
+	color: #555d6b;
 }
 
 slot:hover {
-	border: 1dp #6b6255;
+	border: 1dp #5a6474;
 }
 
 row.focused slot.chosen {
-	color: #f2ead8;
-	border: 1dp #d4a95a;
-	decorator: vertical-gradient(#3a3020 #1c170f);
+	color: #f0f4fa;
+	border: 1dp #a8c4e8;
+	decorator: vertical-gradient(#22324a #111a28);
 }
 
 slot.listening, row.focused slot.listening {
@@ -387,9 +371,9 @@ row.open {
 list {
 	display: block;
 	margin: 0 12dp 6dp 40dp;
-	border: 1dp #6b6255;
+	border: 1dp #5a6474;
 	padding: 2dp;
-	background-color: #0c0a09f8;
+	background-color: #0a0b0df8;
 }
 
 choice {
@@ -399,19 +383,18 @@ choice {
 }
 
 choice.chosen {
-	color: #d4a95a;
+	color: #a8c4e8;
 }
 
 choice.highlighted {
-	decorator: horizontal-gradient(#d4a95a30 #d4a95a00);
-	border-left: 3dp #d4a95a;
+	decorator: horizontal-gradient(#a8c4e830 #a8c4e800);
 }
 
 /* ---- Help ---------------------------------------------------------------------------------------------------------- */
 #help {
 	width: 280dp;
 	padding: 26dp 22dp 0 20dp;
-	border-left: 1dp #2a2620;
+	border-left: 1dp #22272f;
 	overflow-y: auto;
 }
 
@@ -419,9 +402,9 @@ choice.highlighted {
 	display: block;
 	font-family: Cinzel;
 	font-size: 19dp;
-	color: #d4a95a;
+	color: #a8c4e8;
 	padding-bottom: 6dp;
-	border-bottom: 1dp #2a2620;
+	border-bottom: 1dp #22272f;
 	margin-bottom: 10dp;
 }
 
@@ -429,7 +412,7 @@ choice.highlighted {
 	display: block;
 	font-size: 15dp;
 	line-height: 1.45;
-	color: #bfb6a6;
+	color: #b4bccb;
 	margin-bottom: 8dp;
 }
 
@@ -441,9 +424,9 @@ choice.highlighted {
 #prompts {
 	text-align: center;
 	font-size: 14dp;
-	color: #948b7c;
+	color: #8790a0;
 	padding-top: 9dp;
-	border-top: 1dp #2a2620;
+	border-top: 1dp #22272f;
 }
 
 prompt {
@@ -454,8 +437,8 @@ prompt {
 key {
 	display: inline-block;
 	font-size: 13dp;
-	color: #e2dccf;
-	border: 1dp #4a443a;
+	color: #dde3ec;
+	border: 1dp #3e4654;
 	padding: 0 6dp;
 	margin-right: 5dp;
 }
@@ -471,9 +454,140 @@ scrollbarvertical slidertrack {
 }
 
 scrollbarvertical sliderbar {
-	background-color: #4a443a;
+	background-color: #3e4654;
 }
 
 scrollbarvertical sliderbar:hover {
-	background-color: #6b6255;
+	background-color: #5a6474;
+}
+
+/* ---- The game's own window (body.game-art: the disc has menu/menu.tmx) ---------------------------------------------
+   King's Field IV's menu window, from its own textures on the player's disc (port/ui/game_menu_art.hpp): a soft black
+   panel, and four wisps of ice added over it along the sides. The pieces and their places are those of the game's
+   Settings screen (menu/option_para.dat: parts 0 and 31 to 34), at 1.5dp a game pixel (2 lines a game line). The
+   sprites are in the textures' pixels; the edges are 0.75 bright (the parts' alpha, 0x60). */
+@spritesheet game-panel {
+	src: game-menu/10944-over.tex;
+	game-panel: 0px 0px 128px 128px;
+}
+
+@spritesheet game-edges {
+	src: game-menu/11584-add.tex;
+	game-edge-side: 7px 54px 51px 458px;
+	game-edge-bottom: 0px 1px 511px 56px;
+}
+
+@spritesheet game-edges-top {
+	src: game-menu/11584-add_alpha.tex;
+	game-edge-top: 0px 5px 510px 51px;
+}
+
+#game-frame {
+	display: none;
+}
+
+body.game-art #game-frame {
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+#game-frame div {
+	position: absolute;
+	image-color: #ffffffc0;
+}
+
+#game-frame #game-panel {
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	decorator: image(game-panel);
+	image-color: #000000;
+}
+
+#game-edge-left, #game-edge-right {
+	top: 0;
+	width: 32dp;
+	height: 100%;
+	decorator: image(game-edge-side);
+}
+
+#game-edge-left { left: 40dp; }
+#game-edge-right { right: 44dp; }
+
+#game-edge-top {
+	top: 16dp;
+	left: 9dp;
+	right: 0;
+	height: 36dp;
+	decorator: image(game-edge-top);
+}
+
+#game-edge-bottom {
+	bottom: 20dp;
+	left: 0;
+	right: 0;
+	height: 36dp;
+	decorator: image(game-edge-bottom flip-horizontal);
+}
+
+/* the window's own frame and corners give way to the game's; its rows stay inside the wisps */
+body.game-art #rule-outer {
+	position: relative;
+	border-width: 0;
+	padding: 52dp 76dp 56dp 72dp;
+	decorator: none;
+}
+
+body.game-art #rule-inner {
+	border-width: 0;
+	decorator: none;
+}
+
+body.game-art img.corner {
+	display: none;
+}
+
+/* the sidebar's shade fades into the game's panel on every side, with no dividing line: a soft box (soft_box.alpha,
+   tools/ui_ornaments.py) drawn as a nine-patch, so the fade keeps its width; widest towards the rows, reaching past the
+   sidebar to where the rows begin. It is drawn behind the sidebar's words (z-index -1 inside the sidebar). */
+@spritesheet soft-box {
+	src: soft_box.alpha;
+	soft-box-outer: 0px 0px 136px 136px;
+	soft-box-inner: 64px 64px 8px 8px;
+}
+
+#sidebar-shade {
+	display: none;
+}
+
+body.game-art #sidebar {
+	position: relative;
+	z-index: 0;
+	border-right-width: 0;
+	decorator: none;
+}
+
+body.game-art #sidebar-shade {
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: -26dp;
+	bottom: 0;
+	z-index: -1;
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 40dp 120dp 40dp 36dp);
+	image-color: #0d0f12d0;
+}
+
+/* the chosen section, row and choice are lit by the same soft box, fading in from the left as the shade does */
+body.game-art tab.selected,
+body.game-art row.focused,
+body.game-art choice.highlighted {
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 8dp 90dp 8dp 36dp);
+	image-color: #a8c4e838;
 }

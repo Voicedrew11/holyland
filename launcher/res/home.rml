@@ -1,0 +1,20 @@
+<rml>
+<head>
+	<title>Holyland</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<div id="update"></div>
+	<img id="logo" src="logo.alpha"/>
+	<p id="disc" class="dim"></p>
+	<p id="built" class="dim"></p>
+	<div class="buttons">
+		<span class="button main" data-action="play">Play</span>
+		<span class="button" data-action="change-disc">Change disc</span>
+		<span class="button" data-action="rebuild">Rebuild</span>
+		<span class="button" data-action="open-folder">Open data folder</span>
+	</div>
+	<span id="updates-check" class="link" data-action="toggle-updates"></span>
+	<div id="foot"><span id="version"></span></div>
+</body>
+</rml>

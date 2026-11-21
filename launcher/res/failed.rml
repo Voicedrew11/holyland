@@ -1,0 +1,21 @@
+<rml>
+<head>
+	<title>The build failed</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<div class="column">
+		<div id="update"></div>
+		<h1 class="error">The game could not be built</h1>
+		<p id="message"></p>
+		<p id="where" class="dim"></p>
+		<div id="log" class="log"></div>
+		<div class="buttons">
+			<span class="button main" data-action="try-again">Try again</span>
+			<span class="button" data-action="copy-log">Copy the log</span>
+			<span class="button" data-action="open-folder">Open the log's folder</span>
+			<span class="button" data-action="close">Close</span>
+		</div>
+	</div>
+</body>
+</rml>

@@ -1,0 +1,307 @@
+/* The launcher's look (launcher/window.h): the player menu's fonts and colours (port/ui/res/kf4.rcss), kept plain.
+   Charcoal ground, bone-white text, one accent (amber) for what can be clicked; ember only for errors.
+
+   Colours:  ground #0f0d0c   panel #181512   border #8a7f6e   amber #d4a95a   text #e2dccf   dim #c0b9ac
+             ember #e78868 */
+
+/* (RmlUi has no default style sheet: every element is inline until it says otherwise) */
+div, p, h1, h2 {
+	display: block;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 24dp 32dp;
+	font-family: Spectral;
+	font-weight: normal;
+	font-size: 20dp;
+	color: #e2dccf;
+	background-color: #0f0d0c;
+}
+
+h1 {
+	font-family: Cinzel;
+	font-size: 32dp;
+	color: #e2dccf;
+	text-align: center;
+	margin: 0 0 8dp 0;
+}
+
+p {
+	text-align: center;
+	margin: 0 0 6dp 0;
+	word-break: break-word; /* (a long path breaks where it must) */
+}
+
+.dim {
+	color: #c0b9ac;
+}
+
+.error {
+	color: #e78868;
+}
+
+#logo {
+	width: 380dp;
+	image-color: #d4a95a;
+	margin-bottom: 28dp;
+}
+
+#logo.small {
+	width: 240dp;
+	margin-bottom: 18dp;
+}
+
+/* ---- Buttons and links: amber when the pointer is on them ---------------------------------------------------------- */
+.button {
+	display: inline-block;
+	padding: 8dp 20dp;
+	margin: 0 6dp;
+	border: 1.5dp #8a7f6e;
+	border-radius: 4dp;
+	background-color: #181512;
+	color: #e2dccf;
+	cursor: pointer;
+}
+
+.button:hover {
+	border-color: #d4a95a;
+	color: #d4a95a;
+}
+
+.button.main {
+	border-color: #d4a95a;
+	color: #d4a95a;
+}
+
+.button.main:hover {
+	background-color: #2a2217;
+}
+
+.buttons {
+	text-align: center;
+	margin-top: 18dp;
+}
+
+.link {
+	display: inline-block;
+	color: #c0b9ac;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.link:hover {
+	color: #d4a95a;
+}
+
+/* ---- The disc's page: the drop area, what is needed, a typed path --------------------------------------------------- */
+#page {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	width: 100%;
+	max-width: 680dp;
+}
+
+#drop {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 230dp;
+	box-sizing: border-box;
+	margin-bottom: 18dp;
+	border: 1.5dp #8a7f6e;
+	border-radius: 6dp;
+	cursor: pointer;
+}
+
+#drop:hover, #drop.over {
+	border: 2.5dp #d4a95a;
+}
+
+#drop:hover h1, #drop.over h1 {
+	color: #d4a95a;
+}
+
+#drop.choosing {
+	cursor: default;
+	border: 1.5dp #8a7f6e;
+}
+
+/* a disc, drawn: a ring with a hole */
+.disc {
+	width: 44dp;
+	height: 44dp;
+	box-sizing: border-box;
+	border: 2dp #e2dccf;
+	border-radius: 22dp;
+	margin-bottom: 14dp;
+}
+
+.disc div {
+	width: 12dp;
+	height: 12dp;
+	box-sizing: border-box;
+	margin: 14dp 14dp;
+	border: 2dp #e2dccf;
+	border-radius: 6dp;
+}
+
+#drop:hover .disc, #drop:hover .disc div, #drop.over .disc, #drop.over .disc div {
+	border-color: #d4a95a;
+}
+
+.row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	width: 100%;
+	margin-top: 10dp;
+}
+
+input.text {
+	flex: 1;
+	padding: 8dp 10dp;
+	border: 1.5dp #8a7f6e;
+	background-color: #181512;
+	color: #e2dccf;
+	cursor: text;
+}
+
+input.text:focus {
+	border-color: #d4a95a;
+}
+
+input.text selection {
+	background-color: #5a4a2e;
+	color: #e2dccf;
+}
+
+#type-link {
+	margin-top: 14dp;
+}
+
+/* ---- The setup's foot: the version, the page's place, the way back ------------------------------------------------- */
+#foot {
+	position: absolute;
+	left: 24dp;
+	right: 24dp;
+	bottom: 16dp;
+	height: 40dp;
+}
+
+#version {
+	position: absolute;
+	left: 0;
+	bottom: 4dp;
+	font-size: 15dp;
+	color: #c0b9ac;
+}
+
+#dots {
+	text-align: center;
+	padding-top: 14dp;
+}
+
+.dot {
+	display: inline-block;
+	width: 8dp;
+	height: 8dp;
+	margin: 0 4dp;
+	border-radius: 4dp;
+	background-color: #8a7f6e;
+}
+
+.dot.here {
+	background-color: #d4a95a;
+}
+
+#back {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+}
+
+/* ---- The build, a failure, the game stopped: a column with a log ---------------------------------------------------- */
+.column {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	width: 100%;
+	max-width: 780dp;
+	height: 100%;
+}
+
+#stage {
+	margin-top: 10dp;
+}
+
+.bar {
+	width: 100%;
+	height: 8dp;
+	margin: 10dp 0;
+	border-radius: 4dp;
+	background-color: #2a2620;
+}
+
+.bar div {
+	height: 100%;
+	border-radius: 4dp;
+	background-color: #d4a95a;
+}
+
+.log {
+	flex: 1;
+	width: 100%;
+	min-height: 120dp;
+	box-sizing: border-box;
+	padding: 8dp 12dp;
+	border: 1dp #2a2620;
+	background-color: #0a0908;
+	font-size: 15dp;
+	color: #c0b9ac;
+	overflow-y: auto;
+	text-align: left;
+}
+
+.log p {
+	text-align: left;
+	margin: 0;
+	white-space: pre-wrap;
+}
+
+/* ---- The update's notice, at the top of the launcher's own pages --------------------------------------------------- */
+#update {
+	width: 100%;
+	text-align: center;
+	margin-bottom: 14dp;
+}
+
+#update .notice {
+	padding: 8dp 14dp;
+	border: 1.5dp #d4a95a;
+	border-radius: 4dp;
+	color: #e2dccf;
+}
+
+#update .link {
+	margin-left: 14dp;
+}
+
+/* ---- Home: the disc, the build, the buttons, the update check ------------------------------------------------------ */
+#updates-check {
+	margin-top: 22dp;
+}
+
+/* (last, so it wins over a class that shows the element) */
+.hidden {
+	display: none;
+}
