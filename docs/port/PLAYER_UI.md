@@ -127,7 +127,8 @@ Still in ImGui (`port/overlay/`), to move over one at a time:
 6. **Developer tools**: the Developer page, the profiler (Shift+P) and the frame views. These can stay in ImGui
    longest, or become an RmlUi developer tab. Once they are moved, `third_party/imgui` and the ImGui backends
    go.
-7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (premultiplied blend
+7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (the launcher does
+   this already: `launcher/window.cpp`, `Window::State::draw`) (premultiplied blend
    mode), so the menu exists there too.
 
 Not started yet: the game's own art from the disc (the menu frames and fonts KF4 draws with), read at run time like

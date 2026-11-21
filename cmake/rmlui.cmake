@@ -1,7 +1,7 @@
 # RmlUi (third_party/rmlui, MIT) with its FreeType font engine (third_party/freetype, FTL): the player menu
 # (port/ui/). Both copied into the repository, as libchdr is, so a release builds without the network. Third-party
 # code: no warnings, optimised in every build type.
-set(KF4_FREETYPE ${CMAKE_SOURCE_DIR}/third_party/freetype)
+set(KF4_FREETYPE ${CMAKE_CURRENT_LIST_DIR}/../third_party/freetype)
 add_library(kf4_freetype STATIC
     ${KF4_FREETYPE}/src/base/ftbase.c
     ${KF4_FREETYPE}/src/base/ftinit.c
@@ -26,7 +26,7 @@ target_compile_definitions(kf4_freetype PRIVATE FT2_BUILD_LIBRARY
 target_compile_options(kf4_freetype PRIVATE -w -O2)
 set_target_properties(kf4_freetype PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-set(KF4_RMLUI ${CMAKE_SOURCE_DIR}/third_party/rmlui)
+set(KF4_RMLUI ${CMAKE_CURRENT_LIST_DIR}/../third_party/rmlui)
 file(GLOB_RECURSE KF4_RMLUI_SOURCES CONFIGURE_DEPENDS ${KF4_RMLUI}/Source/Core/*.cpp)
 add_library(kf4_rmlui STATIC ${KF4_RMLUI_SOURCES})
 target_include_directories(kf4_rmlui SYSTEM PUBLIC ${KF4_RMLUI}/Include)

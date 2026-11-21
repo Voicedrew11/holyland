@@ -93,7 +93,7 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   between game frames). Shared shader headers in `port/render/shaders/`.
 - `port/ui/`: the player menu (F1), RmlUi in King's Field IV's look, its settings as data (`settings_rows.cpp`),
   drawn by the Vulkan presenter (`port/platform/present_vk_ui.cpp`): `docs/port/PLAYER_UI.md`, with the plan to
-  retire ImGui.
+  retire ImGui. The launcher's window uses the same RmlUi code on SDL's renderer (`launcher/window.h`).
 - `port/overlay/`: the ImGui overlay, now the developers' (Shift+F1 where the player menu is): settings, stats
   panels, profiler, automap view.
 - `launcher/`: **Holyland**, the launcher players get (its own CMake project, `cd launcher && cmake --preset

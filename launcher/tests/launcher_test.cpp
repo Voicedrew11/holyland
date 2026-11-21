@@ -1,5 +1,5 @@
 // The launcher's parts that need no window or network (docs/port/LAUNCHER.md): SHA-256 and the build key,
-// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, the logo's mask, the
+// Ninja's progress lines, the disc's verdict and an extracted disc's folder, launcher.json, text put in the pages, the
 // first start's order of pages, and the local build's steps run against a pretend system.
 //
 //   launcher_test
@@ -10,13 +10,13 @@
 #include <system_error>
 #include <vector>
 
-#include "alpha_mask.h"
 #include "build_key.h"
 #include "build_log.h"
 #include "build_strategy.h"
 #include "disc_check.h"
 #include "launcher_files.h"
 #include "platform.h"
+#include "rml_text.h"
 #include "setup_flow.h"
 
 using namespace launcher;
@@ -147,19 +147,10 @@ void test_choices() {
     fs::remove_all(dir);
 }
 
-void test_alpha_mask() {
-    std::string two_by_one = std::string("KF4A") + std::string("\x02\0\0\0\x01\0\0\0", 8) + "\x10\xff";
-    auto mask = read_alpha_mask(two_by_one);
-    check("mask read", mask && mask->width == 2 && mask->height == 1 && mask->alpha[0] == 0x10 && mask->alpha[1] == 0xff);
-    check("mask a byte short", !read_alpha_mask(two_by_one.substr(0, two_by_one.size() - 1)));
-    check("mask a byte over", !read_alpha_mask(two_by_one + "x"));
-    check("mask another tag", !read_alpha_mask("KF4B" + two_by_one.substr(4)));
-    check("mask header only", !read_alpha_mask(two_by_one.substr(0, 11)));
-    std::string empty = std::string("KF4A") + std::string(8, '\0');
-    check("mask with no pixels", !read_alpha_mask(empty));
-    // 65536 x 65537 would be 2^32 + 65536 bytes: a 32-bit product would wrap to 65536
-    std::string huge = std::string("KF4A") + std::string("\0\0\x01\0\x01\0\x01\0", 8) + std::string(65536, 'a');
-    check("mask whose sizes overflow", !read_alpha_mask(huge));
+void test_rml_escaped() {
+    check("plain text kept", rml_escaped("King's Field IV") == "King's Field IV");
+    check("markup escaped", rml_escaped("<p a=\"b\">x & y</p>") == "&lt;p a=&quot;b&quot;&gt;x &amp; y&lt;/p&gt;");
+    check("empty", rml_escaped("").empty());
 }
 
 struct CountingPage final : SetupPage {
@@ -374,7 +365,7 @@ int main() {
     test_disc_folder();
     test_disc_chd();
     test_choices();
-    test_alpha_mask();
+    test_rml_escaped();
     test_setup_flow();
     test_local_build();
     std::printf("%d/%d passed\n", checked - failed, checked);

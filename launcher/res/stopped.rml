@@ -1,0 +1,18 @@
+<rml>
+<head>
+	<title>The game stopped</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<div class="column">
+		<h1 class="error">The game stopped unexpectedly</h1>
+		<p id="why"></p>
+		<p id="where" class="dim"></p>
+		<div id="log" class="log"></div>
+		<div class="buttons">
+			<span class="button" data-action="open-folder">Open the log's folder</span>
+			<span class="button main" data-action="close">Close</span>
+		</div>
+	</div>
+</body>
+</rml>

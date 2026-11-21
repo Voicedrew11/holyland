@@ -1,7 +1,7 @@
 # Holyland, the launcher (launcher/product.h, docs/port/LAUNCHER.md): builds King's Field IV's PC port on the player's computer
 # from a release's source and tools, then plays it. Its own project: it needs neither the decomp nor the
 # game's build, only SDL3 and a few files the game shares with it (port/platform/data_dir.c, disc_image.c (and third_party/libchdr), iso9660.c,
-# update_notice.c, third_party/imgui and cjson).
+# update_notice.c, the player menu's RmlUi code (port/ui/) and its fonts and logo, third_party/rmlui, freetype and cjson).
 #
 #   cd launcher && cmake --preset linux && cmake --build --preset linux && ctest --test-dir ../out/launcher-linux
 cmake_minimum_required(VERSION 3.21)
@@ -29,12 +29,12 @@ add_library(launcher_core STATIC
     ${ROOT}/port/platform/iso9660.c
     ${ROOT}/port/platform/update_notice.c
     ${ROOT}/third_party/cjson/cJSON.c
-    alpha_mask.cpp
     build_key.cpp
     build_log.cpp
     build_local.cpp
     disc_check.cpp
     launcher_files.cpp
+    rml_text.cpp
     setup_flow.cpp
     update_check.cpp)
 target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson)
@@ -58,33 +58,33 @@ add_library(launcher_platform STATIC ${LAUNCHER_PLATFORM})
 target_link_libraries(launcher_platform PUBLIC launcher_core ${LAUNCHER_PLATFORM_LIBS})
 target_compile_options(launcher_platform PRIVATE ${LAUNCHER_WARNINGS})
 
-# The window: SDL3 and Dear ImGui on SDL's renderer
+# The window: SDL3 and RmlUi (cmake/rmlui.cmake, as the player menu), drawn on SDL's renderer
 find_package(SDL3 CONFIG REQUIRED)
-add_library(launcher_imgui STATIC
-    ${ROOT}/third_party/imgui/imgui.cpp
-    ${ROOT}/third_party/imgui/imgui_draw.cpp
-    ${ROOT}/third_party/imgui/imgui_tables.cpp
-    ${ROOT}/third_party/imgui/imgui_widgets.cpp
-    ${ROOT}/third_party/imgui/backends/imgui_impl_sdl3.cpp
-    ${ROOT}/third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp)
-target_include_directories(launcher_imgui PUBLIC ${ROOT}/third_party/imgui)
-target_link_libraries(launcher_imgui PUBLIC SDL3::SDL3)
+include(${ROOT}/cmake/rmlui.cmake)
 
-# The look's files, carried inside the launcher as the game carries them (port/ui/res/: the logo's mask, the fonts)
-set(LAUNCHER_UI_FILES logo.alpha fonts/Cinzel-Regular.ttf fonts/Spectral-Regular.ttf)
+# The pages' files, carried inside the launcher as the game carries the menu's: the menu's fonts and logo
+# (port/ui/res/) and the launcher's pages (launcher/res/)
+set(LAUNCHER_UI_FILES logo.alpha fonts/Cinzel-Regular.ttf fonts/Cinzel-SemiBold.ttf fonts/Spectral-Regular.ttf
+    fonts/Spectral-SemiBold.ttf fonts/Spectral-Italic.ttf)
+file(GLOB LAUNCHER_PAGES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/res
+     ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rml ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rcss)
+list(SORT LAUNCHER_PAGES)
 list(TRANSFORM LAUNCHER_UI_FILES PREPEND ${ROOT}/port/ui/res/ OUTPUT_VARIABLE LAUNCHER_UI_FILE_PATHS)
+list(TRANSFORM LAUNCHER_PAGES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/res/ OUTPUT_VARIABLE LAUNCHER_PAGE_PATHS)
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
     COMMAND ${CMAKE_COMMAND} -DROOT=${ROOT}/port/ui/res "-DFILES=${LAUNCHER_UI_FILES}"
+            -DMORE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/res "-DMORE_FILES=${LAUNCHER_PAGES}"
             -DOUT=${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp -P ${ROOT}/cmake/ui_assets.cmake
-    DEPENDS ${LAUNCHER_UI_FILE_PATHS} ${ROOT}/cmake/ui_assets.cmake
-    COMMENT "The launcher's look: the logo and the fonts" VERBATIM)
+    DEPENDS ${LAUNCHER_UI_FILE_PATHS} ${LAUNCHER_PAGE_PATHS} ${ROOT}/cmake/ui_assets.cmake
+    COMMENT "The launcher's pages, fonts and logo" VERBATIM)
 
-add_executable(launcher main.cpp session.cpp setup_pages.cpp window.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp)
-target_include_directories(launcher PRIVATE ${ROOT}/port/ui) # ui_assets.hpp
+add_executable(launcher main.cpp session.cpp setup_pages.cpp window.cpp ${ROOT}/port/ui/ui_render.cpp
+               ${ROOT}/port/ui/ui_ties.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp)
+target_include_directories(launcher PRIVATE ${ROOT}/port/ui) # ui_render.hpp, ui_ties.hpp, ui_assets.hpp
 set_target_properties(launcher PROPERTIES OUTPUT_NAME holyland) # launcher/product.h: kProductId
 target_compile_definitions(launcher PRIVATE HOLYLAND_VERSION="${HOLYLAND_VERSION}")
 target_compile_options(launcher PRIVATE ${LAUNCHER_WARNINGS})
-target_link_libraries(launcher PRIVATE launcher_platform launcher_imgui)
+target_link_libraries(launcher PRIVATE launcher_platform kf4_rmlui SDL3::SDL3)
 if(WIN32)
     # a window program: no console window of its own (it prints into one it was started from)
     target_link_options(launcher PRIVATE -mwindows)

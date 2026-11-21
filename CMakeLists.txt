@@ -424,7 +424,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
             DEPENDS ${KF4_UI_FILE_PATHS} ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
             COMMENT "The player menu's files" VERBATIM)
         add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
-                    port/ui/ui_render.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
+                    port/ui/ui_render.cpp port/ui/ui_ties.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
         target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3)

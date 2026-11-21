@@ -36,9 +36,17 @@ Later starts go straight into the game. `holyland --launcher` (Start menu: "Holy
 updates)"; the desktop entry's action) shows the launcher instead: Play, Change disc (the setup's disc page),
 Rebuild, Open data folder, "Check for updates at launch".
 
-The window (`launcher/window.h`) is Dear ImGui on SDL's renderer, in the player menu's colours, with its logo and
-fonts (`port/ui/res/`, carried in the launcher by `cmake/ui_assets.cmake`). On a screen the desktop scales (115%)
-ImGui's drawing is scaled to the window's pixels. `--build-only` builds with no window and no disc (CI, tests).
+The window (`launcher/window.h`) is RmlUi, the player menu's UI library, drawn on SDL's renderer (no Vulkan: it
+opens even where the game cannot). Its pages are documents in `launcher/res/` (`setup.rml`, `building.rml`,
+`failed.rml`, `home.rml`, `stopped.rml`, one style sheet `launcher.rcss` in the menu's fonts and colours), carried in
+the launcher with the menu's fonts and logo by `cmake/ui_assets.cmake`. A screen shows its page, fills its parts by
+id (`set_text`, `set_rml`, `set_classes`) and asks for the buttons clicked (`data-action`, `take_action`). It shares
+the menu's RmlUi code: `port/ui/ui_render.cpp` records RmlUi's drawing as a `ui::Frame`, which `window.cpp` draws
+with `SDL_RenderGeometryRaw`, and `port/ui/ui_ties.cpp` gives RmlUi the clock, log, cursor, clipboard, files and
+fonts. Sizes are in dp, from SDL's display scale, so a 115% screen gets sharp, larger text.
+
+`KF4_LAUNCHER_SHOT=FILE.bmp` saves the window's picture at its tenth frame (with `KF4_DATA_DIR` at an empty folder:
+the first start), for checking the pages without a screenshot of the desktop. `--build-only` builds with no window and no disc (CI, tests).
 
 ## The files
 
