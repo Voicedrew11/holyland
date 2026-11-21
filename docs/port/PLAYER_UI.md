@@ -36,9 +36,14 @@ is not borrowed.
   fonts (CC0), outlined; `port/ui/pad_glyphs.hpp` holds each family's table. Keyboard keys keep their boxes.
 - **Mouse**: over a row focuses it; a click is Enter; the arrows either side of a value step it; a click on a list's
   choice picks it; a click on a tab shows it; the right button is Back; the wheel scrolls.
-- At the start, a small panel at the top of the screen says "F1 or L3 + R3: Holyland's settings" for ten seconds
-  (fading over the last one), and goes as soon as the menu is opened. Not under a pad script (`--input`), so test
-  runs' pictures are as they were. It is the menu's document with `body.closed`: only `#hint` shows.
+- **The hint** (2026-11-21): until the player has found the menu, a small plate in the top right corner shows its
+  keys and "Settings", on a soft dark box: F1 for the keyboard, or L3 + R3 as the controller's own pictures. It
+  follows the input in use while it shows (a key: F1; a controller's button: that controller's). It shows for 8 s
+  from the start of play (two seconds of the game's own clock: the pictures start earlier, while the renderer's
+  pipelines are made), with the controller's keys if one is connected, and for 5 s whenever a controller is
+  connected later. Opening the menu hides it and sets `overlay.menu_found` in settings.json: no hint in later runs.
+  Not under a pad script (`--input`), so test runs' pictures are as they were. It is the menu's document with
+  `body.closed`: only `#hint` shows, written by `hint_rml()` in `player_ui.cpp`.
 - **Sounds**: the game's own menu sounds, the first four of its se_com bank, as King's Field IV's menus play them
   (`Sound_PlayMenu`) and at its sound volume option: the cursor's for a move, a list's highlight, a tab or a value
   that changed; Cross's for opening the menu or a list, a choice, a toggle, an action, a slot listened for (and the

@@ -38,20 +38,19 @@ body.closed #shade, body.closed #window {
 	display: none;
 }
 
+/* a quiet plate in the top right corner: the keys of the input in use (F1, or the controller's L3 + R3 as pictures)
+   and "Settings", on a dark soft box that fades into the picture (the soft box is defined with the game's window, below) */
 #hint {
 	display: none;
 	position: absolute;
-	top: 28dp;
-	left: 50%;
-	width: 420dp;
-	margin-left: -210dp;
-	box-sizing: border-box;
-	padding: 7dp 14dp 7dp 14dp;
-	text-align: center;
+	top: 18dp;
+	right: 18dp;
+	padding: 12dp 34dp 12dp 34dp;
+	white-space: nowrap;
 	font-size: 15dp;
 	color: #b4bccb;
-	border: 1dp #5a6474;
-	decorator: vertical-gradient(#0f1114e8 #060708f0);
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 18dp 30dp 18dp 30dp);
+	image-color: #050607c8;
 }
 
 body.closed #hint.shown {
@@ -59,15 +58,27 @@ body.closed #hint.shown {
 }
 
 #hint key {
-	margin: 0 5dp;
+	margin-right: 0;
 }
 
-#hint-what {
+#hint pad {
+	color: #c8d6ea;
+	margin-right: 0;
+	position: relative;
+	top: -4dp; /* (as the prompts': centred on the words' capitals) */
+}
+
+#hint plus {
+	color: #8790a0;
+	margin: 0 3dp;
+}
+
+#hint what {
 	font-family: Cinzel;
-	letter-spacing: 1dp;
+	letter-spacing: 1.5dp;
 	font-size: 17dp;
 	color: #a8c4e8;
-	margin-left: 10dp;
+	margin-left: 12dp;
 }
 
 /* ---- The window ---------------------------------------------------------------------------------------------------- */

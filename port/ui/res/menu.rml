@@ -5,8 +5,8 @@
 </head>
 <!-- The player menu (port/ui/player_ui.cpp fills #tabs, #version, #heading, #rows, #help and #prompts) -->
 <body>
-	<!-- the keys that open the menu, for the first seconds of play (player_ui.cpp: start_hint) -->
-	<div id="hint"><key>F1</key>or<key>L3</key>+<key>R3</key><span id="hint-what">Holyland's settings</span></div>
+	<!-- the keys that open the menu, until the player has found it (player_ui.cpp: hint_rml) -->
+	<div id="hint"></div>
 	<div id="shade"></div>
 	<div id="window">
 		<!-- the game's own panel and frame, from the disc's menu/menu.tmx (body.game-art; port/ui/game_menu_art.hpp) -->

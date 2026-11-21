@@ -46,6 +46,14 @@ namespace {
 // ---- The menu's state -----------------------------------------------------------------------------------------------
 enum class Device { keyboard, pad };
 
+// The hint of the keys that open the menu, until the player has found the menu (settings.json: menu_found): at the
+// start of play, and again for a while when a controller is connected
+struct Hint {
+    bool waiting = false;  // to show once the game's clock reaches HINT_START_VBLANK (the start of play)
+    uint64_t from_ms = 0;  // showing from then (fading in) until then (fading out); until 0: not showing
+    uint64_t until_ms = 0;
+};
+
 struct Menu;
 class PointerEvents final : public Rml::EventListener {
 public:
@@ -85,7 +93,7 @@ struct Menu {
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
-    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml;
+    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml;
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
     Device device = Device::keyboard;
@@ -96,16 +104,19 @@ struct Menu {
     int stick_direction = -1; // the left stick's, as a MenuInput (or -1)
     bool l3 = false, r3 = false;
     bool was_listening = false; // a binding's slot waited for a key last picture
-    // the hint of the keys that open the menu, shown from the start until then (0: never, or no longer)
-    uint64_t hint_until_ms = 0;
+    Hint hint;
     // the window's pixels for each of SDL's window units (a HiDPI screen: 2)
     float pixels_per_unit = 1.0f;
     bool drawn = false;
 };
 Menu menu;
 
-const uint64_t HINT_MS = 10000;     // the start's hint, from the menu's start (the window's)
-const uint64_t HINT_FADE_MS = 1000; // its fading at the end
+const uint64_t HINT_START_VBLANK = 120; // the start of play: two seconds of the game's own clock (the pictures start
+                                        // before the game does, while the renderer's pipelines are made)
+const uint64_t HINT_MS = 8000;          // the hint at the start of play
+const uint64_t HINT_AGAIN_MS = 5000;    // the hint when a controller is connected
+const uint64_t HINT_FADE_IN_MS = 400;
+const uint64_t HINT_FADE_OUT_MS = 1000;
 const uint64_t PAD_DELAY_MS = 350;  // a held direction repeats after this
 const uint64_t PAD_REPEAT_MS = 85;  // every this
 
@@ -132,7 +143,11 @@ void set_open(bool open) {
         return;
     }
     menu.open = open;
-    menu.hint_until_ms = 0; // (the menu was found: the hint has done its job)
+    menu.hint = {}; // (the menu was found: the hint has done its job, now and in later runs)
+    if (open && !port_settings.menu_found) {
+        port_settings.menu_found = 1;
+        port_settings_changed();
+    }
     // (the game's input and the mouse follow: port_overlay_holds_input)
     if (port_controls_listening(nullptr, nullptr)) {
         port_controls_listen_cancel(); // (a slot left waiting: only the test pictures can leave one)
@@ -686,14 +701,55 @@ bool pad_chord(const SDL_Event &event) {
     return menu.open;
 }
 
-// The start's hint: how much of it shows now, 0 to 1
+// The hint: how much of it shows now, 0 to 1
 float hint_opacity() {
     uint64_t now = SDL_GetTicks();
-    if (menu.hint_until_ms == 0 || now >= menu.hint_until_ms) {
+    const Hint &hint = menu.hint;
+    if (hint.until_ms == 0 || now >= hint.until_ms || now < hint.from_ms) {
         return 0.0f;
     }
-    uint64_t left = menu.hint_until_ms - now;
-    return left >= HINT_FADE_MS ? 1.0f : float(left) / float(HINT_FADE_MS);
+    uint64_t shown = now - hint.from_ms, left = hint.until_ms - now;
+    float in = shown >= HINT_FADE_IN_MS ? 1.0f : float(shown) / float(HINT_FADE_IN_MS);
+    float out = left >= HINT_FADE_OUT_MS ? 1.0f : float(left) / float(HINT_FADE_OUT_MS);
+    return std::min(in, out);
+}
+
+// The hint shown for this long from now, unless the player has found the menu (or a pad script plays: the test
+// runs' pictures stay as they were)
+void show_hint(uint64_t ms) {
+    if (port_settings.menu_found || port_options.input != nullptr || menu.open) {
+        return;
+    }
+    uint64_t now = SDL_GetTicks();
+    if (hint_opacity() <= 0.0f) {
+        menu.hint.from_ms = now; // (fading in; one already showing stays)
+    }
+    menu.hint.until_ms = now + ms;
+}
+
+// The hint's keys, for the input in use: F1, or the controller's L3 + R3 as its family's pictures
+std::string hint_rml() {
+    std::string out;
+    if (menu.device == Device::pad) {
+        out += ui::pad_glyph_rml(menu.pad_family, ui::PadButton::left_stick);
+        out += "<plus>+</plus>";
+        out += ui::pad_glyph_rml(menu.pad_family, ui::PadButton::right_stick);
+    } else {
+        out += key_rml("F1");
+    }
+    return out + "<what>Settings</what>";
+}
+
+// While the hint shows, it follows the input the player uses
+void hint_follows(const SDL_Event &event) {
+    if (menu.open || hint_opacity() <= 0.0f) {
+        return;
+    }
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+        menu.device = Device::keyboard;
+    } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        use_pad(event.gbutton.which);
+    }
 }
 
 // The document as the menu is now: closed, only the hint (or nothing); open, the window
@@ -701,6 +757,9 @@ void show_state(float hint) {
     Rml::ElementDocument &document = *menu.document;
     document.SetClass("closed", !menu.open);
     if (Rml::Element *element = document.GetElementById("hint")) {
+        if (hint > 0.0f) {
+            set_part("hint", menu.hint_rml, hint_rml());
+        }
         element->SetClass("shown", hint > 0.0f);
         char opacity[16];
         std::snprintf(opacity, sizeof(opacity), "%.3f", double(hint));
@@ -785,8 +844,8 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.model.open_at(0);
     menu.ready = true;
-    // (not under a pad script: the test runs' pictures stay as they were)
-    menu.hint_until_ms = port_options.input == nullptr ? SDL_GetTicks() + HINT_MS : 0;
+    // the hint from the start of play (show_hint: not once the menu was found, nor under a pad script)
+    menu.hint.waiting = !port_settings.menu_found && port_options.input == nullptr;
     std::atexit(quit);
     std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 the developers' overlay\n");
 }
@@ -796,6 +855,15 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     if (!menu.ready) {
         return 0;
     }
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+        // a controller connected: its own keys for the menu (L3 + R3), for a while (from the start of play, if
+        // play has not started: the controllers connected at the start come as these too)
+        use_pad(event.gdevice.which);
+        if (!menu.hint.waiting) {
+            show_hint(HINT_AGAIN_MS);
+        }
+    }
+    hint_follows(event);
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
         if (event.key.mod & SDL_KMOD_SHIFT) {
             return 0; // (the developers' overlay)
@@ -877,7 +945,8 @@ extern "C" int port_player_ui_open(void) {
 }
 
 extern "C" int port_player_ui_visible(void) {
-    return menu.ready && (menu.open || hint_opacity() > 0.0f);
+    // (a hint waiting for the start of play: port_player_ui_draw watches for it)
+    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f);
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -935,6 +1004,17 @@ extern "C" void port_player_ui_draw(int width, int height) {
     menu.drawn = false;
     if (!port_player_ui_visible() || width <= 0 || height <= 0) {
         return;
+    }
+    if (menu.hint.waiting) {
+        if (port_vblank_count() < HINT_START_VBLANK) {
+            return;
+        }
+        menu.hint.waiting = false;
+        // play has started: the hint for the controller already connected, if one is (L3 + R3 is the harder to guess)
+        if (SDL_Gamepad *pad = first_pad()) {
+            use_pad(SDL_GetGamepadID(pad));
+        }
+        show_hint(HINT_MS);
     }
     int units_w = 0, units_h = 0;
     SDL_GetWindowSize(menu.window, &units_w, &units_h);
