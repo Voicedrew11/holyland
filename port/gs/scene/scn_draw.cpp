@@ -356,8 +356,9 @@ void Drawer::prepare(const Scene &scene) {
     auto record_of = [&](const Material &m, uint32_t mi) {
         pcr::PrimPush r = m.push;
         r.table = table_of[mi] == no_record ? 0xFFFFu : table_of[mi];
-        if (m.sampled && table_of[mi] != no_record) {
-            // (a sampled texture's size from its record: pcr_prim.h's sampled_size)
+        if (m.sampled && table_of[mi] != no_record && r.src_offset[0] == 0) {
+            // (a sampled texture's size from its record: pcr_prim.h's sampled_size; one already there is the texture's
+            // own, its image finer: scn_build.cpp's font sheets)
             r.src_offset[0] = int32_t(m.sampled->get_width());
             r.src_offset[1] = int32_t(m.sampled->get_height());
         }

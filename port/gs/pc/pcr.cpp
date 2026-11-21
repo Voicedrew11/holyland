@@ -699,7 +699,7 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
 struct Settings {
     std::atomic<uint32_t> scale{1 | 1 << 8}; // across | down << 8, from the next vblank
     std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, mode_2d{GSN_2D_PS2}, antialias{PORT_AA_OFF},
-        layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE};
+        layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE}, font{GSN_FONT_SHARP};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
 };
 
@@ -1081,10 +1081,11 @@ public:
         since_vblank_bytes_ = 0;
     }
 
-    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d:
-    // Canvas::set_2d's
+    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d and
+    // font: Drawing::set_2d's and set_font's
     // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
-    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, uint64_t game_vblank) {
+    void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, int font,
+                uint64_t game_vblank) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
@@ -1094,6 +1095,7 @@ public:
             drawing_->set_scale(scale & 0xFF, scale >> 8);
             drawing_->set_sampling(lod, uint32_t(aniso));
             drawing_->set_2d(mode_2d);
+            drawing_->set_font(font);
             drawing_->vblank(game_vblank);
             ZoneScope collect_zone(gpu_times_collected_zone);
             times_->collect();
@@ -3322,7 +3324,7 @@ private:
             ahead_left_ = 0;
             const double from = port_wall_seconds();
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           settings.mode_2d.load(), v.tag >> 16);
+                           settings.mode_2d.load(), settings.font.load(), v.tag >> 16);
             note(DOING_VBLANK, from, port_wall_seconds());
             if (budget_on_ && !timing_.on) {
                 // (slice 5) the vblank's scene, closed alone (not in a picture's midst): its GPU work timed by a fence
@@ -4090,6 +4092,10 @@ extern "C" int pcr_set_aniso(int taps) {
 
 extern "C" void pcr_set_2d(int mode) {
     settings().mode_2d.store(mode);
+}
+
+extern "C" void pcr_set_font(int font) {
+    settings().font.store(font);
 }
 
 extern "C" void pcr_set_antialias(int method) {

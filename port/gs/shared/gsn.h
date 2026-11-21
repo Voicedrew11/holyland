@@ -39,6 +39,10 @@
 /* 2D textured from VRAM at a scale above 1 (pcr_set_2d): read nearest at the PS2's pixels, or bilinear (smooth) */
 #define GSN_2D_PS2 0
 #define GSN_2D_SMOOTH 1
+/* The game's font (pcr_set_font): the disc's, or its English letters drawn again from IPA Mincho four times as fine
+   (port/gs/shared/font_sheet.h; the scene renderer's) */
+#define GSN_FONT_PS2 0
+#define GSN_FONT_SHARP 1
 /* How Z is kept and tested (pcr_set_layer_z): the GS's whole number per pixel, or its fraction kept (tolerant layers) */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1

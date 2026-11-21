@@ -179,6 +179,7 @@ static int open_pc_renderer(void) {
     gsr_set_lod(port_options.native_lod);
     port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
     gsr_set_2d(port_options.native_2d);
+    gsr_set_font(port_options.font);
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
     gsr_set_presenter(port_video_submit, port_video_submit_image);
@@ -871,6 +872,15 @@ void port_gs_set_native_2d(int mode) {
 #ifdef KF4_HAVE_PARALLEL_GS
     if (have_pc) {
         gsr_set_2d(mode);
+    }
+#endif
+}
+
+void port_gs_set_font(int font) {
+    port_options.font = font;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_pc) {
+        gsr_set_font(font);
     }
 #endif
 }

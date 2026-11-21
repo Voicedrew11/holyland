@@ -286,6 +286,18 @@ void describe_sharpen(int percent, char *out, size_t size) {
     }
 }
 
+// (gsn.h's GSN_FONT_*)
+const Choice fonts[] = {{"Sharp (IPA Mincho)", 1}, {"As on the PS2", 0}};
+int get_font() {
+    return port_options.font;
+}
+void set_font(int font) {
+    port_live_set(PORT_LIVE_FONT, font);
+}
+bool font_overridden() {
+    return port_options.font != port_settings.font;
+}
+
 // The texture detail (mipmap level) and anisotropic filtering as one choice: value lod * 100 + aniso
 const Choice texture_qualities[] = {
     {"PS2's", 0 * 100 + 1}, {"Standard", 1 * 100 + 1}, {"High", 1 * 100 + 16}, {"Maximum", 2 * 100 + 16}};
@@ -438,6 +450,10 @@ const SettingRow graphics_rows[] = {
      "would at this resolution.\nHigh: also sharp at grazing angles (anisotropic filtering).\nMaximum: the finest "
      "everywhere; far surfaces can shimmer.",
      RowKind::choice, texture_qualities, {}, get_textures, set_textures, nullptr, describe_textures, pc_renderer},
+    {"Font",
+     "The letters of the menus and messages.\nSharp: drawn again from IPA Mincho, a font in the same style, crisp at any "
+     "resolution.\nAs on the PS2: the game's own, soft when enlarged.",
+     RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
     {"World", "", RowKind::heading},
     {"Draw distance",
      "How far you see through the fog.\n1x: the PS2's fog.\nFurther: the fog starts and ends that much further "
