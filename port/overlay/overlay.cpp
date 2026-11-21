@@ -312,15 +312,6 @@ void frame_rate_combo() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
-    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED)
-        return;
-    int cap = port_options.frame_rate_cap;
-    if (ImGui::SliderInt("Unlocked's cap", &cap, 0, 2000, cap > 0 ? "%d a second" : "none")) {
-        cap = cap > 0 && cap < 60 ? 60 : cap;
-        port_settings.frame_rate_cap = port_options.frame_rate_cap = cap;
-        changed();
-    }
-    tooltip("Unlocked no faster than this. 0: none. (--frame-rate-cap N)");
 }
 
 // VSync, adaptive sync and unlocked's tearing as one choice; settings.json keeps the three as they were

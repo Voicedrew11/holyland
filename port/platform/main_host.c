@@ -553,7 +553,6 @@ static void parse_options(int argc, char **argv) {
                 fprintf(stderr, "--frame-rate-cap wants 60 or more, or 0 for none, not %s\n", value);
                 exit(2);
             }
-            port_options.frame_rate_cap_forced = 1;
         } else if (strcmp(option, "--draw-distance") == 0) {
             port_options.draw_distance = port_draw_distance_parse(value);
             if (port_options.draw_distance < 0) {

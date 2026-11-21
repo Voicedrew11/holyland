@@ -85,25 +85,6 @@ bool frame_rate_overridden() {
     return port_options.frame_rate != port_settings.frame_rate;
 }
 
-bool unlocked() {
-    return port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED;
-}
-int get_cap() {
-    return port_options.frame_rate_cap;
-}
-void set_cap(int cap) {
-    cap = cap > 0 && cap < 60 ? 60 : cap;
-    port_settings.frame_rate_cap = port_options.frame_rate_cap = cap;
-    changed();
-}
-void describe_cap(int cap, char *out, size_t size) {
-    if (cap > 0) {
-        std::snprintf(out, size, "%d a second", cap);
-    } else {
-        std::snprintf(out, size, "None");
-    }
-}
-
 // VSync, adaptive sync and unlocked's tearing as one choice; settings.json keeps the three as they were
 enum Sync { SYNC_OFF, SYNC_VSYNC, SYNC_ADAPTIVE };
 const Choice syncs[] = {{"Off", SYNC_OFF}, {"VSync", SYNC_VSYNC}, {"Adaptive sync", SYNC_ADAPTIVE}};
@@ -149,8 +130,6 @@ const SettingRow display_rows[] = {
      "game still runs at 30, and what it does is the same.\nUnlocked: as many as your computer keeps up with.",
      RowKind::choice, frame_rates, {}, get_frame_rate, set_frame_rate, nullptr, describe_frame_rate, nullptr, nullptr,
      frame_rate_overridden},
-    {"Unlocked's limit", "Unlocked never goes faster than this. None: no limit.", RowKind::number, {}, {0, 2000, 10},
-     get_cap, set_cap, nullptr, describe_cap, unlocked},
     {"Sync",
      "Off: each picture is shown at once, which can tear.\nVSync: each picture waits for the screen's refresh: no "
      "tearing.\nAdaptive sync: for a FreeSync or G-Sync screen, which refreshes when each picture comes. It must be "

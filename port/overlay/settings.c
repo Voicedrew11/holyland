@@ -5,7 +5,7 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
-                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "frame_rate_cap": 0, "tearing": false,
+                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "fxaa", "native_lod": "scale",
@@ -339,8 +339,6 @@ void port_settings_load(void) {
         } else {
             s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, PORT_FRAME_RATE_MONITOR - 1);
         }
-        s->frame_rate_cap = (int)read_number(display, "frame_rate_cap", s->frame_rate_cap, 0, PORT_FRAME_RATE_MONITOR - 1);
-        s->frame_rate_cap = s->frame_rate_cap > 0 && s->frame_rate_cap < 60 ? 60 : s->frame_rate_cap;
         s->tearing = read_bool(display, "tearing", s->tearing);
         s->adaptive_sync = read_bool(display, "adaptive_sync", s->adaptive_sync);
     }
@@ -485,9 +483,6 @@ void port_settings_load(void) {
     }
     if (!port_options.frame_rate_forced) {
         port_options.frame_rate = s->frame_rate;
-    }
-    if (!port_options.frame_rate_cap_forced) {
-        port_options.frame_rate_cap = s->frame_rate_cap;
     }
     if (!port_options.tearing_forced) {
         port_options.tearing = s->tearing;
@@ -653,7 +648,6 @@ void port_settings_save(void) {
     put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR    ? cJSON_CreateString("monitor")
                                : s->frame_rate == PORT_FRAME_RATE_UNLOCKED ? cJSON_CreateString("unlocked")
                                                                            : cJSON_CreateNumber(s->frame_rate));
-    put(display, "frame_rate_cap", cJSON_CreateNumber(s->frame_rate_cap));
     put(display, "tearing", cJSON_CreateBool(s->tearing));
     put(display, "adaptive_sync", cJSON_CreateBool(s->adaptive_sync));
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));

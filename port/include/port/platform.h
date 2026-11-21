@@ -106,8 +106,7 @@ typedef struct {
 /* the most pictures a vblank the schedule holds (port_interp_schedule, gs.c's room): ~7,670 a second, no cap in practice */
 #define PORT_INTERP_MOST_A_VBLANK 128
     int frame_rate;
-    int frame_rate_cap;
-    int frame_rate_cap_forced; /* --frame-rate-cap: this run's, whatever settings.json says */
+    int frame_rate_cap; /* --frame-rate-cap (developers', test runs): unlocked no faster than this; 0, none, otherwise */
     /* --tearing or settings.json: unlocked's swapchain immediate (tearing, the least latency; a VRR screen's), not
        mailbox (port/platform/present_vk.cpp) */
     int tearing;
