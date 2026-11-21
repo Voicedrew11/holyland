@@ -1,6 +1,7 @@
 # The scene renderer, slice 3: results
 
-Slice 3 of `scene-renderer-design.md` ("The slices"): batching, cut into five parts (`HANDOFF_scene_slice3.md`), on
+Slice 3 of `scene-renderer-design.md` ("The slices"): batching, cut into five parts and a sixth after 3b (3f, a study of
+where the GPU's time goes: `HANDOFF_scene_slice3.md`, "After 3b"), on
 `scene/slice3` from slice 2's end (`d45c9b4a`). A section a part, written as each is done. The measurements are in
 `~/Documents/darker-reality-measurements/2026-11-20-scene-slice3-<part>/` (their README entries).
 
@@ -119,3 +120,113 @@ counted in it).
   alternation; outside 0x280, 104 / 168 / 215, against the design's 20-70 for 0x000 (these count the alpha test's two
   passes, viewport, scissor and buffers as state; 3b sees which of them it can draw as one).
 - The GIF's 3D ends 2-9 runs a frame and cuts 1-3 in two: not worth taking into the native draw for 3b.
+
+## 3b. Runs as indirect draws
+
+2026-11-20 (`2026-11-20-scene-slice3-3b/`).
+
+### What it does
+
+- **The fragment stage's record.** The vertex stage hands down the record's place alone, one flat value
+  (`pcr_common.h`'s `v_record_at`: the push constants' record + `gl_DrawID`). The fragment stage runs its shader for
+  one record at a time (`PCR_EACH_RECORD`): the subgroup's first pixel's record (`subgroupBroadcastFirst`), by the
+  pixels that have it, then the next, until none is left. A draw's pixels and their quads share a record, and a
+  subgroup is nearly always one draw's, so it is once round: the record's place the same across the subgroup, its
+  fields loaded once and its tests the subgroup's, as with 3a's push constants. It costs what 3a did (below), not the
+  0.5-0.8 ms of the 25 flat values. The PC renderer's shaders unchanged (`pcr_shaders.h` byte for byte). Needs draw
+  parameters and the subgroup's ballot in the fragment stage, else no records (a draw's own push constants, slice 2's).
+- **The runs.** Consecutive calls from the records of one pipeline and dynamic state, their records consecutive, are
+  one `vkCmdDrawIndirect` (`scn_draw.cpp`'s `Pending`): a command a call in a commands buffer the scene holds, written
+  as the calls are recorded, the push constants' record the run's first. A run is drawn when a call cannot join it
+  (another state, a clear, a draw of its own, the pass's end); a run of one call is a `vkCmdDraw`. The GIF's primitives
+  drawn from the records read the scene's corners from one vertex buffer (each draw's first vertex its command's), no
+  longer copied a draw. Needs multi-draw indirect and the first instance in indirect draws (the native draws'
+  instance), else a call a `vkCmdDraw`.
+- **State in one form** (`canonical`): a key's alpha blend where the alpha is not written, and the blend constants where
+  no factor reads them, do not end a run (the pixels the same either way).
+- **Unblended calls in runs blended by the source's alpha** (`merge`). What ended most of 0x000's runs was its models'
+  opaque batches (no blend, RGB written) alternating with their batches blended by As (`SRC_ALPHA`, `ONE_MINUS_SRC_ALPHA`)
+  on the same program and buffers. An unblended pass that writes no alpha has its alpha out 1.0 from its record
+  (`SCN_ALPHA_ONE`, `pc.factors`, unused by the scene's records before), so it is drawn the same under that blend
+  (Cs 1 + Cd 0 is Cs) and joins such a run; a run of them meeting a blended call is drawn blended. Byte for byte below.
+- Developers' switches: `KF4_SCN_INDIRECT=0` (every call its own `vkCmdDraw`, the same shaders), `KF4_SCN_BLEND_RUNS=0`
+  (no unblended call in a blended run); `world_plain.py`'s `scene_noindirect`, `scene_noblendruns` and their
+  `_nodetail`. `[stats] scene renderer draw calls` and the runs log's new columns (`draw_calls indirect_calls
+  indirect_draws calls_gif calls_000 calls_280 calls_700 calls_ripple`) count the calls made.
+
+### The calls at the three places
+
+As 3a's counts (headless at 2x with native widescreen, the scenarios' last 100 vblanks before their pictures, medians a
+game frame; `runs_merge/`, and `runs/` for the build without `canonical` and `merge`):
+
+| | 099 (start) | the pond | the palace |
+|---|---|---|---|
+| a draw's pass each (3a's calls) | 361 | 1,562 | 2,029 |
+| draw calls, 3a | 361 | 1,562 | 2,029 |
+| draw calls, runs of the same state | 243 | 1,055 | 1,652 |
+| draw calls, 3b (with `canonical` and `merge`) | 171 | 971 | 1,478 |
+| of them indirect (their commands) | 13 (203) | 82 (676) | 14 (565) |
+| ... program 0x000's | 13 | 55 | 25 |
+| ... 0x280's | 139 | 885 | 1,437 |
+| ... the GIF's | 18 | 9 | 15 |
+| ... 0x700's and the ripple's | 1 | 22 | 1 |
+| 0x000's, runs of the same state alone | 84 | 139 | 199 |
+
+- **0x000's calls are the design's 20-70** (13 / 55 / 25), from 84 / 139 / 199 with the state compared as it is: the
+  blend's alternation was most of them.
+- **What is left is 0x280's** passes alternating, 81-97% of the calls: 3d's.
+
+### Passes
+
+| criterion | measured | passed |
+|---|---|---|
+| Byte for byte 3a's: the 50 scenarios at 2x (`scene_scenarios.py --reference-exe bin/kf4_3a`) | first build (`scen_3b/`): 49 of 50, "start spin" as ever; the build committed (`scen_final/`): 49 of 50, "start spin" again | yes |
+| The validation layer with synchronization validation: start, the pond, the palace, fx prev, the map change, fx fill, pickup (`validation/`) | no error or warning; every picture byte for byte 3a's, 6,800-20,500 indirect draws a run | yes |
+| ctest | 37 of 37 | yes |
+| Calls a frame counted, 0x000's against the design's 20-70 | 13 / 55 / 25 (above) | yes |
+| 0x000 at 099 under 2 ms at 2x (real window, Vega 7) | 2.60 with the detail on (3a 2.61; slice 2 2.61): the calls were not its cost (below) | **no** |
+| GPU time no worse than 3a | the same at 099 and the pond (within the rounds' spread), 0.13-0.15 ms less at the palace | yes |
+
+### The GPU time
+
+`world_plain.py --scales 2 --rounds 2` in a real window with the owner's settings (Vega 7, 30), ms a game frame,
+medians (`cost/`). `3a` is `bin/kf4_3a`; the detail off is `KF4_GPU_DETAIL=0` (its 0x000 then has DATE and the sky in
+it).
+
+| | 3a | 3b | 3b, a call a `vkCmdDraw` | 3b, no blended runs |
+|---|---|---|---|---|
+| 099: 0x000, detail on / off | 2.61 / 3.53 | 2.60 / 3.54 | 2.63 / 3.56 | 2.61 / 3.53 |
+| 099: all, on / off | 10.43 / 10.41 | 10.42 / 10.43 | 10.47 / 10.48 | 10.47 / 10.46 |
+| the pond: 0x000; 0x280 and 0x700 (on) | 2.84; 3.94 | 2.85; 3.96 | 2.88; 3.98 | 2.89; 3.98 |
+| the pond: all, on / off | 13.14 / 13.07 | 13.18 / 13.12 | 13.19 / 13.20 | 13.20 / 13.15 |
+| the palace: 0x000; 0x280 and 0x700 (on) | 3.68; 2.74 | 3.58; 2.68 | 3.71; 2.75 | 3.71; 2.72 |
+| the palace: all, on / off | 12.89 / 12.86 | 12.74 / 12.73 | 12.94 / 12.97 | 12.93 / 12.87 |
+
+The spread between rounds 0.00-0.09 (the palace without blended runs 0.15).
+
+- **The fragment stage's record a record at a time costs up to about 0.1 ms** against 3a's push constants' place: 3b
+  with a call a `vkCmdDraw` (3a's calls, 3b's shaders and the GIF's corners from one buffer) is 0.04-0.13 over 3a, a
+  little past the rounds' spread with the detail off (+0.07 / +0.13 / +0.11 at 099 / the pond / the palace), not with
+  it on (+0.04 / +0.05 / +0.05). The runs win it back: 3b as a whole is 3a's or better everywhere. Not the 0.5-1.0 of
+  the 25 flat values.
+- **The indirect draws gain 0.01-0.24 ms a game frame, the blended runs up to 0.19**, both most at the palace (3b 0.20 /
+  0.24 under a call each, 0.15 / 0.13 under 3a): 3a's 0.12 there is won back, and the palace is slice 2's again
+  (12.74 / 12.73 against 12.81 / 12.69). The blended runs put opaque batches under a blend (a destination read) and
+  cost nothing for it: within the spread at 099 and the pond, 0.19 / 0.14 less at the palace.
+- **Indirect draws are not slow on the Vega 7** (the design's risk): the merged form was not needed.
+- **0x000 at 099 is not under 2 ms, and fewer calls will not make it so.** Its calls went from 84 to 13 a frame and
+  its time from 2.61 to 2.60 ms; a call each against the runs is 0.03 ms. The time is the GPU drawing 0x000's pixels at
+  2x, not the calls. What in them (the fragment shader's length, the texture's reads, overdraw, the depth's
+  interpolation) is the next question, not batching's: until it is answered, the criterion stands failed.
+
+### Risks and what 3c-3e start from
+
+- **RADV and indirect draws.** The PC renderer turned its indirect runs off on RADV (`pcr_canvas.cpp`'s
+  `runs_hang_here`): a ring timeout and a reset of the whole card on the RX 9070 XT at 240 pictures a second, in 4 of
+  6 runs. The scene renderer draws at the game's rate here (no pictures between yet), and no hang was met on the Vega 7
+  in this part's runs, but the 9070 XT was not tried: 3e must, with the owner's settings, before the runs are kept on
+  there. `KF4_SCN_INDIRECT=0` is the way back.
+- 3d: 0x280's alternation is 81-97% of the calls left (139 / 885 / 1,437 a frame).
+- 0x000's time at 099 (2.6 ms with the detail on) is not in its calls: part 3f (`HANDOFF_scene_slice3.md`) studies
+  where it goes, and the scanout's 5.5 ms a game frame (half the GPU's frame at all three places), and measures the
+  calls' CPU time, where batching's gain is; the slice's "under 2 ms" is judged by it.

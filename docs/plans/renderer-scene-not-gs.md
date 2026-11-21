@@ -97,7 +97,9 @@ In short:
 ### Where it stands (2026-11-20)
 
 Slices 1 and 2 are built and measured (`scene-slice1-results.md`, `scene-slice2-results.md`, `scene-slice2-after.md`).
-Slice 3 (batching) is next, cut into five parts of a session or so each: `HANDOFF_scene_slice3.md`.
+Slice 3 (batching) is under way, cut into parts of a session or so each: `HANDOFF_scene_slice3.md`. 3a and 3b are
+done: calls a frame down by half to two-thirds, the GPU time little changed (0.15 ms less at the palace). Batching saves
+the CPU's time; the world's GPU time is in its pixels, which part 3f studies (and the scanout, half the GPU's frame).
 
 ## Order
 

@@ -10,9 +10,13 @@
 // built with PCR_RECORDS and PCR_DRAWS_APART (pcr_common.h: the fields loaded once a draw, in both stages); the textures the scene's draws read in one bindless table (set 2, u_table) with their
 // samplers (set 0, u_samplers), the CLUTs in one buffer (u_walk_cluts, the record's clut_at). Draws that read a target or
 // its copy (u_surface, u_dest: the HUD's DATE sprite, the shader's blends, the textures drawn by the frame) or a sampler
-// past the sixteen keep their own set 1 and push constants, as do the picture's layers (scn_picture_layer.frag). Still a
-// call a draw's pass; the runs that 3b draws as indirect draws are counted (Counts). KF4_SCN_RECORDS=0: every draw with
-// its own push constants and set 1, as slice 2 (to compare).
+// past the sixteen keep their own set 1 and push constants, as do the picture's layers (scn_picture_layer.frag).
+// KF4_SCN_RECORDS=0: every draw with its own push constants and set 1, as slice 2 (to compare).
+// Runs (part 3b): consecutive calls from the records with the same pipeline and dynamic state and consecutive records
+// are one vkCmdDrawIndirect (Pending), a command a call in the scene's commands buffer, the push constants' record the
+// run's first (gl_DrawID the rest; the fragment stage has the record's place from the vertex stage, pcr_common.h); a run
+// of one call a vkCmdDraw. The GIF's primitives drawn from the records read the scene's vertices from one buffer.
+// KF4_SCN_INDIRECT=0: every call its own vkCmdDraw, the same shaders (to compare).
 // One thread: the builder's.
 #pragma once
 
@@ -75,6 +79,10 @@ public:
         // 0x280's; what ended each run; the runs the GIF's 3D cut in two (the same state either side of it)
         uint64_t calls = 0, record_calls = 0, runs = 0, runs_280 = 0, gif3d_splits = 0;
         std::array<uint64_t, end_count> ends{};
+        // (3b) the draw calls made (vkCmdDraw and vkCmdDrawIndirect, clears not counted), of them indirect and the
+        // commands in those; the draw calls by program (Pending::slot: the GIF's, 0x000, 0x280, 0x700, the ripple's)
+        uint64_t draw_calls = 0, indirect_calls = 0, indirect_draws = 0;
+        std::array<uint64_t, 5> draw_calls_by{};
         // (the scenes' records, table entries and CLUTs, and the scenes recorded)
         uint64_t records = 0, table_entries = 0, cluts = 0, scenes = 0, table_max = 0;
         uint64_t own_sampler = 0; // (materials kept to their own set 1: no room for their sampler)
@@ -93,30 +101,61 @@ private:
         Vulkan::BindlessDescriptorSet table{};
         std::array<const Vulkan::Sampler *, 16> samplers{};
         std::vector<uint32_t> first_record; // (by draw: its first pass's record; no_record: its own push constants and set 1)
+        // (3b) the runs' commands, written as the calls are recorded (mapped until the scene is), and the GIF's
+        // primitives' corners (Scene::vertices) for the draws from the records
+        Vulkan::BufferHandle commands, vertices;
+        VkDrawIndirectCommand *command_map = nullptr;
+        uint32_t command_capacity = 0, commands_used = 0;
     };
     // A call as a run sees it: what must be the same for two calls to be one indirect draw
     struct RunKey {
         Vulkan::Program *program = nullptr;
         bool ztest = false, zwrite = false, blend = false;
         VkCompareOp zcompare = VK_COMPARE_OP_ALWAYS;
-        VkBlendFactor src = VK_BLEND_FACTOR_ONE, src_alpha = VK_BLEND_FACTOR_ONE, dst = VK_BLEND_FACTOR_ZERO;
-        VkBlendOp op = VK_BLEND_OP_ADD;
+        VkBlendFactor src = VK_BLEND_FACTOR_ONE, src_alpha = VK_BLEND_FACTOR_ONE, dst = VK_BLEND_FACTOR_ZERO,
+                      dst_alpha = VK_BLEND_FACTOR_ZERO;
+        VkBlendOp op = VK_BLEND_OP_ADD, op_alpha = VK_BLEND_OP_ADD;
         uint32_t mask = 0;
         float constants[4] = {};
         VkViewport viewport{};
         VkRect2D scissor{};
         const void *native[3] = {};
         bool own = false, gif_3d = false, n280 = false;
+        // (an unblended call whose alpha out is 1.0 and not written: drawn the same in a run blended by it, merge)
+        bool alpha_one = false;
     };
     struct RunState {
         bool open = false, after_clear = false;
-        RunKey last;
+        RunKey last, call; // (the run's state, merge's; the last call's own)
         // (a stretch of the GIF's 3D: the key of the call before it, to see whether it cut a run in two)
         bool in_gif3d = false, before_gif3d_valid = false;
         RunKey before_gif3d;
     };
+    // The run being recorded (3b): its state is the command buffer's, its calls' commands from first_command in
+    // Prepared::commands (the first also in first), not yet drawn
+    struct Pending {
+        bool open = false;
+        RunKey key;
+        uint32_t first_record = 0, first_command = 0, count = 0, slot = 0;
+        VkDrawIndirectCommand first{};
+    };
+    static bool same_state(const RunKey &a, const RunKey &b);
+    static void canonical(RunKey &k);
+    static bool merge(RunKey &run, const RunKey &key);
+    static bool alpha_one(const Material &m, uint32_t pass);
     void prepare(const Scene &scene);
     void count_call(const RunKey &key);
+    // Whether a call of key from record joins the open run; a call into it (a run opened if none is: its state and
+    // push constants already set); the open run drawn
+    bool joins(const RunKey &key, uint32_t record) const;
+    void add_to_run(const RunKey &key, uint32_t record, const VkDrawIndirectCommand &command, uint32_t slot,
+                    Vulkan::CommandBuffer &c);
+    void flush_run(Vulkan::CommandBuffer &c);
+    // The state a draw's calls share (viewport, scissor, the GPU time's interval, bindings, depth compare, blend
+    // constants, the GIF's corners) and a call's own (program, depth, blend, write mask), from its key
+    void set_draw_state(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, bool records,
+                        Vulkan::CommandBuffer &c);
+    void set_call_state(const RunKey &key, Vulkan::CommandBuffer &c);
     void log_scene(const Scene &scene, const Counts &before);
     void record_op(const Op &op, Vulkan::CommandBuffer &c);
     void record_pass(const Scene &scene, const Pass &pass, Vulkan::CommandBuffer &c);
@@ -138,9 +177,15 @@ private:
     std::array<Vulkan::Program *, size_t(Program::count)> plain_{}, early_{}, first_id_{}, first_{};
     // (the same reading the draw's fields from the scene's records: PCR_RECORDS)
     std::array<Vulkan::Program *, size_t(Program::count)> plain_rec_{}, early_rec_{}, first_id_rec_{}, first_rec_{};
-    const bool records_on_ = !getenv("KF4_SCN_RECORDS") || atoi(getenv("KF4_SCN_RECORDS")) != 0;
+    bool records_on_ = !getenv("KF4_SCN_RECORDS") || atoi(getenv("KF4_SCN_RECORDS")) != 0;
+    // (3b: indirect draws possible here and not switched off, KF4_SCN_INDIRECT=0; the most commands one may have)
+    bool indirect_on_ = !getenv("KF4_SCN_INDIRECT") || atoi(getenv("KF4_SCN_INDIRECT")) != 0;
+    uint32_t max_run_ = 1;
+    // (developers', KF4_SCN_BLEND_RUNS=0: an unblended call never drawn in a run blended by the source's alpha, merge)
+    const bool blend_runs_ = !getenv("KF4_SCN_BLEND_RUNS") || atoi(getenv("KF4_SCN_BLEND_RUNS")) != 0;
     Prepared prepared_;
     RunState run_;
+    Pending pending_;
     FILE *runs_log_ = nullptr; // (developers', KF4_SCN_RUNS_LOG=FILE: a line a scene recorded, its calls and runs)
     Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
     Vulkan::ImageHandle dummy_uint_, dummy_float_;

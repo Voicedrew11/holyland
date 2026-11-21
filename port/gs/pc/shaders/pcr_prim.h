@@ -606,7 +606,12 @@ bool pcr_exact_depth() {
 }
 #endif
 
+#if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
+// (PCR_DRAWS_APART: the pixel shaded for one record at a time, pcr_common.h's PCR_EACH_RECORD; main below)
+void pcr_shade() {
+#else
 void main() {
+#endif
 #ifdef PCR_RECORDS
     pcr_take_record();
 #endif
@@ -718,8 +723,20 @@ void main() {
         discard;
     }
 #endif
+#if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
+    // (the scene's records, pc.factors' SCN_ALPHA_ONE: an unblended pass that writes no alpha, its alpha out 1.0 so that
+    // it may be drawn in a run blended by the source's alpha, Cs 1 + Cd 0 being Cs: scn_draw.cpp's merge)
+    if ((pc.factors & SCN_ALPHA_ONE) != 0u) {
+        o_color.a = 1.0;
+    }
+#endif
     trace(PCR_TRACE_SHADED, uvec4(rgb, c.a));
     if ((pc.flags & PCR_F_DECAL_LOSS) != 0u) {
         o_color = vec4(16.0 / 255.0, 0.0, 16.0 / 255.0, 1.0);
     }
 }
+#if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
+void main() {
+    PCR_EACH_RECORD(pcr_shade());
+}
+#endif

@@ -102,7 +102,11 @@ void pcr_triangle(out uint triangle, out uint instance) {
 #endif
 #define pc u_records.r[PCR_RECORD]
 #ifdef PCR_DRAWS_APART
-void pcr_pass_record() {} // (the fragment stage reads the record itself: below)
+// (the record's place alone, flat: the fragment stage reads the record itself, below)
+layout(location = 4) flat out uint v_record_at;
+void pcr_pass_record() {
+    v_record_at = PCR_RECORD;
+}
 #else
 // (the fields the fragment stage reads, flat: read there from the record, each a load a pixel, the pictures between
 // took the GPU 6% longer)
@@ -117,13 +121,32 @@ void pcr_pass_record() {
 }
 #endif
 #elif defined(PCR_DRAWS_APART)
-// (PCR_DRAWS_APART, the fragment stage: each draw a call of its own (slice 3a: gl_DrawID 0), its record the push
-// constants' place, the same across the draw, its fields loaded once a draw. Handed down from the vertex stage as the
-// PC renderer's runs have them, 25 flat values a vertex, the scene's world took the GPU 20% longer at 2x on the Vega 7:
-// 0.5-0.8 ms a game frame, docs/plans/scene-slice3-results.md. An indirect draw of several records (3b) has no
-// gl_DrawID here: it must find its own way.)
+// (PCR_DRAWS_APART, the fragment stage. An indirect draw of several records (the scene's runs, slice 3b) has no
+// gl_DrawID here, so the vertex stage hands down the record's place, one flat value (v_record_at). Its fields handed
+// down instead, as the PC renderer's runs have them (25 flat values a vertex), the scene's world took the GPU 20%
+// longer at 2x on the Vega 7: 0.5-0.8 ms a game frame, docs/plans/scene-slice3-results.md. Read by a place that may
+// differ across the subgroup, each field would be a load a pixel and each test of it a branch the GPU takes both ways;
+// so the shader is run for one record at a time (PCR_EACH_RECORD): the subgroup's first pixel's record, by the pixels
+// that have it, then the next, until none is left. A draw's pixels share it (its quads too: the derivatives hold), and a
+// subgroup is nearly always one draw's, so it is once round: the place the same across the subgroup, the fields loaded
+// once and the tests the subgroup's, as with the push constants.)
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(location = 4) flat in uint v_record_at;
+uint pcr_record_at = 0u;
 void pcr_take_record() {}
-#define pc u_records.r[pcr_push.record]
+#define pc u_records.r[pcr_record_at]
+#define PCR_EACH_RECORD(body) \
+    { \
+        uint pcr_mine_ = v_record_at; \
+        for (;;) { \
+            uint pcr_first_ = subgroupBroadcastFirst(pcr_mine_); \
+            if (pcr_mine_ == pcr_first_) { \
+                pcr_record_at = pcr_first_; \
+                body; \
+                break; \
+            } \
+        } \
+    }
 #else
 layout(location = 4) flat in uvec4 v_record[6];
 PcrRecord pcr_record;
@@ -157,6 +180,10 @@ void pcr_take_record() {
 #endif
 
 #define PCR_NO_TABLE 0xFFFFu
+
+// (the scene renderer's records, PCR_DRAWS_APART: factors is not the PC renderer's dual-source factors there but bits of
+// its own) the alpha out 1.0 (pcr_prim.h; scn_draw.cpp's merge)
+#define SCN_ALPHA_ONE 0x1u
 
 #define PCR_NO_WALK_CLUT 0xFFFFFFFFu
 

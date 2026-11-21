@@ -98,6 +98,15 @@ VARIANTS = {
                        {}, ["--renderer", "scene"]),
     "scene_ref_nodetail": ("the scene renderer of the build --exe-for names, the GPU's time by kind alone",
                            {"KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
+    # ... every call its own vkCmdDraw, not the runs as indirect draws (slice 3b: KF4_SCN_INDIRECT=0)
+    "scene_noindirect": ("the scene renderer, a draw call a call, no indirect draws (KF4_SCN_INDIRECT=0)",
+                         {"KF4_SCN_INDIRECT": "0"}, {}, ["--renderer", "scene"]),
+    "scene_noblendruns": ("the scene renderer, no unblended call in a run blended by the source's alpha "
+                          "(KF4_SCN_BLEND_RUNS=0)", {"KF4_SCN_BLEND_RUNS": "0"}, {}, ["--renderer", "scene"]),
+    "scene_noblendruns_nodetail": ("the scene renderer, no unblended call in a blended run, the GPU's time by kind alone",
+                                   {"KF4_SCN_BLEND_RUNS": "0", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
+    "scene_noindirect_nodetail": ("the scene renderer, no indirect draws, the GPU's time by kind alone",
+                                  {"KF4_SCN_INDIRECT": "0", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }
 MAIN = "exact,exactz,nosettle,noplanes,gpu,noblend,plain"
 

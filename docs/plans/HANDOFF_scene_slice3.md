@@ -5,7 +5,7 @@ at `d45c9b4a`). Read `CLAUDE.md`, then `renderer-scene-not-gs.md` (the direction
 Draws", "10. The slices", the owner's decision 2) and `scene-slice2-after.md` ("Slice 3's start").
 
 Slice 3 is too much for one session: new shaders and plumbing, a fused shader the owner must look at, and the whole
-slice measured. It is cut into five parts. Each part is a session or so, ends with the build working, the pictures
+slice measured. It is cut into five parts, and a sixth (3f) added after 3b (below, "After 3b"). Each part is a session or so, ends with the build working, the pictures
 checked and a commit, and writes its numbers into `scene-slice3-results.md` (made by the first part, one section a
 part) so the next session starts from the document, not from memory.
 
@@ -22,13 +22,45 @@ GPUs.
 | part | what | depends on | done when |
 |---|---|---|---|
 | 3a | records and the bindless table, still a call a draw; the counts; the baseline | slice 2 | byte for byte slice 2's; GPU time no worse |
-| 3b | runs as indirect draws (all but 0x280's alternation) | 3a | byte for byte; calls counted; 0x000 at 099 under 2 ms |
+| 3b | runs as indirect draws (all but 0x280's alternation) | 3a | byte for byte; calls counted (done 2026-11-20; 0x000 at 099 under 2 ms not met, moved to 3f) |
 | 3c | the level off paraLLEl-GS at 1x (a study) | nothing | found, or what is ruled out written down |
 | 3d | 0x280's two passes as one draw, behind a switch | 3b; 3c before it is judged | the changes counted and pictured for the owner; 0x280 under 1 ms |
-| 3e | the slice judged whole; the owner's decision on 3d | 3a-3d | the results document complete; slice 4's start written |
+| 3f | where the GPU's time goes: 0x000's pixels, the scanout; and the calls' CPU time (a study) | nothing | the causes measured; the fixes proposed with their gains; 0x000 at 099 under 2 ms judged by it |
+| 3e | the slice judged whole; the owner's decision on 3d | 3a-3d, 3f | the results document complete; slice 4's start written |
 
-3c touches no renderer code and can be done at any point before 3d is judged (first, if a session is short of a
-whole part).
+3c and 3f touch no renderer code (but developers' switches to measure with) and can be done at any point before 3e
+(first, if a session is short of a whole part).
+
+### After 3b (2026-11-20): what batching does and does not buy
+
+3b took 0x000's calls a frame from 84 / 139 / 199 to 13 / 55 / 25 (099 / the pond / the palace) and its GPU time at 099
+from 2.61 to 2.60 ms; a call a `vkCmdDraw` against the runs is 0.03 ms (`scene-slice3-results.md`, 3b). The calls cost
+the CPU (the driver, Granite's state, the commands), which `world_plain.py`'s GPU timestamps do not see; on the GPU a
+call's start overlaps the shading before it but where draws are tiny and change state (0x280's ~1,400 at the palace:
+0.15 ms won there). The design put "the world at 099 under 2 ms" on batching with nothing measured that tied 0x000's GPU
+time to its calls; 3b shows it is not tied. So:
+
+- **3b's 2 ms criterion moves to 3f**, which finds where the time is, and 3e judges the slice's "under 2 ms" by what 3f
+  finds and what its fixes give (a fix that moves pictures is the owner's to judge, behind a switch).
+- **Batching's gain is to be measured where it is: the CPU** (3f), which matters most with pictures between (slice 4).
+- 3d is still worth doing for 0x280's GPU time (its tiny draws are where the calls did show), and for its calls.
+
+### 3f. Where the GPU's time goes
+
+A study, a session at most; developers' switches allowed, no picture changed by default.
+
+- **0x000's pixels** at 099 (2.6 ms with the detail on, at 2x on the Vega 7): its time at 1x against 2x (scaling
+  with the pixels: the pixels' cost); a trivial fragment shader for 0x000 behind a developers' switch (the shader's
+  share); a Radeon GPU Profiler capture (the fragment shader's registers, occupancy, waits on memory); overdraw
+  counted. The PC renderer's fragment shader (`pcr_prim.h`) is the GS's whole pixel in one shader: a shader made for
+  the scene's few states (the texture function, fog, the test known per material) is a likely fix, to be measured.
+- **The scanout**: 5.5 ms a game frame at all three places (`world_plain.py`'s "Scanout": the picture made and
+  presented), the largest kind in the frame, never looked at in the scene renderer. What it is (how many pictures a
+  game frame at the owner's display rate, at what size and with what passes) and what of it is needed.
+- **The calls' CPU time**: the builder and the drawer's time a frame (and the driver's) with the runs and without
+  (`KF4_SCN_INDIRECT=0`), and 3a against 3b, at the three places.
+- Into `scene-slice3-results.md`, "3f": each cost found with its measure, the fixes proposed with their estimated
+  gains; then the 2 ms judged.
 
 ### 3a. Records and the bindless table
 
