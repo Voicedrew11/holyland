@@ -6,6 +6,7 @@
 | `port_census.py` | per folder of the game code, the errors and inline asm left (docs/port/RULES.md) |
 | `port_abi_check.py` | declarations that disagree with the definition |
 | `boot_test.py`, `frame_test.py` | step 1's and step 2's checks: a headless boot to a new game, and its pictures |
+| `state_test.py` | save states: one saved at map 009 (the automap on) loaded by a new run and by a run playing another map (F7's path), each going on as the saving run did for 500 vblanks (the game state lines, paraLLEl-GS's pictures byte for byte) |
 | `vu1_disasm.py` | the game's VU1 programs as text |
 | `map_tour.py` | every map visited and pictured without playing there, with a GS capture and census of each (below) |
 | `motion_compare.py` | the PC renderer against paraLLEl-GS in motion (below): menus, a pick-up, combat, spells, creatures' effects, fades, under water, each played by a pad script (`tests/motion/`) by both renderers and compared vblank by vblank (as `tour_compare.py` measures), at 1x and at 4x with native widescreen; the PC renderer's pictures between at 240 checked with `flash_find.py --frames` and its game frames there against the 30 run's |

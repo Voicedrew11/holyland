@@ -14,7 +14,9 @@
    (threads, semaphores, handlers, timers, EE time); the DMA controller's counts; VIF1; VU1; the GIF's
    paths and the GS's VRAM and registers; the libraries (libgraph, libpad, libcdvd, SIF and the
    IOP heap, rand); the IOP's memory; libsd's sound data inputs; FSIOPSND, modmidi and modhsyn; the
-   sound's clock. The parts list their own variables (port_*_state). Not in a state: what belongs to
+   sound's clock; the automap's fog of war. The parts list their own variables (port_*_state). PC code
+   built with the game whose globals hold the host's memory (the automap) is linked after the image's end
+   marker (CMakeLists.txt, game_host) and writes what a state needs itself. Not in a state: what belongs to
    the host (the window, the sound device, the log, files, the options) and the counters of --stats,
    which count from the last state saved or loaded.
 
@@ -43,6 +45,7 @@
 #endif
 
 #include "port/audio.h"
+#include "port/automap.h"
 #include "port/lz4_block.h"
 #include "port/host.h"
 #include "port/platform.h"
@@ -438,6 +441,8 @@ static void sync_all(PortStateIo *io) {
     port_modhsyn_state(io);
     section(io, "AUDO");
     port_audio_state(io);
+    section(io, "AMAP");
+    Automap_State(io);
     section(io, "END ");
 }
 
