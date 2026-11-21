@@ -62,7 +62,7 @@ is not borrowed.
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
-| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
 | `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
 | `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
@@ -85,8 +85,8 @@ else changes: the model and the page take any row.
 
 `kf4.rcss` has the palette at its top: cold iron and ice, taken from the game's own window frame (2026-11-21; before
 it dark iron and amber, and before that blue-grey and IM FELL English). The game's black panel and wisps of ice for the
-window (the iron frame and corners only when the disc lacks them), titles in Cinzel in ice blue over an ornamented
-rule, an ice edge and glow for the focused line, text in cool white; one accent throughout, ember only for warnings and
+window (the iron frame and corners only when the disc lacks them), titles in Cinzel in ice blue, a soft glow fading in
+from the left for the focused line (no bars or diamond rules, 2026-11-21), text in cool white; one accent throughout, ember only for warnings and
 a key being listened for. RmlUi has no default style sheet:
 every element is inline until the sheet says otherwise (hence `div, h2, p { display: block }`).
 
@@ -95,7 +95,7 @@ straight gradients (`horizontal-gradient`, `vertical-gradient`, made of vertex c
 `linear-gradient` and the other shader gradients, `box-shadow`, `filter`, `transform` or `mask-image`: RmlUi then
 leaves them out, and the recorder logs the first of each kind. The only images are the menu's own alpha masks
 (`res/*.alpha`: "KF4A", width, height, a byte of alpha a pixel), white and coloured by `image-color`, so the game needs
-no image decoder; the logo, the corners and the rules are. Textures RmlUi makes between pictures (loading the document) go with the next
+no image decoder; the logo, the corners and the soft box are. Textures RmlUi makes between pictures (loading the document) go with the next
 picture.
 
 ## Testing
