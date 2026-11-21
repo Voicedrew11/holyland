@@ -19,14 +19,18 @@ typedef enum {
     PORT_LIVE_ANTIALIAS,         /* PORT_AA_*: the picture's anti-aliasing (port/antialias.h) */
     PORT_LIVE_NATIVE_2D,         /* 0 ps2 or 1 smooth: the 2D at a larger scale */
     PORT_LIVE_FONT,              /* 0 ps2 or 1 sharp: the game's font (GSN_FONT_*) */
+    PORT_LIVE_GAME_SPEED,        /* the whole game's clock, 1x to 2x in quarters (1.25: a quarter faster) */
     PORT_LIVE_COUNT
 } PortLiveSetting;
 
-/* The setting changed to value, from the next vblank */
-void port_live_set(PortLiveSetting setting, int value);
+/* The setting changed to value (whole for the settings that take whole numbers, a fraction for the game
+   speed's quarters), from the next vblank. Returns the value that took effect, after the setter's own
+   clamp, so a caller can say when a request was not taken as asked. */
+double port_live_set(PortLiveSetting setting, double value);
 
 /* KF4_SET_AT=VBLANK:NAME=VALUE,... (each vblank) the test changes due by now, as the overlay makes them: NAME is the
-   setting's in lower case without PORT_LIVE_ (native_widescreen, native_scale, ...), VALUE a number (0x... too) */
+   setting's in lower case without PORT_LIVE_ (native_widescreen, native_scale, ...), VALUE a number, whole
+   or fractional (1.25, 0x... too) */
 void port_live_vblank(void);
 
 #ifdef __cplusplus

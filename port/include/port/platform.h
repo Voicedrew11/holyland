@@ -24,6 +24,13 @@ typedef struct {
     const char *host_dir;    /* --host-dir: where host0: files go (default: the current directory) */
     long long frames;        /* --frames: stop after this many vblanks (0: run on) */
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
+    /* --game-speed: the game's whole clock, this many times the host's (1, the PS2's, by default; 2: a
+       second of the game in half a second of the host, every vblank, timer, animation and control twice
+       as fast; the music and sounds play at their own, normal speed). Ignored with --fast, which holds the
+       game to no clock at all. Live: the player menu's Game speed and KF4_SET_AT change it while the game
+       runs, and the vblank pacing follows it from the next vblank (port/platform/kernel.c). */
+    float game_speed;
+    int game_speed_forced;   /* --game-speed: this run's, whatever settings.json says */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
     /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_SCENE, the scene renderer (port/gs/scene/,
@@ -285,6 +292,20 @@ int port_kernel_run(int (*game_main)(void));
 /* The current EE time in bus cycles, and the vblanks so far. */
 uint64_t port_ee_cycles(void);
 uint64_t port_vblank_count(void);
+/* The host's seconds a vblank takes at the game's speed: 1001/60000 with --game-speed 1, half at 2. The
+   pictures between and the screen's refreshes are timed in these (port/platform/video.c). */
+double port_vblank_wall_seconds(void);
+/* The game's side (game/frame_interp.c, at its hook in the patched GameLoop_DrawFrame) marks whether
+   the play simulates now: played when the play has the player in control (Quick_WhyNotInPlay), stopped
+   while it does not - the game's own pause, an open message, a menu opening, the map or screen fading.
+   port_game_speed runs the clock fast only while that mark is recent; no mark at all means the game is
+   not drawing frames at all (its thread is held, or a movie's loop runs) and keeps the PS2's 1x.
+   The mark is written on the game's thread only; a read a vblank behind costs one vblank of speed. */
+void port_clock_played(void);
+void port_clock_stopped(void);
+/* --game-speed, 1 when unset (port_options.game_speed; at least 0.01); 1 while the game does not
+   simulate, whatever the mark says (port/platform/video.c) */
+double port_game_speed(void);
 /* Waits for the next vblank start (the EE's VSync): other threads run meanwhile. */
 void port_vsync(void);
 /* Lets time pass for a call the game polls in a loop (cycles of EE time). */

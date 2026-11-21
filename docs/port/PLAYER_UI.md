@@ -52,6 +52,13 @@ is not borrowed.
   only open and close.
 - Changes apply as the overlay's did (`port_live_set`, `port_settings`, `port_options`) and settings.json is written
   as before. The menu itself saves nothing of its own.
+- **Game speed** (Gameplay) is live: its row goes through `port_live_set(PORT_LIVE_GAME_SPEED, ...)` and
+  `port/platform/kernel.c` re-anchors the vblank pacing when the clock a vblank takes changes, so 1x to 2x in
+  quarters is chosen and heard in play, either way; `KF4_SET_AT=VBLANK:game_speed=N` drives the same path in
+  test runs. The clock runs the speed only while the play simulates: `game/frame_interp.c`, at its hook in the
+  patched `GameLoop_DrawFrame`, marks the clock (`port_clock_played` / `port_clock_stopped`,
+  `port/platform/video.c`) from `Quick_WhyNotInPlay` (`game/quicksave.c`), so the game's pause, an open
+  message, a menu, a map or screen fade and a movie's loop keep the PS2's 1x whatever the row says.
 
 ## Files
 
