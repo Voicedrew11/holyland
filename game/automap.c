@@ -88,7 +88,6 @@ const char *Automap_CreatureName(int record);
 const char *Automap_ObjectHint(int map, int object);
 const char *Automap_SpawnHint(int map, int spawn, int record);
 int Automap_PersonPage(int record);
-int Automap_HazardIsWater(int map);
 
 #define CELL PORT_AUTOMAP_CELL
 #define LAYERS PORT_AUTOMAP_LAYERS
@@ -623,7 +622,6 @@ static int priority(int kind) {
     case PORT_AUTOMAP_WATER: return 2;
     case PORT_AUTOMAP_POISON: return 3;
     case PORT_AUTOMAP_HURT: return 4;
-    case PORT_AUTOMAP_DEEP: return 5;
     case PORT_AUTOMAP_FIRE: return 5;
     case PORT_AUTOMAP_DEATH: return 6;
     default: return 0;
@@ -668,7 +666,7 @@ static void floor_triangle(const float a[3], const float b[3], const float c[3],
     if (kind == PORT_AUTOMAP_POISON) { /* the hazards: which one by the effect */
         kind = effect == 0                ? PORT_AUTOMAP_DEATH
                : effect >= 1 && effect <= 3 ? PORT_AUTOMAP_POISON
-               : effect == 4                ? (Automap_HazardIsWater(plan.map) ? PORT_AUTOMAP_DEEP : PORT_AUTOMAP_FIRE)
+               : effect == 4                ? PORT_AUTOMAP_FIRE /* lava, on every map that has it: game/automap_guide.c */
                                             : PORT_AUTOMAP_HURT;
     }
     raster(a, b, c, add_layer, &kind);

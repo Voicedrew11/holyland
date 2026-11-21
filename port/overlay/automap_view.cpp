@@ -46,7 +46,7 @@ ImU32 fade(ImU32 c, float alpha) {
 struct Palette {
     ImU32 wall = col(215, 200, 160), water = col(50, 88, 140, 0.92f), fire = col(215, 75, 20, 0.95f);
     ImU32 poison = col(80, 150, 55, 0.92f), hurt = col(165, 60, 150, 0.92f);
-    ImU32 death = col(46, 46, 50, 0.92f), hatch = col(78, 78, 84, 0.9f), deep = col(30, 52, 100, 0.95f);
+    ImU32 death = col(46, 46, 50, 0.92f), hatch = col(78, 78, 84, 0.9f);
     ImU32 door = col(190, 120, 50), locked = col(210, 60, 50), chest = col(230, 170, 60);
     ImU32 person = col(255, 60, 170), outline = col(0, 0, 0, 0.8f), save = col(80, 220, 230);
     ImU32 exit = col(250, 250, 255), secret = col(170, 90, 220), item = col(250, 220, 90);
@@ -271,7 +271,6 @@ void rebuild_cache(const PortAutomapPlan *p, int py, long long seed_cell) {
                 case PORT_AUTOMAP_FIRE: c = palette.fire; break;
                 case PORT_AUTOMAP_HURT: c = palette.hurt; break;
                 case PORT_AUTOMAP_DEATH: c = palette.death; cache.chasm[cell] = 1; break;
-                case PORT_AUTOMAP_DEEP: c = palette.deep; break;
                 default: c = floor_colour(l.y, py); break;
                 }
                 if ((l.flags & PORT_AUTOMAP_WALL) && l.kind != PORT_AUTOMAP_DEATH)
@@ -924,8 +923,6 @@ void draw_legend(ImDrawList *dl, const PortAutomapPlan *p, ImVec2 at, float ts) 
     entry(palette.wall, "Wall", 0);
     if (any_layer(p, PORT_AUTOMAP_WATER))
         entry(palette.water, "Water", 0);
-    if (any_layer(p, PORT_AUTOMAP_DEEP))
-        entry(palette.deep, "Deep water (drowns)", 0);
     if (any_layer(p, PORT_AUTOMAP_FIRE))
         entry(palette.fire, "Lava (burns)", 0);
     if (any_layer(p, PORT_AUTOMAP_POISON))
