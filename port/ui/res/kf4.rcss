@@ -454,6 +454,8 @@ pad {
 
 prompt pad {
 	color: #c8d6ea;
+	position: relative;
+	top: -4dp; /* (centred on the words' capitals, not their x-height) */
 }
 
 pad.xbox {
