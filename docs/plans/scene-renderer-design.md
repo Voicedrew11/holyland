@@ -590,6 +590,15 @@ is a picture between (4b: the third world draw a game frame at 60 gone, byte for
 3's reprojection is therefore moved after slice 5 (pictures begun just in time), and needs the HUD in an image of its
 own (decision 4) not to move the HUD with the world.
 
+Slice 5 is built and measured (2026-11-21, `scene-slice5-results.md`). Pictures are begun just in time from their
+measured cost (`pcr_budget.h`: by kind, the vblank's scene timed as GPU work of its own). A picture between that would
+not be ready by its time, or that would make a game frame's own picture late, is left out, and gs.c's cut is off under
+it. A vblank with nothing new is its last picture published again. The spin holds 30 game frames a second at 60, 240 and
+unlocked, every picture on time after the first two seconds. The late turn at 60 is 6.6 ms (was 12.2), the picture's own
+cost. A repeated vblank costs the renderer no GPU work. The design's drawing thread is not built: kf4-pc waits for each
+picture's time between building scenes, enough at 60, but at 240 one picture in seven or so is begun late. The
+presenter's copy into the swapchain is not yet in the final pass.
+
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
 

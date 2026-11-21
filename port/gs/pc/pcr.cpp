@@ -38,6 +38,7 @@
 #include "context.hpp"
 #include "pcr_antialias.h"
 #include "pcr_between.h"
+#include "pcr_budget.h"
 #include "pcr_canvas.h"
 #include "pcr_gpu_time.h"
 #include "pcr_hang_watch.h"
@@ -90,6 +91,8 @@ const ZoneId pc_take_picture_between_zone = port_zone_id("pc take_picture_betwee
 const ZoneId pc_inbox_waits_for_room_zone = port_zone_id("pc inbox: the sender waits for room", ZONE_WAIT);
 const ZoneId pc_inbox_waits_for_a_reply_zone = port_zone_id("pc inbox: the sender waits for its picture", ZONE_WAIT);
 const ZoneId pc_inbox_waits_behind_zone = port_zone_id("pc inbox: the sender waits for the renderer (2 vblanks behind)", ZONE_WAIT);
+const ZoneId pc_waits_for_a_picture_s_time_zone = port_zone_id("pc waits until a picture's time (the budget)", ZONE_WAIT);
+const ZoneId watch_waits_for_a_picture_zone = port_zone_id("watch: waits for a picture's GPU work", ZONE_WAIT);
 
 namespace {
 
@@ -451,6 +454,13 @@ public:
         return true;
     }
 
+    // (the PC renderer's thread: KF4_SCN_REPEAT_CHECK) The picture a published slot holds (its scaled one, else whole)
+    const Image *picture_of(int slot) {
+        std::lock_guard<std::mutex> hold(lock_);
+        const Slot &s = slots_[slot];
+        return s.scaled_valid ? s.scaled.get() : s.whole_valid ? s.image.get() : nullptr;
+    }
+
     std::optional<uint64_t> newest_tag() {
         std::lock_guard<std::mutex> hold(lock_);
         if (newest_ < 0) {
@@ -610,6 +620,9 @@ struct Stats {
     // (Renderer::interp_picture) pictures between sent to the pump directly, and of them those kf4-pc then found
     // the frame's kept walk no longer fitting for (the store changed by the next frame's packets before them)
     std::atomic<uint64_t> direct{0}, direct_stale{0};
+    // (slice 5: the scene renderer's) vblanks shown again from the last picture's slot (PictureOut::repeat)
+    std::atomic<uint64_t> repeats{0};
+    std::atomic<uint64_t> repeat_checks{0}, repeat_differ{0}; // (KF4_SCN_REPEAT_CHECK=1: made, and found different)
 };
 
 // (kf4-pc) Each frame's intake, for --stats: the time kf4-pc spent taking its packets in (busy), and from its first
@@ -1648,6 +1661,8 @@ public:
         ZoneScope zone(picture_made_zone);
         MadePicture m;
         bool extra = (v.want & GSN_EXTRA) != 0;
+        last_made_.valid = false;
+        shown_ok_ = false;
         m.want = v.want;
         m.tag = v.tag;
         m.reply = v.reply;
@@ -1713,6 +1728,11 @@ public:
             if (scaled || whole) {
                 m.slot = slot;
                 m.ok |= GSN_WANT_IMAGE;
+                last_slot_ = slot;
+                if (!extra && shown_ok_ && !m.scaled_pixels && !(want & GSN_WANT_PIXELS)) {
+                    last_made_ = {true, want, shown_rect_, *size, scale, present_size,
+                                  settings().present_sharpen.load(std::memory_order_relaxed), aa, slot};
+                }
             }
         }
         if (frame && ((want & GSN_WANT_PIXELS) || present_pixels)) {
@@ -1730,6 +1750,111 @@ public:
     // Whether handing m out reads this one's own pixels (which its next picture writes over)
     bool own_pixels(const MadePicture &m) const {
         return m.frame == &presented_;
+    }
+
+    // (slice 5, docs/plans/scene-slice5-results.md) A vblank's own picture asked as the last one made was (the buffer
+    // shown, its size, the scale and the final pass's settings), its drawing's scanout of that buffer unchanged since
+    // (Drawing::scanout_unchanged): the same picture, which repeat publishes again from its slot with no GPU work. Not
+    // with the temporal anti-aliasing (its history moves on each picture), nor for pixels.
+    bool can_repeat(const VblankPicture &v, uint32_t scale, pcr::Drawing *canvas) {
+        const LastMade &l = last_made_;
+        GsnRect rect;
+        if (!l.valid || !canvas || (v.want & (GSN_EXTRA | GSN_WANT_PIXELS)) || v.want != l.want ||
+            history_.wanted() || scale != l.scale ||
+            settings().present_size.load(std::memory_order_relaxed) != l.present_size ||
+            settings().present_sharpen.load(std::memory_order_relaxed) != l.sharpen ||
+            settings().antialias.load(std::memory_order_relaxed) != l.aa || !display_rect(v.privileged.data(), rect)) {
+            return false;
+        }
+        std::optional<PictureSize> size = picture_size(v, false, scale & 0xFF, scale >> 8);
+        uint64_t smode2 = v.privileged[2 * 2];
+        bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
+        const pcr::ShownRect r = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
+                                  uint32_t(field_doubled && v.field == LOWER_FIELD)};
+        const pcr::ShownRect &o = l.shown;
+        if (!size || size->width != l.size.width || size->height != l.size.height || r.bp != o.bp || r.bw != o.bw ||
+            r.psm != o.psm || r.x != o.x || r.y != o.y || r.w != o.w || r.h != o.h || r.lower_field != o.lower_field) {
+            return false;
+        }
+        return canvas->scanout_unchanged(r);
+    }
+
+    // (slice 5) A vblank whose picture is left out: the last picture made (any), its slot published again under v's tag
+    MadePicture again(const VblankPicture &v) {
+        MadePicture m;
+        m.want = v.want;
+        m.tag = v.tag;
+        m.reply = v.reply;
+        m.vblank = (v.want & GSN_EXTRA) == 0;
+        // (above 60 the window's own thread shows the pictures by their times and waits for none: nothing handed out)
+        const bool window_waits = port_options.frame_rate <= 60;
+        if (window_waits && last_slot_ >= 0 && (v.want & GSN_WANT_IMAGE) && !(v.want & GSN_WANT_PIXELS)) {
+            m.slot = last_slot_;
+            m.ok = GSN_WANT_IMAGE;
+        } else {
+            m.want &= ~GSN_PRESENT;
+        }
+        stats_.pictures++;
+        stats_.vblanks += m.vblank ? 1 : 0;
+        return m;
+    }
+
+    // The vblank's picture as the last one made (can_repeat): its slot published again under v's tag
+    MadePicture repeat(const VblankPicture &v) {
+        MadePicture m;
+        m.want = v.want;
+        m.tag = v.tag;
+        m.reply = v.reply;
+        m.vblank = true;
+        m.slot = last_made_.slot;
+        m.ok = GSN_WANT_IMAGE;
+        stats_.pictures++;
+        stats_.vblanks++;
+        stats_.repeats++;
+        return m;
+    }
+
+    // (developers', KF4_SCN_REPEAT_CHECK=1) Whether slots a and b hold the same picture, byte for byte: both read back
+    bool same_pictures(int a, int b) {
+        const Image *ia = scanout_.picture_of(a), *ib = scanout_.picture_of(b);
+        if (!ia || !ib || ia->get_width() != ib->get_width() || ia->get_height() != ib->get_height()) {
+            return false;
+        }
+        const VkDeviceSize size = VkDeviceSize(ia->get_width()) * ia->get_height() * 4;
+        BufferCreateInfo info = {};
+        info.domain = BufferDomain::CachedHost;
+        info.size = size;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        BufferHandle ba = device_.create_buffer(info, nullptr), bb = device_.create_buffer(info, nullptr);
+        if (!ba || !bb) {
+            return false;
+        }
+        CommandBufferHandle cmd = device_.request_command_buffer();
+        cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                     VK_ACCESS_2_TRANSFER_READ_BIT);
+        const VkImageSubresourceLayers colour = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        cmd->copy_image_to_buffer(*ba, *ia, 0, {0, 0, 0}, {ia->get_width(), ia->get_height(), 1}, 0, 0, colour);
+        cmd->copy_image_to_buffer(*bb, *ib, 0, {0, 0, 0}, {ib->get_width(), ib->get_height(), 1}, 0, 0, colour);
+        cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                     VK_ACCESS_2_HOST_READ_BIT);
+        Fence fence;
+        device_.submit(cmd, &fence);
+        fence->wait();
+        const void *ma = device_.map_host_buffer(*ba, MEMORY_ACCESS_READ_BIT);
+        const void *mb = device_.map_host_buffer(*bb, MEMORY_ACCESS_READ_BIT);
+        bool same = ma && mb && memcmp(ma, mb, size_t(size)) == 0;
+        device_.unmap_host_buffer(*ba, MEMORY_ACCESS_READ_BIT);
+        device_.unmap_host_buffer(*bb, MEMORY_ACCESS_READ_BIT);
+        return same;
+    }
+
+    int last_made_slot() const {
+        return last_made_.valid ? last_made_.slot : -1;
+    }
+
+    // (slice 5) The fence of the picture last submitted (submit_now's): done once the GPU is past it
+    Fence last_fence() const {
+        return last_fence_;
     }
 
     // m published, given to the presenter, its sender answered, its vblank done
@@ -1777,6 +1902,7 @@ private:
         device_.submit(cmd, &fence);
         device_.flush_frame();
         submitted_++;
+        last_fence_ = fence;
     }
 
     // The picture: the canvas's surface the display shows, scaled to its size (cleared to the picture's colour where
@@ -1803,6 +1929,8 @@ private:
             shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
                           uint32_t(field_doubled && v.field == LOWER_FIELD)};
             shown = canvas->scanout(cmd, shown_rect, *picture_);
+            shown_rect_ = shown_rect;
+            shown_ok_ = shown;
         }
         if (!shown) {
             cmd.clear_image(*picture_, clear_.value);
@@ -2010,6 +2138,21 @@ private:
     const char *who_;
     std::array<Fence, PICTURES_FENCED> fences_; // (submit_now's, the last PICTURES_FENCED pictures')
     uint64_t submitted_ = 0;
+    Fence last_fence_;
+    // (slice 5: can_repeat) the last picture made into a slot as a vblank's own, as it was asked, and the scanout of it
+    struct LastMade {
+        bool valid = false;
+        int want = 0;
+        pcr::ShownRect shown;
+        PictureSize size{};
+        uint32_t scale = 0, present_size = 0, sharpen = 0;
+        int aa = 0;
+        int slot = -1;
+    };
+    LastMade last_made_;
+    int last_slot_ = -1; // (the slot of the last picture made into one: again's)
+    pcr::ShownRect shown_rect_; // (draw_picture's last scanout, and whether it showed anything)
+    bool shown_ok_ = false;
     ImageHandle picture_;
     ImageHandle spare_picture_; // (the picture's kind and size: what FXAA draws into, swapped with picture_)
     ImageHandle scaled_work_; // (scale_for_window: the picture scaled, before the sharpening)
@@ -2327,6 +2470,133 @@ private:
     std::thread thread_;
 };
 
+// ---- Slice 5: the pictures for the window by budget (pcr_budget.h; docs/plans/scene-slice5-results.md) --------------
+// The scene renderer's (KF4_SCN_BUDGET=0: as before; never in a run that dumps frames or has no window). kf4-pc times
+// each picture it makes for the window from begun to submitted; this thread ("kf4-pc-watch") waits for each one's fence
+// in turn and times its GPU work from then (or from the picture before done, when that is later): the budget's
+// measures, when the GPU is done with the pictures in flight, and how long before its time each was done.
+class PictureWatch {
+public:
+    struct Sent {
+        Fence fence;
+        pcr::PictureKind kind = pcr::PictureKind::frame;
+        uint64_t serial = 0;
+        double begun_s = 0, submitted_s = 0, shown_s = 0;
+    };
+
+    void start() {
+        thread_ = std::thread([this] { run(); });
+    }
+
+    // At exit, after kf4-pc: the pictures in flight waited for (two seconds at most, else the thread is left)
+    void stop() {
+        if (!thread_.joinable()) {
+            return;
+        }
+        std::unique_lock<std::mutex> hold(lock_);
+        stopping_ = true;
+        wake_.notify_all();
+        bool gone = idle_.wait_for(hold, std::chrono::seconds(2), [&] { return gone_; });
+        hold.unlock();
+        if (gone) {
+            thread_.join();
+        } else {
+            thread_.detach();
+        }
+    }
+
+    // (kf4-pc) A picture submitted
+    void sent(Sent sent) {
+        std::lock_guard<std::mutex> hold(lock_);
+        queue_.submitted(sent.serial, sent.submitted_s, budget_.gpu_s(sent.kind));
+        pending_.push_back(std::move(sent));
+        wake_.notify_one();
+    }
+
+    // (kf4-pc) f(budget, the GPU's queue) under the lock
+    template <class F> auto with(F f) {
+        std::lock_guard<std::mutex> hold(lock_);
+        return f(static_cast<const pcr::PictureBudget &>(budget_), static_cast<const pcr::GpuQueueTime &>(queue_));
+    }
+
+    // --stats (the threads idle)
+    void print(FILE *out) {
+        std::lock_guard<std::mutex> hold(lock_);
+        if (ahead_ms_.empty()) {
+            return;
+        }
+        std::vector<float> a = ahead_ms_;
+        std::sort(a.begin(), a.end());
+        auto at = [&](double q) { return a[std::min(a.size() - 1, size_t(q * double(a.size())))]; };
+        size_t late = size_t(std::lower_bound(a.begin(), a.end(), 0.0f) - a.begin());
+        fprintf(out,
+                "[stats] scene renderer pictures timed: %zu, done before their time (ms): p1 %.2f, p10 %.2f, median %.2f, "
+                "p90 %.2f; %zu done after it; the budget's last (CPU + GPU ms, the high percentile and margin): a game "
+                "frame's picture %.2f + %.2f (%zu measured), a picture between's %.2f + %.2f (%zu), shown by the "
+                "vblank's own %.2f + %.2f (%zu), the vblank's scene alone %.2f (%zu)\n",
+                a.size(), double(at(0.01)), double(at(0.1)), double(at(0.5)), double(at(0.9)), late,
+                budget_.cpu_s(pcr::PictureKind::frame) * 1e3, budget_.gpu_s(pcr::PictureKind::frame) * 1e3,
+                budget_.measured(pcr::PictureKind::frame), budget_.cpu_s(pcr::PictureKind::between) * 1e3,
+                budget_.gpu_s(pcr::PictureKind::between) * 1e3, budget_.measured(pcr::PictureKind::between),
+                budget_.cpu_s(pcr::PictureKind::between_own) * 1e3, budget_.gpu_s(pcr::PictureKind::between_own) * 1e3,
+                budget_.measured(pcr::PictureKind::between_own), budget_.gpu_s(pcr::PictureKind::scene) * 1e3,
+                budget_.measured(pcr::PictureKind::scene));
+    }
+
+private:
+    void run() {
+#ifdef __linux__
+        pthread_setname_np(pthread_self(), "kf4-pc-watch");
+#endif
+        std::unique_lock<std::mutex> hold(lock_);
+        for (;;) {
+            wake_.wait(hold, [&] { return stopping_ || !pending_.empty(); });
+            if (pending_.empty()) {
+                break; // (stopping, nothing in flight)
+            }
+            Sent sent = pending_.front();
+            hold.unlock();
+            if (sent.fence) {
+                ZoneScope zone(watch_waits_for_a_picture_zone);
+                sent.fence->wait();
+            }
+            const double done = port_wall_seconds();
+            hold.lock();
+            pending_.pop_front();
+            if (log_) {
+                fprintf(log_, "%d %.6f %.6f %.6f %.6f %.6f %.3f %.3f\n", int(sent.kind), sent.begun_s, sent.submitted_s,
+                        done, sent.shown_s, last_done_s_, budget_.cpu_s(sent.kind) * 1e3,
+                        budget_.gpu_s(sent.kind) * 1e3);
+            }
+            budget_.made(sent.kind, sent.submitted_s - sent.begun_s, done - std::max(sent.submitted_s, last_done_s_));
+            queue_.done(sent.serial, done);
+            last_done_s_ = done;
+            if (sent.shown_s > 0 && ahead_ms_.size() < MOST) {
+                ahead_ms_.push_back(float((sent.shown_s - done) * 1e3));
+            }
+        }
+        gone_ = true;
+        idle_.notify_all();
+    }
+
+    static constexpr size_t MOST = 1 << 20;
+    std::mutex lock_;
+    std::condition_variable wake_, idle_;
+    std::deque<Sent> pending_;
+    pcr::PictureBudget budget_;
+    pcr::GpuQueueTime queue_;
+    double last_done_s_ = 0;
+    std::vector<float> ahead_ms_; // (each picture: its time less when it was done)
+    // (developers', KF4_SCN_BUDGET_LOG=FILE) a line a picture: kind begun submitted done shown done_before cpu_ms gpu_ms
+    // (times in port_wall_seconds; done_before: the picture before it done; the budget's estimates as it was begun)
+    FILE *log_ = [] {
+        const char *path = getenv("KF4_SCN_BUDGET_LOG");
+        return path && *path ? fopen(path, "w") : nullptr;
+    }();
+    bool stopping_ = false, gone_ = false;
+    std::thread thread_;
+};
+
 // ---- The renderer ------------------------------------------------------------------------------------
 std::string &pipeline_cache_path_before_open(); // (below)
 
@@ -2379,6 +2649,10 @@ public:
             const char *locked = getenv("KF4_PC_GPU_WAIT_LOCKED");
             gpu_wait_unlocked_ = !(locked && strcmp(locked, "1") == 0);
         }
+        budget_on_ = budget_wanted();
+        if (budget_on_) {
+            watch_.start();
+        }
         thread_ = std::thread([this] { run(); });
         // (the driver too: a crash or a wrong picture on one driver is told apart by it in a player's log)
         const VkPhysicalDeviceVulkan12Properties &v12 = device_->get_device_features().vk12_props;
@@ -2427,6 +2701,7 @@ public:
         if (pump_) {
             pump_->stop();
         }
+        watch_.stop();
     }
 
     void gif(int path, const void *data, size_t bytes) {
@@ -2749,6 +3024,15 @@ private:
         if (!extra) {
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
                            settings.mode_2d.load(), v.tag >> 16);
+            if (budget_on_ && !timing_.on) {
+                // (slice 5) the vblank's scene, closed alone (not in a picture's midst): its GPU work timed by a fence
+                // after it, ahead of the pictures after it
+                CommandBufferHandle cmd = device_->request_command_buffer();
+                Fence fence;
+                const double now = port_wall_seconds();
+                device_->submit(cmd, &fence);
+                watch_.sent({fence, pcr::PictureKind::scene, ++timed_serial_, now, now, 0});
+            }
         }
         uint32_t scale = picture_scale_;
         if (!extra) {
@@ -2775,12 +3059,80 @@ private:
         if (!extra) {
             pay_frame_contexts(); // (the canvas submitted at the vblank)
         }
+        if (extra && between_left_out_) {
+            // (slice 5: the picture between it shows left out by the budget) nothing made, nothing shown
+            between_left_out_ = false;
+            MadePicture none;
+            none.want = v.want & ~GSN_PRESENT;
+            none.tag = v.tag;
+            none.reply = v.reply;
+            hand_out_in_order(none);
+            return;
+        }
+        if (!extra && between_left_out_) {
+            // (slice 5: the vblank's own picture, a picture between left out by the budget) the last picture again, so
+            // that the window has this vblank's (at 60 and below it waits for one a while)
+            between_left_out_ = false;
+            MadePicture again = out_->again(v);
+            last_between_ = {};
+            hand_out_in_order(again);
+            return;
+        }
+        if (!extra && !timing_.on && (v.want & GSN_PRESENT) && budget_on_) {
+            frames_shown_lately_ = true;
+        }
+        if (!extra && !timing_.on && (v.want & GSN_PRESENT)) {
+            // (slice 5) the vblank's own picture of the game's frame: the last one again where nothing it shows changed,
+            // else begun no sooner than its cost before its time
+            if (repeat_on_ && repeat_check_ && out_->can_repeat(v, scale, intake_.drawing())) {
+                // (developers': made all the same, and compared with the picture it would have shown again)
+                const int was = out_->last_made_slot();
+                MadePicture made = out_->make(v, scale, intake_.drawing(), *intake_.gpu_times());
+                stats.repeat_checks++;
+                if (made.slot < 0 || !out_->same_pictures(was, made.slot)) {
+                    stats.repeat_differ++;
+                }
+                if (pcr::Drawing *drawing = intake_.drawing()) {
+                    drawing->picture_made();
+                }
+                last_between_ = {};
+                if (made.drawn) {
+                    next_frame_context();
+                }
+                hand_out_in_order(made);
+                return;
+            }
+            if (repeat_on_ && out_->can_repeat(v, scale, intake_.drawing())) {
+                MadePicture made = out_->repeat(v);
+                if (pcr::Drawing *drawing = intake_.drawing()) {
+                    drawing->picture_made();
+                }
+                last_between_ = {};
+                hand_out_in_order(made);
+                return;
+            }
+            const double shown = budget_on_ ? port_video_picture_due_s(v.tag) : 0;
+            if (shown > 0) {
+                wait_until(watch_.with([&](const pcr::PictureBudget &b, const pcr::GpuQueueTime &) {
+                    return b.begin_at_s(pcr::PictureKind::frame, shown);
+                }));
+                timing_ = {true, pcr::PictureKind::frame, port_wall_seconds(), shown};
+            }
+        }
         if (aa_history_.wanted() && pump_ && !pump_->idle()) {
             // (the temporal anti-aliasing's history is in the order pictures are made: made after the pump's before it,
             // as it is handed out after them)
             pump_->wait_idle();
         }
         MadePicture made = out_->make(v, scale, intake_.drawing(), *intake_.gpu_times());
+        if (timing_.on) {
+            // (slice 5) its GPU work timed by the watch from its fence
+            if (made.slot >= 0 && made.drawn && (made.want & GSN_PRESENT)) {
+                watch_.sent({out_->last_fence(), timing_.kind, ++timed_serial_, timing_.begun_s, port_wall_seconds(),
+                             timing_.shown_s});
+            }
+            timing_.on = false;
+        }
         if (pcr::Drawing *drawing = intake_.drawing()) {
             drawing->picture_made();
         }
@@ -2883,6 +3235,32 @@ private:
             }
             return;
         }
+        timing_.on = false;
+        if (budget_on_ && p.picture.shown_s > 0) {
+            // (slice 5) begun no sooner than its cost before its time (and where the next vblank's own picture is a game
+            // frame's, before that one's GPU work); left out, with the picture that would show it, when it would not be
+            // ready then. The game frame's first vblank's own picture is the frame's, unless the mouse turned it.
+            const double shown = p.picture.shown_s, phase = p.picture.phase;
+            if (phase == 0 && p.picture.t == 0) {
+                frames_shown_lately_ = false; // (the frame's own vblank shown as a picture between: the mouse)
+            }
+            const bool next_frame = frames_shown_lately_ && p.picture.t + (1.0 - phase) * 0.5 >= 0.999;
+            const pcr::PictureKind kind = phase == 0 ? pcr::PictureKind::between_own : pcr::PictureKind::between;
+            wait_until(watch_.with([&](const pcr::PictureBudget &b, const pcr::GpuQueueTime &) {
+                return b.between_begin_at_s(kind, shown, phase, VBLANK_S, next_frame);
+            }));
+            const double now = port_wall_seconds();
+            if (!watch_.with([&](const pcr::PictureBudget &b, const pcr::GpuQueueTime &q) {
+                    return b.fits(kind, now, q.free_s(), shown, phase, VBLANK_S, next_frame);
+                })) {
+                between_left_out_ = true;
+                budget_left_out_++;
+                budget_left_out_own_ += phase == 0 ? 1 : 0;
+                direct_serial_.store(0, std::memory_order_release);
+                return;
+            }
+            timing_ = {true, kind, now, shown};
+        }
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_turned_s_ = port_wall_seconds();
         last_between_ = p.picture;
@@ -2910,7 +3288,76 @@ private:
     }
 
 
+    // (kf4-pc, slice 5) Until at_s (50 ms at most): the budget's wait for a picture's time
+    void wait_until(double at_s) {
+        const double now = port_wall_seconds();
+        if (at_s - now > 0.0002) {
+            ZoneScope zone(pc_waits_for_a_picture_s_time_zone);
+            const double rest = std::min(at_s - now, 0.05), until = now + rest;
+            // (slept to a little before, then the last of it in turns given up: a sleep may wake a millisecond late,
+            // more on Windows)
+            if (rest > SLEEP_EARLY_S) {
+                std::this_thread::sleep_for(std::chrono::duration<double>(rest - SLEEP_EARLY_S));
+            }
+            while (port_wall_seconds() < until) {
+                std::this_thread::yield();
+            }
+            budget_waits_++;
+            budget_waited_s_ += rest;
+        } else if (now - at_s > 0.001) {
+            budget_begun_late_++;
+        }
+    }
+
+    // KF4_SCN_BUDGET=0: the scene renderer's pictures as before slice 5 (each made as it is taken, gs.c's cut). Only for
+    // a window's pictures: never in a run without one or that dumps frames (whose pictures must not depend on time).
+    static bool budget_wanted() {
+        const char *e = getenv("KF4_SCN_BUDGET");
+        return drawing_maker() != nullptr && !(e && strcmp(e, "0") == 0) && !port_options.headless &&
+               !port_options.fast && !port_options.dump_frames;
+    }
+    // KF4_SCN_REPEAT=0: every vblank's picture made, as before slice 5
+    static bool repeat_wanted() {
+        const char *e = getenv("KF4_SCN_REPEAT");
+        return drawing_maker() != nullptr && !(e && strcmp(e, "0") == 0);
+    }
+
+    static constexpr double VBLANK_S = 1001.0 / 60000.0;
+#ifdef _WIN32
+    static constexpr double SLEEP_EARLY_S = 0.0015;
+#else
+    static constexpr double SLEEP_EARLY_S = 0.0003;
+#endif
+
 public:
+    // (any thread) The pictures by budget (slice 5): gs.c then asks for every picture between, cut by nothing
+    bool budgets_pictures() const {
+        return budget_on_;
+    }
+
+    // --stats (the threads idle)
+    void print_budget(FILE *out) {
+        if (budget_on_) {
+            fprintf(out,
+                    "[stats] scene renderer pictures by budget: %llu waits for a picture's time (%.1f ms on average), "
+                    "%llu begun more than 1 ms after it; %llu pictures between left out (not ready by their time), %llu of them "
+                    "a vblank's own (the last picture shown again)\n",
+                    (unsigned long long)budget_waits_, budget_waits_ ? budget_waited_s_ * 1e3 / double(budget_waits_) : 0.0,
+                    (unsigned long long)budget_begun_late_, (unsigned long long)budget_left_out_,
+                    (unsigned long long)budget_left_out_own_);
+            watch_.print(out);
+        }
+        if (repeat_on_) {
+            fprintf(out, "[stats] scene renderer vblanks shown again from the last picture (nothing new): %llu\n",
+                    (unsigned long long)stats.repeats.load());
+            if (repeat_check_) {
+                fprintf(out, "[stats] scene renderer repeats checked (KF4_SCN_REPEAT_CHECK): %llu made all the same, %llu "
+                        "of them different from the picture shown again\n",
+                        (unsigned long long)stats.repeat_checks.load(), (unsigned long long)stats.repeat_differ.load());
+            }
+        }
+    }
+
     Settings settings;
     Stats stats;
     IntakeTimes intake_times; // (kf4-pc's; read by --stats once it is idle)
@@ -2950,6 +3397,23 @@ private:
     GsnInterpPicture last_between_{}; // (kf4-pc's) the picture between last taken (its run bits not kept)
     double last_turned_s_ = 0;        // (kf4-pc's) when its mouse turn was taken (turn_to_hand)
     SharedTurnLead turn_lead_;   // (before the pump, which holds it)
+    // (slice 5, kf4-pc's) the pictures by budget: on (budget_wanted, set at open), the watch, the picture being timed,
+    // whether the picture between taken last was left out (with the picture that would show it), and the counts
+    bool budget_on_ = false;
+    const bool repeat_on_ = repeat_wanted();
+    const bool repeat_check_ = getenv("KF4_SCN_REPEAT_CHECK") && strcmp(getenv("KF4_SCN_REPEAT_CHECK"), "0") != 0;
+    PictureWatch watch_;
+    struct Timing {
+        bool on = false;
+        pcr::PictureKind kind = pcr::PictureKind::frame;
+        double begun_s = 0, shown_s = 0;
+    };
+    Timing timing_;
+    uint64_t timed_serial_ = 0;
+    bool between_left_out_ = false;
+    bool frames_shown_lately_ = true; // (the game frames' own pictures are shown: not with the mouse turning them)
+    uint64_t budget_waits_ = 0, budget_begun_late_ = 0, budget_left_out_ = 0, budget_left_out_own_ = 0;
+    double budget_waited_s_ = 0;
     UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
     std::thread thread_;
@@ -3047,6 +3511,10 @@ extern "C" int pcr_vsync(const uint64_t *privileged, int field, int want_pixels,
 
 extern "C" int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag) {
     return renderer()->picture(privileged, field, want_pixels, frame, tag);
+}
+
+extern "C" int pcr_budgets_pictures(void) {
+    return renderer() && renderer()->budgets_pictures() ? 1 : 0;
 }
 
 extern "C" int pcr_backlog(void) {
@@ -3303,6 +3771,7 @@ extern "C" void pcr_print_stats(void) {
     fprintf(stderr, "[stats] pc pictures between straight to the pump: %llu (%llu then found not fitting)\n",
             (unsigned long long)s.direct.load(), (unsigned long long)s.direct_stale.load());
     renderer()->intake_times.print(stderr);
+    renderer()->print_budget(stderr);
     renderer()->print_census();
     // (here, not by a job: at exit the thread may be stopped already; idle or gone, it records nothing meanwhile)
     if (pcr::GpuTimes *times = renderer()->intake().gpu_times()) {

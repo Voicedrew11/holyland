@@ -515,6 +515,7 @@ public:
         held_.clear();
         stand_in_pool_.clear();
         picture_pending_ = false;
+        last_scanout_ = {};
     }
 
     std::vector<uint8_t> vram_image() override {
@@ -584,6 +585,7 @@ public:
             counts_.pictures_unshown++;
             return scanout(out, shown_rect, dst);
         }
+        last_scanout_ = {}; // (made again below where it is the buffer as it is)
         if (stand_in) {
             return scanout_picture(out, rect, placed, *stand_in, dst);
         }
@@ -632,6 +634,8 @@ public:
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
         }
+        // (what it read, for scanout_unchanged: the picture is the same while nothing meets it)
+        last_scanout_ = {true, shown_rect, s->image, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}};
         if (!drawn.empty()) {
             compose(out, *s, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}, dst, drawn);
             return true;
@@ -702,6 +706,27 @@ public:
     // (the temporal anti-aliasing's depth: not the scene renderer's yet)
     std::optional<ShownDepth> scanout_depth(CommandBuffer &, const ShownRect &, const Image &) override {
         return std::nullopt;
+    }
+
+    // (slice 5, docs/plans/scene-slice5-results.md) The last scanout's buffer as it is (not a picture between's), the same
+    // rect, and nothing the stream did since met what it read (touch and push_op forget it): its picture again
+    bool scanout_unchanged(const ShownRect &rect) override {
+        flush_batch();
+        const ShownRect &l = last_scanout_.rect;
+        if (!last_scanout_.valid || picture_pending_ || pending_scale_ != scale_ || rect.bp != l.bp || rect.bw != l.bw ||
+            rect.psm != l.psm || rect.x != l.x || rect.y != l.y || rect.w != l.w || rect.h != l.h ||
+            rect.lower_field != l.lower_field) {
+            return false;
+        }
+        // (its target still that image: not grown, let go or made again since)
+        bool still = std::any_of(colour_.begin(), colour_.end(),
+                                 [&](const auto &t) { return t->image.get() == last_scanout_.image.get(); });
+        if (!still) {
+            last_scanout_ = {};
+            return false;
+        }
+        counts_.scanouts_unchanged++;
+        return true;
     }
     void begin_drawing(uint64_t, Jitter) override {}
 
@@ -2104,6 +2129,9 @@ private:
     void push_op(Op &&op) {
         end_shadow_run();
         pass_.open = false;
+        if (op.dst && op.dst.get() == last_scanout_.image.get()) {
+            last_scanout_ = {}; // (anywhere in it: slice 5's scanout_unchanged)
+        }
         if (op.dst && op.dst.get() == alpha_clear_) {
             alpha_clear_ = nullptr; // (written: its alpha no longer known)
         }
@@ -2223,6 +2251,10 @@ private:
     // What the stream has drawn into rect of image (its colour or its depth) made so in the scene: the clears held
     // back there each a step of its own, and the layers folded there drawn
     void touch(const ImageHandle &image, bool depth, const VkRect2D &rect, bool layers_too = true) {
+        if (last_scanout_.valid && !depth && image.get() == last_scanout_.image.get() &&
+            rects_meet(rect, last_scanout_.shown)) {
+            last_scanout_ = {};
+        }
         if (!held_.empty() && !in_written_over_) {
             held_use(image.get(), depth, rect, false);
         }
@@ -3544,6 +3576,7 @@ private:
         }
         draw_all_held(); // (into the images of the scale they were drawn at, blitted below)
         scale_ = pending_scale_;
+        last_scanout_ = {};
         for (auto *list : {&colour_, &depth_}) {
             for (auto &s : *list) {
                 ImageHandle image = make_target_image(s->width(), s->height, s->depth, s->psm);
@@ -5040,6 +5073,14 @@ private:
     const bool between_bound_ = getenv("KF4_SCN_BETWEEN_BOUND") && strcmp(getenv("KF4_SCN_BETWEEN_BOUND"), "0") != 0;
     const bool drop_frame_ = getenv("KF4_SCN_DROP_FRAME") && strcmp(getenv("KF4_SCN_DROP_FRAME"), "0") != 0;
     const Image *drop_into_ = nullptr; // (close_scene's: frame_steps' image)
+    // (slice 5: scanout_unchanged) the last scanout of a buffer as it is: its rect, the image and pixels it read
+    struct LastScanout {
+        bool valid = false;
+        ShownRect rect;
+        ImageHandle image;
+        VkRect2D shown{};
+    };
+    LastScanout last_scanout_;
     // (slice 4b: the frame held back; KF4_SCN_HOLD_FRAME=0: drawn as its scene closes)
     const bool hold_frame_ = !(getenv("KF4_SCN_HOLD_FRAME") && strcmp(getenv("KF4_SCN_HOLD_FRAME"), "0") == 0);
     const Image *hold_into_ = nullptr; // (close_scene's: the frame's buffer whose steps it holds back)
@@ -5156,7 +5197,7 @@ private:
                  held_depth_read_late = 0, hold_refused_none = 0, hold_refused_target = 0, hold_refused_depth = 0,
                  hold_refused_first = 0;
         uint64_t scenes = 0, bound_pictures = 0, frames_kept = 0, frames_not_kept = 0, pictures_between = 0,
-                 pictures_not_drawn = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
+                 pictures_not_drawn = 0, scanouts_unchanged = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;

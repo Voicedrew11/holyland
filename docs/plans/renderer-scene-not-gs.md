@@ -109,6 +109,14 @@ frame, not three times (2.2-2.9 ms a game frame less at 2x, every picture byte f
 measured: 12 ms at 60 (5 degrees at 6 rad/s), mostly pictures drawn a vblank before they are shown, so the reprojection
 waits for slice 5's scheduling (and for the HUD in an image of its own).
 
+Slice 5 (2026-11-21, `scene-slice5-results.md`): the pictures by budget. Each picture is begun just in time from its
+measured cost, and a picture between that would be late is left out (gs.c's cut off under it). A vblank with nothing new
+is the last picture again, with no GPU work. The spin holds 30 game frames a second at 60, 240 and unlocked, with every
+picture on time (before, 596 shown late at 240). The late turn at 60 halves (12.2 to 6.6 ms), and at 30 the renderer's GPU
+time is 27% less. Not built: the drawing thread (at 240, 256-522 of 3,500 pictures begun late while kf4-pc built a
+scene) and the presenter's copy folded into the final pass. The late turn left is the picture's own cost: 3f's to take
+down next, then the reprojection judged again.
+
 ## Order
 
 1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,

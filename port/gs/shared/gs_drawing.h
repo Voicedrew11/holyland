@@ -116,6 +116,12 @@ public:
     // Everything drawn so far recorded, the shown rectangle copied (scaled to dst's size) into dst, which the commands
     // that follow in cmd may read. False when there is nothing to show (dst left as it was).
     virtual bool scanout(Vulkan::CommandBuffer &cmd, const ShownRect &rect, const Vulkan::Image &dst) = 0;
+    // (a vblank shown again: docs/plans/scene-slice5-results.md) The last scanout was of rect, as the buffer is, and
+    // nothing drawn, cleared or copied since meets what it read: the same picture. False when not known (the canvas).
+    virtual bool scanout_unchanged(const ShownRect &rect) {
+        (void)rect;
+        return false;
+    }
     // After scanout: the depth of the picture's 3D copied into dst (R32F), where it can be given (pcr_canvas.h's)
     virtual std::optional<ShownDepth> scanout_depth(Vulkan::CommandBuffer &cmd, const ShownRect &rect,
                                                     const Vulkan::Image &dst) = 0;

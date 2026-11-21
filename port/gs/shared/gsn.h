@@ -182,6 +182,8 @@ typedef struct {
                           time before it */
     uint32_t leave_out_late; /* 1: the renderer leaves it out when it would be late, and begins it no sooner than it
                           needs (--frame-rate unlocked: port/gs/pc/pcr_late.h) */
+    float phase;       /* when in its vblank it is shown (0: by the vblank's own picture, else by an extra one after
+                          it): the scene renderer's budget (port/gs/pc/pcr_budget.h) */
     uint32_t runs;     /* bits */
     const uint32_t *run_bits; /* (runs + 31) / 32 words: the runs drawn with their model's move */
 } GsnInterpPicture;

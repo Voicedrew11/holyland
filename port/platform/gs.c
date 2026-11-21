@@ -990,6 +990,14 @@ int port_gs_interp_gpu(void) {
     return port_gs_replay_uploads() && pc_between;
 }
 
+int port_gs_budgets_pictures(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    return have_pc && gsr_budgets_pictures();
+#else
+    return 0;
+#endif
+}
+
 int port_gs_between_leaves_memory(void) {
     /* (KF4_SCN_RESTORE=1: the restore drawn all the same, as before slice 4) */
     static int restore = -1;
@@ -1054,6 +1062,9 @@ void port_gs_run_vsync(void) {
        frame is being drawn between (interp_live), and whether the vblank's own picture is one */
     double interp_phases[16];
     int interp_count = 0, interp_live = 0, own_shown = 1, interp_allow_now = INTERP_ALL, interp_between = 0;
+    /* the renderer leaves out the pictures between it would not have ready in time (the scene renderer's slice 5): no
+       cut, none left out here as it is behind */
+    int budget = port_gs_budgets_pictures();
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -1097,7 +1108,7 @@ void port_gs_run_vsync(void) {
            behind. Left-outs keep the backlog low (a vblank's pictures left out are not drawn), so on the backlog
            alone the cut seldom lowered the count to what the renderer makes, and the pictures came in bursts and
            gaps (PERFORMANCE.md, 2026-11-12) */
-        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && interp_cut_on() &&
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && !budget && interp_cut_on() &&
                                     (gsr_backlog() > 1 || (interp_left_last > 0 && cut_on_left_out()))
                                 ? interp_behind_run + 1
                                 : 0;
@@ -1234,7 +1245,7 @@ void port_gs_run_vsync(void) {
                 }
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || (!budget && gsr_behind()))) {
                 interp_behind++;
                 __atomic_store_n(&interp_behind_at, request->vblank, __ATOMIC_RELAXED);
                 interp_left_last++;

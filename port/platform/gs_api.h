@@ -64,6 +64,11 @@ static inline int gsr_backlog(void) {
 static inline int gsr_behind(void) {
     return pcr_backlog() > 2;
 }
+/* The renderer decides which pictures between it makes, from their cost (pcr_budgets_pictures): no cut, none left out
+   as behind */
+static inline int gsr_budgets_pictures(void) {
+    return pcr_budgets_pictures();
+}
 static inline void gsr_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag),
                                      void (*image)(uint64_t tag)) {
     pcr_set_presenter(pixels, image);

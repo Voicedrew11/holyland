@@ -54,6 +54,9 @@ void pcr_read_fifo(void *dst, uint32_t qwords);
 int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 int pcr_backlog(void);
+/* 1: the renderer leaves out the pictures between it would not have ready by their time, and begins each no sooner
+   than it must (the scene renderer's slice 5, port/gs/pc/pcr_budget.h): gs.c then asks for every one, cut by nothing */
+int pcr_budgets_pictures(void);
 void pcr_interp_frame(GsnInterpFrame *frame);
 void pcr_interp_picture(const GsnInterpPicture *picture);
 

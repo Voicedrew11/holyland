@@ -147,8 +147,8 @@ static int unlocked_asked_hz(void) {
 
         follow = !(e != NULL && strcmp(e, "0") == 0);
     }
-    if (!follow || shown <= 0) {
-        return top;
+    if (!follow || shown <= 0 || port_gs_budgets_pictures()) {
+        return top; /* (a renderer that leaves out what it would not have in time picks among them all) */
     }
     asked = (int)(shown * 1.25);
     asked = asked < UNLOCKED_LEAST_HZ ? UNLOCKED_LEAST_HZ : asked;
@@ -3230,7 +3230,8 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
 }
 
 /* A picture between on the GPU: its time, its cameras, and the runs that move with their model then */
-static void gpu_picture(const Camera *between, double t, MouseTurn hand, double shown_s, int leave_out_late) {
+static void gpu_picture(const Camera *between, double t, MouseTurn hand, double shown_s, int leave_out_late,
+                        double phase) {
     static uint32_t *bits;
     static size_t bits_room;
     const Objects *o = pending.objects;
@@ -3280,6 +3281,7 @@ static void gpu_picture(const Camera *between, double t, MouseTurn hand, double 
     pic.t = (float)t;
     pic.shown_s = shown_s;
     pic.leave_out_late = (uint32_t)leave_out_late;
+    pic.phase = (float)phase;
     pic.hand_yaw_rad = hand.yaw_rad;
     pic.hand_pitch_rad = hand.pitch_rad;
     pic.runs = o != NULL ? (uint32_t)o->nruns : 0;
@@ -3535,7 +3537,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
         /* (unlocked: the renderer leaves out a picture it would be late for) */
         int unlocked = port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED && phase > 0;
 
-        gpu_picture(&between, t, hand, port_video_picture_due_s(PORT_PICTURE_TAG(vblank, phase)), unlocked);
+        gpu_picture(&between, t, hand, port_video_picture_due_s(PORT_PICTURE_TAG(vblank, phase)), unlocked, phase);
     } else {
         replay_pending(&between, t, 0, send, 0);
     }
