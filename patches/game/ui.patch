@@ -4486,7 +4486,7 @@ index 9158a8a2bd6b47784a7aaa33e7bd5e8787d6e157..a2f71653e166205babb740e9d138dab2
  /* the effect shown when item `kind` is used (files item_ms/...), item_effect_defs_by_kind[kind] (kinds 0x46 to 0x52 are used) */
  typedef struct {
 diff --git a/src/game/ui/title.c b/src/game/ui/title.c
-index cd2dcc4df93e39118ed42306e12844f72b8cf19d..0b38647a4119eac806cee0ff3ab7aec72d98a310 100644
+index cd2dcc4df93e39118ed42306e12844f72b8cf19d..e97731db725de808fda383db84be9e28bba2e287 100644
 --- a/src/game/ui/title.c
 +++ b/src/game/ui/title.c
 @@ -7,6 +7,7 @@
@@ -4601,7 +4601,17 @@ index cd2dcc4df93e39118ed42306e12844f72b8cf19d..0b38647a4119eac806cee0ff3ab7aec7
      if (menu_confirmed) {
          screen_timer--;
          if (screen_timer <= 0) {
-@@ -466,7 +501,7 @@ int Title_InitGameOver(void) {
+@@ -455,6 +490,9 @@ int Title_RunGameOver(void) {
+     do {
+         result = Title_UpdateGameOver();
+         Title_SwapBuffers();
++        if (result == 0 && Quick_PollTitle()) { /* PC: a quick save was loaded (game/quicksave.c) */
++            result = 3; /* not Load (1) or Quit (2): main goes on to the loaded game */
++        }
+     } while (result == 0);
+     return result;
+ }
+@@ -466,7 +504,7 @@ int Title_InitGameOver(void) {
      sceGsSyncV(0);
      sceGsResetGraph(0, 1, 2, 1);
      sceGsSetDefDBuff(&title_dbuff, 0, 640, 224, 3, 0, 1);
@@ -4610,7 +4620,7 @@ index cd2dcc4df93e39118ed42306e12844f72b8cf19d..0b38647a4119eac806cee0ff3ab7aec7
      ((int (*)(void))Title_SwapBuffers)(); // match: called as if it returned a value, which keeps $2 busy
      texture_cursor = (TextureHeader *)map_file_area;
      Title_LoadTexture("title\\gameover_load.tm2", TITLE_TEXTURE_GAME_OVER_LOAD);
-@@ -510,6 +545,9 @@ int Title_UpdateGameOver(void) {
+@@ -510,6 +548,9 @@ int Title_UpdateGameOver(void) {
      }
      stick_pressed = stick & ~game_over_held_stick;
      game_over_held_stick = stick;
