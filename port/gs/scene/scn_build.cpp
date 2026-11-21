@@ -20,6 +20,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "font_sheet.h"
 #include "pcr_blend.h"
 #include "pcr_gpu_time.h"
 #include "pcr_hang_notes.h"
@@ -127,6 +128,7 @@ struct SampledTexture {
     std::array<uint32_t, 256> clut{};
     ImageHandle image;
     uint32_t levels = 1;
+    uint32_t finer = 1; // (the image this many times the texture's texels across and down: a font sheet, font_sheet.h)
     uint64_t used = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
     bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c) const {
@@ -145,6 +147,8 @@ struct BoundTexture {
     bool ok = false;
     uint8_t alpha_lo = 0, alpha_hi = 255;
     std::array<uint32_t, 256> clut{}; // (SRC_INDEX)
+    uint32_t finer = 1;               // (SRC_SAMPLED: SampledTexture's)
+    uint32_t width = 0, height = 0;   // (... and the texture's size in its texels)
 };
 
 struct PixelBox {
@@ -1948,7 +1952,8 @@ public:
         fprintf(stderr,
                 "[stats] scene renderer targets and textures: %llu targets made, %llu grown, %llu filled from uploads, "
                 "%llu uploads written into them, %llu copies between them, %llu depth aliases cleared; textures %llu "
-                "decoded, %llu sampled, %llu from targets (%llu into a kept image), %llu missing, %llu reused; "
+                "decoded, %llu sampled (%llu font sheets made finer), %llu from targets (%llu into a kept image), "
+                "%llu missing, %llu reused; "
                 "%llu shader blends, %llu read-backs; "
                 "not drawn: %llu shapes, %llu blends, %llu textures on targets, %llu copies, %llu uploads into targets, "
                 "%llu read-backs; %llu uploads asked again passed\n",
@@ -1956,7 +1961,8 @@ public:
                 (unsigned long long)counts_.filled_from_uploads, (unsigned long long)counts_.uploads_into_targets,
                 (unsigned long long)counts_.copies_between_targets, (unsigned long long)counts_.depth_aliases_cleared,
                 (unsigned long long)counts_.textures_uploaded, (unsigned long long)counts_.textures_sampled,
-                (unsigned long long)counts_.textures_from_targets, (unsigned long long)counts_.target_copies_reused,
+                (unsigned long long)counts_.font_sheets, (unsigned long long)counts_.textures_from_targets,
+                (unsigned long long)counts_.target_copies_reused,
                 (unsigned long long)counts_.textures_missing,
                 (unsigned long long)counts_.textures_reused, (unsigned long long)counts_.shader_blends,
                 (unsigned long long)counts_.read_backs, (unsigned long long)counts_.unsupported_shapes,
@@ -3780,6 +3786,9 @@ private:
                 b.alpha_hi = t->alpha_hi;
                 b.cols = std::max(cols, a.texture->read_cols);
                 b.rows = std::max(rows, a.texture->read_rows);
+                b.finer = t->finer;
+                b.width = a.texture->width_px;
+                b.height = a.texture->height_px;
                 b.ok = true;
                 counts_.textures_sampled++;
                 return b;
@@ -3873,14 +3882,25 @@ private:
             return &found->second;
         }
         std::vector<uint32_t> colours = colour_texels(d, psm, clut, texa);
-        ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(d.width_px, d.height_px, VK_FORMAT_R8G8B8A8_UNORM);
+        // (the game's fonts: the sheet four times as fine, its English letters drawn again; font_sheet.h)
+        uint32_t finer = 1;
+        if (sharp_font_ && d.kind == TexelKind::Index8) {
+            std::vector<uint32_t> sharp = sharper_font_sheet(d, colours, clut.rgba);
+            if (!sharp.empty()) {
+                colours = std::move(sharp);
+                finer = font_sheet_scale;
+                counts_.font_sheets++;
+            }
+        }
+        ImageCreateInfo info =
+            ImageCreateInfo::immutable_2d_image(d.width_px * finer, d.height_px * finer, VK_FORMAT_R8G8B8A8_UNORM);
         info.levels = d.levels;
         info.misc = 0;
         std::array<ImageInitialData, 7> data{};
         for (uint32_t l = 0; l < d.levels; l++) {
-            data[l].data = colours.data() + d.level_start[l];
-            data[l].row_length = d.level_width(l);
-            data[l].image_height = d.level_height(l);
+            data[l].data = colours.data() + d.level_start[l] * finer * finer;
+            data[l].row_length = d.level_width(l) * finer;
+            data[l].image_height = d.level_height(l) * finer;
         }
         ImageHandle image = device_.create_image(info, data.data());
         if (!image) {
@@ -3893,6 +3913,7 @@ private:
         t.clut = clut.rgba;
         t.image = image;
         t.levels = d.levels;
+        t.finer = finer;
         t.used = frame_;
         t.alpha_lo = 255;
         t.alpha_hi = 0;
@@ -4766,7 +4787,7 @@ private:
         flags |= blend.flags & ~0x80000000u;
         flags |= date && !shadow ? F_DATE | (datm ? F_DATM : 0) : 0;
         flags |= mode_2d_ == GSN_2D_SMOOTH && (scale_[0] > 1 || scale_[1] > 1) && (flags & F_TME) && !b.native &&
-                         b.texture.src != SRC_SURFACE
+                         b.texture.src != SRC_SURFACE && b.texture.finer == 1
                      ? F_SMOOTH_2D
                      : 0;
         // (the depth: Z / zmax at each pixel, clamped by the depth clamp to the viewport's 0 to 1)
@@ -4775,6 +4796,12 @@ private:
         gs_fields(s, b.texture, (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8), push);
         push.src_scale[0] = int32_t(scale_[0]);
         push.src_scale[1] = int32_t(scale_[1]);
+        if (b.texture.src == SRC_SAMPLED && b.texture.finer > 1) {
+            // (an image finer than the texture: its size in the texture's texels, which UV is in; pcr_prim.h's
+            // sampled_size)
+            push.src_offset[0] = int32_t(b.texture.width);
+            push.src_offset[1] = int32_t(b.texture.height);
+        }
         push.place[0] = int32_t(placed.x);
         push.place[1] = int32_t(placed.y);
         push.dest_offset[0] = dest_offset.x;
@@ -5260,6 +5287,8 @@ private:
     };
     std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
+    // (developers' KF4_SHARP_FONT=0: the game's font sheets as the disc has them, to compare; font_sheet.h)
+    const bool sharp_font_ = !getenv("KF4_SHARP_FONT") || strcmp(getenv("KF4_SHARP_FONT"), "0") != 0;
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     // (slice 3d's bound, developers' only: the picture lacks the shine) program 0x280's second, sphere-mapped passes
     // left out, so that its time with them gone is the most drawing both passes as one could save
@@ -5306,7 +5335,7 @@ private:
         uint64_t targets_made = 0, targets_grown = 0, filled_from_uploads = 0, uploads_into_targets = 0,
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
-                 textures_reused = 0;
+                 textures_reused = 0, font_sheets = 0;
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
                                                              // pair before's materials again)

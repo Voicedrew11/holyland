@@ -112,9 +112,10 @@ uvec4 fetch_texels(ivec2 at, int level) {
     return texelFetch(u_texels, at, level);
 }
 
-// The sampled texture (u_sampled or the table's with its sampler)
+// The sampled texture (u_sampled or the table's with its sampler). Its size is in the texture's texels, which UV is in:
+// the scene renderer's image of a font sheet is finer (font_sheet.h), its size then in src_offset.
 ivec2 sampled_size() {
-    if (from_table()) {
+    if (from_table() || pc.src_offset.x != 0) {
         // (its size from the canvas, not textureSize: RADV, Mesa 26.2.3, gave another batch's texture's size here and
         // there in a merged run's draw, whose index differs within the draw, nonuniformEXT or not)
         return pc.src_offset;
