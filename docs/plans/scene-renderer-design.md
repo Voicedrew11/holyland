@@ -583,6 +583,13 @@ vertex stage), unblended batches drawn in runs blended by As where exact; pictur
 sixth part, 3f, studies where the GPU's time goes (0x000's pixels, the 5.5 ms scanout) and the calls' CPU time; the
 "under 2 ms" is judged by it (`HANDOFF_scene_slice3.md`, "After 3b").
 
+Slice 4 is built and measured (2026-11-20, `scene-slice4-results.md`): pictures between from the kept scene into
+stand-ins (4a, no exact restore); mouse look from the scene, the frame's own passes held back where every picture of it
+is a picture between (4b: the third world draw a game frame at 60 gone, byte for byte). The late turn measured is not
+"a degree or two": 12 ms at 60, 5.3 degrees at 6 rad/s, mostly the picture drawn a vblank before it is shown. Decision
+3's reprojection is therefore moved after slice 5 (pictures begun just in time), and needs the HUD in an image of its
+own (decision 4) not to move the HUD with the world.
+
 **When today's renderer can go**: after slice 6, when the scene renderer is no further from paraLLEl-GS than today's
 in the tours and motion cases, draws every scenario of the layer inventory, and the owner has played it.
 

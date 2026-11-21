@@ -43,6 +43,7 @@
 
 extern "C" {
 #include "gs_api.h"
+#include "port/mouse_lead.h"
 #include "port/overlay.h"
 #include "port/debug.h"
 #include "port/platform.h"
@@ -1095,6 +1096,28 @@ void read_window(Frame &f) {
 
 } // namespace
 
+// (developers', KF4_LATE_TURN_LOG=FILE: slice 4b's measurement, docs/plans/scene-slice4-results.md) For each picture
+// presented that shows a picture between, as its commands are recorded here: what the mouse's hand has moved since the
+// hand the picture was turned to (its newest reading now), the late turn a reprojection here would add. A line a
+// picture: now_s turned_s shown_s yaw_rad pitch_rad sx sy newest_age_s (sx, sy: GS pixels a unit of x / z, y / z;
+// newest_age_s: how old the newest reading of the hand is now).
+void log_late_turn(const GsnPictureTurn &turn) {
+    static FILE *log = [] {
+        const char *path = getenv("KF4_LATE_TURN_LOG");
+        return path && *path ? fopen(path, "w") : nullptr;
+    }();
+    if (!log) {
+        return;
+    }
+    constexpr double VBLANK_S = 1001.0 / 60000.0;
+    const double now = port_wall_seconds();
+    MouseTurn since = port_mouse_lead_since({turn.hand_yaw_rad, turn.hand_pitch_rad}, HUGE_VAL);
+    const double newest_v = port_mouse_lead_newest_vblanks(), now_v = port_video_vblanks_at(now);
+    const double age = newest_v >= 0 && now_v >= 0 ? (now_v - newest_v) * VBLANK_S : -1;
+    fprintf(log, "%.6f %.6f %.6f %.7f %.7f %.2f %.2f %.6f\n", now, turn.turned_s, turn.shown_s, since.yaw_rad,
+            since.pitch_rad, turn.sx, turn.sy, age);
+}
+
 // ---- The port's side -----------------------------------------------------------------------------
 extern "C" int port_vk_open(void *sdl_window) {
     pr = Presenter();
@@ -1280,6 +1303,9 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     // the PC renderer's picture of that tag (with nothing new, the one shown last again)
     GsnScanout scanout = {};
     bool have_scanout = pr.source == SOURCE_NATIVE && gsr_scanout_take_tag(&scanout, pr.tag);
+    if (fresh && have_scanout && scanout.turn.known) {
+        log_late_turn(scanout.turn);
+    }
 
     // the picture's place; the PC renderer scales its next pictures to it with the best scaling (or the
     // sharpening), this one when it was made at this size

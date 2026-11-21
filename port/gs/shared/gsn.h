@@ -73,6 +73,17 @@ typedef struct {
    picture. Between take and release (once the presenter's command buffer is submitted) the image is not destroyed.
    serial counts the pictures. The renderer keeps the last few pictures (a ring of images): pcr_scanout_take_tag takes
    the newest with that tag (pcr_picture's), or the newest of all when it is no longer there. */
+/* A picture's mouse turn (port/include/port/mouse_lead.h), as the presenter gets it with the picture: the hand its camera
+   was turned to as it was drawn, when (turned_s, port_wall_seconds) and when it is to be shown (shown_s, 0: not known),
+   and the world's projection's scale (sx, sy: GS pixels a unit of x / z and y / z). known 0: a picture with no turn of
+   its own (a game frame's, or one with the mouse not in play). Slice 4b: the late turn is what the hand has moved since. */
+typedef struct {
+    uint32_t known;
+    float sx, sy;
+    double hand_yaw_rad, hand_pitch_rad;
+    double turned_s, shown_s;
+} GsnPictureTurn;
+
 typedef struct {
     uint64_t image;
     uint32_t width, height;
@@ -80,6 +91,7 @@ typedef struct {
     uint64_t tag;
     uint64_t scaled; /* the picture at the window's size (VkImage, GENERAL), 0: none */
     uint32_t scaled_width, scaled_height;
+    GsnPictureTurn turn;
 } GsnScanout;
 
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"). The DMA controller's

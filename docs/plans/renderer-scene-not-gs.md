@@ -103,6 +103,12 @@ the CPU's time; the world's GPU time is in its pixels, which part 3f studies (an
 3d (0x280's two passes as one draw, off by default) took the palace's GPU frame from 12.7 to 11.2 ms and the pond's
 from 13.2 to 12.9, calls a frame to 36 / 200 / 46; its pictures wait on 3c's level against paraLLEl-GS.
 
+Slice 4 (2026-11-20, `scene-slice4-results.md`): pictures between drawn from the scene (4a), and mouse look from the
+scene (4b) with the frame's own passes held back, so that at 60 with the mouse turning the world is drawn twice a game
+frame, not three times (2.2-2.9 ms a game frame less at 2x, every picture byte for byte as before). The late turn
+measured: 12 ms at 60 (5 degrees at 6 rad/s), mostly pictures drawn a vblank before they are shown, so the reprojection
+waits for slice 5's scheduling (and for the HUD in an image of its own).
+
 ## Order
 
 1. **Measure** (done 2026-11-19): `camera-whip-slowdown.md`, `fullscreen-layers-inventory.md`, `world-plain.md`,

@@ -580,8 +580,11 @@ void Drawer::log_scene(const Scene &scene, const Counts &b) {
     fprintf(runs_log_, "\n");
 }
 
-void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *picture) {
+void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *picture,
+                    const std::vector<uint8_t> *left_out, const Substitutes *substitutes) {
     picture_ = picture;
+    left_out_ = left_out;
+    substitutes_ = substitutes;
     const Counts before = counts_;
     counts_.scenes++;
     counts_.picture_scenes += picture ? 1 : 0;
@@ -590,7 +593,11 @@ void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *pic
     bool after_pass = false;
     full_barrier(c); // (what was submitted before: the targets' last scene, uploads into images)
     place_vertices(c);
-    for (const Step &step : scene.steps) {
+    for (size_t si = 0; si < scene.steps.size(); si++) {
+        const Step &step = scene.steps[si];
+        if (left_out && si < left_out->size() && (*left_out)[si]) {
+            continue;
+        }
         if (step.kind == Step::Kind::op) {
             if (after_pass) {
                 full_barrier(c);
@@ -618,12 +625,20 @@ void Drawer::record(const Scene &scene, CommandBuffer &c, const PictureDraw *pic
         log_scene(scene, before);
     }
     picture_ = nullptr;
+    left_out_ = nullptr;
+    substitutes_ = nullptr;
 }
 
 const Image &Drawer::image(const ImageHandle &h) const {
     if (picture_ && picture_->stand_ins) {
         auto it = picture_->stand_ins->find(h.get());
         if (it != picture_->stand_ins->end()) {
+            return *it->second;
+        }
+    }
+    if (substitutes_) {
+        auto it = substitutes_->find(h.get());
+        if (it != substitutes_->end()) {
             return *it->second;
         }
     }
@@ -678,9 +693,24 @@ void Drawer::prepare_placing(const Scene &scene) {
     std::vector<Pending> pending;
     std::vector<uint32_t> pending_of(scene.draws.size(), no_record);
     std::unordered_map<Key, uint32_t, KeyHash> seen;
+    // (the draws of the steps left out: not placed)
+    std::vector<uint8_t> drawn;
+    if (left_out_) {
+        drawn.assign(scene.draws.size(), 1);
+        for (size_t si = 0; si < scene.steps.size() && si < left_out_->size(); si++) {
+            const Step &st = scene.steps[si];
+            if ((*left_out_)[si] && st.kind == Step::Kind::pass) {
+                const Pass &pass = scene.passes[st.index];
+                for (uint32_t i = 0; i < pass.draw_count; i++) {
+                    drawn[pass.first_draw + i] = 0;
+                }
+            }
+        }
+    }
     for (size_t di = 0; di < scene.draws.size(); di++) {
         const Draw &d = scene.draws[di];
-        if (d.clear || !d.native || p.first_record[di] == no_record || d.native_vertex_count == 0 ||
+        if ((!drawn.empty() && !drawn[di]) || d.clear || !d.native || p.first_record[di] == no_record ||
+            d.native_vertex_count == 0 ||
             scene.materials[d.material].fuse != no_material) {
             continue;
         }

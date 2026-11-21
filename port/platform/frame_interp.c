@@ -3488,6 +3488,20 @@ static int camera_lead(Camera *c, double t, double picture_vblank) {
 }
 
 /* The hand has moved since `hand` (the renderer turns the picture on by it as it draws it) */
+/* (developers', KF4_INTERP_T0=1: slice 4b's tests) the frame's own vblank drawn as a picture between at t 0 as when
+   the mouse turned, with no mouse: the frame taken at its own vblank and every picture shown a picture between, under
+   a pad script that repeats (the scene renderer's frame held back: docs/plans/scene-slice4-results.md, "4b") */
+static int t0_pictures(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        const char *e = getenv("KF4_INTERP_T0");
+
+        on = e != NULL && atoi(e) != 0;
+    }
+    return on;
+}
+
 static int hand_moved_since(MouseTurn hand) {
     MouseTurn since = port_mouse_lead_since(hand, HUGE_VAL); /* (to the newest reading) */
 
@@ -3510,7 +3524,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
     between = interp_camera_between(&pending.before, &pending.scan.camera, t);
     led = camera_lead(&between, t, (double)vblank + phase);
     hand = port_mouse_lead_hand((double)vblank + phase);
-    if (t == 0 && !led && !hand_moved_since(hand)) {
+    if (t == 0 && !led && !hand_moved_since(hand) && !t0_pictures()) {
         return 0; /* the frame shown, as the game drew it (turned by the mouse, it is drawn again as the others) */
     }
     if (pending.gpu == 0) {

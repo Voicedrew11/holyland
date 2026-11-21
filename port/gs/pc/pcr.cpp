@@ -411,10 +411,11 @@ public:
     }
 
     // (the PC renderer's thread) Once the commands writing the slot are on the queue: the presenter may take it
-    void publish(int slot, uint64_t tag) {
+    void publish(int slot, uint64_t tag, const GsnPictureTurn &turn) {
         std::lock_guard<std::mutex> hold(lock_);
         slots_[slot].serial = ++serial_;
         slots_[slot].tag = tag;
+        slots_[slot].turn = turn;
         newest_ = slot;
     }
 
@@ -436,6 +437,7 @@ public:
         out = {};
         out.serial = s.serial;
         out.tag = s.tag;
+        out.turn = s.turn;
         if (s.scaled_valid) {
             out.scaled = uint64_t(s.scaled->get_image());
             out.scaled_width = s.scaled_width;
@@ -489,6 +491,7 @@ private:
         bool whole_valid = false;  // (image is this picture's)
         uint64_t serial = 0; // 0: none published in it (or it is being written)
         uint64_t tag = 0;
+        GsnPictureTurn turn{};
     };
     std::mutex lock_;
     std::array<Slot, SCANOUT_SLOTS> slots_;
@@ -1550,7 +1553,24 @@ struct MadePicture {
     const PortGsFrame *frame = nullptr;
     uint64_t tag = 0;
     Reply *reply = nullptr;
+    GsnPictureTurn turn{}; // (a picture that shows a picture between: its mouse turn, for the presenter)
 };
+
+// The mouse turn of a picture between (its hand, turned at turned_s), as the picture that shows it carries it
+GsnPictureTurn picture_turn(const GsnInterpPicture &between, double turned_s) {
+    GsnPictureTurn t{};
+    if (between.serial == 0 || turned_s <= 0) {
+        return t;
+    }
+    t.known = 1;
+    t.sx = between.screen[0];
+    t.sy = between.screen[1];
+    t.hand_yaw_rad = between.hand_yaw_rad;
+    t.hand_pitch_rad = between.hand_pitch_rad;
+    t.turned_s = turned_s;
+    t.shown_s = between.shown_s;
+    return t;
+}
 
 // (kf4-pc or the pump, as it hands out the extra picture that shows a picture between) --frame-rate unlocked: not to the
 // presenter when it is too late to show (pcr_late.h). 1 if it was left out.
@@ -1716,7 +1736,7 @@ public:
     void hand_out(const MadePicture &m, Inbox &inbox) {
         ZoneScope zone(picture_handed_out_zone);
         if (m.slot >= 0) {
-            scanout_.publish(m.slot, m.tag);
+            scanout_.publish(m.slot, m.tag, m.turn);
         }
         if (m.ok && (m.want & GSN_PRESENT)) {
             hand_to_presenter(m);
@@ -2218,6 +2238,7 @@ private:
         ZoneScope zone(pump_picture_between_zone);
         double began_s = port_wall_seconds();
         turned_before(turn_lead_, turn_to_hand(p.picture, turn_lead_));
+        last_turned_s_ = port_wall_seconds();
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         out_.begin_drawing(canvas_.get(), &p.picture);
@@ -2259,6 +2280,7 @@ private:
         double began_s = port_wall_seconds();
         MadePicture made = out_.make(e.picture, e.scale, canvas_.get(), *times_);
         late_ += uint64_t(not_shown_when_late(made, last_between_));
+        made.turn = picture_turn(last_between_, last_turned_s_);
         last_between_ = {}; // (shown by this picture: not again)
         out_.hand_out(made, inbox_);
         if (between_took_s_ > 0) {
@@ -2294,6 +2316,7 @@ private:
     uint64_t left_out_ = 0;         // (under the lock) pictures between left out as too late (unlocked)
     uint64_t late_ = 0;             // (the pump's thread) and those made but too late to show
     GsnInterpPicture last_between_{}; // (the pump's thread) the picture between last drawn (its run bits not kept)
+    double last_turned_s_ = 0;        // (the pump's thread) when its mouse turn was taken
     pcr::PictureCost cost_;         // (under the lock: written by the pump's thread, read in take)
     double between_took_s_ = 0;     // (the pump's thread) the last picture between's work, until its picture's
     std::mutex lock_;
@@ -2764,6 +2787,7 @@ private:
         if (extra) {
             stats.interp_late += uint64_t(not_shown_when_late(made, last_between_));
         }
+        made.turn = picture_turn(last_between_, last_turned_s_); // (a vblank's own picture shows one too, at 60)
         last_between_ = {}; // (shown by this picture, or not one's: not again)
         if (made.drawn) {
             next_frame_context();
@@ -2860,6 +2884,7 @@ private:
             return;
         }
         double before_s = turn_to_hand(p.picture, turn_lead_);
+        last_turned_s_ = port_wall_seconds();
         last_between_ = p.picture;
         p.picture.run_bits = p.run_bits.empty() ? nullptr : p.run_bits.data();
         out_->begin_drawing(intake_.drawing(), &p.picture); // (drawn here unless it goes to the pump, which begins its own)
@@ -2923,6 +2948,7 @@ private:
     // and the pictures counted (counted set) it has taken: everything it gives the pump of them sent
     std::atomic<uint64_t> direct_serial_{0}, routed_done_{0};
     GsnInterpPicture last_between_{}; // (kf4-pc's) the picture between last taken (its run bits not kept)
+    double last_turned_s_ = 0;        // (kf4-pc's) when its mouse turn was taken (turn_to_hand)
     SharedTurnLead turn_lead_;   // (before the pump, which holds it)
     UpperField upper_field_;     // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
