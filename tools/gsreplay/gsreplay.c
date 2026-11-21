@@ -81,6 +81,15 @@
 #include "pcr.h"
 #include "scn.h"
 
+/* setenv is POSIX: Windows' CRT has _putenv_s (getenv sees both) */
+static void replay_setenv(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 int port_gs_backend_open(void);
 void *port_gs_backend_context(void);
 void port_gs_backend_gif(int path, const void *data, size_t bytes);
@@ -1647,8 +1656,8 @@ int main(int argc, char **argv) {
             decal_losses = 1;
         } else if (strcmp(a, "--gpu-draws") == 0 && v != NULL) {
             /* (read by the PC renderer's GPU times as they are made: before it opens) */
-            setenv("KF4_GPU_DRAWS", v, 1);
-            setenv("KF4_GSN_GPU_TIME", "1", 1);
+            replay_setenv("KF4_GPU_DRAWS", v);
+            replay_setenv("KF4_GSN_GPU_TIME", "1");
             run.gpu_draws = 1;
             i++;
         } else if (strcmp(a, "--end-picture") == 0) {
