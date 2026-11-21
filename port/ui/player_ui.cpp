@@ -49,12 +49,32 @@ public:
     void ProcessEvent(Rml::Event &event) override;
 };
 
+// The game's menu art from the disc (game_menu_art.hpp), for the recorder
+class GameMenuArt final : public ui::ImageSource {
+public:
+    bool has(const std::string &source) const override {
+        return ui::is_game_menu_source(source);
+    }
+    std::optional<ui::TextureUpload> load(const std::string &source) const override {
+        std::optional<ui::MenuArtImage> image = ui::load_game_menu_art(source);
+        if (!image) {
+            return std::nullopt;
+        }
+        ui::TextureUpload upload;
+        upload.width = image->width;
+        upload.height = image->height;
+        upload.rgba = std::move(image->rgba);
+        return upload;
+    }
+};
+
 struct Menu {
     bool ready = false;
     bool open = false;
     SDL_Window *window = nullptr;
     ui::SystemTies system;
     ui::AssetFiles files;
+    GameMenuArt game_art;
     ui::Recorder recorder;
     ui::SettingsRows rows;
     ui::MenuModel model{rows};
@@ -691,6 +711,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.window = static_cast<SDL_Window *>(sdl_window);
     Rml::SetSystemInterface(&menu.system);
     Rml::SetFileInterface(&menu.files);
+    menu.recorder.set_images(&menu.game_art);
     Rml::SetRenderInterface(&menu.recorder);
     if (!Rml::Initialise()) {
         std::fprintf(stderr, "[ui] RmlUi did not start: no player menu\n");
