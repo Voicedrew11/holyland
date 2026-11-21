@@ -571,8 +571,8 @@ body.game-art img.corner {
 }
 
 /* the sidebar's shade fades into the game's panel on every side, with no dividing line: a soft box (soft_box.alpha,
-   tools/ui_ornaments.py) drawn as a nine-patch, so the fade keeps its width; widest towards the rows. It is drawn
-   behind the sidebar's words (z-index -1 inside the sidebar). */
+   tools/ui_ornaments.py) drawn as a nine-patch, so the fade keeps its width; widest towards the rows, reaching past the
+   sidebar to where the rows begin. It is drawn behind the sidebar's words (z-index -1 inside the sidebar). */
 @spritesheet soft-box {
 	src: soft_box.alpha;
 	soft-box-outer: 0px 0px 136px 136px;
@@ -595,9 +595,17 @@ body.game-art #sidebar-shade {
 	position: absolute;
 	left: 0;
 	top: 0;
-	right: 0;
+	right: -26dp;
 	bottom: 0;
 	z-index: -1;
-	decorator: ninepatch(soft-box-outer, soft-box-inner, 40dp 100dp 40dp 36dp);
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 40dp 120dp 40dp 36dp);
 	image-color: #0d0f12d0;
+}
+
+/* the selected section's highlight is the same soft box, so it fades in from the left as the shade does, instead of
+   a bar standing out in the shade's faded edge */
+body.game-art tab.selected {
+	border-left-color: #00000000;
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 8dp 90dp 8dp 36dp);
+	image-color: #a8c4e838;
 }
