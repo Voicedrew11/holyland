@@ -90,6 +90,8 @@ void pcr_set_scale(int x_scale, int y_scale);
 void pcr_set_lod(int mode);
 int pcr_set_aniso(int taps);
 void pcr_set_2d(int mode);
+/* The game's font, GSN_FONT_* (gsn.h), from the next vblank */
+void pcr_set_font(int font);
 /* The picture's anti-aliasing, PORT_AA_* (port/antialias.h; pcr_antialias.h), from the next picture */
 void pcr_set_antialias(int method);
 /* The temporal anti-aliasing's history dropped at the next picture (any thread): a teleport, a state or quick load */

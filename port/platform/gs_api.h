@@ -110,6 +110,9 @@ static inline void gsr_antialias_cut(void) {
 static inline void gsr_set_2d(int mode) {
     pcr_set_2d(mode);
 }
+static inline void gsr_set_font(int font) {
+    pcr_set_font(font);
+}
 static inline void gsr_set_layer_z(int mode) {
     pcr_set_layer_z(mode);
 }

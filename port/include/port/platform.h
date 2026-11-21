@@ -63,6 +63,11 @@ typedef struct {
        gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
     int native_2d;
     int native_2d_forced;
+    /* --font: the game's font (GSN_FONT_*, gsn.h: 0 ps2, the disc's; 1 sharp, the default: its English letters
+       drawn again from IPA Mincho four times as fine, port/gs/shared/font_sheet.h). The scene renderer's. Live
+       from the player menu. */
+    int font;
+    int font_forced;
     /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
        0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
        surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
@@ -396,6 +401,8 @@ void port_gs_set_native_lod(int mode);
 void port_gs_set_native_aniso(int taps);
 /* The renderer's 2D at a larger scale (port_options.native_2d), from the next draw */
 void port_gs_set_native_2d(int mode);
+/* The game's font (port_options.font), from the next vblank */
+void port_gs_set_font(int font);
 /* The renderer's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
 /* --native-draw (port_options.native_draw), from the next frame */

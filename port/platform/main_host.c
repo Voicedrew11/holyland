@@ -40,6 +40,8 @@
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
+       --font MODE       the game's font: sharp (the default: its English letters drawn again from
+                         IPA Mincho four times as fine, crisp at any resolution) or ps2 (the disc's)
        --native-lod MODE the mipmap level the renderer reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
@@ -291,7 +293,7 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-2d smooth|ps2]\n"
+            "          [--native-2d smooth|ps2] [--font sharp|ps2]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
             "          [--test-dma-wait]\n"
@@ -364,6 +366,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
+    port_options.font = 1;             /* GSN_FONT_SHARP */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
@@ -638,6 +641,16 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.native_2d_forced = 1;
+        } else if (strcmp(option, "--font") == 0) {
+            if (strcmp(value, "ps2") == 0) {
+                port_options.font = 0;
+            } else if (strcmp(value, "sharp") == 0) {
+                port_options.font = 1;
+            } else {
+                fprintf(stderr, "--font wants sharp or ps2, not %s\n", value);
+                exit(2);
+            }
+            port_options.font_forced = 1;
         } else if (strcmp(option, "--native-draw") == 0) {
             int bits = port_native_draw_parse(value);
 

@@ -53,6 +53,11 @@ static void set_antialias(int method) {
     port_gs_set_antialias(port_settings.antialias);
 }
 
+static void set_font(int font) {
+    port_settings.font = font != 0;
+    port_gs_set_font(port_settings.font);
+}
+
 static void set_native_2d(int smooth) {
     port_settings.native_2d = smooth != 0;
     port_gs_set_native_2d(smooth != 0);
@@ -73,6 +78,7 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_SKY] = {"sky", set_sky},
     [PORT_LIVE_ANTIALIAS] = {"antialias", set_antialias},
     [PORT_LIVE_NATIVE_2D] = {"native_2d", set_native_2d},
+    [PORT_LIVE_FONT] = {"font", set_font},
 };
 
 void port_live_set(PortLiveSetting setting, int value) {

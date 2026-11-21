@@ -129,10 +129,11 @@ struct SampledTexture {
     ImageHandle image;
     uint32_t levels = 1;
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: a font sheet, font_sheet.h)
+    bool sharp_font = false; // (made with the sharper font asked, where it may be a font sheet: may_be_font_sheet)
     uint64_t used = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
-    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c) const {
-        return key == k && texa == t && clut == c;
+    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, bool sharp) const {
+        return key == k && texa == t && clut == c && sharp_font == sharp;
     }
 };
 
@@ -226,6 +227,9 @@ public:
     }
     void set_2d(int mode) override {
         mode_2d_ = mode;
+    }
+    void set_font(int font) override {
+        sharp_font_ = font == GSN_FONT_SHARP;
     }
 
     // ---- The front end's events ----
@@ -3862,6 +3866,11 @@ private:
         return across && down;
     }
 
+    // Whether a texture has a font sheet's shape (is_font_sheet's cheap part: a draw's lookup asks it)
+    static bool may_be_font_sheet(const DecodedTexture &d) {
+        return d.kind == TexelKind::Index8 && d.width_px == 512 && d.height_px == 512 && d.levels == 1;
+    }
+
     // A texture as the GPU's sampler reads it: decoded once, the CLUT's colours and TEXA in it, kept by all it was made
     // from (the design's materials: an image kept by its key)
     SampledTexture *sampled_texture(const TextureAnswer &a, const DrawState &s) {
@@ -3872,19 +3881,22 @@ private:
         if (d.kind == TexelKind::Index8) {
             clut = store_.clut_colours(s.tex0, s.texa);
         }
-        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull);
+        // (the font asked is part of what a texture that may be a font sheet is made from: the setting changed, it is made
+        // again)
+        bool sharp = sharp_font_ && may_be_font_sheet(d);
+        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ (sharp ? 0x5BD1E995ull : 0);
         for (uint32_t c : clut.rgba) {
             h = (h ^ c) * 0x100000001B3ull;
         }
         auto found = sampled_.find(h);
-        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba)) {
+        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, sharp)) {
             found->second.used = frame_;
             return &found->second;
         }
         std::vector<uint32_t> colours = colour_texels(d, psm, clut, texa);
         // (the game's fonts: the sheet four times as fine, its English letters drawn again; font_sheet.h)
         uint32_t finer = 1;
-        if (sharp_font_ && d.kind == TexelKind::Index8) {
+        if (sharp) {
             std::vector<uint32_t> sharp = sharper_font_sheet(d, colours, clut.rgba);
             if (!sharp.empty()) {
                 colours = std::move(sharp);
@@ -3914,6 +3926,7 @@ private:
         t.image = image;
         t.levels = d.levels;
         t.finer = finer;
+        t.sharp_font = sharp;
         t.used = frame_;
         t.alpha_lo = 255;
         t.alpha_hi = 0;
@@ -5287,8 +5300,7 @@ private:
     };
     std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
-    // (developers' KF4_SHARP_FONT=0: the game's font sheets as the disc has them, to compare; font_sheet.h)
-    const bool sharp_font_ = !getenv("KF4_SHARP_FONT") || strcmp(getenv("KF4_SHARP_FONT"), "0") != 0;
+    bool sharp_font_ = true; // (set_font: the game's font sheets made finer, their letters drawn again; font_sheet.h)
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     // (slice 3d's bound, developers' only: the picture lacks the shine) program 0x280's second, sphere-mapped passes
     // left out, so that its time with them gone is the most drawing both passes as one could save

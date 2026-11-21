@@ -5778,6 +5778,8 @@ void Canvas::set_scale(uint32_t x_scale, uint32_t y_scale) {
 void Canvas::set_2d(int mode) {
     impl_->set_2d(mode);
 }
+void Canvas::set_font(int) {
+}
 void Canvas::set_sampling(int lod, uint32_t aniso) {
     impl_->set_sampling(lod, aniso);
 }

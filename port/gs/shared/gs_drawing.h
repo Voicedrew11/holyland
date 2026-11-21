@@ -88,10 +88,11 @@ public:
 class Drawing : public NativeSink {
 public:
     // Settings, from the next vblank: the scale (1 to 8 a GS pixel across and down), texture detail and anisotropy,
-    // the 2D mode (gsn.h's GSN_*)
+    // the 2D mode, the font (gsn.h's GSN_*)
     virtual void set_scale(uint32_t x_scale, uint32_t y_scale) = 0;
     virtual void set_sampling(int lod, uint32_t aniso) = 0;
     virtual void set_2d(int mode) = 0;
+    virtual void set_font(int font) = 0;
 
     // The front end's events (pcr_gif.h), with its register file at each
     virtual void primitive(const GsRegisterFile &file, const GifPrimitive &primitive) = 0;
