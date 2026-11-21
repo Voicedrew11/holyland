@@ -62,7 +62,7 @@ is not borrowed.
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
-| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
+| `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the rules under the titles, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
 | `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
 | `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1 |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |

@@ -20,6 +20,7 @@ MASKS = [
     ("corner_br.png", "corner_br.alpha", None),
     ("rule_centred.png", "rule_centred.alpha", None),
     ("rule_left.png", "rule_left.alpha", None),
+    ("soft_box.png", "soft_box.alpha", None),
 ]
 
 

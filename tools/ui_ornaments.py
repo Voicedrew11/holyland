@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Draws the player menu's ornaments (white on clear) into port/ui/art/: the window's four corners and the two rules
-under the titles. tools/ui_masks.py then makes the alpha masks the game carries. Run after changing a drawing here;
+"""Draws the player menu's ornaments (white on clear) into port/ui/art/: the window's four corners, the two rules
+under the titles and the soft box the sidebar's shade is cut from. tools/ui_masks.py then makes the alpha masks the game carries. Run after changing a drawing here;
 the pictures and the masks are committed. Needs Pillow."""
 import sys
 from pathlib import Path
@@ -74,6 +74,20 @@ def rule_from_left(width: int, height: int) -> Image.Image:
     return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def soft_box(fade: int, middle: int) -> Image.Image:
+    """A square, whole in its middle, fading smoothly to nothing over `fade` pixels on each side (its corners in both
+    directions): drawn as a nine-patch, whose sides keep their width however large the box."""
+    side = 2 * fade + middle
+    image = Image.new("L", (side, side), 0)
+
+    def reach(i: int) -> float:  # 0 at the outside to 1 inside the fade, smoothed
+        t = min(1.0, (min(i, side - 1 - i) + 0.5) / fade)
+        return t * t * (3 - 2 * t)
+
+    image.putdata([round(255 * reach(x) * reach(y)) for y in range(side) for x in range(side)])
+    return image
+
+
 def main() -> int:
     art = Path(__file__).resolve().parent.parent / "port/ui/art"
     # sizes in pixels: about 3 pixels a dp, so sharp up to 4K
@@ -85,6 +99,7 @@ def main() -> int:
         "corner_br.png": corner.transpose(Image.Transpose.ROTATE_180),
         "rule_centred.png": rule_centred(660, 36),
         "rule_left.png": rule_from_left(1260, 24),
+        "soft_box.png": soft_box(64, 8),
     }
     for name, alpha in pictures.items():
         white = Image.new("RGBA", alpha.size, (255, 255, 255, 0))

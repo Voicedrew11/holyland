@@ -22,7 +22,6 @@
 				<div id="main">
 					<div id="sidebar">
 						<div id="sidebar-shade"></div>
-						<div id="sidebar-fade"></div>
 						<div id="crest">
 							<img id="logo" src="logo.alpha"/>
 							<div id="subtitle">King's Field IV</div>
