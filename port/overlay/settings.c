@@ -337,9 +337,9 @@ void port_settings_load(void) {
                             : strcmp(rate, "unlocked") == 0 ? PORT_FRAME_RATE_UNLOCKED
                                                             : s->frame_rate;
         } else {
-            s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, 500);
+            s->frame_rate = (int)read_number(display, "frame_rate", s->frame_rate, 30, PORT_FRAME_RATE_MONITOR - 1);
         }
-        s->frame_rate_cap = (int)read_number(display, "frame_rate_cap", s->frame_rate_cap, 0, 1000);
+        s->frame_rate_cap = (int)read_number(display, "frame_rate_cap", s->frame_rate_cap, 0, PORT_FRAME_RATE_MONITOR - 1);
         s->frame_rate_cap = s->frame_rate_cap > 0 && s->frame_rate_cap < 60 ? 60 : s->frame_rate_cap;
         s->tearing = read_bool(display, "tearing", s->tearing);
         s->adaptive_sync = read_bool(display, "adaptive_sync", s->adaptive_sync);

@@ -149,7 +149,7 @@ const SettingRow display_rows[] = {
      "game still runs at 30, and what it does is the same.\nUnlocked: as many as your computer keeps up with.",
      RowKind::choice, frame_rates, {}, get_frame_rate, set_frame_rate, nullptr, describe_frame_rate, nullptr, nullptr,
      frame_rate_overridden},
-    {"Unlocked's limit", "Unlocked never goes faster than this. None: no limit.", RowKind::number, {}, {0, 500, 10},
+    {"Unlocked's limit", "Unlocked never goes faster than this. None: no limit.", RowKind::number, {}, {0, 2000, 10},
      get_cap, set_cap, nullptr, describe_cap, unlocked},
     {"Sync",
      "Off: each picture is shown at once, which can tear.\nVSync: each picture waits for the screen's refresh: no "

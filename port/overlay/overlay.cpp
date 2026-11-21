@@ -315,7 +315,7 @@ void frame_rate_combo() {
     if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED)
         return;
     int cap = port_options.frame_rate_cap;
-    if (ImGui::SliderInt("Unlocked's cap", &cap, 0, 500, cap > 0 ? "%d a second" : "none")) {
+    if (ImGui::SliderInt("Unlocked's cap", &cap, 0, 2000, cap > 0 ? "%d a second" : "none")) {
         cap = cap > 0 && cap < 60 ? 60 : cap;
         port_settings.frame_rate_cap = port_options.frame_rate_cap = cap;
         changed();
@@ -928,7 +928,8 @@ std::string bug_report() {
     std::snprintf(line, sizeof(line),
                   "renderer: %s scale=%d (%dx) widescreen=%d sharper_widescreen=%d native_draw=0x%x frame_rate=%d "
                   "draw_distance=%d sky=%d presenter=%d\n",
-                  port_options.renderer == PORT_RENDERER_GS ? "gs" : "pc", port_options.native_scale,
+                  port_options.renderer == PORT_RENDERER_GS ? "gs" : port_options.renderer == PORT_RENDERER_PC ? "pc" : "scene",
+                  port_options.native_scale,
                   port_gs_native_scale(), port_options.widescreen, port_options.native_widescreen,
                   port_options.native_draw, port_options.frame_rate, port_options.draw_distance, port_options.native_sky,
                   port_video_presenter());

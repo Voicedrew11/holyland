@@ -1052,7 +1052,7 @@ void port_gs_run_vsync(void) {
     int shown = !port_options.headless || port_video_simulated();
     /* --frame-rate: the times in this vblank of the pictures shown (port_interp_schedule), whether a game
        frame is being drawn between (interp_live), and whether the vblank's own picture is one */
-    double interp_phases[16];
+    double interp_phases[PORT_INTERP_MOST_A_VBLANK];
     int interp_count = 0, interp_live = 0, own_shown = 1, interp_allow_now = INTERP_ALL, interp_between = 0;
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
@@ -1084,7 +1084,7 @@ void port_gs_run_vsync(void) {
            field at a time) */
         int extras = have_pc && port_whole_frame();
 
-        interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, 16) : 1;
+        interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, PORT_INTERP_MOST_A_VBLANK) : 1;
         if (!extras) {
             interp_phases[0] = 0;
         }
