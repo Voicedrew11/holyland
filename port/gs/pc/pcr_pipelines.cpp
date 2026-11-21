@@ -87,6 +87,7 @@ struct Warm {
     std::unordered_map<Program *, uint32_t> role_of;
     std::vector<Program *> compute_programs; // (default state, for startup only)
     WarmDevice traits; // (warm_watch's)
+    std::vector<DeferredPipelineCompile> drawing; // (warm_drawing's: another renderer's pipelines, listed whole)
 } warm;
 
 // The pipelines kept between runs (pcr_pipelines.h, "Between runs"): the Vulkan pipeline cache's file and the list of
@@ -539,9 +540,33 @@ void make_compute_ahead(Device &device, Program *program) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
+// (a thread making ahead) One of warm_drawing's pipelines made, through the cache, unless made already
+void make_listed(Device &device, DeferredPipelineCompile compile) {
+    {
+        std::lock_guard<std::mutex> hold(store.hashes_lock);
+        if (!store.hashes.insert(uint64_t(compile.hash)).second) {
+            return;
+        }
+    }
+    compile.cache = CommandBuffer::kf4_pipeline_cache(&device);
+    if (compile.program->get_pipeline(compile.hash).pipeline != VK_NULL_HANDLE) {
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    if (CommandBuffer::build_graphics_pipeline(&device, compile, CommandBuffer::CompileMode::Sync).pipeline) {
+        store.ahead_made++;
+    }
+    store.ahead_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+// A pipeline to make: a record (the canvas's, or a post-processing pass's) and its program, or one listed whole
+// (warm_drawing's: listed)
 struct GraphicsJob {
-    Record record;
-    Program *program;
+    Record record{};
+    Program *program = nullptr;
+    bool listed = false;
+    DeferredPipelineCompile compile{};
 };
 
 Record fullscreen_record(VkFormat format) {
@@ -561,16 +586,20 @@ Record fullscreen_record(VkFormat format) {
 
 // (store.lock and warm.lock held) Build the list in the background or the startup work while the game waits.
 void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute,
-                 std::span<const FullscreenPipeline> fullscreen, unsigned threads) {
-    const size_t total = list.size() + compute.size() + fullscreen.size();
+                 std::span<const FullscreenPipeline> fullscreen, unsigned threads,
+                 std::span<const DeferredPipelineCompile> listed = {}) {
+    const size_t total = list.size() + compute.size() + fullscreen.size() + listed.size();
     if (store.ahead_started || !store.open || total == 0 || !warm.device) {
         return;
     }
     store.ahead_started = true;
     auto graphics = std::make_shared<std::vector<GraphicsJob>>();
-    graphics->reserve(list.size() + fullscreen.size());
+    graphics->reserve(list.size() + fullscreen.size() + listed.size());
     for (const FullscreenPipeline &pass : fullscreen) {
         graphics->push_back({fullscreen_record(pass.format), pass.program});
+    }
+    for (const DeferredPipelineCompile &compile : listed) {
+        graphics->push_back({{}, compile.program, true, compile});
     }
     for (const Record &record : list) {
         auto role = warm.roles.find(record.role);
@@ -594,8 +623,18 @@ void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute
                              i);
                     port_crash_note_set(note);
                     make_compute_ahead(*device, (*compute_programs)[i]);
+                } else if (const GraphicsJob &job = (*graphics)[i - compute_programs->size()]; job.listed) {
+                    const auto &st = job.compile.static_state.state;
+                    snprintf(note, sizeof note,
+                             "making pipeline %zu of %zu ahead (listed, program %016llx, pass %016llx, depth test %u "
+                             "compare %u, blend %u, dynamic %u%u, hash %016llx)",
+                             i + 1, total, (unsigned long long)job.program->get_hash(),
+                             (unsigned long long)job.compile.compatible_render_pass->get_hash(),
+                             unsigned(st.depth_test), unsigned(st.depth_compare), unsigned(st.blend_enable),
+                             unsigned(st.dynamic_ds), unsigned(st.dynamic_blend), (unsigned long long)job.compile.hash);
+                    port_crash_note_set(note);
+                    make_listed(*device, job.compile);
                 } else {
-                    const GraphicsJob &job = (*graphics)[i - compute_programs->size()];
                     const auto &st = job.record.static_state.state;
                     snprintf(note, sizeof note,
                              "making pipeline %zu of %zu ahead (role %u, colour format %d, depth format %d, depth test "
@@ -817,19 +856,24 @@ void start_precompile() {
     if (!store.pre_asked || store.ahead_started || !warm.device) {
         return;
     }
-    std::vector<Record> list = seed_for_device();
+    // (the seed and the list name the canvas's programs: under another renderer, warm_drawing's list in their place)
+    std::vector<Record> list = warm.roles.empty() ? std::vector<Record>() : seed_for_device();
     store.pre_seed = list.size();
-    store.pre_list = store.records.size();
-    list.insert(list.end(), store.records.begin(), store.records.end());
+    store.pre_list = warm.roles.empty() ? 0 : store.records.size();
+    if (store.pre_list) {
+        list.insert(list.end(), store.records.begin(), store.records.end());
+    }
     unsigned cores = std::thread::hardware_concurrency();
     {
-        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list, %zu fixed compute, "
-                        "%zu post-processing\n",
-                store.pre_seed, store.pre_list, warm.compute_programs.size(), store.pre_fullscreen.size());
+        fprintf(stderr, "[pcr] pipelines made before play: %zu from the seed, %zu from the list, %zu listed by the "
+                        "renderer, %zu fixed compute, %zu post-processing\n",
+                store.pre_seed, store.pre_list, warm.drawing.size(), warm.compute_programs.size(),
+                store.pre_fullscreen.size());
     }
     std::vector<Program *> compute = warm.compute_programs;
     compute.insert(compute.end(), store.pre_compute.begin(), store.pre_compute.end());
-    start_ahead(list, std::move(compute), store.pre_fullscreen, cores > 2 ? cores - 1 : 1);
+    start_ahead(list, std::move(compute), store.pre_fullscreen, cores > 2 ? cores - 1 : 1, warm.drawing);
+    warm.drawing.clear();
     store.pre_fullscreen.clear();
     store.pre_compute.clear();
     if (!store.ahead_started) {
@@ -863,6 +907,29 @@ void warm_watch(Device &device, Program *const *programs, uint32_t count, const 
         start_precompile(); // (when the settings came first)
     } else if (store.ahead_on) {
         start_ahead(store.records, {}, {}, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)));
+    }
+}
+
+void warm_drawing(Device &device, std::vector<DeferredPipelineCompile> graphics,
+                  std::span<Program *const> compute_programs) {
+    std::lock_guard<std::mutex> hold_store(store.lock);
+    std::lock_guard<std::mutex> hold(warm.lock);
+    warm.device = &device;
+    warm.drawing = std::move(graphics);
+    warm.compute_programs.clear();
+    for (Program *program : compute_programs) {
+        if (program) {
+            warm.compute_programs.push_back(program);
+        }
+    }
+    Vulkan::kf4_on_compile = on_compile;
+    Vulkan::kf4_on_render_pass = on_render_pass;
+    if (store.pre_on) {
+        start_precompile(); // (when the settings came first)
+    } else if (store.ahead_on) {
+        start_ahead({}, warm.compute_programs, {}, std::max(1u, std::min(4u, std::thread::hardware_concurrency() / 4)),
+                    warm.drawing);
+        warm.drawing.clear();
     }
 }
 

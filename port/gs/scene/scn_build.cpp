@@ -27,6 +27,7 @@
 #include "pcr_hang_notes.h"
 #include "pcr_hang_watch.h"
 #include "pcr_jitter.h"
+#include "pcr_pipelines.h"
 #include "pcr_prim_layout.h"
 #include "pcr_textures.h"
 #include "scn_draw.h"
@@ -212,6 +213,17 @@ public:
         fprintf(stderr, "[scn] the scene renderer: depth %s for the 16-bit Z buffers (D32F the others), DATE's shadows %s\n",
                 d16_ ? "D16_UNORM" : "D32F (no D16_UNORM here)",
                 first_draw_on_ ? "by the first-draw image" : "by a copy of the target");
+        // every pipeline the drawer can draw with, made before play (pcr_pipelines.h's warm_drawing): the targets'
+        // formats (make_target_image's, and the first-draw image's where DATE draws into it)
+        std::vector<VkFormat> colours = {colour_format}, depths = {VK_FORMAT_D32_SFLOAT};
+        if (first_draw_on_) {
+            colours.push_back(Drawer::first_format);
+        }
+        if (d16_) {
+            depths.push_back(VK_FORMAT_D16_UNORM);
+        }
+        const std::vector<Vulkan::Program *> compute = drawer_.compute_programs();
+        pcr::warm_drawing(device_, drawer_.pipeline_set(colours, depths), compute);
     }
 
     ~Builder() override {
@@ -3054,7 +3066,11 @@ private:
         }
         sc.steps.push_back({Step::Kind::pass, uint32_t(sc.passes.size())});
         sc.passes.push_back(std::move(p));
+        // (the shell's command buffer, without dynamic state: the drawer's draws with it, as on the scene's own, so
+        // that their pipelines are those made before play; the shell's after them without, as before)
+        out.set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
         drawer_.record(sc, out, picture);
+        out.set_dynamic_state(false, false);
         counts_.pictures_composed++;
     }
 

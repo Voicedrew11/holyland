@@ -2790,11 +2790,8 @@ public:
     }
 
     void precompile(bool scaling, bool sharpen) {
-        if (drawing_maker() != nullptr) {
-            // (the pipelines made before play are the canvas's, started by its programs (warm_watch): under another
-            // renderer they never start, and the game would wait the 20 s precompile_running gives them)
-            return;
-        }
+        // (started once the drawing's pipelines are known too: the canvas's programs (warm_watch), or another
+        // renderer's list of its own (warm_drawing: the scene renderer's Builder))
         std::vector<pcr::FullscreenPipeline> passes;
         std::vector<Program *> compute;
         pcr::AntiAliasing::warm_pipelines(*device_, settings.antialias.load(), passes);
