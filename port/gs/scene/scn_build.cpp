@@ -3973,12 +3973,11 @@ private:
                (mmin == 1 || mmin == 4 || mmin == 5);
     }
 
-    // The sampler of a texture read at the GPU's own level: bilinear, trilinear over all its levels, the anisotropy
-    // asked (where the GPU has it)
+    // The sampler of a texture read at its own level: bilinear, trilinear over all its levels, no anisotropy of its own
+    // (the shader's: pcr_prim.h's sampled_footprint, the GPU's starting in a step)
     const Sampler &gpu_levels_sampler(uint64_t clamp, uint32_t image_levels) {
         uint32_t wrap = bits(clamp, 0, 4);
-        uint32_t aniso = device_.get_device_features().enabled_features.samplerAnisotropy ? aniso_ : 1;
-        uint32_t key = wrap | image_levels << 4 | aniso << 8;
+        uint32_t key = wrap | image_levels << 4;
         auto found = gpu_levels_samplers_.find(key);
         if (found != gpu_levels_samplers_.end()) {
             return *found->second;
@@ -3992,10 +3991,6 @@ private:
         info.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         info.min_lod = 0.0f;
         info.max_lod = float(image_levels - 1);
-        if (aniso > 1) {
-            info.anisotropy_enable = VK_TRUE;
-            info.max_anisotropy = std::min(float(aniso), device_.get_gpu_properties().limits.maxSamplerAnisotropy);
-        }
         info.border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         SamplerHandle made = device_.create_sampler(info);
         if (!made) {

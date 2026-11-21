@@ -329,6 +329,33 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
     return true;
 }
 
+// A texture read at its own level (PCR_TEX1_GPU_LEVELS: scn_build.cpp's gpu_levels_for), filtered anisotropically here,
+// not by the sampler. The GPU's own anisotropy (RADV on RDNA, 2026-11-21) starts in a step: where a floor's footprint
+// grows long enough its level jumps finer, a line at a fixed distance that crawls as the camera moves. Here the level
+// is the footprint's width (its short axis, or its long axis over the most reads, at least a texel: level 0 where
+// magnified) and the reads are spread along its long axis over its length less that width, so at every change of the
+// number of reads they start where the fewer were: the picture changes smoothly with distance and angle.
+vec4 sampled_footprint(vec2 uv) {
+    vec2 size = vec2(sampled_size());
+    float lx = length(uv_dx), ly = length(uv_dy);
+    float major = max(lx, ly), minor = min(lx, ly);
+    float most = float(1u << aniso_log2());
+    float width = max(max(minor, major / most), 1.0);
+    float lod = log2(width);
+    int reads = int(min(ceil(major / width - 1.0 / 64.0), most));
+    if (reads <= 1) {
+        return sampled_lod(uv / size, lod);
+    }
+    vec2 along = (lx >= ly ? uv_dx : uv_dy) / major;
+    vec2 step = along * ((major - width) / float(reads - 1));
+    vec2 at = uv - step * (0.5 * float(reads - 1));
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < reads; i++) {
+        sum += sampled_lod((at + step * float(i)) / size, lod);
+    }
+    return sum / float(reads);
+}
+
 // The 2D mode's smooth (pcr_canvas.cpp, PCR_F_SMOOTH_2D: at a scale above 1, a sprite's or a 2D triangle's texture
 // read nearest): where the texture is magnified on the target (a texel at least a pixel across), it is read with a
 // Catmull-Rom cubic (16 texels) at this pixel's own place, not nearest: the same picture at every scale, the texels'
@@ -391,10 +418,9 @@ uvec4 sample_texture() {
         return smooth_2d(uv);
     }
     if (src_kind() == PCR_SRC_SAMPLED && (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u) {
-        // (the GPU's level from the footprint, the sampler's anisotropy: no GS level, bias or MMAG/MMIN choice; the
-        // sampler is bilinear and trilinear over the texture's levels made on the PC)
-        vec2 size = vec2(sampled_size());
-        return uvec4(round(sampled_grad(uv / size, uv_dx / size, uv_dy / size) * 255.0));
+        // (the level and the anisotropy from the footprint: no GS level, bias or MMAG/MMIN choice; the sampler is
+        // bilinear and trilinear over the texture's levels made on the PC)
+        return uvec4(round(sampled_footprint(uv) * 255.0));
     }
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
