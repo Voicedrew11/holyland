@@ -56,6 +56,14 @@ void port_twin_stick_set(int on);
    two looks (up: look_down_button), each from out of its deadzone. */
 unsigned short twin_stick_held(unsigned short held, unsigned short pad_held, PadSticks sticks, MoveButtons buttons);
 
+/* (Player_Update, for Ladder_DispatchPad only) twin_stick_held's buttons as a ladder should read them. A
+   ladder lets go of the player at a side step, or a turn without forward or back, so: of the left stick's
+   buttons only its main direction's (mostly up or down climbs, mostly sideways steps off), and none of the
+   right stick's turns (it turns the view as the mouse does, pressing nothing). Buttons the pad itself holds
+   (`pad_held`: keys, the d-pad) are kept. */
+unsigned short twin_stick_ladder_held(unsigned short held, unsigned short pad_held, PadSticks sticks,
+                                      MoveButtons buttons);
+
 /* (Player_Move, after the buttons have moved the speeds to `after`) The speeds with each axis the
    sticks drive set by them: an axis is driven while its stick is out of the deadzone and `buttons`,
    the held buttons as Player_Move has them, still has its bits (the game's masks took nothing away).

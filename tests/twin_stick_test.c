@@ -178,6 +178,36 @@ static void test_turn_and_look(void) {
     check("look masked: the game's", speeds.look == after.look);
 }
 
+/* Issue #203: a ladder lets go of the player at a step, or a turn without forward or back */
+static void test_ladder(void) {
+    PadSticks s;
+    unsigned short held;
+
+    s = left_at(0.3, -0.9);
+    held = twin_stick_ladder_held(twin_stick_held(0, 0, s, defaults), 0, s, defaults);
+    check("ladder: up, a little right, climbs without stepping", held == PAD_UP);
+
+    s = left_at(-0.2, 0.9);
+    held = twin_stick_ladder_held(twin_stick_held(0, 0, s, defaults), 0, s, defaults);
+    check("ladder: down, a little left, climbs down", held == PAD_DOWN);
+
+    s = left_at(0.9, -0.3);
+    held = twin_stick_ladder_held(twin_stick_held(0, 0, s, defaults), 0, s, defaults);
+    check("ladder: mostly right steps off", held == PAD_R1);
+
+    s = right_at(0.8, -0.2);
+    held = twin_stick_ladder_held(twin_stick_held(0, 0, s, defaults), 0, s, defaults);
+    check("ladder: the right stick turns nothing, looks still", held == PAD_L2);
+
+    s = right_at(0.8, 0.0);
+    held = twin_stick_ladder_held(twin_stick_held(PAD_RIGHT | PAD_R1, PAD_RIGHT | PAD_R1, s, defaults),
+                                  PAD_RIGHT | PAD_R1, s, defaults);
+    check("ladder: the pad's own turn and step kept", held == (PAD_RIGHT | PAD_R1));
+
+    held = twin_stick_ladder_held(twin_stick_held(PAD_UP, PAD_UP, centred, defaults), PAD_UP, centred, defaults);
+    check("ladder: a key's climb kept", held == PAD_UP);
+}
+
 static void test_setting(void) {
     check("on by default", port_twin_stick_on());
     port_options.input = "script.pad";
@@ -192,6 +222,7 @@ int main(void) {
     test_held();
     test_walk();
     test_turn_and_look();
+    test_ladder();
     test_setting();
     printf("%d of %d checks passed\n", checked - failed, checked);
     return failed != 0;

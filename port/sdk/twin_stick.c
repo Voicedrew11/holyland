@@ -105,6 +105,21 @@ unsigned short twin_stick_held(unsigned short held, unsigned short pad_held, Pad
     return held;
 }
 
+unsigned short twin_stick_ladder_held(unsigned short held, unsigned short pad_held, PadSticks sticks,
+                                      MoveButtons buttons) {
+    Stick left = left_stick(sticks);
+    Stick right = right_stick(sticks);
+    unsigned short from_sticks = (unsigned short)(axis_buttons(left.y, buttons.forward, buttons.back) |
+                                                  axis_buttons(left.x, buttons.step_left, buttons.step_right) |
+                                                  axis_buttons(right.x, buttons.turn_left, buttons.turn_right));
+
+    held &= (unsigned short)~(from_sticks & ~pad_held);
+    if (fabsf(left.y) >= fabsf(left.x)) {
+        return held | axis_buttons(left.y, buttons.forward, buttons.back);
+    }
+    return held | axis_buttons(left.x, buttons.step_left, buttons.step_right);
+}
+
 /* The walk and strafe that Player_Move's own evening out of a diagonal (each scaled by the cosine
    or sine of atan2(|walk|, |strafe|)) turns into `magnitude` in the stick's direction: it would
    otherwise slow a part-diagonal stick and pull the walk toward the nearer axis. */
