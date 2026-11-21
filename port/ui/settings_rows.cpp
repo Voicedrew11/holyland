@@ -216,6 +216,23 @@ void set_hud(int centred) {
     port_settings.widescreen_hud_centred = port_options.widescreen_hud_centred = centred;
     changed();
 }
+int get_fov() {
+    return port_options.fov;
+}
+void set_fov(int fov) {
+    port_settings.fov = port_options.fov = fov;
+    changed();
+}
+void describe_fov(int fov, char *out, size_t size) {
+    if (fov == 64) {
+        std::snprintf(out, size, "64 degrees (the PS2's)");
+    } else {
+        std::snprintf(out, size, "%d degrees", fov);
+    }
+}
+bool fov_overridden() {
+    return port_options.fov != port_settings.fov;
+}
 
 bool pc_renderer() {
     return port_options.renderer != PORT_RENDERER_GS;
@@ -400,6 +417,10 @@ const SettingRow graphics_rows[] = {
      RowKind::toggle, on_off, {}, get_widescreen, set_widescreen},
     {"HUD", "Where the widescreen picture puts the gauges of the top left.", RowKind::choice, huds, {}, get_hud,
      set_hud, nullptr, nullptr, widescreen_on},
+    {"Field of view",
+     "The 3D view's horizontal field at 4:3, in degrees. 64 is the PS2's; more sees further round the sides, less "
+     "zooms in. The widescreen picture widens the same view further.",
+     RowKind::number, {}, {30, 120, 1}, get_fov, set_fov, nullptr, describe_fov, nullptr, nullptr, fov_overridden},
     {"Resolution",
      "The game is drawn at this many times the PS2's 640 x 448.\nAuto: the nearest to the height the window shows "
      "the picture at (1080: 2x, 1440: 3x, 2160: 4x).",

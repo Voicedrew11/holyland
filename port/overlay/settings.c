@@ -5,7 +5,7 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
-                    "widescreen": false, "widescreen_hud": "corner", "frame_rate": 30, "tearing": false,
+                    "widescreen": false, "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "fxaa", "native_lod": "scale",
@@ -78,6 +78,7 @@ PortSettings port_settings = {
     .seamless_scroll = 1,
     .frame_rate = 30,
     .door_speed = 1,
+    .fov = 64,
     .volume = 100,
     .ui_scale = 1.0f,
     .presenter = PORT_PRESENTER_VULKAN,
@@ -334,6 +335,7 @@ void port_settings_load(void) {
     s->seamless_scroll = read_bool(display, "seamless_scroll", s->seamless_scroll);
     s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
+    s->fov = (int)read_number(display, "fov", s->fov, 30, 120);
     {
         const char *hud = read_string(display, "widescreen_hud");
 
@@ -483,6 +485,9 @@ void port_settings_load(void) {
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
         port_options.widescreen_hud_centred = s->widescreen_hud_centred;
+    }
+    if (!port_options.fov_forced) {
+        port_options.fov = s->fov;
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
@@ -666,6 +671,7 @@ void port_settings_save(void) {
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "fov", cJSON_CreateNumber(s->fov));
     put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR    ? cJSON_CreateString("monitor")
                                : s->frame_rate == PORT_FRAME_RATE_UNLOCKED ? cJSON_CreateString("unlocked")
                                                                            : cJSON_CreateNumber(s->frame_rate));

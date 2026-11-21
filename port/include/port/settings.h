@@ -34,6 +34,7 @@ typedef struct {
     int flicker_filter;    /* the game's flicker filter, as on the PS2 (port_options.flicker_filter; off) */
     int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
     int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
+    int fov;               /* the 3D view's horizontal field, degrees at 4:3 (port_options.fov; 64, the game's) */
     int frame_rate;        /* 30 (the PS2's), or the opt-in higher rates, interpolated: pictures a second, or
                               PORT_FRAME_RATE_MONITOR or _UNLOCKED (port_options.frame_rate) */
     int tearing;           /* unlocked's swapchain immediate, not mailbox (port_options.tearing; off) */

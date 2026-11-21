@@ -95,6 +95,11 @@ typedef struct {
     int widescreen;
     int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
     int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
+    /* --fov: the 3D view's horizontal field, in degrees at 4:3 (64, the game's own, by default; wider
+       sees more at the sides, narrower zooms in). The game scales its projection by port_fov_scale(),
+       and widescreen widens it further. Live from the settings. */
+    int fov;
+    int fov_forced;
     /* The opt-in higher frame rates (port_frame_interp(), port/platform/frame_interp.c): 30 (the
        PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
        or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,

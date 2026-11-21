@@ -91,6 +91,8 @@
                          with a seam where they repeat (port_seamless_scroll())
        --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
+       --fov N           the 3D view's horizontal field in degrees at 4:3 (64, the game's own, by
+                         default; 30 to 120). Widescreen widens it further; applies at once
        --widescreen-hud-centred
                          the same, with the HUD in the 4:3 middle instead of the 16:9 corner
        --present-scaling sharp|smooth|best
@@ -348,6 +350,7 @@ static void parse_options(int argc, char **argv) {
 
     port_options.disc = getenv("KF4_DISC");
     port_options.door_speed = 1;
+    port_options.fov = 64;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
     port_options.whole_frame = 1;
     port_options.seamless_scroll = 1;
@@ -491,6 +494,16 @@ static void parse_options(int argc, char **argv) {
         i++;
         if (strcmp(option, "--disc") == 0) {
             port_options.disc = value;
+        } else if (strcmp(option, "--fov") == 0) {
+            char *end;
+            long fov = strtol(value, &end, 10);
+
+            if (end == value || *end != 0 || fov < 30 || fov > 120) {
+                fprintf(stderr, "--fov wants 30 to 120 degrees, not %s\n", value);
+                exit(2);
+            }
+            port_options.fov = (int)fov;
+            port_options.fov_forced = 1;
         } else if (strcmp(option, "--renderer") == 0) {
             if (strcmp(value, "gs") == 0) {
                 port_options.renderer = PORT_RENDERER_GS;
