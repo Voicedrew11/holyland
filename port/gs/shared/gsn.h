@@ -73,6 +73,17 @@ typedef struct {
    picture. Between take and release (once the presenter's command buffer is submitted) the image is not destroyed.
    serial counts the pictures. The renderer keeps the last few pictures (a ring of images): pcr_scanout_take_tag takes
    the newest with that tag (pcr_picture's), or the newest of all when it is no longer there. */
+/* A picture's mouse turn (port/include/port/mouse_lead.h), as the presenter gets it with the picture: the hand its camera
+   was turned to as it was drawn, when (turned_s, port_wall_seconds) and when it is to be shown (shown_s, 0: not known),
+   and the world's projection's scale (sx, sy: GS pixels a unit of x / z and y / z). known 0: a picture with no turn of
+   its own (a game frame's, or one with the mouse not in play). Slice 4b: the late turn is what the hand has moved since. */
+typedef struct {
+    uint32_t known;
+    float sx, sy;
+    double hand_yaw_rad, hand_pitch_rad;
+    double turned_s, shown_s;
+} GsnPictureTurn;
+
 typedef struct {
     uint64_t image;
     uint32_t width, height;
@@ -80,6 +91,13 @@ typedef struct {
     uint64_t tag;
     uint64_t scaled; /* the picture at the window's size (VkImage, GENERAL), 0: none */
     uint32_t scaled_width, scaled_height;
+    GsnPictureTurn turn;
+    /* (the Vulkan presenter's, pcr_present_sharpens) scaled not sharpened yet: the presenter sharpens it by this strength
+       (pcr_present_sharpen.frag) as it draws it into the window, reading it through scaled_view (VkImageView); 0: as it
+       is */
+    float sharpen;
+    uint64_t scaled_view;
+    uint64_t check; /* (KF4_PRESENT_FOLD_CHECK) scaled as the renderer sharpens it (VkImage, GENERAL), to compare; 0: none */
 } GsnScanout;
 
 /* --frame-rate's pictures between drawn on the GPU (port/platform/frame_interp.c, "On the GPU"). The DMA controller's
@@ -170,6 +188,8 @@ typedef struct {
                           time before it */
     uint32_t leave_out_late; /* 1: the renderer leaves it out when it would be late, and begins it no sooner than it
                           needs (--frame-rate unlocked: port/gs/pc/pcr_late.h) */
+    float phase;       /* when in its vblank it is shown (0: by the vblank's own picture, else by an extra one after
+                          it): the scene renderer's budget (port/gs/pc/pcr_budget.h) */
     uint32_t runs;     /* bits */
     const uint32_t *run_bits; /* (runs + 31) / 32 words: the runs drawn with their model's move */
 } GsnInterpPicture;

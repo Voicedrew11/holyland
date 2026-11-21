@@ -25,6 +25,9 @@ static inline void gsr_hang_reports_in(const char *folder) {
 static inline void gsr_gif(int path, const void *data, size_t bytes) {
     pcr_gif(path, data, bytes);
 }
+static inline void gsr_gif_vblank(int path, const void *data, size_t bytes) {
+    pcr_gif_vblank(path, data, bytes);
+}
 static inline void gsr_settle(void) {
     pcr_settle();
 }
@@ -64,9 +67,23 @@ static inline int gsr_backlog(void) {
 static inline int gsr_behind(void) {
     return pcr_backlog() > 2;
 }
-/* --frame-rate unlocked: the pictures between a second the renderer has time for (0: not known) */
-static inline double gsr_pictures_room_hz(void) {
-    return pcr_pictures_room_hz();
+/* The renderer decides which pictures between it makes, from their cost (pcr_budgets_pictures): no cut, none left out
+   as behind */
+static inline int gsr_budgets_pictures(void) {
+    return pcr_budgets_pictures();
+}
+static inline void gsr_present_sharpens(int on) {
+    pcr_present_sharpens(on);
+}
+static inline const uint32_t *gsr_present_sharpen_spirv(size_t *vert_bytes, const uint32_t **frag, size_t *frag_bytes) {
+    return pcr_present_sharpen_spirv(vert_bytes, frag, frag_bytes);
+}
+static inline int gsr_pictures_later(void) {
+    return pcr_pictures_later();
+}
+static inline int gsr_picture_later(const uint64_t *privileged, int field, int want_pixels, uint64_t tag,
+                                    const char *name) {
+    return pcr_picture_later(privileged, field, want_pixels, tag, name);
 }
 static inline void gsr_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag),
                                      void (*image)(uint64_t tag)) {

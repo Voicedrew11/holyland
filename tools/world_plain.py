@@ -161,6 +161,15 @@ VARIANTS = {
                      "the final pass in one)", {"KF4_GPU_DETAIL": "0", "KF4_PC_FUSED": "0"}, {}, ["--renderer", "scene"]),
     "scene_noflash": ("the scene renderer, by kind alone, the flash recorder off (a measurement)", {"KF4_GPU_DETAIL": "0"},
                       {}, ["--renderer", "scene", "--flash-recorder", "off"]),
+    # Slice 4b's bound (docs/plans/scene-slice4-results.md, "4b"): the frame's own passes into its buffer left out where
+    # the frame is taken at its own vblank (the mouse turned): the third redraw's cost
+    "scene_drop_nodetail": ("the scene renderer, the frame's own passes left out where its pictures are all between "
+                            "(KF4_SCN_DROP_FRAME=1: a bound), the GPU's time by kind alone",
+                            {"KF4_SCN_DROP_FRAME": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
+    # ... and slice 4b built: the frame held back (the default) against drawn as its scene closes
+    "scene_unheld_nodetail": ("the scene renderer, the frame drawn as its scene closes, not held back "
+                              "(KF4_SCN_HOLD_FRAME=0), the GPU's time by kind alone",
+                              {"KF4_SCN_HOLD_FRAME": "0", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
     "scene_fuse_nodetail": ("the scene renderer, 0x280's two passes as one draw, the GPU's time by kind alone",
                             {"KF4_SCN_FUSE_280": "1", "KF4_GPU_DETAIL": "0"}, {}, ["--renderer", "scene"]),
 }

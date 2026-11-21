@@ -52,8 +52,13 @@ public:
     };
 
     // The scene's steps into cmd, in order: each op between full barriers, each pass a render pass. What follows in cmd
-    // sees all of it. picture: as a picture between's (above), else the scene's own.
-    void record(const Scene &scene, Vulkan::CommandBuffer &cmd, const PictureDraw *picture = nullptr);
+    // sees all of it. picture: as a picture between's (above), else the scene's own. left_out (by step, non-zero: not
+    // recorded, nor its draws' vertices placed): the steps another record draws, or none does (slice 4b).
+    // substitutes: images drawn into or read in another's place (as a picture's stand-ins, the scene's own records
+    // otherwise): a held frame's steps drawn late (slice 4b, scn_build.cpp's HeldFrame)
+    using Substitutes = std::unordered_map<const Vulkan::Image *, Vulkan::ImageHandle>;
+    void record(const Scene &scene, Vulkan::CommandBuffer &cmd, const PictureDraw *picture = nullptr,
+                const std::vector<uint8_t> *left_out = nullptr, const Substitutes *substitutes = nullptr);
 
     // DATE by the first-draw image is possible here: an R32F colour target that blends (MIN)
     bool first_draw_ok() const {
@@ -212,6 +217,8 @@ private:
     const bool placed_on_ = !getenv("KF4_SCN_PLACED") || atoi(getenv("KF4_SCN_PLACED")) != 0;
     std::array<Vulkan::Program *, 2> place_{};
     const PictureDraw *picture_ = nullptr;
+    const std::vector<uint8_t> *left_out_ = nullptr; // (record's)
+    const Substitutes *substitutes_ = nullptr;       // (record's)
     // (developers', slice 3f's bounds: docs/plans/scene-slice4-results.md) KF4_SCN_FLAT=1: the plain passes' draws by a
     // fragment shader of one colour (scn_flat.frag); KF4_SCN_TINY=1: their scissor one pixel (the vertex stage and the
     // draws' own cost left). The pictures are wrong.

@@ -663,7 +663,7 @@ static void replay_gif(int path, const void *data, size_t bytes) {
         port_gs_backend_gif(path, data, bytes);
     }
     if (have_pc) {
-        gsr_gif(path, data, bytes);
+        gsr_gif_vblank(path, data, bytes);
     }
 }
 
@@ -747,15 +747,20 @@ static void present_extra(VsyncRequest *request, double phase, int shown, int du
     int images = shown && (port_video_takes_images() || port_options.headless);
 
     if (dump) {
-        int got = gsr_picture(request->privileged, request->field,
-                              GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
-                                  (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0),
-                              &pc_frame, tag);
+        int want = GSN_EXTRA | GSN_WANT_PIXELS | (images || port_options.dump_present_width > 0 ? GSN_WANT_IMAGE : 0) |
+                   (port_options.dump_present_width > 0 ? GSN_WANT_SCALED : 0);
         char name[64];
+        int got;
 
+        snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
+                 (int)(phase * 1000.0 + 0.5));
+        if (!shown && want == (GSN_EXTRA | GSN_WANT_PIXELS) && gsr_pictures_later()) {
+            /* (developers', KF4_SCN_AHEAD_FORCE=1) sent after the game's next packets, dumped once made */
+            gsr_picture_later(request->privileged, request->field, want, tag, name);
+            return;
+        }
+        got = gsr_picture(request->privileged, request->field, want, &pc_frame, tag);
         if (got & GSN_WANT_PIXELS) {
-            snprintf(name, sizeof(name), "frame_%06llu_%03d.png", (unsigned long long)request->vblank,
-                     (int)(phase * 1000.0 + 0.5));
             port_video_dump_named(&pc_frame, name);
             if (shown) {
                 if (images) {
@@ -990,6 +995,14 @@ int port_gs_interp_gpu(void) {
     return port_gs_replay_uploads() && pc_between;
 }
 
+int port_gs_budgets_pictures(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    return have_pc && gsr_budgets_pictures();
+#else
+    return 0;
+#endif
+}
+
 int port_gs_between_leaves_memory(void) {
     /* (KF4_SCN_RESTORE=1: the restore drawn all the same, as before slice 4) */
     static int restore = -1;
@@ -1014,14 +1027,6 @@ void port_gs_interp_picture(const void *picture) {
     gsr_interp_picture((const GsnInterpPicture *)picture);
 #else
     (void)picture;
-#endif
-}
-
-double port_gs_pictures_room_hz(void) {
-#ifdef KF4_HAVE_PARALLEL_GS
-    return have_pc ? gsr_pictures_room_hz() : 0;
-#else
-    return 0;
 #endif
 }
 
@@ -1062,6 +1067,9 @@ void port_gs_run_vsync(void) {
        frame is being drawn between (interp_live), and whether the vblank's own picture is one */
     double interp_phases[PORT_INTERP_MOST_A_VBLANK];
     int interp_count = 0, interp_live = 0, own_shown = 1, interp_allow_now = INTERP_ALL, interp_between = 0;
+    /* the renderer leaves out the pictures between it would not have ready in time (the scene renderer's slice 5): no
+       cut, none left out here as it is behind */
+    int budget = port_gs_budgets_pictures();
 
     while (dump_next < dump_count && dump_at[dump_next] < request->vblank) {
         dump_next++;
@@ -1105,7 +1113,7 @@ void port_gs_run_vsync(void) {
            behind. Left-outs keep the backlog low (a vblank's pictures left out are not drawn), so on the backlog
            alone the cut seldom lowered the count to what the renderer makes, and the pictures came in bursts and
            gaps (PERFORMANCE.md, 2026-11-12) */
-        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && interp_cut_on() &&
+        interp_behind_run = interp_live && !dump && !port_options.fast && shown && have_pc && !budget && interp_cut_on() &&
                                     (gsr_backlog() > 1 || (interp_left_last > 0 && cut_on_left_out()))
                                 ? interp_behind_run + 1
                                 : 0;
@@ -1242,7 +1250,7 @@ void port_gs_run_vsync(void) {
                 }
             }
             if (!dump && !port_options.fast && shown &&
-                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || gsr_behind())) {
+                (__atomic_load_n(&queue_head, __ATOMIC_ACQUIRE) - tail > 1 || (!budget && gsr_behind()))) {
                 interp_behind++;
                 __atomic_store_n(&interp_behind_at, request->vblank, __ATOMIC_RELAXED);
                 interp_left_last++;

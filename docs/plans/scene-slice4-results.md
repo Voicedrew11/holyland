@@ -288,7 +288,8 @@ The same holds for the ripple (`pcr_ndripple.vert`), small today.
   begin_frame_kept`, `picture_instance`), the GIF corners numbered by their kicks (as `pcr_canvas.cpp`'s
   `add_primitive`), the picture's buffers (`pcr::Between`), the next scanout reading the stand-in frame with the kept
   layers; `motion_compare.py` taught a rate (60, 240) with paraLLEl-GS run at it too.
-- 4b: mouse look from the scene, the late turns measured and the margin sized from them, the reprojection.
+- 4b: mouse look from the scene, the late turns measured and the margin sized from them, the reprojection (below,
+  "4b").
 
 ### What removing the third redraw takes (found building 4a)
 
@@ -307,3 +308,121 @@ textures, the reflection, copies) are drawn as now. A held pass drawn late uses 
 so it cannot disturb the Z of the frame drawn since. With the mouse turning, the frame buffer is never read before it is
 cleared again: two world draws a game frame at 60 in place of three. To be bounded first by a switch that drops the
 frame's passes when a mouse picture was drawn for it (wrong only where the frame is read later).
+
+## 4b. Mouse look from the scene (branch `scene/slice4b`, 2026-11-20)
+
+Measurements: `~/Documents/darker-reality-measurements/2026-11-20-scene-slice4b/`.
+
+Mouse look was already drawn from the scene by 4a: frame_interp.c's turned pictures (the frame at t 0 turned to the
+mouse at its own vblank, then the pictures between) are pictures between, each turned again to the hand as it is drawn
+(`pcr.cpp`'s `turn_to_hand`) and drawn from the kept scene. What 4b adds: the third world draw gone, and the late turn
+measured.
+
+### The third redraw: the bound (`bound/`)
+
+`KF4_SCN_DROP_FRAME=1` (developers', wrong pictures): the frame's own passes into its buffer (and the shadows'
+first-draw passes) left out where the frame is taken at its own vblank. `world_plain.py --scenes "start spin,pond
+spin,palace spin" --variants scene_nodetail,scene_drop_nodetail --rates 30,60 --scales 2 --rounds 2` (new scenarios:
+the pond and the palace standing at their teleport places, KF4_DIAG_SPIN=6: a whole turn's views, not the views of
+"pond" and "palace"), ms a game frame, medians:
+
+| | world at 30 | world at 60 | left out | all at 60 | left out | saved |
+|---|---|---|---|---|---|---|
+| 099, the spin | 3.14 | 9.31 | 6.15 | 19.30 | 16.31 | 2.99 |
+| the pond, the spin | 3.07 | 9.39 | 7.22 | 17.65 | 16.15 | 1.50 |
+| the palace, the spin | 3.18 | 10.17 | 6.88 | 19.52 | 16.51 | 3.01 |
+
+At 60 with the mouse turning the world is drawn three times a game frame (9.3 against 3.1), and leaving out the frame's
+own passes takes one of them away (at the pond 2.2 of 3.1: the reflection's view and the scrolling targets are not the
+frame's buffer and stay).
+
+
+### The frame held back (`scn_build.cpp`'s `HeldFrame`; `KF4_SCN_HOLD_FRAME=0`: as before)
+
+As slice 2 holds clears back: where frame_interp.c takes the frame at its own vblank (the mouse turned), the frame's
+steps into its buffer are not drawn as its scene closes but held, and recorded late, before whatever then comes, only
+where something uses what they drew:
+
+- **What is held**: the passes into the frame's buffer and the shadows' first-draw passes for them (`plan_hold`), and
+  every step after them that reads what a held step writes or writes it again. None held where one of those writes
+  another of the GS's targets (counted: the frame copied to 0x2BC0 under water is not, it copies from the frame
+  before), or uses a second Z.
+- **Renames** (`rename_reads`): the frame reads effects drawn between its own passes. At 099 a 128x160 target (the
+  clouds) is drawn, copied into a 128x128 copy the frame reads, drawn again from that copy and copied again, three
+  times a frame. Holding every step that writes the copy again would hold the target too. Instead, where a step drawn
+  now writes again what held steps read, the copy is copied just before the first of those readers (an op of the
+  scene, drawn now and by the pictures), and the held reads point at that copy. (First built before the writer, not the
+  reader: right for the late draw, but the pictures between draw the whole scene in order and read the copy before it
+  was made, a level or three off in the clouds. Found by the byte compare below.)
+- **Dropped** where a clear covers what the held steps drew of the frame's buffer (`held_use`, called by `written_over`
+  and `touch`, every use of an image the builder sees). **Drawn late** where a draw, an op, a read-back or a picture of
+  the frame meets it, where their Z is read before it is cleared, at a save state's memory (`vram_image`) and before a
+  scale change. Drawn late, they draw what they would have: into the live images, with a first-draw image of their own
+  (cleared), a Z of their own where the live one was written over since (as is: their first use of it clears it), and
+  any other image they read copied as something first writes it (`snapshot`).
+- Developers': `KF4_SCN_HOLD_LOG=1` (the first frames: what is held, renamed, copied, or why not),
+  `KF4_INTERP_T0=1` (frame_interp.c: the frame's own vblank drawn as a picture between at t 0 with no mouse, so that
+  frames are held under a pad script that repeats; the mouse's turns go by the wall clock).
+
+### Exact: byte for byte (`hold_all/`, `check/`)
+
+`tools/hold_compare.py` (new): every case of `motion_compare.py` played by the scene renderer with the frame held and
+not (`KF4_SCN_HOLD_FRAME=1` and `0`, both with `KF4_INTERP_T0=1`), each picture compared byte for byte.
+
+**0 of 6,556 pictures differ**: the 13 cases at 1x and at 2x widescreen (`--native-draw on`), at 60 and at 240. In
+every case but two, frames are held and nearly all dropped as dead (combat 862 held, 854 dead, 6 drawn late; spell 3
+635, 631, 2; the title 475, 472, 1; a frame or two still held at the end). Under water and the drain hold none: their
+frame is copied into 0x2BC0 between its passes (another of the GS's targets), so it is drawn as its scene closes, as
+before. The late draws were also made many times over (`check/`: the walk at 2x widescreen with a save state every 37
+vblanks, 25 held frames drawn late for the states' memory): 0 of 150 pictures differ.
+
+### The GPU's time (`held/`: real window, the owner's settings, 2x, Vega 7)
+
+`world_plain.py --scenes "start spin,pond spin,palace spin" --variants
+scene_unheld_nodetail,scene_nodetail,scene_drop_nodetail --rates 30,60 --scales 2 --rounds 2`, ms a game frame,
+medians (`scene_unheld_nodetail`: `KF4_SCN_HOLD_FRAME=0`, as before):
+
+| at 60, the spin | world: as before | held | the bound | all: as before | held | the bound | saved |
+|---|---|---|---|---|---|---|---|
+| 099 | 9.34 | 6.15 | 6.12 | 19.36 | 16.50 | 16.33 | 2.86 |
+| the pond | 9.26 | 6.94 | 6.90 | 17.53 | 15.37 | 15.14 | 2.16 |
+| the palace | 10.25 | 6.84 | 6.78 | 19.53 | 16.60 | 16.29 | 2.93 |
+
+**The third world draw is gone**: held, within 0.1-0.3 ms of the bound (the copies the renames and the held frames
+make: 0.2-0.4 ms more "copies" than the bound's). At 30 nothing changes (10.8 / 10.1 / 10.8, the frame is never taken
+at its own vblank).
+
+### The late turn (`late/`)
+
+`KF4_LATE_TURN_LOG=FILE` (developers', `present_vk.cpp`): each picture that shows a picture between carries its mouse
+turn to the presenter (`GsnScanout::turn`: the hand it was turned to, when, and when it is to be shown), and as the
+presenter records the picture it logs what the hand has moved since: the turn a reprojection there would add.
+`bin/late_turn.sh` (the spin at 099, the owner's settings in a real window, KF4_DIAG_SPIN=6) and `bin/late_turn.py`:
+
+| at 60 (the owner's) | median | p90 | p99 |
+|---|---|---|---|
+| the picture's turn to the presenter's recording of it | 12.1 ms | 15.9 ms | 16.0 ms |
+| ... to the time it is shown | 16.1 ms | 19.9 ms | 20.0 ms |
+| the late turn at 6 rad/s | 92 mrad (5.3 degrees) | 95 mrad | 95 mrad |
+| ... in the GS's pixels (sx 384: 80 degrees across 640) | 35.5 (5.5% of the width) | 36.3 | 36.5 |
+
+At 240 the GPU does not keep up with the spin (16-20 ms a game frame at 60 already): pictures are shown up to a
+quarter of a second after their time and the late turn means nothing but that backlog (slice 5's scheduling).
+
+**The margin, sized: not small.** The design took the late turn to be the last few milliseconds' turn, a degree or two
+(decision 3). It is 12 ms at 60, 5.3 degrees at 6 rad/s and four times that in a flick of 20 rad/s: a margin of 6% or
+more of the width a side, and more pixels than the design wanted to draw. And it is not the drawing's time: a picture is
+drawn as soon as it is asked for, a vblank before it is shown, then waits. So:
+
+- **The reprojection is not built.** Most of the late turn is slice 5's to take away: each picture begun no sooner
+  than its predicted cost before it is shown (as `pcr_late.h`'s `begin_at_s` does for the PC renderer's pump at an
+  unlocked rate), the hand then a few milliseconds old. What remains after that is the turn a reprojection could
+  cover, sized again then.
+- A reprojection of the picture as it is would move the HUD with the world (the HUD is drawn into the frame's buffer):
+  at 5 degrees, the orb by about a hundred pixels. It needs the HUD in an image of its own (decision 4's "only if a
+  later measurement says it is worth it"): this is that measurement, for after slice 5.
+
+## After 4b
+
+Nothing of 4a and 4b but the reprojection, moved behind slice 5 (above). Slice 5 starts from: pictures drawn just in
+time (the late turn), the held frame's two world draws a game frame at 60, and the world's own cost (3f).

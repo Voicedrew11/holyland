@@ -123,11 +123,7 @@ int port_frame_interp(void) {
    followed (the schedule's times stay put). After the menus' 60 or a load the rate climbs a quarter each half second,
    about three seconds from the least to 500. (Tried and left out: the top at once where it showed all that was asked
    for. The rate overshot and the pictures came in bursts again, in play too.) Before the window has shown anything,
-   and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before.
-   And never more than the renderer has time for (port_gs_pictures_room_hz: the scene renderer draws its pictures between
-   on the thread that takes the game's packets in). A quarter over what was shown kept that thread busy all the time: the
-   pictures queued behind a game frame's packets (5-6 ms in one go) were begun late, and it never caught up before the
-   next frame's; drawn too late to show, 100-470 ms went by with no picture (063, 2026-11-20). */
+   and where nothing is shown (headless), the top. KF4_UNLOCKED_FOLLOW=0: the top always, as before. */
 #define UNLOCKED_LEAST_HZ 120
 
 /* hz, no more than adaptive sync's cap under the screen's rate (port/include/port/adaptive_sync.h) where it is on */
@@ -144,19 +140,17 @@ static int unlocked_asked_hz(void) {
     int cap = port_options.frame_rate_cap;
     int top = under_adaptive_sync_cap(cap > 0 && cap < most ? cap : (int)most);
     int asked, last = asked_now;
-    double shown = port_video_pictures_per_second(), room;
+    double shown = port_video_pictures_per_second();
 
     if (follow < 0) {
         const char *e = getenv("KF4_UNLOCKED_FOLLOW");
 
         follow = !(e != NULL && strcmp(e, "0") == 0);
     }
-    if (!follow || shown <= 0) {
-        return top;
+    if (!follow || shown <= 0 || port_gs_budgets_pictures()) {
+        return top; /* (a renderer that leaves out what it would not have in time picks among them all) */
     }
     asked = (int)(shown * 1.25);
-    room = port_gs_pictures_room_hz();
-    asked = room > 0 && room < asked ? (int)room : asked;
     asked = asked < UNLOCKED_LEAST_HZ ? UNLOCKED_LEAST_HZ : asked;
     asked = asked > top ? top : asked;
     if (asked != top && last != 0 && last <= top && abs(asked - last) * 20 < last) {
@@ -3236,7 +3230,8 @@ static int gpu_frame(const Camera *between, double t, void (*send)(int path, con
 }
 
 /* A picture between on the GPU: its time, its cameras, and the runs that move with their model then */
-static void gpu_picture(const Camera *between, double t, MouseTurn hand, double shown_s, int leave_out_late) {
+static void gpu_picture(const Camera *between, double t, MouseTurn hand, double shown_s, int leave_out_late,
+                        double phase) {
     static uint32_t *bits;
     static size_t bits_room;
     const Objects *o = pending.objects;
@@ -3286,6 +3281,7 @@ static void gpu_picture(const Camera *between, double t, MouseTurn hand, double 
     pic.t = (float)t;
     pic.shown_s = shown_s;
     pic.leave_out_late = (uint32_t)leave_out_late;
+    pic.phase = (float)phase;
     pic.hand_yaw_rad = hand.yaw_rad;
     pic.hand_pitch_rad = hand.pitch_rad;
     pic.runs = o != NULL ? (uint32_t)o->nruns : 0;
@@ -3494,6 +3490,20 @@ static int camera_lead(Camera *c, double t, double picture_vblank) {
 }
 
 /* The hand has moved since `hand` (the renderer turns the picture on by it as it draws it) */
+/* (developers', KF4_INTERP_T0=1: slice 4b's tests) the frame's own vblank drawn as a picture between at t 0 as when
+   the mouse turned, with no mouse: the frame taken at its own vblank and every picture shown a picture between, under
+   a pad script that repeats (the scene renderer's frame held back: docs/plans/scene-slice4-results.md, "4b") */
+static int t0_pictures(void) {
+    static int on = -1;
+
+    if (on < 0) {
+        const char *e = getenv("KF4_INTERP_T0");
+
+        on = e != NULL && atoi(e) != 0;
+    }
+    return on;
+}
+
 static int hand_moved_since(MouseTurn hand) {
     MouseTurn since = port_mouse_lead_since(hand, HUGE_VAL); /* (to the newest reading) */
 
@@ -3516,7 +3526,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
     between = interp_camera_between(&pending.before, &pending.scan.camera, t);
     led = camera_lead(&between, t, (double)vblank + phase);
     hand = port_mouse_lead_hand((double)vblank + phase);
-    if (t == 0 && !led && !hand_moved_since(hand)) {
+    if (t == 0 && !led && !hand_moved_since(hand) && !t0_pictures()) {
         return 0; /* the frame shown, as the game drew it (turned by the mouse, it is drawn again as the others) */
     }
     if (pending.gpu == 0) {
@@ -3527,7 +3537,7 @@ int port_interp_picture(uint64_t vblank, double phase, void (*send)(int path, co
         /* (unlocked: the renderer leaves out a picture it would be late for) */
         int unlocked = port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED && phase > 0;
 
-        gpu_picture(&between, t, hand, port_video_picture_due_s(PORT_PICTURE_TAG(vblank, phase)), unlocked);
+        gpu_picture(&between, t, hand, port_video_picture_due_s(PORT_PICTURE_TAG(vblank, phase)), unlocked, phase);
     } else {
         replay_pending(&between, t, 0, send, 0);
     }

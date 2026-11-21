@@ -45,6 +45,9 @@ int pcr_gpu_kind(void);
 /* The GS's input, worked on by the PC renderer's thread in the order sent; pcr_wait returns once it has
    done everything sent before */
 void pcr_gif(int path, const void *data, size_t bytes);
+/* (gs.c's own packets at a vblank, among its pictures: frame_interp.c's replays, the fields' screens) as pcr_gif, never
+   taken ahead of a picture between (the scene renderer's slice 5) */
+void pcr_gif_vblank(int path, const void *data, size_t bytes);
 void pcr_wait(void);
 /* Before the process exits: everything sent done, as pcr_wait, two seconds at most (and the pump's likewise), so that
    the renderer's thread is not drawing while exit's handlers tear down what it uses (the statics of Mesa, Granite or a
@@ -54,9 +57,19 @@ void pcr_read_fifo(void *dst, uint32_t qwords);
 int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 int pcr_backlog(void);
-/* --frame-rate unlocked: the pictures between a second the PC renderer's thread has time for (pcr_late.h's PictureRoom),
-   as of the last half second; 0 when not known (none drawn on it) */
-double pcr_pictures_room_hz(void);
+/* 1: the renderer leaves out the pictures between it would not have ready by their time, and begins each no sooner
+   than it must (the scene renderer's slice 5, port/gs/pc/pcr_budget.h): gs.c then asks for every one, cut by nothing */
+int pcr_budgets_pictures(void);
+/* (the Vulkan presenter) 1: it sharpens the scaled pictures itself as it draws them into the window
+   (GsnScanout's sharpen), so the renderer leaves them unsharpened; 0: it does not (KF4_PRESENT_FOLD=0: never) */
+void pcr_present_sharpens(int on);
+/* The sharpening's shaders as SPIR-V for the presenter's own pipeline: the vertex shader (returned) and the fragment
+   shader (frag), their sizes in bytes */
+const uint32_t *pcr_present_sharpen_spirv(size_t *vert_bytes, const uint32_t **frag, size_t *frag_bytes);
+/* (developers', KF4_SCN_AHEAD_FORCE=1, headless) 1: the pictures between held back and sent after the game's next
+   packets; an extra picture to dump is then sent by pcr_picture_later, which dumps it as name once it is made */
+int pcr_pictures_later(void);
+int pcr_picture_later(const uint64_t *privileged, int field, int want_pixels, uint64_t tag, const char *name);
 void pcr_interp_frame(GsnInterpFrame *frame);
 void pcr_interp_picture(const GsnInterpPicture *picture);
 

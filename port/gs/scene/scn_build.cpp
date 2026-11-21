@@ -14,6 +14,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -191,6 +192,7 @@ constexpr uint32_t first_generations = 1u << (24 - first_shadow_bits);
 
 class Builder final : public Drawing {
     struct Placed; // (below)
+    struct Layer;  // (below)
 
 public:
     Builder(Device &device, GpuTimes &times, HangNotes &notes)
@@ -511,12 +513,15 @@ public:
         last_stretch_.clear();
         stand_in_plan_.clear();
         stand_ins_.clear();
+        held_.clear();
         stand_in_pool_.clear();
         picture_pending_ = false;
+        last_scanout_ = {};
     }
 
     std::vector<uint8_t> vram_image() override {
         flush_batch();
+        draw_all_held();
         close_scene(true);
         std::vector<uint8_t> image = store_.vram_image();
         for (auto &target : colour_) {
@@ -554,7 +559,8 @@ public:
     }
 
     bool scanout(CommandBuffer &out, const ShownRect &shown_rect, const Image &dst) override {
-        flush_batch();
+        last_rect_ = shown_rect;
+        last_rect_known_ = true;
         // (a picture between drawn since the last picture: the frame's buffer shown from its stand-in, where the
         // display shows the buffer the stream would have drawn it into, or the frame's)
         bool picture = picture_pending_;
@@ -565,6 +571,17 @@ public:
             picture = rect.bp % 32 == 0 && (fbp == kept_shape_.shown_fbp || fbp == kept_shape_.draw_fbp);
             rect.bp = kept_shape_.draw_fbp * 32;
         }
+        if (ahead_.open) {
+            // (packets taken ahead of this picture: shown from the stand-in, the frame's buffer placed and its layers as
+            // they were when they began, the scene they add to left open)
+            auto it = stand_ins_.find(ahead_.target.image.get());
+            if (picture && rect.w != 0 && rect.h != 0 && rect.psm == GSN_PSMCT32 && it != stand_ins_.end()) {
+                last_scanout_ = {};
+                return scanout_picture(out, rect, ahead_.target, ahead_.x, ahead_.y, *it->second, dst, ahead_.layers);
+            }
+            counts_.ahead_unshown++; // (the buffer as it is now, packets taken ahead and all)
+        }
+        flush_batch();
         if (rect.w == 0 || rect.h == 0 || rect.psm != GSN_PSMCT32) {
             close_scene(false);
             return false;
@@ -581,8 +598,9 @@ public:
             counts_.pictures_unshown++;
             return scanout(out, shown_rect, dst);
         }
+        last_scanout_ = {}; // (made again below where it is the buffer as it is)
         if (stand_in) {
-            return scanout_picture(out, rect, placed, *stand_in, dst);
+            return scanout_picture(out, rect, *s, placed.x, placed.y, *stand_in, dst, layers_);
         }
         int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         std::vector<Layer> drawn;
@@ -600,7 +618,7 @@ public:
                 VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
                 touch(s->image, false, shown, false);
                 bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
-                if (!lower && same_size && composable(s->image.get(), shown)) {
+                if (!lower && same_size && composable(layers_, s->image.get(), shown)) {
                     for (const Layer &l : layers_) {
                         if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
                             drawn.push_back(l);
@@ -629,6 +647,8 @@ public:
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
         }
+        // (what it read, for scanout_unchanged: the picture is the same while nothing meets it)
+        last_scanout_ = {true, shown_rect, s->image, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}};
         if (!drawn.empty()) {
             compose(out, *s, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}, dst, drawn);
             return true;
@@ -644,17 +664,20 @@ public:
         return true;
     }
 
-    // A picture between shown: rect of the frame's buffer (placed) from its stand-in, the layers kept on the frame's
-    // buffer (the brightness) drawn over it where they can be (composable, picture_draws), reading the stand-in. Nothing
-    // of the GS's memory is drawn or touched.
-    bool scanout_picture(CommandBuffer &out, const ShownRect &rect, const Placed &placed, const Image &from,
-                         const Image &dst) {
-        Target *s = placed.target;
-        uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
+    // A picture between shown: rect of the frame's buffer (its target s, the frame at px, py in it) from its stand-in,
+    // the layers kept on the frame's buffer (the brightness) drawn over it where they can be (composable, picture_draws),
+    // reading the stand-in. Nothing of the GS's memory is drawn or touched. (Packets taken ahead: s and layers as they
+    // were before them, and the scene they add to not closed.)
+    bool scanout_picture(CommandBuffer &out, const ShownRect &rect, const Target &target, uint32_t px, uint32_t py,
+                         const Image &from, const Image &dst, const std::vector<Layer> &layers) {
+        const Target *s = &target;
+        uint32_t rx = rect.x + px, ry = rect.y + py;
         int32_t x0 = int32_t(rx * scale_[0]), y0 = int32_t(ry * scale_[1]);
         int32_t x1 = int32_t(std::min(rx + rect.w, s->width()) * scale_[0]);
         int32_t y1 = int32_t(std::min(ry + rect.h, s->height) * scale_[1]);
-        close_scene(false);
+        if (!ahead_.open) {
+            close_scene(false);
+        }
         times_.begin(out, GpuWork::picture);
         out.barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
@@ -665,8 +688,8 @@ public:
         const VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
         std::vector<Layer> drawn;
         const bool same_size = uint32_t(x1 - x0) == dst.get_width() && uint32_t(y1 - y0) == dst.get_height();
-        if (same_size && composable(s->image.get(), shown)) {
-            for (const Layer &l : layers_) {
+        if (same_size && composable(layers, s->image.get(), shown)) {
+            for (const Layer &l : layers) {
                 if (l.image.get() == s->image.get() && rects_meet(l.rect, shown)) {
                     drawn.push_back(l);
                 }
@@ -681,7 +704,7 @@ public:
             compose(out, *s, shown, dst, drawn, &pd);
             return true;
         }
-        if (!layers_.empty() && std::any_of(layers_.begin(), layers_.end(), [&](const Layer &l) {
+        if (!layers.empty() && std::any_of(layers.begin(), layers.end(), [&](const Layer &l) {
                 return l.image.get() == s->image.get() && rects_meet(l.rect, shown);
             })) {
             counts_.pictures_without_layers++;
@@ -699,6 +722,27 @@ public:
     // (the temporal anti-aliasing's depth: not the scene renderer's yet)
     std::optional<ShownDepth> scanout_depth(CommandBuffer &, const ShownRect &, const Image &) override {
         return std::nullopt;
+    }
+
+    // (slice 5, docs/plans/scene-slice5-results.md) The last scanout's buffer as it is (not a picture between's), the same
+    // rect, and nothing the stream did since met what it read (touch and push_op forget it): its picture again
+    bool scanout_unchanged(const ShownRect &rect) override {
+        flush_batch();
+        const ShownRect &l = last_scanout_.rect;
+        if (!last_scanout_.valid || picture_pending_ || pending_scale_ != scale_ || rect.bp != l.bp || rect.bw != l.bw ||
+            rect.psm != l.psm || rect.x != l.x || rect.y != l.y || rect.w != l.w || rect.h != l.h ||
+            rect.lower_field != l.lower_field) {
+            return false;
+        }
+        // (its target still that image: not grown, let go or made again since)
+        bool still = std::any_of(colour_.begin(), colour_.end(),
+                                 [&](const auto &t) { return t->image.get() == last_scanout_.image.get(); });
+        if (!still) {
+            last_scanout_ = {};
+            return false;
+        }
+        counts_.scanouts_unchanged++;
+        return true;
     }
     void begin_drawing(uint64_t, Jitter) override {}
 
@@ -723,6 +767,77 @@ public:
         let_go_of_idle_depth();
     }
 
+    // ---- (slice 5) The packets taken ahead of the pictures between (docs/plans/scene-slice5-results.md) ----
+    // The scene so far closed, and the stream's packets from here kept out of this vblank's pictures between and the
+    // extra pictures that show them: the scene they add to is closed by none of those pictures (nor its batch flushed),
+    // so that the GPU draws it after them; each draws the frame kept into its stand-ins, from the GS's memory as it was
+    // here, and is shown from them with the frame's buffer placed and its layers as they were here (Ahead). Only while
+    // the pictures to come are drawn from a frame kept and shown from its stand-in; until the scene's next close (the
+    // vblank's, the next frame's, or one the packets make: a read-back, a state saved).
+    struct Ahead {
+        bool open = false;
+        Target target;             // the frame's buffer's target (scanout's placement), as it was
+        uint32_t x = 0, y = 0;     // the frame in it
+        std::vector<Layer> layers; // the layers kept on it, as they were
+    };
+    Ahead ahead_;
+    ShownRect last_rect_{}; // (the last picture's shown rectangle: a vblank's pictures between show the same)
+    bool last_rect_known_ = false;
+
+    bool packets_ahead() override {
+        if (ahead_.open) {
+            return true;
+        }
+        ShownRect rect = last_rect_;
+        const uint32_t fbp = rect.bp / 32;
+        if (kept_.empty() || between_bound_ || !last_rect_known_ || rect.bp % 32 != 0 ||
+            (fbp != kept_shape_.shown_fbp && fbp != kept_shape_.draw_fbp) || rect.w == 0 || rect.h == 0 ||
+            rect.psm != GSN_PSMCT32) {
+            counts_.ahead_refused++;
+            return false;
+        }
+        rect.bp = kept_shape_.draw_fbp * 32;
+        // (colour_target's placement, found only: none made or grown here)
+        Placed placed;
+        for (auto &t : colour_) {
+            uint32_t x, y;
+            if (t->fbw == rect.bw && t->page_place(rect.bp / 32, x, y) && x == 0) {
+                if (t->height >= rounded_height(y + rect.y + rect.h, GSN_PSMCT32)) {
+                    placed = {t.get(), 0, y};
+                }
+                break;
+            }
+        }
+        if (!placed.target || !stand_ins_.count(placed.target->image.get())) {
+            counts_.ahead_refused++;
+            return false;
+        }
+        flush_batch();
+        close_scene(false);
+        ahead_.open = true;
+        ahead_.target = *placed.target;
+        ahead_.x = placed.x;
+        ahead_.y = placed.y;
+        for (const Layer &l : layers_) {
+            if (l.image.get() == ahead_.target.image.get()) {
+                ahead_.layers.push_back(l);
+            }
+        }
+        counts_.aheads++;
+        return true;
+    }
+
+    bool packets_ahead_open() const override {
+        return ahead_.open;
+    }
+
+    void packets_ahead_end() override {
+        if (ahead_.open) {
+            flush_batch();
+            close_scene(false);
+        }
+    }
+
     // ---- Pictures between (slice 4, docs/plans/scene-slice4-results.md) ----
     // The scenes closed between two vblanks are kept (a stretch) while frames are being taken; the frame frame_interp.c
     // hands over is one of them (the shell says which: FrameStretch), kept as it was drawn. A picture between draws it
@@ -741,7 +856,14 @@ public:
         picture_pending_ = false;
         taken_at_ = frame_;
         if (which == FrameStretch::open) {
+            if (drop_frame_) {
+                drop_into_ = frame_image(shape.draw_fbp);
+            } else if (hold_frame_ && !between_bound_) {
+                hold_into_ = frame_image(shape.draw_fbp);
+            }
             close_scene(true);
+            drop_into_ = nullptr;
+            hold_into_ = nullptr;
             kept_ = std::move(stretch_);
             stretch_.clear();
         } else if (which == FrameStretch::last) {
@@ -757,8 +879,8 @@ public:
             return;
         }
         // (the native draws' kicks, numbered from native_kick_base: the frame's kicks' count on, as Between's)
-        for (Scene &sc : kept_) {
-            for (Vertex &v : sc.vertices) {
+        for (auto &scp : kept_) {
+            for (Vertex &v : scp->vertices) {
                 for (int k = 0; k < 3; k++) {
                     if (v.kicks[k] != no_kick && v.kicks[k] >= native_kick_base) {
                         v.kicks[k] = v.kicks[k] - native_kick_base + shape.kicks;
@@ -767,6 +889,686 @@ public:
             }
         }
         plan_stand_ins();
+    }
+
+    // (developers', KF4_SCN_DROP_FRAME=1: slice 4b's bound) the frame's own steps into its buffer left out where the frame
+    // is taken at its own vblank (the mouse turned: every picture shown of it a picture between). Wrong wherever the
+    // frame's buffer is read later (a texture of it, a copy, a picture of the frame itself, a save state).
+    // The colour image the frame buffer at fbp is in (nullptr: none yet)
+    const Image *frame_image(uint32_t fbp) const {
+        for (const auto &t : colour_) {
+            uint32_t x, y;
+            if (t->page_place(fbp, x, y) && x == 0) {
+                return t->image.get();
+            }
+        }
+        return nullptr;
+    }
+    // By step of sc: the passes that draw into `into` (its colour) and DATE's first-draw passes
+    std::vector<uint8_t> frame_steps(const Scene &sc, const Image *into) {
+        std::vector<uint8_t> out(sc.steps.size(), 0);
+        for (size_t i = 0; i < sc.steps.size(); i++) {
+            const Step &st = sc.steps[i];
+            if (st.kind != Step::Kind::pass) {
+                continue;
+            }
+            const Pass &pass = sc.passes[st.index];
+            if (pass.colour.get() == into || pass.kind == PassKind::first_draw) {
+                out[i] = 1;
+                counts_.frame_steps_dropped++;
+            }
+        }
+        return out;
+    }
+
+    // ---- The frame held back (slice 4b, docs/plans/scene-slice4-results.md, "4b") ----
+    // With the mouse turned, frame_interp.c takes the frame at its own vblank, and every picture of it the window shows
+    // is a picture between, drawn from the kept scene into stand-ins: the frame's own steps into its buffer, drawn into
+    // the GS's targets as the scene closes, would be shown by nothing (the third world draw a game frame at 60). They are
+    // held back as slice 2 holds clears back, and recorded late, before whatever then comes, only where something uses
+    // what they drew: a draw, an op or a read-back meeting it in the frame's buffer, a picture of the frame itself, a save
+    // state, or a read of their Z that is not a clear first. A clear covering what they drew in the frame's buffer drops
+    // them (dead). Exact: drawn late, they draw what they would have.
+    // - Held: the steps drawing into the frame's buffer (and the shadows' first-draw passes for them), and every step
+    //   after them that reads what a held step writes, or writes what one reads or writes. None held where one of them
+    //   writes another of the GS's targets (the frame's copy under water: drawn as the scene closes, as before).
+    // - Their Z: the live Z, unless something wrote over it since (a clear: dead for them), when a Z of their own is
+    //   theirs: as is where their first use of it clears it (the pass's load op), else the live Z copied as something
+    //   first wrote over it.
+    // - Their first-draw images: one of their own, cleared (no triangle yet), as a picture's.
+    // - What else they read or write (a target's copy, the history): the live image while nothing has written it since,
+    //   else a copy made of it as something first did.
+    // KF4_SCN_HOLD_FRAME=0: drawn as the scene closes, as before.
+    struct HeldFrame {
+        std::shared_ptr<Scene> scene;
+        std::vector<uint8_t> held; // by step: held back (the late draw records these alone)
+        std::vector<uint8_t> drawn; // (its complement: Drawer::record's left_out for the late draw)
+        ImageHandle frame;
+        VkRect2D frame_rect{}; // (what the held steps draw of it, in the image's pixels)
+        ImageHandle depth;     // (none: no held step uses a Z)
+        VkRect2D depth_rect{};
+        bool depth_self_cleared = false; // (their first use of it clears it: depth_rect is all they read of it)
+        bool depth_written_since = false;
+        std::vector<ImageHandle> firsts;
+        std::unordered_set<const Image *> others; // (the other images they read or write: copied as first written)
+        Drawer::Substitutes substitutes;           // (the copies made of them, and of their Z)
+        uint64_t frame_number = 0;
+        // (plan_hold's) what held steps read that a step drawn now writes again: copied before the first of them
+        // (rename_reads)
+        struct Rename {
+            const Image *image = nullptr;
+            size_t before = 0;
+            std::vector<size_t> readers;
+        };
+        std::vector<Rename> renames;
+        std::vector<ImageHandle> renamed; // (the copies)
+    };
+
+    // The images a step reads and writes (a pass's attachments both; the textures its draws read from targets or their
+    // copies, u_surface and u_dest; the texels and the store's images are never written again)
+    static void step_images(const Scene &sc, const Step &st, std::vector<const Image *> &reads,
+                            std::vector<const Image *> &writes) {
+        reads.clear();
+        writes.clear();
+        if (st.kind == Step::Kind::op) {
+            const Op &op = sc.ops[st.index];
+            if (op.src) {
+                reads.push_back(op.src.get());
+            }
+            if (op.dst) {
+                writes.push_back(op.dst.get());
+            }
+            return;
+        }
+        const Pass &pass = sc.passes[st.index];
+        for (const ImageHandle *h : {&pass.colour, &pass.depth}) {
+            if (*h) {
+                reads.push_back(h->get());
+                writes.push_back(h->get());
+            }
+        }
+        if (pass.first) {
+            reads.push_back(pass.first.get());
+        }
+        for (uint32_t i = 0; i < pass.draw_count; i++) {
+            const Draw &d = sc.draws[pass.first_draw + i];
+            if (d.clear) {
+                continue;
+            }
+            const Material &m = sc.materials[d.material];
+            if (m.surface) {
+                reads.push_back(m.surface.get());
+            }
+            if (m.dest) {
+                reads.push_back(m.dest.get());
+            }
+        }
+    }
+
+    static VkRect2D rect_union(const VkRect2D &a, const VkRect2D &b) {
+        if (a.extent.width == 0 || a.extent.height == 0) {
+            return b;
+        }
+        if (b.extent.width == 0 || b.extent.height == 0) {
+            return a;
+        }
+        int32_t x0 = std::min(a.offset.x, b.offset.x), y0 = std::min(a.offset.y, b.offset.y);
+        int64_t x1 = std::max(int64_t(a.offset.x) + a.extent.width, int64_t(b.offset.x) + b.extent.width);
+        int64_t y1 = std::max(int64_t(a.offset.y) + a.extent.height, int64_t(b.offset.y) + b.extent.height);
+        return {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+    }
+    static VkRect2D clipped(const VkRect2D &r, const Image &image) {
+        int32_t x0 = std::max(r.offset.x, 0), y0 = std::max(r.offset.y, 0);
+        int64_t x1 = std::min<int64_t>(int64_t(r.offset.x) + r.extent.width, image.get_width());
+        int64_t y1 = std::min<int64_t>(int64_t(r.offset.y) + r.extent.height, image.get_height());
+        if (x1 <= x0 || y1 <= y0) {
+            return {};
+        }
+        return {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+    }
+
+    // Whether step k of sc reads image only where a read can be pointed at a copy of it: a draw's texture (u_surface,
+    // u_dest) or an op's source, not an attachment or a first-draw image
+    static bool renamable_read(const Scene &sc, size_t k, const Image *image) {
+        const Step &st = sc.steps[k];
+        if (st.kind == Step::Kind::op) {
+            const Op &op = sc.ops[st.index];
+            return op.src.get() == image && op.dst.get() != image;
+        }
+        const Pass &pass = sc.passes[st.index];
+        return pass.colour.get() != image && pass.depth.get() != image && pass.first.get() != image;
+    }
+
+    // The renames plan_hold found made in sc: where a step drawn now writes again what held steps read, a copy of it
+    // made just before the first of them (an op, drawn now and by the pictures, which draw every step in order), and
+    // those held steps' reads pointed at the copy (their draws' materials
+    // made again with it, their ops' sources). held (by step) is made to fit the steps put in. The copies are the held
+    // frame's (h.renamed), as long as it is held.
+    void rename_reads(Scene &sc, HeldFrame &h) {
+        if (h.renames.empty()) {
+            return;
+        }
+        std::vector<Step> steps;
+        std::vector<uint8_t> held;
+        steps.reserve(sc.steps.size() + h.renames.size());
+        size_t next = 0;
+        std::sort(h.renames.begin(), h.renames.end(), [](const auto &a, const auto &b) { return a.before < b.before; });
+        for (size_t i = 0; i < sc.steps.size(); i++) {
+            for (; next < h.renames.size() && h.renames[next].before == i; next++) {
+                const HeldFrame::Rename &r = h.renames[next];
+                ImageHandle live;
+                for (const Op &op : sc.ops) {
+                    live = op.dst.get() == r.image ? op.dst : op.src.get() == r.image ? op.src : live;
+                }
+                for (size_t k = 0; k < sc.materials.size() && !live; k++) {
+                    const Material &m = sc.materials[k];
+                    live = m.surface.get() == r.image ? m.surface : m.dest.get() == r.image ? m.dest : live;
+                }
+                for (const Pass &pass : sc.passes) {
+                    live = !live && pass.colour.get() == r.image ? pass.colour : live;
+                }
+                ImageHandle copy = live ? stand_in_for(*live) : ImageHandle();
+                if (!copy) {
+                    continue; // (never: then the held steps read the live image, copied as something first writes it)
+                }
+                Op op;
+                op.kind = Op::Kind::copy;
+                op.dst = copy;
+                op.src = live;
+                op.extent = {live->get_width(), live->get_height(), 1};
+                op.work = GpuWork::texture_copy;
+                steps.push_back({Step::Kind::op, uint32_t(sc.ops.size())});
+                held.push_back(0);
+                sc.ops.push_back(std::move(op));
+                for (size_t k : r.readers) {
+                    const Step &st = sc.steps[k];
+                    if (st.kind == Step::Kind::op) {
+                        sc.ops[st.index].src = copy;
+                        continue;
+                    }
+                    const Pass &pass = sc.passes[st.index];
+                    std::unordered_map<uint32_t, uint32_t> remade;
+                    for (uint32_t d = 0; d < pass.draw_count; d++) {
+                        Draw &draw = sc.draws[pass.first_draw + d];
+                        if (draw.clear) {
+                            continue;
+                        }
+                        const Material &m = sc.materials[draw.material];
+                        if (m.surface.get() != r.image && m.dest.get() != r.image) {
+                            continue;
+                        }
+                        auto [it, fresh] = remade.try_emplace(draw.material, uint32_t(sc.materials.size()));
+                        if (fresh) {
+                            Material made = m;
+                            made.surface = made.surface.get() == r.image ? copy : made.surface;
+                            made.dest = made.dest.get() == r.image ? copy : made.dest;
+                            sc.materials.push_back(std::move(made));
+                        }
+                        draw.material = it->second;
+                    }
+                }
+                if (hold_log_ && logged_renames_ < 8) {
+                    logged_renames_++;
+                    size_t redirected = 0;
+                    for (size_t k : r.readers) {
+                        const Step &st = sc.steps[k];
+                        if (st.kind == Step::Kind::pass) {
+                            const Pass &pass = sc.passes[st.index];
+                            for (uint32_t d = 0; d < pass.draw_count; d++) {
+                                const Material &m = sc.materials[sc.draws[pass.first_draw + d].material];
+                                redirected += m.surface == copy || m.dest == copy;
+                            }
+                        }
+                    }
+                    fprintf(stderr, "[scn] frame %llu: %ux%u/%d read by %zu held steps (", (unsigned long long)frame_,
+                            live->get_width(), live->get_height(), int(live->get_format()), r.readers.size());
+                    for (size_t k : r.readers) {
+                        fprintf(stderr, " %zu", k);
+                    }
+                    fprintf(stderr, ") copied before step %zu (its first reader); %zu draws pointed at the copy\n",
+                            r.before, redirected);
+                }
+                h.renamed.push_back(std::move(copy));
+                counts_.held_renames++;
+            }
+            steps.push_back(sc.steps[i]);
+            held.push_back(h.held[i]);
+        }
+        sc.steps = std::move(steps);
+        h.held = std::move(held);
+    }
+
+    // What of sc can be held back for the frame's buffer `frame`, or none (and why, counted)
+    std::optional<HeldFrame> plan_hold(const Scene &sc, const Image *frame) {
+        const size_t n = sc.steps.size();
+        HeldFrame h;
+        h.held.assign(n, 0);
+        // the first-draw images the darkening into the frame reads, and those another target's reads
+        std::unordered_set<const Image *> firsts_here, firsts_elsewhere;
+        for (const Pass &pass : sc.passes) {
+            if (pass.kind == PassKind::darken && pass.first) {
+                (pass.colour.get() == frame ? firsts_here : firsts_elsewhere).insert(pass.first.get());
+            }
+        }
+        for (const Image *f : firsts_here) {
+            if (firsts_elsewhere.count(f)) {
+                counts_.hold_refused_first++;
+                return std::nullopt;
+            }
+        }
+        for (size_t i = 0; i < n; i++) {
+            const Step &st = sc.steps[i];
+            if (st.kind == Step::Kind::pass) {
+                const Pass &pass = sc.passes[st.index];
+                h.held[i] = pass.colour.get() == frame ||
+                            (pass.kind == PassKind::first_draw && firsts_here.count(pass.colour.get()));
+            }
+        }
+        // What depends on them held too: a step reading what a held step writes, or writing it. A step drawn now that
+        // writes what a held step read before it (a target's copy made again: the frame reading an effect drawn into a
+        // small target and copied, between its passes) is not held: what the held steps read of it is copied first,
+        // before it, and they read the copy (renames, made by rename_reads once the frame is held). Where a held step
+        // reads it otherwise than as a texture or an op's source, the step is held as before.
+        std::unordered_set<const Image *> held_reads, held_writes;
+        std::unordered_map<const Image *, std::vector<size_t>> unrenamed; // (held reads since its last write here)
+        std::vector<const Image *> reads, writes;
+        bool any = false;
+        h.renames.clear();
+        for (size_t i = 0; i < n; i++) {
+            step_images(sc, sc.steps[i], reads, writes);
+            if (!h.held[i]) {
+                for (const Image *r : reads) {
+                    h.held[i] |= held_writes.count(r) != 0;
+                }
+                for (const Image *w : writes) {
+                    h.held[i] |= held_writes.count(w) != 0;
+                    auto it = unrenamed.find(w);
+                    if (it != unrenamed.end() && !it->second.empty()) {
+                        h.held[i] |= !std::all_of(it->second.begin(), it->second.end(),
+                                                  [&](size_t k) { return renamable_read(sc, k, w); });
+                    }
+                }
+                if (!h.held[i]) {
+                    for (const Image *w : writes) {
+                        auto it = unrenamed.find(w);
+                        if (it != unrenamed.end() && !it->second.empty()) {
+                            // (copied just before its first held reader: after the last write before them, and
+                            // read in order where the whole scene is drawn, by the pictures between)
+                            const size_t first = it->second.front();
+                            h.renames.push_back({w, first, std::move(it->second)});
+                            it->second.clear();
+                        }
+                    }
+                }
+            }
+            if (h.held[i]) {
+                any = true;
+                held_writes.insert(writes.begin(), writes.end());
+                for (const Image *r : reads) {
+                    if (!held_writes.count(r)) {
+                        unrenamed[r].push_back(i);
+                    }
+                }
+            }
+        }
+        // (what they read and no step here writes again: as it is now, copied as something first writes it)
+        for (const auto &[image, readers] : unrenamed) {
+            if (!readers.empty()) {
+                held_reads.insert(image);
+            }
+        }
+        if (!any) {
+            counts_.hold_refused_none++;
+            return std::nullopt;
+        }
+        // none held where they write another of the GS's targets, or more than one Z
+        for (const Image *w : held_writes) {
+            if (w == frame || firsts_here.count(w)) {
+                continue;
+            }
+            bool target = false, depth = false;
+            for (const auto &t : colour_) {
+                target |= t->image.get() == w;
+            }
+            for (const auto &t : depth_) {
+                depth |= t->image.get() == w;
+            }
+            if (target) {
+                counts_.hold_refused_target++;
+                if (hold_log_ && logged_refusals_ < 6) {
+                    logged_refusals_++;
+                    fprintf(stderr, "[scn] frame %llu not held: it writes %ux%u/%d; held steps:",
+                            (unsigned long long)frame_, w->get_width(), w->get_height(), int(w->get_format()));
+                    for (size_t i = 0; i < n; i++) {
+                        const Step &st = sc.steps[i];
+                        if (st.kind == Step::Kind::op) {
+                            const Op &op = sc.ops[st.index];
+                            fprintf(stderr, " %s%zu:op%d(%ux%u<-%ux%u)", h.held[i] ? "*" : "", i, int(op.kind),
+                                    op.dst ? op.dst->get_width() : 0, op.dst ? op.dst->get_height() : 0,
+                                    op.src ? op.src->get_width() : 0, op.src ? op.src->get_height() : 0);
+                        } else {
+                            const Pass &pass = sc.passes[st.index];
+                            fprintf(stderr, " %s%zu:pass%d(%ux%u%s,%zu draws%s%p)", h.held[i] ? "*" : "", i,
+                                    int(pass.kind), pass.colour ? pass.colour->get_width() : 0,
+                                    pass.colour ? pass.colour->get_height() : 0,
+                                    pass.colour.get() == frame ? " frame" : "", size_t(pass.draw_count),
+                                    pass.depth ? " Z" : "", (const void *)pass.depth.get());
+                        }
+                    }
+                    fprintf(stderr, "\n");
+                }
+                return std::nullopt;
+            }
+            if (depth) {
+                if (h.depth && h.depth.get() != w) {
+                    counts_.hold_refused_depth++;
+                    return std::nullopt;
+                }
+                for (const Pass &pass : sc.passes) {
+                    if (pass.depth.get() == w) {
+                        h.depth = pass.depth;
+                    }
+                }
+                for (const Op &op : sc.ops) {
+                    if (!h.depth && op.dst.get() == w) {
+                        h.depth = op.dst;
+                    }
+                }
+            }
+        }
+        // what they draw of the frame's buffer and use of the Z; whether their first use of the Z clears it
+        bool depth_met = false;
+        for (size_t i = 0; i < n; i++) {
+            if (!h.held[i]) {
+                continue;
+            }
+            const Step &st = sc.steps[i];
+            if (st.kind == Step::Kind::op) {
+                const Op &op = sc.ops[st.index];
+                if (op.dst && (op.dst.get() == frame || op.dst == h.depth)) {
+                    VkRect2D r = op.kind == Op::Kind::clear
+                                     ? whole_of(*op.dst)
+                                     : VkRect2D{{op.dst_at.x, op.dst_at.y}, {op.extent.width, op.extent.height}};
+                    if (op.dst.get() == frame) {
+                        h.frame_rect = rect_union(h.frame_rect, r);
+                    } else {
+                        if (!depth_met) {
+                            h.depth_self_cleared = op.kind == Op::Kind::clear;
+                        }
+                        depth_met = true;
+                        h.depth_rect = rect_union(h.depth_rect, r);
+                    }
+                }
+                if (op.src && op.src == h.depth) {
+                    depth_met = true;
+                    h.depth_rect = rect_union(h.depth_rect, whole_of(*op.src));
+                }
+                continue;
+            }
+            const Pass &pass = sc.passes[st.index];
+            VkRect2D drawn{};
+            if (pass.clear_colour || pass.clear_depth) {
+                drawn = pass.area;
+            }
+            for (uint32_t k = 0; k < pass.draw_count; k++) {
+                const Draw &d = sc.draws[pass.first_draw + k];
+                drawn = rect_union(drawn, d.clear ? VkRect2D{{int32_t(d.clear_rect.rect.offset.x),
+                                                              int32_t(d.clear_rect.rect.offset.y)},
+                                                             d.clear_rect.rect.extent}
+                                                  : d.scissor);
+            }
+            if (pass.colour.get() == frame) {
+                h.frame_rect = rect_union(h.frame_rect, pass.clear_colour ? rect_union(drawn, pass.area) : drawn);
+            }
+            if (pass.depth && pass.depth == h.depth) {
+                if (!depth_met) {
+                    h.depth_self_cleared = pass.clear_depth;
+                }
+                depth_met = true;
+                h.depth_rect = rect_union(h.depth_rect, pass.clear_depth ? rect_union(drawn, pass.area) : drawn);
+            }
+        }
+        h.frame_rect = clipped(h.frame_rect, *frame);
+        if (h.depth) {
+            h.depth_rect = clipped(h.depth_rect, *h.depth);
+            if (h.depth_self_cleared) {
+                // (the load op's area must hold every later use: else what it did not clear is read)
+                h.depth_self_cleared = false;
+                for (size_t i = 0; i < n && !h.depth_self_cleared; i++) {
+                    const Step &st = sc.steps[i];
+                    if (h.held[i] && st.kind == Step::Kind::pass && sc.passes[st.index].depth == h.depth) {
+                        const Pass &pass = sc.passes[st.index];
+                        h.depth_self_cleared = rect_contains(clipped(pass.area, *h.depth), h.depth_rect);
+                        break;
+                    }
+                    if (h.held[i] && st.kind == Step::Kind::op && sc.ops[st.index].dst == h.depth) {
+                        h.depth_self_cleared = sc.ops[st.index].kind == Op::Kind::clear;
+                        break;
+                    }
+                }
+            }
+        }
+        for (const auto &t : colour_) {
+            if (t->image.get() == frame) {
+                h.frame = t->image;
+            }
+        }
+        for (const Pass &pass : sc.passes) {
+            if (pass.kind == PassKind::first_draw && firsts_here.count(pass.colour.get()) &&
+                std::none_of(h.firsts.begin(), h.firsts.end(),
+                             [&](const ImageHandle &f) { return f == pass.colour; })) {
+                h.firsts.push_back(pass.colour);
+            }
+        }
+        for (const std::unordered_set<const Image *> *set : {&held_reads, &held_writes}) {
+            for (const Image *im : *set) {
+                if (im != frame && im != h.depth.get() && !firsts_here.count(im)) {
+                    h.others.insert(im);
+                }
+            }
+        }
+        if (!h.frame || h.frame_rect.extent.width == 0) {
+            counts_.hold_refused_none++;
+            return std::nullopt;
+        }
+        h.frame_number = frame_;
+        if (hold_log_ && logged_holds_ < 12) {
+            logged_holds_++;
+            fprintf(stderr, "[scn] held frame %llu: %zu of %zu steps; frame %d,%d %ux%u; Z %s %d,%d %ux%u; %zu first-draw, "
+                    "%zu others:", (unsigned long long)frame_, size_t(std::count(h.held.begin(), h.held.end(), 1)), n,
+                    h.frame_rect.offset.x, h.frame_rect.offset.y, h.frame_rect.extent.width, h.frame_rect.extent.height,
+                    !h.depth ? "none" : h.depth_self_cleared ? "self-cleared" : "loaded", h.depth_rect.offset.x,
+                    h.depth_rect.offset.y, h.depth_rect.extent.width, h.depth_rect.extent.height, h.firsts.size(),
+                    h.others.size());
+            for (const Image *o : h.others) {
+                fprintf(stderr, " %ux%u/%d", o->get_width(), o->get_height(), int(o->get_format()));
+            }
+            fprintf(stderr, "\n");
+        }
+        return h;
+    }
+
+    // An image of the same size, format and usage as live, for a while (back with stand_in_back)
+    ImageHandle stand_in_for(const Image &live) {
+        for (size_t k = 0; k < stand_in_pool_.size(); k++) {
+            const ImageHandle &c = stand_in_pool_[k];
+            if (c && c->get_width() == live.get_width() && c->get_height() == live.get_height() &&
+                c->get_format() == live.get_format() &&
+                c->get_create_info().usage == (live.get_create_info().usage | stand_in_usage)) {
+                ImageHandle taken = std::move(stand_in_pool_[k]);
+                stand_in_pool_.erase(stand_in_pool_.begin() + std::ptrdiff_t(k));
+                return taken;
+            }
+        }
+        ImageCreateInfo info = live.get_create_info();
+        info.usage |= stand_in_usage;
+        info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+        counts_.stand_ins_made++;
+        return device_.create_image(info, nullptr);
+    }
+    void stand_in_back(ImageHandle image) {
+        if (image) {
+            stand_in_pool_.push_back(std::move(image));
+        }
+    }
+    static bool is_depth_format(VkFormat f) {
+        return f == VK_FORMAT_D16_UNORM || f == VK_FORMAT_D32_SFLOAT || f == VK_FORMAT_D24_UNORM_S8_UINT ||
+               f == VK_FORMAT_D32_SFLOAT_S8_UINT || f == VK_FORMAT_X8_D24_UNORM_PACK32;
+    }
+
+    // The live image copied for a held frame, as something first writes it (submitted now: before the step that
+    // writes it, which the open scene records at its close)
+    bool snapshot(HeldFrame &h, const ImageHandle &live) {
+        ImageHandle copy = stand_in_for(*live);
+        if (!copy) {
+            return false;
+        }
+        CommandBufferHandle cmd = device_.request_command_buffer();
+        cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        const VkImageSubresourceLayers layers = {
+            VkImageAspectFlags(is_depth_format(live->get_format()) ? VK_IMAGE_ASPECT_DEPTH_BIT
+                                                                   : VK_IMAGE_ASPECT_COLOR_BIT),
+            0, 0, 1};
+        cmd->copy_image(*copy, *live, {0, 0, 0}, {0, 0, 0}, {live->get_width(), live->get_height(), 1}, layers, layers);
+        cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        notes_.submitted("kf4-pc", "a held frame's image copied before it is written", hang_clock_s());
+        device_.submit(cmd);
+        if (hold_log_ && logged_holds_ < 12) {
+            logged_holds_++;
+            fprintf(stderr, "[scn] held frame %llu: %ux%u format %d copied before written (%s)\n",
+                    (unsigned long long)h.frame_number, live->get_width(), live->get_height(), int(live->get_format()),
+                    live == h.depth ? "its Z" : "another image");
+        }
+        h.substitutes[live.get()] = std::move(copy);
+        counts_.held_snapshots++;
+        return true;
+    }
+
+    // A held frame's steps recorded now (submitted: before the open scene, which nothing of theirs meets), into the
+    // live images but where they have their own (substitutes), with first-draw images of their own, cleared
+    void draw_held(HeldFrame &h) {
+        CommandBufferHandle cmd = device_.request_command_buffer();
+        cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
+        cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
+        std::vector<ImageHandle> own;
+        for (const ImageHandle &f : h.firsts) {
+            ImageHandle mine = stand_in_for(*f);
+            if (!mine) {
+                continue;
+            }
+            VkClearValue none = {};
+            none.color.float32[0] = first_none;
+            cmd->clear_image(*mine, none);
+            h.substitutes[f.get()] = mine;
+            own.push_back(mine);
+        }
+        if (h.depth && h.depth_written_since && h.depth_self_cleared && !h.substitutes.count(h.depth.get())) {
+            // (their Z cleared by them: as is)
+            ImageHandle mine = stand_in_for(*h.depth);
+            if (mine) {
+                h.substitutes[h.depth.get()] = mine;
+            }
+        }
+        drawer_.record(*h.scene, *cmd, nullptr, &h.drawn, &h.substitutes);
+        times_.end(*cmd);
+        char what[120];
+        snprintf(what, sizeof(what), "a held frame's steps (frame %llu), drawn late",
+                 (unsigned long long)h.frame_number);
+        notes_.submitted("kf4-pc", what, hang_clock_s());
+        device_.submit(cmd);
+        counts_.held_drawn++;
+    }
+
+    void let_go_of_held(HeldFrame &h) {
+        for (auto &[k, image] : h.substitutes) {
+            stand_in_back(std::move(image));
+        }
+        h.substitutes.clear();
+        for (ImageHandle &image : h.renamed) {
+            stand_in_back(std::move(image));
+        }
+        h.renamed.clear();
+    }
+
+    // rect of image (its depth, or colour) about to be used: covers, written over whole. A held frame whose frame buffer
+    // that meets is drawn first, or dead where it covers what they drew; whose Z it reads, drawn first; whose Z or other
+    // images it writes over, those copied first (or the Z left to them, where they clear it first).
+    void held_use(const Image *image, bool depth, const VkRect2D &rect, bool covers) {
+        for (size_t i = 0; i < held_.size();) {
+            HeldFrame &h = held_[i];
+            bool draw = false, dead = false;
+            if (image == h.frame.get() && !depth) {
+                if (covers && rect_contains(rect, h.frame_rect)) {
+                    dead = true;
+                } else if (rects_meet(rect, h.frame_rect)) {
+                    draw = true;
+                }
+            } else if (h.depth && image == h.depth.get()) {
+                if (!h.depth_written_since) {
+                    if (!rects_meet(rect, h.depth_rect)) {
+                        // (elsewhere in it: the live Z changed, theirs is theirs from now)
+                        h.depth_written_since = true;
+                        if (!h.depth_self_cleared && !snapshot(h, h.depth)) {
+                            draw = true;
+                        }
+                    } else if (covers && rect_contains(rect, h.depth_rect)) {
+                        h.depth_written_since = true;
+                        if (!h.depth_self_cleared && !snapshot(h, h.depth)) {
+                            draw = true;
+                        }
+                    } else {
+                        draw = true; // (their Z read: drawn into the live Z first)
+                    }
+                } else if (rects_meet(rect, h.depth_rect) && !covers) {
+                    // (their Z read where it was written over since: never by the game's own frames, which clear it)
+                    counts_.held_depth_read_late++;
+                }
+            } else if (h.others.count(image) && !h.substitutes.count(image)) {
+                ImageHandle live;
+                for (const auto &scp : {h.scene}) {
+                    for (const Pass &pass : scp->passes) {
+                        for (const ImageHandle *hh : {&pass.colour, &pass.depth, &pass.first}) {
+                            if (hh->get() == image) {
+                                live = *hh;
+                            }
+                        }
+                        for (uint32_t k = 0; k < pass.draw_count && !live; k++) {
+                            const Draw &d = scp->draws[pass.first_draw + k];
+                            const Material &m = scp->materials[d.material];
+                            live = m.surface.get() == image ? m.surface : m.dest.get() == image ? m.dest : live;
+                        }
+                    }
+                    for (const Op &op : scp->ops) {
+                        live = op.src.get() == image ? op.src : op.dst.get() == image ? op.dst : live;
+                    }
+                }
+                if (!live || !snapshot(h, live)) {
+                    draw = true;
+                }
+            }
+            if (draw) {
+                draw_held(h);
+            }
+            if (draw || dead) {
+                counts_.held_dead += dead ? 1 : 0;
+                let_go_of_held(h);
+                held_.erase(held_.begin() + std::ptrdiff_t(i));
+                continue;
+            }
+            i++;
+        }
+    }
+
+    // Every held frame drawn now (a save state's memory, a scale changed)
+    void draw_all_held() {
+        for (HeldFrame &h : held_) {
+            draw_held(h);
+            let_go_of_held(h);
+        }
+        held_.clear();
     }
 
     // How each image the kept scenes write starts in a picture: the first-draw image cleared (no triangle yet); one whose
@@ -808,7 +1610,8 @@ public:
                 written.insert(h.get());
             }
         };
-        for (const Scene &sc : kept_) {
+        for (const auto &scp : kept_) {
+            const Scene &sc = *scp;
             for (const Step &st : sc.steps) {
                 if (st.kind == Step::Kind::op) {
                     const Op &op = sc.ops[st.index];
@@ -903,10 +1706,13 @@ public:
             counts_.pictures_not_drawn++;
             return false;
         }
-        flush_batch();
-        close_scene(false);
+        if (!ahead_.open) {
+            flush_batch();
+            close_scene(false);
+        }
         if (between_bound_) {
-            for (const Scene &sc : kept_) {
+            for (const auto &scp : kept_) {
+                const Scene &sc = *scp;
                 CommandBufferHandle cmd = device_.request_command_buffer();
                 cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
                 drawer_.record(sc, *cmd);
@@ -956,7 +1762,8 @@ public:
         Drawer::PictureDraw pd;
         pd.buffers = buffers;
         pd.stand_ins = &stand_ins_;
-        for (const Scene &sc : kept_) {
+        for (const auto &scp : kept_) {
+            const Scene &sc = *scp;
             drawer_.record(sc, *cmd, &pd);
         }
         times_.end(*cmd);
@@ -1067,6 +1874,32 @@ public:
                     (unsigned long long)counts_.stand_ins_made, (unsigned long long)counts_.stand_in_copies,
                     between_bound_ ? " (KF4_SCN_BETWEEN_BOUND: the frame's scenes again, unmoved)" : "");
         }
+        if (counts_.aheads || counts_.ahead_refused) {
+            fprintf(stderr,
+                    "[stats] scene renderer packets taken ahead of the pictures between: %llu times, %llu refused (no "
+                    "frame kept, or not shown from its stand-in); %llu pictures after them shown from the buffer as it "
+                    "is\n",
+                    (unsigned long long)counts_.aheads, (unsigned long long)counts_.ahead_refused,
+                    (unsigned long long)counts_.ahead_unshown);
+        }
+        if (drop_frame_) {
+            fprintf(stderr, "[stats] scene renderer KF4_SCN_DROP_FRAME: %llu of the frames' steps left out\n",
+                    (unsigned long long)counts_.frame_steps_dropped);
+        }
+        if (counts_.held_frames || counts_.hold_refused_none || counts_.hold_refused_target ||
+            counts_.hold_refused_depth || counts_.hold_refused_first) {
+            fprintf(stderr,
+                    "[stats] scene renderer frames held back: %llu (%llu steps; %llu dead, %llu drawn late, %llu still "
+                    "held; %llu reads pointed at a copy made before written again; %llu images copied before written, %llu Z reads after it was written over); not held: %llu "
+                    "nothing to hold, %llu writing another target, %llu with two Z, %llu a first-draw image shared\n",
+                    (unsigned long long)counts_.held_frames, (unsigned long long)counts_.held_steps,
+                    (unsigned long long)counts_.held_dead, (unsigned long long)counts_.held_drawn,
+                    (unsigned long long)held_.size(), (unsigned long long)counts_.held_renames,
+                    (unsigned long long)counts_.held_snapshots,
+                    (unsigned long long)counts_.held_depth_read_late, (unsigned long long)counts_.hold_refused_none,
+                    (unsigned long long)counts_.hold_refused_target, (unsigned long long)counts_.hold_refused_depth,
+                    (unsigned long long)counts_.hold_refused_first);
+        }
         const Drawer::Counts &d = drawer_.counts();
         fprintf(stderr,
                 "[stats] scene renderer: %llu scenes drawn; %llu passes, %llu draws (%llu native, %llu GIF, %llu clears in a "
@@ -1160,6 +1993,11 @@ private:
     // ---- The scene ----
     // The scene drawn and submitted (flush: put on the GPU's queue now, else with the next submit that flushes)
     void close_scene(bool flush) {
+        if (ahead_.open) {
+            ahead_.open = false; // (packets_ahead's end: their scene drawn)
+            ahead_.layers.clear();
+            ahead_.target = {};
+        }
         end_shadow_run();
         pass_.open = false;
         fuse_.valid = false;
@@ -1174,7 +2012,25 @@ private:
         }
         CommandBufferHandle cmd = device_.request_command_buffer();
         cmd->set_dynamic_state(drawer_.dynamic_ds(), drawer_.dynamic_blend());
-        drawer_.record(scene_, *cmd);
+        std::vector<uint8_t> left_out;
+        std::optional<HeldFrame> hold;
+        if (drop_into_) {
+            left_out = frame_steps(scene_, drop_into_);
+            drop_into_ = nullptr;
+        } else if (hold_into_) {
+            hold = plan_hold(scene_, hold_into_);
+            hold_into_ = nullptr;
+            if (hold) {
+                rename_reads(scene_, *hold);
+                hold->drawn.resize(hold->held.size());
+                for (size_t i = 0; i < hold->held.size(); i++) {
+                    hold->drawn[i] = !hold->held[i];
+                    counts_.held_steps += hold->held[i];
+                }
+                left_out = hold->held;
+            }
+        }
+        drawer_.record(scene_, *cmd, nullptr, left_out.empty() ? nullptr : &left_out);
         times_.end(*cmd);
         char what[160];
         snprintf(what, sizeof(what), "scene, vblank %llu: %zu passes, %zu draws, %zu ops", (unsigned long long)vblank_,
@@ -1185,10 +2041,18 @@ private:
             device_.flush_frame();
         }
         counts_.scenes++;
-        if (keeping_stretches()) {
+        if (keeping_stretches() || hold) {
             // (the stretch: the scenes closed since the last vblank, a frame's when frame_interp.c takes it)
-            stretch_.push_back(std::move(scene_));
+            auto closed = std::make_shared<Scene>(std::move(scene_));
             scene_ = Scene();
+            if (keeping_stretches()) {
+                stretch_.push_back(closed);
+            }
+            if (hold) {
+                hold->scene = std::move(closed);
+                held_.push_back(std::move(*hold));
+                counts_.held_frames++;
+            }
         } else {
             scene_.clear();
         }
@@ -1367,6 +2231,9 @@ private:
     void push_op(Op &&op) {
         end_shadow_run();
         pass_.open = false;
+        if (op.dst && op.dst.get() == last_scanout_.image.get()) {
+            last_scanout_ = {}; // (anywhere in it: slice 5's scanout_unchanged)
+        }
         if (op.dst && op.dst.get() == alpha_clear_) {
             alpha_clear_ = nullptr; // (written: its alpha no longer known)
         }
@@ -1456,6 +2323,9 @@ private:
     // rect of image (its colour, or its depth) written whole: the clears held back there and the layers folded there
     // that it covers are dead; those it only meets are drawn first
     void written_over(const ImageHandle &image, bool depth, const VkRect2D &rect) {
+        if (!held_.empty()) {
+            held_use(image.get(), depth, rect, true);
+        }
         for (size_t i = 0; i < pending_.size();) {
             const PendingClear &p = pending_[i];
             if (p.image.get() == image.get() && p.depth == depth && rect_contains(rect, p.rect)) {
@@ -1475,12 +2345,21 @@ private:
                 }
             }
         }
+        in_written_over_ = true;
         touch(image, depth, rect);
+        in_written_over_ = false;
     }
 
     // What the stream has drawn into rect of image (its colour or its depth) made so in the scene: the clears held
     // back there each a step of its own, and the layers folded there drawn
     void touch(const ImageHandle &image, bool depth, const VkRect2D &rect, bool layers_too = true) {
+        if (last_scanout_.valid && !depth && image.get() == last_scanout_.image.get() &&
+            rects_meet(rect, last_scanout_.shown)) {
+            last_scanout_ = {};
+        }
+        if (!held_.empty() && !in_written_over_) {
+            held_use(image.get(), depth, rect, false);
+        }
         for (size_t i = 0; i < pending_.size();) {
             const PendingClear &p = pending_[i];
             if (p.image.get() == image.get() && p.depth == depth && rects_meet(p.rect, rect)) {
@@ -1964,9 +2843,9 @@ private:
     }
 
     // The layer kept on image that meets shown can be drawn by the picture: inside it
-    bool composable(const Image *image, const VkRect2D &shown) const {
+    bool composable(const std::vector<Layer> &layers, const Image *image, const VkRect2D &shown) const {
         bool any = false;
-        for (const Layer &l : layers_) {
+        for (const Layer &l : layers) {
             if (l.image.get() != image || !rects_meet(l.rect, shown)) {
                 continue;
             }
@@ -2797,7 +3676,9 @@ private:
         if (pending_scale_ == scale_) {
             return;
         }
+        draw_all_held(); // (into the images of the scale they were drawn at, blitted below)
         scale_ = pending_scale_;
+        last_scanout_ = {};
         for (auto *list : {&colour_, &depth_}) {
             for (auto &s : *list) {
                 ImageHandle image = make_target_image(s->width(), s->height, s->depth, s->psm);
@@ -4292,7 +5173,25 @@ private:
     Scene scene_;
     // (KF4_SCN_BETWEEN_BOUND) the frame's scene kept for its pictures between's bound
     const bool between_bound_ = getenv("KF4_SCN_BETWEEN_BOUND") && strcmp(getenv("KF4_SCN_BETWEEN_BOUND"), "0") != 0;
-    std::vector<Scene> kept_, stretch_, last_stretch_;
+    const bool drop_frame_ = getenv("KF4_SCN_DROP_FRAME") && strcmp(getenv("KF4_SCN_DROP_FRAME"), "0") != 0;
+    const Image *drop_into_ = nullptr; // (close_scene's: frame_steps' image)
+    // (slice 5: scanout_unchanged) the last scanout of a buffer as it is: its rect, the image and pixels it read
+    struct LastScanout {
+        bool valid = false;
+        ShownRect rect;
+        ImageHandle image;
+        VkRect2D shown{};
+    };
+    LastScanout last_scanout_;
+    // (slice 4b: the frame held back; KF4_SCN_HOLD_FRAME=0: drawn as its scene closes)
+    const bool hold_frame_ = !(getenv("KF4_SCN_HOLD_FRAME") && strcmp(getenv("KF4_SCN_HOLD_FRAME"), "0") == 0);
+    const Image *hold_into_ = nullptr; // (close_scene's: the frame's buffer whose steps it holds back)
+    std::vector<HeldFrame> held_;      // (oldest first)
+    const bool hold_log_ = getenv("KF4_SCN_HOLD_LOG") && atoi(getenv("KF4_SCN_HOLD_LOG")) != 0;
+    int logged_holds_ = 0, logged_refusals_ = 0, logged_renames_ = 0;
+    bool in_written_over_ = false;     // (written_over's touch: held_use was told)
+    // (shared: a held frame, HeldFrame, keeps its scene past the next frame's taking)
+    std::vector<std::shared_ptr<Scene>> kept_, stretch_, last_stretch_;
     FrameShape kept_shape_;
     uint64_t taken_at_ = UINT64_MAX; // (frame_ when a frame was last taken)
     // the kept scenes' written images' stand-ins (plan_stand_ins), and the stand-in of each (Drawer::PictureDraw's)
@@ -4394,8 +5293,13 @@ private:
     std::map<std::string, uint64_t> census_;
     uint64_t census_pairs_ = 0, census_singles_ = 0;
     struct Counts {
+        uint64_t frame_steps_dropped = 0;
+        uint64_t held_renames = 0;
+        uint64_t held_frames = 0, held_steps = 0, held_dead = 0, held_drawn = 0, held_snapshots = 0,
+                 held_depth_read_late = 0, hold_refused_none = 0, hold_refused_target = 0, hold_refused_depth = 0,
+                 hold_refused_first = 0;
         uint64_t scenes = 0, bound_pictures = 0, frames_kept = 0, frames_not_kept = 0, pictures_between = 0,
-                 pictures_not_drawn = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
+                 pictures_not_drawn = 0, scanouts_unchanged = 0, aheads = 0, ahead_refused = 0, ahead_unshown = 0, pictures_shown = 0, pictures_unshown = 0, pictures_without_layers = 0, stand_ins_made = 0, stand_in_copies = 0, primitives = 0, native_batches = 0, load_clears = 0;
         uint64_t native_joined = 0, native_same_material = 0, target_copies_reused = 0;
         uint64_t date_copies = 0, date_copies_native = 0, first_cleared = 0, alpha_resets = 0, alpha_read_frames = 0,
                  alpha_checked_frames = 0;

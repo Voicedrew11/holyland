@@ -413,10 +413,11 @@ int port_gs_interp_gpu(void);
 /* 1 when the renderer's pictures between leave the GS's memory as the game's frame left it (the scene renderer's: drawn
    into images of their own, docs/plans/scene-slice4-results.md), so that no exact restore is drawn after them */
 int port_gs_between_leaves_memory(void);
+/* 1: the renderer leaves out the pictures between it would not have ready by their time (the scene renderer's slice 5,
+   port/gs/pc/pcr_budget.h): every picture between is asked for, cut by nothing */
+int port_gs_budgets_pictures(void);
 void port_gs_interp_frame(void *frame);
 void port_gs_interp_picture(const void *picture);
-/* --frame-rate unlocked: the pictures between a second the renderer has time for (0: not known) */
-double port_gs_pictures_room_hz(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */
