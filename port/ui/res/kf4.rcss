@@ -1,6 +1,8 @@
-/* The player menu's look: King's Field IV's. Windows of near-black blue-grey with a double steel rule, as the
+/* The player menu's look: King's Field IV's. A sidebar with the Holyland logo and the sections, the section's rows,
+   the focused row's help; the keys along the bottom. Windows of near-black blue-grey with a double steel rule, as the
    game's own menus; titles in an old print face in pale gold; the chosen line a cold blue band; text in bone white.
-   Only borders, colours and straight gradients (port/ui/ui_render.hpp draws no shaders, layers or transforms).
+   Only borders, colours, straight gradients and the menu's alpha masks (port/ui/ui_render.hpp draws no shaders,
+   layers or transforms).
 
    Colours:  window #0a0f17 to #05080d   rule #7a879c / #263042   gold #c8b07a   text #d9d3c3
              dim #8d95a3   off #5a616d   band #2b4673 to #142238   band edge #b9c7e0   note #d39a6a */
@@ -29,15 +31,51 @@ body {
 	decorator: vertical-gradient(#000000a8 #000000d8);
 }
 
+/* ---- While the menu is closed: only the hint of the keys that open it --------------------------------------------- */
+body.closed #shade, body.closed #window {
+	display: none;
+}
+
+#hint {
+	display: none;
+	position: absolute;
+	top: 28dp;
+	left: 50%;
+	width: 420dp;
+	margin-left: -210dp;
+	box-sizing: border-box;
+	padding: 7dp 14dp 7dp 14dp;
+	text-align: center;
+	font-size: 15dp;
+	color: #bdb6a6;
+	border: 1dp #7a879c;
+	decorator: vertical-gradient(#0a0f17e8 #05080df0);
+}
+
+body.closed #hint.shown {
+	display: block;
+}
+
+#hint key {
+	margin: 0 5dp;
+}
+
+#hint-what {
+	font-family: "IM FELL English";
+	font-size: 17dp;
+	color: #c8b07a;
+	margin-left: 10dp;
+}
+
 /* ---- The window ---------------------------------------------------------------------------------------------------- */
 #window {
 	position: absolute;
 	left: 50%;
 	top: 50%;
-	width: 1000dp;
-	height: 680dp;
-	margin-left: -500dp;
-	margin-top: -340dp;
+	width: 1200dp;
+	height: 740dp;
+	margin-left: -600dp;
+	margin-top: -370dp;
 }
 
 #rule-outer {
@@ -56,19 +94,37 @@ body {
 	height: 100%;
 	box-sizing: border-box;
 	border: 1dp #263042;
-	padding: 14dp 26dp 12dp 26dp;
+	padding-bottom: 10dp;
+}
+
+#main {
+	display: flex;
+	flex-direction: row;
+	flex: 1;
+	min-height: 0;
+}
+
+/* ---- The sidebar: the logo, the sections, the version ------------------------------------------------------------- */
+#sidebar {
+	display: flex;
+	flex-direction: column;
+	width: 270dp;
+	box-sizing: border-box;
+	padding: 22dp 0 12dp 0;
+	border-right: 1dp #263042;
+	decorator: vertical-gradient(#0e1522c0 #060a10c0);
 }
 
 #crest {
 	text-align: center;
-	padding-bottom: 6dp;
+	padding: 0 18dp 14dp 18dp;
+	margin-bottom: 8dp;
+	border-bottom: 1dp #263042;
 }
 
-#title {
-	font-family: "IM FELL English SC";
-	font-size: 34dp;
-	color: #c8b07a;
-	letter-spacing: 2dp;
+#logo {
+	width: 228dp;
+	image-color: #c8b07a;
 }
 
 #subtitle {
@@ -76,25 +132,22 @@ body {
 	font-style: italic;
 	font-size: 16dp;
 	color: #8d95a3;
-	margin-top: -4dp;
+	margin-top: 4dp;
+	letter-spacing: 1dp;
 }
 
-/* ---- Tabs ---------------------------------------------------------------------------------------------------------- */
 #tabs {
-	display: flex;
-	flex-direction: row;
-	justify-content: center;
-	border-bottom: 1dp #263042;
-	margin-bottom: 10dp;
+	flex: 1;
+	overflow-y: auto;
 }
 
 tab {
 	display: block;
 	font-family: "IM FELL English SC";
-	font-size: 19dp;
+	font-size: 20dp;
 	color: #8d95a3;
-	padding: 6dp 16dp 5dp 16dp;
-	border-bottom: 2dp #00000000;
+	padding: 4dp 18dp 4dp 26dp;
+	border-left: 3dp #00000000;
 }
 
 tab:hover {
@@ -103,22 +156,45 @@ tab:hover {
 
 tab.selected {
 	color: #efe7d2;
-	border-bottom: 2dp #c8b07a;
+	border-left: 3dp #c8b07a;
+	decorator: horizontal-gradient(#c8b07a38 #c8b07a00);
 }
 
+/* the keys that change the section, above and below them */
 tab.end {
 	font-family: Spectral;
-	font-size: 13dp;
+	font-size: 12dp;
 	color: #5a616d;
-	padding-top: 10dp;
+	padding-top: 2dp;
+	padding-bottom: 2dp;
 }
 
-/* ---- The page: rows on the left, the focused row's help on the right ------------------------------------------------ */
-#page {
+#version {
+	font-size: 12dp;
+	color: #5a616d;
+	padding: 8dp 18dp 0 26dp;
+}
+
+#version update {
+	display: block;
+	color: #c8b07a;
+}
+
+/* ---- The section: its title and rows ------------------------------------------------------------------------------- */
+#content {
 	display: flex;
-	flex-direction: row;
+	flex-direction: column;
 	flex: 1;
-	min-height: 0;
+	min-width: 0;
+	padding: 18dp 12dp 0 26dp;
+}
+
+#heading {
+	font-family: "IM FELL English SC";
+	font-size: 30dp;
+	color: #c8b07a;
+	letter-spacing: 1dp;
+	padding-bottom: 6dp;
 }
 
 #rows {
@@ -224,6 +300,49 @@ note {
 	margin-right: 10dp;
 }
 
+/* ---- A binding's slots: two keys and a controller button ----------------------------------------------------------- */
+row.binding label {
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+row.binding.changed label {
+	color: #e3dabf;
+}
+
+slot {
+	display: block;
+	width: 92dp;
+	margin-left: 4dp;
+	padding: 2dp 4dp;
+	text-align: center;
+	font-size: 13dp;
+	color: #bdb6a6;
+	border: 1dp #263042;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+slot.empty {
+	color: #5a616d;
+}
+
+slot:hover {
+	border: 1dp #7a879c;
+}
+
+row.focused slot.chosen {
+	color: #efe7d2;
+	border: 1dp #b9c7e0;
+	decorator: vertical-gradient(#2b4673 #142238);
+}
+
+slot.listening, row.focused slot.listening {
+	color: #f0c49a;
+	border: 1dp #d39a6a;
+	decorator: vertical-gradient(#5a3a22 #2a1a10);
+}
+
 /* ---- A choice's list, open under its row --------------------------------------------------------------------------- */
 row.open {
 	margin-bottom: 0;
@@ -254,10 +373,10 @@ choice.highlighted {
 
 /* ---- Help ---------------------------------------------------------------------------------------------------------- */
 #help {
-	width: 300dp;
-	margin-left: 18dp;
-	padding: 4dp 0 0 18dp;
+	width: 280dp;
+	padding: 26dp 22dp 0 20dp;
 	border-left: 1dp #263042;
+	overflow-y: auto;
 }
 
 #help h2 {
@@ -285,9 +404,8 @@ choice.highlighted {
 	text-align: center;
 	font-size: 14dp;
 	color: #8d95a3;
-	padding-top: 8dp;
+	padding-top: 9dp;
 	border-top: 1dp #263042;
-	margin-top: 8dp;
 }
 
 prompt {

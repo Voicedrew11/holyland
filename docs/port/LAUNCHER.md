@@ -1,13 +1,13 @@
-# The launcher: Darker Reality
+# The launcher: Holyland
 
-Players get **Darker Reality**, a launcher that builds the game on their own computer and then plays it. A
+Players get **Holyland**, a launcher that builds the game on their own computer and then plays it. A
 release never contains a built `kf4`: the game's code comes from the decomp, so, like the Verdite ports
 (`verdite-core/launcher`), a release ships the **source and the tools** and the build happens on the player's
-machine. The design follows Verdite's launcher; Darker Reality is C/C++, so the code is new (`launcher/`).
+machine. The design follows Verdite's launcher; Holyland is C/C++, so the code is new (`launcher/`).
 
-"Darker Reality" is the project's name (it was holyland until 2026-11-18): `launcher/product.h`,
+"Holyland" is the project's name (it was Darker Reality from 2026-11-18 to 2026-11-20): `launcher/product.h`,
 `packaging/package.env`, and the folders in `port/platform/data_dir.c`. The game's program is still `kf4`. The
-first start after the rename moves the old `holyland` data and local folders to their new names
+first start after the rename moves the `darker-reality` data and local folders back to `holyland`
 (`data_dir_move_old_folders`), so players keep their settings and saves.
 
 ## What it does
@@ -24,7 +24,7 @@ first start after the rename moves the old `holyland` data and local folders to 
 5. Play: the window closes, `kf4 --disc <disc> [what came after --]` runs in the player's working folder, its
    output goes to the console and to `game.log`. A crash shows "The game stopped" with the log's end.
 
-Later starts go straight into the game. `darker-reality --launcher` (Start menu: "Darker Reality (disc, rebuild,
+Later starts go straight into the game. `holyland --launcher` (Start menu: "Holyland (disc, rebuild,
 updates)"; the desktop entry's action) shows the launcher instead: Play, Change disc, Rebuild, Open data folder,
 "Check for updates at launch". `--build-only` builds with no window and no disc (CI, tests).
 
@@ -32,11 +32,11 @@ updates)"; the desktop entry's action) shows the launcher instead: Play, Change 
 
 | Where | What | Written by |
 |---|---|---|
-| data folder (`port/platform/data_dir.c`: `%APPDATA%\darker-reality`, `~/.config/darker-reality`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
+| data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.config/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
 | | `launcher.json`: disc, `update_check`, `skipped` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
 | | `build.log`, `game.log` | the launcher |
-| builds folder (`%LOCALAPPDATA%\darker-reality\builds`, `$XDG_DATA_HOME/darker-reality/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
+| builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
 | install folder (read-only) | the launcher, `content/` | the installer |
 
 ## Platforms
@@ -71,7 +71,7 @@ Pinned by SHA-256 in `packaging/toolchain.lock`, downloaded once into `out/packa
 Change a tool: its line in `toolchain.lock` (`packaging/fetch.sh --print NAME` gives the new SHA-256), then the
 `ID` in that platform's `toolchain.sh`, which makes every player's next start build again.
 
-The release workflow keeps the finished Linux tools (`DARKER_REALITY_TOOLCHAIN_CACHE`, read by
+The release workflow keeps the finished Linux tools (`HOLYLAND_TOOLCHAIN_CACHE`, read by
 `build-appimage.sh`) and the Windows downloads in GitHub caches saved only on `main` (a tag's own cache is seen by
 that tag alone). Pushing a change to the tools' files to `main` runs the package jobs to refill them.
 
@@ -134,8 +134,8 @@ The same as Verdite's launcher: the player is told; nothing installs itself.
 
 ## Versions
 
-The tag is the version (`tools/version.sh`: `$DARKER_REALITY_VERSION`, else the newest `vX.Y.Z` tag, else 0.0.0). The
-launcher is built with `-DDARKER_REALITY_VERSION`, and passes it to the game's build as `KF4_VERSION`
+The tag is the version (`tools/version.sh`: `$HOLYLAND_VERSION`, else the newest `vX.Y.Z` tag, else 0.0.0). The
+launcher is built with `-DHOLYLAND_VERSION`, and passes it to the game's build as `KF4_VERSION`
 (`port/include/port/version.h`, shown in About and the bug report). A developer's build has none.
 
 ## Making a release

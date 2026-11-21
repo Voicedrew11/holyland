@@ -318,7 +318,7 @@ def live_scenario(a, name, rate, tag="", env_more=None, settings_more=None, args
     data_dir = os.path.join(folder, stem.replace("live_", "live_data_", 1))
     shutil.rmtree(data_dir, ignore_errors=True)
     os.makedirs(data_dir)
-    home = os.path.expanduser("~/.config/darker-reality")
+    home = os.path.expanduser("~/.config/holyland")
     for f in ("settings.json", "pc_pipeline_list.bin", "pc_pipelines.bin"):
         if os.path.exists(os.path.join(home, f)):
             shutil.copy(os.path.join(home, f), data_dir)

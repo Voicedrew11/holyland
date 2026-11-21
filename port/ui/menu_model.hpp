@@ -4,11 +4,14 @@
 //
 //   Up / Down       the row before / after that can be used (not past the ends); in an open list, its choice
 //   Left / Right    a choice: the one before / after (not past the ends); on / off: off / on; a number: a step
-//   Confirm         a choice: opens its list; on / off: turns it over; an action: does it; in a list: chooses
+//   Confirm         a choice: opens its list; on / off: turns it over; an action: does it; in a list: chooses;
+//                   a binding: listens for a new key in its chosen slot
+//   Left / Right    (a binding) the slot before / after
+//   Clear           (a binding) empties its chosen slot
 //   Back            closes the open list, else asks to close the menu
 //   Next / previous tab   the tab after / before (round), on its first row that can be used
 // The pointer: over a row gives it the focus, a click on it is Confirm, a click on a row's arrow is Left or Right,
-// a click on a list's choice chooses it, a click on a tab shows it.
+// a click on a list's choice chooses it, a click on a tab shows it, a click on a binding's slot listens there.
 #pragma once
 
 namespace ui {
@@ -19,13 +22,14 @@ enum class RowKind {
     number,  // a value in steps
     action,  // a button: does something
     heading, // a section's title: never has the focus
+    binding, // an action's keys and buttons, in slots: one chosen at a time, listened for or cleared
 };
 
 // What the model knows of a row, asked again before each move (a change can show, hide or disable rows)
 struct RowShape {
     RowKind kind;
     bool enabled;      // false: shown dimmed, never has the focus
-    int choice_count;  // choice: how many
+    int choice_count;  // choice: how many; binding: its slots
     int current;       // choice: the chosen one (-1: none of them, a value set in settings.json); toggle: 0 or 1
 };
 
@@ -40,9 +44,12 @@ public:
     // a number: delta steps up (or down)
     virtual void step(int tab, int row, int delta) = 0;
     virtual void activate(int tab, int row) = 0;
+    // a binding: the next key or button pressed goes into the slot
+    virtual void listen(int tab, int row, int slot) = 0;
+    virtual void clear(int tab, int row, int slot) = 0;
 };
 
-enum class MenuInput { up, down, left, right, confirm, back, next_tab, previous_tab };
+enum class MenuInput { up, down, left, right, confirm, back, next_tab, previous_tab, clear };
 
 // What the menu is to do after an input
 enum class MenuResult { stay, close };
@@ -61,6 +68,7 @@ public:
     void click_step(int row, int delta);
     void click_choice(int choice);
     void click_tab(int tab);
+    void click_slot(int row, int slot);
 
     int tab() const {
         return tab_;
@@ -76,6 +84,10 @@ public:
     int list_choice() const {
         return list_choice_;
     }
+    // a binding row's chosen slot (kept from row to row, as a column)
+    int slot() const {
+        return slot_;
+    }
 
 private:
     bool usable(int row) const;
@@ -84,12 +96,14 @@ private:
     void settle(); // the focus and list kept to what the rows are now
     void step_row(int delta);
     void confirm_row();
+    void clear_row();
 
     MenuRows &rows_;
     int tab_ = 0;
     int row_ = -1;
     bool list_open_ = false;
     int list_choice_ = 0;
+    int slot_ = 0;
 };
 
 } // namespace ui

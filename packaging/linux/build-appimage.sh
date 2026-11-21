@@ -26,10 +26,10 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 
 echo "==> the game's source and the tools"
 "$ROOT/packaging/payload.sh" "$CONTENT"
-# DARKER_REALITY_TOOLCHAIN_CACHE (the release workflow): a folder holding the tools toolchain.sh made before,
+# HOLYLAND_TOOLCHAIN_CACHE (the release workflow): a folder holding the tools toolchain.sh made before,
 # taken as they are when it has them (unpacking LLVM and building SDL2 took 4 minutes there), else filled. Whoever
 # sets it keys it on everything the tools are made from (toolchain.lock, toolchain.sh, build-sdl3.sh).
-TOOLCHAIN_CACHE="${DARKER_REALITY_TOOLCHAIN_CACHE:-}"
+TOOLCHAIN_CACHE="${HOLYLAND_TOOLCHAIN_CACHE:-}"
 if [ -n "$TOOLCHAIN_CACHE" ] && [ -f "$TOOLCHAIN_CACHE/ID" ]; then
     echo "==> the tools, from $TOOLCHAIN_CACHE ($(cat "$TOOLCHAIN_CACHE/ID"))"
     mkdir -p "$CONTENT"
@@ -55,7 +55,7 @@ rm -rf "$B"
 env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" -G Ninja -S "$ROOT/launcher" -B "$B" \
     -DCMAKE_MAKE_PROGRAM="$T/bin/ninja" -DCMAKE_C_COMPILER="$T/llvm/bin/clang" \
     -DCMAKE_CXX_COMPILER="$T/llvm/bin/clang++" -DCMAKE_TOOLCHAIN_FILE="$T/linux.cmake" \
-    -DCMAKE_BUILD_TYPE=Release -DDARKER_REALITY_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
+    -DCMAKE_BUILD_TYPE=Release -DHOLYLAND_VERSION="$VERSION" -DLAUNCHER_TESTS=OFF
 env -i HOME="$HOME" PATH="$T/llvm/bin:/usr/bin:/bin" "$T/cmake/bin/cmake" --build "$B"
 cp "$B/$APP_ID" "$APPDIR/usr/bin/$APP_ID"
 strip "$APPDIR/usr/bin/$APP_ID"

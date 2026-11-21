@@ -64,6 +64,10 @@ static inline int gsr_backlog(void) {
 static inline int gsr_behind(void) {
     return pcr_backlog() > 2;
 }
+/* --frame-rate unlocked: the pictures between a second the renderer has time for (0: not known) */
+static inline double gsr_pictures_room_hz(void) {
+    return pcr_pictures_room_hz();
+}
 static inline void gsr_set_presenter(void (*pixels)(const PortGsFrame *frame, uint64_t tag),
                                      void (*image)(uint64_t tag)) {
     pcr_set_presenter(pixels, image);

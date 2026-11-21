@@ -37,6 +37,8 @@ struct SettingRow {
     bool (*shown)() = nullptr;                                   // nullptr: always
     bool (*enabled)() = nullptr;                                 // nullptr: always
     bool (*overridden)() = nullptr; // the command line chose this run's value: the row says so
+    const char *(*note)() = nullptr; // a line under the help, that changes (the cheats' last message); nullptr: none
+    int action = -1;                 // binding: its PortAction (port/include/port/controls.h); shown while it is used
 };
 
 struct SettingTab {
@@ -56,11 +58,19 @@ public:
     void choose(int tab, int row, int choice) override;
     void step(int tab, int row, int delta) override;
     void activate(int tab, int row) override;
+    void listen(int tab, int row, int slot) override;
+    void clear(int tab, int row, int slot) override;
 
     const SettingTab &tab(int tab) const;
     const SettingRow &row(int tab, int row) const;
     // the row's value as the menu shows it ("On", "Auto (2x)", "75%"); empty for actions and headings
     std::string value_text(int tab, int row) const;
+    // a binding's slot as the menu shows it ("Space", "Pad A", "-", "Press a key...")
+    std::string slot_text(int tab, int row, int slot) const;
+    // a binding's slot is waiting for a key or button
+    bool listening(int tab, int row, int slot) const;
+    // a binding is not as it was by default
+    bool changed_from_default(int tab, int row) const;
     // a number's place in its range, 0 to 1 (for its bar)
     float number_fraction(int tab, int row) const;
     // the tab of that id, or -1

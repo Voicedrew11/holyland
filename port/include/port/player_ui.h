@@ -1,4 +1,4 @@
-/* The player menu (port/ui/): Darker Reality's own settings, drawn with RmlUi in King's Field IV's look, over the
+/* The player menu (port/ui/): Holyland's own settings, drawn with RmlUi in King's Field IV's look, over the
    game's picture. F1 (or a controller's L3 + R3) opens and closes it; the developers' overlay (Dear ImGui,
    port/include/port/overlay.h) moved to Shift+F1. Like the overlay it exists only with a window and settings.json
    (port_settings_active): never in a headless run or with a pad script, so tests stay the same. KF4_OVERLAY_SHOT's
@@ -23,7 +23,7 @@ int port_player_ui_event(const void *sdl_event);
 int port_player_ui_ready(void);
 /* 1 while the menu is open: the keyboard, mouse and controller are its */
 int port_player_ui_open(void);
-/* 1 when the menu draws something this picture */
+/* 1 when the menu draws something this picture: open, or its hint at the start ("F1 or L3 + R3: settings") */
 int port_player_ui_visible(void);
 /* (port/overlay/overlay.cpp's test pictures) opens the menu on the tab of that id ("display", ...), then presses
    the keys after a colon, by name ("display:down.confirm": up down left right confirm back next previous); or closes

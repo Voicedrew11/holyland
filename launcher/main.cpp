@@ -1,7 +1,7 @@
-// Darker Reality, the launcher (launcher/product.h; docs/port/LAUNCHER.md). Builds King's Field IV's PC port on the player's computer
+// Holyland, the launcher (launcher/product.h; docs/port/LAUNCHER.md). Builds King's Field IV's PC port on the player's computer
 // from the release's source and tools, then plays it.
 //
-//   darker-reality [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]
+//   holyland [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]
 
 #include <cstdio>
 #include <cstring>

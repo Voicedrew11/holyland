@@ -5,7 +5,7 @@
 
 namespace launcher {
 
-constexpr const char *kProductName = "Darker Reality";  // in windows and messages
-constexpr const char *kProductId = "darker-reality";    // the program, the AppImage's share/<id>/, the log prefix
+constexpr const char *kProductName = "Holyland";  // in windows and messages
+constexpr const char *kProductId = "holyland";    // the program, the AppImage's share/<id>/, the log prefix
 
 } // namespace launcher

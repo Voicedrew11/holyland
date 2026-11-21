@@ -312,15 +312,6 @@ void frame_rate_combo() {
         ImGui::SameLine();
         ImGui::TextColored(colour_note, "(for this run: command line)");
     }
-    if (port_options.frame_rate != PORT_FRAME_RATE_UNLOCKED)
-        return;
-    int cap = port_options.frame_rate_cap;
-    if (ImGui::SliderInt("Unlocked's cap", &cap, 0, 500, cap > 0 ? "%d a second" : "none")) {
-        cap = cap > 0 && cap < 60 ? 60 : cap;
-        port_settings.frame_rate_cap = port_options.frame_rate_cap = cap;
-        changed();
-    }
-    tooltip("Unlocked no faster than this. 0: none. (--frame-rate-cap N)");
 }
 
 // VSync, adaptive sync and unlocked's tearing as one choice; settings.json keeps the three as they were
@@ -928,7 +919,8 @@ std::string bug_report() {
     std::snprintf(line, sizeof(line),
                   "renderer: %s scale=%d (%dx) widescreen=%d sharper_widescreen=%d native_draw=0x%x frame_rate=%d "
                   "draw_distance=%d sky=%d presenter=%d\n",
-                  port_options.renderer == PORT_RENDERER_GS ? "gs" : "pc", port_options.native_scale,
+                  port_options.renderer == PORT_RENDERER_GS ? "gs" : port_options.renderer == PORT_RENDERER_PC ? "pc" : "scene",
+                  port_options.native_scale,
                   port_gs_native_scale(), port_options.widescreen, port_options.native_widescreen,
                   port_options.native_draw, port_options.frame_rate, port_options.draw_distance, port_options.native_sky,
                   port_video_presenter());
@@ -1405,7 +1397,7 @@ void about_window() {
         ImGui::End();
         return;
     }
-    ImGui::Text("Darker Reality: King's Field IV on the PC, built from the kfiv-decomp decompilation");
+    ImGui::Text("Holyland: King's Field IV on the PC, built from the kfiv-decomp decompilation");
     ImGui::TextDisabled("%s", update_badge_version_line());
     ImGui::Separator();
     ImGui::BulletText("The game's code: kfiv-decomp (Voicedrew11 and contributors)");

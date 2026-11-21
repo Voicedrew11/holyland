@@ -54,6 +54,9 @@ void pcr_read_fifo(void *dst, uint32_t qwords);
 int pcr_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 int pcr_picture(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame, uint64_t tag);
 int pcr_backlog(void);
+/* --frame-rate unlocked: the pictures between a second the PC renderer's thread has time for (pcr_late.h's PictureRoom),
+   as of the last half second; 0 when not known (none drawn on it) */
+double pcr_pictures_room_hz(void);
 void pcr_interp_frame(GsnInterpFrame *frame);
 void pcr_interp_picture(const GsnInterpPicture *picture);
 

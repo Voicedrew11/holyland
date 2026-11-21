@@ -16,5 +16,12 @@ void update_badge_menu_item();
 // The release's window, when the button opened it
 void update_badge_window();
 
-// "Darker Reality 0.2.0" or "Darker Reality (developer's build abc1234)"
+// "Holyland 0.2.0" or "Holyland (developer's build abc1234)"
 const char *update_badge_version_line();
+
+// For the player menu (port/ui/settings_rows.cpp): an update is due and not put off; what it says ("Holyland v0.3.0 is
+// out. You have 0.2.0."); its release page opened in the browser; this version skipped for good
+bool update_badge_due();
+const char *update_badge_summary();
+void update_badge_open_page();
+void update_badge_skip();

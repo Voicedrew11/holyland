@@ -1,4 +1,4 @@
-// (darker-reality) Granite's command buffer with Vulkan's dynamic state for depth, stencil, culling, topology and blend
+// (holyland) Granite's command buffer with Vulkan's dynamic state for depth, stencil, culling, topology and blend
 // constants (Vulkan 1.3's extended dynamic state) and, where the device has VK_EXT_extended_dynamic_state3's, for
 // blend enable, the blend equation and the colour write mask. Included into vulkan/command_buffer.cpp (inside
 // namespace Vulkan) by cmake/granite_dynamic_state.cmake, which also adds the calls into Granite's own code.
@@ -10,7 +10,7 @@
 
 std::atomic<uint64_t> kf4_pipeline_binds{0}; // graphics pipelines bound (--stats)
 
-enum { DARKER_REALITY_DYNAMIC_BIT = 1u << 31 }; // (a pipeline's dynamic_mask: made with the state below dynamic)
+enum { HOLYLAND_DYNAMIC_BIT = 1u << 31 }; // (a pipeline's dynamic_mask: made with the state below dynamic)
 
 // Primitive topology's class (Vulkan's dynamic topology may change only within one without
 // dynamicPrimitiveTopologyUnrestricted): the pipeline is looked up by the class
@@ -103,7 +103,7 @@ static uint32_t kf4_dynamic_states(const Device &device, const PipelineState &s,
 		add(VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT);
 		add(VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT);
 	}
-	return DARKER_REALITY_DYNAMIC_BIT | COMMAND_BUFFER_DIRTY_STENCIL_REFERENCE_BIT;
+	return HOLYLAND_DYNAMIC_BIT | COMMAND_BUFFER_DIRTY_STENCIL_REFERENCE_BIT;
 }
 
 // A pipeline about to be bound: whether it is to be (bind_pipeline). A command buffer with dynamic state does not bind
@@ -117,7 +117,7 @@ bool CommandBuffer::kf4_bind(VkPipelineBindPoint bind_point, VkPipeline pipeline
 		return false;
 	kf4_bound = pipeline;
 	kf4_pipeline_binds.fetch_add(1, std::memory_order_relaxed);
-	if (!(active_dynamic_state & DARKER_REALITY_DYNAMIC_BIT))
+	if (!(active_dynamic_state & HOLYLAND_DYNAMIC_BIT))
 		kf4_emitted.valid = false;
 	return true;
 }

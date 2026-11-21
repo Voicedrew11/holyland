@@ -1,4 +1,4 @@
-// (darker-reality) Included into Granite's vulkan/command_buffer.cpp, in namespace Vulkan, by cmake/granite_pipeline_warm.cmake:
+// (holyland) Included into Granite's vulkan/command_buffer.cpp, in namespace Vulkan, by cmake/granite_pipeline_warm.cmake:
 // the hooks a pipeline list uses.
 
 // a pipeline Granite made (sync: a draw or dispatch waited for it; ok: it was made), and a compatible render pass made

@@ -26,10 +26,10 @@ typedef struct {
     int fast;                /* --fast: do not hold the game to 59.94 vblanks a second */
     int headless;            /* --headless: no SDL at all, and no window */
     int no_gs;               /* --no-gs: draw nothing (the packets are still read) */
-    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_PC, the PC renderer (port/gs/pc/), is the
-       default and the only one a player gets; PORT_RENDERER_GS is paraLLEl-GS, for comparing pictures
-       against, and PORT_RENDERER_SCENE the scene renderer (port/gs/scene/) being built to replace the PC
-       renderer, under its shell (developers only). gs.c sets it to what started. */
+    /* --renderer: who draws (port/platform/gs.c). PORT_RENDERER_SCENE, the scene renderer (port/gs/scene/,
+       under the PC renderer's shell), is the default and the only one a player gets; PORT_RENDERER_PC is the
+       PC renderer it replaces (port/gs/pc/, --renderer pc) and PORT_RENDERER_GS paraLLEl-GS, for comparing
+       pictures against (both developers only). gs.c sets it to what started. */
     int renderer;
     /* --presenter: how the picture reaches the window (port/platform/video.c). PORT_PRESENTER_VULKAN,
        the default, a swapchain on the renderer's own device (port/platform/present_vk.cpp), with the
@@ -99,12 +99,14 @@ typedef struct {
        PS2's: a picture every second vblank in play) by default; 60, 120, 144, 240 (pictures a second)
        or PORT_FRAME_RATE_MONITOR (the window's screen's refresh) with --frame-rate or settings.json,
        live from the overlay. PORT_FRAME_RATE_UNLOCKED: as many as the renderer has time for, each shown at
-       the time it shows (port/platform/frame_interp.c), no more than frame_rate_cap a second (0: no cap). */
-#define PORT_FRAME_RATE_MONITOR 1000
-#define PORT_FRAME_RATE_UNLOCKED 1001
+       the time it shows (port/platform/frame_interp.c), no more than frame_rate_cap a second (0: no cap).
+       A fixed rate has no top: any from 30 up to the two names' values, which are far above any rate. */
+#define PORT_FRAME_RATE_MONITOR 1000000
+#define PORT_FRAME_RATE_UNLOCKED 1000001
+/* the most pictures a vblank the schedule holds (port_interp_schedule, gs.c's room): ~7,670 a second, no cap in practice */
+#define PORT_INTERP_MOST_A_VBLANK 128
     int frame_rate;
-    int frame_rate_cap;
-    int frame_rate_cap_forced; /* --frame-rate-cap: this run's, whatever settings.json says */
+    int frame_rate_cap; /* --frame-rate-cap (developers', test runs): unlocked no faster than this; 0, none, otherwise */
     /* --tearing or settings.json: unlocked's swapchain immediate (tearing, the least latency; a VRR screen's), not
        mailbox (port/platform/present_vk.cpp) */
     int tearing;
@@ -348,8 +350,8 @@ extern uint64_t port_vu1_check_runs, port_vu1_check_differ;
    Everything but port_gs_init and port_gs_post_vsync runs on the controller's thread. */
 /* port_options.renderer: what draws. PORT_RENDERER_GS (paraLLEl-GS, --renderer gs) is for comparing against only */
 #define PORT_RENDERER_GS 0
-#define PORT_RENDERER_PC 1
-#define PORT_RENDERER_SCENE 2 /* (the scene renderer, --renderer scene: developers' only; the PC renderer's shell) */
+#define PORT_RENDERER_PC 1 /* (the PC renderer, --renderer pc: developers' only) */
+#define PORT_RENDERER_SCENE 2 /* (the scene renderer, the default; the PC renderer's shell) */
 /* port_options.draw_distance: --draw-distance 1, 1.5, 2, 4 or max */
 enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, PORT_DRAW_DISTANCE_4, PORT_DRAW_DISTANCE_MAX,
        PORT_DRAW_DISTANCE_COUNT };
@@ -413,6 +415,8 @@ int port_gs_interp_gpu(void);
 int port_gs_between_leaves_memory(void);
 void port_gs_interp_frame(void *frame);
 void port_gs_interp_picture(const void *picture);
+/* --frame-rate unlocked: the pictures between a second the renderer has time for (0: not known) */
+double port_gs_pictures_room_hz(void);
 /* A GIF packet by PATH1, 2 or 3, in whole qwords. */
 void port_gs_gif(int path, const void *data, size_t bytes);
 /* 1 when a path is between GIF packets (the GIF may hand the GS to another path). */

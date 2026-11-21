@@ -3,8 +3,11 @@
 
 #include <RmlUi/Core/Log.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+
+#include "ui_assets.hpp"
 
 namespace ui {
 
@@ -22,6 +25,14 @@ void not_drawn(const char *what) {
     std::fprintf(stderr, "[ui] RmlUi asked for %s, which the menu does not draw\n", what);
 }
 
+// An alpha mask's header (tools/ui_logo.py): "KF4A", the width and the height, little-endian
+const size_t MASK_HEADER = 12;
+const uint32_t MASK_SIDE_MAX = 8192;
+
+uint32_t little_endian(const unsigned char *bytes) {
+    return uint32_t(bytes[0]) | uint32_t(bytes[1]) << 8 | uint32_t(bytes[2]) << 16 | uint32_t(bytes[3]) << 24;
+}
+
 } // namespace
 
 void Recorder::begin_frame(int width, int height) {
@@ -30,9 +41,23 @@ void Recorder::begin_frame(int width, int height) {
     frame_.vertices.clear();
     frame_.indices.clear();
     frame_.draws.clear();
-    frame_.uploads.clear();
-    frame_.releases.clear();
+    frame_.uploads = std::move(held_uploads_);
+    frame_.releases = std::move(held_releases_);
+    held_uploads_.clear();
+    held_releases_.clear();
     clipping_ = false;
+    recording_ = true;
+}
+
+void Recorder::end_frame() {
+    recording_ = false;
+}
+
+TextureId Recorder::add_upload(TextureUpload upload) {
+    upload.id = next_texture_++;
+    std::vector<TextureUpload> &to = recording_ ? frame_.uploads : held_uploads_;
+    to.push_back(std::move(upload));
+    return to.back().id;
 }
 
 Rml::CompiledGeometryHandle Recorder::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -80,11 +105,30 @@ void Recorder::ReleaseGeometry(Rml::CompiledGeometryHandle handle) {
     geometries_.erase(uintptr_t(handle));
 }
 
+// Only the menu's own alpha masks (.alpha, tools/ui_logo.py): white, premultiplied, coloured by the sheet's image-color
 Rml::TextureHandle Recorder::LoadTexture(Rml::Vector2i &dimensions, const Rml::String &source) {
-    (void)source;
     dimensions = {0, 0};
-    not_drawn("an image from a file");
-    return 0;
+    const UiAsset *file = ui_asset(source);
+    if (file == nullptr || file->size < MASK_HEADER || std::memcmp(file->data, "KF4A", 4) != 0) {
+        not_drawn("an image other than the menu's alpha masks");
+        return 0;
+    }
+    uint32_t width = little_endian(file->data + 4), height = little_endian(file->data + 8);
+    if (width == 0 || height == 0 || width > MASK_SIDE_MAX || height > MASK_SIDE_MAX ||
+        file->size - MASK_HEADER != size_t(width) * size_t(height)) {
+        Rml::Log::Message(Rml::Log::LT_ERROR, "[ui] %s is not a whole alpha mask", source.c_str());
+        return 0;
+    }
+    TextureUpload upload;
+    upload.width = int(width);
+    upload.height = int(height);
+    upload.rgba.resize(size_t(width) * size_t(height) * 4);
+    const unsigned char *alpha = file->data + MASK_HEADER;
+    for (size_t i = 0; i < size_t(width) * size_t(height); i++) {
+        std::memset(&upload.rgba[i * 4], alpha[i], 4);
+    }
+    dimensions = {int(width), int(height)};
+    return Rml::TextureHandle(add_upload(std::move(upload)));
 }
 
 Rml::TextureHandle Recorder::GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions) {
@@ -92,17 +136,15 @@ Rml::TextureHandle Recorder::GenerateTexture(Rml::Span<const Rml::byte> source, 
         return 0;
     }
     TextureUpload upload;
-    upload.id = next_texture_++;
     upload.width = dimensions.x;
     upload.height = dimensions.y;
     upload.rgba.assign(source.begin(), source.end());
-    frame_.uploads.push_back(std::move(upload));
-    return Rml::TextureHandle(frame_.uploads.back().id);
+    return Rml::TextureHandle(add_upload(std::move(upload)));
 }
 
 void Recorder::ReleaseTexture(Rml::TextureHandle texture) {
     if (texture != 0) {
-        frame_.releases.push_back(TextureId(texture));
+        (recording_ ? frame_.releases : held_releases_).push_back(TextureId(texture));
     }
 }
 
