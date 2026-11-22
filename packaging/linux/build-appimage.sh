@@ -77,7 +77,7 @@ chmod +x "$APPDIR/AppRun"
 for d in "$APPDIR/usr/share/applications/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"; do
     { cat "$ROOT/packaging/shared/$APP_ID.desktop"; echo "X-AppImage-Version=$VERSION"; } > "$d"
 done
-# no mark of its own yet: a transparent square, so appimagetool accepts the entry
+# the mark (packaging/shared/holyland.png); without one, a transparent square, so appimagetool accepts the entry
 ICON="$ROOT/packaging/shared/$APP_ID.png"
 if [ ! -f "$ICON" ]; then
     ICON="$OUT/$APP_ID-blank.png"

@@ -348,6 +348,14 @@ endif()
 if(KF4_USE_SDL AND SDL3_FOUND)
     target_compile_definitions(kf4_port PRIVATE KF4_HAVE_SDL)
     target_link_libraries(kf4_port PRIVATE SDL3::SDL3)
+    # The window's icon (port/platform/window_icon.c), built in
+    add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/window_icon_bmp.c
+        COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_SOURCE_DIR}/packaging/shared/holyland.bmp
+                -DOUT=${CMAKE_BINARY_DIR}/window_icon_bmp.c -DNAME=port_window_icon_bmp
+                -P ${CMAKE_SOURCE_DIR}/cmake/embed_file.cmake
+        DEPENDS ${CMAKE_SOURCE_DIR}/packaging/shared/holyland.bmp ${CMAKE_SOURCE_DIR}/cmake/embed_file.cmake
+        COMMENT "The window's icon" VERBATIM)
+    target_sources(kf4_port PRIVATE port/platform/window_icon.c ${CMAKE_BINARY_DIR}/window_icon_bmp.c)
     # The settings overlay (F1): Dear ImGui (third_party/imgui) on the window's SDL_Renderer
     enable_language(CXX)
     add_library(imgui STATIC
@@ -662,6 +670,11 @@ add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> $
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
 if(WIN32)
+    # the icon (packaging/shared/holyland.ico) in the .exe, for Explorer, the taskbar and the window
+    enable_language(RC)
+    set(HOLYLAND_ICON ${CMAKE_SOURCE_DIR}/packaging/shared/holyland.ico)
+    configure_file(packaging/shared/holyland.rc.in ${CMAKE_BINARY_DIR}/holyland.rc @ONLY)
+    target_sources(kf4 PRIVATE ${CMAKE_BINARY_DIR}/holyland.rc)
     target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
 else()
     target_link_options(kf4 PRIVATE -no-pie)

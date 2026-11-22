@@ -1,0 +1,3 @@
+// The program's icon on Windows (Explorer, the taskbar, and SDL's window, which takes the .exe's first icon).
+// CMake fills in the absolute path, as windres and llvm-rc resolve relative ones differently.
+1 ICON "@HOLYLAND_ICON@"

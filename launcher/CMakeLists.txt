@@ -81,14 +81,28 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
     DEPENDS ${LAUNCHER_UI_FILE_PATHS} ${LAUNCHER_PAGE_PATHS} ${ROOT}/cmake/ui_assets.cmake
     COMMENT "The launcher's pages, fonts and logo" VERBATIM)
 
+# The window's icon (port/platform/window_icon.c), built in as the game has it
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/window_icon_bmp.c
+    COMMAND ${CMAKE_COMMAND} -DIN=${ROOT}/packaging/shared/holyland.bmp
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/window_icon_bmp.c -DNAME=port_window_icon_bmp
+            -P ${ROOT}/cmake/embed_file.cmake
+    DEPENDS ${ROOT}/packaging/shared/holyland.bmp ${ROOT}/cmake/embed_file.cmake
+    COMMENT "The window's icon" VERBATIM)
+
 add_executable(launcher main.cpp session.cpp setup_pages.cpp window.cpp ${ROOT}/port/ui/ui_render.cpp
-               ${ROOT}/port/ui/ui_ties.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp)
+               ${ROOT}/port/ui/ui_ties.cpp ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
+               ${ROOT}/port/platform/window_icon.c ${CMAKE_CURRENT_BINARY_DIR}/window_icon_bmp.c)
 target_include_directories(launcher PRIVATE ${ROOT}/port/ui) # ui_render.hpp, ui_ties.hpp, ui_assets.hpp
 set_target_properties(launcher PROPERTIES OUTPUT_NAME holyland) # launcher/product.h: kProductId
 target_compile_definitions(launcher PRIVATE HOLYLAND_VERSION="${HOLYLAND_VERSION}")
 target_compile_options(launcher PRIVATE ${LAUNCHER_WARNINGS})
 target_link_libraries(launcher PRIVATE launcher_platform kf4_rmlui SDL3::SDL3)
 if(WIN32)
+    # the icon (packaging/shared/holyland.ico) in the .exe, for Explorer, the taskbar and the window
+    enable_language(RC)
+    set(HOLYLAND_ICON ${ROOT}/packaging/shared/holyland.ico)
+    configure_file(${ROOT}/packaging/shared/holyland.rc.in ${CMAKE_CURRENT_BINARY_DIR}/holyland.rc @ONLY)
+    target_sources(launcher PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/holyland.rc)
     # a window program: no console window of its own (it prints into one it was started from)
     target_link_options(launcher PRIVATE -mwindows)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

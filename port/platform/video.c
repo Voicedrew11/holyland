@@ -39,6 +39,9 @@
 #include "port/refresh_clock.h"
 #include "port/screen_vblank.h"
 #include "port/settings.h"
+#ifdef KF4_HAVE_SDL
+#include "port/window_icon.h"
+#endif
 
 /* ---- The pictures, between the threads -------------------------------------------------------- */
 #ifdef _WIN32
@@ -505,6 +508,7 @@ void port_video_apply_settings(void) {
 
 #ifdef KF4_HAVE_SDL
 static SDL_Window *make_window(SDL_WindowFlags flags) {
+    SDL_Window *window;
     int width, height;
 
     window_size(&width, &height);
@@ -517,7 +521,11 @@ static SDL_Window *make_window(SDL_WindowFlags flags) {
     }
     /* (centred on the screen; SDL3 starts no text input, so the desktop's input method (IBus, Fcitx) does not
        take the keys: the overlay (Dear ImGui) starts it only while one of its text fields is typed in) */
-    return SDL_CreateWindow("King's Field IV", width, height, flags);
+    window = SDL_CreateWindow("King's Field IV", width, height, flags);
+    if (window != NULL) {
+        port_window_icon_set(window); /* (X11; without it the desktop's default) */
+    }
+    return window;
 }
 #endif
 
@@ -535,6 +543,9 @@ static int vulkan_window_wanted(void) {
 #ifdef KF4_HAVE_SDL
 static int start_sdl_video(void) {
     SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
+    /* the launcher's desktop entry (packaging/shared/holyland.desktop): Wayland desktops take the window's
+       icon and taskbar group from it by this name, which is otherwise the program's own (kf4) */
+    SDL_SetHint(SDL_HINT_APP_ID, "holyland");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
         return 0;
