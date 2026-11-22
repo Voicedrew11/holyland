@@ -426,12 +426,19 @@ bool flicker_filter_overridden() {
     return port_options.flicker_filter != port_settings.flicker_filter;
 }
 
-// (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens
-const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT},
+// (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens. Low to
+// high, the cheapest first; the developers' unsettled is not among them (describe_scene_depth names it)
+const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU},
                                {port_scene_depth(PORT_SCENE_DEPTH_NEARER)->label, PORT_SCENE_DEPTH_NEARER},
-                               {port_scene_depth(PORT_SCENE_DEPTH_UNSETTLED)->label, PORT_SCENE_DEPTH_UNSETTLED},
-                               {port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU}};
-static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT);
+                               {port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT}};
+static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT - 1);
+// (a mode the menu has no choice for, set in settings.json or by --scene-depth: its own label)
+void describe_scene_depth(int mode, char *out, size_t size) {
+    const PortSceneDepth *d = port_scene_depth(mode);
+    if (mode == PORT_SCENE_DEPTH_UNSETTLED && d != nullptr) {
+        std::snprintf(out, size, "%s", d->label);
+    }
+}
 int get_scene_depth() {
     return port_settings.scene_depth;
 }
@@ -477,11 +484,13 @@ const SettingRow graphics_rows[] = {
     {"Font", "IPA Mincho: a sharp font in the same style.\nOriginal: the game's own, blurry when enlarged.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
     {"Depth",
-     "How surfaces close together are sorted. From the next start.\nExact: the PS2's depth at each pixel; least "
-     "z-fighting.\nLayers in one pass: as Exact, a little faster.\nLayers unsettled: as Exact, cheaper; a surface drawn "
-     "after a layer on it can lose.\nGPU: the old depth; fastest, more z-fighting.",
-     RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, nullptr, scene_renderer, nullptr,
-     scene_depth_overridden, scene_depth_note},
+     "How cleanly things lying on a surface are drawn: moss and grime on walls, markings on floors, a rope on a log. "
+     "Higher costs the graphics card more. From the next start.\nHigh: as on the PS2; no flicker, stripes or gaps."
+     "\nMedium: looks the same as High nearly everywhere; in rare spots something drawn over moss or grime can show "
+     "small gaps.\nLow: moss and markings can flicker or break up into dark slashes, mostly up close, and thin things "
+     "far off, such as a ladder's rungs, can show bands.",
+     RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, describe_scene_depth,
+     scene_renderer, nullptr, scene_depth_overridden, scene_depth_note},
     {"View", "", RowKind::heading},
     {"Widescreen", "16:9 view with more at the sides. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
      get_widescreen, set_widescreen},

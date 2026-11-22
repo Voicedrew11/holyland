@@ -12,7 +12,7 @@
                     "native_aniso": 1, "native_2d": "smooth", "font": "sharp",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
                     "reflection_clip": true,
-                    "presenter": "vulkan", "scene_depth": "exact"},
+                    "presenter": "vulkan", "scene_depth": "high"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"mouse_sensitivity": 1.0, "invert_y": false,
                     "instant_mouse_look": true, "twin_stick": true, "instant_wasd_accel": false,
@@ -734,7 +734,7 @@ void port_settings_save(void) {
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
     put(display, "reflection_clip", cJSON_CreateBool(s->reflection_clip));
     put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
-    put(display, "scene_depth", cJSON_CreateString(port_scene_depth(s->scene_depth) ? port_scene_depth(s->scene_depth)->name : "exact"));
+    put(display, "scene_depth", cJSON_CreateString(port_scene_depth(s->scene_depth) ? port_scene_depth(s->scene_depth)->name : "high"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

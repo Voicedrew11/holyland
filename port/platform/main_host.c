@@ -49,10 +49,11 @@
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
        --font MODE       the game's font: sharp (the default: its English letters drawn again from
                          IPA Mincho four times as fine, crisp at any resolution) or ps2 (the disc's)
-       --scene-depth MODE the scene renderer's depth: exact (the default: the GS's whole Z at each
-                         pixel, the layers over a surface settled by the stencil), nearer (exact, the
-                         layers settled in one pass where nearer), unsettled (exact, the layers left
-                         with the depth they were tested with) or gpu (the GPU's own, interpolated)
+       --scene-depth MODE the scene renderer's depth, the player menu's Depth: high (the default: the GS's
+                         whole Z at each pixel, the layers over a surface settled by the stencil;
+                         also exact), medium (as high, the layers settled in one pass where nearer;
+                         also nearer), low (the GPU's own, interpolated; also gpu) or unsettled
+                         (developers': as high, the layers left with the depth they were tested with)
        --native-lod MODE the mipmap level the renderer reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
@@ -311,7 +312,7 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-2d smooth|ps2] [--font sharp|ps2] [--scene-depth exact|nearer|unsettled|gpu]\n"
+            "          [--native-2d smooth|ps2] [--font sharp|ps2] [--scene-depth high|medium|low|unsettled]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
             "          [--test-dma-wait]\n"
@@ -692,7 +693,7 @@ static void parse_options(int argc, char **argv) {
         } else if (strcmp(option, "--scene-depth") == 0) {
             port_options.scene_depth = port_scene_depth_from_name(value);
             if (port_options.scene_depth < 0) {
-                fprintf(stderr, "--scene-depth wants exact, nearer, unsettled or gpu, not %s\n", value);
+                fprintf(stderr, "--scene-depth wants high, medium, low or unsettled, not %s\n", value);
                 exit(2);
             }
             port_options.scene_depth_forced = 1;
