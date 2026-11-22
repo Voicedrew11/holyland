@@ -89,6 +89,9 @@ SPOT_DEFAULTS = {
     "env": {},             # more environment
     "teleport_first": None,  # a map to visit before the spot (state that lasts across maps)
     "settle": 90,          # vblanks from a view's load to its picture (the fade in is about 70)
+    "visible_contrast": 0,  # FAIL needs the worst window's flips to jump this far (levels) ...
+    "visible_area": 0,     # ... and this many flips in it ...
+    "visible_energy": 900,  # ... and contrast x area this much; over the limit but not visible: MINOR (passes)
     "cluster": 5,          # a flip counts with at least this many flips in the 5x5 around it (0: every flip)
     "window": 16,          # the score's window: a square this fraction of the picture's width (16: 1/16)
     "time_mask": True,     # leave out what moves by itself in a game frame (flames, water, idle animations)
@@ -404,8 +407,12 @@ def play(args, spot, folder, name, save, presses=(), shots=None):
     cmd = [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--fast", "--frames", str(max(shots) + 2),
            "--clock", CLOCK, "--saves", "none", "--input", pad, "--quick-load", loads,
            "--dump-frames", ",".join(map(str, shots)), "--dump-dir", pictures]
-    options, picture_env = picture_options(args.exe, args.settings, data_dir, spot_scale(args, spot),
-                                           spot["frame_rate"])
+    settings = args.settings
+    if spot.get("fov"):
+        # (a narrower view, to look closely at something small: a creature's parts)
+        settings = json.loads(json.dumps(settings))
+        settings.setdefault("display", {})["fov"] = spot["fov"]
+    options, picture_env = picture_options(args.exe, settings, data_dir, spot_scale(args, spot), spot["frame_rate"])
     cmd = compatible(args.exe, cmd + options + extra + list(spot["args"]) + list(args.extra))
     env = dict(os.environ, KF4_DATA_DIR=data_dir, **picture_env)
     env.update({k: str(v) for k, v in spot["env"].items()})
@@ -525,7 +532,8 @@ def run_spot(args, spot, base_path):
         result.update(status="ERROR", error="the view does not hold still under %s (a flash, a creature?): "
                       "%s" % (", ".join(unsteady), "; ".join(result["motions"][k]["unsteady"] for k in unsteady)))
     else:
-        result["status"] = "PASS" if result["score"] <= 100 else "FAIL"
+        result["status"] = ("FAIL" if any(m["visible"] for m in result["motions"].values())
+                            else "MINOR" if result["score"] > 100 else "PASS")
     if not args.keep_frames:
         shutil.rmtree(os.path.join(folder, "pictures"), ignore_errors=True)
     with open(os.path.join(folder, "score.json"), "w") as f:
@@ -631,8 +639,14 @@ def measure(count, largest, animated, middle, spot):
     w = max(16, shape[1] // int(spot["window"]))
     sums = box_sums(flips, w)
     wy, wx = np.unravel_index(int(np.argmax(sums)), sums.shape)
+    inside = flips[wy:wy + w, wx:wx + w]
+    jumps = largest[wy:wy + w, wx:wx + w][inside]
     m = {
         "flips": round(float(sums[wy, wx]) * 100000.0 / (w * w), 1),
+        # how far the flips jump in the worst window (the fighting surfaces' difference, in levels: the 75th
+        # percentile of each flip's largest jump), and how many there are
+        "contrast": round(float(np.percentile(jumps, 75)), 1) if jumps.size else 0.0,
+        "area": int(sums[wy, wx]),
         "global": round(float(flips.sum()) * 100000.0 / (shape[0] * shape[1]), 2),
         "flip_pixels": int(flips.sum()),
         "flips_twice": int(((count > 1) & counted).sum()),
@@ -658,6 +672,14 @@ def animated_mask(sweeps):
     return dilate(mask, 2)
 
 
+def visible(score, m, spot):
+    """Over its limit, and a fight a player sees: enough flips in the window that jump far enough: contrast (levels)
+    times area (flips in the window) at least visible_energy, and each at least its own floor. Over the limit but
+    not visible: MINOR"""
+    return (score > 100 and m["contrast"] >= float(spot["visible_contrast"]) and m["area"] >= int(spot["visible_area"])
+            and m["contrast"] * m["area"] >= float(spot["visible_energy"]))
+
+
 def score_sweep(paths, animated, spot):
     """A turn, step or side sweep: the middle view, the sweep, the middle view again. Two measures: robust (the
     neighbours' colours within `radius` pixels, `threshold` levels) and fine (the neighbours' own pixel,
@@ -672,7 +694,9 @@ def score_sweep(paths, animated, spot):
     m = dict(robust if r_score >= f_score else fine)
     m.update(score=round(max(r_score, f_score), 1), robust=robust["flips"], fine=fine["flips"],
              robust_global=robust["global"], fine_global=fine["global"], maps=maps,
-             by="robust" if r_score >= f_score else "fine")
+             robust_contrast=robust["contrast"], fine_contrast=fine["contrast"], robust_area=robust["area"],
+             fine_area=fine["area"], by="robust" if r_score >= f_score else "fine",
+             visible=visible(r_score, robust, spot) or visible(f_score, fine, spot))
     del m["flips"], m["global"]
     # a view that is not a small move from its neighbour (a flash, a creature in the face)
     region = counted_region(middle.shape[:2], spot)
@@ -697,7 +721,9 @@ def score_walk(play1, play2, spot):
     middle = read(play1[len(play1) // 2])
     m = measure(count, largest, animated, middle, spot)
     m.update(score=round(100.0 * m["flips"] / float(spot["walk_max"]), 1), walk=m.pop("flips"), by="walk",
-             walk_global=m.pop("global"), maps={"walk": m.pop("map")})
+             walk_global=m.pop("global"), maps={"walk": m.pop("map")}, walk_contrast=m["contrast"],
+             walk_area=m["area"])
+    m["visible"] = visible(m["score"], m, spot)
     if m["animated_pct"] > 25:
         m["unsteady"] = "the two plays of the walk differ at %.0f%% of the picture" % m["animated_pct"]
     return m
@@ -739,7 +765,8 @@ def motion_scores(r):
     """each motion's score (percent of its limit) and its flips a 100,000 pixels: r robust, f fine, w walk"""
     out = []
     for k, m in r.get("motions", {}).items():
-        raw = "w%.1f" % m["walk"] if "walk" in m else "r%.1f f%.1f" % (m["robust"], m["fine"])
+        raw = ("w%.1f" % m["walk"] if "walk" in m else "r%.1f f%.1f" % (m["robust"], m["fine"])) + \
+            " c%.0f a%d" % (m.get("contrast", 0), m.get("area", 0))
         out.append("%s %.0f%% (%s)" % (k, m["score"], raw))
     return ", ".join(out)
 
@@ -810,7 +837,7 @@ def main():
         for r in results:
             f.write("| %s | %s | %s | %s | %s |\n" % (r["spot"], r["status"], r.get("score", "-"), motion_scores(r),
                                                     r.get("error") or "%s/evidence.png" % r["spot"]))
-    bad = [r for r in results if r["status"] != "PASS"]
+    bad = [r for r in results if r["status"] not in ("PASS", "MINOR")]
     print("zfight_test: %d of %d spots pass, %.0f s; report in %s" % (len(results) - len(bad), len(results), total,
                                                                       os.path.join(args.out, "report.md")))
     sys.exit(1 if bad else 0)

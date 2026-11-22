@@ -47,7 +47,9 @@ nothing of the game's data, so it is committed. Only `map`, `position` and `head
 | `fine_threshold`, `fine_max` | 24, 40 | the fine measure: levels, flips allowed |
 | `walk_threshold`, `walk_radius`, `walk_max` | 24, 2, 25 | the walk's measure |
 | `cluster`, `window` | 5, 16 | a flip counts with at least this many in its 5x5; the score's window is 1/`window` of the width |
-| `time_mask` | true | leave out what moves by itself in a game frame (flames, water, idle animations) |
+| `time_mask` | true | leave out what moves by itself in a game frame (flames, water, idle animations); false for a spot about a creature |
+| `visible_contrast`, `visible_area`, `visible_energy` | 0, 0, 900 | FAIL needs the worst window's contrast (levels) times area (flips) at least `visible_energy`, and each at least its floor; over the limit without that: MINOR |
+| `fov` | the settings' | a narrower view for a close look at something small (30 to 120), e.g. a creature's parts |
 | `region` | the whole picture | `[x0, y0, x1, y1]`, fractions of the picture, the part measured |
 | `ignore` | `[]` | more `[x0, y0, x1, y1]` boxes left out (the HUD's corner always is) |
 | `scale`, `frame_rate` | auto, 240 | `--native-scale` (auto: what the settings' auto gives on `--screen-height`), `--frame-rate` |
@@ -145,10 +147,28 @@ counted either; a spot about a moving thing sets it false. For the walk, the two
 picture. The HUD's corner is never counted. A spot whose two plays differ a lot (more than 4 levels on average, or
 more than a quarter of the picture: a flash of poison, a creature in the face) is an ERROR, not a pass.
 
+Two tiers. A spot over its limit FAILs only when the fight is one a player sees: in its worst window, the contrast
+(the 75th percentile of each flip's largest jump: how different the two fighting surfaces look, in levels) times
+the area (the flips in the window) is at least `visible_energy` (900). A big dim fight (the broken bridge: contrast
+16, 102 flips) and a small bright one (chest-walkup's worst window: 72, 23) both pass that; a thin faint seam (nearwall: 22, 24)
+does not. Over the limit but not visible, the spot is MINOR: reported, with its evidence, but the run still passes
+(exit code 0). nearwall-1113's seam line is MINOR: a real fight the
+owner cannot see in play. Each motion's line gives `c` (contrast) and `a` (area: flips in the window).
+
 No approved pictures: changes to lighting, fog, filtering or anti-aliasing move colours smoothly and do not flip,
 so the test fails only on new flicker. `evidence.png` shows the worst 256x256 part of the worst motion's middle
 picture (zoomed), the size of each pixel's largest jump there (red; left-out pixels blue), and the whole picture
 with every flip marked red.
+
+## Creatures
+
+Fights on creatures' models (a part of the model fighting what is beneath it: the dog's mouth and snout, a soldier's
+knee armour) were missed at first, for two reasons: a creature's idle animation moves it between game frames, so
+the time mask left the whole creature out; and at the player's view a creature is small, so its fights were a few
+scattered pixels the cluster filter dropped. A spot about a creature therefore sets `"time_mask": false` (the
+animation is the same in every run, each loaded at the same vblank), `"fov": 30` and `"scale": 4` (a close look:
+about 2.8 times the size), and a `region` around the creature. npc-models-1121 and soldier-knee-1121 do so; their
+worst windows are then on the dog's mouth and the soldier.
 
 ## Adding a spot
 
@@ -162,30 +182,41 @@ numbers shows the same picture as the quick save, runs the test on it once and w
 
 ## What it catches (2026-11-21, evening: local scoring, the player's settings, one run a view)
 
-The preview build 2fdf828e (scale 3 from the owner's settings at 2560x1440): each spot's score in percent of its
-limit, the motion that scored it, and where the worst window is (`evidence.png`).
+The preview build 2fdf828e (scale 3 from the owner's settings at 2560x1440): each spot's tier, its score in percent
+of its limit, the worst motion with its contrast `c` (levels) and area `a` (flips in the window; the larger measure's
+energy c x a in brackets, FAIL from 900), and where the worst window is (`evidence.png`).
 
-| spot | preview 2fdf828e | worst motion | where | owner |
-|---|---|---|---|---|
-| bridge-broken-1121 | **1992** | turn | the broken bridge's lower planks (diagonal stripes) and their ends | fights |
-| zfight-bridge-1113 | **2364** | turn | the same bridge, further off | (11-13 spot) |
-| door-braces-1121 | **1640** | step (walk 1000) | the door's braces | fights |
-| ruins-corner-1121 | **2539** | step | diagonal hatching where the ruins' wall meets the ground | fights |
-| npc-models-1121 | **1153** | side | a vertical line by the window shutter on the house wall, not the daughter or the dog | fights on the models |
-| door-frames-1121 | **860** | turn | vertical lines on the wooden frames and planks | fights |
-| zfight-rock-1113 | **957** | side | the rock's top face and ridge | (11-13 spot) |
-| zfight-cave-1113 | **235** | step | the lit back wall right of the torch | fights (off-centre view) |
-| wall-seam-1121 | **235** | side | the helmet on the rampart, not the seam (a `region` around the seam's side) | fights at the seam |
-| chest-walkup-1121 | **225** | turn (walk 125) | the torch brazier by the door, not demonstrably the chest | fights on the chest |
-| sign-1114 | **332** | step | where the rock meets the low wall left of the door | (11-14 spot) |
-| temple-wall-1121 | **117** | step | the low wall's base by the steps | fights |
-| nearwall-1113 | **469** | side | a vertical dashed line at a seam of the wall | (control) |
-| chest-far-1114 | 78 | turn | the torch braziers by the door | (11-14 spot) |
-| ground-rect-1115 | 0 | | | (11-15 spot) |
-| reflect-1114 | 0 | | | (11-14 spot) |
+| spot | tier | score | worst: c, a (energy) | where | owner |
+|---|---|---|---|---|---|
+| npc-models-1121 | FAIL | 8160 | step: c46 a988 (45448) | the dog's mouth; the daughter's belt and head flip too | fights on the models |
+| temple-wall-1121 | FAIL | 2871 | step: c15 a147 (2205) | the low wall's panels (fov 30) | fights |
+| ruins-corner-1121 | FAIL | 2539 | step: c16 a130 (2080) | hatching where the wall meets the ground | fights |
+| zfight-bridge-1113 | FAIL | 2364 | turn: c16 a121 (1936) | the bridge | fights |
+| bridge-broken-1121 | FAIL | 1992 | turn: c16 a102 (1632) | the lower planks and their ends | fights |
+| door-braces-1121 | FAIL | 1640 | step: c71 a106 (7504) | the braces | fights |
+| zfight-rock-1113 | FAIL | 957 | side: c33 a49 (1617) | the rock | fights |
+| door-frames-1121 | FAIL | 860 | turn: c35 a44 (1540) | lines on the wooden frames and planks | fights |
+| soldier-knee-1121 | FAIL | 538 | turn: c34 a78 (2652) | the soldier's hands and knee (fov 30, 4x) | fights at the knee |
+| zfight-cave-1113 | FAIL | 235 | turn: c65 a20 (1300) | the lit wall right of the torch | fights |
+| chest-walkup-1121 | FAIL | 225 | turn: c72 a23 (1667) | the torch brazier by the door, not demonstrably the chest | fights on the chest |
+| nearwall-1113 | MINOR | 469 | side: c22 a24 (528) | a thin seam line on the wall | real, not seen in play |
+| sign-1114 | MINOR | 332 | turn: c31 a27 (837) | where the rock meets the low wall | ? |
+| chest-far-1114 | PASS | 78 | | the braziers | |
+| wall-seam-1121 | PASS | 0 | | the seam: not caught (below) | fights |
+| ground-rect-1115 | PASS | 0 | | | |
+| reflect-1114 | PASS | 0 | | | |
 
-The whole suite takes about 12 minutes there (`--jobs 2`; 16 spots, about 25 runs each at 3x; `--motion turn,side`
-about half).
+Margins at the visibility floor (900): nearwall 528 and sign 837 under it; cave 1300, door-frames 1540, the broken
+bridge 1632 and chest-walkup 1667 the lowest over it. The window on the house's shutter line at npc-models (the
+owner: real, slight) is outside that spot's region now; at the player's view it scored c20-33 with few flips, the
+nearwall kind.
+
+Not caught: wall-seam-1121. The seam is nearly black where the dirt wall meets the bricks, and it did not flip under
+the sweeps, at the player's view or closer (fov 30, the heading turned onto it), at 12 levels or 6. Its region is
+the seam alone, so the spot passes; at its first region it failed on the helmet beside the seam.
+
+The whole suite takes about 14 minutes there (`--jobs 2`; 17 spots, about 25 runs each at 3x, two at 4x;
+`--motion turn,side` about half).
 
 Checks on the measure:
 - Lighting cannot count: every view is pictured at the same moment of the game. The spot itself played twice gives
@@ -214,7 +245,7 @@ spots with nothing reported pass (reflect, ground-rect) or stay under the limit 
 - The views are a new game's progress at the spot's place (checked against the quick save for each spot: 0.00 to
   0.01% of pixels differ, outside the HUD). Where progress changes what is seen, `zfight_add_spot.py` warns.
 - The limits come from the preview build at 3x with the owner's settings (FXAA); builds before FXAA shimmer more
-  and fail most spots (above). Where a spot's worst window is not on the reported fight (npc-models, wall-seam,
-  chest-walkup), the spot fails for something else: look at its evidence.
-- Fights on animated models: the creatures are pictured at one pose; the daughter's and the dog's fights did not
-  show at that pose.
+  and fail most spots (above). Where a spot's worst window is not on the reported fight (chest-walkup), the spot
+  fails for something else: look at its evidence.
+- Creatures are pictured at one pose (the same in every run); a fight that shows only in other poses is missed.
+- Dark fights: a seam that is nearly black (wall-seam-1121) does not flip enough to count.

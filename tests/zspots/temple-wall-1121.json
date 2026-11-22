@@ -1,5 +1,5 @@
 {
-  "about": "temple area: the low wall's recessed stone panels by the steps flicker (owner, preview 2fdf828e, 2026-11-21)",
+  "about": "temple area: the low wall's recessed stone panels by the steps flicker (owner, preview 2fdf828e, 2026-11-21); looked at closely (fov 30) with a region around the wall: at the player's view the fight is a few pixels",
   "map": 99,
   "position": [
     3445.25,
@@ -7,5 +7,12 @@
     -3013.999
   ],
   "heading": -1.61853,
-  "pitch": -0.06719
+  "pitch": -0.06719,
+  "fov": 30,
+  "region": [
+    0.25,
+    0.25,
+    0.75,
+    0.7
+  ]
 }

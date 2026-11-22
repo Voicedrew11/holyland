@@ -1,5 +1,5 @@
 {
-  "about": "where the dirt wall meets the rampart's bricks: dark diagonal stripes along the seam (owner, preview 2fdf828e, 2026-11-21); region: the seam on the left (the lava's far edge on the right flips too, in a game frame's time mask's gaps)",
+  "about": "where the dirt wall meets the rampart's bricks: dark diagonal stripes along the seam (owner, preview 2fdf828e, 2026-11-21); region: the seam only. NOT CAUGHT: the seam is nearly black and does not flip under these motions, closer (fov 30) either; the helmet beside it does (2026-11-21)",
   "map": 0,
   "position": [
     -1159.288,
@@ -11,7 +11,7 @@
   "region": [
     0.12,
     0.12,
-    0.45,
+    0.33,
     0.6
   ]
 }
