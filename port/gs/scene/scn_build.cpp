@@ -1957,11 +1957,12 @@ public:
                 (unsigned long long)d.table_max, per(d.cluts), (unsigned long long)d.own_sampler);
         fprintf(stderr,
                 "[stats] scene renderer draw calls: %llu (%.1f a scene: the GIF's %.1f, 0x000 %.1f, 0x280 %.1f, 0x700 "
-                "%.1f, the ripple %.1f), %llu of them indirect (%.1f a scene) with %llu commands (%.1f a scene)\n",
+                "%.1f, the ripple %.1f), %llu of them indirect (%.1f a scene) with %llu commands (%.1f a scene); %llu "
+                "runs of decals settled (%.1f a scene)\n",
                 (unsigned long long)d.draw_calls, per(d.draw_calls), per(d.draw_calls_by[0]), per(d.draw_calls_by[1]),
                 per(d.draw_calls_by[2]), per(d.draw_calls_by[3]), per(d.draw_calls_by[4]),
                 (unsigned long long)d.indirect_calls, per(d.indirect_calls), (unsigned long long)d.indirect_draws,
-                per(d.indirect_draws));
+                per(d.indirect_draws), (unsigned long long)d.settled_runs, per(d.settled_runs));
         fprintf(stderr,
                 "[stats] scene renderer vertices placed once (0x000, 0x280): %llu jobs (%.1f a scene, %llu draws sharing "
                 "one before them), %llu vertices (%.1f a scene), %llu dispatches\n",

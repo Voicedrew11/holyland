@@ -1,7 +1,8 @@
 /* How the scene renderer keeps the 3D's depth (port/gs/scene/scn_draw.h, docs/plans/scene-renderer-design.md "Depth's
    exactness and DATE"), by number and by name: settings.json's display "scene_depth", --scene-depth, the player
-   menu's Depth row. Chosen as the renderer opens (the depth's format, its shaders and the pipelines made before
-   play), so a change takes effect at the next start. A mode is one entry here. */
+   menu's Depth row (High, Medium, Low; unsettled is the developers'). Chosen as the renderer opens (the depth's
+   format, its shaders and the pipelines made before play), so a change takes effect at the next start. A mode is one
+   entry here. Each also has the name it had before the menu's levels (exact, nearer, gpu), still read. */
 #ifndef PORT_SCENE_DEPTH_H
 #define PORT_SCENE_DEPTH_H
 
@@ -21,24 +22,26 @@ enum {
 };
 
 typedef struct {
-    const char *name;  /* settings.json's and the command line's */
-    const char *label; /* the player menu's */
+    const char *name;     /* settings.json's and the command line's */
+    const char *label;    /* the player menu's (unsettled is not in it) */
+    const char *old_name; /* its name before the menu's levels (2026-11-22), still read */
 } PortSceneDepth;
 
 static inline const PortSceneDepth *port_scene_depth(int mode) {
     static const PortSceneDepth modes[PORT_SCENE_DEPTH_COUNT] = {
-        {"exact", "Exact"},                         /* PORT_SCENE_DEPTH_EXACT (in the enum's order) */
-        {"nearer", "Exact, layers in one pass"},    /* PORT_SCENE_DEPTH_NEARER */
-        {"unsettled", "Exact, layers unsettled"},   /* PORT_SCENE_DEPTH_UNSETTLED */
-        {"gpu", "GPU"},                             /* PORT_SCENE_DEPTH_GPU */
+        {"high", "High", "exact"},                     /* PORT_SCENE_DEPTH_EXACT (in the enum's order) */
+        {"medium", "Medium", "nearer"},                /* PORT_SCENE_DEPTH_NEARER */
+        {"unsettled", "Exact, layers unsettled", NULL}, /* PORT_SCENE_DEPTH_UNSETTLED (the developers') */
+        {"low", "Low", "gpu"},                         /* PORT_SCENE_DEPTH_GPU */
     };
     return mode >= 0 && mode < PORT_SCENE_DEPTH_COUNT ? &modes[mode] : NULL;
 }
 
-/* The mode named name, or -1 for none */
+/* The mode named name (its name or its old one), or -1 for none */
 static inline int port_scene_depth_from_name(const char *name) {
     for (int m = 0; name != NULL && m < PORT_SCENE_DEPTH_COUNT; m++) {
-        if (strcmp(port_scene_depth(m)->name, name) == 0) {
+        const PortSceneDepth *d = port_scene_depth(m);
+        if (strcmp(d->name, name) == 0 || (d->old_name != NULL && strcmp(d->old_name, name) == 0)) {
             return m;
         }
     }
