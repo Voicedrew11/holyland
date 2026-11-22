@@ -75,6 +75,12 @@ typedef struct {
        from the player menu. */
     int font;
     int font_forced;
+    /* --scene-depth: how the scene renderer keeps the 3D's depth (PORT_SCENE_DEPTH_*, port/scene_depth.h), from the
+       next start: it
+       chooses the depth's format, shaders and pipelines as the renderer opens. Developers' KF4_SCN_DEPTH=gpu and
+       KF4_SCN_SETTLE=0|nearer override it. */
+    int scene_depth;
+    int scene_depth_forced;
     /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
        0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
        surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
@@ -525,7 +531,13 @@ void port_field_frames_reset(int whole);
 uint64_t port_field_frames_replays(void);
 
 /* ---- The window (port/platform/video.c) -------------------------------------------------- */
+/* Before port_gs_init: the window the Vulkan presenter shows (when it is wanted), so that the PC renderer chooses a
+   GPU and a queue that can present to it (port_video_make_surface) */
+void port_video_open_window(void);
 void port_video_init(void);
+/* A Vulkan surface (VkSurfaceKHR) for the window opened by port_video_open_window, on the instance (VkInstance):
+   1, or 0 without the window. The caller destroys it. On the DMA controller's thread (the PC renderer's opening). */
+int port_video_make_surface(void *instance, uint64_t *surface);
 /* A picture's tag: the vblank it belongs to, and when in it (phase, 0 to 1: 0 is the vblank's own
    picture; --frame-rate above 60 has more between two vblanks). The window shows each at its time. */
 #define PORT_PICTURE_TAG(vblank, phase) (((uint64_t)(vblank) << 16) | (uint64_t)((phase) * 65536.0) & 0xFFFF)

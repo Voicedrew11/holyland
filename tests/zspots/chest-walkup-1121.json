@@ -1,0 +1,46 @@
+{
+  "about": "the wooden chest inside a ruined building, seen from a distance: it flickers when walking forward and back (owner, preview 2fdf828e, 2026-11-21); looked at closely (fov 30), region on the chest; steps of 4 units (the chest is far: still under a pixel there; at 0.5 its lid barely flips; near things move several pixels at 4, so only with a region on something far)",
+  "map": 0,
+  "position": [
+    1375.137,
+    -0.0,
+    -3912.685
+  ],
+  "heading": -0.96662,
+  "pitch": -0.08028,
+  "fov": 30,
+  "region": [
+    0.32,
+    0.32,
+    0.52,
+    0.53
+  ],
+  "motion": [
+    "turn",
+    "step",
+    "walk"
+  ],
+  "walk": [
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      6
+    ],
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      8
+    ]
+  ],
+  "step_units": 4
+}

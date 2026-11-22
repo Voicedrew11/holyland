@@ -894,10 +894,18 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a26833c75505 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db63817c4af19 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
-@@ -20,6 +20,12 @@
+@@ -9,6 +9,7 @@
+ #include "ui/splash.h"
+ #include "effect/effect.h"
+ #include "core/game.h"
++#include "port/cinematic.h" /* PC: the cinematic camera */
+ #include "input/pad.h"
+ #include "entity/entity_world.h"
+ #include "ui/hud.h"
+@@ -20,6 +21,12 @@
  #include "player/magic_ladder.h"
  #include "ui/menu_screens.h"
  #include "gfx/packet.h"
@@ -910,7 +918,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  
  void Game_ResetProgress(void);
  void Player_ResetForNewGame(void);
-@@ -63,9 +69,11 @@ void Sound_Update(void);
+@@ -63,9 +70,11 @@ void Sound_Update(void);
  void Game_StepFade(void);
  void GameLoop_UpdateCamera(void);
  void GameLoop_SetCameraMatrices(int, int);
@@ -923,7 +931,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  void MapItem_UpdatePickup(void);
  void Map_RunFreeCamera(void);
  void GameLoop_OpenRequestedMenu(void);
-@@ -74,7 +82,6 @@ void GameLoop_UpdatePause(void);
+@@ -74,7 +83,6 @@ void GameLoop_UpdatePause(void);
  void Input_StopRumble(void);
  void Sound_SetBgmVolume(int);
  void Sound_SetBankVolumes(int);
@@ -931,7 +939,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  int Sound_BgmLoadCanYield(void);
  void File_CloseAll(void);
  void Wobble_AdvanceSines(void);
-@@ -102,33 +109,21 @@ void Game_BlendScreenOffsetDown(void);
+@@ -102,33 +110,21 @@ void Game_BlendScreenOffsetDown(void);
  void Game_BlendScreenOffsetUpDown(void);
  void Game_BlendPreviousFrame(int);
  void Game_ShiftScreenByViewTurn(void);
@@ -968,7 +976,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  int Sound_LoadBgm(int, int);
  void MapLoad_RequestHold(void);
  int MapLoad_IsHeld(void);
-@@ -145,7 +140,6 @@ void MapViewer_Run(void);
+@@ -145,7 +141,6 @@ void MapViewer_Run(void);
  void File_Lock(void);
  void MapLoad_Release(void);
  void GameLoop_ClearBothBuffers(void);
@@ -976,7 +984,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -153,20 +147,40 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -153,20 +148,40 @@ void GsDraw_QueueTexturedSprite(void *);
  void PlayTime_Update(void);
  void Input_PauseRumble(void);
  void Input_ResumeRumble(void);
@@ -1021,7 +1029,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -237,6 +251,7 @@ void GameLoop_Run(int arg) {
+@@ -237,6 +252,7 @@ void GameLoop_Run(int arg) {
          save_loaded = 0;
          PlayTime_Resume(save_play_time[0]);
          Game_StartFadeIn(0, 0, 0, 0x1E);
@@ -1029,7 +1037,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      }
      map_load_state.flags.raw |= 1;
      Packet_SwapBuffers();
-@@ -250,6 +265,9 @@ void GameLoop_Run(int arg) {
+@@ -250,6 +266,9 @@ void GameLoop_Run(int arg) {
          Timer_Restart();
          if (!(game_status.bit12 && game_status.bit13)) {
              Packet_SendChain();
@@ -1039,7 +1047,15 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
              Timer_GetTicks();
              Packet_SwapBuffers();
              DrawList_Clear();
-@@ -302,11 +320,12 @@ void GameLoop_Run(int arg) {
+@@ -290,6 +309,7 @@ void GameLoop_Run(int arg) {
+         Splash_Update();
+         ItemEffect_Update();
+         GameLoop_UpdateCamera();
++        Cinematic_PlaceCamera(); /* PC: the cinematic camera's view while flying (game/cinematic.c) */
+         GameLoop_SetCameraMatrices(0, 0);
+         GsDraw_QueueVu1Matrix(world_screen_matrix);
+         WeaponTrail_Update();
+@@ -302,11 +322,12 @@ void GameLoop_Run(int arg) {
          GameLoop_OpenRequestedMenu();
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
@@ -1056,7 +1072,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -332,13 +351,15 @@ void GameLoop_Run(int arg) {
+@@ -332,13 +353,15 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -1073,7 +1089,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      Wobble_AdvanceSines();
      func_001095D0();
      GsDraw_ResetDrawTarget();
-@@ -457,6 +478,8 @@ int GameLoop_DrawFrame(int arg) {
+@@ -457,6 +480,8 @@ int GameLoop_DrawFrame(int arg) {
      }
      GameLoop_SetCameraMatrices(0, 0);
      GsDraw_QueueVu1Matrix(world_screen_matrix);
@@ -1082,7 +1098,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      if ((s32)(player_state.status_bits >> 39) & 1) {
          GsDraw_CopyFrame(0x2BC0);
          tinted = TRUE;
-@@ -473,24 +496,36 @@ int GameLoop_DrawFrame(int arg) {
+@@ -473,24 +498,36 @@ int GameLoop_DrawFrame(int arg) {
      }
      Player_DrawScreenFade();
      if (map_draw_state.bit44) {
@@ -1125,7 +1141,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
          Game_ShiftScreenByViewTurn();
      }
      GsDraw_ClearDepth();
-@@ -498,20 +533,30 @@ int GameLoop_DrawFrame(int arg) {
+@@ -498,20 +535,30 @@ int GameLoop_DrawFrame(int arg) {
          Effect_UploadTextures();
      }
      DrawList_Draw(3, 0);
@@ -1161,7 +1177,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -529,14 +574,21 @@ int GameLoop_DrawFrame(int arg) {
+@@ -529,14 +576,21 @@ int GameLoop_DrawFrame(int arg) {
          }
      }
      if (message_dim_alpha != 0) {
@@ -1186,7 +1202,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
      func_001095D8();
  }
  
-@@ -656,14 +708,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -656,14 +710,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
      f32 other[16];
      f32 translation[4];
      f32 angle;
@@ -1213,7 +1229,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +764,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +766,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1221,7 +1237,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..7c30e9b9d6b20ba5fcaa8c2f7123a268
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +791,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +793,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

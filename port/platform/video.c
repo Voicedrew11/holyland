@@ -27,6 +27,7 @@
 
 #ifdef KF4_HAVE_SDL
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 #endif
 
 #include "port/adaptive_sync.h"
@@ -520,6 +521,60 @@ static SDL_Window *make_window(SDL_WindowFlags flags) {
 }
 #endif
 
+#if defined(KF4_HAVE_SDL) && defined(KF4_HAVE_VULKAN_PRESENTER)
+/* the window is the Vulkan presenter's, on the PC renderer's device (with --renderer gs, SDL_Renderer's) */
+static int vulkan_window_wanted(void) {
+    return !port_options.headless && port_options.presenter == PORT_PRESENTER_VULKAN &&
+           port_options.renderer != PORT_RENDERER_GS;
+}
+#endif
+
+/* The window's sizes are the screen's own pixels: on Windows SDL3's own (it is aware of each monitor's
+   scaling), on a scaled Wayland desktop by this hint (as SDL2 and sdl2-compat had it). Without it a 2560 x
+   1440 screen at 115% gives a 2226 x 1252 swapchain, stretched up by the compositor. 1 when SDL's video started. */
+#ifdef KF4_HAVE_SDL
+static int start_sdl_video(void) {
+    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+        fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
+        return 0;
+    }
+    return 1;
+}
+#endif
+
+void port_video_open_window(void) {
+#if defined(KF4_HAVE_SDL) && defined(KF4_HAVE_VULKAN_PRESENTER)
+    if (!vulkan_window_wanted() || !start_sdl_video()) {
+        return;
+    }
+    window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+    if (window == NULL) {
+        fprintf(stderr, "[video] no Vulkan window: %s\n", SDL_GetError());
+    }
+#endif
+}
+
+int port_video_make_surface(void *instance, uint64_t *surface) {
+#if defined(KF4_HAVE_SDL) && defined(KF4_HAVE_VULKAN_PRESENTER)
+    VkSurfaceKHR made = 0;
+
+    if (window == NULL) {
+        return 0;
+    }
+    if (!SDL_Vulkan_CreateSurface(window, (VkInstance)instance, NULL, &made)) {
+        fprintf(stderr, "[video] no Vulkan surface for the window: %s\n", SDL_GetError());
+        return 0;
+    }
+    *surface = (uint64_t)made;
+    return 1;
+#else
+    (void)instance;
+    (void)surface;
+    return 0;
+#endif
+}
+
 void port_video_init(void) {
 #ifdef KF4_HAVE_SDL
     if (port_options.headless && port_gs_enabled() && getenv("KF4_PRESENT_SIM") != NULL) {
@@ -538,14 +593,13 @@ void port_video_init(void) {
         return;
     }
     if (port_options.headless || !port_gs_enabled()) {
+        if (window != NULL) { /* (port_video_open_window's, with no renderer to show) */
+            SDL_DestroyWindow(window);
+            window = NULL;
+        }
         return;
     }
-    /* The window's sizes are the screen's own pixels: on Windows SDL3's own (it is aware of each monitor's
-       scaling), on a scaled Wayland desktop by this hint (as SDL2 and sdl2-compat had it). Without it a 2560 x
-       1440 screen at 115% gives a 2226 x 1252 swapchain, stretched up by the compositor. */
-    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1");
-    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
-        fprintf(stderr, "[video] no window: %s\n", SDL_GetError());
+    if (!start_sdl_video()) {
         return;
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
@@ -557,7 +611,9 @@ void port_video_init(void) {
             fprintf(stderr, "[video] --presenter vulkan needs the PC renderer: the window is SDL_Renderer's\n");
         }
     } else if (port_options.presenter == PORT_PRESENTER_VULKAN) {
-        window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        if (window == NULL) {
+            window = make_window(SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        }
         if (window != NULL && port_vk_open(window)) {
             shown = malloc(sizeof(uint32_t) * PORT_GS_FRAME_PIXELS);
             __atomic_store_n(&presenter, PORT_PRESENTER_VULKAN, __ATOMIC_RELEASE);
@@ -572,6 +628,7 @@ void port_video_init(void) {
         fprintf(stderr, "[video] the Vulkan presenter did not start: the window is SDL_Renderer's\n");
         if (window != NULL) {
             SDL_DestroyWindow(window);
+            window = NULL;
         }
     }
 #else

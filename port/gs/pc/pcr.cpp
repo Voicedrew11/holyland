@@ -2725,15 +2725,16 @@ std::string &pipeline_cache_path_before_open(); // (below)
 
 class Renderer {
 public:
-    // The device (with the presenter's extensions when present_wanted), and the thread. False without one.
+    // The device (with the presenter's extensions when present_wanted, on a GPU and queue that can present to
+    // make_surface's window when given), and the thread. False without one.
     // hang_folder: where a GPU hang's report goes (pcr_hang_reports_in)
-    bool open(bool present_wanted, const std::string &hang_folder) {
+    bool open(bool present_wanted, PcrMakeSurface make_surface, const std::string &hang_folder) {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[pcr] no Vulkan loader\n");
             return false;
         }
         present_wanted_ = present_wanted;
-        if (!make_context()) {
+        if (!make_context(make_surface)) {
             fprintf(stderr, "[pcr] no Vulkan device\n");
             return false;
         }
@@ -3105,8 +3106,10 @@ public:
 
 private:
     // The Vulkan instance and device: with the presenter's surface and swapchain extensions when it wants
-    // them, else (or when that fails) without
-    bool make_context() {
+    // them, else (or when that fails) without. With make_surface, the GPU and its graphics queue are ones that can
+    // present to the window: chosen without it, the GPU or the queue may not (NVIDIA on Windows, 2026-11-18:
+    // "the PC renderer's queue cannot present to the window", and the window fell back to SDL_Renderer)
+    bool make_context(PcrMakeSurface make_surface) {
         // (KF4_PC_PUSH_DESCRIPTORS=1: push descriptors. Granite then pushes the last set of each program's layout,
         // vkCmdPushDescriptorSet, rather than allocating and writing a descriptor set for it at every change: the
         // batches' textures, pcr_canvas.cpp's set 1. Off by default: on NVIDIA (RTX 5080, 2026-11-12) it took the
@@ -3123,9 +3126,20 @@ private:
         if (!instance_ext.empty()) {
             context_ = std::make_unique<Context>();
             context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
-            if (context_->init_instance_and_device(instance_ext.data(), uint32_t(instance_ext.size()),
-                                                   device_ext.data(), uint32_t(device_ext.size()), context_flags)) {
-                return true;
+            if (context_->init_instance(instance_ext.data(), uint32_t(instance_ext.size()), context_flags)) {
+                VkSurfaceKHR window = window_surface(make_surface);
+                bool made = context_->init_device(VK_NULL_HANDLE, window, device_ext.data(), uint32_t(device_ext.size()),
+                                                  context_flags);
+                if (window != VK_NULL_HANDLE) {
+                    vkDestroySurfaceKHR(context_->get_instance(), window, nullptr);
+                }
+                if (made) {
+                    return true;
+                }
+                if (window != VK_NULL_HANDLE) {
+                    fprintf(stderr, "[pcr] no Vulkan GPU can present to the window (is the screen plugged into the graphics "
+                                    "card?)\n");
+                }
             }
             fprintf(stderr, "[pcr] no Vulkan device with a swapchain: the window is shown without one\n");
         }
@@ -3137,6 +3151,20 @@ private:
             return false;
         }
         return true;
+    }
+
+    // The window's surface on the instance made (VK_NULL_HANDLE without make_surface or when it fails: the GPU is then
+    // chosen without the window)
+    VkSurfaceKHR window_surface(PcrMakeSurface make_surface) const {
+        uint64_t surface = 0;
+        if (make_surface == nullptr) {
+            return VK_NULL_HANDLE;
+        }
+        if (!make_surface(context_->get_instance(), &surface)) {
+            fprintf(stderr, "[pcr] no Vulkan surface for the window: the GPU is chosen without it\n");
+            return VK_NULL_HANDLE;
+        }
+        return reinterpret_cast<VkSurfaceKHR>(surface);
     }
 
     // The surface extensions the Vulkan loader has (VK_KHR_surface and each platform's: SDL picks one;
@@ -3893,6 +3921,7 @@ std::unique_ptr<Renderer> &renderer() {
 }
 
 bool present_asked; // pcr_enable_present, before pcr_open (the opener's thread)
+PcrMakeSurface make_surface_asked; // likewise (NULL: the GPU is chosen without the window)
 std::string hang_folder_asked; // pcr_hang_reports_in, likewise
 
 // pcr_pipeline_cache's path, before pcr_open
@@ -3918,7 +3947,7 @@ extern "C" int pcr_open(void *shared_context) {
         return 1;
     }
     auto made = std::make_unique<Renderer>();
-    if (!made->open(present_asked, hang_folder_asked)) {
+    if (!made->open(present_asked, make_surface_asked, hang_folder_asked)) {
         return 0;
     }
     renderer() = std::move(made);
@@ -3934,8 +3963,9 @@ void pcr::use_drawing(DrawingMaker maker, const char *name) {
     drawing_name() = maker && name ? name : "the PC renderer";
 }
 
-extern "C" void pcr_enable_present(void) {
+extern "C" void pcr_enable_present(PcrMakeSurface make_surface) {
     present_asked = true;
+    make_surface_asked = make_surface;
 }
 
 extern "C" void pcr_hang_reports_in(const char *folder) {

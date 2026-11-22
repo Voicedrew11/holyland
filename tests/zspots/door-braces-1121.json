@@ -1,0 +1,37 @@
+{
+  "about": "a wooden double door: its diagonal cross braces flicker in front of and behind the panel when walking back and forth (owner, preview 2fdf828e, 2026-11-21)",
+  "map": 99,
+  "position": [
+    -6266.58,
+    -0.003,
+    -8268.273
+  ],
+  "heading": 3.01271,
+  "pitch": -0.02792,
+  "motion": [
+    "step",
+    "walk"
+  ],
+  "walk": [
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      6
+    ],
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      8
+    ]
+  ]
+}

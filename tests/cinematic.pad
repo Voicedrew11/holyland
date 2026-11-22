@@ -1,0 +1,28 @@
+# New Game, then the cinematic camera (port/include/port/cinematic.h) in the first map (099.map): fly forward
+# through the first room's wall, turn, dive, let go and coast, land. Play with --cinematic-camera --input
+# tests/cinematic.pad (and the options tools/boot_test.py passes); the log's [cinematic] lines say where it flew.
+# <vblank> <buttons or axes> [vblanks held, default 6]; axes 0..255, 128 centred, ly=0 is forward
+100 CROSS 4     # the notice that there is nowhere to save (--saves none)
+300 START 4     # skip the logos
+400 START 4     # Press Start
+500 CROSS 4     # New Game (the cursor starts on it)
+740 START 4     # skip the opening movie
+700 CROSS 4
+800 CROSS 4
+900 CROSS 4
+1000 CROSS 4
+1100 CROSS 4
+1200 CROSS 4
+1300 CROSS 4
+1400 CROSS 4
+# the player has control from about vblank 1500
+1700 event cinematic_camera     # fly
+1720 ly=0 90                    # forward, into the rock beside the path
+1810 rx=255 60                  # turn right (the view trails it)
+1900 ry=255 40                  # look down
+1940 ly=0 60                    # forward: dives
+2000 ry=0 60                    # look up
+2060 ly=0 60                    # forward: climbs
+# let go at 2120: it coasts to a stop
+2200 event cinematic_camera     # land
+2250 ly=0 60                    # walk again

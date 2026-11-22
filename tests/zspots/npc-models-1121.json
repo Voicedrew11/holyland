@@ -1,0 +1,21 @@
+{
+  "about": "the sick lady's daughter (her belt) and the dog (its mouth) fight on their own models (owner, preview 2fdf828e, 2026-11-21); settle 600: they come into view some seconds after a load; looked at closely (fov 30, 4x), the region around the two, no time mask (their idle animation is the same in every run)",
+  "map": 4,
+  "position": [
+    1708.417,
+    -526.219,
+    -78.547
+  ],
+  "heading": 2.21158,
+  "pitch": 0.11345,
+  "settle": 600,
+  "fov": 30,
+  "scale": 4,
+  "time_mask": false,
+  "region": [
+    0.24,
+    0.12,
+    0.6,
+    0.52
+  ]
+}

@@ -316,6 +316,12 @@ void port_automap_quick_loading(const char *path) {
     }
 }
 
+void port_automap_state_loaded(void) {
+    at_title = 0;
+    loaded_since_title = 1;
+    port_automap_mark_dirty();
+}
+
 /* (game/automap.c) the title was reached: is the next game a new one? */
 void port_automap_title(void) {
     if (!at_title) {

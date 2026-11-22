@@ -49,6 +49,10 @@
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
        --font MODE       the game's font: sharp (the default: its English letters drawn again from
                          IPA Mincho four times as fine, crisp at any resolution) or ps2 (the disc's)
+       --scene-depth MODE the scene renderer's depth: exact (the default: the GS's whole Z at each
+                         pixel, the layers over a surface settled by the stencil), nearer (exact, the
+                         layers settled in one pass where nearer), unsettled (exact, the layers left
+                         with the depth they were tested with) or gpu (the GPU's own, interpolated)
        --native-lod MODE the mipmap level the renderer reads textures at: scale (the default: the
                          GS's level made finer by log2 of --native-scale, the detail of the larger
                          picture; at 1x the PS2's), ps2 (the GS's level, picked for 640x448) or
@@ -146,6 +150,9 @@
                          of cards at the bottom left (port/include/port/hands.h); --weapon-sets is the old name
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the player menu's Cheats tab)
+       --cinematic-camera  the trailer's cheat on: V or the pad's mute key flies the camera
+                         (port/include/port/cinematic.h); a pad script's "event cinematic_camera" presses it
+       --enemies-ignore  the trailer's cheat on: enemies never notice the player
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
                          or all), as the player menu's Cheats tab does; spells1, spells2 or spells3 for the
                          spells at that level (3 otherwise) (port/include/port/cheats.h)
@@ -202,6 +209,7 @@
 
 #include "port/antialias.h"
 #include "port/automap.h"
+#include "port/cinematic.h"
 #include "port/data_dir.h"
 #include "port/hands.h"
 #include "port/audio.h"
@@ -212,6 +220,7 @@
 #include "port/profile_run.h"
 #include "port/settings.h"
 #include "port/savestate.h"
+#include "port/scene_depth.h"
 #include "port/quicksave.h"
 #include "port/save_files.h"
 #include "port/teleport.h"
@@ -297,12 +306,12 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred] [--fov N]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-2d smooth|ps2] [--font sharp|ps2]\n"
+            "          [--native-2d smooth|ps2] [--font sharp|ps2] [--scene-depth exact|nearer|unsettled|gpu]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
             "          [--test-dma-wait]\n"
@@ -453,6 +462,14 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--invincible") == 0) {
             port_options.invincible = 1;
+            continue;
+        }
+        if (strcmp(option, "--cinematic-camera") == 0) {
+            port_cinematic_set_enabled(1);
+            continue;
+        }
+        if (strcmp(option, "--enemies-ignore") == 0) {
+            port_enemies_ignore_set(1);
             continue;
         }
         if (strcmp(option, "--test-dma-wait") == 0) {
@@ -671,6 +688,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.font_forced = 1;
+        } else if (strcmp(option, "--scene-depth") == 0) {
+            port_options.scene_depth = port_scene_depth_from_name(value);
+            if (port_options.scene_depth < 0) {
+                fprintf(stderr, "--scene-depth wants exact, nearer, unsettled or gpu, not %s\n", value);
+                exit(2);
+            }
+            port_options.scene_depth_forced = 1;
         } else if (strcmp(option, "--native-draw") == 0) {
             int bits = port_native_draw_parse(value);
 
@@ -874,7 +898,7 @@ static int parse_cheats(const char *list) {
 }
 
 int port_invincible(void) {
-    return port_options.invincible != 0;
+    return port_options.invincible != 0 || port_cinematic_flying(); /* (nothing hurts the flying camera) */
 }
 
 int port_native_draw(int kind) {
@@ -1098,6 +1122,7 @@ int main(int argc, char **argv) {
     port_kernel_init();
     port_dmac_start();
     port_debug_init(gs_capture_at); /* before the GS: a capture asked for makes a --headless run draw */
+    port_video_open_window(); /* (before the GS: the PC renderer chooses a GPU that can present to it) */
     port_gs_init();
     port_pad_init();
     port_video_init();

@@ -74,6 +74,10 @@ typedef enum {
     ACTION_SPELL_SWAP,    /* the other spell */
     ACTION_HOTKEY_NEXT,   /* the next hotkey that holds something */
     ACTION_HOTKEY_PREVIOUS,
+    ACTION_CINEMATIC_CAMERA, /* the cinematic camera cheat (port/include/port/cinematic.h): fly or land: V, the pad's
+                                spare button (a DualSense's mute key) */
+    ACTION_FLY_UP,           /* flying: rise and sink */
+    ACTION_FLY_DOWN,
     ACTION_COUNT
 } PortAction;
 

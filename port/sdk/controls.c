@@ -3,7 +3,8 @@
    choose: what each does follows what the player is doing.
 
    The keyboard (the game's own button for each in brackets):
-       W A S D       the left stick: walk and step sideways (twin-stick), move the menus' cursor
+       W A S D       walk and step sideways (the game's own walking buttons, eased as the d-pad's, whatever
+                     twin-stick is: port/include/port/walk_keys.h), move the menus' cursor
        arrows        the d-pad: walk and turn, move the menus' cursor
        I J K L       the right stick: turn and look
        Space         square (attack)                 E          cross (use, talk, confirm)
@@ -26,11 +27,12 @@
    L1 R1 L2 R2). F2 / F4 take and load a quick save (port/platform/quicksave.c), F5 / F7 save and load the quick
    slot's save state, and F3 shows or hides the frame-rate counter.
 
-   With the separate run mod on (--separate-run, the player menu's Controls tab), Left Shift and the controller's
-   left stick press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
-   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make the left
-   stick walk and step sideways and the right stick turn and look; off, the left stick is the d-pad (walk and
-   turn), as on the PS2.
+   With the separate run mod on (--separate-run, the player menu's Controls tab), Left Shift and the controller's left stick
+   press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
+   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make a
+   controller's left stick walk and step sideways and the right stick turn and look; off, the left stick is the
+   d-pad (walk and turn), as on the PS2. It changes only the controller's sticks: W A S D are the same either way
+   (unless instant WASD acceleration is on: port/include/port/walk_keys.h).
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look): each
    movement is applied once, so it neither coasts nor builds speed. A mouse button held as play starts or stops
@@ -45,6 +47,7 @@
 #include "port/host.h"
 #include "port/menu_pointer.h"
 #include "port/mouse_lead.h"
+#include "port/cinematic.h"
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
@@ -53,6 +56,7 @@
 #include "port/settings.h"
 #include "port/stats.h"
 #include "port/hands.h"
+#include "port/walk_keys.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL3/SDL.h>
@@ -113,10 +117,10 @@ static const struct {
     [ACTION_R3] = {"r3", "R3 (right stick press)", 0x0004},
     [ACTION_START] = {"start", "Start", 0x0008},
     [ACTION_SELECT] = {"select", "Select", 0x0001},
-    [ACTION_LEFT_STICK_UP] = {"left_stick_up", "Left stick up", 0},
-    [ACTION_LEFT_STICK_DOWN] = {"left_stick_down", "Left stick down", 0},
-    [ACTION_LEFT_STICK_LEFT] = {"left_stick_left", "Left stick left", 0},
-    [ACTION_LEFT_STICK_RIGHT] = {"left_stick_right", "Left stick right", 0},
+    [ACTION_LEFT_STICK_UP] = {"left_stick_up", "Walk forward", 0},
+    [ACTION_LEFT_STICK_DOWN] = {"left_stick_down", "Walk back", 0},
+    [ACTION_LEFT_STICK_LEFT] = {"left_stick_left", "Step left", 0},
+    [ACTION_LEFT_STICK_RIGHT] = {"left_stick_right", "Step right", 0},
     [ACTION_RIGHT_STICK_UP] = {"right_stick_up", "Right stick up", 0},
     [ACTION_RIGHT_STICK_DOWN] = {"right_stick_down", "Right stick down", 0},
     [ACTION_RIGHT_STICK_LEFT] = {"right_stick_left", "Right stick left", 0},
@@ -138,6 +142,9 @@ static const struct {
     [ACTION_SPELL_SWAP] = {"spell_swap", "Swap spell (hands mod)", 0},
     [ACTION_HOTKEY_NEXT] = {"hotkey_next", "Next hotkey (hands mod)", 0},
     [ACTION_HOTKEY_PREVIOUS] = {"hotkey_previous", "Previous hotkey (hands mod)", 0},
+    [ACTION_CINEMATIC_CAMERA] = {"cinematic_camera", "Cinematic camera: fly / land (cheat)", 0},
+    [ACTION_FLY_UP] = {"fly_up", "Cinematic camera: fly up", 0},
+    [ACTION_FLY_DOWN] = {"fly_down", "Cinematic camera: fly down", 0},
 };
 
 /* The hands mod's key of the action, -1 none */
@@ -176,6 +183,9 @@ int port_controls_action_used(int action) {
     }
     if (hands_key_of(action) >= 0) {
         return port_hands.enabled;
+    }
+    if (action == ACTION_CINEMATIC_CAMERA || action == ACTION_FLY_UP || action == ACTION_FLY_DOWN) {
+        return port_cinematic_enabled();
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -238,6 +248,9 @@ static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
     [ACTION_SPELL_SWAP] = {KEY(2), KEY(T), PAD(DPAD_LEFT)},
     [ACTION_HOTKEY_NEXT] = {KEY(3), KEY(G), PAD(DPAD_DOWN)},
     [ACTION_HOTKEY_PREVIOUS] = {KEY(4), 0, PAD(DPAD_UP)},
+    [ACTION_CINEMATIC_CAMERA] = {KEY(V), 0, PAD(MISC1)},
+    [ACTION_FLY_UP] = {KEY(X)},
+    [ACTION_FLY_DOWN] = {KEY(LCTRL)},
 };
 /* The mouse outside play: left cross, right circle, middle cross */
 static const int default_menu_mouse[3] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_CROSS};
@@ -328,6 +341,12 @@ void port_controls_set_mouse_lead(int on) {
     mouse_lead = on != 0;
 }
 
+/* Instant mouse look now: held off while the cinematic camera flies, whose look smoothing and the lead together
+   judder (Verdite3 aeb5030); the setting is left as it is */
+static int lead_on(void) {
+    return mouse_lead && !port_cinematic_flying();
+}
+
 /* The mouse motion not yet spent, as the next port_mouse_look will give it, to instant mouse look (nothing
    while it is off: then nothing is spent there either, and no picture is turned) */
 static double held_turn(double turn) {
@@ -344,7 +363,7 @@ static double reading_time(void) {
 static void lead_waiting(void) {
     MouseTurn waiting = {0, 0};
 
-    if (mouse_lead) {
+    if (lead_on()) {
         waiting.yaw_rad = held_turn(pc.yaw);
         waiting.pitch_rad = held_turn(pc.pitch);
     }
@@ -440,7 +459,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     if (y == 0.0 && p == 0.0) {
         return 0;
     }
-    if (mouse_lead) {
+    if (lead_on()) {
         MouseTurn spent = {y, p};
 
         port_mouse_lead_spent(spent); /* (out of what waited: the hand is where it was) */
@@ -551,6 +570,7 @@ static const char *pad_label(int button) {
     case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "Pad down";
     case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Pad left";
     case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Pad right";
+    case SDL_GAMEPAD_BUTTON_MISC1: return "Pad mute / share";
     default: return NULL;
     }
 }
@@ -875,12 +895,12 @@ void port_controls_sample_mouse(void) {
     float dx = 0.0f, dy = 0.0f; /* (pixels, with a high-resolution mouse's fractions) */
 
     if (diag_spin_rad_s() != 0.0) {
-        if (mouse_lead && in_gameplay() && diag_spin_add()) {
+        if (lead_on() && in_gameplay() && diag_spin_add()) {
             lead_waiting();
         }
         return;
     }
-    if (port_options.input != NULL || port_options.headless || !mouse_lead ||
+    if (port_options.input != NULL || port_options.headless || !lead_on() ||
         pc.blocked || !pc.captured || !in_gameplay()) {
         return;
     }
@@ -987,6 +1007,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     unsigned int pad = 0;         /* from the controller */
     unsigned int mouse = 0;       /* bit n: SDL's mouse button n */
     unsigned int menu = 0;        /* the mouse outside play */
+    unsigned int walk = 0;        /* the walk keys' buttons (never a tap) */
     uint64_t held_keys = 0;       /* actions, from the keyboard and mouse */
     uint64_t held_pad = 0;        /* actions, from the controller */
     uint64_t held;
@@ -1152,6 +1173,11 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_STATS_PANEL & 1u) {
         port_stats_toggle_panel();
     }
+    if (edges >> ACTION_CINEMATIC_CAMERA & 1u) {
+        port_pad_record_event("cinematic_camera", 0);
+        port_cinematic_key_toggle(); /* taken by game/cinematic.c; no notice, so nothing lands in the shot */
+    }
+    port_cinematic_set_held((int)(held >> ACTION_FLY_UP & 1u) - (int)(held >> ACTION_FLY_DOWN & 1u), pc.run);
     for (action = 0; action < ACTION_COUNT; action++) {
         int key = hands_key_of(action);
 
@@ -1169,8 +1195,13 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 
     axis[0] = action_axis(held, ACTION_RIGHT_STICK_LEFT, ACTION_RIGHT_STICK_RIGHT);
     axis[1] = action_axis(held, ACTION_RIGHT_STICK_UP, ACTION_RIGHT_STICK_DOWN);
-    axis[2] = action_axis(held, ACTION_LEFT_STICK_LEFT, ACTION_LEFT_STICK_RIGHT);
-    axis[3] = action_axis(held, ACTION_LEFT_STICK_UP, ACTION_LEFT_STICK_DOWN);
+    /* the walk keys are the game's walking buttons, not the left stick (port/include/port/walk_keys.h): the stick
+       is left at rest, a controller's own; with instant WASD acceleration the stick at full throw, as before */
+    walk = walk_keys_read((held >> ACTION_LEFT_STICK_UP & 1u ? WALK_KEY_FORWARD : 0u) |
+                              (held >> ACTION_LEFT_STICK_DOWN & 1u ? WALK_KEY_BACK : 0u) |
+                              (held >> ACTION_LEFT_STICK_LEFT & 1u ? WALK_KEY_LEFT : 0u) |
+                              (held >> ACTION_LEFT_STICK_RIGHT & 1u ? WALK_KEY_RIGHT : 0u),
+                          gameplay, port_walk_keys_buttons(), port_walk_keys_instant(), axis);
 
     if (gameplay && pc.captured) {
         pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
@@ -1210,6 +1241,6 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.previous_buttons = pressed;
     pc.previous_gameplay = gameplay;
     update_cursor();
-    *buttons |= pressed | pad;
+    *buttons |= pressed | pad | walk;
 }
 #endif

@@ -36,7 +36,11 @@ extern "C" {
 /* Opening: shared_context must be NULL (the PC renderer runs on a device of its own). 0 without a Vulkan
    device it can use. pcr_enable_present, before: the presenter's surface and swapchain extensions. */
 int pcr_open(void *shared_context);
-void pcr_enable_present(void);
+/* Makes a Vulkan surface (VkSurfaceKHR, written to *surface) for the window on the instance (VkInstance): 1, or 0
+   without one. Called on pcr_open's thread. The PC renderer destroys the surface once it has chosen its GPU. */
+typedef int (*PcrMakeSurface)(void *instance, uint64_t *surface);
+/* make_surface (may be NULL): the window's surface, so that the GPU and the queue chosen can present to it */
+void pcr_enable_present(PcrMakeSurface make_surface);
 /* Before pcr_open: the folder a GPU hang's report is written into (pcr_hang_watch.h). Not called: the folder the
    program runs in. */
 void pcr_hang_reports_in(const char *folder);

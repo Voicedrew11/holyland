@@ -163,7 +163,7 @@ static int open_pc_renderer(void) {
     char path[1100];
 
     if (port_options.presenter == PORT_PRESENTER_VULKAN && !port_options.headless) {
-        gsr_enable_present();
+        gsr_enable_present(port_video_make_surface);
     }
     gsr_hang_reports_in(port_data_dir());
     /* (before it opens: its pipelines are made through the kept cache from the first draw on) */

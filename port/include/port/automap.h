@@ -179,6 +179,12 @@ void port_automap_quick_loading(const char *path);     /* quicksave.c: a quick s
 size_t Automap_Serialize(uint8_t **out);   /* malloc'd */
 void Automap_Deserialize(const uint8_t *data, size_t size); /* NULL: forget everything */
 void Automap_Flush(void);                  /* the current map's state into the stored ones */
+/* (port/platform/savestate.c) the fog of war into a save state, or back: the file is linked outside the state's
+   image (its globals hold the host's memory), so a state carries this instead; PortStateIo: port/savestate.h */
+struct PortStateIo;
+void Automap_State(struct PortStateIo *io);
+/* (game/automap.c) a save state's fog of war was loaded: it counts as a load (not a new game), and is written */
+void port_automap_state_loaded(void);
 /* (port side) write live.bin now, if anything changed */
 void port_automap_save_live(int force);
 void port_automap_mark_dirty(void);
