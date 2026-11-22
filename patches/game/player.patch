@@ -1290,15 +1290,16 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..7488481f1e4929c4459b49710bf21d5e
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
-index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff803289089d17 100644
+index 0bb4b0efa70e9591ff4b71939f79236f831481a0..6ba9b684b090fd375d064ee2c634cc80ee121718 100644
 --- a/src/game/player/player_update.c
 +++ b/src/game/player/player_update.c
-@@ -8,9 +8,16 @@
+@@ -8,9 +8,17 @@
  #include "map/map.h"
  #include "model/model.h"
  #include "player/player.h"
 +#include "port/controls.h" /* PC: mouse look, the run key */
 +#include "port/twin_stick.h" /* PC: twin-stick controls */
++#include "port/cinematic.h" /* PC: the cinematic camera */
 +#include "input/pad.h"
  #include "effect/shot.h"
  #include "sound/sound.h"
@@ -1310,7 +1311,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  
  static s32 swing_magic_frames;                    /* 0x447114 frames the swing-cast magic still runs */
  static s32 swing_magic_id;                        /* 0x447118 magic id cast from the swing */
-@@ -35,7 +42,8 @@ extern SoundLoadQueue sound_load_queue;
+@@ -35,7 +43,8 @@ extern SoundLoadQueue sound_load_queue;
  extern u16 pad_state[];
  extern u8 item_counts[];
  extern s8 game_options[];
@@ -1320,7 +1321,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  extern int current_map_slot;
  extern u32 frame_counter;
  extern int sacrificial_mask_cooldown;              /* frames until the item 0x32 may launch its effect again */
-@@ -52,6 +60,29 @@ extern u16 step_right_button;              /* step right */
+@@ -52,6 +61,29 @@ extern u16 step_right_button;              /* step right */
  extern u16 step_left_button;              /* step left */
  extern u16 look_down_button;              /* look down */
  extern u16 look_up_button;              /* look up */
@@ -1350,7 +1351,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  extern u16 attack_button;
  extern u16 magic_button;
  extern u16 action_button;              /* run; pressed: use what is in front */
-@@ -86,9 +117,6 @@ void (*item_step_handlers[8])(u16, u16) = {
+@@ -86,9 +118,6 @@ void (*item_step_handlers[8])(u16, u16) = {
      (void (*)(u16, u16))Player_HolsterWeapon, 0, 0, 0,
  };
  
@@ -1360,7 +1361,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  int Sound_PlayFootstep(int);
  int Sound_PlayCommon(int);
  int Attack_LaunchMagicEffect(u16, void *, void *, void *, void *);
-@@ -114,8 +142,7 @@ void Attack_WearWeapon(int, int);
+@@ -114,8 +143,7 @@ void Attack_WearWeapon(int, int);
  void Attack_WearWornItem(int idx, int amount);
  
  extern u8 spell_levels[6][5];
@@ -1370,7 +1371,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  extern LevelRecord weapon_level_records[70];
  extern LevelDef item_name_defs[0x17C];
  
-@@ -253,6 +280,11 @@ void Player_Update(void) {
+@@ -253,6 +281,11 @@ void Player_Update(void) {
      }
      held = pad_state[0];
      pressed = pad_state[1];
@@ -1382,20 +1383,25 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
      player_previous = player_state;
  
      PLAYER_STATUS(&player_state)->bit35 = FALSE;
-@@ -379,7 +411,11 @@ void Player_Update(void) {
+@@ -378,8 +411,15 @@ void Player_Update(void) {
+     }
      if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1)) {
          Player_Move(held, pressed);
-         Player_ApplyGroundEffects();
+-        Player_ApplyGroundEffects();
 -        Ladder_DispatchPad(held, pressed);
-+        /* PC: the ladder reads the sticks by their main direction (issue #203) */
-+        Ladder_DispatchPad(port_twin_stick_on() ? twin_stick_ladder_held(held, Pad_GetReport(0, 0)->held,
-+                                                                         Player_PadSticks(), Player_MoveButtons())
-+                                                : held,
-+                           pressed);
++        Cinematic_AfterMove(); /* PC: the cinematic camera's flight writes over the walk (game/cinematic.c) */
++        if (!port_cinematic_flying()) { /* PC: neither deadly ground nor a ladder while flying */
++            Player_ApplyGroundEffects();
++            /* PC: the ladder reads the sticks by their main direction (issue #203) */
++            Ladder_DispatchPad(port_twin_stick_on() ? twin_stick_ladder_held(held, Pad_GetReport(0, 0)->held,
++                                                                             Player_PadSticks(), Player_MoveButtons())
++                                                    : held,
++                               pressed);
++        }
          Player_UpdateBreath();
          Player_UpdateAilmentImmunity();
          Player_UpdateDying();
-@@ -515,7 +551,7 @@ void Player_Update(void) {
+@@ -515,7 +555,7 @@ void Player_Update(void) {
      game_status.movement_input_enabled = 1;
  }
  
@@ -1404,7 +1410,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  
  /* Draws the colours that lie over the screen (PlayerScreenTint). */
  void Player_DrawScreenTints(void) {
-@@ -890,11 +926,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
+@@ -890,11 +930,10 @@ void Player_SwingWeapon(u16 held, u16 pressed) {
      }
  }
  
@@ -1417,7 +1423,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  }
  
  /* Handler of an item that shoots: on the button, starts the motion and launches the item's shot. */
-@@ -921,7 +956,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
+@@ -921,7 +960,7 @@ void Player_FireProjectile(u16 held, u16 pressed) {
      }
  }
  
@@ -1426,7 +1432,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  static u8 D_0057A348[8] __attribute__((section(".bss")));  /* 0x57A348 the eight bytes before the requests */
  static Unk1B1470Request bow_shot_requests[32];                     /* 0x57A350 the bow's requests, one per shot */
  
-@@ -1019,11 +1054,12 @@ void Player_HolsterWeapon(void) {
+@@ -1019,11 +1058,12 @@ void Player_HolsterWeapon(void) {
      ModelMotion_Step(WEAPON_MODEL);
      if (MODEL_CHANNEL(WEAPON_MODEL)->blend_left == 0) {
          Effect_FreePlayerWeaponKinds();
@@ -1441,7 +1447,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  
  int Player_CanFireAtAim(void) {
      float vec[4];
-@@ -1039,8 +1075,6 @@ int Player_CanFireAtAim(void) {
+@@ -1039,8 +1079,6 @@ int Player_CanFireAtAim(void) {
      return result;
  }
  
@@ -1450,7 +1456,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  
  void Player_UpdateWeaponAim(void) {
      float vec[4];
-@@ -1060,11 +1094,6 @@ extern f32 identity_matrix[16];
+@@ -1060,11 +1098,6 @@ extern f32 identity_matrix[16];
  
  /* the pad bits of each control */
  
@@ -1462,7 +1468,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  float Angle_Wrap(float);
  int Angle_Approach(float *, float, float);
  int Sound_PlayMap(int);
-@@ -1074,8 +1103,8 @@ void Player_FindFloorMaterial(void);
+@@ -1074,8 +1107,8 @@ void Player_FindFloorMaterial(void);
  void Player_CollideWithEntities(int);
  void Player_CollideWithMapObjects(int);
  
@@ -1473,7 +1479,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  
  #define STEP_LENGTH 25.0f
  
-@@ -1348,6 +1377,30 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1348,6 +1381,30 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
          }
      }
  
@@ -1504,7 +1510,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
      /* falling */
      if (game_status.player_control != 0 && !(game_status.update_hold_flags & 1) && !((s32)(player_state.status_bits >> 36) & 1)) {
          if ((s32)(player_state.status_bits >> 33) & 1) {
-@@ -1365,6 +1418,21 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1365,6 +1422,21 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
          delta.x *= 0.5f;
          delta.y *= 0.5f;
      }
@@ -1526,7 +1532,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
      player_state.rotation.y = Angle_Wrap(player_state.rotation.y + delta.y);
      player_state.rotation.x += delta.x;
      if (player_state.rotation.x > 1.012291f) {
-@@ -1447,7 +1515,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1447,7 +1519,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
      }
  
      if ((s32)(player_state.status_bits >> 37) & 1) {
@@ -1535,7 +1541,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
          if (player_state.landing_dip_frame++ >= player_state.landing_dip_frames) {
              player_state.status_bits &= ~PLAYER_FLAG_37;
              player_state.landing_dip_offset = 0.0f;
-@@ -1500,7 +1568,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1500,7 +1572,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
          }
      }
  
@@ -1544,7 +1550,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
          player_state.hp_now = 0;
          player_state.hp_bar_level = 0;
          Player_UpdateDying();
-@@ -1509,7 +1577,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
+@@ -1509,7 +1581,7 @@ void Player_Move(u16 buttons, u16 unused_pressed) {
  
  /* What the ground under the player does to him: death, poison (by chance or at once), damage, or experience. */
  void Player_ApplyGroundEffects(void) {
@@ -1553,7 +1559,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
          player_state.hp_now = 0;
          player_state.hp_bar_level = 0;
          if (player_state.death_timer == 0) {
-@@ -1575,7 +1643,7 @@ void Player_TakeFallDamage(float speed) {
+@@ -1575,7 +1647,7 @@ void Player_TakeFallDamage(float speed) {
      if (player_state.stepped_on_entity != 0) {
          amount = amount * 60 / 100;
      } else if ((player_state.status_bits >> 38 & 1) == 1) {
@@ -1562,7 +1568,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
              amount = amount * 80 / 100;
          }
      }
-@@ -1608,7 +1676,7 @@ void Player_StopWalking(void) {
+@@ -1608,7 +1680,7 @@ void Player_StopWalking(void) {
      player_state.look_speed = 0.0f;
      player_state.turn_speed = 0.0f;
      player_state.stride_phase = 0;
@@ -1571,7 +1577,7 @@ index 0bb4b0efa70e9591ff4b71939f79236f831481a0..f2fe9b1648cd6800dc9b4c3a9eff8032
  }
  
  /* The breath bar under water (status bit 39, which Player_CollideWithMap sets while the water surface, strip
-@@ -1623,7 +1691,7 @@ void Player_UpdateBreath(void) {
+@@ -1623,7 +1695,7 @@ void Player_UpdateBreath(void) {
      int filled;
  
      player = &player_state;

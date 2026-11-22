@@ -45,6 +45,7 @@ extern "C" {
 #include "port/automap.h"
 #include "port/hands.h"
 #include "port/cheats.h"
+#include "port/cinematic.h"
 #include "port/controls.h"
 #include "port/twin_stick.h"
 #include "port/debug.h"
@@ -1278,6 +1279,18 @@ void cheats_section() {
             "deadly ground and scripted deaths do not kill. Poison and other ailments still show.\n"
             "For testing areas a new character could not survive. Not saved: off at the next start\n"
             "(--invincible turns it on from the start).");
+    bool ignore = port_enemies_ignore() != 0;
+    if (ImGui::Checkbox("Enemies ignore you", &ignore))
+        port_enemies_ignore_set(ignore);
+    tooltip("Enemies never notice you, and one you hit goes back to idle (--enemies-ignore).");
+    bool cinematic = port_cinematic_enabled() != 0;
+    if (ImGui::Checkbox("Cinematic camera", &cinematic))
+        port_cinematic_set_enabled(cinematic);
+    tooltip("V or the pad's mute key flies the camera through walls, eased (--cinematic-camera).");
+    if (port_cinematic_flying()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(flying)");
+    }
     if (ImGui::Button("Learn all spells"))
         port_cheat_request(PORT_CHEAT_SPELLS);
     tooltip("Every spell of the six schools, at the level beside. They show in Equipment > Magic and\n"

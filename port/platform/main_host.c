@@ -146,6 +146,9 @@
                          of cards at the bottom left (port/include/port/hands.h); --weapon-sets is the old name
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
        --invincible      debugging: the player loses no HP and does not die (the overlay's Developer page)
+       --cinematic-camera  the trailer's cheat on: V or the pad's mute key flies the camera
+                         (port/include/port/cinematic.h); a pad script's "event cinematic_camera" presses it
+       --enemies-ignore  the trailer's cheat on: enemies never notice the player
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
                          or all), as the Developer page's buttons do; spells1, spells2 or spells3 for the
                          spells at that level (3 otherwise) (port/include/port/cheats.h)
@@ -202,6 +205,7 @@
 
 #include "port/antialias.h"
 #include "port/automap.h"
+#include "port/cinematic.h"
 #include "port/data_dir.h"
 #include "port/hands.h"
 #include "port/audio.h"
@@ -297,7 +301,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred] [--fov N]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
@@ -453,6 +457,14 @@ static void parse_options(int argc, char **argv) {
         }
         if (strcmp(option, "--invincible") == 0) {
             port_options.invincible = 1;
+            continue;
+        }
+        if (strcmp(option, "--cinematic-camera") == 0) {
+            port_cinematic_set_enabled(1);
+            continue;
+        }
+        if (strcmp(option, "--enemies-ignore") == 0) {
+            port_enemies_ignore_set(1);
             continue;
         }
         if (strcmp(option, "--test-dma-wait") == 0) {
@@ -874,7 +886,7 @@ static int parse_cheats(const char *list) {
 }
 
 int port_invincible(void) {
-    return port_options.invincible != 0;
+    return port_options.invincible != 0 || port_cinematic_flying(); /* (nothing hurts the flying camera) */
 }
 
 int port_native_draw(int kind) {
