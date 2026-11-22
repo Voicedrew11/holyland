@@ -235,6 +235,19 @@ static void make_mods(const char *root) {
     write_file(path, picture, sizeof(picture));
     snprintf(path, sizeof(path), "%s/b-files/files/nonsense.bin", root);
     write_file(path, picture, 10);
+    /* finer sign pictures: b-files's goes with its own m0001.tm2; c-signs's m0003 with the disc's picture */
+    snprintf(path, sizeof(path), "%s/b-files/signs", root);
+    make_dir(path);
+    snprintf(path, sizeof(path), "%s/b-files/signs/m0001.png", root);
+    write_file(path, "b", 1);
+    snprintf(path, sizeof(path), "%s/c-signs", root);
+    make_dir(path);
+    snprintf(path, sizeof(path), "%s/c-signs/signs", root);
+    make_dir(path);
+    snprintf(path, sizeof(path), "%s/c-signs/signs/m0001.png", root);
+    write_file(path, "c", 1);
+    snprintf(path, sizeof(path), "%s/c-signs/signs/m0003.png", root);
+    write_file(path, "c", 1);
     snprintf(path, sizeof(path), "%s/_off", root); /* skipped */
     make_dir(path);
     snprintf(path, sizeof(path), "%s/_off/text.json", root);
@@ -313,6 +326,15 @@ static void test_disc(const char *base) {
     CHECK(data != NULL && size == 3 && data[0] == 'x');
     free(data);
     CHECK(!port_disc_replace_member("no/such.file", "x", 1));
+    /* a finer picture goes with the picture in use, whatever the mods' order */
+    {
+        const char *path = port_mods_find_with("signs/m0001.png", "msg/m0001.tm2");
+
+        CHECK(path != NULL && strstr(path, "b-files") != NULL);
+        path = port_mods_find_with("signs/m0003.png", "msg/m0003.tm2");
+        CHECK(path != NULL && strstr(path, "c-signs") != NULL);
+        CHECK(port_mods_find_with("signs/m0009.png", "msg/m0009.tm2") == NULL);
+    }
 }
 
 int main(int argc, char **argv) {

@@ -4946,12 +4946,14 @@ index df766951e5e83792583982317358f949b5d5f12a..6f08c60e52012f10c9398b8f3025e7f3
  
  #endif
 diff --git a/src/game/ui/splash.c b/src/game/ui/splash.c
-index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47b9d24b87 100644
+index fddc7986c53181049f608b2fed7b478623121bde..46ac5970dedc9228517113dfe5ea5fe4f48397d3 100644
 --- a/src/game/ui/splash.c
 +++ b/src/game/ui/splash.c
-@@ -3,14 +3,16 @@
+@@ -2,15 +2,18 @@
+ #include "core/file.h"
  #include "core/game.h"
  #include "gfx/gs.h"
++#include "port/signs.h" /* PC: finer sign pictures */
  
 -void *memset(void *, int, u32);
 -void *memcpy(void *, const void *, u32);
@@ -4972,7 +4974,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
  extern u16 action_button;
  extern u32 *splash_image_packet;
  
-@@ -26,7 +28,8 @@ void Packet_AddGsRegister(int, s64);
+@@ -26,7 +29,8 @@ void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
  void GsDraw_QueueTexFlush(void);
  void GsDraw_QueueTexturedSprite(void *);
@@ -4982,7 +4984,15 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
  void Player_StopWalking(void);
  static void Splash_BuildImagePacket(int tbp, int cbp);
  
-@@ -239,23 +242,25 @@ void Splash_Draw(void) {
+@@ -168,6 +172,7 @@ void Splash_StateLoadImage(void) {
+         memset(&file_load_buffer, 0, 0x80000);
+         File_Read(image_fd, &file_load_buffer, 0x80000);
+         File_Close(image_fd);
++        port_sign_loaded(splash_image_id, &file_load_buffer, 0x80000); /* PC: a mod's finer picture (port/include/port/signs.h) */
+         Splash_BuildImagePacket(0x2E40, 0x3D40);
+         Splash_BuildSprite();
+         splash_state += 1;
+@@ -239,23 +244,25 @@ void Splash_Draw(void) {
          GsDraw_FillScreen(0, 0, 0, splash_brightness / 2, 0x44);
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_TEST_1, 0x3000D);
@@ -5011,7 +5021,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
          Packet_AddGsRegister(8, 0);
          Packet_EndGsRegisters();
      }
-@@ -267,17 +272,17 @@ void Splash_BuildSprite(void) {
+@@ -267,17 +274,17 @@ void Splash_BuildSprite(void) {
      int width;
      u64 tex0;
  
@@ -5036,7 +5046,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
      splash_sprite.gif_reg = 0x156;
      splash_sprite.red = 0x80;
      splash_sprite.green = 0x80;
-@@ -295,8 +300,8 @@ void Splash_BuildSprite(void) {
+@@ -295,8 +302,8 @@ void Splash_BuildSprite(void) {
  }
  
  static inline char *align16(char *address) {
@@ -5047,7 +5057,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
      }
      return address;
  }
-@@ -363,7 +368,7 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
+@@ -363,7 +370,7 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
      *cursor++ = 0;
      *cursor++ = 0;
      *cursor++ = total | 0x51000000;
@@ -5056,7 +5066,7 @@ index fddc7986c53181049f608b2fed7b478623121bde..08164f3e2ff7ccb745989071b1fcfe47
      *cursor++ = 0xE;
      *cursor++ = 0;
      *cursor++ = 0xFFFFFFFF;
-@@ -371,22 +376,22 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
+@@ -371,22 +378,22 @@ static void Splash_BuildImagePacket(int tbp, int cbp) {
      *cursor++ = 0x3F;
      *cursor++ = 0;
      format = image->tex0.psm;

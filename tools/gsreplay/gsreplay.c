@@ -78,6 +78,7 @@
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/render.h"
+#include "port/signs.h"
 #include "pcr.h"
 #include "scn.h"
 
@@ -194,6 +195,20 @@ int port_whole_fields(void) {
 /* (pcr_native.cpp: the mirror image cut at its water, as the game's default) */
 int port_reflection_clip(void) {
     return 1;
+}
+
+/* (port/platform/signs.c: a replay has no mods, so no finer sign pictures) */
+uint64_t port_sign_fingerprint(const uint8_t *indices, size_t count) {
+    (void)indices;
+    (void)count;
+    return 0;
+}
+
+int port_sign_finer(uint64_t fingerprint, const uint32_t **rgba, uint32_t *scale) {
+    (void)fingerprint;
+    (void)rgba;
+    (void)scale;
+    return 0;
 }
 
 /* (pcr.cpp's latency levers: a replay draws no pictures between, so never behind) */

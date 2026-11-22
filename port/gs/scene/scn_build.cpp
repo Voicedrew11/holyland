@@ -39,6 +39,7 @@ extern "C" {
 #include "gsn.h"
 #include "gsn_vram.h"
 #include "port/render.h"
+#include "port/signs.h"
 }
 
 using namespace Vulkan;
@@ -141,6 +142,7 @@ struct SampledTexture {
     uint32_t image_levels = 1; // the image's: the game's and below them those made on the PC (gpu_levels_for)
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: finer_pictures.h)
     uint64_t finer_asked = 0; // (what was asked to be finer, where it may be a finer picture: FinerAsked::hash)
+    uint64_t sign = 0;        // (made with a mod's finer sign picture: its fingerprint; port/include/port/signs.h)
     uint64_t used = 0;
     uint64_t image_bytes = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
@@ -3978,6 +3980,27 @@ private:
         return across && down;
     }
 
+    // A sign picture's finer one from a mod (port/include/port/signs.h): a 512 x 256 palette texture of one level, known
+    // by its indices' fingerprint (worked out once a texture key); 0 with none
+    uint64_t sign_fingerprint(const TextureKey &key, const DecodedTexture &d, const uint32_t **rgba, uint32_t *scale) {
+        if (d.kind != TexelKind::Index8 || d.width_px != 512 || d.height_px != 256 || d.levels != 1 ||
+            d.indices.size() < size_t(512) * 256) {
+            return 0;
+        }
+        auto found = sign_fingerprints_.find(key.hash());
+        uint64_t f;
+        if (found != sign_fingerprints_.end()) {
+            f = found->second;
+        } else {
+            if (sign_fingerprints_.size() > 256) {
+                sign_fingerprints_.clear();
+            }
+            f = port_sign_fingerprint(d.indices.data(), size_t(512) * 256);
+            sign_fingerprints_[key.hash()] = f;
+        }
+        return port_sign_finer(f, rgba, scale) ? f : 0;
+    }
+
     // A texture as the GPU's sampler reads it: decoded once, the CLUT's colours and TEXA in it, kept by all it was made
     // from (the design's materials: an image kept by its key)
     SampledTexture *sampled_texture(const TextureAnswer &a, const DrawState &s) {
@@ -3992,12 +4015,17 @@ private:
         // with buttons is made from: a setting changed, it is made again)
         bool finer_asked = may_be_finer(d, finer_asked_);
         uint64_t asked = finer_asked ? finer_asked_.hash() : 0;
-        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ asked;
+        // (a sign with a finer picture in a mod: that picture in the texture's place, port/include/port/signs.h)
+        const uint32_t *sign_rgba = nullptr;
+        uint32_t sign_scale = 1;
+        uint64_t sign = sign_fingerprint(a.key, d, &sign_rgba, &sign_scale);
+        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ asked ^ sign;
         for (uint32_t c : clut.rgba) {
             h = (h ^ c) * 0x100000001B3ull;
         }
         auto found = sampled_.find(h);
-        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, asked)) {
+        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, asked) &&
+            found->second.sign == sign) {
             found->second.used = frame_;
             return &found->second;
         }
@@ -4012,6 +4040,10 @@ private:
                 finer = made.scale;
                 counts_.finer_pictures++;
             }
+        }
+        if (sign != 0 && finer == 1) {
+            colours.assign(sign_rgba, sign_rgba + size_t(512) * sign_scale * 256 * sign_scale);
+            finer = sign_scale;
         }
         // (below the game's levels, the rest down to 1 x 1 made here, for the GPU's own level: gpu_levels_for)
         std::vector<ImageInitialData> data(d.levels);
@@ -4055,6 +4087,7 @@ private:
         t.image_levels = uint32_t(data.size());
         t.finer = finer;
         t.finer_asked = asked;
+        t.sign = sign;
         t.used = frame_;
         t.alpha_lo = 255;
         t.alpha_hi = 0;
@@ -5632,6 +5665,7 @@ private:
     ByteTracker texture_bytes_;
     uint64_t texture_cap_ = 0;
     bool texture_cap_set_ = false;
+    std::unordered_map<uint64_t, uint64_t> sign_fingerprints_; // (sign_fingerprint's, by the texture's key)
     std::unordered_map<uint32_t, SamplerHandle> samplers_;
     std::unordered_map<uint32_t, SamplerHandle> gpu_levels_samplers_; // (gpu_levels_sampler's)
     Batch batch_;

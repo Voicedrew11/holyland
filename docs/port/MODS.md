@@ -75,3 +75,23 @@ The game reads `font.txc` and the name tables into memory, so a save state keeps
 quick saves and the game's saves hold no text and don't depend on mods.
 
 Tests: `mods_test` (tests/mods_test.c).
+
+## Finer sign pictures
+
+The signs, gravestones and inscriptions the player examines are pictures, `msg/mNNNN.tm2` (512 x 256, 4 or
+8 bits a texel; `ui/splash.c`). A mod replaces one as any member (`files/msg/m0034.tm2`), and can give a finer
+one beside it: `signs/m0034.png`, the same picture 2 to 8 times as wide and as tall (4: 2048 x 1024), 8 bits a
+channel, not interlaced. The scene renderer draws the finer one in its place; the GS and the PC renderer draw the
+game's, so a mod with a finer picture should give the 512 x 256 one too (made from it).
+
+A finer picture goes with the picture it was made from: a mod's `signs/m0034.png` is used with that mod's own
+`files/msg/m0034.tm2`, or with the disc's when the mod has none (`port_mods_find_with`). So a mod of finer pictures
+for the disc's signs (kf4-signs) and a translation with its own signs and finer ones (kf4-retranslation) can both be
+on: each sign shows the translation's when the translation replaces it, and the disc's sharpened otherwise, whatever
+the mods' order.
+
+How (`port/include/port/signs.h`, `port/platform/signs.c`): when the game reads a picture (`Splash_StateLoadImage`,
+patched) the port keeps its number and a fingerprint of its texels; the scene renderer, making a 512 x 256 palette
+texture for the GPU (`sampled_texture`), looks the fingerprint up and, when the mod whose picture is in use has a
+`signs/mNNNN.png`, uses it, `finer` times as fine, as it does the sharper font's sheets. The PNG is read once (inflated
+by the miniz libchdr brings). The log says so: `[signs] .../signs/m0034.png: 2048x1024, 4 times as fine`.

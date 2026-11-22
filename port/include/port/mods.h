@@ -23,6 +23,18 @@
 /* Applies the mods in folder (NULL: <data folder>/mods; "none": none). After port_disc_open. */
 void port_mods_open(const char *folder);
 
+/* The path of `file` in the last applied mod that has it ("journal.json"), NULL when none has: for a mod's own
+   data that is not a game file. The path is good until the next call. */
+const char *port_mods_find(const char *file);
+
+/* The path of `file` for a game file `member`'s mod: in the last applied mod that has files/<member>, when one has
+   (NULL if that mod has no `file`), else as port_mods_find. A finer sign picture is the one made with the game's
+   picture in use: a mod's signs/m0034.png with its own files/msg/m0034.tm2, or with the disc's when it has none. */
+const char *port_mods_find_with(const char *file, const char *member);
+
+/* 1 when the mod folder of that name ("kf4-retranslation") was applied (not skipped, not missing) */
+int port_mods_active(const char *name);
+
 /* ---- The parts, for tests ---------------------------------------------------------------------------- */
 
 /* Encodes UTF-8 text in the game's text code (16-bit: 0x08xx a Latin character, 0x8000 a new line,

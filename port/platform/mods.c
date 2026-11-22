@@ -474,6 +474,64 @@ static void apply_text(void) {
     apply_names("param/magic.prm", SPELL_RECORD, SPELL_NAME_WORDS, spells, SPELL_COUNT);
 }
 
+static char *mod_folders[64]; /* the mods applied, in order (port_mods_find) */
+static int mod_folder_count;
+
+const char *port_mods_find(const char *file) {
+    static char found[2200];
+    int i;
+
+    for (i = mod_folder_count - 1; i >= 0; i--) {
+        FILE *f;
+
+        snprintf(found, sizeof(found), "%s/%s", mod_folders[i], file);
+        if ((f = fopen(found, "rb")) != NULL) {
+            fclose(f);
+            return found;
+        }
+    }
+    return NULL;
+}
+
+const char *port_mods_find_with(const char *file, const char *member) {
+    static char found[2200];
+    int i;
+
+    for (i = mod_folder_count - 1; i >= 0; i--) {
+        FILE *f;
+
+        snprintf(found, sizeof(found), "%s/files/%s", mod_folders[i], member);
+        if ((f = fopen(found, "rb")) != NULL) { /* (this mod's picture is the one in use) */
+            fclose(f);
+            snprintf(found, sizeof(found), "%s/%s", mod_folders[i], file);
+            if ((f = fopen(found, "rb")) != NULL) {
+                fclose(f);
+                return found;
+            }
+            return NULL;
+        }
+    }
+    return port_mods_find(file);
+}
+
+int port_mods_active(const char *name) {
+    int i;
+
+    for (i = 0; i < mod_folder_count; i++) {
+        const char *base = mod_folders[i], *p;
+
+        for (p = mod_folders[i]; *p; p++) {
+            if (*p == '/' || *p == '\\') {
+                base = p + 1;
+            }
+        }
+        if (strcmp(base, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void port_mods_open(const char *folder) {
     char path[1024];
     char **names;
@@ -497,6 +555,9 @@ void port_mods_open(const char *folder) {
         snprintf(mod, sizeof(mod), "%s/%s", path, names[i]);
         if (names[i][0] != '.' && names[i][0] != '_' && is_folder(mod)) {
             fprintf(stderr, "[mods] %s\n", names[i]);
+            if (mod_folder_count < 64) {
+                mod_folders[mod_folder_count++] = strdup(mod);
+            }
             snprintf(part, sizeof(part), "%s/files", mod);
             if (is_folder(part)) {
                 apply_files(part, "", 0);

@@ -195,6 +195,7 @@ add_library(kf4_port STATIC
     port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/mods.c
+    port/platform/signs.c
     port/platform/disc_image.c
     port/platform/iso9660.c
     port/platform/ipu.c
