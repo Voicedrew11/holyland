@@ -21,7 +21,7 @@ to the game after the owner's settings: -- --renderer pc profiles the PC rendere
 Kept in --keep (a temporary folder by default): samples.txt, which stacks.py reads again (--callers, --callees,
 another --thread), the game's output (run.log) and its data folder. The program wants a RelWithDebInfo build
 (llvm-symbolizer names the frames from its DWARF); on Windows with kf4-sampler.exe beside it (built with it) and
-llvm-mingw's bin on PATH, on Linux with frame pointers (-DKF4_FRAME_POINTERS=ON, the default). Run alone, with the GPU
+llvm-mingw's bin on PATH, on Linux with frame pointers (-DKF4_FRAME_POINTERS=ON, the linux-gcc and linux-clang presets' default). Run alone, with the GPU
 otherwise idle.
 """
 import argparse

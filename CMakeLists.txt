@@ -12,6 +12,23 @@
 # At configure time the decomp's src/game and src/nonmatching are copied, the patches are applied to
 # the copy, and the copy (out/<preset>/decomp_src/src/) is compiled.
 cmake_minimum_required(VERSION 3.21)
+# Without a preset (a plain `cmake -B build`) the build is linux-clang-release's: clang where it is installed (CC and
+# CXX, or -DCMAKE_C_COMPILER=..., still choose), LTO and no frame pointers (KF4_LTO, KF4_FRAME_POINTERS below)
+if(NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+    find_program(KF4_DEFAULT_CC clang)
+    if(KF4_DEFAULT_CC)
+        set(CMAKE_C_COMPILER ${KF4_DEFAULT_CC})
+    endif()
+endif()
+if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    find_program(KF4_DEFAULT_CXX clang++)
+    if(KF4_DEFAULT_CXX)
+        set(CMAKE_CXX_COMPILER ${KF4_DEFAULT_CXX})
+    endif()
+endif()
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "The build type (the presets': RelWithDebInfo)" FORCE)
+endif()
 project(kf4 C)
 
 set(CMAKE_C_STANDARD 99)
@@ -76,13 +93,8 @@ endif()
 
 # ---- Frame pointers (docs/port/PROFILING.md) ------------------------------------------------------
 # The function profiler (port/include/port/sampler.h) walks stacks by frame pointers: kept in every function,
-# leaves too, for about 1% of the speed. On by default on Linux, where the profiler is.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(KF4_FRAME_POINTERS_DEFAULT ON)
-else()
-    set(KF4_FRAME_POINTERS_DEFAULT OFF)
-endif()
-option(KF4_FRAME_POINTERS "Keep frame pointers everywhere, for the function profiler" ${KF4_FRAME_POINTERS_DEFAULT})
+# leaves too, for about 1% of the speed. Off by default (the release's); the Linux developer presets turn it on.
+option(KF4_FRAME_POINTERS "Keep frame pointers everywhere, for the function profiler" OFF)
 if(KF4_FRAME_POINTERS AND NOT MSVC)
     add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
 endif()
@@ -95,7 +107,8 @@ endif()
 # exactly as without LTO, with its own flags, never inlined into port code nor port code into it.
 # The rest (port/, the renderers, paraLLEl-GS, the tests) is LTO'd; their per-file float flags
 # (-frounding-math, -fdenormal-fp-math) are function attributes the cross-file inliner respects.
-option(KF4_LTO "Link-time optimisation of everything but the save state's image (the game, ico-audio)" OFF)
+# On by default (the release's); the developer presets turn it off.
+option(KF4_LTO "Link-time optimisation of everything but the save state's image (the game, ico-audio)" ON)
 # KF4_PGO: profile-guided optimisation. "generate" builds a program that writes a profile when it
 # stops after --frames (clang: where LLVM_PROFILE_FILE says; gcc: .gcda files beside the objects).
 # Then, in the same build folder, the merged profile (.profdata) with clang, or "use" with gcc (the

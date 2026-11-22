@@ -6,7 +6,7 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/${presetName}",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "KF4_LTO": "OFF" }
     },
     {
       "name": "windows-clang",
@@ -18,13 +18,13 @@
       "name": "linux-gcc",
       "displayName": "Linux, gcc",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++", "KF4_FRAME_POINTERS": "ON" }
     },
     {
       "name": "linux-clang",
       "displayName": "Linux, clang",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++", "KF4_FRAME_POINTERS": "ON" }
     },
     {
       "name": "release",
