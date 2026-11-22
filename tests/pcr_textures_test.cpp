@@ -399,7 +399,7 @@ struct Run {
             return;
         }
         const Placed &p = placed[rng.below(uint32_t(placed.size()))];
-        uint32_t psm = rng.one_in(3) ? GSN_PSMCT32 : p.psm;
+        uint32_t psm = rng.one_in(3) ? uint32_t(GSN_PSMCT32) : p.psm;
         uint32_t w = 1 + rng.below(1u << p.tw), h = 1 + rng.below(1u << p.th);
         pcr::TransferRegs regs{bitbltbuf_of(p.tbp[0], p.tbw[0], psm) >> 32,
                                uint64_t(rng.below(8)) | uint64_t(rng.below(8)) << 16, uint64_t(w) | uint64_t(h) << 32};

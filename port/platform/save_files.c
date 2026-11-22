@@ -199,7 +199,9 @@ static PortSaveState read_save(int index, uint8_t record[PORT_SAVE_RECORD_SIZE],
     state = read_whole(from, record, data, size);
     if (state != PORT_SAVE_DAMAGED || !save_path(from, PATH_SIZE, index, ".bak") ||
         read_whole(from, record, data, size) != PORT_SAVE_OK) {
-        save_path(from, PATH_SIZE, index, "");
+        if (!save_path(from, PATH_SIZE, index, "")) { /* (fitted above: cannot fail) */
+            from[0] = '\0';
+        }
         return state;
     }
     return PORT_SAVE_OK;

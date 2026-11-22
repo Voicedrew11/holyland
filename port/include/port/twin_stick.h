@@ -73,7 +73,7 @@ PlayerSpeeds twin_stick_speeds(PlayerSpeeds after, PadSticks sticks, SpeedLimits
                                unsigned short buttons);
 
 /* Save states: which of the turn and look the stick drove */
-typedef struct PortStateIo PortStateIo;
-void port_twin_stick_state(PortStateIo *io);
+struct PortStateIo; /* (savestate.h) */
+void port_twin_stick_state(struct PortStateIo *io);
 
 #endif

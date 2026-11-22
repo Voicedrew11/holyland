@@ -391,7 +391,7 @@ extern "C" void port_stats_overlay_update(void) {
     }
     static const bool log = std::getenv("KF4_STATS_LOG") != nullptr;
     if (log && want != wanted.load(std::memory_order_relaxed))
-        std::fprintf(stderr, "[stats] vblank %llu: the mod %s\n", port_vblank_count(),
+        std::fprintf(stderr, "[stats] vblank %llu: the mod %s\n", (unsigned long long)port_vblank_count(),
                      want ? "draws (the overlay is up)" : "draws nothing");
     wanted = want;
 }

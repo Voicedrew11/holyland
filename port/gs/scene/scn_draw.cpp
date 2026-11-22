@@ -852,7 +852,7 @@ void Drawer::record_op(const Op &op, CommandBuffer &c) {
     counts_.ops++;
     times_.begin(c, op.work);
     const VkImageSubresourceLayers layers = {
-        VkImageAspectFlags(op.depth ? depth_aspects(image(op.dst).get_format()) : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+        VkImageAspectFlags(op.depth ? depth_aspects(image(op.dst).get_format()) : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)), 0, 0, 1};
     switch (op.kind) {
     case Op::Kind::clear:
         if (op.depth) {

@@ -13,11 +13,9 @@
 namespace pcr {
 
 // pcr_common.h's flags this file sets (the canvas's PrimPush::flags)
-enum : uint32_t {
-    F_PREMUL = 0x1000,       // the colour out is Cs * C / 128 (Vulkan adds or takes it away)
-    F_C_FIX = 0x2000,        // ... C is ALPHA's FIX (the push's clamp_hi bits 24-31), else As
-    F_ALPHA_FACTOR = 0x4000, // the alpha out is As / 128, the blend's factor (the blend constant puts it back)
-};
+constexpr uint32_t F_PREMUL = 0x1000;       // the colour out is Cs * C / 128 (Vulkan adds or takes it away)
+constexpr uint32_t F_C_FIX = 0x2000;        // ... C is ALPHA's FIX (the push's clamp_hi bits 24-31), else As
+constexpr uint32_t F_ALPHA_FACTOR = 0x4000; // the alpha out is As / 128, the blend's factor (the blend constant puts it back)
 
 inline uint32_t blend_bits(uint64_t v, int at, int count) {
     return uint32_t((v >> at) & ((uint64_t(1) << count) - 1));

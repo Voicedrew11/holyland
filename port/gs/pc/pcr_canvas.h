@@ -208,6 +208,7 @@ public:
     // A frame taken for its pictures between, with its packets the last taken in: the uploads since the last vblank
     // are the frame's, what its pictures ask for again (upload_again), as the vblank after them would have made them
     void frame_taken();
+    using Drawing::frame_taken; // (Drawing's, for the frame walk: the canvas keeps its default)
 
     // Developers' views (pcr.h's pcr_debug_*, which say what each does; kf4-gsreplay --renderer pc), never a player's:
     // the pixel trace (trace_pixel to start it: false when the spot is not one or there is no memory for it; take_trace
