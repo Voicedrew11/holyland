@@ -2469,7 +2469,7 @@ index 0000000000000000000000000000000000000000..882f07b65bf6bab2936fe88998ef3f83
 +
 +#endif
 diff --git a/src/game/ui/menu_screens.c b/src/game/ui/menu_screens.c
-index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce82175d3ca9d4 100644
+index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..6c17dc67f46b160d6d9b7f877cfc9d79dcf54bea 100644
 --- a/src/game/ui/menu_screens.c
 +++ b/src/game/ui/menu_screens.c
 @@ -4,6 +4,7 @@
@@ -2778,16 +2778,17 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  static void Menu_OpenMain(void);
  static void Menu_UpdateMain(HandlerContext *context);
  static void Menu_OpenChosenScreen(HandlerContext *context);
-@@ -706,7 +711,7 @@ static void Menu_StepBlink(void);
+@@ -706,7 +711,8 @@ static void Menu_StepBlink(void);
  static void Menu_MoveItemAfter(MenuItem *item, MenuItem *after);
  static f32 Menu_PulseValue(f32 value, s32 start, s32 target);
  static void Menu_UpdateUseItem(HandlerContext *context);
 -static void Menu_UpdateCastSpell(s32 context);
++static void Menu_UpdateUseCategory(HandlerContext *context); /* PC: the Use Item screen's first step */
 +static void Menu_UpdateCastSpell(char *context);
  static void Menu_UpdateEquip(void);
  static void Menu_UpdateStatus(void);
  static void Menu_UpdateKeyItems(void);
-@@ -926,6 +931,7 @@ static void Menu_BuildItemRings(void) {
+@@ -926,6 +932,7 @@ static void Menu_BuildItemRings(void) {
      } else {
          castable_spell_cursor[0] = NULL;
      }
@@ -2795,7 +2796,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      equip_list_shown[0] = (MenuItemList *)equip_list_refs[equip_group_shown];
  }
  
-@@ -1432,7 +1438,7 @@ static void Menu_StepPackageLoad(ChunkUpload *upload) {
+@@ -1432,7 +1439,7 @@ static void Menu_StepPackageLoad(ChunkUpload *upload) {
  }
  
  /* Gives a load node a buffer from the free list, if one is left. Returns nothing. */
@@ -2804,7 +2805,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      ChunkPoolNode *free_node = free_load_buffers;
  
      if (free_node != NULL) {
-@@ -1940,7 +1946,7 @@ void Menu_Init(void) {
+@@ -1940,7 +1947,7 @@ void Menu_Init(void) {
  
      sceGsResetGraph(0, 1, 2, 1);
      sceGsSetDefDBuffDc(&menu_frame_buffers, 0, 0x280, 0xE0, 3, 0x30, 1);
@@ -2813,7 +2814,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      MenuHeap_Reset();
      Menu_LoadAllParts();
      menu_file = MenuHeap_Alloc(0xE0000);
-@@ -1959,139 +1965,139 @@ void Menu_Init(void) {
+@@ -1959,139 +1966,139 @@ void Menu_Init(void) {
      }
      for (i = 0; i < 150; i++) {
          shortcut_entries[i].item_number = i;
@@ -2976,7 +2977,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          spell_entries[i].group = 1;
      }
      use_item_list.group = 11;
-@@ -2159,7 +2165,7 @@ static const MenuWeekdayNames weekday_names_table = { {
+@@ -2159,7 +2166,7 @@ static const MenuWeekdayNames weekday_names_table = { {
     card_screen_state.unk16 was set. */
  int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign-extends a byte here
      ClockTime clock;
@@ -2985,7 +2986,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      MenuWeekdayNames weekday_names;
      u32 *packet;
      s32 status; // match: one variable for the card state in the loop and the menu number after it
-@@ -2174,13 +2180,13 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2174,13 +2181,13 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
      sceCdReadClock((struct sceCdCLOCK *)&clock);
      weekday_names = weekday_names_table; // match: never read
      // match: the clock bytes are BCD and are used as they are, the day is lowered by one, and the result is not used
@@ -3006,7 +3007,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      menu_mode = mode;
      pad_mode = pad_mode_before = Pad_GetMode(0, 0);
      while (SoundDriver_FlushCommands(), menu_run_steps[menu_run_step]() != 0) {
-@@ -2202,6 +2208,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2202,6 +2209,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
                  menu_buttons = 0;
              }
          }
@@ -3014,7 +3015,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      }
      if (menu_mode == 0 && card_screen_state.save_loaded == 0) {
          packet = MenuDraw_NextPacket();
-@@ -2249,7 +2256,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2249,7 +2257,7 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
          packet[0] = 0x800A;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 11;
@@ -3023,7 +3024,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
          context2_buffer_half = context1_buffer_half = 1;
      }
-@@ -2300,11 +2307,12 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
+@@ -2300,11 +2308,12 @@ int Menu_Run(s8 mode) { // match: callers declare the parameter int; retail sign
          }
          return 0;
      }
@@ -3038,7 +3039,17 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      Menu_Start,
      Menu_RunHandler,
      Menu_CutModelChain,
-@@ -2390,10 +2398,10 @@ static void Menu_SendUnusedFlatSprite(void) {
+@@ -2312,7 +2321,8 @@ static int (*const menu_steps[4])(void) = {
+ };
+ /* the screen each line of the main menu opens */
+ static void *const main_menu_screens[8] = {
+-    Menu_UpdateUseItem, Menu_UpdateCastSpell, Menu_UpdateEquip, Menu_UpdateStatus, Menu_UpdateRecollection, Menu_UpdateVisibleItem, Menu_UpdateSystem, NULL,
++    /* PC: line 0 opens the Use Item categories first (Menu_UpdateUseItem in retail) */
++    Menu_UpdateUseCategory, Menu_UpdateCastSpell, Menu_UpdateEquip, Menu_UpdateStatus, Menu_UpdateRecollection, Menu_UpdateVisibleItem, Menu_UpdateSystem, NULL,
+ };
+ /* the screen each line of the system menu opens */
+ static void *const system_menu_screens[6] = {
+@@ -2390,10 +2400,10 @@ static void Menu_SendUnusedFlatSprite(void) {
      (cursor++)->as_int = 0xF2000E;
      (cursor++)->as_int = 0x41;
      (cursor++)->as_int = 0;
@@ -3052,7 +3063,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -2464,10 +2472,10 @@ static void Menu_SendUnusedSpriteFirst(void) {
+@@ -2464,10 +2474,10 @@ static void Menu_SendUnusedSpriteFirst(void) {
      (cursor++)->as_int = 0x80;
      (cursor++)->as_int = 0x42;
      (cursor++)->as_int = 0;
@@ -3066,7 +3077,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -2538,16 +2546,16 @@ static void Menu_SendUnusedSpriteSecond(void) {
+@@ -2538,16 +2548,16 @@ static void Menu_SendUnusedSpriteSecond(void) {
      (cursor++)->as_int = 0x80;
      (cursor++)->as_int = 0x42;
      (cursor++)->as_int = 0;
@@ -3087,7 +3098,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      u32 *packet;
  
      packet = MenuDraw_NextPacket();
-@@ -2565,7 +2573,7 @@ int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; n
+@@ -2565,7 +2575,7 @@ int Menu_DrawItemModel(f32 *matrix) { // match: callers declare an int result; n
      packet[11] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 3;
@@ -3096,7 +3107,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      *D2_CHCR = D_CHCR_STR;
      DRAW_NODE_MODEL(&model_load_shown, matrix, menu_draw_color);
      sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
-@@ -2587,7 +2595,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2587,7 +2597,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[1] = 0x100B4000; // match: the tag word packet[0] is written last
          packet[2] = 0xE;
          packet[3] = 0;
@@ -3105,7 +3116,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          packet[6] = 0x4C;
          packet[7] = 0;
          packet[8] = 0;
-@@ -2602,7 +2610,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2602,7 +2612,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[17] = 0xE00000;
          packet[18] = 0x40;
          packet[19] = 0;
@@ -3114,7 +3125,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          packet[22] = 0x6;
          packet[23] = 0;
          packet[24] = 0x80808080;
-@@ -2651,7 +2659,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2651,7 +2661,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[69] = 0;
          packet[70] = 0x5;
          packet[71] = 0;
@@ -3123,7 +3134,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          packet[74] = 0x4C;
          packet[75] = 0;
          packet[76] = 0;
-@@ -2685,7 +2693,7 @@ static s32 Menu_CopyFrameToTexture(void) {
+@@ -2685,7 +2695,7 @@ static s32 Menu_CopyFrameToTexture(void) {
          packet[0] = 0x8019;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 26;
@@ -3132,7 +3143,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
      }
      sceGsSyncPath(0, 0);
-@@ -2714,7 +2722,7 @@ s32 Menu_EndFrame(s32 run_handler) {
+@@ -2714,7 +2724,7 @@ s32 Menu_EndFrame(s32 run_handler) {
          D_00447208++;
      }
      D_00447208 %= 3;
@@ -3141,7 +3152,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      sceGsSetHalfOffset2(context1_buffer_half != 0 ? menu_second_draw_env2 : menu_first_draw_env2, 0x800, 0x800, even_field);
      FlushCache(0);
      sceGsSyncPath(0, 0);
-@@ -2755,7 +2763,7 @@ static void Menu_DrawBackdropPlain(void) {
+@@ -2755,7 +2765,7 @@ static void Menu_DrawBackdropPlain(void) {
          packet[17] = 1;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 5;
@@ -3150,7 +3161,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
          sceGsSyncPath(0, 0);
          packet = MenuDraw_NextPacket();
-@@ -2773,7 +2781,7 @@ static void Menu_DrawBackdropPlain(void) {
+@@ -2773,7 +2783,7 @@ static void Menu_DrawBackdropPlain(void) {
          packet[11] = 2;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -3159,7 +3170,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
      }
  }
-@@ -2786,7 +2794,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
+@@ -2786,7 +2796,7 @@ static void Menu_DrawBackdropItemSelParts(void) {
      for (i = 0; i < item_sel_part_count; i++) {
          if (item_sel_parts[i].handler_index == 2) {
              Menu_SetBlendMode(item_sel_parts[i].blend_mode);
@@ -3168,7 +3179,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              Menu_SetBlendMode(0);
          }
      }
-@@ -2799,7 +2807,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
+@@ -2799,7 +2809,7 @@ static void Menu_DrawBackdropPreshopParts(void) {
      for (i = 0; i < preshop_part_count; i++) {
          if (preshop_parts[i].handler_index == 2) {
              Menu_SetBlendMode(preshop_parts[i].blend_mode);
@@ -3177,7 +3188,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              Menu_SetBlendMode(0);
          }
      }
-@@ -2811,7 +2819,7 @@ static int Menu_RunStep(void) {
+@@ -2811,7 +2821,7 @@ static int Menu_RunStep(void) {
      int (*step)(char *);
  
      Menu_StepModelLoads(0);
@@ -3186,7 +3197,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      if (step != NULL) {
          return step(D_005CE0E0);
      }
-@@ -2819,7 +2827,7 @@ static int Menu_RunStep(void) {
+@@ -2819,7 +2829,7 @@ static int Menu_RunStep(void) {
  }
  
  /* Start-up step of a menu screen: loads its textures and blocks, then picks the handler for the screen menu_mode names. */
@@ -3195,7 +3206,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 i = 0;
      u32 *packet;
      LoadedBlockRef *block;
-@@ -2847,7 +2855,7 @@ static s32 Menu_Start(void) {
+@@ -2847,7 +2857,7 @@ static s32 Menu_Start(void) {
      packet[7] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 2;
@@ -3204,7 +3215,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      *D2_CHCR = D_CHCR_STR;
      if (menu_mode == 0) {
          equip_group_shown = 0;
-@@ -2896,15 +2904,16 @@ static s32 Menu_Start(void) {
+@@ -2896,15 +2906,16 @@ static s32 Menu_Start(void) {
      return TRUE;
  }
  
@@ -3225,7 +3236,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      LinkNode *node;
  
      switch (menu_mode) {
-@@ -2940,7 +2949,7 @@ static s32 Menu_CutModelChain(void) {
+@@ -2940,7 +2951,7 @@ static s32 Menu_CutModelChain(void) {
          menu_step = 0;
          return FALSE;
      }
@@ -3234,7 +3245,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  }
  
  /* Makes the main menu the current screen, with its parts faded out. */
-@@ -2992,14 +3001,17 @@ static void Menu_UpdateMain(HandlerContext *context) {
+@@ -2992,14 +3003,17 @@ static void Menu_UpdateMain(HandlerContext *context) {
          }
      }
      main_menu_line = (main_menu_line + 7) % line_count;
@@ -3254,7 +3265,304 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          }
          Menu_SetBlendMode(0);
      }
-@@ -3131,10 +3143,10 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3036,7 +3050,8 @@ static void Menu_UpdateMain(HandlerContext *context) {
+                             context->active_list = main_menu_line;
+                             switch (context->active_list) {
+                             case 0:
+-                                ((void (*)(s32))Menu_ChainItemListModels)(0); // match: the callee takes nothing
++                                /* PC: the categories come first (Menu_UpdateUseCategory), which have no models; a
++                                   category's are chained when it is chosen */
+                                 break;
+                             case 1:
+                                 ((void (*)(s32))Menu_ChainSpellModels)(0); // match: the callee takes nothing
+@@ -3119,6 +3134,286 @@ static f32 Menu_PulseValue(f32 value, s32 start, s32 target) {
+     return value;
+ }
+ 
++/* PC: the Use Item screen in two steps. Main menu line 0 opens a list of the categories the player has items in
++   (Menu_UpdateUseCategory); choosing one rings only its items (Menu_LinkUseItems) and hands over to the game's own Use
++   Item screen (Menu_UpdateUseItem), whose Back returns to the categories. The categories go by ItemCommonDef.type
++   (what using the item does: map/map.h), the arrows apart. The player menu's "Item categories" (port_item_categories)
++   turns the first step off: line 0 then opens every item, as in retail. */
++enum {
++    USE_CATEGORY_CONSUMABLES, /* type 0: herbs, waters, crystals, seeds */
++    USE_CATEGORY_WANDS,       /* types 1 and 2: the guide stones and the wands */
++    USE_CATEGORY_KEYS,        /* type 3 */
++    USE_CATEGORY_SPECIAL,     /* types 4 and 5: used on a map object (the icons, the Keystone...) */
++    USE_CATEGORY_MAPS,        /* type 6 */
++    USE_CATEGORY_ARROWS,      /* ITEM_ARROW to ITEM_WIDDAS_ARROW (type 0, but not used from this menu) */
++    USE_CATEGORY_OTHER,       /* type 8 and anything else: "Nothing happened" */
++    USE_CATEGORY_COUNT
++};
++static const char *const use_category_names[USE_CATEGORY_COUNT] = {
++    "Consumables", "Wands and Stones", "Keys", "Special Items", "Maps", "Arrows", "Other",
++};
++static const char *const use_category_texts[USE_CATEGORY_COUNT] = {
++    "Herbs, waters, crystals and seeds, used up when used.",
++    "The wands of passage and the guide stones they lead to.",
++    "Keys that open locked doors.",
++    "Icons, relics and other items used on things in the world.",
++    "Maps of the places you have been.",
++    "Arrows and bolts for bows and crossbows.",
++    "Materials and curiosities.",
++};
++static s32 use_category_cursor;         /* the row the cursor is on */
++static s8 use_category_state;           /* 0: fading in, 1: open, 2: fading out to the main menu, 3: to the key items */
++static s8 use_category_keys_return;     /* TRUE while the key items were opened from here: they come back here */
++
++/* The category of a common item (1 to 149). */
++static s32 Menu_UseCategoryOf(s32 item) {
++    if (item >= ITEM_ARROW && item <= ITEM_WIDDAS_ARROW) {
++        return USE_CATEGORY_ARROWS;
++    }
++    switch (item_common_defs[item].type) {
++    case 0:
++        return USE_CATEGORY_CONSUMABLES;
++    case 1:
++    case 2:
++        return USE_CATEGORY_WANDS;
++    case 3:
++        return USE_CATEGORY_KEYS;
++    case 4:
++    case 5:
++        return USE_CATEGORY_SPECIAL;
++    case 6:
++        return USE_CATEGORY_MAPS;
++    default:
++        return USE_CATEGORY_OTHER;
++    }
++}
++
++/* Rings the items the Use Item screen lists as Menu_BuildItemRings does, only those of category (all of them for -1),
++   the cursor on the first. */
++static void Menu_LinkUseItems(s32 category) {
++    MenuItem *last = NULL;
++    MenuItem *first = NULL;
++    s32 count = 0;
++    s32 i;
++
++    item_list_top[0] = NULL;
++    item_list_page_mark[0] = NULL;
++    item_list_first = NULL;
++    item_list_last_page = NULL;
++    for (i = 1; i < 150; i++) {
++        if (item_counts[i] != 0 && (item_name_defs[i].state & 1)
++            && (category < 0 || Menu_UseCategoryOf(i) == category)) {
++            LINK_COUNTED_ITEM(&common_item_entries[i], item_list_page_mark)
++        }
++    }
++    item_list_count = count;
++    if (first != NULL) {
++        last->prev = first;
++        item_list_cursor[0] = item_list_top[0] = use_item_list.item = first;
++        first->next = last;
++        if (item_list_page_mark[0] == NULL) {
++            item_list_page_mark[0] = last->next;
++        } else {
++            item_list_page_mark[0] = item_list_page_mark[0]->next;
++        }
++        item_list_first = first;
++        item_list_last_page = last;
++        for (i = 5; i >= 0; i--) {
++            item_list_last_page = item_list_last_page->next;
++        }
++    } else {
++        item_list_cursor[0] = NULL;
++    }
++}
++
++/* The categories the player has items in, in order, into rows; the number of different items of each into kinds.
++   Returns how many. */
++static s32 Menu_UseCategoryRows(s32 rows[USE_CATEGORY_COUNT], s32 kinds[USE_CATEGORY_COUNT]) {
++    s32 counts[USE_CATEGORY_COUNT];
++    s32 count = 0;
++    s32 i;
++
++    memset(counts, 0, sizeof(counts));
++    for (i = 1; i < 150; i++) {
++        if (item_counts[i] != 0 && (item_name_defs[i].state & 1)) {
++            counts[Menu_UseCategoryOf(i)]++;
++        }
++    }
++    for (i = 0; i < USE_CATEGORY_COUNT; i++) {
++        if (counts[i] != 0) {
++            kinds[count] = counts[i];
++            rows[count++] = i;
++        }
++    }
++    return count;
++}
++
++/* `ascii` in the menus' codes (printable Latin characters: 0x0800 + (character - 0x20)), ended by 0xFFFF */
++static void Menu_AsciiText(const char *ascii, u16 *out, s32 size) {
++    s32 i;
++
++    for (i = 0; ascii[i] != '\0' && i + 1 < size; i++) {
++        u8 c = (u8)ascii[i];
++
++        out[i] = (u16)(0x0800 | (c >= 0x20 && c < 0x7F ? c - 0x20 : '?' - 0x20));
++    }
++    out[i] = 0xFFFF;
++}
++
++/* The Use Item screen's first step: the Use Item screen's parts, the categories as its list and the cursor's category's
++   text; Confirm opens the category's items, Back the main menu and the Keys button the key items. Fades in and out. */
++static void Menu_UpdateUseCategory(HandlerContext *context) {
++    MenuCursorBar bar;
++    GsPackedWord word;
++    GsPackedWord corner;
++    s32 rows[USE_CATEGORY_COUNT];
++    s32 kinds[USE_CATEGORY_COUNT];
++    s32 count;
++    s32 row;
++    u32 i;
++    u8 kind;
++    u32 full_alpha;
++    u16 text[64];
++
++    (void)context;
++    if (!port_item_categories()) {
++        /* the player menu's "Item categories" off: straight on to every item, as retail opens them */
++        Menu_LinkUseItems(-1);
++        Menu_ChainItemListModels();
++        use_category_state = 0;
++        use_item_state = 0;
++        menu_screen_handler = (void *)Menu_UpdateUseItem;
++        return;
++    }
++    count = Menu_UseCategoryRows(rows, kinds);
++    if (use_category_cursor >= count) {
++        use_category_cursor = count > 0 ? count - 1 : 0;
++    }
++    if (menu_input_enabled != 0 && use_category_state == 1 && count > 0) {
++        /* the list stops at its ends rather than going round */
++        if ((menu_buttons & PAD_UP) && use_category_cursor > 0) {
++            use_category_cursor--;
++            Sound_PlayMenu(1);
++        } else if ((menu_buttons & PAD_DOWN) && use_category_cursor < count - 1) {
++            use_category_cursor++;
++            Sound_PlayMenu(1);
++        }
++    }
++    D_00446DF4 = count > 0 ? kinds[use_category_cursor] : 0; /* "Owned": the category's different items */
++    for (i = 0; i < item_part_count; i++) {
++        kind = item_parts[i].handler_index;
++        Menu_SetBlendMode(item_parts[i].blend_mode);
++        MenuSprite_Draw((sptr)&item_parts[i], kind + 1000, count > 0 ? 0 : 1, (int)screen_part_alphas[i]);
++        Menu_SetBlendMode(0);
++    }
++    word.raw = 0x0A0AAE607C307080;
++    corner.raw = 0x0A0F42407C306FE0;
++    if (count > 0) {
++        bar.first.f.lo16 = corner.f.lo16;
++        bar.first.f.mid16 = corner.f.mid16 + use_category_cursor * 0xB0;
++        bar.first.f.mid24 = corner.f.mid24;
++        bar.red = 0xFF;
++        bar.green = 0xFF;
++        bar.blue = 0x78;
++        bar.second.f.lo16 = bar.first.f.lo16 + 0x1240;
++        bar.second.f.mid16 = bar.first.f.mid16 + 0xB0;
++        bar.second.f.mid24 = bar.first.f.mid24;
++        if (use_category_state == 1) {
++            screen_part_alphas[253] = Menu_PulseValue(screen_part_alphas[253], 0x10, 0x20);
++        }
++        bar.alpha = (s32)screen_part_alphas[253];
++        MenuDraw_Bar(&bar);
++        MenuPad_PointCursor(use_category_cursor, MENU_AXIS_VERTICAL);
++        MenuPad_PointRows(count, corner.f.lo16, corner.f.mid16, 0x1240, 0xB0, 0xB0);
++        MenuText_SetColor(menu_draw_color);
++        for (row = 0; row < count; row++) {
++            Menu_AsciiText(use_category_names[rows[row]], text, 64);
++            MenuText_SetPen(word);
++            MenuText_DrawWrapped(text, 0x1A);
++            word.f.mid16 += 0xB0;
++            word.f.lo16 = 0x7080;
++        }
++        word.raw = 0x000A875083207080;
++        MenuText_SetPen(word);
++        Menu_AsciiText(use_category_texts[rows[use_category_cursor]], text, 64);
++        MenuText_DrawWordWrappedLong(text, 0x33);
++    }
++    if ((menu_buttons & PAD_CROSS) && menu_input_enabled != 0 && use_category_state == 1 && count > 0) {
++        /* the category's items, in the game's own screen: its parts are the same, so it goes on without a fade */
++        Sound_PlayMenu(0);
++        Menu_LinkUseItems(rows[use_category_cursor]);
++        Menu_ResetLoadBuffers();
++        Menu_ChainItemListModels();
++        use_item_state = 0;
++        use_category_state = 0; /* (faded in again when the items' Back comes here) */
++        menu_screen_handler = (void *)Menu_UpdateUseItem;
++        return;
++    } else if ((menu_buttons & PAD_CIRCLE) && menu_input_enabled != 0 && use_category_state == 1) {
++        Sound_PlayMenu(2);
++        use_category_state = 2;
++        menu_input_enabled = 0;
++    } else if ((menu_buttons & PAD_SQUARE) && menu_input_enabled != 0 && use_category_state == 1) {
++        Sound_PlayMenu(0);
++        use_category_state = 3;
++        menu_input_enabled = 0;
++    }
++    switch (use_category_state) {
++    case 0:
++        screen_part_alphas[255] += 12.8f;
++        if (screen_part_alphas[255] > 128.0f) {
++            screen_part_alphas[255] = 128.0f;
++        }
++        screen_part_alphas[253] += 1.6f;
++        menu_draw_color.alpha = (s32)screen_part_alphas[255];
++        if (screen_part_alphas[253] > 16.0f) {
++            screen_part_alphas[253] = 16.0f;
++        }
++        for (i = 0; i < item_part_count; i++) {
++            screen_part_alphas[i] += item_parts[i].alpha / 10.0f;
++            if (screen_part_alphas[i] > item_parts[i].alpha) {
++                for (i = 0; i < item_part_count; i++) {
++                    full_alpha = item_parts[i].alpha;
++                    screen_part_alphas[i] = full_alpha;
++                }
++                use_category_state = 1;
++                menu_input_enabled = 1;
++                return;
++            }
++        }
++        break;
++    case 2:
++    case 3:
++        screen_part_alphas[255] -= 12.8f;
++        if (screen_part_alphas[255] < 0.0f) {
++            screen_part_alphas[255] = 0.0f;
++        }
++        screen_part_alphas[253] -= 1.6f;
++        menu_draw_color.alpha = (s32)screen_part_alphas[255];
++        if (screen_part_alphas[253] < 0.0f) {
++            screen_part_alphas[253] = 0.0f;
++        }
++        for (i = 0; i < item_part_count; i++) {
++            screen_part_alphas[i] -= item_parts[i].alpha / 10.0f;
++            if (screen_part_alphas[i] < 0.0f) {
++                memset(screen_part_alphas, 0, 0x400);
++                Menu_ResetLoadBuffers();
++                if (use_category_state == 2) {
++                    Menu_LinkUseItems(-1); /* every item again, for the rest of the menu */
++                    use_category_cursor = 0;
++                    menu_screen_handler = Menu_OpenMain;
++                } else {
++                    Menu_ChainKeyItemModels();
++                    use_category_keys_return = TRUE;
++                    menu_screen_handler = Menu_UpdateKeyItems;
++                }
++                use_category_state = 0;
++                return;
++            }
++        }
++        break;
++    }
++}
++
+ /* The Use Item screen (main menu line 0): its parts, the turning model, the list of seven and the cursor bar. The
+    confirm button uses the item and closes the menu, button 0x8000 opens the key items; fades in and out. */
+ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3131,10 +3426,10 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
      MenuItem *bar_item;
      u32 i;
      s32 row;
@@ -3267,7 +3575,28 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      u8 kind;
      u32 full_alpha;
  
-@@ -3156,9 +3168,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3145,6 +3440,20 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+     corner.raw = 0x0A0F42407C306FE0;
+     item = item_list_top[0]; // match: dead (the magic menu, Menu_UpdateCastSpell, takes its first row here); it keeps the address's high part out of a register
+     if (item_list_cursor[0] != NULL) {
++        /* PC: the list stops at its ends rather than going round (the ring's first row is the top, first->next the
++           bottom; a page of the window stops at the first and the last page) */
++        if (item_list_cursor[0] == item_list_first) {
++            menu_buttons &= ~PAD_UP;
++        }
++        if (item_list_cursor[0]->prev == item_list_first) {
++            menu_buttons &= ~PAD_DOWN;
++        }
++        if (item_list_top[0] == item_list_first) {
++            menu_buttons &= ~PAD_LEFT;
++        }
++        if (item_list_top[0] == item_list_last_page) {
++            menu_buttons &= ~PAD_RIGHT;
++        }
+         Menu_MoveItemListCursor(context, menu_input_enabled == 0);
+     }
+     if (item_list_cursor[0] != NULL) {
+@@ -3156,9 +3465,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
          kind = item_parts[i].handler_index;
          ((void (*)(u8))Menu_SetBlendMode)(item_parts[i].blend_mode); // match: called as if it returned nothing
          if (item_list_cursor[0] != NULL) {
@@ -3279,7 +3608,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
      }
-@@ -3187,6 +3199,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3187,6 +3496,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
                  break;
              }
          }
@@ -3289,7 +3618,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      }
      if (item_list_cursor[0] != NULL) {
          sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 0.5f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
-@@ -3197,9 +3212,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3197,9 +3509,9 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
          item = item_list_top[0];
          MenuText_SetColor(menu_draw_color);
          for (row = 0; row < 7; row++, item = item->prev) {
@@ -3301,7 +3630,27 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              word.f.mid16 += 0xB0;
              word.f.lo16 = 0x7080;
              if (item_list_page_mark[0]->prev == item) {
-@@ -3320,7 +3335,7 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+@@ -3297,12 +3609,18 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
+                 memset(screen_part_alphas, 0, 0x400);
+                 switch (use_item_state) {
+                 case 5:
++                    Menu_LinkUseItems(-1); /* PC: every item again (the list held only a category's) */
+                     menu_screen_handler = NULL;
+                     menu_step++;
+                     break;
+                 case 6:
+                     ((s32 (*)(s32))Menu_ResetLoadBuffers)(0); // match: called as if it took a number and returned one
+-                    menu_screen_handler = Menu_OpenMain;
++                    if (port_item_categories()) {
++                        menu_screen_handler = (void *)Menu_UpdateUseCategory; /* PC: Back goes to the categories */
++                    } else {
++                        Menu_LinkUseItems(-1); /* PC: every item again (the setting may have changed meanwhile) */
++                        menu_screen_handler = Menu_OpenMain;
++                    }
+                     break;
+                 case 7:
+                     ((s32 (*)(s32))Menu_ResetLoadBuffers)(0); // match: called as if it took a number and returned one
+@@ -3320,7 +3638,7 @@ static void Menu_UpdateUseItem(HandlerContext *context) {
  
  /* The Cast a Spell screen (main menu line 1): its parts, the list of seven spells and the cursor bar, the spell's
     text and model; fades in and out. */
@@ -3310,7 +3659,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      f32 view[16];
      f32 local[16];
      MenuCursorBar bar;
-@@ -3334,7 +3349,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3334,7 +3652,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      s32 row;
      s32 page;
      s32 number;
@@ -3319,7 +3668,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 entry;
      s32 slot;
      u8 kind;
-@@ -3348,7 +3363,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3348,7 +3666,7 @@ static void Menu_UpdateCastSpell(s32 context) {
          return;
      }
      if (cast_spell_state < 2) {
@@ -3328,7 +3677,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      }
      item = castable_spell_top[0];
      word.raw = 0x0C0AAE607C307080;
-@@ -3364,7 +3379,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3364,7 +3682,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      for (; i < magic_part_count; i++) {
          kind = magic_parts[i].handler_index;
          Menu_SetBlendMode(magic_parts[i].blend_mode);
@@ -3337,7 +3686,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as if it returned nothing
      }
      for (row = 0; row < 7; row++, item = item->prev) {
-@@ -3386,6 +3401,9 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3386,6 +3704,9 @@ static void Menu_UpdateCastSpell(s32 context) {
              break;
          }
      }
@@ -3347,7 +3696,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      item = castable_spell_top[0];
      MenuText_SetColor(menu_draw_color);
      for (row = 0; row < 7; row++, item = item->prev) {
-@@ -3422,7 +3440,7 @@ static void Menu_UpdateCastSpell(s32 context) {
+@@ -3422,7 +3743,7 @@ static void Menu_UpdateCastSpell(s32 context) {
      packet[11] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 3;
@@ -3356,7 +3705,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      *D2_CHCR = D_CHCR_STR;
      DRAW_NODE_MODEL(&model_load_shown, local, menu_draw_color);
      if ((menu_buttons & PAD_CROSS) && menu_input_enabled != 0) {
-@@ -3574,6 +3592,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3574,6 +3895,7 @@ static void Menu_UpdateEquip(void) {
      {
      void *definition;
      SpritePacket *parts;
@@ -3364,7 +3713,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      if ((menu_buttons & PAD_UP) && equip_model_shown != 0 && menu_input_enabled != 0 && worn_model_loading == 0) {
          EQUIP_LIST = EQUIP_LIST->next;
          ((void (*)(s32))Menu_ShiftEquipModelsNextList)(0); // match: called with the number alone
-@@ -3602,9 +3621,9 @@ static void Menu_UpdateEquip(void) {
+@@ -3602,9 +3924,9 @@ static void Menu_UpdateEquip(void) {
          kind = equip_parts[i].handler_index;
          SET_BLEND(equip_parts[i].blend_mode);
          if (Menu_IsEquipped(equip_group_shown, CURRENT_ITEM->group, CURRENT_ITEM->item_number)) {
@@ -3376,7 +3725,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          }
          SET_BLEND(0);
      }
-@@ -3827,7 +3846,7 @@ static void Menu_UpdateEquip(void) {
+@@ -3827,7 +4149,7 @@ static void Menu_UpdateEquip(void) {
                  detail_panel_sound_pending = 0;
                  for (i = 0; i < equip_s_part_count; i++) {
                      SET_BLEND(equip_s_parts[i].blend_mode);
@@ -3385,7 +3734,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
                      SET_BLEND(0);
                  }
                  MenuText_SetColor(panel_text_color);
-@@ -3962,12 +3981,13 @@ static void Menu_UpdateEquip(void) {
+@@ -3962,12 +4284,13 @@ static void Menu_UpdateEquip(void) {
          MenuText_SetColor(menu_draw_color);
          ((int (*)(KindObject *))MenuDraw_Word)((KindObject *)&sprite); // match: the result register stays taken
      }
@@ -3400,7 +3749,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              SET_BLEND(0);
          }
          switch (equip_panel_state) {
-@@ -4028,7 +4048,9 @@ static void Menu_UpdateEquip(void) {
+@@ -4028,7 +4351,9 @@ static void Menu_UpdateEquip(void) {
          EquipGroupBytes unused_bytes = D_0043FDD0;
          f32 unused_pair[32];
  
@@ -3411,7 +3760,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              Sound_PlayMenu(0);
              if (weapon_defs[player_state.weapon].action_handler_index == 2 && EQUIP_LIST->group == 0
                  && weapon_defs[index].action_handler_index != 2) {
-@@ -4162,7 +4184,7 @@ static void Menu_UpdateStatus(void) {
+@@ -4162,7 +4487,7 @@ static void Menu_UpdateStatus(void) {
  
      for (i = 0; i < status_part_count; i++) {
          Menu_SetBlendMode(status_parts[i].blend_mode);
@@ -3420,7 +3769,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -4331,7 +4353,7 @@ static void Menu_UpdateKeyItems(void) {
+@@ -4331,7 +4656,7 @@ static void Menu_UpdateKeyItems(void) {
      sceVu0ViewScreenMatrix(menu_view_screen_matrix, 512.0f, 1.0f, 0.5f, 2048.0f, 2048.0f, 0.0f, 16777215.0f, 1.0f, 65536.0f);
      for (i = 0; i < keylist_part_count; i++) {
          Menu_SetBlendMode(keylist_parts[i].blend_mode);
@@ -3429,7 +3778,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
      key_items_frames++;
-@@ -4340,7 +4362,7 @@ static void Menu_UpdateKeyItems(void) {
+@@ -4340,7 +4665,7 @@ static void Menu_UpdateKeyItems(void) {
          if (slot < 0) {
              continue;
          }
@@ -3438,7 +3787,23 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          if (upload->done != 0) {
              file = upload->pool_node->buffer;
              texture = (TextureHeader *)((char *)file + file->texture_offset);
-@@ -4448,7 +4470,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4421,6 +4746,15 @@ static void Menu_UpdateKeyItems(void) {
+             if (screen_part_alphas[i] < 0.0f) {
+                 memset(screen_part_alphas, 0, 0x400);
+                 key_item_row = 0;
++                if (use_category_keys_return) {
++                    /* PC: opened from the Use Item categories: back to them, either way */
++                    use_category_keys_return = FALSE;
++                    Menu_ResetLoadBuffers();
++                    menu_screen_handler = (void *)Menu_UpdateUseCategory;
++                    key_items_state = 0;
++                    key_items_frames = 0;
++                    break;
++                }
+                 menu_screen_handler = (void *)Menu_UpdateUseItem;
+                 ((void (*)(s32))Menu_ResetLoadBuffers)(0); // match: the callee takes nothing
+                 ((void (*)(s32))Menu_ChainItemListModels)(0); // match: the callee takes nothing
+@@ -4448,7 +4782,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
      GsPackedWord word;
      s32 i;
      s32 row_count;
@@ -3447,7 +3812,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 first_text;
      s32 entry;
      u32 *packet;
-@@ -4456,7 +4478,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4456,7 +4790,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
      s32 show_picture;
      s32 row;
      u32 full_alpha;
@@ -3456,7 +3821,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 counter = 0;                /* one work variable: the pages tried, then a bit number, then a row */
  
      bar_origin.raw = 0x0001869F7C307EE0;
-@@ -4546,7 +4568,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4546,7 +4880,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
  
      for (i = 0; i < image_part_count; i++) {
          Menu_SetBlendMode(image_parts[i].blend_mode);
@@ -3465,7 +3830,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -4572,7 +4594,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4572,7 +4906,7 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
          packet[11] = 0;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -3474,7 +3839,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
          chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
          for (i = 0; i < recollection_page; i++) {
-@@ -4628,6 +4650,10 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
+@@ -4628,6 +4962,10 @@ static void Menu_UpdateRecollection(HandlerContext *context) {
              }
              bar.alpha = (s32)screen_part_alphas[253];
              MenuDraw_Bar(&bar);
@@ -3485,7 +3850,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              break;
          }
      }
-@@ -4734,7 +4760,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4734,7 +5072,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
      u32 i;
      s32 page;
      s32 number;
@@ -3494,7 +3859,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 entry;
      u8 kind;
  
-@@ -4742,7 +4768,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4742,7 +5080,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
      for (i = 0; i < image_part_count; i++) {
          kind = image_parts[i].handler_index;
          Menu_SetBlendMode(image_parts[i].blend_mode);
@@ -3503,7 +3868,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
      if (npc_package_load.done != 0) {
-@@ -4766,7 +4792,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
+@@ -4766,7 +5104,7 @@ static void Menu_UpdateRecollectionPage(HandlerContext *context) {
          packet[11] = 0;
          while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
          *D2_QWC = 3;
@@ -3512,7 +3877,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          *D2_CHCR = D_CHCR_STR;
          chunk = (PackageChunk *)((char *)npc_package_load.pool_node->buffer + 0x10);
          for (i = 0; (s32)i < page; i++) {
-@@ -4836,10 +4862,10 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4836,10 +5174,10 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
      s32 row;
      s32 i;
      s32 kind;
@@ -3525,7 +3890,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  
      memset(view, 0, 0x40);
      view[10] = view[5] = view[0] = 0.8f;
-@@ -4908,9 +4934,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4908,9 +5246,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
          kind = recol_parts[i].handler_index;
          Menu_SetBlendMode(recol_parts[i].blend_mode);
          if (owned_list_current[0]->group != 12) {
@@ -3537,7 +3902,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
-@@ -4940,6 +4966,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4940,6 +5278,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
              break;
          }
      }
@@ -3547,7 +3912,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  
      node = owned_list_top[0];
      cursor = owned_list_current[0];
-@@ -4983,9 +5012,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
+@@ -4983,9 +5324,9 @@ static void Menu_UpdateVisibleItem(HandlerContext *context) {
          if (kind != 2) {
              ((void (*)(u8))Menu_SetBlendMode)(item_sel_parts[i].blend_mode); // match: called as returning nothing
              if (visible_item_state != 1 && ((worn_mask >> item_sel_parts[i].slot) & 1)) {
@@ -3559,7 +3924,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              }
              Menu_SetBlendMode(0);
          }
-@@ -5219,17 +5248,25 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
+@@ -5219,17 +5560,25 @@ static void Menu_UpdateSystem(MenuScreenContext *context) {
          }
      }
      system_menu_line = (system_menu_line + 5) % line_count;
@@ -3588,7 +3953,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              }
          }
          SET_PART_MODE(0);
-@@ -5595,32 +5632,54 @@ static s32 Menu_MoveAllItemsCursor(void) {
+@@ -5595,32 +5944,54 @@ static s32 Menu_MoveAllItemsCursor(void) {
      return FALSE;
  }
  
@@ -3649,7 +4014,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              }
              break;
          case 3:
-@@ -5629,67 +5688,67 @@ static void Menu_UpdateCardSlot(void) {
+@@ -5629,67 +6000,67 @@ static void Menu_UpdateCardSlot(void) {
              case 5:
              case 9:
              case 10:
@@ -3733,7 +4098,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              break;
          }
          SET_PART_MODE(0);
-@@ -5728,35 +5787,38 @@ static void Menu_UpdateCardSlot(void) {
+@@ -5728,35 +6099,38 @@ static void Menu_UpdateCardSlot(void) {
          card_screen_state.dialog_id = 10;
          SaveCard_StartCheck(1);
      } else if (card_screen_state.card_op_running == 0 && card_screen_state.input_locked == 0) {
@@ -3783,7 +4148,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
                      if (card_screen_state.dialog_id != -1) {
                          card_screen_state.dialog_id = -1;
                      } else {
-@@ -5861,10 +5923,13 @@ static void Menu_UpdateSaveList(void) {
+@@ -5861,10 +6235,13 @@ static void Menu_UpdateSaveList(void) {
      u8 kind;
      s32 slot;
      s32 group;
@@ -3798,7 +4163,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  
      info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(0);
      D_00446DF4 = info[0]->level;
-@@ -5962,27 +6027,46 @@ static void Menu_UpdateSaveList(void) {
+@@ -5962,27 +6339,46 @@ static void Menu_UpdateSaveList(void) {
          }
      }
  
@@ -3849,7 +4214,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              break;
          }
          SET_PART_MODE(0);
-@@ -5993,7 +6077,9 @@ static void Menu_UpdateSaveList(void) {
+@@ -5993,7 +6389,9 @@ static void Menu_UpdateSaveList(void) {
      for (i = 0; i < 3; i++) {
          entry = ((s32 *)table)[info[i]->save_area + 1];
          MenuText_SetPen(word);
@@ -3860,7 +4225,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          if (entry != 0) {
              MenuText_DrawWrapped((u16 *)(table + entry), 0x18);
          }
-@@ -6006,19 +6092,19 @@ static void Menu_UpdateSaveList(void) {
+@@ -6006,19 +6404,19 @@ static void Menu_UpdateSaveList(void) {
          if (kind == 3) {
              switch (card_screen_state.list_step) {
              case 8:
@@ -3885,7 +4250,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
                  break;
              }
          } else {
-@@ -6028,14 +6114,17 @@ static void Menu_UpdateSaveList(void) {
+@@ -6028,14 +6426,17 @@ static void Menu_UpdateSaveList(void) {
              case 8:
              case 10:
              case 23:
@@ -3905,7 +4270,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          bar.first.f.lo16 = 0x7490;
          bar.first.f.mid16 = card_screen_state.confirm_choice * 0xC0 + 0x80A0;
          bar.first.f.mid24 = 0x5F370;
-@@ -6269,6 +6358,10 @@ static void Menu_UpdateSaveList(void) {
+@@ -6269,6 +6670,10 @@ static void Menu_UpdateSaveList(void) {
          }
          break;
      }
@@ -3916,7 +4281,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  }
  
  /* The options screen: moves the cursor over its seven lines, changes the option under it, draws the parts, and
-@@ -6287,6 +6380,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6287,6 +6692,15 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      }
      context->selection += 7;
      context->selection %= 7;
@@ -3932,7 +4297,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  
      switch (context->selection) {
      case 0:
-@@ -6372,7 +6474,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
+@@ -6372,7 +6786,7 @@ static void Menu_UpdateOptions(MenuScreenContext *context) {
      for (i = 0; i < option_part_count; i++) {
          kind = option_parts[i].handler_index;
          Menu_SetBlendMode(option_parts[i].blend_mode);
@@ -3941,7 +4306,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
-@@ -6553,6 +6655,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6553,6 +6967,11 @@ static void Menu_UpdateButtonConfig(void) {
      line_count = choice_count + 1;
      button_line += line_count;
      button_line %= line_count;
@@ -3953,7 +4318,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  
      wrap = choice_count; // match: a second variable, set here, is what retail keeps in $16 for the two divisions
      for (i = 0; i < wrap; i++) {
-@@ -6625,14 +6732,14 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6625,14 +7044,14 @@ static void Menu_UpdateButtonConfig(void) {
          switch (kind) {
          case 2:
              if (button_prompt != 0) {
@@ -3971,7 +4336,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              }
              break;
          case 0x18:
-@@ -6656,7 +6763,7 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6656,7 +7075,7 @@ static void Menu_UpdateButtonConfig(void) {
                  D_00446DF4 = 0;
                  D_00446DF8 = 0;
              }
@@ -3980,7 +4345,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              break;
          case 0x21:
              if (D_00446E00 == 0) {
-@@ -6664,11 +6771,11 @@ static void Menu_UpdateButtonConfig(void) {
+@@ -6664,11 +7083,11 @@ static void Menu_UpdateButtonConfig(void) {
              }
              D_00446E04 = button_choices_shown[D_00446E00];
              // match: called as returning a value, which keeps $2 out of the count's increment
@@ -3994,7 +4359,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
              break;
          }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
-@@ -6891,16 +6998,16 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6891,16 +7310,16 @@ static void Menu_UpdateCardCheck(void) {
              ((void (*)(u8))Menu_SetBlendMode)(mc_mess_parts[i].blend_mode); // match: called as returning nothing, which frees $2 for the switch
              switch (card_screen_state.dialog_id) {
              case 0x10:
@@ -4015,7 +4380,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
                  break;
              }
              Menu_SetBlendMode(0);
-@@ -6908,6 +7015,9 @@ static void Menu_UpdateCardCheck(void) {
+@@ -6908,6 +7327,9 @@ static void Menu_UpdateCardCheck(void) {
      }
  
      if (card_screen_state.skip_drawing == 0) {
@@ -4025,7 +4390,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          bar.first.f.lo16 = 0x75D0;
          bar.first.f.mid16 = card_screen_state.selected_card * 0xE0 + 0x8250;
          bar.first.f.mid24 = 0xDBBA0;
-@@ -7043,7 +7153,7 @@ static void Menu_UpdateBrightness(void) {
+@@ -7043,7 +7465,7 @@ static void Menu_UpdateBrightness(void) {
      for (i = 0; i < bright_part_count; i++) {
          kind = bright_parts[i].handler_index;
          Menu_SetBlendMode(bright_parts[i].blend_mode);
@@ -4034,7 +4399,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
          Menu_SetBlendMode(0);
      }
      switch (system_screen_state) {
-@@ -7097,7 +7207,7 @@ static void Menu_WaitForCancel(void) {
+@@ -7097,7 +7519,7 @@ static void Menu_WaitForCancel(void) {
     text drawer returns, nothing without a text. */
  static int Menu_DrawEquipItemText(s32 index) {
      DataNode *node;
@@ -4043,7 +4408,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
      s32 slot;
      s32 entry;
      GsPackedWord word;
-@@ -7112,6 +7222,7 @@ static int Menu_DrawEquipItemText(s32 index) {
+@@ -7112,6 +7534,7 @@ static int Menu_DrawEquipItemText(s32 index) {
          MenuDraw_SetGsRegister(GS_REG_TEST_1, 0x30000);
          return MenuText_DrawWrappedLong((u16 *)(table + entry), 0x1B);
      }
@@ -4051,7 +4416,7 @@ index 20134d3592c5983cca603bd8a3a3a217a3eff6f5..a8c3f7a40cb4608b1d8e174a7bce8217
  }
  
  /* If the item list has anything: names its five models and chains the five load nodes for them. */
-@@ -7461,7 +7572,7 @@ void Menu_DrawBrightness(s32 level) {
+@@ -7461,7 +7884,7 @@ void Menu_DrawBrightness(s32 level) {
      cursor[1].as_int = 0xFFFFF;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 5;

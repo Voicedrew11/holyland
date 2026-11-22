@@ -727,6 +727,13 @@ void set_equipped_mark(int on) {
     port_settings.equipped_mark = port_options.equipped_mark = on;
     changed();
 }
+int get_item_categories() {
+    return port_options.item_categories != 0;
+}
+void set_item_categories(int on) {
+    port_settings.item_categories = port_options.item_categories = on;
+    changed();
+}
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1083,8 +1090,6 @@ const SettingRow gameplay_rows[] = {
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
     {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
-    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
-     on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "
@@ -1105,6 +1110,11 @@ const SettingRow gameplay_rows[] = {
 };
 
 const SettingRow interface_rows[] = {
+    {"Menus", "", RowKind::heading},
+    {"Item categories", "The menu's Item screen lists categories first (Consumables, Maps, and so on), then the "
+     "chosen category's items.", RowKind::toggle, on_off, {}, get_item_categories, set_item_categories},
+    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
+     on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Map", "", RowKind::heading},
     {"Automap",
      "A map of where you have been, kept with each save. Opened by its key (M unless changed); the game waits while "
