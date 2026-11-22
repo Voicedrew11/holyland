@@ -101,6 +101,8 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   update notices. `packaging/` makes the releases (AppImage, Windows zip and installer), `.github/workflows/release.yml`
   on a `v*` tag. All in `docs/port/LAUNCHER.md`. The data folder is `holyland/`
   (on Windows too); the first start moves an old `darker-reality/` folder there (`port/platform/data_dir.c`).
+- `third_party/vk-sync2-layer`: Khronos's synchronization2 layer, built into `vk_layers/` beside `kf4` and enabled only on
+  a driver without `VK_KHR_synchronization2`, which Granite needs (`port/gs/pc/pcr_sync2.h`).
 - `cmake/granite_*.cmake`: patches written into paraLLEl-GS's Granite at each configure (the list:
   `cmake/granite_edits.cmake`; a file is written only when its text changes, since a release's source is read-only). The submodule
   shows as dirty because of them (`ignore = dirty`); that's expected.
