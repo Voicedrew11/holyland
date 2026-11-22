@@ -604,7 +604,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/cinematic.c game/screen_fx.c game/menu_pointer.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/attack_tracking.c game/cinematic.c game/screen_fx.c game/menu_pointer.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # PC mods built as game code whose state is the host's: their objects are linked after the save state's

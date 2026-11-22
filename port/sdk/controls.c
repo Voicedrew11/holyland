@@ -70,6 +70,7 @@ static struct {
     int captured;                /* the mouse is held (SDL's relative mouse mode) */
     int wants_capture;           /* the player has not let it go (ACTION_CAPTURE_MOUSE) */
     int mouse_last;              /* the mouse was used last, not a key or a controller: its cursor shows */
+    int mouse_turning;           /* the mouse turned the view since a controller was last used (port_mouse_turning) */
     int cursor_shown;            /* SDL's cursor is shown (while the mouse is let go) */
     uint32_t motion_after;       /* SDL_GetTicks before which mouse motion is not the player's (SDL's warp) */
     uint32_t gameplay_ms;        /* SDL_GetTicks at the last read in play */
@@ -435,6 +436,9 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
             /* (no instant mouse look: its readings go by the wall clock, and the pictures between would not
                repeat) */
             port_mouse_lead_waiting(none, reading_time());
+            if (turned) {
+                pc.mouse_turning = 1;
+            }
             return turned;
         }
     }
@@ -469,7 +473,12 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     *yaw = (float)y;
     *pitch = (float)p;
     port_pad_record_look(*yaw, *pitch); /* (--record-input) */
+    pc.mouse_turning = 1;
     return 1;
+}
+
+int port_mouse_turning(void) {
+    return pc.mouse_turning;
 }
 
 /* Whether Run is held, with the mod on and Run bound; -1 when the mod does not apply (the action button runs) */
@@ -807,6 +816,12 @@ static void set_blocked(int blocked) {
     update_cursor();
 }
 
+/* A controller's button or stick: the mouse no longer turns the view (port_mouse_turning). (No events reach here
+   while a pad script plays, so its runs repeat.) */
+static void controller_used(void) {
+    pc.mouse_turning = 0;
+}
+
 /* What the player is using: the mouse, or a key or controller (the cursor follows it: update_cursor) */
 static void note_device(const SDL_Event *event) {
     switch (event->type) {
@@ -817,10 +832,12 @@ static void note_device(const SDL_Event *event) {
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         pc.mouse_last = 0;
+        controller_used();
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         if (event->gaxis.value > STICK_USED || event->gaxis.value < -STICK_USED) {
             pc.mouse_last = 0;
+            controller_used();
         }
         break;
     case SDL_EVENT_MOUSE_MOTION:

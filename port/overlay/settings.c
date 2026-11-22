@@ -19,7 +19,8 @@
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
        "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false,
-                    "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false},
+                    "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false,
+                    "attack_tracking": 0},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -85,6 +86,7 @@ PortSettings port_settings = {
     .item_categories = 1,
     .detailed_notices = 1,
     .instant_smith = 0,
+    .attack_tracking = PORT_ATTACK_TRACKING_AUTO,
     .fov = 64,
     .game_speed = 1.f,
     .volume = 100,
@@ -505,6 +507,11 @@ void port_settings_load(void) {
     s->detailed_notices = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "detailed_notices",
         s->detailed_notices);
     s->instant_smith = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "instant_smith", s->instant_smith);
+    s->attack_tracking = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "attack_tracking",
+        s->attack_tracking, 0, 400);
+    if (s->attack_tracking != PORT_ATTACK_TRACKING_AUTO && s->attack_tracking < 100) {
+        s->attack_tracking = 100; /* (no slower than the PS2's) */
+    }
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
@@ -566,6 +573,7 @@ void port_settings_load(void) {
     port_options.item_categories = s->item_categories; /* (no command-line switch) */
     port_options.detailed_notices = s->detailed_notices; /* (no command-line switch) */
     port_options.instant_smith = s->instant_smith;
+    port_options.attack_tracking = s->attack_tracking; /* (no command-line switch) */
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
     }
@@ -775,6 +783,7 @@ void port_settings_save(void) {
     put(section("mods"), "item_categories", cJSON_CreateBool(s->item_categories));
     put(section("mods"), "detailed_notices", cJSON_CreateBool(s->detailed_notices));
     put(section("mods"), "instant_smith", cJSON_CreateBool(s->instant_smith));
+    put(section("mods"), "attack_tracking", cJSON_CreateNumber(s->attack_tracking));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */

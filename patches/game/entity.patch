@@ -835,7 +835,7 @@ index c44b5a78c545a33d19d04a8c6a0c28b694f80594..7facba7eb11ae694d2bfae44786799e9
  void Entity_ResetAllLists(void);
  void Entity_FreeAllInGroup(int group_id);
 diff --git a/src/game/entity/entity_ai.c b/src/game/entity/entity_ai.c
-index 26e563eb1b3443ffb1440f955b1e647836ac1320..de2bd0bafa055fb5df4618d9a7198cead9208384 100644
+index 26e563eb1b3443ffb1440f955b1e647836ac1320..c16a90031af976a430515469dfce4546903f8c75 100644
 --- a/src/game/entity/entity_ai.c
 +++ b/src/game/entity/entity_ai.c
 @@ -8,15 +8,18 @@
@@ -1078,7 +1078,47 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..de2bd0bafa055fb5df4618d9a7198cea
          diff = atan2f(target[1] - entity->model->position[1], distance[0]);
          diff -= entity->model->rotation[0];
          diff = diff - (f32)(s32)(diff / 6.2831855f) * 6.2831855f;
-@@ -1834,7 +1816,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
+@@ -1708,6 +1690,13 @@ static float EntityAi_Decelerate(Entity *entity, float speed) {
+    once it is there. */
+ s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
+     f32 diff;
++    /* PC: an attack's turn at the player, before it strikes, is faster by the attack tracking setting
++       (port_attack_tracking_scale): the top speed times k and the build-up times k squared, so any turn takes 1/k
++       the time. Every other turn is the game's own. */
++    f32 scale = (entity->busy_flags & ENTITY_BUSY_ATTACK) && target == entity->heading_to_player
++                    ? port_attack_tracking_scale() : 1.0f;
++    f32 turn_step = entity->params->turn_step_per_frame * scale * scale;
++    f32 turn_limit = entity->params->turn_limit * scale;
+ 
+     target -= (int)(target / 6.2831855f) * 6.2831855f;
+     if (3.1415927f < target) {
+@@ -1727,9 +1716,9 @@ s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
+         diff += 6.2831855f;
+     }
+     if (diff > 0.0f) {
+-        *speed += entity->params->turn_step_per_frame;
+-        if (*speed > entity->params->turn_limit) {
+-            *speed = entity->params->turn_limit;
++        *speed += turn_step;
++        if (*speed > turn_limit) {
++            *speed = turn_limit;
+         }
+         if (diff <= *speed) {
+             entity->turn_delta_yaw += diff;
+@@ -1738,9 +1727,9 @@ s32 EntityAi_TurnToHeading(Entity *entity, f32 *speed, f32 target) {
+         }
+         entity->turn_delta_yaw += *speed;
+     } else if (diff < 0.0f) {
+-        *speed -= entity->params->turn_step_per_frame;
+-        if (*speed < -entity->params->turn_limit) {
+-            *speed = -entity->params->turn_limit;
++        *speed -= turn_step;
++        if (*speed < -turn_limit) {
++            *speed = -turn_limit;
+         }
+         if (*speed <= diff) {
+             entity->turn_delta_yaw += diff;
+@@ -1834,7 +1823,7 @@ int EntityAi_SetReaction(Entity *entity, void (*reaction)(void), int run_now) {
      entity->reaction_step = 0;
      if (run_now != 0) {
          if (reaction != NULL) {
@@ -1087,7 +1127,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..de2bd0bafa055fb5df4618d9a7198cea
          }
      }
      return 1;
-@@ -1874,8 +1856,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
+@@ -1874,8 +1863,7 @@ int EntityAi_AnimationFrameCount(Entity *entity, s32 index) {
  u16 Motion_FrameCount(ModelInstance *model, int index) {
      ModelPartLevels *levels;
  
@@ -1097,7 +1137,7 @@ index 26e563eb1b3443ffb1440f955b1e647836ac1320..de2bd0bafa055fb5df4618d9a7198cea
      return *(u16 *)((char *)levels - 4);
  }
  
-@@ -1994,7 +1975,10 @@ void Entity_DrawPoolModels(void) {
+@@ -1994,7 +1982,10 @@ void Entity_DrawPoolModels(void) {
          Packet_BeginGsRegisters();
          Packet_AddGsRegister(GS_REG_ALPHA_2, ((s64)(s32)(ENTITY_MODEL(entity)->alpha * 32.0f * 0.0078125f) << 32) | 0x64);
          Packet_EndGsRegisters();
