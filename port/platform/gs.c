@@ -215,6 +215,12 @@ static void open_backend(void *unused) {
 #endif
 }
 
+void port_gs_find_vulkan_layers(void) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    gsr_find_vulkan_layers();
+#endif
+}
+
 void port_gs_init(void) {
     parse_dumps();
     if (port_options.no_gs || (port_options.headless && dump_count == 0 && !port_debug_wants_gs())) {

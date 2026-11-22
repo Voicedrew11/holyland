@@ -23,6 +23,7 @@ build/
 *.o
 *.a
 *.map
+!third_party/vk-sync2-layer/extension-layer/layers/libVkLayer_khronos_synchronization2.map
 build.ninja
 objdiff.json
 .ninja_log

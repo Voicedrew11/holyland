@@ -1115,6 +1115,7 @@ int main(int argc, char **argv) {
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);
+    port_gs_find_vulkan_layers(); /* (before any thread: it sets the Vulkan loader's variables) */
     if (port_options.stats) {
         atexit(print_stats); /* (a run's own end prints them before exit: port_print_stats) */
     }

@@ -43,6 +43,29 @@ std::string run_step(const Platform &platform, const ProcessSpec &spec, BuildPro
     return {};
 }
 
+// The game's Vulkan layers (the game's CMakeLists.txt: vk_layers/ beside kf4, port/gs/pc/pcr_sync2.h), copied into
+// the same folder beside the kept program; "" when it worked or the build made none, else why not
+std::string keep_vulkan_layers(const fs::path &obj, const fs::path &build_dir) {
+    const fs::path layers = obj / "vk_layers";
+    std::error_code error;
+    if (!fs::is_directory(layers, error))
+        return {};
+    const fs::path kept = build_dir / "vk_layers";
+    fs::create_directories(kept, error);
+    if (error)
+        return "Cannot make " + kept.string() + ": " + error.message();
+    for (fs::directory_iterator it(layers, error), end; !error && it != end; it.increment(error)) {
+        if (!it->is_regular_file(error))
+            continue;
+        fs::copy_file(it->path(), kept / it->path().filename(), fs::copy_options::overwrite_existing, error);
+        if (error)
+            return "Cannot copy " + it->path().string() + ": " + error.message();
+    }
+    if (error)
+        return "Cannot list " + layers.string() + ": " + error.message();
+    return {};
+}
+
 std::string path_option(const char *name, const fs::path &path) {
     return std::string("-D") + name + "=" + path.generic_string();
 }
@@ -96,6 +119,8 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
         // a copy of the release's read-only file stays removable (Windows will not delete a read-only one)
         fs::permissions(copy, fs::perms::owner_write, fs::perm_options::add, error);
     }
+    if (std::string failed = keep_vulkan_layers(obj, request.build_dir); !failed.empty())
+        return {false, failed};
     fs::remove_all(obj, error); // the objects are big and never used again; a failure here is harmless
     return {true, {}};
 }

@@ -182,6 +182,31 @@ samples, about 140 MB each), and there are three sets (kf4-pc's, the pump's, the
 holds 2.4 GB. Less needs fewer or smaller copies (only the rows of the buffer shown, or only the surfaces the walk
 draws on).
 
+## Drivers without synchronization2 (2026-11-22)
+
+Granite makes no device without `VK_KHR_synchronization2` (Vulkan 1.3's core; an extension before it): "KHR_synchronization2
+is not supported. This is a hard requirement for Granite." A player's driver had Vulkan 1.2.170 (early 2021) and
+stopped there. The game now builds Khronos's synchronization2 layer (`third_party/vk-sync2-layer`,
+`cmake/vk_sync2_layer.cmake`) into `vk_layers/` beside `kf4`, and the launcher keeps that folder in a build.
+
+- At start, before any thread (`port_gs_find_vulkan_layers`, `pcr::sync2::let_loader_find_layer`), the game adds
+  `vk_layers/` to the loader's layer folders: `VK_ADD_LAYER_PATH` from loader 1.3.207 on. An older loader has only
+  `VK_LAYER_PATH`, which replaces the system's explicit layer folders (no validation layer on such a loader).
+- `make_instance` (pcr.cpp) makes Granite's instance as before, then asks each GPU. When one is below 1.3 as the instance
+  uses it and has no `VK_KHR_synchronization2`, the instance is made again with the layer
+  (`[pcr] VK_KHR_synchronization2 from VK_LAYER_KHRONOS_synchronization2`). Without the layer it says so, and Granite
+  stops as before.
+- On a driver with the extension, nothing changes: the layer is never enabled.
+- Granite falls back to the extension's `...KHR` functions when the core ones are missing (`PROMOTE_CALL`), and those
+  are the layer's.
+- Checked on RADV, 2026-11-22, by making Granite take Vulkan 1.2 and the KHR functions (temporary edits, not kept)
+  with `VK_SYNCHRONIZATION2_FORCE_ENABLE=1`. The layer then did the barriers and submits, and pictures 400, 900
+  and 1490 of `tests/newgame.pad` were byte for byte the same as without it. A run in a window, through 009, was fine too.
+  The same on the player's loader, Vulkan-Loader v1.2.170 built from source (`LD_LIBRARY_PATH`): the layer found through
+  `VK_LAYER_PATH`, its manifest taken, the same pictures.
+  Not yet run on a real Vulkan 1.2 driver, or on Windows (the DLL builds, with the loader's entry points).
+- Only the PC and scene renderers' instance; paraLLEl-GS (`--renderer gs`) still needs a driver with the extension.
+
 ## The reflection cut at the water (2026-11-14; `--reflection-clip`)
 
 A zombie standing in a pond had its feet in the water's reflection, sticking up behind its legs. The PS2 does the

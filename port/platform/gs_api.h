@@ -11,6 +11,9 @@
 extern "C" {
 #endif
 
+static inline void gsr_find_vulkan_layers(void) {
+    pcr_find_vulkan_layers();
+}
 static inline int gsr_open(void *shared_context) {
     return pcr_open(shared_context);
 }
