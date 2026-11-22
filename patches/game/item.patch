@@ -1,5 +1,5 @@
 diff --git a/src/game/item/gold.c b/src/game/item/gold.c
-index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..b54be4758d1146ffc662c22b7c44a5511a69c00d 100644
+index 48ad07ab61cb8357851bf30452e13c32cf61cb8b..68378289e380abb76624716ae0fc51e5562fbef9 100644
 --- a/src/game/item/gold.c
 +++ b/src/game/item/gold.c
 @@ -7,12 +7,12 @@
@@ -167,7 +167,7 @@ index 0594b38176e84720f45364fd6332ff2ec1cbb15c..269c10ab4d7dbd97a10bd25fe11ee901
 +GameDefinition *const weapon_name_defs = item_name_defs + 150;
 +GameDefinition *const worn_name_defs = item_name_defs + 220;
 diff --git a/src/game/item/map_item.c b/src/game/item/map_item.c
-index 2ee95737a736c28f019ae010355d1f3e29f4f7df..a472da988337a9ba002ac2e1ac4fe3bf55c689bc 100644
+index 2ee95737a736c28f019ae010355d1f3e29f4f7df..c16b404788d6ae0023d8468566d86b26104885f9 100644
 --- a/src/game/item/map_item.c
 +++ b/src/game/item/map_item.c
 @@ -8,6 +8,7 @@
@@ -369,7 +369,22 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..a472da988337a9ba002ac2e1ac4fe3bf
      if (distance < 75.0f) {
          Vector_Scale(pickup_velocity, delta, 1.0f / distance);
          Vector_Scale(pickup_velocity, pickup_velocity, 5.0f);
-@@ -819,7 +830,7 @@ void MapItem_PickupTake(void) {
+@@ -797,7 +808,13 @@ void MapItem_PickupHold(void) {
+             pickup_step++;
+             return;
+         }
+-        Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_CANT_CARRY_ANY_MORE);
++        { /* PC: "Can't carry any more: Herb" with the player menu's "Detailed notices" */
++            NoticeDetail detail;
++
++            NoticeDetail_Start(&detail);
++            NoticeDetail_ItemName(&detail, (s16)pickup_item->item);
++            Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_CANT_CARRY_ANY_MORE, &detail);
++        }
+     } else if (!(pad_pressed[0] & PAD_CIRCLE) || pickup_no_put_back != 0) {
+         return;
+     }
+@@ -819,7 +836,7 @@ void MapItem_PickupTake(void) {
      if (node->def != NULL && node->def->required_flag != 0) {
          map_item_pickup_counts[map_slots[node->flags & 1].tag][node->index]++;
      } else if (node->map_object != 0) {
@@ -378,7 +393,7 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..a472da988337a9ba002ac2e1ac4fe3bf
      } else if (node->record != NULL) {
          memset(node->record, 0, sizeof(DroppedItemRecord));
      }
-@@ -845,7 +856,7 @@ void MapItem_PickupPutBack(void) {
+@@ -845,7 +862,7 @@ void MapItem_PickupPutBack(void) {
      }
      Vector_Copy(&pickup_item->model->position, pickup_start_position);
      Vector_Copy(&pickup_item->model->rotation, pickup_start_rotation);
@@ -387,7 +402,7 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..a472da988337a9ba002ac2e1ac4fe3bf
      if (object != NULL && (object->state_flags & MAP_OBJECT_IN_USE) && object->definition->kind == 3) {
          MapItem_Unlink(pickup_item);
      }
-@@ -888,22 +899,24 @@ void *MapItem_FindModelSource(int slot, int key) {
+@@ -888,22 +905,24 @@ void *MapItem_FindModelSource(int slot, int key) {
              return NULL;
          }
          if (value == key) {
@@ -417,7 +432,7 @@ index 2ee95737a736c28f019ae010355d1f3e29f4f7df..a472da988337a9ba002ac2e1ac4fe3bf
  }
  
  /* Takes an item off the list of items lying about, frees its object and drop record links, and returns
-@@ -983,7 +996,7 @@ int MapItem_UniqueNotDropped(int item) {
+@@ -983,7 +1002,7 @@ int MapItem_UniqueNotDropped(int item) {
  
      common = item_common_defs + item;
      for (i = 0; i < 0x80; i++) {

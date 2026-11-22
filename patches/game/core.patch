@@ -894,7 +894,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db63817c4af19 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011eee1b95e32 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -9,6 +9,7 @@
@@ -1089,16 +1089,17 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
      Wobble_AdvanceSines();
      func_001095D0();
      GsDraw_ResetDrawTarget();
-@@ -457,6 +480,8 @@ int GameLoop_DrawFrame(int arg) {
+@@ -457,6 +480,9 @@ int GameLoop_DrawFrame(int arg) {
      }
      GameLoop_SetCameraMatrices(0, 0);
      GsDraw_QueueVu1Matrix(world_screen_matrix);
 +    FrameInterp_EndWorld(); /* PC */
 +    ScreenFx_Begin(); /* PC: KF4_FX, debugging (game/screen_fx.c) */
++    Cinematic_HideScreenEffects(); /* PC: none of the player's conditions or damage on the screen while flying */
      if ((s32)(player_state.status_bits >> 39) & 1) {
          GsDraw_CopyFrame(0x2BC0);
          tinted = TRUE;
-@@ -473,24 +498,36 @@ int GameLoop_DrawFrame(int arg) {
+@@ -473,24 +499,36 @@ int GameLoop_DrawFrame(int arg) {
      }
      Player_DrawScreenFade();
      if (map_draw_state.bit44) {
@@ -1141,7 +1142,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
          Game_ShiftScreenByViewTurn();
      }
      GsDraw_ClearDepth();
-@@ -498,20 +535,30 @@ int GameLoop_DrawFrame(int arg) {
+@@ -498,20 +536,30 @@ int GameLoop_DrawFrame(int arg) {
          Effect_UploadTextures();
      }
      DrawList_Draw(3, 0);
@@ -1177,7 +1178,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -529,14 +576,21 @@ int GameLoop_DrawFrame(int arg) {
+@@ -529,14 +577,22 @@ int GameLoop_DrawFrame(int arg) {
          }
      }
      if (message_dim_alpha != 0) {
@@ -1198,11 +1199,12 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
 +    if (!port_native_draw(PORT_ND_PASSES) || !NativeDraw_Brightness(game_options[10])) { /* PC: --native-draw (game/native_draw/) */
 +        Game_ApplyBrightness(game_options[10]);
 +    }
++    Cinematic_ShowScreenEffects(); /* PC */
 +    ScreenFx_End(); /* PC: KF4_FX */
      func_001095D8();
  }
  
-@@ -656,14 +710,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -656,14 +712,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
      f32 other[16];
      f32 translation[4];
      f32 angle;
@@ -1229,7 +1231,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +766,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +768,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1237,7 +1239,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..3ab275b30880c984ebae0116ea2db638
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +793,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +795,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

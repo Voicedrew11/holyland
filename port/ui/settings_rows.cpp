@@ -426,12 +426,19 @@ bool flicker_filter_overridden() {
     return port_options.flicker_filter != port_settings.flicker_filter;
 }
 
-// (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens
-const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT},
+// (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens. Low to
+// high, the cheapest first; the developers' unsettled is not among them (describe_scene_depth names it)
+const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU},
                                {port_scene_depth(PORT_SCENE_DEPTH_NEARER)->label, PORT_SCENE_DEPTH_NEARER},
-                               {port_scene_depth(PORT_SCENE_DEPTH_UNSETTLED)->label, PORT_SCENE_DEPTH_UNSETTLED},
-                               {port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU}};
-static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT);
+                               {port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT}};
+static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT - 1);
+// (a mode the menu has no choice for, set in settings.json or by --scene-depth: its own label)
+void describe_scene_depth(int mode, char *out, size_t size) {
+    const PortSceneDepth *d = port_scene_depth(mode);
+    if (mode == PORT_SCENE_DEPTH_UNSETTLED && d != nullptr) {
+        std::snprintf(out, size, "%s", d->label);
+    }
+}
 int get_scene_depth() {
     return port_settings.scene_depth;
 }
@@ -477,11 +484,13 @@ const SettingRow graphics_rows[] = {
     {"Font", "IPA Mincho: a sharp font in the same style.\nOriginal: the game's own, blurry when enlarged.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
     {"Depth",
-     "How surfaces close together are sorted. From the next start.\nExact: the PS2's depth at each pixel; least "
-     "z-fighting.\nLayers in one pass: as Exact, a little faster.\nLayers unsettled: as Exact, cheaper; a surface drawn "
-     "after a layer on it can lose.\nGPU: the old depth; fastest, more z-fighting.",
-     RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, nullptr, scene_renderer, nullptr,
-     scene_depth_overridden, scene_depth_note},
+     "How cleanly things lying on a surface are drawn: moss and grime on walls, markings on floors, a rope on a log. "
+     "Higher costs the graphics card more. From the next start.\nHigh: as on the PS2; no flicker, stripes or gaps."
+     "\nMedium: looks the same as High nearly everywhere; in rare spots something drawn over moss or grime can show "
+     "small gaps.\nLow: moss and markings can flicker or break up into dark slashes, mostly up close, and thin things "
+     "far off, such as a ladder's rungs, can show bands.",
+     RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, describe_scene_depth,
+     scene_renderer, nullptr, scene_depth_overridden, scene_depth_note},
     {"View", "", RowKind::heading},
     {"Widescreen", "16:9 view with more at the sides. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
      get_widescreen, set_widescreen},
@@ -725,6 +734,27 @@ int get_equipped_mark() {
 }
 void set_equipped_mark(int on) {
     port_settings.equipped_mark = port_options.equipped_mark = on;
+    changed();
+}
+int get_item_categories() {
+    return port_options.item_categories != 0;
+}
+void set_item_categories(int on) {
+    port_settings.item_categories = port_options.item_categories = on;
+    changed();
+}
+int get_detailed_notices() {
+    return port_options.detailed_notices != 0;
+}
+void set_detailed_notices(int on) {
+    port_settings.detailed_notices = port_options.detailed_notices = on;
+    changed();
+}
+int get_instant_smith() {
+    return port_options.instant_smith != 0;
+}
+void set_instant_smith(int on) {
+    port_settings.instant_smith = port_options.instant_smith = on;
     changed();
 }
 int get_stats() {
@@ -1083,8 +1113,10 @@ const SettingRow gameplay_rows[] = {
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
     {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
-    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
-     on_off, {}, get_equipped_mark, set_equipped_mark},
+    {"Detailed notices", "Notices say what changed: the magic learned, the level reached, the weapon and magic levels, "
+     "the new Physical and Magic Power.", RowKind::toggle, on_off, {}, get_detailed_notices, set_detailed_notices},
+    {"Instant smith", "The smith restores and upgrades your item instantly, for gold in place of waiting. Also shows stats of the repair/upgrade.",
+     RowKind::toggle, on_off, {}, get_instant_smith, set_instant_smith},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "
@@ -1105,6 +1137,11 @@ const SettingRow gameplay_rows[] = {
 };
 
 const SettingRow interface_rows[] = {
+    {"Menus", "", RowKind::heading},
+    {"Item categories", "The menu's Item screen lists categories first (Consumables, Maps, and so on), then the "
+     "chosen category's items.", RowKind::toggle, on_off, {}, get_item_categories, set_item_categories},
+    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
+     on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Map", "", RowKind::heading},
     {"Automap",
      "A map of where you have been, kept with each save. Opened by its key (M unless changed); the game waits while "
