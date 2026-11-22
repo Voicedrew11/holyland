@@ -4669,7 +4669,7 @@ index 2d93d8ffe6c19858a638f7e6f0beb307be469ea1..3adaa127017dca14e9b69bb4acce26c4
  
  /* Whether the player has any item other than the keys and the "none" items (the main menu's item screen). */
 diff --git a/src/game/ui/trade.c b/src/game/ui/trade.c
-index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d2b336a8e 100644
+index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..5f16be7cc023d992be986a9a4956a10bee328f2d 100644
 --- a/src/game/ui/trade.c
 +++ b/src/game/ui/trade.c
 @@ -17,6 +17,10 @@
@@ -5370,22 +5370,81 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      *D2_CHCR = D_CHCR_STR;
      sceGsSyncPath(0, 0);
      smith_run_step++;
-@@ -3154,6 +3214,9 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
+@@ -3133,11 +3193,38 @@ static void Smith_ChainModels(void) {
      }
-     line_count = 3;
-     context->active_list = (context->active_list + 3) % line_count;
+ }
+ 
++/* PC: how many items the smith holds that can be received now: Smith_BuildItemRings(2)'s test (left with him, and
++   their wait over), counted without building the list */
++static s32 Smith_ReceivableCount(void) {
++    s32 count = 0;
++    s32 i;
++
++    PlayTime_Update();
++    for (i = 151; i < 220; i++) {
++        if (weapon_level_records[i - 150].in_smith_rings != 0 && !(item_name_defs[i].state & 2) &&
++            PlayTime_SecondsBetween(weapon_level_records[i - 150].last_upgraded.time, current_play_time) >=
++                item_name_defs[i].upgrade_wait_minutes * 60) {
++            count++;
++        }
++    }
++    for (i = 221; i < 380; i++) {
++        if (worn_item_level_records[i - 220].in_smith_rings != 0 && !(item_name_defs[i].state & 2) &&
++            PlayTime_SecondsBetween(worn_item_level_records[i - 220].last_upgraded.time, current_play_time) >=
++                item_name_defs[i].upgrade_wait_minutes * 60) {
++            count++;
++        }
++    }
++    return count;
++}
++
+ /* The three-line menu in front of the item lists: draws its parts and the cursor bar, opens the list of the chosen
+-   line, and fades the parts in and out. */
++   line, and fades the parts in and out. PC: with nothing to receive, the third line (Receive) is left out: two lines,
++   the box a line shorter. */
+ static void Smith_UpdateSelectScreen(HandlerContext *context) {
+     u32 i;
+     s32 line_count;
++    s32 receive_shown = !port_instant_smith() || Smith_ReceivableCount() > 0; /* PC: Instant smith hides an empty Receive */
++    s32 receive_y = 0;                                /* PC: the Receive word's top: the lowest of the words */
+     s32 bar_drawn;
+     MenuCursorBar bar;
+     u32 full_alpha;
+@@ -3152,8 +3239,16 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
+             context->active_list++;
+         }
+     }
+-    line_count = 3;
+-    context->active_list = (context->active_list + 3) % line_count;
++    line_count = receive_shown ? 3 : 2; /* PC: 3 in retail */
++    context->active_list = (context->active_list + line_count) % line_count;
 +    /* PC: the mouse's pointing */
 +    MenuPad_PointCursor(context->active_list, MENU_AXIS_VERTICAL);
-+    MenuPad_PointRows(3, 0x76C0, 0x7EF0, 0x12C0, 0xC0, 0xD0);
++    MenuPad_PointRows(line_count, 0x76C0, 0x7EF0, 0x12C0, 0xC0, 0xD0);
++    for (i = 0; i < pretune_part_count; i++) {
++        if (pretune_parts[i].kind == 1 && (s32)pretune_parts[i].xyz0.Y > receive_y) {
++            receive_y = pretune_parts[i].xyz0.Y;
++        }
++    }
  
      bar_drawn = FALSE;
      for (i = 0; i < pretune_part_count; i++) {
-@@ -3176,14 +3239,14 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
+@@ -3176,14 +3271,24 @@ static void Smith_UpdateSelectScreen(HandlerContext *context) {
              MenuDraw_Bar(&bar);
          }
          ((int (*)(s8))Menu_SetBlendMode)(pretune_parts[i].blend_mode); // match: the byte is passed sign-extended here
 -        MenuSprite_Draw((int)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
-+        MenuSprite_Draw((sptr)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
++        if (!receive_shown && pretune_parts[i].kind == 1 && (s32)pretune_parts[i].xyz0.Y == receive_y) {
++            /* PC: nothing to receive: no Receive line */
++        } else if (!receive_shown && pretune_parts[i].kind == 0 && (s32)pretune_parts[i].xyz0.Y < receive_y &&
++                   (s32)pretune_parts[i].xyz1.Y > receive_y) {
++            SpritePacket box = pretune_parts[i]; /* PC: the box around the lines, a line (0xD0) shorter */
++
++            box.xyz1.Y -= 0xD0;
++            MenuSprite_Draw((sptr)&box, 1000, 0, (int)screen_part_alphas[i]);
++        } else {
++            MenuSprite_Draw((sptr)&pretune_parts[i], 1000, 0, (int)screen_part_alphas[i]);
++        }
          ((void (*)(u8))Menu_SetBlendMode)(0); // match: called as returning nothing, which frees $2 for the loop test
      }
  
@@ -5397,7 +5456,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          }
      }
  
-@@ -3352,7 +3415,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3352,7 +3457,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
      s32 row;
      s32 number;
      s32 index;
@@ -5406,7 +5465,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      s32 entry;
      s32 variant;
      f32 angle;
-@@ -3388,22 +3451,24 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3388,22 +3493,24 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
          if (kind == 3) {
              switch (tune_parts[i].slot) {
              case 0:
@@ -5435,7 +5494,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      item = item_list_top[0];
      for (row = 0; row < 7; row++, item = item->prev) {
          if (item == item_list_cursor[0]) {
-@@ -3430,7 +3495,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3430,7 +3537,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
      for (line = 0, node = item_list_top[0]; line < 7; node = node->prev, line++) {
          def = &item_name_defs[node->item_number];
          MenuText_SetPen(word);
@@ -5444,7 +5503,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          word.f.mid16 += 0xB0;
          if (item_list_page_mark[0]->prev == node) {
              break;
-@@ -3490,7 +3555,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3490,7 +3597,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
              }
              for (i = 0; i < shop_g_part_count; i++) {
                  SELECT_PART((s8)shop_g_parts[i].blend_mode);
@@ -5453,7 +5512,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g_parts;
-@@ -3522,7 +3587,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3522,7 +3629,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
              }
              for (i = 0; i < shop_g2_part_count; i++) {
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode);
@@ -5462,7 +5521,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g2_parts;
-@@ -3555,7 +3620,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3555,7 +3662,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
              }
              for (i = 0; i < shop_a_part_count; i++) {
                  SELECT_PART((s8)shop_a_parts[i].blend_mode);
@@ -5471,7 +5530,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_a_parts;
-@@ -3599,7 +3664,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+@@ -3599,7 +3706,7 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
      word.raw = 0x000A875083207080;
      MenuText_SetPen(word);
      if (entry != 0) {
@@ -5480,7 +5539,110 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      }
      if ((menu_buttons & PAD_CROSS) && modal_input_locked == 0) {
          if ((item_list_cursor[0]->item_number < 220 ? GetWeaponLevel(item_list_cursor[0]->item_number - 150) < 100
-@@ -3706,7 +3771,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3687,6 +3794,102 @@ static void Smith_UpdateUpgradeList(HandlerContext *context) {
+     }
+ }
+ 
++/* PC: with Instant smith on, the smith's confirmation windows say what the repair or upgrade does, in place of the
++   time it takes ("Time 0 min"): one line under the item's name, built here from plain text, a name in the text
++   code and numbers. */
++static u16 smith_info[0x40];
++static s32 smith_info_length;
++
++static void Smith_InfoPut(u16 glyph) {
++    if (smith_info_length < (s32)(sizeof(smith_info) / sizeof(smith_info[0])) - 1) {
++        smith_info[smith_info_length++] = glyph;
++    }
++    smith_info[smith_info_length] = 0xFFFF;
++}
++
++static void Smith_InfoStart(void) {
++    smith_info_length = 0;
++    smith_info[0] = 0xFFFF;
++}
++
++static void Smith_InfoAscii(const char *ascii) {
++    for (; *ascii != '\0'; ascii++) {
++        u8 c = (u8)*ascii;
++
++        Smith_InfoPut((u16)(0x0800 | (c >= 0x20 && c < 0x7F ? c - 0x20 : '?' - 0x20))); /* half-width Latin glyphs */
++    }
++}
++
++static void Smith_InfoName(s32 item) {
++    const u16 *glyph = (const u16 *)&item_name_defs[item];
++    s32 i;
++
++    for (i = 0; i < 0x20 && glyph[i] != 0xFFFF && !(glyph[i] & 0x8000); i++) {
++        Smith_InfoPut(glyph[i]);
++    }
++}
++
++static void Smith_InfoNumber(s32 value) {
++    char digits[12];
++
++    sprintf(digits, "%d", (int)value);
++    Smith_InfoAscii(digits);
++}
++
++static void Smith_InfoDraw(s32 row);
++
++/* With Instant smith the work costs gold in place of the time: a price per minute of the wait the PS2 makes */
++#define SMITH_GOLD_PER_MINUTE 200
++
++static s32 Smith_GoldCost(s32 item) {
++    return item_name_defs[item].upgrade_wait_minutes * SMITH_GOLD_PER_MINUTE;
++}
++
++/* What was agreed when the player confirmed, kept until the work is done at the end of the fade, so that turning the
++   setting on or off in between neither skips the gold check nor takes gold for work done the PS2's way */
++static s32 smith_job_instant;
++static s32 smith_job_price;
++
++static void Smith_AgreeJob(s32 item) {
++    smith_job_instant = port_instant_smith();
++    smith_job_price = smith_job_instant ? Smith_GoldCost(item) : 0;
++}
++
++static void Smith_PayJob(void) {
++    player_state.gold -= smith_job_price;
++    if (player_state.gold < 0) {
++        player_state.gold = 0;
++    }
++    smith_job_price = 0;
++}
++
++/* The pen's Y for a row of the window (row 0 is the item's name; the rows are close, to fit four of them) */
++static s32 Smith_InfoY(s32 row) {
++    return 0x7F50 - 0x110 + 0x20 + 0xB0 * row;
++}
++
++/* "Cost: 300 Gold" */
++static void Smith_InfoGold(s32 item, s32 row) {
++    Smith_InfoStart();
++    Smith_InfoAscii("Cost: ");
++    Smith_InfoNumber(Smith_GoldCost(item));
++    Smith_InfoAscii(" Gold");
++    Smith_InfoDraw(row);
++}
++
++/* The line, centred under the item's name (the name's own pen, `row` rows down) */
++static void Smith_InfoDraw(s32 row) {
++    GsPackedWord pen;
++
++    pen.raw = 0x0A2DC6C07F5078C0;
++    pen.f.mid16 = Smith_InfoY(row);
++    if (smith_info_length > 0x18) { /* longer than the name's field: the same centring, as the field grows with the line */
++        pen.f.lo16 += 0x50 * (0x18 - smith_info_length); /* a cell is 0x140 wide, the pen moves half a cell's half per cell */
++    }
++    MenuText_SetPen(pen);
++    MenuText_DrawLineCentered(smith_info, smith_info_length > 0x18 ? smith_info_length : 0x18);
++}
++
+ /* The screen Smith_UpdateUpgradeList opens for the item chosen from its list: draws the parts, the list with the item's panel,
+    its name and its text, waits for accept or cancel and fades out. On accept the item's record gets level 100, the
+    play time of now and the flag that makes that time count (LevelDef.upgrade_wait_minutes minutes, shown through D_00446E38); item
+@@ -3706,7 +3909,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
      s32 row;
      s32 number;
      s32 index;
@@ -5489,7 +5651,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      s32 entry;
      s32 variant;
      f32 angle;
-@@ -3734,19 +3799,19 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3734,19 +3937,19 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
          if (kind == 3) {
              switch (tune_parts[i].slot) {
              case 0:
@@ -5513,7 +5675,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          }
          SELECT_PART(0);
      }
-@@ -3805,7 +3870,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3805,7 +4008,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
              }
              for (i = 0; i < shop_g_part_count; i++) {
                  SELECT_PART((s8)shop_g_parts[i].blend_mode);
@@ -5522,7 +5684,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g_parts;
-@@ -3838,7 +3903,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3838,7 +4041,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
              for (i = 0; i < shop_g2_part_count; i++) {
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode);
                  // match: called as returning a value, which keeps $2 away from the pointer formed for the next call
@@ -5531,7 +5693,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode); // match: the other lists hand 0 here
              }
              parts = shop_g2_parts;
-@@ -3871,7 +3936,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3871,7 +4074,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
              }
              for (i = 0; i < shop_a_part_count; i++) {
                  SELECT_PART((s8)shop_a_parts[i].blend_mode);
@@ -5540,7 +5702,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_a_parts;
-@@ -3909,7 +3974,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+@@ -3909,24 +4112,45 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
      for (row = 0, item = item_list_top[0]; row < 7; item = item->prev, row++) {
          def = &item_name_defs[item->item_number];
          MenuText_SetPen(word);
@@ -5549,9 +5711,15 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          word.f.mid16 += 0xB0;
          if (item_list_page_mark[0]->prev == item) {
              break;
-@@ -3919,14 +3984,14 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+         }
+     }
+-    D_00446E38 = item_name_defs[item_list_cursor[0]->item_number].upgrade_wait_minutes;
++    D_00446E38 = port_instant_smith() ? 0 : item_name_defs[item_list_cursor[0]->item_number].upgrade_wait_minutes; /* PC: Instant smith */
      for (i = 0; i < tune_mess_part_count; i++) {
          kind = tune_mess_parts[i].handler_index;
++        if (port_instant_smith() && kind == 2) {
++            continue; /* PC: Instant smith: no "Time ... min" (its words and number are the ones of handler 2) */
++        }
          SELECT_PART((s8)tune_mess_parts[i].blend_mode);
 -        MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
 +        MenuSprite_Draw((sptr)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
@@ -5560,13 +5728,80 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      selected_def = &item_name_defs[item_list_cursor[0]->item_number];
      MenuText_SetColor(menu_draw_color);
      word.raw = 0x0A2DC6C07F5078C0;
++    if (port_instant_smith()) {
++        word.f.mid16 = Smith_InfoY(0); /* PC: the rows are closer, to fit the cost */
++    }
      MenuText_SetPen(word);
 -    MenuText_DrawLineCentered(selected_def, 0x18);
 +    MenuText_DrawLineCentered((u16 *)selected_def, 0x18);
++    if (port_instant_smith()) { /* PC: what the repair does: the condition, or what the Broken Katana becomes */
++        s32 number = item_list_cursor[0]->item_number;
++
++        Smith_InfoStart();
++        if (number == ITEM_BROKEN_KATANA) {
++            Smith_InfoAscii("Becomes ");
++            Smith_InfoName(number + 1);
++        } else {
++            Smith_InfoAscii("Condition ");
++            Smith_InfoNumber(number < 220 ? GetWeaponLevel(number - 150) : GetItemLevel(number - 220));
++            Smith_InfoAscii(" to 100");
++        }
++        Smith_InfoDraw(1);
++        Smith_InfoGold(number, 2);
++    }
      selected = item_list_cursor[0];
      table = Message_GetFontText(menu_heap);
      text_index = selected->item_number + MSG_ITEM_TEXT_FIRST + 1;
-@@ -4085,7 +4150,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -3937,7 +4161,10 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+         MenuText_DrawWordWrappedLong((u16 *)(table + entry), 0x33);
+     }
+     if (modal_input_locked == 0) {
+-        if (menu_buttons & PAD_CROSS) {
++        if ((menu_buttons & PAD_CROSS) && port_instant_smith() && player_state.gold < Smith_GoldCost(item_list_cursor[0]->item_number)) {
++            Sound_PlayMenu(3); /* PC: Instant smith: not enough gold */
++        } else if (menu_buttons & PAD_CROSS) {
++            Smith_AgreeJob(item_list_cursor[0]->item_number); /* PC */
+             Sound_PlayMenu(0);
+             smith_screen_state = 2;
+             smith_panel_state = 2;
+@@ -4017,6 +4244,7 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+                 if (smith_screen_state == 4) {
+                     PlayTime_Update();
+                     bought = item_list_cursor[0];
++                    Smith_PayJob(); /* PC: Instant smith: gold in place of time */
+                     if (bought->item_number < 220) {
+                         if (bought->item_number == ITEM_BROKEN_KATANA) {
+                             item_counts[ITEM_BROKEN_KATANA] = 0;
+@@ -4025,22 +4253,23 @@ static void Smith_UpdateUpgradeConfirm(HandlerContext *context) {
+                             // forming the table's address out of this one (it does for "- 149")
+                             *(ClockTime *)weapon_level_records[bought->item_number - 150 + 1].last_upgraded.bytes = current_play_time;
+                             GetWeaponRecord(bought->item_number - 149)->level = 100;
+-                            GetWeaponRecord(bought->item_number - 149)->in_smith_rings = 1;
++                            GetWeaponRecord(bought->item_number - 149)->in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                         } else {
+                             *(ClockTime *)weapon_level_records[bought->item_number - 150].last_upgraded.bytes = current_play_time;
+                             GetWeaponRecord(bought->item_number - 150)->level = 100;
+-                            GetWeaponRecord(bought->item_number - 150)->in_smith_rings = 1;
++                            GetWeaponRecord(bought->item_number - 150)->in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                         }
+                     } else {
+                         *(ClockTime *)worn_item_level_records[bought->item_number - 220].last_upgraded.bytes = current_play_time;
+                         GetItemRecord(bought->item_number - 220)->level = 100;
+-                        GetItemRecord(bought->item_number - 220)->in_smith_rings = 1;
++                        GetItemRecord(bought->item_number - 220)->in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                     }
+-                    if (item_list_cursor[0]->item_number == player_state.weapon + ITEM_WEAPON_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST ||
++                    if ((!smith_job_instant || bought->item_number == ITEM_BROKEN_KATANA) && /* PC: Instant smith: the item stays equipped (not the katana, given up for another) */
++                        (item_list_cursor[0]->item_number == player_state.weapon + ITEM_WEAPON_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_ARMOR] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_HELM] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_GAUNTLET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_BOOT] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_RING] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_BRACELET] + ITEM_WORN_FIRST ||
+-                        item_list_cursor[0]->item_number == player_state.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.shortcut) {
++                        item_list_cursor[0]->item_number == player_state.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.shortcut)) {
+                         Menu_ClearEquipSlot(item_list_cursor[0]->group);
+                     }
+                     context->active_list = 0;
+@@ -4085,7 +4314,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
      s32 row;
      s32 number;
      s32 index;
@@ -5575,7 +5810,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      s32 entry;
      s32 variant;
      f32 angle;
-@@ -4122,24 +4187,24 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4122,24 +4351,24 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
          if (kind == 3) {
              switch (tune_parts[i].slot) {
              case 0:
@@ -5605,7 +5840,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          }
          SELECT_PART(0);
      }
-@@ -4148,6 +4213,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4148,6 +4377,8 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
          // the loop body: its three fields then leave the loop in the first loop pass and 0xFF only in the second.
          // The word's top byte is not used and cannot be told from the code.
          corner.raw = 0x000864707C306FE0;
@@ -5614,7 +5849,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          item = item_list_top[0];
          for (row = 0; row < 7; row++, item = item->prev) {
              if (item == item_list_cursor[0]) {
-@@ -4178,7 +4245,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4178,7 +4409,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
      for (line = 0, node = item_list_top[0]; line < 7; node = node->prev, line++) {
          def = &item_name_defs[node->item_number];
          MenuText_SetPen(word);
@@ -5623,7 +5858,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          word.f.mid16 += 0xB0;
          if (item_list_page_mark[0]->prev == node) {
              break;
-@@ -4241,7 +4308,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4241,7 +4472,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
              }
              for (i = 0; i < shop_g_part_count; i++) {
                  SELECT_PART((s8)shop_g_parts[i].blend_mode);
@@ -5632,7 +5867,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g_parts;
-@@ -4273,7 +4340,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4273,7 +4504,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
              }
              for (i = 0; i < shop_g2_part_count; i++) {
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode);
@@ -5641,7 +5876,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g2_parts;
-@@ -4306,7 +4373,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4306,7 +4537,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
              }
              for (i = 0; i < shop_a_part_count; i++) {
                  SELECT_PART((s8)shop_a_parts[i].blend_mode);
@@ -5650,16 +5885,132 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_a_parts;
-@@ -4345,7 +4412,7 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+@@ -4341,18 +4572,49 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+         }
+     }
+     if (smith_confirm_shown != 0) {
+-        D_00446E38 = item_name_defs[item_list_cursor[0]->item_number].upgrade_wait_minutes;
++        D_00446E38 = port_instant_smith() ? 0 : item_name_defs[item_list_cursor[0]->item_number].upgrade_wait_minutes; /* PC: Instant smith */
          for (i = 0; i < tune_mess_part_count; i++) {
              kind = tune_mess_parts[i].handler_index;
++            if (port_instant_smith() && kind == 2) {
++                continue; /* PC: Instant smith: no "Time ... min" (its words and number are the ones of handler 2) */
++            }
              SELECT_PART((s8)tune_mess_parts[i].blend_mode);
 -            MenuSprite_Draw((int)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
 +            MenuSprite_Draw((sptr)&tune_mess_parts[i], kind + 1000, 0, (int)message_part_alphas[i]);
              SELECT_PART(0);
          }
          chosen = &item_name_defs[item_list_cursor[0]->item_number];
-@@ -4563,7 +4630,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+         MenuText_SetColor(menu_draw_color);
+         word.raw = 0x0A2DC6C07F5078C0;
++        if (port_instant_smith()) {
++            word.f.mid16 = Smith_InfoY(0); /* PC: the rows are closer, to fit the three lines below */
++        }
+         MenuText_SetPen(word);
+         MenuText_DrawLineCentered((u16 *)chosen, 0x18);
++        if (port_instant_smith()) { /* PC: what the upgrade does: the kind picked and its upgrades, before and after */
++            static const char *const kinds[3] = {"Slash", "Hit", "Stab"};
++            s32 number = item_list_cursor[0]->item_number;
++            LevelRecord *record = number < 220 ? &weapon_level_records[number - 150] : &worn_item_level_records[number - 220];
++            s32 base = number < 220 ? weapon_defs[number - 150].attack_by_level[record->level_index].values[smith_upgrade_choice]
++                                    : worn_defs[number - 220].base_values[smith_upgrade_choice];
++            s32 gained = record->gained_values[smith_upgrade_choice];
++
++            /* the value at full condition: base + gained; an upgrade adds 1 to gained */
++            Smith_InfoStart();
++            Smith_InfoAscii(kinds[smith_upgrade_choice]);
++            Smith_InfoAscii(" ");
++            Smith_InfoNumber(base + gained);
++            Smith_InfoAscii(" to ");
++            Smith_InfoNumber(base + gained + 1);
++            if (record->level < 100) { /* the item screens show it scaled by the condition */
++                Smith_InfoAscii(" (at 100 dura)");
++            }
++            Smith_InfoDraw(1);
++            Smith_InfoStart(); /* what it costs: an Earth Stone (Smith_UpdateItemScreen takes it) */
++            Smith_InfoAscii("Cost: 1 ");
++            Smith_InfoName(ITEM_EARTH_STONE);
++            Smith_InfoDraw(2);
++            Smith_InfoGold(number, 3);
++        }
+     }
+     selected = item_list_cursor[0];
+     table = Message_GetFontText(menu_heap);
+@@ -4364,12 +4626,16 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+         MenuText_DrawWordWrappedLong((u16 *)(table + entry), 0x33);
+     }
+     if (modal_input_locked == 0) {
+-        if (menu_buttons & PAD_CROSS) {
++        if ((menu_buttons & PAD_CROSS) && smith_confirm_shown != 0 && port_instant_smith() &&
++            player_state.gold < Smith_GoldCost(item_list_cursor[0]->item_number)) {
++            Sound_PlayMenu(3); /* PC: Instant smith: not enough gold */
++        } else if (menu_buttons & PAD_CROSS) {
+             if (smith_confirm_shown == 0) {
+                 Sound_PlayMenu(0);
+                 smith_screen_state = 2;
+                 modal_input_locked = 1;
+             } else {
++                Smith_AgreeJob(item_list_cursor[0]->item_number); /* PC */
+                 Sound_PlayMenu(0);
+                 smith_screen_state = 3;
+                 modal_input_locked = 1;
+@@ -4475,20 +4741,21 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+                     smith_upgrade_choice = 0;
+                 } else if (smith_screen_state == 7) {
+                     PlayTime_Update();
++                    Smith_PayJob(); /* PC: Instant smith: gold in place of time */
+                     if (item_list_cursor[0]->item_number < 220) {
+                         *(ClockTime *)weapon_level_records[item_list_cursor[0]->item_number - 150].last_upgraded.bytes = current_play_time;
+                         switch (smith_upgrade_choice) {
+                         case 0:
+                             weapon_level_records[item_list_cursor[0]->item_number - 150].gained_values[0]++;
+-                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = 1;
++                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         case 1:
+                             weapon_level_records[item_list_cursor[0]->item_number - 150].gained_values[1]++;
+-                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = 1;
++                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         case 2:
+                             weapon_level_records[item_list_cursor[0]->item_number - 150].gained_values[2]++;
+-                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = 1;
++                            weapon_level_records[item_list_cursor[0]->item_number - 150].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         }
+                     } else {
+@@ -4496,23 +4763,24 @@ static void Smith_UpdateListWithConfirm(HandlerContext *context) {
+                         switch (smith_upgrade_choice) {
+                         case 0:
+                             worn_item_level_records[item_list_cursor[0]->item_number - 220].gained_values[0]++;
+-                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = 1;
++                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         case 1:
+                             worn_item_level_records[item_list_cursor[0]->item_number - 220].gained_values[1]++;
+-                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = 1;
++                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         case 2:
+                             worn_item_level_records[item_list_cursor[0]->item_number - 220].gained_values[2]++;
+-                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = 1;
++                            worn_item_level_records[item_list_cursor[0]->item_number - 220].in_smith_rings = !smith_job_instant; /* PC: Instant smith: kept */
+                             break;
+                         }
+                     }
+-                    if (item_list_cursor[0]->item_number == player_state.weapon + ITEM_WEAPON_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST ||
++                    if (!smith_job_instant && /* PC: Instant smith: the item stays equipped */
++                        (item_list_cursor[0]->item_number == player_state.weapon + ITEM_WEAPON_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_SHIELD] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_ARMOR] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_HELM] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_GAUNTLET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_BOOT] + ITEM_WORN_FIRST ||
+                         item_list_cursor[0]->item_number == player_state.equipment[EQUIP_RING] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.equipment[EQUIP_BRACELET] + ITEM_WORN_FIRST ||
+-                        item_list_cursor[0]->item_number == player_state.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.shortcut) {
++                        item_list_cursor[0]->item_number == player_state.equipment[EQUIP_AMULET] + ITEM_WORN_FIRST || item_list_cursor[0]->item_number == player_state.shortcut)) {
+                         Menu_ClearEquipSlot(item_list_cursor[0]->group);
+                     }
+                     smith_handler = Smith_UpdateSelectScreen;
+@@ -4563,7 +4831,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
      s32 line_offset;
      s32 number;
      s32 index;
@@ -5668,7 +6019,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      s32 entry;
      s32 variant;
      f32 angle;
-@@ -4582,6 +4649,9 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4582,6 +4850,9 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
      }
      line_count = 3;
      smith_upgrade_choice = (s8)(smith_upgrade_choice + 3) % line_count;
@@ -5678,7 +6029,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      D_00446E30 = 100;
      if (item_list_cursor[0]->item_number < 220) {
          D_00446E34 = GetWeaponLevel(item_list_cursor[0]->item_number - 150);
-@@ -4596,7 +4666,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4596,7 +4867,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
      bar_drawn = FALSE;
      for (i = 0; i < tune_s_part_count; i++) {
          if (!bar_drawn && tune_s_parts[i].has_cursor_bar == 1) {
@@ -5687,7 +6038,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
              bar_drawn = TRUE;
              bar.first.f.lo16 = word.f.lo16;
              line_offset = smith_upgrade_choice * 0xB0; // match: kept in a variable, or the sums below fold to constants
-@@ -4621,7 +4691,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4621,7 +4892,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
          }
          kind = tune_s_parts[i].handler_index;
          SELECT_PART((s8)tune_s_parts[i].blend_mode);
@@ -5696,7 +6047,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          SELECT_PART(0);
      }
      MenuText_SetColor(menu_draw_color);
-@@ -4675,7 +4745,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4675,7 +4946,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
              variant = player_weapon[item_list_cursor[0]->group];
              for (i = 0; i < shop_g_part_count; i++) {
                  SELECT_PART((s8)shop_g_parts[i].blend_mode);
@@ -5705,7 +6056,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g_parts;
-@@ -4700,7 +4770,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4700,7 +4971,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
              variant = player_weapon[item_list_cursor[0]->group];
              for (i = 0; i < shop_g2_part_count; i++) {
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode);
@@ -5714,7 +6065,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g2_parts;
-@@ -4726,7 +4796,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4726,7 +4997,7 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
              D_00446E2C = 100;
              for (i = 0; i < shop_a_part_count; i++) {
                  SELECT_PART((s8)shop_a_parts[i].blend_mode);
@@ -5723,7 +6074,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_a_parts;
-@@ -4764,10 +4834,10 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
+@@ -4764,10 +5035,10 @@ static void Smith_UpdateItemScreen(HandlerContext *context) {
      table = Message_GetFontText(menu_heap);
      text_index = selected->item_number + MSG_ITEM_TEXT_FIRST + 1;
      entry = ((s32 *)table)[text_index];
@@ -5736,7 +6087,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      }
      if (modal_input_locked == 0) {
          if (menu_buttons & PAD_CROSS) {
-@@ -4869,7 +4939,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -4869,7 +5140,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
      s32 row;
      s32 number;
      s32 index;
@@ -5745,7 +6096,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      s32 entry;
      s32 variant;
      f32 angle;
-@@ -4905,22 +4975,25 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -4905,22 +5176,25 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
          if (kind == 3) {
              switch (tune_parts[i].slot) {
              case 0:
@@ -5775,7 +6126,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      item = smith_collect_list_top[0];
      for (row = 0; row < 7; row++, item = item->prev) {
          if (item == smith_collect_list_cursor[0]) {
-@@ -4947,7 +5020,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -4947,7 +5221,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
      for (line = 0, node = smith_collect_list_top[0]; line < 7; node = node->prev, line++) {
          def = &item_name_defs[node->item_number];
          MenuText_SetPen(word);
@@ -5784,7 +6135,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          word.f.mid16 += 0xB0;
          if (smith_collect_list_page_mark[0]->prev == node) {
              break;
-@@ -5007,7 +5080,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -5007,7 +5281,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
              }
              for (i = 0; i < shop_g_part_count; i++) {
                  SELECT_PART((s8)shop_g_parts[i].blend_mode);
@@ -5793,7 +6144,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g_parts;
-@@ -5039,7 +5112,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -5039,7 +5313,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
              }
              for (i = 0; i < shop_g2_part_count; i++) {
                  SELECT_PART((s8)shop_g2_parts[i].blend_mode);
@@ -5802,7 +6153,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_g2_parts;
-@@ -5072,7 +5145,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -5072,7 +5346,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
              }
              for (i = 0; i < shop_a_part_count; i++) {
                  SELECT_PART((s8)shop_a_parts[i].blend_mode);
@@ -5811,7 +6162,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  SELECT_PART(0);
              }
              parts = shop_a_parts;
-@@ -5114,7 +5187,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
+@@ -5114,7 +5388,7 @@ static void Smith_UpdateCollectList(HandlerContext *context) {
      word.raw = 0x000A875083207080;
      MenuText_SetPen(word);
      if (entry != 0) {
@@ -5820,7 +6171,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      }
      if (modal_input_locked == 0) {
          if (menu_buttons & PAD_CROSS) {
-@@ -5313,6 +5386,7 @@ void SaveScreen_Run(void) {
+@@ -5313,6 +5587,7 @@ void SaveScreen_Run(void) {
                  menu_buttons = 0;
              }
          }
@@ -5828,7 +6179,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      }
      sceGsSyncPath(0, 0);
      while (sceGsSyncV(0) != 0) {
-@@ -5400,7 +5474,7 @@ static s32 SaveScreen_DrawBackground(void) {
+@@ -5400,7 +5675,7 @@ static s32 SaveScreen_DrawBackground(void) {
      packet->first_frame_z_corner1 = 0;
      packet->first_frame_xy_corner1_register = 5;
      packet->first_frame_xy_corner1_pad = 0;
@@ -5837,7 +6188,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      packet->second_frame_register = 0x4C;
      packet->second_frame_pad = 0;
      packet->second_frame_st_corner0_s = 0;
-@@ -5434,7 +5508,7 @@ static s32 SaveScreen_DrawBackground(void) {
+@@ -5434,7 +5709,7 @@ static s32 SaveScreen_DrawBackground(void) {
      packet->gif_tag = 0x8019;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 0x1A;
@@ -5846,7 +6197,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      *D2_CHCR = D_CHCR_STR;
      sceGsSyncPath(0, 0);
      menu_draw_color.red = menu_draw_color.green = menu_draw_color.blue = 0x80;
-@@ -5489,11 +5563,11 @@ static int SaveScreen_Start(HandlerContext *context) {
+@@ -5489,11 +5764,11 @@ static int SaveScreen_Start(HandlerContext *context) {
      packet[7] = 0;
      while ((*D2_CHCR & D_CHCR_STR) || (*GIF_STAT & GIF_STAT_APATH));
      *D2_QWC = 2;
@@ -5860,7 +6211,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
      screen = &save_screen_state;
      screen->dialog_id = -1;
      screen->card_update_result = 0;
-@@ -5544,8 +5618,25 @@ static int SaveScreen_CutModelChain(void) {
+@@ -5544,8 +5819,25 @@ static int SaveScreen_CutModelChain(void) {
      return 1;
  }
  
@@ -5887,7 +6238,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
  static void SaveScreen_UpdateCardSelect(void) {
      MenuCursorBar bar;
      GsPackedWord unused_corner;
-@@ -5555,6 +5646,9 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5555,6 +5847,9 @@ static void SaveScreen_UpdateCardSelect(void) {
      s32 slot;
      s32 card_flags;
      PadReport *report;
@@ -5897,7 +6248,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
  
      card_result = SaveCard_Update();
      if (SaveCard_HasCard(save_screen_state.selected_card) == 0 && save_screen_state.dialog_id == 14) {
-@@ -5563,30 +5657,32 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5563,30 +5858,32 @@ static void SaveScreen_UpdateCardSelect(void) {
      if (save_screen_state.check_finished == 0 && SaveCard_IsCheckRunning() == 0) {
          save_screen_state.input_locked = 0;
          save_screen_state.check_finished = 1;
@@ -5937,7 +6288,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  }
              }
              break;
-@@ -5600,75 +5696,78 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5600,75 +5897,78 @@ static void SaveScreen_UpdateCardSelect(void) {
              case 14:
              case 15:
              case 21:
@@ -6035,7 +6386,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          // match: a depth nothing reads; without it the 64-bit mask of the bar's depth field is loaded after the branch below
          unused_corner.f.mid24 = 0x5F370;
          bar.first.f.lo16 = 0x7580;
-@@ -5781,19 +5880,27 @@ static void SaveScreen_UpdateCardSelect(void) {
+@@ -5781,19 +6081,27 @@ static void SaveScreen_UpdateCardSelect(void) {
          save_screen_state.card_op_running = 0;
          SaveCard_StartCheck(1);
      } else if (save_screen_state.card_op_running == 0 && save_screen_state.input_locked == 0) {
@@ -6072,7 +6423,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                      if (save_screen_state.dialog_id == 14) {
                          if (SaveCard_StartReadList(save_screen_state.selected_card, 0) == 0) {
                              save_screen_state.card_op_running = 1;
-@@ -5929,8 +6036,11 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -5929,8 +6237,11 @@ static void SaveScreen_UpdateSaveList(void) {
      PadReport *report;
      s32 same_count;
      s32 save_state;
@@ -6084,7 +6435,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
  
      info[0] = (CardSaveInfo *)SaveCard_GetSaveInfo(save_line_slots[0]);
      D_00446DF4 = info[0]->level;
-@@ -6030,29 +6140,44 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6030,29 +6341,44 @@ static void SaveScreen_UpdateSaveList(void) {
          }
      }
  
@@ -6134,7 +6485,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
              break;
          }
          SET_PART_MODE(0);
-@@ -6066,8 +6191,10 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6066,8 +6392,10 @@ static void SaveScreen_UpdateSaveList(void) {
              if (kind != 0) {
                  text = (char *)table + kind;
                  MenuText_SetPen(word);
@@ -6147,7 +6498,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
              }
          }
          word.f.mid16 += 0x340;
-@@ -6079,25 +6206,25 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6079,25 +6407,25 @@ static void SaveScreen_UpdateSaveList(void) {
          if (kind == 3) {
              switch (save_screen_state.list_step) {
              case 6:
@@ -6180,7 +6531,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
                  break;
              }
          } else {
-@@ -6109,14 +6236,17 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6109,14 +6437,17 @@ static void SaveScreen_UpdateSaveList(void) {
              case 10:
              case 11:
              case 20:
@@ -6200,7 +6551,7 @@ index 1fa1e2e263be3170d4e7d5a334417a1db1053a38..09ad0ef8b116432e477ddae17420654d
          bar.first.f.lo16 = 0x7490;
          bar.first.f.mid16 = save_screen_state.confirm_choice * 0xC0 + 0x80A0;
          bar.first.f.mid24 = 0x5F370;
-@@ -6370,4 +6500,8 @@ static void SaveScreen_UpdateSaveList(void) {
+@@ -6370,4 +6701,8 @@ static void SaveScreen_UpdateSaveList(void) {
          }
          break;
      }

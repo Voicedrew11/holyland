@@ -172,6 +172,10 @@ int port_auto_loot_gold(void);
    upgrade, receive) show " (E)" after what he has equipped (settings.json's mods.equipped_mark, the player menu's
    Gameplay tab; on by default). Read by the patched ui/trade.c. */
 int port_equipped_mark(void);
+/* port_instant_smith(): 1 while the smith's restoring and upgrading are done at once: the item is not left with him
+   (nor taken off), so there is nothing to come back for, and he asks gold in place of the wait (settings.json's
+   mods.instant_smith, the Gameplay page; off by default). Items left with him before keep their wait. */
+int port_instant_smith(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

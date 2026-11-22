@@ -727,6 +727,13 @@ void set_equipped_mark(int on) {
     port_settings.equipped_mark = port_options.equipped_mark = on;
     changed();
 }
+int get_instant_smith() {
+    return port_options.instant_smith != 0;
+}
+void set_instant_smith(int on) {
+    port_settings.instant_smith = port_options.instant_smith = on;
+    changed();
+}
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1085,6 +1092,8 @@ const SettingRow gameplay_rows[] = {
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
     {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
      on_off, {}, get_equipped_mark, set_equipped_mark},
+    {"Instant smith", "The smith restores and upgrades your item instantly, for gold in place of waiting. Also shows stats of the repair/upgrade.",
+     RowKind::toggle, on_off, {}, get_instant_smith, set_instant_smith},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "

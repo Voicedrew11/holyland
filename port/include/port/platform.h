@@ -171,6 +171,8 @@ typedef struct {
     /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark()); settings.json's
        mods.equipped_mark, on by default (no command-line switch) */
     int equipped_mark;
+    /* the smith restores and upgrades at once (port_instant_smith()); settings.json's mods.instant_smith, off by default */
+    int instant_smith;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;
