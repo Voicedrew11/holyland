@@ -12,6 +12,7 @@ extern "C" {
 #include "port/antialias.h"
 #include "port/automap.h"
 #include "port/cheats.h"
+#include "port/cinematic.h"
 #include "port/controls.h"
 #include "port/hands.h"
 #include "port/host.h"
@@ -1023,6 +1024,43 @@ void give_all() {
 const char *cheat_message() {
     return port_cheat_message();
 }
+int get_enemies_ignore() {
+    return port_enemies_ignore();
+}
+void set_enemies_ignore(int on) {
+    port_enemies_ignore_set(on); // (never saved: one run's)
+}
+int get_cinematic() {
+    return port_cinematic_enabled();
+}
+void set_cinematic(int on) {
+    port_cinematic_set_enabled(on); // (never saved: one run's)
+}
+bool cinematic_on() {
+    return port_cinematic_enabled() != 0;
+}
+int get_cinematic_speed() {
+    return port_cinematic_speed();
+}
+void set_cinematic_speed(int units_per_s) {
+    port_cinematic_set_speed(units_per_s);
+}
+// the smoothing rows count hundredths of a second
+int get_move_smoothing() {
+    return int(std::lround(port_cinematic_move_smoothing_s() * 100.0f));
+}
+void set_move_smoothing(int hundredths) {
+    port_cinematic_set_move_smoothing_s(float(hundredths) / 100.0f);
+}
+int get_look_smoothing() {
+    return int(std::lround(port_cinematic_look_smoothing_s() * 100.0f));
+}
+void set_look_smoothing(int hundredths) {
+    port_cinematic_set_look_smoothing_s(float(hundredths) / 100.0f);
+}
+void describe_hundredths_s(int hundredths, char *out, size_t size) {
+    std::snprintf(out, size, "%.2f s", double(hundredths) / 100.0);
+}
 const char cheat_help[] = "Applied once you are in play (not in a menu or message). A save made after keeps it.";
 
 
@@ -1116,8 +1154,26 @@ const SettingRow cheats_rows[] = {
     {"Cheats", "", RowKind::heading},
     {"Invincible", "No HP lost. Off again at the next start.", RowKind::toggle, on_off, {}, get_invincible,
      set_invincible},
+    {"Enemies ignore you", "Enemies never notice you, and one you hit goes back to what it was doing. Off again at "
+     "the next start.",
+     RowKind::toggle, on_off, {}, get_enemies_ignore, set_enemies_ignore},
     {"Myu's Necklace always on", "Its effect without wearing it, so the amulet slot is free.", RowKind::toggle, on_off,
      {}, get_necklace, set_necklace, nullptr, nullptr, nullptr, nullptr, necklace_overridden},
+    {"Cinematic camera", "", RowKind::heading},
+    {"Cinematic camera",
+     "For filming. V or the controller's mute button flies the camera through walls and back down (unless changed "
+     "in Key Bindings): it goes where you look, X and Left Ctrl rise and sink, Run is faster. The speed and the turn "
+     "ease in and out, nothing can hurt you while flying, and no notice shows. Off again at the next start.",
+     RowKind::toggle, on_off, {}, get_cinematic, set_cinematic},
+    {"Flight speed", "Units a second; Run flies four times as fast.", RowKind::number, {},
+     {PORT_CINEMATIC_SPEED_MIN, PORT_CINEMATIC_SPEED_MAX, 100}, get_cinematic_speed, set_cinematic_speed, nullptr,
+     nullptr, nullptr, cinematic_on},
+    {"Move smoothing", "How long the flight takes to reach the speed asked for, and to coast down again.",
+     RowKind::number, {}, {5, 200, 5}, get_move_smoothing, set_move_smoothing, nullptr, describe_hundredths_s,
+     nullptr, cinematic_on},
+    {"Look smoothing", "How far the view trails the mouse or the stick. It arrives late, never short.",
+     RowKind::number, {}, {5, 200, 5}, get_look_smoothing, set_look_smoothing, nullptr, describe_hundredths_s,
+     nullptr, cinematic_on},
     {"Map", "", RowKind::heading},
     {"Reveal map", "Every floor, explored or not. Needs the automap.", RowKind::toggle, on_off, {}, get_reveal,
      set_reveal, nullptr, nullptr, nullptr, automap_on},

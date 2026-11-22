@@ -47,6 +47,7 @@
 #include "port/host.h"
 #include "port/menu_pointer.h"
 #include "port/mouse_lead.h"
+#include "port/cinematic.h"
 #include "port/overlay.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
@@ -141,6 +142,9 @@ static const struct {
     [ACTION_SPELL_SWAP] = {"spell_swap", "Swap spell (hands mod)", 0},
     [ACTION_HOTKEY_NEXT] = {"hotkey_next", "Next hotkey (hands mod)", 0},
     [ACTION_HOTKEY_PREVIOUS] = {"hotkey_previous", "Previous hotkey (hands mod)", 0},
+    [ACTION_CINEMATIC_CAMERA] = {"cinematic_camera", "Cinematic camera: fly / land (cheat)", 0},
+    [ACTION_FLY_UP] = {"fly_up", "Cinematic camera: fly up", 0},
+    [ACTION_FLY_DOWN] = {"fly_down", "Cinematic camera: fly down", 0},
 };
 
 /* The hands mod's key of the action, -1 none */
@@ -179,6 +183,9 @@ int port_controls_action_used(int action) {
     }
     if (hands_key_of(action) >= 0) {
         return port_hands.enabled;
+    }
+    if (action == ACTION_CINEMATIC_CAMERA || action == ACTION_FLY_UP || action == ACTION_FLY_DOWN) {
+        return port_cinematic_enabled();
     }
     return action >= 0 && action < ACTION_COUNT;
 }
@@ -241,6 +248,9 @@ static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
     [ACTION_SPELL_SWAP] = {KEY(2), KEY(T), PAD(DPAD_LEFT)},
     [ACTION_HOTKEY_NEXT] = {KEY(3), KEY(G), PAD(DPAD_DOWN)},
     [ACTION_HOTKEY_PREVIOUS] = {KEY(4), 0, PAD(DPAD_UP)},
+    [ACTION_CINEMATIC_CAMERA] = {KEY(V), 0, PAD(MISC1)},
+    [ACTION_FLY_UP] = {KEY(X)},
+    [ACTION_FLY_DOWN] = {KEY(LCTRL)},
 };
 /* The mouse outside play: left cross, right circle, middle cross */
 static const int default_menu_mouse[3] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_CROSS};
@@ -331,6 +341,12 @@ void port_controls_set_mouse_lead(int on) {
     mouse_lead = on != 0;
 }
 
+/* Instant mouse look now: held off while the cinematic camera flies, whose look smoothing and the lead together
+   judder (Verdite3 aeb5030); the setting is left as it is */
+static int lead_on(void) {
+    return mouse_lead && !port_cinematic_flying();
+}
+
 /* The mouse motion not yet spent, as the next port_mouse_look will give it, to instant mouse look (nothing
    while it is off: then nothing is spent there either, and no picture is turned) */
 static double held_turn(double turn) {
@@ -347,7 +363,7 @@ static double reading_time(void) {
 static void lead_waiting(void) {
     MouseTurn waiting = {0, 0};
 
-    if (mouse_lead) {
+    if (lead_on()) {
         waiting.yaw_rad = held_turn(pc.yaw);
         waiting.pitch_rad = held_turn(pc.pitch);
     }
@@ -443,7 +459,7 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch) {
     if (y == 0.0 && p == 0.0) {
         return 0;
     }
-    if (mouse_lead) {
+    if (lead_on()) {
         MouseTurn spent = {y, p};
 
         port_mouse_lead_spent(spent); /* (out of what waited: the hand is where it was) */
@@ -554,6 +570,7 @@ static const char *pad_label(int button) {
     case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "Pad down";
     case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Pad left";
     case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Pad right";
+    case SDL_GAMEPAD_BUTTON_MISC1: return "Pad mute / share";
     default: return NULL;
     }
 }
@@ -878,12 +895,12 @@ void port_controls_sample_mouse(void) {
     float dx = 0.0f, dy = 0.0f; /* (pixels, with a high-resolution mouse's fractions) */
 
     if (diag_spin_rad_s() != 0.0) {
-        if (mouse_lead && in_gameplay() && diag_spin_add()) {
+        if (lead_on() && in_gameplay() && diag_spin_add()) {
             lead_waiting();
         }
         return;
     }
-    if (port_options.input != NULL || port_options.headless || !mouse_lead ||
+    if (port_options.input != NULL || port_options.headless || !lead_on() ||
         pc.blocked || !pc.captured || !in_gameplay()) {
         return;
     }
@@ -1156,6 +1173,11 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_STATS_PANEL & 1u) {
         port_stats_toggle_panel();
     }
+    if (edges >> ACTION_CINEMATIC_CAMERA & 1u) {
+        port_pad_record_event("cinematic_camera", 0);
+        port_cinematic_key_toggle(); /* taken by game/cinematic.c; no notice, so nothing lands in the shot */
+    }
+    port_cinematic_set_held((int)(held >> ACTION_FLY_UP & 1u) - (int)(held >> ACTION_FLY_DOWN & 1u), pc.run);
     for (action = 0; action < ACTION_COUNT; action++) {
         int key = hands_key_of(action);
 

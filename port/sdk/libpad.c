@@ -26,7 +26,8 @@
    was held (left out when the separate run mod did not apply: the action button runs), and
        <vblank> look <yaw> <pitch>       the mouse's turn one port_mouse_look call gave (C99 hex floats)
        <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, spell_swap, hotkey_next,
-                                         hotkey_previous (the hands mod), game_save, game_load
+                                         hotkey_previous (the hands mod), game_save, game_load,
+                                         cinematic_camera (the cheat's fly / land)
    A recording is the game's input per vblank, not per picture: it replays the same whatever the frame
    rate, headless or in a window, from the same start (the same --clock, --quick-load or save, and the
    data folder's settings, quick saves, automap and hands as they were). */
@@ -48,6 +49,7 @@
 #include "port/quicksave.h"
 #include "port/savestate.h"
 #include "port/hands.h"
+#include "port/cinematic.h"
 
 #define BUTTON_SELECT 0x0001
 #define BUTTON_L3 0x0002
@@ -102,6 +104,7 @@ static int script_lines;
 #define REPLAY_HANDS 1 /* a hand key: the item's slot is the HandsKey */
 #define REPLAY_GAME_SAVE 2
 #define REPLAY_GAME_LOAD 3
+#define REPLAY_CINEMATIC 4 /* the cinematic camera's key */
 
 typedef struct {
     uint64_t vblank;
@@ -257,7 +260,10 @@ static void load_item(const ScriptLine *line, const char *word, const char *path
         if (a == NULL) {
             PORT_FATAL("%s:%d: an event wants a name", path, line_number);
         }
-        item.kind = strcmp(a, "game_save") == 0 ? REPLAY_GAME_SAVE : strcmp(a, "game_load") == 0 ? REPLAY_GAME_LOAD : -1;
+        item.kind = strcmp(a, "game_save") == 0          ? REPLAY_GAME_SAVE
+                    : strcmp(a, "game_load") == 0        ? REPLAY_GAME_LOAD
+                    : strcmp(a, "cinematic_camera") == 0 ? REPLAY_CINEMATIC
+                                                         : -1;
         item.slot = b != NULL ? (int)strtol(b, NULL, 0) : 0;
         if (item.kind < 0) {
             item.slot = port_hands_event_key(a);
@@ -455,6 +461,8 @@ static void replay_events(void) {
             port_quick_request_save(item->slot);
         } else if (item->kind == REPLAY_GAME_LOAD) {
             port_quick_request_load(item->slot);
+        } else if (item->kind == REPLAY_CINEMATIC) {
+            port_cinematic_key_toggle();
         }
     }
 }
