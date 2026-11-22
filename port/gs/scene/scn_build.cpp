@@ -213,11 +213,8 @@ public:
         const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
                                            VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
         exact_z_ = drawer_.exact_z();
-        // (exact Z's decals settled where the depth can have a stencil: Material::settle. Developers'
-        // KF4_SCN_SETTLE=0: not, the top fine part written)
-        const char *settle = getenv("KF4_SCN_SETTLE");
-        settle_ = exact_z_ && !(settle && strcmp(settle, "0") == 0) &&
-                  device_.image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT, need);
+        // (exact Z's decals settled where the depth can have a stencil: Material::settle; the drawer's choice)
+        settle_ = drawer_.settle_decals() && device_.image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT, need);
         d16_ = !exact_z_ && device_.image_format_is_supported(VK_FORMAT_D16_UNORM, need);
         const char *date = getenv("KF4_SCN_DATE");
         first_draw_on_ = drawer_.first_draw_ok() && !(date && strcmp(date, "copy") == 0);

@@ -80,6 +80,11 @@ public:
     bool exact_z() const {
         return exact_z_;
     }
+    // (exact Z) its decals' depth settled after them (Material::settle; settle_run, or own_depth_after where nearer),
+    // else left with the top fine part they were tested with (port/scene_depth.h's PORT_SCENE_DEPTH_UNSETTLED)
+    bool settle_decals() const {
+        return settle_decals_;
+    }
     // DATE by the first-draw image is possible here: an R32F colour target that blends (MIN)
     bool first_draw_ok() const {
         return first_draw_ok_;
@@ -185,7 +190,7 @@ private:
         // (exact Z's decals settled, record_settled) the stencil: none, decal_won set where the call passes, or drawn
         // only where it is set and cleared there
         // (own_first: no stencil; program 0x280's decals' own depth drawn before the run, which writes none: settle_run)
-        // (own_after, KF4_SCN_SETTLE=nearer: no stencil; the run writes no depth, then its own depth where nearer than
+        // (own_after, PORT_SCENE_DEPTH_NEARER: no stencil; the run writes no depth, then its own depth where nearer than
         // what is there: own_depth_after)
         enum class Stencil : uint8_t { off, mark_won, reset_won, own_first, own_after } stencil = Stencil::off;
     };
@@ -281,8 +286,8 @@ private:
     Vulkan::Device &device_;
     pcr::GpuTimes &times_;
     bool dynamic_ds_ = false, dynamic_blend_ = false, first_draw_ok_ = false, exact_z_ = false;
-    // (developers' KF4_SCN_SETTLE=nearer: the decals other than 0x280's settled by own_depth_after, not settle_run)
-    bool settle_nearer_ = false;
+    // (PORT_SCENE_DEPTH_NEARER: the decals other than 0x280's settled by own_depth_after, not settle_run)
+    bool settle_decals_ = false, settle_nearer_ = false;
     const bool time_clears_ = getenv("KF4_SCN_TIME_CLEARS") && atoi(getenv("KF4_SCN_TIME_CLEARS")) != 0;
     // by Program: the plain fragment shader, the one tested before it (pcr_prim_early.frag), the first-draw image's
     // (scn_first_draw.frag) and the shadows' darkening (pcr_prim.frag with SCN_FIRST_DRAW)

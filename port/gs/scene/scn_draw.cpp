@@ -11,6 +11,11 @@
 #include "pcr_shaders.h"
 #include "scn_shaders.h"
 
+extern "C" {
+#include "port/platform.h"
+}
+#include "port/scene_depth.h"
+
 using namespace Vulkan;
 
 namespace scn {
@@ -78,18 +83,14 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
     indirect_on_ = indirect_on_ && records_on_ && f.enabled_features.multiDrawIndirect &&
                    f.enabled_features.drawIndirectFirstInstance;
     max_run_ = indirect_on_ ? std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u) : 1u;
-    // (exact Z: the GPU's depth clamp and 64-bit integers, pcr_exact_z.h; developers' KF4_SCN_DEPTH=gpu: the GPU's own)
-    const char *depth = getenv("KF4_SCN_DEPTH");
-    exact_z_ = f.enabled_features.depthClamp && f.enabled_features.shaderInt64 && !(depth && strcmp(depth, "gpu") == 0);
-    if (!exact_z_) {
-        fprintf(stderr, "[scn] depth: the GPU's (%s)\n",
-                depth && strcmp(depth, "gpu") == 0 ? "KF4_SCN_DEPTH=gpu" : "no depth clamp or 64-bit integers here");
-    }
-    const char *settle = getenv("KF4_SCN_SETTLE");
-    settle_nearer_ = exact_z_ && settle && strcmp(settle, "nearer") == 0;
-    if (settle_nearer_) {
-        fprintf(stderr, "[scn] decals settled by their own depth where nearer (KF4_SCN_SETTLE=nearer)\n");
-    }
+    // (the player menu's Depth, --scene-depth, or developers' KF4_SCN_DEPTH=gpu and KF4_SCN_SETTLE=0|nearer:
+    // port/scene_depth.h) exact Z needs the GPU's depth clamp and 64-bit integers (pcr_exact_z.h)
+    const int mode = port_scene_depth_with_env(port_options.scene_depth, getenv("KF4_SCN_DEPTH"), getenv("KF4_SCN_SETTLE"));
+    exact_z_ = f.enabled_features.depthClamp && f.enabled_features.shaderInt64 && mode != PORT_SCENE_DEPTH_GPU;
+    settle_decals_ = exact_z_ && mode != PORT_SCENE_DEPTH_UNSETTLED;
+    settle_nearer_ = exact_z_ && mode == PORT_SCENE_DEPTH_NEARER;
+    fprintf(stderr, "[scn] depth: %s%s\n", port_scene_depth(mode)->name,
+            !exact_z_ && mode != PORT_SCENE_DEPTH_GPU ? " asked, the GPU's here (no depth clamp or 64-bit integers)" : "");
     make_programs();
     if (const char *log = getenv("KF4_SCN_RUNS_LOG")) {
         runs_log_ = fopen(log, "w");
@@ -1276,7 +1277,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.stencil = RunKey::Stencil::own_first;
             key.zwrite = false;
         } else if (key.stencil == RunKey::Stencil::mark_won && settle_nearer_) {
-            // (developers' KF4_SCN_SETTLE=nearer: the colour writing no depth, then the own depth where nearer)
+            // (PORT_SCENE_DEPTH_NEARER: the colour writing no depth, then the own depth where nearer)
             key.stencil = RunKey::Stencil::own_after;
             key.zwrite = false;
         }
@@ -1380,7 +1381,7 @@ void Drawer::own_depth_first(const Pending &r, CommandBuffer &c) {
     own_depth(r, VK_COMPARE_OP_GREATER_OR_EQUAL, c);
 }
 
-// (developers' KF4_SCN_SETTLE=nearer) A run of settled decals drawn writing no depth (tested with the top fine part, so
+// (PORT_SCENE_DEPTH_NEARER) A run of settled decals drawn writing no depth (tested with the top fine part, so
 // that each ties with the surface of its whole Z under it), then its calls again with no colour and their own depth
 // (the GPU's, as settle_run's), GREATER: written only where the decal is nearer than what is there. A decal lying on
 // its surface leaves the surface's depth, which a later draw on that plane ties with by the fine part as it would
@@ -1591,7 +1592,7 @@ std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkForm
                 key.stencil = RunKey::Stencil::off; // (the own depth)
                 key.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
                 list(key);
-                key.zcompare = VK_COMPARE_OP_GREATER; // (KF4_SCN_SETTLE=nearer's own depth, own_depth_after)
+                key.zcompare = VK_COMPARE_OP_GREATER; // (PORT_SCENE_DEPTH_NEARER's own depth, own_depth_after)
                 list(key);
             }
             cmd->end_render_pass();
