@@ -23,6 +23,7 @@ struct DataPaths {
     fs::path builds;  // builds/<key>/
     fs::path choices() const { return data / "launcher.json"; }
     fs::path update_cache() const { return data / "update.json"; }
+    fs::path update_request() const { return data / "update-request.json"; } // the game's ask (self_update.h)
     fs::path build_log() const { return data / "build.log"; }
     fs::path game_log() const { return data / "game.log"; }
 };

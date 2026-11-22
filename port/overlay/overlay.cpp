@@ -1102,15 +1102,8 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
         return;
     sample_rates();
     port_settings_poll();
-    // a new release the launcher found: a note when nothing else is showing
-    static bool update_note_pending;
-    if (update_badge_poll((Uint32)SDL_GetTicks()))
-        update_note_pending = true;
-    if (update_note_pending && !building_shown()) {
-        update_note_pending = false;
-        toast_text = update_badge_note;
-        toast_until = (Uint32)SDL_GetTicks() + 6000;
-    }
+    // a new release the launcher found: the title screen offers it in a pop-up (port_update_title)
+    update_badge_poll((Uint32)SDL_GetTicks());
     shot_open();
     if (!port_overlay_visible())
         return;

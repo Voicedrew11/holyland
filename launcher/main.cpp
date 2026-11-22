@@ -30,6 +30,7 @@ void usage() {
 
 int main(int argc, char **argv) {
     launcher::LaunchOptions options;
+    options.args.assign(argv + 1, argv + argc);
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--") == 0) {
             options.game_args.assign(argv + i + 1, argv + argc);

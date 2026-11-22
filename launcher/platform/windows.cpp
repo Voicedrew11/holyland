@@ -8,8 +8,10 @@
 #include <shobjidl.h>
 #include <winhttp.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <system_error>
 
 #include "../build_strategy.h"
@@ -28,18 +30,24 @@ std::wstring widen(std::string_view text) {
     return out;
 }
 
-fs::path program_dir() {
+// the launcher's own .exe; empty if Windows does not say
+fs::path program_path() {
     std::wstring path(MAX_PATH, L'\0');
     for (;;) {
         DWORD n = GetModuleFileNameW(nullptr, path.data(), (DWORD)path.size());
         if (n == 0)
-            return fs::current_path();
+            return {};
         if (n < path.size()) {
             path.resize(n);
-            return fs::path(path).parent_path();
+            return fs::path(path);
         }
         path.resize(path.size() * 2);
     }
+}
+
+fs::path program_dir() {
+    fs::path self = program_path();
+    return self.empty() ? fs::current_path() : self.parent_path();
 }
 
 // one argument as the C runtime reads it back (CommandLineToArgvW's rules)
@@ -189,6 +197,231 @@ struct InternetHandle {
     }
 };
 
+// A GET's request, sent and answered 200
+struct OpenGet {
+    InternetHandle session, connection, request;
+};
+std::string open_get(OpenGet &get, std::string_view url, std::string_view user_agent, int timeout_ms,
+                     const wchar_t *headers) {
+    std::wstring wide_url = widen(url);
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    wchar_t host[256] = {}, path[2048] = {};
+    parts.lpszHostName = host;
+    parts.dwHostNameLength = 256;
+    parts.lpszUrlPath = path;
+    parts.dwUrlPathLength = 2048;
+    if (!WinHttpCrackUrl(wide_url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
+        return "not an https:// address";
+    get.session.handle = WinHttpOpen(widen(user_agent).c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (get.session.handle == nullptr)
+        return "WinHTTP did not start (" + std::to_string(GetLastError()) + ")";
+    WinHttpSetTimeouts(get.session.handle, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+    get.connection.handle = WinHttpConnect(get.session.handle, host, parts.nPort, 0);
+    if (get.connection.handle == nullptr)
+        return "cannot reach the server (" + std::to_string(GetLastError()) + ")";
+    // (redirects are followed: GitHub sends a release's files to its file host)
+    get.request.handle = WinHttpOpenRequest(get.connection.handle, L"GET", path, nullptr, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (get.request.handle == nullptr ||
+        !WinHttpSendRequest(get.request.handle, headers, headers != nullptr ? (DWORD)-1L : 0, WINHTTP_NO_REQUEST_DATA,
+                            0, 0, 0) ||
+        !WinHttpReceiveResponse(get.request.handle, nullptr))
+        return "no answer (" + std::to_string(GetLastError()) + ")";
+    DWORD status = 0, size = sizeof(status);
+    if (!WinHttpQueryHeaders(get.request.handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX))
+        return "no answer";
+    if (status != 200)
+        return "the server answered " + std::to_string(status);
+    return {};
+}
+
+// a program started on its own, in no job of the launcher's, so that it outlives the launcher
+std::string start_on_its_own(const fs::path &program, const std::vector<std::wstring> &args) {
+    std::wstring line;
+    append_quoted(line, program.wstring());
+    for (const std::wstring &arg : args)
+        append_quoted(line, arg);
+    std::wstring dir = program.parent_path().wstring();
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+    if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, nullptr,
+                        dir.c_str(), &startup, &info))
+        return "cannot start " + program.u8string() + " (" + std::to_string(GetLastError()) + ")";
+    CloseHandle(info.hThread);
+    CloseHandle(info.hProcess);
+    return {};
+}
+
+fs::path with_old(const fs::path &file) {
+    fs::path old = file;
+    old += ".old";
+    return old;
+}
+
+// a running program or a DLL it has loaded can be renamed, not written over or deleted
+bool move_aside(const fs::path &file) {
+    std::error_code error;
+    if (!fs::exists(file, error))
+        return true;
+    fs::remove_all(with_old(file), error);
+    return MoveFileExW(file.c_str(), with_old(file).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+void move_back(const fs::path &file) {
+    std::error_code error;
+    if (fs::exists(with_old(file), error)) {
+        fs::remove_all(file, error);
+        MoveFileExW(with_old(file).c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+}
+
+// The files beside the launcher that it has open while it runs
+std::vector<fs::path> running_files(const fs::path &dir, const fs::path &exe) {
+    return {exe, dir / "SDL3.dll"};
+}
+
+// Installed by the installer (packaging/windows/installer.iss; its uninstaller is beside the launcher): the new
+// release's installer runs silently over this one, and starts the new launcher when it is done.
+class InstallerInstallation final : public Installation {
+public:
+    InstallerInstallation(fs::path dir, fs::path exe) : dir_(std::move(dir)), exe_(std::move(exe)) {}
+
+    std::string_view asset_suffix() const override { return "-win-x64-setup.exe"; }
+    fs::path download_path() const override { return dir_ / "update-setup.exe"; }
+
+    std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &) const override {
+        for (const fs::path &file : running_files(dir_, exe_)) {
+            if (!move_aside(file)) {
+                for (const fs::path &back : running_files(dir_, exe_))
+                    move_back(back);
+                return "cannot move " + file.u8string() + " aside (" + std::to_string(GetLastError()) + ")";
+            }
+        }
+        // installer.iss starts the new launcher after a silent install only when asked: /HOLYLANDRELAUNCH
+        std::string why = start_on_its_own(downloaded, {L"/VERYSILENT", L"/SUPPRESSMSGBOXES", L"/NORESTART",
+                                                         L"/HOLYLANDRELAUNCH"});
+        if (!why.empty()) {
+            for (const fs::path &file : running_files(dir_, exe_))
+                move_back(file);
+        }
+        return why;
+    }
+
+    void remove_leftovers() const override {
+        std::error_code error;
+        for (const fs::path &file : running_files(dir_, exe_))
+            fs::remove(with_old(file), error);
+        fs::remove(download_path(), error);
+        fs::path sums = download_path();
+        sums += ".sums";
+        fs::remove(sums, error);
+    }
+
+private:
+    fs::path dir_, exe_;
+};
+
+// Unpacked from the zip: the new zip is unpacked beside, with Windows' own tar.exe (Windows 10 1803 and later), and
+// each of its files and folders put in place of the old ones, which are moved aside first.
+class ZipInstallation final : public Installation {
+public:
+    ZipInstallation(fs::path dir, fs::path exe) : dir_(std::move(dir)), exe_(std::move(exe)) {}
+
+    std::string_view asset_suffix() const override { return "-win-x64.zip"; }
+    fs::path download_path() const override { return dir_ / "update.zip"; }
+
+    std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &args) const override {
+        std::error_code error;
+        fs::path unpacked = dir_ / "update.partial";
+        fs::remove_all(unpacked, error);
+        if (!fs::create_directory(unpacked, error))
+            return "cannot make " + unpacked.u8string() + ": " + error.message();
+        std::string why = unpack(downloaded, unpacked);
+        if (!why.empty()) {
+            fs::remove_all(unpacked, error);
+            return why;
+        }
+        // the new files: what the zip holds at its top
+        std::vector<fs::path> names;
+        for (fs::directory_iterator it(unpacked, error), end; !error && it != end; it.increment(error))
+            names.push_back(it->path().filename());
+        if (error || !fs::is_regular_file(unpacked / exe_.filename(), error)) {
+            fs::remove_all(unpacked, error);
+            return "the zip does not hold " + exe_.filename().u8string();
+        }
+        std::vector<fs::path> moved;
+        for (const fs::path &name : names) {
+            if (!move_aside(dir_ / name) ||
+                !MoveFileExW((unpacked / name).c_str(), (dir_ / name).c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                why = "cannot put " + name.u8string() + " in place (" + std::to_string(GetLastError()) + ")";
+                moved.push_back(name);
+                for (const fs::path &back : moved)
+                    move_back(dir_ / back);
+                fs::remove_all(unpacked, error);
+                return why;
+            }
+            moved.push_back(name);
+        }
+        fs::remove_all(unpacked, error);
+        std::vector<std::wstring> wide_args;
+        for (const std::string &arg : args)
+            wide_args.push_back(widen(arg));
+        return start_on_its_own(exe_, wide_args);
+    }
+
+    void remove_leftovers() const override {
+        std::error_code error;
+        for (fs::directory_iterator it(dir_, error), end; !error && it != end; it.increment(error)) {
+            if (it->path().extension() == ".old") {
+                std::error_code ignored;
+                fs::remove_all(it->path(), ignored);
+            }
+        }
+        fs::remove_all(dir_ / "update.partial", error);
+        fs::remove(download_path(), error);
+        fs::path sums = download_path();
+        sums += ".sums";
+        fs::remove(sums, error);
+    }
+
+private:
+    static std::string unpack(const fs::path &zip, const fs::path &into) {
+        std::wstring system(MAX_PATH, L'\0');
+        UINT n = GetSystemDirectoryW(system.data(), (UINT)system.size());
+        if (n == 0 || n >= system.size())
+            return "cannot find Windows' folder";
+        system.resize(n);
+        fs::path tar = fs::path(system) / "tar.exe";
+        std::error_code error;
+        if (!fs::is_regular_file(tar, error))
+            return "this Windows has no tar.exe (Windows 10 1803 or later has it): use the download page";
+        std::wstring line;
+        for (const std::wstring &arg : {tar.wstring(), std::wstring(L"-xf"), zip.wstring(), std::wstring(L"-C"),
+                                        into.wstring()})
+            append_quoted(line, arg);
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION info{};
+        if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                            &startup, &info))
+            return "cannot start tar.exe (" + std::to_string(GetLastError()) + ")";
+        CloseHandle(info.hThread);
+        WaitForSingleObject(info.hProcess, INFINITE);
+        DWORD code = 1;
+        GetExitCodeProcess(info.hProcess, &code);
+        CloseHandle(info.hProcess);
+        if (code != 0)
+            return "the zip could not be unpacked (tar.exe ended with " + std::to_string(code) + ")";
+        return {};
+    }
+
+    fs::path dir_, exe_;
+};
+
 class WindowsPlatform final : public Platform {
 public:
     std::string_view name() const override { return "windows"; }
@@ -334,41 +567,14 @@ public:
 
     std::optional<std::string> http_get(std::string_view url, std::string_view user_agent,
                                         int timeout_ms) const override {
-        std::wstring wide_url = widen(url);
-        URL_COMPONENTS parts{};
-        parts.dwStructSize = sizeof(parts);
-        wchar_t host[256] = {}, path[2048] = {};
-        parts.lpszHostName = host;
-        parts.dwHostNameLength = 256;
-        parts.lpszUrlPath = path;
-        parts.dwUrlPathLength = 2048;
-        if (!WinHttpCrackUrl(wide_url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
-            return std::nullopt;
-        InternetHandle session{WinHttpOpen(widen(user_agent).c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
-        if (session.handle == nullptr)
-            return std::nullopt;
-        WinHttpSetTimeouts(session.handle, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
-        InternetHandle connection{WinHttpConnect(session.handle, host, parts.nPort, 0)};
-        if (connection.handle == nullptr)
-            return std::nullopt;
-        InternetHandle request{WinHttpOpenRequest(connection.handle, L"GET", path, nullptr, WINHTTP_NO_REFERER,
-                                                  WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)};
-        if (request.handle == nullptr ||
-            !WinHttpSendRequest(request.handle, L"Accept: application/vnd.github+json", (DWORD)-1L,
-                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-            !WinHttpReceiveResponse(request.handle, nullptr))
-            return std::nullopt;
-        DWORD status = 0, size = sizeof(status);
-        if (!WinHttpQueryHeaders(request.handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX) ||
-            status != 200)
+        OpenGet get;
+        if (!open_get(get, url, user_agent, timeout_ms, L"Accept: application/vnd.github+json").empty())
             return std::nullopt;
         std::string answer;
         for (;;) {
             char buffer[8192];
             DWORD got = 0;
-            if (!WinHttpReadData(request.handle, buffer, sizeof(buffer), &got))
+            if (!WinHttpReadData(get.request.handle, buffer, sizeof(buffer), &got))
                 return std::nullopt;
             if (got == 0)
                 break;
@@ -377,6 +583,81 @@ public:
             answer.append(buffer, got);
         }
         return answer;
+    }
+
+    std::string http_download(std::string_view url, const fs::path &to, std::uint64_t max_bytes,
+                              std::string_view user_agent, const DownloadProgress &progress) const override {
+        OpenGet get;
+        std::string why = open_get(get, url, user_agent, 30000, nullptr);
+        if (!why.empty())
+            return why;
+        std::uint64_t total = 0;
+        wchar_t length[32] = {};
+        DWORD length_size = sizeof(length);
+        if (WinHttpQueryHeaders(get.request.handle, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, length,
+                                &length_size, WINHTTP_NO_HEADER_INDEX))
+            total = std::wcstoull(length, nullptr, 10);
+        if (total > max_bytes)
+            return "the file is larger than expected";
+        std::FILE *file = _wfopen(to.c_str(), L"wb");
+        if (file == nullptr)
+            return "cannot write " + to.u8string();
+        std::uint64_t done = 0;
+        std::vector<char> buffer(1 << 16);
+        for (;;) {
+            DWORD got = 0;
+            if (!WinHttpReadData(get.request.handle, buffer.data(), (DWORD)buffer.size(), &got)) {
+                why = "the connection broke (" + std::to_string(GetLastError()) + ")";
+                break;
+            }
+            if (got == 0)
+                break;
+            if (done + got > max_bytes) {
+                why = "the file is larger than expected";
+                break;
+            }
+            if (std::fwrite(buffer.data(), 1, got, file) != got) {
+                why = "cannot write " + to.u8string();
+                break;
+            }
+            done += got;
+            if (progress && !progress(done, total)) {
+                why = "stopped";
+                break;
+            }
+        }
+        if (std::fclose(file) != 0 && why.empty())
+            why = "cannot write " + to.u8string();
+        if (why.empty() && total != 0 && done != total)
+            why = "the download ended early";
+        if (!why.empty()) {
+            std::error_code error;
+            fs::remove(to, error);
+        }
+        return why;
+    }
+
+    std::unique_ptr<Installation> installation(std::string &why) const override {
+        fs::path exe = program_path();
+        fs::path dir = exe.parent_path();
+        std::error_code error;
+        // a release's folder: the launcher and content/ with its manifest (a developer's build has neither)
+        if (!fs::is_regular_file(exe, error) || !fs::is_regular_file(dir / "content" / "manifest.txt", error)) {
+            why = "this is not an installed release";
+            return nullptr;
+        }
+        if (fs::is_regular_file(dir / "unins000.exe", error))
+            return std::make_unique<InstallerInstallation>(dir, exe);
+        // a zip's folder must be one the launcher may write
+        fs::path probe = dir / "update.write-test";
+        std::FILE *f = _wfopen(probe.c_str(), L"wb");
+        if (f == nullptr) {
+            why = dir.u8string() + " cannot be written";
+            return nullptr;
+        }
+        std::fclose(f);
+        fs::remove(probe, error);
+        return std::make_unique<ZipInstallation>(dir, exe);
     }
 
     void attach_console() const override {

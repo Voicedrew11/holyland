@@ -29,15 +29,19 @@ add_library(launcher_core STATIC
     ${ROOT}/port/platform/iso9660.c
     ${ROOT}/port/platform/update_notice.c
     ${ROOT}/third_party/cjson/cJSON.c
+    ${ROOT}/third_party/monocypher/monocypher.c
+    ${ROOT}/third_party/monocypher/monocypher-ed25519.c
     build_key.cpp
     build_log.cpp
     build_local.cpp
     disc_check.cpp
     launcher_files.cpp
     rml_text.cpp
+    self_update.cpp
     setup_flow.cpp
     update_check.cpp)
-target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson)
+target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson
+                           ${ROOT}/third_party/monocypher)
 target_compile_options(launcher_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${LAUNCHER_WARNINGS}>)
 find_package(Threads REQUIRED)
 include(${ROOT}/cmake/libchdr.cmake) # CHD disc images (port/platform/disc_image.c)
@@ -62,10 +66,9 @@ target_compile_options(launcher_platform PRIVATE ${LAUNCHER_WARNINGS})
 find_package(SDL3 CONFIG REQUIRED)
 include(${ROOT}/cmake/rmlui.cmake)
 
-# The pages' files, carried inside the launcher as the game carries the menu's: the menu's font, logo and masks
+# The pages' files, carried inside the launcher as the game carries the menu's: the menu's font and logo
 # (port/ui/res/) and the launcher's pages (launcher/res/)
-set(LAUNCHER_UI_FILES logo.alpha corner_tl.alpha corner_tr.alpha corner_bl.alpha corner_br.alpha soft_box.alpha
-    fonts/HolylandMincho.ttf)
+set(LAUNCHER_UI_FILES logo.alpha fonts/HolylandMincho.ttf)
 file(GLOB LAUNCHER_PAGES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/res
      ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rml ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rcss)
 list(SORT LAUNCHER_PAGES)

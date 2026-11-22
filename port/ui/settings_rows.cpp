@@ -1129,6 +1129,9 @@ const SettingRow interface_rows[] = {
 
 const SettingRow general_rows[] = {
     {"Update available", "", RowKind::heading, {}, {}, nullptr, nullptr, nullptr, nullptr, update_due},
+    {"Update now", "Closes the game; the launcher downloads and installs the new release and starts again.",
+     RowKind::action, {}, {}, nullptr, nullptr, update_badge_update_now, nullptr, update_due, nullptr, nullptr,
+     update_summary},
     {"Open download page", "Opens the release's page in your browser; install it over this one.", RowKind::action,
      {}, {}, nullptr, nullptr, update_badge_open_page, nullptr, update_due, nullptr, nullptr, update_summary},
     {"Skip this version", "No more notices until the next version.", RowKind::action, {}, {}, nullptr, nullptr,

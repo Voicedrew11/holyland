@@ -3,7 +3,9 @@
 // and later iOS or Android) is a new file here and a line in CMakeLists.txt, nothing else.
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,6 +53,26 @@ struct ProcessSpec {
     bool stop_with_children = true;
 };
 
+// How far a download is: the bytes so far and the whole (0 when not known). Returning false stops it. On the
+// downloading thread.
+using DownloadProgress = std::function<bool(std::uint64_t done_bytes, std::uint64_t total_bytes)>;
+
+// How this copy of the launcher was installed, which says how an update replaces it (docs/port/LAUNCHER.md,
+// "Updates"). One implementation per way of installing: an AppImage, Windows' installer, Windows' zip.
+class Installation {
+public:
+    virtual ~Installation() = default;
+    // the end of the name of the release's file for this way ("-x86_64.AppImage", "-win-x64-setup.exe")
+    virtual std::string_view asset_suffix() const = 0;
+    // where the download goes: on the same file system as what it replaces, so a rename puts it in place
+    virtual fs::path download_path() const = 0;
+    // the checked download put in place and the new launcher started with `args`; "" once it has started (this
+    // one then exits at once), else why not, with the old install left as it was
+    virtual std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &args) const = 0;
+    // what the last update left behind (the old files, a half download); at every start
+    virtual void remove_leftovers() const = 0;
+};
+
 class Platform {
 public:
     virtual ~Platform() = default;
@@ -86,6 +108,15 @@ public:
     // GET over HTTPS; nullopt on any failure (no network, an error status, the time running out)
     virtual std::optional<std::string> http_get(std::string_view url, std::string_view user_agent,
                                                 int timeout_ms) const = 0;
+
+    // GET over HTTPS into the file `to`, at most `max_bytes` (a test's file:// works on Linux); "" when it is all
+    // there, else why not, with nothing left at `to`
+    virtual std::string http_download(std::string_view url, const fs::path &to, std::uint64_t max_bytes,
+                                      std::string_view user_agent, const DownloadProgress &progress) const = 0;
+
+    // this copy's way of being installed; nullptr, with why in `why`, when it cannot update itself (a developer's
+    // build, a folder it may not write)
+    virtual std::unique_ptr<Installation> installation(std::string &why) const = 0;
 
     // Windows: print into the console the launcher was started from, if any
     virtual void attach_console() const {}

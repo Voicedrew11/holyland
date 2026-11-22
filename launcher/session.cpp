@@ -21,6 +21,7 @@
 #include "platform.h"
 #include "product.h"
 #include "rml_text.h"
+#include "self_update.h"
 #include "setup_flow.h"
 #include "setup_pages.h"
 #include "update_check.h"
@@ -128,7 +129,8 @@ private:
     int last_tenth_ = -1;
 };
 
-enum class Screen { setup, building, build_failed, home, play, quit };
+// play, quit and restarted end the window: the game, nothing, or the new release started (this launcher exits)
+enum class Screen { setup, building, build_failed, home, updating, update_failed, play, quit, restarted };
 
 class Session final : private DiscKeeper {
 public:
@@ -156,7 +158,11 @@ private:
 
     void start_build();
     void remove_old_builds();
+    // the window from `screen` until it closes; play, quit or restarted
+    Screen show_window(Screen screen);
     int play();
+    // an update to `tag` begun (self_update.h); a build going is stopped
+    void start_update(std::string tag);
     void show_game_stopped(int code);
 
     // a frame of each screen; returns the next screen
@@ -165,8 +171,8 @@ private:
     Screen draw_building(Window &window);
     Screen draw_build_failed(Window &window);
     Screen draw_home(Window &window);
-    // the update's notice at the top of the page (its #update), and what the player chose in it
-    void draw_update_notice(Window &window);
+    Screen draw_updating(Window &window);
+    Screen draw_update_failed(Window &window);
 
     const Platform &platform_;
     DataPaths paths_;
@@ -177,7 +183,11 @@ private:
     std::string key_;
     std::string disc_error_;
     std::unique_ptr<SetupFlow> setup_;
-    bool update_hidden_ = false;
+    std::unique_ptr<Installation> installation_; // nullptr when this copy cannot update itself (why: no_update_why_)
+    std::string no_update_why_;
+    std::string update_tag_;
+    std::unique_ptr<UpdateRun> update_;
+    std::string update_why_; // update_failed: why
     std::unique_ptr<BuildRun> build_;
     std::thread build_thread_;
 };
@@ -191,6 +201,9 @@ int Session::run() {
     choices_ = read_choices(paths_.choices());
     std::error_code error;
     fs::create_directories(paths_.data, error);
+    installation_ = platform_.installation(no_update_why_);
+    if (installation_)
+        installation_->remove_leftovers();
     updates_.start(platform_, paths_, choices_, launcher_version());
     content_ = platform_.content_dir();
     std::string why;
@@ -204,32 +217,53 @@ int Session::run() {
     }
 
     Screen screen = first_screen();
-    if (screen != Screen::play) {
-        std::string title = std::string(kProductName) + " " + (launcher_version()[0] ? launcher_version() : "(developer's build)");
-        auto window = Window::open(title, why);
-        if (!window) {
-            std::fprintf(stderr, "[%s] cannot open the launcher's window: %s\n", kProductId, why.c_str());
-            return 1;
-        }
-        // (the build needs no disc: it runs while the player goes through the setup)
-        if (screen == Screen::building || (screen == Screen::setup && !build_ready()))
-            start_build();
-        while (screen != Screen::play && screen != Screen::quit) {
-            if (!window->begin_frame()) {
-                if (build_)
-                    build_->cancel();
-                screen = Screen::quit;
-            } else {
-                screen = draw(screen, *window);
-                window->end_frame();
-            }
-        }
-        if (build_thread_.joinable())
-            build_thread_.join();
+    // (an ask the last launcher did not see: it was ended while the game ran)
+    if (auto tag = take_update_request(paths_)) {
+        start_update(*tag);
+        screen = Screen::updating;
     }
-    int code = screen == Screen::play ? play() : 0;
+    int code = 0;
+    for (;;) {
+        if (screen != Screen::play)
+            screen = show_window(screen);
+        if (screen != Screen::play)
+            break;
+        code = play();
+        // the player chose Update in the game, which then quit
+        auto tag = take_update_request(paths_);
+        if (!tag)
+            break;
+        start_update(*tag);
+        screen = Screen::updating;
+    }
     updates_.finish_within(kUpdateWaitMs);
-    return code;
+    return screen == Screen::restarted ? 0 : code;
+}
+
+Screen Session::show_window(Screen screen) {
+    std::string why;
+    std::string title = std::string(kProductName) + " " + (launcher_version()[0] ? launcher_version() : "(developer's build)");
+    auto window = Window::open(title, why);
+    if (!window) {
+        std::fprintf(stderr, "[%s] cannot open the launcher's window: %s\n", kProductId, why.c_str());
+        return Screen::quit;
+    }
+    // (the build needs no disc: it runs while the player goes through the setup)
+    if (screen == Screen::building || (screen == Screen::setup && !build_ready()))
+        start_build();
+    while (screen != Screen::play && screen != Screen::quit && screen != Screen::restarted) {
+        if (!window->begin_frame()) {
+            if (build_)
+                build_->cancel();
+            screen = Screen::quit;
+        } else {
+            screen = draw(screen, *window);
+            window->end_frame();
+        }
+    }
+    if (build_thread_.joinable())
+        build_thread_.join();
+    return screen;
 }
 
 int Session::build_only() {
@@ -413,8 +447,6 @@ void Session::show_game_stopped(int code) {
     while (window->begin_frame()) {
         window->show_page("stopped.rml");
         window->set_text("why", "(" + platform_.describe_exit(code) + ")");
-        window->set_text("where", "Its last messages are below; all of them are in " + paths_.game_log().u8string() +
-                                      ". Please include that file in a bug report.");
         window->set_rml("log", log_rml(tail));
         window->scroll_to_end("log");
         if (window->take_action("open-folder"))
@@ -426,44 +458,32 @@ void Session::show_game_stopped(int code) {
 }
 
 Screen Session::draw(Screen screen, Window &window) {
+    Screen next = screen;
     switch (screen) {
     case Screen::setup:
-        return draw_setup(window);
+        next = draw_setup(window);
+        break;
     case Screen::building:
-        return draw_building(window);
+        next = draw_building(window);
+        break;
     case Screen::build_failed:
-        return draw_build_failed(window);
+        next = draw_build_failed(window);
+        break;
     case Screen::home:
-        return draw_home(window);
+        next = draw_home(window);
+        break;
+    case Screen::updating:
+        next = draw_updating(window);
+        break;
+    case Screen::update_failed:
+        next = draw_update_failed(window);
+        break;
     case Screen::play:
     case Screen::quit:
+    case Screen::restarted:
         break;
     }
-    return screen;
-}
-
-void Session::draw_update_notice(Window &window) {
-    auto notice = updates_.notice();
-    if (!notice || update_hidden_) {
-        window.set_rml("update", "");
-        return;
-    }
-    if (window.take_action("update-download"))
-        SDL_OpenURL(notice->url);
-    if (window.take_action("update-skip")) {
-        updates_.skip();
-        choices_.skipped = notice->tag;
-        write_choices(paths_.choices(), choices_);
-        update_hidden_ = true;
-    }
-    if (window.take_action("update-later"))
-        update_hidden_ = true;
-    window.set_rml("update", update_hidden_ ? std::string() :
-        "<div class=\"notice\">" + rml_escaped(std::string(kProductName) + " " + notice->tag + " is out (you have " +
-                                               launcher_version() + "). Your settings and saves are kept.") +
-        "<span class=\"link\" data-action=\"update-download\">Download page</span>"
-        "<span class=\"link\" data-action=\"update-skip\">Skip this version</span>"
-        "<span class=\"link\" data-action=\"update-later\">Later</span></div>");
+    return next;
 }
 
 // The logo, the page, and at the foot the version, the page's place in the row and the way back
@@ -500,7 +520,6 @@ Screen Session::draw_building(Window &window) {
         return Screen::quit;
     }
     window.show_page("building.rml");
-    draw_update_notice(window);
     if (view.total > 0) {
         window.set_text("stage", view.stage + ": " + std::to_string(view.done) + " of " + std::to_string(view.total));
         window.set_rml("bar", "<div style=\"width: " + std::to_string(view.done * 100 / view.total) + "%\"></div>");
@@ -528,10 +547,7 @@ Screen Session::draw_build_failed(Window &window) {
     if (window.take_action("close"))
         return Screen::quit;
     window.show_page("failed.rml");
-    draw_update_notice(window);
     window.set_text("message", view.result ? view.result->message : "");
-    window.set_text("where", "The whole build's output is in " + paths_.build_log().u8string() +
-                                 ". Please include that file in a bug report.");
     window.set_rml("log", log_rml(view.tail));
     window.scroll_to_end("log");
     return Screen::build_failed;
@@ -563,13 +579,95 @@ Screen Session::draw_home(Window &window) {
         write_choices(paths_.choices(), choices_);
     }
     window.show_page("home.rml");
-    draw_update_notice(window);
     window.set_text("disc", "Disc: " + choices_.disc);
-    window.set_text("built", build_ready() ? "Built for this release." : "Not built yet: Play builds it first.");
-    window.set_text("updates-check", choices_.update_check ? "Checking for updates at launch: on"
-                                                           : "Checking for updates at launch: off");
+    window.set_text("updates-check", choices_.update_check ? "Check for updates: on" : "Check for updates: off");
     window.set_text("version", version_line());
     return Screen::home;
+}
+
+void Session::start_update(std::string tag) {
+    if (build_thread_.joinable()) { // (its result is not needed: the new release builds its own)
+        build_->cancel();
+        build_thread_.join();
+    }
+    build_.reset();
+    update_.reset();
+    update_tag_ = std::move(tag);
+    update_why_.clear();
+    if (!installation_) {
+        update_why_ = "This copy of Holyland cannot update itself: " + no_update_why_ + ".";
+        return;
+    }
+    std::fprintf(stderr, "[%s] updating to %s\n", kProductId, update_tag_.c_str());
+    std::string agent = std::string(kProductId) + "-launcher/" + (launcher_version()[0] ? launcher_version() : "dev");
+    update_ = std::make_unique<UpdateRun>(platform_, *installation_, update_tag_, agent);
+}
+
+// "12.3 MB"
+std::string megabytes(std::uint64_t bytes) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    return text;
+}
+
+Screen Session::draw_updating(Window &window) {
+    if (!update_)
+        return Screen::update_failed;
+    UpdateRun::View view = update_->view();
+    if (view.state == UpdateRun::State::failed) {
+        update_why_ = view.why;
+        std::fprintf(stderr, "[%s] the update stopped: %s\n", kProductId, update_why_.c_str());
+        return Screen::update_failed;
+    }
+    if (view.state == UpdateRun::State::ready) {
+        std::string why = update_->install(options_.args);
+        if (why.empty()) {
+            std::fprintf(stderr, "[%s] %s is in place; starting it\n", kProductId, update_tag_.c_str());
+            return Screen::restarted;
+        }
+        update_why_ = why;
+        std::fprintf(stderr, "[%s] the update could not be put in place: %s\n", kProductId, why.c_str());
+        return Screen::update_failed;
+    }
+    if (window.take_action("cancel")) {
+        update_.reset();
+        return Screen::home;
+    }
+    window.show_page("updating.rml");
+    window.set_text("heading", std::string("Updating to ") + kProductName + " " + update_tag_);
+    if (view.total_bytes > 0) {
+        window.set_text("stage", view.stage + ": " + megabytes(view.done_bytes) + " of " + megabytes(view.total_bytes));
+        window.set_rml("bar", "<div style=\"width: " + std::to_string(view.done_bytes * 100 / view.total_bytes) + "%\"></div>");
+    } else {
+        window.set_text("stage", view.done_bytes > 0 ? view.stage + ": " + megabytes(view.done_bytes) : view.stage);
+        window.set_rml("bar", "");
+    }
+    return Screen::updating;
+}
+
+Screen Session::draw_update_failed(Window &window) {
+    if (window.take_action("try-again")) {
+        start_update(update_tag_);
+        return Screen::updating;
+    }
+    if (window.take_action("download-page")) {
+        std::string page = "https://github.com/" UPDATE_REPOSITORY "/releases/tag/" + update_tag_;
+        if (!SDL_OpenURL(page.c_str()))
+            std::fprintf(stderr, "[%s] cannot open %s: %s\n", kProductId, page.c_str(), SDL_GetError());
+    }
+    if (window.take_action("play")) {
+        update_.reset();
+        if (build_ready())
+            return Screen::play;
+        options_.show_launcher = false;
+        start_build();
+        return Screen::building;
+    }
+    if (window.take_action("close"))
+        return Screen::quit;
+    window.show_page("update_failed.rml");
+    window.set_text("message", update_why_);
+    return Screen::update_failed;
 }
 
 } // namespace

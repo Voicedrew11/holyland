@@ -3,12 +3,15 @@
 // for (every desktop distribution has it); the disc chooser through kdialog or zenity.
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <system_error>
@@ -124,7 +127,8 @@ private:
 // libcurl's numbers for what is used here (curl/curl.h; part of its ABI, never changed)
 constexpr int kOptWriteData = 10001, kOptUrl = 10002, kOptUserAgent = 10018, kOptHttpHeader = 10023;
 constexpr int kOptFailOnError = 45, kOptFollowLocation = 52, kOptNoSignal = 99, kOptTimeoutMs = 155;
-constexpr int kOptWriteFunction = 20011;
+constexpr int kOptWriteFunction = 20011, kOptConnectTimeoutMs = 156, kOptLowSpeedLimit = 19, kOptLowSpeedTime = 20;
+constexpr int kInfoContentLengthDownloadT = 0x600000 + 15; // CURLINFO_OFF_T + 15
 constexpr std::size_t kMaxAnswer = 1 << 20;
 
 struct Curl {
@@ -132,6 +136,8 @@ struct Curl {
     int (*easy_setopt)(void *, int, ...);
     int (*easy_perform)(void *);
     void (*easy_cleanup)(void *);
+    int (*easy_getinfo)(void *, int, ...);
+    const char *(*easy_strerror)(int);
     void *(*slist_append)(void *, const char *);
     void (*slist_free_all)(void *);
 };
@@ -148,10 +154,12 @@ const Curl *load_curl() {
         curl.easy_setopt = reinterpret_cast<int (*)(void *, int, ...)>(dlsym(lib, "curl_easy_setopt"));
         curl.easy_perform = reinterpret_cast<int (*)(void *)>(dlsym(lib, "curl_easy_perform"));
         curl.easy_cleanup = reinterpret_cast<void (*)(void *)>(dlsym(lib, "curl_easy_cleanup"));
+        curl.easy_getinfo = reinterpret_cast<int (*)(void *, int, ...)>(dlsym(lib, "curl_easy_getinfo"));
+        curl.easy_strerror = reinterpret_cast<const char *(*)(int)>(dlsym(lib, "curl_easy_strerror"));
         curl.slist_append = reinterpret_cast<void *(*)(void *, const char *)>(dlsym(lib, "curl_slist_append"));
         curl.slist_free_all = reinterpret_cast<void (*)(void *)>(dlsym(lib, "curl_slist_free_all"));
-        return curl.easy_init && curl.easy_setopt && curl.easy_perform && curl.easy_cleanup && curl.slist_append &&
-               curl.slist_free_all;
+        return curl.easy_init && curl.easy_setopt && curl.easy_perform && curl.easy_cleanup && curl.easy_getinfo &&
+               curl.easy_strerror && curl.slist_append && curl.slist_free_all;
     }();
     return loaded ? &curl : nullptr;
 }
@@ -164,6 +172,87 @@ std::size_t keep_answer(char *data, std::size_t size, std::size_t count, void *c
     answer->append(data, bytes);
     return bytes;
 }
+
+// A download's file, written as curl hands the bytes over
+struct DownloadTo {
+    const Curl *curl;
+    void *handle;
+    std::FILE *file;
+    std::uint64_t done = 0, max_bytes;
+    const DownloadProgress *progress;
+    bool too_big = false, stopped = false;
+};
+
+std::size_t keep_download(char *data, std::size_t size, std::size_t count, void *context) {
+    auto *to = static_cast<DownloadTo *>(context);
+    std::size_t bytes = size * count;
+    if (to->done + bytes > to->max_bytes) {
+        to->too_big = true;
+        return 0;
+    }
+    if (std::fwrite(data, 1, bytes, to->file) != bytes)
+        return 0;
+    to->done += bytes;
+    if (*to->progress) {
+        std::int64_t total = -1;
+        to->curl->easy_getinfo(to->handle, kInfoContentLengthDownloadT, &total);
+        if (!(*to->progress)(to->done, total > 0 ? (std::uint64_t)total : 0)) {
+            to->stopped = true;
+            return 0;
+        }
+    }
+    return bytes;
+}
+
+// An AppImage (packaging/linux/build-appimage.sh): one file, $APPIMAGE, that the new release's AppImage replaces.
+// A running AppImage can be renamed over: its mount keeps the old file's data until it exits.
+class AppImageInstallation final : public Installation {
+public:
+    explicit AppImageInstallation(fs::path appimage) : appimage_(std::move(appimage)) {}
+
+    std::string_view asset_suffix() const override { return "-x86_64.AppImage"; }
+
+    fs::path download_path() const override {
+        fs::path partial = appimage_;
+        partial += ".partial";
+        return partial;
+    }
+
+    std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &args) const override {
+        if (chmod(downloaded.c_str(), 0755) != 0)
+            return std::string("cannot make the new AppImage runnable: ") + std::strerror(errno);
+        if (std::rename(downloaded.c_str(), appimage_.c_str()) != 0)
+            return "cannot put the new AppImage in place of " + appimage_.string() + ": " + std::strerror(errno);
+        // the new one in a session of its own, so that this one's ending (and its mount's) does not end it
+        std::vector<std::string> argv_text = {appimage_.string()};
+        argv_text.insert(argv_text.end(), args.begin(), args.end());
+        std::vector<char *> argv;
+        for (std::string &arg : argv_text)
+            argv.push_back(arg.data());
+        argv.push_back(nullptr);
+        pid_t pid = fork();
+        if (pid < 0)
+            return std::string("the new AppImage is in place, but could not be started (start it again): ") +
+                   std::strerror(errno);
+        if (pid == 0) {
+            setsid();
+            execv(argv[0], argv.data());
+            _exit(127);
+        }
+        return {};
+    }
+
+    void remove_leftovers() const override {
+        std::error_code error;
+        fs::path partial = download_path();
+        fs::remove(partial, error);
+        partial += ".sums";
+        fs::remove(partial, error);
+    }
+
+private:
+    fs::path appimage_;
+};
 
 class LinuxPlatform final : public Platform {
 public:
@@ -331,6 +420,65 @@ public:
         if (result != 0)
             return std::nullopt;
         return answer;
+    }
+
+    std::string http_download(std::string_view url, const fs::path &to, std::uint64_t max_bytes,
+                              std::string_view user_agent, const DownloadProgress &progress) const override {
+        const Curl *curl = load_curl();
+        if (curl == nullptr)
+            return "libcurl is not installed";
+        std::FILE *file = std::fopen(to.c_str(), "wb");
+        if (file == nullptr)
+            return "cannot write " + to.string() + ": " + std::strerror(errno);
+        void *handle = curl->easy_init();
+        if (handle == nullptr) {
+            std::fclose(file);
+            std::remove(to.c_str());
+            return "libcurl did not start";
+        }
+        std::string url_text(url), agent(user_agent);
+        DownloadTo download{curl, handle, file, 0, max_bytes, &progress};
+        curl->easy_setopt(handle, kOptUrl, url_text.c_str());
+        curl->easy_setopt(handle, kOptUserAgent, agent.c_str());
+        curl->easy_setopt(handle, kOptFailOnError, 1L);
+        curl->easy_setopt(handle, kOptFollowLocation, 1L);
+        curl->easy_setopt(handle, kOptNoSignal, 1L);
+        curl->easy_setopt(handle, kOptConnectTimeoutMs, 20000L);
+        // a stalled download ends: under 1 KB/s for 30 s
+        curl->easy_setopt(handle, kOptLowSpeedLimit, 1024L);
+        curl->easy_setopt(handle, kOptLowSpeedTime, 30L);
+        curl->easy_setopt(handle, kOptWriteFunction, &keep_download);
+        curl->easy_setopt(handle, kOptWriteData, &download);
+        int result = curl->easy_perform(handle);
+        std::string why;
+        if (download.stopped)
+            why = "stopped";
+        else if (download.too_big)
+            why = "the file is larger than expected";
+        else if (result != 0)
+            why = curl->easy_strerror(result);
+        curl->easy_cleanup(handle);
+        if (std::fclose(file) != 0 && why.empty())
+            why = "cannot write " + to.string() + ": " + std::strerror(errno);
+        if (!why.empty())
+            std::remove(to.c_str());
+        return why;
+    }
+
+    std::unique_ptr<Installation> installation(std::string &why) const override {
+        // set by the AppImage's own start (its runtime): the file the player ran
+        std::string appimage = env_or_empty("APPIMAGE");
+        std::error_code error;
+        if (appimage.empty() || !fs::is_regular_file(appimage, error)) {
+            why = "this is not a release's AppImage";
+            return nullptr;
+        }
+        fs::path folder = fs::path(appimage).parent_path();
+        if (access(folder.c_str(), W_OK) != 0) {
+            why = "the folder of " + appimage + " cannot be written";
+            return nullptr;
+        }
+        return std::make_unique<AppImageInstallation>(appimage);
     }
 
 private:
