@@ -315,7 +315,10 @@ def load_spot(path):
         spot.setdefault(k, v)
     spot["name"] = os.path.splitext(os.path.basename(path))[0]
     spot["path"] = path
-    if "quick" in spot and not os.path.isabs(spot["quick"]):
+    if "quick" in spot:
+        # (a local quick save: may name environment variables, e.g. ${KF4_ZSAVES}/NAME/quick0.kf4quick)
+        spot["quick"] = os.path.expandvars(spot["quick"])
+    if "quick" in spot and not os.path.isabs(spot["quick"]) and "$" not in spot["quick"]:
         spot["quick"] = os.path.join(os.path.dirname(path), spot["quick"])
     if "quick" not in spot and not all(k in spot for k in ("map", "position", "heading")):
         raise ValueError("%s: a spot needs map, position and heading (or quick)" % path)
@@ -436,6 +439,9 @@ def run_spot(args, spot, base_path):
     shutil.rmtree(folder, ignore_errors=True)
     saves = os.path.join(folder, "saves")
     os.makedirs(saves)
+    if "quick" in spot and not os.path.exists(spot["quick"]):
+        return {"spot": spot["name"], "status": "SKIP", "error": "no quick save %s (a local spot: set KF4_ZSAVES)" %
+                spot["quick"]}
     base = read_quick(base_path) if "quick" not in spot else None
     cache = {}  # a view (move, turn) -> its picture: the sweeps share their middle view
     logs = []
@@ -443,6 +449,7 @@ def run_spot(args, spot, base_path):
     result = {"spot": spot["name"]}
 
     def write_view(path, move, dh, dp):
+        dh += float(spot.get("heading_offset", 0.0))
         if base is not None:
             position = [float(p) + d for p, d in zip(spot["position"], move)]
             write_made_up(base, path, int(spot["map"]), position, float(spot["heading"]) + dh,
@@ -837,7 +844,7 @@ def main():
         for r in results:
             f.write("| %s | %s | %s | %s | %s |\n" % (r["spot"], r["status"], r.get("score", "-"), motion_scores(r),
                                                     r.get("error") or "%s/evidence.png" % r["spot"]))
-    bad = [r for r in results if r["status"] not in ("PASS", "MINOR")]
+    bad = [r for r in results if r["status"] not in ("PASS", "MINOR", "SKIP")]
     print("zfight_test: %d of %d spots pass, %.0f s; report in %s" % (len(results) - len(bad), len(results), total,
                                                                       os.path.join(args.out, "report.md")))
     sys.exit(1 if bad else 0)

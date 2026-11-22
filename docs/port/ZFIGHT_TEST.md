@@ -56,7 +56,8 @@ nothing of the game's data, so it is committed. Only `map`, `position` and `head
 | `args`, `env` | | more options and environment for the game (an option a build does not know is dropped) |
 | `teleport_first` | | a map to visit before the spot (`--teleport`), for state that lasts across maps |
 | `settle` | 90 | vblanks from a view's load to its picture (the fade in takes about 70) |
-| `quick` | | a quick save file to load instead of the numbers (local spots only: never commit a save) |
+| `quick` | | a quick save file to load instead of the numbers, for a scene a new game's save cannot show (progress); it may name environment variables, `${KF4_ZSAVES}/NAME/quick0.kf4quick`: the spot is SKIPped where the file is not (the save itself is never committed) |
+| `heading_offset` | 0 | turn every view by this much (radians), e.g. onto something beside a quick save's heading |
 | `found`, `approved` | | written by the tools: the score when the spot was added, and with `--approve` |
 
 ## The picture settings
@@ -198,11 +199,12 @@ energy c x a in brackets, FAIL from 900), and where the worst window is (`eviden
 | door-frames-1121 | FAIL | 860 | turn: c35 a44 (1540) | lines on the wooden frames and planks | fights |
 | soldier-knee-1121 | FAIL | 538 | turn: c34 a78 (2652) | the soldier's hands and knee (fov 30, 4x) | fights at the knee |
 | zfight-cave-1113 | FAIL | 235 | turn: c65 a20 (1300) | the lit wall right of the torch | fights |
-| chest-walkup-1121 | FAIL | 225 | turn: c72 a23 (1667) | the torch brazier by the door, not demonstrably the chest | fights on the chest |
+| chest-walkup-1121 | FAIL | 18633 | step: c19 a954 (18126) | the chest's lid (owner's new save, fov 30, steps of 4 units) | fights |
+| chest-ruin-edge-1121 | PASS | 0 | | the ruin's wall edge: not caught (below) | fights |
 | nearwall-1113 | MINOR | 469 | side: c22 a24 (528) | a thin seam line on the wall | real, not seen in play |
 | sign-1114 | MINOR | 332 | turn: c31 a27 (837) | where the rock meets the low wall | ? |
 | chest-far-1114 | PASS | 78 | | the braziers | |
-| wall-seam-1121 | PASS | 0 | | the seam: not caught (below) | fights |
+| wall-seam-1121 | PASS (local) | 0 | | the seam: not caught (below); SKIP without `KF4_ZSAVES` | fights |
 | ground-rect-1115 | PASS | 0 | | | |
 | reflect-1114 | PASS | 0 | | | |
 
@@ -211,9 +213,18 @@ bridge 1632 and chest-walkup 1667 the lowest over it. The window on the house's 
 owner: real, slight) is outside that spot's region now; at the player's view it scored c20-33 with few flips, the
 nearwall kind.
 
-Not caught: wall-seam-1121. The seam is nearly black where the dirt wall meets the bricks, and it did not flip under
-the sweeps, at the player's view or closer (fov 30, the heading turned onto it), at 12 levels or 6. Its region is
-the seam alone, so the spot passes; at its first region it failed on the helmet beside the seam.
+Not caught:
+- wall-seam-1121 (the owner's second, closer save). On that save part of the rampart collapses after the load, which
+  a new game's save does not do (its rampart stays whole), so the spot loads the owner's save (`${KF4_ZSAVES}`, a
+  local spot) and waits 400 vblanks (the collapse is over by 300). The stripes on the bricks beside the rock edge do
+  not show in the headless pictures at all, even brightened 4 times, at the player's view or closer (fov 30, turned
+  onto the seam), and nothing flips there at 12 levels or 6, in the sweeps or the walk.
+- chest-ruin-edge-1121: nothing flips on the ruin's wall edge at steps of 0.5 or 4 units or in the walk. At 16 units
+  it does, but steps that big flip the floor of a spot with nothing reported (ground-rect: 22520% at 4 units), so
+  they are not used.
+- chest-walkup-1121 needs steps of 4 units: its chest is far enough that 4 units is still under a pixel there, and
+  the region keeps out the near floor, which moves several pixels at 4 and flips; at 0.5 the lid barely flips.
+
 
 The whole suite takes about 14 minutes there (`--jobs 2`; 17 spots, about 25 runs each at 3x, two at 4x;
 `--motion turn,side` about half).

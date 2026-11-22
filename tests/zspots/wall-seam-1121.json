@@ -1,17 +1,19 @@
 {
-  "about": "where the dirt wall meets the rampart's bricks: dark diagonal stripes along the seam (owner, preview 2fdf828e, 2026-11-21); region: the seam only. NOT CAUGHT: the seam is nearly black and does not flip under these motions, closer (fov 30) either; the helmet beside it does (2026-11-21)",
+  "about": "where the dirt wall meets the rampart's bricks: dark diagonal stripes on the bricks beside the rock edge (owner, preview 2fdf828e, 2026-11-21). A LOCAL spot: the owner's quick save (${KF4_ZSAVES}, skipped without it), since a new game's save has the rampart whole: on the owner's, part of it collapses after the load (settle 400: it is down by 300). NOT CAUGHT: the stripes do not show in the headless pictures at all (brightened 4x), at the player's view or closer",
+  "quick": "${KF4_ZSAVES}/zwall2-1121/quick0.kf4quick",
   "map": 0,
   "position": [
-    -1159.288,
+    -1081.708,
     -800.0,
-    561.604
+    575.707
   ],
-  "heading": -1.59495,
-  "pitch": -0.185,
+  "heading": -1.61848,
+  "pitch": -0.24521,
+  "settle": 400,
   "region": [
-    0.12,
-    0.12,
+    0.15,
+    0.25,
     0.33,
-    0.6
+    0.68
   ]
 }

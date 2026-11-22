@@ -1,0 +1,48 @@
+{
+  "about": "the same view: the edge of the ruined building's wall by the chest flickers (owner, preview 2fdf828e, 2026-11-21); region on the ruin, the chest left out. NOT CAUGHT (2026-11-21): nothing flips there at steps of 0.5 or 4 units or in the walk; at 16 units it flips, but steps that big flip the floor of a clean spot too",
+  "map": 0,
+  "position": [
+    1375.137,
+    -0.0,
+    -3912.685
+  ],
+  "heading": -0.96662,
+  "pitch": -0.08028,
+  "region": [
+    0.18,
+    0.38,
+    0.62,
+    0.6
+  ],
+  "ignore": [
+    [
+      0.43,
+      0.43,
+      0.49,
+      0.5
+    ]
+  ],
+  "walk": [
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      6
+    ],
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      8
+    ]
+  ],
+  "step_units": 0.5
+}
