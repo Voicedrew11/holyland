@@ -62,10 +62,10 @@ target_compile_options(launcher_platform PRIVATE ${LAUNCHER_WARNINGS})
 find_package(SDL3 CONFIG REQUIRED)
 include(${ROOT}/cmake/rmlui.cmake)
 
-# The pages' files, carried inside the launcher as the game carries the menu's: the menu's fonts and logo
+# The pages' files, carried inside the launcher as the game carries the menu's: the menu's font, logo and masks
 # (port/ui/res/) and the launcher's pages (launcher/res/)
-set(LAUNCHER_UI_FILES logo.alpha fonts/Cinzel-Regular.ttf fonts/Cinzel-SemiBold.ttf fonts/Spectral-Regular.ttf
-    fonts/Spectral-SemiBold.ttf fonts/Spectral-Italic.ttf)
+set(LAUNCHER_UI_FILES logo.alpha corner_tl.alpha corner_tr.alpha corner_bl.alpha corner_br.alpha soft_box.alpha
+    fonts/HolylandMincho.ttf)
 file(GLOB LAUNCHER_PAGES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/res
      ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rml ${CMAKE_CURRENT_SOURCE_DIR}/res/*.rcss)
 list(SORT LAUNCHER_PAGES)

@@ -1,8 +1,10 @@
-/* The launcher's look (launcher/window.h): the player menu's fonts and colours (port/ui/res/kf4.rcss), kept plain.
-   Charcoal ground, bone-white text, one accent (amber) for what can be clicked; ember only for errors.
+/* The launcher's look (launcher/window.h): the player menu's (port/ui/res/kf4.rcss), cold iron and ice. The window is
+   the menu's window without the disc's art (the launcher has no disc to read it from until one is chosen): its dark
+   gradient, its iron frame and corners; every word in the game's Mincho, titles in ice blue; what can be clicked lit as
+   the menu's chosen line is, ice on the left fading out; ember only for errors.
 
-   Colours:  ground #0f0d0c   panel #181512   border #8a7f6e   amber #d4a95a   text #e2dccf   dim #c0b9ac
-             ember #e78868 */
+   Colours:  window #0f1114 to #060708   frame #5a6474 / #2f3540 / #22272f   ice #a8c4e8   text #dde3ec   soft #b4bccb
+             dim #8790a0   off #555d6b   key #3e4654   ember #c46a4a */
 
 /* (RmlUi has no default style sheet: every element is inline until it says otherwise) */
 div, p, h1, h2 {
@@ -17,87 +19,125 @@ body {
 	width: 100%;
 	height: 100%;
 	box-sizing: border-box;
-	padding: 24dp 32dp;
-	font-family: Spectral;
+	padding: 36dp 48dp;
+	font-family: Mincho;
 	font-weight: normal;
-	font-size: 20dp;
-	color: #e2dccf;
-	background-color: #0f0d0c;
+	font-size: 19dp;
+	color: #dde3ec;
+	background-color: #060708;
+	decorator: vertical-gradient(#0f1114 #060708);
 }
 
+/* ---- The window's frame: the menu's two rules and its iron corners, along the window's edges ----------------------- */
+#frame {
+	position: absolute;
+	left: 10dp;
+	top: 10dp;
+	right: 10dp;
+	bottom: 10dp;
+	border: 2dp #5a6474;
+	z-index: -1;
+}
+
+#frame div {
+	position: absolute;
+	left: 4dp;
+	top: 4dp;
+	right: 4dp;
+	bottom: 4dp;
+	border: 1dp #2f3540;
+	border-top-color: #3c4452;
+	decorator: vertical-gradient(#ffffff08 #ffffff00);
+}
+
+img.corner {
+	display: block;
+	position: absolute;
+	width: 64dp;
+	height: 64dp;
+	image-color: #8ea6c4;
+}
+
+#corner-tl { left: -6dp; top: -6dp; }
+#corner-tr { right: -6dp; top: -6dp; }
+#corner-bl { left: -6dp; bottom: -6dp; }
+#corner-br { right: -6dp; bottom: -6dp; }
+
 h1 {
-	font-family: Cinzel;
-	font-size: 32dp;
-	color: #e2dccf;
+	font-size: 28dp;
+	letter-spacing: 2dp;
+	color: #a8c4e8;
 	text-align: center;
-	margin: 0 0 8dp 0;
+	margin: 0 0 10dp 0;
 }
 
 p {
 	text-align: center;
+	line-height: 1.45;
 	margin: 0 0 6dp 0;
 	word-break: break-word; /* (a long path breaks where it must) */
 }
 
 .dim {
-	color: #c0b9ac;
+	color: #8790a0;
 }
 
-.error {
-	color: #e78868;
+.error, h1.error {
+	color: #c46a4a;
 }
 
 #logo {
-	width: 380dp;
-	image-color: #d4a95a;
-	margin-bottom: 28dp;
+	width: 360dp;
+	image-color: #a8c4e8;
+	margin-bottom: 30dp;
 }
 
 #logo.small {
-	width: 240dp;
+	width: 228dp;
 	margin-bottom: 18dp;
 }
 
-/* ---- Buttons and links: amber when the pointer is on them ---------------------------------------------------------- */
+/* ---- Buttons and links: lit as the menu's chosen line when the pointer is on them ----------------------------------- */
 .button {
 	display: inline-block;
-	padding: 8dp 20dp;
-	margin: 0 6dp;
-	border: 1.5dp #8a7f6e;
-	border-radius: 4dp;
-	background-color: #181512;
-	color: #e2dccf;
+	padding: 7dp 22dp;
+	margin: 0 5dp;
+	border: 1dp #3e4654;
+	color: #b4bccb;
 	cursor: pointer;
 }
 
 .button:hover {
-	border-color: #d4a95a;
-	color: #d4a95a;
+	border-color: #a8c4e8;
+	color: #f0f4fa;
+	decorator: horizontal-gradient(#a8c4e830 #a8c4e808);
 }
 
 .button.main {
-	border-color: #d4a95a;
-	color: #d4a95a;
+	border-color: #5a6474;
+	color: #a8c4e8;
+	decorator: vertical-gradient(#22324a #111a28);
 }
 
 .button.main:hover {
-	background-color: #2a2217;
+	border-color: #a8c4e8;
+	color: #f0f4fa;
 }
 
 .buttons {
 	text-align: center;
-	margin-top: 18dp;
+	margin-top: 20dp;
 }
 
 .link {
 	display: inline-block;
-	color: #c0b9ac;
+	color: #8790a0;
 	text-decoration: underline;
 	cursor: pointer;
 }
 
 .link:hover {
-	color: #d4a95a;
+	color: #a8c4e8;
 }
 
 /* ---- The disc's page: the drop area, what is needed, a typed path --------------------------------------------------- */
@@ -115,25 +155,31 @@ p {
 	align-items: center;
 	justify-content: center;
 	width: 100%;
-	height: 230dp;
+	height: 220dp;
 	box-sizing: border-box;
 	margin-bottom: 18dp;
-	border: 1.5dp #8a7f6e;
-	border-radius: 6dp;
+	border: 1dp #3e4654;
+	decorator: vertical-gradient(#ffffff06 #ffffff00);
 	cursor: pointer;
 }
 
+#drop h1 {
+	color: #dde3ec;
+}
+
 #drop:hover, #drop.over {
-	border: 2.5dp #d4a95a;
+	border-color: #a8c4e8;
+	decorator: vertical-gradient(#a8c4e81c #a8c4e804);
 }
 
 #drop:hover h1, #drop.over h1 {
-	color: #d4a95a;
+	color: #a8c4e8;
 }
 
 #drop.choosing {
 	cursor: default;
-	border: 1.5dp #8a7f6e;
+	border-color: #3e4654;
+	decorator: vertical-gradient(#ffffff06 #ffffff00);
 }
 
 /* a disc, drawn: a ring with a hole */
@@ -141,7 +187,7 @@ p {
 	width: 44dp;
 	height: 44dp;
 	box-sizing: border-box;
-	border: 2dp #e2dccf;
+	border: 2dp #8790a0;
 	border-radius: 22dp;
 	margin-bottom: 14dp;
 }
@@ -151,12 +197,12 @@ p {
 	height: 12dp;
 	box-sizing: border-box;
 	margin: 14dp 14dp;
-	border: 2dp #e2dccf;
+	border: 2dp #8790a0;
 	border-radius: 6dp;
 }
 
 #drop:hover .disc, #drop:hover .disc div, #drop.over .disc, #drop.over .disc div {
-	border-color: #d4a95a;
+	border-color: #a8c4e8;
 }
 
 .row {
@@ -169,20 +215,20 @@ p {
 
 input.text {
 	flex: 1;
-	padding: 8dp 10dp;
-	border: 1.5dp #8a7f6e;
-	background-color: #181512;
-	color: #e2dccf;
+	padding: 7dp 10dp;
+	border: 1dp #3e4654;
+	background-color: #0a0b0d;
+	color: #dde3ec;
 	cursor: text;
 }
 
 input.text:focus {
-	border-color: #d4a95a;
+	border-color: #a8c4e8;
 }
 
 input.text selection {
-	background-color: #5a4a2e;
-	color: #e2dccf;
+	background-color: #22324a;
+	color: #f0f4fa;
 }
 
 #type-link {
@@ -192,9 +238,9 @@ input.text selection {
 /* ---- The setup's foot: the version, the page's place, the way back ------------------------------------------------- */
 #foot {
 	position: absolute;
-	left: 24dp;
-	right: 24dp;
-	bottom: 16dp;
+	left: 32dp;
+	right: 32dp;
+	bottom: 26dp;
 	height: 40dp;
 }
 
@@ -202,8 +248,8 @@ input.text selection {
 	position: absolute;
 	left: 0;
 	bottom: 4dp;
-	font-size: 15dp;
-	color: #c0b9ac;
+	font-size: 13dp;
+	color: #555d6b;
 }
 
 #dots {
@@ -213,15 +259,15 @@ input.text selection {
 
 .dot {
 	display: inline-block;
-	width: 8dp;
-	height: 8dp;
+	width: 7dp;
+	height: 7dp;
 	margin: 0 4dp;
 	border-radius: 4dp;
-	background-color: #8a7f6e;
+	background-color: #3e4654;
 }
 
 .dot.here {
-	background-color: #d4a95a;
+	background-color: #a8c4e8;
 }
 
 #back {
@@ -242,20 +288,20 @@ input.text selection {
 
 #stage {
 	margin-top: 10dp;
+	color: #b4bccb;
 }
 
+/* (the menu's bar under a number: a thin rule, its done part in ice) */
 .bar {
 	width: 100%;
-	height: 8dp;
-	margin: 10dp 0;
-	border-radius: 4dp;
-	background-color: #2a2620;
+	height: 3dp;
+	margin: 12dp 0;
+	background-color: #22272f;
 }
 
 .bar div {
 	height: 100%;
-	border-radius: 4dp;
-	background-color: #d4a95a;
+	background-color: #a8c4e8;
 }
 
 .log {
@@ -264,16 +310,17 @@ input.text selection {
 	min-height: 120dp;
 	box-sizing: border-box;
 	padding: 8dp 12dp;
-	border: 1dp #2a2620;
-	background-color: #0a0908;
-	font-size: 15dp;
-	color: #c0b9ac;
+	border: 1dp #22272f;
+	background-color: #0a0b0dd0;
+	font-size: 14dp;
+	color: #8790a0;
 	overflow-y: auto;
 	text-align: left;
 }
 
 .log p {
 	text-align: left;
+	line-height: 1.3;
 	margin: 0;
 	white-space: pre-wrap;
 }
@@ -287,9 +334,10 @@ input.text selection {
 
 #update .notice {
 	padding: 8dp 14dp;
-	border: 1.5dp #d4a95a;
-	border-radius: 4dp;
-	color: #e2dccf;
+	border: 1dp #5a6474;
+	border-left: 3dp #a8c4e8;
+	color: #dde3ec;
+	decorator: horizontal-gradient(#a8c4e826 #a8c4e800);
 }
 
 #update .link {
@@ -299,6 +347,24 @@ input.text selection {
 /* ---- Home: the disc, the build, the buttons, the update check ------------------------------------------------------ */
 #updates-check {
 	margin-top: 22dp;
+}
+
+/* ---- Scrollbars (the menu's) --------------------------------------------------------------------------------------- */
+scrollbarvertical {
+	width: 5dp;
+	margin-left: 4dp;
+}
+
+scrollbarvertical slidertrack {
+	background-color: #00000000;
+}
+
+scrollbarvertical sliderbar {
+	background-color: #3e4654;
+}
+
+scrollbarvertical sliderbar:hover {
+	background-color: #5a6474;
 }
 
 /* (last, so it wins over a class that shows the element) */

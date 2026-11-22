@@ -5,7 +5,7 @@
 #include <string_view>
 
 struct UiAsset {
-    const char *path; // under port/ui/res/: "menu.rml", "fonts/Spectral-Regular.ttf"
+    const char *path; // under port/ui/res/: "menu.rml", "fonts/HolylandMincho.ttf"
     const unsigned char *data;
     size_t size;
 };

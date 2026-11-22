@@ -366,11 +366,11 @@ void value_rml(std::string &out, int tab, int row, const ui::RowShape &shape, bo
         out += std::string("<bar><fill style=\"width: ") + width + "\"></fill></bar>";
     }
     if (arrows) {
-        out += first ? "<arrow class=\"end\">&#x2039;</arrow>" : "<arrow data-step=\"-1\">&#x2039;</arrow>";
+        out += first ? "<arrow class=\"end\">&lt;</arrow>" : "<arrow data-step=\"-1\">&lt;</arrow>";
     }
     escaped(out, text);
     if (arrows) {
-        out += last ? "<arrow class=\"end\">&#x203A;</arrow>" : "<arrow data-step=\"1\">&#x203A;</arrow>";
+        out += last ? "<arrow class=\"end\">&gt;</arrow>" : "<arrow data-step=\"1\">&gt;</arrow>";
     }
     out += "</value>";
 }
