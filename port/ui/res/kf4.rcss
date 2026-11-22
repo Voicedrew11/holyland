@@ -1,8 +1,8 @@
 /* The player menu's look: King's Field IV's own, cold iron and ice. A sidebar with the Holyland logo and the sections,
    the section's rows, the focused row's help; the keys along the bottom. The window is the game's own (its black panel
-   and wisps of ice, read from the disc: "The game's own window" at the end); titles in Cinzel in ice blue; the
-   chosen line lit by a soft glow fading in from the left, no bars or ornaments; text in cool white. One accent (ice) throughout, taken
-   from the game's frame; ember only for warnings and a key being listened for. Only borders, colours, straight
+   and wisps of ice, read from the disc: "The game's own window" at the end); every word in the game's own Mincho
+   (fonts/HolylandMincho.ttf), titles in ice blue; the chosen line lit by a soft glow fading in from the left, no bars or
+   ornaments; text in cool white. One accent (ice) throughout, taken from the game's frame; ember only for warnings and a key being listened for. Only borders, colours, straight
    gradients and images (port/ui/ui_render.hpp draws no shaders, layers or transforms; the corners and the soft box are masks
    made by tools/ui_ornaments.py and tools/ui_masks.py).
 
@@ -16,7 +16,7 @@ div, h2, p {
 
 body {
 	display: block;
-	font-family: Spectral;
+	font-family: Mincho;
 	font-weight: normal;
 	font-size: 17dp;
 	color: #dde3ec;
@@ -74,7 +74,6 @@ body.closed #hint.shown {
 }
 
 #hint what {
-	font-family: Cinzel;
 	letter-spacing: 1.5dp;
 	font-size: 17dp;
 	color: #a8c4e8;
@@ -157,7 +156,6 @@ img.corner {
 }
 
 #subtitle {
-	font-family: Cinzel;
 	font-size: 13dp;
 	color: #8790a0;
 	margin-top: 6dp;
@@ -172,7 +170,6 @@ img.corner {
 
 tab {
 	display: block;
-	font-family: Cinzel;
 	font-size: 17dp;
 	letter-spacing: 1dp;
 	color: #8790a0;
@@ -191,7 +188,6 @@ tab.selected {
 
 /* the keys that change the section, above and below them */
 tab.end {
-	font-family: Spectral;
 	font-size: 12dp;
 	color: #555d6b;
 	padding-top: 2dp;
@@ -219,8 +215,6 @@ tab.end {
 }
 
 #heading {
-	font-family: Cinzel;
-	font-weight: bold;
 	font-size: 28dp;
 	color: #a8c4e8;
 	letter-spacing: 2dp;
@@ -255,7 +249,6 @@ row.heading {
 	height: 30dp;
 	margin-top: 10dp;
 	padding-left: 2dp;
-	font-family: Cinzel;
 	font-size: 15dp;
 	letter-spacing: 1dp;
 	color: #8fb0d8;
@@ -289,7 +282,6 @@ value.off {
 
 row.action value {
 	color: #8790a0;
-	font-style: italic;
 }
 
 /* the arrows either side of a choice's or a number's value, on the focused row */
@@ -411,7 +403,6 @@ choice.highlighted {
 
 #help h2 {
 	display: block;
-	font-family: Cinzel;
 	font-size: 19dp;
 	color: #a8c4e8;
 	padding-bottom: 6dp;

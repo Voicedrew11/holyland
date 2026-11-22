@@ -115,12 +115,9 @@ bool load_fonts() {
         Rml::Style::FontStyle style;
         Rml::Style::FontWeight weight;
     };
+    // (one face: the menus write in the game's Mincho, tools/make_menu_font.py, in one weight and no italic)
     static const Face faces[] = {
-        {"fonts/Spectral-Regular.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
-        {"fonts/Spectral-SemiBold.ttf", "Spectral", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
-        {"fonts/Spectral-Italic.ttf", "Spectral", Rml::Style::FontStyle::Italic, Rml::Style::FontWeight::Normal},
-        {"fonts/Cinzel-Regular.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
-        {"fonts/Cinzel-SemiBold.ttf", "Cinzel", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Bold},
+        {"fonts/HolylandMincho.ttf", "Mincho", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal},
     };
     for (const Face &face : faces) {
         const UiAsset *file = ui_asset(face.path);

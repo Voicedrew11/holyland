@@ -88,7 +88,7 @@ is not borrowed.
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
 | `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
 | `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
-| `port/ui/res/fonts/` | Cinzel (titles; static Regular and SemiBold cut from the variable font with fontTools' `varLib.instancer`) and Spectral (text), SIL OFL 1.1; `kenney_input_{xbox_series,playstation_series,nintendo_switch}.ttf` (controller pictures, Kenney's Input Prompts 1.5, CC0: `CC0-Kenney-Input-Prompts.txt`; their glyphs are in the private use area from U+E000, so each is its own family) |
+| `port/ui/res/fonts/` | `HolylandMincho.ttf`, every word: IPA P Mincho (the proportional cut of the Mincho the game's own letters are drawn again from, `tools/make_font_letters.py`) cut down to its Latin letters, without embedded bitmaps (so every size is anti-aliased), and renamed as the IPA Font License asks of a changed font (`tools/make_menu_font.py`, `IPA_Font_License_Agreement_v1.0.txt`); one weight, no italic; `kenney_input_{xbox_series,playstation_series,nintendo_switch}.ttf` (controller pictures, Kenney's Input Prompts 1.5, CC0: `CC0-Kenney-Input-Prompts.txt`; their glyphs are in the private use area from U+E000, so each is its own family) |
 | `cmake/rmlui.cmake`, `cmake/ui_assets.cmake` | RmlUi and FreeType built from `third_party/`; `res/` carried in the game as arrays |
 | `third_party/rmlui`, `third_party/freetype` | copied in (see their `UPSTREAM.md`), so a release builds offline |
 
@@ -109,7 +109,7 @@ else changes: the model and the page take any row.
 
 `kf4.rcss` has the palette at its top: cold iron and ice, taken from the game's own window frame (2026-11-21; before
 it dark iron and amber, and before that blue-grey and IM FELL English). The game's black panel and wisps of ice for the
-window (the iron frame and corners only when the disc lacks them), titles in Cinzel in ice blue, a soft glow fading in
+window (the iron frame and corners only when the disc lacks them), every word in the game's Mincho, titles in ice blue, a soft glow fading in
 from the left for the focused line (no bars or diamond rules, 2026-11-21), text in cool white; one accent throughout, ember only for warnings and
 a key being listened for. RmlUi has no default style sheet:
 every element is inline until the sheet says otherwise (hence `div, h2, p { display: block }`).

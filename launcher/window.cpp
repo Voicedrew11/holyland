@@ -355,7 +355,7 @@ void Window::State::draw(const ui::Frame &frame) {
         textures[upload.id] = texture;
     }
     SDL_SetRenderClipRect(renderer, nullptr);
-    SDL_SetRenderDrawColor(renderer, 15, 13, 12, 255); // (launcher.rcss: the window's charcoal)
+    SDL_SetRenderDrawColor(renderer, 6, 7, 8, 255); // (launcher.rcss: the window's gradient at its foot)
     SDL_RenderClear(renderer);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
     std::vector<float> xy;

@@ -14,7 +14,8 @@ layout(push_constant, std430) uniform Push {
     uint texa;       // TEXA: TA0 0-7, AEM 15, TA1 16-23
     uint tex1;       // TEX1: MMAG 0, MMIN 1-3, MXL 4-6, LCM 7, L 8-9; log2 of the anisotropy 10-12, the GPU's own
                      // level (PCR_TEX1_GPU_LEVELS) 13, the texture detail's bias to the GS's level 16-31 (signed,
-                     // 256ths; pcr_canvas.cpp's sampling_bits)
+                     // 256ths; pcr_canvas.cpp's sampling_bits); with the GPU's own level, 16-31 hold instead log2 of
+                     // the image's texels across one of the texture's (a finer font sheet's; 0 for the rest)
     float lod_k;     // TEX1's K
     uint levels;     // the texture's levels (mipmaps read: TEX1's MXL + 1 at most)
     ivec2 src_offset; // a texture from a surface: where in the surface's copy (GS pixels) it starts

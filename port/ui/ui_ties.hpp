@@ -52,7 +52,7 @@ private:
     std::vector<Reading> open_; // (a handle is its place plus one; a handful of files are opened, once each)
 };
 
-// Spectral (regular, semibold, italic) and Cinzel (regular, semibold) from the carried fonts/; false if one is missing
+// Holyland Mincho (the game's Mincho, tools/make_menu_font.py) from the carried fonts/; false if it is missing
 bool load_fonts();
 
 } // namespace ui

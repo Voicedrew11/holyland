@@ -693,7 +693,7 @@ void about_window() {
     ImGui::BulletText("The Verdite layout: Verdite2 (Voicedrew11, MIT)");
     ImGui::BulletText("Dear ImGui (MIT), cJSON (MIT), SDL3 (zlib)");
     ImGui::BulletText("The menu: RmlUi (MIT), FreeType (FreeType Licence)");
-    ImGui::BulletText("Its fonts: Cinzel (Natanael Gama) and Spectral (Production Type), SIL OFL 1.1");
+    ImGui::BulletText("Its font: IPA Mincho (IPA), cut down as Holyland Mincho, IPA Font License v1.0");
     ImGui::End();
 }
 
