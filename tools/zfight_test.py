@@ -214,8 +214,12 @@ def known_options(exe):
     if exe not in _help_cache:
         with open(exe, "rb") as f:
             data = f.read()
-        _help_cache[exe] = set(c.decode() for c in data.split(bytes(1))
-                               if re.fullmatch(rb"--[a-z0-9][a-z0-9-]*", c) or c == b"KF4_READ_SETTINGS")
+        known = set(c.decode() for c in data.split(bytes(1))
+                    if re.fullmatch(rb"--[a-z0-9][a-z0-9-]*", c) or c == b"KF4_READ_SETTINGS")
+        # (clang folds a short option's strcmp into integer compares, e.g. "--input": no string of its own then, but
+        # the usage text and the messages name it)
+        known |= set(m.decode() for m in re.findall(rb"(?<![A-Za-z0-9-])--[a-z0-9][a-z0-9-]*", data))
+        _help_cache[exe] = known
     return _help_cache[exe]
 
 
