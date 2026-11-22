@@ -21,7 +21,8 @@
        "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false,
                     "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false,
                     "attack_tracking": 0},
-       "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
+       "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0,
+                    "cheats_shown": false}
      }
 
    "bindings" holds only the actions that differ from their defaults (port/sdk/controls.c), each as its
@@ -521,6 +522,7 @@ void port_settings_load(void) {
     s->ui_scale = (float)read_number(overlay, "scale", s->ui_scale, 0.75, 2.0);
     s->save_slot = (int)read_number(overlay, "save_slot", s->save_slot, 0, 9);
     s->quick_slot = (int)read_number(overlay, "quick_slot", s->quick_slot, 0, 9);
+    s->cheats_shown = read_bool(overlay, "cheats_shown", s->cheats_shown);
 
     /* the command line wins for this run: a switch it turned off stays off */
     if (port_options.deinterlace) {
@@ -793,6 +795,7 @@ void port_settings_save(void) {
     put(overlay, "scale", cJSON_CreateNumber((double)(int)(s->ui_scale * 100.0f + 0.5f) / 100.0));
     put(overlay, "save_slot", cJSON_CreateNumber(s->save_slot));
     put(overlay, "quick_slot", cJSON_CreateNumber(s->quick_slot));
+    put(overlay, "cheats_shown", cJSON_CreateBool(s->cheats_shown));
 
     text = cJSON_Print(document);
     if (text == NULL) {

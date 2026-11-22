@@ -1273,12 +1273,30 @@ const SettingRow cheats_rows[] = {
      nullptr, cheat_message},
 };
 
+bool cheats_shown() {
+    return port_settings.cheats_shown != 0; // (the logo's five clicks: port/ui/player_ui.cpp)
+}
+
 const SettingTab tabs[] = {
     {"display", "Display", display_rows},       {"graphics", "Graphics", graphics_rows},
     {"controls", "Controls", controls_rows},    {"keys", "Key Bindings", binding_rows},
     {"gameplay", "Gameplay", gameplay_rows},    {"interface", "Interface", interface_rows},
-    {"general", "General", general_rows},       {"cheats", "Cheats", cheats_rows},
+    {"general", "General", general_rows},       {"cheats", "Cheats", cheats_rows, cheats_shown},
 };
+
+bool tab_shown(const SettingTab &tab) {
+    return tab.shown == nullptr || tab.shown();
+}
+
+// The shown tab of that index among the shown tabs (the caller keeps it below tab_count())
+const SettingTab &shown_tab(int shown) {
+    for (const SettingTab &tab : tabs) {
+        if (tab_shown(tab) && shown-- == 0) {
+            return tab;
+        }
+    }
+    return tabs[0];
+}
 
 bool row_shown(const SettingRow &row) {
     if (row.action >= 0 && !port_controls_action_used(row.action)) {
@@ -1289,7 +1307,7 @@ bool row_shown(const SettingRow &row) {
 
 // The index in the catalogue of the tab's n-th shown row
 int catalogue_index(int tab, int shown) {
-    std::span<const SettingRow> rows = tabs[tab].rows;
+    std::span<const SettingRow> rows = shown_tab(tab).rows;
     for (size_t i = 0; i < rows.size(); i++) {
         if (row_shown(rows[i]) && shown-- == 0) {
             return int(i);
@@ -1314,23 +1332,27 @@ std::span<const SettingTab> setting_tabs() {
 }
 
 int SettingsRows::tab_count() const {
-    return int(std::size(tabs));
+    int count = 0;
+    for (const SettingTab &tab : tabs) {
+        count += tab_shown(tab);
+    }
+    return count;
 }
 
 int SettingsRows::row_count(int tab) const {
     int count = 0;
-    for (const SettingRow &row : tabs[tab].rows) {
+    for (const SettingRow &row : shown_tab(tab).rows) {
         count += row_shown(row);
     }
     return count;
 }
 
 const SettingTab &SettingsRows::tab(int tab) const {
-    return tabs[tab];
+    return shown_tab(tab);
 }
 
 const SettingRow &SettingsRows::row(int tab, int row) const {
-    return tabs[tab].rows[size_t(catalogue_index(tab, row))];
+    return shown_tab(tab).rows[size_t(catalogue_index(tab, row))];
 }
 
 RowShape SettingsRows::shape(int tab, int index) const {
@@ -1453,9 +1475,9 @@ float SettingsRows::number_fraction(int tab, int index) const {
 }
 
 int SettingsRows::tab_of(const char *id) const {
-    for (size_t i = 0; i < std::size(tabs); i++) {
-        if (std::string_view(tabs[i].id) == id) {
-            return int(i);
+    for (int t = 0; t < tab_count(); t++) {
+        if (std::string_view(shown_tab(t).id) == id) {
+            return t;
         }
     }
     return -1;

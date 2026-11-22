@@ -88,6 +88,8 @@ typedef struct {
     float ui_scale;        /* the overlay's size, 0.75 to 2 */
     int save_slot;         /* the slot the Save states page has chosen */
     int quick_slot;        /* the slot of the quick save and quick load keys (port/include/port/quicksave.h) */
+    int cheats_shown;      /* the player menu shows its Cheats tab; clicking the Holyland logo five times shows or
+                              hides it (port/ui/player_ui.cpp; off by default) */
 } PortSettings;
 extern PortSettings port_settings;
 
