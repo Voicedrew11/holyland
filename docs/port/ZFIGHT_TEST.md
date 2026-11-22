@@ -19,6 +19,10 @@ each measure's flips (`maps_MOTION.npz`); `--motion turn,side` runs only those m
 spot's score into its JSON as `approved` (a record of what a good build scored; it changes no limit). Options after
 `--` go to every run of the game.
 
+Most spots are only numbers and run anywhere. A few scenes need progress a new game's save doesn't have (wall-seam's
+collapsed rampart); those spots load a quick save named through `KF4_ZSAVES` (a folder of `NAME/quick0.kf4quick`
+kept outside the repo, since a save is game data) and are SKIPped, not failed, where it isn't set.
+
 ## A spot
 
 A spot is a small JSON file in `tests/zspots/` (or `--spots DIR`, or `KF4_ZSPOTS`): where the player stands, and
@@ -173,8 +177,8 @@ worst windows are then on the dog's mouth and the soldier.
 
 ## Adding a spot
 
-In the game: stand where it flickers, face it, press F2. Then `tools/zfight_add_spot.py NAME --about "..."` (on
-the owner's PC: `C:\code\kf4-zspot-add.bat NAME "what fights"`). It reads the newest quick save in the data folder
+In the game: stand where it flickers, face it, press F2. Then `tools/zfight_add_spot.py NAME --about "..."` (a
+one-line wrapper script that sets `KF4_DISC` and `KF4_EXE` makes this a single command). It reads the newest quick save in the data folder
 (`quicksaves/`, or `--quick FILE`) for the map, position, heading and pitch only (the save is not copied into the
 spots folder and nothing in the data folder is written), writes `NAME.json`, checks that the spot made from the
 numbers shows the same picture as the quick save, runs the test on it once and writes the score into the JSON as
