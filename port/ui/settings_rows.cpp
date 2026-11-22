@@ -18,6 +18,7 @@ extern "C" {
 #include "port/live_settings.h"
 #include "port/platform.h"
 #include "port/quicksave.h"
+#include "port/scene_depth.h"
 #include "port/settings.h"
 #include "port/stats.h"
 #include "port/twin_stick.h"
@@ -423,6 +424,35 @@ bool flicker_filter_overridden() {
     return port_options.flicker_filter != port_settings.flicker_filter;
 }
 
+// (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens
+const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT},
+                               {port_scene_depth(PORT_SCENE_DEPTH_NEARER)->label, PORT_SCENE_DEPTH_NEARER},
+                               {port_scene_depth(PORT_SCENE_DEPTH_UNSETTLED)->label, PORT_SCENE_DEPTH_UNSETTLED},
+                               {port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU}};
+static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT);
+int get_scene_depth() {
+    return port_settings.scene_depth;
+}
+void set_scene_depth(int mode) {
+    port_settings.scene_depth = mode;
+    changed();
+}
+bool scene_renderer() {
+    return port_options.renderer == PORT_RENDERER_SCENE;
+}
+bool scene_depth_overridden() {
+    return port_options.scene_depth_forced != 0;
+}
+const char *scene_depth_note() {
+    if (port_options.scene_depth_forced || port_settings.scene_depth == port_options.scene_depth) {
+        return nullptr;
+    }
+    static char note[96];
+    const PortSceneDepth *now = port_scene_depth(port_options.scene_depth);
+    std::snprintf(note, sizeof(note), "Restart the game to use it. Now: %s.", now ? now->label : "?");
+    return note;
+}
+
 const SettingRow graphics_rows[] = {
     {"Rendering", "", RowKind::heading},
     {"Internal resolution",
@@ -444,6 +474,12 @@ const SettingRow graphics_rows[] = {
      RowKind::choice, texture_lods, {}, get_texture_lod, set_texture_lod, nullptr, nullptr, pc_renderer},
     {"Font", "IPA Mincho: a sharp font in the same style.\nOriginal: the game's own, blurry when enlarged.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
+    {"Depth",
+     "How surfaces close together are sorted. From the next start.\nExact: the PS2's depth at each pixel; least "
+     "z-fighting.\nLayers in one pass: as Exact, a little faster.\nLayers unsettled: as Exact, cheaper; a surface drawn "
+     "after a layer on it can lose.\nGPU: the old depth; fastest, more z-fighting.",
+     RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, nullptr, scene_renderer, nullptr,
+     scene_depth_overridden, scene_depth_note},
     {"View", "", RowKind::heading},
     {"Widescreen", "16:9 view with more at the sides. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
      get_widescreen, set_widescreen},

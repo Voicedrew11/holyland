@@ -12,7 +12,7 @@
                     "native_aniso": 1, "native_2d": "smooth", "font": "sharp",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
                     "reflection_clip": true,
-                    "presenter": "vulkan"},
+                    "presenter": "vulkan", "scene_depth": "exact"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"mouse_sensitivity": 1.0, "invert_y": false,
                     "instant_mouse_look": true, "twin_stick": true,
@@ -58,6 +58,7 @@
 #include "port/automap.h"
 #include "port/hands.h"
 #include "port/controls.h"
+#include "port/scene_depth.h"
 #include "port/data_dir.h"
 #include "port/twin_stick.h"
 #include "port/host.h"
@@ -412,6 +413,16 @@ void port_settings_load(void) {
         }
     }
     {
+        const char *depth = read_string(display, "scene_depth");
+
+        if (depth != NULL) {
+            s->scene_depth = port_scene_depth_from_name(depth);
+            if (s->scene_depth < 0) {
+                s->scene_depth = PORT_SCENE_DEPTH_EXACT;
+            }
+        }
+    }
+    {
         const char *font = read_string(display, "font");
 
         if (font != NULL) {
@@ -569,6 +580,9 @@ void port_settings_load(void) {
     if (!port_options.presenter_forced) {
         port_options.presenter = s->presenter;
     }
+    if (!port_options.scene_depth_forced) {
+        port_options.scene_depth = s->scene_depth;
+    }
     if (!port_options.native_draw_forced) {
         port_options.native_draw = s->native_draw ? PORT_ND_ACCEPTED : 0;
     }
@@ -708,6 +722,7 @@ void port_settings_save(void) {
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));
     put(display, "reflection_clip", cJSON_CreateBool(s->reflection_clip));
     put(display, "presenter", cJSON_CreateString(s->presenter == PORT_PRESENTER_VULKAN ? "vulkan" : "sdl"));
+    put(display, "scene_depth", cJSON_CreateString(port_scene_depth(s->scene_depth) ? port_scene_depth(s->scene_depth)->name : "exact"));
     audio = section("audio");
     put(audio, "volume", cJSON_CreateNumber(s->volume));
     put(audio, "mute", cJSON_CreateBool(s->mute));

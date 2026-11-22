@@ -15,10 +15,7 @@
 // and the pixel's Z less it (read at the pixel's middle: pcr_exact_depth); the depth written never past the corners'
 // bound (the GPU's early tests keep)
 #ifdef PCR_EXACT_Z
-#include "pcr_exact_z.h"
-layout(location = 10) flat in uint v_zref;
-layout(location = 11) noperspective in float v_zrel;
-layout(depth_less) out float gl_FragDepth;
+#include "pcr_exact_z.h" // (v_zref, v_zrel, gl_FragDepth and pcr_whole_depth there)
 #endif
 // (PCR_DEPTH_RULE, the _dr variants of the exact Z ones: the depth rule, pcr_depth_rule below) The depth surface's own
 // copy of its depth (pcr_canvas.cpp's Surface::zcopy), a storage image of one layer, bound at set 1's binding 11
@@ -494,38 +491,6 @@ bool alpha_passes(uint a) {
 }
 
 #ifdef PCR_EXACT_Z
-// The pixel's whole Z (pcr_common.h's exact Z), as paraLLEl-GS works it out: the triangle's shared whole Z plus the
-// rounded interpolation of the corners' differences from it at the pixel's middle (with a moved corner's fraction),
-// clamped to the Z buffer's largest.
-// Below the whole Z the depth keeps the plane's fine part (plane_z.h's pz_fine_bits), so that two surfaces a fraction
-// of a Z apart, which the GS rounds to one Z far from the eye, are drawn in their order (the strip of a log behind its
-// front no longer shows through it), and two meshes on one plane still tie. A decal (pcr_canvas.cpp's is_decal) takes
-// the top fine part of its whole Z instead, so that it wins against any surface of its whole Z under it, as on the GS:
-// its test is the GS's. That top part is only its test's: drawn again where it won (pcr_canvas.cpp's
-// settle_decal_depth), reset and then without PCR_F_DECAL, its pixels keep its own fine part,
-// so that a later draw of the same whole Z on its plane ties with it as on the GS, rather than losing to the top.
-void pcr_whole_depth() {
-    uint z, fine;
-    if (!pcr_plane_z(z, fine)) {
-        uint z0 = v_zref;
-        int r = int(roundEven(interpolateAtOffset(v_zrel, vec2(0.0))));
-        z = r >= 0 ? z0 + min(uint(r), 0xFFFFFFFFu - z0) : z0 - min(uint(-r), z0);
-    }
-    if (z >= pc.zmax) {
-        z = pc.zmax;
-        fine = 0u;
-    }
-    // (developers' KF4_PC_DEPTH=gsexact, PCR_F_PIXEL_CLAMP with exact Z, which it means nothing to otherwise: the GS's
-    // whole Z alone, no fine part, so that every two surfaces on one whole Z tie and the later draw wins, as on the GS;
-    // docs/plans/scene-renderer-design.md)
-    if ((pc.flags & PCR_F_PIXEL_CLAMP) != 0u) {
-        fine = 0u;
-    } else if ((pc.flags & PCR_F_DECAL) != 0u) {
-        fine = pz_fine_top(z);
-    }
-    gl_FragDepth = (float(z + pcr_loss_margin()) + float(fine) * (1.0 / 256.0)) * pc.zscale;
-}
-
 // (PCR_F_FULL_DEPTH: the depth rule's passes, pcr_canvas.cpp's rule_on_) The pixel's Z with its fraction, not rounded:
 // the plane's (pcr_exact_z.h's pcr_plane_depth), else the interpolated one; and its tolerance, the GS's own rounding
 // of it (the interpolated one's: its steps across and down and the float's error)

@@ -71,7 +71,7 @@ Placed place(uint at) {
         r.flags |= m.drop ? SCN_PLACED_DROP : 0u;
     }
     r.rgba = scn_pack_rgba(lit_colour(at));
-    r.pad0 = 0u;
+    r.zown = scn_own_zfrac(p.zf, r.zframe);
     r.pad1 = 0u;
     return r;
 }

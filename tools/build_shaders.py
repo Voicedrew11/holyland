@@ -66,6 +66,10 @@ SCENE_AGAIN = [
     # (developers' bound, KF4_SCN_ND_EMPTY: the native draws of 0x000 and 0x280 with no maths)
     (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_empty",
      ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_ND_EMPTY"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]]
+# (the scene renderer's exact Z, pcr_common.h's: each of those but the bound again with PCR_EXACT_Z, as <symbol>_xz; the
+# placed native draws work out their triangles' planes in the vertex stage, pcr_nd000.vert's scn_corner)
+SCENE_AGAIN += [(path, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for path, symbol, defines in SCENE_AGAIN
+                if not symbol.endswith("_empty")]
 
 
 def main():

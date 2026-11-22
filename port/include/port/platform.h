@@ -75,6 +75,12 @@ typedef struct {
        from the player menu. */
     int font;
     int font_forced;
+    /* --scene-depth: how the scene renderer keeps the 3D's depth (PORT_SCENE_DEPTH_*, port/scene_depth.h), from the
+       next start: it
+       chooses the depth's format, shaders and pipelines as the renderer opens. Developers' KF4_SCN_DEPTH=gpu and
+       KF4_SCN_SETTLE=0|nearer override it. */
+    int scene_depth;
+    int scene_depth_forced;
     /* --native-layer-z: how the renderer keeps and tests the 3D's Z (GSN_LAYER_Z_*, gsn.h:
        0 ps2, the GS's whole numbers, the layers blended over a surface failing the test in places and
        surfaces meeting in a sawtooth; 1 tolerant, the default: Z's fraction kept and the layers tested
