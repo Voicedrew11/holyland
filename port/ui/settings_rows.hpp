@@ -45,11 +45,13 @@ struct SettingTab {
     const char *id;   // for KF4_OVERLAY_SHOT's ui-<id>
     const char *name; // the tab's title
     std::span<const SettingRow> rows;
+    bool (*shown)() = nullptr; // nullptr: always
 };
 
 std::span<const SettingTab> setting_tabs();
 
-// The tabs' shown rows (a row's shown() can hide it), for the model and the view
+// The shown tabs' shown rows (a tab's or a row's shown() can hide it), for the model and the view; a tab's index is
+// among the shown tabs
 class SettingsRows final : public MenuRows {
 public:
     int tab_count() const override;
@@ -73,7 +75,7 @@ public:
     bool changed_from_default(int tab, int row) const;
     // a number's place in its range, 0 to 1 (for its bar)
     float number_fraction(int tab, int row) const;
-    // the tab of that id, or -1
+    // the shown tab of that id, or -1
     int tab_of(const char *id) const;
 };
 

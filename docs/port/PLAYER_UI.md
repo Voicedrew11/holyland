@@ -102,7 +102,9 @@ Add a `SettingRow` to its tab's array in `port/ui/settings_rows.cpp`: label, hel
 (text for the value: "Auto (2x)"), `shown` (hide the row), `enabled` (dim it), `overridden` (the command line chose
 this run's value), `note` (a changing line under the help: the cheats' last message). A `binding` row names its
 `action` (a `PortAction`) and is shown while `port_controls_action_used`; the Key Bindings rows are made from
-`ACTION_COUNT`, with a heading before each group in `binding_groups`. A new section is a new entry in `tabs`. Nothing
+`ACTION_COUNT`, with a heading before each group in `binding_groups`. A new section is a new entry in `tabs`; its own `shown`
+hides it (Cheats is hidden until the player clicks the Holyland logo five times in a row, each within 1.5 s, which
+sets `cheats_shown` in settings.json; five more hide it again). Nothing
 else changes: the model and the page take any row.
 
 ## The look
@@ -127,7 +129,7 @@ picture.
 - `ctest -R ui_menu`: the model.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
   presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; `xbox`,
-  `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; the sections are `display graphics controls keys gameplay interface general cheats`), and writes
+  `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; the sections are `display graphics controls keys gameplay interface general cheats`, `cheats` only with `"overlay": {"cheats_shown": true}` in the data folder's settings.json), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 
