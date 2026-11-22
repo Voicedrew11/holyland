@@ -1,14 +1,14 @@
 /* The automap mod (docs/port/AUTOMAP.md): a floor plan of the map the player is in, made from the map's
    own collision meshes, that fills in as the player explores (the fog of war, kept per save), with markers
    for what is in it, drawn over the game by the overlay (Dear ImGui) as a full map on its key (M) and as a
-   corner minimap. Off by default, like every mod; the Mods page's "Map" section, settings.json's "mods".
+   corner minimap. Off by default, like every mod; the player menu's Interface tab, settings.json's "mods".
 
    Three parts:
    - game/automap.c, the game's side: reads the maps, objects, entities and items from the game's own
      structures once a game frame (Automap_Poll, from Quick_PollGame) and builds what is shown;
    - port/platform/automap.c: the settings, the command line, the files (the fog of war, per save), and
      whether the full map is open;
-   - port/overlay/automap_view.cpp: the drawing, the hover labels and the Mods page's section.
+   - port/overlay/automap_view.cpp: the drawing and the hover labels.
    Everything runs on the game's thread (the overlay draws at the vblank), so nothing is locked. */
 #ifndef PORT_AUTOMAP_H
 #define PORT_AUTOMAP_H
@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-/* ---- Settings (settings.json "mods", the Mods page; port/platform/automap.c) --------------------- */
+/* ---- Settings (settings.json "mods", the player menu's Interface tab; port/platform/automap.c) ---- */
 typedef struct {
     int enabled;          /* the mod: off by default */
     int minimap;          /* the corner minimap while playing */
@@ -44,7 +44,7 @@ int port_automap_option(int argc, char **argv, int *i);
    left it alone, write puts the keys in */
 void port_automap_settings_read(const void *mods);
 void port_automap_settings_write(void *mods);
-/* a setting changed on the Mods page */
+/* a setting changed (the player menu's Interface tab) */
 void port_automap_settings_changed(void);
 
 /* ---- The full map ----------------------------------------------------------------------------- */

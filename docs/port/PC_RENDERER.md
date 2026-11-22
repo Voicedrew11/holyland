@@ -190,7 +190,7 @@ same, and paraLLEl-GS shows it: GameLoop_SetCameraMatrices' mode 1 mirrors the w
 water (the feet, the pond's floor) is mirrored to above it, into the 256 x 256 reflection the water then reads by the
 place on the screen; the parts of it over the water show through behind the real legs. Now, by default, the native
 draws of a mirror camera are cut at the water's plane; `--reflection-clip off` (settings.json `display.reflection_clip`,
-the overlay's Display page, live) is the PS2's picture.
+the player menu's Graphics tab, live) is the PS2's picture.
 
 - **The plane.** `vu1_mirror_plane` (port/render/vu1_record.cpp) takes a camera of mode 1 (the reflection of maps 008,
   009 and 014, and map 041's mirror drawn into the frame) and works out the water's height from its own matrices
@@ -2797,9 +2797,9 @@ The pump is not built (step 2: it buys nothing while pictures wait for their rec
 today's schedule: the pictures between a vblank are still worked out ahead (`port_interp_schedule`, up to 16 a
 vblank) and shown at their times, at a rate that follows the renderer.
 
-- `--frame-rate unlocked` (`settings.json` `"frame_rate": "unlocked"`, the Display page's "Unlocked"),
-  `--frame-rate-cap N` (0 none; a slider under it until 2026-11-20, when the owner took the setting out: now the
-  command line's alone, for test runs), `--tearing` (`tearing`, off).
+- `--frame-rate unlocked` (`settings.json` `"frame_rate": "unlocked"`, the player menu's Display tab, Frame rate
+  "Unlocked"), `--frame-rate-cap N` (0 none; a slider under it until 2026-11-20, when the owner took the setting out:
+  now the command line's alone, for test runs), `--tearing` (`tearing`, off).
 - **The rate** (`port/include/port/unlocked_rate.h`, `unlocked_rate.c`; `unlocked_rate_test`, ctest
   `unlocked_rate`): between 60 and the cap (or 16 a vblank, 959). At each game vblank gs.c says whether the native
   GS was behind, as the cut judges it, or left pictures between of the vblank before out; and frame_interp.c gives
@@ -2815,14 +2815,14 @@ vblank) and shown at their times, at a rate that follows the renderer.
   so no vblank leaves the screen: PERFORMANCE.md, "the game's 57-58 vblanks a second uncapped" (#107).
 - **The swapchain** (present_vk.cpp): unlocked is mailbox whatever VSync says (the owner's choice), FIFO where
   there is no mailbox; with `--tearing` immediate, then mailbox. SDL_Renderer's presenter keeps VSync as set.
-- **Adaptive sync** (2026-11-14; `--adaptive-sync`, `settings.json` `display.adaptive_sync`, off; the Display page's
-  "Adaptive sync (VRR)"; `port/include/port/adaptive_sync.h`): for a FreeSync/G-Sync screen. The swapchain FIFO at
-  every rate (over VSync and `--tearing`; the SDL presenter's VSync on), every rate over 30 no more than the screen's
-  rate less rate²/3600 (161 at 170 Hz, 116 at 120: `adaptive_sync_cap_hz`, ctest `adaptive_sync`), and `monitor` not
-  timed by the screen's refreshes (they follow the pictures under VRR), so fixed rates are timed by the game's clock
-  and shown when they come. VRR itself is the screen's and the desktop's (KWin: full-screen windows by default).
-  Measured at 009:0 with the owner's settings: FIFO made, 115.9 a second shown at the 120 Hz screen's cap of 116
-  (without it, 404, immediate).
+- **Adaptive sync** (2026-11-14; `--adaptive-sync`, `settings.json` `display.adaptive_sync`, off; the player menu's
+  Display tab, Vertical sync "Adaptive"; `port/include/port/adaptive_sync.h`): for a FreeSync/G-Sync screen. The
+  swapchain FIFO at every rate (over VSync and `--tearing`; the SDL presenter's VSync on), every rate over 30 no more
+  than the screen's rate less rate²/3600 (161 at 170 Hz, 116 at 120: `adaptive_sync_cap_hz`, ctest `adaptive_sync`), and
+  `monitor` not timed by the screen's refreshes (they follow the pictures under VRR), so fixed rates are timed by the
+  game's clock and shown when they come. VRR itself is the screen's and the desktop's (KWin: full-screen windows by
+  default). Measured at 009:0 with the owner's settings: FIFO made, 115.9 a second shown at the 120 Hz screen's cap of
+  116 (without it, 404, immediate).
 
 **Measured** (map 000, the owner's settings, `pace_test.py --mode pace`, 169.83 Hz simulated screen, real time;
 `--renderer fast --native-msaa 2 --native-colour high`):

@@ -1,12 +1,13 @@
-// The settings overlay (port/include/port/overlay.h): F1 opens a menu bar and the Settings window (Shift+F1 on the
-// Vulkan presenter, where F1 is the player menu's: port/include/port/player_ui.h, which this passes events to first),
+// The developers' overlay (port/include/port/overlay.h): ` (the backtick) opens a menu bar and the Settings window,
+// and so does F1 (Shift+F1 on the Vulkan presenter, where F1 is the player menu's: port/include/port/player_ui.h,
+// which this passes events to first),
 // drawn with Dear ImGui (third_party/imgui) over the game's picture, on the window's SDL_Renderer or by
 // the Vulkan presenter (port/platform/present_vk.cpp, --presenter vulkan) with ImGui's Vulkan backend. The
-// pages (the table `pages`): Display, Graphics, Controls, Gameplay, Saves, General, and Developer for
-// testing. Settings every player wants as the port has them are not offered; they stay in settings.json.
+// pages (the table `pages`): Developer, for testing, and General (the overlay's own size, the settings file). The
+// settings players change are the player menu's (port/ui/), not this overlay's.
 //
 // While it is open the keyboard, the mouse and the controller go to it, not to the game; the game
-// runs on unless "Pause the game while the overlay is open" is on (port/platform/kernel.c holds it).
+// runs on unless the player menu's "Pause while open" is on (port/platform/kernel.c holds it).
 // Settings are kept in settings.json (port/overlay/settings.c). Everything here runs on the game's
 // thread, at the vblank (port_pad_poll's events, port_video_present's drawing).
 //
@@ -171,427 +172,31 @@ void changed() {
     port_settings_changed();
 }
 
-// ---- Display -------------------------------------------------------------------------------------
-void window_size_combo() {
-    PortSettings &s = port_settings;
-    // window sizes: the common screen heights, and the PS2's 448 lines once and twice, as wide as
-    // the picture's shape (width 0); then monitors' own sizes, wide (16:9), 16:10 and ultrawide
-    // (21:9), which the picture is fitted into
-    struct Size {
-        int width, height;
-        const char *note;
-    };
-    static const Size sizes[] = {
-        {0, 448, " (PS2 lines)"}, {0, 720, ""},   {0, 896, " (PS2 lines x2)"}, {0, 900, ""},
-        {0, 1080, ""},            {0, 1440, ""},  {0, 2160, ""},               {2560, 1440, " (16:9)"},
-        {2560, 1600, " (16:10)"}, {3440, 1440, " (21:9)"}, {3840, 2160, " (16:9)"}, {3840, 2400, " (16:10)"},
-    };
-    const int count = (int)(sizeof(sizes) / sizeof(sizes[0]));
-    const bool wide = port_options.widescreen != 0;
-    SDL_Rect screen = {0, 0, 0, 0};
-    char label[64];
-    int current = -1;
-
-    SDL_GetDisplayBounds(window != NULL ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay(), &screen);
-    auto width_of = [&](int w, int h) { return w > 0 ? w : wide ? (h * 16 + 8) / 9 : (h * 4 + 2) / 3; };
-    // a height whose width the shape gives is left out where a monitor's size is the same
-    auto duplicate = [&](int i) {
-        for (int j = 0; sizes[i].width == 0 && j < count; j++) {
-            if (sizes[j].width != 0 && sizes[j].width == width_of(0, sizes[i].height) &&
-                sizes[j].height == sizes[i].height) {
-                return true;
-            }
-        }
-        return false;
-    };
-    const int window_width = width_of(s.window_width, s.window_height);
-    for (int i = 0; i < count; i++) {
-        if (!duplicate(i) && width_of(sizes[i].width, sizes[i].height) == window_width &&
-            sizes[i].height == s.window_height) {
-            current = i;
-        }
-    }
-    auto size_label = [&](int i) {
-        snprintf(label, sizeof(label), "%d x %d%s", width_of(sizes[i].width, sizes[i].height), sizes[i].height,
-                 sizes[i].note);
-        return label;
-    };
-    ImGui::BeginDisabled(s.fullscreen != 0);
-    char shown[64];
-    if (current >= 0) {
-        snprintf(shown, sizeof(shown), "%s", size_label(current));
-    } else {
-        snprintf(shown, sizeof(shown), "%d x %d", window_width, s.window_height);
-    }
-    if (ImGui::BeginCombo("Window size", shown)) {
-        for (int i = 0; i < count; i++) {
-            // sizes bigger than the screen are left out: full screen is for those
-            if (i != current && (duplicate(i) || (screen.h > 0 && (sizes[i].height > screen.h ||
-                                                                    width_of(sizes[i].width, sizes[i].height) > screen.w)))) {
-                continue;
-            }
-            if (ImGui::Selectable(size_label(i), i == current)) {
-                s.window_width = sizes[i].width;
-                s.window_height = sizes[i].height;
-                port_video_apply_settings();
-                changed();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndDisabled();
-    tooltip("The window's size; its width follows the picture's shape (4:3, or 16:9 with widescreen).\n"
-            "The window can also be resized by dragging its edges. Full screen always uses the monitor's\n"
-            "own resolution (1920 x 1080, 2560 x 1440, ...) and fits the picture to it.");
-}
-
-void scaling_controls() {
-    PortSettings &s = port_settings;
-    static const char *const scalings[] = {"Sharp pixels", "Smooth (bilinear)", "Best"};
-    int scaling = s.scaling;
-    if (ImGui::Combo("Scaling to the window", &scaling, scalings, 3)) {
-        s.scaling = scaling;
-        s.smooth = scaling != PORT_SCALING_SHARP;
-        changed();
-    }
-    tooltip("How the picture is fitted to the window.\nSharp pixels: each pixel repeated, blocky.\n"
-            "Smooth: bilinear filtering; made much smaller, fine detail flickers and edges step.\n"
-            "Best (the default): a cubic filter on linear light that averages every pixel covered when\n"
-            "made smaller and keeps edges sharp when made larger. (--present-scaling sharp|smooth|best)");
-    if (port_options.present_scaling >= 0 && port_options.present_scaling != s.scaling) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-}
-
-// Beside anti-aliasing (graphics_page): the presenter's sharpening, after the picture is scaled to the window
-void sharpen_slider() {
-    PortSettings &s = port_settings;
-    float sharpen = s.sharpen;
-    if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, sharpen > 0 ? "%.2f" : "off")) {
-        s.sharpen = sharpen < 0.02f ? 0.0f : sharpen;
-        changed();
-    }
-    tooltip("Contrast-adaptive sharpening after the scaling to the window (so after anti-aliasing): fine\n"
-            "detail crisper, hard edges left alone. Brings back some of the texture detail FXAA softens.\n"
-            "0: off (the default). It uses the best scaling. (--present-sharpen 0 to 1)");
-}
-
-void frame_rate_combo() {
-    static const int rates[] = {30, 60, 120, 144, 165, 240, PORT_FRAME_RATE_MONITOR, PORT_FRAME_RATE_UNLOCKED};
-    static const char *const names[] = {"30 (the PS2's)", "60", "120", "144", "165", "240", "The screen's refresh rate",
-                                        "Unlocked"};
-    const int count = int(sizeof(rates) / sizeof(rates[0]));
-    char shown[48];
-    int at = -1;
-
-    for (int i = 0; i < count; i++)
-        at = rates[i] == port_options.frame_rate ? i : at;
-    if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR) {
-        snprintf(shown, sizeof(shown), "The screen's refresh rate (%d)", port_frame_rate_hz());
-    } else if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
-        snprintf(shown, sizeof(shown), "Unlocked (%.0f now)", port_video_pictures_per_second());
-    } else {
-        snprintf(shown, sizeof(shown), "%d", port_options.frame_rate);
-    }
-    if (ImGui::BeginCombo("Pictures a second", shown)) {
-        for (int i = 0; i < count; i++) {
-            if (ImGui::Selectable(names[i], i == at))
-                port_live_set(PORT_LIVE_FRAME_RATE, rates[i]);
-        }
-        ImGui::EndCombo();
-    }
-    tooltip("30: the PS2's 30 pictures a second in play.\nMore: pictures between each two of the game's, the "
-            "camera, models, the HUD and fades where\nthey are at that time, so turning and walking look "
-            "smooth. The game still runs at 30: what\nit does is the same, and the picture is no later. The "
-            "menus are as they were. Applies at once.\nUnlocked: as many as the renderer keeps up with. A "
-            "fixed rate that is not the screen's judders\nwithout adaptive sync. (--frame-rate "
-            "30|60|120|144|240|monitor|unlocked)");
-    if (port_options.frame_rate != port_settings.frame_rate) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-}
-
-// VSync, adaptive sync and unlocked's tearing as one choice; settings.json keeps the three as they were
-enum Sync { SYNC_OFF, SYNC_VSYNC, SYNC_ADAPTIVE };
-
-Sync sync_now() {
-    if (port_options.adaptive_sync)
-        return SYNC_ADAPTIVE;
-    // unlocked shows the newest picture each refresh (mailbox) unless tearing is allowed; other rates follow VSync
-    if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED)
-        return port_options.tearing ? SYNC_OFF : SYNC_VSYNC;
-    return port_settings.vsync ? SYNC_VSYNC : SYNC_OFF;
-}
-
-void sync_set(Sync sync) {
-    PortSettings &s = port_settings;
-    s.adaptive_sync = port_options.adaptive_sync = sync == SYNC_ADAPTIVE;
-    if (sync != SYNC_ADAPTIVE) {
-        s.vsync = sync == SYNC_VSYNC;
-        s.tearing = port_options.tearing = sync == SYNC_OFF;
-    }
-    port_video_apply_settings();
-    changed();
-}
-
-void sync_combo() {
-    static const char *const names[] = {"Off (least latency, may tear)", "VSync (no tearing)",
-                                        "Adaptive sync (FreeSync, G-Sync)"};
-    int sync = sync_now();
-    if (ImGui::Combo("Sync", &sync, names, 3))
-        sync_set(Sync(sync));
-    tooltip("Off: each picture is shown at once, part way down the screen if need be (tearing).\n"
-            "VSync: each picture waits for the screen's refresh; unlocked, the screen shows the newest\n"
-            "picture at each refresh. On a 60 Hz screen a picture is shown twice about every 17 seconds.\n"
-            "Adaptive sync: for a VRR screen, which refreshes when each picture comes, so any rate is\n"
-            "shown evenly, without tearing or judder; every rate is kept a little under the screen's.\n"
-            "VRR must be on for the screen and the system too (on Linux the desktop's display settings;\n"
-            "most only for a full-screen window). (--adaptive-sync, --tearing)");
-    if (port_options.adaptive_sync && port_video_refresh_rate() > 0) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(up to %d a second)", adaptive_sync_cap_hz(port_video_refresh_rate()));
-    }
-    if (port_options.adaptive_sync != port_settings.adaptive_sync) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-}
-
-void display_page() {
-    PortSettings &s = port_settings;
-
-    ImGui::SeparatorText("Window");
-    window_size_combo();
-    bool fullscreen = s.fullscreen != 0;
-    if (ImGui::Checkbox("Full screen (borderless)", &fullscreen)) {
-        s.fullscreen = fullscreen;
-        port_video_apply_settings();
-        changed();
-    }
-    tooltip("Also F11.");
-    const char *const aspects[] = {port_options.widescreen ? "Keep 16:9" : "Keep 4:3, as on a TV (PS2)",
-                                   "Stretch to the window"};
-    if (ImGui::Combo("Picture shape", &s.aspect, aspects, 2))
-        changed();
-    tooltip("Keep: the picture keeps its shape, with black bars at the sides or top.\nStretch fills the window "
-            "and distorts the picture.");
-    scaling_controls();
-
-    ImGui::SeparatorText("Frame rate");
-    frame_rate_combo();
-    sync_combo();
-}
-
-// ---- Graphics ------------------------------------------------------------------------------------
-// The texture detail (mipmap level) and anisotropic filtering as one choice; "custom" for any other mix
-struct TextureQuality {
-    const char *name;
-    int lod;   // port_options.native_lod: 0 the PS2's, 1 matched to the resolution, 2 finest
-    int aniso; // port_options.native_aniso
-};
-const TextureQuality texture_qualities[] = {
-    {"PS2's", 0, 1}, {"Standard", 1, 1}, {"High (anisotropic 16x)", 1, 16}, {"Maximum (finest, 16x)", 2, 16}};
-const int TEXTURE_QUALITY_COUNT = int(sizeof(texture_qualities) / sizeof(texture_qualities[0]));
-
-void texture_quality_combo() {
-    int at = -1;
-    for (int i = 0; i < TEXTURE_QUALITY_COUNT; i++) {
-        if (texture_qualities[i].lod == port_options.native_lod && texture_qualities[i].aniso == port_options.native_aniso)
-            at = i;
-    }
-    if (ImGui::BeginCombo("Texture quality", at >= 0 ? texture_qualities[at].name : "Custom (settings file)")) {
-        for (int i = 0; i < TEXTURE_QUALITY_COUNT; i++) {
-            if (!ImGui::Selectable(texture_qualities[i].name, i == at))
-                continue;
-            port_gs_set_native_lod(texture_qualities[i].lod);
-            port_gs_set_native_aniso(texture_qualities[i].aniso);
-            port_settings.native_lod = texture_qualities[i].lod;
-            port_settings.native_aniso = port_options.native_aniso;
-            changed();
-        }
-        ImGui::EndCombo();
-    }
-    tooltip("How sharp textures stay with distance.\nPS2's: the PS2's mipmap levels, made for 640 x 448: far "
-            "surfaces blur at a higher resolution.\nStandard (the default): the level the PS2 would pick at "
-            "this resolution.\nHigh: also anisotropic filtering, so floors and walls seen at a grazing angle "
-            "stay sharp;\na little GPU time.\nMaximum: the whole texture at every distance, sharpest, but far "
-            "surfaces can shimmer.\nOnly mipmapped surfaces (about two thirds of the maps). (--native-lod, "
-            "--native-aniso)");
-}
-
-void graphics_page() {
-    PortSettings &s = port_settings;
-    const bool pc = port_options.renderer != PORT_RENDERER_GS;
-
-    ImGui::SeparatorText("Picture");
-    bool widescreen = port_options.widescreen != 0;
-    if (ImGui::Checkbox("Widescreen (16:9)", &widescreen))
-        port_live_set(PORT_LIVE_WIDESCREEN, widescreen);
-    tooltip("Off: the PS2's 4:3 picture.\nOn: the game's view is widened to 16:9 (the same height, more at the "
-            "sides), and the\nmenus, the message boxes and the HUD keep their 4:3 shape. Applies at once. "
-            "(--widescreen)");
-    if (widescreen) {
-        static const char *const huds[] = {"In the corner of the 16:9 picture", "Centred, where it is at 4:3"};
-        int hud = port_options.widescreen_hud_centred != 0;
-        ImGui::Indent();
-        if (ImGui::Combo("HUD", &hud, huds, 2)) {
-            s.widescreen_hud_centred = port_options.widescreen_hud_centred = hud;
-            changed();
-        }
-        tooltip("Where the widescreen picture puts the HUD (the gauges of the top left).");
-        ImGui::Unindent();
-    }
-    {
-        int fov = port_options.fov;
-        char name[40];
-
-        snprintf(name, sizeof(name), fov == 64 ? "%d (the PS2's)" : "%d degrees", fov);
-        if (ImGui::SliderInt("Field of view", &fov, 30, 120, name, ImGuiSliderFlags_AlwaysClamp)) {
-            s.fov = port_options.fov = fov;
-            changed();
-        }
-        tooltip("The 3D view's horizontal field at 4:3, in degrees. 64 is the PS2's; more sees further\n"
-                "round the sides, less zooms in. Widescreen widens the same view further. Applies at once.\n"
-                "(--fov 30-120)");
-        if (port_options.fov != s.fov) {
-            ImGui::SameLine();
-            ImGui::TextColored(colour_note, "(this run: command line)");
-        }
-    }
-    if (pc) {
-        int scale = port_options.native_scale;
-        char scale_name[32];
-        if (scale >= 1) {
-            snprintf(scale_name, sizeof(scale_name), "%dx", scale);
-        } else {
-            snprintf(scale_name, sizeof(scale_name), "Auto (%dx)", port_gs_native_scale());
-        }
-        if (ImGui::SliderInt("Resolution", &scale, 0, 4, scale_name, ImGuiSliderFlags_AlwaysClamp))
-            port_live_set(PORT_LIVE_NATIVE_SCALE, scale);
-        tooltip("The game is drawn at this many times the PS2's 640 x 448 (2x: 1280 x 896, 4x: 2560 x 1792).\n"
-                "1x is the PS2's picture. Auto (the default, all the way left): the multiple of 448 lines\n"
-                "nearest the height the window shows the picture at (1080: 2x, 1440: 3x, 2160: 4x), at most\n"
-                "2x on an integrated GPU. Applies from the next picture. (--native-scale auto|1-4)");
-        const char *aa_labels[PORT_AA_COUNT];
-        for (int m = 0; m < PORT_AA_COUNT; m++)
-            aa_labels[m] = port_antialias(m)->label;
-        int aa = port_options.antialias;
-        if (ImGui::Combo("Anti-aliasing", &aa, aa_labels, PORT_AA_COUNT))
-            port_live_set(PORT_LIVE_ANTIALIAS, aa);
-        tooltip("Smooths the stair-steps along edges, on the finished picture at the resolution above, before\n"
-                "it is scaled to the window. FXAA: cheap, but it softens fine detail and the 2D (text, the HUD)\n"
-                "a little too. SMAA: finds edges by their shape, softens less, costs a little more.\n"
-                "SMAA T2x: SMAA on two pictures drawn half a pixel apart, the last one moved to where things are\n"
-                "now: steadier thin edges in motion. Off is the picture as drawn. Applies from the next picture.\n"
-                "(--antialias off|fxaa|smaa|smaa_t2x)");
-        if (port_options.antialias != s.antialias) {
-            ImGui::SameLine();
-            ImGui::TextColored(colour_note, "(for this run: command line)");
-        }
-        sharpen_slider();
-        texture_quality_combo();
-    }
-
-    ImGui::SeparatorText("World");
-    static const char *const distances[PORT_DRAW_DISTANCE_COUNT] = {"1x (PS2)", "1.5x", "2x", "4x", "Max (no distance fog)"};
-    int distance = port_options.draw_distance;
-    if (ImGui::Combo("Draw distance", &distance, distances, PORT_DRAW_DISTANCE_COUNT))
-        port_live_set(PORT_LIVE_DRAW_DISTANCE, distance);
-    tooltip("1x: the PS2's fog.\nFurther: the fog starts and ends that many times as far away, so more of "
-            "the world\nshows through it. Max removes the distance fog, also the mist that is part of a\n"
-            "place's look (the Holy Forest). Where the game draws nothing, the background shows in\n"
-            "the fog's colour. Applies at once. (--draw-distance)");
-    if (port_options.draw_distance != s.draw_distance) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-    if (port_options.draw_distance != PORT_DRAW_DISTANCE_1) {
-        ImGui::Indent();
-        bool sky_fog = port_options.draw_distance_sky != 0;
-        if (ImGui::Checkbox("Push the sky's fog out too", &sky_fog)) {
-            s.draw_distance_sky = port_options.draw_distance_sky = sky_fog;
-            changed();
-        }
-        tooltip("Off: the sky keeps the PS2's fog (the sky is a dome around you, not further away).\nOn: its "
-                "fog goes out as well, which lightens it: the dark sky of the Village Ruins\nshows its clouds. "
-                "(--draw-distance-sky push)");
-        ImGui::Unindent();
-    }
-    static const char *const skies[] = {"PS2 (at the feet, its real distance)", "Modern (around the eye, behind everything)"};
-    int sky = port_options.native_sky == PORT_SKY_PS2 ? 0 : 1;
-    if (ImGui::Combo("Sky", &sky, skies, 2))
-        port_live_set(PORT_LIVE_SKY, sky == 0 ? PORT_SKY_PS2 : PORT_SKY_MODERN);
-    tooltip("Modern (the default): the sky's dome is centred on the eye and drawn behind everything, as a\n"
-            "modern game's sky: what lies beyond it shows (the tops of far hills on a few maps).\nPS2: the dome "
-            "at the feet with its real distance, as the PS2 draws it: it hides what lies\nbeyond it. Applies at "
-            "once. (--sky modern|ps2)");
-    if (port_options.native_sky != s.native_sky) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-    bool clip = port_options.reflection_clip != 0;
-    if (ImGui::Checkbox("Cut the water's reflection at the water", &clip)) {
-        s.reflection_clip = port_options.reflection_clip = clip;
-        changed();
-    }
-    tooltip("On (the default): what is under the water, a zombie's feet in a pond, is not in its\nreflection. "
-            "Off: as on the PS2, which mirrors the whole scene, the feet sticking up above\nthe water. With "
-            "native draw only. Applies at once. (--reflection-clip on|off)");
-    if (port_options.reflection_clip != s.reflection_clip) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(for this run: command line)");
-    }
-}
-
-// The PS2's TV picture fixes, each on by default (Developer > Renderer): all off shows the picture as the PS2 sent it
+// The PS2 picture fixes the player menu has not (Graphics > PS2 video has the others): paraLLEl-GS's scanout's two,
+// each on by default (Developer > Renderer, --renderer gs only)
 void ps2_picture_section() {
+    if (port_options.renderer != PORT_RENDERER_GS)
+        return;
     PortSettings &s = port_settings;
-    ImGui::TextUnformatted("The PS2's picture: fixes for what it made for a TV");
+    ImGui::TextUnformatted("paraLLEl-GS's scanout");
     struct Switch {
         const char *label;
         const char *tip;
         int *setting;
         int *option;
-        bool ps2_when_on; /* the option on is the PS2's way: the box shows it off */
-        bool gs_only;     /* paraLLEl-GS's scanout's (--renderer gs): the PC renderer has no such step */
     } switches[] = {
-        {"Weave the two fields (deinterlace)",
-         "The game draws each field as its own 224-line picture, half a line apart.\nOn: the two are woven "
-         "into one, as a TV shows them. Off: each field alone,\nwhich breaks up text. (--no-deinterlace)",
-         &s.deinterlace, &port_options.deinterlace},
-        {"Read a whole-frame picture whole (progressive)",
-         "On: a frame-mode interlaced picture is read whole.\nOff: a field at a time, as the GS scans it out. "
-         "(--no-progressive)",
-         &s.progressive, &port_options.progressive},
         {"Undo the blur of blended fields (anti-blur)",
          "On: undoes the blur of a game that blends its two read circuits.\nOff: keeps it, as on a TV. "
          "(--no-anti-blur)",
-         &s.anti_blur, &port_options.anti_blur, false, true},
+         &s.anti_blur, &port_options.anti_blur},
         {"Picture width follows the game's (adapt width)",
          "On: the picture is scanned out at the game's width.\nOff: at the TV's width. (--no-adapt-width)",
-         &s.adapt_width, &port_options.adapt_width, false, true},
-        {"Whole frames only (no interlace comb)",
-         "On: the game leaves out the picture between it draws over every other line while the view\n"
-         "turns, for the other field of an interlaced TV, which on a PC screen is a comb trailing what\n"
-         "moves, and shows the movies' and the menus' pictures whole. Off: as on the PS2. (--no-whole-frame)",
-         &s.whole_frame, &port_options.whole_frame},
-        {"Scrolling textures without a seam",
-         "On: the sky's clouds, the lava and the water repeat evenly. Off: as on the PS2, with a line\n"
-         "where the clouds or the lava warp. (--no-seamless-scroll)",
-         &s.seamless_scroll, &port_options.seamless_scroll},
-        {"No flicker filter (no up-and-down blur)",
-         "On (the default): the rows as the game drew them. Off: as on the PS2, each row blended half\n"
-         "with the row above, against an interlaced TV's flicker. (--flicker-filter)",
-         &s.flicker_filter, &port_options.flicker_filter, true},
+         &s.adapt_width, &port_options.adapt_width},
     };
     for (Switch &item : switches) {
-        if (item.gs_only && port_options.renderer != PORT_RENDERER_GS)
-            continue;
-        bool value = (*item.option != 0) != item.ps2_when_on;
+        bool value = *item.option != 0;
         if (ImGui::Checkbox(item.label, &value)) {
-            *item.setting = *item.option = value != item.ps2_when_on;
+            *item.setting = *item.option = value;
             changed();
         }
         tooltip(item.tip);
@@ -600,230 +205,10 @@ void ps2_picture_section() {
             ImGui::TextColored(colour_note, "(off for this run: command line)");
         }
     }
-    if (ImGui::Button("All off: as the PS2 shows it")) {
-        for (Switch &item : switches)
-            *item.setting = *item.option = item.ps2_when_on;
-        changed();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("All on: the PC's picture")) {
-        for (Switch &item : switches)
-            *item.setting = *item.option = !item.ps2_when_on;
-        changed();
-    }
 }
 
-// ---- Controls ------------------------------------------------------------------------------------
-void binding_button(int action, int slot) {
-    int listen_action, listen_slot;
-    bool listening = port_controls_listening(&listen_action, &listen_slot) && listen_action == action &&
-                     listen_slot == slot;
-    char label[96];
-
-    if (listening) {
-        std::snprintf(label, sizeof(label), "%s###b%d_%d", slot == BINDING_PAD_SLOT ? "Press a button..." : "Press a key...",
-                      action, slot);
-    } else {
-        char name[64];
-        port_controls_binding_label(port_controls_binding(action, slot), name, sizeof(name));
-        std::snprintf(label, sizeof(label), "%s###b%d_%d", name, action, slot);
-    }
-    if (listening)
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-    if (ImGui::Button(label, ImVec2(-FLT_MIN, 0)))
-        port_controls_listen(action, slot);
-    if (listening)
-        ImGui::PopStyleColor();
-    if (!listening && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-        port_controls_bind(action, slot, BINDING_NONE);
-        changed();
-    }
-}
-
-// The mouse's buttons outside play: which pad button each presses
-void mouse_in_menus() {
-    static const int menu_actions[] = {-1, ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE,
-                                       ACTION_START, ACTION_SELECT};
-    static const char *const menu_labels[] = {"Nothing", "Cross", "Circle", "Square", "Triangle", "Start", "Select"};
-    static const char *const buttons[3] = {"Left button", "Right button", "Middle button"};
-    for (int button = 0; button < 3; button++) {
-        int current = 0;
-        for (int i = 0; i < 7; i++)
-            if (menu_actions[i] == port_controls_menu_mouse(button))
-                current = i;
-        ImGui::SetNextItemWidth(ImGui::CalcTextSize("Triangle").x * 2.0f);
-        if (ImGui::Combo(buttons[button], &current, menu_labels, 7)) {
-            port_controls_set_menu_mouse(button, menu_actions[current]);
-            changed();
-        }
-    }
-}
-
-void controls_page() {
-    PortSettings &s = port_settings;
-    int listen_action, listen_slot;
-    static int was_listening;
-    bool listening = port_controls_listening(&listen_action, &listen_slot);
-
-    // a binding was made (or cleared) since the last frame
-    if (was_listening && !listening)
-        changed();
-    was_listening = listening;
-
-    ImGui::TextWrapped("One set of controls: W A S D walk and step sideways, the mouse turns and looks (held in "
-                       "play, let go in the menus), Space attacks, Q casts, E uses, Escape opens the menu and goes "
-                       "back. A controller works at the same time.");
-
-    bool twin_stick = port_twin_stick_setting() != 0;
-    if (ImGui::Checkbox("Twin-stick controls", &twin_stick)) {
-        port_twin_stick_set(twin_stick);
-        changed();
-    }
-    tooltip("The left stick walks and steps sideways, the right stick turns and looks, each as far as it\n"
-            "is pushed, up to the game's own speeds. Off, the sticks are the PS2's: the left one is the\n"
-            "d-pad (walk and turn), the right one only looks up and down.");
-    bool separate_run = port_options.separate_run != 0;
-    if (ImGui::Checkbox("Separate run key", &separate_run)) {
-        s.separate_run = port_options.separate_run = separate_run;
-        changed();
-    }
-    tooltip("Run while Run's key (Left Shift, or a controller's left stick press) is held, instead of\n"
-            "while the action button is: the action button then only talks, picks up and opens.\n"
-            "Applies at once. (--separate-run)");
-    if (port_options.separate_run != s.separate_run) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(on for this run: command line)");
-    }
-
-    ImGui::SeparatorText("Mouse");
-    float sensitivity = (float)port_controls_mouse_sensitivity();
-    bool invert = port_controls_mouse_invert() != 0;
-    if (ImGui::SliderFloat("Mouse sensitivity", &sensitivity, 0.25f, 4.0f, "%.2fx",
-                           ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic)) {
-        port_controls_set_mouse(sensitivity, invert);
-        changed();
-    }
-    if (ImGui::Checkbox("Invert mouse up / down", &invert)) {
-        port_controls_set_mouse(sensitivity, invert);
-        changed();
-    }
-    bool menus_open = ImGui::TreeNode("Mouse buttons in menus");
-    tooltip("Outside play (menus, pause, talking) the mouse presses these. In play, with the mouse\ncaptured, "
-            "its buttons are the bindings below.");
-    if (menus_open) {
-        mouse_in_menus();
-        ImGui::TreePop();
-    }
-
-    ImGui::SeparatorText("Bindings");
-    ImGui::TextWrapped("Click a slot and press a key, mouse button or controller button. Delete or a right click "
-                       "clears it; F1 or five seconds cancel. A controller's sticks are the pad's sticks.");
-    if (listening) {
-        ImGui::TextColored(colour_note, "Waiting for %s, slot %d...", port_controls_action_label(listen_action),
-                           listen_slot + 1);
-    }
-    // the table scrolls in what is left of the page, and the page scrolls when that is too little
-    float table_height = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 1.4f;
-    if (table_height < ImGui::GetFrameHeightWithSpacing() * 8)
-        table_height = ImGui::GetFrameHeightWithSpacing() * 8;
-    if (ImGui::BeginTable("bindings", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
-                          ImVec2(0, table_height))) {
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 1.6f);
-        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableHeadersRow();
-        for (int action = 0; action < ACTION_COUNT; action++) {
-            if (!port_controls_action_used(action))
-                continue;
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            if (port_controls_is_default(action))
-                ImGui::TextUnformatted(port_controls_action_label(action));
-            else
-                ImGui::TextColored(colour_note, "%s *", port_controls_action_label(action));
-            for (int slot = 0; slot < BINDING_SLOTS; slot++) {
-                ImGui::TableNextColumn();
-                binding_button(action, slot);
-            }
-        }
-        ImGui::EndTable();
-    }
-    if (ImGui::Button("Defaults")) {
-        port_controls_reset();
-        changed();
-    }
-    tooltip("Puts the keys, buttons and mouse settings back as they were.");
-    ImGui::SameLine();
-    ImGui::TextDisabled("* changed from the default");
-}
-
-// ---- Saves ---------------------------------------------------------------------------------------
 void key_name(int action, char *out, size_t size) {
     port_controls_binding_label(port_controls_binding(action, 0), out, size);
-}
-
-void saves_page() {
-    PortSettings &s = port_settings;
-    char save_key[64], load_key[64];
-
-    key_name(ACTION_GAME_SAVE, save_key, sizeof(save_key));
-    key_name(ACTION_GAME_LOAD, load_key, sizeof(load_key));
-    ImGui::SeparatorText("Quick saves");
-    ImGui::TextWrapped("Use these to play: they load in any build of the program, so they survive updates. %s "
-                       "saves to the chosen slot and %s loads it, in play (not in menus, messages or events); "
-                       "a load works on the title screen too.",
-                       save_key, load_key);
-    tooltip("A quick save is the game's own save (what a save point writes), taken where you "
-            "stand: the map, your position, heading and look, HP and MP, level, stats, items, magic, gold and the "
-            "world's flags (doors, chests, events, items picked up).\n"
-            "Loading restarts the map from it, as loading a save does: enemies come back as when "
-            "you enter a map, and what lasts only a while (ailments' timers, the power and magic gauges, "
-            "spell effects) starts afresh. The save point's three saves are left as they are.");
-    if (ImGui::BeginTable("quick", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthStretch, 0.7f);
-        ImGui::TableSetupColumn("Where", ImGuiTableColumnFlags_WidthStretch, 1.3f);
-        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableHeadersRow();
-        for (int slot = 0; slot < PORT_QUICK_SLOTS; slot++) {
-            char label[32];
-            PortQuickInfo info;
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            std::snprintf(label, sizeof(label), "Quick %d##quick", slot);
-            if (ImGui::Selectable(label, s.quick_slot == slot, ImGuiSelectableFlags_SpanAllColumns)) {
-                s.quick_slot = slot;
-                changed();
-            }
-            ImGui::TableNextColumn();
-            if (port_quick_info(slot, &info)) {
-                ImGui::Text("map %02X, level %d, HP %d/%d", info.map_tag, info.level, info.hp, info.hp_max);
-                ImGui::TableNextColumn();
-                char when[64] = "saved";
-                time_t time = (time_t)info.time;
-                if (struct tm *local = std::localtime(&time))
-                    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", local);
-                ImGui::TextUnformatted(when);
-            } else {
-                ImGui::TextDisabled("empty");
-                ImGui::TableNextColumn();
-            }
-        }
-        ImGui::EndTable();
-    }
-    if (ImGui::Button("Quick save"))
-        port_quick_request_save(s.quick_slot);
-    ImGui::SameLine();
-    PortQuickInfo info;
-    ImGui::BeginDisabled(!port_quick_info(s.quick_slot, &info));
-    if (ImGui::Button("Quick load"))
-        port_quick_request_load(s.quick_slot);
-    ImGui::EndDisabled();
-    if (port_overlay_paused())
-        ImGui::TextColored(colour_note, "The game is paused: a request is taken when the overlay closes.");
-    ImGui::TextDisabled("%s", port_quick_message());
 }
 
 // Save states (Developer): the whole running game, exact but for this build only
@@ -1176,56 +561,6 @@ void teleport_section() {
     ImGui::TextDisabled("%s", port_quick_message());
 }
 
-// ---- Gameplay ------------------------------------------------------------------------------------
-// A mod's checkbox, kept in settings.json and port_options, with the command line's note
-void mod_checkbox(const char *label, int *setting, int *option, const char *tip) {
-    bool on = *option != 0;
-    if (ImGui::Checkbox(label, &on)) {
-        *setting = *option = on;
-        changed();
-    }
-    tooltip(tip);
-    if (*option != *setting) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_note, "(on for this run: command line)");
-    }
-}
-
-void gameplay_page() {
-    PortSettings &s = port_settings;
-
-    ImGui::TextWrapped("Optional changes to how the game plays. All are off by default; with them off, the game plays as it does on the PS2.");
-    ImGui::SeparatorText("Tweaks");
-    {
-        static const char *speeds[] = {"Normal, as on the PS2", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
-        int speed = port_options.door_speed - 1;
-
-        if (speed < 0 || speed >= (int)(sizeof(speeds) / sizeof(speeds[0]))) {
-            speed = 0;
-        }
-        if (ImGui::Combo("Door speed", &speed, speeds, (int)(sizeof(speeds) / sizeof(speeds[0])))) {
-            s.door_speed = port_options.door_speed = speed + 1;
-            changed();
-        }
-        tooltip("Doors open and close this many times faster than on the PS2. Also affects wall panels.\n"
-                "Applies at once. (--door-speed)");
-        if (port_options.door_speed != s.door_speed) {
-            ImGui::TextColored(colour_note, "(for this run: command line)");
-        }
-    }
-    mod_checkbox("Myu's Necklace effect without wearing it", &s.myus_necklace, &port_options.myus_necklace,
-                 "Objects that glow while Myu's Necklace is worn always glow, so the amulet slot\nis free for another "
-                 "amulet. Applies at once. (--myus-necklace)");
-    mod_checkbox("No camera jolt when enemies hit you", &s.no_hit_jolt, &port_options.no_hit_jolt,
-                 "A hard hit no longer throws the view down: the camera stays where you aimed it. The hit\n"
-                 "still flashes red, rumbles and knocks you back. Applies at once. (--no-hit-jolt)");
-    mod_checkbox("Auto-loot gold drops", &s.auto_loot_gold, &port_options.auto_loot_gold,
-                 "The gold an enemy drops when you kill it is automatically looted.");
-    port_stats_overlay_mods(); // the extended stats mod (port/overlay/stats_panel.cpp)
-    automap_view_mods_section(); // the automap mod (port/overlay/automap_view.cpp)
-    hands_view_mods_section(); // the hands mod (port/overlay/hands_view.cpp)
-}
-
 // ---- Developer -----------------------------------------------------------------------------------
 void speed_section() {
     if (!ImGui::CollapsingHeader("Speed", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1268,56 +603,10 @@ void game_section() {
     tooltip("Copies the numbers above, the map and position, and this run's options.");
 }
 
-void cheats_section() {
-    if (!ImGui::CollapsingHeader("Cheats"))
-        return;
-    bool invincible = port_options.invincible != 0;
-    if (ImGui::Checkbox("Invincible", &invincible))
-        port_options.invincible = invincible;
-    tooltip("You lose no HP: hits still land, flash and knock you back, but take nothing, and falls,\n"
-            "deadly ground and scripted deaths do not kill. Poison and other ailments still show.\n"
-            "For testing areas a new character could not survive. Not saved: off at the next start\n"
-            "(--invincible turns it on from the start).");
-    if (ImGui::Button("Learn all spells"))
-        port_cheat_request(PORT_CHEAT_SPELLS);
-    tooltip("Every spell of the six schools, at the level beside. They show in Equipment > Magic and\n"
-            "the Item menu's magic once a menu is opened again.");
-    ImGui::SameLine();
-    {
-        int level = port_cheat_spell_level();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
-        if (ImGui::SliderInt("level", &level, 1, 3))
-            port_cheat_set_spell_level(level);
-        tooltip("Each level is its own spell, with its own strength, effect and length (Earth Heal 1 heals\n"
-                "for under 3 seconds; Earth Heal 3 also gives a 30 second boost, and its glow lasts as\n"
-                "long). Learning again sets every spell to this level.");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Add all equipment"))
-        port_cheat_request(PORT_CHEAT_EQUIPMENT);
-    tooltip("One of every weapon, shield, helm, armour, gauntlet, boot, ring, bracelet and amulet.");
-    ImGui::SameLine();
-    if (ImGui::Button("Add all items"))
-        port_cheat_request(PORT_CHEAT_ITEMS);
-    tooltip("99 of every carried item (one of a one-of-a-kind item): potions, herbs, crystals, wands,\n"
-            "arrows, maps. Not the keys, which belong to the story.");
-    if (ImGui::Button("Max MP and Magic Power"))
-        port_cheat_request(PORT_CHEAT_MAGIC);
-    tooltip("MP and Magic Power at 999, the game's own cap, and MP full. Magic Power is what makes\n"
-            "the magic gauge fill quickly.");
-    ImGui::SameLine();
-    if (ImGui::Button("All of these"))
-        port_cheat_request(PORT_CHEAT_SPELLS | PORT_CHEAT_EQUIPMENT | PORT_CHEAT_ITEMS | PORT_CHEAT_MAGIC);
-    tooltip("They change your game as progress does: a save made afterwards keeps them.");
-    if (port_cheat_message()[0])
-        ImGui::TextDisabled("%s", port_cheat_message());
-}
-
 void developer_page() {
     ImGui::TextWrapped("For testing and bug reports.");
     speed_section();
     game_section();
-    cheats_section();
     teleport_section();
     save_states_section();
     renderer_section();
@@ -1325,47 +614,10 @@ void developer_page() {
 }
 
 // ---- General -------------------------------------------------------------------------------------
-void audio_section() {
-    PortSettings &s = port_settings;
-
-    ImGui::SeparatorText("Audio");
-    if (ImGui::SliderInt("Volume", &s.volume, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
-        port_settings_apply_audio();
-        changed();
-    }
-    bool mute = s.mute != 0;
-    if (ImGui::Checkbox("Mute", &mute)) {
-        s.mute = mute;
-        port_settings_apply_audio();
-        changed();
-    }
-    if (port_options.no_audio)
-        ImGui::TextColored(colour_note, "No sound device this run (--no-audio).");
-}
-
 void overlay_section() {
     PortSettings &s = port_settings;
 
     ImGui::SeparatorText("Overlay");
-    bool pause = s.pause_when_open != 0;
-    if (ImGui::Checkbox("Pause the game while the overlay is open", &pause)) {
-        s.pause_when_open = pause;
-        changed();
-    }
-    tooltip("Off: the game runs on behind the overlay.");
-    bool fps = port_options.show_fps != 0;
-    char fps_key[64];
-    port_controls_binding_label(port_controls_binding(ACTION_SHOW_FPS, 0), fps_key,
-                                sizeof(fps_key));
-    if (ImGui::Checkbox("Frame-rate counter", &fps)) {
-        s.show_fps = port_options.show_fps = fps;
-        changed();
-    }
-    tooltip("The pictures the window shows a second, in the picture's top right corner, with the\n"
-            "overlay closed too; below it the game's own frames a second when they differ. Its key\n"
-            "shows and hides it in play. (--show-fps)");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", fps_key);
     static float scale = -1.0f;
     if (!ImGui::IsAnyItemActive() || scale < 0.0f)
         scale = s.ui_scale;
@@ -1378,12 +630,12 @@ void overlay_section() {
 }
 
 void general_page() {
-    audio_section();
     overlay_section();
     ImGui::SeparatorText("Settings file");
     ImGui::TextWrapped("%s", port_settings_path());
     ImGui::TextDisabled("Options on the command line override it for one run.");
 }
+
 
 // ---- Windows -------------------------------------------------------------------------------------
 // The Settings window's pages, in the sidebar's order; the id names a page for KF4_OVERLAY_SHOT
@@ -1393,10 +645,8 @@ struct PageEntry {
     void (*draw)();
 };
 const PageEntry pages[] = {
-    {"Display", "display", display_page},    {"Graphics", "graphics", graphics_page},
-    {"Controls", "controls", controls_page}, {"Gameplay", "gameplay", gameplay_page},
-    {"Saves", "saves", saves_page},          {"General", "general", general_page},
     {"Developer", "developer", developer_page},
+    {"General", "general", general_page},
 };
 const int PAGE_COUNT = int(sizeof(pages) / sizeof(pages[0]));
 
@@ -1450,7 +700,6 @@ void menu_bar() {
         return;
     ImGui::MenuItem("Settings", nullptr, &show_settings);
     ImGui::MenuItem("About", nullptr, &show_about);
-    update_badge_menu_item();
     char status[96];
     std::snprintf(status, sizeof(status), "%s to close%s", port_overlay_key(),
                   port_overlay_paused() ? "   (game paused)" : "");
@@ -1503,12 +752,14 @@ void draw_building() {
 }
 
 // ---- KF4_OVERLAY_SHOT ----------------------------------------------------------------------------
-// The pages' ids before November 2026's reorganization, so older scripts still find a page
+// Pages' ids that are gone (November 2026's reorganizations), so older scripts still open one
 const struct {
     const char *old_id;
     const char *id;
-} page_aliases[] = {{"audio", "general"}, {"interface", "general"}, {"savestates", "saves"},
-                    {"mods", "gameplay"}, {"debug", "developer"}};
+} page_aliases[] = {{"audio", "general"},    {"interface", "general"}, {"savestates", "developer"},
+                    {"mods", "developer"},   {"debug", "developer"},   {"display", "general"},
+                    {"graphics", "general"}, {"controls", "general"},  {"gameplay", "general"},
+                    {"saves", "developer"}};
 
 int page_index(const char *id) {
     for (int i = 0; i < PAGE_COUNT; i++)
@@ -1726,7 +977,9 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         return 0;
     if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat) {
         SDL_Scancode key = event->key.scancode;
-        if (key == SDL_SCANCODE_F1 || (overlay_open && key == SDL_SCANCODE_ESCAPE && !ImGui::GetIO().WantTextInput)) {
+        // (F1 gets here only as Shift+F1, or with no player menu; ` is not typed into a text field of the overlay)
+        if (key == SDL_SCANCODE_F1 || (key == SDL_SCANCODE_GRAVE && !ImGui::GetIO().WantTextInput) ||
+            (overlay_open && key == SDL_SCANCODE_ESCAPE && !ImGui::GetIO().WantTextInput)) {
             set_open(!overlay_open);
             return 1;
         }
@@ -1740,7 +993,8 @@ extern "C" int port_overlay_event(const void *sdl_event) {
             return 1;
     }
     if (event->type == SDL_EVENT_KEY_UP &&
-        (event->key.scancode == SDL_SCANCODE_F1 || event->key.scancode == SDL_SCANCODE_F11))
+        (event->key.scancode == SDL_SCANCODE_F1 || event->key.scancode == SDL_SCANCODE_GRAVE ||
+         event->key.scancode == SDL_SCANCODE_F11))
         return 1;
     // the automap mod's full map: its key closes it, and it has the mouse while it is open
     if (!overlay_open && automap_view_event(event))
@@ -1809,7 +1063,7 @@ extern "C" int port_overlay_holds_input(void) {
 }
 
 extern "C" const char *port_overlay_key(void) {
-    return port_player_ui_ready() ? "Shift+F1" : "F1";
+    return port_player_ui_ready() ? "Shift+F1 or `" : "F1 or `";
 }
 
 extern "C" int port_overlay_paused(void) {
@@ -1899,7 +1153,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
             settings_window();
         if (show_about)
             about_window();
-        update_badge_window();
     }
     (void)x, (void)y, (void)width, (void)height;
     imgui_typing.store(ImGui::GetIO().WantTextInput);

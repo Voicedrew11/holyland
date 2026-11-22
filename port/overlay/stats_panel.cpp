@@ -7,7 +7,7 @@
 //     equipment's wear; shown and hidden by its key (F6);
 //   - the hit log (bottom left: each hit dealt and taken, the real damage) and the health bar of the
 //     creature last hit (top middle);
-//   - its section of the Gameplay page.
+//   - its section of the player menu's Gameplay tab.
 // Everything runs on the game's thread at the vblank. The panel never takes the keyboard, mouse or
 // controller from the game: it takes input only while the overlay is open (to move it).
 //
@@ -418,63 +418,4 @@ extern "C" void port_stats_overlay_draw(int overlay_open, int x, int y, int widt
     if (panel_shown())
         panel(overlay_open != 0);
     port_host_float_end(mxcsr);
-}
-
-extern "C" void port_stats_overlay_mods(void) {
-    PortStatsOptions &o = port_stats_options;
-    bool on = o.on != 0;
-
-    ImGui::SeparatorText("Extended stats");
-    if (ImGui::Checkbox("Extended stats in the game's menus", &on)) {
-        port_stats_set_on(on);
-        o.menus = 1; // the menus' lines are what the mod is (extended_stats_menus stays in settings.json)
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("What the game keeps about you and never shows, in its own menus. It only reads the game.\n"
-                          "(--extended-stats)");
-    if (o.forced) {
-        ImGui::SameLine();
-        ImGui::TextColored(colour_title, "(on for this run: command line)");
-    }
-    ImGui::Indent();
-    ImGui::PushStyleColor(ImGuiCol_Text, colour_dim);
-    ImGui::TextWrapped("The main menu and Status: the experience to the next level, the hits and spells to the next "
-                       "Physical and Magical point, the weapon's level, the ailments' time left. Equipment: the durability "
-                       "of each piece, the weapon's level, the hidden effects of what you wear. Item and Arrange: what "
-                       "the item under the cursor does.");
-    ImGui::PopStyleColor();
-    ImGui::BeginDisabled(!o.on);
-    bool panel = o.panel != 0, damage = o.damage != 0, durability = o.durability != 0, timers = o.timers != 0;
-    if (ImGui::Checkbox("Equipment durability", &durability)) {
-        o.durability = durability;
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("The percent each piece's values count at, worn down by hits (the smith mends it).");
-    if (ImGui::Checkbox("Ailment timers on screen", &timers)) {
-        o.timers = timers;
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("While you play, the ailments running and the timed effects of spells and items (Power\n"
-                          "Seed, Widda Needle ...), each with its seconds left, beside the minimap (above it in a\n"
-                          "bottom corner, below it in a top one), or in its corner with the minimap off.");
-    if (ImGui::Checkbox("Hit log and the target's health", &damage)) {
-        o.damage = damage;
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("Each hit you deal or take, with its real damage and the HP left (bottom left), and the\n"
-                          "health bar of the creature you last hit (top).");
-    if (ImGui::Checkbox("Stats panel on its key (F6)", &panel)) {
-        o.panel = panel;
-        port_settings_changed();
-    }
-    ImGui::SetItemTooltip("Everything in one free-floating panel, shown and hidden by its key (F6, rebind it on the Controls\n"
-                          "page: \"Show / hide the stats panel\"); it can be moved while the overlay is open.");
-    ImGui::SameLine();
-    bool open = port_stats_panel_open() != 0;
-    ImGui::BeginDisabled(!o.panel);
-    if (ImGui::Checkbox("Shown now", &open))
-        port_stats_set_panel_open(open);
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    ImGui::Unindent();
 }

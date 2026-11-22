@@ -1,8 +1,8 @@
 /* The player menu (port/ui/): Holyland's own settings, drawn with RmlUi in King's Field IV's look, over the
    game's picture. F1 (or a controller's L3 + R3) opens and closes it; the developers' overlay (Dear ImGui,
-   port/include/port/overlay.h) moved to Shift+F1. Like the overlay it exists only with a window and settings.json
-   (port_settings_active): never in a headless run or with a pad script, so tests stay the same. KF4_OVERLAY_SHOT's
-   pages ui-<tab> open it for test pictures.
+   port/include/port/overlay.h) moved to Shift+F1 (or `). Like the overlay it exists only with a window and
+   settings.json (port_settings_active): never in a headless run or with a pad script, so tests stay the same.
+   KF4_OVERLAY_SHOT's pages ui-<tab> open it for test pictures.
 
    Drawn by the Vulkan presenter (port/platform/present_vk.cpp), which takes this picture's triangles from
    player_ui_frame (port/ui/ui_frame.hpp). All on the game's thread. */
@@ -19,7 +19,7 @@ extern "C" {
 void port_player_ui_init(void *sdl_window);
 /* (port/overlay/overlay.cpp, each SDL event) 1 when the menu took it, and nothing else may see it */
 int port_player_ui_event(const void *sdl_event);
-/* 1 when the menu started (it has F1, and the developers' overlay Shift+F1) */
+/* 1 when the menu started (it has F1, and the developers' overlay Shift+F1 or `) */
 int port_player_ui_ready(void);
 /* 1 while the menu is open: the keyboard, mouse and controller are its */
 int port_player_ui_open(void);

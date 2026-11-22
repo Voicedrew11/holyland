@@ -163,10 +163,11 @@ typedef struct {
     int auto_loot_gold;
     int auto_loot_gold_forced; /* --auto-loot-gold: on for this run whatever settings.json says */
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
-       default, turned on by --show-fps or settings.json, F3 or the overlay's Interface page */
+       default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;
     int show_fps_forced;     /* --show-fps: on for this run whatever settings.json says */
-    int invincible;          /* --invincible, or the Developer page: no HP lost (port_invincible()); never saved */
+    /* --invincible, or the player menu's Cheats tab: no HP lost (port_invincible()); never saved */
+    int invincible;
     /* --flash-recorder (port/platform/present_vk.cpp, docs/port/README.md "Debugging"): the Vulkan presenter
        keeps the last flash_seconds of presented pictures in a ring on the GPU, each flash_height rows high
        (its width the picture's shape), for the flash recorder's key (F8); 0 seconds: off. Live from the
@@ -186,11 +187,11 @@ typedef struct {
     int native_wave_uvs;
     int test_dma_wait;
     /* --sky (port_native_sky(), port/include/port/host.h): how the native sky is drawn, PORT_SKY_*; settings.json
-       display.native_sky, live from the overlay's Developer page */
+       display.native_sky, live from the player menu's Graphics tab */
     int native_sky;
     int native_sky_forced; /* --sky: this run's, whatever settings.json says */
     /* --reflection-clip (port_reflection_clip(), port/include/port/host.h): the mirror image cut at its water, on by
-       default; settings.json display.reflection_clip, live from the overlay's Display page */
+       default; settings.json display.reflection_clip, live from the player menu's Graphics tab */
     int reflection_clip;
     int reflection_clip_forced; /* --reflection-clip: this run's, whatever settings.json says */
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */

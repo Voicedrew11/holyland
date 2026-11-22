@@ -370,7 +370,7 @@ bool reflection_clip_overridden() {
     return port_options.reflection_clip != port_settings.reflection_clip;
 }
 
-// The PS2's TV picture fixes (as the overlay's Developer page): on, the PC's picture; off, the PS2's. The flicker
+// The PS2's TV picture fixes: on, the PC's picture; off, the PS2's. The flicker
 // filter is the other way round: on is the PS2's own blur.
 int get_deinterlace() {
     return port_options.deinterlace != 0;

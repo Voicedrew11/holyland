@@ -1,6 +1,6 @@
 // The update notice in the overlay (docs/port/LAUNCHER.md, "Updates"): what the launcher found (update.json)
-// shown as a short note when the game starts, a gold "Update available!" in the F1 menu bar and a window
-// with the release's page. The overlay never asks the network itself. Main thread.
+// shown as a short note when the game starts (the player menu's General tab has the release's page and Skip). The
+// overlay never asks the network itself. Main thread.
 #pragma once
 
 // Reads update.json and launcher.json again when due (every few seconds for the first minute: the
@@ -9,12 +9,6 @@ bool update_badge_poll(unsigned now_ms);
 
 // The note shown when the game starts ("Update available: v0.2.0, F1 for details")
 const char *update_badge_note();
-
-// In the menu bar: the gold button, when a notice is due
-void update_badge_menu_item();
-
-// The release's window, when the button opened it
-void update_badge_window();
 
 // "Holyland 0.2.0" or "Holyland (developer's build abc1234)"
 const char *update_badge_version_line();

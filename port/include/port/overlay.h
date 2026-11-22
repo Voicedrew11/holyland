@@ -1,5 +1,6 @@
-/* The settings overlay (port/overlay/overlay.cpp): Dear ImGui over the game's picture, F1 (Shift+F1 where the player
-   menu, port/include/port/player_ui.h, has F1; port_overlay_open, _visible and _paused count the menu too). It exists
+/* The developers' overlay (port/overlay/overlay.cpp): Dear ImGui over the game's picture, ` (the backtick), or F1
+   (Shift+F1 where the player menu, port/include/port/player_ui.h, has F1; port_overlay_open, _visible and _paused
+   count the menu too). It exists
    only with a window (SDL3), and never in a headless run or with a pad script (--input), so tests
    stay the same; KF4_OVERLAY_SHOT is the exception, for pictures of it (docs/port/README.md). */
 #ifndef PORT_OVERLAY_H
@@ -60,10 +61,10 @@ int port_overlay_holds_mouse(void);
    game and lets the mouse go from it at each vblank; port/sdk/libpad.c leaves out the controller's sticks): the
    layers only open and close. */
 int port_overlay_holds_input(void);
-/* The key that opens it, and so gives its windows (the profiler, the extended stats) the mouse: "Shift+F1" where
-   the player menu has F1, else "F1" */
+/* The key that opens it, and so gives its windows (the profiler, the extended stats) the mouse: "Shift+F1 or `"
+   where the player menu has F1, else "F1 or `" (the backtick opens it everywhere) */
 const char *port_overlay_key(void);
-/* The game holds still while the overlay is open ("Pause the game while the overlay is open") */
+/* The game holds still while the overlay or the player menu is open (the player menu's "Pause while open") */
 int port_overlay_paused(void);
 /* (port/sdk/controls.c) a save state was asked for by its key: shows port_state_message() a while */
 void port_overlay_notify_state(void);

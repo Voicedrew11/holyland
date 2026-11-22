@@ -3,7 +3,7 @@
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread (or, under the PC renderer, kept on the GPU) and queued here with its time; the window shows each when it is due (at each
    vblank the game's thread, waiting a little for the vblank's own; with --frame-rate above 60 the
    pictures between too, "The pictures between") in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
-   the settings overlay (F1) over it. That is
+   the player menu (F1) and the developers' overlay over it. That is
    SDL_Renderer's work, or with --presenter vulkan a swapchain's on the PC renderer's own device
    (port/platform/present_vk.cpp), which takes the PC renderer's picture as the image it is on the GPU
    (port_video_submit_image) and the others' pixels as they are here. A dumped frame is
@@ -621,7 +621,7 @@ static void fill_rect(void *context, int x, int y, int width, int height, unsign
 #endif
 
 #ifdef KF4_HAVE_SDL
-/* ---- The frame-rate counter (F3, --show-fps, the overlay's Interface page) --------------------- */
+/* ---- The frame-rate counter (F3, --show-fps, the player menu's Display tab) ----------------------- */
 /* The new pictures presented to the window, by either thread (draw_window, under PRESENT_LOCK; the
    last one drawn again for the overlay is not counted), and the rates sampled from them and from the
    game's frame counter twice a second on the game's thread (port_video_vblank). The counter is drawn

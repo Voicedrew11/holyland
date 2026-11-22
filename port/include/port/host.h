@@ -141,7 +141,7 @@ float port_fov_scale(void);
 int port_whole_frame(void);
 
 /* port_flicker_filter(): 1 while the game draws its flicker filter (port_options.flicker_filter; off by
-   default, on with --flicker-filter, --ps2-scanout or the overlay's Display page). Every frame of play
+   default, on with --flicker-filter, --ps2-scanout or the player menu's Graphics tab). Every frame of play
    Game_BlendScreenOffsetDown blends the picture over itself one row lower at half strength, so that a
    line one row thin is in both fields of an interlaced TV and does not flicker between them. A PC
    screen shows every row at once: there it is a blur up and down at 1x, and at a larger
@@ -161,12 +161,12 @@ int port_flicker_filter(void);
 int port_seamless_scroll(void);
 
 /* port_door_speed(): how many steps a door's opening or closing animation takes each game frame, 1 (the
-   PS2's) to 8 (settings.json's mods.door_speed, the Gameplay page, or --door-speed; 1 by default). The
+   PS2's) to 8 (settings.json's mods.door_speed, the player menu's Gameplay tab, or --door-speed; 1 by default). The
    patched MapObject_UpdateOpeningDoor and MapObject_UpdateClosingDoor step a door this many times. */
 int port_door_speed(void);
 /* port_auto_loot_gold(): 1 while the gold an enemy drops when the player kills it goes into his purse at once,
    with the pickup's own notice, rather than a pile to press the action button for (settings.json's
-   mods.auto_loot_gold, the Gameplay page; off by default). */
+   mods.auto_loot_gold, the player menu's Gameplay tab; off by default). */
 int port_auto_loot_gold(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
@@ -197,7 +197,7 @@ int port_frame_interp(void);
                                             whose triangles the pictures draw whole); 0: no longer */
 
 /* port_draw_distance(): how many times further than the PS2 the game's fog lies: 1 (the PS2's, the
-   default) unless --draw-distance or the overlay's Display page says 1.5, 2, 4 or max
+   default) unless --draw-distance or the player menu's Graphics tab says 1.5, 2, 4 or max
    (PORT_DRAW_DISTANCE_MAX_FOG: no distance fog within the far plane). The game draws every map record
    the visibility table of the player's record lists, with no distance cut, so what ends the view is the
    fog (game/draw_distance.c). port_draw_distance_far(): the far plane's factor (GameLoop_SetCameraMatrices'
@@ -261,7 +261,7 @@ int port_native_draw(int kind);
 #define PORT_WAVE_UVS_PS2 3
 int port_native_wave_uvs(void);
 /* port_native_sky(): how the sky is drawn when it is drawn natively (--native-draw sky; --sky, settings.json
-   display.native_sky, the overlay's Developer page, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
+   display.native_sky, the player menu's Graphics tab, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
    PORT_SKY_MODERN (the default, `modern`): where the sky is the frame's first draw, the dome centred on the
      eye and at the far plane (Z 0: it hides nothing drawn after it), its fog and colour the game's; where
      other records are drawn before it (maps 000 and 004), the PS2's (game/native_draw/nd_sky.c).
@@ -271,7 +271,7 @@ int port_native_wave_uvs(void);
 #define PORT_SKY_MODERN 1
 int port_native_sky(void);
 /* port_reflection_clip(): 1 while the mirror image is cut at its water (--reflection-clip, settings.json
-   display.reflection_clip, the overlay's Display page, live; on by default). The game draws the water's reflection
+   display.reflection_clip, the player menu's Graphics tab, live; on by default). The game draws the water's reflection
    (maps 008, 009, 014) and map 041's mirror by mirroring the whole scene about the water line and cuts nothing off,
    so what is under the water, a zombie's feet in a pond, shows in the reflection above it, behind its legs.
    paraLLEl-GS shows it too. On, the native draws of the mirror camera are cut at the water's plane on the GPU
@@ -289,15 +289,15 @@ int port_test_dma_wait(void);
    the amulet slot holds. */
 int port_myus_necklace(void);
 
-/* port_no_hit_jolt(): 1 while the steady view mod is on (--no-hit-jolt, or the overlay's Mods page). A hard
+/* port_no_hit_jolt(): 1 while the steady view mod is on (--no-hit-jolt, or the player menu's Gameplay tab). A hard
    hit then no longer throws the view down (Player_TiltViewFromHit starts no tilt); the hit still flashes,
    rumbles and knocks back. */
 int port_no_hit_jolt(void);
 
-/* The separate run key (--separate-run, or the Mods page) is read through port_controls_run_held()
+/* The separate run key (--separate-run, or the player menu's Controls tab) is read through port_controls_run_held()
    (port/include/port/controls.h). */
 
-/* port_invincible(): 1 while the debug option is on (--invincible, or the overlay's Developer page; never
+/* port_invincible(): 1 while the debug option is on (--invincible, or the player menu's Cheats tab; never
    saved). The player then loses no HP: hits still land, flash and knock back, but take nothing
    (Player_LoseHp), and falls, deadly ground and scripted kills or damage do not kill. For testing
    areas a new character could not survive; it is not a mod. */

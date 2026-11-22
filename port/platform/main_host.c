@@ -145,9 +145,9 @@
        --hands           the opt-in mod: two weapons, two spells and five hotkeys, swapped on keys, with a cross
                          of cards at the bottom left (port/include/port/hands.h); --weapon-sets is the old name
        --show-fps        the frame-rate counter in the picture's top right corner (F3 shows and hides it)
-       --invincible      debugging: the player loses no HP and does not die (the overlay's Developer page)
+       --invincible      debugging: the player loses no HP and does not die (the player menu's Cheats tab)
        --cheats LIST     debugging: once in play, spells, equipment, items and/or magic (comma-separated,
-                         or all), as the Developer page's buttons do; spells1, spells2 or spells3 for the
+                         or all), as the player menu's Cheats tab does; spells1, spells2 or spells3 for the
                          spells at that level (3 otherwise) (port/include/port/cheats.h)
        --dump-frames N,N write the picture shown at these vblanks as PNGs
        --dump-dir DIR    where --dump-frames writes (the current directory by default)
