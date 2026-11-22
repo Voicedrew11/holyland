@@ -1,0 +1,24 @@
+{
+  "about": "stairs by a wall, a negative control (owner 11-13): the triangle that comes and goes at the screen's edge when walking here is the game's own near clipping (paraLLEl-GS and old builds too), so no walk",
+  "map": 0,
+  "position": [
+    -35.001,
+    1300.0,
+    -8975.054
+  ],
+  "heading": 0.41106,
+  "pitch": -0.09685,
+  "motion": [
+    "turn",
+    "step",
+    "side"
+  ],
+  "ignore": [
+    [
+      0.85,
+      0.7,
+      1.0,
+      1.0
+    ]
+  ]
+}

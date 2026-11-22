@@ -97,7 +97,7 @@ float view_place(float n, float q, float s) {
 struct Place {
     int x, y, z;
     float q;
-#if defined(ND_STANDALONE) || defined(PCR_PLANES)
+#if defined(ND_STANDALONE) || defined(PCR_PLANES) || defined(SCN_PLACE)
     float zf; // (sa_280.vert) Z before FTOI4: what the scene's depth is made of, unrounded
 #endif
 };
@@ -201,7 +201,7 @@ Place vu_place(uint slot) {
     p.x = ftoi(vu_mul(c.x, p.q) * 16.0);
     p.y = ftoi(vu_mul(c.y, p.q) * 16.0);
     p.z = ftoi(vu_mul(c.z, p.q) * 16.0);
-#if defined(ND_STANDALONE) || defined(PCR_PLANES)
+#if defined(ND_STANDALONE) || defined(PCR_PLANES) || defined(SCN_PLACE)
     p.zf = vu_mul(c.z, p.q);
 #endif
     return p;

@@ -67,9 +67,14 @@ uint32_t zmax_of(uint32_t zpsm) {
     return zpsm == 0x30 ? 0xFFFFFFFFu : zpsm == 0x31 ? 0xFFFFFFu : 0xFFFFu;
 }
 
-// The depth a Z is in its Z buffer's image: Z / zmax (D16_UNORM's whole steps are the 16-bit Z buffers' whole Z)
-float depth_of(uint32_t z, uint32_t zpsm) {
+// The depth a Z is in its Z buffer's image: with exact Z (scn::Drawer::exact_z) Z times the draws' zscale, as
+// pcr_exact_z.h writes it (the fine part below it 0); else Z / zmax (D16_UNORM's whole steps are the 16-bit Z buffers'
+// whole Z)
+float depth_of(uint32_t z, uint32_t zpsm, bool exact_z) {
     uint32_t zmax = zmax_of(zpsm);
+    if (exact_z) {
+        return float(std::min(z, zmax)) * (zpsm == 0x30 ? 1.0f / 4294967296.0f : 1.0f / 16777216.0f);
+    }
     return float(double(std::min(z, zmax)) / double(zmax));
 }
 
@@ -207,15 +212,18 @@ public:
         : device_(device), times_(times), notes_(notes), drawer_(device, times), store_(store_limits()) {
         const VkFormatFeatureFlags2 need = VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
                                            VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
-        d16_ = device_.image_format_is_supported(VK_FORMAT_D16_UNORM, need);
+        exact_z_ = drawer_.exact_z();
+        // (exact Z's decals settled where the depth can have a stencil: Material::settle; the drawer's choice)
+        settle_ = drawer_.settle_decals() && device_.image_format_is_supported(VK_FORMAT_D32_SFLOAT_S8_UINT, need);
+        d16_ = !exact_z_ && device_.image_format_is_supported(VK_FORMAT_D16_UNORM, need);
         const char *date = getenv("KF4_SCN_DATE");
         first_draw_on_ = drawer_.first_draw_ok() && !(date && strcmp(date, "copy") == 0);
         fprintf(stderr, "[scn] the scene renderer: depth %s for the 16-bit Z buffers (D32F the others), DATE's shadows %s\n",
-                d16_ ? "D16_UNORM" : "D32F (no D16_UNORM here)",
+                settle_ ? "D32F with a stencil, exact Z, decals settled" : exact_z_ ? "D32F, exact Z" : d16_ ? "D16_UNORM" : "D32F (no D16_UNORM here)",
                 first_draw_on_ ? "by the first-draw image" : "by a copy of the target");
         // every pipeline the drawer can draw with, made before play (pcr_pipelines.h's warm_drawing): the targets'
         // formats (make_target_image's, and the first-draw image's where DATE draws into it)
-        std::vector<VkFormat> colours = {colour_format}, depths = {VK_FORMAT_D32_SFLOAT};
+        std::vector<VkFormat> colours = {colour_format}, depths = {settle_ ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT};
         if (first_draw_on_) {
             colours.push_back(Drawer::first_format);
         }
@@ -410,7 +418,7 @@ public:
         sm.ztest = first.ztest;
         sm.zcompare = first.zcompare;
         sm.push = first.push;
-        uint32_t flags = texture_flags(s, sb.texture) | (first.push.flags & F_PIXEL_CLAMP);
+        uint32_t flags = texture_flags(s, sb.texture) | (first.push.flags & (F_PIXEL_CLAMP | F_EXACT_Z | F_DECAL));
         flags |= bits(s.prim, 5, 1) ? F_FGE : 0;
         flags |= bits(s.fba, 0, 1) ? F_FBA : 0;
         flags |= bits(s.prim, 6, 1) ? F_SHADER_BLEND : 0;
@@ -1449,7 +1457,7 @@ public:
         cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
                      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
         const VkImageSubresourceLayers layers = {
-            VkImageAspectFlags(is_depth_format(live->get_format()) ? VK_IMAGE_ASPECT_DEPTH_BIT
+            VkImageAspectFlags(is_depth_format(live->get_format()) ? depth_aspects(live->get_format())
                                                                    : VK_IMAGE_ASPECT_COLOR_BIT),
             0, 0, 1};
         cmd->copy_image(*copy, *live, {0, 0, 0}, {0, 0, 0}, {live->get_width(), live->get_height(), 1}, layers, layers);
@@ -1755,7 +1763,7 @@ public:
             const Image &live = *key;
             const Image &to = *si.image;
             const VkImageSubresourceLayers layers = {
-                VkImageAspectFlags(si.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+                VkImageAspectFlags(si.depth ? depth_aspects(live.get_format()) : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
             switch (si.start) {
             case StandIn::Start::as_is:
                 break;
@@ -2531,7 +2539,7 @@ private:
             d.scissor = p.rect;
             d.clear_rect = {p.rect, 0, 1};
             VkClearAttachment &a = d.clear_att[0];
-            a.aspectMask = p.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            a.aspectMask = p.depth ? depth_aspects(depth->get_format()) : VK_IMAGE_ASPECT_COLOR_BIT;
             a.colorAttachment = 0;
             a.clearValue = p.value;
             d.clear_count = 1;
@@ -3307,9 +3315,10 @@ private:
 
     // ---- Targets ----
     ImageHandle make_target_image(uint32_t width, uint32_t height, bool depth, uint32_t psm) {
-        VkFormat format = !depth ? colour_format
+        VkFormat format = !depth                                ? colour_format
+                          : settle_                              ? VK_FORMAT_D32_SFLOAT_S8_UINT
                           : d16_ && (psm == 0x32 || psm == 0x3A) ? VK_FORMAT_D16_UNORM
-                                                                : VK_FORMAT_D32_SFLOAT;
+                                                                 : VK_FORMAT_D32_SFLOAT;
         ImageCreateInfo info = ImageCreateInfo::render_target(width * scale_[0], height * scale_[1], format);
         info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                      (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
@@ -4444,6 +4453,58 @@ private:
         touch(vb);
     }
 
+    // (pcr_canvas.cpp's) The least and most alpha a batch's pixels can have, before the alpha test: its vertices' (a
+    // native batch's taken as 0x80), through the texture function with the texture's where it is read with TCC (any
+    // alpha, 0 to 255, where the texture's are not known)
+    struct AlphaRange {
+        uint32_t lo, hi;
+    };
+    static AlphaRange alpha_range(const Batch &b) {
+        const DrawState &s = b.state;
+        uint32_t vlo = 0x80, vhi = 0x80;
+        if (!b.native && !b.vertices.empty()) {
+            vlo = 255;
+            vhi = 0;
+            for (const Vertex &v : b.vertices) {
+                vlo = std::min<uint32_t>(vlo, v.rgba[3]);
+                vhi = std::max<uint32_t>(vhi, v.rgba[3]);
+            }
+        }
+        if (!bits(s.prim, 4, 1) || !bits(s.tex0, 34, 1)) {
+            return {vlo, vhi}; // (untextured, or the texture's alpha not taken: the vertices')
+        }
+        uint32_t tlo = b.texture.ok ? b.texture.alpha_lo : 0, thi = b.texture.ok ? b.texture.alpha_hi : 255;
+        uint32_t tfx = bits(s.tex0, 35, 2);
+        uint32_t lo = tfx == 0 ? (vlo * tlo) >> 7 : tfx == 2 ? std::min(255u, vlo + tlo) : tlo;
+        uint32_t hi = tfx == 0 ? std::min(255u, (vhi * thi) >> 7) : tfx == 2 ? std::min(255u, vhi + thi) : thi;
+        return {lo, hi};
+    }
+
+    // (exact Z, pcr_canvas.cpp's) A decal: a blended draw Z tested GEQUAL whose blend shows what is under it somewhere
+    // (not blend_covers): tested with the top fine part of its whole Z, so that it ties with a surface of its whole Z
+    // under it whatever their fine parts, as on the GS (pcr_exact_z.h's pcr_whole_depth)
+    static bool is_decal(const Batch &b) {
+        const DrawState &s = b.state;
+        return bits(s.test, 16, 1) != 0 && bits(s.test, 17, 2) == 2 && bits(s.prim, 6, 1) != 0 && !blend_covers(b);
+    }
+
+    // Whether a blended batch's blend writes its source colour alone at every pixel: ALPHA's (Cs - Cd) * C + Cd with C
+    // 0x80 or more there (FIX, or As over its whole alpha_range), so that nothing under it shows. (A native batch's
+    // vertices are the GPU's: their alpha is known only where its program leaves the mesh's and the mesh's is 0x80
+    // throughout, native_alpha_is_one)
+    static bool blend_covers(const Batch &b) {
+        const DrawState &s = b.state;
+        uint32_t a = bits(s.alpha, 0, 2), bb = bits(s.alpha, 2, 2), c = bits(s.alpha, 4, 2), d = bits(s.alpha, 6, 2);
+        if (a != 0 || bb != 1 || d != 1) {
+            return false;
+        }
+        if (c == 2) {
+            return bits(s.alpha, 32, 8) >= 0x80;
+        }
+        bool vertices_known = !b.native || (b.nb.program == NativeProgram::vu1_000 && b.native_alpha_is_one);
+        return c == 0 && vertices_known && alpha_range(b).lo >= 0x80;
+    }
+
     static bool blend_is_source(const Batch &b) {
         const DrawState &s = b.state;
         if (bits(s.alpha, 0, 2) != 0 || bits(s.alpha, 2, 2) != 1 || bits(s.alpha, 6, 2) != 1 || b.shader_blend) {
@@ -4507,7 +4568,7 @@ private:
                 continue;
             }
             VkClearValue value{};
-            value.depthStencil.depth = depth_of(z, o->psm);
+            value.depthStencil.depth = depth_of(z, o->psm, exact_z_);
             pend_clear(o->image, true, whole_of(*o->image), value);
             o->cleared = true;
             o->cleared_z = std::min(z, zmax);
@@ -4881,8 +4942,9 @@ private:
                          b.texture.src != SRC_SURFACE && b.texture.finer == 1
                      ? F_SMOOTH_2D
                      : 0;
-        // (the depth: Z / zmax at each pixel, clamped by the depth clamp to the viewport's 0 to 1)
-        flags |= F_PIXEL_CLAMP;
+        // (the depth: exact Z, the fragment stage's, decals tested with the top fine part of their whole Z; else Z / zmax
+        // at each pixel, clamped by the depth clamp to the viewport's 0 to 1)
+        flags |= exact_z_ ? F_EXACT_Z | (is_decal(b) ? F_DECAL : 0) : F_PIXEL_CLAMP;
         push.flags = flags;
         gs_fields(s, b.texture, (blend.flags & 0x80000000u) ? 0 : bits(s.alpha, 32, 8), push);
         push.src_scale[0] = int32_t(scale_[0]);
@@ -4908,6 +4970,8 @@ private:
                      : ztst == 2 ? VK_COMPARE_OP_GREATER_OR_EQUAL
                                  : VK_COMPARE_OP_GREATER;
         m.blend = blend;
+        // (settled where the Z buffer is 16-bit: every 3D draw's; Drawer::settle_run's viewport is its)
+        m.settle = settle_ && (flags & F_DECAL) && m.ztest && z_written && push.zmax == 0xFFFFu;
         {
             pcr::ShaderState &st = m.state;
             st.program = !b.native                                 ? 0
@@ -4972,7 +5036,7 @@ private:
             }
             if (zwrite) {
                 VkClearValue value{};
-                value.depthStencil.depth = depth_of(v0.z, zpsm);
+                value.depthStencil.depth = depth_of(v0.z, zpsm, exact_z_);
                 pend_clear(depth->image, true, clear_rect.rect, value);
             }
             bool alpha_high = !z_only && ((fba ? v0.rgba[3] | 0x80u : v0.rgba[3]) & 0x80u) != 0;
@@ -5321,7 +5385,7 @@ private:
     const bool between_log_ = getenv("KF4_SCN_BETWEEN_LOG") && strcmp(getenv("KF4_SCN_BETWEEN_LOG"), "0") != 0;
     int logged_plans_ = 0;
     bool picture_pending_ = false; // (a picture between drawn: the next picture shows it)
-    bool d16_ = false, first_draw_on_ = false;
+    bool d16_ = false, first_draw_on_ = false, exact_z_ = false, settle_ = false; // (exact_z_: the drawer's, Drawer::exact_z)
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = 0, mode_2d_ = 0;
     uint32_t aniso_ = 1;

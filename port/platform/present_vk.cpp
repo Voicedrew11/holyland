@@ -1432,9 +1432,10 @@ extern "C" int port_vk_open(void *sdl_window) {
         return 0;
     }
     VkBool32 supported = VK_FALSE;
-    vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
-    if (!supported) {
-        std::fprintf(stderr, "[present] the PC renderer's queue cannot present to the window\n");
+    VkResult asked = vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
+    if (asked != VK_SUCCESS || !supported) {
+        std::fprintf(stderr, "[present] the PC renderer's queue (family %u) cannot present to the window (VkResult %d)\n",
+                     pr.family, int(asked));
         close_all();
         return 0;
     }

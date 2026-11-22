@@ -75,7 +75,7 @@ Placed place(uint slot, bool sphere) {
         float a1 = min(vu_add(vu_mul(qf(one, 3u).w, d.scale.w), d.bias.w), 255.0);
         r.rgba = scn_pack_rgba(uvec4(255u, 255u, 255u, uint(ftoi(a1)) & 0xFFu));
     }
-    r.pad0 = 0u;
+    r.zown = scn_own_zfrac(pl.zf, r.zframe);
     r.pad1 = 0u;
     return r;
 }

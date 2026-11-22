@@ -3,7 +3,8 @@
    choose: what each does follows what the player is doing.
 
    The keyboard (the game's own button for each in brackets):
-       W A S D       the left stick: walk and step sideways (twin-stick), move the menus' cursor
+       W A S D       walk and step sideways (the game's own walking buttons, eased as the d-pad's, whatever
+                     twin-stick is: port/include/port/walk_keys.h), move the menus' cursor
        arrows        the d-pad: walk and turn, move the menus' cursor
        I J K L       the right stick: turn and look
        Space         square (attack)                 E          cross (use, talk, confirm)
@@ -28,9 +29,10 @@
 
    With the separate run mod on (--separate-run, the Mods page), Left Shift and the controller's left stick
    press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
-   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make the left
-   stick walk and step sideways and the right stick turn and look; off, the left stick is the d-pad (walk and
-   turn), as on the PS2.
+   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make a
+   controller's left stick walk and step sideways and the right stick turn and look; off, the left stick is the
+   d-pad (walk and turn), as on the PS2. It changes only the controller's sticks: W A S D are the same either way
+   (unless instant WASD acceleration is on: port/include/port/walk_keys.h).
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look): each
    movement is applied once, so it neither coasts nor builds speed. A mouse button held as play starts or stops
@@ -54,6 +56,7 @@
 #include "port/settings.h"
 #include "port/stats.h"
 #include "port/hands.h"
+#include "port/walk_keys.h"
 
 #ifdef KF4_HAVE_SDL
 #include <SDL3/SDL.h>
@@ -114,10 +117,10 @@ static const struct {
     [ACTION_R3] = {"r3", "R3 (right stick press)", 0x0004},
     [ACTION_START] = {"start", "Start", 0x0008},
     [ACTION_SELECT] = {"select", "Select", 0x0001},
-    [ACTION_LEFT_STICK_UP] = {"left_stick_up", "Left stick up", 0},
-    [ACTION_LEFT_STICK_DOWN] = {"left_stick_down", "Left stick down", 0},
-    [ACTION_LEFT_STICK_LEFT] = {"left_stick_left", "Left stick left", 0},
-    [ACTION_LEFT_STICK_RIGHT] = {"left_stick_right", "Left stick right", 0},
+    [ACTION_LEFT_STICK_UP] = {"left_stick_up", "Walk forward", 0},
+    [ACTION_LEFT_STICK_DOWN] = {"left_stick_down", "Walk back", 0},
+    [ACTION_LEFT_STICK_LEFT] = {"left_stick_left", "Step left", 0},
+    [ACTION_LEFT_STICK_RIGHT] = {"left_stick_right", "Step right", 0},
     [ACTION_RIGHT_STICK_UP] = {"right_stick_up", "Right stick up", 0},
     [ACTION_RIGHT_STICK_DOWN] = {"right_stick_down", "Right stick down", 0},
     [ACTION_RIGHT_STICK_LEFT] = {"right_stick_left", "Right stick left", 0},
@@ -1004,6 +1007,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     unsigned int pad = 0;         /* from the controller */
     unsigned int mouse = 0;       /* bit n: SDL's mouse button n */
     unsigned int menu = 0;        /* the mouse outside play */
+    unsigned int walk = 0;        /* the walk keys' buttons (never a tap) */
     uint64_t held_keys = 0;       /* actions, from the keyboard and mouse */
     uint64_t held_pad = 0;        /* actions, from the controller */
     uint64_t held;
@@ -1191,8 +1195,13 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
 
     axis[0] = action_axis(held, ACTION_RIGHT_STICK_LEFT, ACTION_RIGHT_STICK_RIGHT);
     axis[1] = action_axis(held, ACTION_RIGHT_STICK_UP, ACTION_RIGHT_STICK_DOWN);
-    axis[2] = action_axis(held, ACTION_LEFT_STICK_LEFT, ACTION_LEFT_STICK_RIGHT);
-    axis[3] = action_axis(held, ACTION_LEFT_STICK_UP, ACTION_LEFT_STICK_DOWN);
+    /* the walk keys are the game's walking buttons, not the left stick (port/include/port/walk_keys.h): the stick
+       is left at rest, a controller's own; with instant WASD acceleration the stick at full throw, as before */
+    walk = walk_keys_read((held >> ACTION_LEFT_STICK_UP & 1u ? WALK_KEY_FORWARD : 0u) |
+                              (held >> ACTION_LEFT_STICK_DOWN & 1u ? WALK_KEY_BACK : 0u) |
+                              (held >> ACTION_LEFT_STICK_LEFT & 1u ? WALK_KEY_LEFT : 0u) |
+                              (held >> ACTION_LEFT_STICK_RIGHT & 1u ? WALK_KEY_RIGHT : 0u),
+                          gameplay, port_walk_keys_buttons(), port_walk_keys_instant(), axis);
 
     if (gameplay && pc.captured) {
         pc.yaw += dx * RADIANS_PER_PIXEL * sensitivity;
@@ -1232,6 +1241,6 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     pc.previous_buttons = pressed;
     pc.previous_gameplay = gameplay;
     update_cursor();
-    *buttons |= pressed | pad;
+    *buttons |= pressed | pad | walk;
 }
 #endif

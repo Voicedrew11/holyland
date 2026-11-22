@@ -48,6 +48,7 @@ extern "C" {
 #include "port/cinematic.h"
 #include "port/controls.h"
 #include "port/twin_stick.h"
+#include "port/walk_keys.h"
 #include "port/debug.h"
 #include "port/overlay.h"
 #include "port/player_ui.h"
@@ -683,6 +684,14 @@ void controls_page() {
     tooltip("The left stick walks and steps sideways, the right stick turns and looks, each as far as it\n"
             "is pushed, up to the game's own speeds. Off, the sticks are the PS2's: the left one is the\n"
             "d-pad (walk and turn), the right one only looks up and down.");
+    bool instant_wasd = port_walk_keys_instant_setting() != 0;
+    if (ImGui::Checkbox("Instant WASD acceleration", &instant_wasd)) {
+        port_walk_keys_set_instant(instant_wasd);
+        changed();
+    }
+    tooltip("W A S D walk at full speed at once and turn round at once, as the left stick pushed all the\n"
+            "way (with twin-stick controls). Off, they speed up and slow down as the game's walking always\n"
+            "has. The keyboard only: a controller is not changed.");
     bool separate_run = port_options.separate_run != 0;
     if (ImGui::Checkbox("Separate run key", &separate_run)) {
         s.separate_run = port_options.separate_run = separate_run;

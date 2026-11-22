@@ -42,6 +42,7 @@
 #include "port/automap.h"
 #include "script/script.h"
 #include "port/platform.h"
+#include "port/savestate.h"
 #include "port/teleport.h"
 #include "automap_script.h"
 
@@ -1070,6 +1071,42 @@ void Automap_Deserialize(const uint8_t *data, size_t size) {
         memset(seen, 0, (size_t)plan.width * plan.height);
         apply_stored();
     }
+}
+
+/* ---- In a save state (port/platform/savestate.c) ---------------------------------------------------
+   This file is linked after the state's image (CMakeLists.txt, game_host): its globals hold malloc'd
+   buffers, which a state cannot carry. A state holds the fog of war as Automap_Serialize writes it
+   instead, and what is built from the game's maps is built again from the game the state brings back. A
+   state taken with the mod off holds none, and loading it leaves the fog of war as it is. */
+void Automap_State(PortStateIo *io) {
+    uint32_t kept = 0, size = 0;
+    uint8_t *data = NULL;
+
+    if (!io->loading && port_automap.enabled) {
+        port_automap_start(); /* (live.bin first, if the mod has not run yet) */
+        Automap_Flush();
+        size = (uint32_t)Automap_Serialize(&data);
+        kept = data != NULL;
+    }
+    PORT_STATE(io, kept);
+    PORT_STATE(io, size);
+    if (io->loading && size > 0) {
+        data = malloc(size); /* (NULL: skipped) */
+    }
+    port_state_bytes(io, data, size);
+    if (io->loading) {
+        if (kept && data != NULL && port_automap.enabled) {
+            port_automap_start(); /* (so that live.bin is not read over it later) */
+            Automap_Deserialize(data, size);
+            port_automap_state_loaded();
+        }
+        /* game RAM is another: the plan, its exits and the scripts read are built again at the next poll */
+        built_slot = -1;
+        built_records = NULL;
+        last_reveal_cell = -1;
+        polls_since_build = 0;
+    }
+    free(data);
 }
 
 /* ---- Revealing ------------------------------------------------------------------------------------ */

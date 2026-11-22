@@ -72,6 +72,7 @@ enum : uint32_t {
     F_ZALWAYS = 0x20000000,
     F_DATE_MARK = 0x40000000,
     F_DATE_CLEARS = 0x200000,
+    F_SCN_OWN_DEPTH = 0x200000, // (the scene renderer's settled decals' own depth: pcr_common.h; the rule's bit above)
     F_LAYER = 0x80000, // (developers' KF4_PC_DEPTH=layers: pcr_common.h)
     F_PIXEL_CLAMP = 0x80000000u, // (... and its Z clamped at each pixel: pcr_common.h)
 };

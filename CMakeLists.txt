@@ -183,6 +183,7 @@ add_library(kf4_port STATIC
     port/sdk/libpad.c
     port/sdk/controls.c
     port/sdk/twin_stick.c
+    port/sdk/walk_keys.c
     port/sdk/libsdr.c
     port/platform/savestate.c
     port/platform/quicksave.c
@@ -560,9 +561,14 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/cinematic.c game/automap.c game/automap_guide.c game/automap_script.c game/screen_fx.c game/menu_pointer.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/cinematic.c game/screen_fx.c game/menu_pointer.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
+# PC mods built as game code whose state is the host's: their objects are linked after the save state's
+# image (below), since their globals hold the host's memory (malloc'd buffers), which a state cannot carry
+# from one run, or one moment, to another. A part that matters to a state writes it itself (the automap's
+# fog of war: Automap_State, port/platform/savestate.c).
+add_library(game_host OBJECT game/automap.c game/automap_guide.c game/automap_script.c)
 # the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
 target_sources(game_data PRIVATE game/stats.c)
 target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
@@ -582,12 +588,12 @@ set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
 
 # Every game file calls the PS2's math library, not the host's (port/include/port/libm_ps2.h)
-foreach(target ${KF4_GAME_TARGETS})
+foreach(target ${KF4_GAME_TARGETS} game_host)
     target_include_directories(${target} PRIVATE ${KF4_SRC}/src/game port/include)
     target_compile_options(${target} PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS} ${KF4_GAME_ERRORS}
         -include ${CMAKE_SOURCE_DIR}/port/include/port/libm_ps2.h)
 endforeach()
-add_custom_target(game DEPENDS ${KF4_GAME_TARGETS})
+add_custom_target(game DEPENDS ${KF4_GAME_TARGETS} game_host)
 
 # ---- The PS2's math library -----------------------------------------------------------------------
 # newlib's libm as the SDK built it, from the decomp's own sources (read, never edited), its names made
@@ -617,10 +623,10 @@ endforeach()
 add_library(kf4_state_begin OBJECT port/platform/state_begin.c)
 add_library(kf4_state_end OBJECT port/platform/state_end.c)
 # never LTO'd (KF4_LTO, above): the linker would lay their data out after every plain object's
-set_target_properties(kf4_state_begin kf4_state_end ico_audio ${KF4_GAME_TARGETS} PROPERTIES
+set_target_properties(kf4_state_begin kf4_state_end ico_audio ${KF4_GAME_TARGETS} game_host PROPERTIES
     INTERPROCEDURAL_OPTIMIZATION OFF)
 add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
-    $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end>)
+    $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end> $<TARGET_OBJECTS:game_host>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
 target_link_libraries(kf4 PRIVATE kf4_port)
 if(WIN32)
@@ -762,6 +768,16 @@ if(KF4_TESTS)
     add_test(NAME antialias COMMAND antialias_test)
 endif()
 
+# The scene renderer's depth modes by name, and the developers' variables over them (port/include/port/scene_depth.h)
+add_executable(scene_depth_test tests/scene_depth_test.c)
+target_include_directories(scene_depth_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(scene_depth_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME scene_depth COMMAND scene_depth_test)
+endif()
+
 # The screen's refresh clock: its period and phase from the times pictures were seen (port/platform/refresh_clock.c)
 add_executable(refresh_clock_test tests/refresh_clock_test.c port/platform/refresh_clock.c)
 target_include_directories(refresh_clock_test PRIVATE port/include)
@@ -853,6 +869,17 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME twin_stick COMMAND twin_stick_test)
+endif()
+
+# The keyboard's walking: W A S D as the game's walking buttons, twin-stick on or off (port/sdk/walk_keys.c)
+add_executable(walk_keys_test tests/walk_keys_test.c port/sdk/walk_keys.c port/sdk/twin_stick.c)
+target_include_directories(walk_keys_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(walk_keys_test PRIVATE m)
+    target_compile_options(walk_keys_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME walk_keys COMMAND walk_keys_test)
 endif()
 
 # The scene renderer's pictures by budget: when each is begun, which are left out (port/gs/pc/pcr_budget.h)

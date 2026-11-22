@@ -1,9 +1,14 @@
 // The scene renderer's drawing side (scn_scene.h): a closed scene's steps recorded into a command buffer, in order.
-// Its programs are the PC renderer's shaders built without exact Z (pcr_prim.vert and .frag, pcr_nd000.vert,
-// pcr_nd280.vert, pcr_nd700.vert, pcr_ndripple.vert), with the depth the GPU's: each draw's Z / zmax, clamped at each
-// pixel by the depth clamp to the viewport's 0 to 1, into D16_UNORM for the game's 16-bit Z buffers (the GS's whole Z,
-// rounded by the GPU) and D32F for the others (docs/plans/scene-renderer-design.md, "Depth's exactness and DATE"). And
-// DATE's shadows by the first-draw image: scn_first_draw.frag, then pcr_prim.frag with SCN_FIRST_DRAW.
+// Its programs are the PC renderer's shaders (pcr_prim.vert and .frag, pcr_nd000.vert, pcr_nd280.vert, pcr_nd700.vert,
+// pcr_ndripple.vert) built with exact Z (PCR_EXACT_Z, where the GPU has depth clamp and 64-bit integers: exact_z): each
+// pixel's whole Z as the GS works it out, from the triangle's plane in integers where its corners' Z span far (near the
+// eye, scn_corner's SCN_PLANE_SPAN) and else from the interpolated Z, with a fine part below it, written by the fragment
+// stage into D32F with a stencil; decals tested with the top fine part and settled (settle_run, own_depth_first).
+// Without exact Z (KF4_SCN_DEPTH=gpu) the depth the GPU's: each draw's Z / zmax, clamped at each pixel by the depth
+// clamp to the viewport's 0 to 1, into D16_UNORM for the 16-bit Z buffers (docs/plans/scene-renderer-design.md,
+// "Depth's exactness and DATE": the moss on map 063's low wall cut in slashes, the rope ladder's planks in bands at
+// map 000, 2026-11-21). And DATE's shadows by the first-draw image: scn_first_draw.frag, then pcr_prim.frag with
+// SCN_FIRST_DRAW.
 //
 // A draw's fields are a record of the scene's (slice 3, HANDOFF_scene_slice3.md, part 3a): a records buffer made for each
 // scene recorded, a record a draw's pass, read at the push constants' place (+ gl_DrawID) by the PC renderer's shaders
@@ -70,6 +75,16 @@ public:
                                                               std::span<const VkFormat> depth_formats);
     std::vector<Vulkan::Program *> compute_programs() const;
 
+    // Exact Z (pcr_common.h's): the GS's whole Z at each pixel from the triangle's plane, with its fine part, written by
+    // the fragment stage into D32F (the draws' flags PCR_F_EXACT_Z, decals PCR_F_DECAL); else the GPU's depth
+    bool exact_z() const {
+        return exact_z_;
+    }
+    // (exact Z) its decals' depth settled after them (Material::settle; settle_run, or own_depth_after where nearer),
+    // else left with the top fine part they were tested with (port/scene_depth.h's PORT_SCENE_DEPTH_UNSETTLED)
+    bool settle_decals() const {
+        return settle_decals_;
+    }
     // DATE by the first-draw image is possible here: an R32F colour target that blends (MIN)
     bool first_draw_ok() const {
         return first_draw_ok_;
@@ -122,6 +137,7 @@ public:
         uint64_t picture_scenes = 0; // (slice 4: the scenes recorded for pictures between)
         // (each vertex once) the jobs placed, the vertices in them, the draws that share a job with one before
         uint64_t place_jobs = 0, placed_vertices = 0, place_shared = 0, place_dispatches = 0;
+        uint64_t settled_runs = 0; // (exact Z: the runs of decals settled, settle_run)
     };
     const Counts &counts() const {
         return counts_;
@@ -129,6 +145,7 @@ public:
 
 private:
     static constexpr uint32_t no_record = 0xFFFFFFFFu;
+    static constexpr uint8_t decal_won = 0x2; // (the stencil's bit of a settled decal: pcr_canvas.cpp's)
     // A scene's records, table and CLUTs (prepare), held until the next scene is recorded (Granite lets go of them once
     // the GPU is done with the frame)
     struct Prepared {
@@ -152,6 +169,7 @@ private:
             uint32_t first_job = 0, count = 0;
         };
         std::vector<Placing> placings;
+        uint32_t own_offset = 0; // (exact Z's settled decals: record r's own depth at r + own_offset; 0: none)
     };
     // A call as a run sees it: what must be the same for two calls to be one indirect draw
     struct RunKey {
@@ -169,6 +187,12 @@ private:
         bool own = false, gif_3d = false, n280 = false;
         // (an unblended call whose alpha out is 1.0 and not written: drawn the same in a run blended by it, merge)
         bool alpha_one = false;
+        // (exact Z's decals settled, record_settled) the stencil: none, decal_won set where the call passes, or drawn
+        // only where it is set and cleared there
+        // (own_first: no stencil; program 0x280's decals' own depth drawn before the run, which writes none: settle_run)
+        // (own_after, PORT_SCENE_DEPTH_NEARER: no stencil; the run writes no depth, then its own depth where nearer than
+        // what is there: own_depth_after)
+        enum class Stencil : uint8_t { off, mark_won, reset_won, own_first, own_after } stencil = Stencil::off;
     };
     struct RunState {
         bool open = false, after_clear = false;
@@ -214,6 +238,16 @@ private:
     void record_pass(const Scene &scene, const Pass &pass, Vulkan::CommandBuffer &c);
     // set: the material whose state the command buffer has from the draw before in the pass (no_material: none)
     void record_draw(const Scene &scene, const Pass &pass, uint32_t index, Vulkan::CommandBuffer &c, uint32_t set);
+    // (exact Z) Whether a draw's decal is settled (Material::settle, drawn from the records in a plain pass): its calls
+    // that write Z mark the stencil's decal_won (RunKey::Stencil::mark_won), and the runs of them are settled
+    // (settle_run, after the run is drawn)
+    bool settles(const Pass &pass, const Material &m, uint32_t record) const;
+    void settle_run(const Pending &r, Vulkan::CommandBuffer &c);
+    void own_depth_first(const Pending &r, Vulkan::CommandBuffer &c);
+    void own_depth_after(const Pending &r, Vulkan::CommandBuffer &c);
+    // (own_depth_first's and own_depth_after's) the run's calls again with no colour and their own depth, by compare
+    void own_depth(const Pending &r, VkCompareOp compare, Vulkan::CommandBuffer &c);
+    void draw_run(const Pending &r, Vulkan::CommandBuffer &c); // (the run's calls: one draw, or one indirect draw)
     void bind_records(const Pass &pass, const Draw &d, Vulkan::CommandBuffer &c);
     void bind_own(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, Vulkan::CommandBuffer &c);
     void push_record(Vulkan::CommandBuffer &c, uint32_t record);
@@ -251,7 +285,9 @@ private:
 
     Vulkan::Device &device_;
     pcr::GpuTimes &times_;
-    bool dynamic_ds_ = false, dynamic_blend_ = false, first_draw_ok_ = false;
+    bool dynamic_ds_ = false, dynamic_blend_ = false, first_draw_ok_ = false, exact_z_ = false;
+    // (PORT_SCENE_DEPTH_NEARER: the decals other than 0x280's settled by own_depth_after, not settle_run)
+    bool settle_decals_ = false, settle_nearer_ = false;
     const bool time_clears_ = getenv("KF4_SCN_TIME_CLEARS") && atoi(getenv("KF4_SCN_TIME_CLEARS")) != 0;
     // by Program: the plain fragment shader, the one tested before it (pcr_prim_early.frag), the first-draw image's
     // (scn_first_draw.frag) and the shadows' darkening (pcr_prim.frag with SCN_FIRST_DRAW)
@@ -269,7 +305,11 @@ private:
     Pending pending_;
     FILE *runs_log_ = nullptr; // (developers', KF4_SCN_RUNS_LOG=FILE: a line a scene recorded, its calls and runs)
     Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
-    Vulkan::Program *fused_280_ = nullptr; // (slice 3d: pcr_nd280.vert and pcr_prim_early.frag with SCN_FUSE_280)
+    Vulkan::Program *fused_280_ = nullptr;
+    // (exact Z's settle: each records vertex shader with pcr_depth_reset.frag)
+    std::array<Vulkan::Program *, size_t(Program::count)> depth_reset_rec_{};
+    // (settle_run's viewport: the depth of the largest Z of the 16-bit Z buffers, the settled decals', Z * 2^-24)
+    static constexpr float own_depth_most_ = 65535.0f / 16777216.0f; // (slice 3d: pcr_nd280.vert and pcr_prim_early.frag with SCN_FUSE_280)
     Vulkan::ImageHandle dummy_uint_, dummy_float_;
     Vulkan::BufferHandle zeros_, no_clut_, no_trace_;
     Vulkan::BindlessDescriptorPoolHandle table_pool_;

@@ -22,8 +22,15 @@ struct Placed {
     vec4 whole;   // (a picture between) whole_triangle.h's Whole: h, w
     uint rgba;    // the vertex's colour (the lights'; the sphere pass's white with vertex 1's alpha)
     float cut;    // the mirror image's cut at the water (0: none)
-    uint pad0, pad1;
+    float zown;   // (exact Z's fine part) the frame's Z before FTOI4 less zframe, 0 to 1 (pcr_exact_z.h's pcr_frame_zfrac)
+    uint pad1;
 };
+
+// VU1's Z before FTOI4 (zf) less the GS's whole Z of it (z), 0 to 1 (pcr_exact_z.h's pcr_frame_zfrac)
+float scn_own_zfrac(float zf, uint z) {
+    float f = zf - float(z);
+    return f >= 0.0 && f < 1.0 ? f : 0.0;
+}
 
 #define SCN_PLACED_DROP 1u    // (moved) moved()'s drop
 #define SCN_PLACED_CLIPPED 2u // (0x000) VU1's ADC for it (vu_clipped)

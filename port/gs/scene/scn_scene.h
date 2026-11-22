@@ -21,6 +21,14 @@
 
 namespace scn {
 
+// A depth image's aspects a clear or a copy takes: its stencil too where it has one (exact Z's settled decals keep a bit
+// there, zero between draws: every clear and copy of the depth carries it, so no stencil is ever left unknown)
+inline VkImageAspectFlags depth_aspects(VkFormat format) {
+    return VK_IMAGE_ASPECT_DEPTH_BIT |
+           (format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT ? VK_IMAGE_ASPECT_STENCIL_BIT
+                                                                                          : 0);
+}
+
 constexpr uint32_t no_clut = 0xFFFFFFFFu;
 constexpr uint32_t no_material = 0xFFFFFFFFu;
 constexpr uint32_t no_shadow = 0xFFFFFFFFu;
@@ -55,6 +63,9 @@ struct Material {
     // (slice 3d, program 0x280's first pass with its sphere pass in it: scn_build.cpp's fuse_280) the sphere pass's
     // material, its record the one the fused shaders read after the first's (pcr_prim.h's SCN_FUSE_280); no_material: none
     uint32_t fuse = no_material;
+    // (exact Z) a decal that writes Z, given back its own depth where it won (scn_draw.cpp's record_settled,
+    // pcr_canvas.cpp's settle_decal_depth): the depth surfaces have a stencil
+    bool settle = false;
     // (the GPU's time by shader state, KF4_GPU_DETAIL: pcr_gpu_time.h's shader_state_key, without the first-draw field
     // the drawer adds by its pass)
     pcr::ShaderState state{};
