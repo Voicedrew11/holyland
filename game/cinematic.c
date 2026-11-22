@@ -32,6 +32,7 @@
 extern PlayerState player_state;
 extern GameStatus game_status;
 extern CameraState camera_state;
+extern PlayerScreenTint player_screen_tint;
 extern f32 player_top_speed[6];
 
 void Player_FindMapRecord(void);
@@ -176,4 +177,43 @@ void Cinematic_PlaceCamera(void) {
     camera_state.yaw = player_state.rotation.y;
     camera_state.roll = 0.0f;
     player_state.head_bob_offset = 0.0f;
+}
+
+/* What Cinematic_HideScreenEffects took off the picture, for Cinematic_ShowScreenEffects to put back */
+static struct {
+    int hidden;
+    PlayerScreenTint tint;
+    s32 mp_drain_tint;
+    f32 aim_speed;
+} kept_effects;
+
+void Cinematic_HideScreenEffects(void) {
+    if (!port_cinematic_flying()) {
+        return;
+    }
+    kept_effects.hidden = 1;
+    kept_effects.tint = player_screen_tint;
+    kept_effects.mp_drain_tint = player_state.mp_drain_tint;
+    kept_effects.aim_speed = player_state.aim_speed;
+    /* Player_DrawScreenTints' fills, but the light spell's glow (a light, not something done to the player) */
+    player_screen_tint.damage_flash_alpha = 0;
+    player_screen_tint.green_tint_alpha = 0;
+    player_screen_tint.dark_yellow_tint_alpha = 0;
+    player_screen_tint.darkness_tint_alpha = 0;
+    player_screen_tint.purple_tint_alpha = 0;
+    player_screen_tint.white_tint_alpha = 0;
+    player_screen_tint.cycling_tint_alpha = 0;
+    player_screen_tint.death_fade_tint_alpha = 0;
+    player_state.mp_drain_tint = 0; /* the drain's wobbling screen */
+    player_state.aim_speed = 0.0f;  /* a hit's knock-back: the frame before blended in */
+}
+
+void Cinematic_ShowScreenEffects(void) {
+    if (!kept_effects.hidden) {
+        return;
+    }
+    kept_effects.hidden = 0;
+    player_screen_tint = kept_effects.tint;
+    player_state.mp_drain_tint = kept_effects.mp_drain_tint;
+    player_state.aim_speed = kept_effects.aim_speed;
 }

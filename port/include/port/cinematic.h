@@ -6,7 +6,8 @@
    descends), Fly up / Fly down rise and sink, and Run flies faster. The speed eases toward what is asked and coasts
    down when let go, and the view trails the turn (first-order lags, seconds to about two thirds of the way, spent
    against the wall clock so the feel is the same at any rate). No notice is shown, so nothing lands in the shot.
-   While flying the player can't be hurt or die (port_invincible), and instant mouse look is held off (its lead and
+   While flying the player can't be hurt or die (port_invincible), the screen shows no conditions or damage, and
+   instant mouse look is held off (its lead and
    the look's smoothing together judder; Verdite3 aeb5030).
 
    Enemies ignore you: enemies never notice the player, and one that is hit goes back to idle
@@ -58,6 +59,12 @@ void port_cinematic_set_flying(int on);
 /* Game side, called by the patched game (patches/game/player.patch, core.patch) */
 void Cinematic_AfterMove(void);   /* Player_Update, right after Player_Move: the flight */
 void Cinematic_PlaceCamera(void); /* GameLoop_Run, after GameLoop_UpdateCamera: the view's angles while flying */
+/* GameLoop_DrawFrame's screen passes, between the two: while flying, the picture shows none of the player's conditions
+   or damage (the poison's and the other ailments' tints, the darkness, the red flash and knock-back blur of a hit, the MP
+   drain's wobble).
+   Only the picture: the game's own state is put back, so they show again as soon as the flight lands. */
+void Cinematic_HideScreenEffects(void);
+void Cinematic_ShowScreenEffects(void);
 
 #ifdef __cplusplus
 }
