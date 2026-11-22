@@ -171,6 +171,9 @@ typedef struct {
     /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark()); settings.json's
        mods.equipped_mark, on by default (no command-line switch) */
     int equipped_mark;
+    /* the menu's Item line lists categories first (port_item_categories()); settings.json's mods.item_categories,
+       on by default (no command-line switch) */
+    int item_categories;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;

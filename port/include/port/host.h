@@ -172,6 +172,10 @@ int port_auto_loot_gold(void);
    upgrade, receive) show " (E)" after what he has equipped (settings.json's mods.equipped_mark, the player menu's
    Gameplay tab; on by default). Read by the patched ui/trade.c. */
 int port_equipped_mark(void);
+/* port_item_categories(): 1 while the menu's Item line opens a list of categories first, then the chosen one's items
+   (settings.json's mods.item_categories, the player menu's Interface tab; on by default). Read by the patched
+   ui/menu_screens.c. */
+int port_item_categories(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */
