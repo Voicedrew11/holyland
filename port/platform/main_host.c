@@ -1110,6 +1110,7 @@ int main(int argc, char **argv) {
     port_kernel_init();
     port_dmac_start();
     port_debug_init(gs_capture_at); /* before the GS: a capture asked for makes a --headless run draw */
+    port_video_open_window(); /* (before the GS: the PC renderer chooses a GPU that can present to it) */
     port_gs_init();
     port_pad_init();
     port_video_init();
