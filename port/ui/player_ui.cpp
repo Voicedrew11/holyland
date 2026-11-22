@@ -7,6 +7,10 @@
 // the mouse goes to RmlUi, whose events on the rows (data-row, data-step, data-choice, data-tab) go to the model. All
 // on the game's thread.
 //
+// The first-start setup (setup_model.hpp, setup_view.hpp) shows in the same window, with body.setup: at the start of
+// the game when it is due (settings.json's setup_version), and from the Display section's Run setup again. While it
+// shows the menu is open (the game sees no input) and the game is held still (port_player_ui_setup_open).
+//
 // The menu makes the game's own menu sounds (port/include/port/menu_sounds.h): the model's cue for each input
 // (menu_model.hpp), confirm when the menu opens and back when it closes.
 #include <SDL3/SDL.h>
@@ -19,13 +23,17 @@
 #include <cstring>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
 #include "game_menu_art.hpp"
 #include "menu_model.hpp"
 #include "pad_glyphs.hpp"
+#include "rows_rml.hpp"
 #include "settings_rows.hpp"
+#include "setup_model.hpp"
+#include "setup_view.hpp"
 #include "ui_assets.hpp"
 #include "ui_frame.hpp"
 #include "ui_render.hpp"
@@ -99,11 +107,15 @@ struct Menu {
     ui::Recorder recorder;
     ui::SettingsRows rows;
     ui::MenuModel model{rows};
+    ui::SetupFlow setup{ui::find_setting_row};
+    bool in_setup = false;     // the setup shows, in place of the settings
+    bool setup_wanted = false; // Run setup again was chosen: the setup opens once the press is done
     PointerEvents pointer;
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
     std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml;
+    bool body_setup = false; // the document's body.setup, as last set
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
     Device device = Device::keyboard;
@@ -180,7 +192,7 @@ void set_open(bool open) {
 
 // The sound for the inputs since the last one played
 void play_cue() {
-    switch (menu.model.take_cue()) {
+    switch (menu.in_setup ? menu.setup.take_cue() : menu.model.take_cue()) {
     case ui::MenuCue::move:
         port_menu_sound(PORT_MENU_SOUND_MOVE);
         break;
@@ -214,8 +226,44 @@ void apply(ui::MenuResult result) {
     }
 }
 
+// The setup, from its first page; again: from the menu (Cancel puts back what was there)
+void start_setup(ui::SetupStart start) {
+    SDL_Gamepad *pad = first_pad();
+    menu.setup.open(start, port_settings_found() != 0, pad != nullptr ? ui::SetupDevice::pad : ui::SetupDevice::keyboard);
+    std::fprintf(stderr, "[ui] setup opens (%s)\n", start == ui::SetupStart::first ? "the first start" : "from the menu");
+    menu.in_setup = true;
+    menu.setup_wanted = false;
+    menu.scrolled_row = -2;
+    menu.scroll_wanted = true;
+    menu.model.take_cue(); // (the menu's own, for the row that chose the setup: the setup's sound instead)
+    if (start == ui::SetupStart::again) {
+        port_menu_sound(PORT_MENU_SOUND_CONFIRM);
+    }
+    set_open(true);
+}
+
+// The setup gone through (or skipped, or cancelled): not shown again until its version is raised
+void end_setup() {
+    std::fprintf(stderr, "[ui] setup done: settings.json's setup_version %d\n", ui::SETUP_VERSION);
+    menu.in_setup = false;
+    port_settings.setup_version = ui::SETUP_VERSION;
+    port_settings_changed();
+    menu.model.open_at(0);
+    set_open(false);
+}
+
 void press(ui::MenuInput input) {
+    menu.scroll_wanted = true;
+    if (menu.in_setup) {
+        if (menu.setup.press(input) == ui::SetupResult::done) {
+            end_setup();
+        }
+        return;
+    }
     apply(menu.model.press(input));
+    if (menu.setup_wanted) {
+        start_setup(ui::SetupStart::again);
+    }
 }
 
 // Kenney's controller fonts, one family each (pad_glyphs.hpp)
@@ -263,13 +311,32 @@ void click_logo() {
     menu.model.open_at(menu.model.tab()); // (on the Cheats tab as it hides: back to the first)
 }
 
+// A press of the pointer on the setup's page: a step in the sidebar, a list's choice, an arrow, a row
+void setup_pointer(Rml::Element *target) {
+    int value = 0, row = 0;
+    ui::SetupFlow &setup = menu.setup;
+    if (find_attribute(target, "data-page", value)) {
+        setup.click_page(value);
+    } else if (find_attribute(target, "data-choice", value)) {
+        setup.click_choice(value);
+    } else if (find_attribute(target, "data-step", value) && find_attribute(target, "data-row", row)) {
+        setup.click_step(row, value);
+    } else if (setup.click_row(find_attribute(target, "data-row", value) ? value : -1) == ui::SetupResult::done) {
+        end_setup();
+    }
+}
+
 void PointerEvents::ProcessEvent(Rml::Event &event) {
     Rml::Element *target = event.GetTargetElement();
     int value = 0;
     menu.device = Device::keyboard; // (the mouse's prompts are the keyboard's)
     if (event.GetId() == Rml::EventId::Mouseover) {
         if (find_attribute(target, "data-row", value)) {
-            menu.model.point_at_row(value);
+            if (menu.in_setup) {
+                menu.setup.point_at_row(value);
+            } else {
+                menu.model.point_at_row(value);
+            }
         }
         return;
     }
@@ -278,7 +345,9 @@ void PointerEvents::ProcessEvent(Rml::Event &event) {
         return;
     }
     int row = 0;
-    if (target != nullptr && target->GetId() == "logo") {
+    if (menu.in_setup) {
+        setup_pointer(target);
+    } else if (target != nullptr && target->GetId() == "logo") {
         click_logo();
     } else if (find_attribute(target, "data-tab", value)) {
         menu.model.click_tab(value);
@@ -293,29 +362,16 @@ void PointerEvents::ProcessEvent(Rml::Event &event) {
     } else {
         menu.model.click_row(-1); // outside the rows: closes an open list
     }
+    if (menu.setup_wanted) {
+        start_setup(ui::SetupStart::again);
+    }
     menu.scroll_wanted = false;
 }
 
 // ---- The page, as RML -----------------------------------------------------------------------------------------------
+// (the rows and the help: rows_rml.hpp)
 void escaped(std::string &out, std::string_view text) {
-    for (char c : text) {
-        switch (c) {
-        case '&':
-            out += "&amp;";
-            break;
-        case '<':
-            out += "&lt;";
-            break;
-        case '>':
-            out += "&gt;";
-            break;
-        case '"':
-            out += "&quot;";
-            break;
-        default:
-            out += c;
-        }
-    }
+    ui::rml_escaped(out, text);
 }
 
 // A key's name in its box
@@ -353,141 +409,6 @@ std::string version_rml() {
         out += "<update>An update is out: Sound &amp; Menu</update>";
     }
     escaped(out, update_badge_version_line());
-    return out;
-}
-
-// A binding's slots: the chosen one marked on the focused row, the one waiting for a key lit
-void slots_rml(std::string &out, int tab, int row, bool focused) {
-    for (int slot = 0; slot < menu.rows.shape(tab, row).choice_count; slot++) {
-        std::string text = menu.rows.slot_text(tab, row, slot);
-        out += "<slot data-slot=\"" + std::to_string(slot) + "\" class=\"";
-        out += focused && slot == menu.model.slot() ? "chosen " : "";
-        out += menu.rows.listening(tab, row, slot) ? "listening " : "";
-        out += text == "-" ? "empty" : "";
-        out += "\">";
-        std::optional<ui::PadButton> button;
-        if (!menu.rows.listening(tab, row, slot)) {
-            button = ui::pad_button_of_binding(port_controls_binding(menu.rows.row(tab, row).action, slot));
-        }
-        if (button) {
-            out += ui::pad_glyph_rml(menu.pad_family, *button);
-        } else {
-            escaped(out, text);
-        }
-        out += "</slot>";
-    }
-}
-
-// A row's value: the arrows either side on the focused row (dim at the ends), a number's bar under it
-void value_rml(std::string &out, int tab, int row, const ui::RowShape &shape, bool focused) {
-    const ui::SettingRow &r = menu.rows.row(tab, row);
-    std::string text = menu.rows.value_text(tab, row);
-    out += shape.kind == ui::RowKind::toggle && shape.current == 0 ? "<value class=\"off\">" : "<value>";
-    if (r.overridden != nullptr && r.overridden()) {
-        out += "<note>command line</note>";
-    }
-    bool arrows = focused && shape.enabled && shape.kind != ui::RowKind::action;
-    bool first = false, last = false;
-    if (shape.kind == ui::RowKind::choice || shape.kind == ui::RowKind::toggle) {
-        first = shape.current == 0;
-        last = shape.current == shape.choice_count - 1;
-    } else if (shape.kind == ui::RowKind::number) {
-        float f = menu.rows.number_fraction(tab, row);
-        first = f <= 0.0f;
-        last = f >= 1.0f;
-    }
-    if (shape.kind == ui::RowKind::number) {
-        char width[32];
-        std::snprintf(width, sizeof(width), "%.1f%%", double(menu.rows.number_fraction(tab, row)) * 100.0);
-        out += std::string("<bar><fill style=\"width: ") + width + "\"></fill></bar>";
-    }
-    if (arrows) {
-        out += first ? "<arrow class=\"end\">&lt;</arrow>" : "<arrow data-step=\"-1\">&lt;</arrow>";
-    }
-    escaped(out, text);
-    if (arrows) {
-        out += last ? "<arrow class=\"end\">&gt;</arrow>" : "<arrow data-step=\"1\">&gt;</arrow>";
-    }
-    out += "</value>";
-}
-
-std::string rows_rml() {
-    std::string out;
-    int tab = menu.model.tab();
-    for (int row = 0; row < menu.rows.row_count(tab); row++) {
-        ui::RowShape shape = menu.rows.shape(tab, row);
-        const ui::SettingRow &r = menu.rows.row(tab, row);
-        if (shape.kind == ui::RowKind::heading) {
-            out += row == 0 ? "<row class=\"heading first\"><label>" : "<row class=\"heading\"><label>";
-            escaped(out, r.label);
-            out += "</label></row>";
-            continue;
-        }
-        bool focused = row == menu.model.row();
-        bool open = focused && menu.model.list_open();
-        out += "<row id=\"row-" + std::to_string(row) + "\" data-row=\"" + std::to_string(row) + "\" class=\"";
-        out += focused ? "focused " : "";
-        out += shape.enabled ? "" : "disabled ";
-        out += shape.kind == ui::RowKind::action ? "action " : "";
-        out += shape.kind == ui::RowKind::binding ? "binding " : "";
-        out += menu.rows.changed_from_default(tab, row) ? "changed " : "";
-        out += open ? "open" : "";
-        out += "\"><label>";
-        escaped(out, r.label);
-        out += "</label>";
-        if (shape.kind == ui::RowKind::binding) {
-            slots_rml(out, tab, row, focused);
-        } else if (shape.kind == ui::RowKind::action) {
-            out += focused && shape.enabled ? "<value>Enter</value>" : "";
-        } else {
-            value_rml(out, tab, row, shape, focused);
-        }
-        out += "</row>";
-        if (open) {
-            out += "<list>";
-            for (int c = 0; c < shape.choice_count; c++) {
-                out += "<choice data-choice=\"" + std::to_string(c) + "\" class=\"";
-                out += c == menu.model.list_choice() ? "highlighted " : "";
-                out += c == shape.current ? "chosen" : "";
-                out += "\">";
-                escaped(out, r.choices[size_t(c)].label);
-                out += "</choice>";
-            }
-            out += "</list>";
-        }
-    }
-    return out;
-}
-
-std::string help_rml() {
-    int tab = menu.model.tab(), row = menu.model.row();
-    if (row < 0) {
-        return "";
-    }
-    const ui::SettingRow &r = menu.rows.row(tab, row);
-    std::string out = "<h2>";
-    escaped(out, r.label);
-    out += "</h2>";
-    std::string_view help = r.help;
-    while (!help.empty()) {
-        size_t end = help.find('\n');
-        out += "<p>";
-        escaped(out, help.substr(0, end));
-        out += "</p>";
-        help = end == std::string_view::npos ? std::string_view() : help.substr(end + 1);
-    }
-    if (r.overridden != nullptr && r.overridden()) {
-        out += "<p class=\"note\">This run's value was set on the command line. A change here is kept for the next "
-               "start.</p>";
-    }
-    if (menu.rows.changed_from_default(tab, row)) {
-        out += "<p class=\"note\">Changed from the default.</p>";
-    }
-    if (r.note != nullptr && r.note() != nullptr && r.note()[0] != 0) {
-        out += "<p class=\"note\">";
-        escaped(out, r.note());
-        out += "</p>";
-    }
     return out;
 }
 
@@ -541,6 +462,44 @@ std::string prompts_rml() {
     return out;
 }
 
+// The setup's keys: moving, changing, going on and back a page
+std::string setup_prompts_rml() {
+    using ui::PadButton;
+    std::string out;
+    std::string up_down = input_rml(PadButton::dpad_vertical, "&#x2191;");
+    std::string left_right = input_rml(PadButton::dpad_horizontal, "&#x2190;");
+    if (menu.device != Device::pad) {
+        up_down += key_rml("&#x2193;");
+        left_right += key_rml("&#x2192;");
+    }
+    std::string confirm = input_rml(PadButton::south, "Enter");
+    std::string back = input_rml(PadButton::east, "Esc");
+    if (menu.setup.model().list_open()) {
+        prompt(out, up_down, "Choose");
+        prompt(out, confirm, "Pick");
+        prompt(out, back, "Cancel");
+        return out;
+    }
+    prompt(out, up_down, "Move");
+    if (menu.setup.page() == 0) {
+        prompt(out, confirm, "Choose");
+        if (menu.setup.again()) {
+            prompt(out, back, "Cancel");
+        }
+        return out;
+    }
+    bool last = menu.setup.page() + 1 == int(ui::setup_pages().size());
+    if (!last) {
+        prompt(out, left_right, "Change");
+    }
+    prompt(out, confirm, "Select");
+    if (!last) {
+        prompt(out, input_rml(PadButton::start, "E"), "Next page");
+    }
+    prompt(out, back, "Back");
+    return out;
+}
+
 void set_part(const char *id, std::string &last, std::string now) {
     if (now == last) {
         return;
@@ -575,18 +534,31 @@ void light_logo() {
 }
 
 void write_page() {
+    if (menu.body_setup != menu.in_setup) {
+        menu.document->SetClass("setup", menu.in_setup);
+        menu.body_setup = menu.in_setup;
+    }
+    set_part("version", menu.version_rml, version_rml());
+    if (menu.in_setup) {
+        set_part("tabs", menu.tabs_rml, ui::setup_steps_rml(menu.setup));
+        set_part("heading", menu.heading_rml, ui::setup_heading_rml(menu.setup));
+        set_part("rows", menu.rows_rml, ui::setup_rows_rml(menu.setup, menu.pad_family));
+        set_part("help", menu.help_rml, ui::setup_help_rml(menu.setup, menu.pad_family));
+        set_part("prompts", menu.prompts_rml, setup_prompts_rml());
+        return;
+    }
     light_logo();
     set_part("tabs", menu.tabs_rml, tabs_rml());
     set_part("heading", menu.heading_rml, heading_rml());
-    set_part("version", menu.version_rml, version_rml());
-    set_part("rows", menu.rows_rml, rows_rml());
-    set_part("help", menu.help_rml, help_rml());
+    set_part("rows", menu.rows_rml, ui::rows_rml(menu.rows, menu.model, menu.pad_family));
+    set_part("help", menu.help_rml, ui::help_rml(menu.rows, menu.model));
     set_part("prompts", menu.prompts_rml, prompts_rml());
 }
 
 // The focused row (and its open list) into view, after a key moved it; not after the pointer did
 void scroll_to_focus() {
-    int row = menu.model.row();
+    const ui::MenuModel &model = menu.in_setup ? menu.setup.model() : menu.model;
+    int row = model.row();
     if (!menu.scroll_wanted || row < 0) {
         return;
     }
@@ -594,7 +566,7 @@ void scroll_to_focus() {
     std::string id = "row-" + std::to_string(row);
     if (Rml::Element *element = menu.document->GetElementById(id)) {
         Rml::ScrollIntoViewOptions nearest(Rml::ScrollAlignment::Nearest, Rml::ScrollAlignment::Nearest);
-        if (menu.model.list_open()) {
+        if (model.list_open()) {
             if (Rml::Element *list = element->GetNextSibling()) {
                 list->ScrollIntoView(nearest);
             }
@@ -753,7 +725,9 @@ bool pad_chord(const SDL_Event &event) {
     }
     if (down && menu.l3 && menu.r3) {
         use_pad(event.gbutton.which);
-        toggle_open(!menu.open);
+        if (!menu.in_setup) {
+            toggle_open(!menu.open);
+        }
         return true;
     }
     return menu.open;
@@ -860,6 +834,27 @@ int mouse_x(float x) {
     return int(x * menu.pixels_per_unit);
 }
 
+// The setup's page of that id, or -1
+int setup_page_of(std::string_view id) {
+    std::span<const ui::SetupPage> pages = ui::setup_pages();
+    for (size_t page = 0; page < pages.size(); page++) {
+        if (id == pages[page].id) {
+            return int(page);
+        }
+    }
+    return -1;
+}
+
+// The setup shows at this start: not gone through yet (or KF4_SETUP=1), and no pad script plays (test runs' pictures
+// stay as they were) nor do test pictures
+bool setup_due_now() {
+    const char *forced = std::getenv("KF4_SETUP");
+    if (port_options.input != nullptr || std::getenv("KF4_OVERLAY_SHOT") != nullptr) {
+        return false;
+    }
+    return ui::setup_due(port_settings.setup_version, forced != nullptr && std::strcmp(forced, "1") == 0);
+}
+
 void quit() {
     if (!menu.ready) {
         return;
@@ -902,6 +897,11 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->Show();
     menu.model.open_at(0);
     menu.ready = true;
+    // the setup's tables against the menu's rows (setup_pages.hpp)
+    std::string problems = ui::setup_problems(ui::find_setting_row);
+    if (!problems.empty()) {
+        std::fprintf(stderr, "[ui] setup: %s\n", problems.c_str());
+    }
     // the hint from the start of play (show_hint: not under a pad script)
     menu.hint.waiting = port_options.input == nullptr;
     std::atexit(quit);
@@ -926,7 +926,7 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         if (event.key.mod & SDL_KMOD_SHIFT) {
             return 0; // (the developers' overlay)
         }
-        if (!event.key.repeat) {
+        if (!event.key.repeat && !menu.in_setup) { // (the setup closes from its own pages only)
             menu.device = Device::keyboard;
             toggle_open(!menu.open);
         }
@@ -953,7 +953,11 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
         use_pad(event.gbutton.which);
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
-            toggle_open(false);
+            if (menu.in_setup) {
+                press(ui::MenuInput::next_tab); // (the setup's next page)
+            } else {
+                toggle_open(false);
+            }
             break;
         }
         int input = pad_input(event.gbutton.button);
@@ -1012,21 +1016,33 @@ extern "C" int port_player_ui_show(const char *tab_id) {
         return 0;
     }
     if (tab_id == nullptr) {
+        menu.in_setup = false;
         set_open(false);
         return 1;
     }
-    // "graphics:down.down.confirm": the tab, then those presses
+    // "graphics:down.down.confirm": the tab, then those presses; "setup-hands:right": the setup's page
     std::string_view spec = tab_id;
     size_t colon = spec.find(':');
-    int tab = menu.rows.tab_of(std::string(spec.substr(0, colon)).c_str());
-    if (tab < 0) {
-        return 0;
+    std::string target(spec.substr(0, colon));
+    if (target.rfind("setup-", 0) == 0) {
+        int page = setup_page_of(target.substr(6));
+        if (page < 0) {
+            return 0;
+        }
+        start_setup(ui::SetupStart::first);
+        menu.setup.show_page(page);
+    } else {
+        int tab = menu.rows.tab_of(target.c_str());
+        if (tab < 0) {
+            return 0;
+        }
+        menu.in_setup = false;
+        set_open(true);
+        if (port_controls_listening(nullptr, nullptr)) {
+            port_controls_listen_cancel();
+        }
+        menu.model.open_at(tab);
     }
-    set_open(true);
-    if (port_controls_listening(nullptr, nullptr)) {
-        port_controls_listen_cancel();
-    }
-    menu.model.open_at(tab);
     static const char *const names[] = {"up", "down", "left", "right", "confirm", "back", "next", "previous", "clear"};
     for (spec = colon == std::string_view::npos ? std::string_view() : spec.substr(colon + 1); !spec.empty();) {
         size_t end = spec.find('.');
@@ -1055,7 +1071,16 @@ extern "C" int port_player_ui_show(const char *tab_id) {
         spec = end == std::string_view::npos ? std::string_view() : spec.substr(end + 1);
     }
     menu.model.take_cue(); // (the test pictures' presses make no sound)
+    menu.setup.take_cue();
     return 1;
+}
+
+extern "C" void port_player_ui_run_setup(void) {
+    menu.setup_wanted = menu.ready; // (once the press that chose it is done: press, PointerEvents)
+}
+
+extern "C" int port_player_ui_setup_open(void) {
+    return menu.ready && menu.open && menu.in_setup;
 }
 
 extern "C" void port_player_ui_draw(int width, int height) {
@@ -1072,7 +1097,11 @@ extern "C" void port_player_ui_draw(int width, int height) {
         if (SDL_Gamepad *pad = first_pad()) {
             use_pad(SDL_GetGamepadID(pad));
         }
-        show_hint(HINT_MS);
+        if (setup_due_now()) {
+            start_setup(ui::SetupStart::first); // (in place of the hint: the setup's last page names the keys)
+        } else {
+            show_hint(HINT_MS);
+        }
     }
     int units_w = 0, units_h = 0;
     SDL_GetWindowSize(menu.window, &units_w, &units_h);

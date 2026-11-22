@@ -103,6 +103,15 @@ if(KF4_FRAME_POINTERS AND NOT MSVC)
     add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
 endif()
 
+# ---- Player builds ----------------------------------------------------------------------------------
+# KF4_PLAYER_BUILD: the build players get (the *-release presets and the launcher's build, launcher/build_local.cpp):
+# choices still being tried are fixed for them (port/include/port/scene_depth.h: the GPU's depth, the player
+# menu's other levels dimmed). Off in the developers' builds, which keep every choice.
+option(KF4_PLAYER_BUILD "The build players get: choices still being tried fixed (the depth)" OFF)
+if(KF4_PLAYER_BUILD)
+    add_compile_definitions(KF4_PLAYER_BUILD)
+endif()
+
 # ---- Release builds: LTO and PGO (the *-release presets, tools/README.md "A release build") ----
 # KF4_LTO: link-time optimisation (ThinLTO with clang) of everything but the save state's image. The
 # game's objects, ico-audio's and the two markers (state_begin.c, state_end.c, below) are left as
@@ -470,8 +479,9 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
             DEPENDS ${KF4_UI_FILE_PATHS} ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
             COMMENT "The player menu's files" VERBATIM)
         add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
-                    port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp port/ui/pad_glyphs.cpp
-                    ${CMAKE_BINARY_DIR}/ui_assets.cpp)
+                    port/ui/setting_row.cpp port/ui/rows_rml.cpp port/ui/setup_pages.cpp port/ui/setup_model.cpp
+                    port/ui/setup_view.cpp port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
+                    port/ui/pad_glyphs.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
         target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3)
@@ -978,6 +988,19 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME ui_menu COMMAND ui_menu_test)
+endif()
+
+# The first-start setup (port/ui/setup_model.hpp, setup_pages.hpp): its pages, cards, presets, Cancel and Skip, on
+# stand-in rows named as the tables name the menu's
+add_executable(ui_setup_test tests/ui_setup_test.cpp port/ui/setup_model.cpp port/ui/setup_pages.cpp
+               port/ui/setting_row.cpp port/ui/menu_model.cpp)
+target_include_directories(ui_setup_test PRIVATE port/ui port/include)
+set_target_properties(ui_setup_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(ui_setup_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME ui_setup COMMAND ui_setup_test)
 endif()
 
 # The game's menu art for the player menu (port/ui/game_menu_art.hpp): menu.tmx's textures decoded, on a made-up file

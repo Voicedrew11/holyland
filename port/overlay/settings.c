@@ -22,7 +22,7 @@
                     "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false,
                     "attack_tracking": 0},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0,
-                    "cheats_shown": false}
+                    "cheats_shown": false, "setup_version": 1}
      }
 
    "bindings" holds only the actions that differ from their defaults (port/sdk/controls.c), each as its
@@ -139,6 +139,7 @@ int port_instant_smith(void) {
 }
 
 static int active;
+static int found; /* a settings.json was there to read */
 static cJSON *document;
 static int dirty;
 static double dirty_since;
@@ -288,6 +289,10 @@ int port_settings_active(void) {
     return active;
 }
 
+int port_settings_found(void) {
+    return found;
+}
+
 void port_settings_load(void) {
     PortSettings *s = &port_settings;
     const cJSON *display;
@@ -319,6 +324,7 @@ void port_settings_load(void) {
             size = 0;
         }
         fclose(file);
+        found = 1;
     }
     document = text != NULL ? cJSON_Parse(text) : NULL;
     free(text);
@@ -452,6 +458,9 @@ void port_settings_load(void) {
             }
         }
     }
+    if (port_scene_depth_locked()) {
+        s->scene_depth = PORT_SCENE_DEPTH_GPU; /* (a player build: port/include/port/scene_depth.h) */
+    }
     {
         const char *font = read_string(display, "font");
 
@@ -523,6 +532,7 @@ void port_settings_load(void) {
     s->save_slot = (int)read_number(overlay, "save_slot", s->save_slot, 0, 9);
     s->quick_slot = (int)read_number(overlay, "quick_slot", s->quick_slot, 0, 9);
     s->cheats_shown = read_bool(overlay, "cheats_shown", s->cheats_shown);
+    s->setup_version = (int)read_number(overlay, "setup_version", s->setup_version, 0, 1000000);
 
     /* the command line wins for this run: a switch it turned off stays off */
     if (port_options.deinterlace) {
@@ -796,6 +806,7 @@ void port_settings_save(void) {
     put(overlay, "save_slot", cJSON_CreateNumber(s->save_slot));
     put(overlay, "quick_slot", cJSON_CreateNumber(s->quick_slot));
     put(overlay, "cheats_shown", cJSON_CreateBool(s->cheats_shown));
+    put(overlay, "setup_version", cJSON_CreateNumber(s->setup_version));
 
     text = cJSON_Print(document);
     if (text == NULL) {

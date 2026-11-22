@@ -27,8 +27,13 @@ int port_player_ui_open(void);
 int port_player_ui_visible(void);
 /* (port/overlay/overlay.cpp's test pictures) opens the menu on the tab of that id ("display", ...), then presses
    the keys after a colon, by name ("display:down.confirm": up down left right confirm back next previous; xbox, playstation,
-   nintendo or keyboard: the prompts as if that was used last); or closes it (NULL). 0 when there is no such tab. */
+   nintendo or keyboard: the prompts as if that was used last); "setup-<page>[:keys]" the setup on that page
+   (port/ui/setup_pages.cpp's ids); or closes either (NULL). 0 when there is no such tab or page. */
 int port_player_ui_show(const char *tab_id);
+/* (the menu's Run setup again row) the first-start setup (port/ui/setup_model.hpp), in place of the menu */
+void port_player_ui_run_setup(void);
+/* 1 while the setup shows: the game is held still under it, whatever "Pause while open" says */
+int port_player_ui_setup_open(void);
 /* (the presenter, before it draws) lays the menu out for a window of width x height pixels and records its
    triangles: player_ui_frame */
 void port_player_ui_draw(int width, int height);
@@ -48,6 +53,11 @@ static inline int port_player_ui_visible(void) {
 }
 static inline int port_player_ui_show(const char *tab_id) {
     (void)tab_id;
+    return 0;
+}
+static inline void port_player_ui_run_setup(void) {
+}
+static inline int port_player_ui_setup_open(void) {
     return 0;
 }
 static inline void port_player_ui_draw(int width, int height) {

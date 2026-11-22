@@ -29,7 +29,7 @@
     {
       "name": "release",
       "hidden": true,
-      "cacheVariables": { "KF4_FRAME_POINTERS": "OFF", "KF4_LTO": "ON" }
+      "cacheVariables": { "KF4_FRAME_POINTERS": "OFF", "KF4_LTO": "ON", "KF4_PLAYER_BUILD": "ON" }
     },
     {
       "name": "windows-clang-release",

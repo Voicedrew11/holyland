@@ -18,6 +18,7 @@ extern "C" {
 #include "port/host.h"
 #include "port/live_settings.h"
 #include "port/platform.h"
+#include "port/player_ui.h"
 #include "port/quicksave.h"
 #include "port/scene_depth.h"
 #include "port/settings.h"
@@ -175,6 +176,10 @@ void set_fps(int on) {
     changed();
 }
 
+void run_setup() {
+    port_player_ui_run_setup(); // (when the menu closes: port/ui/player_ui.cpp)
+}
+
 const SettingRow display_rows[] = {
     {"Window", "", RowKind::heading},
     {"Fullscreen", "Borderless, at the screen's resolution. F11 also switches it.", RowKind::toggle, on_off, {},
@@ -201,6 +206,11 @@ const SettingRow display_rows[] = {
      RowKind::choice, syncs, {}, get_sync, set_sync, nullptr, nullptr, nullptr, nullptr, sync_overridden},
     {"FPS counter", "Top right corner. F3 shows and hides it in play.", RowKind::toggle, on_off, {}, get_fps,
      set_fps},
+    {"Setup", "", RowKind::heading},
+    {"Run setup again",
+     "The pages shown at the first start: a starting point for every setting, then each page to change what you "
+     "like. Cancel on its first page puts everything back.",
+     RowKind::action, {}, {}, nullptr, nullptr, run_setup},
 };
 
 // ---- Graphics -------------------------------------------------------------------------------------------------------
@@ -428,9 +438,13 @@ bool flicker_filter_overridden() {
 
 // (port/scene_depth.h) The scene renderer's depth: settings.json's, which the renderer takes as it opens. Low to
 // high, the cheapest first; the developers' unsettled is not among them (describe_scene_depth names it)
+// In a player build only Low (the GPU's) can be chosen; the others are dimmed (port_scene_depth_locked)
+bool depth_unlocked() {
+    return !port_scene_depth_locked();
+}
 const Choice scene_depths[] = {{port_scene_depth(PORT_SCENE_DEPTH_GPU)->label, PORT_SCENE_DEPTH_GPU},
-                               {port_scene_depth(PORT_SCENE_DEPTH_NEARER)->label, PORT_SCENE_DEPTH_NEARER},
-                               {port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT}};
+                               {port_scene_depth(PORT_SCENE_DEPTH_NEARER)->label, PORT_SCENE_DEPTH_NEARER, depth_unlocked},
+                               {port_scene_depth(PORT_SCENE_DEPTH_EXACT)->label, PORT_SCENE_DEPTH_EXACT, depth_unlocked}};
 static_assert(std::size(scene_depths) == PORT_SCENE_DEPTH_COUNT - 1);
 // (a mode the menu has no choice for, set in settings.json or by --scene-depth: its own label)
 void describe_scene_depth(int mode, char *out, size_t size) {
@@ -453,6 +467,9 @@ bool scene_depth_overridden() {
     return port_options.scene_depth_forced != 0;
 }
 const char *scene_depth_note() {
+    if (port_scene_depth_locked() && !port_options.scene_depth_forced) {
+        return "Medium and High are not ready yet: this release draws Low.";
+    }
     if (port_options.scene_depth_forced || port_settings.scene_depth == port_options.scene_depth) {
         return nullptr;
     }
@@ -1316,19 +1333,24 @@ int catalogue_index(int tab, int shown) {
     return -1;
 }
 
-int choice_index(const SettingRow &row, int value) {
-    for (size_t i = 0; i < row.choices.size(); i++) {
-        if (row.choices[i].value == value) {
-            return int(i);
-        }
-    }
-    return -1;
-}
-
 } // namespace
 
 std::span<const SettingTab> setting_tabs() {
     return tabs;
+}
+
+const SettingRow *find_setting_row(std::string_view tab_id, std::string_view label) {
+    for (const SettingTab &tab : tabs) {
+        if (tab_id != tab.id) {
+            continue;
+        }
+        for (const SettingRow &row : tab.rows) {
+            if (row.kind != RowKind::heading && label == row.label) {
+                return &row;
+            }
+        }
+    }
+    return nullptr;
 }
 
 int SettingsRows::tab_count() const {
@@ -1356,43 +1378,23 @@ const SettingRow &SettingsRows::row(int tab, int row) const {
 }
 
 RowShape SettingsRows::shape(int tab, int index) const {
-    const SettingRow &r = row(tab, index);
-    RowShape shape = {r.kind, r.enabled == nullptr || r.enabled(), int(r.choices.size()), 0};
-    if (r.kind == RowKind::choice || r.kind == RowKind::toggle) {
-        shape.current = choice_index(r, r.get());
-    } else if (r.kind == RowKind::binding) {
-        shape.choice_count = BINDING_SLOTS;
-    }
-    return shape;
+    return row_shape(row(tab, index));
 }
 
 void SettingsRows::choose(int tab, int index, int choice) {
-    const SettingRow &r = row(tab, index);
-    if (choice >= 0 && size_t(choice) < r.choices.size() && r.set != nullptr) {
-        r.set(r.choices[size_t(choice)].value);
-    }
+    row_choose(row(tab, index), choice);
 }
 
 void SettingsRows::step(int tab, int index, int delta) {
-    const SettingRow &r = row(tab, index);
-    if (r.kind != RowKind::number || r.set == nullptr) {
-        return;
-    }
-    // to the next whole step, so a value between steps (from settings.json) lands on one
-    int value = r.get();
-    int steps = (value - r.range.min) / r.range.step + (delta > 0 ? 1 : ((value - r.range.min) % r.range.step ? 0 : -1));
-    int next = r.range.min + steps * r.range.step;
-    next = next < r.range.min ? r.range.min : next > r.range.max ? r.range.max : next;
-    if (next != value) {
-        r.set(next);
-    }
+    row_step(row(tab, index), delta);
 }
 
 void SettingsRows::activate(int tab, int index) {
-    const SettingRow &r = row(tab, index);
-    if (r.act != nullptr) {
-        r.act();
-    }
+    row_activate(row(tab, index));
+}
+
+bool SettingsRows::choice_enabled(int tab, int index, int choice) const {
+    return row_choice_enabled(row(tab, index), choice);
 }
 
 void SettingsRows::listen(int tab, int index, int slot) {
@@ -1434,44 +1436,11 @@ bool SettingsRows::changed_from_default(int tab, int index) const {
 }
 
 std::string SettingsRows::value_text(int tab, int index) const {
-    const SettingRow &r = row(tab, index);
-    char text[96] = "";
-    switch (r.kind) {
-    case RowKind::choice:
-    case RowKind::toggle: {
-        // the row's own text when it gives one ("Auto (2x)"), else the chosen choice's label
-        int value = r.get();
-        if (r.describe != nullptr) {
-            r.describe(value, text, sizeof(text));
-        }
-        int at = choice_index(r, value);
-        if (text[0] == 0 && at >= 0) {
-            return r.choices[size_t(at)].label;
-        }
-        return text;
-    }
-    case RowKind::number:
-        if (r.describe != nullptr) {
-            r.describe(r.get(), text, sizeof(text));
-        } else {
-            std::snprintf(text, sizeof(text), "%d", r.get());
-        }
-        return text;
-    case RowKind::action:
-    case RowKind::heading:
-    case RowKind::binding:
-        break;
-    }
-    return text;
+    return row_value_text(row(tab, index));
 }
 
 float SettingsRows::number_fraction(int tab, int index) const {
-    const SettingRow &r = row(tab, index);
-    if (r.kind != RowKind::number || r.range.max <= r.range.min) {
-        return 0.0f;
-    }
-    float f = float(r.get() - r.range.min) / float(r.range.max - r.range.min);
-    return f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+    return row_number_fraction(row(tab, index));
 }
 
 int SettingsRows::tab_of(const char *id) const {

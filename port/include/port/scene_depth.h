@@ -48,6 +48,17 @@ static inline int port_scene_depth_from_name(const char *name) {
     return -1;
 }
 
+/* 1 in a player build (KF4_PLAYER_BUILD: the release presets and the launcher's build): the depth is the GPU's
+   whatever settings.json says, and the player menu's other levels are dimmed; --scene-depth still chooses. 0 in the
+   developers' builds, which keep all of them */
+static inline int port_scene_depth_locked(void) {
+#ifdef KF4_PLAYER_BUILD
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 /* The mode the renderer opens with: mode (the settings' or --scene-depth's) unless the developers' variables say
    otherwise: KF4_SCN_DEPTH=gpu (depth_env), else KF4_SCN_SETTLE=0 or nearer (settle_env); NULL for one not set */
 static inline int port_scene_depth_with_env(int mode, const char *depth_env, const char *settle_env) {
