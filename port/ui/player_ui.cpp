@@ -55,10 +55,13 @@ struct Hint {
     uint64_t until_ms = 0;
 };
 
-// The clicks on the Holyland logo: five in a row, each soon after the last, show the Cheats tab (or hide it again)
+// The clicks on the Holyland logo: five in a row, each soon after the last, show the Cheats tab (or hide it again).
+// Each click lights the logo up for a moment, the fifth for longer.
 struct LogoClicks {
     int count = 0;
     uint64_t last_ms = 0;
+    uint64_t flash_from_ms = 0; // the logo lit from then, fading over flash_ms; flash_ms 0: not lit
+    uint64_t flash_ms = 0;
 };
 
 struct Menu;
@@ -129,6 +132,8 @@ const uint64_t PAD_DELAY_MS = 350;  // a held direction repeats after this
 const uint64_t PAD_REPEAT_MS = 85;  // every this
 const int LOGO_CLICKS_FOR_CHEATS = 5;
 const uint64_t LOGO_CLICK_GAP_MS = 1500; // a click later than this after the last starts the count again
+const uint64_t LOGO_FLASH_MS = 250;      // a click's light on the logo
+const uint64_t LOGO_FLASH_DONE_MS = 700; // the fifth click's
 
 // The first controller libpad opened (SDL_GetGamepadFromID finds only an open one), or nullptr
 SDL_Gamepad *first_pad() {
@@ -244,10 +249,14 @@ void click_logo() {
     LogoClicks &clicks = menu.logo_clicks;
     clicks.count = now - clicks.last_ms <= LOGO_CLICK_GAP_MS ? clicks.count + 1 : 1;
     clicks.last_ms = now;
+    clicks.flash_from_ms = now;
     if (clicks.count < LOGO_CLICKS_FOR_CHEATS) {
+        clicks.flash_ms = LOGO_FLASH_MS;
+        port_menu_sound(PORT_MENU_SOUND_MOVE);
         return;
     }
-    clicks = {};
+    clicks.count = 0;
+    clicks.flash_ms = LOGO_FLASH_DONE_MS;
     port_settings.cheats_shown = !port_settings.cheats_shown;
     port_settings_changed();
     port_menu_sound(PORT_MENU_SOUND_CONFIRM);
@@ -542,7 +551,31 @@ void set_part(const char *id, std::string &last, std::string now) {
     last = std::move(now);
 }
 
+// The logo's colour: its own, lit toward white by a click and fading back (port/ui/res/kf4.rcss: #logo)
+void light_logo() {
+    LogoClicks &clicks = menu.logo_clicks;
+    if (clicks.flash_ms == 0) {
+        return;
+    }
+    Rml::Element *logo = menu.document->GetElementById("logo");
+    uint64_t since = SDL_GetTicks() - clicks.flash_from_ms;
+    if (logo == nullptr || since >= clicks.flash_ms) {
+        clicks.flash_ms = 0;
+        if (logo != nullptr) {
+            logo->RemoveProperty("image-color"); // (back to the style sheet's)
+        }
+        return;
+    }
+    float light = 1.0f - float(since) / float(clicks.flash_ms);
+    light *= light; // (quick to fade, slow to settle)
+    auto channel = [light](int own) { return int(float(own) + float(255 - own) * light + 0.5f); };
+    char colour[32];
+    std::snprintf(colour, sizeof(colour), "rgb(%d,%d,%d)", channel(0xa8), channel(0xc4), channel(0xe8));
+    logo->SetProperty("image-color", colour);
+}
+
 void write_page() {
+    light_logo();
     set_part("tabs", menu.tabs_rml, tabs_rml());
     set_part("heading", menu.heading_rml, heading_rml());
     set_part("version", menu.version_rml, version_rml());
