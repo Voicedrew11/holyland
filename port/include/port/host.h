@@ -184,6 +184,13 @@ int port_detailed_notices(void);
    (nor taken off), so there is nothing to come back for, and he asks gold in place of the wait (settings.json's
    mods.instant_smith, the Gameplay page; off by default). Items left with him before keep their wait. */
 int port_instant_smith(void);
+/* port_attack_tracking_scale(): how many times faster an enemy's attack turns at the player before it strikes, 1 (the
+   PS2's) to 4. The setting (settings.json's mods.attack_tracking, the Gameplay page's Difficulty) is a multiplier, or
+   Auto: PORT_ATTACK_TRACKING_MOUSE while the mouse is turning the view (port_mouse_turning), else 1. Read by the
+   patched entity/entity_ai.c (EntityAi_TurnToHeading); game/attack_tracking.c. */
+float port_attack_tracking_scale(void);
+#define PORT_ATTACK_TRACKING_AUTO 0    /* port_options.attack_tracking: Auto; otherwise the multiplier in hundredths */
+#define PORT_ATTACK_TRACKING_MOUSE 3.0f /* Auto's multiplier while the mouse turns the view */
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

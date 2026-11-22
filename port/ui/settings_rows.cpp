@@ -757,6 +757,24 @@ void set_instant_smith(int on) {
     port_settings.instant_smith = port_options.instant_smith = on;
     changed();
 }
+// (in hundredths, as port_options.attack_tracking; Auto is PORT_ATTACK_TRACKING_AUTO)
+const Choice attack_trackings[] = {{"Auto", PORT_ATTACK_TRACKING_AUTO}, {"1x, as on the PS2", 100}, {"1.5x", 150},
+                                   {"2x", 200}, {"3x", 300}, {"4x", 400}};
+int get_attack_tracking() {
+    return port_options.attack_tracking;
+}
+void set_attack_tracking(int hundredths) {
+    port_settings.attack_tracking = port_options.attack_tracking = hundredths;
+    changed();
+}
+void describe_attack_tracking(int hundredths, char *out, size_t size) {
+    if (hundredths != PORT_ATTACK_TRACKING_AUTO) {
+        out[0] = '\0'; // (the choice's label)
+        return;
+    }
+    std::snprintf(out, size, "Auto (%gx)", double(port_attack_tracking_scale()));
+}
+
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1117,6 +1135,12 @@ const SettingRow gameplay_rows[] = {
      "the new Physical and Magic Power.", RowKind::toggle, on_off, {}, get_detailed_notices, set_detailed_notices},
     {"Instant smith", "The smith restores and upgrades your item instantly, for gold in place of waiting. Also shows stats of the repair/upgrade.",
      RowKind::toggle, on_off, {}, get_instant_smith, set_instant_smith},
+    {"Difficulty", "", RowKind::heading},
+    {"Attack tracking",
+     "How fast an enemy turns to follow you as it winds up an attack. Once the blow starts it is committed. Auto: 3x "
+     "while you turn with the mouse, which outturns the PS2's enemies; 1x on a controller.",
+     RowKind::choice, attack_trackings, {}, get_attack_tracking, set_attack_tracking, nullptr,
+     describe_attack_tracking},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "

@@ -13,6 +13,11 @@
    A pad script recorded with mouse look (--record-input) gives back the recorded turns instead. */
 int port_mouse_look(int gameplay, float *yaw, float *pitch);
 
+/* 1 while the mouse is what turns the view: it has turned it (port_mouse_look gave a turn, a pad script's recorded
+   turns too) since a game controller's last button or stick; 0 from the start until then. Keys change nothing, so
+   a mouse player standing still keeps it. Read by port_attack_tracking_scale's Auto. */
+int port_mouse_turning(void);
+
 /* Called by the game (Player_Update) with the pad's held buttons and the action button's bit (the
    game's button for running and for using what is in front). With the separate run mod on
    (port_options.separate_run) and Run bound, running is Run's: the action bit of

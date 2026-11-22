@@ -179,6 +179,9 @@ typedef struct {
     int detailed_notices;
     /* the smith restores and upgrades at once (port_instant_smith()); settings.json's mods.instant_smith, off by default */
     int instant_smith;
+    /* how much faster an enemy's attack turns at you before it strikes (port_attack_tracking_scale()): in hundredths,
+       100 the PS2's, or PORT_ATTACK_TRACKING_AUTO; settings.json's mods.attack_tracking, Auto by default */
+    int attack_tracking;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;
