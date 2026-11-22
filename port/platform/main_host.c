@@ -374,6 +374,7 @@ static void parse_options(int argc, char **argv) {
     port_options.equipped_mark = 1; /* (settings.json's, on by default; no command-line switch) */
     port_options.item_categories = 1; /* (the same) */
     port_options.detailed_notices = 1; /* (the same) */
+    port_options.instant_smith = 0;
     port_options.fov = 64;
     port_options.game_speed = 1.0f;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;

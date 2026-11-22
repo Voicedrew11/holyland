@@ -177,6 +177,8 @@ typedef struct {
     /* notices say what changed (port_detailed_notices()); settings.json's mods.detailed_notices, on by default (no
        command-line switch) */
     int detailed_notices;
+    /* the smith restores and upgrades at once (port_instant_smith()); settings.json's mods.instant_smith, off by default */
+    int instant_smith;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;

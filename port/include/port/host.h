@@ -180,6 +180,10 @@ int port_item_categories(void);
    "Weapon Level UP: Moonlight Sword Lv 2"...) (settings.json's mods.detailed_notices, the player menu's Gameplay tab;
    on by default). Read by the patched ui/message.c. */
 int port_detailed_notices(void);
+/* port_instant_smith(): 1 while the smith's restoring and upgrading are done at once: the item is not left with him
+   (nor taken off), so there is nothing to come back for, and he asks gold in place of the wait (settings.json's
+   mods.instant_smith, the Gameplay page; off by default). Items left with him before keep their wait. */
+int port_instant_smith(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

@@ -750,6 +750,13 @@ void set_detailed_notices(int on) {
     port_settings.detailed_notices = port_options.detailed_notices = on;
     changed();
 }
+int get_instant_smith() {
+    return port_options.instant_smith != 0;
+}
+void set_instant_smith(int on) {
+    port_settings.instant_smith = port_options.instant_smith = on;
+    changed();
+}
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1108,6 +1115,8 @@ const SettingRow gameplay_rows[] = {
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
     {"Detailed notices", "Notices say what changed: the magic learned, the level reached, the weapon and magic levels, "
      "the new Physical and Magic Power.", RowKind::toggle, on_off, {}, get_detailed_notices, set_detailed_notices},
+    {"Instant smith", "The smith restores and upgrades your item instantly, for gold in place of waiting. Also shows stats of the repair/upgrade.",
+     RowKind::toggle, on_off, {}, get_instant_smith, set_instant_smith},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "

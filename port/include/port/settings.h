@@ -79,6 +79,7 @@ typedef struct {
                               on by default) */
     int item_categories;   /* the menu's Item line lists categories first (port_item_categories; on by default) */
     int detailed_notices;  /* notices say what changed (port_detailed_notices; on by default) */
+    int instant_smith;     /* the smith restores and upgrades at once, for gold in place of the wait (port_instant_smith; off by default) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

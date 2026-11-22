@@ -19,7 +19,7 @@
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
        "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false,
-                    "equipped_mark": true, "item_categories": true, "detailed_notices": true},
+                    "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0}
      }
 
@@ -84,6 +84,7 @@ PortSettings port_settings = {
     .equipped_mark = 1,
     .item_categories = 1,
     .detailed_notices = 1,
+    .instant_smith = 0,
     .fov = 64,
     .game_speed = 1.f,
     .volume = 100,
@@ -127,6 +128,11 @@ int port_item_categories(void) {
 /* (the notices: src/game/ui/message.c, via port/host.h) */
 int port_detailed_notices(void) {
     return port_options.detailed_notices != 0;
+}
+
+/* (the smith's screens: game/ui/trade.c, via port/host.h) */
+int port_instant_smith(void) {
+    return port_options.instant_smith != 0;
 }
 
 static int active;
@@ -498,6 +504,7 @@ void port_settings_load(void) {
         s->item_categories);
     s->detailed_notices = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "detailed_notices",
         s->detailed_notices);
+    s->instant_smith = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "instant_smith", s->instant_smith);
     port_stats_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the extended stats mod */
     port_automap_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the automap mod */
     port_hands_settings_read(cJSON_GetObjectItemCaseSensitive(document, "mods")); /* the hands mod */
@@ -558,6 +565,7 @@ void port_settings_load(void) {
     port_options.equipped_mark = s->equipped_mark; /* (no command-line switch) */
     port_options.item_categories = s->item_categories; /* (no command-line switch) */
     port_options.detailed_notices = s->detailed_notices; /* (no command-line switch) */
+    port_options.instant_smith = s->instant_smith;
     if (!port_options.show_fps_forced) {
         port_options.show_fps = s->show_fps;
     }
@@ -766,6 +774,7 @@ void port_settings_save(void) {
     put(section("mods"), "equipped_mark", cJSON_CreateBool(s->equipped_mark));
     put(section("mods"), "item_categories", cJSON_CreateBool(s->item_categories));
     put(section("mods"), "detailed_notices", cJSON_CreateBool(s->detailed_notices));
+    put(section("mods"), "instant_smith", cJSON_CreateBool(s->instant_smith));
     port_stats_settings_write(section("mods")); /* the extended stats mod */
     port_automap_settings_write(section("mods")); /* the automap mod */
     port_hands_settings_write(section("mods")); /* the hands mod */
