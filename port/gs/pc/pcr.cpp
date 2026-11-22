@@ -50,6 +50,7 @@
 #include "pcr_pipelines.h"
 #include "pcr_shell.h"
 #include "pcr_shaders.h"
+#include "pcr_sync2.h"
 #include "port/gs_capture_format.h"
 #include "port/zone_scope.hpp"
 #include "device.hpp"
@@ -3124,9 +3125,7 @@ private:
             present_extensions(instance_ext, device_ext);
         }
         if (!instance_ext.empty()) {
-            context_ = std::make_unique<Context>();
-            context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
-            if (context_->init_instance(instance_ext.data(), uint32_t(instance_ext.size()), context_flags)) {
+            if (make_instance(instance_ext.data(), uint32_t(instance_ext.size()), context_flags)) {
                 VkSurfaceKHR window = window_surface(make_surface);
                 bool made = context_->init_device(VK_NULL_HANDLE, window, device_ext.data(), uint32_t(device_ext.size()),
                                                   context_flags);
@@ -3144,13 +3143,37 @@ private:
             fprintf(stderr, "[pcr] no Vulkan device with a swapchain: the window is shown without one\n");
         }
         present_wanted_ = false;
-        context_ = std::make_unique<Context>();
-        context_->set_num_thread_indices(2);
-        if (!context_->init_instance_and_device(nullptr, 0, nullptr, 0, context_flags)) {
+        if (!make_instance(nullptr, 0, context_flags) ||
+            !context_->init_device(VK_NULL_HANDLE, VK_NULL_HANDLE, nullptr, 0, context_flags)) {
             context_.reset();
             return false;
         }
         return true;
+    }
+
+    // Granite's instance in context_. When a GPU has no VK_KHR_synchronization2 of its own (a driver before Vulkan 1.3),
+    // made again with the layer that adds it, which Granite cannot make a device without (pcr_sync2.h).
+    bool make_instance(const char *const *instance_ext, uint32_t instance_ext_count,
+                       Vulkan::ContextCreationFlags context_flags) {
+        context_ = std::make_unique<Context>();
+        context_->set_num_thread_indices(2); // (kf4-pc's and the pump's)
+        if (!context_->init_instance(instance_ext, instance_ext_count, context_flags)) {
+            return false;
+        }
+        uint32_t version = context_->get_enabled_device_features().instance_api_core_version;
+        if (!pcr::sync2::instance_needs_layer(context_->get_instance(), version)) {
+            return true;
+        }
+        if (!pcr::sync2::loader_has_layer()) {
+            fprintf(stderr, "[pcr] and %s is not beside the game (%s/): a newer driver is needed\n",
+                    pcr::sync2::LAYER_NAME, pcr::sync2::LAYERS_FOLDER);
+            return true; // (Granite then says what it lacks)
+        }
+        fprintf(stderr, "[pcr] VK_KHR_synchronization2 from %s\n", pcr::sync2::LAYER_NAME);
+        context_ = std::make_unique<Context>();
+        context_->set_num_thread_indices(2);
+        context_->set_instance_factory(&pcr::sync2::layer_instance_factory());
+        return context_->init_instance(instance_ext, instance_ext_count, context_flags);
     }
 
     // The window's surface on the instance made (VK_NULL_HANDLE without make_surface or when it fails: the GPU is then

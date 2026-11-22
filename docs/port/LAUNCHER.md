@@ -57,7 +57,7 @@ the first start), for checking the pages without a screenshot of the desktop. `-
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
 | | `update-request.json`: the release the player chose to update to (`tag`) | the game; the launcher reads and removes it |
 | | `build.log`, `game.log` | the launcher |
-| builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
+| builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries, and `vk_layers/` (the synchronization2 layer: `docs/port/PC_RENDERER.md`); older keys are removed after a build | the launcher |
 | install folder (read-only but for updates) | the launcher, `content/`; during and after an update `*.partial`, `*.old`, `update.partial/`, removed at the next start | the installer, the launcher's update |
 
 ## Platforms

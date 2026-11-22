@@ -426,6 +426,11 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     target_compile_options(kf4_pc PRIVATE -Wall -Wextra -Wno-missing-field-initializers) # (the last: Granite's headers)
     set_target_properties(kf4_pc PROPERTIES CXX_STANDARD 20)
     target_link_libraries(kf4_port PUBLIC kf4_pc)
+    # Khronos's synchronization2 layer in vk_layers/ beside kf4, for a driver without VK_KHR_synchronization2, which
+    # Granite cannot do without (port/gs/pc/pcr_sync2.h); built whenever kf4 is
+    include(cmake/vk_sync2_layer.cmake)
+    kf4_vk_sync2_layer(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
+    add_dependencies(kf4_pc kf4_vk_sync2_layer)
     # the scene renderer (port/gs/scene/, docs/plans/scene-renderer-design.md: --renderer scene, developers' only), under
     # the PC renderer's shell
     file(GLOB KF4_SCENE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/scene/*.cpp)
@@ -915,6 +920,18 @@ if(NOT MSVC)
 endif()
 if(KF4_TESTS)
     add_test(NAME pcr_budget COMMAND pcr_budget_test)
+endif()
+
+# The synchronization2 layer's choices: the loader's variable, its value, which GPUs need the layer (port/gs/pc/pcr_sync2.h)
+add_executable(pcr_sync2_test tests/pcr_sync2_test.cpp)
+target_include_directories(pcr_sync2_test PRIVATE port/gs/pc
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
+set_target_properties(pcr_sync2_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(pcr_sync2_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME pcr_sync2 COMMAND pcr_sync2_test)
 endif()
 
 # --frame-rate unlocked: which pictures the PC renderer's pump leaves out as too late (port/gs/pc/pcr_late.h)

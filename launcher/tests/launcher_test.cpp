@@ -266,6 +266,8 @@ public:
             fs::path obj = spec.argv.size() > 2 ? fs::path(spec.argv[2]) : fs::path();
             write(obj / "kf4", "game");
             write(obj / "extra.dll", "dll");
+            write(obj / "vk_layers/VkLayer_khronos_synchronization2.json", "manifest");
+            write(obj / "vk_layers/libVkLayer_khronos_synchronization2.so", "layer");
         }
         return std::make_unique<FakeProcess>(script);
     }
@@ -351,6 +353,9 @@ void test_local_build() {
     check("steps reported", progress.done == 3 && progress.total == 3);
     check("game kept, objects gone", fs::exists(dir / "abc/kf4") && fs::exists(dir / "abc/extra.dll") &&
                                          !fs::exists(dir / "abc/obj"));
+    check("the Vulkan layers kept in vk_layers/ beside the game",
+          fs::exists(dir / "abc/vk_layers/VkLayer_khronos_synchronization2.json") &&
+              fs::exists(dir / "abc/vk_layers/libVkLayer_khronos_synchronization2.so"));
     check("output logged", progress.log.size() >= 4);
     std::error_code error;
     check("the tools' runtime files beside the game, removable",

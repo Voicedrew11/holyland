@@ -450,6 +450,9 @@ typedef struct {
     uint32_t width, height;
     uint32_t *rgba; /* width * height pixels, R in the low byte */
 } PortGsFrame;
+/* The main thread, at start, before any other thread (it writes the process's environment): lets the Vulkan loader
+   find the layers built with the game (port/gs/pc/pcr_sync2.h). Before port_gs_init. */
+void port_gs_find_vulkan_layers(void);
 /* Starts the renderer (after port_dmac_start), unless the run draws nothing. */
 void port_gs_init(void);
 /* 1 when there is a renderer. */
