@@ -75,6 +75,8 @@ typedef struct {
                               PS2's) to 8 (port_door_speed; 1, the PS2's, by default) */
     int auto_loot_gold;    /* the gold an enemy drops when the player kills it goes into his purse at once, with the
                               pickup's notice (port_auto_loot_gold; off by default) */
+    int equipped_mark;     /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark;
+                              on by default) */
     /* The overlay */
     int pause_when_open;
     int show_fps;

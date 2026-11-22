@@ -168,6 +168,10 @@ int port_door_speed(void);
    with the pickup's own notice, rather than a pile to press the action button for (settings.json's
    mods.auto_loot_gold, the player menu's Gameplay tab; off by default). */
 int port_auto_loot_gold(void);
+/* port_equipped_mark(): 1 while the lists of what the player owns in the shops (selling) and at the smith (repair,
+   upgrade, receive) show " (E)" after what he has equipped (settings.json's mods.equipped_mark, the player menu's
+   Gameplay tab; on by default). Read by the patched ui/trade.c. */
+int port_equipped_mark(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

@@ -168,6 +168,9 @@ typedef struct {
        (port_auto_loot_gold()); settings.json's mods.auto_loot_gold, off by default */
     int auto_loot_gold;
     int auto_loot_gold_forced; /* --auto-loot-gold: on for this run whatever settings.json says */
+    /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark()); settings.json's
+       mods.equipped_mark, on by default (no command-line switch) */
+    int equipped_mark;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */
     int show_fps;
