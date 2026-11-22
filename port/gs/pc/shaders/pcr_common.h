@@ -219,6 +219,9 @@ void pcr_take_record() {
 #define PCR_F_ZALWAYS 0x20000000u  // (... and its copy) the GS's test is ALWAYS: every sample passes, the copy written
 #define PCR_F_DATE_MARK 0x40000000u // (... and its copy) DATE by the stencil: the copy's sign bit marks where it fails
 #define PCR_F_DATE_CLEARS 0x200000u // (... and its copy) DATE's stencil cleared where this pass draws: marked failing
+// (the scene renderer's, PCR_DRAWS_APART: the depth rule is the PC renderer's alone) a settled decal's own depth by the
+// GPU's interpolation, Z with its fraction and half a Z less a margin, over zmax (scn_draw.cpp's settle_run)
+#define PCR_F_SCN_OWN_DEPTH 0x200000u
 #define PCR_F_LAYER 0x80000u       // (developers' KF4_PC_DEPTH=layers, no exact Z) a layer: its corners plane_at / 256 of a Z nearer
 #define PCR_F_PIXEL_CLAMP 0x80000000u // (... every draw) Z clamped to zmax at each pixel, not at the corners: the depth is
                                       // Z / zmax, the viewport's depth range 0 to zmax * zscale, the GPU's depth clamp
@@ -267,10 +270,19 @@ layout(location = 11) noperspective out float v_zrel;
 // its surface from the same corners has the same depth, where the GPU's own depth test decides; KF4_PC_DEPTH=gpu|layers)
 invariant gl_Position;
 #endif
+// (PCR_F_SCN_OWN_DEPTH) The exact depth's whole Z and fine part are the Z with half a Z added, its fraction cut to
+// 256ths: within 1/256 below that; the GPU's interpolation a little more. So a margin of 2/256 under it: a later draw
+// of the decal's plane ties with it, as with the exact own depth it stands in for
+#define PCR_OWN_DEPTH_HALF (0.5 - 2.0 / 256.0)
 float pcr_depth(uint z, float zfrac, uint zref) {
 #ifdef PCR_STAGE_VERTEX
     v_zref = zref;
     v_zrel = float(int(z - zref)) + zfrac;
+#endif
+#ifdef PCR_DRAWS_APART
+    if ((pc.flags & PCR_F_SCN_OWN_DEPTH) != 0u) {
+        return (float(z) + zfrac + PCR_OWN_DEPTH_HALF) / float(pc.zmax);
+    }
 #endif
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (float(z) + zfrac + float(pcr_loss_margin())) * pc.zscale + 4.0 / 16777216.0;
@@ -290,6 +302,11 @@ float pcr_depth_h(float zh, float w, uint zref) {
     v_zrel = zh / w - float(zref);
 #endif
     float margin = float(pcr_loss_margin());
+#ifdef PCR_DRAWS_APART
+    if ((pc.flags & PCR_F_SCN_OWN_DEPTH) != 0u) {
+        return (zh + PCR_OWN_DEPTH_HALF * w) / float(pc.zmax);
+    }
+#endif
     if ((pc.flags & PCR_F_EXACT_Z) != 0u) {
         return (zh + margin * w) * pc.zscale + w * (4.0 / 16777216.0);
     }

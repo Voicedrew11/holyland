@@ -78,6 +78,13 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
     indirect_on_ = indirect_on_ && records_on_ && f.enabled_features.multiDrawIndirect &&
                    f.enabled_features.drawIndirectFirstInstance;
     max_run_ = indirect_on_ ? std::max(device_.get_gpu_properties().limits.maxDrawIndirectCount, 1u) : 1u;
+    // (exact Z: the GPU's depth clamp and 64-bit integers, pcr_exact_z.h; developers' KF4_SCN_DEPTH=gpu: the GPU's own)
+    const char *depth = getenv("KF4_SCN_DEPTH");
+    exact_z_ = f.enabled_features.depthClamp && f.enabled_features.shaderInt64 && !(depth && strcmp(depth, "gpu") == 0);
+    if (!exact_z_) {
+        fprintf(stderr, "[scn] depth: the GPU's (%s)\n",
+                depth && strcmp(depth, "gpu") == 0 ? "KF4_SCN_DEPTH=gpu" : "no depth clamp or 64-bit integers here");
+    }
     make_programs();
     if (const char *log = getenv("KF4_SCN_RUNS_LOG")) {
         runs_log_ = fopen(log, "w");
@@ -155,22 +162,25 @@ void Drawer::make_programs() {
     first.sets[1].fp_mask |= 1u << first_binding;
     first.sets[1].meta[first_binding].array_size = 1;
 #define SCN_PCR_SHADER(name, layout) device_.request_shader(pcr_spv_##name, sizeof(pcr_spv_##name), layout)
-    Shader *fs = SCN_PCR_SHADER(pcr_prim_frag, &frag), *efs = SCN_PCR_SHADER(pcr_prim_early_frag, &frag);
+// (exact Z: the shader made with PCR_EXACT_Z, <name>_xz, where it is on)
+#define SCN_PCR_SHADER_XZ(name, layout)                                                                                \
+    (exact_z_ ? SCN_PCR_SHADER(name##_xz, layout) : SCN_PCR_SHADER(name, layout))
+    Shader *fs = SCN_PCR_SHADER_XZ(pcr_prim_frag, &frag), *efs = SCN_PCR_SHADER_XZ(pcr_prim_early_frag, &frag);
     Shader *idfs = device_.request_shader(scn_spv_scn_first_draw_frag, sizeof(scn_spv_scn_first_draw_frag), &frag);
     Shader *firstfs = device_.request_shader(scn_spv_scn_prim_first_frag, sizeof(scn_spv_scn_prim_first_frag), &first);
     Shader *vs[size_t(Program::count)] = {
-        SCN_PCR_SHADER(pcr_prim_vert, &vert),         SCN_PCR_SHADER(pcr_nd000_vert, &batch_vert),
+        SCN_PCR_SHADER_XZ(pcr_prim_vert, &vert),      SCN_PCR_SHADER(pcr_nd000_vert, &batch_vert),
         SCN_PCR_SHADER(pcr_nd280_vert, &batch_vert),  SCN_PCR_SHADER(pcr_nd700_vert, &batch_vert),
         SCN_PCR_SHADER(pcr_ndripple_vert, &batch_vert),
     };
     // (the records' programs: the PC renderer's shaders and the scene's two DATE shaders made with PCR_RECORDS and
     // PCR_DRAWS_APART, each record a draw of its own: scn_shaders.h's)
-#define SCN_REC_SHADER(name, layout) device_.request_shader(scn_spv_scn_##name, sizeof(scn_spv_scn_##name), layout)
+#define SCN_REC_SHADER_ONE(name, layout) device_.request_shader(scn_spv_scn_##name, sizeof(scn_spv_scn_##name), layout)
+#define SCN_REC_SHADER(name, layout)                                                                                   \
+    (exact_z_ ? SCN_REC_SHADER_ONE(name##_xz, layout) : SCN_REC_SHADER_ONE(name, layout))
     Shader *fs_rec = SCN_REC_SHADER(pcr_prim_frag_rec, &frag), *efs_rec = SCN_REC_SHADER(pcr_prim_early_frag_rec, &frag);
-    Shader *idfs_rec =
-        device_.request_shader(scn_spv_scn_first_draw_frag_rec, sizeof(scn_spv_scn_first_draw_frag_rec), &frag);
-    Shader *firstfs_rec =
-        device_.request_shader(scn_spv_scn_prim_first_frag_rec, sizeof(scn_spv_scn_prim_first_frag_rec), &first);
+    Shader *idfs_rec = SCN_REC_SHADER(first_draw_frag_rec, &frag);
+    Shader *firstfs_rec = SCN_REC_SHADER(prim_first_frag_rec, &first);
     Shader *vs_rec[size_t(Program::count)] = {
         SCN_REC_SHADER(pcr_prim_vert_rec, &vert),        SCN_REC_SHADER(pcr_nd000_vert_rec, &batch_vert),
         SCN_REC_SHADER(pcr_nd280_vert_rec, &batch_vert), SCN_REC_SHADER(pcr_nd700_vert_rec, &batch_vert),
@@ -201,17 +211,25 @@ void Drawer::make_programs() {
     }
     if (getenv("KF4_SCN_ND_EMPTY") && atoi(getenv("KF4_SCN_ND_EMPTY")) != 0) {
         // (developers': the bound of the native draws' maths, nothing drawn by them)
-        vs_rec[size_t(Program::nd000)] = SCN_REC_SHADER(pcr_nd000_vert_empty, &batch_vert);
-        vs_rec[size_t(Program::nd280)] = SCN_REC_SHADER(pcr_nd280_vert_empty, &batch_vert);
+        vs_rec[size_t(Program::nd000)] = SCN_REC_SHADER_ONE(pcr_nd000_vert_empty, &batch_vert);
+        vs_rec[size_t(Program::nd280)] = SCN_REC_SHADER_ONE(pcr_nd280_vert_empty, &batch_vert);
     }
     // (slice 3d: program 0x280's two passes as one draw, pcr_prim.h's SCN_FUSE_280; the early tests: nothing discarded)
     fused_280_ = device_.request_program(SCN_REC_SHADER(pcr_nd280_vert_fuse, &batch_vert),
                                          SCN_REC_SHADER(pcr_prim_early_frag_fuse, &frag));
 #undef SCN_REC_SHADER
+#undef SCN_REC_SHADER_ONE
+#undef SCN_PCR_SHADER_XZ
 #undef SCN_PCR_SHADER
     Shader *layerfs = device_.request_shader(scn_spv_scn_picture_layer_frag, sizeof(scn_spv_scn_picture_layer_frag),
                                              &frag);
     picture_layer_ = device_.request_program(vs[size_t(Program::gif)], layerfs);
+    if (exact_z_) {
+        Shader *resetfs = device_.request_shader(pcr_spv_pcr_depth_reset_frag, sizeof(pcr_spv_pcr_depth_reset_frag), &frag);
+        for (size_t v = 0; v < size_t(Program::count); v++) {
+            depth_reset_rec_[v] = device_.request_program(vs_rec[v], resetfs);
+        }
+    }
     Shader *flatfs = device_.request_shader(scn_spv_scn_flat_frag, sizeof(scn_spv_scn_flat_frag), &frag);
     for (size_t v = 0; v < size_t(Program::count); v++) {
         flat_[v] = device_.request_program(vs[v], flatfs);
@@ -404,6 +422,19 @@ void Drawer::prepare(const Scene &scene) {
             records[at].merged = sphere_record[sm];
         }
     }
+    // (exact Z's settled decals: every record again without PCR_F_DECAL, record r's at r + own_offset, so that a run's
+    // own depth is drawn from consecutive records as its colour is: settle_run)
+    p.own_offset = 0;
+    if (std::any_of(scene.materials.begin(), scene.materials.end(), [](const Material &m) { return m.settle; })) {
+        p.own_offset = uint32_t(records.size());
+        records.reserve(2 * records.size());
+        for (uint32_t i = 0; i < p.own_offset; i++) {
+            pcr::PrimPush own = records[i];
+            // (no plane worked out: the GPU's own depth)
+            own.flags = (own.flags & ~(pcr::F_DECAL | pcr::F_EXACT_Z)) | pcr::F_SCN_OWN_DEPTH;
+            records.push_back(own);
+        }
+    }
     if (records.empty()) {
         std::fill(p.first_record.begin(), p.first_record.end(), no_record);
         return;
@@ -451,7 +482,7 @@ bool Drawer::same_state(const RunKey &a, const RunKey &b) {
            a.mask == b.mask && memcmp(a.constants, b.constants, sizeof(a.constants)) == 0 &&
            memcmp(&a.viewport, &b.viewport, sizeof(a.viewport)) == 0 &&
            memcmp(&a.scissor, &b.scissor, sizeof(a.scissor)) == 0 &&
-           memcmp(a.native, b.native, sizeof(a.native)) == 0 && a.gif_3d == b.gif_3d;
+           memcmp(a.native, b.native, sizeof(a.native)) == 0 && a.gif_3d == b.gif_3d && a.stencil == b.stencil;
 }
 
 // A key in one form for the same pixels: the alpha's blend where the alpha is not written, and the blend constants where
@@ -815,11 +846,11 @@ void Drawer::record_op(const Op &op, CommandBuffer &c) {
     counts_.ops++;
     times_.begin(c, op.work);
     const VkImageSubresourceLayers layers = {
-        VkImageAspectFlags(op.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+        VkImageAspectFlags(op.depth ? depth_aspects(image(op.dst).get_format()) : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
     switch (op.kind) {
     case Op::Kind::clear:
         if (op.depth) {
-            c.clear_image(image(op.dst), op.value, VK_IMAGE_ASPECT_DEPTH_BIT);
+            c.clear_image(image(op.dst), op.value, depth_aspects(image(op.dst).get_format()));
         } else {
             c.clear_image(image(op.dst), op.value);
         }
@@ -1028,6 +1059,16 @@ void Drawer::flush_run(CommandBuffer &c) {
         return;
     }
     r.open = false;
+    if (r.key.stencil == RunKey::Stencil::own_first) {
+        own_depth_first(r, c);
+    }
+    draw_run(r, c);
+    if (r.key.stencil == RunKey::Stencil::mark_won) {
+        settle_run(r, c);
+    }
+}
+
+void Drawer::draw_run(const Pending &r, CommandBuffer &c) {
     if (r.count == 1) {
         c.draw(r.first.vertexCount, r.first.instanceCount, r.first.firstVertex, r.first.firstInstance);
     } else {
@@ -1096,6 +1137,15 @@ void Drawer::set_call_state(const RunKey &key, CommandBuffer &c) {
         c.set_blend_op(key.op, key.op_alpha);
     }
     c.set_color_write_mask(key.mask);
+    // (exact Z's settle: the stencil's decal_won bit, pcr_canvas.cpp's mark_decal_won and settle_decal_depth)
+    c.set_stencil_test(key.stencil == RunKey::Stencil::mark_won || key.stencil == RunKey::Stencil::reset_won);
+    if (key.stencil == RunKey::Stencil::mark_won) {
+        c.set_stencil_ops(VK_COMPARE_OP_ALWAYS, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(decal_won, decal_won, decal_won);
+    } else if (key.stencil == RunKey::Stencil::reset_won) {
+        c.set_stencil_ops(VK_COMPARE_OP_EQUAL, VK_STENCIL_OP_ZERO, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP);
+        c.set_stencil_reference(decal_won, decal_won, decal_won);
+    }
 }
 
 void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, CommandBuffer &c, uint32_t set) {
@@ -1212,6 +1262,13 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
         }
         key.alpha_one = records && blend_runs_ && alpha_one(m, i) && pass.kind != PassKind::first_draw &&
                         !m.picture_layer && m.fuse == no_material;
+        key.stencil = key.zwrite && settles(pass, m, rec) ? RunKey::Stencil::mark_won : RunKey::Stencil::off;
+        if (key.stencil == RunKey::Stencil::mark_won && m.program == Program::nd280) {
+            // (program 0x280's decals, about 1,900 a picture at 009's fire: their own depth first, then their colour
+            // writing none, own_depth_first; pcr_canvas.cpp's decal_depth_first)
+            key.stencil = RunKey::Stencil::own_first;
+            key.zwrite = false;
+        }
         canonical(key);
         if (records && joins(key, rec + i)) {
             // (the open run's state is this call's: nothing set)
@@ -1243,6 +1300,95 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
         counts_.draw_calls++;
         counts_.draw_calls_by[slot]++;
     }
+}
+
+bool Drawer::settles(const Pass &pass, const Material &m, uint32_t record) const {
+    return m.settle && m.fuse == no_material && !m.picture_layer && pass.kind == PassKind::plain && record != no_record &&
+           depth_reset_rec_[size_t(m.program)] != nullptr && !flat_on_;
+}
+
+// A run of settled decals (pcr_canvas.cpp's settle_decal_depth, a run at a time). Each is tested with the top fine
+// part of its whole Z, so that it wins against the surface of its whole Z under it as on the GS; written as its depth,
+// that top part made every later draw of the same whole Z lose to it where the GS lets the later draw win (map 063's
+// rock hole showing the sky). So their passes that write Z set the stencil's decal_won bit where they pass (zero
+// before: this clears every bit it set, and a depth surface's stencil is cleared with it), and after the run its calls
+// are drawn twice more with no colour: where the bit is set the depth reset to the farthest (the viewport's depth 0 to
+// 0) and the bit cleared; then the decal's own depth, tested GEQUAL, so that each of those pixels ends with the nearest
+// of the run's fragments' there (elsewhere it lost, and loses again). Its own depth is the GPU's interpolated one, not
+// the shader's
+// (PCR_F_SCN_OWN_DEPTH, the records at own_offset: pcr_common.h), so that both passes are tested before their shader,
+// which does nothing (pcr_depth_reset.frag); the viewport's depth range 0 to the largest Z's depth, so that its clamp is
+// the exact depth's. (Settled as the PC renderer does it, the own depth the shader's, map 063 took 3.53 ms of GPU a
+// picture against 2.64 unsettled; the own depth written by the first fragment alone, no reset, let a rock's far side
+// through to the sky; 2026-11-21.)
+void Drawer::settle_run(const Pending &r, CommandBuffer &c) {
+    size_t v = 0;
+    while (v < size_t(Program::count) && r.key.program != early_rec_[v] && r.key.program != plain_rec_[v]) {
+        v++;
+    }
+    if (v == size_t(Program::count) || !depth_reset_rec_[v] || prepared_.own_offset == 0) {
+        return; // (not a program of the records: not settled)
+    }
+    RunKey reset = r.key;
+    reset.program = depth_reset_rec_[v];
+    reset.ztest = reset.zwrite = true;
+    reset.blend = false;
+    reset.mask = 0;
+    reset.stencil = RunKey::Stencil::reset_won;
+    reset.zcompare = VK_COMPARE_OP_ALWAYS;
+    reset.viewport.minDepth = reset.viewport.maxDepth = 0.0f; // (the farthest)
+    set_call_state(reset, c);
+    c.set_viewport(reset.viewport);
+    c.set_depth_compare(VK_COMPARE_OP_ALWAYS);
+    push_record(c, r.first_record);
+    draw_run(r, c);
+    RunKey own = reset;
+    own.stencil = RunKey::Stencil::off;
+    own.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    own.viewport.maxDepth = own_depth_most_;
+    set_call_state(own, c);
+    c.set_viewport(own.viewport);
+    c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL);
+    push_record(c, r.first_record + prepared_.own_offset);
+    draw_run(r, c);
+    set_call_state(r.key, c);
+    c.set_viewport(r.key.viewport);
+    c.set_depth_compare(r.key.zcompare);
+    push_record(c, r.first_record);
+    counts_.settled_runs++;
+}
+
+// A run of program 0x280's decals with its depth given first (pcr_canvas.cpp's decal_depth_first): its calls drawn with
+// no colour and their own depth (settle_run's: the GPU's, the records at own_offset), GEQUAL, so that each pixel holds
+// the nearer of what was there and the run's own depth; then the run itself (after this), tested with the top fine part
+// (a tie with the surface under it passes, as on the GS) and writing no depth. No stencil, one draw more a run, not
+// two. Unlike the GS (and the settle), where the decals overlap themselves their farther part is not drawn under the
+// nearer: the PC renderer's choice for this program alone (009's fire, 2026-11-19: no pixel more than 4 apart from the
+// settle's in 32 frames at 4x; for every program, map 013's blended tree came out thinner)
+void Drawer::own_depth_first(const Pending &r, CommandBuffer &c) {
+    size_t v = size_t(Program::nd280);
+    if (!depth_reset_rec_[v] || prepared_.own_offset == 0) {
+        return;
+    }
+    RunKey own = r.key;
+    own.program = depth_reset_rec_[v];
+    own.ztest = own.zwrite = true;
+    own.blend = false;
+    own.mask = 0;
+    own.stencil = RunKey::Stencil::off;
+    own.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    own.viewport.minDepth = 0.0f;
+    own.viewport.maxDepth = own_depth_most_;
+    set_call_state(own, c);
+    c.set_viewport(own.viewport);
+    c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL);
+    push_record(c, r.first_record + prepared_.own_offset);
+    draw_run(r, c);
+    set_call_state(r.key, c);
+    c.set_viewport(r.key.viewport);
+    c.set_depth_compare(r.key.zcompare);
+    push_record(c, r.first_record);
+    counts_.settled_runs++;
 }
 
 // ---- The pipelines drawn with, listed (pipeline_set) ----
@@ -1379,18 +1525,43 @@ std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkForm
             rp.render_area = {{0, 0}, {1, 1}};
             cmd->begin_render_pass(rp);
             const bool first = colour == first_format;
+            auto list = [&](const RunKey &key) {
+                set_shared_pipeline_state(key.zcompare, key.constants, *cmd);
+                set_vertex_input(*zeros_, *cmd); // (read only by the GIF's programs: in the others' no input)
+                set_call_state(key, *cmd);
+                DeferredPipelineCompile compile;
+                cmd->extract_pipeline_state(compile);
+                if (seen.insert(compile.hash).second) {
+                    out.push_back(compile);
+                }
+            };
+            // (exact Z's settled decals, record_settled: in a pass whose depth has a stencil)
+            const bool settle = !first && depth == VK_FORMAT_D32_SFLOAT_S8_UINT;
             for (Vulkan::Program *program : first ? firsts : others) {
                 for (RunKey key : first ? first_keys : other_keys) {
                     key.program = program;
-                    set_shared_pipeline_state(key.zcompare, key.constants, *cmd);
-                    set_vertex_input(*zeros_, *cmd); // (read only by the GIF's programs: in the others' no input)
-                    set_call_state(key, *cmd);
-                    DeferredPipelineCompile compile;
-                    cmd->extract_pipeline_state(compile);
-                    if (seen.insert(compile.hash).second) {
-                        out.push_back(compile);
+                    list(key);
+                    if (settle && (key.zwrite || dynamic_ds_)) {
+                        key.stencil = RunKey::Stencil::mark_won;
+                        list(key);
                     }
                 }
+            }
+            for (Vulkan::Program *program : depth_reset_rec_) {
+                if (!settle || !program) {
+                    continue;
+                }
+                RunKey key;
+                key.program = program;
+                key.ztest = key.zwrite = true;
+                key.zcompare = VK_COMPARE_OP_ALWAYS;
+                key.mask = 0;
+                canonical(key);
+                key.stencil = RunKey::Stencil::reset_won; // (the reset)
+                list(key);
+                key.stencil = RunKey::Stencil::off; // (the own depth)
+                key.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+                list(key);
             }
             cmd->end_render_pass();
         }

@@ -92,6 +92,29 @@ Whole whole_of(Placed p) {
     return w;
 }
 
+#ifdef PCR_EXACT_Z
+// (exact Z) Whether a triangle's plane is worked out (pcr_exact_z.h): where its corners' Z span this much or more.
+// Below it the interpolated Z (v_zrel, the corners' Z less a shared whole one) is within about 2^-11 of a Z of the
+// plane's (its float's error, the span 2^-23 a few times), the same whole Z and nearly always the same fine part; above
+// it, near the eye, the float's error passes half a Z (map 063's low wall, cut by its moss: 2026-11-21)
+#define SCN_PLANE_SPAN 4096u
+bool scn_plane_wanted(GsCorner a, GsCorner b, GsCorner c) {
+    return max(max(a.z, b.z), c.z) - min(min(a.z, b.z), c.z) >= SCN_PLANE_SPAN;
+}
+
+// (exact Z) A placed corner as the GS gets it (pcr_planes_*.comp's corner): the frame's whole Z with its own fraction,
+// in a picture between moved; at the far plane (the modern sky) Z 0; origin the draw's offset
+GsCorner scn_corner(Placed p, bool moving, bool far, ivec2 origin) {
+    ivec2 xy = moving ? p.xy : ivec2(int(uint(p.xy.x) & 0xFFFFu), int(uint(p.xy.y) & 0xFFFFu));
+    GsCorner c = GsCorner(xy + 16 * ivec2(pc.place) - origin, moving ? p.z : p.zframe, (moving ? p.zfrac : 0.0) + p.zown);
+    if (far) {
+        c.z = 0u;
+        c.zfrac = 0.0;
+    }
+    return c;
+}
+#endif
+
 void main() {
     v_color_q = 0.0;
     pcr_plane_none();
@@ -156,6 +179,9 @@ void main() {
         }
     }
     z = far ? 0u : z;
+#ifdef PCR_EXACT_Z
+    zfrac += c.zown; // (the corner's own fraction, as scn_corner gives the plane)
+#endif
     zfrac = far ? 0.0 : zfrac;
     zref = far ? 0u : zref;
     ivec2 g = moving ? xyg : ivec2(int(uint(xyg.x) & 0xFFFFu), int(uint(xyg.y) & 0xFFFFu));
@@ -171,9 +197,16 @@ void main() {
     v_stq = stq;
     v_fog = c.st.w;
     v_rect = uvec2(PCR_NO_RECT);
-    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone) {
-        pcr_plane_of_draw();
+#ifdef PCR_EXACT_Z
+    // (the triangle's plane worked out by its provoking vertex, from the placed corners: pcr_exact_z.h)
+    if ((pc.flags & PCR_F_EXACT_Z) != 0u && !gone && uint(gl_VertexIndex) % 3u == 0u) {
+        GsCorner c0 = scn_corner(at_vertex(tri.x), moving, far, info.yz), c1 = scn_corner(at_vertex(tri.y), moving, far, info.yz),
+                 c2 = scn_corner(at_vertex(tri.z), moving, far, info.yz);
+        if (scn_plane_wanted(c0, c1, c2)) {
+            pcr_plane_words(c0, c1, c2, pc.src_scale, v_plane0, v_plane1);
+        }
     }
+#endif
 }
 #else
 void main() {
