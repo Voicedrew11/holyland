@@ -13,6 +13,7 @@ struct LaunchOptions {
     bool build_only = false;             // --build-only: build this release's game if needed, no window, no disc
     std::string disc;                    // --disc PATH, or a path given alone
     std::vector<std::string> game_args;  // after "--": passed to the game
+    std::vector<std::string> args;       // every argument as given: the new launcher's, after an update
 };
 
 // the launcher's exit code: the game's, or 0 when the player closed the launcher, or 1 on an error

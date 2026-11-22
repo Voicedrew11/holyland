@@ -2,9 +2,11 @@
 // the launcher; this file reads the two files and draws.
 #include "update_badge.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 
 #include <SDL3/SDL.h>
 #ifdef _WIN32
@@ -15,7 +17,10 @@
 #include "imgui.h"
 
 extern "C" {
+#include "port/platform.h"
+#include "port/player_ui.h"
 #include "port/settings.h"
+#include "port/update_offer.h"
 #include "port/update_notice.h"
 #include "port/version.h"
 }
@@ -96,9 +101,109 @@ void skip_this_version() {
     due = false;
 }
 
+// update-request.json: the launcher installs `release` once the game has quit
+bool ask_launcher_to_update() {
+    char text[256];
+    if (!update_request_format(release.tag, text, sizeof(text)))
+        return false;
+    std::string path = data_path("update-request.json");
+    std::string temp = path + ".tmp";
+    FILE *f = std::fopen(temp.c_str(), "wb");
+    if (f == nullptr)
+        return false;
+    bool written = std::fputs(text, f) >= 0;
+    written = std::fclose(f) == 0 && written;
+    if (!written || !replace_file(temp, path)) {
+        std::remove(temp.c_str());
+        return false;
+    }
+    return true;
+}
+
+enum OfferAnswer { kOfferWaiting = 0, kOfferUpdate = 1, kOfferSkip = 2, kOfferLater = 3, kOfferNoBox = 4 };
+
+// The pop-up runs on a thread of its own (the offer's thread): the system's dialog (zenity on Linux, the system's
+// own on Windows) waits for the player while the game goes on drawing and stays responsive. Its answer is read
+// on the game's thread (take_offer_answer).
+std::atomic<int> offer_answer{kOfferWaiting};
+bool offer_open;
+
+void show_offer(std::string title, std::string message) { // the offer's thread
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, kOfferUpdate, "Update"},
+        {0, kOfferSkip, "Skip this version"},
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, kOfferLater, "Later"},
+    };
+    SDL_MessageBoxData box{};
+    box.flags = SDL_MESSAGEBOX_INFORMATION | SDL_MESSAGEBOX_BUTTONS_LEFT_TO_RIGHT;
+    box.window = nullptr; // (a parent would tie it to the game's thread)
+    box.title = title.c_str();
+    box.message = message.c_str();
+    box.numbuttons = (int)(sizeof(buttons) / sizeof(buttons[0]));
+    box.buttons = buttons;
+    int chosen = kOfferLater;
+    if (!SDL_ShowMessageBox(&box, &chosen)) {
+        std::fprintf(stderr, "[update] no pop-up: %s\n", SDL_GetError());
+        chosen = kOfferNoBox;
+    }
+    offer_answer = chosen;
+}
+
 } // namespace
 
+void update_badge_update_now() {
+    if (!due)
+        return;
+    if (!ask_launcher_to_update()) {
+        std::fprintf(stderr, "[update] could not write update-request.json in %s\n", port_data_dir());
+        return;
+    }
+    std::fprintf(stderr, "[update] the player chose to update to %s: quitting for the launcher\n", release.tag);
+    // the game's own way out (port/sdk/libpad.c): the same as closing the window
+    SDL_Event quit{};
+    quit.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&quit);
+}
+
+// what the player chose in the pop-up, once it is closed; the game's thread
+static void take_offer_answer() {
+    if (!offer_open)
+        return;
+    int answer = offer_answer.exchange(kOfferWaiting);
+    if (answer == kOfferWaiting)
+        return;
+    offer_open = false;
+    switch (answer) {
+    case kOfferUpdate:
+        update_badge_update_now();
+        break;
+    case kOfferSkip:
+        std::fprintf(stderr, "[update] the player skipped %s\n", release.tag);
+        skip_this_version();
+        break;
+    case kOfferNoBox:
+        // no pop-up on this desktop: the F1 menu's General tab has the same choices
+        port_player_ui_show("general");
+        break;
+    default:
+        std::fprintf(stderr, "[update] the player chose later\n");
+        break;
+    }
+}
+
+void port_update_title() {
+    static bool offered;
+    if (offered || !due)
+        return;
+    offered = true;
+    offer_open = true;
+    std::string message =
+        std::string(kProductName) + " " + release.tag + " is available. You have " + port_version + ".";
+    std::thread(show_offer, std::string("Update available"), std::move(message)).detach();
+}
+
 bool update_badge_poll(unsigned now_ms) {
+    take_offer_answer();
     if (!polled_once) {
         polled_once = true;
         first_poll_ms = now_ms;
@@ -113,12 +218,6 @@ bool update_badge_poll(unsigned now_ms) {
     if (due)
         std::fprintf(stderr, "[update] %s %s is out (this is %s): %s\n", kProductName, release.tag, port_version, release.url);
     return due;
-}
-
-const char *update_badge_note() {
-    static char note[128];
-    std::snprintf(note, sizeof(note), "Update available: %s (F1 for details)", release.tag);
-    return note;
 }
 
 const char *update_badge_version_line() {

@@ -186,3 +186,180 @@ int update_skip_in_launcher_json(const char *json, const char *tag, char *out, s
     cJSON_Delete(root);
     return fits;
 }
+
+/* ---- Updating --------------------------------------------------------------------------------------------- */
+
+static int ends_with(const char *text, const char *suffix) {
+    size_t n = strlen(text), m = strlen(suffix);
+
+    return n >= m && strcmp(text + n - m, suffix) == 0;
+}
+
+int update_asset_pick(const char *github_json, const char *tag, const char *name_suffix, const char *url_prefix,
+                      char *name, size_t name_size, char *url, size_t url_size) {
+    cJSON *root;
+    const cJSON *assets, *asset;
+    const char *found_name = NULL, *found_url = NULL;
+    int matches = 0, ok;
+
+    if (name_size > 0) {
+        name[0] = 0;
+    }
+    if (url_size > 0) {
+        url[0] = 0;
+    }
+    if (github_json == NULL || tag == NULL || name_suffix == NULL || name_suffix[0] == 0 || url_prefix == NULL) {
+        return 0;
+    }
+    root = cJSON_Parse(github_json);
+    {
+        const char *release_tag = string_item(root, "tag_name");
+
+        if (release_tag == NULL || strcmp(release_tag, tag) != 0) {
+            cJSON_Delete(root);
+            return 0;
+        }
+    }
+    assets = cJSON_GetObjectItemCaseSensitive(root, "assets");
+    if (!cJSON_IsArray(assets)) {
+        assets = NULL;
+    }
+    cJSON_ArrayForEach(asset, assets) {
+        const char *asset_name = string_item(asset, "name");
+        const char *asset_url = string_item(asset, "browser_download_url");
+
+        if (asset_name == NULL || asset_url == NULL) {
+            continue;
+        }
+        if (name_suffix[0] == '-' ? !ends_with(asset_name, name_suffix) : strcmp(asset_name, name_suffix) != 0) {
+            continue;
+        }
+        matches++;
+        found_name = asset_name;
+        found_url = asset_url;
+    }
+    /* a name with a path in it or a URL elsewhere is never taken: the answer could come from anywhere on the way */
+    ok = matches == 1 && strncmp(found_url, url_prefix, strlen(url_prefix)) == 0 && strchr(found_name, '/') == NULL &&
+         strchr(found_name, '\\') == NULL && strlen(found_name) < name_size && strlen(found_url) < url_size;
+    if (ok) {
+        copy_text(name, name_size, found_name);
+        copy_text(url, url_size, found_url);
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
+static int hex_digit(int c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+int update_sums_lookup(const char *sums_text, const char *file_name, char hex[65]) {
+    const char *line = sums_text;
+    size_t name_length;
+
+    hex[0] = 0;
+    if (sums_text == NULL || file_name == NULL || file_name[0] == 0) {
+        return 0;
+    }
+    name_length = strlen(file_name);
+    while (*line != 0) {
+        const char *end = strchr(line, '\n');
+        size_t length = end != NULL ? (size_t)(end - line) : strlen(line);
+        const char *name;
+        size_t i;
+
+        if (length > 0 && line[length - 1] == '\r') {
+            length--;
+        }
+        /* "<64 hex><space><space or *><name>" */
+        name = line + 66;
+        if (length == 66 + name_length && line[64] == ' ' && (line[65] == ' ' || line[65] == '*') &&
+            memcmp(name, file_name, name_length) == 0) {
+            for (i = 0; i < 64; i++) {
+                int digit = hex_digit((unsigned char)line[i]);
+
+                if (digit < 0) {
+                    hex[0] = 0;
+                    return 0;
+                }
+                hex[i] = "0123456789abcdef"[digit];
+            }
+            hex[64] = 0;
+            return 1;
+        }
+        if (end == NULL) {
+            break;
+        }
+        line = end + 1;
+    }
+    return 0;
+}
+
+int update_hex_bytes(const char *text, unsigned char *out, size_t size) {
+    size_t i;
+
+    if (text == NULL) {
+        return 0;
+    }
+    while (isspace((unsigned char)*text)) {
+        text++;
+    }
+    for (i = 0; i < size; i++) {
+        int high = hex_digit((unsigned char)text[2 * i]);
+        int low = high < 0 ? -1 : hex_digit((unsigned char)text[2 * i + 1]);
+
+        if (high < 0 || low < 0) {
+            return 0;
+        }
+        out[i] = (unsigned char)(high << 4 | low);
+    }
+    text += 2 * size;
+    while (isspace((unsigned char)*text)) {
+        text++;
+    }
+    return *text == 0;
+}
+
+int update_request_parse(const char *json, char *tag, size_t tag_size) {
+    cJSON *root;
+    const char *value;
+    long parts[4];
+    int ok;
+
+    if (tag_size > 0) {
+        tag[0] = 0;
+    }
+    if (json == NULL) {
+        return 0;
+    }
+    root = cJSON_Parse(json);
+    value = string_item(root, "tag");
+    ok = value != NULL && strlen(value) < tag_size && read_version(value, parts) > 0;
+    if (ok) {
+        copy_text(tag, tag_size, value);
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
+int update_request_format(const char *tag, char *out, size_t out_size) {
+    cJSON *root = cJSON_CreateObject();
+    int fits;
+
+    if (root == NULL) {
+        return 0;
+    }
+    cJSON_AddStringToObject(root, "tag", tag != NULL ? tag : "");
+    fits = print_into(root, out, out_size);
+    cJSON_Delete(root);
+    return fits;
+}

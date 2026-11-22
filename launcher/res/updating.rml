@@ -1,0 +1,15 @@
+<rml>
+<head>
+	<title>Updating</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<div class="column">
+		<img id="logo" class="small" src="logo.alpha"/>
+		<h1 id="heading">Updating Holyland</h1>
+		<p id="stage"></p>
+		<div id="bar" class="bar"></div>
+		<div class="buttons"><span class="button" data-action="cancel">Cancel</span></div>
+	</div>
+</body>
+</rml>

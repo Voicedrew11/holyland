@@ -33,6 +33,7 @@
 #include "port/hands.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
+#include "port/update_offer.h"
 
 #define SAVE_IMAGE_SIZE 0x20000
 #define SAVE_IMAGE_MAGIC 0x15400
@@ -536,6 +537,7 @@ int Quick_PollTitle(void) {
 
     port_automap_title(); /* the automap mod: the next game may be a new one (game/automap.c) */
     port_hands_title(); /* the hands mod: the same (game/hands.c) */
+    port_update_title(); /* a new release: the offer to update, once (port/overlay/update_badge.cpp) */
     if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");
     } else if (wanted == PORT_QUICK_LOAD) {

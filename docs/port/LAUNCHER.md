@@ -34,12 +34,12 @@ first start after the rename moves the `darker-reality` data and local folders b
 
 Later starts go straight into the game. `holyland --launcher` (Start menu: "Holyland (disc, rebuild,
 updates)"; the desktop entry's action) shows the launcher instead: Play, Change disc (the setup's disc page),
-Rebuild, Open data folder, "Check for updates at launch".
+Rebuild, Open data folder, "Check for updates".
 
 The window (`launcher/window.h`) is RmlUi, the player menu's UI library, drawn on SDL's renderer (no Vulkan: it
 opens even where the game cannot). Its pages are documents in `launcher/res/` (`setup.rml`, `building.rml`,
-`failed.rml`, `home.rml`, `stopped.rml`, one style sheet `launcher.rcss` in the menu's look: its Mincho, colours, frame and corners), carried in
-the launcher with the menu's font, logo and masks by `cmake/ui_assets.cmake`. A screen shows its page, fills its parts by
+`failed.rml`, `home.rml`, `stopped.rml`, one style sheet `launcher.rcss` in the menu's look: its Mincho and colours), carried in
+the launcher with the menu's font and logo by `cmake/ui_assets.cmake`. A screen shows its page, fills its parts by
 id (`set_text`, `set_rml`, `set_classes`) and asks for the buttons clicked (`data-action`, `take_action`). It shares
 the menu's RmlUi code: `port/ui/ui_render.cpp` records RmlUi's drawing as a `ui::Frame`, which `window.cpp` draws
 with `SDL_RenderGeometryRaw`, and `port/ui/ui_ties.cpp` gives RmlUi the clock, log, cursor, clipboard, files and
@@ -55,9 +55,10 @@ the first start), for checking the pages without a screenshot of the desktop. `-
 | data folder (`port/platform/data_dir.c`: `%APPDATA%\holyland`, `~/.local/share/holyland`, `KF4_DATA_DIR`) | `settings.json`, saves | the game |
 | | `launcher.json`: disc, `update_check`, `skipped`, `setup_done` | the launcher's window; the overlay sets `skipped` only, while the launcher's window is closed |
 | | `update.json`: the cached answer (`checked`, `tag`, `url`) | the launcher's update thread only |
+| | `update-request.json`: the release the player chose to update to (`tag`) | the game; the launcher reads and removes it |
 | | `build.log`, `game.log` | the launcher |
 | builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries; older keys are removed after a build | the launcher |
-| install folder (read-only) | the launcher, `content/` | the installer |
+| install folder (read-only but for updates) | the launcher, `content/`; during and after an update `*.partial`, `*.old`, `update.partial/`, removed at the next start | the installer, the launcher's update |
 
 ## Platforms
 
@@ -136,21 +137,63 @@ PGO with the player's disc (`tools/pgo_train.py`) is a possible later option; it
 
 ## Updates
 
-The same as Verdite's launcher: the player is told; nothing installs itself.
+The player is told, and can let Holyland update itself in one step, as OpenCE's updater (OpenCommunityEdition/OpenCE,
+`port/linux/src/updater.c`): download, check, put in place, start again.
 
-- `launcher/update_check.cpp` asks `GET https://api.github.com/repos/Voicedrew11/darker-reality/releases/latest` (drafts
-  and pre-releases are never "latest") on its own thread, at most once an hour, 10 s at most; the answer goes to
-  `update.json`. No network: the cached answer stands. A URL that is not `https://github.com/` is refused.
-- The rules are shared C (`port/platform/update_notice.c`, `tests/update_notice_test.c`): `v` dropped, dotted
-  numbers compared, suffixes ignored (Verdite's `UpdateCheck.IsNewer`); a developer's build (no version) is never
-  told.
-- The launcher's window: a gold "Update available!" menu and, once a start, a window: Download page, Skip this
-  version, Later.
-- The game (`port/overlay/update_badge.cpp`): reads `update.json` for the first minute (the check may finish after
-  the game starts); a note when the game starts ("Update available: v0.2.0 (F1 for details)"), the gold menu in
-  the F1 bar, the same window. It logs `[update] ...` to `game.log`.
-- `KF4_UPDATE_CHECK=0` turns it off, `=force` ignores the hour; `KF4_UPDATE_URL` (a test only; `file://` works on
-  Linux) answers instead of GitHub.
+**Finding a release.** `launcher/update_check.cpp` asks `GET https://api.github.com/repos/Voicedrew11/holyland/releases/latest`
+(drafts and pre-releases are never "latest") on its own thread, at most once an hour, 10 s at most; the answer goes
+to `update.json`. No network: the cached answer stands. A URL that is not `https://github.com/` is refused. The rules
+are shared C (`port/platform/update_notice.c`, `tests/update_notice_test.c`): `v` dropped, dotted numbers compared,
+suffixes ignored (Verdite's `UpdateCheck.IsNewer`); a developer's build (no version) is never told.
+
+**Asking the player.**
+- The game's title screen (`Quick_PollTitle` calls `port_update_title`, `port/include/port/update_offer.h`): once a
+  run, when `update.json` names a newer release (the overlay reads it for the first minute, as the check may finish
+  after the game starts), a native pop-up (`SDL_ShowMessageBox`: zenity on Linux, the system's own box on Windows),
+  "Holyland v0.3.0 is available. You have 0.2.0.": **Update**, **Skip this version**, **Later**. It runs on a thread
+  of its own, so the game keeps drawing while it is open; the answer is taken on the game's next frame. Skip writes `skipped` in `launcher.json`, so that release
+  is never offered again; the next one is. Where no pop-up can open, the F1 menu opens on General instead.
+- The F1 menu's General tab: **Update now**, Open download page, Skip this version, while an update is due.
+
+**Updating.** Update in the game writes `update-request.json` (`{"tag": "v0.3.0"}`) and quits the game the way
+closing its window does; the launcher, which started the game and waited for it, reads and removes the request and
+opens its window on "Updating" (`launcher/self_update.h`, `res/updating.rml`):
+1. GitHub's answer about that release (`.../releases/tags/<tag>`): this way of installing's file, `SHA256SUMS` and
+   `SHA256SUMS.sig`. A release without the two is not installed from here (the Download page is).
+2. `SHA256SUMS.sig` must be `SHA256SUMS`'s Ed25519 signature by the release key (`deploy/release-key.pub`, compiled
+   in as `launcher/release_key.h`; checked with Monocypher, `third_party/monocypher/`).
+3. The file is downloaded beside what it replaces and its SHA-256 must be the one `SHA256SUMS` gives.
+4. It is put in place and the new launcher started with the same arguments; this one exits. The new one builds its
+   release's game once (a new build key) and plays. Settings, saves and quick saves are in the data folder and are
+   not touched; save states are tied to a build, as always.
+
+Any failure shows why (`res/update_failed.rml`): Try again, Download page, Play this version, Close. Nothing is
+replaced before every check has passed.
+
+How each way of installing is replaced (`Installation` in `launcher/platform.h`, one class each):
+
+| Installed as | Detected by | The file | Put in place |
+|---|---|---|---|
+| AppImage (`platform/linux.cpp`) | `$APPIMAGE` (set by the AppImage's runtime), its folder writable | `*-x86_64.AppImage` | downloaded to `<AppImage>.partial`, renamed over the AppImage (the running one's mount keeps the old data), the new one started in a session of its own |
+| Windows installer (`platform/windows.cpp`) | `unins000.exe` beside the launcher | `*-win-x64-setup.exe` | the launcher and `SDL3.dll` renamed to `.old` (a running program can be renamed, not overwritten), the installer run with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /HOLYLANDRELAUNCH`; `installer.iss` starts the new launcher when given that switch |
+| Windows zip | `content/manifest.txt` beside the launcher, the folder writable | `*-win-x64.zip` | unpacked into `update.partial\` with Windows' own `tar.exe` (Windows 10 1803 and later), each of its files and folders put in place after the old one is renamed to `.old`; rolled back if one fails |
+
+The next start removes what an update left (`remove_leftovers`: `.old` files, a half download). A developer's build,
+an AppImage in a folder it cannot write, or an extracted AppImage cannot update itself: Update then ends on the failed
+page, whose Download page opens the release.
+
+**Signing a release.** The release workflow's `release` job writes `SHA256SUMS` over every file and signs it with
+`tools/release_sign.sh` and the `RELEASE_SIGNING_KEY` repository secret (a PEM Ed25519 private key); with no secret it
+fails, so no unsigned release is made. The private key was made on 2026-11-22 and is kept by the owner, outside the
+repository. A new key: `openssl genpkey -algorithm ed25519`, `tools/release_sign.sh public-key KEY.pem` into
+`deploy/release-key.pub` and `launcher/release_key.h`, the secret replaced; launchers built before it never update to
+a release signed with the new one.
+
+**Testing.** `KF4_UPDATE_CHECK=0` turns the check off, `=force` ignores the hour. `KF4_UPDATE_URL` (a test only;
+`file://` works on Linux) answers instead of GitHub, for the check and for the update; its files may then be `file://`
+too, and they must be signed with `KF4_UPDATE_KEY` (64 hex digits) instead of the release key. A whole update was run
+this way on 2026-11-22 with two AppImages built here (0.0.1 updating to 0.0.2), the pop-up's Update pressed by a
+stand-in `zenity` on `PATH` (SDL runs zenity for the pop-up on Wayland and reads the button pressed from it).
 
 ## Versions
 
@@ -192,4 +235,4 @@ AppImage, the Windows zip, the installer) is in a zip locked with the `PREVIEW_P
 - A real Windows play test of an installed release: the Windows launcher and its tests were built and run here
   only through cross-compiling and Wine; the release workflow's Windows job is the first native run.
 - An icon: the AppImage carries a transparent square.
-- One-click updating (the owner chose the notice only, as Verdite's).
+- A real Windows run of an update (installer or zip): built and type-checked here by cross-compiling only.

@@ -41,7 +41,6 @@ void UpdateCheck::start(const Platform &platform, const DataPaths &paths, const 
     {
         std::lock_guard<std::mutex> lock(mutex_);
         release_ = cached;
-        skipped_ = choices.skipped;
         running_version_ = std::move(running_version);
     }
     if (mode == UPDATE_CHECK_OFF || !update_check_due(mode, &cached, now_s())) {
@@ -65,18 +64,6 @@ void UpdateCheck::run(const Platform &platform, std::string cache_path) {
     }
     // no answer: the cached one stands, and the next start asks again
     done_ = true;
-}
-
-std::optional<UpdateRelease> UpdateCheck::notice() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!update_notice_due(&release_, running_version_.c_str(), skipped_.c_str()))
-        return std::nullopt;
-    return release_;
-}
-
-void UpdateCheck::skip() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    skipped_ = release_.tag;
 }
 
 void UpdateCheck::finish_within(int ms) {

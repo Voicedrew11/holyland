@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <deque>
 #include <fstream>
+#include <map>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -17,7 +18,12 @@
 #include "launcher_files.h"
 #include "platform.h"
 #include "rml_text.h"
+#include "self_update.h"
 #include "setup_flow.h"
+
+extern "C" {
+#include "monocypher-ed25519.h"
+}
 
 using namespace launcher;
 
@@ -265,7 +271,32 @@ public:
     }
     std::string describe_exit(int code) const override { return "code " + std::to_string(code); }
     std::optional<fs::path> pick_disc() const override { return std::nullopt; }
-    std::optional<std::string> http_get(std::string_view, std::string_view, int) const override { return std::nullopt; }
+    std::map<std::string, std::string> web; // a pretend network: what each URL answers
+    std::optional<std::string> http_get(std::string_view url, std::string_view, int) const override {
+        auto it = web.find(std::string(url));
+        if (it == web.end())
+            return std::nullopt;
+        return it->second;
+    }
+    std::string http_download(std::string_view url, const fs::path &to, std::uint64_t max_bytes, std::string_view,
+                              const DownloadProgress &progress) const override {
+        auto it = web.find(std::string(url));
+        if (it == web.end())
+            return "no such file";
+        if (it->second.size() > max_bytes)
+            return "the file is larger than expected";
+        write(to, it->second);
+        if (progress && !progress(it->second.size(), it->second.size())) {
+            std::error_code error;
+            fs::remove(to, error);
+            return "stopped";
+        }
+        return {};
+    }
+    std::unique_ptr<Installation> installation(std::string &why) const override {
+        why = "a test";
+        return nullptr;
+    }
 };
 
 class Recorder final : public BuildProgress {
@@ -357,6 +388,127 @@ void test_local_build() {
 
 } // namespace
 
+// ---- An update's download and checks against a pretend network -------------------------------------------------
+
+class FakeInstallation final : public Installation {
+public:
+    explicit FakeInstallation(fs::path dir) : dir_(std::move(dir)) {}
+    std::string_view asset_suffix() const override { return "-x86_64.AppImage"; }
+    fs::path download_path() const override { return dir_ / "new.partial"; }
+    std::string replace_and_start(const fs::path &, const std::vector<std::string> &) const override { return {}; }
+    void remove_leftovers() const override {}
+
+private:
+    fs::path dir_;
+};
+
+class QuietUpdate final : public UpdateProgress {
+public:
+    std::vector<std::string> stages;
+    void stage(std::string_view what) override { stages.emplace_back(what); }
+    bool bytes(std::uint64_t, std::uint64_t) override { return true; }
+};
+
+std::string hex_of(const std::uint8_t *bytes, std::size_t size) {
+    std::string hex;
+    char two[3];
+    for (std::size_t i = 0; i < size; i++) {
+        std::snprintf(two, sizeof(two), "%02x", bytes[i]);
+        hex += two;
+    }
+    return hex;
+}
+
+void test_update_fetch() {
+    fs::path dir = temp_dir("holyland_launcher_test_update");
+    std::uint8_t seed[32], secret[64], other_secret[64];
+    UpdateSource source{"https://api.github.com/r/tags/v0.3.0", "https://github.com/", {}};
+    ReleaseKey other{};
+    for (int i = 0; i < 32; i++)
+        seed[i] = (std::uint8_t)i;
+    crypto_ed25519_key_pair(secret, source.key.data(), seed); // (it wipes the seed)
+    for (int i = 0; i < 32; i++)
+        seed[i] = (std::uint8_t)(100 + i);
+    crypto_ed25519_key_pair(other_secret, other.data(), seed);
+
+    const std::string game = "the new AppImage's bytes";
+    const std::string base = "https://github.com/r/releases/download/v0.3.0/";
+    std::string sums = sha(game) + "  H-0.3.0-x86_64.AppImage\n" + sha("zip") + "  H-0.3.0-win-x64.zip\n";
+    auto sign = [&sums](const std::uint8_t *key) {
+        std::uint8_t signature[64];
+        crypto_ed25519_sign(signature, key, reinterpret_cast<const std::uint8_t *>(sums.data()), sums.size());
+        return hex_of(signature, 64) + "\n";
+    };
+    std::string release = "{\"tag_name\":\"v0.3.0\",\"assets\":["
+                          "{\"name\":\"H-0.3.0-x86_64.AppImage\",\"browser_download_url\":\"" + base + "H-0.3.0-x86_64.AppImage\"},"
+                          "{\"name\":\"SHA256SUMS\",\"browser_download_url\":\"" + base + "SHA256SUMS\"},"
+                          "{\"name\":\"SHA256SUMS.sig\",\"browser_download_url\":\"" + base + "SHA256SUMS.sig\"}]}";
+    FakePlatform platform;
+    FakeInstallation installation(dir);
+    platform.web[source.release_url] = release;
+    platform.web[base + "H-0.3.0-x86_64.AppImage"] = game;
+    platform.web[base + "SHA256SUMS"] = sums;
+    platform.web[base + "SHA256SUMS.sig"] = sign(secret);
+    std::error_code error;
+
+    QuietUpdate progress;
+    std::string why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    auto got = read_file(installation.download_path());
+    check("a good update is downloaded and passes", why.empty() && got && *got == game);
+    check("its stages are told", progress.stages.size() == 4);
+    check("the checksums' file is not left", !fs::exists(dir / "new.partial.sums", error));
+    fs::remove(installation.download_path(), error);
+
+    platform.web[base + "H-0.3.0-x86_64.AppImage"] = "something else";
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("a changed file is refused and removed",
+          why.find("checksum differs") != std::string::npos && !fs::exists(installation.download_path(), error));
+    platform.web[base + "H-0.3.0-x86_64.AppImage"] = game;
+
+    platform.web[base + "SHA256SUMS.sig"] = sign(other_secret);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("a signature by another key is refused, before the download",
+          why.find("signature is not good") != std::string::npos && !fs::exists(installation.download_path(), error));
+
+    platform.web[base + "SHA256SUMS.sig"] = sign(secret);
+    platform.web[base + "SHA256SUMS"] = sums + "\n";
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("checksums changed after signing are refused", why.find("signature is not good") != std::string::npos);
+    platform.web[base + "SHA256SUMS"] = sums;
+
+    platform.web[base + "SHA256SUMS.sig"] = "not hex\n";
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("a broken signature is refused", why.find("signature is not good") != std::string::npos);
+
+    platform.web[source.release_url] = "{\"tag_name\":\"v0.3.0\",\"assets\":["
+                                       "{\"name\":\"H-0.3.0-x86_64.AppImage\",\"browser_download_url\":\"" + base +
+                                       "H-0.3.0-x86_64.AppImage\"}]}";
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("an unsigned release is refused", why.find("not signed") != std::string::npos);
+
+    platform.web[source.release_url] = release;
+    why = fetch_checked_update(platform, installation, source, "v0.4.0", "test", progress);
+    check("another release's answer is refused", why.find("no file for this computer") != std::string::npos);
+
+    platform.web.erase(source.release_url);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    check("no network", why.find("could not be reached") != std::string::npos);
+    fs::remove_all(dir, error);
+}
+
+void test_update_request() {
+    fs::path dir = temp_dir("holyland_launcher_test_request");
+    DataPaths paths{dir, dir / "builds"};
+    check("no ask", !take_update_request(paths));
+    write(paths.update_request(), "{\"tag\": \"v0.3.0\"}");
+    auto tag = take_update_request(paths);
+    std::error_code error;
+    check("the game's ask, read once", tag && *tag == "v0.3.0" && !fs::exists(paths.update_request(), error));
+    write(paths.update_request(), "{\"tag\": \"preview\"}");
+    check("an ask for no version is dropped", !take_update_request(paths) && !fs::exists(paths.update_request(), error));
+    fs::remove_all(dir, error);
+}
+
 int main() {
     test_sha256();
     test_build_key();
@@ -368,6 +520,8 @@ int main() {
     test_rml_escaped();
     test_setup_flow();
     test_local_build();
+    test_update_fetch();
+    test_update_request();
     std::printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;
 }

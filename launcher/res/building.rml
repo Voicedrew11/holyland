@@ -4,19 +4,9 @@
 	<link type="text/rcss" href="launcher.rcss"/>
 </head>
 <body>
-	<!-- the menu's window: its frame and iron corners (launcher.rcss) -->
-	<div id="frame">
-		<div></div>
-		<img class="corner" id="corner-tl" src="corner_tl.alpha"/>
-		<img class="corner" id="corner-tr" src="corner_tr.alpha"/>
-		<img class="corner" id="corner-bl" src="corner_bl.alpha"/>
-		<img class="corner" id="corner-br" src="corner_br.alpha"/>
-	</div>
 	<div class="column">
-		<div id="update"></div>
 		<img id="logo" class="small" src="logo.alpha"/>
 		<h1>Building the game</h1>
-		<p class="dim">This happens once for each release. The game is compiled here, on your computer, from its source: no part of it is downloaded.</p>
 		<p id="stage"></p>
 		<div id="bar" class="bar"></div>
 		<div id="log" class="log"></div>

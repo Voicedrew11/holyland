@@ -1,0 +1,19 @@
+<rml>
+<head>
+	<title>The update failed</title>
+	<link type="text/rcss" href="launcher.rcss"/>
+</head>
+<body>
+	<div class="column">
+		<h1 class="error">Holyland could not update itself</h1>
+		<p id="message"></p>
+		<p class="dim">The release's page has its files, to install by hand.</p>
+		<div class="buttons">
+			<span class="button main" data-action="try-again">Try again</span>
+			<span class="button" data-action="download-page">Download page</span>
+			<span class="button" data-action="play">Play this version</span>
+			<span class="button" data-action="close">Close</span>
+		</div>
+	</div>
+</body>
+</rml>

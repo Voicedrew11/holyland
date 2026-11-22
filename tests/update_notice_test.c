@@ -258,6 +258,106 @@ static void test_move_old_folders(void) {
 }
 #endif
 
+static const char release_json[] =
+    "{\"tag_name\":\"v0.3.0\",\"assets\":["
+    "{\"name\":\"DarkerReality-0.3.0-x86_64.AppImage\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-x86_64.AppImage\"},"
+    "{\"name\":\"DarkerReality-0.3.0-win-x64.zip\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-win-x64.zip\"},"
+    "{\"name\":\"DarkerReality-0.3.0-win-x64-setup.exe\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-win-x64-setup.exe\"},"
+    "{\"name\":\"SHA256SUMS\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/SHA256SUMS\"},"
+    "{\"name\":\"SHA256SUMS.sig\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/SHA256SUMS.sig\"}]}";
+
+static void test_assets(void) {
+    char name[128], url[512];
+    const char *gh = "https://github.com/";
+
+    check("the AppImage", update_asset_pick(release_json, "v0.3.0", "-x86_64.AppImage", gh, name, sizeof(name), url,
+                                            sizeof(url)) &&
+                              strcmp(name, "DarkerReality-0.3.0-x86_64.AppImage") == 0 &&
+                              strstr(url, "/v0.3.0/DarkerReality-0.3.0-x86_64.AppImage") != NULL);
+    check("the zip is not the installer",
+          update_asset_pick(release_json, "v0.3.0", "-win-x64.zip", gh, name, sizeof(name), url, sizeof(url)) &&
+              strcmp(name, "DarkerReality-0.3.0-win-x64.zip") == 0);
+    check("the installer",
+          update_asset_pick(release_json, "v0.3.0", "-win-x64-setup.exe", gh, name, sizeof(name), url, sizeof(url)) &&
+              strcmp(name, "DarkerReality-0.3.0-win-x64-setup.exe") == 0);
+    check("SHA256SUMS exactly, not its .sig",
+          update_asset_pick(release_json, "v0.3.0", "SHA256SUMS", gh, name, sizeof(name), url, sizeof(url)) &&
+              strcmp(name, "SHA256SUMS") == 0);
+    check("the .sig", update_asset_pick(release_json, "v0.3.0", "SHA256SUMS.sig", gh, name, sizeof(name), url,
+                                        sizeof(url)) &&
+                          strcmp(name, "SHA256SUMS.sig") == 0);
+    check("another release's answer is refused",
+          !update_asset_pick(release_json, "v0.4.0", "-x86_64.AppImage", gh, name, sizeof(name), url, sizeof(url)) &&
+              name[0] == 0 && url[0] == 0);
+    check("no such asset", !update_asset_pick(release_json, "v0.3.0", "-macos.dmg", gh, name, sizeof(name), url,
+                                              sizeof(url)));
+    check("a URL too long for the room is refused",
+          !update_asset_pick(release_json, "v0.3.0", "-win-x64-setup.exe", gh, name, sizeof(name), url, 10));
+    check("two that match are refused",
+          !update_asset_pick("{\"tag_name\":\"v1\",\"assets\":["
+                             "{\"name\":\"a-x86_64.AppImage\",\"browser_download_url\":\"https://github.com/a\"},"
+                             "{\"name\":\"b-x86_64.AppImage\",\"browser_download_url\":\"https://github.com/b\"}]}",
+                             "v1", "-x86_64.AppImage", gh, name, sizeof(name), url, sizeof(url)));
+    check("a URL elsewhere is refused",
+          !update_asset_pick("{\"tag_name\":\"v1\",\"assets\":[{\"name\":\"a-x86_64.AppImage\","
+                             "\"browser_download_url\":\"https://example.com/a-x86_64.AppImage\"}]}",
+                             "v1", "-x86_64.AppImage", gh, name, sizeof(name), url, sizeof(url)));
+    check("a test's prefix",
+          update_asset_pick("{\"tag_name\":\"v1\",\"assets\":[{\"name\":\"a-x86_64.AppImage\","
+                            "\"browser_download_url\":\"file:///tmp/a-x86_64.AppImage\"}]}",
+                            "v1", "-x86_64.AppImage", "file://", name, sizeof(name), url, sizeof(url)));
+    check("a name with a path is refused",
+          !update_asset_pick("{\"tag_name\":\"v1\",\"assets\":[{\"name\":\"../a-x86_64.AppImage\","
+                             "\"browser_download_url\":\"https://github.com/a\"}]}",
+                             "v1", "-x86_64.AppImage", gh, name, sizeof(name), url, sizeof(url)));
+    check("not JSON", !update_asset_pick("<html>", "v1", "-x", gh, name, sizeof(name), url, sizeof(url)) &&
+                          !update_asset_pick(NULL, "v1", "-x", gh, name, sizeof(name), url, sizeof(url)));
+}
+
+static void test_sums(void) {
+    char hex[65];
+    const char *sums = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08  a.AppImage\n"
+                       "60303AE22B998861BCE3B28F33EEC1BE758A213C86C93C076DBE9F558C11C752 *b.zip\r\n"
+                       "zz303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752  bad.exe\n"
+                       "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08  a.AppImage.old";
+
+    check("a sum", update_sums_lookup(sums, "a.AppImage", hex) &&
+                       strcmp(hex, "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08") == 0);
+    check("binary mark, CRLF, upper case read as lower",
+          update_sums_lookup(sums, "b.zip", hex) &&
+              strcmp(hex, "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752") == 0);
+    check("not hex", !update_sums_lookup(sums, "bad.exe", hex) && hex[0] == 0);
+    check("a name only a prefix of another's", update_sums_lookup(sums, "a.AppImage.old", hex) &&
+                                                   !update_sums_lookup(sums, "a.AppIm", hex));
+    check("none", !update_sums_lookup(sums, "c", hex) && !update_sums_lookup(NULL, "c", hex) &&
+                      !update_sums_lookup("", "c", hex));
+}
+
+static void test_hex(void) {
+    unsigned char bytes[4];
+
+    check("hex bytes", update_hex_bytes(" 0aFf10e3\n", bytes, 4) && bytes[0] == 0x0a && bytes[1] == 0xff &&
+                           bytes[2] == 0x10 && bytes[3] == 0xe3);
+    check("too short", !update_hex_bytes("0aff10", bytes, 4));
+    check("too long", !update_hex_bytes("0aff10e300", bytes, 4));
+    check("not hex", !update_hex_bytes("0aff10eg", bytes, 4) && !update_hex_bytes(NULL, bytes, 4));
+}
+
+static void test_request(void) {
+    char text[256], tag[64];
+
+    check("a request round trip", update_request_format("v0.3.0", text, sizeof(text)) &&
+                                      update_request_parse(text, tag, sizeof(tag)) && strcmp(tag, "v0.3.0") == 0);
+    check("no version is no request", !update_request_parse("{\"tag\":\"preview\"}", tag, sizeof(tag)) && tag[0] == 0);
+    check("broken", !update_request_parse("{", tag, sizeof(tag)) && !update_request_parse(NULL, tag, sizeof(tag)));
+    check("too small", !update_request_format("v0.3.0", text, 4));
+}
+
 int main(void) {
     test_versions();
     test_github_answer();
@@ -265,6 +365,10 @@ int main(void) {
     test_when_to_ask();
     test_when_to_tell();
     test_skip();
+    test_assets();
+    test_sums();
+    test_hex();
+    test_request();
     test_data_dir();
 #ifndef _WIN32
     test_move_old_folders();

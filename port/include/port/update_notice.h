@@ -10,7 +10,11 @@
    launcher.json, in the data folder, holds the player's choices:
      {"disc": "/path/to/kf4.iso", "update_check": true, "skipped": "v0.2.0", "setup_done": true}
    The launcher writes it while its window is open, the overlay only to set "skipped", and the game
-   runs only after the launcher's window has closed: the two never write it at once. */
+   runs only after the launcher's window has closed: the two never write it at once.
+
+   update-request.json, in the data folder, is the game asking the launcher to update once it has quit (the player
+   chose Update at the title or in the F1 menu): {"tag": "v0.3.0"}. The game writes it, the launcher reads and
+   removes it. */
 #ifndef PORT_UPDATE_NOTICE_H
 #define PORT_UPDATE_NOTICE_H
 
@@ -21,7 +25,7 @@
 extern "C" {
 #endif
 
-#define UPDATE_REPOSITORY "Voicedrew11/darker-reality"
+#define UPDATE_REPOSITORY "Voicedrew11/holyland"
 #define UPDATE_CHECK_INTERVAL_S 3600 /* at most once an hour, as Verdite's launcher */
 
 typedef struct {
@@ -64,6 +68,32 @@ int update_version_is_newer(const char *tag, const char *current);
 /* launcher.json's "skipped" set to `tag` in `json` (the file's text, or NULL for none), written into
    `out` with every other key kept. Returns 0 if it did not fit. */
 int update_skip_in_launcher_json(const char *json, const char *tag, char *out, size_t out_size);
+
+/* ---- Updating (launcher/self_update.cpp) -------------------------------------------------------------------- */
+
+#define UPDATE_SUMS_ASSET "SHA256SUMS"         /* every asset's SHA-256, as sha256sum writes it */
+#define UPDATE_SIGNATURE_ASSET "SHA256SUMS.sig" /* SHA256SUMS's Ed25519 signature, 128 hex digits */
+
+/* The asset of GitHub's answer about one release (GET /repos/<repo>/releases/tags/<tag> or .../latest) whose name
+   ends with `name_suffix` when that starts with '-' ("-x86_64.AppImage"), else is it exactly ("SHA256SUMS"). Its name and its
+   browser_download_url into `name` and `url`. The URL must start with `url_prefix` ("https://github.com/"; a test's
+   answer: "file://"). Returns 0 when the answer is not a release of tag `tag`, when no asset or more than one
+   matches, or when it does not fit. */
+int update_asset_pick(const char *github_json, const char *tag, const char *name_suffix, const char *url_prefix,
+                      char *name, size_t name_size, char *url, size_t url_size);
+
+/* The SHA-256 SHA256SUMS gives for `file_name` (lines "<64 hex>  <name>" or "<64 hex> *<name>") into `hex`
+   (65 bytes: 64 lowercase digits and the end). Returns 0 when it gives none or the line is not a SHA-256. */
+int update_sums_lookup(const char *sums_text, const char *file_name, char hex[65]);
+
+/* Hex text (whitespace around it ignored) into exactly `size` bytes. Returns 0 when it is anything else. */
+int update_hex_bytes(const char *text, unsigned char *out, size_t size);
+
+/* update-request.json's text into `tag`. Returns 0 when it is missing, broken or names no version. */
+int update_request_parse(const char *json, char *tag, size_t tag_size);
+
+/* update-request.json's text for `tag`. Returns 0 if it did not fit. */
+int update_request_format(const char *tag, char *out, size_t out_size);
 
 #ifdef __cplusplus
 }

@@ -350,6 +350,7 @@ if(KF4_USE_SDL AND SDL3_FOUND)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL3 not used: the pad takes only a pad script (--input), and there is no window")
+    target_sources(kf4_port PRIVATE port/platform/update_offer_none.c)
 endif()
 # paraLLEl-GS, the GS in Vulkan compute; without it the game runs and draws nothing
 # The software SPU2 (third_party/ico-audio, from ico-pc) and its tests

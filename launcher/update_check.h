@@ -1,5 +1,6 @@
 // Asking GitHub for the latest release (docs/port/LAUNCHER.md, "Updates"), on a thread of its own so the
-// launcher and the game never wait for the network. The rules (how often, which release to tell about)
+// launcher and the game never wait for the network. The answer goes to update.json, which the game reads to offer
+// the update at its title. The rules (how often, which release to tell about)
 // are port/platform/update_notice.c, shared with the game's overlay.
 #pragma once
 
@@ -30,12 +31,6 @@ public:
     void start(const Platform &platform, const DataPaths &paths, const LauncherChoices &choices,
                std::string running_version);
 
-    // the release to tell the player about, if any (thread safe)
-    std::optional<UpdateRelease> notice() const;
-
-    // the player chose to skip it (the caller writes launcher.json)
-    void skip();
-
     // waits up to `ms` for the check to finish (before the launcher exits)
     void finish_within(int ms);
 
@@ -44,7 +39,6 @@ private:
 
     mutable std::mutex mutex_;
     UpdateRelease release_{};
-    std::string skipped_;
     std::string running_version_;
     std::atomic<bool> done_{false};
     std::thread thread_;

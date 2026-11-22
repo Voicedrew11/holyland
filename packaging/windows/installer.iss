@@ -63,3 +63,17 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#Exe}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#Exe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; The launcher's own update (launcher/platform/windows.cpp, InstallerInstallation) runs this installer silently with
+; /HOLYLANDRELAUNCH: the new launcher starts when it is done
+Filename: "{app}\{#Exe}"; Flags: nowait; Check: UpdateRelaunch
+
+[Code]
+function UpdateRelaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/HOLYLANDRELAUNCH') = 0 then
+      Result := True;
+end;
