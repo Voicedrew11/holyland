@@ -3812,9 +3812,14 @@ private:
                 b.image = t->image;
                 b.src = SRC_SAMPLED;
                 b.levels = t->levels;
-                if (gpu_levels_for(s, *t)) {
+                if (t->finer > 1) {
+                    // (a font sheet made finer: its letters read by their footprint on the screen, anti-aliased at
+                    // every scale, whatever filter the game asked; pcr_prim.h's sampled_footprint)
                     b.sampler = &gpu_levels_sampler(s.clamp, t->image_levels);
-                    b.sampling = sampling_bits(aniso_) | tex1_gpu_levels;
+                    b.sampling = gpu_levels_bits(1, t->finer);
+                } else if (gpu_levels_for(s, *t)) {
+                    b.sampler = &gpu_levels_sampler(s.clamp, t->image_levels);
+                    b.sampling = gpu_levels_bits(aniso_, 1);
                     counts_.textures_gpu_levels++;
                 } else {
                     uint32_t aniso = anisotropy_for(s.tex1, t->levels);
@@ -4027,6 +4032,17 @@ private:
     uint32_t anisotropy_for(uint64_t tex1, uint32_t levels) const {
         uint32_t mmag = bits(tex1, 5, 1), mmin = bits(tex1, 6, 3);
         return aniso_ > 1 && levels > 1 && mmag == 1 && (mmin == 4 || mmin == 5) ? aniso_ : 1;
+    }
+
+    // TEX1's PC bits for a texture read at the GPU's own level (PCR_TEX1_GPU_LEVELS): the anisotropy, and in the bias's
+    // place log2 of the image's texels across one of the texture's (`finer`: a font sheet's font_sheet_scale, else 1)
+    static uint32_t gpu_levels_bits(uint32_t aniso, uint32_t finer) {
+        uint32_t a = 0;
+        while (a < 4 && (2u << a) <= aniso) {
+            a++;
+        }
+        uint32_t fine256 = uint32_t(std::lround(std::log2(float(finer)) * 256.0f));
+        return a << 10 | tex1_gpu_levels | fine256 << 16;
     }
 
     uint32_t sampling_bits(uint32_t aniso) const {

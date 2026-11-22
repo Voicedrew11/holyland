@@ -332,19 +332,29 @@ bool sampled_anisotropic(vec2 uv, float lod, out vec4 t) {
 // is the footprint's width (its short axis, or its long axis over the most reads, at least a texel: level 0 where
 // magnified) and the reads are spread along its long axis over its length less that width, so at every change of the
 // number of reads they start where the fewer were: the picture changes smoothly with distance and angle.
-vec4 sampled_footprint(vec2 uv) {
+// An image finer than the texture (a font sheet, font_sheet.h) has its levels counted in its own texels: `finer` is
+// its texels across one of the texture's (1 for the rest), so its letters are read by their footprint on the screen,
+// anti-aliased at every scale, not at the GS's level 0 (where, smaller on the screen than the image, they lost texels).
+vec4 sampled_footprint(vec2 uv, float finer) {
     vec2 size = vec2(sampled_size());
-    float lx = length(uv_dx), ly = length(uv_dy);
+    float lx = length(uv_dx) * finer, ly = length(uv_dy) * finer;
     float major = max(lx, ly), minor = min(lx, ly);
     float most = float(1u << aniso_log2());
     float width = max(max(minor, major / most), 1.0);
     float lod = log2(width);
+    if (finer > 1.0 && v_rect.x != PCR_NO_RECT) {
+        // (a letter's reads kept inside its cell, v_rect: the filter's reach at the coarser of the two levels read,
+        // half its texel, in from the cell's edges; past them, the letters beside it bled in as specks)
+        vec2 first = vec2(v_rect & 0xFFFFu), last = vec2(v_rect >> 16) + 1.0;
+        vec2 reach = min(vec2(0.5 * exp2(ceil(lod)) / finer), 0.5 * (last - first));
+        uv = clamp(uv, first + reach, last - reach);
+    }
     int reads = int(min(ceil(major / width - 1.0 / 64.0), most));
     if (reads <= 1) {
         return sampled_lod(uv / size, lod);
     }
-    vec2 along = (lx >= ly ? uv_dx : uv_dy) / major;
-    vec2 step = along * ((major - width) / float(reads - 1));
+    vec2 along = (lx >= ly ? uv_dx : uv_dy) * finer / major;
+    vec2 step = along * ((major - width) / finer / float(reads - 1));
     vec2 at = uv - step * (0.5 * float(reads - 1));
     vec4 sum = vec4(0.0);
     for (int i = 0; i < reads; i++) {
@@ -416,8 +426,9 @@ uvec4 sample_texture() {
     }
     if (src_kind() == PCR_SRC_SAMPLED && (pc.tex1 & PCR_TEX1_GPU_LEVELS) != 0u) {
         // (the level and the anisotropy from the footprint: no GS level, bias or MMAG/MMIN choice; the sampler is
-        // bilinear and trilinear over the texture's levels made on the PC)
-        return uvec4(round(sampled_footprint(uv) * 255.0));
+        // bilinear and trilinear over the texture's levels made on the PC. The bias's bits hold the image's fineness
+        // instead: log2 of its texels across one of the texture's, in 256ths)
+        return uvec4(round(sampled_footprint(uv, exp2(bias)) * 255.0));
     }
     if (src_kind() == PCR_SRC_SAMPLED) {
         // (the sampler's filters are MMAG's at a level of 0 or below and MMIN's above; its levels and the lod's
