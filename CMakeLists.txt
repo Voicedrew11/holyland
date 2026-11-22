@@ -183,6 +183,7 @@ add_library(kf4_port STATIC
     port/sdk/libpad.c
     port/sdk/controls.c
     port/sdk/twin_stick.c
+    port/sdk/walk_keys.c
     port/sdk/libsdr.c
     port/platform/savestate.c
     port/platform/quicksave.c
@@ -855,6 +856,17 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME twin_stick COMMAND twin_stick_test)
+endif()
+
+# The keyboard's walking: W A S D as the game's walking buttons, twin-stick on or off (port/sdk/walk_keys.c)
+add_executable(walk_keys_test tests/walk_keys_test.c port/sdk/walk_keys.c port/sdk/twin_stick.c)
+target_include_directories(walk_keys_test PRIVATE port/include)
+if(NOT WIN32)
+    target_link_libraries(walk_keys_test PRIVATE m)
+    target_compile_options(walk_keys_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME walk_keys COMMAND walk_keys_test)
 endif()
 
 # The scene renderer's pictures by budget: when each is begun, which are left out (port/gs/pc/pcr_budget.h)
