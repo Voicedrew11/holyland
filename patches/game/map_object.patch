@@ -73,7 +73,7 @@ index 22c57f5f873812a6442640267f8592f88c9d1da3..2abd2ff5a45b1a599021b655fc66ce73
          bit = game_status.bit1;
          game_status.bit1 = 1;
 diff --git a/src/game/map_object/door.c b/src/game/map_object/door.c
-index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a7280e83912 100644
+index ca11e10ff92986756121d2db0239f82cd2f37acd..3b975964d7b4ebe2cc384240012513d10cd3fa47 100644
 --- a/src/game/map_object/door.c
 +++ b/src/game/map_object/door.c
 @@ -1,6 +1,7 @@
