@@ -85,6 +85,11 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
         fprintf(stderr, "[scn] depth: the GPU's (%s)\n",
                 depth && strcmp(depth, "gpu") == 0 ? "KF4_SCN_DEPTH=gpu" : "no depth clamp or 64-bit integers here");
     }
+    const char *settle = getenv("KF4_SCN_SETTLE");
+    settle_nearer_ = exact_z_ && settle && strcmp(settle, "nearer") == 0;
+    if (settle_nearer_) {
+        fprintf(stderr, "[scn] decals settled by their own depth where nearer (KF4_SCN_SETTLE=nearer)\n");
+    }
     make_programs();
     if (const char *log = getenv("KF4_SCN_RUNS_LOG")) {
         runs_log_ = fopen(log, "w");
@@ -1065,6 +1070,8 @@ void Drawer::flush_run(CommandBuffer &c) {
     draw_run(r, c);
     if (r.key.stencil == RunKey::Stencil::mark_won) {
         settle_run(r, c);
+    } else if (r.key.stencil == RunKey::Stencil::own_after) {
+        own_depth_after(r, c);
     }
 }
 
@@ -1268,6 +1275,10 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             // writing none, own_depth_first; pcr_canvas.cpp's decal_depth_first)
             key.stencil = RunKey::Stencil::own_first;
             key.zwrite = false;
+        } else if (key.stencil == RunKey::Stencil::mark_won && settle_nearer_) {
+            // (developers' KF4_SCN_SETTLE=nearer: the colour writing no depth, then the own depth where nearer)
+            key.stencil = RunKey::Stencil::own_after;
+            key.zwrite = false;
         }
         canonical(key);
         if (records && joins(key, rec + i)) {
@@ -1366,9 +1377,27 @@ void Drawer::settle_run(const Pending &r, CommandBuffer &c) {
 // nearer: the PC renderer's choice for this program alone (009's fire, 2026-11-19: no pixel more than 4 apart from the
 // settle's in 32 frames at 4x; for every program, map 013's blended tree came out thinner)
 void Drawer::own_depth_first(const Pending &r, CommandBuffer &c) {
-    size_t v = size_t(Program::nd280);
-    if (!depth_reset_rec_[v] || prepared_.own_offset == 0) {
-        return;
+    own_depth(r, VK_COMPARE_OP_GREATER_OR_EQUAL, c);
+}
+
+// (developers' KF4_SCN_SETTLE=nearer) A run of settled decals drawn writing no depth (tested with the top fine part, so
+// that each ties with the surface of its whole Z under it), then its calls again with no colour and their own depth
+// (the GPU's, as settle_run's), GREATER: written only where the decal is nearer than what is there. A decal lying on
+// its surface leaves the surface's depth, which a later draw on that plane ties with by the fine part as it would
+// without the decal; one in front of what is under it hides what comes after behind it. One draw more a run and no
+// stencil, against settle_run's two and the stencil's marks. Overlapping decals within the run are drawn as with the
+// settle: each tested against the depth from before the run.
+void Drawer::own_depth_after(const Pending &r, CommandBuffer &c) {
+    own_depth(r, VK_COMPARE_OP_GREATER, c);
+}
+
+void Drawer::own_depth(const Pending &r, VkCompareOp compare, CommandBuffer &c) {
+    size_t v = 0;
+    while (v < size_t(Program::count) && r.key.program != early_rec_[v] && r.key.program != plain_rec_[v]) {
+        v++;
+    }
+    if (v == size_t(Program::count) || !depth_reset_rec_[v] || prepared_.own_offset == 0) {
+        return; // (not a program of the records)
     }
     RunKey own = r.key;
     own.program = depth_reset_rec_[v];
@@ -1376,12 +1405,12 @@ void Drawer::own_depth_first(const Pending &r, CommandBuffer &c) {
     own.blend = false;
     own.mask = 0;
     own.stencil = RunKey::Stencil::off;
-    own.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    own.zcompare = compare;
     own.viewport.minDepth = 0.0f;
     own.viewport.maxDepth = own_depth_most_;
     set_call_state(own, c);
     c.set_viewport(own.viewport);
-    c.set_depth_compare(VK_COMPARE_OP_GREATER_OR_EQUAL);
+    c.set_depth_compare(compare);
     push_record(c, r.first_record + prepared_.own_offset);
     draw_run(r, c);
     set_call_state(r.key, c);
@@ -1561,6 +1590,8 @@ std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkForm
                 list(key);
                 key.stencil = RunKey::Stencil::off; // (the own depth)
                 key.zcompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+                list(key);
+                key.zcompare = VK_COMPARE_OP_GREATER; // (KF4_SCN_SETTLE=nearer's own depth, own_depth_after)
                 list(key);
             }
             cmd->end_render_pass();

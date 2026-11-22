@@ -185,7 +185,9 @@ private:
         // (exact Z's decals settled, record_settled) the stencil: none, decal_won set where the call passes, or drawn
         // only where it is set and cleared there
         // (own_first: no stencil; program 0x280's decals' own depth drawn before the run, which writes none: settle_run)
-        enum class Stencil : uint8_t { off, mark_won, reset_won, own_first } stencil = Stencil::off;
+        // (own_after, KF4_SCN_SETTLE=nearer: no stencil; the run writes no depth, then its own depth where nearer than
+        // what is there: own_depth_after)
+        enum class Stencil : uint8_t { off, mark_won, reset_won, own_first, own_after } stencil = Stencil::off;
     };
     struct RunState {
         bool open = false, after_clear = false;
@@ -237,6 +239,9 @@ private:
     bool settles(const Pass &pass, const Material &m, uint32_t record) const;
     void settle_run(const Pending &r, Vulkan::CommandBuffer &c);
     void own_depth_first(const Pending &r, Vulkan::CommandBuffer &c);
+    void own_depth_after(const Pending &r, Vulkan::CommandBuffer &c);
+    // (own_depth_first's and own_depth_after's) the run's calls again with no colour and their own depth, by compare
+    void own_depth(const Pending &r, VkCompareOp compare, Vulkan::CommandBuffer &c);
     void draw_run(const Pending &r, Vulkan::CommandBuffer &c); // (the run's calls: one draw, or one indirect draw)
     void bind_records(const Pass &pass, const Draw &d, Vulkan::CommandBuffer &c);
     void bind_own(const Scene &scene, const Pass &pass, const Draw &d, const Material &m, Vulkan::CommandBuffer &c);
@@ -276,6 +281,8 @@ private:
     Vulkan::Device &device_;
     pcr::GpuTimes &times_;
     bool dynamic_ds_ = false, dynamic_blend_ = false, first_draw_ok_ = false, exact_z_ = false;
+    // (developers' KF4_SCN_SETTLE=nearer: the decals other than 0x280's settled by own_depth_after, not settle_run)
+    bool settle_nearer_ = false;
     const bool time_clears_ = getenv("KF4_SCN_TIME_CLEARS") && atoi(getenv("KF4_SCN_TIME_CLEARS")) != 0;
     // by Program: the plain fragment shader, the one tested before it (pcr_prim_early.frag), the first-draw image's
     // (scn_first_draw.frag) and the shadows' darkening (pcr_prim.frag with SCN_FIRST_DRAW)
