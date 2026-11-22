@@ -1324,10 +1324,10 @@ bool Drawer::settles(const Pass &pass, const Material &m, uint32_t record) const
 // that top part made every later draw of the same whole Z lose to it where the GS lets the later draw win (map 063's
 // rock hole showing the sky). So their passes that write Z set the stencil's decal_won bit where they pass (zero
 // before: this clears every bit it set, and a depth surface's stencil is cleared with it), and after the run its calls
-// are drawn twice more with no colour: where the bit is set the depth reset to the farthest (the viewport's depth 0 to
-// 0) and the bit cleared; then the decal's own depth, tested GEQUAL, so that each of those pixels ends with the nearest
-// of the run's fragments' there (elsewhere it lost, and loses again). Its own depth is the GPU's interpolated one, not
-// the shader's
+// are drawn twice more with no colour: where the bit is set the depth reset (the first fragment there writes its own
+// depth, ALWAYS, and clears the bit); then the decal's own depth, tested GEQUAL, so that each of those pixels ends with
+// the nearest of the run's fragments' there (elsewhere it lost, and loses again). Its own depth is the GPU's
+// interpolated one, not the shader's
 // (PCR_F_SCN_OWN_DEPTH, the records at own_offset: pcr_common.h), so that both passes are tested before their shader,
 // which does nothing (pcr_depth_reset.frag); the viewport's depth range 0 to the largest Z's depth, so that its clamp is
 // the exact depth's. (Settled as the PC renderer does it, the own depth the shader's, map 063 took 3.53 ms of GPU a
@@ -1348,11 +1348,19 @@ void Drawer::settle_run(const Pending &r, CommandBuffer &c) {
     reset.mask = 0;
     reset.stencil = RunKey::Stencil::reset_won;
     reset.zcompare = VK_COMPARE_OP_ALWAYS;
-    reset.viewport.minDepth = reset.viewport.maxDepth = 0.0f; // (the farthest)
+    // (the first fragment's own depth, not the farthest, 0 to 0 as before: the stencil passes only it, and the own pass
+    // after brings each pixel to the nearest of the run's own depths all the same. The depth then moves a fraction of
+    // a Z, not to the far plane: map 063 0.19 ms a picture less on the Vega 7, 2026-11-22. What the reset still costs
+    // is the depth it writes farther than what is there: 1.4 ms a picture there, as the own pass's nearer writes at
+    // the same pixels cost a few tenths.)
+    reset.viewport.minDepth = 0.0f;
+    reset.viewport.maxDepth = own_depth_most_;
     set_call_state(reset, c);
     c.set_viewport(reset.viewport);
     c.set_depth_compare(VK_COMPARE_OP_ALWAYS);
-    push_record(c, r.first_record);
+    // (the reset from the own depth's records too: the same pixels and the own depth, and no plane worked out by each
+    // triangle's provoking vertex, which the run's own records would have)
+    push_record(c, r.first_record + prepared_.own_offset);
     draw_run(r, c);
     RunKey own = reset;
     own.stencil = RunKey::Stencil::off;

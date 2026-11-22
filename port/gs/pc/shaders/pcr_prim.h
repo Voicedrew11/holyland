@@ -156,7 +156,15 @@ bool traced() {
     return pc.trace_xy != PCR_NO_TRACE && uvec2(gl_FragCoord.xy) == uvec2(pc.trace_xy & 0xFFFFu, pc.trace_xy >> 16);
 }
 
+// (SCN_NO_TRACE, the scene renderer's shaders, which never trace: none, so that the shader writes no memory. One that
+// may write memory is shaded at every pixel its triangle covers, the GPU's early and hierarchical depth tests not let
+// cull it (RADV: LATE_Z, EXEC_ON_HIER_FAIL), unless it asks for its tests before it, which exact Z's depth written by
+// the shader cannot. At map 009 on the Vega 7, 0.5 ms a picture less with the GPU's depth and with exact Z's nearer,
+// 0.35 with the settle; 2026-11-22)
 void trace(uint outcome, uvec4 c) {
+#ifdef SCN_NO_TRACE
+    return;
+#endif
     if (!traced()) {
         return;
     }

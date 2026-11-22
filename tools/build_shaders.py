@@ -70,6 +70,8 @@ SCENE_AGAIN = [
 # placed native draws work out their triangles' planes in the vertex stage, pcr_nd000.vert's scn_corner)
 SCENE_AGAIN += [(path, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for path, symbol, defines in SCENE_AGAIN
                 if not symbol.endswith("_empty")]
+# (the scene renderer never traces a pixel: its shaders without the trace, writing no memory, pcr_prim.h's SCN_NO_TRACE)
+SCENE_AGAIN = [(path, symbol, defines + ["-DSCN_NO_TRACE"]) for path, symbol, defines in SCENE_AGAIN]
 
 
 def main():
