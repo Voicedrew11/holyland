@@ -204,7 +204,7 @@ energy c x a in brackets, FAIL from 900), and where the worst window is (`eviden
 | nearwall-1113 | MINOR | 469 | side: c22 a24 (528) | a thin seam line on the wall | real, not seen in play |
 | sign-1114 | MINOR | 332 | turn: c31 a27 (837) | where the rock meets the low wall | ? |
 | chest-far-1114 | PASS | 78 | | the braziers | |
-| wall-seam-1121 | PASS (local) | 0 | | the seam: not caught (below); SKIP without `KF4_ZSAVES` | fights |
+| wall-seam-1121 | FAIL (local) | 2148 | step: c16 a110 (1760) | the big stripes on the bricks beside the rock edge (steps of 4 units); SKIP without `KF4_ZSAVES` | fights |
 | ground-rect-1115 | PASS | 0 | | | |
 | reflect-1114 | PASS | 0 | | | |
 
@@ -214,14 +214,17 @@ owner: real, slight) is outside that spot's region now; at the player's view it 
 nearwall kind.
 
 Not caught:
-- wall-seam-1121 (the owner's second, closer save). On that save part of the rampart collapses after the load, which
-  a new game's save does not do (its rampart stays whole), so the spot loads the owner's save (`${KF4_ZSAVES}`, a
-  local spot) and waits 400 vblanks (the collapse is over by 300). The stripes on the bricks beside the rock edge do
-  not show in the headless pictures at all, even brightened 4 times, at the player's view or closer (fov 30, turned
-  onto the seam), and nothing flips there at 12 levels or 6, in the sweeps or the walk.
 - chest-ruin-edge-1121: nothing flips on the ruin's wall edge at steps of 0.5 or 4 units or in the walk. At 16 units
   it does, but steps that big flip the floor of a spot with nothing reported (ground-rect: 22520% at 4 units), so
   they are not used.
+- Stable fights. wall-seam-1121's stripes stay put under a tiny nudge (the owner: they change only when the player
+  really moves): at steps of 0.5 units and turns of 0.02 degrees nothing flips. Forward and back steps of 4 units
+  slide them: 2148%, contrast 16, 110 flips, on the stripes. A step that big moves near textures by pixels, so it is
+  used only with a tight region on a far or plain surface: at 4 units the plain bricks beside the stripes score 31
+  (MINOR), the rock beside them 0, the middle of reflect-1114 0, but the middle of ground-rect-1115 (floor) 250
+  (FAIL), and turns of 0.3 degrees flip the rock's texture (24809). The spot loads the owner's save
+  (`${KF4_ZSAVES}`, a local spot): on it part of the rampart collapses after the load, which a new game's save does
+  not do; it waits 400 vblanks (the collapse is over by 300).
 - chest-walkup-1121 needs steps of 4 units: its chest is far enough that 4 units is still under a pixel there, and
   the region keeps out the near floor, which moves several pixels at 4 and flips; at 0.5 the lid barely flips.
 

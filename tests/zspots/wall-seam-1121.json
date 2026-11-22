@@ -1,5 +1,5 @@
 {
-  "about": "where the dirt wall meets the rampart's bricks: dark diagonal stripes on the bricks beside the rock edge (owner, preview 2fdf828e, 2026-11-21). A LOCAL spot: the owner's quick save (${KF4_ZSAVES}, skipped without it), since a new game's save has the rampart whole: on the owner's, part of it collapses after the load (settle 400: it is down by 300). NOT CAUGHT: the stripes do not show in the headless pictures at all (brightened 4x), at the player's view or closer",
+  "about": "where the dirt wall meets the rampart's bricks: big dark diagonal stripes on the bricks beside the rock edge, a stable fight that stays put under a tiny nudge (owner, preview 2fdf828e, 2026-11-21). A LOCAL spot: the owner's quick save (${KF4_ZSAVES}, skipped without it), since a new game's save has the rampart whole: on the owner's, part of it collapses after the load (settle 400: it is down by 300). Sideways steps of 4 units slide the stripes (0.5 does not); a tight region on them, since steps that big flip textured floor elsewhere",
   "quick": "${KF4_ZSAVES}/zwall2-1121/quick0.kf4quick",
   "map": 0,
   "position": [
@@ -11,9 +11,27 @@
   "pitch": -0.24521,
   "settle": 400,
   "region": [
-    0.15,
-    0.25,
-    0.33,
-    0.68
+    0.21,
+    0.42,
+    0.3,
+    0.62
+  ],
+  "motion": [
+    "side",
+    "step",
+    "walk"
+  ],
+  "step_units": 4,
+  "walk": [
+    [
+      "UP",
+      20,
+      10
+    ],
+    [
+      "DOWN",
+      20,
+      10
+    ]
   ]
 }
