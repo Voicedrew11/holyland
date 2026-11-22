@@ -1,0 +1,21 @@
+{
+  "about": "the sitting soldier in the cave tunnel: his knee armour swaps with what is beneath it (owner, preview 2fdf828e, 2026-11-21); looked at closely (fov 30, 4x), the region around him, no time mask",
+  "map": 0,
+  "position": [
+    2984.926,
+    -0.0,
+    -3336.242
+  ],
+  "heading": -2.89082,
+  "pitch": -0.05148,
+  "fov": 30,
+  "scale": 4,
+  "time_mask": false,
+  "settle": 600,
+  "region": [
+    0.44,
+    0.38,
+    0.6,
+    0.68
+  ]
+}

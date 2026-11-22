@@ -1,0 +1,11 @@
+{
+  "about": "map 00's door: the owner's dark rectangle on the floor overlay (11-15, after walking into map 63h) is not reproduced; 646df6d0's floor overlay fights here",
+  "map": 0,
+  "position": [
+    250.33,
+    -0.0,
+    -2884.505
+  ],
+  "heading": 3.0919,
+  "pitch": -0.29758
+}

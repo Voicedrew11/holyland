@@ -1,0 +1,33 @@
+{
+  "about": "the ruins' bottom corner where the wall meets the ground: dark hatching that blinks between black and the wall when walking back and forth (owner, preview 2fdf828e, 2026-11-21)",
+  "map": 0,
+  "position": [
+    762.185,
+    -0.0,
+    -1921.646
+  ],
+  "heading": -1.19962,
+  "pitch": -0.22689,
+  "walk": [
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      6
+    ],
+    [
+      "UP",
+      8,
+      6
+    ],
+    [
+      "DOWN",
+      8,
+      8
+    ]
+  ]
+}
