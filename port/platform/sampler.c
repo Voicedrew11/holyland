@@ -465,7 +465,7 @@ static int add_module(struct dl_phdr_info *info, size_t size, void *unused) {
     m = &modules[module_count];
     memset(m, 0, sizeof(*m));
     snprintf(m->path, sizeof(m->path), "%s", path);
-    snprintf(m->name, sizeof(m->name), "%s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path);
+    snprintf(m->name, sizeof(m->name), "%.63s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path);
     m->bias = (uint64_t)info->dlpi_addr;
     m->lo = UINT64_MAX;
     for (i = 0; i < info->dlpi_phnum; i++) {

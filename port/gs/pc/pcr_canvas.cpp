@@ -4095,7 +4095,7 @@ private:
         // (a surface as tall as what is drawn in it, not its scissor: the game's scissors run past small targets, onto
         // the targets below them)
         uint32_t height = uint32_t(std::clamp(std::min(b.y1, int32_t(scay1)) + 1, 1, 2048));
-        Placed placed = colour_surface(fbp, fbw, fpsm == GSN_PSMCT24 ? GSN_PSMCT32 : fpsm, height);
+        Placed placed = colour_surface(fbp, fbw, fpsm == GSN_PSMCT24 ? uint32_t(GSN_PSMCT32) : fpsm, height);
         Surface *colour = placed.surface;
         if (!colour) {
             return;

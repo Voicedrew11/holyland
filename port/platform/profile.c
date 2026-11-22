@@ -181,7 +181,7 @@ int port_profile_gpu_rows(ProfileGpuRow *rows, int most) {
             unlock_gpu();
             return 0;
         }
-        n = gpu_row_count;
+        n = gpu_row_count < PROFILE_GPU_ROWS ? gpu_row_count : PROFILE_GPU_ROWS; /* (never more: gpu_row_of) */
         memcpy(all, gpu_rows, (size_t)n * sizeof(*all));
         unlock_gpu();
         qsort(all, (size_t)n, sizeof(*all), gpu_row_order);

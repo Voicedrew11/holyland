@@ -36,7 +36,7 @@ struct Draw {
 
 // A texture made since the last frame (the fonts' glyphs, images): RGBA, premultiplied, rows top first
 struct TextureUpload {
-    TextureId id;
+    TextureId id = 0;
     int32_t width, height;
     std::vector<uint8_t> rgba;
 };

@@ -199,7 +199,7 @@ static void put_on_floor(void) {
         return;
     }
     player_state.position.y = COLLISION_RESULT->point[1];
-    port_quick_moved(&player_state.position.x);
+    port_quick_moved((const float *)&player_state.position);
     port_event("quick load: made up: on the floor at %.1f,%.1f,%.1f (asked %.1f)", player_state.position.x,
                player_state.position.y, player_state.position.z, asked);
 }

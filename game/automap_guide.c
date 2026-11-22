@@ -6,7 +6,7 @@
    - Creatures: the game names no monster anywhere in its data. These are the names of Prima's official
      strategy guide (2004) as the community's creature list has them (cleanhit.wiki, KF4:Creatures), placed on
      the chr.prm records by hit points, experience, resistances and drops (decomp/docs/GAME_DATA.md,
-     "Monsters"; the decomp's enemy/*.c files carry the same names). A record not listed shows as
+     "Monsters"; the decomp's enemy/ files carry the same names). A record not listed shows as
      "Creature (#record)".
    - Hints: by map and map object (its index in the map's object list, the map file's order: the same every
      visit; the full map's hover label shows it with the hints cheat, e.g. "#45"), or by map and entity spawn

@@ -1458,7 +1458,7 @@ public:
                      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT);
         const VkImageSubresourceLayers layers = {
             VkImageAspectFlags(is_depth_format(live->get_format()) ? depth_aspects(live->get_format())
-                                                                   : VK_IMAGE_ASPECT_COLOR_BIT),
+                                                                   : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)),
             0, 0, 1};
         cmd->copy_image(*copy, *live, {0, 0, 0}, {0, 0, 0}, {live->get_width(), live->get_height(), 1}, layers, layers);
         cmd->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
@@ -1763,7 +1763,7 @@ public:
             const Image &live = *key;
             const Image &to = *si.image;
             const VkImageSubresourceLayers layers = {
-                VkImageAspectFlags(si.depth ? depth_aspects(live.get_format()) : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+                VkImageAspectFlags(si.depth ? depth_aspects(live.get_format()) : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT)), 0, 0, 1};
             switch (si.start) {
             case StandIn::Start::as_is:
                 break;
@@ -2539,7 +2539,7 @@ private:
             d.scissor = p.rect;
             d.clear_rect = {p.rect, 0, 1};
             VkClearAttachment &a = d.clear_att[0];
-            a.aspectMask = p.depth ? depth_aspects(depth->get_format()) : VK_IMAGE_ASPECT_COLOR_BIT;
+            a.aspectMask = p.depth ? depth_aspects(depth->get_format()) : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT);
             a.colorAttachment = 0;
             a.clearValue = p.value;
             d.clear_count = 1;
@@ -4837,7 +4837,7 @@ private:
         if (!shadow_candidate) {
             end_shadow_run();
         }
-        Placed placed = colour_target(fbp, fbw, fpsm == GSN_PSMCT24 ? GSN_PSMCT32 : fpsm, height);
+        Placed placed = colour_target(fbp, fbw, fpsm == GSN_PSMCT24 ? uint32_t(GSN_PSMCT32) : fpsm, height);
         Target *colour = placed.target;
         if (!colour) {
             return;

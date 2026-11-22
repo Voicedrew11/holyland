@@ -77,7 +77,11 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # (clang only) an address in a 64-bit integer must not be narrowed back to 32 bits without a cast
     list(APPEND KF4_GAME_ERRORS -Werror=incompatible-function-pointer-types -Werror=shorten-64-to-32
          -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function
-         -Wno-missing-braces -Wno-parentheses-equality)
+         -Wno-missing-braces -Wno-parentheses-equality
+         # the decomp as it is (patches/ leaves these alone): printf of a message variable, s8 for char,
+         # `*/` paths in comments, arrays indexed past their declared length, tests of an array's address
+         -Wno-format-security -Wno-pointer-sign -Wno-comment -Wno-array-bounds -Wno-pointer-bool-conversion
+         -Wno-tautological-pointer-compare -Wno-unused-value)
 endif()
 
 # ---- Sanitizers (docs/port/README.md, "Sanitizers") -----------------------------------------------
@@ -379,7 +383,19 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     # Granite with Holyland's edits, made in its checkout (cmake/granite_edits.cmake lists them)
     include(cmake/granite_edits.cmake)
     kf4_granite_edits(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite)
+    # Granite asks for CMake 3.6, before CMP0069: without this its targets would not take the release's LTO
+    # (and CMake warns about it); and its policies as of 3.10 at least, the oldest CMake supports without a warning
+    set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
     add_subdirectory(third_party/parallel-gs EXCLUDE_FROM_ALL)
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+    unset(CMAKE_POLICY_DEFAULT_CMP0069)
+    # (clang) Granite's command_buffer.cpp keeps a static inline helper it no longer calls (is_legacy_layout)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND TARGET granite-vulkan)
+        set_source_files_properties(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/vulkan/command_buffer.cpp
+            TARGET_DIRECTORY granite-vulkan
+            PROPERTIES COMPILE_OPTIONS -Wno-unused-function)
+    endif()
     # paraLLEl-GS as a library of its own: the developer comparison (--renderer gs), never a player's GS
     add_library(kf4_gs STATIC port/gs/gs_parallel.cpp)
     target_include_directories(kf4_gs PRIVATE port/include)
@@ -672,19 +688,16 @@ if(TARGET kf4_gs)
         set(KF4_LB_OUT ${CMAKE_BINARY_DIR}/layer_bench)
         file(MAKE_DIRECTORY ${KF4_LB_OUT})
         set(KF4_LB_PARTS)
-        macro(kf4_layer_shader name source)
-            add_custom_command(OUTPUT ${KF4_LB_OUT}/${name}.inc
-                COMMAND ${KF4_GLSLANG} -V ${ARGN} --vn ${name} -o ${KF4_LB_OUT}/${name}.inc ${KF4_LB}/${source}
-                DEPENDS ${KF4_LB}/${source} VERBATIM)
+        foreach(name layer_vert layer_frag_fill layer_frag_textured layer_frag_discards layer_frag_own_depth
+                     layer_frag_mask_one layer_frag_mask_all)
             list(APPEND KF4_LB_PARTS ${KF4_LB_OUT}/${name}.inc)
-        endmacro()
-        kf4_layer_shader(layer_vert layer.vert)
-        kf4_layer_shader(layer_frag_fill layer.frag)
-        kf4_layer_shader(layer_frag_textured layer.frag -DTEXTURED)
-        kf4_layer_shader(layer_frag_discards layer.frag -DTEXTURED -DDISCARDS)
-        kf4_layer_shader(layer_frag_own_depth layer.frag -DTEXTURED -DDISCARDS -DOWN_DEPTH)
-        kf4_layer_shader(layer_frag_mask_one layer.frag -DTEXTURED -DMASK_ONE)
-        kf4_layer_shader(layer_frag_mask_all layer.frag -DTEXTURED -DMASK_ALL)
+        endforeach()
+        # (all seven in one step, quietly: cmake/layer_bench_shaders.cmake lists each one's source and defines)
+        add_custom_command(OUTPUT ${KF4_LB_PARTS}
+            COMMAND ${CMAKE_COMMAND} -DGLSLANG=${KF4_GLSLANG} -DSRC=${KF4_LB} -DOUT=${KF4_LB_OUT}
+                    -P ${CMAKE_SOURCE_DIR}/cmake/layer_bench_shaders.cmake
+            DEPENDS ${KF4_LB}/layer.vert ${KF4_LB}/layer.frag ${CMAKE_SOURCE_DIR}/cmake/layer_bench_shaders.cmake
+            COMMENT "The layer bench's shaders" VERBATIM)
         file(WRITE ${KF4_LB_OUT}/layer_bench_shaders.h
             "#include <stdint.h>\n#include \"layer_vert.inc\"\n#include \"layer_frag_fill.inc\"\n#include \"layer_frag_textured.inc\"\n#include \"layer_frag_discards.inc\"\n#include \"layer_frag_own_depth.inc\"\n#include \"layer_frag_mask_one.inc\"\n#include \"layer_frag_mask_all.inc\"\n")
         add_executable(kf4-layerbench tools/layer_bench/layer_bench.cpp ${KF4_LB_PARTS})

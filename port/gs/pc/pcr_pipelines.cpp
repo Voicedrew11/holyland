@@ -226,7 +226,7 @@ void remember(const DeferredPipelineCompile &compile, const PassDesc &pass) {
         return;
     }
     Record r;
-    memset(&r, 0, sizeof(r));
+    memset(static_cast<void *>(&r), 0, sizeof(r)); // (padding too: the records are written as bytes)
     r.role = role->second;
     r.samples = 1;
     r.colours = pass.colours;
@@ -766,7 +766,7 @@ bool zclear_record(const Record &r, const WarmDevice &t, Record &z) {
     if (t.zclear_role == 0 || !r.depth) {
         return false;
     }
-    memset(&z, 0, sizeof(z));
+    memset(static_cast<void *>(&z), 0, sizeof(z));
     z.role = t.zclear_role;
     z.samples = r.samples;
     z.colours = r.colours;

@@ -30,6 +30,10 @@ int failures = 0;
     } while (0)
 
 void put_u32(std::vector<uint8_t> &bytes, size_t at, uint32_t value) {
+    CHECK(at + 4 <= bytes.size());
+    if (at + 4 > bytes.size()) {
+        return;
+    }
     for (int i = 0; i < 4; i++) {
         bytes[at + size_t(i)] = uint8_t(value >> (8 * i));
     }

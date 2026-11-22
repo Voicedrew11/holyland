@@ -48,39 +48,41 @@ constexpr uint32_t no_plane = 0xFFFFFFFFu; // (pcr_exact_z.h's PCR_NO_PLANE)
 // (tex1) the sampled texture read at the GPU's own level, its levels made on the PC (pcr_common.h's PCR_TEX1_GPU_LEVELS)
 constexpr uint32_t tex1_gpu_levels = 0x2000u;
 
-enum : uint32_t {
-    F_TME = 0x1,
-    F_FST = 0x2,
-    F_TFX_SHIFT = 2,
-    F_TCC = 0x10,
-    F_FGE = 0x20,
-    F_SRC_SHIFT = 6,
-    F_PASS_SHIFT = 9,
-    F_FBA = 0x800,
-    F_DATE = 0x8000,
-    F_DATM = 0x10000,
-    F_SHADER_BLEND = 0x20000,
-    F_SURFACE_CT16 = 0x40000,
-    F_SMOOTH_2D = 0x100000,
-    F_DECAL = 0x400000,
-    F_DECAL_LOSS = 0x800000, // (developers' decal losses: pcr_common.h)
-    F_DECAL_LOSS_FAR = 0x1000000,
-    F_EXACT_Z = 0x2000000, // (pcr_common.h's exact Z)
-    F_FULL_DEPTH = 0x4000000, // (the depth rule: pcr_common.h)
-    F_ZGREATER = 0x8000000,
-    F_ZWRITE = 0x10000000,
-    F_ZALWAYS = 0x20000000,
-    F_DATE_MARK = 0x40000000,
-    F_DATE_CLEARS = 0x200000,
-    F_SCN_OWN_DEPTH = 0x200000, // (the scene renderer's settled decals' own depth: pcr_common.h; the rule's bit above)
-    F_LAYER = 0x80000, // (developers' KF4_PC_DEPTH=layers: pcr_common.h)
-    F_PIXEL_CLAMP = 0x80000000u, // (... and its Z clamped at each pixel: pcr_common.h)
-};
+constexpr uint32_t F_TME = 0x1;
+constexpr uint32_t F_FST = 0x2;
+constexpr uint32_t F_TFX_SHIFT = 2;
+constexpr uint32_t F_TCC = 0x10;
+constexpr uint32_t F_FGE = 0x20;
+constexpr uint32_t F_SRC_SHIFT = 6;
+constexpr uint32_t F_PASS_SHIFT = 9;
+constexpr uint32_t F_FBA = 0x800;
+constexpr uint32_t F_DATE = 0x8000;
+constexpr uint32_t F_DATM = 0x10000;
+constexpr uint32_t F_SHADER_BLEND = 0x20000;
+constexpr uint32_t F_SURFACE_CT16 = 0x40000;
+constexpr uint32_t F_SMOOTH_2D = 0x100000;
+constexpr uint32_t F_DECAL = 0x400000;
+constexpr uint32_t F_DECAL_LOSS = 0x800000; // (developers' decal losses: pcr_common.h)
+constexpr uint32_t F_DECAL_LOSS_FAR = 0x1000000;
+constexpr uint32_t F_EXACT_Z = 0x2000000; // (pcr_common.h's exact Z)
+constexpr uint32_t F_FULL_DEPTH = 0x4000000; // (the depth rule: pcr_common.h)
+constexpr uint32_t F_ZGREATER = 0x8000000;
+constexpr uint32_t F_ZWRITE = 0x10000000;
+constexpr uint32_t F_ZALWAYS = 0x20000000;
+constexpr uint32_t F_DATE_MARK = 0x40000000;
+constexpr uint32_t F_DATE_CLEARS = 0x200000;
+constexpr uint32_t F_SCN_OWN_DEPTH = 0x200000; // (the scene renderer's settled decals' own depth: pcr_common.h; the rule's bit above)
+constexpr uint32_t F_LAYER = 0x80000; // (developers' KF4_PC_DEPTH=layers: pcr_common.h)
+constexpr uint32_t F_PIXEL_CLAMP = 0x80000000u; // (... and its Z clamped at each pixel: pcr_common.h)
 enum : uint32_t { SRC_CT32 = 0, SRC_CT24 = 1, SRC_CT16 = 2, SRC_INDEX = 3, SRC_SURFACE = 4, SRC_SAMPLED = 5 };
 
 // Vertex::kicks[3] (pcr_prim.vert's PCR_K_*): a sprite's corner (0-3), a sprite's, UV for S and T
 // (the scene renderer's) a corner of the frame only, or of its pictures between only (pcr_prim.vert's PCR_K_FRAME_ONLY)
-enum : uint32_t { K_CORNER = 0x3, K_SPRITE = 0x4, K_FST = 0x8, K_FRAME_ONLY = 0x10, K_PICTURE_ONLY = 0x20 };
+constexpr uint32_t K_CORNER = 0x3;
+constexpr uint32_t K_SPRITE = 0x4;
+constexpr uint32_t K_FST = 0x8;
+constexpr uint32_t K_FRAME_ONLY = 0x10;
+constexpr uint32_t K_PICTURE_ONLY = 0x20;
 
 // (Vertex::rect: no texels known, the 2D mode's smooth not for its primitive)
 constexpr uint32_t no_rect = 0xFFFFFFFFu;
