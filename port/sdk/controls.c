@@ -18,7 +18,7 @@
    screen that takes pointing (port/include/port/menu_pointer.h) the mouse is let go: the pointer moves the
    cursor to the line under it and the left button chooses the line clicked; a click on nothing does nothing.
    Elsewhere out of play (a message, a cutscene) the mouse stays held and the cursor hidden. A menu over the
-   game (F1, the overlay) or another window lets it go; a click in play takes it back.
+   game (the player menu, the developers' overlay) or another window lets it go; a click in play takes it back.
 
    While the mouse is let go its cursor shows only while the mouse is what is being used: a key or a controller
    hides it, moving or clicking the mouse shows it again.
@@ -27,7 +27,7 @@
    L1 R1 L2 R2). F2 / F4 take and load a quick save (port/platform/quicksave.c), F5 / F7 save and load the quick
    slot's save state, and F3 shows or hides the frame-rate counter.
 
-   With the separate run mod on (--separate-run, the Mods page), Left Shift and the controller's left stick
+   With the separate run mod on (--separate-run, the player menu's Controls tab), Left Shift and the controller's left stick
    press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
    button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make a
    controller's left stick walk and step sideways and the right stick turn and look; off, the left stick is the

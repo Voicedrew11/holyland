@@ -14,19 +14,18 @@
    - In play a cross of three cards at the bottom left shows the spell, the weapon and the hotkey, each with
      the item's own menu model.
 
-   Off by default, like every mod (the Gameplay page, settings.json's "mods" "hands", --hands); with it off
-   the game runs exactly as without it.
+   Off by default, like every mod (the player menu's Gameplay tab, settings.json's "mods" "hands", --hands); with
+   it off the game runs exactly as without it.
 
-   Four parts:
+   Three parts (its switches are rows of the player menu's Gameplay tab):
    - port/platform/hands_rules.c: the plain rules (slots, stepping, the file's text), tested by
      tests/hands_test.c;
    - port/platform/hands.c: the switch, the keys, and the hands kept per save (a live file, a copy per quick
      save and per game save, as the automap keeps its explored maps);
    - game/hands.c, the game's side: the swaps (once a game frame from Quick_PollGame, where the game itself
      would let a menu open), with game/hands_put.c the equipment screen's "Put in" box (patched into
-     ui/menu_screens.c), and game/hands_cross.c the cross (drawn after Hud_Draw);
-   - port/overlay/hands_view.cpp: the hotkey's count on the cross and the Gameplay page's section.
-   Everything runs on the game's thread (the overlay draws at the vblank). */
+     ui/menu_screens.c), and game/hands_cross.c the cross and the hotkey's count (drawn after Hud_Draw).
+   Everything runs on the game's thread. */
 #ifndef PORT_HANDS_H
 #define PORT_HANDS_H
 
@@ -125,7 +124,7 @@ extern PortHandsOptions port_hands;
 int port_hands_option(int argc, char **argv, int *i); /* --hands (and the old --weapon-sets) */
 void port_hands_settings_read(const void *mods);       /* settings.json's "mods" (a cJSON *) */
 void port_hands_settings_write(void *mods);
-void port_hands_set_enabled(int on); /* the Gameplay page */
+void port_hands_set_enabled(int on); /* the player menu's Gameplay tab */
 void port_hands_set_fade(int on);
 void port_hands_set_scale(float scale); /* clamped to PORT_HANDS_SCALE_MIN to _MAX */
 void port_hands_set_corner(PortHandsCorner corner);
@@ -163,9 +162,6 @@ void port_hands_quick_saved(const char *path);       /* quicksave.c: a quick sav
 void port_hands_quick_loading(const char *path);     /* quicksave.c: one is being loaded */
 void port_hands_title(void);                         /* (game) the title screen: the next game may be a new one */
 int port_hands_new_game(void);                       /* (game, the first frame in play after the title) 1: a new game */
-
-/* the overlay's side (port/overlay/hands_view.cpp, called by port/overlay/overlay.cpp) */
-void hands_view_mods_section(void);
 
 #ifdef __cplusplus
 }

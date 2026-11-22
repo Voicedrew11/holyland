@@ -36,8 +36,6 @@ constexpr unsigned kPollForMs = 60000;
 UpdateRelease release;
 std::string skipped;
 bool due;
-bool hidden;      // "Later": until the next start
-bool show_window; // the release's window
 bool polled_once;
 unsigned next_poll_ms;
 unsigned first_poll_ms;
@@ -123,54 +121,6 @@ const char *update_badge_note() {
     return note;
 }
 
-void update_badge_menu_item() {
-    if (!due || hidden)
-        return;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.3f, 1.0f));
-    if (ImGui::BeginMenu("Update available!")) {
-        ImGui::PopStyleColor();
-        if (ImGui::MenuItem("What's new..."))
-            show_window = true;
-        if (ImGui::MenuItem("Open download page"))
-            SDL_OpenURL(release.url);
-        if (ImGui::MenuItem("Skip this version"))
-            skip_this_version();
-        if (ImGui::MenuItem("Hide until next start"))
-            hidden = true;
-        ImGui::EndMenu();
-    } else {
-        ImGui::PopStyleColor();
-    }
-}
-
-void update_badge_window() {
-    if (!show_window || !due)
-        return;
-    if (!ImGui::Begin("Update available", &show_window, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::End();
-        return;
-    }
-    ImGui::Text("%s %s is out. You have %s.", kProductName, release.tag, port_version);
-    ImGui::TextDisabled("Download it from the release page and install it over this one.");
-    ImGui::TextDisabled("Your settings and saves are kept. Quick saves carry over; save states do not.");
-    ImGui::Separator();
-    if (ImGui::Button("Download page")) {
-        SDL_OpenURL(release.url);
-        show_window = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Skip this version")) {
-        skip_this_version();
-        show_window = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Later")) {
-        hidden = true;
-        show_window = false;
-    }
-    ImGui::End();
-}
-
 const char *update_badge_version_line() {
     static char line[128];
     if (port_version[0] != 0)
@@ -181,7 +131,7 @@ const char *update_badge_version_line() {
 }
 
 bool update_badge_due() {
-    return due && !hidden;
+    return due;
 }
 
 const char *update_badge_summary() {

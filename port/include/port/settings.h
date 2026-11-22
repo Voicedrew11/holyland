@@ -1,4 +1,4 @@
-/* The player's settings (port/overlay/settings.c): what the overlay (F1) changes, kept in
+/* The player's settings (port/overlay/settings.c): what the player menu (F1) changes, kept in
    settings.json in the user's data folder. Options on the command line override them for that run.
    A run that is headless or plays a pad script (--input) reads no settings.json, so tests stay the
    same whatever the player has chosen. */

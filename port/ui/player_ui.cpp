@@ -845,7 +845,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     // the hint from the start of play (show_hint: not under a pad script)
     menu.hint.waiting = port_options.input == nullptr;
     std::atexit(quit);
-    std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 the developers' overlay\n");
+    std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 or ` the developers' overlay\n");
 }
 
 extern "C" int port_player_ui_event(const void *sdl_event) {
@@ -880,8 +880,8 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     }
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN: {
-        if (event.key.scancode == SDL_SCANCODE_F11) {
-            return 0; // (full screen: the overlay's key, open or not)
+        if (event.key.scancode == SDL_SCANCODE_F11 || event.key.scancode == SDL_SCANCODE_GRAVE) {
+            return 0; // (full screen, and the developers' overlay: the overlay's keys, the menu open or not)
         }
         int input = key_input(event.key.scancode, event.key.mod);
         if (input >= 0 && (!event.key.repeat || repeats(input))) {
