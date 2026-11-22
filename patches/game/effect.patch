@@ -1041,7 +1041,7 @@ index 4a6bbd258a4f189164f20bea79a7d2c8045c3d3d..bcdca52f85c3dcd11c85901f8237c8bc
  
  /* The nearest entity within def->interval of position that can be targeted, or NULL. */
 diff --git a/src/game/effect/item_effect.c b/src/game/effect/item_effect.c
-index 2c58a35e31eda01ff580a5c940e49998cb773304..92b11ef46c634d15938ff3a696523765f6bd187c 100644
+index 2c58a35e31eda01ff580a5c940e49998cb773304..e75e5f1d22350f8625a8f453bc73d9dcac00b033 100644
 --- a/src/game/effect/item_effect.c
 +++ b/src/game/effect/item_effect.c
 @@ -3,29 +3,28 @@
@@ -1131,7 +1131,22 @@ index 2c58a35e31eda01ff580a5c940e49998cb773304..92b11ef46c634d15938ff3a696523765
      for (i = 0; i < item_effect_model->part_count; i++) {
          if (i == 0) {
              MODEL_PART_FLAG_BITS(&item_effect_model->parts[0])->bit41 = TRUE;
-@@ -307,7 +306,7 @@ void ItemEffect_StepRequestGameStatus(void) {
+@@ -279,7 +278,13 @@ void ItemEffect_Update(void) {
+             player_state.magic_gauge = 5000;
+         }
+         if (item_effect_marked != 0) {
+-            Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_MAGIC_LEARNED);
++            extern s32 player_learned_magic; /* PC: player/player_items.c */
++            extern FxTableEntry fx_table[];
++            NoticeDetail detail; /* PC: "Magic Learned: Fire Ball" with the player menu's "Detailed notices" */
++
++            NoticeDetail_Start(&detail);
++            NoticeDetail_Name(&detail, &fx_table[player_learned_magic]);
++            Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_MAGIC_LEARNED, &detail);
+             item_effect_marked = 0;
+         }
+     }
+@@ -307,7 +312,7 @@ void ItemEffect_StepRequestGameStatus(void) {
  
  /* Item-effect step 1: waits until the confirmation overlay flag is clear. */
  void ItemEffect_StepWaitOverlay(void) {
@@ -1140,7 +1155,7 @@ index 2c58a35e31eda01ff580a5c940e49998cb773304..92b11ef46c634d15938ff3a696523765
          game_status.update_hold_flags = 0xC5F;
          game_status.effect_owner = item_effect_model;
          item_effect_step++;
-@@ -331,8 +330,8 @@ void ItemEffect_StepFadeOut(void) {
+@@ -331,8 +336,8 @@ void ItemEffect_StepFadeOut(void) {
  
          item_effect_active = 0;
          item_effect_step = 0;

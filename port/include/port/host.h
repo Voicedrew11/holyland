@@ -172,6 +172,10 @@ int port_auto_loot_gold(void);
    upgrade, receive) show " (E)" after what he has equipped (settings.json's mods.equipped_mark, the player menu's
    Gameplay tab; on by default). Read by the patched ui/trade.c. */
 int port_equipped_mark(void);
+/* port_detailed_notices(): 1 while notices say what changed ("Magic Learned: Fire Ball", "Level UP: 51",
+   "Weapon Level UP: Moonlight Sword Lv 2"...) (settings.json's mods.detailed_notices, the player menu's Gameplay tab;
+   on by default). Read by the patched ui/message.c. */
+int port_detailed_notices(void);
 
 #define PORT_WIDESCREEN_HUD_LEFT 2 /* the HUD of the top left: at the 16:9 picture's left edge, or centred
                                       as PORT_WIDESCREEN_2D, by the player's choice */

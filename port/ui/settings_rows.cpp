@@ -727,6 +727,13 @@ void set_equipped_mark(int on) {
     port_settings.equipped_mark = port_options.equipped_mark = on;
     changed();
 }
+int get_detailed_notices() {
+    return port_options.detailed_notices != 0;
+}
+void set_detailed_notices(int on) {
+    port_settings.detailed_notices = port_options.detailed_notices = on;
+    changed();
+}
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1083,6 +1090,8 @@ const SettingRow gameplay_rows[] = {
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
     {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
+    {"Detailed notices", "Notices say what changed: the magic learned, the level reached, the weapon and magic levels, "
+     "the new Physical and Magic Power.", RowKind::toggle, on_off, {}, get_detailed_notices, set_detailed_notices},
     {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
      on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Hands and hotkeys", "", RowKind::heading},

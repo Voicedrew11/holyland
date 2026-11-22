@@ -4083,7 +4083,7 @@ index b6f81dfc3ac840762c4812d748779b5ebca327da..b4f8432669d0c8a93a7060f28c9abdf3
  /* Puts every load buffer back on the free list, keeping a load still in progress. */
  void Menu_ResetLoadBuffers(void);
 diff --git a/src/game/ui/message.c b/src/game/ui/message.c
-index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46abf22781b4 100644
+index 900c0bc7148f07247f3919bffcf126775bd08779..e9c63d5407756479a0dbf883a1c4b7073ca949c3 100644
 --- a/src/game/ui/message.c
 +++ b/src/game/ui/message.c
 @@ -1,13 +1,11 @@
@@ -4208,7 +4208,111 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46ab
          width = Message_GetTextWidth(notice_free->text, font);
          left = x + 0x140;
          top = y + 0x190;
-@@ -356,8 +359,9 @@ void Message_DebugPrintf(char *format, ...) {
+@@ -351,13 +354,113 @@ void Message_ShowNotice(int x, int y, int font, int kind, int frames, int messag
+     notices_active = 1;
+ }
+ 
++/* PC: Message_ShowNotice for a glyph stream of its own: `format` in place of message message_id's text. */
++static void Message_ShowNoticeText(int x, int y, int font, int kind, int frames, u16 *format, ...) {
++    va_list args;
++    MessageSlot *slot;
++    int width;
++
++    if (kind == 1) {
++        slot = notice_shown;
++    } else {
++        if (notice_free->next == notice_shown) {
++            return;
++        }
++        slot = notice_free;
++    }
++    va_start(args, format);
++    slot->length = Message_Format(format, (u16 *)slot->text, args);
++    va_end(args);
++    width = Message_GetTextWidth(slot->text, font);
++    slot->frames = frames;
++    slot->frames_left = frames;
++    slot->font = font;
++    slot->left = x + 0x140 - width / 2;
++    slot->top = y + 0x190;
++    slot->kind = kind == 1 ? 1 : 0;
++    if (kind != 1) {
++        notice_free = notice_free->next;
++    }
++    notices_active = 1;
++}
++
++extern GameDefinition item_name_defs[380];
++
++/* PC: a NoticeDetail's glyphs: the half-width Latin ones are 0x0800 + (character - 0x20) */
++static void NoticeDetail_Put(NoticeDetail *detail, u16 glyph) {
++    if (detail->length < (s32)(sizeof(detail->text) / sizeof(detail->text[0])) - 1) {
++        detail->text[detail->length++] = glyph;
++    }
++    detail->text[detail->length] = 0xFFFF;
++}
++
++void NoticeDetail_Start(NoticeDetail *detail) {
++    detail->length = 0;
++    detail->text[0] = 0xFFFF;
++}
++
++void NoticeDetail_Ascii(NoticeDetail *detail, const char *ascii) {
++    for (; *ascii != '\0'; ascii++) {
++        u8 c = (u8)*ascii;
++
++        NoticeDetail_Put(detail, (u16)(0x0800 | (c >= 0x20 && c < 0x7F ? c - 0x20 : '?' - 0x20)));
++    }
++}
++
++void NoticeDetail_Name(NoticeDetail *detail, const void *name) {
++    const u16 *glyph = (const u16 *)name;
++    s32 i;
++
++    for (i = 0; i < 0x20 && glyph[i] != 0xFFFF && !(glyph[i] & 0x8000); i++) { /* (0x8000: a line break) */
++        NoticeDetail_Put(detail, glyph[i]);
++    }
++}
++
++void NoticeDetail_ItemName(NoticeDetail *detail, s32 item) {
++    if (item >= 0 && item < 380) {
++        NoticeDetail_Name(detail, &item_name_defs[item]);
++    }
++}
++
++void NoticeDetail_Number(NoticeDetail *detail, s32 value) {
++    char digits[12];
++
++    sprintf(digits, "%d", (int)value);
++    NoticeDetail_Ascii(detail, digits);
++}
++
++/* PC: message message_id as a notice, with ": " and `detail` after its text while the player menu's "Detailed
++   notices" is on (port_detailed_notices); the message alone otherwise. */
++void Message_ShowNoticeDetail(int x, int y, int font, int kind, int frames, int message_id, const NoticeDetail *detail) {
++    static u16 format[0x200];
++    const u16 *text = (const u16 *)Message_GetText(message_id);
++    s32 length = 0;
++    s32 i;
++
++    if (!port_detailed_notices() || detail == NULL || detail->length == 0) {
++        Message_ShowNotice(x, y, font, kind, frames, message_id);
++        return;
++    }
++    while (*text != 0xFFFF && length < 0x100) {
++        format[length++] = *text++;
++    }
++    format[length++] = 0x0800 | (':' - 0x20);
++    format[length++] = 0x0800; /* a space */
++    for (i = 0; i < detail->length && length < 0x1FF; i++) {
++        format[length++] = detail->text[i];
++    }
++    format[length] = 0xFFFF;
++    Message_ShowNoticeText(x, y, font, kind, frames, format);
++}
++
+ /* Formats a line into the next debug log slot. */
+ void Message_DebugPrintf(char *format, ...) {
      va_list args;
      int length;
  
@@ -4219,7 +4323,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46ab
      glyph_count += length;
      debug_line_count++;
  }
-@@ -369,12 +373,12 @@ void Message_DebugSetColor(char colour) {
+@@ -369,12 +472,12 @@ void Message_DebugSetColor(char colour) {
  }
  
  /* Where font.tmr, the font texture, is loaded in the font buffer. */
@@ -4234,7 +4338,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46ab
      return font_base + 0x1A0400;
  }
  
-@@ -586,9 +590,11 @@ static void Message_DrawGlyph(int pos_x, int pos_y, int glyph, int colour, int a
+@@ -586,9 +689,11 @@ static void Message_DrawGlyph(int pos_x, int pos_y, int glyph, int colour, int a
      *glyph_packet++ = 0;
      *glyph_packet++ = 0;
      if (first_page && kind == 0) {
@@ -4248,7 +4352,7 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46ab
      }
      rgb = &text_colours[colour];
      *glyph_packet++ = rgb->red;
-@@ -682,7 +688,7 @@ int Message_SplitDigits(int value, u8 *digits) {
+@@ -682,7 +787,7 @@ int Message_SplitDigits(int value, u8 *digits) {
  }
  
  /* Address of message message_id: the offset table entry after the table's first word, then the text it points to. */
@@ -4258,10 +4362,10 @@ index 900c0bc7148f07247f3919bffcf126775bd08779..b0be2c36944630c4ee87e965585c46ab
  
      return Message_GetFontText(menu_heap + *offset);
 diff --git a/src/game/ui/message.h b/src/game/ui/message.h
-index df766951e5e83792583982317358f949b5d5f12a..c43669166e88a57f1cf141889b6b3bb3d35da14b 100644
+index df766951e5e83792583982317358f949b5d5f12a..6f08c60e52012f10c9398b8f3025e7f35d70b9ba 100644
 --- a/src/game/ui/message.h
 +++ b/src/game/ui/message.h
-@@ -97,11 +97,11 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
+@@ -97,11 +97,25 @@ void Message_OpenBox(int x, int y, int font, int centred, int delay, int message
  void Message_ShowNotice(int x, int y, int font, int kind, int frames, int message_id, ...);
  void Message_DebugPrintf(char *format, ...);
  void Message_DebugSetColor(char colour);
@@ -4274,6 +4378,20 @@ index df766951e5e83792583982317358f949b5d5f12a..c43669166e88a57f1cf141889b6b3bb3
  void Message_CloseBox(void);
 -int Message_GetText(int message_id);
 +sptr Message_GetText(int message_id);
++
++/* PC: the player menu's "Detailed notices" (port_detailed_notices): a notice that says what changed, as "Magic
++   Learned: Fire Ball". A NoticeDetail is built from plain text, names in the text code and numbers, then shown after
++   the message's own text and ": " by Message_ShowNoticeDetail (the message alone while the setting is off). */
++typedef struct {
++    u16 text[0x100];                /* glyphs, ended by 0xFFFF */
++    s32 length;
++} NoticeDetail;
++void NoticeDetail_Start(NoticeDetail *detail);
++void NoticeDetail_Ascii(NoticeDetail *detail, const char *ascii);
++void NoticeDetail_Name(NoticeDetail *detail, const void *name); /* a name in the text code, as the tables keep them */
++void NoticeDetail_ItemName(NoticeDetail *detail, s32 item);   /* item `item`'s name (item_name_defs) */
++void NoticeDetail_Number(NoticeDetail *detail, s32 value);
++void Message_ShowNoticeDetail(int x, int y, int font, int kind, int frames, int message_id, const NoticeDetail *detail);
  
  #endif
 diff --git a/src/game/ui/splash.c b/src/game/ui/splash.c

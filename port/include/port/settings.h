@@ -77,6 +77,7 @@ typedef struct {
                               pickup's notice (port_auto_loot_gold; off by default) */
     int equipped_mark;     /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark;
                               on by default) */
+    int detailed_notices;  /* notices say what changed (port_detailed_notices; on by default) */
     /* The overlay */
     int pause_when_open;
     int show_fps;
