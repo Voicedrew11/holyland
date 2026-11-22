@@ -720,6 +720,13 @@ void set_auto_loot_gold(int on) {
 bool auto_loot_gold_overridden() {
     return port_options.auto_loot_gold != port_settings.auto_loot_gold;
 }
+int get_equipped_mark() {
+    return port_options.equipped_mark != 0;
+}
+void set_equipped_mark(int on) {
+    port_settings.equipped_mark = port_options.equipped_mark = on;
+    changed();
+}
 int get_stats() {
     return port_stats_options.on != 0;
 }
@@ -1076,6 +1083,8 @@ const SettingRow gameplay_rows[] = {
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
     {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
+    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
+     on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Hands and hotkeys", "", RowKind::heading},
     {"Hands and hotkeys",
      "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "
