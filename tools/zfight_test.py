@@ -3,31 +3,33 @@
 floors, rock edges, bridge planks, far chests and signs) at spots where they were seen (docs/port/ZFIGHT_TEST.md).
 
     tools/zfight_test.py [--spots DIR] [--spot NAME,...] [--exe KF4] [--disc ISO] [--out DIR] [--jobs 1|2]
-                         [--keep-frames] [--approve] [-- extra kf4 options]
+                         [--settings FILE|default] [--screen-height 1440] [--motion turn,step,side,walk]
+                         [--keep-frames] [--keep-maps] [--approve] [-- extra kf4 options]
 
 A spot is a small JSON file, tests/zspots/NAME.json by default (--spots, or KF4_ZSPOTS): a map, the player's
 position, heading and pitch, and how to look (see ZFIGHT_TEST.md for every field). It holds no game data. At run
 time the tool makes a real quick save of a new game with the program under test (tests/newgame.pad,
 --quick-save-at; cached in OUT/base), then writes from it one "made-up" quick save per view (map_tour.py's: the
-map tag, position and rotation changed; the game puts the player on the floor and loads the neighbouring map), and
-plays them all in one headless, silent run (--quick-load A,V:B,...), a picture of each once it has settled.
+map tag, position and rotation changed; the game puts the player on the floor and loads the neighbouring map). Each
+view is its own headless, silent run, loaded on the title screen and pictured once settled, so every view is at the
+same moment of the game: only the view differs (a torch's flicker, water and idle animations are the same in all).
+The picture settings are the player's settings.json (a copy in each run's data folder, KF4_READ_SETTINGS=1; the
+overlays off), at the native scale its "auto" gives on --screen-height.
 
-The motions (the spot's "motion", all by default): turn (the heading turned 0.02 degrees a view: 0.4 pixels at 2x),
-step and side (moved 0.5 units a view forward, sideways), each a sweep of 9 views with the middle view before and
-after it; and walk (the game's own walk forward and back by pad presses, from one load, every picture at 240 with
-the pictures between, played twice). What it measures:
+The motions (the spot's "motion", all by default): turn (the heading turned 0.02 degrees a view), step and side
+(moved 0.5 units a view forward, sideways), each a sweep of 9 views; and walk (the game's own walk by pad presses,
+every picture at 240 with the pictures between, played twice). What it measures:
 - in pictures that only move smoothly, a pixel's colour lies between (or near) its colours in the picture before
   and the picture after;
 - where two surfaces fight over depth, the winner changes with the tiniest move, so the pixel jumps away from both
   its neighbours and back: a flip (above both, or below both, by more than a threshold, in some channel);
 - robust measure: the neighbours' colours taken within `radius` (1) pixels and 12 levels, so that an aliased edge
   crossing a pixel does not count; fine measure: the neighbours' own pixel and 24 levels (1-pixel stripes count);
-  walk: within 2 pixels, 24 levels;
-- what changes with time and not with the view (the HUD's orb, fire, water, creatures) differs between the middle
-  view and its repeats (or between the walk's two plays) and is left out, as is the HUD's corner.
-Each measure counts flip pixels per 100,000 pixels of the picture against its limit (max_score 25, fine_max 40,
-walk_max 25); a spot's score is the worst of them in percent of its limit, and it passes at 100% or less. No
-approved pictures: lighting, fog and filtering changes move colours smoothly and do not flip.
+  walk: within 2 pixels, 24 levels; a flip counts only with `cluster` (5) flips in its 5x5;
+- the spot twice, and a game frame later, give what is not the view's doing (left out), as is the HUD's corner.
+Each measure counts the flips in the densest window (a square 1/16 of the picture's width) per 100,000 pixels of the
+window, against its limit (max_score 20, fine_max 40, walk_max 25): one small fighting object fails like a big one.
+A spot's score is the worst of them in percent of its limit, and it passes at 100% or less. No approved pictures.
 
 Into OUT/NAME/: evidence.png (the worst part: the middle picture, its flip map, and the whole picture with the
 flips marked), score.json, run.log. The pictures are deleted after scoring unless --keep-frames. OUT/report.md
@@ -39,6 +41,7 @@ scored there; it changes no limit.
 import argparse
 import concurrent.futures
 import datetime
+import functools
 import hashlib
 import json
 import math
@@ -73,29 +76,44 @@ SPOT_DEFAULTS = {
     "walk_threshold": 24,  # walk: levels a pixel must stand out by
     "walk_max": 25,        # walk: flip pixels per 100,000 allowed
     "axis": "heading",     # heading or pitch
-    "scale": 2,            # --native-scale
+    "scale": "auto",       # --native-scale: auto is what the settings' auto gives on --screen-height (1440: 3)
     "frame_rate": "240",
     "threshold": 12,       # robust measure: levels (of 255) a pixel must stand out from both neighbours by,
     "radius": 1,           #   the neighbours' colours taken within this many pixels (aliased edges do not count)
-    "max_score": 25,       #   flip pixels per 100,000 allowed
+    "max_score": 20,       #   flip pixels per 100,000 pixels of the densest window allowed
     "fine_threshold": 24,  # fine measure: levels a pixel must stand out by, the neighbours' own pixel (1-pixel
-    "fine_max": 40,        #   stripes count; aliased edges too, so a higher limit)
+    "fine_max": 40,        #   stripes count; aliased edges too, so a higher limit), per 100,000 of the window
     "region": None,        # [x0, y0, x1, y1] in fractions of the picture; default all of it
     "ignore": [],          # more [x0, y0, x1, y1] boxes left out
     "args": [],            # more kf4 options
     "env": {},             # more environment
     "teleport_first": None,  # a map to visit before the spot (state that lasts across maps)
     "settle": 90,          # vblanks from a view's load to its picture (the fade in is about 70)
+    "cluster": 5,          # a flip counts with at least this many flips in the 5x5 around it (0: every flip)
+    "window": 16,          # the score's window: a square this fraction of the picture's width (16: 1/16)
+    "time_mask": True,     # leave out what moves by itself in a game frame (flames, water, idle animations)
 }
-# the owner's picture settings (settings.json); an option the program does not know (older builds) is left out
-OWNER = ["--native-draw", "on", "--widescreen", "--native-widescreen", "--fov", "64", "--antialias", "fxaa",
-         "--native-aniso", "16", "--native-lod", "full", "--native-layer-z", "tolerant",
-         "--native-msaa", "4", "--native-cutout-aa", "ssaa"]  # (builds before FXAA, 2026-11-16: MSAA, as played then)
+# The picture settings when there is no settings.json to read (--settings): the owner's of 2026-11-21
+DEFAULT_SETTINGS = {"version": 3, "display": {
+    "widescreen": True, "widescreen_hud": "corner", "fov": 64, "native_widescreen": True, "antialias": "fxaa",
+    "native_aniso": 16, "native_lod": "full", "native_2d": "smooth", "native_layer_z": "tolerant", "native_draw": "on",
+    "native_sky": "modern", "draw_distance": "1", "native_scale": "auto", "frame_rate": "unlocked"}}
+# the settings that draw over the picture (the automap's minimap, the stats panels, the hands' cards, the frame-rate
+# counter): off in the run's copy, whatever the file says
+OVERLAYS_OFF = {"mods": {"automap_minimap": False, "extended_stats_panel": False, "extended_stats_damage": False,
+                         "extended_stats_timers": False, "hands": False}, "overlay": {"show_fps": False}}
+# a settings.json key and the option that says the same, for builds that do not read settings.json headless (before
+# KF4_READ_SETTINGS, 2026-11-15); an option a build does not know is left out
+SETTING_OPTIONS = (("widescreen", "--widescreen", None), ("native_widescreen", "--native-widescreen", None),
+                   ("fov", "--fov", str), ("antialias", "--antialias", str), ("native_aniso", "--native-aniso", str),
+                   ("native_lod", "--native-lod", str), ("native_2d", "--native-2d", str),
+                   ("native_layer_z", "--native-layer-z", str), ("native_draw", "--native-draw", str),
+                   ("native_sky", "--sky", str), ("draw_distance", "--draw-distance", str))
+OLD_AA = ["--native-msaa", "4", "--native-cutout-aa", "ssaa"]  # (builds before FXAA, 2026-11-16, as played then)
 HUD = [(0.0, 0.0, 0.29, 0.135), (0.0, 0.0, 0.125, 0.235)]  # the gauges' corner (widescreen HUD in the corner)
 MOTIONS = ("turn", "step", "side", "walk")
 
 FIRST_LOAD = 130  # the first view is loaded on the title screen (map_tour.py's)
-STRIDE = 100      # vblanks a view
 
 # ---- quick saves (port/platform/quicksave.c, game/quicksave.c; map_tour.py's made-up files) ----------------------
 QUICK_HEADER_SIZE = 40
@@ -188,13 +206,64 @@ _help_cache = {}
 
 def known_options(exe):
     """The options the program knows (older builds lack some of today's): each option's name is a string in the
-    program (main_host.c's strcmp), as --help may not name them all"""
+    program (main_host.c's strcmp), as --help may not name them all; and "KF4_READ_SETTINGS" when it reads
+    settings.json headless"""
     if exe not in _help_cache:
         with open(exe, "rb") as f:
             data = f.read()
         _help_cache[exe] = set(c.decode() for c in data.split(bytes(1))
-                               if re.fullmatch(rb"--[a-z0-9][a-z0-9-]*", c))
+                               if re.fullmatch(rb"--[a-z0-9][a-z0-9-]*", c) or c == b"KF4_READ_SETTINGS")
     return _help_cache[exe]
+
+
+def owner_settings_path():
+    if os.name == "nt":
+        return os.path.join(os.environ.get("APPDATA", ""), "holyland", "settings.json")
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "holyland",
+                        "settings.json")
+
+
+def load_settings(path):
+    """--settings: a settings.json (read only), or DEFAULT_SETTINGS for "default" or when the owner's is missing"""
+    if path == "default" or not path or not os.path.exists(path):
+        return json.loads(json.dumps(DEFAULT_SETTINGS)), "built-in defaults"
+    with open(path, encoding="utf-8") as f:
+        return json.load(f), path
+
+
+def native_scale(settings, screen_height):
+    """What native_scale "auto" gives on the owner's screen (port_gs_native_scale: the picture's height over 448,
+    rounded, at most 4); headless there is no screen and auto gives 1, so the test says the scale itself"""
+    scale = settings.get("display", {}).get("native_scale", "auto")
+    if isinstance(scale, (int, float)) and scale >= 1:
+        return int(min(scale, 4))
+    return max(1, min(4, (screen_height + 224) // 448))
+
+
+def picture_options(exe, settings, data_dir, scale, frame_rate):
+    """The options and environment that give a run the settings' pictures: a copy of settings.json in the run's data
+    folder with KF4_READ_SETTINGS=1 (the overlays off), or for builds that do not read it headless, the same as
+    options. The scale and frame rate are always options (they win over the file)."""
+    known = known_options(exe)
+    forced = ["--native-scale", str(scale), "--frame-rate", str(frame_rate)] + OLD_AA
+    if "KF4_READ_SETTINGS" in known:
+        copy = json.loads(json.dumps(settings))
+        for section, values in OVERLAYS_OFF.items():
+            copy.setdefault(section, {}).update(values)
+        os.makedirs(data_dir, exist_ok=True)
+        with open(os.path.join(data_dir, "settings.json"), "w", encoding="utf-8") as f:
+            json.dump(copy, f, indent=1)
+        return forced, {"KF4_READ_SETTINGS": "1"}
+    display = settings.get("display", {})
+    options = []
+    for key, option, value in SETTING_OPTIONS:
+        if key not in display:
+            continue
+        if value is None:
+            options += [option] if display[key] else (["--no-native-widescreen"] if key == "native_widescreen" else [])
+        else:
+            options += [option, value(display[key])]
+    return options + forced, {}
 
 
 def compatible(exe, args):
@@ -268,13 +337,13 @@ def motions(spot):
     bad = [k for k in kinds if k not in MOTIONS]
     if bad:
         raise ValueError("%s: motion %s is none of %s or all" % (spot["path"], ", ".join(bad), ", ".join(MOTIONS)))
-    return kinds
+    only = spot.get("only_motions")
+    return [k for k in kinds if not only or k in only] or kinds[:1]
 
 
 def sweep(n, step):
-    """n offsets of step around 0, with the middle one before and after them as well (for the animated mask)"""
-    s = [step * (i - (n - 1) / 2.0) for i in range(n)]
-    return [s[n // 2]] + s + [s[n // 2]]
+    """n offsets of step around 0 (the middle one 0: the spot itself)"""
+    return [step * (i - (n - 1) / 2.0) for i in range(n)]
 
 
 def plan_segments(spot):
@@ -302,107 +371,151 @@ def plan_segments(spot):
     return segments
 
 
-def walk_presses(start, walk):
-    """The pad lines of one play of the walk from vblank start, and its length: each [button, vblanks held,
-    vblanks of rest after]"""
-    lines, t = [], start
-    for button, held, rest in walk:
-        lines.append("%d %s %d" % (t, button, held))
-        t += held + rest
-    return lines, t - start
+def spot_scale(args, spot):
+    return native_scale(args.settings, args.screen_height) if spot["scale"] == "auto" else int(spot["scale"])
+
+
+def play(args, spot, folder, name, save, presses=(), shots=None):
+    """One run of the game from a fresh start: save loaded on the title screen (with teleport_first: then that map,
+    then save again), the pad presses from settle vblanks after the load, the pictures at shots (vblanks after the
+    load; default the settled picture). Every run loads at the same vblank, so the game's own time (a torch's flicker,
+    the water, the HUD's orb) is the same in each: only the view differs. Returns (pictures, log, seconds), pictures
+    in order with the pictures between, or None."""
+    settle = int(spot["settle"])
+    start = FIRST_LOAD
+    loads = save
+    extra = []
+    if spot["teleport_first"] is not None:
+        start = FIRST_LOAD + 700
+        loads = "%s,%d:%s" % (save, start, save)
+        where = str(spot["teleport_first"])
+        extra = ["--teleport", "%d:%s" % (FIRST_LOAD + 300, where if ":" in where else where + ":0"), "--invincible"]
+    shots = [start + v for v in (shots if shots is not None else [settle])]
+    pictures = os.path.join(folder, "pictures", name)
+    data_dir = os.path.join(folder, "data_" + name)
+    os.makedirs(pictures)
+    pad = os.path.join(folder, name + ".pad")
+    with open(pad, "w") as f:
+        f.write("100 CROSS 4     # the notice that there is nowhere to save; the load is on the title screen\n")
+        t = start + settle
+        for button, held, rest in presses:
+            f.write("%d %s %d\n" % (t, button, held))
+            t += held + rest
+    cmd = [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--fast", "--frames", str(max(shots) + 2),
+           "--clock", CLOCK, "--saves", "none", "--input", pad, "--quick-load", loads,
+           "--dump-frames", ",".join(map(str, shots)), "--dump-dir", pictures]
+    options, picture_env = picture_options(args.exe, args.settings, data_dir, spot_scale(args, spot),
+                                           spot["frame_rate"])
+    cmd = compatible(args.exe, cmd + options + extra + list(spot["args"]) + list(args.extra))
+    env = dict(os.environ, KF4_DATA_DIR=data_dir, **picture_env)
+    env.update({k: str(v) for k, v in spot["env"].items()})
+    started = time.time()
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", env=env)
+    seconds = time.time() - started
+    shutil.rmtree(data_dir, ignore_errors=True)
+    log = " ".join(cmd) + "\n\n" + r.stdout
+    out = []
+    for v in shots:
+        first = os.path.join(pictures, "frame_%06d.png" % v)
+        if not os.path.exists(first):
+            return None, log, seconds
+        between = [f for f in os.listdir(pictures) if f.startswith("frame_%06d_" % v)]
+        out += [first] + [os.path.join(pictures, f) for f in sorted(between, key=lambda f: int(f[13:-4]))]
+    return (out if r.returncode == 0 else None), log, seconds
 
 
 def run_spot(args, spot, base_path):
     folder = os.path.join(args.out, spot["name"])
     shutil.rmtree(folder, ignore_errors=True)
-    saves, pictures, data_dir = (os.path.join(folder, d) for d in ("saves", "pictures", "data"))
-    for d in (saves, pictures, data_dir):
-        os.makedirs(d)
+    saves = os.path.join(folder, "saves")
+    os.makedirs(saves)
     base = read_quick(base_path) if "quick" not in spot else None
-    settle = int(spot["settle"])
-    t = FIRST_LOAD
-    if spot["teleport_first"] is not None:
-        t += 700  # into play with the first view, then the other map (state that lasts across maps), then the views
-    pad_lines = ["100 CROSS 4     # the notice that there is nowhere to save; the first load is on the title screen"]
-    loads, dumps = [], []
-    segments = plan_segments(spot)
-    for seg in segments:
-        seg["pictures"] = []
-        for i, (move, dh, dp) in enumerate(seg["views"]):
-            path = os.path.join(saves, "%s%02d.kf4quick" % (seg["kind"], i))
-            if seg["kind"] == "walk" and i == 1:
-                path = os.path.join(saves, "walk00.kf4quick")
-            elif base is not None:
-                position = [float(p) + d for p, d in zip(spot["position"], move)]
-                write_made_up(base, path, int(spot["map"]), position, float(spot["heading"]) + dh,
-                              float(spot["pitch"]) + dp)
-            else:
-                write_moved(spot["quick"], path, move, dh, dp)
-            loads.append((t, path))
+    cache = {}  # a view (move, turn) -> its picture: the sweeps share their middle view
+    logs = []
+    seconds = 0.0
+    result = {"spot": spot["name"]}
+
+    def write_view(path, move, dh, dp):
+        if base is not None:
+            position = [float(p) + d for p, d in zip(spot["position"], move)]
+            write_made_up(base, path, int(spot["map"]), position, float(spot["heading"]) + dh,
+                          float(spot["pitch"]) + dp)
+        else:
+            write_moved(spot["quick"], path, move, dh, dp)
+
+    def view(move, dh, dp, name=None, shots=None):
+        nonlocal seconds
+        key = (tuple(round(m, 6) for m in move), round(dh, 9), round(dp, 9))
+        if key in cache and name is None:
+            return cache[key]
+        name = name or "v%02d" % len(cache)
+        path = os.path.join(saves, name + ".kf4quick")
+        write_view(path, move, dh, dp)
+        pics, log, s = play(args, spot, folder, name, path, shots=shots)
+        logs.append(log)
+        seconds += s
+        if pics is None:
+            raise RuntimeError("the run of view %s gave no picture" % name)
+        if name.startswith("v"):
+            cache[key] = pics[0]
+        return pics[0] if shots is None else pics
+
+    try:
+        segments = plan_segments(spot)
+        # the spot itself twice, from two runs: what differs between them is not the view's doing (the animated mask)
+        # and, with time_mask, pictured again a game frame later: what moves by itself (a torch's flame, water, an
+        # idle animation) is left out too
+        repeat = later = None
+        if any(s["kind"] != "walk" for s in segments):
+            settle = int(spot["settle"])
+            pics = view((0, 0, 0), 0.0, 0.0, name="repeat", shots=[settle, settle + 2])
+            repeat = pics[0]
+            later = [p for p in pics if os.path.basename(p) == os.path.basename(pics[0]).replace(
+                "%06d" % int(os.path.basename(pics[0])[6:12]), "%06d" % (int(os.path.basename(pics[0])[6:12]) + 2))]
+            later = later[0] if later and spot["time_mask"] else None
+        for seg in segments:
             if seg["kind"] == "walk":
-                lines, length = walk_presses(t + settle, spot["walk"])
-                pad_lines += lines
-                shots = list(range(t + settle - 2, t + settle + length + 2))
-                seg["pictures"].append(shots)
-                dumps += shots
-                t += settle + length + 20
+                path = os.path.join(saves, "walk.kf4quick")
+                write_view(path, (0, 0, 0), 0.0, 0.0)
+                length = sum(held + rest for _, held, rest in spot["walk"])
+                shots = list(range(int(spot["settle"]) - 2, int(spot["settle"]) + length + 2))
+                plays = []
+                for k in range(2):
+                    pics, log, s = play(args, spot, folder, "walk%d" % k, path, spot["walk"], shots)
+                    logs.append(log)
+                    seconds += s
+                    if pics is None:
+                        raise RuntimeError("the walk's run %d gave no pictures" % k)
+                    plays.append(pics)
+                seg["paths"] = plays
             else:
-                seg["pictures"].append(t + settle)
-                dumps.append(t + settle)
-                t += STRIDE
-    if spot["teleport_first"] is not None:
-        loads.insert(0, (0, loads[0][1]))
-    # (the first load is taken on the title screen, with no vblank)
-    quick = ",".join(p if k == 0 else "%d:%s" % (at, p) for k, (at, p) in enumerate(loads))
-    pad = os.path.join(folder, "spot.pad")
-    with open(pad, "w") as f:
-        f.write("\n".join(pad_lines) + "\n")
-    frames = max(dumps) + 2
-    cmd = [args.exe, "--disc", args.disc, "--headless", "--no-audio", "--fast", "--frames", str(frames),
-           "--clock", CLOCK, "--saves", "none", "--input", pad, "--quick-load", quick,
-           "--dump-frames", ",".join(map(str, dumps)), "--dump-dir", pictures,
-           "--native-scale", str(spot["scale"]), "--frame-rate", str(spot["frame_rate"])] + OWNER
-    if spot["teleport_first"] is not None:
-        cmd += ["--teleport", "%d:%s" % (FIRST_LOAD + 300, spot["teleport_first"] if ":" in str(spot["teleport_first"])
-                                      else "%s:0" % spot["teleport_first"]), "--invincible"]
-    cmd = compatible(args.exe, cmd + list(spot["args"]) + list(args.extra))
-    env = dict(os.environ, KF4_DATA_DIR=data_dir)
-    env.update({k: str(v) for k, v in spot["env"].items()})
-    started = time.time()
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", env=env)
-    wall = time.time() - started
+                seg["paths"] = [repeat] + [view(*v) for v in seg["views"]] + [repeat]
+    except RuntimeError as e:
+        with open(os.path.join(folder, "run.log"), "w") as f:
+            f.write("\n\n".join(logs))
+        result.update(status="ERROR", error=str(e), seconds=round(seconds, 1))
+        return result
     with open(os.path.join(folder, "run.log"), "w") as f:
-        f.write(" ".join(cmd) + "\n\n" + r.stdout)
-    shutil.rmtree(data_dir, ignore_errors=True)
+        f.write("\n\n".join(logs))
     shutil.rmtree(saves, ignore_errors=True)
-    result = {"spot": spot["name"], "exit": r.returncode, "seconds": round(wall, 1)}
-    floors = re.findall(r"quick load: made up: (.*)", r.stdout)
+    floors = re.findall(r"quick load: made up: (.*)", "".join(logs[:1]))
     if floors:
         result["floor"] = floors[0]
-    picture = lambda v: os.path.join(pictures, "frame_%06d.png" % v)  # noqa: E731
-
-    def all_pictures(v):
-        """the vblank's picture and, at higher frame rates, its pictures between (frame_V_250.png ...)"""
-        between = [f for f in os.listdir(pictures) if f.startswith("frame_%06d_" % v)]
-        return [picture(v)] + [os.path.join(pictures, f) for f in sorted(between, key=lambda f: int(f[13:-4]))]
-    missing = [v for v in dumps if not os.path.exists(picture(v))]
-    if r.returncode != 0 or missing:
-        result.update(status="ERROR", error="exit %d, %d of %d pictures" % (r.returncode, len(dumps) - len(missing),
-                                                                          len(dumps)))
-        return result
-    result.update(score=0.0, motions={})
+    result.update(seconds=round(seconds, 1), runs=len(logs), score=0.0, motions={})
     worst = None
-    # what changes with time and not with the view: every sweep's middle view against its repeats, all sweeps
-    # together (they are all within a few pixels of each other)
-    sweeps = [[picture(v) for v in seg["pictures"]] for seg in segments if seg["kind"] != "walk"]
+    sweeps = [seg["paths"] for seg in segments if seg["kind"] != "walk"]
     animated = animated_mask(sweeps) if sweeps else None
+    if animated is not None and later is not None:
+        animated |= dilate(np.abs(read(repeat) - read(later)).max(axis=2) > 12, 2)
     for seg in segments:
         if seg["kind"] == "walk":
-            m = score_walk([p for v in seg["pictures"][0] for p in all_pictures(v)],
-                           [p for v in seg["pictures"][1] for p in all_pictures(v)], spot)
+            m = score_walk(seg["paths"][0], seg["paths"][1], spot)
         else:
-            m = score_sweep([picture(v) for v in seg["pictures"]], animated, spot)
+            m = score_sweep(seg["paths"], animated, spot)
         evidence = m.pop("evidence")
+        maps = m.pop("maps")
+        if args.keep_maps:
+            np.savez_compressed(os.path.join(folder, "maps_%s.npz" % seg["kind"]), **maps)
         result["motions"][seg["kind"]] = m
         if worst is None or m["score"] > result["score"]:
             worst, result["score"], result["worst_motion"] = evidence, m["score"], seg["kind"]
@@ -414,7 +527,7 @@ def run_spot(args, spot, base_path):
     else:
         result["status"] = "PASS" if result["score"] <= 100 else "FAIL"
     if not args.keep_frames:
-        shutil.rmtree(pictures, ignore_errors=True)
+        shutil.rmtree(os.path.join(folder, "pictures"), ignore_errors=True)
     with open(os.path.join(folder, "score.json"), "w") as f:
         json.dump(result, f, indent=1)
     return result
@@ -446,13 +559,22 @@ def window(img, r, op):
     for axis in (0, 1):
         grown = out.copy()
         for d in range(1, r + 1):
-            grown = op(grown, op(np.roll(out, d, axis=axis), np.roll(out, -d, axis=axis)))
+            if axis == 0:
+                op(grown[d:], out[:-d], out=grown[d:])
+                op(grown[:-d], out[d:], out=grown[:-d])
+            else:
+                op(grown[:, d:], out[:, :-d], out=grown[:, d:])
+                op(grown[:, :-d], out[:, d:], out=grown[:, :-d])
         out = grown
     return out
 
 
+@functools.lru_cache(maxsize=24)
 def read(path):
-    return np.asarray(Image.open(path).convert("RGB")).astype(np.int16)
+    """A picture as int16 RGB (the sweeps' pictures are read several times: kept for a while; not to be changed)"""
+    img = np.asarray(Image.open(path).convert("RGB")).astype(np.int16)
+    img.setflags(write=False)
+    return img
 
 
 def flip_map(paths, threshold, radius):
@@ -487,25 +609,40 @@ def counted_region(shape, spot):
     return region
 
 
+def box_sums(mask, w):
+    """The number of True pixels in each w x w window (top-left corner at each pixel that fits one)"""
+    c = np.zeros((mask.shape[0] + 1, mask.shape[1] + 1), np.int32)
+    c[1:, 1:] = np.cumsum(np.cumsum(mask, axis=0, dtype=np.int32), axis=1)
+    return c[w:, w:] - c[:-w, w:] - c[w:, :-w] + c[:-w, :-w]
+
+
 def measure(count, largest, animated, middle, spot):
+    """The flip pixels counted (in the spot's region, not animated): "flips", the densest window's, a square 1/16 of
+    the picture's width (one small fighting object counts as much as a wall of them), per 100,000 pixels of the
+    window; "global", per 100,000 pixels of the whole picture"""
     shape = middle.shape[:2]
     counted = counted_region(shape, spot) & ~animated
     flips = (count > 0) & counted
-    per = 100000.0 / (shape[0] * shape[1])
-    b = max(16, 32 * shape[1] // 1920)
-    hb, wb = shape[0] // b, shape[1] // b
-    blocks = flips[:hb * b, :wb * b].reshape(hb, b, wb, b).sum(axis=(1, 3))
-    by, bx = np.unravel_index(int(np.argmax(blocks)), blocks.shape)
+    raw = flips.copy()
+    if int(spot["cluster"]) > 0:
+        # only flips with at least `cluster` flips in the 5x5 around them: a patch or stripes of a fight, not the odd
+        # pixel of an aliased edge or a thin pole
+        flips &= box_sums(np.pad(flips, 2), 5) >= int(spot["cluster"])
+    w = max(16, shape[1] // int(spot["window"]))
+    sums = box_sums(flips, w)
+    wy, wx = np.unravel_index(int(np.argmax(sums)), sums.shape)
     m = {
-        "flips": round(float(flips.sum()) * per, 2),
+        "flips": round(float(sums[wy, wx]) * 100000.0 / (w * w), 1),
+        "global": round(float(flips.sum()) * 100000.0 / (shape[0] * shape[1]), 2),
         "flip_pixels": int(flips.sum()),
         "flips_twice": int(((count > 1) & counted).sum()),
         "animated_pct": round(100.0 * float(animated.sum()) / animated.size, 2),
-        "worst_block": [int(bx * b), int(by * b), int(blocks[by, bx])],
+        "worst_window": [int(wx), int(wy), w, int(sums[wy, wx])],
         "picture": [shape[1], shape[0]],
         "unsteady": "",
     }
-    m["evidence"] = (middle, flips, counted, largest, (bx * b + b // 2, by * b + b // 2))
+    m["evidence"] = (middle, flips, counted, largest, (int(wx) + w // 2, int(wy) + w // 2))
+    m["map"] = raw  # (--keep-maps: every flip, before the cluster filter)
     return m
 
 
@@ -531,10 +668,12 @@ def score_sweep(paths, animated, spot):
     fine = measure(*flip_map(sweep_paths, float(spot["fine_threshold"]), 0), animated, middle, spot)
     r_score = 100.0 * robust["flips"] / float(spot["max_score"])
     f_score = 100.0 * fine["flips"] / float(spot["fine_max"])
+    maps = {"robust": robust.pop("map"), "fine": fine.pop("map")}
     m = dict(robust if r_score >= f_score else fine)
     m.update(score=round(max(r_score, f_score), 1), robust=robust["flips"], fine=fine["flips"],
+             robust_global=robust["global"], fine_global=fine["global"], maps=maps,
              by="robust" if r_score >= f_score else "fine")
-    del m["flips"]
+    del m["flips"], m["global"]
     # a view that is not a small move from its neighbour (a flash, a creature in the face)
     region = counted_region(middle.shape[:2], spot)
     grey = lambda img: img.astype(np.float32).mean(axis=2)  # noqa: E731
@@ -557,7 +696,8 @@ def score_walk(play1, play2, spot):
     count, largest = flip_map(play1, float(spot["walk_threshold"]), int(spot["walk_radius"]))
     middle = read(play1[len(play1) // 2])
     m = measure(count, largest, animated, middle, spot)
-    m.update(score=round(100.0 * m["flips"] / float(spot["walk_max"]), 1), walk=m.pop("flips"), by="walk")
+    m.update(score=round(100.0 * m["flips"] / float(spot["walk_max"]), 1), walk=m.pop("flips"), by="walk",
+             walk_global=m.pop("global"), maps={"walk": m.pop("map")})
     if m["animated_pct"] > 25:
         m["unsteady"] = "the two plays of the walk differ at %.0f%% of the picture" % m["animated_pct"]
     return m
@@ -615,6 +755,14 @@ def main():
     parser.add_argument("--out", help="the output folder (outside the repository; default a temporary one)")
     parser.add_argument("--jobs", type=int, default=1, choices=(1, 2), help="spots run at once (1 or 2)")
     parser.add_argument("--keep-frames", action="store_true", help="keep the pictures (big at high scales)")
+    parser.add_argument("--motion", help="only these motions of each spot's (e.g. turn,side: a quicker run)")
+    parser.add_argument("--keep-maps", action="store_true", help="keep each measure's flip pixels (maps_*.npz)")
+    parser.add_argument("--settings", default=owner_settings_path(),
+                        help="the settings.json the runs use (read only, copied into each run's data folder): "
+                             "default the player's (%(default)s) when there is one, else built-in defaults; "
+                             "\"default\" for those")
+    parser.add_argument("--screen-height", type=int, default=1440,
+                        help="the screen the settings' native_scale auto is worked out for (default 1440)")
     parser.add_argument("--approve", action="store_true",
                         help="write each spot's score into its JSON as \"approved\" (a good build's record)")
     parser.add_argument("extra", nargs="*", help="more kf4 options (after --)")
@@ -622,9 +770,15 @@ def main():
     if not args.disc:
         sys.exit("zfight_test: pass --disc or set KF4_DISC")
     args.exe = os.path.abspath(args.exe or find_exe())
+    args.settings, settings_from = load_settings(args.settings)
+    print("zfight_test: settings from %s, native scale %d" % (settings_from, native_scale(args.settings,
+                                                                                         args.screen_height)))
     args.out = os.path.abspath(args.out or tempfile.mkdtemp(prefix="kf4_zfight_"))
     os.makedirs(args.out, exist_ok=True)
     spots = list_spots(args.spots, args.spot)
+    if args.motion:
+        for s in spots:
+            s["only_motions"] = args.motion.split(",")
     if not spots:
         sys.exit("zfight_test: no spots in %s" % args.spots)
     base = None

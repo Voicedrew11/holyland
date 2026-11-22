@@ -1,0 +1,23 @@
+{
+  "about": "a chest seen from a distance flickers, most while walking up to it (owner, preview 2fdf828e, 2026-11-21)",
+  "map": 0,
+  "position": [
+    -537.026,
+    -0.0,
+    -5318.222
+  ],
+  "heading": -0.13673,
+  "pitch": -0.03054,
+  "motion": [
+    "turn",
+    "step",
+    "walk"
+  ],
+  "walk": [
+    [
+      "UP",
+      40,
+      10
+    ]
+  ]
+}

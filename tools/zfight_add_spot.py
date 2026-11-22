@@ -47,24 +47,25 @@ def newest_quick_save():
     return max(files, key=os.path.getmtime)
 
 
-def one_picture(exe, disc, save, folder, spot):
+def one_picture(exe, disc, save, folder, spot, settings=None, scale=3):
     """The picture after loading save, as the test takes its views"""
     os.makedirs(folder)
+    data_dir = os.path.join(folder, "data")
+    options, env = zt.picture_options(exe, settings or zt.DEFAULT_SETTINGS, data_dir, scale, spot["frame_rate"])
     pad = os.path.join(folder, "p.pad")
     with open(pad, "w") as f:
         f.write("100 CROSS 4\n")
     shot = zt.FIRST_LOAD + int(spot["settle"])
     cmd = zt.compatible(exe, [exe, "--disc", disc, "--headless", "--no-audio", "--fast", "--frames", str(shot + 2),
                               "--clock", zt.CLOCK, "--saves", "none", "--input", pad, "--quick-load", save,
-                              "--dump-frames", str(shot), "--dump-dir", folder, "--native-scale", str(spot["scale"]),
-                              "--frame-rate", str(spot["frame_rate"])] + zt.OWNER + list(spot["args"]))
+                              "--dump-frames", str(shot), "--dump-dir", folder] + options + list(spot["args"]))
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   env=dict(os.environ, KF4_DATA_DIR=os.path.join(folder, "data")))
+                   env=dict(os.environ, KF4_DATA_DIR=data_dir, **env))
     path = os.path.join(folder, "frame_%06d.png" % shot)
     return zt.read(path) if os.path.exists(path) else None
 
 
-def compare_with_save(exe, disc, quick, spot, work):
+def compare_with_save(exe, disc, quick, spot, work, settings=None, scale=3):
     """How far the spot made from numbers is from the player's own quick save: the share of pixels (outside the
     HUD) that differ by more than 16 levels"""
     base = zt.read_quick(zt.make_base(exe, disc, os.path.join(work, "base")))
@@ -72,8 +73,8 @@ def compare_with_save(exe, disc, quick, spot, work):
     zt.write_made_up(base, made, spot["map"], spot["position"], spot["heading"], spot["pitch"])
     own = os.path.join(work, "own.kf4quick")
     shutil.copy(quick, own)  # (a copy in the work folder, deleted after; the data folder is only read)
-    a = one_picture(exe, disc, made, os.path.join(work, "made"), spot)
-    b = one_picture(exe, disc, own, os.path.join(work, "own"), spot)
+    a = one_picture(exe, disc, made, os.path.join(work, "made"), spot, settings, scale)
+    b = one_picture(exe, disc, own, os.path.join(work, "own"), spot, settings, scale)
     if a is None or b is None:
         return None
     region = zt.counted_region(a.shape[:2], spot)
@@ -91,6 +92,8 @@ def main():
     parser.add_argument("--disc", default=os.environ.get("KF4_DISC"))
     parser.add_argument("--motion", help="the motions to test (default all)")
     parser.add_argument("--force", action="store_true", help="replace a spot of that name")
+    parser.add_argument("--settings", default=zt.owner_settings_path(), help="as zfight_test.py's")
+    parser.add_argument("--screen-height", type=int, default=1440, help="as zfight_test.py's")
     parser.add_argument("--no-run", action="store_true", help="only write the JSON")
     args = parser.parse_args()
     name = args.name.strip()
@@ -120,7 +123,10 @@ def main():
     work = tempfile.mkdtemp(prefix="kf4_zspot_")
     try:
         loaded = zt.load_spot(path)
-        differ = compare_with_save(exe, args.disc, quick, loaded, work)
+        settings, _ = zt.load_settings(args.settings)
+        differ = compare_with_save(exe, args.disc, quick, loaded, work, settings,
+                                   zt.spot_scale(argparse.Namespace(settings=settings,
+                                                                    screen_height=args.screen_height), loaded))
         if differ is None:
             print("zfight_add_spot: could not take the pictures to compare with the quick save")
         elif differ > 1.0:
@@ -131,7 +137,8 @@ def main():
             print("zfight_add_spot: the spot shows what your quick save shows (%.2f%% of pixels differ)" % differ)
         out = os.path.join(work, "test")
         r = subprocess.run([sys.executable, os.path.join(HERE, "zfight_test.py"), "--spots", args.spots, "--spot",
-                            name, "--exe", exe, "--disc", args.disc, "--out", out])
+                            name, "--exe", exe, "--disc", args.disc, "--out", out, "--settings", args.settings,
+                            "--screen-height", str(args.screen_height)])
         with open(os.path.join(out, name, "score.json")) as f:
             result = json.load(f)
         with open(path) as f:

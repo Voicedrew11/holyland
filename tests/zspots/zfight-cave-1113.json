@@ -1,5 +1,5 @@
 {
-  "about": "cave tunnel by the torch-lit wall: #143 646df6d0's z-fights (owner 11-13); robust limit 6 (good builds 2.1-2.3, main 482ec65b 33.6, 646df6d0 284; main 5834c15e 8.7: a checkered patch on the lit wall)",
+  "about": "cave tunnel, the torch-lit back wall right of the torch where the shadows are: #143 646df6d0's z-fights (owner 11-13) and the preview's (owner 11-21, seen from this off-centre angle)",
   "map": 0,
   "position": [
     2720.362,
@@ -7,6 +7,5 @@
     -2742.384
   ],
   "heading": 2.78295,
-  "pitch": -0.09422,
-  "max_score": 6
+  "pitch": -0.09422
 }
