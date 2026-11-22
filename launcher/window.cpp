@@ -19,6 +19,8 @@
 #include "ui_render.hpp"
 #include "ui_ties.hpp"
 
+#include "port/window_icon.h"
+
 namespace launcher {
 
 namespace {
@@ -207,6 +209,9 @@ bool Window::State::changed(const char *id, const char *kind, const std::string 
 }
 
 std::unique_ptr<Window> Window::open(const std::string &title, std::string &why) {
+    // the desktop entry's name (packaging/shared/holyland.desktop), as the game's window has it: Wayland
+    // desktops take the icon from it
+    SDL_SetHint(SDL_HINT_APP_ID, "holyland");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         why = SDL_GetError();
         return nullptr;
@@ -219,6 +224,7 @@ std::unique_ptr<Window> Window::open(const std::string &title, std::string &why)
         why = SDL_GetError();
         return nullptr;
     }
+    port_window_icon_set(state->window); // (X11; without it the desktop's default)
     state->renderer = SDL_CreateRenderer(state->window, nullptr);
     if (state->renderer == nullptr)
         state->renderer = SDL_CreateRenderer(state->window, SDL_SOFTWARE_RENDERER);
