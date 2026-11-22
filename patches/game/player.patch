@@ -1144,7 +1144,7 @@ index 25f57b15fba1eb09103782657f9cb4dfe1f870a1..e90f4ebda9b25b0569c71812a5006210
              Vector_Copy(&player_state, old_position);
          }
 diff --git a/src/game/player/player_items.c b/src/game/player/player_items.c
-index de8c2b9e63010c554f3b2b4087ebff2d25334ada..24b2a9eaea93c79dc08d51ceb1b8f1c61984ee9a 100644
+index de8c2b9e63010c554f3b2b4087ebff2d25334ada..eb8a4aa4d3533ddc4ed5719e22a0fc8899d5a838 100644
 --- a/src/game/player/player_items.c
 +++ b/src/game/player/player_items.c
 @@ -22,7 +22,6 @@ extern ItemCommonDef item_common_defs[];
@@ -1155,7 +1155,20 @@ index de8c2b9e63010c554f3b2b4087ebff2d25334ada..24b2a9eaea93c79dc08d51ceb1b8f1c6
  extern int current_map_slot;
  extern u32 frame_counter;
  extern u8 spell_levels[6][5];
-@@ -168,7 +167,7 @@ void Player_UseItem(void) {
+@@ -77,7 +76,11 @@ void Player_AddItem(int index) {
+                 Menu_AddKeyItem(index);
+             }
+         } else {
+-            Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_CANT_CARRY_ANY_MORE);
++            NoticeDetail detail; /* PC: "Can't carry any more: Herb" with the player menu's "Detailed notices" */
++
++            NoticeDetail_Start(&detail);
++            NoticeDetail_ItemName(&detail, index);
++            Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_CANT_CARRY_ANY_MORE, &detail);
+         }
+     }
+ }
+@@ -168,7 +171,7 @@ void Player_UseItem(void) {
                  }
                  break;
              case 2:
@@ -1164,6 +1177,51 @@ index de8c2b9e63010c554f3b2b4087ebff2d25334ada..24b2a9eaea93c79dc08d51ceb1b8f1c6
                  if (stood_on == NULL || stood_on->definition->kind != MAP_OBJECT_KIND_SYMBOL_OF_PASSAGE || !MapChange_StartPassage(item)) {
                      Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
                      return;
+@@ -217,7 +220,11 @@ void Player_ApplyItem(int kind) {
+         break;
+     case ITEM_WISE_MANS_FRUIT:
+         if (player_state.magic_base < 999) {
+-            Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_MAGIC_POWER_UP);
++            NoticeDetail detail; /* PC: "Magic Power UP: 102" with the player menu's "Detailed notices" */
++
++            NoticeDetail_Start(&detail);
++            NoticeDetail_Number(&detail, player_state.magic_base + 1); /* (raised just below) */
++            Message_ShowNoticeDetail(0, 0, 0, 1, 0x2D, MSG_MAGIC_POWER_UP, &detail);
+             player_state.magic_base++;
+         } else {
+             Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
+@@ -225,8 +232,12 @@ void Player_ApplyItem(int kind) {
+         break;
+     case ITEM_FOOLS_FRUIT:
+         if (player_state.power_base < 999) {
++            NoticeDetail detail; /* PC: "Physical UP: 104" with the player menu's "Detailed notices" */
++
+             player_state.power_base++;
+-            Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_PHYSICAL_UP);
++            NoticeDetail_Start(&detail);
++            NoticeDetail_Number(&detail, player_state.power_base);
++            Message_ShowNoticeDetail(0, 0, 0, 1, 0x2D, MSG_PHYSICAL_UP, &detail);
+         } else {
+             Message_ShowNotice(0, 0, 0, 1, 0x2D, MSG_NOTHING_HAPPENED);
+         }
+@@ -284,6 +295,9 @@ void Player_ApplyPoisonWater(int kind) {
+     }
+ }
+ 
++/* PC: the magic Player_LearnSpellInRow learned last (its effect id at level 1), for the "Magic Learned" notice */
++s32 player_learned_magic;
++
+ /* Learns the next magic of a spell row: the first of its five slots at level 0 goes to 1. FALSE if all are learned. */
+ int Player_LearnSpellInRow(int row) {
+     int i;
+@@ -291,6 +305,7 @@ int Player_LearnSpellInRow(int row) {
+     for (i = 0; i < 5; i++) {
+         if (spell_levels[row][i] == 0) {
+             spell_levels[row][i] = 1;
++            player_learned_magic = (row * 5 + i) * 3 + 1; /* PC: slot (row, i), level 1 */
+             return TRUE;
+         }
+     }
 diff --git a/src/game/player/player_state.c b/src/game/player/player_state.c
 index 96836aaddc6a6e0c72785357643b2c0d1c2851c3..5891f8d9a776cd0b4b6885acea7595a7beedf86c 100644
 --- a/src/game/player/player_state.c
@@ -1184,7 +1242,7 @@ index 96836aaddc6a6e0c72785357643b2c0d1c2851c3..5891f8d9a776cd0b4b6885acea7595a7
 -asm(".globl player_status_bits\nplayer_status_bits = player_previous + 0x1C8\n");  /* unk1C8 status bits */
 -asm(".globl player_previous_fade_level\nplayer_previous_fade_level = player_previous + 0x2A4\n");  /* fade_area: the map record byte 0x4C under the player, the frame before */
 diff --git a/src/game/player/player_status.c b/src/game/player/player_status.c
-index bf8c6b33fb9766311b354add70cb34a9460d0813..7488481f1e4929c4459b49710bf21d5e2acd2c20 100644
+index bf8c6b33fb9766311b354add70cb34a9460d0813..a338aa986f8c55383bbefb2d098748e2b3aca2d0 100644
 --- a/src/game/player/player_status.c
 +++ b/src/game/player/player_status.c
 @@ -21,13 +21,12 @@ int ModelMotion_BlendInto(ModelInstance *model, u8 index, u16 speed);
@@ -1287,6 +1345,85 @@ index bf8c6b33fb9766311b354add70cb34a9460d0813..7488481f1e4929c4459b49710bf21d5e
 -        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118L);
 +        Packet_AddGsRegister(GS_REG_ZBUF_1, 0xA000118LL);
          Packet_EndGsRegisters();
+     }
+ }
+@@ -432,7 +440,13 @@ void Player_AddExperience(int amount) {
+             player_state.mp_base += player_level_steps[level].mp_gain;
+             player_state.power_base += player_level_steps[level].power_gain;
+             player_state.magic_base += player_level_steps[level].magic_gain;
+-            Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_LEVEL_UP);
++            { /* PC: "Level UP: 51" with the player menu's "Detailed notices" */
++                NoticeDetail detail;
++
++                NoticeDetail_Start(&detail);
++                NoticeDetail_Number(&detail, player_state.level);
++                Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_LEVEL_UP, &detail);
++            }
+         }
+     }
+ }
+@@ -468,7 +482,15 @@ void Player_CountMagicUse(int effect_id) {
+         if ((clamped_uses >= 50 && spell_levels[row][column] < 2)
+             || (clamped_uses >= 150 && spell_levels[row][column] < 3)) {
+             spell_levels[row][column]++;
+-            Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_MAGIC_LEVEL_UP);
++            { /* PC: "Magic Level UP: Fire Ball Lv 2" with the player menu's "Detailed notices" */
++                NoticeDetail detail;
++
++                NoticeDetail_Start(&detail);
++                NoticeDetail_Name(&detail, &fx_table[effect_id]);
++                NoticeDetail_Ascii(&detail, " Lv ");
++                NoticeDetail_Number(&detail, spell_levels[row][column]);
++                Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_MAGIC_LEVEL_UP, &detail);
++            }
+             if (player_state.equipped_magic == effect_id) {
+                 player_state.equipped_magic = effect_id + 1;
+             } else if (player_state.shortcut_type == 2 && player_state.shortcut == effect_id) {
+@@ -479,7 +501,13 @@ void Player_CountMagicUse(int effect_id) {
+     player_state.magic_use_count = (player_state.magic_use_count + 1) % 100;
+     if (player_state.magic_use_count == 0 && player_state.magic_base < 999) {
+         player_state.magic_base++;
+-        Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_MAGIC_POWER_UP);
++        { /* PC: "Magic Power UP: 102" with the player menu's "Detailed notices" */
++            NoticeDetail detail;
++
++            NoticeDetail_Start(&detail);
++            NoticeDetail_Number(&detail, player_state.magic_base);
++            Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_MAGIC_POWER_UP, &detail);
++        }
+     }
+ }
+ 
+@@ -499,7 +527,15 @@ void Player_CountWeaponUse(int weapon) {
+         if ((u16)new_uses == 0xB4 || (u16)new_uses == 0x1E0) {
+             if (record->level_index < 2) {
+                 record->level_index++;
+-                Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_WEAPON_LEVEL_UP);
++                { /* PC: "Weapon Level UP: Moonlight Sword Lv 2" with the player menu's "Detailed notices" */
++                    NoticeDetail detail;
++
++                    NoticeDetail_Start(&detail);
++                    NoticeDetail_ItemName(&detail, ITEM_WEAPON_FIRST + weapon);
++                    NoticeDetail_Ascii(&detail, " Lv ");
++                    NoticeDetail_Number(&detail, record->level_index + 1);
++                    Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_WEAPON_LEVEL_UP, &detail);
++                }
+             }
+         }
+     }
+@@ -509,7 +545,13 @@ void Player_CountWeaponUse(int weapon) {
+     if (count == 0) {
+         if (player->power_base < 0x3E7) {
+             player->power_base++;
+-            Message_ShowNotice(0, 0, 0, 0, 0x2D, MSG_PHYSICAL_UP);
++            { /* PC: "Physical UP: 104" with the player menu's "Detailed notices" */
++                NoticeDetail detail;
++
++                NoticeDetail_Start(&detail);
++                NoticeDetail_Number(&detail, player->power_base);
++                Message_ShowNoticeDetail(0, 0, 0, 0, 0x2D, MSG_PHYSICAL_UP, &detail);
++            }
+         }
      }
  }
 diff --git a/src/game/player/player_update.c b/src/game/player/player_update.c
