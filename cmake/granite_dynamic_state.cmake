@@ -65,4 +65,13 @@ function(kf4_granite_dynamic_state granite)
         "\tVkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features = {}; // (darker-reality)" FALSE)
     kf4_granite_edit(${ctx} "\tif (has_extension(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME))"
         "\tif (has_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME); ADD_CHAIN(ext.eds3_features, EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT); } // (darker-reality)" TRUE)
+    # VK_EXT_extended_dynamic_state on a driver older than Vulkan 1.3 (1.3 has it as core), with its calls under 1.3's
+    # names: without it the scene renderer's pipeline list is twelve times as long (92,405 against 7,710), more than an
+    # old card's driver can hold (an HD 7800 on AMD's Vulkan 1.2 driver ran out at about 28,700)
+    kf4_granite_edit(${ctx_hpp} "\tVkPhysicalDeviceMaintenance5FeaturesKHR maintenance5_features = {};"
+        "\tVkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds_features = {}; // (holyland)" FALSE)
+    kf4_granite_edit(${ctx} "\tif (has_extension(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME))"
+        "\tif (ext.device_api_core_version < VK_API_VERSION_1_3 && has_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) { enabled_extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME); ADD_CHAIN(ext.eds_features, EXTENDED_DYNAMIC_STATE_FEATURES_EXT); } // (holyland)" TRUE)
+    kf4_granite_edit(${ctx} "\tPROMOTE_CALL(ResetQueryPool, EXT);"
+        "\tPROMOTE_CALL(CmdSetDepthTestEnable, EXT); PROMOTE_CALL(CmdSetDepthWriteEnable, EXT); PROMOTE_CALL(CmdSetDepthCompareOp, EXT); PROMOTE_CALL(CmdSetDepthBoundsTestEnable, EXT); PROMOTE_CALL(CmdSetStencilTestEnable, EXT); PROMOTE_CALL(CmdSetStencilOp, EXT); PROMOTE_CALL(CmdSetCullMode, EXT); PROMOTE_CALL(CmdSetFrontFace, EXT); PROMOTE_CALL(CmdSetPrimitiveTopology, EXT); // (holyland)" FALSE)
 endfunction()

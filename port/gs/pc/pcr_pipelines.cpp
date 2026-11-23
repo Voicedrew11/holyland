@@ -555,6 +555,10 @@ void make_listed(Device &device, DeferredPipelineCompile compile) {
     auto start = std::chrono::steady_clock::now();
     if (CommandBuffer::build_graphics_pipeline(&device, compile, CommandBuffer::CompileMode::Sync).pipeline) {
         store.ahead_made++;
+    } else if (!store.ahead_stop.exchange(true)) {
+        // (a driver out of memory for pipelines, as an HD 7800's was after about 28,700: the rest made at their first
+        // draws, so that what is left of the GPU's memory is play's)
+        fprintf(stderr, "[pcr] a pipeline made ahead failed: no more made ahead, the rest at their first draws\n");
     }
     store.ahead_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();

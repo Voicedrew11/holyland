@@ -20,6 +20,7 @@
 #include <variant>
 #include <vector>
 
+#include "pcr_dynamic_state.h"
 #include "pcr_shaders.h"
 #include "pcr_gpu_time.h"
 #include "pcr_hang_watch.h"
@@ -935,7 +936,7 @@ private:
     }
 
     // Vulkan's dynamic state for the draws (cmake/granite_dynamic_state.cmake), as the GS has it: depth,
-    // stencil, culling and blend constants where the device has Vulkan 1.3; blending and the colour write mask too
+    // stencil, culling and blend constants where the device has Vulkan 1.3 or VK_EXT_extended_dynamic_state; blending and the colour write mask too
     // where it has VK_EXT_extended_dynamic_state3's. A batch that differs from the one before only there (native
     // 280's two blends, a DATE batch's stencil passes) then binds no pipeline of its own. KF4_PC_DYNAMIC=0: none
     // (the pipelines as before, to compare); 1: not the blending and the write mask.
@@ -947,7 +948,7 @@ private:
         int want = v ? atoi(v) : 2;
         const auto &f = device.get_device_features();
         DynamicChoice d;
-        d.ds = want >= 1 && f.device_api_core_version >= VK_API_VERSION_1_3;
+        d.ds = want >= 1 && has_dynamic_depth_state(f);
         d.blend = d.ds && want >= 2 && f.eds3_features.extendedDynamicState3ColorBlendEnable &&
                   f.eds3_features.extendedDynamicState3ColorBlendEquation &&
                   f.eds3_features.extendedDynamicState3ColorWriteMask;

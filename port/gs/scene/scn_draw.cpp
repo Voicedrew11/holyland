@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "pcr_dynamic_state.h"
 #include "pcr_shaders.h"
 #include "scn_shaders.h"
 
@@ -61,7 +62,7 @@ Drawer::Drawer(Device &device, pcr::GpuTimes &times) : device_(device), times_(t
     const char *v = getenv("KF4_PC_DYNAMIC");
     int want = v ? atoi(v) : 2;
     const auto &f = device_.get_device_features();
-    dynamic_ds_ = want >= 1 && f.device_api_core_version >= VK_API_VERSION_1_3;
+    dynamic_ds_ = want >= 1 && pcr::has_dynamic_depth_state(f);
     dynamic_blend_ = dynamic_ds_ && want >= 2 && f.eds3_features.extendedDynamicState3ColorBlendEnable &&
                      f.eds3_features.extendedDynamicState3ColorBlendEquation &&
                      f.eds3_features.extendedDynamicState3ColorWriteMask;
@@ -1516,6 +1517,13 @@ std::vector<Drawer::RunKey> Drawer::call_keys(bool first_draw) const {
 
 std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkFormat> colour_formats,
                                                           std::span<const VkFormat> depth_formats) {
+    // (without dynamic depth state the list is about twelve times as long, 92,405 pipelines: more than an old card's
+    // driver can hold, an HD 7800's ran out of memory at about 28,700 and drew nothing after) none made before play
+    // there: each is made at its first draw
+    if (!dynamic_ds_) {
+        fprintf(stderr, "[scn] no dynamic depth state here: pipelines made at their first draws, none before play\n");
+        return {};
+    }
     // The programs record_draw draws with: the first-draw passes' (first_id_: in them, and only there), the others'
     std::vector<Vulkan::Program *> firsts, others;
     for (size_t v = 0; v < size_t(Program::count); v++) {
