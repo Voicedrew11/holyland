@@ -494,7 +494,7 @@ std::string setup_prompts_rml() {
     }
     prompt(out, confirm, "Select");
     if (!last) {
-        prompt(out, input_rml(PadButton::start, "E"), "Next page");
+        prompt(out, input_rml(PadButton::start, "E"), "Next");
     }
     prompt(out, back, "Back");
     return out;

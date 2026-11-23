@@ -13,13 +13,13 @@ bool setup_due(int seen_version, bool forced) {
 namespace {
 
 bool own_is_card(SetupOwn own) {
-    return own == SetupOwn::card_ps2 || own == SetupOwn::card_improved || own == SetupOwn::card_modern;
+    return own == SetupOwn::card_ps2 || own == SetupOwn::card_balanced || own == SetupOwn::card_modern;
 }
 
 Preset card_preset(SetupOwn own) {
     switch (own) {
-    case SetupOwn::card_improved:
-        return Preset::improved;
+    case SetupOwn::card_balanced:
+        return Preset::balanced;
     case SetupOwn::card_modern:
         return Preset::modern;
     default:

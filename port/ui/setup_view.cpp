@@ -57,15 +57,15 @@ std::string gauges() {
 }
 
 std::string screen_preview() {
-    const char *text = port_options.widescreen ? "16:9: more of the world at the sides. Menus and messages stay 4:3."
-                                               : "4:3, as on the PS2, with black bars at the sides.";
+    const char *text = port_options.widescreen ? "16:9 shows more at the sides. Menus and messages stay 4:3."
+                                               : "4:3 with black bars at the sides.";
     return "<preview>" + monitor(gauges()) + caption(text) + "</preview>";
 }
 
 // The hands: three cards (spell, hotkey, weapon) at the HUD's corner, at its size, in its layout and shape
 std::string hands_preview() {
     if (!port_hands.enabled) {
-        return "<preview class=\"off\">" + monitor(gauges()) + caption("Off: the game's own controls for equipping.") +
+        return "<preview class=\"off\">" + monitor(gauges()) + caption("Quick slots off. Equip items from the menu.") +
                "</preview>";
     }
     // The game's cards (game/hands_cross.c) are in the HUD's 640 x 448, drawn on a 4:3 picture's shape also in
@@ -92,7 +92,7 @@ std::string hands_preview() {
         float card_top = y + (i == 1 ? drop : 0.0f);
         cards += placed("card", "", left + float(i) * (width + gap), card_top, width, height);
     }
-    return "<preview>" + monitor(gauges() + cards) + caption("Where the hands show: spell, hotkey and weapon. Drawn larger than in the game.") +
+    return "<preview>" + monitor(gauges() + cards) + caption("Spell, item and weapon slots, shown larger than in game.") +
            "</preview>";
 }
 
@@ -116,20 +116,20 @@ std::string controls_preview(const SetupFlow &flow, PadFamily family) {
     std::string out = "<preview class=\"legend\">";
     bool twin = port_twin_stick_setting() != 0;
     if (flow.device() == SetupDevice::pad) {
-        line(out, pad_glyph_rml(family, PadButton::left_stick), twin ? "Walk and step aside" : "Walk and turn");
-        line(out, pad_glyph_rml(family, PadButton::right_stick), twin ? "Turn and look" : "Look up and down");
+        line(out, pad_glyph_rml(family, PadButton::left_stick), twin ? "Move and Strafe" : "Move and Turn");
+        line(out, pad_glyph_rml(family, PadButton::right_stick), twin ? "Look" : "Look Up and Down");
         line(out, pad_glyph_rml(family, PadButton::dpad_vertical) + pad_glyph_rml(family, PadButton::dpad_horizontal),
-             port_hands.enabled ? "Swap weapons, spells and hotkeys" : "Walk and turn, as on the PS2");
+             port_hands.enabled ? "Swap Quick Slots" : "Move and Turn");
     } else {
         line(out,
              key_of(ACTION_LEFT_STICK_UP) + key_of(ACTION_LEFT_STICK_LEFT) + key_of(ACTION_LEFT_STICK_DOWN) +
                  key_of(ACTION_LEFT_STICK_RIGHT),
-             "Walk and step aside");
-        line(out, "<key>Mouse</key>", "Turn and look");
-        line(out, key_of(ACTION_RUN), "Run while held");
-        line(out, key_of(ACTION_CROSS), "Talk, pick up and open");
+             "Move and Strafe");
+        line(out, "<key>Mouse</key>", "Look");
+        line(out, key_of(ACTION_RUN), "Run (Hold)");
+        line(out, key_of(ACTION_CROSS), "Interact");
     }
-    out += caption("Every key and button can be changed in F1's Key Bindings.");
+    out += caption("Rebind keys and buttons in F1 > Key Bindings.");
     return out + "</preview>";
 }
 

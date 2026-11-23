@@ -212,7 +212,7 @@ void cards_and_pages() {
     CHECK(flow.page() == 0 && flow.take_cue() == MenuCue::refused);
     flow.press(MenuInput::back);
     CHECK(flow.page() == 0);
-    // the first card: As on the PS2
+    // the first card: Original
     CHECK(flow.rows().own(0, flow.model().row()) == SetupOwn::card_ps2);
     CHECK(flow.press(MenuInput::confirm) == SetupResult::stay);
     CHECK(flow.page() == 1 && preset_set(Preset::ps2) && granted_set(false));
@@ -255,11 +255,11 @@ void controls_device() {
     flow.open(SetupStart::first, false, SetupDevice::keyboard);
     flow.press(MenuInput::confirm); // (a card: to the Controls page)
     CHECK(std::strcmp(setup_pages()[size_t(flow.page())].id, "controls") == 0);
-    CHECK(shows(flow, "Mouse sensitivity") && !shows(flow, "Twin-stick controls"));
+    CHECK(shows(flow, "Mouse Sensitivity") && !shows(flow, "Twin-Stick Controls"));
     CHECK(flow.rows().own(flow.page(), flow.model().row()) == SetupOwn::device);
     flow.press(MenuInput::right);
     CHECK(flow.device() == SetupDevice::pad);
-    CHECK(!shows(flow, "Mouse sensitivity") && shows(flow, "Twin-stick controls"));
+    CHECK(!shows(flow, "Mouse Sensitivity") && shows(flow, "Twin-Stick Controls"));
     CHECK(flow.rows().value_text(flow.page(), flow.model().row()) == "Controller");
     flow.open(SetupStart::first, false, SetupDevice::pad);
     CHECK(flow.device() == SetupDevice::pad);

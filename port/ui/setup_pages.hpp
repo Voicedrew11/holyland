@@ -13,7 +13,7 @@
 namespace ui {
 
 // The Welcome's cards: each fills every page with its values; the player then walks the pages
-enum class Preset { ps2, improved, modern };
+enum class Preset { ps2, balanced, modern };
 inline constexpr int PRESET_COUNT = 3;
 
 // Whose row it is on the Controls page: everyone's, the keyboard and mouse player's, the controller player's
@@ -23,7 +23,7 @@ enum class SetupDevice { any, keyboard, pad };
 enum class SetupOwn {
     none,
     card_ps2, // the Welcome's cards: the preset, then the next page
-    card_improved,
+    card_balanced,
     card_modern,
     card_keep, // the player's own settings as they are (only offered when there were some)
     skip,      // the Welcome: only the settings given to everyone, and done

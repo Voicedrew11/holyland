@@ -121,7 +121,7 @@ bool scaling_overridden() {
 
 const Choice frame_rates[] = {{"30", 30},   {"60", 60},   {"120", 120},
                               {"144", 144}, {"165", 165}, {"240", 240},
-                              {"Monitor refresh rate", PORT_FRAME_RATE_MONITOR}, {"Unlocked", PORT_FRAME_RATE_UNLOCKED}};
+                              {"Refresh Rate", PORT_FRAME_RATE_MONITOR}, {"Unlocked", PORT_FRAME_RATE_UNLOCKED}};
 int get_frame_rate() {
     return port_options.frame_rate;
 }
@@ -130,9 +130,9 @@ void set_frame_rate(int rate) {
 }
 void describe_frame_rate(int rate, char *out, size_t size) {
     if (rate == PORT_FRAME_RATE_MONITOR) {
-        std::snprintf(out, size, "Monitor (%d)", port_frame_rate_hz());
+        std::snprintf(out, size, "Refresh Rate (%d Hz)", port_frame_rate_hz());
     } else if (rate == PORT_FRAME_RATE_UNLOCKED) {
-        std::snprintf(out, size, "Unlocked (%.0f fps)", port_video_pictures_per_second());
+        std::snprintf(out, size, "Unlocked (%.0f FPS)", port_video_pictures_per_second());
     } else {
         out[0] = 0; // (the choice's label)
         (void)size;
@@ -184,32 +184,30 @@ const SettingRow display_rows[] = {
     {"Window", "", RowKind::heading},
     {"Fullscreen", "Borderless, at the screen's resolution. F11 also switches it.", RowKind::toggle, on_off, {},
      get_fullscreen, set_fullscreen},
-    {"Window size",
+    {"Window Size",
      "The window's size when not fullscreen. The width follows the aspect ratio (4:3, or 16:9 with widescreen). The "
      "window can also be resized by dragging its edges.",
      RowKind::choice, window_size_choices, {}, get_window_size, set_window_size, nullptr, describe_window_size, nullptr,
      windowed},
-    {"Aspect ratio", "Keep: 4:3 (16:9 with widescreen), with black bars.\nStretch: fill the window.", RowKind::choice,
+    {"Aspect Ratio", "Keep: 4:3 (16:9 with widescreen), with black bars.\nStretch: fill the window.", RowKind::choice,
      shapes, {}, get_shape, set_shape},
-    {"Scaling filter",
+    {"Scaling Filter",
      "How the picture is scaled to the window.\nNearest: blocky pixels.\nBilinear: smooth.\nBicubic: sharp "
      "edges, clean downscaling.",
      RowKind::choice, scalings, {}, get_scaling, set_scaling, nullptr, nullptr, nullptr, nullptr, scaling_overridden},
-    {"Frame rate", "", RowKind::heading},
-    {"Frame rate",
-     "30 is the PS2's. Higher rates draw frames between the game's own; the game itself still runs at 30.",
+    {"Frame Rate", "", RowKind::heading},
+    {"Frame Rate",
+     "30 FPS is the original. Higher rates add interpolated frames; game logic stays at 30 FPS.",
      RowKind::choice, frame_rates, {}, get_frame_rate, set_frame_rate, nullptr, describe_frame_rate, nullptr, nullptr,
      frame_rate_overridden},
-    {"Vertical sync",
+    {"Vertical Sync",
      "Off: can tear.\nOn: waits for the screen's refresh.\nAdaptive: FreeSync or G-Sync (must be on in your system's "
      "display settings too).",
      RowKind::choice, syncs, {}, get_sync, set_sync, nullptr, nullptr, nullptr, nullptr, sync_overridden},
-    {"FPS counter", "Top right corner. F3 shows and hides it in play.", RowKind::toggle, on_off, {}, get_fps,
+    {"FPS Counter", "Top right corner. F3 shows and hides it in play.", RowKind::toggle, on_off, {}, get_fps,
      set_fps},
     {"Setup", "", RowKind::heading},
-    {"Run setup again",
-     "The pages shown at the first start: a starting point for every setting, then each page to change what you "
-     "like. Cancel on its first page puts everything back.",
+    {"Run Setup Again", "Opens the first-start setup. Cancel on its first page restores your previous settings.",
      RowKind::action, {}, {}, nullptr, nullptr, run_setup},
 };
 
@@ -490,15 +488,15 @@ const char *scene_depth_note() {
 
 const SettingRow graphics_rows[] = {
     {"Rendering", "", RowKind::heading},
-    {"Internal resolution",
+    {"Internal Resolution",
      "A multiple of the PS2's 640 x 448.\nAuto: picked from the window's height (1080: 2x, 1440: 3x, 2160: 4x).",
      RowKind::choice, scales, {}, get_scale, set_scale, nullptr, describe_scale, pc_renderer},
-    {"Anti-aliasing", "FXAA: cheapest, a little soft.\nSMAA: sharper.\nSMAA T2x: steadier thin edges in motion.",
+    {"Anti-Aliasing", "FXAA: fastest, slightly soft.\nSMAA: sharper.\nSMAA T2x: less shimmer in motion.",
      RowKind::choice, antialiases, {}, get_antialias, set_antialias, nullptr, nullptr, pc_renderer, nullptr,
      antialias_overridden},
     {"Sharpening", "Applied after scaling to the window; brings back detail anti-aliasing softens.", RowKind::number,
      {}, {0, 100, 5}, get_sharpen, set_sharpen, nullptr, describe_sharpen, pc_renderer},
-    {"Anisotropic filtering",
+    {"Anisotropic Filtering",
      "Smooth, sharp textures on floors and walls seen at a grazing angle or far off, without shimmer.\nOff: as the PS2 "
      "draws them.",
      RowKind::choice, anisotropies, {}, get_aniso, set_aniso, nullptr, nullptr, pc_renderer},
@@ -507,7 +505,7 @@ const SettingRow graphics_rows[] = {
      "this resolution.\nHighest: always the full texture; far surfaces can shimmer.\nWith anisotropic filtering on, "
      "the 3D's textures pick their own level.",
      RowKind::choice, texture_lods, {}, get_texture_lod, set_texture_lod, nullptr, nullptr, pc_renderer},
-    {"Font", "IPA Mincho: a sharp font in the same style.\nOriginal: the game's own, blurry when enlarged.",
+    {"Font", "IPA Mincho: sharp, in the same style.\nOriginal: blurry at high resolutions.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
     {"Depth",
      "How cleanly things lying on a surface are drawn: moss and grime on walls, markings on floors, a rope on a log. "
@@ -518,37 +516,37 @@ const SettingRow graphics_rows[] = {
      RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, describe_scene_depth,
      scene_renderer, nullptr, scene_depth_overridden, scene_depth_note},
     {"View", "", RowKind::heading},
-    {"Widescreen", "16:9 view with more at the sides. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
+    {"Widescreen", "16:9 view. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
      get_widescreen, set_widescreen},
-    {"HUD position", "Where the health and magic gauges go in widescreen.", RowKind::choice, huds, {}, get_hud, set_hud,
+    {"HUD Position", "Position of the health and magic bars in 16:9.", RowKind::choice, huds, {}, get_hud, set_hud,
      nullptr, nullptr, widescreen_on},
-    {"Field of view", "Horizontal, in degrees at 4:3. 64 is the PS2's.", RowKind::number, {}, {30, 120, 1}, get_fov,
+    {"Field of View", "Horizontal, in degrees at 4:3. 64 is the PS2's.", RowKind::number, {}, {30, 120, 1}, get_fov,
      set_fov, nullptr, describe_fov, nullptr, nullptr, fov_overridden},
     {"World", "", RowKind::heading},
-    {"Draw distance", "How far the fog starts. 1x is the PS2's. No fog also removes some places' mist.",
+    {"Draw Distance", "How far the fog starts. 1x is the PS2's. No fog also removes some places' mist.",
      RowKind::choice, distances, {}, get_distance, set_distance, nullptr, nullptr, nullptr, nullptr,
      distance_overridden, distance_note},
-    {"Sky fog distance", "Moves the sky's fog out with the draw distance too; lightens dark skies.", RowKind::toggle,
+    {"Sky Fog Distance", "Moves the sky's fog out with the draw distance too; lightens dark skies.", RowKind::toggle,
      on_off, {}, get_sky_fog, set_sky_fog, nullptr, nullptr, distance_longer},
     {"Sky", "Modern: drawn behind everything, so far hills show.\nPS2: the dome at its real distance, hiding what is "
             "beyond it.",
      RowKind::choice, skies, {}, get_sky, set_sky, nullptr, nullptr, nullptr, nullptr, sky_overridden},
-    {"Reflection clipping", "Hides what is under the water from its reflection. Off: the PS2's.", RowKind::toggle,
+    {"Reflection Clipping", "Hides what is under the water from its reflection. Off: the PS2's.", RowKind::toggle,
      on_off, {}, get_reflection_clip, set_reflection_clip, nullptr, nullptr, nullptr, nullptr,
      reflection_clip_overridden},
-    {"PS2 video", "", RowKind::heading},
+    {"PS2 Video", "", RowKind::heading},
     {"Deinterlace", "Weaves the two 224-line fields into one picture. Off: each field alone, which breaks up text.",
      RowKind::toggle, on_off, {}, get_deinterlace, set_deinterlace, nullptr, nullptr, nullptr, nullptr,
      deinterlace_overridden},
-    {"Progressive scan", "Reads frame-mode pictures whole. Off: a field at a time, as the PS2.", RowKind::toggle,
+    {"Progressive Scan", "Reads frame-mode pictures whole. Off: a field at a time, as the PS2.", RowKind::toggle,
      on_off, {}, get_progressive, set_progressive, nullptr, nullptr, nullptr, nullptr, progressive_overridden},
-    {"Interlace comb removal",
+    {"Interlace Comb Removal",
      "Removes the comb that trails moving things while the view turns, and shows movies and menus whole.",
      RowKind::toggle, on_off, {}, get_whole_frame, set_whole_frame, nullptr, nullptr, nullptr, nullptr,
      whole_frame_overridden},
-    {"Seamless texture scrolling", "Clouds, lava and water scroll without the PS2's seam.", RowKind::toggle, on_off,
+    {"Seamless Texture Scrolling", "Clouds, lava and water scroll without the PS2's seam.", RowKind::toggle, on_off,
      {}, get_seamless_scroll, set_seamless_scroll, nullptr, nullptr, nullptr, nullptr, seamless_scroll_overridden},
-    {"Flicker filter", "The PS2's blend of each row with the one above, made for a TV.", RowKind::toggle, on_off, {},
+    {"Flicker Filter", "The PS2's blend of each row with the one above, made for a TV.", RowKind::toggle, on_off, {},
      get_flicker_filter, set_flicker_filter, nullptr, nullptr, nullptr, nullptr, flicker_filter_overridden},
 };
 
@@ -617,20 +615,20 @@ const char menu_mouse_help[] =
     "bindings.";
 
 const SettingRow controls_rows[] = {
-    {"Twin-stick controls", "Left stick moves and strafes, right stick turns and looks. Off: the PS2's layout.",
+    {"Twin-Stick Controls", "Left stick moves and strafes, right stick looks. Off uses the original layout.",
      RowKind::toggle, on_off, {}, get_twin_stick, set_twin_stick},
     {"Mouse", "", RowKind::heading},
-    {"Mouse sensitivity", "", RowKind::number, {}, {25, 400, 5}, get_sensitivity, set_sensitivity, nullptr,
+    {"Mouse Sensitivity", "", RowKind::number, {}, {25, 400, 5}, get_sensitivity, set_sensitivity, nullptr,
      describe_sensitivity},
-    {"Invert Y axis", "", RowKind::toggle, on_off, {}, get_invert, set_invert},
-    {"Low-latency mouse look",
+    {"Invert Y Axis", "", RowKind::toggle, on_off, {}, get_invert, set_invert},
+    {"Low-Latency Mouse Look",
      "Frames between the game's show the mouse's turn as soon as it is read. Off: the turn waits for the game's next "
      "frame.",
      RowKind::toggle, on_off, {}, get_mouse_lead, set_mouse_lead},
-    {"Mouse in menus", "", RowKind::heading},
-    {"Left click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_left, set_menu_left},
-    {"Right click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_right, set_menu_right},
-    {"Middle click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_middle, set_menu_middle},
+    {"Mouse in Menus", "", RowKind::heading},
+    {"Left Click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_left, set_menu_left},
+    {"Right Click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_right, set_menu_right},
+    {"Middle Click", menu_mouse_help, RowKind::choice, menu_presses, {}, get_menu_middle, set_menu_middle},
 };
 
 // ---- Key bindings ---------------------------------------------------------------------------------------------------
@@ -686,7 +684,7 @@ void set_door_speed(int speed) {
 bool door_speed_overridden() {
     return port_options.door_speed != port_settings.door_speed;
 }
-const Choice game_speeds[] = {{"1x, as on the PS2", 100}, {"1.25x", 125}, {"1.5x", 150}, {"1.75x", 175}, {"2x", 200}};
+const Choice game_speeds[] = {{"1x (Original)", 100}, {"1.25x", 125}, {"1.5x", 150}, {"1.75x", 175}, {"2x", 200}};
 int get_game_speed() { // (the row's value in hundredths: the menu can only hold whole numbers)
     return (int)std::lround(port_options.game_speed * 100.0f);
 }
@@ -757,7 +755,7 @@ void set_instant_smith(int on) {
     changed();
 }
 // (in hundredths, as port_options.attack_tracking; Auto is PORT_ATTACK_TRACKING_AUTO)
-const Choice attack_trackings[] = {{"Auto", PORT_ATTACK_TRACKING_AUTO}, {"1x, as on the PS2", 100}, {"1.5x", 150},
+const Choice attack_trackings[] = {{"Auto", PORT_ATTACK_TRACKING_AUTO}, {"1x (Original)", 100}, {"1.5x", 150},
                                    {"2x", 200}, {"3x", 300}, {"4x", 400}};
 int get_attack_tracking() {
     return port_options.attack_tracking;
@@ -949,10 +947,10 @@ int get_hands_size() {
 void set_hands_size(int percent) {
     port_hands_set_scale(float(percent) / 100.0f);
 }
-const Choice hands_corners[] = {{"Bottom left", PORT_HANDS_BOTTOM_LEFT},
-                                {"Bottom right", PORT_HANDS_BOTTOM_RIGHT},
-                                {"Top right", PORT_HANDS_TOP_RIGHT},
-                                {"Top left", PORT_HANDS_TOP_LEFT}};
+const Choice hands_corners[] = {{"Bottom Left", PORT_HANDS_BOTTOM_LEFT},
+                                {"Bottom Right", PORT_HANDS_BOTTOM_RIGHT},
+                                {"Top Right", PORT_HANDS_TOP_RIGHT},
+                                {"Top Left", PORT_HANDS_TOP_LEFT}};
 static_assert(std::size(hands_corners) == PORT_HANDS_CORNER_COUNT);
 int get_hands_corner() {
     return int(port_hands.corner);
@@ -1120,50 +1118,49 @@ const char cheat_help[] = "Applied once you are in play (not in a menu or messag
 
 // ---- The tabs' rows (after every get / set above) ------------------------------------------------------------------
 const SettingRow gameplay_rows[] = {
-    {"Door speed", "How fast doors and wall panels open and close. 1x is the PS2's.", RowKind::choice, door_speeds,
+    {"Door Speed", "Speed of doors and wall panels. 1x is the original.", RowKind::choice, door_speeds,
      {}, get_door_speed, set_door_speed, nullptr, nullptr, nullptr, nullptr, door_speed_overridden},
-    {"Game speed",
+    {"Game Speed",
      "The gameplay runs this many times faster. Music, sound, menus, and cinematics are unaffected.",
      RowKind::choice, game_speeds, {}, get_game_speed, set_game_speed, nullptr, nullptr, nullptr, nullptr,
      game_speed_overridden},
-    {"Camera jolt on hit", "A hard hit throws the view down. Off: it still flashes, rumbles and knocks you back.",
+    {"Camera Jolt on Hit", "Heavy hits jolt the camera down. Flash, rumble and knockback still apply when off.",
      RowKind::toggle, on_off, {}, get_jolt, set_jolt, nullptr, nullptr, nullptr, nullptr, jolt_overridden},
-    {"Auto-loot gold", "Gold dropped by an enemy you kill is picked up at once.", RowKind::toggle, on_off, {},
+    {"Auto-Loot Gold", "Picks up gold from defeated enemies automatically.", RowKind::toggle, on_off, {},
      get_auto_loot_gold, set_auto_loot_gold, nullptr, nullptr, nullptr, nullptr, auto_loot_gold_overridden},
-    {"Detailed notices", "Notices say what changed: the magic learned, the level reached, the weapon and magic levels, "
+    {"Detailed Notices", "Notices say what changed: the magic learned, the level reached, the weapon and magic levels, "
      "the new Physical and Magic Power.", RowKind::toggle, on_off, {}, get_detailed_notices, set_detailed_notices},
-    {"Instant smith", "The smith restores and upgrades your item instantly, for gold in place of waiting. Also shows stats of the repair/upgrade.",
+    {"Instant Smith", "Smith repairs and upgrades finish instantly. Also shows the stat changes.",
      RowKind::toggle, on_off, {}, get_instant_smith, set_instant_smith},
     {"Difficulty", "", RowKind::heading},
-    {"Attack tracking",
-     "How fast an enemy turns to follow you as it winds up an attack. Once the blow starts it is committed. Auto: 3x "
-     "while you turn with the mouse, which outturns the PS2's enemies; 1x on a controller.",
+    {"Attack Tracking",
+     "How fast enemies turn to track you while winding up an attack. Auto uses 3x with a mouse and 1x with a "
+     "controller.",
      RowKind::choice, attack_trackings, {}, get_attack_tracking, set_attack_tracking, nullptr,
      describe_attack_tracking},
-    {"Hands and hotkeys", "", RowKind::heading},
-    {"Hands and hotkeys",
-     "Two weapons in the right hand, two spells in the left, and five hotkeys. The d-pad swaps them (Right weapon, "
-     "Left spell, Up and Down hotkey; keyboard: Key bindings); Select uses the hotkey. Cross on an item in the "
-     "equipment screen puts it in a slot.",
+    {"Quick Slots", "", RowKind::heading},
+    {"Quick Slots",
+     "Two weapon slots, two spell slots and five item hotkeys, swapped with the D-pad. Select uses the item; Cross "
+     "on an item in the Equipment screen assigns it.",
      RowKind::toggle, on_off, {}, get_hands, set_hands, nullptr, nullptr, nullptr, nullptr, hands_overridden},
-    {"Fade when idle", "Fades to a quarter after a few seconds without a hand key.", RowKind::toggle, on_off, {},
+    {"Fade When Idle", "Fades to a quarter after a few seconds without a hand key.", RowKind::toggle, on_off, {},
      get_hands_fade, set_hands_fade, nullptr, nullptr, nullptr, hands_on},
-    {"HUD size", "", RowKind::number, {},
+    {"HUD Size", "", RowKind::number, {},
      {int(PORT_HANDS_SCALE_MIN * 100.0f + 0.5f), int(PORT_HANDS_SCALE_MAX * 100.0f + 0.5f), 5}, get_hands_size,
      set_hands_size, nullptr, describe_percent, nullptr, hands_on},
-    {"HUD position", "Top left puts it under the health and magic gauges.", RowKind::choice, hands_corners, {},
+    {"HUD Position", "Top Left places the slots below the health and magic bars.", RowKind::choice, hands_corners, {},
      get_hands_corner, set_hands_corner, nullptr, nullptr, nullptr, hands_on},
-    {"HUD layout", "Cross: the hotkey's card a little lower.\nRow: the three in line.", RowKind::choice, hands_layouts,
+    {"HUD Layout", "Cross: item slot set lower.\nRow: all three in a line.", RowKind::choice, hands_layouts,
      {}, get_hands_layout, set_hands_layout, nullptr, nullptr, nullptr, hands_on},
-    {"Card shape", "", RowKind::choice, hands_cards, {}, get_hands_cards, set_hands_cards, nullptr, nullptr, nullptr,
+    {"Card Shape", "", RowKind::choice, hands_cards, {}, get_hands_cards, set_hands_cards, nullptr, nullptr, nullptr,
      hands_on},
 };
 
 const SettingRow interface_rows[] = {
     {"Menus", "", RowKind::heading},
-    {"Item categories", "The menu's Item screen lists categories first (Consumables, Maps, and so on), then the "
+    {"Item Categories", "The menu's Item screen lists categories first (Consumables, Maps, and so on), then the "
      "chosen category's items.", RowKind::toggle, on_off, {}, get_item_categories, set_item_categories},
-    {"Mark equipped items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
+    {"Mark Equipped Items", "Shops and the blacksmith show (E) after the items you have equipped.", RowKind::toggle,
      on_off, {}, get_equipped_mark, set_equipped_mark},
     {"Map", "", RowKind::heading},
     {"Automap",
@@ -1171,54 +1168,54 @@ const SettingRow interface_rows[] = {
      "it is open.",
      RowKind::toggle, on_off, {}, get_automap, set_automap},
     {"Minimap", "", RowKind::toggle, on_off, {}, get_minimap, set_minimap, nullptr, nullptr, nullptr, automap_on},
-    {"Minimap position", "", RowKind::choice, minimap_corners, {}, get_minimap_corner, set_minimap_corner, nullptr,
+    {"Minimap Position", "", RowKind::choice, minimap_corners, {}, get_minimap_corner, set_minimap_corner, nullptr,
      nullptr, nullptr, minimap_on},
-    {"Minimap size", "Percent of the picture.", RowKind::number, {}, {10, 45, 1}, get_minimap_size, set_minimap_size,
+    {"Minimap Size", "Percent of the picture.", RowKind::number, {}, {10, 45, 1}, get_minimap_size, set_minimap_size,
      nullptr, describe_minimap_size, nullptr, minimap_on},
-    {"Minimap range", "How far from you the minimap shows, in game units.", RowKind::number, {}, {20, 120, 5},
+    {"Minimap Range", "How far from you the minimap shows, in game units.", RowKind::number, {}, {20, 120, 5},
      get_minimap_reach, set_minimap_reach, nullptr, describe_minimap_reach, nullptr, minimap_on},
-    {"Minimap opacity", "", RowKind::number, {}, {20, 100, 5}, get_minimap_opacity, set_minimap_opacity, nullptr,
+    {"Minimap Opacity", "", RowKind::number, {}, {20, 100, 5}, get_minimap_opacity, set_minimap_opacity, nullptr,
      describe_percent, nullptr, minimap_on},
-    {"Full map opacity", "How much the full map's background hides the game.", RowKind::number, {}, {40, 100, 5},
+    {"Full Map Opacity", "How much the full map's background hides the game.", RowKind::number, {}, {40, 100, 5},
      get_full_opacity, set_full_opacity, nullptr, describe_percent, nullptr, automap_on},
-    {"Extended stats", "", RowKind::heading},
-    {"Extended stats",
+    {"Extended Stats", "", RowKind::heading},
+    {"Extended Stats",
      "Hidden numbers in the game's menus: experience to the next level, hits and spells to the next Physical and "
      "Magical point, durability, hidden effects of equipment, what an item does.",
      RowKind::toggle, on_off, {}, get_stats, set_stats, nullptr, nullptr, nullptr, nullptr, stats_overridden},
-    {"Equipment durability", "Each piece's condition in percent; hits wear it down, the smith mends it.",
+    {"Equipment Durability", "Each piece's condition in percent; hits wear it down, the smith mends it.",
      RowKind::toggle, on_off, {}, get_durability, set_durability, nullptr, nullptr, nullptr, stats_on},
-    {"Ailment timers", "Running ailments and timed spell and item effects, with seconds left, beside the minimap.",
+    {"Ailment Timers", "Running ailments and timed spell and item effects, with seconds left, beside the minimap.",
      RowKind::toggle, on_off, {}, get_timers, set_timers, nullptr, nullptr, nullptr, stats_on},
-    {"Hit log", "Each hit's real damage and the HP left (bottom left), and the last enemy hit's health bar (top).",
+    {"Hit Log", "Each hit's real damage and the HP left (bottom left), and the last enemy hit's health bar (top).",
      RowKind::toggle, on_off, {}, get_damage, set_damage, nullptr, nullptr, nullptr, stats_on},
-    {"Stats panel", "Everything in one panel, on its key (F6 unless changed).", RowKind::toggle, on_off, {},
+    {"Stats Panel", "Everything in one panel, on its key (F6 unless changed).", RowKind::toggle, on_off, {},
      get_stats_panel, set_stats_panel, nullptr, nullptr, nullptr, stats_on},
 };
 
 const SettingRow general_rows[] = {
-    {"Update available", "", RowKind::heading, {}, {}, nullptr, nullptr, nullptr, nullptr, update_due},
-    {"Update now", "Closes the game; the launcher downloads and installs the new release and starts again.",
+    {"Update Available", "", RowKind::heading, {}, {}, nullptr, nullptr, nullptr, nullptr, update_due},
+    {"Update Now", "Closes the game; the launcher downloads and installs the new release and starts again.",
      RowKind::action, {}, {}, nullptr, nullptr, update_badge_update_now, nullptr, update_due, nullptr, nullptr,
      update_summary},
-    {"Open download page", "Opens the release's page in your browser; install it over this one.", RowKind::action,
+    {"Open Download Page", "Opens the release's page in your browser; install it over this one.", RowKind::action,
      {}, {}, nullptr, nullptr, update_badge_open_page, nullptr, update_due, nullptr, nullptr, update_summary},
-    {"Skip this version", "No more notices until the next version.", RowKind::action, {}, {}, nullptr, nullptr,
+    {"Skip This Version", "No more notices until the next version.", RowKind::action, {}, {}, nullptr, nullptr,
      update_badge_skip, nullptr, update_due, nullptr, nullptr, update_summary},
     {"Audio", "", RowKind::heading},
     {"Volume", "", RowKind::number, {}, {0, 100, 5}, get_volume, set_volume, nullptr, describe_percent},
     {"Mute", "", RowKind::toggle, on_off, {}, get_mute, set_mute},
-    {"Quick save", "", RowKind::heading},
-    {"Quick save slot",
+    {"Quick Save", "", RowKind::heading},
+    {"Quick Save Slot",
      "The slot F2 and F4 use (unless changed). Quick saves are the game's own save, taken where you stand, and load in "
      "any version. The save points' saves are separate.",
      RowKind::choice, quick_slots, {}, get_quick_slot, set_quick_slot, nullptr, describe_quick_slot},
-    {"Quick save", "Saves when the menu closes (in play, not in menus, messages or events).", RowKind::action, {}, {},
+    {"Quick Save", "Saves when the menu closes (in play, not in menus, messages or events).", RowKind::action, {}, {},
      nullptr, nullptr, quick_save},
-    {"Quick load", "Loads when the menu closes. Enemies come back as when entering a map.", RowKind::action, {}, {},
+    {"Quick Load", "Loads when the menu closes. Enemies come back as when entering a map.", RowKind::action, {}, {},
      nullptr, nullptr, quick_load, nullptr, nullptr, quick_slot_full},
     {"Menu", "", RowKind::heading},
-    {"Pause while open", "The game holds still while this menu is open.", RowKind::toggle, on_off, {}, get_pause,
+    {"Pause While Open", "The game holds still while this menu is open.", RowKind::toggle, on_off, {}, get_pause,
      set_pause},
 };
 
@@ -1226,49 +1223,49 @@ const SettingRow cheats_rows[] = {
     {"Cheats", "", RowKind::heading},
     {"Invincible", "No HP lost. Off again at the next start.", RowKind::toggle, on_off, {}, get_invincible,
      set_invincible},
-    {"Enemies ignore you", "Enemies never notice you, and one you hit goes back to what it was doing. Off again at "
+    {"Enemies Ignore You", "Enemies never notice you, and one you hit goes back to what it was doing. Off again at "
      "the next start.",
      RowKind::toggle, on_off, {}, get_enemies_ignore, set_enemies_ignore},
-    {"Myu's Necklace always on", "Its effect without wearing it, so the amulet slot is free.", RowKind::toggle, on_off,
+    {"Myu's Necklace Always On", "Its effect without wearing it, so the amulet slot is free.", RowKind::toggle, on_off,
      {}, get_necklace, set_necklace, nullptr, nullptr, nullptr, nullptr, necklace_overridden},
-    {"Cinematic camera", "", RowKind::heading},
-    {"Cinematic camera",
+    {"Cinematic Camera", "", RowKind::heading},
+    {"Cinematic Camera",
      "For filming. V or the controller's mute button flies the camera through walls and back down (unless changed "
      "in Key Bindings): it goes where you look, X and Left Ctrl rise and sink, Run is faster. The speed and the turn "
      "ease in and out, nothing can hurt you while flying, and no notice shows. Off again at the next start.",
      RowKind::toggle, on_off, {}, get_cinematic, set_cinematic},
-    {"Flight speed", "Units a second; Run flies four times as fast.", RowKind::number, {},
+    {"Flight Speed", "Units a second; Run flies four times as fast.", RowKind::number, {},
      {PORT_CINEMATIC_SPEED_MIN, PORT_CINEMATIC_SPEED_MAX, 100}, get_cinematic_speed, set_cinematic_speed, nullptr,
      nullptr, nullptr, cinematic_on},
-    {"Move smoothing", "How long the flight takes to reach the speed asked for, and to coast down again.",
+    {"Move Smoothing", "How long the flight takes to reach the speed asked for, and to coast down again.",
      RowKind::number, {}, {5, 200, 5}, get_move_smoothing, set_move_smoothing, nullptr, describe_hundredths_s,
      nullptr, cinematic_on},
-    {"Look smoothing", "How far the view trails the mouse or the stick. It arrives late, never short.",
+    {"Look Smoothing", "How far the view trails the mouse or the stick. It arrives late, never short.",
      RowKind::number, {}, {5, 200, 5}, get_look_smoothing, set_look_smoothing, nullptr, describe_hundredths_s,
      nullptr, cinematic_on},
     {"Map", "", RowKind::heading},
-    {"Reveal map", "Every floor, explored or not. Needs the automap.", RowKind::toggle, on_off, {}, get_reveal,
+    {"Reveal Map", "Every floor, explored or not. Needs the automap.", RowKind::toggle, on_off, {}, get_reveal,
      set_reveal, nullptr, nullptr, nullptr, automap_on},
-    {"Show items", "Items on the ground and in containers, and enemy drops, through the fog.", RowKind::toggle,
+    {"Show Items", "Items on the ground and in containers, and enemy drops, through the fog.", RowKind::toggle,
      on_off, {}, get_map_items, set_map_items, nullptr, nullptr, nullptr, automap_on},
-    {"Show enemies", "Live enemies with their names and HP, through the fog.", RowKind::toggle, on_off, {},
+    {"Show Enemies", "Live enemies with their names and HP, through the fog.", RowKind::toggle, on_off, {},
      get_map_enemies, set_map_enemies, nullptr, nullptr, nullptr, automap_on},
-    {"Show traps and secrets", "Traps and hidden or vanishing walls, through the fog.", RowKind::toggle, on_off, {},
+    {"Show Traps and Secrets", "Traps and hidden or vanishing walls, through the fog.", RowKind::toggle, on_off, {},
      get_map_secrets, set_map_secrets, nullptr, nullptr, nullptr, automap_on},
-    {"Show lock hints", "What each lock needs and whether you have it, and notes for puzzles (a blue ?).",
+    {"Show Lock Hints", "What each lock needs and whether you have it, and notes for puzzles (a blue ?).",
      RowKind::toggle, on_off, {}, get_map_hints, set_map_hints, nullptr, nullptr, nullptr, automap_on},
     {"Give", "", RowKind::heading},
-    {"Spell level", "The level spells are given at (1 to 3). Known spells change to it too.", RowKind::number, {},
+    {"Spell Level", "The level spells are given at (1 to 3). Known spells change to it too.", RowKind::number, {},
      {1, 3, 1}, get_spell_level, set_spell_level},
-    {"Give all spells", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_spells, nullptr, nullptr, nullptr,
+    {"Give All Spells", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_spells, nullptr, nullptr, nullptr,
      nullptr, cheat_message},
-    {"Give all weapons and armour", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_equipment, nullptr,
+    {"Give All Weapons and Armour", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_equipment, nullptr,
      nullptr, nullptr, nullptr, cheat_message},
-    {"Give all items (99 each)", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_items, nullptr, nullptr,
+    {"Give All Items (99 Each)", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_items, nullptr, nullptr,
      nullptr, nullptr, cheat_message},
-    {"Max magic", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_magic, nullptr, nullptr, nullptr, nullptr,
+    {"Max Magic", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_magic, nullptr, nullptr, nullptr, nullptr,
      cheat_message},
-    {"Give everything", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_all, nullptr, nullptr, nullptr,
+    {"Give Everything", cheat_help, RowKind::action, {}, {}, nullptr, nullptr, give_all, nullptr, nullptr, nullptr,
      nullptr, cheat_message},
 };
 

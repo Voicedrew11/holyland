@@ -82,34 +82,36 @@ game, in the menu's own window, not in the launcher.
   missing key is 0, so a player with settings from before sees it once too. Raise `SETUP_VERSION` to show it to
   everyone again. `KF4_SETUP=1` shows it regardless. Never under a pad script (`--input`) or with
   `KF4_OVERLAY_SHOT` (test runs' pictures stay as they were). The game is held still while it shows, whatever
-  "Pause while open" says (`port_player_ui_setup_open`, `port_overlay_paused`).
-- **Again**: Display, Run setup again. Its Welcome then has Cancel, which puts back every setting the setup can
+  "Pause While Open" says (`port_player_ui_setup_open`, `port_overlay_paused`).
+- **Again**: Display, Run Setup Again. Its Welcome then has Cancel, which puts back every setting the setup can
   touch as it was when it opened (Esc on the Welcome does the same).
-- **The pages** (`port/ui/setup_pages.cpp`, a table): Welcome (the cards), Controls, Picture, How it plays, Hands and
-  hotkeys, Ready. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
+- **The pages** (`port/ui/setup_pages.cpp`, a table): Welcome (the cards), Controls, Display, Gameplay, Quick Slots,
+  Finish. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
   and menus (automap, minimap, extended stats, item categories, notices); F1 has them. Their rows are the menu's own (`SettingRow`s found by section id and label,
   `find_setting_row`), so a row behaves and is saved exactly as in the menu, and each change shows at once on the
-  game behind. The setup's own rows (the cards, Skip, Cancel, "I play with", Continue, Start) are `SetupOwn`.
-- **The cards** each set their preset's values (the `presets` table: As on the PS2, Improved, Modern) and the
-  settings every player gets, then go to the next page. **Keep my settings** (offered when there was a settings.json)
-  goes on with nothing changed but the depth. **Skip setup** (first start only) gives only what everyone gets.
+  game behind. The setup's own rows (the cards, Skip, Cancel, Input Device, Next, Finish) are `SetupOwn`.
+- **The cards** each set their preset's values (the `presets` table: Original, Balanced, Modern) and the
+  settings every player gets, then go to the next page. **Current Settings** (offered when there was a settings.json)
+  goes on with nothing changed but the depth. **Skip** (first start only) gives only what everyone gets.
+  Text in the setup and the menu follows the UI copy rules: standard settings terms, Title Case labels, help of at most
+  two short sentences that leads with what the option does.
   The card whose values the settings match is lit, so a run again shows where the player is.
 - **Given to everyone, never asked** (the `granted` table): full screen, vsync on, Bicubic, Keep, internal
   resolution Auto (from the screen's height), anisotropic 16x, texture LOD Auto, the PS2 video fixes at their
   defaults, and Depth Low (the GPU's: the only one ready for players).
-- **Controls**: "I play with" (keyboard and mouse, or a controller: chosen from whether one is connected) only
+- **Controls**: Input Device (keyboard and mouse, or a controller: chosen from whether one is connected) only
   chooses which rows the page shows; both always work.
 - **Previews** (`port/ui/setup_view.cpp`), over the focused row's help: what the sticks and keys do (Controls); a
-  screen of the monitor's shape with the 4:3 or 16:9 picture and the gauges (Picture); the hands' three cards at their
-  corner, size, layout and shape (Hands), in the game's proportions (game/hands_cross.c's, on a 4:3 HUD also in
-  widescreen); each page's choices (Ready).
+  screen of the monitor's shape with the 4:3 or 16:9 picture and the gauges (Display); the hands' three cards at their
+  corner, size, layout and shape (Quick Slots), in the game's proportions (game/hands_cross.c's, on a 4:3 HUD also in
+  widescreen); each page's choices (Finish).
   Boxes the style sheet draws (`body.setup` in `kf4.rcss`), from the settings as they are now.
 - **Checked at each start**: `setup_problems` logs `[ui] setup: ...` for a named row that is not in the menu, or a
   preset or given value its row cannot hold. Nothing logged: all well.
 
 The presets, for the owner to look over:
 
-| row | As on the PS2 | Improved | Modern |
+| row | Original | Balanced | Modern |
 |---|---|---|---|
 | frame rate | 30 | the monitor's | the monitor's |
 | widescreen | off | off | on |
@@ -118,7 +120,7 @@ The presets, for the owner to look over:
 | twin-stick | off | on | on |
 | attack tracking | 1x | Auto | Auto |
 | door speed / auto-loot gold | 1x / off | 1x / off | 1x / on |
-| hands and hotkeys | off | off | on |
+| quick slots | off | off | on |
 | instant smith | off | off | off |
 
 The sky (PS2), draw distance (1x) and game speed (1x) are not set by the presets: they keep settings.json's, whose
