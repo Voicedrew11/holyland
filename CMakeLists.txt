@@ -1148,7 +1148,7 @@ add_library(kf4_key_pictures STATIC port/gs/shared/key_pictures.cpp port/gs/shar
 target_include_directories(kf4_key_pictures PUBLIC port/gs/shared)
 set_target_properties(kf4_key_pictures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/finer_pictures.cpp
-            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/button_pictures.cpp port/gs/shared/stroke_letters.cpp
+            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/button_pictures.cpp
             port/gs/shared/mip_chain.cpp)
 target_include_directories(kf4_pc_textures PUBLIC port/gs/shared)
 target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram kf4_key_pictures)

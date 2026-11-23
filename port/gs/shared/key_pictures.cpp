@@ -135,16 +135,16 @@ public:
     }
 
 private:
-    static KeyText fitted_label(std::string_view text, const RoundedBox &top) {
+    static LetterText fitted_label(std::string_view text, const RoundedBox &top) {
         float height = key_label_height, room = top.x1 - top.x0 - 2 * key_label_margin;
-        if (float unit_width = KeyText::width_for(text, 1); unit_width > 0) {
+        if (float unit_width = LetterText::width_for(key_font(), text, 1); unit_width > 0) {
             height = std::min(height, room / unit_width);
         }
-        return KeyText(text, (top.x0 + top.x1) / 2, (top.y0 + top.y1) / 2, height);
+        return LetterText(key_font(), text, (top.x0 + top.x1) / 2, (top.y0 + top.y1) / 2, height);
     }
 
     RoundedBox body_, top_;
-    KeyText label_;
+    LetterText label_;
 };
 
 // A mouse seen from above, its front up, a U square: its two buttons split by a groove, the wheel between them and

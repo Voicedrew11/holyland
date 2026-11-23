@@ -1,29 +1,26 @@
-// The keys' labels (key_letters.h): the font's letters read between their rows, the arrows as a shaft and a head.
+// The buttons' letters (key_letters.h): a font's letters read between their rows, the arrows as a shaft and a head.
 #include "key_letters.h"
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
 
 #include "key_letters_data.h"
-#include "stroke_letters.h"
+#include "xbox_letters_data.h"
 
 namespace pcr {
 namespace {
 
-namespace data = key_letters_data;
-
-// An arrow, in rows of the letters' pictures: as wide as it is advanced, a capital tall
-constexpr float arrow_advance = data::cap_height * 0.95f;
+// An arrow's advance, in capitals' heights: as wide as it is advanced, a capital tall
+constexpr float arrow_advance = 0.95f;
 constexpr float arrow_shaft = 0.24f, arrow_head = 0.52f, arrow_head_width = 0.95f; // (shares of a capital's height)
 
 bool is_arrow(char c) {
     return c == arrow_up || c == arrow_down || c == arrow_left || c == arrow_right;
 }
 
-int glyph_of(char c) {
-    for (size_t i = 0; i < std::size(data::glyphs); i++) {
-        if (data::glyphs[i].character == c) {
+int glyph_of(const LetterFont &font, char c) {
+    for (size_t i = 0; i < font.glyphs.size(); i++) {
+        if (font.glyphs[i].character == c) {
             return int(i);
         }
     }
@@ -31,16 +28,16 @@ int glyph_of(char c) {
 }
 
 // A character's advance, in rows (0: none to draw)
-float advance_of(char c) {
+float advance_of(const LetterFont &font, char c) {
     if (is_arrow(c)) {
-        return arrow_advance;
+        return arrow_advance * float(font.cap_height);
     }
-    int g = glyph_of(c);
-    return g < 0 ? 0.0f : float(data::glyphs[g].advance);
+    int g = glyph_of(font, c);
+    return g < 0 ? 0.0f : float(font.glyphs[size_t(g)].advance);
 }
 
 // A glyph's coverage at a point of its picture (rows from its corner), 0 to 1, between its rows
-float coverage_at(const data::Glyph &g, float u, float v) {
+float coverage_at(const LetterFont &font, const LetterGlyph &g, float u, float v) {
     u -= 0.5f;
     v -= 0.5f;
     const int x0 = int(std::floor(u)), y0 = int(std::floor(v));
@@ -49,7 +46,7 @@ float coverage_at(const data::Glyph &g, float u, float v) {
         if (x < 0 || y < 0 || x >= g.width || y >= g.height) {
             return 0.0f;
         }
-        return float(data::coverage[g.start + size_t(y) * g.width + size_t(x)]) / 255.0f;
+        return float(font.coverage[g.start + size_t(y) * g.width + size_t(x)]) / 255.0f;
     };
     float top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
     float bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
@@ -71,9 +68,20 @@ bool on_up_arrow(float a, float b) {
 
 } // namespace
 
-KeyText::KeyText(std::string_view text, float centre_x, float centre_y, float cap_height)
-    : scale_(cap_height / float(data::cap_height)) {
-    float pen = centre_x - width_for(text, cap_height) / 2;
+const LetterFont &key_font() {
+    static const LetterFont font{key_letters_data::cap_height, key_letters_data::glyphs, key_letters_data::coverage};
+    return font;
+}
+
+const LetterFont &xbox_font() {
+    static const LetterFont font{xbox_letters_data::cap_height, xbox_letters_data::glyphs, xbox_letters_data::coverage};
+    return font;
+}
+
+LetterText::LetterText(const LetterFont &font, std::string_view text, float centre_x, float centre_y, float cap_height)
+    : font_(&font), scale_(cap_height / float(font.cap_height)) {
+    const float arrow_width = arrow_advance * cap_height;
+    float pen = centre_x - width_for(font, text, cap_height) / 2;
     const float baseline = centre_y + cap_height / 2;
     left_ = top_ = INFINITY;
     right_ = bottom_ = -INFINITY;
@@ -84,10 +92,10 @@ KeyText::KeyText(std::string_view text, float centre_x, float centre_y, float ca
             p.arrow = c;
             p.x0 = pen;
             p.y0 = baseline - cap_height;
-            x1 = pen + arrow_advance * scale_;
+            x1 = pen + arrow_width;
             y1 = baseline;
-        } else if (int g = glyph_of(c); g >= 0) {
-            const data::Glyph &glyph = data::glyphs[g];
+        } else if (int g = glyph_of(font, c); g >= 0) {
+            const LetterGlyph &glyph = font.glyphs[size_t(g)];
             p.glyph = g;
             p.x0 = pen + float(glyph.left) * scale_;
             p.y0 = baseline - float(glyph.top) * scale_;
@@ -96,7 +104,7 @@ KeyText::KeyText(std::string_view text, float centre_x, float centre_y, float ca
         } else {
             continue;
         }
-        pen += advance_of(c) * scale_;
+        pen += advance_of(font, c) * scale_;
         left_ = std::min(left_, p.x0);
         top_ = std::min(top_, p.y0);
         right_ = std::max(right_, x1);
@@ -105,19 +113,19 @@ KeyText::KeyText(std::string_view text, float centre_x, float centre_y, float ca
     }
 }
 
-float KeyText::ink(float x, float y) const {
+float LetterText::ink(float x, float y) const {
     if (x < left_ || x > right_ || y < top_ || y > bottom_) {
         return 0.0f;
     }
     float out = 0.0f;
     for (const Placed &p : placed_) {
         if (p.glyph >= 0) {
-            const data::Glyph &g = data::glyphs[p.glyph];
-            out = std::max(out, coverage_at(g, (x - p.x0) / scale_, (y - p.y0) / scale_));
+            const LetterGlyph &g = font_->glyphs[size_t(p.glyph)];
+            out = std::max(out, coverage_at(*font_, g, (x - p.x0) / scale_, (y - p.y0) / scale_));
             continue;
         }
-        const float size = float(data::cap_height) * scale_;
-        const float a = (x - (p.x0 + arrow_advance * scale_ / 2)) / size, b = -(y - (p.y0 + size / 2)) / size;
+        const float size = float(font_->cap_height) * scale_;
+        const float a = (x - (p.x0 + arrow_advance * size / 2)) / size, b = -(y - (p.y0 + size / 2)) / size;
         bool on = false;
         switch (p.arrow) {
         case arrow_up: on = on_up_arrow(a, b); break;
@@ -130,12 +138,12 @@ float KeyText::ink(float x, float y) const {
     return out;
 }
 
-float KeyText::width_for(std::string_view text, float cap_height) {
+float LetterText::width_for(const LetterFont &font, std::string_view text, float cap_height) {
     float rows = 0.0f;
     for (char c : text) {
-        rows += advance_of(c);
+        rows += advance_of(font, c);
     }
-    return rows * cap_height / float(data::cap_height);
+    return rows * cap_height / float(font.cap_height);
 }
 
 } // namespace pcr

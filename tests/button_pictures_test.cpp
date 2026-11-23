@@ -15,7 +15,6 @@
 #include "button_pictures_data.h"
 #include "finer_pictures.h"
 #include "key_letters.h"
-#include "stroke_letters.h"
 
 using namespace pcr;
 namespace data = pcr::button_pictures_data;
@@ -260,14 +259,14 @@ void test_key_widths() {
 
 // The keys' letters: ink where a letter's stroke is, none beside it, wider text for more letters
 void test_key_text() {
-    const KeyText bar("I", 50.0f, 50.0f, 20.0f);
+    const LetterText bar(key_font(), "I", 50.0f, 50.0f, 20.0f);
     CHECK(bar.ink(50.0f, 50.0f) > 0.9f);
     CHECK(bar.ink(50.0f, 75.0f) == 0.0f);
     CHECK(bar.ink(70.0f, 50.0f) == 0.0f);
-    const KeyText up(std::string(1, arrow_up), 50.0f, 50.0f, 20.0f);
+    const LetterText up(key_font(), std::string(1, arrow_up), 50.0f, 50.0f, 20.0f);
     CHECK(up.ink(50.0f, 50.0f) > 0.9f);
-    CHECK(KeyText::width_for("SHIFT", 10.0f) > KeyText::width_for("F", 10.0f) * 3);
-    CHECK(KeyText::width_for("", 10.0f) == 0.0f);
+    CHECK(LetterText::width_for(key_font(), "SHIFT", 10.0f) > LetterText::width_for(key_font(), "F", 10.0f) * 3);
+    CHECK(LetterText::width_for(key_font(), "", 10.0f) == 0.0f);
 }
 
 void test_key_label_text() {
@@ -293,22 +292,16 @@ void test_looks_hash() {
     CHECK(looks_of(ButtonStyle::xbox).hash() != looks_of(ButtonStyle::playstation).hash());
 }
 
-// A stroke letter covers its strokes and not the space between them
-void test_stroke_letters() {
-    for (LetterShape shape : {LetterShape::rounded, LetterShape::angular}) {
-        StrokeText h("H", 10, 10, 6, 1, shape); // (the H's legs at x 8 and 12, its bar at y 10)
-        CHECK(h.covers(8, 8) && h.covers(12, 12) && h.covers(10, 10));
-        CHECK(!h.covers(10, 8) && !h.covers(10, 12) && !h.covers(5, 10));
-        StrokeText none("", 10, 10, 6, 1, shape);
-        CHECK(!none.covers(10, 10));
+// The Xbox font has the four letters, each a capital tall, and nothing else
+void test_xbox_font() {
+    for (const char *letter : {"A", "B", "X", "Y"}) {
+        CHECK(LetterText::width_for(xbox_font(), letter, 10.0f) > 5.0f);
     }
-    CHECK(StrokeText::width_for("HH", 6) > StrokeText::width_for("H", 6));
-    // (a rounded stroke's end is round, an angular one's square: the corner past the H's leg's top)
-    CHECK(!StrokeText("H", 10, 10, 6, 1, LetterShape::rounded).covers(8.45f, 6.55f));
-    CHECK(StrokeText("H", 10, 10, 6, 1, LetterShape::angular).covers(8.45f, 6.55f));
-    // (an angular A's feet cut level with its bottom: nothing below half a stroke under it)
-    StrokeText a("A", 10, 10, 6, 1, LetterShape::angular);
-    CHECK(a.covers(8, 13.4f) && !a.covers(8, 13.6f));
+    CHECK(LetterText::width_for(xbox_font(), "Q", 10.0f) == 0.0f);
+    const LetterText x(xbox_font(), "X", 50.0f, 50.0f, 20.0f);
+    CHECK(x.ink(50.0f, 50.0f) > 0.9f);  // (where its strokes cross)
+    CHECK(x.ink(50.0f, 42.0f) == 0.0f); // (between its arms)
+    CHECK(x.ink(50.0f, 62.0f) == 0.0f); // (above and below the letter)
 }
 
 } // namespace
@@ -324,7 +317,7 @@ int main() {
     test_key_text();
     test_key_label_text();
     test_looks_hash();
-    test_stroke_letters();
+    test_xbox_font();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

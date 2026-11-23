@@ -11,8 +11,8 @@
 #include <optional>
 
 #include "button_pictures_data.h"
+#include "key_letters.h"
 #include "key_pictures.h"
-#include "stroke_letters.h"
 
 namespace pcr {
 namespace {
@@ -363,7 +363,7 @@ constexpr std::array<XboxLetter, face_button_count> xbox_letters = {{
     {"X", {92, 148, 228}},  // (square: west)
     {"Y", {232, 200, 84}},  // (triangle: north)
 }};
-constexpr float xbox_letter_height = 10.0f, xbox_letter_stroke = 2.0f; // (texels)
+constexpr float xbox_letter_height = 11.0f; // (a capital's, texels)
 
 // One button drawn again in a style
 struct Redraw {
@@ -384,10 +384,10 @@ void draw_playstation(const Redraw &r) {
 
 void draw_xbox(const Redraw &r) {
     const XboxLetter &letter = xbox_letters[size_t(r.face)];
-    const StrokeText text(letter.letter, float(data::centre), float(data::centre), xbox_letter_height,
-                          xbox_letter_stroke, LetterShape::angular);
-    draw_round_button(r.button, r.cell, r.shared, [&](double x, double y) { return text.covers(float(x), float(y)); },
-                      letter.colour, r.fine, r.fine_width);
+    const LetterText text(xbox_font(), letter.letter, float(data::centre), float(data::centre), xbox_letter_height);
+    draw_round_button(
+        r.button, r.cell, r.shared, [&](double x, double y) { return text.ink(float(x), float(y)) >= 0.5f; },
+        letter.colour, r.fine, r.fine_width);
 }
 
 void draw_keyboard(const Redraw &r) {
