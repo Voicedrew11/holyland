@@ -7,3 +7,4 @@ port/gs/pc/pcr_shaders.h linguist-generated -diff
 
 # cmd reads its labels wrong in a .bat with LF endings
 *.bat text eol=crlf
+tests/data/delta/* -text
