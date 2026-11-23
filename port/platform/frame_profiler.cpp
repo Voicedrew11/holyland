@@ -131,8 +131,9 @@ private:
                 write_csv(f);
             }
             if (asked_.spike_ms > 0 && f.ms() > asked_.spike_ms) {
-                std::fprintf(stderr, "[profile] spike: frame %llu, %.2f ms: %s\n", (unsigned long long)f.index, f.ms(),
-                             largest(f, 6).c_str());
+                std::fprintf(stderr, "[profile] spike: frame %llu, %.2f ms: %s; longest waits: %s\n",
+                             (unsigned long long)f.index, f.ms(), largest(f, 6, ZONE_WORK).c_str(),
+                             largest(f, 3, ZONE_WAIT).c_str());
             }
             if (asked_.console) {
                 add_to_report(f);
@@ -153,11 +154,12 @@ private:
         }
     }
 
-    // The frame's n largest self times, waits left out
-    std::string largest(const zones::Frame &f, size_t n) const {
+    // The frame's n largest self times: of waits (ZONE_WAIT), or of everything else (work and GPU)
+    std::string largest(const zones::Frame &f, size_t n, int kind) const {
         std::vector<const zones::ZoneTime *> order;
         for (const zones::ZoneTime &z : f.zones) {
-            if (port_zone_kind(z.id) != ZONE_WAIT && z.self_ns > 0) {
+            bool is_wait = port_zone_kind(z.id) == ZONE_WAIT;
+            if (is_wait == (kind == ZONE_WAIT) && z.self_ns > 0) {
                 order.push_back(&z);
             }
         }
