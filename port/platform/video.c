@@ -1056,7 +1056,13 @@ void port_video_present(void) {
         }
     }
     if (between_on() && thread_shows()) {
-        /* (the pictures' thread shows this vblank's too, a little after: port_video_wait) */
+        /* (the pictures' thread shows this vblank's too, a little after: port_video_wait; over it the overlay's
+           draw lists made here) */
+#ifdef KF4_HAVE_VULKAN_PRESENTER
+        PRESENT_LOCK();
+        port_vk_overlay_keep();
+        PRESENT_UNLOCK();
+#endif
         LOCK();
         presented_vblank = times_newest;
         UNLOCK();
@@ -1118,9 +1124,12 @@ void port_video_show_blank(void) {
 #ifdef KF4_HAVE_SDL
 /* --frame-rate above 60: the pictures between two vblanks, each shown at its time. With the Vulkan
    presenter a thread of their own shows them, so that the game's own work between two vblanks (a few
-   milliseconds, often without a call into the kernel) does not hold them up; it leaves them to the
-   game's thread while the overlay is drawn (their ImGui frame is the game
-   thread's; the frame-rate counter is not ImGui's and stays on the thread), and with SDL_Renderer (which is the game thread's) they are the game thread's always:
+   milliseconds, often without a call into the kernel) does not hold them up. ImGui's frame is the game
+   thread's: it makes the overlay's draw lists once a vblank and the thread draws those over each picture
+   (port_vk_overlay_keep). Left to the game thread, the minimap or the extended stats on screen made the pictures
+   come late and a quarter of them were left out as the view turned (2026-11-22, 1416 against 187 in 40 s at
+   120 Hz). The thread leaves them to the game's thread only while the player menu is shown or a test picture
+   is due (port_overlay_each_picture). With SDL_Renderer (which is the game thread's) they are the game thread's always:
    shown while it waits for the next vblank (port_video_wait) and whenever it is in the kernel meanwhile
    (port_video_poll). (At 60 and below every picture is a vblank's own, shown by port_video_present.) */
 static int between_thread_up; /* (atomic: the thread reads it, and runs before between_start sets it) */
@@ -1138,7 +1147,7 @@ static int between_on(void) {
 
 /* the thread shows them now */
 static int thread_shows(void) {
-    return __atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE) && !port_overlay_visible();
+    return __atomic_load_n(&between_thread_up, __ATOMIC_ACQUIRE) && !port_overlay_each_picture();
 }
 
 int port_video_refresh_schedule(uint64_t vblank, double *phases, int max) {

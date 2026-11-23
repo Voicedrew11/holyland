@@ -1032,6 +1032,10 @@ extern "C" int port_overlay_visible(void) {
                      automap_view_visible() || profiler_visible()));
 }
 
+extern "C" int port_overlay_each_picture(void) {
+    return port_player_ui_visible() || (ready && shot_pending());
+}
+
 extern "C" void *port_overlay_draw_data(void) {
     return drawn ? ImGui::GetDrawData() : nullptr;
 }

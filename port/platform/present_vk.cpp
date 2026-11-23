@@ -244,6 +244,52 @@ struct Presenter {
 };
 Presenter pr;
 
+// (a stopgap until ImGui is retired, docs/port/PLAYER_UI.md) The overlay's draw lists as the game's thread made them at
+// its last vblank, copied, for the pictures' thread's presents (port_vk_overlay_keep). Under video.c's present lock,
+// as every use of ImGui's draw lists and textures here is: Textures is ImGui's own list, which the backend updates as it
+// draws.
+class KeptOverlay {
+public:
+    KeptOverlay() = default;
+    KeptOverlay(const KeptOverlay &) = delete;
+    KeptOverlay &operator=(const KeptOverlay &) = delete;
+    ~KeptOverlay() {
+        forget();
+    }
+
+    void keep(const ImDrawData *from) {
+        forget();
+        if (from == nullptr || !from->Valid) {
+            return;
+        }
+        for (const ImDrawList *list : from->CmdLists) {
+            data_.AddDrawList(list->CloneOutput());
+        }
+        data_.DisplayPos = from->DisplayPos;
+        data_.DisplaySize = from->DisplaySize;
+        data_.FramebufferScale = from->FramebufferScale;
+        data_.OwnerViewport = from->OwnerViewport;
+        data_.Textures = from->Textures;
+        data_.Valid = true;
+    }
+
+    void forget() {
+        for (ImDrawList *list : data_.CmdLists) {
+            IM_DELETE(list);
+        }
+        data_.Clear();
+    }
+
+    // The kept draw lists, or nullptr
+    ImDrawData *data() {
+        return data_.Valid ? &data_ : nullptr;
+    }
+
+private:
+    ImDrawData data_;
+};
+KeptOverlay kept_overlay;
+
 void fold_check_print(); // (KF4_PRESENT_FOLD_CHECK's, below)
 
 void check(VkResult result) {
@@ -1176,6 +1222,7 @@ void flash_read_timer(Frame &f) {
 
 // Everything made so far, undone (a start that failed: the window goes back to SDL_Renderer)
 void close_all() {
+    kept_overlay.forget();
     if (pr.device != VK_NULL_HANDLE && vk.vkQueueWaitIdle != nullptr) {
         flash_free();
         for (Frame &f : pr.frames) {
@@ -1513,6 +1560,18 @@ static const ZoneId present_wait_zone = port_zone_id("present: wait for its fram
 static const ZoneId present_overlay_zone = port_zone_id("present: the overlay drawn (ImGui)", ZONE_WORK);
 static const ZoneId present_queue_zone = port_zone_id("present: submit and vkQueuePresentKHR", ZONE_WAIT);
 
+extern "C" void port_vk_overlay_keep(void) {
+    if (!pr.up || !pr.imgui || !port_overlay_visible() || pr.extent.width == 0) {
+        kept_overlay.forget();
+        return;
+    }
+    ZoneScope overlay_zone(present_overlay_zone);
+    int x, y, w, h;
+    port_video_fit(int(pr.extent.width), int(pr.extent.height), &x, &y, &w, &h);
+    port_overlay_draw(x, y, w, h);
+    kept_overlay.keep(static_cast<const ImDrawData *>(port_overlay_draw_data()));
+}
+
 extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
                                 int overlay) {
     if (!pr.up) {
@@ -1613,6 +1672,9 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
     ImDrawData *draw = nullptr;
     const ui::Frame *menu = nullptr;
     bool shot = false;
+    if (!overlay && pr.imgui && port_overlay_visible()) {
+        draw = kept_overlay.data(); // (the pictures' thread: the game thread's draw lists of its last vblank)
+    }
     if (overlay) {
         ZoneScope overlay_zone(present_overlay_zone);
 #ifdef KF4_HAVE_PLAYER_UI
