@@ -22,6 +22,7 @@
 #include "port/zone_record.hpp"
 
 extern "C" {
+#include "port/host_load.h"
 #include "port/platform.h"
 #include "port/profile.h"
 #include "port/version.h"
@@ -346,6 +347,18 @@ void draw_screen() {
         ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1), "This build is not optimized: it runs several times slower");
     }
     ImGui::Text("Pictures shown: %.0f a second of %.0f", double(latest), target);
+    // (the PC under the game: a CPU slowing down, from heat or power saving, or the game's memory growing)
+    const PortHostLoad load = port_host_load();
+    char cpu[96] = "CPU: speed unknown";
+    if (load.cpu_mhz > 0 && load.cpu_limit_mhz > 0) {
+        std::snprintf(cpu, sizeof(cpu), "CPU: %.0f MHz (base %.0f, held to %.0f)", load.cpu_mhz, load.cpu_most_mhz,
+                      load.cpu_limit_mhz);
+    } else if (load.cpu_limit_mhz > 0) {
+        std::snprintf(cpu, sizeof(cpu), "CPU: base %.0f MHz, held to %.0f", load.cpu_most_mhz, load.cpu_limit_mhz);
+    } else if (load.cpu_mhz > 0) {
+        std::snprintf(cpu, sizeof(cpu), "CPU: %.0f MHz (most %.0f)", load.cpu_mhz, load.cpu_most_mhz);
+    }
+    ImGui::Text("%s   Game's memory: %.0f MB", cpu, load.memory_mb);
     float ordered[SHOWN_HISTORY];
     for (int i = 0; i < state.shown_count; i++) {
         ordered[i] = state.shown_history[(state.shown_next - state.shown_count + i + SHOWN_HISTORY) % SHOWN_HISTORY];

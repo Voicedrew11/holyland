@@ -198,6 +198,7 @@ add_library(kf4_port STATIC
     port/platform/iso9660.c
     port/platform/ipu.c
     port/platform/host_time.c
+    port/platform/host_load.c
     port/platform/int_divide.c
     port/math/libvu0.c
     port/sdk/libcdvd.c
@@ -315,7 +316,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(kf4_port PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(kf4_port PUBLIC winmm)
+    target_link_libraries(kf4_port PUBLIC winmm pdh powrprof) # (pdh, powrprof: host_load.c)
 else()
     target_link_libraries(kf4_port PUBLIC m)
 endif()
