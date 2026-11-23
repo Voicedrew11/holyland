@@ -23,6 +23,10 @@ extern "C" {
 int port_screen_vblank_open(int width, int height, int refresh_hz);
 /* When that screen's last vblank began (port_wall_seconds): 1 when known */
 int port_screen_vblank_last(double *at_s);
+/* 1 when that screen refreshes in adaptive sync now (Linux: its CRTC's VRR_ENABLED, which a compositor sets for a
+   fullscreen window by its own policy, KDE's "Automatic", whatever the game asked); 0 when not, or not known. Its
+   refreshes then follow the pictures, so they cannot time them. */
+int port_screen_adaptive_sync_on(void);
 
 #ifdef __cplusplus
 }

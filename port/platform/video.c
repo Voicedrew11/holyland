@@ -295,8 +295,11 @@ static double ahead_s; /* 0: not measured yet */
 
 /* (under the lock) the pictures are timed by the screen's refreshes now (monitor's rate is the screen's:
    port_frame_rate_hz, which kf4-gsreplay does not link) */
+static int screen_adaptive; /* the screen in adaptive sync by the compositor's choice (screen_adaptive_check) */
+
 static int by_refresh(void) {
     return port_options.frame_rate == PORT_FRAME_RATE_MONITOR && !port_options.adaptive_sync &&
+           !__atomic_load_n(&screen_adaptive, __ATOMIC_RELAXED) &&
            port_video_refresh_rate() > 60 && !port_options.fast && times_set && refresh_clock_locked(&refresh_clock);
 }
 
@@ -922,6 +925,26 @@ static void sim_screen(uint64_t tag) {
     sim_shown = shown;
 }
 
+/* (the game's thread) Whether the screen is in adaptive sync though the game did not ask for it (KDE's "Automatic"
+   turns it on by its own policy): looked at twice a second. Its refreshes then follow the pictures, so they cannot
+   time them (as with the game's own adaptive sync): the pictures are timed by their time until it is out again. */
+static void screen_adaptive_check(void) {
+    static double looked;
+    double now = port_wall_seconds();
+    int on;
+
+    if (now - looked < 0.5) {
+        return;
+    }
+    looked = now;
+    on = port_screen_adaptive_sync_on();
+    if (on != __atomic_load_n(&screen_adaptive, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&screen_adaptive, on, __ATOMIC_RELAXED);
+        fprintf(stderr, on ? "[present] the screen is in adaptive sync (the desktop's choice): pictures timed by the game's clock\n"
+                           : "[present] the screen is out of adaptive sync: pictures timed by its refreshes\n");
+    }
+}
+
 /* The window drawn: a new picture (fresh: its pixels in shown, or image: the PC renderer's by its tag),
    or the last again for the overlay; with overlay, the overlay over it (the
    game's thread only). Under PRESENT_LOCK. */
@@ -948,6 +971,7 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
         stat_last = now;
     }
     if (fresh && !sim && port_options.frame_rate == PORT_FRAME_RATE_MONITOR && !port_options.adaptive_sync) {
+        screen_adaptive_check();
         /* the screen's last vblank, to the refresh clock (each once) */
         static double fed;
         double vblank;

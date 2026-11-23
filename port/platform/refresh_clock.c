@@ -7,6 +7,7 @@
 #define LOCK_SAMPLES 16  /* times kept before the clock may be locked */
 #define LOCK_SPAN 60     /* and the refreshes they span */
 #define LOCK_RESIDUAL 0.1 /* and their RMS distance from the line, in refreshes */
+#define HOLD_RESIDUAL 0.25 /* (the same once locked: what keeps it locked) */
 #define LOCK_LEFT_OUT 2   /* and at most this many of the last REFRESH_CLOCK_HISTORY times left out */
 
 void refresh_clock_init(RefreshClock *clock, double named_hz) {
@@ -81,6 +82,31 @@ static double shortest_gap(const RefreshClock *clock) {
     return shortest;
 }
 
+/* Whether the times kept are sure enough, on the line to within residual_limit refreshes */
+static int sure(const RefreshClock *clock, double residual_limit) {
+    int64_t low, high;
+    int i;
+
+    if (clock->count < LOCK_SAMPLES || clock->residual_s > residual_limit * clock->period_s ||
+        left_out_lately(clock->left_out) > LOCK_LEFT_OUT) {
+        return 0;
+    }
+    low = high = clock->index[0];
+    for (i = 1; i < clock->count; i++) {
+        low = clock->index[i] < low ? clock->index[i] : low;
+        high = clock->index[i] > high ? clock->index[i] : high;
+    }
+    return high - low >= LOCK_SPAN;
+}
+
+static void update_lock(RefreshClock *clock) {
+    clock->locked = sure(clock, clock->locked ? HOLD_RESIDUAL : LOCK_RESIDUAL);
+}
+
+int refresh_clock_locked(const RefreshClock *clock) {
+    return clock->locked;
+}
+
 void refresh_clock_add(RefreshClock *clock, double seen_s) {
     double t, n;
 
@@ -93,6 +119,7 @@ void refresh_clock_add(RefreshClock *clock, double seen_s) {
         clock->phase_s = 0;
         clock->newest = 0;
         keep(clock, 0, 0);
+        update_lock(clock);
         return;
     }
     t = seen_s - clock->origin_s;
@@ -103,26 +130,12 @@ void refresh_clock_add(RefreshClock *clock, double seen_s) {
         if (left_out_lately(clock->left_out) >= REFRESH_CLOCK_RESTART) {
             refresh_clock_init(clock, 1.0 / shortest_gap(clock));
         }
+        update_lock(clock);
         return;
     }
     clock->newest = (int64_t)n;
     keep(clock, clock->newest, t);
-}
-
-int refresh_clock_locked(const RefreshClock *clock) {
-    int64_t low, high;
-    int i;
-
-    if (clock->count < LOCK_SAMPLES || clock->residual_s > LOCK_RESIDUAL * clock->period_s ||
-        left_out_lately(clock->left_out) > LOCK_LEFT_OUT) {
-        return 0;
-    }
-    low = high = clock->index[0];
-    for (i = 1; i < clock->count; i++) {
-        low = clock->index[i] < low ? clock->index[i] : low;
-        high = clock->index[i] > high ? clock->index[i] : high;
-    }
-    return high - low >= LOCK_SPAN;
+    update_lock(clock);
 }
 
 double refresh_clock_period_s(const RefreshClock *clock) {

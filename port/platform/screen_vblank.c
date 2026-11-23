@@ -43,18 +43,23 @@ int port_screen_vblank_last(double *at_s) {
     *at_s = wall - (double)(int64_t)((uint64_t)now.QuadPart - info.qpcVBlank) / (double)frequency.QuadPart;
     return 1;
 }
+
+int port_screen_adaptive_sync_on(void) {
+    return 0;
+}
 #elif defined(KF4_HAVE_LIBDRM)
 #define CARDS 16
 
 /* The card's file and the CRTC's index on it (-1: none), under the lock */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int card = -1, pipe_index = -1;
+static uint32_t crtc_id; /* the pipe's CRTC's object id */
 
 /* The index of the CRTC on the card showing width x height at refresh_hz, else the one CRTC at that rate
    (-1: none, or more than one at the rate and none of the size) */
-static int find_pipe(int fd, int width, int height, int refresh_hz) {
+static int find_pipe(int fd, int width, int height, int refresh_hz, uint32_t *id) {
     drmModeRes *resources = drmModeGetResources(fd);
-    int i, by_size = -1, by_rate = -1, at_rate = 0;
+    int i, by_size = -1, by_rate = -1, at_rate = 0, found;
 
     if (resources == NULL) {
         return -1;
@@ -74,8 +79,10 @@ static int find_pipe(int fd, int width, int height, int refresh_hz) {
         }
         drmModeFreeCrtc(crtc);
     }
+    found = by_size >= 0 ? by_size : at_rate == 1 ? by_rate : -1;
+    *id = found >= 0 ? resources->crtcs[found] : 0;
     drmModeFreeResources(resources);
-    return by_size >= 0 ? by_size : at_rate == 1 ? by_rate : -1;
+    return found;
 }
 
 int port_screen_vblank_open(int width, int height, int refresh_hz) {
@@ -94,7 +101,7 @@ int port_screen_vblank_open(int width, int height, int refresh_hz) {
         if (card < 0) {
             continue;
         }
-        pipe_index = find_pipe(card, width, height, refresh_hz);
+        pipe_index = find_pipe(card, width, height, refresh_hz, &crtc_id);
         if (pipe_index < 0) {
             close(card);
             card = -1;
@@ -131,6 +138,26 @@ int port_screen_vblank_last(double *at_s) {
             ((double)now.tv_nsec * 1e-9 - (double)vblank.reply.tval_usec * 1e-6);
     return 1;
 }
+
+int port_screen_adaptive_sync_on(void) {
+    drmModeObjectProperties *props;
+    uint32_t i;
+    int on = 0;
+
+    pthread_mutex_lock(&lock);
+    props = pipe_index >= 0 ? drmModeObjectGetProperties(card, crtc_id, DRM_MODE_OBJECT_CRTC) : NULL;
+    for (i = 0; props != NULL && i < props->count_props; i++) {
+        drmModePropertyRes *prop = drmModeGetProperty(card, props->props[i]);
+
+        if (prop != NULL && strcmp(prop->name, "VRR_ENABLED") == 0) {
+            on = props->prop_values[i] != 0;
+        }
+        drmModeFreeProperty(prop);
+    }
+    drmModeFreeObjectProperties(props);
+    pthread_mutex_unlock(&lock);
+    return on;
+}
 #else
 int port_screen_vblank_open(int width, int height, int refresh_hz) {
     (void)width;
@@ -141,6 +168,10 @@ int port_screen_vblank_open(int width, int height, int refresh_hz) {
 
 int port_screen_vblank_last(double *at_s) {
     (void)at_s;
+    return 0;
+}
+
+int port_screen_adaptive_sync_on(void) {
     return 0;
 }
 #endif

@@ -94,6 +94,32 @@ int main(void) {
         check("times at random never lock", !ever);
     }
 
+    /* a locked clock stays locked while the times wander more than a tenth of a refresh but less than a quarter
+       (every other one 0.22 of a refresh late: RMS 0.11, none left out), and a clock that is not locked does not lock
+       on them (2026-11-23: it locked and unlocked by turns on a screen's noisy vblanks, each turn a late picture) */
+    refresh_clock_init(&clock, 120);
+    play(&clock, 119.88, 5.0, 400, 0, 0.0002, 0, &state);
+    check("locks at 119.88", refresh_clock_locked(&clock));
+    {
+        int i, held = 1;
+
+        for (i = 0; i < 4000; i++) {
+            refresh_clock_add(&clock, 5.0 + (400 + i) / 119.88 + (i % 2 ? 0.22 / 119.88 : 0));
+            held &= refresh_clock_locked(&clock);
+        }
+        check("and stays locked on noisy times", held);
+    }
+    refresh_clock_init(&clock, 120);
+    {
+        int i, ever = 0;
+
+        for (i = 0; i < 4000; i++) {
+            refresh_clock_add(&clock, 10.0 + i / 119.88 + (i % 2 ? 0.22 / 119.88 : 0));
+            ever |= refresh_clock_locked(&clock);
+        }
+        check("noisy times alone do not lock it", !ever);
+    }
+
     /* the screen goes from 60 to 144 Hz: the clock starts again and finds the new rate */
     refresh_clock_init(&clock, 60);
     play(&clock, 59.95, 10.0, 300, 0, 0.0002, 0, &state);

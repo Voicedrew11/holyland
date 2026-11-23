@@ -41,6 +41,7 @@ typedef struct {
     int seen;                             /* how many times were added */
     double period_s, phase_s;             /* the line: refresh n at origin_s + phase_s + n * period_s */
     double residual_s;                    /* the times' RMS distance from it */
+    int locked;                           /* sure enough to time pictures by (refresh_clock_locked) */
 } RefreshClock;
 
 /* A clock that knows nothing yet; named_hz, the screen's rate as the system names it (0: unknown) */
@@ -48,7 +49,9 @@ void refresh_clock_init(RefreshClock *clock, double named_hz);
 /* The screen refreshed at seen_s (any one clock's seconds, port_wall_seconds) */
 void refresh_clock_add(RefreshClock *clock, double seen_s);
 /* 1 when the clock is sure enough to time pictures by: enough times over enough refreshes, on the line
-   to within a tenth of a refresh, and few of the last left out */
+   to within a tenth of a refresh, and few of the last left out. Once locked it stays so while the times are on
+   the line to within a quarter of a refresh: times that wander near the tenth (a screen's noisy vblanks) locked
+   and unlocked it by turns, and each turn moved the pictures' times by up to a few refreshes (2026-11-23). */
 int refresh_clock_locked(const RefreshClock *clock);
 /* A refresh's length, in seconds (named_s until locked) */
 double refresh_clock_period_s(const RefreshClock *clock);
