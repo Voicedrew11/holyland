@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "button_pictures_data.h"
+#include "key_letters.h"
 #include "stroke_letters.h"
 
 namespace pcr {
@@ -314,17 +315,160 @@ void draw_round_button(const data::Button &button, const Cell &cell, const CellT
     }
 }
 
-// The keyboard's: the key's label on the button's body, sized to fit inside the disc (texels)
-constexpr float key_label_width = 14.0f, key_label_height = 9.0f; // (the most the label is)
-constexpr std::array<double, 3> key_label_colour = {232, 224, 204};
+// The keyboard's: a key as the PC versions of the late 2000s drew them, seen a little from above: a black cap, its
+// top face raised and lit from above, its sides falling away darker (the front's the deepest), a dark rim and a soft
+// shadow under it, the key's label printed light on the top face. All of it in the cell's texels.
+struct RoundedBox {
+    float x0, y0, x1, y1, radius;
 
-StrokeText key_label(std::string_view text) {
-    float height = key_label_height;
-    if (float unit_width = StrokeText::width_for(text, 1); unit_width > 0) {
-        height = std::min(height, key_label_width / unit_width);
+    // How far outside its edge a point is (negative: inside)
+    float distance(float x, float y) const {
+        float dx = x - std::clamp(x, x0 + radius, x1 - radius), dy = y - std::clamp(y, y0 + radius, y1 - radius);
+        return std::sqrt(dx * dx + dy * dy) - radius;
     }
-    float stroke = std::clamp(height * 0.18f, 0.75f, 1.7f);
-    return StrokeText(text, float(data::centre), float(data::centre), height, stroke, LetterShape::rounded);
+    // Which way a point outside its middle part (the box shrunk by radius) is from it
+    void towards(float x, float y, float &dx, float &dy) const {
+        dx = x - std::clamp(x, x0 + radius, x1 - radius);
+        dy = y - std::clamp(y, y0 + radius, y1 - radius);
+    }
+};
+
+// A key one U wide (a letter key's) fills a button's cell; each U more adds the cell's width, as the keys of a real
+// keyboard are spaced. Texels from the key's picture's corner.
+constexpr float key_pitch = float(data::cell);        // (a U)
+constexpr float key_gap = 3.0f;                       // (between two keys side by side)
+constexpr float key_height = key_pitch - key_gap;
+// How much of its sides shows (left and right, back, front: seen a little from the front) and how tall it stands
+constexpr float key_side = 1.9f, key_back = 0.8f, key_front = 3.6f, key_tall = 2.6f;
+constexpr float key_corner = 1.7f, key_top_corner = 1.5f;
+constexpr float key_dish = 0.22f;                     // (how deep its top is scooped, side to side)
+constexpr float key_shadow_dy = 0.7f, key_shadow_soft = 1.4f, key_shadow_alpha = 0.6f;
+constexpr float key_label_margin = 1.6f, key_label_height = 7.0f; // (the most the label is)
+
+// The plastic and the light, in linear light. Seen from the front and a little above; lit from above, behind and to
+// the left, as a room light is.
+struct KeyMaterial {
+    double plastic, legend;          // (how much light each gives back, of what falls on it)
+    double ambient;                  // (light from everywhere, against the light's 1)
+    double gloss, sheen;             // (a sharp highlight's and a broad one's strength)
+    double gloss_power, sheen_power;
+};
+constexpr KeyMaterial key_material = {0.012, 0.62, 0.45, 0.22, 0.012, 70.0, 6.0};
+constexpr std::array<double, 3> key_light = {-0.38, -0.62, 0.69};  // (x right, y down the picture, z toward the eye)
+constexpr std::array<double, 3> key_eye = {0.0, 0.42, 0.91};
+constexpr std::array<double, 3> key_tint = {1.0, 1.0, 1.04};       // (the plastic's: a little cool)
+
+std::array<double, 3> normalised(std::array<double, 3> v) {
+    double length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return {v[0] / length, v[1] / length, v[2] / length};
+}
+
+double dot(const std::array<double, 3> &a, const std::array<double, 3> &b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+uint32_t srgb_byte(double linear) {
+    linear = std::clamp(linear, 0.0, 1.0);
+    double v = linear <= 0.0031308 ? 12.92 * linear : 1.055 * std::pow(linear, 1 / 2.4) - 0.055;
+    return byte(255 * v);
+}
+
+// One key, width_u U wide, its corner at (x0, y0): its body (where it meets the board), its top face and its label
+struct Key {
+    RoundedBox body, top;
+    KeyText label;
+
+    Key(std::string_view text, float width_u, float x0, float y0)
+        : body{x0 + key_gap / 2, y0 + key_gap / 2, x0 + key_gap / 2 + key_pitch * width_u - key_gap,
+               y0 + key_gap / 2 + key_height, key_corner},
+          top{body.x0 + key_side, body.y0 + key_back, body.x1 - key_side, body.y1 - key_front, key_top_corner},
+          label(fitted_label(text, top)) {}
+
+    static KeyText fitted_label(std::string_view text, const RoundedBox &top) {
+        float height = key_label_height, room = top.x1 - top.x0 - 2 * key_label_margin;
+        if (float unit_width = KeyText::width_for(text, 1); unit_width > 0) {
+            height = std::min(height, room / unit_width);
+        }
+        return KeyText(text, (top.x0 + top.x1) / 2, (top.y0 + top.y1) / 2, height);
+    }
+
+    // How high the key is at a point inside its body, texels above the board
+    float height(float x, float y) const {
+        float outside_top = top.distance(x, y);
+        if (outside_top <= 0) {
+            float across = (2 * x - top.x0 - top.x1) / (top.x1 - top.x0);
+            return key_tall - key_dish * (1 - across * across);
+        }
+        float inside_body = std::max(-body.distance(x, y), 0.0f);
+        float s = inside_body / (inside_body + outside_top); // (0 at the board, 1 at the top face's edge)
+        // (steep near the board, rounding over into the top)
+        return key_tall * float(1 - std::pow(1 - s, 2.4));
+    }
+
+    // The key's colour at a point inside its body, linear
+    std::array<double, 3> colour(float x, float y) const {
+        const KeyMaterial &m = key_material;
+        constexpr float e = 0.12f;
+        std::array<double, 3> normal = normalised({-(height(x + e, y) - height(x - e, y)) / (2 * e),
+                                                   -(height(x, y + e) - height(x, y - e)) / (2 * e), 1.0});
+        const std::array<double, 3> light = normalised(key_light), eye = normalised(key_eye);
+        const std::array<double, 3> half = normalised({light[0] + eye[0], light[1] + eye[1], light[2] + eye[2]});
+        double ink = top.distance(x, y) <= 0 ? label.ink(x, y) : 0.0;
+        double albedo = m.plastic + (m.legend - m.plastic) * ink;
+        double facing = std::max(dot(normal, light), 0.0), towards_half = std::max(dot(normal, half), 0.0);
+        // (darker where the key meets the board: the light it lets past)
+        double occlusion = 0.45 + 0.55 * std::clamp(double(height(x, y)) / (0.6 * key_tall), 0.0, 1.0);
+        double diffuse = albedo * (m.ambient * (0.6 + 0.4 * normal[2]) + facing) * occlusion;
+        double shine = (m.gloss * (1 - ink * 0.7) * std::pow(towards_half, m.gloss_power) +
+                        m.sheen * std::pow(towards_half, m.sheen_power)) *
+                       occlusion;
+        return {diffuse * key_tint[0] + shine, diffuse * key_tint[1] + shine, diffuse * key_tint[2] + shine};
+    }
+
+    // A finer texel's colour and how much of it the key and its shadow cover (0 to 1); (x, y) its corner, size its
+    // width, in texels
+    uint32_t texel(float x, float y, float size, double &share) const {
+        std::array<double, 3> sum{};
+        double cover = 0, shadow = 0;
+        for (uint32_t sy = 0; sy < draw_samples; sy++) {
+            for (uint32_t sx = 0; sx < draw_samples; sx++) {
+                float px = x + size * (sx + 0.5f) / draw_samples, py = y + size * (sy + 0.5f) / draw_samples;
+                if (body.distance(px, py) <= 0) {
+                    std::array<double, 3> c = colour(px, py);
+                    for (uint32_t i = 0; i < 3; i++) {
+                        sum[i] += c[i];
+                    }
+                    cover++;
+                    continue;
+                }
+                float d = body.distance(px, py - key_shadow_dy);
+                float fade = std::clamp(1.0f - d / key_shadow_soft, 0.0f, 1.0f);
+                shadow += key_shadow_alpha * fade * fade;
+            }
+        }
+        share = (cover + shadow) / (draw_samples * draw_samples);
+        // (the shadow is black; beyond the key and its shadow the colour is the plastic's, for the filter to blend
+        // toward)
+        uint32_t out = 0;
+        for (uint32_t i = 0; i < 3; i++) {
+            out |= srgb_byte(cover + shadow > 0 ? sum[i] / (cover + shadow) : key_material.plastic) << (8 * i);
+        }
+        return out;
+    }
+};
+
+// A one-U key drawn into a button's cell of the finer picture: the key opaque as the button's body was, its shadow
+// part way, the picture's background beyond
+void draw_key_in_cell(const Cell &cell, std::string_view text, std::span<uint32_t> fine, uint32_t fine_width) {
+    const Key key(text, 1.0f, 0, 0);
+    for (uint32_t fy = 0; fy < data::cell * k; fy++) {
+        for (uint32_t fx = 0; fx < data::cell * k; fx++) {
+            double share = 0;
+            uint32_t out = key.texel(float(fx) / k, float(fy) / k, 1.0f / k, share);
+            out |= byte(cell.background + (double(cell.opaque) - cell.background) * share) << 24;
+            fine[fine_index(cell, fx, fy, fine_width)] = out;
+        }
+    }
 }
 
 std::optional<FaceButton> face_button_of(const data::Button &button) {
@@ -377,9 +521,7 @@ void draw_xbox(const Redraw &r) {
 }
 
 void draw_keyboard(const Redraw &r) {
-    const StrokeText text = key_label(key_label_text(r.looks.keys[size_t(r.face)]));
-    draw_round_button(r.button, r.cell, r.shared, [&](double x, double y) { return text.covers(float(x), float(y)); },
-                      key_label_colour, r.fine, r.fine_width);
+    draw_key_in_cell(r.cell, key_label_text(r.looks.keys[size_t(r.face)]), r.fine, r.fine_width);
 }
 
 struct Style {
@@ -452,6 +594,39 @@ std::string key_label_text(std::string_view key_name) {
     std::string out;
     for (char c : key_name.substr(0, 5)) {
         out += char(std::toupper(uint8_t(c)));
+    }
+    return out;
+}
+
+float key_width_u(std::string_view key_name) {
+    // (a US keyboard's ANSI widths, but Space: 3 U, not 6.25, so a hint with it still fits a line)
+    static constexpr std::array<std::pair<std::string_view, float>, 14> widths = {{
+        {"Tab", 1.5f},          {"CapsLock", 1.75f},   {"Backspace", 2.0f},  {"Return", 2.25f},
+        {"Left Shift", 2.25f},  {"Right Shift", 2.75f}, {"Left Ctrl", 1.25f}, {"Right Ctrl", 1.25f},
+        {"Left Alt", 1.25f},    {"Right Alt", 1.25f},   {"Left GUI", 1.25f},  {"Right GUI", 1.25f},
+        {"Space", 3.0f},        {"Keypad 0", 2.0f},
+    }};
+    for (const auto &[name, width] : widths) {
+        if (name == key_name) {
+            return width;
+        }
+    }
+    return 1.0f;
+}
+
+KeyPicture key_picture(std::string_view key_name, uint32_t scale) {
+    const float width_u = key_width_u(key_name);
+    KeyPicture out;
+    out.width = uint32_t(std::ceil(width_u * data::cell)) * scale;
+    out.height = data::cell * scale;
+    out.texels.resize(size_t(out.width) * out.height);
+    const Key key(key_label_text(key_name), width_u, 0, 0);
+    for (uint32_t y = 0; y < out.height; y++) {
+        for (uint32_t x = 0; x < out.width; x++) {
+            double share = 0;
+            uint32_t colour = key.texel(float(x) / scale, float(y) / scale, 1.0f / scale, share);
+            out.texels[size_t(y) * out.width + x] = colour | byte(255 * share) << 24;
+        }
     }
     return out;
 }

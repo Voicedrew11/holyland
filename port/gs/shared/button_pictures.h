@@ -8,7 +8,8 @@
 //   measured on the disc (bars, a ring, an outlined square or triangle) with sharp edges, in the symbol's colour;
 // - Xbox: the same body, the Xbox controller's letter for the button in the same place (A for cross, B circle,
 //   X square, Y triangle: SDL's south, east, west and north) in that letter's colour;
-// - Keyboard: the same body, labelled with the key (or mouse button) the button is bound to.
+// - Keyboard: a black key in its place, lit as a real one is (sides, a scooped top, a gloss, a shadow under it),
+//   the key (or mouse button) the button is bound to printed on it in Barlow (key_letters.h).
 // The other buttons (the d-pad's, the shoulders') are left as the disc has them. A new style is a new entry in
 // button_pictures.cpp's table.
 //
@@ -55,6 +56,17 @@ struct ButtonLooks {
 // What the keyboard's button says for a key's name: capitals, five letters at most ("Escape" ESC, "Left Shift" SHIFT,
 // "Up" an arrow, "Mouse left" LMB, "F" itself)
 std::string key_label_text(std::string_view key_name);
+
+// How wide a key is on a real (US) keyboard, in U (a letter key's width): Tab 1.5, Return 2.25; Space 3, shortened
+float key_width_u(std::string_view key_name);
+
+// A key drawn on its own, as the keyboard's buttons draw it, key_width_u wide: RGBA8, straight alpha (255 opaque),
+// rows top down; a U is the button's cell (23 texels), scale finer texels to a texel
+struct KeyPicture {
+    uint32_t width = 0, height = 0;
+    std::vector<uint32_t> texels;
+};
+KeyPicture key_picture(std::string_view key_name, uint32_t scale);
 
 // Whether a decoded texture has the shape of a picture with buttons (one level of indices, a size one of them has)
 bool may_have_buttons(const DecodedTexture &texture);

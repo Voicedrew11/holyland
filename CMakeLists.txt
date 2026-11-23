@@ -1135,7 +1135,7 @@ target_include_directories(kf4_gsn_vram PUBLIC port/gs/shared)
 # and the game's fonts, word pictures and button sheet made sharper from them (port/gs/shared/finer_pictures.h), their smaller levels
 # made on the PC (port/gs/shared/mip_chain.h)
 add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/finer_pictures.cpp
-            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/button_pictures.cpp port/gs/shared/stroke_letters.cpp
+            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/button_pictures.cpp port/gs/shared/key_letters.cpp port/gs/shared/stroke_letters.cpp
             port/gs/shared/mip_chain.cpp)
 target_include_directories(kf4_pc_textures PUBLIC port/gs/shared)
 target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)

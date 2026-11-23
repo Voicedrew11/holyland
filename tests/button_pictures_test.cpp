@@ -14,6 +14,7 @@
 
 #include "button_pictures_data.h"
 #include "finer_pictures.h"
+#include "key_letters.h"
 #include "stroke_letters.h"
 
 using namespace pcr;
@@ -210,21 +211,63 @@ void test_xbox_letters() {
     CHECK(cell_has(fine, button_named("triangle"), 232, 200, 84));
 }
 
-// Keyboard: the bound key's label on the same round body
-void test_keyboard_labels() {
+// Whether any finer texel of a button's cell is a light legend (every colour channel at least `light`)
+bool cell_has_light(const std::vector<uint32_t> &fine, const data::Button &b, uint32_t light) {
+    for (uint32_t y = 0; y < data::cell * k; y++) {
+        for (uint32_t x = 0; x < data::cell * k; x++) {
+            uint32_t c = fine[size_t(b.cell_y * k + y) * width * k + b.cell_x * k + x];
+            if (channel(c, 0) >= light && channel(c, 1) >= light && channel(c, 2) >= light && channel(c, 3) > 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Keyboard: a black key in the button's place, the bound key's label light on its top
+void test_keyboard_keys() {
     std::vector<uint32_t> fine = redrawn(flat_sheet(), ButtonStyle::keyboard);
     for (const char *symbol : {"cross", "circle", "square", "triangle"}) {
         const data::Button &b = button_named(symbol);
-        CHECK(cell_has(fine, b, 232, 224, 204));
-        CHECK(channel(fine_at(fine, b, 0.1, 0.1), 3) == 0); // (the disc's edge, no other shape)
-        CHECK(channel(fine_at(fine, b, data::centre, data::centre + data::radius - 1), 3) == opaque);
+        CHECK(cell_has_light(fine, b, 150));
+        CHECK(channel(fine_at(fine, b, 0.1, 0.1), 3) == 0);                // (the picture's background round it)
+        uint32_t top_corner = fine_at(fine, b, 5.0, 4.5);                   // (the top face, away from the label)
+        CHECK(channel(top_corner, 3) == opaque);
+        CHECK(channel(top_corner, 0) < 80 && channel(top_corner, 1) < 80 && channel(top_corner, 2) < 80);
     }
-    // (an unbound key: the body alone)
+    // (an unbound key: the key alone)
     ButtonLooks unbound = looks_of(ButtonStyle::keyboard);
     unbound.keys[0].clear();
     std::vector<uint32_t> colours = flat_sheet(), blank = enlarged_as_read(colours, width, height, k);
     CHECK(draw_listed_buttons(sheet, colours, width, height, blank, unbound));
-    CHECK(!cell_has(blank, button_named("cross"), 232, 224, 204));
+    CHECK(!cell_has_light(blank, button_named("cross"), 150));
+}
+
+// The keys' widths as a real keyboard's, and a key drawn on its own that wide
+void test_key_widths() {
+    CHECK(key_width_u("F") == 1.0f);
+    CHECK(key_width_u("Tab") == 1.5f);
+    CHECK(key_width_u("Return") == 2.25f);
+    CHECK(key_width_u("Right Shift") == 2.75f);
+    CHECK(key_width_u("Space") == 3.0f);
+    KeyPicture one = key_picture("F", 2), enter = key_picture("Return", 2);
+    CHECK(one.width == data::cell * 2 && one.height == data::cell * 2);
+    CHECK(enter.height == one.height && enter.width >= one.width * 2);
+    CHECK(one.texels.size() == size_t(one.width) * one.height);
+    CHECK(channel(one.texels[0], 3) == 0);                                  // (clear round the key)
+    CHECK(channel(one.texels[size_t(one.height / 3) * one.width + one.width / 4], 3) == 255);
+}
+
+// The keys' letters: ink where a letter's stroke is, none beside it, wider text for more letters
+void test_key_text() {
+    const KeyText bar("I", 50.0f, 50.0f, 20.0f);
+    CHECK(bar.ink(50.0f, 50.0f) > 0.9f);
+    CHECK(bar.ink(50.0f, 75.0f) == 0.0f);
+    CHECK(bar.ink(70.0f, 50.0f) == 0.0f);
+    const KeyText up(std::string(1, arrow_up), 50.0f, 50.0f, 20.0f);
+    CHECK(up.ink(50.0f, 50.0f) > 0.9f);
+    CHECK(KeyText::width_for("SHIFT", 10.0f) > KeyText::width_for("F", 10.0f) * 3);
+    CHECK(KeyText::width_for("", 10.0f) == 0.0f);
 }
 
 void test_key_label_text() {
@@ -276,7 +319,9 @@ int main() {
     test_faint_background_kept();
     test_others_left_alone();
     test_xbox_letters();
-    test_keyboard_labels();
+    test_keyboard_keys();
+    test_key_widths();
+    test_key_text();
     test_key_label_text();
     test_looks_hash();
     test_stroke_letters();
