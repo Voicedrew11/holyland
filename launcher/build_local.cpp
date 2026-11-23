@@ -75,7 +75,9 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
     std::string why;
     auto tools = platform.toolchain(request.content, why);
     if (!tools)
-        return {false, "The build tools are missing from this release: " + why};
+        // (the release has them: the install lost some, an update cut short or an antivirus, as a player's 0.1.4 did)
+        return {false, "This install of Holyland is incomplete (" + why +
+                           "). Install the release again from its download page."};
     fs::path source = request.content / "src";
     fs::path obj = request.build_dir / "obj";
     std::error_code error;
