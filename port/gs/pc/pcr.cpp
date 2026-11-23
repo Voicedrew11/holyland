@@ -3424,7 +3424,9 @@ private:
             // the frame's own picture instead, as without the mouse: its steps held back (slice 4b) drawn late by it. Not
             // the last picture again: where no picture between fits (a GPU slower than the scale asks), nothing new was
             // shown while the mouse turned, the view stood still until it stopped (walking, the frames' own pictures
-            // showed it at 30 a second).
+            // showed it at 30 a second). Only where no picture between was made lately (take_picture_between): where the
+            // others are, the frame's own picture is the view of two game frames before them, and the last picture
+            // again is right (the owner's report of 2026-11-22: a ghost while turning, unlocked at 1440p).
             between_left_out_ = false;
             left_out_frame_own_ = false;
             budget_frame_instead_++;
@@ -3592,6 +3594,7 @@ private:
     void take_picture_between(InterpPicture p) {
         ZoneScope zone(pc_take_picture_between_zone);
         if (p.direct) {
+            between_made_s_ = port_wall_seconds();
             last_between_ = p.picture;
             shows_pumped_ = true;
             if (!intake_.direct_picture(p.picture)) {
@@ -3619,7 +3622,10 @@ private:
             const double now = port_wall_seconds();
             if (!watch_.admit(kind, now, shown, phase, VBLANK_S, next_frame)) {
                 between_left_out_ = true;
-                left_out_frame_own_ = phase == 0 && p.picture.t == 0;
+                // (the frame's own picture instead only where no picture between reaches the screen: where the others
+                // do, the frame's own shows its camera before the mouse's turn, two game frames behind the pictures
+                // around it, a step back and forth 30 times a second while the mouse turns)
+                left_out_frame_own_ = phase == 0 && p.picture.t == 0 && !(now - between_made_s_ < BETWEEN_LATELY_S);
                 budget_left_out_++;
                 budget_left_out_own_ += phase == 0 ? 1 : 0;
                 direct_serial_.store(0, std::memory_order_release);
@@ -3627,6 +3633,7 @@ private:
             }
             timing_ = {true, kind, now, shown};
         }
+        between_made_s_ = port_wall_seconds();
         double before_s = turn_to_hand(p.picture, turn_lead_);
         last_turned_s_ = port_wall_seconds();
         last_between_ = p.picture;
@@ -3926,6 +3933,8 @@ private:
     uint64_t timed_serial_ = 0;
     bool between_left_out_ = false;
     bool left_out_frame_own_ = false; // (the one left out was the game frame's first vblank's own, at t 0)
+    double between_made_s_ = -1e9;    // (when the last picture between was made: not left out)
+    static constexpr double BETWEEN_LATELY_S = 2.5 * VBLANK_S; // (made this lately: since the game frame before, at 30)
     bool frames_shown_lately_ = true; // (the game frames' own pictures are shown: not with the mouse turning them)
     uint64_t budget_waits_ = 0, budget_begun_late_ = 0, budget_left_out_ = 0, budget_left_out_own_ = 0,
              budget_frame_instead_ = 0;
