@@ -126,7 +126,11 @@ static void test_instant(void) {
     int axis[4] = {0x80, 0x80, 0x80, 0x80};
     unsigned short held;
 
+    check("instant by default", port_walk_keys_instant_setting());
     check("instant in live play", port_walk_keys_instant());
+    port_walk_keys_set_instant(0);
+    check("setting off: eased in live play", !port_walk_keys_instant());
+    port_walk_keys_set_instant(1);
     port_options.input = "script.pad";
     check("not while a pad script plays", !port_walk_keys_instant());
     port_options.input = NULL;

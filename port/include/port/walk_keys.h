@@ -8,10 +8,11 @@
    a controller's sticks: the keys are the same with it on or off, and they set no stick, so a controller's stick
    at rest takes nothing from them.
 
-   In play the keys are always instant (no setting since 2026-11-22): the left stick at full throw, which
-   twin-stick controls walk at the top speed at once and turn round at once. With twin-stick off that stick is
-   the PS2's (the d-pad: A and D turn). Never while a pad script plays or one is recorded: those keep the eased
-   buttons, so the scripts recorded before stay the same. */
+   Instant WASD acceleration (the player menu's Controls page, settings.json "controls": "instant_wasd_accel", on
+   by default; not in the first-start setup) makes the keys the left stick at full throw instead, which twin-stick
+   controls walk at the top speed at once and turn round at once. With twin-stick off that stick is the PS2's
+   (the d-pad: A and D turn). Never while a pad script plays or one is recorded: those keep the eased buttons, so
+   the scripts recorded before stay the same. Off, live play walks eased as above (Sean's, 696bf0f0). */
 #ifndef PORT_WALK_KEYS_H
 #define PORT_WALK_KEYS_H
 
@@ -28,7 +29,10 @@
 void port_walk_keys_set_buttons(MoveButtons buttons);
 MoveButtons port_walk_keys_buttons(void);
 
-/* Whether the keys are instant now: no pad script, no recording */
+/* Instant WASD acceleration: the setting (on until set), and whether it applies now (on, no pad script, no
+   recording) */
+int port_walk_keys_instant_setting(void);
+void port_walk_keys_set_instant(int on);
 int port_walk_keys_instant(void);
 
 /* The held walk keys (WALK_KEY_) into the pad: returns the buttons they hold (in play, `gameplay`, the game's

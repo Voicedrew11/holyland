@@ -25,6 +25,7 @@ extern "C" {
 #include "port/stats.h"
 #include "port/twin_stick.h"
 #include "port/walk_keys.h"
+#include "port/walk_keys.h"
 }
 
 #include "../overlay/update_badge.h"
@@ -559,6 +560,14 @@ void set_twin_stick(int on) {
     changed();
 }
 
+int get_instant_wasd() {
+    return port_walk_keys_instant_setting() != 0;
+}
+void set_instant_wasd(int on) {
+    port_walk_keys_set_instant(on);
+    changed();
+}
+
 int get_sensitivity() {
     return int(std::lround(port_controls_mouse_sensitivity() * 100.0));
 }
@@ -617,6 +626,9 @@ const char menu_mouse_help[] =
 const SettingRow controls_rows[] = {
     {"Twin-Stick Controls", "Left stick moves and strafes, right stick looks. Off uses the original layout.",
      RowKind::toggle, on_off, {}, get_twin_stick, set_twin_stick},
+    {"Instant WASD Acceleration",
+     "W A S D walk at full speed at once. Off: they speed up and slow down as the game's own walking does.",
+     RowKind::toggle, on_off, {}, get_instant_wasd, set_instant_wasd},
     {"Mouse", "", RowKind::heading},
     {"Mouse Sensitivity", "", RowKind::number, {}, {25, 400, 5}, get_sensitivity, set_sensitivity, nullptr,
      describe_sensitivity},
