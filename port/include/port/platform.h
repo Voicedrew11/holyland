@@ -28,7 +28,9 @@ typedef struct {
        second of the game in half a second of the host, every vblank, timer, animation and control twice
        as fast; the music and sounds play at their own, normal speed). Ignored with --fast, which holds the
        game to no clock at all. Live: the player menu's Game speed and KF4_SET_AT change it while the game
-       runs, and the vblank pacing follows it from the next vblank (port/platform/kernel.c). */
+       runs, and the vblank pacing follows it from the next vblank (port/platform/kernel.c). The pictures
+       stay at 1x's rate of the host: those over it are not drawn (port_interp_schedule), so that vsync does not
+       slow the game. */
     float game_speed;
     int game_speed_forced;   /* --game-speed: this run's, whatever settings.json says */
     int headless;            /* --headless: no SDL at all, and no window */
@@ -548,9 +550,12 @@ int port_interp_active(void);
 int port_interp_on_gpu(void);
 /* The pictures a second (port_options.frame_rate, the screen's for PORT_FRAME_RATE_MONITOR), and the
    times in vblank (0 to 1) of the pictures shown in it: up to max, their count returned (the
-   vblank's own, at 0, among them when it is shown) */
+   vblank's own, at 0, among them when it is shown; none for a vblank --game-speed leaves without one) */
 int port_frame_rate_hz(void);
 int port_interp_schedule(uint64_t vblank, double *phases, int max);
+/* 1 if the vblank has a picture shown: always at 1x; above it, at 60 and below, the vblanks shown at 1x's rate of
+   the host (its own picture, and the window's present) */
+int port_interp_vblank_due(uint64_t vblank);
 /* (port/platform/gs.c) The pictures between a vblank the renderer leaves out now because it fell behind
    (0: none; the F3 counter's "CUT") */
 int port_interp_cut(void);

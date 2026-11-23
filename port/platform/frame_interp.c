@@ -99,6 +99,11 @@ int port_frame_interp(void) {
    picture and n - 1 more between it and the next, evenly; otherwise (144, 165 Hz) a picture every
    1 / (F / 59.94) of a vblank from vblank 0 on, wherever it falls. Each is the time the window shows it
    at (port/platform/video.c), and what the picture shows is the game's world at that time.
+   --game-speed shortens the vblank (port_vblank_wall_seconds) and the pictures a vblank with it, so that the
+   pictures a second of the host stay F (59.94 at 60 and below, the vblanks' at 1x): fewer a vblank, and under one
+   some vblanks have none (port_interp_vblank_due). Those are not drawn at all (gs.c leaves the vblank's own picture
+   out, as it does above 60 where the phases need not include 0), rather than drawn and left out by the window, and
+   the window, never given more than F a second, does not wait on vsync for them and slow the game.
    With the screen's rate (PORT_FRAME_RATE_MONITOR), once the screen's refresh clock is sure of its
    refreshes (port_video_refresh_schedule), one picture each refresh instead, timed for it: the screen
    keeps its own time (169.83 Hz where the system names 170), and pictures on any other clock beat
@@ -173,27 +178,51 @@ int port_frame_rate_hz(void) {
     return hz < 30 ? 30 : hz;
 }
 
+/* The pictures the window shows a second of the host's: the frame rate's, and at 60 and below a vblank's at 1x
+   (59.94: the PS2's vblanks, each a picture, as they always were) */
+static double shown_a_second(void) {
+    int hz = port_frame_rate_hz();
+
+    return hz > 60 ? (double)hz : 60000.0 / 1001.0;
+}
+
 static double pictures_a_vblank(void) {
-    double p, n;
+    /* (a vblank's host seconds, port_vblank_wall_seconds, in the order 1x always reckoned them: exactly as before at 1x,
+       whose division is by 1) */
+    double p = shown_a_second() * 1001.0 / 60000.0 / port_game_speed(), n;
 
     if (port_options.frame_rate == PORT_FRAME_RATE_UNLOCKED) {
-        return port_frame_rate_hz() * 1001.0 / 60000.0; /* (a fraction: the renderer picks among them) */
+        return p; /* (a fraction: the renderer picks among them) */
     }
-    p = port_frame_rate_hz() * 1001.0 / 60000.0;
     n = floor(p + 0.5);
     return n >= 1 && fabs(p - n) <= 0.01 * n ? n : p;
+}
+
+/* Whether the vblank has a picture at all: under one a vblank (--game-speed above 1x), one of the pictures a
+   second's times falls in it or none does */
+static int vblank_due(uint64_t vblank, double p) {
+    return p >= 1.0 || ceil((double)vblank * p - 1e-6) < (double)(vblank + 1) * p - 1e-6;
+}
+
+int port_interp_vblank_due(uint64_t vblank) {
+    return vblank_due(vblank, pictures_a_vblank());
 }
 
 int port_interp_schedule(uint64_t vblank, double *phases, int max) {
     double p = pictures_a_vblank(), i;
     int n = 0;
 
-    if (port_frame_rate_hz() <= 30 || p < 1.0 || max < 1) {
+    if (max < 1) {
         phases[0] = 0;
         return 1;
     }
+    if (port_frame_rate_hz() <= 60) {
+        /* a vblank's own picture, where it has one (60 and below: no pictures between are shown) */
+        phases[0] = 0;
+        return vblank_due(vblank, p);
+    }
     if (port_options.frame_rate == PORT_FRAME_RATE_MONITOR && (n = port_video_refresh_schedule(vblank, phases, max)) >= 0) {
-        return n;
+        return n; /* (none: a vblank shorter than a refresh, --game-speed, with no refresh in it) */
     }
     n = 0;
     if (p == floor(p)) {

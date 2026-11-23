@@ -22,8 +22,10 @@ int port_vk_open(void *sdl_window);
 /* A picture: pixels (width x height, R in the low byte) to upload, or with image the PC renderer's of
    that tag (pcr_scanout_take_tag); with neither, the last one again, and only if the overlay draws.
    With overlay (the game's thread), presented with the overlay over it; without, as it is (the pictures
-   between vblanks, from a thread of their own, port/platform/video.c). One thread at a time. */
-void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag, int overlay);
+   between vblanks, from a thread of their own, port/platform/video.c). One thread at a time. With no_wait, nothing
+   presented when the swapchain has no image free now (vsync's queue full) rather than waiting for one: 0 then, else 1. */
+int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag, int overlay,
+                    int no_wait);
 /* (the game's thread, under video.c's present lock, once a vblank while the pictures' thread shows every picture) The
    overlay's draw lists made now and kept: the pictures' thread's presents (overlay 0) draw the kept ones over each
    picture while the overlay is visible, so that the minimap or the extended stats on screen do not take the pictures

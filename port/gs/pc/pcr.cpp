@@ -159,7 +159,7 @@ struct SharedTurnLead {
 // last to give to lead.turned: the game's thread reads the mouse as it waits and between its calls, so a reading may
 // be a few milliseconds old.
 double turn_to_hand(GsnInterpPicture &picture, SharedTurnLead &lead) {
-    constexpr double VBLANK_S = 1001.0 / 60000.0;
+    const double VBLANK_S = port_vblank_wall_seconds(); // (the host's: --game-speed shortens it, as the vblanks' times)
     double at = HUGE_VAL, before_s = 0;
     if (picture.shown_s > 0) {
         double lead_s;
@@ -3627,11 +3627,11 @@ private:
             const bool next_frame = frames_shown_lately_ && p.picture.t + (1.0 - phase) * 0.5 >= 0.999;
             const pcr::PictureKind kind = phase == 0 ? pcr::PictureKind::between_own : pcr::PictureKind::between;
             wait_until(watch_.with([&](const pcr::PictureBudget &b, const pcr::GpuQueueTime &) {
-                           return b.between_begin_at_s(kind, shown, phase, VBLANK_S, next_frame);
+                           return b.between_begin_at_s(kind, shown, phase, port_vblank_wall_seconds(), next_frame);
                        }),
                        true);
             const double now = port_wall_seconds();
-            if (!watch_.admit(kind, now, shown, phase, VBLANK_S, next_frame)) {
+            if (!watch_.admit(kind, now, shown, phase, port_vblank_wall_seconds(), next_frame)) {
                 between_left_out_ = true;
                 // (the frame's own picture instead only where no picture between reaches the screen: where the others
                 // do, the frame's own shows its camera before the mouse's turn, two game frames behind the pictures
