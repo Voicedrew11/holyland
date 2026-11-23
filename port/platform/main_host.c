@@ -50,6 +50,10 @@
        --font MODE       the game's font: ps2 (the default: the disc's) or sharp (its English letters,
                          and the words the menu draws as pictures, drawn again from IPA
                          Mincho four times as fine, crisp at any resolution)
+       --glyphs STYLE    the controller's buttons the menus show: original (the default: the disc's),
+                         playstation (drawn again sharper), xbox (the Xbox controller's letters: A
+                         for cross, B circle, X square, Y triangle) or keyboard (the keys they are
+                         bound to)
        --scene-depth MODE the scene renderer's depth, the player menu's Depth: high (the default: the GS's
                          whole Z at each pixel, the layers over a surface settled by the stencil;
                          also exact), medium (as high, the layers settled in one pass where nearer;
@@ -312,7 +316,8 @@ static void usage(const char *program) {
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
             "          [--native-lod scale|ps2|full] [--native-aniso 1|2|4|8|16]\n"
-            "          [--native-2d smooth|ps2] [--font sharp|ps2] [--scene-depth high|medium|low|unsettled]\n"
+            "          [--native-2d smooth|ps2] [--font sharp|ps2]\n"
+            "          [--glyphs original|playstation|xbox|keyboard] [--scene-depth high|medium|low|unsettled]\n"
             "          [--native-layer-z tolerant|ps2]\n"
             "          [--native-wave-uvs ps2|gpu|cpu|late] [--sky modern|ps2] [--reflection-clip on|off]\n"
             "          [--test-dma-wait]\n"
@@ -392,6 +397,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_aniso = 1;
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
     port_options.font = 0;             /* GSN_FONT_PS2: the disc's */
+    port_options.glyphs = 0;           /* GSN_GLYPHS_ORIGINAL: the disc's */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
@@ -690,6 +696,13 @@ static void parse_options(int argc, char **argv) {
                 exit(2);
             }
             port_options.font_forced = 1;
+        } else if (strcmp(option, "--glyphs") == 0) {
+            port_options.glyphs = port_glyphs_from_name(value);
+            if (port_options.glyphs < 0) {
+                fprintf(stderr, "--glyphs wants original, playstation, xbox or keyboard, not %s\n", value);
+                exit(2);
+            }
+            port_options.glyphs_forced = 1;
         } else if (strcmp(option, "--scene-depth") == 0) {
             port_options.scene_depth = port_scene_depth_from_name(value);
             if (port_options.scene_depth < 0) {

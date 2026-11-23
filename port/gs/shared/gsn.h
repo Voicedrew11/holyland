@@ -43,6 +43,20 @@
    (port/gs/shared/font_sheet.h; the scene renderer's) */
 #define GSN_FONT_PS2 0
 #define GSN_FONT_SHARP 1
+/* The controller's buttons the menus show (pcr_set_glyphs): the disc's, or drawn again sharper as the PlayStation's,
+   the Xbox controller's letters, or the keys they are bound to (port/gs/shared/button_pictures.h; the scene
+   renderer's) */
+#define GSN_GLYPHS_ORIGINAL 0
+#define GSN_GLYPHS_PLAYSTATION 1
+#define GSN_GLYPHS_XBOX 2
+#define GSN_GLYPHS_KEYBOARD 3
+#define GSN_GLYPH_KEY_CHARS 24
+typedef struct GsnGlyphs {
+    int style; /* GSN_GLYPHS_* */
+    /* with GSN_GLYPHS_KEYBOARD: the name of the key or mouse button cross, circle, square and triangle are bound to
+       (port_controls_binding_label's), "" when none */
+    char keys[4][GSN_GLYPH_KEY_CHARS];
+} GsnGlyphs;
 /* How Z is kept and tested (pcr_set_layer_z): the GS's whole number per pixel, or its fraction kept (tolerant layers) */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1

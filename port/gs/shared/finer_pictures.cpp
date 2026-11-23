@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 
+#include "button_pictures.h"
 #include "font_sheet.h"
 #include "text_pictures.h"
 
@@ -42,12 +43,20 @@ uint32_t channel(uint32_t colour, uint32_t c) {
 
 } // namespace
 
-bool may_be_finer(const DecodedTexture &texture) {
-    return std::any_of(kinds.begin(), kinds.end(), [&](const Kind &k) { return k.may_be(texture); });
+uint64_t FinerAsked::hash() const {
+    return (sharp_font ? 0x5BD1E995ull : 0) ^ buttons.hash();
 }
 
-FinerPicture finer_picture(const DecodedTexture &texture, std::span<const uint32_t> colours,
-                           std::span<const uint32_t, 256> clut) {
+bool may_be_finer(const DecodedTexture &texture, const FinerAsked &asked) {
+    return (asked.buttons.redrawn() && may_have_buttons(texture)) ||
+           (asked.sharp_font &&
+            std::any_of(kinds.begin(), kinds.end(), [&](const Kind &k) { return k.may_be(texture); }));
+}
+
+namespace {
+
+FinerPicture made_by_a_kind(const DecodedTexture &texture, std::span<const uint32_t> colours,
+                            std::span<const uint32_t, 256> clut) {
     for (const Kind &k : kinds) {
         if (!k.may_be(texture)) {
             continue;
@@ -58,6 +67,25 @@ FinerPicture finer_picture(const DecodedTexture &texture, std::span<const uint32
         }
     }
     return {};
+}
+
+} // namespace
+
+FinerPicture finer_picture(const DecodedTexture &texture, std::span<const uint32_t> colours,
+                           std::span<const uint32_t, 256> clut, const FinerAsked &asked) {
+    FinerPicture made = asked.sharp_font ? made_by_a_kind(texture, colours, clut) : FinerPicture{};
+    if (!asked.buttons.redrawn() || !may_have_buttons(texture) || !has_buttons(texture)) {
+        return made;
+    }
+    // (the buttons drawn over what a kind made, or over the picture enlarged when no kind knows it)
+    if (made.colours.empty()) {
+        made = {enlarged_as_read(colours, texture.width_px, texture.height_px, button_picture_scale),
+                button_picture_scale};
+    }
+    if (made.scale == button_picture_scale) {
+        draw_buttons(texture, colours, made.colours, asked.buttons);
+    }
+    return made;
 }
 
 std::vector<uint32_t> enlarged_as_read(std::span<const uint32_t> colours, uint32_t width, uint32_t height,

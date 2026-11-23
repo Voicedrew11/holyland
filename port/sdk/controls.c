@@ -281,6 +281,7 @@ static void tables_init(void) {
 void port_controls_reset(void) {
     tables_init();
     reset_tables();
+    port_gs_glyph_keys_changed();
 }
 
 int port_controls_binding(int action, int slot) {
@@ -297,6 +298,7 @@ void port_controls_bind(int action, int slot, int binding) {
     }
     tables_init();
     bindings[action][slot] = binding;
+    port_gs_glyph_keys_changed();
 }
 
 int port_controls_is_default(int action) {
@@ -715,6 +717,7 @@ void port_controls_listen_cancel(void) {
 static void listened(int binding) {
     bindings[pc.listen_action][pc.listen_slot] = binding;
     pc.listen_action = -1;
+    port_gs_glyph_keys_changed();
 }
 
 /* While a slot waits: the keyboard, the mouse and the controller go to it, not to the overlay. The

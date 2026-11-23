@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gsn.h" /* (GSN_GLYPHS_*: the plain constants only) */
+#include "port/controls.h"
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
@@ -34,6 +36,31 @@ void port_gs_backend_read_fifo(void *dst, uint32_t qwords);
 int port_gs_backend_vsync(const uint64_t *privileged, int field, int want_pixels, PortGsFrame *frame);
 void *port_gs_backend_context(void);
 #include "gs_api.h"
+#endif
+
+#ifdef KF4_HAVE_PARALLEL_GS
+/* The name of the first key or mouse button an action is bound to, "" when none (main thread) */
+static void first_key_of(int action, char *out, size_t size) {
+    out[0] = '\0';
+    for (int slot = 0; slot < BINDING_SLOTS; slot++) {
+        int binding = port_controls_binding(action, slot);
+        if (BINDING_KIND(binding) == BINDING_KEY || BINDING_KIND(binding) == BINDING_MOUSE) {
+            port_controls_binding_label(binding, out, size);
+            return;
+        }
+    }
+}
+
+/* The buttons' style and the keys bound to the face buttons, to the renderer (main thread) */
+static void send_glyphs(int glyphs) {
+    static const int faces[4] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE};
+    GsnGlyphs asked = {.style = glyphs};
+
+    for (int i = 0; i < 4; i++) {
+        first_key_of(faces[i], asked.keys[i], sizeof(asked.keys[i]));
+    }
+    gsr_set_glyphs(&asked);
+}
 #endif
 
 #define VSYNC_QUEUE 16
@@ -180,6 +207,7 @@ static int open_pc_renderer(void) {
     port_options.native_aniso = gsr_set_aniso(port_options.native_aniso);
     gsr_set_2d(port_options.native_2d);
     gsr_set_font(port_options.font);
+    send_glyphs(port_options.glyphs);
     gsr_set_layer_z(port_options.native_layer_z);
     gsr_set_native_draw(GSN_NATIVE_DRAW_NATIVE);
     gsr_set_presenter(port_video_submit, port_video_submit_image);
@@ -893,6 +921,44 @@ void port_gs_set_font(int font) {
         gsr_set_font(font);
     }
 #endif
+}
+
+static const char *const glyphs_names[] = {
+    [GSN_GLYPHS_ORIGINAL] = "original",
+    [GSN_GLYPHS_PLAYSTATION] = "playstation",
+    [GSN_GLYPHS_XBOX] = "xbox",
+    [GSN_GLYPHS_KEYBOARD] = "keyboard",
+};
+
+int port_glyphs_from_name(const char *name) {
+    for (int i = 0; i < (int)(sizeof(glyphs_names) / sizeof(glyphs_names[0])); i++) {
+        if (strcmp(name, glyphs_names[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+const char *port_glyphs_name(int glyphs) {
+    if (glyphs < 0 || glyphs >= (int)(sizeof(glyphs_names) / sizeof(glyphs_names[0]))) {
+        return NULL;
+    }
+    return glyphs_names[glyphs];
+}
+
+void port_gs_set_glyphs(int glyphs) {
+    port_options.glyphs = glyphs;
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (have_pc) {
+        send_glyphs(glyphs);
+    }
+#endif
+}
+
+void port_gs_glyph_keys_changed(void) {
+    if (port_options.glyphs == GSN_GLYPHS_KEYBOARD) {
+        port_gs_set_glyphs(port_options.glyphs);
+    }
 }
 
 int port_gs_native_draws_now(void) {

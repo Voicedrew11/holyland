@@ -137,11 +137,11 @@ struct SampledTexture {
     uint32_t levels = 1;       // the game's (read as the GS reads them)
     uint32_t image_levels = 1; // the image's: the game's and below them those made on the PC (gpu_levels_for)
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: finer_pictures.h)
-    bool sharp_font = false; // (made with the sharper font asked, where it may be a finer picture: may_be_finer)
+    uint64_t finer_asked = 0; // (what was asked to be finer, where it may be a finer picture: FinerAsked::hash)
     uint64_t used = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
-    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, bool sharp) const {
-        return key == k && texa == t && clut == c && sharp_font == sharp;
+    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, uint64_t asked) const {
+        return key == k && texa == t && clut == c && finer_asked == asked;
     }
 };
 
@@ -251,7 +251,18 @@ public:
         mode_2d_ = mode;
     }
     void set_font(int font) override {
-        sharp_font_ = font == GSN_FONT_SHARP;
+        finer_asked_.sharp_font = font == GSN_FONT_SHARP;
+    }
+    void set_glyphs(const GsnGlyphs &glyphs) override {
+        ButtonLooks looks;
+        if (glyphs.style >= GSN_GLYPHS_ORIGINAL && glyphs.style <= GSN_GLYPHS_KEYBOARD) {
+            looks.style = ButtonStyle(glyphs.style);
+        }
+        for (size_t i = 0; i < looks.keys.size(); i++) {
+            const char *key = glyphs.keys[i];
+            looks.keys[i].assign(key, strnlen(key, GSN_GLYPH_KEY_CHARS));
+        }
+        finer_asked_.buttons = std::move(looks);
     }
 
     // ---- The front end's events ----
@@ -1979,7 +1990,7 @@ public:
         fprintf(stderr,
                 "[stats] scene renderer targets and textures: %llu targets made, %llu grown, %llu filled from uploads, "
                 "%llu uploads written into them, %llu copies between them, %llu depth aliases cleared; textures %llu "
-                "decoded, %llu sampled (%llu fonts and word pictures made finer, %llu at the GPU's own level), %llu from targets "
+                "decoded, %llu sampled (%llu fonts, word pictures and buttons made finer, %llu at the GPU's own level), %llu from targets "
                 "(%llu into a kept image), "
                 "%llu missing, %llu reused; "
                 "%llu shader blends, %llu read-backs; "
@@ -3917,23 +3928,25 @@ private:
         if (d.kind == TexelKind::Index8) {
             clut = store_.clut_colours(s.tex0, s.texa);
         }
-        // (the font asked is part of what a texture that may be a font sheet or a word picture is made from: the setting
-        // changed, it is made again)
-        bool sharp = sharp_font_ && may_be_finer(d);
-        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ (sharp ? 0x5BD1E995ull : 0);
+        // (the font and buttons asked are part of what a texture that may be a font sheet, a word picture or a picture
+        // with buttons is made from: a setting changed, it is made again)
+        bool finer_asked = may_be_finer(d, finer_asked_);
+        uint64_t asked = finer_asked ? finer_asked_.hash() : 0;
+        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ asked;
         for (uint32_t c : clut.rgba) {
             h = (h ^ c) * 0x100000001B3ull;
         }
         auto found = sampled_.find(h);
-        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, sharp)) {
+        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, asked)) {
             found->second.used = frame_;
             return &found->second;
         }
         std::vector<uint32_t> colours = colour_texels(d, psm, clut, texa);
-        // (the game's fonts and word pictures: four times as fine, their English letters drawn again; finer_pictures.h)
+        // (the game's fonts, word pictures and buttons: four times as fine, their English letters and buttons drawn
+        // again as asked; finer_pictures.h)
         uint32_t finer = 1;
-        if (sharp) {
-            FinerPicture made = finer_picture(d, colours, clut.rgba);
+        if (finer_asked) {
+            FinerPicture made = finer_picture(d, colours, clut.rgba, finer_asked_);
             if (!made.colours.empty()) {
                 colours = std::move(made.colours);
                 finer = made.scale;
@@ -3975,7 +3988,7 @@ private:
         t.levels = d.levels;
         t.image_levels = uint32_t(data.size());
         t.finer = finer;
-        t.sharp_font = sharp;
+        t.finer_asked = asked;
         t.used = frame_;
         t.alpha_lo = 255;
         t.alpha_hi = 0;
@@ -5455,7 +5468,7 @@ private:
     };
     std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
-    bool sharp_font_ = true; // (set_font: the game's font sheets and word pictures made finer; finer_pictures.h)
+    FinerAsked finer_asked_{true, {}}; // (set_font, set_glyphs: what is made finer; finer_pictures.h)
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     // (slice 3d's bound, developers' only: the picture lacks the shine) program 0x280's second, sphere-mapped passes
     // left out, so that its time with them gone is the most drawing both passes as one could save

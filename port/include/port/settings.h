@@ -53,6 +53,7 @@ typedef struct {
     int native_aniso;      /* the renderer's anisotropic filtering: 1 off, 2 to 16 (port_options.native_aniso) */
     int native_2d;         /* at a larger scale, the renderer's 2D: 0 ps2, 1 smooth (port_options.native_2d) */
     int font;              /* the game's font: 0 ps2, 1 sharp (port_options.font) */
+    int glyphs;            /* the controller's buttons the menus show: GSN_GLYPHS_* (port_options.glyphs) */
     int native_layer_z;    /* the renderer's Z: 0 ps2, 1 tolerant (port_options.native_layer_z) */
     int native_draw;       /* native draw, the whole path: 0 off (the PS2 path), 1 every accepted kind
                               (port_options.native_draw = PORT_ND_ACCEPTED; docs/port/NATIVE_DRAW.md) */

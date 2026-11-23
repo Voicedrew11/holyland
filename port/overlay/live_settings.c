@@ -86,6 +86,13 @@ static double set_font(double font) {
     return port_settings.font;
 }
 
+static double set_glyphs(double glyphs) {
+    int whole = (int)glyphs;
+    port_settings.glyphs = port_glyphs_name(whole) != NULL ? whole : 0;
+    port_gs_set_glyphs(port_settings.glyphs);
+    return port_settings.glyphs;
+}
+
 static double set_native_2d(double smooth) {
     port_settings.native_2d = smooth != 0;
     port_gs_set_native_2d(smooth != 0);
@@ -108,6 +115,7 @@ static const LiveSetting live_settings[PORT_LIVE_COUNT] = {
     [PORT_LIVE_ANTIALIAS] = {"antialias", set_antialias},
     [PORT_LIVE_NATIVE_2D] = {"native_2d", set_native_2d},
     [PORT_LIVE_FONT] = {"font", set_font},
+    [PORT_LIVE_GLYPHS] = {"glyphs", set_glyphs},
     [PORT_LIVE_GAME_SPEED] = {"game_speed", set_game_speed},
 };
 

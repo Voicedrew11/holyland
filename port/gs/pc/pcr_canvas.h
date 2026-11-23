@@ -107,6 +107,8 @@ public:
     // The font (GSN_FONT_*): the PC renderer draws the disc's whatever it is asked (finer_pictures.h is the scene
     // renderer's)
     void set_font(int font) override;
+    // The controller's buttons (GSN_GLYPHS_*): the PC renderer draws the disc's whatever it is asked
+    void set_glyphs(const GsnGlyphs &glyphs) override;
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);

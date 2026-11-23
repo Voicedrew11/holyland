@@ -177,7 +177,7 @@ void only_the_disc_pictures_known() {
     CHECK(may_be_text_picture(t));
     std::vector<uint32_t> colours = button(black_ground, 100, 150);
     CHECK(sharper_text_picture(t, colours).empty());
-    FinerPicture none = finer_picture(t, colours, std::array<uint32_t, 256>{});
+    FinerPicture none = finer_picture(t, colours, std::array<uint32_t, 256>{}, FinerAsked{true, {}});
     CHECK(none.colours.empty() && none.scale == 1);
     t.width_px = 200; // (no picture is 200 wide)
     CHECK(!may_be_text_picture(t));
