@@ -22,16 +22,21 @@ struct LetterSet {
     bool high_bits;               // (the picture in the indices' high two bits, else the low two)
     std::string_view characters;  // (in the cells' order; each drawn as font_letters' ASCII letter)
     std::array<uint64_t, 2> known; // (the cells' bits as the disc has them: FNV-1a, letters_hash; 0 none)
+    // (a set known when the set at this index in letter_sets is, as its sheet's: its own `known` unused; -1 none)
+    int known_with = -1;
 };
 
 constexpr std::string_view half_width_characters =
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz";
 
-// SLUS-20318's sheets: the messages' set on font.tmr and menu/font.tmr, the menus' on font.tmr
-constexpr std::array<LetterSet, 2> letter_sets = {{
+// SLUS-20318's sheets: the messages' set on font.tmr and menu/font.tmr, the menus' on font.tmr, and on the same sheet
+// the full-width punctuation the English menus use from the kana's last row (cell 243, the slash of "50 / 50", and
+// the ! and ? beside it; its other cells, \x01, past font_letters' characters, are kept as the game has them)
+constexpr std::array<LetterSet, 3> letter_sets = {{
     {0, 460, 10, 20, 50, true, half_width_characters, {0xcee01d3f1f8b8365ull, 0x5ce7fe8a58334073ull}},
     {0, 0, 20, 20, 25, false, "0123456789(),.:<>*-+abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
      {0x1a8f6d3e6aa4fb59ull, 0}},
+    {0, 180, 20, 20, 25, false, "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01!?\x01\x01\x01\x01\x01/", {0, 0}, 1},
 }};
 
 uint32_t rows_of(const LetterSet &set) {
@@ -60,6 +65,9 @@ uint64_t letters_hash(const LetterSet &set, const DecodedTexture &texture) {
 }
 
 bool known(const LetterSet &set, const DecodedTexture &texture) {
+    if (set.known_with >= 0) {
+        return known(letter_sets[size_t(set.known_with)], texture);
+    }
     uint64_t h = letters_hash(set, texture);
     return std::find(set.known.begin(), set.known.end(), h) != set.known.end();
 }

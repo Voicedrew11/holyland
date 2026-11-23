@@ -134,6 +134,50 @@ void letters_drawn_where_the_game_has_ink() {
     CHECK(at(out, 390 * font_sheet_scale + 20, y0 + 40) == none);
 }
 
+// The kana row's punctuation (texel row 180, the low bits): the slash's cell (243: texels 360-379) drawn as a slash,
+// the 、 beside the ? (cell 13: texels 260-279) kept as the game has it
+void full_width_slash_drawn() {
+    DecodedTexture t;
+    t.kind = TexelKind::Index8;
+    t.width_px = t.height_px = sheet;
+    t.levels = 1;
+    t.indices.assign(size_t(sheet) * sheet, 3); // (low bits 3: none)
+    for (uint32_t y = 183; y < 197; y++) {
+        for (uint32_t x = 366; x < 374; x++) {
+            t.indices[size_t(y) * sheet + x] = 0;
+            t.indices[size_t(y) * sheet + x - 100] = 0;
+        }
+    }
+    std::array<uint32_t, 256> clut{};
+    const uint32_t by_low[4] = {ink, faint, darker, none};
+    for (uint32_t i = 0; i < 16; i++) {
+        clut[i] = by_low[i & 3];
+    }
+    std::vector<uint32_t> colours(size_t(sheet) * sheet);
+    for (size_t i = 0; i < colours.size(); i++) {
+        colours[i] = clut[t.indices[i]];
+    }
+    std::vector<uint32_t> out = sharpened_sheet(t, colours, clut);
+    CHECK(!out.empty());
+    if (out.empty()) {
+        return;
+    }
+    // (the slash's core: further right near its top than near its foot)
+    auto core_middle = [&](uint32_t y) {
+        uint32_t sum = 0, n = 0;
+        for (uint32_t x = 360 * font_sheet_scale; x < 380 * font_sheet_scale; x++) {
+            if (at(out, x, y) == ink) {
+                sum += x;
+                n++;
+            }
+        }
+        return n ? sum / n : 0;
+    };
+    uint32_t high = core_middle(186 * font_sheet_scale), low = core_middle(194 * font_sheet_scale);
+    CHECK(high > 0 && low > 0 && high > low + 4);
+    CHECK(at(out, 270 * font_sheet_scale, 190 * font_sheet_scale) == ink); // (、 kept: the block as it is)
+}
+
 void only_the_disc_sheets_known() {
     DecodedTexture t = test_sheet();
     CHECK(!is_font_sheet(t));
@@ -151,6 +195,7 @@ int main() {
     sharpened_only_where_the_clut_shows_letters();
     enlarged_as_bilinear();
     letters_drawn_where_the_game_has_ink();
+    full_width_slash_drawn();
     only_the_disc_sheets_known();
     if (failures) {
         std::printf("%d failed\n", failures);

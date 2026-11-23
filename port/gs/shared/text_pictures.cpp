@@ -338,18 +338,20 @@ void draw_word(const Canvas &fine, const WordImage &w, double left, double basel
     }
 }
 
-// A word drawn again where the game's was: its capitals from cap_top to the baseline, narrowed to fit its region
+// A word drawn again where the game's was: its capitals from cap_top to the baseline, narrowed to fit. A centred word
+// fits its region; a word from the left (a hint, its sprite cut from the sheet about the game's word) fits the game's
+// word's width, or it would show in the next hint's sprite.
 void draw_new_word(const Canvas &fine, const data::Word &w, const OldWord &old) {
     WordImage image = word_image(w.text);
     if (image.width == 0) {
         return;
     }
     double s = double(w.baseline - w.cap_top) * k / data::cap_height;
-    double room = double(w.x1 - w.x0) * k;
+    bool from_left = w.align == data::Align::Left;
+    double room = from_left ? double(old.ink.x1 - old.ink.x0) * k : double(w.x1 - w.x0) * k;
     double sx = std::min(s, room / image.width);
     double width = image.width * sx;
-    double left = w.align == data::Align::Left ? double(old.ink.x0) * k
-                                               : double(old.ink.x0 + old.ink.x1) * k / 2 - width / 2;
+    double left = from_left ? double(old.ink.x0) * k : double(old.ink.x0 + old.ink.x1) * k / 2 - width / 2;
     left = std::clamp(left, double(w.x0) * k, std::max(double(w.x0) * k, double(w.x1) * k - width));
     draw_word(fine, image, std::round(left), double(w.baseline) * k, sx, s, old.colour);
 }

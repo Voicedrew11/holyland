@@ -4,11 +4,13 @@
 //
 // A sheet is 4-bit and holds two pictures, one in the indices' low two bits and one in their high two; the CLUT picks
 // which shows (each colour the same for the four indices that share the bits it reads). Each picture's texels are one
-// of four levels, its bits 3 none (the cell's ground) to 0 a stroke's core. The English letters are in two sets:
+// of four levels, its bits 3 none (the cell's ground) to 0 a stroke's core. The English letters are in three sets:
 // - the messages' (both sheets, the high bits): 10 x 20 texel cells from texel row 460 (message.c's glyph_sheets), the
 //   ASCII character 0x20 + n at column n % 50, row n / 50;
 // - the menus' (font.tmr, the low bits): 20 x 20 cells from the top, 25 to a row, the digits, ( ) , . : < > * - +,
-//   a to z then A to Z.
+//   a to z then A to Z;
+// - the full-width punctuation the English menus use (font.tmr, the low bits): the kana's last row, texel row 180,
+//   its ! ? and / (cell 243, the slash of "50 / 50"), known with the menus' set.
 // A set is known by its cells' bits as the disc has them, and drawn where the CLUT shows its picture: each letter on the
 // baseline the game's are on, across where the game's ink is in its cell.
 //
