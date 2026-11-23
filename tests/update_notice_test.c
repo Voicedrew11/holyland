@@ -260,12 +260,12 @@ static void test_move_old_folders(void) {
 
 static const char release_json[] =
     "{\"tag_name\":\"v0.3.0\",\"assets\":["
-    "{\"name\":\"DarkerReality-0.3.0-x86_64.AppImage\",\"browser_download_url\":"
-    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-x86_64.AppImage\"},"
-    "{\"name\":\"DarkerReality-0.3.0-win-x64.zip\",\"browser_download_url\":"
-    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-win-x64.zip\"},"
-    "{\"name\":\"DarkerReality-0.3.0-win-x64-setup.exe\",\"browser_download_url\":"
-    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/DarkerReality-0.3.0-win-x64-setup.exe\"},"
+    "{\"name\":\"Holyland-0.3.0-x86_64.AppImage\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/Holyland-0.3.0-x86_64.AppImage\"},"
+    "{\"name\":\"Holyland-0.3.0-win-x64.zip\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/Holyland-0.3.0-win-x64.zip\"},"
+    "{\"name\":\"Holyland-0.3.0-win-x64-setup.exe\",\"browser_download_url\":"
+    "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/Holyland-0.3.0-win-x64-setup.exe\"},"
     "{\"name\":\"SHA256SUMS\",\"browser_download_url\":"
     "\"https://github.com/Voicedrew11/holyland/releases/download/v0.3.0/SHA256SUMS\"},"
     "{\"name\":\"SHA256SUMS.sig\",\"browser_download_url\":"
@@ -277,14 +277,14 @@ static void test_assets(void) {
 
     check("the AppImage", update_asset_pick(release_json, "v0.3.0", "-x86_64.AppImage", gh, name, sizeof(name), url,
                                             sizeof(url)) &&
-                              strcmp(name, "DarkerReality-0.3.0-x86_64.AppImage") == 0 &&
-                              strstr(url, "/v0.3.0/DarkerReality-0.3.0-x86_64.AppImage") != NULL);
+                              strcmp(name, "Holyland-0.3.0-x86_64.AppImage") == 0 &&
+                              strstr(url, "/v0.3.0/Holyland-0.3.0-x86_64.AppImage") != NULL);
     check("the zip is not the installer",
           update_asset_pick(release_json, "v0.3.0", "-win-x64.zip", gh, name, sizeof(name), url, sizeof(url)) &&
-              strcmp(name, "DarkerReality-0.3.0-win-x64.zip") == 0);
+              strcmp(name, "Holyland-0.3.0-win-x64.zip") == 0);
     check("the installer",
           update_asset_pick(release_json, "v0.3.0", "-win-x64-setup.exe", gh, name, sizeof(name), url, sizeof(url)) &&
-              strcmp(name, "DarkerReality-0.3.0-win-x64-setup.exe") == 0);
+              strcmp(name, "Holyland-0.3.0-win-x64-setup.exe") == 0);
     check("SHA256SUMS exactly, not its .sig",
           update_asset_pick(release_json, "v0.3.0", "SHA256SUMS", gh, name, sizeof(name), url, sizeof(url)) &&
               strcmp(name, "SHA256SUMS") == 0);
