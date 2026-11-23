@@ -216,6 +216,148 @@ static void no_folder(void) {
     check("back to the folder", port_saves_open(folder) && port_saves_available());
 }
 
+/* ---- Import from a memory card image (port/platform/card_import.c) ------------------------------------ */
+#define CARD_CLUSTERS 1024u
+#define CARD_ALLOC 8u /* the area's first cluster: 0 superblock, 1 the indirect FAT cluster, 2 the FAT */
+
+static uint8_t card[CARD_CLUSTERS * 1024u];
+static uint32_t card_next; /* the area's next free cluster */
+
+static void put32_at(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+/* Puts `size` bytes in a chain of the area's clusters; its first cluster */
+static uint32_t card_file(const uint8_t *bytes, size_t size) {
+    uint32_t first = card_next, count = (uint32_t)((size + 1023u) / 1024u), i;
+
+    for (i = 0; i < count; i++) {
+        put32_at(card + 2u * 1024u + (first + i) * 4u, 0x80000000u | (i + 1 < count ? first + i + 1 : 0x7FFFFFFFu));
+    }
+    memcpy(card + (CARD_ALLOC + first) * 1024u, bytes, size);
+    card_next += count;
+    return first;
+}
+
+static void card_entry(uint8_t *p, uint16_t mode, uint32_t length, uint32_t cluster, const char *name) {
+    p[0] = (uint8_t)mode;
+    p[1] = (uint8_t)(mode >> 8);
+    put32_at(p + 4, length);
+    put32_at(p + 0x10, cluster);
+    snprintf((char *)p + 0x40, 32, "%s", name);
+}
+
+/* What mc.c's Mc_StartWriteChecked writes of `size` bytes; the file's length */
+static size_t checked_file(uint8_t *out, const uint8_t *data, size_t size) {
+    size_t at = 4, done = 0, n, full, i;
+    uint8_t sum;
+
+    put32_at(out, (uint32_t)size);
+    for (full = 0x3FB;; full = 0x3FF) {
+        n = size - done < full ? size - done : full;
+        memcpy(out + at, data + done, n);
+        for (sum = 0, i = 0; i < n; i++) {
+            sum = (uint8_t)(sum + (uint8_t)~data[done + i]);
+        }
+        at += n;
+        if (n != 0) {
+            out[at++] = sum;
+        }
+        done += n;
+        if (n < full) {
+            out[at++] = 1;
+            return (at + 0x1F) & ~(size_t)0x1F;
+        }
+    }
+}
+
+/* A formatted card holding the game's folder with save 2 (index 1) and the list naming it; written with
+   `page_stride` 512 or 528 (ECC bytes after each page) to `path`. `damage`: a byte of the save changed. */
+static void write_card(const char *path, const uint8_t *record, const uint8_t *data, size_t size, size_t page_stride,
+                       int damage) {
+    static uint8_t list[PORT_SAVE_COUNT * PORT_SAVE_RECORD_SIZE], file[PORT_SAVE_DATA_MAX + 0x200];
+    uint8_t game_folder[5 * 512] = {0}, root[3 * 512] = {0};
+    uint32_t list_at, save_at, folder_at, root_at;
+    size_t length, page;
+    FILE *out;
+
+    memset(card, 0, sizeof(card));
+    card_next = 0;
+    memcpy(card, "Sony PS2 Memory Card Format 1.2.0.0", 35);
+    put32_at(card + 0x28, 512u | 2u << 16);
+    put32_at(card + 0x34, CARD_ALLOC);
+    put32_at(card + 0x50, 1); /* ifc_list[0] */
+    put32_at(card + 1024u, 2);
+    root_at = card_file(root, sizeof(root)); /* first: the superblock gives cluster 0 of the area as the root */
+    memset(list, 0, sizeof(list));
+    memcpy(list + PORT_SAVE_RECORD_SIZE, record, PORT_SAVE_RECORD_SIZE);
+    length = checked_file(file, list, sizeof(list));
+    list_at = card_file(file, length);
+    card_entry(game_folder + 2 * 512, 0x8497, (uint32_t)length, list_at, "BASLUS-20318S");
+    length = checked_file(file, data, size);
+    file[0x500] ^= (uint8_t)(damage != 0);
+    save_at = card_file(file, length);
+    card_entry(game_folder + 3 * 512, 0x8497, (uint32_t)length, save_at, "BASLUS-20318G01");
+    card_entry(game_folder, 0x8427, 4, 0, ".");
+    card_entry(game_folder + 512, 0x8427, 0, 0, "..");
+    folder_at = card_file(game_folder, sizeof(game_folder));
+    card_entry(root, 0x8427, 3, 0, ".");
+    card_entry(root + 512, 0xA426, 0, 0, "..");
+    card_entry(root + 1024, 0x8427, 4, folder_at, "BASLUS-20318S");
+    memcpy(card + (CARD_ALLOC + root_at) * 1024u, root, sizeof(root));
+
+    out = fopen(path, "wb");
+    for (page = 0; page < sizeof(card) / 512u; page++) {
+        static const uint8_t ecc[16];
+
+        fwrite(card + page * 512u, 512, 1, out);
+        if (page_stride == 528) {
+            fwrite(ecc, sizeof(ecc), 1, out);
+        }
+    }
+    fclose(out);
+}
+
+static void card_import(void) {
+    static uint8_t record[PORT_SAVE_RECORD_SIZE], data[0x15400], got_record[PORT_SAVE_RECORD_SIZE],
+        got_data[PORT_SAVE_DATA_MAX];
+    char path[600];
+    size_t got = 0, stride;
+
+    snprintf(path, sizeof(path), "%s/card.ps2", folder);
+    make_save(record, data, sizeof(data), 5);
+    record[1] = 0; /* SaveInfo.damaged */
+    put32_at(data, sizeof(data));
+    for (stride = 512; stride <= 528; stride += 16) {
+        remove_all();
+        write_card(path, record, data, sizeof(data), stride, 0);
+        check("a card's save is imported", port_saves_import_card(path) == 1);
+        check("to the save of its number, record and data as on the card",
+              port_save_read(1, got_record, got_data, sizeof(got_data), &got) == PORT_SAVE_OK && got == sizeof(data) &&
+                  memcmp(got_record, record, sizeof(record)) == 0 && memcmp(got_data, data, sizeof(data)) == 0 &&
+                  port_save_record(0, NULL) == PORT_SAVE_EMPTY);
+        check("a save already there is not replaced", port_saves_import_card(path) == 0);
+    }
+    remove_all();
+    write_card(path, record, data, sizeof(data), 512, 1);
+    check("a card save whose sum is wrong is not imported",
+          port_saves_import_card(path) == 0 && port_save_record(1, NULL) == PORT_SAVE_EMPTY);
+    memset(card, 0xFF, 4096);
+    {
+        FILE *out = fopen(path, "wb");
+
+        fwrite(card, 4096, 1, out);
+        fclose(out);
+    }
+    check("an unformatted card is refused", port_saves_import_card(path) == -1);
+    remove(path);
+    check("a missing card is refused", port_saves_import_card(path) == -1);
+    remove_all();
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         snprintf(folder, sizeof(folder), "%s", argv[1]);
@@ -234,6 +376,7 @@ int main(int argc, char **argv) {
     round_trip();
     damage();
     crashes();
+    card_import();
     no_folder();
     remove_all();
     rmdir(folder);

@@ -204,6 +204,7 @@ add_library(kf4_port STATIC
     port/sdk/libdma.c
     port/sdk/libgraph.c
     port/platform/save_files.c
+    port/platform/card_import.c
     port/sdk/libmpeg.c
     port/sdk/mpeg2.c
     port/sdk/libpad.c
@@ -893,8 +894,9 @@ if(KF4_TESTS)
     add_test(NAME cinematic COMMAND cinematic_test)
 endif()
 
-# The saves as files: written whole or not at all, read back, mended after a crash (port/platform/save_files.c)
-add_executable(save_files_test tests/save_files_test.c port/platform/save_files.c)
+# The saves as files: written whole or not at all, read back, mended after a crash (port/platform/save_files.c);
+# saves imported from a memory card image (port/platform/card_import.c)
+add_executable(save_files_test tests/save_files_test.c port/platform/save_files.c port/platform/card_import.c)
 target_include_directories(save_files_test PRIVATE port/include)
 if(NOT WIN32)
     target_compile_options(save_files_test PRIVATE -Wall -Wextra -Wshadow)

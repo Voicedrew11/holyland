@@ -69,6 +69,12 @@ PortSaveState port_save_read(int index, uint8_t record[PORT_SAVE_RECORD_SIZE], u
    disk under its name, 0 when not (the save it replaces, if any, is then as it was). */
 int port_save_write(int index, const uint8_t record[PORT_SAVE_RECORD_SIZE], const uint8_t *data, size_t size);
 
+/* Copies King's Field IV's saves from a PS2 memory card image (PCSX2's .ps2, with or without ECC) into the save
+   folder (port/platform/card_import.c): the card's save N to save N, with the record the card's save list
+   holds of it. A save already in the folder is not replaced. Says what it did on stderr. Returns the number
+   of saves copied, or -1 when the image cannot be read, is not a card, or has no whole save list. */
+int port_saves_import_card(const char *path);
+
 /* The last thing a read or write did, for the log and the overlay */
 const char *port_saves_message(void);
 
