@@ -43,6 +43,30 @@
    (port/gs/shared/font_sheet.h; the scene renderer's) */
 #define GSN_FONT_PS2 0
 #define GSN_FONT_SHARP 1
+/* The controller's buttons the menus show (pcr_set_glyphs): the disc's, or drawn again sharper as the PlayStation's,
+   the Xbox controller's letters, or the keys they are bound to (port/gs/shared/button_pictures.h; the scene
+   renderer's) */
+#define GSN_GLYPHS_ORIGINAL 0
+#define GSN_GLYPHS_PLAYSTATION 1
+#define GSN_GLYPHS_XBOX 2
+#define GSN_GLYPHS_KEYBOARD 3
+#define GSN_GLYPH_KEY_CHARS 24
+typedef struct GsnGlyphs {
+    int style; /* GSN_GLYPHS_* */
+    /* with GSN_GLYPHS_KEYBOARD: the name of the key or mouse button cross, circle, square and triangle are bound to
+       (port_controls_binding_label's), "" when none */
+    char keys[4][GSN_GLYPH_KEY_CHARS];
+} GsnGlyphs;
+/* A hint the menus draw from their hints' sheet, and the parts it is drawn in when its button is a key wider than a
+   letter's or would not be round (pcr_hint_parts; port/gs/shared/button_pictures.h's HintSprite and HintPart): screen
+   x from x0 to x1 and y from y0 to y1 (the GS's units) showing the sheet's texels u0 to u1 across, v0 to v1 down */
+typedef struct GsnHintSprite {
+    float x0, x1, y0, y1, u0, u1, v0, v1;
+} GsnHintSprite;
+typedef struct GsnHintPart {
+    float x0, x1, u0, u1, v0, v1;
+} GsnHintPart;
+#define GSN_HINT_PARTS 3
 /* How Z is kept and tested (pcr_set_layer_z): the GS's whole number per pixel, or its fraction kept (tolerant layers) */
 #define GSN_LAYER_Z_PS2 0
 #define GSN_LAYER_Z_TOLERANT 1

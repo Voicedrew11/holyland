@@ -482,10 +482,11 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
                     port/ui/setting_row.cpp port/ui/rows_rml.cpp port/ui/setup_pages.cpp port/ui/setup_model.cpp
                     port/ui/setup_view.cpp port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
-                    port/ui/pad_glyphs.cpp port/ui/emulator_saves.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
+                    port/ui/pad_glyphs.cpp port/ui/key_glyphs.cpp port/ui/emulator_saves.cpp
+                    ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
-        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3)
+        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3 kf4_key_pictures)
         target_compile_options(kf4_player_ui PRIVATE -Wall -Wextra -Wshadow)
         set_target_properties(kf4_player_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
         target_sources(kf4_port PRIVATE port/platform/present_vk_ui.cpp)
@@ -615,7 +616,7 @@ add_library(game_top OBJECT ${top_sources})
 list(APPEND KF4_GAME_TARGETS game_top)
 # the PC-only data sections (game/data/), built with the decomp's game code
 file(GLOB game_data_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/game/data/*.c)
-add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/attack_tracking.c game/cinematic.c game/screen_fx.c game/menu_pointer.c
+add_library(game_data OBJECT ${game_data_sources} game/state_log.c game/widescreen.c game/fov.c game/draw_distance.c game/frame_interp.c game/native_draw/native_draw.c game/native_draw/nd_entities.c game/native_draw/nd_arm.c game/native_draw/nd_objects.c game/native_draw/nd_sky.c game/native_draw/nd_effects.c game/native_draw/nd_shadows.c game/native_draw/nd_water.c game/native_draw/nd_passes.c game/quicksave.c game/saves.c game/cheats.c game/attack_tracking.c game/cinematic.c game/screen_fx.c game/menu_pointer.c game/hint_rows.c
     port/debug/game_dump.c) # F10's dump reads the game's structures (port/include/port/debug.h)
 list(APPEND KF4_GAME_TARGETS game_data)
 # PC mods built as game code whose state is the host's: their objects are linked after the save state's
@@ -863,6 +864,14 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mouse_lead COMMAND mouse_lead_test)
+endif()
+
+# The menus' hint rows made room for wide keys (game/hint_rows.c)
+add_executable(hint_rows_test tests/hint_rows_test.c game/hint_rows.c)
+target_include_directories(hint_rows_test PRIVATE port/include)
+target_link_libraries(hint_rows_test PRIVATE m)
+if(KF4_TESTS)
+    add_test(NAME hint_rows COMMAND hint_rows_test)
 endif()
 
 # The menus' pointer: hit-testing lines, stepping the cursor, clicks (game/menu_pointer.c)
@@ -1135,12 +1144,18 @@ endif()
 # (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
 add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)
 target_include_directories(kf4_gsn_vram PUBLIC port/gs/shared)
-# and the game's fonts made sharper from them (port/gs/shared/font_sheet.h), their smaller levels made on the PC
-# (port/gs/shared/mip_chain.h)
-add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/font_sheet.cpp
+# and the game's fonts, word pictures and button sheet made sharper from them (port/gs/shared/finer_pictures.h), their smaller levels
+# made on the PC (port/gs/shared/mip_chain.h)
+# The keyboard's keys and the mouse's buttons as pictures (port/gs/shared/key_pictures.h): the menus' buttons' and the
+# player menu's
+add_library(kf4_key_pictures STATIC port/gs/shared/key_pictures.cpp port/gs/shared/key_letters.cpp)
+target_include_directories(kf4_key_pictures PUBLIC port/gs/shared)
+set_target_properties(kf4_key_pictures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/finer_pictures.cpp
+            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/button_pictures.cpp
             port/gs/shared/mip_chain.cpp)
 target_include_directories(kf4_pc_textures PUBLIC port/gs/shared)
-target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
+target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram kf4_key_pictures)
 set_target_properties(kf4_pc_textures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 # against the same uploads written into a 4 MB VRAM with gsn_vram.c in order
 add_executable(pcr_textures_test tests/pcr_textures_test.cpp)
@@ -1156,6 +1171,18 @@ set_target_properties(font_sheet_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_RE
 if(NOT MSVC)
     target_compile_options(font_sheet_test PRIVATE -Wall -Wextra)
 endif()
+add_executable(text_pictures_test tests/text_pictures_test.cpp)
+target_link_libraries(text_pictures_test PRIVATE kf4_pc_textures)
+set_target_properties(text_pictures_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(text_pictures_test PRIVATE -Wall -Wextra)
+endif()
+add_executable(button_pictures_test tests/button_pictures_test.cpp)
+target_link_libraries(button_pictures_test PRIVATE kf4_pc_textures)
+set_target_properties(button_pictures_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(button_pictures_test PRIVATE -Wall -Wextra)
+endif()
 add_executable(mip_chain_test tests/mip_chain_test.cpp)
 target_link_libraries(mip_chain_test PRIVATE kf4_pc_textures)
 set_target_properties(mip_chain_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -1165,6 +1192,8 @@ endif()
 if(KF4_TESTS)
     add_test(NAME pcr_textures COMMAND pcr_textures_test)
     add_test(NAME font_sheet COMMAND font_sheet_test)
+    add_test(NAME text_pictures COMMAND text_pictures_test)
+    add_test(NAME button_pictures COMMAND button_pictures_test)
     add_test(NAME mip_chain COMMAND mip_chain_test)
 endif()
 

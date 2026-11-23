@@ -35,6 +35,11 @@ void port_pad_record_note(const char *note);        /* (recording) a comment at 
 
 void port_controls_init(void);
 
+/* What the player used last, for the buttons the menus show with --glyphs auto (main thread): the keyboard or mouse
+   until a controller is used, or one is plugged in before anything is pressed */
+typedef enum { PORT_DEVICE_KEYS, PORT_DEVICE_PLAYSTATION_PAD, PORT_DEVICE_OTHER_PAD } PortDevice;
+PortDevice port_controls_device(void);
+
 /* ---- What can be bound ------------------------------------------------------------------------ */
 typedef enum {
     ACTION_UP,

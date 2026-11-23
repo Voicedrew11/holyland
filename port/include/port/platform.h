@@ -75,6 +75,12 @@ typedef struct {
        from the player menu. */
     int font;
     int font_forced;
+    /* --glyphs: the controller's buttons the menus show (GSN_GLYPHS_*, gsn.h: 0 original, the disc's; 1 playstation,
+       drawn again sharper; 2 xbox, the Xbox controller's letters; 3 keyboard, the keys they are bound to;
+       port/gs/shared/button_pictures.h), or PORT_GLYPHS_AUTO (the default): one of 1 to 3 by what the player used
+       last (port_controls_device). The scene renderer's. Live from the player menu. */
+    int glyphs;
+    int glyphs_forced;
     /* --scene-depth: how the scene renderer keeps the 3D's depth (PORT_SCENE_DEPTH_*, port/scene_depth.h), from the
        next start: it
        chooses the depth's format, shaders and pipelines as the renderer opens. Developers' KF4_SCN_DEPTH=gpu and
@@ -453,6 +459,17 @@ void port_gs_set_native_aniso(int taps);
 void port_gs_set_native_2d(int mode);
 /* The game's font (port_options.font), from the next vblank */
 void port_gs_set_font(int font);
+/* The controller's buttons the menus show (port_options.glyphs, GSN_GLYPHS_*), from the next vblank */
+void port_gs_set_glyphs(int glyphs);
+/* The keys bound to the face buttons changed: the keyboard's buttons drawn again with them (main thread) */
+void port_gs_glyph_keys_changed(void);
+/* The device the player uses changed (port_controls_device): with PORT_GLYPHS_AUTO, its buttons drawn (main thread) */
+void port_gs_glyph_device_changed(void);
+/* port_options.glyphs: the buttons of the device the player uses (not a GSN_GLYPHS_*, never sent to a renderer) */
+#define PORT_GLYPHS_AUTO 4
+/* --glyphs' and settings.json's names: GSN_GLYPHS_* for a name (-1 for none), a name for GSN_GLYPHS_* */
+int port_glyphs_from_name(const char *name);
+const char *port_glyphs_name(int glyphs);
 /* The renderer's Z (port_options.native_layer_z), from the next draw */
 void port_gs_set_native_layer_z(int mode);
 /* --native-draw (port_options.native_draw), from the next frame */

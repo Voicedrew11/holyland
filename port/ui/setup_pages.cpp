@@ -94,6 +94,7 @@ const PresetValue presets[] = {
     {"graphics", "Widescreen", {0, 0, 1}},
     {"graphics", "Anti-Aliasing", {PORT_AA_FXAA, PORT_AA_SMAA, PORT_AA_SMAA_T2X}},
     {"graphics", "Font", {0, 1, 1}}, // (gsn.h's GSN_FONT_: the PS2's, IPA Mincho)
+    {"graphics", "Glyphs", {0, PORT_GLYPHS_AUTO, PORT_GLYPHS_AUTO}}, // (the disc's; what the player uses, sharp)
     {"controls", "Twin-Stick Controls", {0, 1, 1}},
     {"gameplay", "Attack Tracking", {100, PORT_ATTACK_TRACKING_AUTO, PORT_ATTACK_TRACKING_AUTO}},
     {"gameplay", "Instant Smith", {0, 0, 0}}, // (it changes the game's balance: the player opts in)

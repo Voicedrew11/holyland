@@ -104,8 +104,11 @@ public:
     // The 2D mode (GSN_2D_*) for the batches from the next draw: smooth reads the 2D's magnified textures with a cubic
     // at a scale above 1
     void set_2d(int mode) override;
-    // The font (GSN_FONT_*): the PC renderer draws the disc's whatever it is asked (font_sheet.h is the scene renderer's)
+    // The font (GSN_FONT_*): the PC renderer draws the disc's whatever it is asked (finer_pictures.h is the scene
+    // renderer's)
     void set_font(int font) override;
+    // The controller's buttons (GSN_GLYPHS_*): the PC renderer draws the disc's whatever it is asked
+    void set_glyphs(const GsnGlyphs &glyphs) override;
     // A picture between's walk begins (its buffers: the canvas reads them at each draw until set_between(nullptr)) or
     // ends; the open batch is drawn first either way (its corners are the walk's, or not)
     void set_between(const Between *between);

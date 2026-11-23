@@ -5780,6 +5780,8 @@ void Canvas::set_2d(int mode) {
 }
 void Canvas::set_font(int) {
 }
+void Canvas::set_glyphs(const GsnGlyphs &) {
+}
 void Canvas::set_sampling(int lod, uint32_t aniso) {
     impl_->set_sampling(lod, aniso);
 }

@@ -30,6 +30,7 @@
 #include "emulator_saves.hpp"
 #include "game_menu_art.hpp"
 #include "menu_model.hpp"
+#include "key_glyphs.hpp"
 #include "pad_glyphs.hpp"
 #include "rows_rml.hpp"
 #include "settings_rows.hpp"
@@ -80,13 +81,16 @@ public:
     void ProcessEvent(Rml::Event &event) override;
 };
 
-// The game's menu art from the disc (game_menu_art.hpp), for the recorder
-class GameMenuArt final : public ui::ImageSource {
+// The recorder's images: the game's menu art from the disc (game_menu_art.hpp) and the keys' pictures (key_glyphs.hpp)
+class MenuImages final : public ui::ImageSource {
 public:
     bool has(const std::string &source) const override {
-        return ui::is_game_menu_source(source);
+        return ui::is_game_menu_source(source) || ui::is_key_glyph_source(source);
     }
     std::optional<ui::TextureUpload> load(const std::string &source) const override {
+        if (ui::is_key_glyph_source(source)) {
+            return ui::load_key_glyph(source);
+        }
         std::optional<ui::MenuArtImage> image = ui::load_game_menu_art(source);
         if (!image) {
             return std::nullopt;
@@ -105,7 +109,7 @@ struct Menu {
     SDL_Window *window = nullptr;
     ui::SystemTies system;
     ui::AssetFiles files;
-    GameMenuArt game_art;
+    MenuImages images;
     ui::Recorder recorder;
     ui::SettingsRows rows;
     ui::MenuModel model{rows};
@@ -381,9 +385,9 @@ void escaped(std::string &out, std::string_view text) {
     ui::rml_escaped(out, text);
 }
 
-// A key's name in its box
+// A key (SDL's name: "Return", "Q") as its picture
 std::string key_rml(const char *name) {
-    return std::string("<key>") + name + "</key>";
+    return ui::key_glyph_rml(name);
 }
 
 // The controller's button as its picture when the controller was used last, else the key's name in its box
@@ -428,20 +432,20 @@ void prompt(std::string &out, const std::string &keys, const char *what) {
 std::string prompts_rml() {
     using ui::PadButton;
     std::string out;
-    std::string up_down = input_rml(PadButton::dpad_vertical, "&#x2191;");
+    std::string up_down = input_rml(PadButton::dpad_vertical, "Up");
     if (menu.device != Device::pad) {
-        up_down += key_rml("&#x2193;");
+        up_down += key_rml("Down");
     }
-    std::string left_right = input_rml(PadButton::dpad_horizontal, "&#x2190;");
+    std::string left_right = input_rml(PadButton::dpad_horizontal, "Left");
     if (menu.device != Device::pad) {
-        left_right += key_rml("&#x2192;");
+        left_right += key_rml("Right");
     }
-    std::string confirm = input_rml(PadButton::south, "Enter");
-    std::string back = input_rml(PadButton::east, "Esc");
+    std::string confirm = input_rml(PadButton::south, "Return");
+    std::string back = input_rml(PadButton::east, "Escape");
     std::string sections = input_rml(PadButton::left_shoulder, "Q") + input_rml(PadButton::right_shoulder, "E");
     if (port_controls_listening(nullptr, nullptr)) {
         prompt(out, "", menu.model.slot() == BINDING_PAD_SLOT ? "Press a controller button" : "Press a key or mouse button");
-        prompt(out, key_rml("Del"), "Clear");
+        prompt(out, key_rml("Delete"), "Clear");
         prompt(out, key_rml("F1"), "Cancel");
         return out;
     }
@@ -450,7 +454,7 @@ std::string prompts_rml() {
         prompt(out, up_down, "Move");
         prompt(out, left_right, "Slot");
         prompt(out, confirm, "Change");
-        prompt(out, input_rml(PadButton::west, "Del"), "Clear");
+        prompt(out, input_rml(PadButton::west, "Delete"), "Clear");
         prompt(out, sections, "Sections");
         prompt(out, back, "Close");
         return out;
@@ -473,14 +477,14 @@ std::string prompts_rml() {
 std::string setup_prompts_rml() {
     using ui::PadButton;
     std::string out;
-    std::string up_down = input_rml(PadButton::dpad_vertical, "&#x2191;");
-    std::string left_right = input_rml(PadButton::dpad_horizontal, "&#x2190;");
+    std::string up_down = input_rml(PadButton::dpad_vertical, "Up");
+    std::string left_right = input_rml(PadButton::dpad_horizontal, "Left");
     if (menu.device != Device::pad) {
-        up_down += key_rml("&#x2193;");
-        left_right += key_rml("&#x2192;");
+        up_down += key_rml("Down");
+        left_right += key_rml("Right");
     }
-    std::string confirm = input_rml(PadButton::south, "Enter");
-    std::string back = input_rml(PadButton::east, "Esc");
+    std::string confirm = input_rml(PadButton::south, "Return");
+    std::string back = input_rml(PadButton::east, "Escape");
     if (menu.setup.model().list_open()) {
         prompt(out, up_down, "Choose");
         prompt(out, confirm, "Pick");
@@ -885,7 +889,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.window = static_cast<SDL_Window *>(sdl_window);
     Rml::SetSystemInterface(&menu.system);
     Rml::SetFileInterface(&menu.files);
-    menu.recorder.set_images(&menu.game_art);
+    menu.recorder.set_images(&menu.images);
     Rml::SetRenderInterface(&menu.recorder);
     if (!Rml::Initialise()) {
         std::fprintf(stderr, "[ui] RmlUi did not start: no player menu\n");

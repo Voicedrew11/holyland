@@ -70,6 +70,9 @@ static struct {
     int wants_capture;           /* the player has not let it go (ACTION_CAPTURE_MOUSE) */
     int mouse_last;              /* the mouse was used last, not a key or a controller: its cursor shows */
     int mouse_turning;           /* the mouse turned the view since a controller was last used (port_mouse_turning) */
+    PortDevice device;           /* used last (port_controls_device) */
+    int device_used;             /* a key, the mouse or a controller has been used: a controller plugged in no longer
+                                    changes it */
     int cursor_shown;            /* SDL's cursor is shown (while the mouse is let go) */
     uint32_t motion_after;       /* SDL_GetTicks before which mouse motion is not the player's (SDL's warp) */
     uint32_t gameplay_ms;        /* SDL_GetTicks at the last read in play */
@@ -281,6 +284,7 @@ static void tables_init(void) {
 void port_controls_reset(void) {
     tables_init();
     reset_tables();
+    port_gs_glyph_keys_changed();
 }
 
 int port_controls_binding(int action, int slot) {
@@ -297,6 +301,7 @@ void port_controls_bind(int action, int slot, int binding) {
     }
     tables_init();
     bindings[action][slot] = binding;
+    port_gs_glyph_keys_changed();
 }
 
 int port_controls_is_default(int action) {
@@ -539,6 +544,10 @@ void port_controls_listen_cancel(void) {
 
 void port_controls_sample_mouse(void) {
 }
+
+PortDevice port_controls_device(void) {
+    return PORT_DEVICE_KEYS;
+}
 #else
 #define B_UP 0x0010u
 #define B_DOWN 0x0040u
@@ -715,6 +724,7 @@ void port_controls_listen_cancel(void) {
 static void listened(int binding) {
     bindings[pc.listen_action][pc.listen_slot] = binding;
     pc.listen_action = -1;
+    port_gs_glyph_keys_changed();
 }
 
 /* While a slot waits: the keyboard, the mouse and the controller go to it, not to the overlay. The
@@ -818,32 +828,69 @@ static void controller_used(void) {
     pc.mouse_turning = 0;
 }
 
-/* What the player is using: the mouse, or a key or controller (the cursor follows it: update_cursor) */
+PortDevice port_controls_device(void) {
+    return pc.device;
+}
+
+/* The device the menus' buttons follow is now this one: they are drawn again if it changed (glyphs auto) */
+static void device_now(PortDevice device) {
+    pc.device_used = 1;
+    if (pc.device != device) {
+        pc.device = device;
+        port_gs_glyph_device_changed();
+    }
+}
+
+/* A controller's kind, by SDL's id of it */
+static PortDevice pad_device(SDL_JoystickID id) {
+    switch (SDL_GetGamepadTypeForID(id)) {
+    case SDL_GAMEPAD_TYPE_PS3:
+    case SDL_GAMEPAD_TYPE_PS4:
+    case SDL_GAMEPAD_TYPE_PS5:
+        return PORT_DEVICE_PLAYSTATION_PAD;
+    default:
+        return PORT_DEVICE_OTHER_PAD;
+    }
+}
+
+/* What the player is using: the mouse, or a key or controller (the cursor follows it: update_cursor), and which
+   (the menus' buttons follow it: port_controls_device) */
 static void note_device(const SDL_Event *event) {
     switch (event->type) {
     case SDL_EVENT_KEY_DOWN:
         if (!event->key.repeat) {
             pc.mouse_last = 0;
+            device_now(PORT_DEVICE_KEYS);
+        }
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+        if (!pc.device_used && pc.device != pad_device(event->gdevice.which)) {
+            pc.device = pad_device(event->gdevice.which);
+            port_gs_glyph_device_changed();
         }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         pc.mouse_last = 0;
         controller_used();
+        device_now(pad_device(event->gbutton.which));
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         if (event->gaxis.value > STICK_USED || event->gaxis.value < -STICK_USED) {
             pc.mouse_last = 0;
             controller_used();
+            device_now(pad_device(event->gaxis.which));
         }
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if ((int32_t)((uint32_t)SDL_GetTicks() - pc.motion_after) >= 0) {
             pc.mouse_last = 1;
+            device_now(PORT_DEVICE_KEYS);
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_WHEEL:
         pc.mouse_last = 1;
+        device_now(PORT_DEVICE_KEYS);
         break;
     default:
         break;

@@ -313,6 +313,19 @@ bool font_overridden() {
     return port_options.font != port_settings.font;
 }
 
+// (gsn.h's GSN_GLYPHS_*, and platform.h's PORT_GLYPHS_AUTO)
+const Choice glyph_styles[] = {
+    {"Auto", PORT_GLYPHS_AUTO}, {"Original", 0}, {"PlayStation", 1}, {"Xbox", 2}, {"Keyboard", 3}};
+int get_glyphs() {
+    return port_options.glyphs;
+}
+void set_glyphs(int glyphs) {
+    port_live_set(PORT_LIVE_GLYPHS, glyphs);
+}
+bool glyphs_overridden() {
+    return port_options.glyphs != port_settings.glyphs;
+}
+
 // (port_options.native_aniso: 1 off, 2 to 16 taps)
 const Choice anisotropies[] = {{"Off", 1}, {"2x", 2}, {"4x", 4}, {"8x", 8}, {"16x", 16}};
 int get_aniso() {
@@ -508,6 +521,12 @@ const SettingRow graphics_rows[] = {
      RowKind::choice, texture_lods, {}, get_texture_lod, set_texture_lod, nullptr, nullptr, pc_renderer},
     {"Font", "IPA Mincho: sharp, in the same style.\nOriginal: blurry at high resolutions.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
+    {"Glyphs",
+     "The buttons shown in the menus.\nAuto: those of what you used last, sharp: PlayStation, Xbox or Keyboard."
+     "\nOriginal: as on the disc; blurry at high resolutions.\nPlayStation: the same "
+     "buttons, sharp.\nXbox: A, B, X and Y.\nKeyboard: the keys and mouse buttons they are bound to.",
+     RowKind::choice, glyph_styles, {}, get_glyphs, set_glyphs, nullptr, nullptr, pc_renderer, nullptr,
+     glyphs_overridden},
     {"Depth",
      "How cleanly things lying on a surface are drawn: moss and grime on walls, markings on floors, a rope on a log. "
      "Higher costs the graphics card more. From the next start.\nHigh: as on the PS2; no flicker, stripes or gaps."

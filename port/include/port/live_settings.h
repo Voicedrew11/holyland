@@ -19,6 +19,7 @@ typedef enum {
     PORT_LIVE_ANTIALIAS,         /* PORT_AA_*: the picture's anti-aliasing (port/antialias.h) */
     PORT_LIVE_NATIVE_2D,         /* 0 ps2 or 1 smooth: the 2D at a larger scale */
     PORT_LIVE_FONT,              /* 0 ps2 or 1 sharp: the game's font (GSN_FONT_*) */
+    PORT_LIVE_GLYPHS,            /* GSN_GLYPHS_*: the controller's buttons the menus show */
     PORT_LIVE_GAME_SPEED,        /* the whole game's clock, 1x to 2x in quarters (1.25: a quarter faster) */
     PORT_LIVE_COUNT
 } PortLiveSetting;

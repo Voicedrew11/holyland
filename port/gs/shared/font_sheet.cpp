@@ -5,6 +5,7 @@
 #include <array>
 #include <string_view>
 
+#include "finer_pictures.h"
 #include "font_letters_data.h"
 
 namespace pcr {
@@ -21,16 +22,21 @@ struct LetterSet {
     bool high_bits;               // (the picture in the indices' high two bits, else the low two)
     std::string_view characters;  // (in the cells' order; each drawn as font_letters' ASCII letter)
     std::array<uint64_t, 2> known; // (the cells' bits as the disc has them: FNV-1a, letters_hash; 0 none)
+    // (a set known when the set at this index in letter_sets is, as its sheet's: its own `known` unused; -1 none)
+    int known_with = -1;
 };
 
 constexpr std::string_view half_width_characters =
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz";
 
-// SLUS-20318's sheets: the messages' set on font.tmr and menu/font.tmr, the menus' on font.tmr
-constexpr std::array<LetterSet, 2> letter_sets = {{
+// SLUS-20318's sheets: the messages' set on font.tmr and menu/font.tmr, the menus' on font.tmr, and on the same sheet
+// the full-width punctuation the English menus use from the kana's last row (cell 243, the slash of "50 / 50", and
+// the ! and ? beside it; its other cells, \x01, past font_letters' characters, are kept as the game has them)
+constexpr std::array<LetterSet, 3> letter_sets = {{
     {0, 460, 10, 20, 50, true, half_width_characters, {0xcee01d3f1f8b8365ull, 0x5ce7fe8a58334073ull}},
     {0, 0, 20, 20, 25, false, "0123456789(),.:<>*-+abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
      {0x1a8f6d3e6aa4fb59ull, 0}},
+    {0, 180, 20, 20, 25, false, "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01!?\x01\x01\x01\x01\x01/", {0, 0}, 1},
 }};
 
 uint32_t rows_of(const LetterSet &set) {
@@ -59,6 +65,9 @@ uint64_t letters_hash(const LetterSet &set, const DecodedTexture &texture) {
 }
 
 bool known(const LetterSet &set, const DecodedTexture &texture) {
+    if (set.known_with >= 0) {
+        return known(letter_sets[size_t(set.known_with)], texture);
+    }
     uint64_t h = letters_hash(set, texture);
     return std::find(set.known.begin(), set.known.end(), h) != set.known.end();
 }
@@ -81,36 +90,6 @@ bool whole_sheet(const DecodedTexture &texture) {
 
 uint32_t channel(uint32_t colour, uint32_t c) {
     return (colour >> (8 * c)) & 0xFF;
-}
-
-// The sheet enlarged as the GS's bilinear filter reads it at each fine texel's middle (the edges clamped)
-std::vector<uint32_t> enlarged(std::span<const uint32_t> colours) {
-    std::vector<uint32_t> out(size_t(fine_size) * fine_size);
-    auto clamped = [](int32_t v) { return uint32_t(std::clamp(v, 0, int32_t(sheet_size) - 1)); };
-    for (uint32_t fy = 0; fy < fine_size; fy++) {
-        // (the coarse place of the fine texel's middle, less half a texel, in units of 1 / (2k))
-        int32_t py = int32_t(2 * fy + 1) - int32_t(k);
-        int32_t y0 = py < 0 ? -1 : py / int32_t(2 * k);
-        uint32_t wy = uint32_t(py - y0 * int32_t(2 * k)); // (0 to 2k - 1)
-        uint32_t ya = clamped(y0), yb = clamped(y0 + 1);
-        for (uint32_t fx = 0; fx < fine_size; fx++) {
-            int32_t px = int32_t(2 * fx + 1) - int32_t(k);
-            int32_t x0 = px < 0 ? -1 : px / int32_t(2 * k);
-            uint32_t wx = uint32_t(px - x0 * int32_t(2 * k));
-            uint32_t xa = clamped(x0), xb = clamped(x0 + 1);
-            uint32_t a = colours[size_t(ya) * sheet_size + xa], b = colours[size_t(ya) * sheet_size + xb];
-            uint32_t c = colours[size_t(yb) * sheet_size + xa], d = colours[size_t(yb) * sheet_size + xb];
-            uint32_t texel = 0;
-            for (uint32_t ch = 0; ch < 4; ch++) {
-                uint32_t top = channel(a, ch) * (2 * k - wx) + channel(b, ch) * wx;
-                uint32_t bottom = channel(c, ch) * (2 * k - wx) + channel(d, ch) * wx;
-                uint32_t v = (top * (2 * k - wy) + bottom * wy + 2 * k * k) / (4 * k * k);
-                texel |= std::min(v, 255u) << (8 * ch);
-            }
-            out[size_t(fy) * fine_size + fx] = texel;
-        }
-    }
-    return out;
 }
 
 // A fine texel of a letter from its coverage (0-255): the colours of the picture's four levels, none to the core,
@@ -212,7 +191,7 @@ std::vector<uint32_t> drawn(const DecodedTexture &texture, std::span<const uint3
     if (sets.empty()) {
         return {};
     }
-    std::vector<uint32_t> fine = enlarged(colours);
+    std::vector<uint32_t> fine = enlarged_as_read(colours, sheet_size, sheet_size, k);
     for (const LetterSet *set : sets) {
         draw_set(*set, texture, clut, fine);
     }

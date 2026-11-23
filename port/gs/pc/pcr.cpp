@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <cmath>
 #include <atomic>
 #include <chrono>
@@ -64,6 +65,7 @@ extern "C" {
 #include "port/render.h"
 #include "pcr.h"
 }
+#include "button_pictures.h" /* (pcr_key_width_u, pcr_hint_parts) */
 
 using namespace Vulkan;
 
@@ -702,6 +704,14 @@ struct Settings {
     std::atomic<int> lod{GSN_LOD_SCALE}, aniso{1}, mode_2d{GSN_2D_PS2}, antialias{PORT_AA_OFF},
         layer_z{GSN_LAYER_Z_PS2}, native_draw{GSN_NATIVE_DRAW_NATIVE}, font{GSN_FONT_SHARP};
     std::atomic<uint32_t> present_size{0}, present_sharpen{0};
+    // (the controller's buttons: set on the main thread, read at each vblank on the PC renderer's)
+    mutable std::mutex glyphs_lock;
+    GsnGlyphs glyphs{};
+
+    GsnGlyphs glyphs_now() const {
+        std::lock_guard<std::mutex> hold(glyphs_lock);
+        return glyphs;
+    }
 };
 
 // ---- --stats ---------------------------------------------------------------------------------------
@@ -1082,11 +1092,11 @@ public:
         since_vblank_bytes_ = 0;
     }
 
-    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d and
-    // font: Drawing::set_2d's and set_font's
+    // scale: across | down << 8; lod and aniso: texture detail's and anisotropy's (Canvas::set_sampling); mode_2d,
+    // font and glyphs: Drawing::set_2d's, set_font's and set_glyphs'
     // game_vblank: the game's vblank number (the picture's tag's; the developers' counters name the frames by it)
     void vblank(const uint64_t *privileged, uint32_t scale, int lod, int aniso, int mode_2d, int font,
-                uint64_t game_vblank) {
+                const GsnGlyphs &glyphs, uint64_t game_vblank) {
         vblanks_++;
         since_vblank_bytes_ = 0;
         if (stretch_open_) {
@@ -1097,6 +1107,7 @@ public:
             drawing_->set_sampling(lod, uint32_t(aniso));
             drawing_->set_2d(mode_2d);
             drawing_->set_font(font);
+            drawing_->set_glyphs(glyphs);
             drawing_->vblank(game_vblank);
             ZoneScope collect_zone(gpu_times_collected_zone);
             times_->collect();
@@ -3372,7 +3383,7 @@ private:
             ahead_left_ = 0;
             const double from = port_wall_seconds();
             intake_.vblank(v.privileged.data(), settings.scale.load(), settings.lod.load(), settings.aniso.load(),
-                           settings.mode_2d.load(), settings.font.load(), v.tag >> 16);
+                           settings.mode_2d.load(), settings.font.load(), settings.glyphs_now(), v.tag >> 16);
             note(DOING_VBLANK, from, port_wall_seconds());
             if (budget_on_ && !timing_.on) {
                 // (slice 5) the vblank's scene, closed alone (not in a picture's midst): its GPU work timed by a fence
@@ -4155,6 +4166,26 @@ extern "C" void pcr_set_2d(int mode) {
 
 extern "C" void pcr_set_font(int font) {
     settings().font.store(font);
+}
+
+extern "C" void pcr_set_glyphs(const GsnGlyphs *glyphs) {
+    std::lock_guard<std::mutex> hold(settings().glyphs_lock);
+    settings().glyphs = *glyphs;
+}
+
+extern "C" float pcr_key_width_u(const char *key_name) {
+    return pcr::key_width_u(key_name ? key_name : "");
+}
+
+extern "C" int pcr_hint_parts(const GsnHintSprite *sprite, const float widths_u[4], GsnHintPart parts[GSN_HINT_PARTS]) {
+    static_assert(GSN_HINT_PARTS == pcr::hint_part_count);
+    const pcr::HintSprite asked = {sprite->x0, sprite->x1, sprite->y0, sprite->y1, sprite->u0, sprite->u1, sprite->v0, sprite->v1};
+    std::array<pcr::HintPart, pcr::hint_part_count> out{};
+    size_t count = pcr::hint_parts(asked, std::span<const float, pcr::face_button_count>(widths_u, 4), out);
+    for (size_t i = 0; i < count; i++) {
+        parts[i] = {out[i].x0, out[i].x1, out[i].u0, out[i].u1, out[i].v0, out[i].v1};
+    }
+    return int(count);
 }
 
 extern "C" void pcr_set_antialias(int method) {

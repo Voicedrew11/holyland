@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "font_sheet.h"
+#include "finer_pictures.h"
 #include "mip_chain.h"
 #include "pcr_blend.h"
 #include "pcr_gpu_time.h"
@@ -136,12 +136,12 @@ struct SampledTexture {
     ImageHandle image;
     uint32_t levels = 1;       // the game's (read as the GS reads them)
     uint32_t image_levels = 1; // the image's: the game's and below them those made on the PC (gpu_levels_for)
-    uint32_t finer = 1; // (the image this many times the texture's texels across and down: a font sheet, font_sheet.h)
-    bool sharp_font = false; // (made with the sharper font asked, where it may be a font sheet: may_be_font_sheet)
+    uint32_t finer = 1; // (the image this many times the texture's texels across and down: finer_pictures.h)
+    uint64_t finer_asked = 0; // (what was asked to be finer, where it may be a finer picture: FinerAsked::hash)
     uint64_t used = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
-    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, bool sharp) const {
-        return key == k && texa == t && clut == c && sharp_font == sharp;
+    bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, uint64_t asked) const {
+        return key == k && texa == t && clut == c && finer_asked == asked;
     }
 };
 
@@ -251,7 +251,18 @@ public:
         mode_2d_ = mode;
     }
     void set_font(int font) override {
-        sharp_font_ = font == GSN_FONT_SHARP;
+        finer_asked_.sharp_font = font == GSN_FONT_SHARP;
+    }
+    void set_glyphs(const GsnGlyphs &glyphs) override {
+        ButtonLooks looks;
+        if (glyphs.style >= GSN_GLYPHS_ORIGINAL && glyphs.style <= GSN_GLYPHS_KEYBOARD) {
+            looks.style = ButtonStyle(glyphs.style);
+        }
+        for (size_t i = 0; i < looks.keys.size(); i++) {
+            const char *key = glyphs.keys[i];
+            looks.keys[i].assign(key, strnlen(key, GSN_GLYPH_KEY_CHARS));
+        }
+        finer_asked_.buttons = std::move(looks);
     }
 
     // ---- The front end's events ----
@@ -1979,7 +1990,7 @@ public:
         fprintf(stderr,
                 "[stats] scene renderer targets and textures: %llu targets made, %llu grown, %llu filled from uploads, "
                 "%llu uploads written into them, %llu copies between them, %llu depth aliases cleared; textures %llu "
-                "decoded, %llu sampled (%llu font sheets made finer, %llu at the GPU's own level), %llu from targets "
+                "decoded, %llu sampled (%llu fonts, word pictures and buttons made finer, %llu at the GPU's own level), %llu from targets "
                 "(%llu into a kept image), "
                 "%llu missing, %llu reused; "
                 "%llu shader blends, %llu read-backs; "
@@ -1989,7 +2000,7 @@ public:
                 (unsigned long long)counts_.filled_from_uploads, (unsigned long long)counts_.uploads_into_targets,
                 (unsigned long long)counts_.copies_between_targets, (unsigned long long)counts_.depth_aliases_cleared,
                 (unsigned long long)counts_.textures_uploaded, (unsigned long long)counts_.textures_sampled,
-                (unsigned long long)counts_.font_sheets, (unsigned long long)counts_.textures_gpu_levels,
+                (unsigned long long)counts_.finer_pictures, (unsigned long long)counts_.textures_gpu_levels,
                 (unsigned long long)counts_.textures_from_targets,
                 (unsigned long long)counts_.target_copies_reused,
                 (unsigned long long)counts_.textures_missing,
@@ -3814,8 +3825,8 @@ private:
                 b.src = SRC_SAMPLED;
                 b.levels = t->levels;
                 if (t->finer > 1) {
-                    // (a font sheet made finer: its letters read by their footprint on the screen, anti-aliased at
-                    // every scale, whatever filter the game asked; pcr_prim.h's sampled_footprint)
+                    // (a font sheet or word picture made finer: its letters read by their footprint on the screen,
+                    // anti-aliased at every scale, whatever filter the game asked; pcr_prim.h's sampled_footprint)
                     b.sampler = &gpu_levels_sampler(s.clamp, t->image_levels);
                     b.sampling = gpu_levels_bits(1, t->finer);
                 } else if (gpu_levels_for(s, *t)) {
@@ -3907,11 +3918,6 @@ private:
         return across && down;
     }
 
-    // Whether a texture has a font sheet's shape (is_font_sheet's cheap part: a draw's lookup asks it)
-    static bool may_be_font_sheet(const DecodedTexture &d) {
-        return d.kind == TexelKind::Index8 && d.width_px == 512 && d.height_px == 512 && d.levels == 1;
-    }
-
     // A texture as the GPU's sampler reads it: decoded once, the CLUT's colours and TEXA in it, kept by all it was made
     // from (the design's materials: an image kept by its key)
     SampledTexture *sampled_texture(const TextureAnswer &a, const DrawState &s) {
@@ -3922,27 +3928,29 @@ private:
         if (d.kind == TexelKind::Index8) {
             clut = store_.clut_colours(s.tex0, s.texa);
         }
-        // (the font asked is part of what a texture that may be a font sheet is made from: the setting changed, it is made
-        // again)
-        bool sharp = sharp_font_ && may_be_font_sheet(d);
-        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ (sharp ? 0x5BD1E995ull : 0);
+        // (the font and buttons asked are part of what a texture that may be a font sheet, a word picture or a picture
+        // with buttons is made from: a setting changed, it is made again)
+        bool finer_asked = may_be_finer(d, finer_asked_);
+        uint64_t asked = finer_asked ? finer_asked_.hash() : 0;
+        uint64_t h = a.key.hash() ^ (texa * 0x9E3779B97F4A7C15ull) ^ asked;
         for (uint32_t c : clut.rgba) {
             h = (h ^ c) * 0x100000001B3ull;
         }
         auto found = sampled_.find(h);
-        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, sharp)) {
+        if (found != sampled_.end() && found->second.made_from(a.key, texa, clut.rgba, asked)) {
             found->second.used = frame_;
             return &found->second;
         }
         std::vector<uint32_t> colours = colour_texels(d, psm, clut, texa);
-        // (the game's fonts: the sheet four times as fine, its English letters drawn again; font_sheet.h)
+        // (the game's fonts, word pictures and buttons: four times as fine, their English letters and buttons drawn
+        // again as asked; finer_pictures.h)
         uint32_t finer = 1;
-        if (sharp) {
-            std::vector<uint32_t> sharp = sharper_font_sheet(d, colours, clut.rgba);
-            if (!sharp.empty()) {
-                colours = std::move(sharp);
-                finer = font_sheet_scale;
-                counts_.font_sheets++;
+        if (finer_asked) {
+            FinerPicture made = finer_picture(d, colours, clut.rgba, finer_asked_);
+            if (!made.colours.empty()) {
+                colours = std::move(made.colours);
+                finer = made.scale;
+                counts_.finer_pictures++;
             }
         }
         // (below the game's levels, the rest down to 1 x 1 made here, for the GPU's own level: gpu_levels_for)
@@ -3980,7 +3988,7 @@ private:
         t.levels = d.levels;
         t.image_levels = uint32_t(data.size());
         t.finer = finer;
-        t.sharp_font = sharp;
+        t.finer_asked = asked;
         t.used = frame_;
         t.alpha_lo = 255;
         t.alpha_hi = 0;
@@ -4036,7 +4044,7 @@ private:
     }
 
     // TEX1's PC bits for a texture read at the GPU's own level (PCR_TEX1_GPU_LEVELS): the anisotropy, and in the bias's
-    // place log2 of the image's texels across one of the texture's (`finer`: a font sheet's font_sheet_scale, else 1)
+    // place log2 of the image's texels across one of the texture's (`finer`: a finer picture's scale, else 1)
     static uint32_t gpu_levels_bits(uint32_t aniso, uint32_t finer) {
         uint32_t a = 0;
         while (a < 4 && (2u << a) <= aniso) {
@@ -5460,7 +5468,7 @@ private:
     };
     std::vector<AlphaWatch> alpha_watches_;
     const bool sampler_on_ = !getenv("KF4_PC_SAMPLER") || strcmp(getenv("KF4_PC_SAMPLER"), "0") != 0;
-    bool sharp_font_ = true; // (set_font: the game's font sheets made finer, their letters drawn again; font_sheet.h)
+    FinerAsked finer_asked_{true, {}}; // (set_font, set_glyphs: what is made finer; finer_pictures.h)
     const bool unblend_on_ = !(getenv("KF4_PC_UNBLEND") && strcmp(getenv("KF4_PC_UNBLEND"), "0") == 0);
     // (slice 3d's bound, developers' only: the picture lacks the shine) program 0x280's second, sphere-mapped passes
     // left out, so that its time with them gone is the most drawing both passes as one could save
@@ -5507,7 +5515,7 @@ private:
         uint64_t targets_made = 0, targets_grown = 0, filled_from_uploads = 0, uploads_into_targets = 0,
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
-                 textures_reused = 0, font_sheets = 0;
+                 textures_reused = 0, finer_pictures = 0;
         uint64_t textures_gpu_levels = 0; // (of textures_sampled: read at the GPU's own level, gpu_levels_for)
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
