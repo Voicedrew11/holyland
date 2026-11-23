@@ -1557,7 +1557,8 @@ extern "C" int port_vk_imgui_init(void) {
 
 // The frame profiler's zones (port/include/port/zones.h)
 static const ZoneId present_zone = port_zone_id("present", ZONE_WORK);
-static const ZoneId present_wait_zone = port_zone_id("present: wait for its frame and a swapchain image", ZONE_WAIT);
+static const ZoneId present_frame_zone = port_zone_id("present: wait for its frame (the GPU done with it)", ZONE_WAIT);
+static const ZoneId present_image_zone = port_zone_id("present: wait for a swapchain image (the screen's)", ZONE_WAIT);
 static const ZoneId present_overlay_zone = port_zone_id("present: the overlay drawn (ImGui)", ZONE_WORK);
 static const ZoneId present_queue_zone = port_zone_id("present: submit and vkQueuePresentKHR", ZONE_WAIT);
 
@@ -1616,16 +1617,20 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
         skipped_waiting(image, tag);
         return 0;
     }
-    int waiting = port_zone_begin(present_wait_zone);
+    int waiting = port_zone_begin(present_frame_zone);
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
+    if (waiting) {
+        port_zone_end(present_frame_zone);
+    }
     flash_read_timer(f);
     own_read_timer(f);
     fold_check_read(f);
     uint32_t index = 0;
+    waiting = port_zone_begin(present_image_zone);
     VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, no_wait ? 0 : UINT64_MAX, f.acquired,
                                                VK_NULL_HANDLE, &index);
     if (waiting) {
-        port_zone_end(present_wait_zone);
+        port_zone_end(present_image_zone);
     }
     if (no_wait && (result == VK_TIMEOUT || result == VK_NOT_READY)) {
         skipped_waiting(image, tag);
