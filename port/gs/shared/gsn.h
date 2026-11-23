@@ -58,10 +58,10 @@ typedef struct GsnGlyphs {
     char keys[4][GSN_GLYPH_KEY_CHARS];
 } GsnGlyphs;
 /* A hint the menus draw from their hints' sheet, and the parts it is drawn in when its button is a key wider than a
-   letter's (pcr_hint_parts; port/gs/shared/button_pictures.h's HintSprite and HintPart): screen x from x0 to x1 (any
-   unit) showing the sheet's texels u0 to u1 across, v0 to v1 down */
+   letter's or would not be round (pcr_hint_parts; port/gs/shared/button_pictures.h's HintSprite and HintPart): screen
+   x from x0 to x1 and y from y0 to y1 (the GS's units) showing the sheet's texels u0 to u1 across, v0 to v1 down */
 typedef struct GsnHintSprite {
-    float x0, x1, u0, u1, v0, v1;
+    float x0, x1, y0, y1, u0, u1, v0, v1;
 } GsnHintSprite;
 typedef struct GsnHintPart {
     float x0, x1, u0, u1, v0, v1;

@@ -56,6 +56,9 @@ static void first_key_of(int action, char *out, size_t size) {
 /* Each face button's key's width in U (GsnGlyphs' order), for the hints drawn in parts: 1 but for the keyboard's
    (written by the main thread, read by the game's) */
 static _Atomic float face_widths_u[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+/* Whether the menus' buttons are drawn again (any glyphs but the disc's), so a stretched hint's button is drawn round
+   (written by the main thread, read by the game's) */
+static _Atomic int buttons_redrawn = 0;
 
 /* The style drawn for port_options.glyphs: auto's by the device the player uses (main thread) */
 static int glyphs_drawn(int glyphs) {
@@ -77,6 +80,8 @@ static void send_glyphs(int asked_glyphs) {
     int glyphs = glyphs_drawn(asked_glyphs);
     static const int faces[4] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE};
     GsnGlyphs asked = {.style = glyphs};
+
+    atomic_store(&buttons_redrawn, glyphs != GSN_GLYPHS_ORIGINAL);
 
     for (int i = 0; i < 4; i++) {
         first_key_of(faces[i], asked.keys[i], sizeof(asked.keys[i]));
@@ -979,15 +984,16 @@ void port_gs_set_glyphs(int glyphs) {
 #endif
 }
 
-int port_hint_parts(float x0, float x1, float u0, float u1, float v0, float v1, PortHintPart parts[PORT_HINT_PARTS]) {
+int port_hint_parts(float x0, float x1, float y0, float y1, float u0, float u1, float v0, float v1,
+                    PortHintPart parts[PORT_HINT_PARTS]) {
 #ifdef KF4_HAVE_PARALLEL_GS
     _Static_assert(PORT_HINT_PARTS == GSN_HINT_PARTS, "a hint's parts");
-    const GsnHintSprite sprite = {x0, x1, u0, u1, v0, v1};
+    const GsnHintSprite sprite = {x0, x1, y0, y1, u0, u1, v0, v1};
     float widths_u[4];
     GsnHintPart out[GSN_HINT_PARTS];
     int count;
 
-    if (!have_pc) {
+    if (!have_pc || !atomic_load(&buttons_redrawn)) {
         return 0;
     }
     for (int i = 0; i < 4; i++) {
@@ -999,7 +1005,7 @@ int port_hint_parts(float x0, float x1, float u0, float u1, float v0, float v1, 
     }
     return count;
 #else
-    (void)x0, (void)x1, (void)u0, (void)u1, (void)v0, (void)v1, (void)parts;
+    (void)x0, (void)x1, (void)y0, (void)y1, (void)u0, (void)u1, (void)v0, (void)v1, (void)parts;
     return 0;
 #endif
 }

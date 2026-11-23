@@ -56,9 +56,10 @@ struct ButtonLooks {
 };
 
 // A hint the menus draw from the hints' sheet (button_pictures_data.h's "hints", 512 x 512): a sprite from x0 to x1
-// across the screen (any unit) showing the sheet's texels u0 to u1 across, v0 to v1 down
+// across the screen and y0 to y1 down (the GS's units: y in the field's lines, half the frame's rows) showing the
+// sheet's texels u0 to u1 across, v0 to v1 down
 struct HintSprite {
-    float x0, x1, u0, u1, v0, v1;
+    float x0, x1, y0, y1, u0, u1, v0, v1;
 };
 // One part of a hint drawn in parts: the sheet's texels u0 to u1 across, v0 to v1 down, drawn from x0 to x1
 struct HintPart {
@@ -66,11 +67,16 @@ struct HintPart {
 };
 constexpr size_t hint_part_count = 3;
 constexpr float hint_key_most_u = 3.0f;
+constexpr float hint_round_slack = 0.05f; // (a share of the button's width: the disc's own hints are within 2%)
 
-// How a hint whose button is a key wider than 1 U is drawn: its part before the button as it was, then the key at its
-// width, from where draw_buttons draws it in a part of the sheet the game leaves bare (a row under the hints' words),
-// then its words after it moved along by as much. A key is drawn there at most hint_key_most_u wide. widths_u: each face button's key's width (FaceButton's order; 1 for any style but the keyboard's).
-// Gives back how many parts it wrote, 0 when the sprite is drawn as it is (no face button in it, or a key 1 U wide).
+// How a hint is drawn whose button is a key wider than 1 U, or which the game stretches so its button would not be
+// round (the "Keys" hint shows more of the sheet's rows than the others in as many of the screen's, its square
+// button 12% wider than tall): its part before the button as it was, then the button as wide as its height makes it
+// round (a key: that times its width, from where draw_buttons draws it in a part of the sheet the game leaves bare, a
+// row under the hints' words), then its words after it moved along by as much. A key is drawn there at most
+// hint_key_most_u wide. widths_u: each face button's key's width (FaceButton's order; 1 for any style but the
+// keyboard's). Gives back how many parts it wrote, 0 when the sprite is drawn as it is (no face button in it, or a
+// button 1 U wide within hint_round_slack of round).
 size_t hint_parts(const HintSprite &sprite, std::span<const float, face_button_count> widths_u,
                   std::span<HintPart, hint_part_count> out);
 

@@ -448,9 +448,11 @@ size_t hint_parts(const HintSprite &sprite, std::span<const float, face_button_c
             hints = &p;
         }
     }
-    if (!hints || !(sprite.u1 > sprite.u0) || !(sprite.v1 > sprite.v0)) {
+    if (!hints || !(sprite.x1 > sprite.x0) || !(sprite.u1 > sprite.u0) || !(sprite.v1 > sprite.v0)) {
         return 0;
     }
+    // (screen x a texel is wide for the button to be round: x counts the frame's columns, y the field's lines)
+    const float round_per_texel = 2.0f * std::abs(sprite.y1 - sprite.y0) / (sprite.v1 - sprite.v0);
     for (uint32_t b = 0; b < hints->button_count; b++) {
         const data::Button &button = data::buttons[hints->first_button + b];
         const float c0 = button.cell_x, c1 = c0 + float(data::cell);
@@ -464,18 +466,24 @@ size_t hint_parts(const HintSprite &sprite, std::span<const float, face_button_c
             return 0;
         }
         const float width_u = std::min(widths_u[size_t(*face)], hint_key_most_u);
-        if (!(width_u > 1.0f)) {
-            return 0;
-        }
         const float per_texel = (sprite.x1 - sprite.x0) / (sprite.u1 - sprite.u0);
         const float cell_x0 = sprite.x0 + (c0 - sprite.u0) * per_texel, cell_x1 = sprite.x0 + (c1 - sprite.u0) * per_texel;
-        const float wider = (cell_x1 - cell_x0) * (width_u - 1.0f);
-        // (the key's row, its rows above and below the cell as the sprite has them round its cell)
-        const float key_u0 = float(hint_key_first + hint_key_step * uint32_t(*face)), key_v0 = float(hint_key_row);
+        const float button_x1 = cell_x0 + float(data::cell) * round_per_texel * std::max(width_u, 1.0f);
+        const float wider = button_x1 - cell_x1;
+        const bool key = width_u > 1.0f;
+        if (!key && std::abs(wider) <= hint_round_slack * (cell_x1 - cell_x0)) {
+            return 0;
+        }
         out[0] = {sprite.x0, cell_x0, sprite.u0, c0, sprite.v0, sprite.v1};
-        out[1] = {cell_x0, cell_x1 + wider, key_u0, key_u0 + float(data::cell) * width_u, key_v0 - (r0 - sprite.v0),
-                  key_v0 + (sprite.v1 - r0)};
-        out[2] = {cell_x1 + wider, sprite.x1 + wider, c1, sprite.u1, sprite.v0, sprite.v1};
+        if (key) {
+            // (the key's row, its rows above and below the cell as the sprite has them round its cell)
+            const float key_u0 = float(hint_key_first + hint_key_step * uint32_t(*face)), key_v0 = float(hint_key_row);
+            out[1] = {cell_x0, button_x1, key_u0, key_u0 + float(data::cell) * width_u, key_v0 - (r0 - sprite.v0),
+                      key_v0 + (sprite.v1 - r0)};
+        } else {
+            out[1] = {cell_x0, button_x1, c0, c1, sprite.v0, sprite.v1};
+        }
+        out[2] = {button_x1, sprite.x1 + wider, c1, sprite.u1, sprite.v0, sprite.v1};
         return hint_part_count;
     }
     return 0;

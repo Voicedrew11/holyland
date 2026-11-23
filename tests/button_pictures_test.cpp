@@ -5,6 +5,7 @@
 #include "button_pictures.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -292,6 +293,24 @@ void test_looks_hash() {
     CHECK(looks_of(ButtonStyle::xbox).hash() != looks_of(ButtonStyle::playstation).hash());
 }
 
+// The hints as the Item menu draws them (measured in the game): the "Keys" hint shows more of the sheet's rows than
+// the "Confirm" one in as many of the screen's, so its square would be 12% wider than tall
+void test_hint_drawn_round() {
+    const std::array<float, face_button_count> ones = {1, 1, 1, 1};
+    std::array<HintPart, hint_part_count> parts{};
+    const HintSprite confirm = {28704, 30752, 34144, 34400, 191, 320.5f, 128, 160};
+    CHECK(hint_parts(confirm, ones, parts) == 0); // (its cross within 2% of round: drawn as it is)
+    const HintSprite keys = {32800, 34848, 34144, 34400, 323, 445.5f, 95, 129};
+    CHECK(hint_parts(keys, ones, parts) == hint_part_count);
+    const float round_width = float(data::cell) * 2 * 256 / 34; // (screen x for the cell, round)
+    CHECK(std::abs(parts[1].x1 - parts[1].x0 - round_width) < 0.01f);
+    CHECK(parts[1].u0 == 323 && parts[1].u1 == 323 + float(data::cell)); // (the square's own cell, not a key's)
+    CHECK(parts[0].x1 == parts[1].x0 && parts[1].x1 == parts[2].x0);
+    // (the words moved left by as much as the button was narrowed)
+    const float stretched_width = (keys.x1 - keys.x0) / (keys.u1 - keys.u0) * float(data::cell);
+    CHECK(std::abs((keys.x1 - parts[2].x1) - (stretched_width - round_width)) < 0.01f);
+}
+
 // The Xbox font has the four letters, each a capital tall, and nothing else
 void test_xbox_font() {
     for (const char *letter : {"A", "B", "X", "Y"}) {
@@ -318,6 +337,7 @@ int main() {
     test_key_label_text();
     test_looks_hash();
     test_xbox_font();
+    test_hint_drawn_round();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

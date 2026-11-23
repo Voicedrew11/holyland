@@ -4179,7 +4179,7 @@ extern "C" float pcr_key_width_u(const char *key_name) {
 
 extern "C" int pcr_hint_parts(const GsnHintSprite *sprite, const float widths_u[4], GsnHintPart parts[GSN_HINT_PARTS]) {
     static_assert(GSN_HINT_PARTS == pcr::hint_part_count);
-    const pcr::HintSprite asked = {sprite->x0, sprite->x1, sprite->u0, sprite->u1, sprite->v0, sprite->v1};
+    const pcr::HintSprite asked = {sprite->x0, sprite->x1, sprite->y0, sprite->y1, sprite->u0, sprite->u1, sprite->v0, sprite->v1};
     std::array<pcr::HintPart, pcr::hint_part_count> out{};
     size_t count = pcr::hint_parts(asked, std::span<const float, pcr::face_button_count>(widths_u, 4), out);
     for (size_t i = 0; i < count; i++) {
