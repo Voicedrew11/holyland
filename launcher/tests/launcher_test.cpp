@@ -571,35 +571,35 @@ void test_delta_file() {
     fs::path dir = temp_dir("holyland_launcher_test_delta_file");
     fs::path data = fs::path(TEST_DATA_DIR) / "delta";
     fs::path out = dir / "made";
-    std::string whole = file_sha256(data / "new.bin");
+    std::string whole = file_sha256(data / "new.txt");
     std::error_code error;
     check("delta's name", delta_name("H-0.3.0-x86_64.AppImage", "0.2.0") == "H-0.3.0-x86_64.AppImage.from-0.2.0.delta");
 
-    std::string why = apply_file_patch(data / "old.bin", data / "new.bin.patch", out, whole, kUpdateMaxBytes);
-    check("a file patch makes the new file", why.empty() && read_file(out) == read_file(data / "new.bin"));
+    std::string why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, whole, kUpdateMaxBytes);
+    check("a file patch makes the new file", why.empty() && read_file(out) == read_file(data / "new.txt"));
     fs::remove(out, error);
 
-    why = apply_file_patch(data / "new.bin", data / "new.bin.patch", out, whole, kUpdateMaxBytes);
+    why = apply_file_patch(data / "new.txt", data / "new.txt.patch", out, whole, kUpdateMaxBytes);
     check("a patch against another file is refused, nothing left", !why.empty() && !fs::exists(out, error));
 
-    why = apply_file_patch(data / "old.bin", data / "new.bin.patch", out, sha("other"), kUpdateMaxBytes);
+    why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, sha("other"), kUpdateMaxBytes);
     check("a patch that makes another file is refused",
           why.find("checksum differs") != std::string::npos && !fs::exists(out, error));
 
-    why = apply_file_patch(data / "old.bin", data / "new.bin.patch", out, whole, 1000);
+    why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, whole, 1000);
     check("a patch making more than the limit is refused", !why.empty() && !fs::exists(out, error));
 
-    std::string patch = read_file(data / "new.bin.patch").value_or("");
+    std::string patch = read_file(data / "new.txt.patch").value_or("");
     write(dir / "short.patch", patch.substr(0, patch.size() / 2));
-    why = apply_file_patch(data / "old.bin", dir / "short.patch", out, whole, kUpdateMaxBytes);
+    why = apply_file_patch(data / "old.txt", dir / "short.patch", out, whole, kUpdateMaxBytes);
     check("a patch cut short is refused", !why.empty() && !fs::exists(out, error));
 
     write(dir / "long.patch", patch + patch);
-    why = apply_file_patch(data / "old.bin", dir / "long.patch", out, whole, kUpdateMaxBytes);
+    why = apply_file_patch(data / "old.txt", dir / "long.patch", out, whole, kUpdateMaxBytes);
     check("a patch with more after its end is refused", !why.empty() && !fs::exists(out, error));
 
     write(dir / "junk.patch", "not zstd at all");
-    why = apply_file_patch(data / "old.bin", dir / "junk.patch", out, whole, kUpdateMaxBytes);
+    why = apply_file_patch(data / "old.txt", dir / "junk.patch", out, whole, kUpdateMaxBytes);
     check("a patch that is not one is refused", !why.empty() && !fs::exists(out, error));
     fs::remove_all(dir, error);
 }
