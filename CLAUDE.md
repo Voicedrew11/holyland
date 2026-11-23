@@ -21,7 +21,7 @@ out/linux-clang/kf4 --disc <image> [--renderer pc|gs] ...
 out/linux-clang/kf4 --help                 # every option
 ```
 
-- Release builds: the `*-release` presets (LTO, no frame pointers) and `tools/pgo_train.py` (PGO); check one against
+- Release builds: the `*-release` presets (LTO, no frame pointers, `KF4_PLAYER_BUILD`: Depth fixed at Low) and `tools/pgo_train.py` (PGO); check one against
   the developers' build with `tools/build_compare.py` (`tools/README.md`, "A release build").
 - The game code is GNU C: MSVC `cl` cannot build it.
 - SDL3 (3.2 or newer; releases pin 3.4.20 in `packaging/toolchain.lock`): Fedora's `SDL3-devel`, or `-DSDL3_DIR=<its lib/cmake/SDL3>`
@@ -91,7 +91,8 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
     `--renderer native|modern|fast|both`, scene scale and FSR/DLSS; docs/ still describe it as history.
 - `port/render/`: CPU-side records shared by the renderers (VU1 recording, part moves for pictures
   between game frames). Shared shader headers in `port/render/shaders/`.
-- `port/ui/`: the player menu (F1), RmlUi in King's Field IV's look, its settings as data (`settings_rows.cpp`),
+- `port/ui/`: the player menu (F1), RmlUi in King's Field IV's look, its settings as data (`settings_rows.cpp`), and
+  the first-start setup in the same window (`setup_pages.cpp`, shown once per `SETUP_VERSION`; `KF4_SETUP=1` forces it),
   drawn by the Vulkan presenter (`port/platform/present_vk_ui.cpp`): `docs/port/PLAYER_UI.md`, with the plan to
   retire ImGui. The launcher's window uses the same RmlUi code on SDL's renderer (`launcher/window.h`).
 - `port/overlay/`: the ImGui overlay, now the developers' (Shift+F1 where the player menu is): settings, stats

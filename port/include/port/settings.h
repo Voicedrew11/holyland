@@ -69,7 +69,6 @@ typedef struct {
                               changed while the game runs, from the next vblank, and only while the
                               game simulates: the menus, the pauses and the cinematics keep 1x) */
     int myus_necklace;     /* the effect of Myu's Necklace, always (port_options.myus_necklace) */
-    int separate_run;      /* a run key apart from the action button (port_options.separate_run) */
     int no_hit_jolt;       /* a hard hit does not throw the view down (port_options.no_hit_jolt) */
     int door_speed;        /* doors run their opening and closing animation this many times a game frame, 1 (the
                               PS2's) to 8 (port_door_speed; 1, the PS2's, by default) */
@@ -90,6 +89,8 @@ typedef struct {
     int quick_slot;        /* the slot of the quick save and quick load keys (port/include/port/quicksave.h) */
     int cheats_shown;      /* the player menu shows its Cheats tab; clicking the Holyland logo five times shows or
                               hides it (port/ui/player_ui.cpp; off by default) */
+    int setup_version;     /* the first-start setup's version the player last went through (port/ui/setup_model.hpp's
+                              SETUP_VERSION); below it, the setup shows at the next start. 0 (absent): never seen */
 } PortSettings;
 extern PortSettings port_settings;
 
@@ -98,6 +99,8 @@ extern PortSettings port_settings;
 void port_settings_load(void);
 /* 1 when settings.json was read (a run with a window and no pad script) */
 int port_settings_active(void);
+/* 1 when there was a settings.json to read at the start (the player has settings of their own), 0 on a first start */
+int port_settings_found(void);
 /* Something changed: written a second after the last change, and at exit */
 void port_settings_changed(void);
 /* (once a vblank, the game's thread) writes settings.json if it changed a while ago */

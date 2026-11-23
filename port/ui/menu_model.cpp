@@ -79,6 +79,9 @@ bool MenuModel::step_row(int delta) {
     switch (shape.kind) {
     case RowKind::choice: {
         int next = (shape.current < 0 ? (delta > 0 ? -1 : shape.choice_count) : shape.current) + delta;
+        while (next >= 0 && next < shape.choice_count && !rows_.choice_enabled(tab_, row_, next)) {
+            next += delta; // (a dimmed choice is passed over)
+        }
         if (next < 0 || next >= shape.choice_count) {
             return false;
         }
@@ -161,6 +164,10 @@ MenuResult MenuModel::press(MenuInput input) {
             cue(list_choice_ != was ? MenuCue::move : MenuCue::none);
             break;
         case MenuInput::confirm:
+            if (!rows_.choice_enabled(tab_, row_, list_choice_)) {
+                cue(MenuCue::refused); // (a dimmed choice: the list stays open)
+                break;
+            }
             list_open_ = false;
             rows_.choose(tab_, row_, list_choice_);
             cue(MenuCue::confirm);
@@ -251,6 +258,10 @@ void MenuModel::click_step(int row, int delta) {
 void MenuModel::click_choice(int choice) {
     settle();
     if (list_open_ && choice >= 0 && choice < rows_.shape(tab_, row_).choice_count) {
+        if (!rows_.choice_enabled(tab_, row_, choice)) {
+            cue(MenuCue::refused);
+            return;
+        }
         list_open_ = false;
         rows_.choose(tab_, row_, choice);
         cue(MenuCue::confirm);

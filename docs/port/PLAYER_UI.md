@@ -71,6 +71,72 @@ is not borrowed.
   `port/platform/video.c`) from `Quick_WhyNotInPlay` (`game/quicksave.c`), so the game's pause, an open
   message, a menu, a map or screen fade and a movie's loop keep the PS2's 1x whatever the row says.
 
+## The first-start setup
+
+Started 2026-11-22 on `feat/setup`, on the shape of Verdite2/3's and KFII-PC's onboarding (`KFII-PC/docs/SETTINGS.md`,
+"Onboarding"): presets as starting points, then a page per subject the player walks to the end. Here it is in the
+game, in the menu's own window, not in the launcher.
+
+- **When**: at the start of play (the hint's moment, two seconds of the game's clock, in place of the hint) while
+  settings.json's `"overlay": {"setup_version": N}` is below `SETUP_VERSION` (`port/ui/setup_model.hpp`, 1 now). A
+  missing key is 0, so a player with settings from before sees it once too. Raise `SETUP_VERSION` to show it to
+  everyone again. `KF4_SETUP=1` shows it regardless. Never under a pad script (`--input`) or with
+  `KF4_OVERLAY_SHOT` (test runs' pictures stay as they were). The game is held still while it shows, whatever
+  "Pause While Open" says (`port_player_ui_setup_open`, `port_overlay_paused`).
+- **Again**: Display, Run Setup Again. Its Welcome then has Cancel, which puts back every setting the setup can
+  touch as it was when it opened (Esc on the Welcome does the same).
+- **The pages** (`port/ui/setup_pages.cpp`, a table): Welcome (the cards), Controls, Display, Gameplay, Quick Slots,
+  Finish. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
+  and menus (automap, minimap, extended stats, item categories, notices); F1 has them. Their rows are the menu's own (`SettingRow`s found by section id and label,
+  `find_setting_row`), so a row behaves and is saved exactly as in the menu, and each change shows at once on the
+  game behind. The setup's own rows (the cards, Skip, Cancel, Input Device, Next, Finish) are `SetupOwn`.
+- **The cards** each set their preset's values (the `presets` table: Original, Balanced, Modern) and the
+  settings every player gets, then go to the next page. **Current Settings** (offered when there was a settings.json)
+  goes on with nothing changed but the depth. **Skip** (first start only) gives only what everyone gets.
+  Text in the setup and the menu follows the UI copy rules: standard settings terms, Title Case labels, help of at most
+  two short sentences that leads with what the option does.
+  The card whose values the settings match is lit, so a run again shows where the player is.
+- **Given to everyone, never asked** (the `granted` table): full screen, vsync on, Bicubic, Keep, internal
+  resolution Auto (from the screen's height), anisotropic 16x, texture LOD Auto, the PS2 video fixes at their
+  defaults, and Depth Low (the GPU's: the only one ready for players).
+- **Controls**: Input Device (keyboard and mouse, or a controller: chosen from whether one is connected) only
+  chooses which rows the page shows; both always work.
+- **Previews** (`port/ui/setup_view.cpp`), over the focused row's help: what the sticks and keys do (Controls); a
+  screen of the monitor's shape with the 4:3 or 16:9 picture and the gauges (Display); the hands' three cards at their
+  corner, size, layout and shape (Quick Slots), in the game's proportions (game/hands_cross.c's, on a 4:3 HUD also in
+  widescreen); each page's choices (Finish).
+  Boxes the style sheet draws (`body.setup` in `kf4.rcss`), from the settings as they are now.
+- **Checked at each start**: `setup_problems` logs `[ui] setup: ...` for a named row that is not in the menu, or a
+  preset or given value its row cannot hold. Nothing logged: all well.
+
+The presets, for the owner to look over:
+
+| row | Original | Balanced | Modern |
+|---|---|---|---|
+| frame rate | 30 | the monitor's | the monitor's |
+| widescreen | off | off | on |
+| anti-aliasing | FXAA | SMAA | SMAA T2x |
+| font | Original | IPA Mincho | IPA Mincho |
+| twin-stick | off | on | on |
+| attack tracking | 1x | Auto | Auto |
+| door speed / auto-loot gold | 1x / off | 1x / off | 1x / on |
+| quick slots | off | off | on |
+| instant smith | off | off | off |
+
+The sky (PS2), draw distance (1x) and game speed (1x) are not set by the presets: they keep settings.json's, whose
+defaults are those.
+
+A new page is an entry in `pages` (its rows by section id and label, and a `PreviewKind`); a new preset value is an
+entry in `presets`; neither needs code. `ctest -R ui_setup` checks the flow on stand-in rows; the start's check
+checks the tables against the real rows.
+
+**Depth in a player build**: with `KF4_PLAYER_BUILD` (the `*-release` presets and the launcher's build,
+`launcher/build_local.cpp`) Depth's Medium and High are dimmed (a `Choice`'s `enabled`, which the model passes over
+and the list refuses), its help says why, and settings.json's depth is read as Low (`port_scene_depth_locked`,
+`port/include/port/scene_depth.h`). `--scene-depth` still chooses. Developers' builds keep all three. The draw
+distance is held the same way at 1x (`port_draw_distance_locked`, `port/include/port/platform.h`; `--draw-distance`
+still chooses).
+
 ## Files
 
 | file | what |
@@ -80,7 +146,12 @@ is not borrowed.
 | `port/ui/menu_model.hpp/.cpp` | moving about: focus, lists, tabs, binding slots, the pointer, each input's sound cue (no RmlUi, no settings): `tests/ui_menu_test.cpp` |
 | `port/include/port/menu_sounds.h`, `game/menu_sounds.c` | the game's menu sounds, played for the menu |
 | `port/ui/pad_glyphs.hpp/.cpp` | a controller's buttons as pictures: the family of an SDL controller type, each family's code points in Kenney's fonts, a binding's button: `tests/ui_pad_glyphs_test.cpp` (checks the face buttons against SDL's own labels) |
-| `port/ui/settings_rows.hpp/.cpp` | **the settings, as data**: tabs and rows |
+| `port/ui/settings_rows.hpp/.cpp` | **the settings, as data**: tabs and rows; `find_setting_row` |
+| `port/ui/setting_row.cpp` | one row's shape, value text, stepping (the menu's and the setup's alike) |
+| `port/ui/rows_rml.hpp/.cpp` | a page's rows and the focused row's help as RML (the menu's and the setup's) |
+| `port/ui/setup_pages.hpp/.cpp` | **the first-start setup, as data**: pages, presets, what everyone gets |
+| `port/ui/setup_model.hpp/.cpp` | the setup's moving about (pages, cards, Skip, Cancel): `tests/ui_setup_test.cpp` |
+| `port/ui/setup_view.hpp/.cpp` | the setup's page as RML: the steps, the heading, the previews |
 | `port/ui/ui_render.hpp/.cpp` | `ui::Recorder`, RmlUi's `RenderInterface`: geometry and textures recorded into a `ui::Frame` |
 | `port/ui/ui_frame.hpp` | `ui::Frame`: one picture's triangles, draws, texture uploads and releases (no Vulkan) |
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
@@ -126,10 +197,11 @@ picture.
 
 ## Testing
 
-- `ctest -R ui_menu`: the model.
+- `ctest -R ui_menu`: the model. `ctest -R ui_setup`: the setup.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
   presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; `xbox`,
-  `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; the sections are `display graphics controls keys gameplay interface general cheats`, `cheats` only with `"overlay": {"cheats_shown": true}` in the data folder's settings.json), and writes
+  `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; `ui-setup-<page>[:keys]` shows the
+  setup on that page (`welcome controls picture play hands ready`); the sections are `display graphics controls keys gameplay interface general cheats`, `cheats` only with `"overlay": {"cheats_shown": true}` in the data folder's settings.json), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 

@@ -29,6 +29,7 @@ struct FakeRow {
     int activated = 0;
     int listened = -1; // a binding: the slot last listened for
     int cleared = -1;  // and last cleared
+    std::vector<bool> dimmed = {}; // a choice's choices that cannot be chosen (missing: all can)
 };
 
 class FakeRows final : public MenuRows {
@@ -59,6 +60,10 @@ public:
     }
     void clear(int tab, int row, int slot) override {
         tabs[tab][row].cleared = slot;
+    }
+    bool choice_enabled(int tab, int row, int choice) const override {
+        const std::vector<bool> &dimmed = tabs[tab][row].dimmed;
+        return size_t(choice) >= dimmed.size() || !dimmed[size_t(choice)];
     }
 };
 
@@ -338,7 +343,34 @@ void cues() {
     CHECK(!menu.list_open() && menu.take_cue() == MenuCue::back);
 }
 
+// A dimmed choice: Left / Right pass over it, its list refuses it (and stays open), a click on it is refused
+void dimmed_choices() {
+    FakeRows rows;
+    rows.tabs = {{{RowKind::choice, true, 4, 0}}};
+    rows.tabs[0][0].dimmed = {false, true, true, false};
+    MenuModel menu(rows);
+    menu.open_at(0);
+    menu.press(MenuInput::right);
+    CHECK(rows.tabs[0][0].value == 3);
+    menu.take_cue();
+    menu.press(MenuInput::right);
+    CHECK(rows.tabs[0][0].value == 3 && menu.take_cue() == MenuCue::none);
+    menu.press(MenuInput::left);
+    CHECK(rows.tabs[0][0].value == 0);
+    menu.press(MenuInput::confirm);
+    CHECK(menu.list_open());
+    menu.press(MenuInput::down);
+    menu.take_cue();
+    menu.press(MenuInput::confirm);
+    CHECK(menu.list_open() && rows.tabs[0][0].value == 0 && menu.take_cue() == MenuCue::refused);
+    menu.click_choice(2);
+    CHECK(menu.list_open() && rows.tabs[0][0].value == 0 && menu.take_cue() == MenuCue::refused);
+    menu.click_choice(3);
+    CHECK(!menu.list_open() && rows.tabs[0][0].value == 3);
+}
+
 int main() {
+    dimmed_choices();
     focus_skips_and_stops();
     left_right();
     confirm_and_lists();

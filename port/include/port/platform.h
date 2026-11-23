@@ -156,8 +156,6 @@ typedef struct {
        settings.json, live from the overlay. */
     int myus_necklace;       /* the effect of Myu's Necklace, always (port_myus_necklace()) */
     int myus_necklace_forced; /* --myus-necklace: on for this run whatever settings.json says */
-    int separate_run;        /* running on a key of its own, not the action button (port_controls_run_held()) */
-    int separate_run_forced; /* --separate-run: on for this run whatever settings.json says */
     int no_hit_jolt;         /* a hard hit does not throw the view down (port_no_hit_jolt()) */
     int no_hit_jolt_forced;  /* --no-hit-jolt: on for this run whatever settings.json says */
     /* --door-speed: doors run their opening and closing animation this many times a game frame, 1 (the
@@ -417,6 +415,16 @@ enum { PORT_DRAW_DISTANCE_1 = 0, PORT_DRAW_DISTANCE_1_5, PORT_DRAW_DISTANCE_2, P
        PORT_DRAW_DISTANCE_COUNT };
 /* the level a name ("1", "1.5", "2", "4", "max") stands for, -1 for none; and a level's name */
 int port_draw_distance_parse(const char *name);
+/* 1 in a player build (KF4_PLAYER_BUILD): the draw distance is 1x, the PS2's, whatever settings.json says (the
+   longer ones are not ready), and the player menu's others are dimmed; --draw-distance still chooses. 0 in the
+   developers' builds */
+static inline int port_draw_distance_locked(void) {
+#ifdef KF4_PLAYER_BUILD
+    return 1;
+#else
+    return 0;
+#endif
+}
 const char *port_draw_distance_name(int level);
 enum { PORT_PRESENTER_SDL = 0, PORT_PRESENTER_VULKAN = 1 };
 void port_gs_print_stats(void);

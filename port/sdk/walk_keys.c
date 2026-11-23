@@ -1,5 +1,5 @@
-/* The keyboard's walking (port/include/port/walk_keys.h): W A S D as the game's own walking buttons, or with
-   instant WASD acceleration the left stick at full throw. */
+/* The keyboard's walking (port/include/port/walk_keys.h): W A S D as the game's own walking buttons, or (always
+   in live play) the left stick at full throw. */
 #include <stddef.h>
 
 #include "port/platform.h"
@@ -16,7 +16,6 @@
 
 /* Input_SetDefaultControls's */
 static MoveButtons game_buttons = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_L1, PAD_R1, PAD_R2, PAD_L2};
-static int instant_setting;
 
 void port_walk_keys_set_buttons(MoveButtons buttons) {
     game_buttons = buttons;
@@ -26,16 +25,8 @@ MoveButtons port_walk_keys_buttons(void) {
     return game_buttons;
 }
 
-int port_walk_keys_instant_setting(void) {
-    return instant_setting;
-}
-
-void port_walk_keys_set_instant(int on) {
-    instant_setting = on != 0;
-}
-
 int port_walk_keys_instant(void) {
-    return instant_setting && port_options.input == NULL && port_options.record_input == NULL;
+    return port_options.input == NULL && port_options.record_input == NULL;
 }
 
 /* One stick axis from two keys, as the PC controls' other stick keys */

@@ -1070,7 +1070,9 @@ extern "C" const char *port_overlay_key(void) {
 
 extern "C" int port_overlay_paused(void) {
     bool open = overlay_open || port_player_ui_open();
-    return ready && !shot_mode && ((open && port_settings.pause_when_open) || port_automap_holds_game());
+    // (the first-start setup holds the game still whatever the setting: it opens over the game's start)
+    bool pause = port_settings.pause_when_open || port_player_ui_setup_open();
+    return ready && !shot_mode && ((open && pause) || port_automap_holds_game());
 }
 
 extern "C" void port_overlay_notify_state(void) {

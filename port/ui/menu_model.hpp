@@ -3,7 +3,8 @@
 // through MenuRows (the settings catalogue, port/ui/settings_rows.hpp; tests' stand-ins, tests/ui_menu_test.cpp).
 //
 //   Up / Down       the row before / after that can be used (not past the ends); in an open list, its choice
-//   Left / Right    a choice: the one before / after (not past the ends); on / off: off / on; a number: a step
+//   Left / Right    a choice: the one before / after that is enabled (not past the ends); on / off: off / on; a
+//                   number: a step
 //   Confirm         a choice: opens its list; on / off: turns it over; an action: does it; in a list: chooses;
 //                   a binding: listens for a new key in its chosen slot
 //   Left / Right    (a binding) the slot before / after
@@ -52,6 +53,11 @@ public:
     // a binding: the next key or button pressed goes into the slot
     virtual void listen(int tab, int row, int slot) = 0;
     virtual void clear(int tab, int row, int slot) = 0;
+    // a choice's choice can be chosen (false: shown dimmed, skipped by Left / Right, refused in its list)
+    virtual bool choice_enabled(int tab, int row, int choice) const {
+        (void)tab, (void)row, (void)choice;
+        return true;
+    }
 };
 
 enum class MenuInput { up, down, left, right, confirm, back, next_tab, previous_tab, clear };

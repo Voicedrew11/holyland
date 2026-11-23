@@ -19,13 +19,12 @@ int port_mouse_look(int gameplay, float *yaw, float *pitch);
 int port_mouse_turning(void);
 
 /* Called by the game (Player_Update) with the pad's held buttons and the action button's bit (the
-   game's button for running and for using what is in front). With the separate run mod on
-   (port_options.separate_run) and Run bound, running is Run's: the action bit of
-   `held` becomes whether Run is held, so the action button only uses things (pressed is the game's
-   own). Otherwise `held` is returned as it is: the action button runs, as on the PS2. A pad script
-   gives what its recording held (run=), or nothing (the action button runs). */
+   game's button for running and for using what is in front). The action bit of `held` becomes whether the
+   player runs: Run held on the keyboard, or the controller's action button held (a controller has no Run: it
+   runs as on the PS2). So the keyboard's action key only uses things (pressed is the game's own). A pad script
+   gives what its recording held (run=), or nothing (`held` as it is: the action button runs). */
 unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit);
-int port_controls_run_state(void); /* Run held (1) or not (0) with the mod on and bound; -1: the mod does not apply */
+int port_controls_run_state(void); /* running (1) or not (0); -1 under a pad script */
 
 /* ---- Recording and replaying the PC's controls (port/sdk/libpad.c, --record-input and --input) ---- */
 int port_pad_script_run(void);                      /* the script's run= at this vblank; -1 none */
@@ -62,7 +61,7 @@ typedef enum {
     ACTION_RIGHT_STICK_DOWN,
     ACTION_RIGHT_STICK_LEFT,
     ACTION_RIGHT_STICK_RIGHT,
-    ACTION_RUN,           /* the separate run mod: running apart from the action button (port_controls_run_held) */
+    ACTION_RUN,           /* running apart from the action key, keyboard and mouse only (port_controls_run_held) */
     ACTION_CAPTURE_MOUSE, /* let the mouse go in play, or take it back (unbound by default) */
     ACTION_QUICK_SAVE,    /* save states (port/include/port/savestate.h), the quick slot: F5, F7 */
     ACTION_QUICK_LOAD,
@@ -102,6 +101,11 @@ typedef enum {
 const char *port_controls_action_label(int action); /* "Cross", "Left stick up", "Quick save" */
 const char *port_controls_action_id(int action);    /* "cross", "left_stick_up": settings.json's names */
 int port_controls_action_used(int action); /* the action means something (its mod is on) */
+/* An action's binding slots: all of them, or for Run (keys and mouse buttons only: a controller has no Run) those
+   before the controller's */
+static inline int port_controls_action_slots(int action) {
+    return action == ACTION_RUN ? BINDING_PAD_SLOT : BINDING_SLOTS;
+}
 int port_controls_binding(int action, int slot);
 void port_controls_bind(int action, int slot, int binding);
 int port_controls_is_default(int action);

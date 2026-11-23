@@ -88,7 +88,7 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
     configure.argv = {tools->cmake.string(), "-G", "Ninja", "-S", source.string(), "-B", obj.string(),
                       path_option("CMAKE_MAKE_PROGRAM", tools->ninja), path_option("CMAKE_C_COMPILER", tools->c_compiler),
                       path_option("CMAKE_CXX_COMPILER", tools->cxx_compiler), "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                      "-DKF4_LTO=ON", "-DKF4_FRAME_POINTERS=OFF", "-DKF4_TESTS=OFF", "-DKF4_DECOMP_PREPATCHED=ON",
+                      "-DKF4_LTO=ON", "-DKF4_FRAME_POINTERS=OFF", "-DKF4_PLAYER_BUILD=ON", "-DKF4_TESTS=OFF", "-DKF4_DECOMP_PREPATCHED=ON",
                       "-DKF4_VERSION=" + request.version};
     configure.argv.insert(configure.argv.end(), tools->cmake_options.begin(), tools->cmake_options.end());
     configure.working_dir = request.build_dir;

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "menu_model.hpp"
 
@@ -17,6 +18,7 @@ namespace ui {
 struct Choice {
     const char *label;
     int value;
+    bool (*enabled)() = nullptr; // nullptr: always; false: shown dimmed, never chosen from the menu
 };
 
 struct NumberRange {
@@ -50,9 +52,45 @@ struct SettingTab {
 
 std::span<const SettingTab> setting_tabs();
 
+// The row of that label in the tab of that id, headings left out (shown or not), or nullptr: how the first-start
+// setup (setup_pages.hpp) names the rows it uses
+const SettingRow *find_setting_row(std::string_view tab_id, std::string_view label);
+
+// ---- One row, whatever holds it (the menu's tabs, the setup's pages) ------------------------------------------------
+RowShape row_shape(const SettingRow &row);
+// the choice's place among the row's choices of a value, or -1
+int row_choice_index(const SettingRow &row, int value);
+bool row_choice_enabled(const SettingRow &row, int choice);
+void row_choose(const SettingRow &row, int choice); // a choice's or a toggle's: sets that choice's value
+void row_step(const SettingRow &row, int delta);    // a number's: to the next whole step that way
+void row_activate(const SettingRow &row);           // an action's
+// the row's value as the menu shows it ("On", "Auto (2x)", "75%"); empty for actions, headings and bindings
+std::string row_value_text(const SettingRow &row);
+// a number's place in its range, 0 to 1 (for its bar)
+float row_number_fraction(const SettingRow &row);
+
+// Rows the view can write (port/ui/rows_rml.hpp): the model's rows, with each one's SettingRow and texts
+class RowSource : public MenuRows {
+public:
+    virtual const SettingRow &row(int tab, int row) const = 0;
+    virtual std::string value_text(int tab, int row) const = 0;
+    // a binding's slot as the menu shows it ("Space", "Pad A", "-", "Press a key...")
+    virtual std::string slot_text(int tab, int row, int slot) const = 0;
+    // a binding's slot is waiting for a key or button
+    virtual bool listening(int tab, int row, int slot) const = 0;
+    // a binding is not as it was by default
+    virtual bool changed_from_default(int tab, int row) const = 0;
+    virtual float number_fraction(int tab, int row) const = 0;
+    // more of the row's classes for the style sheet ("card lit"), or empty
+    virtual std::string row_classes(int tab, int row) const {
+        (void)tab, (void)row;
+        return {};
+    }
+};
+
 // The shown tabs' shown rows (a tab's or a row's shown() can hide it), for the model and the view; a tab's index is
 // among the shown tabs
-class SettingsRows final : public MenuRows {
+class SettingsRows final : public RowSource {
 public:
     int tab_count() const override;
     int row_count(int tab) const override;
@@ -62,19 +100,16 @@ public:
     void activate(int tab, int row) override;
     void listen(int tab, int row, int slot) override;
     void clear(int tab, int row, int slot) override;
+    bool choice_enabled(int tab, int row, int choice) const override;
+
+    const SettingRow &row(int tab, int row) const override;
+    std::string value_text(int tab, int row) const override;
+    std::string slot_text(int tab, int row, int slot) const override;
+    bool listening(int tab, int row, int slot) const override;
+    bool changed_from_default(int tab, int row) const override;
+    float number_fraction(int tab, int row) const override;
 
     const SettingTab &tab(int tab) const;
-    const SettingRow &row(int tab, int row) const;
-    // the row's value as the menu shows it ("On", "Auto (2x)", "75%"); empty for actions and headings
-    std::string value_text(int tab, int row) const;
-    // a binding's slot as the menu shows it ("Space", "Pad A", "-", "Press a key...")
-    std::string slot_text(int tab, int row, int slot) const;
-    // a binding's slot is waiting for a key or button
-    bool listening(int tab, int row, int slot) const;
-    // a binding is not as it was by default
-    bool changed_from_default(int tab, int row) const;
-    // a number's place in its range, 0 to 1 (for its bar)
-    float number_fraction(int tab, int row) const;
     // the shown tab of that id, or -1
     int tab_of(const char *id) const;
 };

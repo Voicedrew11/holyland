@@ -633,3 +633,160 @@ body.game-art choice.highlighted {
 	decorator: ninepatch(soft-box-outer, soft-box-inner, 8dp 90dp 8dp 36dp);
 	image-color: #a8c4e838;
 }
+
+/* ---- The first-start setup (body.setup: port/ui/setup_view.hpp) ----------------------------------------------------
+   The same window: the steps down the sidebar in place of the sections, the page's title and its few words, its rows
+   (the Welcome's cards are its action rows), and in the help column the page's preview over the focused row's help. */
+body.setup #help {
+	width: 340dp;
+}
+
+#heading intro {
+	display: block;
+	font-size: 15dp;
+	line-height: 1.4;
+	letter-spacing: 0;
+	color: #8790a0;
+	margin-top: 8dp;
+}
+
+/* the steps: those not reached yet dim, the current one lit (tab.selected) */
+tab.step {
+	color: #555d6b;
+}
+
+tab.step.reached {
+	color: #b4bccb;
+}
+
+tab.step.selected {
+	color: #f0f4fa;
+}
+
+/* the Welcome's cards: larger lines, framed; the one the settings match lit in ice */
+body.setup row.card {
+	height: 50dp;
+	font-size: 20dp;
+	letter-spacing: 1dp;
+	margin-bottom: 6dp;
+	border: 1dp #22272f;
+	border-left-width: 3dp;
+}
+
+body.setup row.card.lit {
+	border-color: #5a6474;
+	border-left-color: #a8c4e8;
+}
+
+body.setup row.card.lit label {
+	color: #a8c4e8;
+}
+
+/* Continue and Start: apart from the rows above, in ice */
+body.setup row.next {
+	margin-top: 14dp;
+}
+
+body.setup row.next label {
+	color: #a8c4e8;
+	letter-spacing: 1dp;
+}
+
+/* a choice that cannot be chosen (the player menu's too: a level not ready) */
+choice.dimmed {
+	color: #555d6b;
+}
+
+/* ---- The previews: a screen of the monitor's shape, the game's picture in it, and marks where things show --------- */
+preview {
+	display: block;
+	margin-bottom: 18dp;
+}
+
+monitor {
+	display: block;
+	position: relative;
+	width: 100%;
+	height: 191dp; /* (16:9 of the column's width, 340dp: body.setup #help) */
+	background-color: #000000;
+	border: 1dp #3e4654;
+}
+
+picture {
+	display: block;
+	position: absolute;
+	decorator: vertical-gradient(#1c2532 #0b0f15);
+}
+
+preview.off monitor {
+	opacity: 0.55;
+}
+
+mark {
+	display: block;
+	position: absolute;
+}
+
+mark.gauges {
+	background-color: #8fb0d855;
+}
+
+card {
+	display: block;
+	position: absolute;
+	box-sizing: border-box;
+	border: 1dp #a8c4e8;
+	background-color: #0a0d12e0;
+}
+
+caption {
+	display: block;
+	font-size: 13dp;
+	line-height: 1.4;
+	color: #8790a0;
+	margin-top: 8dp;
+}
+
+/* the Controls page: what the sticks and keys do */
+legend {
+	display: block;
+	height: 30dp;
+	font-size: 15dp;
+	color: #b4bccb;
+}
+
+legend pad {
+	color: #c8d6ea;
+	position: relative;
+	top: -4dp;
+}
+
+legend what {
+	margin-left: 8dp;
+}
+
+/* the last page: each page's choices */
+preview.summary h3 {
+	display: block;
+	font-size: 14dp;
+	letter-spacing: 1dp;
+	color: #8fb0d8;
+	border-bottom: 1dp #22272f;
+	margin-top: 8dp;
+	margin-bottom: 3dp;
+}
+
+preview.summary line {
+	display: flex;
+	flex-direction: row;
+	font-size: 13dp;
+	color: #8790a0;
+}
+
+preview.summary line label {
+	flex: 1;
+}
+
+preview.summary line value {
+	color: #dde3ec;
+}
