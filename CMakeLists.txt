@@ -1132,10 +1132,10 @@ endif()
 # (port/gs/shared/gsn_vram.c) as its format library and nothing else of the old native GS
 add_library(kf4_gsn_vram STATIC port/gs/shared/gsn_vram.c)
 target_include_directories(kf4_gsn_vram PUBLIC port/gs/shared)
-# and the game's fonts made sharper from them (port/gs/shared/font_sheet.h), their smaller levels made on the PC
-# (port/gs/shared/mip_chain.h)
-add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/font_sheet.cpp
-            port/gs/shared/mip_chain.cpp)
+# and the game's fonts and word pictures made sharper from them (port/gs/shared/finer_pictures.h), their smaller levels
+# made on the PC (port/gs/shared/mip_chain.h)
+add_library(kf4_pc_textures STATIC port/gs/shared/pcr_textures.cpp port/gs/shared/finer_pictures.cpp
+            port/gs/shared/font_sheet.cpp port/gs/shared/text_pictures.cpp port/gs/shared/mip_chain.cpp)
 target_include_directories(kf4_pc_textures PUBLIC port/gs/shared)
 target_link_libraries(kf4_pc_textures PUBLIC kf4_gsn_vram)
 set_target_properties(kf4_pc_textures PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -1153,6 +1153,12 @@ set_target_properties(font_sheet_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_RE
 if(NOT MSVC)
     target_compile_options(font_sheet_test PRIVATE -Wall -Wextra)
 endif()
+add_executable(text_pictures_test tests/text_pictures_test.cpp)
+target_link_libraries(text_pictures_test PRIVATE kf4_pc_textures)
+set_target_properties(text_pictures_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(text_pictures_test PRIVATE -Wall -Wextra)
+endif()
 add_executable(mip_chain_test tests/mip_chain_test.cpp)
 target_link_libraries(mip_chain_test PRIVATE kf4_pc_textures)
 set_target_properties(mip_chain_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -1162,6 +1168,7 @@ endif()
 if(KF4_TESTS)
     add_test(NAME pcr_textures COMMAND pcr_textures_test)
     add_test(NAME font_sheet COMMAND font_sheet_test)
+    add_test(NAME text_pictures COMMAND text_pictures_test)
     add_test(NAME mip_chain COMMAND mip_chain_test)
 endif()
 

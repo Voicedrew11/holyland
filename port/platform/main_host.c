@@ -47,8 +47,9 @@
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
-       --font MODE       the game's font: ps2 (the default: the disc's) or sharp (its English letters
-                         drawn again from IPA Mincho four times as fine, crisp at any resolution)
+       --font MODE       the game's font: ps2 (the default: the disc's) or sharp (its English letters,
+                         and the words the menus and title draw as pictures, drawn again from IPA
+                         Mincho four times as fine, crisp at any resolution)
        --scene-depth MODE the scene renderer's depth, the player menu's Depth: high (the default: the GS's
                          whole Z at each pixel, the layers over a surface settled by the stencil;
                          also exact), medium (as high, the layers settled in one pass where nearer;

@@ -30,6 +30,7 @@
 | `pgo_train.py` | a release build with profile-guided optimisation: built to write a profile, trained at four spots, built again with it (below) |
 | `build_cost.py` | each thread's CPU time in play at a map for several builds, alternated, from `sampler/profile.py`'s runs, and the part of it not spent spinning (the game's thread waits for DMA in a spin); below |
 | `make_font_letters.py` | the English letters of the sharper font drawn from IPA Mincho into `port/gs/shared/font_letters_data.h` (committed; made again only to change the letters): `python3 tools/make_font_letters.py path/to/ipam.ttf [--preview out.png]`; third_party/ipa-fonts/README.md, port/gs/shared/font_sheet.h |
+| `make_text_pictures.py` | the game's word pictures (the menu's buttons and button hints, the title's and game over's choices) drawn again in IPA P Mincho: their hashes, where their words are, and the letters, into `port/gs/shared/text_pictures_data.h` (committed; made again only to change the words or letters): `python3 tools/make_text_pictures.py --iso path/to/kfiv_us.iso` (needs Pillow and pycdlib); port/gs/shared/text_pictures.h |
 | `record_input.py`, `record_input.bat` | a session recorded as it is played (`--record-input`, the player's settings and PC controls on) and replayed headless, byte for byte: to see what a player saw, and to bisect it (below) |
 | `build_rev.cmake` | (the build runs it) writes `build_rev.h`, the commit a GS capture names |
 

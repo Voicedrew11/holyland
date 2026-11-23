@@ -5,6 +5,7 @@
 #include <array>
 #include <string_view>
 
+#include "finer_pictures.h"
 #include "font_letters_data.h"
 
 namespace pcr {
@@ -81,36 +82,6 @@ bool whole_sheet(const DecodedTexture &texture) {
 
 uint32_t channel(uint32_t colour, uint32_t c) {
     return (colour >> (8 * c)) & 0xFF;
-}
-
-// The sheet enlarged as the GS's bilinear filter reads it at each fine texel's middle (the edges clamped)
-std::vector<uint32_t> enlarged(std::span<const uint32_t> colours) {
-    std::vector<uint32_t> out(size_t(fine_size) * fine_size);
-    auto clamped = [](int32_t v) { return uint32_t(std::clamp(v, 0, int32_t(sheet_size) - 1)); };
-    for (uint32_t fy = 0; fy < fine_size; fy++) {
-        // (the coarse place of the fine texel's middle, less half a texel, in units of 1 / (2k))
-        int32_t py = int32_t(2 * fy + 1) - int32_t(k);
-        int32_t y0 = py < 0 ? -1 : py / int32_t(2 * k);
-        uint32_t wy = uint32_t(py - y0 * int32_t(2 * k)); // (0 to 2k - 1)
-        uint32_t ya = clamped(y0), yb = clamped(y0 + 1);
-        for (uint32_t fx = 0; fx < fine_size; fx++) {
-            int32_t px = int32_t(2 * fx + 1) - int32_t(k);
-            int32_t x0 = px < 0 ? -1 : px / int32_t(2 * k);
-            uint32_t wx = uint32_t(px - x0 * int32_t(2 * k));
-            uint32_t xa = clamped(x0), xb = clamped(x0 + 1);
-            uint32_t a = colours[size_t(ya) * sheet_size + xa], b = colours[size_t(ya) * sheet_size + xb];
-            uint32_t c = colours[size_t(yb) * sheet_size + xa], d = colours[size_t(yb) * sheet_size + xb];
-            uint32_t texel = 0;
-            for (uint32_t ch = 0; ch < 4; ch++) {
-                uint32_t top = channel(a, ch) * (2 * k - wx) + channel(b, ch) * wx;
-                uint32_t bottom = channel(c, ch) * (2 * k - wx) + channel(d, ch) * wx;
-                uint32_t v = (top * (2 * k - wy) + bottom * wy + 2 * k * k) / (4 * k * k);
-                texel |= std::min(v, 255u) << (8 * ch);
-            }
-            out[size_t(fy) * fine_size + fx] = texel;
-        }
-    }
-    return out;
 }
 
 // A fine texel of a letter from its coverage (0-255): the colours of the picture's four levels, none to the core,
@@ -212,7 +183,7 @@ std::vector<uint32_t> drawn(const DecodedTexture &texture, std::span<const uint3
     if (sets.empty()) {
         return {};
     }
-    std::vector<uint32_t> fine = enlarged(colours);
+    std::vector<uint32_t> fine = enlarged_as_read(colours, sheet_size, sheet_size, k);
     for (const LetterSet *set : sets) {
         draw_set(*set, texture, clut, fine);
     }
