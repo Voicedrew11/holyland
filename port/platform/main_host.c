@@ -165,9 +165,10 @@
        --no-audio        play no sound (it is still made, for --audio-dump)
        --saves DIR       the folder the game's saves go in (by default saves in the data folder, next
                          to settings.json); "none": saving is off
-       --import-card F   copy King's Field IV's saves from a PS2 memory card image (PCSX2's or
-                         RetroArch's Mcd001.ps2) into the save folder, each to the save of its
-                         number, and exit; a save already there is not replaced (no --disc needed)
+       --import-card F   copy King's Field IV's saves from a PS2 memory card (PCSX2's or RetroArch's
+                         Mcd001.ps2, or a PCSX2 folder card) into empty saves of the save folder,
+                         and exit; a save is never replaced (no --disc needed). The first-start
+                         setup's Emulator Saves page does the same.
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
                          with the turns mouse look, the run key and twin-stick give the game (the
                          sound follows the game's clock); replay from the same start: --clock,
@@ -226,6 +227,7 @@
 #include "port/scene_depth.h"
 #include "port/quicksave.h"
 #include "port/save_files.h"
+#include "port/card_import.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
 #include "port/crash_note.h"

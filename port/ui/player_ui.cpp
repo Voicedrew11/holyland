@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 
+#include "emulator_saves.hpp"
 #include "game_menu_art.hpp"
 #include "menu_model.hpp"
 #include "pad_glyphs.hpp"
@@ -73,6 +74,7 @@ struct LogoClicks {
 };
 
 struct Menu;
+SDL_Window *menu_window();
 class PointerEvents final : public Rml::EventListener {
 public:
     void ProcessEvent(Rml::Event &event) override;
@@ -107,7 +109,8 @@ struct Menu {
     ui::Recorder recorder;
     ui::SettingsRows rows;
     ui::MenuModel model{rows};
-    ui::SetupFlow setup{ui::find_setting_row};
+    std::unique_ptr<ui::SaveImports> emulator_saves = ui::make_emulator_saves(&menu_window);
+    ui::SetupFlow setup{ui::find_setting_row, emulator_saves.get()};
     bool in_setup = false;     // the setup shows, in place of the settings
     bool setup_wanted = false; // Run setup again was chosen: the setup opens once the press is done
     PointerEvents pointer;
@@ -133,6 +136,10 @@ struct Menu {
     bool drawn = false;
 };
 Menu menu;
+
+SDL_Window *menu_window() {
+    return menu.window;
+}
 
 const uint64_t HINT_START_VBLANK = 120; // the start of play: two seconds of the game's own clock (the pictures start
                                         // before the game does, while the renderer's pipelines are made)
@@ -540,6 +547,7 @@ void write_page() {
     }
     set_part("version", menu.version_rml, version_rml());
     if (menu.in_setup) {
+        menu.emulator_saves->update(); // (a card chosen with the file chooser: its saves join the page)
         set_part("tabs", menu.tabs_rml, ui::setup_steps_rml(menu.setup));
         set_part("heading", menu.heading_rml, ui::setup_heading_rml(menu.setup));
         set_part("rows", menu.rows_rml, ui::setup_rows_rml(menu.setup, menu.pad_family));

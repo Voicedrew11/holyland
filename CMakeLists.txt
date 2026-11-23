@@ -482,7 +482,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
                     port/ui/setting_row.cpp port/ui/rows_rml.cpp port/ui/setup_pages.cpp port/ui/setup_model.cpp
                     port/ui/setup_view.cpp port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
-                    port/ui/pad_glyphs.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
+                    port/ui/pad_glyphs.cpp port/ui/emulator_saves.cpp ${CMAKE_BINARY_DIR}/ui_assets.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL)
         target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3)
@@ -895,7 +895,8 @@ if(KF4_TESTS)
 endif()
 
 # The saves as files: written whole or not at all, read back, mended after a crash (port/platform/save_files.c);
-# saves imported from a memory card image (port/platform/card_import.c)
+# saves read from an emulator's memory card, an image or a folder card, and imported never over a save
+# (port/platform/card_import.c)
 add_executable(save_files_test tests/save_files_test.c port/platform/save_files.c port/platform/card_import.c)
 target_include_directories(save_files_test PRIVATE port/include)
 if(NOT WIN32)

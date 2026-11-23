@@ -54,6 +54,21 @@ const SetupRowRef hands_rows[] = {
     {"gameplay", "HUD Layout"},  {"gameplay", "Card Shape"}, own(SetupOwn::next),
 };
 
+SetupRowRef emulator_save(int item) {
+    SetupRowRef ref = own(SetupOwn::emulator_save);
+    ref.item = item;
+    return ref;
+}
+
+const SetupRowRef emulator_rows[] = {
+    emulator_save(0),           emulator_save(1),
+    emulator_save(2),           emulator_save(3),
+    emulator_save(4),           emulator_save(5),
+    own(SetupOwn::emulator_none), own(SetupOwn::emulator_browse),
+    own(SetupOwn::next),
+};
+static_assert(SETUP_EMULATOR_SAVES == 6, "a row for each");
+
 const SetupRowRef ready_rows[] = {own(SetupOwn::finish)};
 
 const SetupPage pages[] = {
@@ -66,6 +81,9 @@ const SetupPage pages[] = {
     {"play", "Gameplay", "1x speeds match the original game.", play_rows, PreviewKind::none},
     {"hands", "Quick Slots", "Swap weapons and spells and use items without opening the menu.", hands_rows,
      PreviewKind::hands},
+    {"saves", "Emulator Saves",
+     "Import your King's Field IV saves from PCSX2 or RetroArch. Holyland saves are never replaced.",
+     emulator_rows, PreviewKind::none},
     {"ready", "Finish", "Press F1, or L3 + R3 on a controller, to open settings at any time.", ready_rows,
      PreviewKind::summary},
 };
@@ -125,6 +143,12 @@ const OwnRow own_rows[] = {
      {"Input Device", "Filters the settings shown. All devices work at any time.", RowKind::choice, devices}},
     {SetupOwn::next, {"Next", "", RowKind::action}},
     {SetupOwn::finish, {"Finish", "Apply these settings and start the game.", RowKind::action}},
+    {SetupOwn::emulator_save, {"", "", RowKind::action}}, // (each save's own row: SaveImports::row)
+    {SetupOwn::emulator_none, {"No PCSX2 or RetroArch Saves Found", "", RowKind::heading}},
+    {SetupOwn::emulator_browse,
+     {"My Save Is in a Different Location",
+      "Opens a file chooser to pick a memory card (.ps2) from PCSX2, RetroArch or another PS2 emulator.",
+      RowKind::action}},
 };
 
 void problem(std::string &out, const char *tab_id, const char *label, const char *what) {

@@ -316,6 +316,109 @@ void list_closes_first() {
 
 } // namespace
 
+// ---- Emulator Saves, on a stand-in list ------------------------------------------------------------------------
+class FakeImports final : public SaveImports {
+public:
+    int saves = 0;
+    int free_slots = 1;
+    int looks = 0, choosers = 0;
+    std::vector<int> imported;
+    std::string chosen;
+
+    void look() override {
+        looks++;
+    }
+    void update() override {
+    }
+    int count() const override {
+        return saves;
+    }
+    const SettingRow &row(int) const override {
+        return row_;
+    }
+    std::string state(int save) const override {
+        return is_imported(save) ? "Imported" : importable(save) ? "Import" : "No free slot";
+    }
+    bool importable(int save) const override {
+        return !is_imported(save) && int(imported.size()) < free_slots;
+    }
+    bool import(int save) override {
+        if (!importable(save)) {
+            return false;
+        }
+        imported.push_back(save);
+        return true;
+    }
+    void choose_file() override {
+        choosers++;
+    }
+    std::string chosen_text() const override {
+        return chosen;
+    }
+
+private:
+    bool is_imported(int save) const {
+        for (int i : imported) {
+            if (i == save) {
+                return true;
+            }
+        }
+        return false;
+    }
+    SettingRow row_{"Card save", "", RowKind::action};
+};
+
+int page_of(const char *id) {
+    for (size_t page = 0; page < setup_pages().size(); page++) {
+        if (std::strcmp(setup_pages()[page].id, id) == 0) {
+            return int(page);
+        }
+    }
+    return -1;
+}
+
+void emulator_saves() {
+    reset_values();
+    FakeImports imports;
+    SetupFlow flow(find, &imports);
+    flow.open(SetupStart::first, false, SetupDevice::keyboard);
+    CHECK(imports.looks == 1);
+    int page = page_of("saves");
+    CHECK(page > 0 && page < last_page());
+    flow.show_page(page);
+    // none found: the line says so; the chooser's row and Next
+    CHECK(own_row(flow, SetupOwn::emulator_save) < 0 && own_row(flow, SetupOwn::emulator_none) >= 0);
+    int browse = own_row(flow, SetupOwn::emulator_browse);
+    CHECK(browse >= 0 && own_row(flow, SetupOwn::next) > browse);
+    CHECK(flow.click_row(browse) == SetupResult::stay && imports.choosers == 1 && flow.page() == page);
+    imports.chosen = "Not a PS2 memory card";
+    CHECK(flow.rows().value_text(page, browse) == "Not a PS2 memory card");
+
+    // two found, room for one: a row each, each its state; the second refused once the first is in
+    imports.saves = 2;
+    flow.show_page(page);
+    CHECK(own_row(flow, SetupOwn::emulator_none) < 0 && flow.rows().row_count(page) == 4);
+    CHECK(flow.rows().own(page, 0) == SetupOwn::emulator_save && flow.rows().own(page, 1) == SetupOwn::emulator_save);
+    CHECK(flow.rows().value_text(page, 1) == "Import");
+    flow.take_cue();
+    CHECK(flow.click_row(1) == SetupResult::stay && imports.imported.size() == 1 && imports.imported[0] == 1);
+    CHECK(flow.take_cue() == MenuCue::confirm && flow.rows().value_text(page, 1) == "Imported");
+    CHECK(!flow.rows().shape(page, 0).enabled && !flow.rows().shape(page, 1).enabled);
+    CHECK(flow.model().row() == own_row(flow, SetupOwn::emulator_browse)); // (the focus off the dim rows)
+    flow.click_row(0);
+    CHECK(imports.imported.size() == 1);
+
+    // at most SETUP_EMULATOR_SAVES rows
+    imports.saves = SETUP_EMULATOR_SAVES + 3;
+    CHECK(flow.rows().row_count(page) == SETUP_EMULATOR_SAVES + 2);
+
+    // without a list: the line, no chooser
+    SetupFlow bare(find);
+    bare.open(SetupStart::first, false, SetupDevice::keyboard);
+    bare.show_page(page);
+    CHECK(own_row(bare, SetupOwn::emulator_none) >= 0 && own_row(bare, SetupOwn::emulator_browse) < 0);
+}
+
 int main() {
     make_fakes();
     tables();
@@ -325,6 +428,7 @@ int main() {
     controls_device();
     skip_keep_cancel();
     list_closes_first();
+    emulator_saves();
     if (failures != 0) {
         std::printf("%d failure(s)\n", failures);
         return 1;

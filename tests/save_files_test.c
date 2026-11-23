@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include "port/card_import.h"
 #include "port/save_files.h"
 
 static int failed, checked;
@@ -216,7 +217,7 @@ static void no_folder(void) {
     check("back to the folder", port_saves_open(folder) && port_saves_available());
 }
 
-/* ---- Import from a memory card image (port/platform/card_import.c) ------------------------------------ */
+/* ---- Import from an emulator's memory card (port/platform/card_import.c) ---------------------------------------- */
 #define CARD_CLUSTERS 1024u
 #define CARD_ALLOC 8u /* the area's first cluster: 0 superblock, 1 the indirect FAT cluster, 2 the FAT */
 
@@ -269,20 +270,45 @@ static size_t checked_file(uint8_t *out, const uint8_t *data, size_t size) {
         done += n;
         if (n < full) {
             out[at++] = 1;
+            memset(out + at, 0, ((at + 0x1F) & ~(size_t)0x1F) - at);
             return (at + 0x1F) & ~(size_t)0x1F;
         }
     }
 }
 
-/* A formatted card holding the game's folder with save 2 (index 1) and the list naming it; written with
-   `page_stride` 512 or 528 (ECC bytes after each page) to `path`. `damage`: a byte of the save changed. */
-static void write_card(const char *path, const uint8_t *record, const uint8_t *data, size_t size, size_t page_stride,
-                       int damage) {
-    static uint8_t list[PORT_SAVE_COUNT * PORT_SAVE_RECORD_SIZE], file[PORT_SAVE_DATA_MAX + 0x200];
-    uint8_t game_folder[5 * 512] = {0}, root[3 * 512] = {0};
+static int write_bytes(const char *path, const uint8_t *bytes, size_t size) {
+    FILE *out = fopen(path, "wb");
+    int ok = out != NULL && fwrite(bytes, size, 1, out) == 1;
+
+    if (out != NULL && fclose(out) != 0) {
+        ok = 0;
+    }
+    return ok;
+}
+
+/* The game's list naming save 2 (index 1) with `record`, and the save's checked file; their lengths */
+static uint8_t card_list[PORT_SAVE_COUNT * PORT_SAVE_RECORD_SIZE + 0x200], card_save[PORT_SAVE_DATA_MAX + 0x400];
+static size_t card_list_length, card_save_length;
+
+static void game_files(const uint8_t *record, const uint8_t *data, size_t size, int damage) {
+    static uint8_t list[PORT_SAVE_COUNT * PORT_SAVE_RECORD_SIZE];
+
+    memset(list, 0, sizeof(list));
+    memcpy(list + PORT_SAVE_RECORD_SIZE, record, PORT_SAVE_RECORD_SIZE);
+    card_list_length = checked_file(card_list, list, sizeof(list));
+    card_save_length = checked_file(card_save, data, size);
+    card_save[0x500] ^= (uint8_t)(damage != 0);
+}
+
+/* A formatted card image holding the game's folder with those files, written with `page_stride` 512 or 528 (ECC
+   bytes after each page) to `path` */
+static int write_card(const char *path, size_t page_stride) {
+    uint8_t game_folder[4 * 512] = {0}, root[3 * 512] = {0};
+    static const uint8_t ecc[16];
     uint32_t list_at, save_at, folder_at, root_at;
-    size_t length, page;
+    size_t page;
     FILE *out;
+    int ok;
 
     memset(card, 0, sizeof(card));
     card_next = 0;
@@ -292,15 +318,10 @@ static void write_card(const char *path, const uint8_t *record, const uint8_t *d
     put32_at(card + 0x50, 1); /* ifc_list[0] */
     put32_at(card + 1024u, 2);
     root_at = card_file(root, sizeof(root)); /* first: the superblock gives cluster 0 of the area as the root */
-    memset(list, 0, sizeof(list));
-    memcpy(list + PORT_SAVE_RECORD_SIZE, record, PORT_SAVE_RECORD_SIZE);
-    length = checked_file(file, list, sizeof(list));
-    list_at = card_file(file, length);
-    card_entry(game_folder + 2 * 512, 0x8497, (uint32_t)length, list_at, "BASLUS-20318S");
-    length = checked_file(file, data, size);
-    file[0x500] ^= (uint8_t)(damage != 0);
-    save_at = card_file(file, length);
-    card_entry(game_folder + 3 * 512, 0x8497, (uint32_t)length, save_at, "BASLUS-20318G01");
+    list_at = card_file(card_list, card_list_length);
+    card_entry(game_folder + 2 * 512, 0x8497, (uint32_t)card_list_length, list_at, "BASLUS-20318S");
+    save_at = card_file(card_save, card_save_length);
+    card_entry(game_folder + 3 * 512, 0x8497, (uint32_t)card_save_length, save_at, "BASLUS-20318G01");
     card_entry(game_folder, 0x8427, 4, 0, ".");
     card_entry(game_folder + 512, 0x8427, 0, 0, "..");
     folder_at = card_file(game_folder, sizeof(game_folder));
@@ -309,52 +330,123 @@ static void write_card(const char *path, const uint8_t *record, const uint8_t *d
     card_entry(root + 1024, 0x8427, 4, folder_at, "BASLUS-20318S");
     memcpy(card + (CARD_ALLOC + root_at) * 1024u, root, sizeof(root));
 
-    out = fopen(path, "wb");
-    for (page = 0; page < sizeof(card) / 512u; page++) {
-        static const uint8_t ecc[16];
-
-        fwrite(card + page * 512u, 512, 1, out);
-        if (page_stride == 528) {
-            fwrite(ecc, sizeof(ecc), 1, out);
-        }
+    if ((out = fopen(path, "wb")) == NULL) {
+        return 0;
     }
-    fclose(out);
+    ok = 1;
+    for (page = 0; page < sizeof(card) / 512u && ok; page++) {
+        ok = fwrite(card + page * 512u, 512, 1, out) == 1 && (page_stride != 528 || fwrite(ecc, sizeof(ecc), 1, out) == 1);
+    }
+    return fclose(out) == 0 && ok;
+}
+
+static int make_folder(const char *path) {
+#ifdef _WIN32
+    return _mkdir(path) == 0;
+#else
+    return mkdir(path, 0700) == 0;
+#endif
+}
+
+/* A PCSX2 folder card: the game's files as plain files */
+static int write_folder_card(const char *path) {
+    char game[700], file[760];
+
+    snprintf(game, sizeof(game), "%s/BASLUS-20318S", path);
+    snprintf(file, sizeof(file), "%s/BASLUS-20318S", game);
+    if (!make_folder(path) || !make_folder(game) || !write_bytes(file, card_list, card_list_length)) {
+        return 0;
+    }
+    snprintf(file, sizeof(file), "%s/BASLUS-20318G01", game);
+    return write_bytes(file, card_save, card_save_length);
+}
+
+static void remove_folder_card(const char *path) {
+    char game[700], file[760];
+
+    snprintf(game, sizeof(game), "%s/BASLUS-20318S", path);
+    snprintf(file, sizeof(file), "%s/BASLUS-20318S", game);
+    remove(file);
+    snprintf(file, sizeof(file), "%s/BASLUS-20318G01", game);
+    remove(file);
+    rmdir(game);
+    rmdir(path);
 }
 
 static void card_import(void) {
-    static uint8_t record[PORT_SAVE_RECORD_SIZE], data[0x15400], got_record[PORT_SAVE_RECORD_SIZE],
-        got_data[PORT_SAVE_DATA_MAX];
-    char path[600];
+    static uint8_t record[PORT_SAVE_RECORD_SIZE], data[0x15400], other_record[PORT_SAVE_RECORD_SIZE],
+        other_data[0x2000], got_record[PORT_SAVE_RECORD_SIZE], got_data[PORT_SAVE_DATA_MAX];
+    static PortCardSaves saves;
+    char path[600], folder_card[600];
     size_t got = 0, stride;
 
     snprintf(path, sizeof(path), "%s/card.ps2", folder);
+    snprintf(folder_card, sizeof(folder_card), "%s/Mcd002.ps2", folder);
     make_save(record, data, sizeof(data), 5);
-    record[1] = 0; /* SaveInfo.damaged */
+    record[1] = 0;                    /* SaveInfo.damaged */
+    put32_at(record + 0x0C, 24);      /* numbers[2]: the level */
+    record[0x178 + 2] = 5;            /* the play time: 31 h 05 min */
+    record[0x178 + 3] = 31;
+    record[0x178 + 5] = 0;
     put32_at(data, sizeof(data));
+    make_save(other_record, other_data, sizeof(other_data), 9); /* (its first word left as made: reads_as) */
+    game_files(record, data, sizeof(data), 0);
+
     for (stride = 512; stride <= 528; stride += 16) {
         remove_all();
-        write_card(path, record, data, sizeof(data), stride, 0);
+        check("a card image is written", write_card(path, stride));
+        check("its save is read", port_card_read(path, &saves) == PORT_CARD_OK && saves.count == 1 &&
+                                       saves.damaged == 0 && saves.saves[0].number == 1 &&
+                                       saves.saves[0].size == sizeof(data) &&
+                                       memcmp(saves.saves[0].data, data, sizeof(data)) == 0);
+        check("its level and play time", port_card_save_level(&saves.saves[0]) == 24 &&
+                                             port_card_save_minutes(&saves.saves[0]) == 31 * 60 + 5);
         check("a card's save is imported", port_saves_import_card(path) == 1);
         check("to the save of its number, record and data as on the card",
               port_save_read(1, got_record, got_data, sizeof(got_data), &got) == PORT_SAVE_OK && got == sizeof(data) &&
                   memcmp(got_record, record, sizeof(record)) == 0 && memcmp(got_data, data, sizeof(data)) == 0 &&
                   port_save_record(0, NULL) == PORT_SAVE_EMPTY);
-        check("a save already there is not replaced", port_saves_import_card(path) == 0);
+        check("a save already imported is known", port_card_save_held_in(&saves.saves[0]) == 1);
+        check("and not imported again", port_saves_import_card(path) == 0 && port_save_record(0, NULL) == PORT_SAVE_EMPTY);
     }
-    remove_all();
-    write_card(path, record, data, sizeof(data), 512, 1);
-    check("a card save whose sum is wrong is not imported",
-          port_saves_import_card(path) == 0 && port_save_record(1, NULL) == PORT_SAVE_EMPTY);
-    memset(card, 0xFF, 4096);
-    {
-        FILE *out = fopen(path, "wb");
 
-        fwrite(card, 4096, 1, out);
-        fclose(out);
-    }
-    check("an unformatted card is refused", port_saves_import_card(path) == -1);
+    /* a save of its number is there: the first free save, the one there untouched */
+    remove_all();
+    check("another save in slot 2", port_save_write(1, other_record, other_data, sizeof(other_data)));
+    check("not held", port_card_save_held_in(&saves.saves[0]) == -1 && port_card_save_slot(&saves.saves[0]) == 0);
+    check("goes to the first free save", port_card_save_import(&saves.saves[0]) == 0 && reads_as(1, 9, sizeof(other_data)));
+    /* every save taken: nothing replaced */
+    remove_all();
+    check("three other saves", port_save_write(0, other_record, other_data, sizeof(other_data)) &&
+                                   port_save_write(1, other_record, other_data, sizeof(other_data)) &&
+                                   port_save_write(2, other_record, other_data, sizeof(other_data)));
+    check("no free save", port_card_save_slot(&saves.saves[0]) == -1 && port_card_save_import(&saves.saves[0]) == -1 &&
+                              port_saves_import_card(path) == 0);
+    check("none replaced", reads_as(0, 9, sizeof(other_data)) && reads_as(1, 9, sizeof(other_data)) &&
+                               reads_as(2, 9, sizeof(other_data)));
+
+    /* a folder card */
+    remove_all();
+    check("a folder card is written", write_folder_card(folder_card));
+    check("its save is read", port_card_read(folder_card, &saves) == PORT_CARD_OK && saves.count == 1 &&
+                                  saves.saves[0].number == 1 && memcmp(saves.saves[0].data, data, sizeof(data)) == 0);
+    check("and imported", port_saves_import_card(folder_card) == 1 && port_save_record(1, NULL) == PORT_SAVE_OK);
+    remove_folder_card(folder_card);
+
+    /* damaged and wrong cards */
+    remove_all();
+    game_files(record, data, sizeof(data), 1);
+    check("a card with a damaged save is written", write_card(path, 512));
+    check("a card save whose sum is wrong is left out",
+          port_card_read(path, &saves) == PORT_CARD_OK && saves.count == 0 && saves.damaged == 1 &&
+              port_saves_import_card(path) == 0 && port_save_record(1, NULL) == PORT_SAVE_EMPTY);
+    memset(card, 0xFF, 4096);
+    check("an unformatted card is written", write_bytes(path, card, 4096));
+    check("an unformatted card is refused",
+          port_card_read(path, &saves) == PORT_CARD_NOT_CARD && port_saves_import_card(path) == -1);
     remove(path);
-    check("a missing card is refused", port_saves_import_card(path) == -1);
+    check("a missing card is refused",
+          port_card_read(path, &saves) == PORT_CARD_UNREADABLE && port_saves_import_card(path) == -1);
     remove_all();
 }
 

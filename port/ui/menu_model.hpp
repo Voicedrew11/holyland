@@ -76,6 +76,10 @@ public:
     // The menu opens on that tab, on its first row that can be used, with no list open
     void open_at(int tab);
     MenuResult press(MenuInput input);
+    // The rows changed without an input (a row went dim, rows came): the focus kept to a usable row
+    void rows_changed() {
+        settle();
+    }
 
     void point_at_row(int row);
     void click_row(int row);
