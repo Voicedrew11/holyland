@@ -1,0 +1,31 @@
+#version 450
+// A field-mode picture's lower field woven in (scn_build.cpp's weave_lower_field): the picture holds the upper field
+// stretched to twice its lines; each of its odd rows from first_row down (row i of u_rows, copied there after) takes
+// the lower field's row that falls there,
+// held between the upper field's rows above and below it (each channel the middle of the three). Where the two fields
+// agree (a picture drawn half a line apart for the two, as the logos are) the lower's row is the line between; where
+// the game rounded the lower field's pictures a whole line off the upper's (letters on whole pixels), the line would
+// comb, and is the upper's nearer row instead.
+layout(local_size_x = 64, local_size_y = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_lower;          // the lower field's buffer (its texels as they are)
+layout(set = 0, binding = 1) uniform sampler2D u_picture;        // the picture, read at its even rows
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D u_rows; // the odd rows made
+
+layout(push_constant) uniform Push {
+    ivec2 lower_origin; // the lower field's rect in its buffer
+    int first_row;      // the picture's first row the lower field's first row falls on (the scale down)
+    int width, height;  // the picture's
+} p;
+
+void main() {
+    const int x = int(gl_GlobalInvocationID.x);
+    const int row = p.first_row + 2 * int(gl_GlobalInvocationID.y);
+    if (x >= p.width || row >= p.height) {
+        return;
+    }
+    const vec4 lower = texelFetch(u_lower, p.lower_origin + ivec2(x, (row - p.first_row) / 2), 0);
+    const vec4 above = texelFetch(u_picture, ivec2(x, row - 1), 0);
+    const vec4 below = row + 1 < p.height ? texelFetch(u_picture, ivec2(x, row + 1), 0) : above;
+    imageStore(u_rows, ivec2(gl_GlobalInvocationID.xy), clamp(lower, min(above, below), max(above, below)));
+}

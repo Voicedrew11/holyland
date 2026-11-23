@@ -59,10 +59,13 @@ struct NativeBatch {
 // A rectangle of the GS's memory as the display reads it: DISPFB's base (in blocks), width (in 64 pixels),
 // format, and the pixels (x, y, w, h). lower_field 1: a field shown at twice its lines that an interlaced TV shows
 // a line lower than the other (the odd lines): the game drew it half a field's line higher for that
-// (sceGsSetHalfOffset), so it is moved down a line of the picture.
+// (sceGsSetHalfOffset), so it is moved down a line of the picture. woven 1: rect is an upper field shown at twice its
+// lines, and the buffer at lower_bp (same width, format and place) holds the lower field of the same moment
+// (whole frames: port/platform/field_frames.c), to be woven between its lines as an interlaced TV shows them.
 struct ShownRect {
     uint32_t bp = 0, bw = 0, psm = 0, x = 0, y = 0, w = 0, h = 0;
     uint32_t lower_field = 0;
+    uint32_t woven = 0, lower_bp = 0;
 };
 
 // After a scanout of rect into a picture dst's size: the depth of its 3D (Drawing::scanout_depth)

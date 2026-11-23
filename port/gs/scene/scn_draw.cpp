@@ -216,6 +216,19 @@ void Drawer::make_programs() {
             place_[p] = shader ? device_.request_program(shader) : nullptr;
         }
     }
+    {
+        // (the weave of a field-mode picture's lower field: set 0, the two read and the rows made)
+        ResourceLayout layout = {};
+        layout.sets[0].sampled_image_mask = 3u;
+        layout.sets[0].storage_image_mask = 4u;
+        layout.sets[0].fp_mask = 7u;
+        for (uint32_t b : {0u, 1u, 2u}) {
+            layout.sets[0].meta[b].array_size = 1;
+        }
+        layout.push_constant_size = 5 * sizeof(int32_t);
+        Shader *shader = device_.request_shader(scn_spv_scn_weave_comp, sizeof(scn_spv_scn_weave_comp), &layout);
+        weave_ = shader ? device_.request_program(shader) : nullptr;
+    }
     if (getenv("KF4_SCN_ND_EMPTY") && atoi(getenv("KF4_SCN_ND_EMPTY")) != 0) {
         // (developers': the bound of the native draws' maths, nothing drawn by them)
         vs_rec[size_t(Program::nd000)] = SCN_REC_SHADER_ONE(pcr_nd000_vert_empty, &batch_vert);
@@ -1625,7 +1638,11 @@ std::vector<Vulkan::Program *> Drawer::compute_programs() const {
             out.push_back(p);
         }
     }
+    if (weave_) {
+        out.push_back(weave_);
+    }
     return out;
 }
+
 
 } // namespace scn

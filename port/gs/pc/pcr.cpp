@@ -128,6 +128,9 @@ struct VblankPicture {
     int field;
     int want;
     bool progressive, deinterlace;
+    // (FieldPair) a field-mode picture's lower field of the same moment, its DISPFB1 and DISPFB2, to weave in
+    bool woven = false;
+    std::array<uint64_t, 2> lower_dispfb{};
     uint64_t tag;
     PortGsFrame *frame; // (the sender's, while it waits: reply set)
     Reply *reply;       // (nullptr: nobody waits)
@@ -634,37 +637,69 @@ bool display_rect(const uint64_t *privileged, GsnRect &rect) {
 }
 
 // (the DMA controller's thread, which tells of every vblank and its pictures between) The screens the game draws as
-// fields (the menus, the title), with whole frames (port_whole_frame(): port/platform/field_frames.c): each vblank's
-// lower field shown from the upper field's buffer, which field_frames drew again for the same moment and told of just
-// before. The game draws the two half a line apart, rounded to a whole line of the field where its pictures are on
-// whole pixels: shown in turn, a line apart or the field's lines moved as on a TV, every other picture was a line
-// higher or lower (the menus shook). Without whole frames, the other buffer holds the moment before: the lower field
-// is moved a line down instead (Canvas::scanout, ShownRect's lower_field).
-class UpperField {
+// fields (the menus, the title, the logos), with whole frames (port_whole_frame(): port/platform/field_frames.c): each
+// vblank shown from the upper field's buffer, with the lower field's buffer of the same moment to weave in between its
+// lines (ShownRect's woven). field_frames drew one of the two again for that moment and told of it just before the
+// vblank, as the other field. The game draws the two half a line apart, rounded to a whole line of the field where its
+// pictures are on whole pixels: shown in turn, a line apart or the field's lines moved as on a TV, every other picture
+// was a line higher or lower (the menus shook); woven, every picture is the two. Without whole frames, the other buffer
+// holds the moment before: the lower field is moved a line down instead (Canvas::scanout, ShownRect's lower_field).
+class FieldPair {
 public:
     void show_in(VblankPicture &v, bool extra) {
         uint64_t smode2 = v.privileged[2 * 2];
         if ((smode2 & 3) != 3 || !v.deinterlace || !port_whole_frame()) {
-            dispfb_.reset();
+            told_[0].reset();
+            told_[1].reset();
             return;
         }
-        if (v.field != LOWER_FIELD) {
-            if (!extra) {
-                dispfb_ = std::array<uint64_t, 2>{v.privileged[DISPFB1], v.privileged[DISPFB2]};
-            }
+        const Buffers own = {v.privileged[DISPFB1], v.privileged[DISPFB2]};
+        const int field = v.field & 1;
+        if (!extra) {
+            told_[field] = own;
+        }
+        const std::optional<Buffers> &other = told_[field ^ 1];
+        if (!other) {
             return;
         }
-        if (dispfb_) {
-            v.privileged[DISPFB1] = (*dispfb_)[0];
-            v.privileged[DISPFB2] = (*dispfb_)[1];
-            v.field = LOWER_FIELD ^ 1;
-        }
+        const Buffers upper = field == LOWER_FIELD ? *other : own;
+        const Buffers lower = field == LOWER_FIELD ? own : *other;
+        v.privileged[DISPFB1] = upper[0];
+        v.privileged[DISPFB2] = upper[1];
+        v.field = LOWER_FIELD ^ 1;
+        v.woven = pair_of(upper, lower);
+        v.lower_dispfb = lower;
     }
 
 private:
+    using Buffers = std::array<uint64_t, 2>;
     static constexpr size_t DISPFB1 = 7 * 2, DISPFB2 = 9 * 2; // (privileged's words)
-    std::optional<std::array<uint64_t, 2>> dispfb_; // the upper field's buffers, as the last vblank of it told
+    // two buffers, at the same width, format and place in them
+    static bool pair_of(const Buffers &upper, const Buffers &lower) {
+        constexpr uint64_t BASE = 0x1FF;
+        for (size_t i = 0; i < 2; i++) {
+            if (((upper[i] ^ lower[i]) & ~BASE) != 0) {
+                return false;
+            }
+        }
+        return (upper[0] & BASE) != (lower[0] & BASE) || (upper[1] & BASE) != (lower[1] & BASE);
+    }
+    std::optional<Buffers> told_[2]; // each field's buffers, as the last vblank of it told
 };
+
+// The rect a vblank's picture shows (display_rect's), as the canvas scans it out
+pcr::ShownRect shown_rect_of(const VblankPicture &v, const GsnRect &rect) {
+    uint64_t smode2 = v.privileged[2 * 2];
+    bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
+    pcr::ShownRect r = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
+                        uint32_t(field_doubled && v.field == LOWER_FIELD)};
+    if (field_doubled && v.woven) {
+        bool circuit2 = (v.privileged[0] & 2) != 0; // (display_rect's circuit)
+        r.woven = 1;
+        r.lower_bp = bits(v.lower_dispfb[circuit2 ? 1 : 0], 0, 9) * 32;
+    }
+    return r;
+}
 
 struct PictureSize {
     uint32_t width, height;
@@ -1881,13 +1916,11 @@ public:
             return false;
         }
         std::optional<PictureSize> size = picture_size(v, false, scale & 0xFF, scale >> 8);
-        uint64_t smode2 = v.privileged[2 * 2];
-        bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
-        const pcr::ShownRect r = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
-                                  uint32_t(field_doubled && v.field == LOWER_FIELD)};
+        const pcr::ShownRect r = shown_rect_of(v, rect);
         const pcr::ShownRect &o = l.shown;
         if (!size || size->width != l.size.width || size->height != l.size.height || r.bp != o.bp || r.bw != o.bw ||
-            r.psm != o.psm || r.x != o.x || r.y != o.y || r.w != o.w || r.h != o.h || r.lower_field != o.lower_field) {
+            r.psm != o.psm || r.x != o.x || r.y != o.y || r.w != o.w || r.h != o.h || r.lower_field != o.lower_field ||
+            r.woven != o.woven || r.lower_bp != o.lower_bp) {
             return false;
         }
         return canvas->scanout_unchanged(r);
@@ -2038,10 +2071,7 @@ private:
         bool shown = false;
         pcr::ShownRect shown_rect;
         if (canvas && display_rect(v.privileged.data(), rect)) {
-            uint64_t smode2 = v.privileged[2 * 2];
-            bool field_doubled = (smode2 & 3) == 3 && v.deinterlace;
-            shown_rect = {rect.bp, rect.bw, rect.psm, rect.x, rect.y, rect.w, rect.h,
-                          uint32_t(field_doubled && v.field == LOWER_FIELD)};
+            shown_rect = shown_rect_of(v, rect);
             shown = canvas->scanout(cmd, shown_rect, *picture_);
             shown_rect_ = shown_rect;
             shown_ok_ = shown;
@@ -2880,7 +2910,7 @@ public:
         v.tag = tag;
         v.sent_s = port_wall_seconds();
         bool extra = (want & GSN_EXTRA) != 0;
-        upper_field_.show_in(v, extra);
+        field_pair_.show_in(v, extra);
         // (the vblank's scale, as kf4-pc takes it: a picture's is the one of the last vblank's before it)
         uint32_t scale = send_scale_;
         if (!extra) {
@@ -3950,7 +3980,7 @@ private:
     uint64_t budget_waits_ = 0, budget_begun_late_ = 0, budget_left_out_ = 0, budget_left_out_own_ = 0,
              budget_frame_instead_ = 0;
     double budget_waited_s_ = 0, budget_late_s_ = 0;
-    UpperField upper_field_;     // (the DMA controller's thread: picture)
+    FieldPair field_pair_;       // (the DMA controller's thread: picture)
     std::unique_ptr<Pump> pump_; // (nullptr: KF4_PC_PUMP=0)
     std::thread thread_;
 };
