@@ -7,7 +7,7 @@
  * unable to execute command"). lld finds this file first through its run path ($ORIGIN/../lib).
  *
  * Every function stops the linker if it is ever called. The names and versions are the ones lld asks
- * for (`nm -D --undefined-only lld | grep xml`); libxml2.map gives them their versions. */
+ * for (`nm -D --undefined-only lld | grep xml`); libxml2.ver gives them their versions. */
 
 #define STOP(name) \
     void name(void) { __builtin_trap(); }

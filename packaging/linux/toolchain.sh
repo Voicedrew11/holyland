@@ -52,7 +52,7 @@ cp -r "$WORK/$LLVM/lib/clang/22/include" "$OUT/llvm/lib/clang/22/"
 # the stand-in is enough). Built with the host's compiler: it uses nothing, not even the C library.
 mkdir -p "$OUT/llvm/lib"
 cc -shared -fPIC -O2 -nostdlib -Wl,-soname,libxml2.so.2 \
-    -Wl,--version-script,"$ROOT/packaging/linux/libxml2-stub/libxml2.map" \
+    -Wl,--version-script,"$ROOT/packaging/linux/libxml2-stub/libxml2.ver" \
     -o "$OUT/llvm/lib/libxml2.so.2" "$ROOT/packaging/linux/libxml2-stub/libxml2.c"
 
 echo "==> CMake and Ninja"
