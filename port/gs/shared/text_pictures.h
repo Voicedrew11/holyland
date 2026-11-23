@@ -1,7 +1,7 @@
-// The game's words drawn as pictures, made sharper: the menu's buttons ("Item", "Magic", "Arrange", "System": a word
-// on a blue glow, 256 x 64), its sheet of button hints (":Back", ":Confirm" beside the controller's buttons, 512 x
-// 512), and the title's and game over's choices ("NEW GAME", "QUIT TO TITLE": white capitals on black). Each is known by
-// its indices (text_pictures_data.h, made by tools/make_text_pictures.py) and given to the GPU text_picture_scale times
+// The game's words drawn as pictures in a Mincho, made sharper: the menu's buttons ("Item", "Magic", "Arrange",
+// "System": a word on a blue glow, 256 x 64) and its sheet of button hints (":Back", ":Confirm" beside the
+// controller's buttons, 512 x 512). (The title's and game over's choices are in typewriter letters, not a Mincho:
+// left as the disc has them.) Each is known by its indices (text_pictures_data.h, made by tools/make_text_pictures.py) and given to the GPU text_picture_scale times
 // as fine: everything enlarged as the GS's bilinear filter enlarges it (finer_pictures.h), each word drawn again over
 // it from IPA P Mincho, its capitals on the game's rows, in the colour of the game's word.
 //

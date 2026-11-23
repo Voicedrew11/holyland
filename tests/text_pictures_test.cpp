@@ -136,23 +136,27 @@ void glow_painted_under_the_word() {
     CHECK(ink_columns(fine, 256 * k, 0, 21 * k).first == UINT32_MAX);
 }
 
-// White capitals on black: the old ones painted black, the new drawn centred on them
+// The hint sheet's first ":Back" as a block of white on nothing: painted over with the ground, the new word drawn
+// from the block's left on the hint's baseline (row 88)
 void plain_painted_under_the_word() {
-    size_t p = picture_of("NEW GAME");
+    size_t p = picture_of(":Back");
     CHECK(data::pictures[p].background == data::Background::Plain);
-    std::vector<uint32_t> colours(button_texels, black);
-    for (uint32_t y = 26; y < 43; y++) {
-        for (uint32_t x = 20; x < 236; x++) {
-            colours[size_t(y) * 256 + x] = white;
+    constexpr uint32_t sheet = 512;
+    const uint32_t ground = rgba(1, 1, 1, 2);
+    std::vector<uint32_t> colours(size_t(sheet) * sheet, ground);
+    for (uint32_t y = 75; y < 88; y++) {
+        for (uint32_t x = 92; x < 185; x++) {
+            colours[size_t(y) * sheet + x] = white;
         }
     }
-    std::vector<uint32_t> fine = redrawn_text_picture(p, colours, 256, 64);
-    auto [left, right] = ink_columns(fine, 256 * k, 26 * k, 43 * k);
-    CHECK(left > 20 * k && right < 236 * k);
-    CHECK(std::abs(int32_t(left + right) / 2 - int32_t(128 * k)) <= int32_t(k));
-    // (beside the new word, where the old block was: black)
-    CHECK(fine[fine_width * 34 * k + size_t(22) * k] == black);
-    CHECK(fine[fine_width * 34 * k + size_t(233) * k] == black);
+    std::vector<uint32_t> fine = redrawn_text_picture(p, colours, sheet, sheet);
+    const size_t width = size_t(sheet) * k;
+    auto [left, right] = ink_columns(fine, sheet * k, 75 * k, 88 * k);
+    CHECK(left >= 92 * k && left <= 92 * k + k);
+    CHECK(right < 185 * k);
+    CHECK(ink_columns(fine, sheet * k, 89 * k, 100 * k).first == UINT32_MAX);
+    // (right of the new word, where the old block was: the ground)
+    CHECK(fine[width * 80 * k + size_t(183) * k] == ground);
 }
 
 // A region without ink: nothing painted, nothing drawn

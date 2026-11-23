@@ -11,8 +11,9 @@ the IPA Font License (third_party/ipa-fonts/) lets us ship.
 
 The pictures (SLUS-20318):
 - menu/menu.tmx, the menu's: its 21 buttons (256 x 64, a word on a blue glow) and the sheet of button hints
-  (block 1, 512 x 512: ":Back", ":Confirm" and so on beside the controller's buttons, on nothing);
-- title/title_menu1-5.tm2 and title/gameover_*.tm2: the title's and game over's choices (white capitals on black).
+  (block 1, 512 x 512: ":Back", ":Confirm" and so on beside the controller's buttons, on nothing).
+The title's and game over's choices (title/title_menu1-5.tm2, title/gameover_*.tm2) are left as the disc has them:
+their typewriter letters are not the Mincho the rest is redrawn in.
 Each word is given by the part of its picture it is in (a region, in texels) and the rows its capitals stand on;
 where the old word's ink lies inside the region is found by the port each time, from the picture.
 """
@@ -55,13 +56,6 @@ PICTURES.append(("menu/menu.tmx", 1, "PLAIN", [
     hint(":Next Page", 1, 4),
     hint(":Back", 2, 0), hint(":Keys", 2, 1), hint(":Items", 2, 2),
 ]))
-TITLE = (2, 10, 254, 56)
-for name, word in [("title/title_menu1.tm2", "PUSH START BUTTON"), ("title/title_menu2.tm2", "NEW GAME"),
-                   ("title/title_menu3.tm2", "LOAD GAME"), ("title/title_menu4.tm2", "OPTIONS"),
-                   ("title/title_menu5.tm2", "CONFIGURATION"), ("title/gameover_load.tm2", "LOAD GAME"),
-                   ("title/gameover_quit.tm2", "QUIT TO TITLE")]:
-    PICTURES.append((name, None, "PLAIN", [(word, TITLE, 26, 43, "CENTRE")]))
-PICTURES.append(("title/gameover_ok.tm2", None, "PLAIN", [(":OK", (52, 10, 126, 56), 24, 41, "LEFT")]))
 
 
 def read_dat(iso_path, names):
