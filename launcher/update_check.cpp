@@ -33,7 +33,7 @@ UpdateCheck::~UpdateCheck() {
 
 void UpdateCheck::start(const Platform &platform, const DataPaths &paths, const LauncherChoices &choices,
                         std::string running_version) {
-    std::string cache_path = paths.update_cache().string();
+    std::string cache_path = paths.update_cache().u8string();
     UpdateRelease cached{};
     auto text = read_file(paths.update_cache());
     update_cache_parse(text ? text->c_str() : nullptr, &cached);

@@ -53,21 +53,21 @@ std::string keep_vulkan_layers(const fs::path &obj, const fs::path &build_dir) {
     const fs::path kept = build_dir / "vk_layers";
     fs::create_directories(kept, error);
     if (error)
-        return "Cannot make " + kept.string() + ": " + error.message();
+        return "Cannot make " + kept.u8string() + ": " + error.message();
     for (fs::directory_iterator it(layers, error), end; !error && it != end; it.increment(error)) {
         if (!it->is_regular_file(error))
             continue;
         fs::copy_file(it->path(), kept / it->path().filename(), fs::copy_options::overwrite_existing, error);
         if (error)
-            return "Cannot copy " + it->path().string() + ": " + error.message();
+            return "Cannot copy " + it->path().u8string() + ": " + error.message();
     }
     if (error)
-        return "Cannot list " + layers.string() + ": " + error.message();
+        return "Cannot list " + layers.u8string() + ": " + error.message();
     return {};
 }
 
 std::string path_option(const char *name, const fs::path &path) {
-    return std::string("-D") + name + "=" + path.generic_string();
+    return std::string("-D") + name + "=" + path.generic_u8string();
 }
 
 BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest &request,
@@ -81,11 +81,11 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
     std::error_code error;
     fs::create_directories(obj, error);
     if (error)
-        return {false, "Cannot make the build folder " + obj.string() + ": " + error.message()};
+        return {false, "Cannot make the build folder " + obj.u8string() + ": " + error.message()};
 
     progress.stage("Preparing the build");
     ProcessSpec configure;
-    configure.argv = {tools->cmake.string(), "-G", "Ninja", "-S", source.string(), "-B", obj.string(),
+    configure.argv = {tools->cmake.u8string(), "-G", "Ninja", "-S", source.u8string(), "-B", obj.u8string(),
                       path_option("CMAKE_MAKE_PROGRAM", tools->ninja), path_option("CMAKE_C_COMPILER", tools->c_compiler),
                       path_option("CMAKE_CXX_COMPILER", tools->cxx_compiler), "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                       "-DKF4_LTO=ON", "-DKF4_FRAME_POINTERS=OFF", "-DKF4_PLAYER_BUILD=ON", "-DKF4_TESTS=OFF", "-DKF4_DECOMP_PREPATCHED=ON",
@@ -99,7 +99,7 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
 
     progress.stage("Building the game");
     ProcessSpec compile;
-    compile.argv = {tools->cmake.string(), "--build", obj.string(), "--target", "kf4"};
+    compile.argv = {tools->cmake.u8string(), "--build", obj.u8string(), "--target", "kf4"};
     compile.working_dir = request.build_dir;
     compile.env = tools->env;
     compile.capture_output = true;
@@ -115,7 +115,7 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
         fs::path copy = request.build_dir / file.filename();
         fs::copy_file(file, copy, fs::copy_options::overwrite_existing, error);
         if (error)
-            return {false, "Cannot copy " + file.string() + ": " + error.message()};
+            return {false, "Cannot copy " + file.u8string() + ": " + error.message()};
         // a copy of the release's read-only file stays removable (Windows will not delete a read-only one)
         fs::permissions(copy, fs::perms::owner_write, fs::perm_options::add, error);
     }

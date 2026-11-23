@@ -395,7 +395,7 @@ void Session::remove_old_builds() {
 
 int Session::play() {
     ProcessSpec spec;
-    spec.argv = {game_path().string(), "--disc", choices_.disc};
+    spec.argv = {game_path().u8string(), "--disc", choices_.disc};
     spec.argv.insert(spec.argv.end(), options_.game_args.begin(), options_.game_args.end());
     // the player's working folder, so that paths given after "--" mean what they meant there
     spec.capture_output = true;

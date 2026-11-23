@@ -106,7 +106,7 @@ DiscCheck check_image(const fs::path &path) {
 std::optional<fs::path> find_any_case(const fs::path &dir, std::string_view name) {
     std::error_code error;
     for (fs::directory_iterator it(dir, error), end; !error && it != end; it.increment(error)) {
-        if (upper(it->path().filename().string()) == upper(name))
+        if (upper(it->path().filename().u8string()) == upper(name))
             return it->path();
     }
     return std::nullopt;
@@ -133,7 +133,7 @@ DiscCheck check_folder(const fs::path &dir) {
 
 fs::path disc_meant(const fs::path &path) {
     std::error_code error;
-    if (fs::is_regular_file(path, error) && upper(path.filename().string()) == "SYSTEM.CNF")
+    if (fs::is_regular_file(path, error) && upper(path.filename().u8string()) == "SYSTEM.CNF")
         return path.parent_path();
     return path;
 }
@@ -188,7 +188,7 @@ DiscCheck check_disc(const fs::path &given) {
     fs::path path = disc_meant(given);
     std::error_code error;
     if (path.empty() || !fs::exists(path, error))
-        return {DiscVerdict::missing, "There is no disc at " + path.string() + ".", {}};
+        return {DiscVerdict::missing, "There is no disc at " + path.u8string() + ".", {}};
     if (fs::is_directory(path, error))
         return check_folder(path);
     return check_image(path);
