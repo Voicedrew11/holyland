@@ -1,5 +1,5 @@
 /* The keyboard's walking (port/include/port/walk_keys.h): W A S D as the game's own walking buttons, or with
-   instant WASD acceleration (the default) the left stick at full throw. */
+   instant WASD acceleration the left stick at full throw. */
 #include <stddef.h>
 
 #include "port/platform.h"
@@ -16,7 +16,7 @@
 
 /* Input_SetDefaultControls's */
 static MoveButtons game_buttons = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_L1, PAD_R1, PAD_R2, PAD_L2};
-static int instant_setting = 1;
+static int instant_setting = 0;
 
 void port_walk_keys_set_buttons(MoveButtons buttons) {
     game_buttons = buttons;

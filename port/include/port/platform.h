@@ -70,7 +70,7 @@ typedef struct {
        gsn.h: 0 ps2, 1 smooth, the default). Nothing at 1x. Live from the overlay. */
     int native_2d;
     int native_2d_forced;
-    /* --font: the game's font (GSN_FONT_*, gsn.h: 0 ps2, the disc's; 1 sharp, the default: its English letters
+    /* --font: the game's font (GSN_FONT_*, gsn.h: 0 ps2, the disc's, the default; 1 sharp: its English letters
        drawn again from IPA Mincho four times as fine, port/gs/shared/font_sheet.h). The scene renderer's. Live
        from the player menu. */
     int font;
@@ -167,18 +167,18 @@ typedef struct {
     int auto_loot_gold;
     int auto_loot_gold_forced; /* --auto-loot-gold: on for this run whatever settings.json says */
     /* the shops' and the smith's lists show " (E)" after what is equipped (port_equipped_mark()); settings.json's
-       mods.equipped_mark, on by default (no command-line switch) */
+       mods.equipped_mark, off by default (no command-line switch) */
     int equipped_mark;
     /* the menu's Item line lists categories first (port_item_categories()); settings.json's mods.item_categories,
-       on by default (no command-line switch) */
+       off by default (no command-line switch) */
     int item_categories;
-    /* notices say what changed (port_detailed_notices()); settings.json's mods.detailed_notices, on by default (no
+    /* notices say what changed (port_detailed_notices()); settings.json's mods.detailed_notices, off by default (no
        command-line switch) */
     int detailed_notices;
     /* the smith restores and upgrades at once (port_instant_smith()); settings.json's mods.instant_smith, off by default */
     int instant_smith;
     /* how much faster an enemy's attack turns at you before it strikes (port_attack_tracking_scale()): in hundredths,
-       100 the PS2's, or PORT_ATTACK_TRACKING_AUTO; settings.json's mods.attack_tracking, Auto by default */
+       100 the PS2's, or PORT_ATTACK_TRACKING_AUTO; settings.json's mods.attack_tracking, 100 by default */
     int attack_tracking;
     /* The frame-rate counter in the picture's top right corner (port_video_counter_draw): off by
        default, turned on by --show-fps or settings.json, F3 or the player menu's Display tab */

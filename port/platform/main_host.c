@@ -47,8 +47,8 @@
                          and title's pictures) that the game reads nearest: smooth (the default: read
                          bilinear where they are magnified, so letters have smooth, even edges) or ps2
                          (nearest, at the GS pixel's point: each texel a block, as the PS2 at 1x)
-       --font MODE       the game's font: sharp (the default: its English letters drawn again from
-                         IPA Mincho four times as fine, crisp at any resolution) or ps2 (the disc's)
+       --font MODE       the game's font: ps2 (the default: the disc's) or sharp (its English letters
+                         drawn again from IPA Mincho four times as fine, crisp at any resolution)
        --scene-depth MODE the scene renderer's depth, the player menu's Depth: high (the default: the GS's
                          whole Z at each pixel, the layers over a surface settled by the stencil;
                          also exact), medium (as high, the layers settled in one pass where nearer;
@@ -370,11 +370,11 @@ static void parse_options(int argc, char **argv) {
 
     port_options.disc = getenv("KF4_DISC");
     port_options.door_speed = 1;
-    port_options.equipped_mark = 1; /* (settings.json's, on by default; no command-line switch) */
-    port_options.item_categories = 1; /* (the same) */
-    port_options.detailed_notices = 1; /* (the same) */
+    port_options.equipped_mark = 0; /* (settings.json's, off by default; no command-line switch) */
+    port_options.item_categories = 0; /* (the same) */
+    port_options.detailed_notices = 0; /* (the same) */
     port_options.instant_smith = 0;
-    port_options.attack_tracking = PORT_ATTACK_TRACKING_AUTO;
+    port_options.attack_tracking = 100; /* (the PS2's) */
     port_options.fov = 64;
     port_options.game_speed = 1.0f;
     port_options.deinterlace = port_options.progressive = port_options.anti_blur = port_options.adapt_width = 1;
@@ -390,7 +390,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_lod = 1; /* GSN_LOD_SCALE */
     port_options.native_aniso = 1;
     port_options.native_2d = 1;        /* GSN_2D_SMOOTH */
-    port_options.font = 1;             /* GSN_FONT_SHARP */
+    port_options.font = 0;             /* GSN_FONT_PS2: the disc's */
     port_options.native_layer_z = 1; /* GSN_LAYER_Z_TOLERANT */
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;

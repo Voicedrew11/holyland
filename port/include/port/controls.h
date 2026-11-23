@@ -125,7 +125,7 @@ double port_controls_mouse_sensitivity(void);
 int port_controls_mouse_invert(void);
 void port_controls_set_mouse(double sensitivity, int invert_y);
 /* Instant mouse look (port/include/port/mouse_lead.h): the pictures between show the mouse's turn by the vblank
-   it is read. On by default. */
+   it is read. Off by default. */
 int port_controls_mouse_lead(void);
 void port_controls_set_mouse_lead(int on);
 

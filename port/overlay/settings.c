@@ -8,22 +8,25 @@
                     "widescreen": false, "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
-                    "native_scale": "auto", "native_widescreen": true, "antialias": "fxaa", "native_lod": "scale",
-                    "native_aniso": 1, "native_2d": "smooth", "font": "sharp",
+                    "native_scale": "auto", "native_widescreen": true, "antialias": "off", "native_lod": "scale",
+                    "native_aniso": 1, "native_2d": "smooth", "font": "ps2",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "ps2",
                     "reflection_clip": true,
                     "presenter": "vulkan", "scene_depth": "high"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"mouse_sensitivity": 1.0, "invert_y": false,
-                    "instant_mouse_look": true, "twin_stick": true, "instant_wasd_accel": true,
+                    "instant_mouse_look": false, "twin_stick": false, "instant_wasd_accel": false,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
        "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "no_hit_jolt": false, "auto_loot_gold": false,
-                    "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false,
-                    "attack_tracking": 0},
+                    "equipped_mark": false, "item_categories": false, "detailed_notices": false, "instant_smith": false,
+                    "attack_tracking": 100},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0,
                     "cheats_shown": false, "setup_version": 1}
      }
+
+   The defaults are the original game's: every addition (the mods, the controls' and the picture's) off until the
+   player turns it on, here or with a preset of the first-start setup (port/ui/setup_pages.cpp).
 
    "bindings" holds only the actions that differ from their defaults (port/sdk/controls.c), each as its
    three slots: two keys or mouse buttons, and a controller button. Until November 2026 there were two
@@ -83,11 +86,11 @@ PortSettings port_settings = {
     .seamless_scroll = 1,
     .frame_rate = 30,
     .door_speed = 1,
-    .equipped_mark = 1,
-    .item_categories = 1,
-    .detailed_notices = 1,
+    .equipped_mark = 0,
+    .item_categories = 0,
+    .detailed_notices = 0,
     .instant_smith = 0,
-    .attack_tracking = PORT_ATTACK_TRACKING_AUTO,
+    .attack_tracking = 100, /* (the PS2's) */
     .fov = 64,
     .game_speed = 1.f,
     .volume = 100,
@@ -97,9 +100,9 @@ PortSettings port_settings = {
     .native_scale = 0, /* auto */
     .native_widescreen = 1,
     .native_aniso = 1,
-    .antialias = PORT_AA_FXAA,
+    .antialias = PORT_AA_OFF,
     .native_2d = 1, /* GSN_2D_SMOOTH */
-    .font = 1,      /* GSN_FONT_SHARP */
+    .font = 0,      /* GSN_FONT_PS2: the disc's */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
     .native_sky = PORT_SKY_PS2,
@@ -263,9 +266,9 @@ static void read_controls(const cJSON *controls) {
 
     port_controls_set_mouse(read_number(controls, "mouse_sensitivity", 1.0, 0.05, 10.0),
                             read_bool(controls, "invert_y", 0));
-    port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 1));
-    port_twin_stick_set(read_bool(controls, "twin_stick", 1));
-    port_walk_keys_set_instant(read_bool(controls, "instant_wasd_accel", 1));
+    port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 0));
+    port_twin_stick_set(read_bool(controls, "twin_stick", 0));
+    port_walk_keys_set_instant(read_bool(controls, "instant_wasd_accel", 0));
     for (i = 0; i < 3 && cJSON_IsArray(menu); i++) {
         const cJSON *item = cJSON_GetArrayItem(menu, i);
 

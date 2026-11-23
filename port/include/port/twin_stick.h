@@ -15,7 +15,7 @@
    button with a direction), the ladders, the masks that stop the player moving. Only the size of each
    speed is the stick's.
 
-   On by default (settings.json "controls": "twin_stick"; the player menu's Controls tab). Off while a pad
+   Off by default (settings.json "controls": "twin_stick"; the player menu's Controls tab). Off while a pad
    script plays or one is recorded, so runs stay the same (KF4_TWIN_STICK_SCRIPTED=1 keeps it on, to test
    it: tests/twin_stick.pad). */
 #ifndef PORT_TWIN_STICK_H

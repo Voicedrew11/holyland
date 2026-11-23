@@ -261,7 +261,7 @@ static int bindings[ACTION_COUNT][BINDING_SLOTS];
 static int menu_mouse[3];
 static double sensitivity;
 static int invert_y;
-static int mouse_lead = 1; /* instant mouse look (port/include/port/mouse_lead.h) */
+static int mouse_lead = 0; /* instant mouse look (port/include/port/mouse_lead.h) */
 
 static void reset_tables(void) {
     memcpy(bindings, default_bindings, sizeof(bindings));

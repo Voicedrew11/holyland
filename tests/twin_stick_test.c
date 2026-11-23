@@ -209,7 +209,9 @@ static void test_ladder(void) {
 }
 
 static void test_setting(void) {
-    check("on by default", port_twin_stick_on());
+    check("off by default (the PS2's)", !port_twin_stick_on());
+    port_twin_stick_set(1);
+    check("on when set", port_twin_stick_on());
     port_options.input = "script.pad";
     check("off while a pad script plays", !port_twin_stick_on());
     port_options.input = NULL;
