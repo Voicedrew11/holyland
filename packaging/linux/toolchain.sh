@@ -3,7 +3,8 @@
 # the player's computer, all from packaging/toolchain.lock.
 #
 #   llvm/     clang, lld and llvm-ar from LLVM's release (as the developers' clang 22), stripped, and clang's
-#             own headers: nothing else of LLVM's 2 GB
+#             own headers: nothing else of LLVM's 2 GB; llvm/lib/libxml2.so.2, a stand-in for the library lld
+#             asks for and never uses (packaging/linux/libxml2-stub/)
 #   cmake/    CMake's release; bin/ninja, Ninja's
 #   sysroot/  Ubuntu 22.04's C library, kernel headers, libstdc++ 12 (linked in statically), libdrm, and
 #             SDL3's headers
@@ -21,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONTENT="${1:?usage: packaging/linux/toolchain.sh CONTENT [SDL3_PREFIX]}"
 SDL3_PREFIX="${2:-}"
 OUT="$CONTENT/toolchain"
-ID="linux-2 llvm-22.1.8 cmake-3.31.6 ninja-1.12.1 ubuntu-22.04 sdl-3.4.20"
+ID="linux-3 llvm-22.1.8 cmake-3.31.6 ninja-1.12.1 ubuntu-22.04 sdl-3.4.20"
 fetch() { "$ROOT/packaging/fetch.sh" "$1"; }
 
 rm -rf "$OUT"
@@ -47,6 +48,12 @@ ln -s llvm-ar "$OUT/llvm/bin/llvm-ranlib"
 mkdir -p "$OUT/llvm/lib/clang/22"
 cp -r "$WORK/$LLVM/lib/clang/22/include" "$OUT/llvm/lib/clang/22/"
 [ -f "$WORK/$LLVM/LICENSE.TXT" ] && cp "$WORK/$LLVM/LICENSE.TXT" "$OUT/llvm/"
+# lld needs libxml2.so.2 to start, which Arch has only in libxml2-legacy (libxml2-stub/libxml2.c says why
+# the stand-in is enough). Built with the host's compiler: it uses nothing, not even the C library.
+mkdir -p "$OUT/llvm/lib"
+cc -shared -fPIC -O2 -nostdlib -Wl,-soname,libxml2.so.2 \
+    -Wl,--version-script,"$ROOT/packaging/linux/libxml2-stub/libxml2.map" \
+    -o "$OUT/llvm/lib/libxml2.so.2" "$ROOT/packaging/linux/libxml2-stub/libxml2.c"
 
 echo "==> CMake and Ninja"
 tar -xzf "$(fetch cmake-linux)" -C "$WORK"
@@ -133,5 +140,18 @@ set(CMAKE_PREFIX_PATH "/usr/lib/cmake")
 # no pkg-config: the build finds libdrm by its files (CMakeLists.txt)
 set(PKG_CONFIG_EXECUTABLE "" CACHE FILEPATH "")
 CFG
+echo "==> the tools need only what every Linux has"
+# A tool that needs a library the player may lack fails with "unable to execute command" (lld and
+# libxml2.so.2 on Arch, 2026-11-23). Each one's libraries must be on this list or shipped beside it.
+system_libs=" libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 ld-linux-x86-64.so.2 libz.so.1 libstdc++.so.6 libgcc_s.so.1 "
+find "$OUT/llvm/bin" "$OUT/cmake/bin" "$OUT/bin" -type f | while read -r tool; do
+    head -c 4 "$tool" | grep -q ELF || continue
+    for lib in $(readelf -d "$tool" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+        case "$system_libs" in *" $lib "*) continue ;; esac
+        [ -f "$(dirname "$tool")/../lib/$lib" ] && continue
+        echo "toolchain.sh: $tool needs $lib, which is neither shipped nor on every Linux" >&2
+        exit 1
+    done
+done
 echo "$ID" > "$OUT/ID"
 echo "done: $OUT ($(du -sh "$OUT" | cut -f1))"

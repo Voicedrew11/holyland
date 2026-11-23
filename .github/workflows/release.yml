@@ -21,6 +21,7 @@ on:
       - packaging/fetch.sh
       - packaging/linux/toolchain.sh
       - packaging/linux/build-sdl3.sh
+      - packaging/linux/libxml2-stub/**
       - packaging/windows/toolchain.sh
   workflow_dispatch:
     inputs:
@@ -65,7 +66,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: out/toolchain-linux
-          key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl3.sh') }}
+          key: toolchain-linux-${{ hashFiles('packaging/toolchain.lock', 'packaging/fetch.sh', 'packaging/linux/toolchain.sh', 'packaging/linux/build-sdl3.sh', 'packaging/linux/libxml2-stub/*') }}
       - name: The AppImage
         env:
           HOLYLAND_TOOLCHAIN_CACHE: ${{ github.workspace }}/out/toolchain-linux

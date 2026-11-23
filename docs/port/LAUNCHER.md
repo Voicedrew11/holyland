@@ -86,6 +86,10 @@ Pinned by SHA-256 in `packaging/toolchain.lock`, downloaded once into `out/packa
   - Ubuntu 22.04 has no SDL3 package at all. SDL3's headers need none of X11's or Wayland's (SDL2's `SDL_syswm.h`
     did), so the sysroot holds SDL3's headers alone.
   - SDL3 opens the window through Wayland where there is one (SDL2 2.30 in the AppImage went through XWayland).
+  - LLVM's release `lld` asks for `libxml2.so.2` (for its Windows linker's manifests only), which Arch has only in
+    `libxml2-legacy` since libxml2 2.14. A stand-in that does nothing goes in `llvm/lib`
+    (`packaging/linux/libxml2-stub/`), and `toolchain.sh` fails if any tool needs a library that is neither shipped
+    nor on every Linux.
 - **Windows** (`packaging/windows/toolchain.sh`): llvm-mingw 20260616 (clang 22, x86_64 only, no debugger or
   sanitizer runtimes), CMake, Ninja, SDL3's MinGW build. The same as `ci.yml`.
 
