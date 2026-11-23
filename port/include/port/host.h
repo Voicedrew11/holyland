@@ -170,15 +170,15 @@ int port_door_speed(void);
 int port_auto_loot_gold(void);
 /* port_equipped_mark(): 1 while the lists of what the player owns in the shops (selling) and at the smith (repair,
    upgrade, receive) show " (E)" after what he has equipped (settings.json's mods.equipped_mark, the player menu's
-   Gameplay tab; on by default). Read by the patched ui/trade.c. */
+   Gameplay tab; off by default). Read by the patched ui/trade.c. */
 int port_equipped_mark(void);
 /* port_item_categories(): 1 while the menu's Item line opens a list of categories first, then the chosen one's items
-   (settings.json's mods.item_categories, the player menu's Interface tab; on by default). Read by the patched
+   (settings.json's mods.item_categories, the player menu's Interface tab; off by default). Read by the patched
    ui/menu_screens.c. */
 int port_item_categories(void);
 /* port_detailed_notices(): 1 while notices say what changed ("Magic Learned: Fire Ball", "Level UP: 51",
    "Weapon Level UP: Moonlight Sword Lv 2"...) (settings.json's mods.detailed_notices, the player menu's Gameplay tab;
-   on by default). Read by the patched ui/message.c. */
+   off by default). Read by the patched ui/message.c. */
 int port_detailed_notices(void);
 /* port_instant_smith(): 1 while the smith's restoring and upgrading are done at once: the item is not left with him
    (nor taken off), so there is nothing to come back for, and he asks gold in place of the wait (settings.json's

@@ -18,7 +18,7 @@
 #define DROVE_TURN 1
 #define DROVE_LOOK 2
 
-static int setting = 1;
+static int setting = 0;
 static int replayed = -1; /* a recording's ts= at this vblank (port_twin_stick_replayed); -1 none */
 static unsigned char drove; /* DROVE_: what the right stick drove last call */
 
