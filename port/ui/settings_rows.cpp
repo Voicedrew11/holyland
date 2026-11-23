@@ -336,11 +336,20 @@ void set_texture_lod(int lod) {
     changed();
 }
 
+// In a player build only 1x can be chosen; the others are dimmed (port_draw_distance_locked)
+bool distance_unlocked() {
+    return !port_draw_distance_locked();
+}
 const Choice distances[] = {{"1x", PORT_DRAW_DISTANCE_1},
-                            {"1.5x", PORT_DRAW_DISTANCE_1_5},
-                            {"2x", PORT_DRAW_DISTANCE_2},
-                            {"4x", PORT_DRAW_DISTANCE_4},
-                            {"No fog", PORT_DRAW_DISTANCE_MAX}};
+                            {"1.5x", PORT_DRAW_DISTANCE_1_5, distance_unlocked},
+                            {"2x", PORT_DRAW_DISTANCE_2, distance_unlocked},
+                            {"4x", PORT_DRAW_DISTANCE_4, distance_unlocked},
+                            {"No fog", PORT_DRAW_DISTANCE_MAX, distance_unlocked}};
+const char *distance_note() {
+    return port_draw_distance_locked() && !port_options.draw_distance_forced
+               ? "The longer distances are not ready yet: this release draws 1x."
+               : nullptr;
+}
 int get_distance() {
     return port_options.draw_distance;
 }
@@ -518,7 +527,7 @@ const SettingRow graphics_rows[] = {
     {"World", "", RowKind::heading},
     {"Draw distance", "How far the fog starts. 1x is the PS2's. No fog also removes some places' mist.",
      RowKind::choice, distances, {}, get_distance, set_distance, nullptr, nullptr, nullptr, nullptr,
-     distance_overridden},
+     distance_overridden, distance_note},
     {"Sky fog distance", "Moves the sky's fog out with the draw distance too; lightens dark skies.", RowKind::toggle,
      on_off, {}, get_sky_fog, set_sky_fog, nullptr, nullptr, distance_longer},
     {"Sky", "Modern: drawn behind everything, so far hills show.\nPS2: the dome at its real distance, hiding what is "
@@ -550,25 +559,6 @@ int get_twin_stick() {
 void set_twin_stick(int on) {
     port_twin_stick_set(on);
     changed();
-}
-
-int get_instant_wasd() {
-    return port_walk_keys_instant_setting() != 0;
-}
-void set_instant_wasd(int on) {
-    port_walk_keys_set_instant(on);
-    changed();
-}
-
-int get_separate_run() {
-    return port_options.separate_run != 0;
-}
-void set_separate_run(int on) {
-    port_settings.separate_run = port_options.separate_run = on;
-    changed();
-}
-bool separate_run_overridden() {
-    return port_options.separate_run != port_settings.separate_run;
 }
 
 int get_sensitivity() {
@@ -629,14 +619,6 @@ const char menu_mouse_help[] =
 const SettingRow controls_rows[] = {
     {"Twin-stick controls", "Left stick moves and strafes, right stick turns and looks. Off: the PS2's layout.",
      RowKind::toggle, on_off, {}, get_twin_stick, set_twin_stick},
-    {"Instant WASD acceleration",
-     "W A S D walk at full speed at once and turn round at once (the left stick pushed all the way, with twin-stick "
-     "controls). Off: they speed up and slow down as the game's walking always has. The keyboard only.",
-     RowKind::toggle, on_off, {}, get_instant_wasd, set_instant_wasd},
-    {"Separate run key",
-     "Run while Left Shift (or the left stick press) is held. The action button then only talks, picks up and opens.",
-     RowKind::toggle, on_off, {}, get_separate_run, set_separate_run, nullptr, nullptr, nullptr, nullptr,
-     separate_run_overridden},
     {"Mouse", "", RowKind::heading},
     {"Mouse sensitivity", "", RowKind::number, {}, {25, 400, 5}, get_sensitivity, set_sensitivity, nullptr,
      describe_sensitivity},

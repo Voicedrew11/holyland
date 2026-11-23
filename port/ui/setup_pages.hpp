@@ -34,7 +34,7 @@ enum class SetupOwn {
 };
 
 // What the help column draws above the focused row's help
-enum class PreviewKind { none, controls, screen, hands, minimap, summary };
+enum class PreviewKind { none, controls, screen, hands, summary };
 
 struct SetupRowRef {
     const char *tab_id = nullptr; // a player menu row: its section's id and its label (find_setting_row)

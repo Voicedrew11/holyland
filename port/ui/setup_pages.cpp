@@ -36,32 +36,22 @@ const SetupRowRef controls_rows[] = {
     {"controls", "Twin-stick controls", pad},
     {"controls", "Mouse sensitivity", keyboard},
     {"controls", "Invert Y axis", keyboard},
-    {"controls", "Instant WASD acceleration", keyboard},
-    {"controls", "Separate run key"},
     own(SetupOwn::next),
 };
 
 const SetupRowRef picture_rows[] = {
     {"display", "Frame rate"},     {"graphics", "Widescreen"}, {"graphics", "HUD position"},
-    {"graphics", "Anti-aliasing"}, {"graphics", "Draw distance"}, {"graphics", "Sky"},
-    {"graphics", "Font"},          own(SetupOwn::next),
+    {"graphics", "Anti-aliasing"}, {"graphics", "Font"},       own(SetupOwn::next),
 };
 
 const SetupRowRef play_rows[] = {
-    {"gameplay", "Attack tracking"},    {"gameplay", "Game speed"},     {"gameplay", "Door speed"},
-    {"gameplay", "Camera jolt on hit"}, {"gameplay", "Auto-loot gold"}, {"gameplay", "Instant smith"},
-    own(SetupOwn::next),
+    {"gameplay", "Attack tracking"}, {"gameplay", "Door speed"},    {"gameplay", "Camera jolt on hit"},
+    {"gameplay", "Auto-loot gold"},  {"gameplay", "Instant smith"}, own(SetupOwn::next),
 };
 
 const SetupRowRef hands_rows[] = {
     {"gameplay", "Hands and hotkeys"}, {"gameplay", "HUD size"},   {"gameplay", "HUD position"},
     {"gameplay", "HUD layout"},        {"gameplay", "Card shape"}, own(SetupOwn::next),
-};
-
-const SetupRowRef map_rows[] = {
-    {"interface", "Automap"},        {"interface", "Minimap"},         {"interface", "Minimap position"},
-    {"interface", "Minimap size"},   {"interface", "Extended stats"},  {"interface", "Item categories"},
-    {"gameplay", "Detailed notices"}, {"interface", "Mark equipped items"}, own(SetupOwn::next),
 };
 
 const SetupRowRef ready_rows[] = {own(SetupOwn::finish)};
@@ -75,12 +65,9 @@ const SetupPage pages[] = {
      "this page shows.",
      controls_rows, PreviewKind::controls},
     {"picture", "Picture", "Each change shows at once on the game behind.", picture_rows, PreviewKind::screen},
-    {"play", "How it plays", "1x is the PS2's everywhere.", play_rows, PreviewKind::none},
+    {"play", "How it plays", "1x is the PS2's.", play_rows, PreviewKind::none},
     {"hands", "Hands and hotkeys",
      "Swap weapons and spells, and use items, without opening the menu.", hands_rows, PreviewKind::hands},
-    {"map", "Map and menus",
-     "The automap draws where you have been. Extended stats show numbers the game keeps to itself.", map_rows,
-     PreviewKind::minimap},
     {"ready", "Ready", "F1, or L3 and R3 together on a controller, opens every setting at any time.", ready_rows,
      PreviewKind::summary},
 };
@@ -90,22 +77,13 @@ const PresetValue presets[] = {
     {"display", "Frame rate", {30, PORT_FRAME_RATE_MONITOR, PORT_FRAME_RATE_MONITOR}},
     {"graphics", "Widescreen", {0, 0, 1}},
     {"graphics", "Anti-aliasing", {PORT_AA_FXAA, PORT_AA_SMAA, PORT_AA_SMAA_T2X}},
-    {"graphics", "Draw distance", {PORT_DRAW_DISTANCE_1, PORT_DRAW_DISTANCE_1, PORT_DRAW_DISTANCE_2}},
-    {"graphics", "Sky", {PORT_SKY_PS2, PORT_SKY_MODERN, PORT_SKY_MODERN}},
     {"graphics", "Font", {0, 1, 1}}, // (gsn.h's GSN_FONT_: the PS2's, IPA Mincho)
     {"controls", "Twin-stick controls", {0, 1, 1}},
     {"gameplay", "Attack tracking", {100, PORT_ATTACK_TRACKING_AUTO, PORT_ATTACK_TRACKING_AUTO}},
-    {"gameplay", "Game speed", {100, 100, 100}}, // (they change the game's balance: the player opts in)
-    {"gameplay", "Instant smith", {0, 0, 0}},
-    {"gameplay", "Door speed", {1, 1, 2}},
+    {"gameplay", "Instant smith", {0, 0, 0}}, // (it changes the game's balance: the player opts in)
+    {"gameplay", "Door speed", {1, 1, 1}},    // (the PS2's: the player may change it on How it plays)
     {"gameplay", "Auto-loot gold", {0, 0, 1}},
-    {"gameplay", "Detailed notices", {0, 1, 1}},
     {"gameplay", "Hands and hotkeys", {0, 0, 1}},
-    {"interface", "Automap", {0, 1, 1}},
-    {"interface", "Minimap", {0, 0, 1}},
-    {"interface", "Extended stats", {0, 1, 1}},
-    {"interface", "Item categories", {0, 1, 1}},
-    {"interface", "Mark equipped items", {0, 1, 1}},
 };
 
 // ---- Every player's, never asked ----------------------------------------------------------------------------------
@@ -126,12 +104,11 @@ const GrantedValue granted[] = {
 };
 
 // ---- The setup's own rows -----------------------------------------------------------------------------------------
-const char ps2_text[] = "The game as it was: 30 frames a second, 4:3, the PS2's controls, text and sky. Only the "
+const char ps2_text[] = "The game as it was: 30 frames a second, 4:3, the PS2's controls and text. Only the "
                         "screen is set up for this monitor.";
-const char improved_text[] = "The PS2's look and pace, smoother and sharper: your monitor's frame rate, sharp text, "
-                             "twin-stick controls, the automap and the numbers the game hides.";
-const char modern_text[] = "Improved, with widescreen, a longer view, the hands and hotkeys, the minimap, quicker "
-                           "doors and gold picked up as you go.";
+const char improved_text[] = "The PS2's look and pace, smoother and sharper: your monitor's frame rate, sharp text "
+                             "and twin-stick controls.";
+const char modern_text[] = "Improved, with widescreen, the hands and hotkeys, and gold picked up as you go.";
 const Choice devices[] = {{"Keyboard and mouse", 0}, {"Controller", 1}};
 
 struct OwnRow {

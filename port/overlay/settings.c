@@ -10,15 +10,15 @@
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "fxaa", "native_lod": "scale",
                     "native_aniso": 1, "native_2d": "smooth", "font": "sharp",
-                    "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "modern",
+                    "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "ps2",
                     "reflection_clip": true,
                     "presenter": "vulkan", "scene_depth": "high"},
        "audio":    {"volume": 100, "mute": false},
        "controls": {"mouse_sensitivity": 1.0, "invert_y": false,
-                    "instant_mouse_look": true, "twin_stick": true, "instant_wasd_accel": false,
+                    "instant_mouse_look": true, "twin_stick": true,
                     "menu_mouse": ["cross", "circle", "cross"],
                     "bindings": {"square": ["key:Space", "mouse:left", "pad:x"]}},
-       "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "separate_run": false, "no_hit_jolt": false, "auto_loot_gold": false,
+       "mods":     {"game_speed": 1, "door_speed": 1, "myus_necklace": false, "no_hit_jolt": false, "auto_loot_gold": false,
                     "equipped_mark": true, "item_categories": true, "detailed_notices": true, "instant_smith": false,
                     "attack_tracking": 0},
        "overlay":  {"pause_when_open": false, "show_fps": false, "scale": 1.0, "save_slot": 0, "quick_slot": 0,
@@ -102,7 +102,7 @@ PortSettings port_settings = {
     .font = 1,      /* GSN_FONT_SHARP */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
-    .native_sky = PORT_SKY_MODERN,
+    .native_sky = PORT_SKY_PS2,
     .reflection_clip = 1,
 };
 
@@ -265,7 +265,6 @@ static void read_controls(const cJSON *controls) {
                             read_bool(controls, "invert_y", 0));
     port_controls_set_mouse_lead(read_bool(controls, "instant_mouse_look", 1));
     port_twin_stick_set(read_bool(controls, "twin_stick", 1));
-    port_walk_keys_set_instant(read_bool(controls, "instant_wasd_accel", 0));
     for (i = 0; i < 3 && cJSON_IsArray(menu); i++) {
         const cJSON *item = cJSON_GetArrayItem(menu, i);
 
@@ -461,6 +460,9 @@ void port_settings_load(void) {
     if (port_scene_depth_locked()) {
         s->scene_depth = PORT_SCENE_DEPTH_GPU; /* (a player build: port/include/port/scene_depth.h) */
     }
+    if (port_draw_distance_locked()) {
+        s->draw_distance = PORT_DRAW_DISTANCE_1; /* (a player build: port/include/port/platform.h) */
+    }
     {
         const char *font = read_string(display, "font");
 
@@ -508,7 +510,6 @@ void port_settings_load(void) {
     s->door_speed = (int)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "door_speed", s->door_speed, 1, 8);
     s->game_speed = (float)read_number(cJSON_GetObjectItemCaseSensitive(document, "mods"), "game_speed",
         s->game_speed, PORT_GAME_SPEED_LOW, PORT_GAME_SPEED_HIGH);
-    s->separate_run = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "separate_run", s->separate_run);
     s->no_hit_jolt = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "no_hit_jolt", s->no_hit_jolt);
     s->auto_loot_gold = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "auto_loot_gold", s->auto_loot_gold);
     s->equipped_mark = read_bool(cJSON_GetObjectItemCaseSensitive(document, "mods"), "equipped_mark", s->equipped_mark);
@@ -568,9 +569,6 @@ void port_settings_load(void) {
     }
     if (!port_options.myus_necklace_forced) {
         port_options.myus_necklace = s->myus_necklace;
-    }
-    if (!port_options.separate_run_forced) {
-        port_options.separate_run = s->separate_run;
     }
     if (!port_options.no_hit_jolt_forced) {
         port_options.no_hit_jolt = s->no_hit_jolt;
@@ -696,7 +694,6 @@ static void write_controls(cJSON *controls) {
     put(controls, "invert_y", cJSON_CreateBool(port_controls_mouse_invert()));
     put(controls, "instant_mouse_look", cJSON_CreateBool(port_controls_mouse_lead()));
     put(controls, "twin_stick", cJSON_CreateBool(port_twin_stick_setting()));
-    put(controls, "instant_wasd_accel", cJSON_CreateBool(port_walk_keys_instant_setting()));
     for (i = 0; i < 3; i++) {
         int menu_action = port_controls_menu_mouse(i);
 
@@ -787,7 +784,6 @@ void port_settings_save(void) {
     write_controls(section("controls"));
     put(section("mods"), "game_speed", cJSON_CreateNumber(s->game_speed));
     put(section("mods"), "myus_necklace", cJSON_CreateBool(s->myus_necklace));
-    put(section("mods"), "separate_run", cJSON_CreateBool(s->separate_run));
     put(section("mods"), "no_hit_jolt", cJSON_CreateBool(s->no_hit_jolt));
     put(section("mods"), "door_speed", cJSON_CreateNumber(s->door_speed));
     put(section("mods"), "auto_loot_gold", cJSON_CreateBool(s->auto_loot_gold));

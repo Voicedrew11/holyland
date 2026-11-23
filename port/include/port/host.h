@@ -285,10 +285,10 @@ int port_native_draw(int kind);
 int port_native_wave_uvs(void);
 /* port_native_sky(): how the sky is drawn when it is drawn natively (--native-draw sky; --sky, settings.json
    display.native_sky, the player menu's Graphics tab, live; P3-2 of docs/port/NATIVE_DRAW_TASKS.md, NATIVE_DRAW.md A1).
-   PORT_SKY_MODERN (the default, `modern`): where the sky is the frame's first draw, the dome centred on the
+   PORT_SKY_MODERN (the command line's default, `modern`; settings.json's is `ps2`): where the sky is the frame's first draw, the dome centred on the
      eye and at the far plane (Z 0: it hides nothing drawn after it), its fog and colour the game's; where
      other records are drawn before it (maps 000 and 004), the PS2's (game/native_draw/nd_sky.c).
-   PORT_SKY_PS2 (`ps2`): as the PS2 draws it, at the feet with its real Z (what lies beyond the dome is
+   PORT_SKY_PS2 (`ps2`, what players get unless they choose): as the PS2 draws it, at the feet with its real Z (what lies beyond the dome is
      hidden by it). The PS2 path's sky (--native-draw without sky) is always this. */
 #define PORT_SKY_PS2 0
 #define PORT_SKY_MODERN 1
@@ -317,8 +317,7 @@ int port_myus_necklace(void);
    rumbles and knocks back. */
 int port_no_hit_jolt(void);
 
-/* The separate run key (--separate-run, or the player menu's Controls tab) is read through port_controls_run_held()
-   (port/include/port/controls.h). */
+/* Running on the keyboard's Run key is read through port_controls_run_held() (port/include/port/controls.h). */
 
 /* port_invincible(): 1 while the debug option is on (--invincible, or the player menu's Cheats tab; never
    saved). The player then loses no HP: hits still land, flash and knock back, but take nothing

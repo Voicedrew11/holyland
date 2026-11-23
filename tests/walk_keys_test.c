@@ -126,17 +126,13 @@ static void test_instant(void) {
     int axis[4] = {0x80, 0x80, 0x80, 0x80};
     unsigned short held;
 
-    check("instant WASD acceleration off by default", !port_walk_keys_instant_setting() && !port_walk_keys_instant());
-    port_walk_keys_set_instant(1);
-    check("on when set on", port_walk_keys_instant());
+    check("instant in live play", port_walk_keys_instant());
     port_options.input = "script.pad";
     check("not while a pad script plays", !port_walk_keys_instant());
     port_options.input = NULL;
     port_options.record_input = "record.pad";
     check("not while one is recorded", !port_walk_keys_instant());
     port_options.record_input = NULL;
-    port_walk_keys_set_instant(0);
-    check("off when set off", !port_walk_keys_instant());
 
     held = walk_keys_read(WALK_KEY_FORWARD, 1, defaults, 1, axis);
     check("instant W: the left stick full up, no buttons, the right stick untouched",

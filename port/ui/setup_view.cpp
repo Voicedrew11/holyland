@@ -8,7 +8,6 @@
 
 #include "rows_rml.hpp"
 
-#include "port/automap.h"
 #include "port/hands.h"
 
 extern "C" {
@@ -69,13 +68,20 @@ std::string hands_preview() {
         return "<preview class=\"off\">" + monitor(gauges()) + caption("Off: the game's own controls for equipping.") +
                "</preview>";
     }
-    // (drawn larger than the game's, to be seen in the small screen: the caption says so)
-    float scale = port_hands.scale;
-    bool square = port_hands.cards == PORT_HANDS_CARDS_SQUARE;
-    float width = (square ? 13.0f : 11.0f) * scale; // (percent of the picture)
-    float height = (square ? 17.0f : 22.0f) * scale;
-    float gap = 1.5f * scale;
-    float drop = port_hands.layout == PORT_HANDS_LAYOUT_CROSS ? height * 0.35f : 0.0f;
+    // The game's cards (game/hands_cross.c) are in the HUD's 640 x 448, drawn on a 4:3 picture's shape also in
+    // widescreen: each is 70 wide, 80 high tall and 70 square, 3 apart, the middle one 24 lower in the cross.
+    // Here in percent of the picture's height and width, which in widescreen is 16 for 9, not 4 for 3; drawn
+    // larger than the game's, to be seen in the small screen (the caption says so).
+    const float larger = 1.25f;
+    float scale = port_hands.scale * larger;
+    float picture_aspect = port_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
+    float across = 100.0f * (4.0f / 3.0f) / 640.0f / picture_aspect * scale; // (a HUD unit across, in percent)
+    float down = 100.0f / 448.0f * scale;                                     // (a HUD unit down)
+    float card_h = port_hands.cards == PORT_HANDS_CARDS_SQUARE ? 70.0f : 80.0f;
+    float width = 70.0f * across;
+    float height = card_h * down;
+    float gap = 3.0f * across;
+    float drop = port_hands.layout == PORT_HANDS_LAYOUT_CROSS ? 24.0f * down : 0.0f;
     float group_w = width * 3.0f + gap * 2.0f, group_h = height + drop;
     bool right = port_hands.corner == PORT_HANDS_BOTTOM_RIGHT || port_hands.corner == PORT_HANDS_TOP_RIGHT;
     bool top = port_hands.corner == PORT_HANDS_TOP_RIGHT || port_hands.corner == PORT_HANDS_TOP_LEFT;
@@ -88,23 +94,6 @@ std::string hands_preview() {
     }
     return "<preview>" + monitor(gauges() + cards) + caption("Where the hands show: spell, hotkey and weapon. Drawn larger than in the game.") +
            "</preview>";
-}
-
-std::string minimap_preview() {
-    if (!port_automap.enabled || !port_automap.minimap) {
-        const char *text = port_automap.enabled ? "The minimap is off; the full map opens on its key (M)."
-                                                : "The automap is off.";
-        return "<preview class=\"off\">" + monitor(gauges()) + caption(text) + "</preview>";
-    }
-    // (its side is a percent of the picture's height; the picture is 9 high for 16 or 12 wide)
-    float side_h = float(port_automap.minimap_size);
-    float side_w = side_h * 9.0f / (port_options.widescreen ? 16.0f : 12.0f);
-    bool right = port_automap.minimap_corner == 0 || port_automap.minimap_corner == 1;
-    bool bottom = port_automap.minimap_corner == 1 || port_automap.minimap_corner == 3;
-    float left = right ? 100.0f - 2.0f - side_w : 2.0f;
-    float top = bottom ? 100.0f - 3.0f - side_h : 3.0f;
-    return "<preview>" + monitor(gauges() + placed("mark", "minimap", left, top, side_w, side_h)) +
-           caption("Where the minimap shows, and its size.") + "</preview>";
 }
 
 // A key's name from its binding (the first slot), in its box
@@ -137,9 +126,8 @@ std::string controls_preview(const SetupFlow &flow, PadFamily family) {
                  key_of(ACTION_LEFT_STICK_RIGHT),
              "Walk and step aside");
         line(out, "<key>Mouse</key>", "Turn and look");
-        if (port_options.separate_run) {
-            line(out, key_of(ACTION_RUN), "Run while held");
-        }
+        line(out, key_of(ACTION_RUN), "Run while held");
+        line(out, key_of(ACTION_CROSS), "Talk, pick up and open");
     }
     out += caption("Every key and button can be changed in F1's Key Bindings.");
     return out + "</preview>";
@@ -176,8 +164,6 @@ std::string preview(const SetupFlow &flow, PadFamily family) {
         return screen_preview();
     case PreviewKind::hands:
         return hands_preview();
-    case PreviewKind::minimap:
-        return minimap_preview();
     case PreviewKind::summary:
         return summary(flow);
     case PreviewKind::none:

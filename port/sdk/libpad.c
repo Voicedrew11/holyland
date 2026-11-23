@@ -20,10 +20,10 @@
 
    --record-input FILE writes what the pad and keyboard send as such a script, a line per run of vblanks
    with the same buttons and sticks, so a played session can be replayed with --input. The PC's own
-   controls stay on while recording (mouse look, the separate run key, twin-stick), and what they hand the game is written too, so that the replay gives the game the same:
+   controls stay on while recording (mouse look, the Run key, twin-stick), and what they hand the game is written too, so that the replay gives the game the same:
        <vblank> <buttons> rx=.. ry=.. lx=.. ly=.. ts=<0|1> run=<0|1> <vblanks>
-   ts= is whether twin-stick shaped the sticks (port_twin_stick_on), run= whether the separate run key
-   was held (left out when the separate run mod did not apply: the action button runs), and
+   ts= is whether twin-stick shaped the sticks (port_twin_stick_on), run= whether the player ran (the
+   Run key or a controller's action button held; left out in scripts from before, where the action button runs), and
        <vblank> look <yaw> <pitch>       the mouse's turn one port_mouse_look call gave (C99 hex floats)
        <vblank> event <name> [<slot>]    a PC key the game sees: weapon_swap, spell_swap, hotkey_next,
                                          hotkey_previous (the hands mod), game_save, game_load,
@@ -87,7 +87,7 @@ typedef struct {
     unsigned int buttons;
     int axis[4]; /* rx, ry, lx, ly: -1 where the line does not set it */
     int twin;    /* ts=: twin-stick on (1) or off (0); -1 not set (a pad script's own rule) */
-    int run;     /* run=: the separate run key held (1) or not (0); -1 not set (the action button runs) */
+    int run;     /* run=: running (1) or not (0); -1 not set (the action button runs) */
 } PadInput;
 
 typedef struct {

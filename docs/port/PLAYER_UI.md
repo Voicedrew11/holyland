@@ -86,7 +86,8 @@ game, in the menu's own window, not in the launcher.
 - **Again**: Display, Run setup again. Its Welcome then has Cancel, which puts back every setting the setup can
   touch as it was when it opened (Esc on the Welcome does the same).
 - **The pages** (`port/ui/setup_pages.cpp`, a table): Welcome (the cards), Controls, Picture, How it plays, Hands and
-  hotkeys, Map and menus, Ready. Their rows are the menu's own (`SettingRow`s found by section id and label,
+  hotkeys, Ready. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
+  and menus (automap, minimap, extended stats, item categories, notices); F1 has them. Their rows are the menu's own (`SettingRow`s found by section id and label,
   `find_setting_row`), so a row behaves and is saved exactly as in the menu, and each change shows at once on the
   game behind. The setup's own rows (the cards, Skip, Cancel, "I play with", Continue, Start) are `SetupOwn`.
 - **The cards** each set their preset's values (the `presets` table: As on the PS2, Improved, Modern) and the
@@ -100,7 +101,8 @@ game, in the menu's own window, not in the launcher.
   chooses which rows the page shows; both always work.
 - **Previews** (`port/ui/setup_view.cpp`), over the focused row's help: what the sticks and keys do (Controls); a
   screen of the monitor's shape with the 4:3 or 16:9 picture and the gauges (Picture); the hands' three cards at their
-  corner, size, layout and shape (Hands); the minimap's box at its corner and size (Map); each page's choices (Ready).
+  corner, size, layout and shape (Hands), in the game's proportions (game/hands_cross.c's, on a 4:3 HUD also in
+  widescreen); each page's choices (Ready).
   Boxes the style sheet draws (`body.setup` in `kf4.rcss`), from the settings as they are now.
 - **Checked at each start**: `setup_problems` logs `[ui] setup: ...` for a named row that is not in the menu, or a
   preset or given value its row cannot hold. Nothing logged: all well.
@@ -112,15 +114,15 @@ The presets, for the owner to look over:
 | frame rate | 30 | the monitor's | the monitor's |
 | widescreen | off | off | on |
 | anti-aliasing | FXAA | SMAA | SMAA T2x |
-| draw distance / sky | 1x / PS2 | 1x / Modern | 2x / Modern |
 | font | Original | IPA Mincho | IPA Mincho |
 | twin-stick | off | on | on |
 | attack tracking | 1x | Auto | Auto |
-| door speed / auto-loot gold / detailed notices | 1 / off / off | 1 / off / on | 2 / on / on |
+| door speed / auto-loot gold | 1x / off | 1x / off | 1x / on |
 | hands and hotkeys | off | off | on |
-| automap / minimap / extended stats | off / off / off | on / off / on | on / on / on |
-| item categories / mark equipped items | off / off | on / on | on / on |
-| game speed / instant smith | 1x / off | 1x / off | 1x / off |
+| instant smith | off | off | off |
+
+The sky (PS2), draw distance (1x) and game speed (1x) are not set by the presets: they keep settings.json's, whose
+defaults are those.
 
 A new page is an entry in `pages` (its rows by section id and label, and a `PreviewKind`); a new preset value is an
 entry in `presets`; neither needs code. `ctest -R ui_setup` checks the flow on stand-in rows; the start's check
@@ -129,7 +131,9 @@ checks the tables against the real rows.
 **Depth in a player build**: with `KF4_PLAYER_BUILD` (the `*-release` presets and the launcher's build,
 `launcher/build_local.cpp`) Depth's Medium and High are dimmed (a `Choice`'s `enabled`, which the model passes over
 and the list refuses), its help says why, and settings.json's depth is read as Low (`port_scene_depth_locked`,
-`port/include/port/scene_depth.h`). `--scene-depth` still chooses. Developers' builds keep all three.
+`port/include/port/scene_depth.h`). `--scene-depth` still chooses. Developers' builds keep all three. The draw
+distance is held the same way at 1x (`port_draw_distance_locked`, `port/include/port/platform.h`; `--draw-distance`
+still chooses).
 
 ## Files
 
@@ -195,7 +199,7 @@ picture.
 - Pictures without anyone at the screen: `KF4_OVERLAY_SHOT=ui-<tab>[:keys]@vblank,...` opens the menu on a tab,
   presses the keys once (`up down left right confirm back next previous clear`, separated by `.`; `xbox`,
   `playstation`, `nintendo` or `keyboard` show the prompts as if that was used last; `ui-setup-<page>[:keys]` shows the
-  setup on that page (`welcome controls picture play hands map ready`); the sections are `display graphics controls keys gameplay interface general cheats`, `cheats` only with `"overlay": {"cheats_shown": true}` in the data folder's settings.json), and writes
+  setup on that page (`welcome controls picture play hands ready`); the sections are `display graphics controls keys gameplay interface general cheats`, `cheats` only with `"overlay": {"cheats_shown": true}` in the data folder's settings.json), and writes
   `overlay_ui-<tab>[:keys].png` into `--dump-dir`. Use a scratch `KF4_DATA_DIR`, since the keys change settings and
   the run writes them:
 

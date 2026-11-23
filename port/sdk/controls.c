@@ -7,11 +7,11 @@
                      twin-stick is: port/include/port/walk_keys.h), move the menus' cursor
        arrows        the d-pad: walk and turn, move the menus' cursor
        I J K L       the right stick: turn and look
-       Space         square (attack)                 E          cross (use, talk, confirm)
+       Space         square (attack)                 F          cross (use, talk, confirm)
        Q             triangle (magic)                Escape, Tab  circle (the menu, back)
        Z / C         L1 / R1 (side steps, a menu's pages)
        Page Down / Up  L2 / R2 (look down / up)      Enter      start (pause)
-       Backspace     select (the shortcut)           Left Shift  run (the separate run mod)
+       Backspace     select (the shortcut)           Left Shift  run (held)
    The mouse, held while the player is in control (the window focused, no menu over the game): moving turns and
    looks; left square, right triangle, middle cross, the side buttons L1 / R1. Out of play (menus, pause,
    dialogue) left is cross, right circle, middle cross (the menu mouse), and the wheel up / down. On a menu
@@ -27,12 +27,11 @@
    L1 R1 L2 R2). F2 / F4 take and load a quick save (port/platform/quicksave.c), F5 / F7 save and load the quick
    slot's save state, and F3 shows or hides the frame-rate counter.
 
-   With the separate run mod on (--separate-run, the player menu's Controls tab), Left Shift and the controller's left stick
-   press run while held, and the action button (cross) only uses things. Off, Run is not used and the action
-   button runs, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make a
+   On the keyboard running is Run's (Left Shift, held), and the action key (F) only uses things. A controller
+   has no Run: its action button (cross) runs and uses, as on the PS2. Twin-stick controls (port/include/port/twin_stick.h, on by default) make a
    controller's left stick walk and step sideways and the right stick turn and look; off, the left stick is the
    d-pad (walk and turn), as on the PS2. It changes only the controller's sticks: W A S D are the same either way
-   (unless instant WASD acceleration is on: port/include/port/walk_keys.h).
+   (port/include/port/walk_keys.h).
 
    Mouse look turns the player in Player_Move, where the game adds the pad's turning (port_mouse_look): each
    movement is applied once, so it neither coasts nor builds speed. A mouse button held as play starts or stops
@@ -90,7 +89,9 @@ static struct {
     int wheel;                   /* wheel movement since the last read: +1 up, -1 down */
     uint32_t tap_until[16];      /* a short press is held this long, so the game's frame sees it */
     uint32_t wheel_until[2];
-    int run;                     /* Run is held */
+    int run;                     /* Run is held, on the keyboard (a controller has no Run) */
+    unsigned int pad_buttons;    /* libpad's buttons held on the controller, at the last read */
+    unsigned int action_bit;     /* the game's action button, as its last Player_Update said (cross until then) */
     int listen_action;           /* rebinding: the slot waiting for a press (-1: none) */
     int listen_slot;
     uint32_t listen_until;
@@ -173,9 +174,6 @@ const char *port_controls_action_id(int action) {
 }
 
 int port_controls_action_used(int action) {
-    if (action == ACTION_RUN) {
-        return port_options.separate_run;
-    }
     if (action == ACTION_STATS_PANEL) {
         return port_stats_options.on;
     }
@@ -205,7 +203,7 @@ int port_controls_action_used(int action) {
 #endif
 
 /* Two keys or mouse buttons and a controller button an action. The game's buttons: square attacks, triangle
-   casts, cross uses (and runs, without the separate run mod), circle opens the menu, select the shortcut, start
+   casts, cross uses (and on a controller runs), circle opens the menu, select the shortcut, start
    pauses (Input_SetDefaultControls). In the menus cross chooses, circle goes back, and square and triangle do
    a screen's own things (triangle takes off what is worn). */
 static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
@@ -213,7 +211,7 @@ static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
     [ACTION_DOWN] = {KEY(DOWN), 0, PAD(DPAD_DOWN)},
     [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
     [ACTION_RIGHT] = {KEY(RIGHT), 0, PAD(DPAD_RIGHT)},
-    [ACTION_CROSS] = {KEY(E), MOUSE(2), PAD(SOUTH)},
+    [ACTION_CROSS] = {KEY(F), MOUSE(2), PAD(SOUTH)},
     [ACTION_CIRCLE] = {KEY(ESCAPE), KEY(TAB), PAD(EAST)},
     [ACTION_SQUARE] = {KEY(SPACE), MOUSE(1), PAD(WEST)},
     [ACTION_TRIANGLE] = {KEY(Q), MOUSE(3), PAD(NORTH)},
@@ -225,7 +223,7 @@ static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
     [ACTION_R3] = {0, 0, PAD(RIGHT_STICK)},
     [ACTION_START] = {KEY(RETURN), 0, PAD(START)},
     [ACTION_SELECT] = {KEY(BACKSPACE), 0, PAD(BACK)},
-    [ACTION_RUN] = {KEY(LSHIFT), 0, PAD(LEFT_STICK)},
+    [ACTION_RUN] = {KEY(LSHIFT)},
     [ACTION_LEFT_STICK_UP] = {KEY(W)},
     [ACTION_LEFT_STICK_DOWN] = {KEY(S)},
     [ACTION_LEFT_STICK_LEFT] = {KEY(A)},
@@ -294,7 +292,7 @@ int port_controls_binding(int action, int slot) {
 }
 
 void port_controls_bind(int action, int slot, int binding) {
-    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= BINDING_SLOTS) {
+    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= port_controls_action_slots(action)) {
         return;
     }
     tables_init();
@@ -408,6 +406,7 @@ static void set_captured(int captured);
 
 void port_controls_init(void) {
     memset(&pc, 0, sizeof(pc));
+    pc.action_bit = 0x4000; /* (cross: Input_SetDefaultControls's action button) */
     pc.focused = 1;
     pc.wants_capture = 1;
     pc.mouse_last = 1;
@@ -481,24 +480,21 @@ int port_mouse_turning(void) {
     return pc.mouse_turning;
 }
 
-/* Whether Run is held, with the mod on and Run bound; -1 when the mod does not apply (the action button runs) */
+/* Whether the player runs: Run held on the keyboard, or the controller's action button held; -1 under a pad
+   script (what it held stands) */
 int port_controls_run_state(void) {
-    int slot;
-
-    if (!port_options.separate_run || port_options.input != NULL) {
+    if (port_options.input != NULL) {
         return -1;
     }
-    for (slot = 0; slot < BINDING_SLOTS; slot++) {
-        if (port_controls_binding(ACTION_RUN, slot) != BINDING_NONE) {
-            return pc.run;
-        }
-    }
-    return -1;
+    return pc.run || (pc.pad_buttons & pc.action_bit) != 0;
 }
 
-/* Running is Run's with the mod on and Run bound; under a pad script, what its recording says (run=) */
+/* Running is Run's or the controller's action button's; under a pad script, what its recording says (run=) */
 unsigned int port_controls_run_held(unsigned int held, unsigned int action_bit) {
-    int run = port_options.input != NULL ? port_pad_script_run() : port_controls_run_state();
+    int run;
+
+    pc.action_bit = action_bit;
+    run = port_options.input != NULL ? port_pad_script_run() : port_controls_run_state();
 
     if (run < 0) {
         return held;
@@ -688,7 +684,7 @@ int port_controls_binding_parse(const char *text, int *binding) {
 
 /* ---- Rebinding -------------------------------------------------------------------------------- */
 void port_controls_listen(int action, int slot) {
-    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= BINDING_SLOTS) {
+    if (action < 0 || action >= ACTION_COUNT || slot < 0 || slot >= port_controls_action_slots(action)) {
         return;
     }
     pc.listen_action = action;
@@ -1045,6 +1041,7 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
         pc.wheel = 0;
         pc.previous_buttons = 0;
         pc.run = 0;
+        pc.pad_buttons = 0;
         return;
     }
     if (lent) {
@@ -1143,7 +1140,8 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     edges = held & ~pc.previous_actions;
     pc.previous_actions = held;
-    pc.run = (held >> ACTION_RUN & 1u) != 0;
+    pc.run = (held_keys >> ACTION_RUN & 1u) != 0;
+    pc.pad_buttons = pad;
 
     /* the PC's own keys */
     if (edges >> ACTION_QUICK_SAVE & 1u) {

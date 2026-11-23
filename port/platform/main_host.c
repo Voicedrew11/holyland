@@ -141,7 +141,6 @@
                          with --draw-distance, the sky keeps the PS2's fog (the default) or has its
                          fog pushed out as well
        --myus-necklace   the opt-in mod: the effect of Myu's Necklace always, worn or not
-       --separate-run    the opt-in mod: run on a key of its own (Run: Left Shift), not the action button
        --no-hit-jolt     the opt-in mod: a hard hit from an enemy does not throw the view down
        --auto-loot-gold  the opt-in mod: the gold an enemy drops when you kill it is automatically looted
        --extended-stats  the opt-in mod: the extended stats panel and hit log (F6; docs/port/EXTENDED_STATS.md)
@@ -307,7 +306,7 @@ static void usage(const char *program) {
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred] [--fov N]\n"
-            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--separate-run] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
+            "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
             "          [--antialias off|fxaa|smaa|smaa_t2x] [--flicker-filter]\n"
@@ -490,10 +489,6 @@ static void parse_options(int argc, char **argv) {
             continue;
         }
         if (port_hands_option(argc, argv, &i)) { /* the hands mod (port/platform/hands.c) */
-            continue;
-        }
-        if (strcmp(option, "--separate-run") == 0) {
-            port_options.separate_run = port_options.separate_run_forced = 1;
             continue;
         }
         if (strcmp(option, "--no-hit-jolt") == 0) {

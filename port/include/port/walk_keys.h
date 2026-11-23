@@ -3,15 +3,15 @@
    play they hold the buttons the game walks forward and back and steps to each side with (forward_button,
    back_button, step_left_button, step_right_button: Input_SetDefaultControls's d-pad up and down and L1 / R1, or
    what the game's controls option made them), so the game eases the walk as it always has, the run (the action
-   button or the separate run key) and the ladders read them as the d-pad's, and W + A walks the diagonal. Out of
+   button or the Run key) and the ladders read them as the d-pad's, and W + A walks the diagonal. Out of
    play they are the d-pad (the menus' cursor). Twin-stick controls (port/include/port/twin_stick.h) change only
    a controller's sticks: the keys are the same with it on or off, and they set no stick, so a controller's stick
    at rest takes nothing from them.
 
-   Instant WASD acceleration (settings.json "controls": "instant_wasd_accel", off by default) puts back the keys
-   as they were before (November 2026, 264cec59 to this change): the left stick at full throw, which twin-stick
-   controls walk at the top speed at once and turn round at once. With twin-stick off that stick is the PS2's
-   (the d-pad: A and D turn). Never while a pad script plays or one is recorded. */
+   In play the keys are always instant (no setting since 2026-11-22): the left stick at full throw, which
+   twin-stick controls walk at the top speed at once and turn round at once. With twin-stick off that stick is
+   the PS2's (the d-pad: A and D turn). Never while a pad script plays or one is recorded: those keep the eased
+   buttons, so the scripts recorded before stay the same. */
 #ifndef PORT_WALK_KEYS_H
 #define PORT_WALK_KEYS_H
 
@@ -28,9 +28,7 @@
 void port_walk_keys_set_buttons(MoveButtons buttons);
 MoveButtons port_walk_keys_buttons(void);
 
-/* Instant WASD acceleration: the setting, and whether it applies now (on, no pad script, no recording) */
-int port_walk_keys_instant_setting(void);
-void port_walk_keys_set_instant(int on);
+/* Whether the keys are instant now: no pad script, no recording */
 int port_walk_keys_instant(void);
 
 /* The held walk keys (WALK_KEY_) into the pad: returns the buttons they hold (in play, `gameplay`, the game's

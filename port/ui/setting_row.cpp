@@ -24,7 +24,7 @@ RowShape row_shape(const SettingRow &r) {
     if ((r.kind == RowKind::choice || r.kind == RowKind::toggle) && r.get != nullptr) {
         shape.current = row_choice_index(r, r.get());
     } else if (r.kind == RowKind::binding) {
-        shape.choice_count = BINDING_SLOTS;
+        shape.choice_count = port_controls_action_slots(r.action);
     }
     return shape;
 }
