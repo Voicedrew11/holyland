@@ -144,15 +144,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            tools/release_sign.sh
-            deploy/release-key.pub
-          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # Deltas (launcher/update_delta.h, docs/port/LAUNCHER.md "Deltas"): from each of the last DELTA_RELEASES
+      # published releases, made by packaging/make_deltas.sh and each checked with the launcher's own code
+      # (launcher_delta_check) to make this release's file exactly. A delta that fails its check fails the release.
+      - name: Deltas from the last releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELTA_RELEASES: 3
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y ninja-build zstd zip unzip
+          cmake -S launcher -B out/delta-check -G Ninja -DLAUNCHER_WINDOW=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build out/delta-check
+          ctest --test-dir out/delta-check --output-on-failure
+          gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 20 \
+              --json tagName -q '.[].tagName' |
+              awk -v this="$GITHUB_REF_NAME" -v most="$DELTA_RELEASES" '$0 != this && /^v[0-9]/ && n < most { print; n++ }' |
+          while read -r tag; do
+              old="$RUNNER_TEMP/old/$tag"
+              mkdir -p "$old"
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" -D "$old" -p '*-x86_64.AppImage' -p '*-win-x64.zip' ||
+                  { echo "$tag: no files to make deltas from"; continue; }
+              packaging/make_deltas.sh dist "$old" "${tag#v}"
+              packaging/check_deltas.sh dist "$old" "${tag#v}" out/delta-check/launcher_delta_check
+              rm -rf "$old"
+          done
+          ls -la dist
       # SHA256SUMS of every file, signed with the release key (tools/release_sign.sh): players' launchers install
       # an update only when both check out (docs/port/LAUNCHER.md, "Updates"). No key, no release.
       - name: Checksums, signed

@@ -58,7 +58,7 @@ the first start), for checking the pages without a screenshot of the desktop. `-
 | | `update-request.json`: the release the player chose to update to (`tag`) | the game; the launcher reads and removes it |
 | | `build.log`, `game.log` | the launcher |
 | builds folder (`%LOCALAPPDATA%\holyland\builds`, `$XDG_DATA_HOME/holyland/builds`, `KF4_BUILDS_DIR`; under `KF4_DATA_DIR` when that is set) | `<key>/kf4` and its libraries, and `vk_layers/` (the synchronization2 layer: `docs/port/PC_RENDERER.md`); older keys are removed after a build | the launcher |
-| install folder (read-only but for updates) | the launcher, `content/`; during and after an update `*.partial`, `*.old`, `update.partial/`, removed at the next start | the installer, the launcher's update |
+| install folder (read-only but for updates) | the launcher, `content/`; during and after an update `*.partial`, `*.delta`, `*.old`, `update.partial/`, removed at the next start | the installer, the launcher's update |
 
 ## Platforms
 
@@ -166,6 +166,36 @@ opens its window on "Updating" (`launcher/self_update.h`, `res/updating.rml`):
 4. It is put in place and the new launcher started with the same arguments; this one exits. The new one builds its
    release's game once (a new build key) and plays. Settings, saves and quick saves are in the data folder and are
    not touched; save states are tied to a build, as always.
+
+**Deltas.** Step 3 downloads a few MB instead of the whole file when it can (`launcher/update_delta.h`). Each release
+also carries, for each of the last 3 published releases, `<whole file>.from-<version>.delta`, listed in the signed
+`SHA256SUMS` like every file. The launcher looks for the one from its own version; if there is one and its way of
+installing takes deltas, it downloads it, checks its SHA-256, and makes the update from it:
+
+| Installed as | The delta | Made into the update |
+|---|---|---|
+| AppImage | a file patch: `zstd --patch-from=<old AppImage>` | the running AppImage as the patch's reference (zstd's decoder is libchdr's copy), written to `<AppImage>.partial`, whose SHA-256 must be the whole AppImage's in `SHA256SUMS` |
+| Windows zip | a tree delta: a zip of the new and changed files, and `delta-files.txt` (every file of the new zip: `<sha256>  <path>`) | unpacked into `update.partial\`, every other listed file hard-linked (or copied) from the install, each file checked against the list, nothing unlisted allowed; then put in place as an unpacked zip |
+| Windows installer | none | the whole installer, as before |
+
+Anything wrong with a delta (none from this version, a bad checksum, a patch that does not fit the installed file,
+a file the list does not match) and the whole file is downloaded instead; the reason goes to the log
+(`[update] the delta did not work (...)`). A launcher without a version (a developer's build) takes none. Launchers
+before 0.2.0 do not know deltas: the first update that uses one is from 0.2.0.
+
+Making them: `packaging/make_deltas.sh NEW_DIR OLD_DIR OLD_VERSION` (a delta under half its whole file is kept). The
+release workflow's release job downloads the last 3 releases' AppImage and zip, makes the deltas, and checks every
+one with the launcher's own code (`packaging/check_deltas.sh` running `launcher_delta_check`, built with
+`-DLAUNCHER_WINDOW=OFF`, which needs no SDL3) before `SHA256SUMS` is written: a delta that does not make its whole
+file exactly fails the release. `ci.yml`'s launcher job runs `packaging/delta_test.sh` (made-up releases, broken deltas
+that must fail; ctest's `deltas`) and makes and checks deltas from the latest release's real files to a changed copy.
+
+Sizes on 2026-11-22: v0.1.0 to a build of a later commit, AppImage 175 MB to a 5.8 MB delta, Windows zip 145 MB to
+2.7 MB (most of it the new launcher). Making both takes ~20 s, applying the AppImage's under a second.
+
+A whole update from a delta was run here on 2026-11-22 (the recipe in Testing below): 0.0.1 to 0.0.2 with the whole
+file's URL pointing nowhere, so only the 1.5 MB delta could have made it; and again with a delta made from another
+AppImage, which was refused and the whole file downloaded.
 
 Any failure shows why (`res/update_failed.rml`): Try again, Download page, Play this version, Close. Nothing is
 replaced before every check has passed.

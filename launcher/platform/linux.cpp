@@ -18,6 +18,7 @@
 
 #include "../build_strategy.h"
 #include "../platform.h"
+#include "../update_delta.h"
 #include "../product.h"
 
 extern char **environ;
@@ -248,6 +249,23 @@ public:
         fs::remove(partial, error);
         partial += ".sums";
         fs::remove(partial, error);
+        fs::remove(delta_download_path(), error);
+    }
+
+    // a file patch (update_delta.h) of the AppImage this is
+    fs::path delta_download_path() const override {
+        fs::path delta = appimage_;
+        delta += ".delta";
+        return delta;
+    }
+
+    Made made_from_delta(const fs::path &delta, std::string_view whole_sha256) const override {
+        std::string why = apply_file_patch(appimage_, delta, download_path(), whole_sha256, kUpdateMaxBytes);
+        std::error_code error;
+        fs::remove(delta, error);
+        if (!why.empty())
+            return {{}, why};
+        return {download_path(), {}};
     }
 
 private:

@@ -16,6 +16,7 @@
 
 #include "../build_strategy.h"
 #include "../platform.h"
+#include "../update_delta.h"
 
 namespace launcher {
 
@@ -334,16 +335,15 @@ public:
     std::string_view asset_suffix() const override { return "-win-x64.zip"; }
     fs::path download_path() const override { return dir_ / "update.zip"; }
 
+    // `downloaded`: the release's zip, or the folder made from its delta (made_from_delta), already whole
     std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &args) const override {
         std::error_code error;
-        fs::path unpacked = dir_ / "update.partial";
-        fs::remove_all(unpacked, error);
-        if (!fs::create_directory(unpacked, error))
-            return "cannot make " + unpacked.u8string() + ": " + error.message();
-        std::string why = unpack(downloaded, unpacked);
-        if (!why.empty()) {
-            fs::remove_all(unpacked, error);
-            return why;
+        fs::path unpacked = staged_path();
+        std::string why;
+        if (!fs::is_directory(downloaded, error)) {
+            why = unpack_fresh(downloaded, unpacked);
+            if (!why.empty())
+                return why;
         }
         // the new files: what the zip holds at its top
         std::vector<fs::path> names;
@@ -381,14 +381,46 @@ public:
                 fs::remove_all(it->path(), ignored);
             }
         }
-        fs::remove_all(dir_ / "update.partial", error);
+        fs::remove_all(staged_path(), error);
         fs::remove(download_path(), error);
         fs::path sums = download_path();
         sums += ".sums";
         fs::remove(sums, error);
+        fs::remove(delta_download_path(), error);
+    }
+
+    // a tree delta (update_delta.h): unpacked as the zip is, the unchanged files linked from this folder
+    fs::path delta_download_path() const override { return dir_ / "update.delta"; }
+
+    Made made_from_delta(const fs::path &delta, std::string_view) const override {
+        fs::path staged = staged_path();
+        std::string why = unpack_fresh(delta, staged);
+        std::error_code error;
+        fs::remove(delta, error);
+        if (why.empty())
+            why = complete_tree(staged, dir_);
+        if (!why.empty()) {
+            fs::remove_all(staged, error);
+            return {{}, why};
+        }
+        return {staged, {}};
     }
 
 private:
+    fs::path staged_path() const { return dir_ / "update.partial"; }
+
+    // `zip` unpacked into `into`, made empty first; "" or why not, with `into` removed
+    static std::string unpack_fresh(const fs::path &zip, const fs::path &into) {
+        std::error_code error;
+        fs::remove_all(into, error);
+        if (!fs::create_directory(into, error))
+            return "cannot make " + into.u8string() + ": " + error.message();
+        std::string why = unpack(zip, into);
+        if (!why.empty())
+            fs::remove_all(into, error);
+        return why;
+    }
+
     static std::string unpack(const fs::path &zip, const fs::path &into) {
         std::wstring system(MAX_PATH, L'\0');
         UINT n = GetSystemDirectoryW(system.data(), (UINT)system.size());

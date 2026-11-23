@@ -20,6 +20,7 @@
 #include "rml_text.h"
 #include "self_update.h"
 #include "setup_flow.h"
+#include "update_delta.h"
 
 extern "C" {
 #include "monocypher-ed25519.h"
@@ -398,10 +399,23 @@ void test_local_build() {
 class FakeInstallation final : public Installation {
 public:
     explicit FakeInstallation(fs::path dir) : dir_(std::move(dir)) {}
+    bool takes_deltas = false;
+    std::string made_from;       // the delta made_from_delta was given, read
+    std::string makes;           // what a delta "makes" (written to download_path()); "" fails
     std::string_view asset_suffix() const override { return "-x86_64.AppImage"; }
     fs::path download_path() const override { return dir_ / "new.partial"; }
     std::string replace_and_start(const fs::path &, const std::vector<std::string> &) const override { return {}; }
     void remove_leftovers() const override {}
+    fs::path delta_download_path() const override { return takes_deltas ? dir_ / "new.delta" : fs::path(); }
+    Made made_from_delta(const fs::path &delta, std::string_view whole_sha256) const override {
+        const_cast<FakeInstallation *>(this)->made_from = read_file(delta).value_or("");
+        std::error_code error;
+        fs::remove(delta, error);
+        if (makes.empty() || sha(makes) != whole_sha256)
+            return {{}, "a test's delta that does not work"};
+        write(download_path(), makes);
+        return {download_path(), {}};
+    }
 
 private:
     fs::path dir_;
@@ -457,7 +471,7 @@ void test_update_fetch() {
     std::error_code error;
 
     QuietUpdate progress;
-    std::string why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    std::string why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     auto got = read_file(installation.download_path());
     check("a good update is downloaded and passes", why.empty() && got && *got == game);
     check("its stages are told", progress.stages.size() == 4);
@@ -465,39 +479,195 @@ void test_update_fetch() {
     fs::remove(installation.download_path(), error);
 
     platform.web[base + "H-0.3.0-x86_64.AppImage"] = "something else";
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("a changed file is refused and removed",
           why.find("checksum differs") != std::string::npos && !fs::exists(installation.download_path(), error));
     platform.web[base + "H-0.3.0-x86_64.AppImage"] = game;
 
     platform.web[base + "SHA256SUMS.sig"] = sign(other_secret);
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("a signature by another key is refused, before the download",
           why.find("signature is not good") != std::string::npos && !fs::exists(installation.download_path(), error));
 
     platform.web[base + "SHA256SUMS.sig"] = sign(secret);
     platform.web[base + "SHA256SUMS"] = sums + "\n";
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("checksums changed after signing are refused", why.find("signature is not good") != std::string::npos);
     platform.web[base + "SHA256SUMS"] = sums;
 
     platform.web[base + "SHA256SUMS.sig"] = "not hex\n";
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("a broken signature is refused", why.find("signature is not good") != std::string::npos);
 
     platform.web[source.release_url] = "{\"tag_name\":\"v0.3.0\",\"assets\":["
                                        "{\"name\":\"H-0.3.0-x86_64.AppImage\",\"browser_download_url\":\"" + base +
                                        "H-0.3.0-x86_64.AppImage\"}]}";
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("an unsigned release is refused", why.find("not signed") != std::string::npos);
 
     platform.web[source.release_url] = release;
-    why = fetch_checked_update(platform, installation, source, "v0.4.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.4.0", "0.2.0", "test", progress).why;
     check("another release's answer is refused", why.find("no file for this computer") != std::string::npos);
 
     platform.web.erase(source.release_url);
-    why = fetch_checked_update(platform, installation, source, "v0.3.0", "test", progress);
+    why = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress).why;
     check("no network", why.find("could not be reached") != std::string::npos);
+
+    // a delta from 0.2.0 beside the whole file (update_delta.h)
+    const std::string delta = "the delta's bytes";
+    std::string delta_sums = sums + sha(delta) + "  H-0.3.0-x86_64.AppImage.from-0.2.0.delta\n";
+    sums = delta_sums;
+    std::string with_delta = release;
+    with_delta.insert(with_delta.rfind(']'), ",{\"name\":\"H-0.3.0-x86_64.AppImage.from-0.2.0.delta\","
+                                            "\"browser_download_url\":\"" + base + "H-0.3.0-x86_64.AppImage.from-0.2.0.delta\"}");
+    platform.web[source.release_url] = with_delta;
+    platform.web[base + "SHA256SUMS"] = sums;
+    platform.web[base + "SHA256SUMS.sig"] = sign(secret);
+    platform.web[base + "H-0.3.0-x86_64.AppImage.from-0.2.0.delta"] = delta;
+    installation.takes_deltas = true;
+    installation.makes = game;
+    platform.web[base + "H-0.3.0-x86_64.AppImage"] = "the whole file is not to be downloaded";
+    progress.stages.clear();
+    Installation::Made made =
+        fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress);
+    got = read_file(made.update);
+    check("the delta is used when there is one", made.why.empty() && installation.made_from == delta && got &&
+                                                     *got == game);
+    check("the delta's download is not left", !fs::exists(dir / "new.delta", error));
+    fs::remove(installation.download_path(), error);
+    platform.web[base + "H-0.3.0-x86_64.AppImage"] = game;
+
+    installation.made_from.clear();
+    made = fetch_checked_update(platform, installation, source, "v0.3.0", "0.1.0", "test", progress);
+    got = read_file(made.update);
+    check("no delta from this version: the whole file", made.why.empty() && installation.made_from.empty() && got &&
+                                                          *got == game);
+    fs::remove(installation.download_path(), error);
+
+    made = fetch_checked_update(platform, installation, source, "v0.3.0", "", "test", progress);
+    check("a build with no version takes no delta", made.why.empty() && installation.made_from.empty());
+    fs::remove(installation.download_path(), error);
+
+    installation.makes.clear();
+    made = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress);
+    got = read_file(made.update);
+    check("a delta that does not work: the whole file instead", made.why.empty() && installation.made_from == delta &&
+                                                                    got && *got == game);
+    fs::remove(installation.download_path(), error);
+
+    installation.makes = game;
+    installation.made_from.clear();
+    platform.web[base + "H-0.3.0-x86_64.AppImage.from-0.2.0.delta"] = "a changed delta";
+    made = fetch_checked_update(platform, installation, source, "v0.3.0", "0.2.0", "test", progress);
+    got = read_file(made.update);
+    check("a delta whose checksum differs is not used", made.why.empty() && installation.made_from.empty() && got &&
+                                                            *got == game && !fs::exists(dir / "new.delta", error));
+    fs::remove_all(dir, error);
+}
+
+// ---- Deltas: a file patch and a tree (update_delta.h) -----------------------------------------------------------
+
+void test_delta_file() {
+    fs::path dir = temp_dir("holyland_launcher_test_delta_file");
+    fs::path data = fs::path(TEST_DATA_DIR) / "delta";
+    fs::path out = dir / "made";
+    std::string whole = file_sha256(data / "new.txt");
+    std::error_code error;
+    check("delta's name", delta_name("H-0.3.0-x86_64.AppImage", "0.2.0") == "H-0.3.0-x86_64.AppImage.from-0.2.0.delta");
+
+    std::string why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, whole, kUpdateMaxBytes);
+    check("a file patch makes the new file", why.empty() && read_file(out) == read_file(data / "new.txt"));
+    fs::remove(out, error);
+
+    why = apply_file_patch(data / "new.txt", data / "new.txt.patch", out, whole, kUpdateMaxBytes);
+    check("a patch against another file is refused, nothing left", !why.empty() && !fs::exists(out, error));
+
+    why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, sha("other"), kUpdateMaxBytes);
+    check("a patch that makes another file is refused",
+          why.find("checksum differs") != std::string::npos && !fs::exists(out, error));
+
+    why = apply_file_patch(data / "old.txt", data / "new.txt.patch", out, whole, 1000);
+    check("a patch making more than the limit is refused", !why.empty() && !fs::exists(out, error));
+
+    std::string patch = read_file(data / "new.txt.patch").value_or("");
+    write(dir / "short.patch", patch.substr(0, patch.size() / 2));
+    why = apply_file_patch(data / "old.txt", dir / "short.patch", out, whole, kUpdateMaxBytes);
+    check("a patch cut short is refused", !why.empty() && !fs::exists(out, error));
+
+    write(dir / "long.patch", patch + patch);
+    why = apply_file_patch(data / "old.txt", dir / "long.patch", out, whole, kUpdateMaxBytes);
+    check("a patch with more after its end is refused", !why.empty() && !fs::exists(out, error));
+
+    write(dir / "junk.patch", "not zstd at all");
+    why = apply_file_patch(data / "old.txt", dir / "junk.patch", out, whole, kUpdateMaxBytes);
+    check("a patch that is not one is refused", !why.empty() && !fs::exists(out, error));
+    fs::remove_all(dir, error);
+}
+
+void test_delta_tree() {
+    fs::path dir = temp_dir("holyland_launcher_test_delta_tree");
+    fs::path installed = dir / "installed", staged = dir / "staged";
+    std::error_code error;
+    auto setup = [&](const std::string &listing) {
+        fs::remove_all(installed, error);
+        fs::remove_all(staged, error);
+        write(installed / "holyland.exe", "old launcher");
+        write(installed / "content/src/same.c", "unchanged");
+        write(installed / "content/src/gone.c", "removed in the new release");
+        write(installed / "content/toolchain/bin/clang", "the big tools");
+        write(staged / "holyland.exe", "new launcher");
+        write(staged / "content/src/added.c", "new in this release");
+        write(staged / kDeltaListing, listing);
+    };
+    std::string listing = sha("new launcher") + "  holyland.exe\n" + sha("unchanged") + "  content/src/same.c\n" +
+                          sha("new in this release") + "  content/src/added.c\n" + sha("the big tools") +
+                          " *content/toolchain/bin/clang\n";
+
+    setup(listing);
+    std::string why = complete_tree(staged, installed);
+    std::size_t files = 0;
+    for (fs::recursive_directory_iterator it(staged, error), end; !error && it != end; it.increment(error))
+        files += it->is_regular_file() ? 1 : 0;
+    check("a tree delta makes the whole new tree",
+          why.empty() && files == 4 && read_file(staged / "content/src/same.c") == std::optional<std::string>("unchanged") &&
+              read_file(staged / "content/toolchain/bin/clang") == std::optional<std::string>("the big tools") &&
+              read_file(staged / "holyland.exe") == std::optional<std::string>("new launcher") &&
+              !fs::exists(staged / "content/src/gone.c", error) && !fs::exists(staged / kDeltaListing, error));
+
+    setup(listing);
+    write(installed / "content/src/same.c", "changed by hand");
+    why = complete_tree(staged, installed);
+    check("an install that is not the old release's is refused", why.find("checksum differs") != std::string::npos);
+
+    setup(listing);
+    fs::remove(installed / "content/src/same.c", error);
+    why = complete_tree(staged, installed);
+    check("an install missing a kept file is refused", !why.empty());
+
+    setup(listing);
+    write(staged / "content/src/unlisted.c", "?");
+    why = complete_tree(staged, installed);
+    check("a delta holding a file its list does not is refused", why.find("unlisted.c") != std::string::npos);
+
+    setup(listing);
+    write(staged / "holyland.exe", "a changed launcher");
+    why = complete_tree(staged, installed);
+    check("a delta's own file that is not its list's is refused", why.find("checksum differs") != std::string::npos);
+
+    for (const char *bad : {"../outside", "/etc/passwd", "content/../../x", "content\\x", "C:/x", "./x", "a//b"}) {
+        setup(listing + sha("x") + "  " + bad + "\n");
+        why = complete_tree(staged, installed);
+        check((std::string("a listed path outside the tree is refused: ") + bad).c_str(),
+              why.find("outside its folder") != std::string::npos);
+    }
+
+    setup("not a listing\n");
+    check("a broken list is refused", !complete_tree(staged, installed).empty());
+    setup(listing + listing);
+    check("a file listed twice is refused", complete_tree(staged, installed).find("twice") != std::string::npos);
+    setup(listing);
+    fs::remove(staged / kDeltaListing, error);
+    check("a delta without its list is refused", !complete_tree(staged, installed).empty());
     fs::remove_all(dir, error);
 }
 
@@ -526,6 +696,8 @@ int main() {
     test_setup_flow();
     test_local_build();
     test_update_fetch();
+    test_delta_file();
+    test_delta_tree();
     test_update_request();
     std::printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;

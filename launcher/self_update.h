@@ -15,10 +15,10 @@
 #include <thread>
 #include <vector>
 
+#include "platform.h"
+
 namespace launcher {
 
-class Installation;
-class Platform;
 struct DataPaths;
 
 using ReleaseKey = std::array<std::uint8_t, 32>; // an Ed25519 public key
@@ -44,11 +44,13 @@ public:
     virtual bool bytes(std::uint64_t done_bytes, std::uint64_t total_bytes) = 0;
 };
 
-// The release `tag`'s file for `installation`, downloaded to installation.download_path() and checked; "" when it
-// is there and good, else why not, with nothing left behind. Any thread.
-std::string fetch_checked_update(const Platform &platform, const Installation &installation,
-                                 const UpdateSource &source, std::string_view tag, std::string_view user_agent,
-                                 UpdateProgress &progress);
+// The release `tag`'s update for `installation`: made from the release's delta from `installed_version` when it
+// has one and it works (update_delta.h), else its whole file downloaded to installation.download_path(); checked
+// either way. What replace_and_start takes, or an empty path with why, with nothing left behind. Any thread.
+Installation::Made fetch_checked_update(const Platform &platform, const Installation &installation,
+                                        const UpdateSource &source, std::string_view tag,
+                                        std::string_view installed_version, std::string_view user_agent,
+                                        UpdateProgress &progress);
 
 // One update, its download and checks on a thread of its own. The rest on the main thread.
 class UpdateRun final : private UpdateProgress {
@@ -61,7 +63,9 @@ public:
         std::string why; // failed: why
     };
 
-    UpdateRun(const Platform &platform, const Installation &installation, std::string tag, std::string user_agent);
+    // `installed_version`: this launcher's (launcher_version()), whose delta is looked for; "" for none
+    UpdateRun(const Platform &platform, const Installation &installation, std::string tag,
+              std::string installed_version, std::string user_agent);
     UpdateRun(const UpdateRun &) = delete;
     UpdateRun &operator=(const UpdateRun &) = delete;
     ~UpdateRun(); // stops the download and waits for it
@@ -77,6 +81,7 @@ private:
     const Installation &installation_;
     mutable std::mutex mutex_;
     View view_{State::working, "Starting", 0, 0, {}};
+    fs::path update_; // ready: what replace_and_start takes
     std::atomic<bool> stopping_{false};
     std::thread thread_;
 };
