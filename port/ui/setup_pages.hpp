@@ -31,6 +31,9 @@ enum class SetupOwn {
     device,    // Controls: what the player plays with (which rows show)
     next,      // the end of each page
     finish,    // the last page's
+    emulator_save,   // Emulator Saves: a save found on a PCSX2 or RetroArch card (SetupRowRef.item: which), imported
+    emulator_none,   // a line: none found
+    emulator_browse, // My save is in a different location: the system's file chooser
 };
 
 // What the help column draws above the focused row's help
@@ -41,7 +44,11 @@ struct SetupRowRef {
     const char *label = nullptr;
     SetupDevice device = SetupDevice::any;
     SetupOwn own = SetupOwn::none; // else one of the setup's own rows (tab_id and label unused)
+    int item = 0;                  // emulator_save: which of the saves found
 };
+
+// The Emulator Saves page's rows for the saves found: at most this many shown
+inline constexpr int SETUP_EMULATOR_SAVES = 6;
 
 struct SetupPage {
     const char *id;    // for KF4_OVERLAY_SHOT's setup-<id>
