@@ -426,10 +426,10 @@ index dc651861ba57f7abc0495d8b37d5b371669b79cc..7335eac362587a7748fd7ddda979019e
 +
  #endif
 diff --git a/src/game/ui/menu_draw.c b/src/game/ui/menu_draw.c
-index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7f62924f0 100644
+index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..25366570dc6fee1bee8109a0bfef397bdebe81e6 100644
 --- a/src/game/ui/menu_draw.c
 +++ b/src/game/ui/menu_draw.c
-@@ -2,9 +2,12 @@
+@@ -2,9 +2,13 @@
     words, numbers, the cursor bar and text), the loader and drawer of the menus' models (parts in pool slots, posed
     by a node tree), the texture upload, the sprite handlers that alter a sprite before it is drawn, and the menus'
     reading of the pad. */
@@ -439,10 +439,11 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  #include <eeregs.h>
 +#include <sifdev.h>
 +#include "port/vu_float.h" /* PC: the VU0 blocks' arithmetic */
++#include "port/host.h"     /* PC: port_sharp_font */
  #include "ui/menu_draw.h"
  #include "player/player.h"
  #include "ui/message.h"
-@@ -12,13 +15,9 @@
+@@ -12,13 +16,9 @@
  #include "ui/splash.h"
  #include "effect/effect.h"
  #include "input/pad.h"
@@ -458,7 +459,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  int File_Open(char *, int, int);
  int File_Close(int);
  int File_Read(int, void *, int);
-@@ -27,11 +26,11 @@ void Vector_WeightedSum4(void *, void *, void *, void *, void *, float *);
+@@ -27,11 +27,11 @@ void Vector_WeightedSum4(void *, void *, void *, void *, void *, float *);
  /* The module's own variables are defined where the original has them: the initialised ones in front of the
     function that first uses them (retail keeps them in that order), the others here. */
  static s64 *color_data;             /* 0x447344 set by MenuSprite_ColorFromNumber and never read */
@@ -473,7 +474,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
  /* the menus' words and font */
  extern u64 *menu_font_page_tex0[];  /* where the TEX0 of each font page is kept */
-@@ -91,13 +90,13 @@ extern LevelRecord worn_item_level_records[];    /* the worn items' records */
+@@ -91,13 +91,13 @@ extern LevelRecord worn_item_level_records[];    /* the worn items' records */
  extern LevelRecordDef worn_defs[];
  extern FxTableEntry fx_table[];   /* the magic table */
  extern u8 game_options[];             /* the options block, a byte per setting */
@@ -494,7 +495,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  extern f32 pulse_sprite_alpha;              /* the alpha of the pulsing sprite, 80 to 128 */
  extern s8 pulse_sprite_falling;               /* TRUE while that alpha falls */
  
-@@ -343,9 +342,8 @@ void (*pool_slot_drawers[4])(RenderSlot *, RenderSlotArg) = {
+@@ -343,9 +343,8 @@ void (*pool_slot_drawers[4])(RenderSlot *, RenderSlotArg) = {
  LoadedBlockRef menu_file_blocks[66] = { { 0 } };
  
  /* 0x42A8D0 the loaded menu font and the two words MenuTexture_GetRegisters reads from it; the second
@@ -505,7 +506,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
  /* 0x42A8E8 8 zero bytes after the loaded font the code never refers to */
  static u64 D_0042A8E8 __attribute__((section(".data"))) = 0;
-@@ -368,6 +366,8 @@ f32 menu_view_screen_matrix[16] = { 0 };
+@@ -368,6 +367,8 @@ f32 menu_view_screen_matrix[16] = { 0 };
  /* the two packet buffers in the scratchpad */
  #define PACKET_BUFFER_0 ((void *)((char *)POOL_DRAW_SCRATCH + 0x800))
  #define PACKET_BUFFER_1 ((void *)((char *)POOL_DRAW_SCRATCH + 0x2400))
@@ -514,7 +515,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  #define POOL(slot) ((PoolSlot *)(slot))
  #define HEADER_TEX0(header) ((BootTex0 *)&(header)->tex0)
  #define ANGLE_PI 3.1415927f
-@@ -380,12 +380,24 @@ static inline s32 text_color(u16 code) {
+@@ -380,12 +381,24 @@ static inline s32 text_color(u16 code) {
      return (code & 0xFFF) >> 8;
  }
  
@@ -540,7 +541,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
  }
  
-@@ -402,7 +414,113 @@ static inline void UnpackColour(u8 *rgb, u32 *colour) {
+@@ -402,7 +415,113 @@ static inline void UnpackColour(u8 *rgb, u32 *colour) {
      rgb[2] = *colour >> 8;
  }
  
@@ -655,7 +656,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  static void MenuHeap_Clear(void);
  static void MenuArena_AllocWorkBuffer(void);
  static void MenuDraw_TextAt(u16 *text, GsPackedWord origin);
-@@ -429,13 +547,13 @@ static SpritePacket *MenuSprite_SlideUp(SpritePacket *src_packet, int amount);
+@@ -429,13 +548,13 @@ static SpritePacket *MenuSprite_SlideUp(SpritePacket *src_packet, int amount);
  static SpritePacket *MenuSprite_SlideDown(SpritePacket *packet, int amount);
  static SpritePacket *MenuSprite_Fade(SpritePacket *src_packet, int alpha);
  static SpritePacket *MenuSprite_SlideRightAlt(SpritePacket *src_packet, int amount);
@@ -673,7 +674,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  static SpritePacket *MenuSprite_ShowIfBitSet(SpritePacket *packet, s32 slot_mask);
  static SpritePacket *MenuSprite_ShowIfOptionChosen(SpritePacket *packet);
  static SpritePacket *MenuSprite_ShowIfFlagSet(SpritePacket *packet);
-@@ -517,16 +635,16 @@ void *MenuHeap_Alloc(int size) {
+@@ -517,16 +636,16 @@ void *MenuHeap_Alloc(int size) {
      heap_top += size;
      // match: a pointer top keeps gcc from folding "- (misalign - 16)" into "+ 16 - misalign"
      top = (u8 *)heap_top;
@@ -693,7 +694,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      return heap_top;
  }
  
-@@ -541,23 +659,24 @@ static void MenuHeap_Clear(void) {
+@@ -541,23 +660,24 @@ static void MenuHeap_Clear(void) {
  }
  
  /* the second allocator */
@@ -723,7 +724,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
      aligned = ((arena_next + align - 1) / align) * align;
      end = aligned + size;
-@@ -579,6 +698,7 @@ void *MenuDraw_NextPacket(void) {
+@@ -579,6 +699,7 @@ void *MenuDraw_NextPacket(void) {
      void *buffers[2] = { PACKET_BUFFER_0, PACKET_BUFFER_1 };
      static s32 current = 0; /* 0x446D50 which of the two was handed out last */
  
@@ -731,7 +732,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      current = current == 0;
      return buffers[current];
  }
-@@ -617,7 +737,7 @@ void MenuDraw_Sprite(KindObject *object) {
+@@ -617,7 +738,7 @@ void MenuDraw_Sprite(KindObject *object) {
          packet[25] = rect->first.depth;
          while (*D2_CHCR & D_CHCR_STR);
          *D2_QWC = 7;
@@ -740,7 +741,20 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *D2_CHCR = D_CHCR_STR;
      }
  }
-@@ -667,28 +787,28 @@ void MenuDraw_Word(KindObject *object) {
+@@ -661,34 +782,41 @@ void MenuDraw_Word(KindObject *object) {
+     second.f.mid24 = sprite->xyz0.Z; // match: the first corner's depth, not the second's
+     step.f.lo16 = ((s32)second.f.lo16 - (s32)first.f.lo16) / count;
+     step.f.mid16 = ((s32)second.f.mid16 - (s32)first.f.mid16) / count; // match: worked out, never used
++    /* PC: with the sharper font, a one-letter word (the save screens' time colon, the status page's slashes) at most a
++       letter wide (the middle 10 texels of its cell: 10 pixels, 0xA0 in 12.4) and centred in its box: its box is two
++       letters wide and it was stretched to fill it. Longer words (the "Weapon" heading) keep their spacing. */
++    if (port_sharp_font() && count == 1 && (s32)step.f.lo16 > 0xA0) {
++        first.f.lo16 += ((s32)step.f.lo16 - 0xA0) / 2;
++        step.f.lo16 = 0xA0;
++    }
+     cursor = packet;
+     *cursor++ = count | 0x8000;
+     *cursor++ = 0xC4000000;
      *cursor++ = 0x25252106;
      *cursor++ = 0xFFFFF525;
      for (index = 0; index < count && (code = menu_word_glyphs[start + index]) != 0xFFFF; index++) {
@@ -779,7 +793,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = ((index + 1) * (s32)step.f.lo16 + (s32)first.f.lo16) | ((s32)first.f.mid16 << 16);
          *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
          *cursor++ = 0;
-@@ -697,7 +817,7 @@ void MenuDraw_Word(KindObject *object) {
+@@ -697,7 +825,7 @@ void MenuDraw_Word(KindObject *object) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = count * 6 + 1;
@@ -788,7 +802,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -734,7 +854,7 @@ void MenuDraw_Bar(MenuCursorBar *bar) {
+@@ -734,7 +862,7 @@ void MenuDraw_Bar(MenuCursorBar *bar) {
          packet[15] = rect->first.depth;
          while (*D2_CHCR & D_CHCR_STR);
          *D2_QWC = 4;
@@ -797,7 +811,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *D2_CHCR = D_CHCR_STR;
      }
  }
-@@ -952,7 +1072,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
+@@ -952,7 +1080,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
      s32 right;
  
      if (sprite == NULL) {
@@ -806,7 +820,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      }
      if (sprite->kind == 2) {
          value = MenuDraw_GetNumber(sprite->number_id);
-@@ -960,7 +1080,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
+@@ -960,7 +1088,7 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
          value = sprite->number_id;
      }
      if (value < 0) {
@@ -815,7 +829,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      }
      if (value <= 999999999) {
          if (sprite->digit_count != 0) {
-@@ -1022,28 +1142,28 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
+@@ -1022,28 +1150,28 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
          code = glyphs[index];
          column = code % 25;
          row = code / 25;
@@ -854,7 +868,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (base + right) | ((s32)first.f.mid16 << 16);
          *cursor++ = ((GsPackedWord *)&sprite->xyz0)->f.mid24;
          *cursor++ = 0;
-@@ -1052,8 +1172,9 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
+@@ -1052,8 +1180,9 @@ int MenuDraw_Number(KindObject *object) { // match: returns int, though no path
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = count * 6 + 1;
@@ -865,7 +879,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  }
  
  /* Draws a line of text at a screen position (origin: x, y, z and the line height in 16ths): one textured
-@@ -1095,14 +1216,14 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
+@@ -1095,14 +1224,14 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
              code += 0x47E;
              column = code % 50;
              row = code / 50;
@@ -882,7 +896,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              code %= 625;
              top.f.lo16 = bottom.f.lo16;
              bottom.f.lo16 += 0x140;
-@@ -1113,21 +1234,21 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
+@@ -1113,21 +1242,21 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
          *cursor++ = 0x54;
          *cursor++ = 0;
          *cursor++ = 0x80808080;
@@ -913,7 +927,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom.f.lo16 | ((s32)top.f.mid16 << 16);
          *cursor++ = top.f.mid24;
          *cursor++ = 0;
-@@ -1139,7 +1260,7 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
+@@ -1139,7 +1268,7 @@ static void MenuDraw_TextAt(u16 *text, GsPackedWord origin) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = count * 6 + 1;
@@ -922,7 +936,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -1185,14 +1306,14 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
+@@ -1185,14 +1314,14 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
              code += 0x47E;
              column = code % 50;
              row = code / 50;
@@ -939,7 +953,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              code %= 625;
              top.f.lo16 = bottom.f.lo16;
              bottom.f.lo16 += 0x140;
-@@ -1203,21 +1324,21 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
+@@ -1203,21 +1332,21 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
          *cursor++ = 0x54;
          *cursor++ = 0;
          *cursor++ = 0x80808080;
@@ -970,7 +984,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom.f.lo16 | ((s32)top.f.mid16 << 16);
          *cursor++ = top.f.mid24;
          *cursor++ = 0;
-@@ -1229,7 +1350,7 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
+@@ -1229,7 +1358,7 @@ static void MenuDraw_TextRightAligned(u16 *text, GsPackedWord origin) {
      while (*D2_CHCR & D_CHCR_STR) {
      }
      *D2_QWC = count * 6 + 1;
@@ -979,7 +993,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
  }
  
-@@ -1371,13 +1492,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
+@@ -1371,13 +1500,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
              glyph_column = glyph % 50;
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
@@ -995,7 +1009,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1389,13 +1510,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
+@@ -1389,13 +1518,13 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1014,7 +1028,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1405,8 +1526,8 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
+@@ -1405,8 +1534,8 @@ s32 MenuText_DrawWrapped(u16 *text, s32 limit) {
      text_pen.pos_y = bottom_right.pos_y;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1025,7 +1039,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -1435,6 +1556,7 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
+@@ -1435,6 +1564,7 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
      s32 glyph_column;
      s32 color_index;
  
@@ -1033,7 +1047,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      packet = long_text_packets[wrapped_long_buffer];
      wrapped_long_buffer = wrapped_long_buffer == 0;
      color[0] = text_ink.red;
-@@ -1498,12 +1620,12 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
+@@ -1498,12 +1628,12 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
              bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
@@ -1048,7 +1062,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1515,13 +1637,13 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
+@@ -1515,13 +1645,13 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1067,7 +1081,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1532,8 +1654,8 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
+@@ -1532,8 +1662,8 @@ s32 MenuText_DrawWrappedLong(u16 *text, s32 limit) {
      FlushCache(0);
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1078,7 +1092,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -1599,14 +1721,14 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
+@@ -1599,14 +1729,14 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
              glyph_column = glyph % 50;
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
@@ -1095,7 +1109,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1616,13 +1738,13 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
+@@ -1616,13 +1746,13 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1114,7 +1128,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1632,8 +1754,8 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
+@@ -1632,8 +1762,8 @@ s32 MenuText_DrawLine(u16 *text, s32 limit) {
      text_pen.pos_y = bottom_right.pos_y;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1125,7 +1139,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -1717,14 +1839,14 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
+@@ -1717,14 +1847,14 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
              glyph_column = glyph % 50;
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
@@ -1142,7 +1156,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1734,13 +1856,13 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
+@@ -1734,13 +1864,13 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1161,7 +1175,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1750,8 +1872,8 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
+@@ -1750,8 +1880,8 @@ s32 MenuText_DrawLineShortened(u16 *text, s32 limit) {
      text_pen.pos_y = bottom_right.pos_y;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1172,7 +1186,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -1826,14 +1948,14 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
+@@ -1826,14 +1956,14 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
              glyph_column = glyph % 50;
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
@@ -1189,7 +1203,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1843,13 +1965,13 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
+@@ -1843,13 +1973,13 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1208,7 +1222,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1859,8 +1981,8 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
+@@ -1859,8 +1989,8 @@ s32 MenuText_DrawLineCentered(u16 *text, s32 limit) {
      text_pen.pos_y = bottom_right.pos_y;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1219,7 +1233,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -1947,14 +2069,14 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
+@@ -1947,14 +2077,14 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
              glyph_column = glyph % 50;
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
@@ -1236,7 +1250,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -1964,13 +2086,13 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
+@@ -1964,13 +2094,13 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1255,7 +1269,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -1980,8 +2102,8 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
+@@ -1980,8 +2110,8 @@ static s32 MenuText_DrawWordWrapped(u16 *text, s32 limit) {
      text_pen.pos_y = bottom_right.pos_y;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1266,7 +1280,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_CHCR = D_CHCR_STR;
      return count;
  }
-@@ -2012,6 +2134,7 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
+@@ -2012,6 +2142,7 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
      s32 glyph_column;
      s32 color_index;
  
@@ -1274,7 +1288,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      packet = long_text_packets[word_wrapped_long_buffer];
      word_wrapped_long_buffer = word_wrapped_long_buffer == 0;
      color[0] = text_ink.red;
-@@ -2076,7 +2199,7 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
+@@ -2076,7 +2207,7 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
              bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
@@ -1283,7 +1297,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              scale[0] = 0.01953125f;
              scale[1] = 0.0390625f;
          } else if (text[i] == 0x8000) {
-@@ -2087,12 +2210,12 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
+@@ -2087,12 +2218,12 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
              glyph_row = glyph / 50;
              top_left.pos_x = bottom_right.pos_x;
              bottom_right.pos_x += (s32)text_glyph_size.pos_x >> 1;
@@ -1298,7 +1312,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              glyph %= 625;
              glyph_column = glyph % 25;
              glyph_row = glyph / 25;
-@@ -2104,13 +2227,13 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
+@@ -2104,13 +2235,13 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
          *cursor++ = 0x56;
          *cursor++ = 0;
          *cursor++ = color[0] | (color[1] << 8) | (color[2] << 16) | (color[3] << 24);
@@ -1317,7 +1331,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *cursor++ = (s32)bottom_right.pos_x | ((s32)bottom_right.pos_y << 16);
          *cursor++ = top_left.depth;
          *cursor++ = 0;
-@@ -2121,8 +2244,8 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
+@@ -2121,8 +2252,8 @@ s32 MenuText_DrawWordWrappedLong(u16 *text, s32 limit) {
      FlushCache(0);
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -1328,7 +1342,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      *D2_TADR = 0;
      *D2_CHCR = D_CHCR_STR | D_CHCR_DIR_FROM_MEMORY | D_CHCR_MOD_CHAIN;
      return count;
-@@ -2135,14 +2258,14 @@ void PoolPartFile_Relocate(PoolPartFile *file) {
+@@ -2135,14 +2266,14 @@ void PoolPartFile_Relocate(PoolPartFile *file) {
  
      part = file->parts;
      for (i = 0; i < file->part_count; i++) {
@@ -1349,7 +1363,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          }
          part++;
      }
-@@ -2159,24 +2282,24 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
+@@ -2159,24 +2290,24 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
  
      for (i = 0; i < file->entry_count; i++) {
          entry = cursor;
@@ -1387,7 +1401,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              }
          }
          cursor = entry + 1;
-@@ -2188,13 +2311,13 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
+@@ -2188,13 +2319,13 @@ s32 PoolNodeFile_Relocate(RelocFile *file) {
     points, then sends each strip to the GS as it stands, its registers first, with the colour on every
     point, and, when the strip has a second texture (unk10), the same strip again with that texture and the
     points' normals as texture coordinates. Last a packet that sets ALPHA_1. */
@@ -1404,7 +1418,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
      scratch->unkA0[0] = 128.0f;
      scratch->unkA0[1] = 128.0f;
-@@ -2203,7 +2326,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2203,7 +2334,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
      scratch->work = part_work_buffer;
      scratch->screen_points = part_work_buffer + 0x500;
      scratch->normals = part_work_buffer + 0xA00;
@@ -1413,7 +1427,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->point_count = part->point_count;
      scratch->strip_count = part->strip_count;
      scratch->normal_count = part->normal_count;
-@@ -2213,69 +2336,23 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2213,69 +2344,23 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
      sceVu0RotMatrixZ(scratch->world, scratch->world, part->rotation[2]);
      sceVu0RotMatrixY(scratch->world, scratch->world, part->rotation[1]);
      sceVu0TransMatrix(scratch->world, scratch->world, part->position);
@@ -1493,7 +1507,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          scratch->normal_index++;
      }
      FlushCache(0);
-@@ -2284,7 +2361,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2284,7 +2369,7 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
      scratch->reg_tag[1] = 0x10004000;
      scratch->reg_tag[2] = 0xE;
      scratch->prim_tag[3] = 0;
@@ -1502,7 +1516,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->reg_tag[3] = 0;
      scratch->tex0 = scratch->strip_at->tex0; // match: every strip is sent with the first strip's TEX0
      for (scratch->strip = 0; scratch->strip < scratch->strip_count; scratch->strip++) {
-@@ -2307,10 +2384,10 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2307,10 +2392,10 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
          scratch->registers[6] = 0;
          scratch->registers[7] = 9;
          scratch->cursor += 0x10;
@@ -1517,7 +1531,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *scratch->cursor++ = scratch->strip_at->alpha_2;
          *scratch->cursor++ = 0;
          *scratch->cursor++ = 0x43;
-@@ -2330,16 +2407,14 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2330,16 +2415,14 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
              ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
              ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
              ((f32 *)scratch->cursor)[2] = 1.0f;
@@ -1536,7 +1550,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              scratch->cursor = out + 8;
              scratch->strip_point++;
          }
-@@ -2361,11 +2436,11 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2361,11 +2444,11 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
              scratch->registers[6] = 0;
              scratch->registers[7] = 9;
              scratch->cursor += 0x10;
@@ -1553,7 +1567,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              *scratch->cursor++ = 0x43;
              *scratch->cursor++ = 0;
              *scratch->cursor++ = 0x50000;
-@@ -2382,20 +2457,15 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2382,20 +2465,15 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
              *scratch->cursor++ = scratch->prim_tag[2];
              *scratch->cursor++ = scratch->prim_tag[3];
              for (scratch->point = 0; scratch->point < scratch->strip_at->point_count; scratch->point++) {
@@ -1578,7 +1592,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
              return;
          }
-@@ -2407,20 +2477,20 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
+@@ -2407,20 +2485,20 @@ void PoolPart_DrawTinted(PoolPart *part, s32 parent, RenderSlotArg color) {
      *scratch->cursor++ = 0x10004000;
      *scratch->cursor++ = 0xE;
      *scratch->cursor++ = 0;
@@ -1604,7 +1618,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
      scratch->unkA0[0] = 128.0f;
      scratch->unkA0[1] = 128.0f;
-@@ -2429,7 +2499,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2429,7 +2507,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
      scratch->work = part_work_buffer;
      scratch->screen_points = part_work_buffer + 0x500;
      scratch->normals = part_work_buffer + 0xA00;
@@ -1613,7 +1627,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->point_count = part->point_count;
      scratch->strip_count = part->strip_count;
      scratch->normal_count = part->normal_count;
-@@ -2439,70 +2509,24 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2439,70 +2517,24 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
      sceVu0RotMatrixZ(scratch->world, scratch->world, part->rotation[2]);
      sceVu0RotMatrixY(scratch->world, scratch->world, part->rotation[1]);
      sceVu0TransMatrix(scratch->world, scratch->world, part->position);
@@ -1694,7 +1708,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          scratch->normal_index++;
      }
      FlushCache(0);
-@@ -2511,7 +2535,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2511,7 +2543,7 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
      scratch->reg_tag[1] = 0x10004000;
      scratch->reg_tag[2] = 0xE;
      scratch->prim_tag[3] = 0;
@@ -1703,7 +1717,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->reg_tag[3] = 0;
      scratch->tex0 = scratch->strip_at->tex0; // match: the first strip's TEX0 serves every strip
      for (scratch->strip = 0; scratch->strip < scratch->strip_count; scratch->strip++) {
-@@ -2534,10 +2558,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2534,10 +2566,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
          scratch->registers[6] = 0;
          scratch->registers[7] = 9;
          scratch->cursor += 0x10;
@@ -1718,7 +1732,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *scratch->cursor++ = scratch->strip_at->alpha_2;
          *scratch->cursor++ = 0;
          *scratch->cursor++ = 0x43;
-@@ -2557,18 +2581,13 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2557,18 +2589,13 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
              ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
              ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
              ((f32 *)scratch->cursor)[2] = 1.0f;
@@ -1740,7 +1754,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
              return;
          }
-@@ -2580,10 +2599,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
+@@ -2580,10 +2607,10 @@ void PoolPart_Draw(PoolPart *part, s32 parent) {
      *scratch->cursor++ = 0x10004000;
      *scratch->cursor++ = 0xE;
      *scratch->cursor++ = 0;
@@ -1753,7 +1767,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      send_packet(scratch->packet, scratch->packet_size);
  }
  
-@@ -2591,7 +2610,7 @@ static u8 tinted_model_page = 0;            /* 0x446D80 which place in GS memory
+@@ -2591,7 +2618,7 @@ static u8 tinted_model_page = 0;            /* 0x446D80 which place in GS memory
  static u8 model_page = 0;                   /* 0x446D81 the same for MenuModel_Draw */
  
  /* Uploads a loaded model's texture and draws its parts with PoolPart_DrawTinted. */
@@ -1762,7 +1776,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      u64 texture_pages[1] = { 0x2840 }; // match: one entry, though indexed like clut_pages (tinted_model_page is always 0)
      u64 clut_pages[2] = { 0x3D68, 0x3D6C };
      KeyItemModelFile *file;
-@@ -2610,7 +2629,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
+@@ -2610,7 +2637,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
          FlushCache(0);
          part = part_file->parts;
          for (i = 0; i < part_file->part_count; i++) {
@@ -1771,7 +1785,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              PoolPart_DrawTinted(part, draw_param, slot_arg);
              part++;
          }
-@@ -2618,7 +2637,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
+@@ -2618,7 +2645,7 @@ void MenuModel_DrawTinted(ChunkUpload *upload, s32 draw_param, RenderSlotArg slo
  }
  
  /* Uploads a loaded model's texture and draws its parts with PoolPart_Draw. */
@@ -1780,7 +1794,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      u64 texture_pages[1] = { 0x2840 }; // match: one entry, though indexed like clut_pages (model_page is always 0)
      u64 clut_pages[2] = { 0x3D68, 0x3D6C };
      KeyItemModelFile *file;
-@@ -2637,7 +2656,7 @@ void MenuModel_Draw(ChunkUpload *upload, s32 draw_param) {
+@@ -2637,7 +2664,7 @@ void MenuModel_Draw(ChunkUpload *upload, s32 draw_param) {
          FlushCache(0);
          part = part_file->parts;
          for (i = 0; i < part_file->part_count; i++) {
@@ -1789,7 +1803,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              PoolPart_Draw(part, draw_param);
              part++;
          }
-@@ -2653,8 +2672,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2653,8 +2680,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
      sceVu0FVECTOR unused_vector = { 0.0f, 128.0f, 0.0f, 128.0f };
      PoolPart *part;
      PoolPartRecord *record;
@@ -1800,7 +1814,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  
      part = POOL(slot)->part;
      if (part == NULL) {
-@@ -2667,7 +2686,7 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2667,7 +2694,7 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
      scratch->unkA0[1] = 128.0f;
      scratch->unkA0[2] = 128.0f;
      scratch->unkA0[3] = 128.0f;
@@ -1809,7 +1823,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->point_count = part->point_count;
      scratch->strip_count = part->strip_count;
      scratch->normal_count = part->normal_count;
-@@ -2680,133 +2699,41 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2680,133 +2707,41 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
          scratch->parent_normal_count = record->parent_normal_count;
          sceVu0MulMatrix(scratch->screen, menu_view_screen_matrix, POOL(slot)->parent);
          sceVu0MulMatrix(scratch->light, POOL(slot)->parent, menu_model_light_directions);
@@ -1960,7 +1974,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      scratch->reg_tag[0] = 0x8008;
      scratch->reg_tag[1] = 0x10004000;
      scratch->reg_tag[2] = 0xE;
-@@ -2833,10 +2760,10 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2833,10 +2768,10 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
          scratch->registers[6] = 0;
          scratch->registers[7] = 9;
          scratch->cursor += 0x10;
@@ -1975,7 +1989,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          *scratch->cursor++ = scratch->strip_at->alpha_2;
          *scratch->cursor++ = 0;
          *scratch->cursor++ = 0x42;
-@@ -2856,13 +2783,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2856,13 +2791,8 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
              ((f32 *)scratch->cursor)[0] = scratch->strip_point->tex_s;
              ((f32 *)scratch->cursor)[1] = scratch->strip_point->tex_t;
              ((f32 *)scratch->cursor)[2] = 1.0f;
@@ -1991,7 +2005,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              scratch->cursor += 12;
              scratch->strip_point++;
          }
-@@ -2884,11 +2806,11 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2884,11 +2814,11 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
              scratch->registers[6] = 0;
              scratch->registers[7] = 9;
              scratch->cursor += 0x10;
@@ -2008,7 +2022,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              *scratch->cursor++ = 0x42;
              *scratch->cursor++ = 0;
              *scratch->cursor++ = 0x50000;
-@@ -2905,20 +2827,15 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2905,20 +2835,15 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
              *scratch->cursor++ = scratch->prim_tag[2];
              *scratch->cursor++ = scratch->prim_tag[3];
              for (scratch->point = 0; scratch->point < scratch->strip_at->point_count; scratch->point++) {
@@ -2033,7 +2047,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          if (scratch->packet_size < 3) { // match: never true, the packet is 9 quadwords before its points
              return;
          }
-@@ -2930,19 +2847,19 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
+@@ -2930,19 +2855,19 @@ void PoolSlot_Draw(RenderSlot *slot, RenderSlotArg unused) {
      *scratch->cursor++ = 0x10004000;
      *scratch->cursor++ = 0xE;
      *scratch->cursor++ = 0;
@@ -2058,7 +2072,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      end = slot + 21 * sizeof(RenderSlot);
      do {
          PoolSlot_Draw((RenderSlot *)slot, slot_arg);
-@@ -3074,8 +2991,9 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
+@@ -3074,8 +2999,9 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
              remaining = group_sizes[group] - i;
              pool_slots[slots[i]].part = part;
              // match: tex0 and unk18 go across as one 16-byte struct
@@ -2070,7 +2084,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              if (record->parent_point_count > 0) {
                  pool_slots[slots[i]].part_record = record;
                  pool_slots[slots[i]].parent = &pool_slots[slots[record->parent_slot_index]];
-@@ -3088,7 +3006,8 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
+@@ -3088,7 +3014,8 @@ void PoolSlot_LoadGroup(PoolPartSource *source, u32 group) {
      } else {
          part = file->parts;
          pool_slots[groups[group][0]].part = part;
@@ -2080,7 +2094,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          pool_slots[groups[group][0]].part_record = NULL;
          pool_slots[groups[group][0]].parent = NULL;
      }
-@@ -3138,8 +3057,8 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
+@@ -3138,8 +3065,8 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
              slot->key_index = 0;
          }
          // match: with no keys, key, next and phase are used below without being set
@@ -2091,7 +2105,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
              for (;;) {
                  if (frame < key->frame + key->length) {
                      phase = (f32)(frame - key->frame) / (f32)key->length;
-@@ -3177,11 +3096,11 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
+@@ -3177,11 +3104,11 @@ void PoolNode_Pose(RelocEntry *node, PoolSlot *slots, f32 *parent_matrix, s32 fr
          sceVu0ScaleVectorXYZ(local[2], local[2], slot->part->scale[2]);
      }
      sceVu0MulMatrix(slot, parent_matrix, local);
@@ -2107,7 +2121,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      }
  }
  
-@@ -3207,11 +3126,11 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
+@@ -3207,11 +3134,11 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
      dest_strip = (PoolPartFlatStrip *)(dest_part + part_count);
      while (--part_count != -1) {
          *dest_part = *source_part;
@@ -2123,7 +2137,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
          while (--strip_count != -1) {
              // match: the strip's 0x20 bytes go over a word at a time through a union, between the other statements
              ((PoolPartStripWords *)dest_strip)->words[0] = ((PoolPartStripWords *)source_strip)->words[0];
-@@ -3245,7 +3164,7 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
+@@ -3245,7 +3172,7 @@ void PoolPartFile_Expand(PoolPartFile *source, PoolPartFile *dest) {
  
  /* Draws a sprite: runs sprite handler `index` on it and draws what the handler gives back by its kind
     (0: a textured rectangle, 1: a word, 2: a number). */
@@ -2132,7 +2146,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      SpriteHandler handler = sprite_handlers[index];
      KindObject *object = NULL;
  
-@@ -3269,7 +3188,7 @@ void MenuSprite_DrawPlain(int owner, int index, int param) {
+@@ -3269,7 +3196,7 @@ void MenuSprite_DrawPlain(int owner, int index, int param) {
  
  /* Reads a whole file through the game's file functions into buffer; returns buffer, or 0 when the file
     does not open. */
@@ -2141,7 +2155,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      int file_handle;
  
      file_handle = File_Open(name, 0, 1);
-@@ -3279,7 +3198,7 @@ int MenuFile_Load(char *name, void *buffer) {
+@@ -3279,7 +3206,7 @@ int MenuFile_Load(char *name, void *buffer) {
      File_Read(file_handle, buffer, -1);
      File_Close(file_handle);
      FlushCache(0);
@@ -2150,7 +2164,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  }
  
  /* Reads a whole file into buffer; returns buffer, or NULL when the file does not open. */
-@@ -3323,7 +3242,7 @@ void MenuFile_IndexBlocks(char *file) {
+@@ -3323,7 +3250,7 @@ void MenuFile_IndexBlocks(char *file) {
          s32 offset = entries[i].offset;
          LoadedBlockRef *block = &menu_file_blocks[i];
  
@@ -2159,7 +2173,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      }
  }
  
-@@ -3397,9 +3316,11 @@ static void MenuTexture_UploadInStrips(TextureHeader *header) {
+@@ -3397,9 +3324,11 @@ static void MenuTexture_UploadInStrips(TextureHeader *header) {
      int clut_width;
      int clut_height;
  
@@ -2173,7 +2187,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      }
      image = (char *)header + sizeof(TextureHeader);
      strip_rows = 131068.0f / (((f32)(u32)header->data_offset - 16.0f) / width);
-@@ -3457,8 +3378,6 @@ void MenuTexture_UploadTwoCluts(TextureHeader *header, u64 *tex0_out, u64 *trail
+@@ -3457,8 +3386,6 @@ void MenuTexture_UploadTwoCluts(TextureHeader *header, u64 *tex0_out, u64 *trail
      if (tex0_out != NULL) {
          *tex0_out = header->tex0;
      }
@@ -2182,7 +2196,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
      image = (char *)header + sizeof(TextureHeader);
      switch (HEADER_TEX0(header)->psm) {
      case 0x00:
-@@ -3700,16 +3619,22 @@ static SpritePacket *MenuSprite_SlideRightAlt(SpritePacket *src_packet, int amou
+@@ -3700,16 +3627,22 @@ static SpritePacket *MenuSprite_SlideRightAlt(SpritePacket *src_packet, int amou
      return &copy;
  }
  
@@ -2211,7 +2225,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  }
  
  /* Sprite handler: a copy of the sprite, blue when the number it stands for (44 to 52) is above what the
-@@ -3866,8 +3791,10 @@ static SpritePacket *MenuSprite_TintMagicStat(SpritePacket *packet) {
+@@ -3866,8 +3799,10 @@ static SpritePacket *MenuSprite_TintMagicStat(SpritePacket *packet) {
      return &copy;
  }
  
@@ -2224,7 +2238,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  }
  
  /* Sprite handler: a copy of the sprite, opaque (alpha 0x80) when its slot's bit is set in the mask, else clear. */
-@@ -4272,6 +4199,109 @@ s16 MenuPad_Update(void) {
+@@ -4272,6 +4207,109 @@ s16 MenuPad_Update(void) {
      return menu_buttons;
  }
  
@@ -2334,7 +2348,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  /* the directional buttons' right and left */
  static s8 horizontal_repeating = 0;         /* 0x446DC0 TRUE while the held direction is repeating */
  static s8 horizontal_idle_frames = 0;       /* 0x446DC1 frames since the last step, stops at 11 */
-@@ -4566,12 +4596,11 @@ s32 MenuDraw_SetGsRegister(int reg_address, s64 reg_value) {
+@@ -4566,12 +4604,11 @@ s32 MenuDraw_SetGsRegister(int reg_address, s64 reg_value) {
      cursor++;
      while (*D2_CHCR & D_CHCR_STR) {
      }
@@ -2350,7 +2364,7 @@ index 02c6ee80fd8a424fd83c8e59cde4ced3ce4601c2..3e4ef414db959e518d02321937bbeae7
  }
  
  /* A copy of the sprite with the alpha passed in. */
-@@ -4584,7 +4613,7 @@ static SpritePacket *MenuSprite_SetAlpha(SpritePacket *packet, int alpha) {
+@@ -4584,7 +4621,7 @@ static SpritePacket *MenuSprite_SetAlpha(SpritePacket *packet, int alpha) {
  
  /* Draws a sprite like MenuSprite_DrawPlain, with handler entry_id % 1000; from 1000 on the sprite is drawn
     with `variant` as its alpha. */

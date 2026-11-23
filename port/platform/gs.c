@@ -398,6 +398,10 @@ int port_widescreen(void) {
     return port_options.widescreen;
 }
 
+int port_sharp_font(void) {
+    return port_options.font == 1; /* GSN_FONT_SHARP */
+}
+
 int port_whole_frame(void) {
     return port_options.whole_frame;
 }
