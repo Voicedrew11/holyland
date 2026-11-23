@@ -9,7 +9,7 @@
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "off", "native_lod": "scale",
-                    "native_aniso": 1, "native_2d": "smooth", "font": "ps2", "glyphs": "original",
+                    "native_aniso": 1, "native_2d": "smooth", "font": "ps2", "glyphs": "auto",
                     "native_layer_z": "tolerant", "native_draw": "on", "native_sky": "ps2",
                     "reflection_clip": true,
                     "presenter": "vulkan", "scene_depth": "high"},
@@ -103,7 +103,7 @@ PortSettings port_settings = {
     .antialias = PORT_AA_OFF,
     .native_2d = 1, /* GSN_2D_SMOOTH */
     .font = 0,      /* GSN_FONT_PS2: the disc's */
-    .glyphs = 0,    /* GSN_GLYPHS_ORIGINAL: the disc's */
+    .glyphs = PORT_GLYPHS_AUTO, /* what the player used last */
     .native_layer_z = 1, /* GSN_LAYER_Z_TOLERANT */
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
     .native_sky = PORT_SKY_PS2,
@@ -789,7 +789,7 @@ void port_settings_save(void) {
     put(display, "native_lod", cJSON_CreateString(s->native_lod == 0 ? "ps2" : s->native_lod == 2 ? "full" : "scale"));
     put(display, "native_2d", cJSON_CreateString(s->native_2d == 0 ? "ps2" : "smooth"));
     put(display, "font", cJSON_CreateString(s->font == 0 ? "ps2" : "sharp"));
-    put(display, "glyphs", cJSON_CreateString(port_glyphs_name(s->glyphs) ? port_glyphs_name(s->glyphs) : "original"));
+    put(display, "glyphs", cJSON_CreateString(port_glyphs_name(s->glyphs) ? port_glyphs_name(s->glyphs) : "auto"));
     put(display, "native_layer_z", cJSON_CreateString(s->native_layer_z == 0 ? "ps2" : "tolerant"));
     put(display, "native_draw", cJSON_CreateString(s->native_draw ? "on" : "off"));
     put(display, "native_sky", cJSON_CreateString(s->native_sky == PORT_SKY_PS2 ? "ps2" : "modern"));

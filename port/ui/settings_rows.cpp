@@ -313,8 +313,9 @@ bool font_overridden() {
     return port_options.font != port_settings.font;
 }
 
-// (gsn.h's GSN_GLYPHS_*)
-const Choice glyph_styles[] = {{"Original", 0}, {"PlayStation", 1}, {"Xbox", 2}, {"Keyboard", 3}};
+// (gsn.h's GSN_GLYPHS_*, and platform.h's PORT_GLYPHS_AUTO)
+const Choice glyph_styles[] = {
+    {"Auto", PORT_GLYPHS_AUTO}, {"Original", 0}, {"PlayStation", 1}, {"Xbox", 2}, {"Keyboard", 3}};
 int get_glyphs() {
     return port_options.glyphs;
 }
@@ -521,7 +522,8 @@ const SettingRow graphics_rows[] = {
     {"Font", "IPA Mincho: sharp, in the same style.\nOriginal: blurry at high resolutions.",
      RowKind::choice, fonts, {}, get_font, set_font, nullptr, nullptr, pc_renderer, nullptr, font_overridden},
     {"Glyphs",
-     "The buttons shown in the menus.\nOriginal: as on the disc; blurry at high resolutions.\nPlayStation: the same "
+     "The buttons shown in the menus.\nAuto: those of what you used last, sharp: PlayStation, Xbox or Keyboard."
+     "\nOriginal: as on the disc; blurry at high resolutions.\nPlayStation: the same "
      "buttons, sharp.\nXbox: A, B, X and Y.\nKeyboard: the keys and mouse buttons they are bound to.",
      RowKind::choice, glyph_styles, {}, get_glyphs, set_glyphs, nullptr, nullptr, pc_renderer, nullptr,
      glyphs_overridden},

@@ -57,8 +57,24 @@ static void first_key_of(int action, char *out, size_t size) {
    (written by the main thread, read by the game's) */
 static _Atomic float face_widths_u[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
+/* The style drawn for port_options.glyphs: auto's by the device the player uses (main thread) */
+static int glyphs_drawn(int glyphs) {
+    if (glyphs != PORT_GLYPHS_AUTO) {
+        return glyphs;
+    }
+    switch (port_controls_device()) {
+    case PORT_DEVICE_PLAYSTATION_PAD:
+        return GSN_GLYPHS_PLAYSTATION;
+    case PORT_DEVICE_OTHER_PAD:
+        return GSN_GLYPHS_XBOX;
+    default:
+        return GSN_GLYPHS_KEYBOARD;
+    }
+}
+
 /* The buttons' style and the keys bound to the face buttons, to the renderer (main thread) */
-static void send_glyphs(int glyphs) {
+static void send_glyphs(int asked_glyphs) {
+    int glyphs = glyphs_drawn(asked_glyphs);
     static const int faces[4] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE};
     GsnGlyphs asked = {.style = glyphs};
 
@@ -935,6 +951,7 @@ static const char *const glyphs_names[] = {
     [GSN_GLYPHS_PLAYSTATION] = "playstation",
     [GSN_GLYPHS_XBOX] = "xbox",
     [GSN_GLYPHS_KEYBOARD] = "keyboard",
+    [PORT_GLYPHS_AUTO] = "auto",
 };
 
 int port_glyphs_from_name(const char *name) {
@@ -988,7 +1005,15 @@ int port_hint_parts(float x0, float x1, float u0, float u1, float v0, float v1, 
 }
 
 void port_gs_glyph_keys_changed(void) {
-    if (port_options.glyphs == GSN_GLYPHS_KEYBOARD) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    if (glyphs_drawn(port_options.glyphs) == GSN_GLYPHS_KEYBOARD) {
+        port_gs_set_glyphs(port_options.glyphs);
+    }
+#endif
+}
+
+void port_gs_glyph_device_changed(void) {
+    if (port_options.glyphs == PORT_GLYPHS_AUTO) {
         port_gs_set_glyphs(port_options.glyphs);
     }
 }
