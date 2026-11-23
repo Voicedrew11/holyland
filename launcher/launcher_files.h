@@ -43,6 +43,9 @@ std::FILE *open_file(const fs::path &file, const char *mode);
 // a small file whole, or nullopt
 std::optional<std::string> read_file(const fs::path &file);
 
+// a file's SHA-256 in hex; "" when it cannot be read
+std::string file_sha256(const fs::path &file);
+
 // a file written whole and then put in place, so a crash never leaves half of it
 bool write_file_atomically(const fs::path &file, const std::string &text);
 

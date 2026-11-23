@@ -71,6 +71,18 @@ public:
     virtual std::string replace_and_start(const fs::path &downloaded, const std::vector<std::string> &args) const = 0;
     // what the last update left behind (the old files, a half download); at every start
     virtual void remove_leftovers() const = 0;
+
+    // Delta updates (update_delta.h). Where the release's delta from this version goes, as download_path() for the
+    // whole file; empty when this way of installing takes none (the default: the whole file is downloaded).
+    virtual fs::path delta_download_path() const { return {}; }
+    // The delta at `delta` (already checked against SHA256SUMS) made into what replace_and_start takes, as the
+    // whole file whose SHA-256 is `whole_sha256` would have made it; that path, or an empty one with why. The
+    // delta is removed either way.
+    struct Made {
+        fs::path update;
+        std::string why;
+    };
+    virtual Made made_from_delta(const fs::path &delta, std::string_view whole_sha256) const;
 };
 
 class Platform {

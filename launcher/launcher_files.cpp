@@ -12,6 +12,7 @@
 #include <windows.h>
 #endif
 
+#include "build_key.h"
 #include "cJSON.h"
 
 extern "C" {
@@ -68,6 +69,20 @@ std::optional<std::string> read_file(const fs::path &file) {
     std::ostringstream text;
     text << in.rdbuf();
     return text.str();
+}
+
+std::string file_sha256(const fs::path &file) {
+    std::FILE *f = open_file(file, "rb");
+    if (f == nullptr)
+        return {};
+    Sha256Hasher hasher;
+    std::string buffer(1 << 20, '\0');
+    std::size_t got;
+    while ((got = std::fread(buffer.data(), 1, buffer.size(), f)) > 0)
+        hasher.add(std::string_view(buffer.data(), got));
+    bool failed = std::ferror(f) != 0;
+    std::fclose(f);
+    return failed ? std::string() : to_hex(hasher.finish());
 }
 
 bool write_file_atomically(const fs::path &file, const std::string &text) {

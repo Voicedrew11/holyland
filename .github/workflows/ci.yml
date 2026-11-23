@@ -165,7 +165,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build clang libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxtst-dev \
             libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev libdecor-0-dev libpulse-dev \
-            libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
+            libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev zstd zip unzip
       - name: Restore SDL3
         id: sdl3
         uses: actions/cache/restore@v4
@@ -187,6 +187,30 @@ jobs:
           cmake --preset linux -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/out/sdl3-ci"
           cmake --build --preset linux
           ctest --test-dir ../out/launcher-linux --output-on-failure
+      # Delta updates (launcher/update_delta.h): the published release's deltas made from itself to itself would
+      # prove little, so made-up releases (ctest's "deltas" above, packaging/delta_test.sh) and here the real
+      # latest release's files patched to a changed copy of themselves, checked with the launcher's own code
+      - name: Deltas on the latest release's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          old="$RUNNER_TEMP/delta-old" new="$RUNNER_TEMP/delta-new"
+          mkdir -p "$old" "$new"
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName) || { echo "no release yet"; exit 0; }
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" -D "$old" -p '*-x86_64.AppImage' -p '*-win-x64.zip'
+          v="${tag#v}"
+          # the next release, made by hand: the AppImage with a megabyte changed, the zip with a source file changed
+          # and the launcher replaced by the one just built
+          app=$(ls "$old"/*-x86_64.AppImage)
+          { head -c 50000000 "$app"; head -c 1000000 /dev/urandom; tail -c +51000001 "$app"; } > "$new/H-9.9.9-x86_64.AppImage"
+          mkdir "$RUNNER_TEMP/tree" && (cd "$RUNNER_TEMP/tree" && unzip -q "$old"/*-win-x64.zip &&
+            echo "# changed" >> content/src/CMakeLists.txt && cp "$GITHUB_WORKSPACE/out/launcher-linux/holyland" holyland.exe &&
+            zip -q -r -X "$new/H-9.9.9-win-x64.zip" .)
+          packaging/make_deltas.sh "$new" "$old" "$v"
+          ls -la "$new"
+          test "$(ls "$new"/*.delta | wc -l)" = 2
+          packaging/check_deltas.sh "$new" "$old" "$v" out/launcher-linux/launcher_delta_check
       - name: Granite's edits on a read-only copy
         run: |
           cmake -DGRANITE=third_party/parallel-gs/Granite -P cmake/apply_granite_edits.cmake

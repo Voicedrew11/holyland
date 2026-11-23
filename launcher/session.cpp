@@ -600,7 +600,7 @@ void Session::start_update(std::string tag) {
     }
     std::fprintf(stderr, "[%s] updating to %s\n", kProductId, update_tag_.c_str());
     std::string agent = std::string(kProductId) + "-launcher/" + (launcher_version()[0] ? launcher_version() : "dev");
-    update_ = std::make_unique<UpdateRun>(platform_, *installation_, update_tag_, agent);
+    update_ = std::make_unique<UpdateRun>(platform_, *installation_, update_tag_, launcher_version(), agent);
 }
 
 // "12.3 MB"
