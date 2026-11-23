@@ -79,7 +79,7 @@ jobs:
       - name: A player's build from it
         run: |
           app="$(ls dist/*.AppImage)"
-          KF4_DATA_DIR="$RUNNER_TEMP/player" "$app" --build-only
+          KF4_DATA_DIR="$RUNNER_TEMP/player" "$app" --build-only || { tail -n 60 "$RUNNER_TEMP/player/build.log"; exit 1; }
           kf4="$(ls "$RUNNER_TEMP"/player/builds/*/kf4)"
           newest="$(objdump -T "$kf4" "$(dirname "$kf4")/libSDL3.so.0" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           echo "the game needs $newest"
@@ -129,7 +129,7 @@ jobs:
       - name: A player's build from it
         run: |
           stage="dist/win-x64"
-          KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/holyland.exe --build-only
+          KF4_DATA_DIR="$RUNNER_TEMP/player" "$stage"/holyland.exe --build-only || { tail -n 60 "$RUNNER_TEMP/player/build.log"; exit 1; }
           ls "$RUNNER_TEMP"/player/builds/*/kf4.exe "$RUNNER_TEMP"/player/builds/*/SDL3.dll
       - uses: actions/upload-artifact@v4
         with:
