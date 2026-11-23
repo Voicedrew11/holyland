@@ -86,7 +86,7 @@ game, in the menu's own window, not in the launcher.
 - **Again**: Display, Run Setup Again. Its Welcome then has Cancel, which puts back every setting the setup can
   touch as it was when it opened (Esc on the Welcome does the same).
 - **The pages** (`port/ui/setup_pages.cpp`, a table): Welcome (the cards), Controls, Display, Gameplay, Quick Slots,
-  Finish. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
+  Emulator Saves, Finish. Left out on purpose (2026-11-22, the owner): the sky, the draw distance, game speed, and the map
   and menus (automap, minimap, extended stats, item categories, notices); F1 has them. Their rows are the menu's own (`SettingRow`s found by section id and label,
   `find_setting_row`), so a row behaves and is saved exactly as in the menu, and each change shows at once on the
   game behind. The setup's own rows (the cards, Skip, Cancel, Input Device, Next, Finish) are `SetupOwn`.
@@ -96,6 +96,12 @@ game, in the menu's own window, not in the launcher.
   Text in the setup and the menu follows the UI copy rules: standard settings terms, Title Case labels, help of at most
   two short sentences that leads with what the option does.
   The card whose values the settings match is lit, so a run again shows where the player is.
+- **Emulator Saves** (`port/ui/emulator_saves.hpp`, the reading in `port/include/port/card_import.h`, first written by
+  Solaire in PR #238): the King's Field IV saves on the memory cards PCSX2 and RetroArch keep (their memcards and
+  saves folders; images and PCSX2 folder cards), a row each; a row imports its save into a free slot, its own
+  number's when free. A Holyland save is never replaced; a save already held shows "Already in slot N". My Save Is
+  in a Different Location opens the system's file chooser (SDL's) for a card elsewhere. `kf4 --import-card FILE`
+  does the same from the command line.
 - **Given to everyone, never asked** (the `granted` table): full screen, vsync on, Bicubic, Keep, internal
   resolution Auto (from the screen's height), anisotropic 16x, texture LOD Auto, the PS2 video fixes at their
   defaults, and Depth Low (the GPU's: the only one ready for players).
@@ -152,6 +158,7 @@ still chooses).
 | `port/ui/setup_pages.hpp/.cpp` | **the first-start setup, as data**: pages, presets, what everyone gets |
 | `port/ui/setup_model.hpp/.cpp` | the setup's moving about (pages, cards, Skip, Cancel): `tests/ui_setup_test.cpp` |
 | `port/ui/setup_view.hpp/.cpp` | the setup's page as RML: the steps, the heading, the previews |
+| `port/ui/emulator_saves.hpp/.cpp` | the Emulator Saves page's list: PCSX2's and RetroArch's cards found or chosen, imported |
 | `port/ui/ui_render.hpp/.cpp` | `ui::Recorder`, RmlUi's `RenderInterface`: geometry and textures recorded into a `ui::Frame` |
 | `port/ui/ui_frame.hpp` | `ui::Frame`: one picture's triangles, draws, texture uploads and releases (no Vulkan) |
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |

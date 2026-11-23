@@ -7,6 +7,8 @@
 //                   everything as it was when the setup opened
 //   Other pages     the rows move as the player menu's (MenuModel); Continue, Next page (E, R1) go on; Back (Esc,
 //                   Circle) and Previous page (Q, L1) go back a page (a list open: closes it first)
+//   Emulator Saves  the saves found on PCSX2's and RetroArch's cards (a SaveImports), each imported by its row into
+//                   a free save; My save is in a different location opens the system's file chooser
 //   The last page   Finish
 // The settings every player gets go in with a card (or Skip); the depth goes in with Keep my settings too.
 #pragma once
@@ -15,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "emulator_saves.hpp"
 #include "menu_model.hpp"
 #include "setup_pages.hpp"
 
@@ -69,7 +72,8 @@ private:
 
 class SetupFlow {
 public:
-    explicit SetupFlow(RowFinder find);
+    // imports: the Emulator Saves page's saves (nullptr: none found, and no chooser). Kept, not owned.
+    explicit SetupFlow(RowFinder find, SaveImports *imports = nullptr);
     SetupFlow(const SetupFlow &) = delete;
     SetupFlow &operator=(const SetupFlow &) = delete;
 
@@ -120,6 +124,9 @@ public:
     const SetupRowRef &shown_ref(int page, int n) const;
     int shown_count(int page) const;
     const SettingRow *find(const SetupRowRef &ref) const;
+    SaveImports *imports() const {
+        return imports_;
+    }
 
 private:
     friend class SetupRows;
@@ -132,6 +139,7 @@ private:
     void put_back();
 
     RowFinder find_;
+    SaveImports *imports_;
     SetupRows rows_{*this};
     MenuModel model_{rows_};
     SetupStart start_ = SetupStart::first;
@@ -140,6 +148,7 @@ private:
     std::optional<Preset> chosen_;
     int reached_ = 0;                                    // the furthest page gone to
     SetupOwn pending_ = SetupOwn::none;                  // an own row activated, for press / click_row to take
+    int pending_item_ = 0;                               // and its item (emulator_save)
     MenuCue cue_ = MenuCue::none;                        // a page's move (the model's are its own)
     std::vector<std::pair<const SettingRow *, int>> was_; // every row the setup can set, as it was at open
 };

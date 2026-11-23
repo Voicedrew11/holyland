@@ -54,6 +54,9 @@ SetupOwn SetupRows::own(int tab, int row) const {
 
 const SettingRow &SetupRows::row(int tab, int row) const {
     const SetupRowRef &r = ref(tab, row);
+    if (r.own == SetupOwn::emulator_save) {
+        return flow_.imports_->row(r.item); // (shown only for a save found)
+    }
     if (r.own != SetupOwn::none) {
         return setup_own_row(r.own);
     }
@@ -64,6 +67,12 @@ RowShape SetupRows::shape(int tab, int index) const {
     SetupOwn o = own(tab, index);
     if (o == SetupOwn::device) {
         return {RowKind::choice, true, 2, flow_.device() == SetupDevice::pad ? 1 : 0};
+    }
+    if (o == SetupOwn::emulator_save) {
+        return {RowKind::action, flow_.imports_->importable(ref(tab, index).item), 0, 0};
+    }
+    if (o == SetupOwn::emulator_none) {
+        return {RowKind::heading, true, 0, 0};
     }
     if (o != SetupOwn::none) {
         return {RowKind::action, true, 0, 0};
@@ -91,6 +100,7 @@ void SetupRows::activate(int tab, int index) {
     SetupOwn o = own(tab, index);
     if (o != SetupOwn::none) {
         flow_.pending_ = o; // (done by the flow once the model has the input: SetupFlow::take)
+        flow_.pending_item_ = ref(tab, index).item;
         return;
     }
     row_activate(row(tab, index));
@@ -113,6 +123,12 @@ std::string SetupRows::value_text(int tab, int index) const {
     SetupOwn o = own(tab, index);
     if (o == SetupOwn::device) {
         return row(tab, index).choices[flow_.device() == SetupDevice::pad ? 1 : 0].label;
+    }
+    if (o == SetupOwn::emulator_save) {
+        return flow_.imports_->state(ref(tab, index).item);
+    }
+    if (o == SetupOwn::emulator_browse) {
+        return flow_.imports_->chosen_text();
     }
     if (o != SetupOwn::none) {
         return "";
@@ -152,7 +168,7 @@ std::string SetupRows::row_classes(int tab, int index) const {
 }
 
 // ---- The flow -----------------------------------------------------------------------------------------------------
-SetupFlow::SetupFlow(RowFinder find) : find_(find) {
+SetupFlow::SetupFlow(RowFinder find, SaveImports *imports) : find_(find), imports_(imports) {
 }
 
 const SettingRow *SetupFlow::find(const SetupRowRef &ref) const {
@@ -167,6 +183,12 @@ bool SetupFlow::shown(const SetupRowRef &ref) const {
         return start_ == SetupStart::first;
     case SetupOwn::cancel:
         return start_ == SetupStart::again;
+    case SetupOwn::emulator_save:
+        return imports_ != nullptr && ref.item < imports_->count();
+    case SetupOwn::emulator_none:
+        return imports_ == nullptr || imports_->count() == 0;
+    case SetupOwn::emulator_browse:
+        return imports_ != nullptr;
     case SetupOwn::none:
         break;
     default:
@@ -221,6 +243,9 @@ void SetupFlow::open(SetupStart start, bool had_settings, SetupDevice device) {
     pending_ = SetupOwn::none;
     cue_ = MenuCue::none;
     was_.clear();
+    if (imports_ != nullptr) {
+        imports_->look();
+    }
     for (const SetupPage &page : setup_pages()) {
         for (const SetupRowRef &ref : page.rows) {
             if (ref.own == SetupOwn::none) {
@@ -324,6 +349,16 @@ SetupResult SetupFlow::take(SetupOwn own) {
         break;
     case SetupOwn::finish:
         return SetupResult::done;
+    case SetupOwn::emulator_save:
+        cue_ = imports_ != nullptr && imports_->import(pending_item_) ? MenuCue::confirm : MenuCue::refused;
+        model_.rows_changed(); // (the imported save's row is dim now)
+        break;
+    case SetupOwn::emulator_browse:
+        if (imports_ != nullptr) {
+            imports_->choose_file();
+        }
+        cue_ = MenuCue::confirm;
+        break;
     default:
         break;
     }

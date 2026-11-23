@@ -171,6 +171,10 @@
        --no-audio        play no sound (it is still made, for --audio-dump)
        --saves DIR       the folder the game's saves go in (by default saves in the data folder, next
                          to settings.json); "none": saving is off
+       --import-card F   copy King's Field IV's saves from a PS2 memory card (PCSX2's or RetroArch's
+                         Mcd001.ps2, or a PCSX2 folder card) into empty saves of the save folder,
+                         and exit; a save is never replaced (no --disc needed). The first-start
+                         setup's Emulator Saves page does the same.
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
                          with the turns mouse look, the run key and twin-stick give the game (the
                          sound follows the game's clock); replay from the same start: --clock,
@@ -229,6 +233,7 @@
 #include "port/scene_depth.h"
 #include "port/quicksave.h"
 #include "port/save_files.h"
+#include "port/card_import.h"
 #include "port/teleport.h"
 #include "port/cheats.h"
 #include "port/crash_note.h"
@@ -308,7 +313,7 @@ static void usage(const char *program) {
             "usage: %s --disc <image.iso|image.chd|folder> [--fast] [--door-speed N] [--game-speed N] [--frames N] [--input FILE] [--log FILE|-]\n"
             "          [--clock YYYY-MM-DDTHH:MM:SS] [--headless] [--no-gs] [--ps2-scanout] [--host-dir DIR]\n"
             "          [--dump-frames N,N,...] [--dump-dir DIR] [--stats]\n"
-            "          [--audio-dump FILE] [--no-audio] [--saves DIR|none]\n"
+            "          [--audio-dump FILE] [--no-audio] [--saves DIR|none] [--import-card FILE]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred] [--fov N]\n"
@@ -340,6 +345,7 @@ static void parse_clock(const char *text) {
 }
 
 static const char *gs_capture_at; /* --gs-capture-at (port/debug/gs_capture.c) */
+static const char *import_card;   /* --import-card: a memory card image whose saves are copied in (port/platform/card_import.c) */
 
 /* --flash-recorder off|on|SECONDS[,HEIGHT] */
 static int parse_flash_recorder(const char *value) {
@@ -790,6 +796,8 @@ static void parse_options(int argc, char **argv) {
             port_options.record_input = value;
         } else if (strcmp(option, "--saves") == 0) {
             port_options.saves = value;
+        } else if (strcmp(option, "--import-card") == 0) {
+            import_card = value;
         } else if (strcmp(option, "--controls") == 0) {
             /* (gone in November 2026: one set of controls, port/sdk/controls.c; still taken, so old scripts run) */
             fprintf(stderr, "[port] --controls %s: there are no layouts any more; ignored\n", value);
@@ -828,7 +836,7 @@ static void parse_options(int argc, char **argv) {
             usage(argv[0]);
         }
     }
-    if (port_options.disc == NULL) {
+    if (port_options.disc == NULL && import_card == NULL) {
         fprintf(stderr, "kf4 needs your own King's Field IV disc: --disc <image.iso, image.chd or folder> (or KF4_DISC)\n");
         usage(argv[0]);
     }
@@ -1123,6 +1131,10 @@ int main(int argc, char **argv) {
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, darker-reality, before any use */
     port_settings_load(); /* settings.json, where the command line left an option alone */
+    if (import_card != NULL) {
+        open_save_folder();
+        exit(port_saves_import_card(import_card) > 0 ? 0 : 1);
+    }
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);

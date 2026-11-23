@@ -135,7 +135,15 @@ std::string rows_rml(const RowSource &rows, const MenuModel &model, PadFamily fa
         if (shape.kind == RowKind::binding) {
             slots_rml(out, rows, model, tab, row, focused, family);
         } else if (shape.kind == RowKind::action) {
-            out += focused && shape.enabled ? "<value>Enter</value>" : "";
+            // (an action's value: what it did or would do, when it says; else Enter on the focused row)
+            std::string text = rows.value_text(tab, row);
+            if (!text.empty()) {
+                out += "<value>";
+                rml_escaped(out, text);
+                out += "</value>";
+            } else if (focused && shape.enabled) {
+                out += "<value>Enter</value>";
+            }
         } else {
             value_rml(out, rows, tab, row, shape, focused);
         }

@@ -141,19 +141,25 @@ std::string summary(const SetupFlow &flow) {
     std::span<const SetupPage> pages = setup_pages();
     const SetupRows &rows = flow.rows();
     for (int page = 1; page + 1 < int(pages.size()); page++) {
-        out += "<h3>";
-        rml_escaped(out, pages[size_t(page)].title);
-        out += "</h3>";
+        // (a page's settings: not its actions, such as Emulator Saves' imports, or its lines)
+        std::string lines;
         for (int row = 0; row < rows.row_count(page); row++) {
-            if (rows.own(page, row) == SetupOwn::next || rows.shape(page, row).kind == RowKind::heading) {
+            RowKind kind = rows.shape(page, row).kind;
+            if (kind == RowKind::action || kind == RowKind::heading) {
                 continue;
             }
-            out += "<line><label>";
-            rml_escaped(out, rows.row(page, row).label);
-            out += "</label><value>";
-            rml_escaped(out, rows.value_text(page, row));
-            out += "</value></line>";
+            lines += "<line><label>";
+            rml_escaped(lines, rows.row(page, row).label);
+            lines += "</label><value>";
+            rml_escaped(lines, rows.value_text(page, row));
+            lines += "</value></line>";
         }
+        if (lines.empty()) {
+            continue;
+        }
+        out += "<h3>";
+        rml_escaped(out, pages[size_t(page)].title);
+        out += "</h3>" + lines;
     }
     return out + "</preview>";
 }
