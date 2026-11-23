@@ -1116,8 +1116,10 @@ void port_gs_run_vsync(void) {
            field at a time) */
         int extras = have_pc && port_whole_frame();
 
-        interp_count = extras ? port_interp_schedule(request->vblank, interp_phases, PORT_INTERP_MOST_A_VBLANK) : 1;
+        interp_count = port_interp_schedule(request->vblank, interp_phases, PORT_INTERP_MOST_A_VBLANK);
         if (!extras) {
+            /* (the vblank's own, where it has a picture: --game-speed leaves some without) */
+            interp_count = interp_count > 0;
             interp_phases[0] = 0;
         }
         if (idle) {
@@ -1194,14 +1196,16 @@ void port_gs_run_vsync(void) {
             }
             interp_between = between;
         }
-        /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between) */
-        own_shown = interp_phases[0] == 0 || !interp_live;
+        /* the vblank's own picture: shown when it is one of the pictures (or there is no picture between); not when the
+           vblank has none (--game-speed: not drawn, rather than drawn and left out by the window) */
+        own_shown = interp_count > 0 && (interp_phases[0] == 0 || !interp_live);
         if (interp_live && (own_shown || dump)) {
             port_interp_picture(request->vblank, 0, replay_gif);
         }
         interp_on = 1;
     } else {
         __atomic_store_n(&interp_cut_now, 0, __ATOMIC_RELAXED);
+        own_shown = port_interp_vblank_due(request->vblank); /* (--game-speed: the vblanks of 1x's rate only) */
         if (interp_on) {
             port_interp_forget(); /* turned off (the overlay): nothing kept for when it is on again */
             interp_on = 0;
@@ -1241,7 +1245,7 @@ void port_gs_run_vsync(void) {
     } else if (dump) {
         fprintf(stderr, "[gs] vblank %llu: nothing is shown, no picture to dump\n", (unsigned long long)request->vblank);
     }
-    if (interp_live && interp_count > 0) {
+    if (interp_live) {
         /* the pictures between this vblank and the next: for the window, only while this thread and the
            PC renderer's keeps up with the game (a picture between left out rather than the game held up). A
            vblank whose own picture is not shown (above 60 its phases need not include 0) keeps at least one: when

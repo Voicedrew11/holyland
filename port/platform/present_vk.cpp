@@ -72,6 +72,7 @@ namespace {
     X(vkDestroySwapchainKHR)                                                                               \
     X(vkGetSwapchainImagesKHR)                                                                             \
     X(vkAcquireNextImageKHR)                                                                               \
+    X(vkGetFenceStatus)                                                                                    \
     X(vkQueuePresentKHR)                                                                                   \
     X(vkQueueSubmit)                                                                                       \
     X(vkQueueWaitIdle)                                                                                     \
@@ -1572,55 +1573,73 @@ extern "C" void port_vk_overlay_keep(void) {
     kept_overlay.keep(static_cast<const ImDrawData *>(port_overlay_draw_data()));
 }
 
-extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
-                                int overlay) {
+// (no_wait) a present left out because the swapchain had no image free (FIFO's queue full): the picture's tag kept, so
+// that the next present, if it has nothing new, shows this one and not the one before
+static void skipped_waiting(int image, uint64_t tag) {
+    if (image) {
+        pr.source = SOURCE_NATIVE;
+        pr.tag = tag;
+    }
+}
+
+extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag,
+                               int overlay, int no_wait) {
     if (!pr.up) {
-        return;
+        return 1;
     }
     ZoneScope zone(present_zone);
     flash_start_writer(); // (F8)
     bool fresh = pixels != nullptr || image;
     // with nothing new, the window is drawn again only for the overlay
     if (!fresh && (pr.source == SOURCE_NONE || !port_overlay_visible())) {
-        return;
+        return 1;
     }
     if (SDL_GetWindowFlags(pr.window) & SDL_WINDOW_MINIMIZED) {
-        return;
+        return 1;
     }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
     if (drawable_w <= 0 || drawable_h <= 0) {
-        return;
+        return 1;
     }
     pr.mode_wanted = wanted_mode();
     if (pr.stale || pr.vsync_made != pr.vsync_wanted || pr.mode_made != pr.mode_wanted ||
         pr.extent.width != uint32_t(drawable_w) ||
         pr.extent.height != uint32_t(drawable_h)) {
         if (!make_swapchain()) {
-            return;
+            return 1;
         }
     }
 
     Frame &f = pr.frames[pr.frame];
+    if (no_wait && vk.vkGetFenceStatus(pr.device, f.done) != VK_SUCCESS) {
+        skipped_waiting(image, tag);
+        return 0;
+    }
     int waiting = port_zone_begin(present_wait_zone);
     vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
     flash_read_timer(f);
     own_read_timer(f);
     fold_check_read(f);
     uint32_t index = 0;
-    VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
+    VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, no_wait ? 0 : UINT64_MAX, f.acquired,
+                                               VK_NULL_HANDLE, &index);
     if (waiting) {
         port_zone_end(present_wait_zone);
     }
+    if (no_wait && (result == VK_TIMEOUT || result == VK_NOT_READY)) {
+        skipped_waiting(image, tag);
+        return 0;
+    }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         pr.stale = true;
-        return;
+        return 1;
     }
     if (result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true; // (drawn all the same, and made again for the next)
     } else if (result != VK_SUCCESS) {
         check(result);
-        return;
+        return 1;
     }
     SwapImage &target = pr.images[index];
 
@@ -1937,6 +1956,7 @@ extern "C" void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t
         read_window(f);
     }
     pr.frame = (pr.frame + 1) % FRAMES;
+    return 1;
 }
 
 extern "C" int port_vk_flash_write(const char *folder, char *why, size_t size) {

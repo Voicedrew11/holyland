@@ -11,7 +11,7 @@
    So the game sees the same timer counts, fields and interrupts on every run with the same input.
    --fast lets the host run ahead of 59.94 vblanks a second; otherwise each vblank waits for the
    host's clock to catch up. --game-speed divides the host's time per EE time: 2, each vblank, timer
-   and animation twice as fast as on the PS2 (port_vblank_wall_seconds, the window's clock too).
+   and animation twice as fast as on the PS2 (port_vblank_wall_seconds; the pictures stay at 1x's rate, port_interp_schedule).
 
    Interrupt handlers run in the kernel calls, on the stack of the thread that made the call, as the
    EE runs them on the interrupted thread's. What they make ready runs once they return.

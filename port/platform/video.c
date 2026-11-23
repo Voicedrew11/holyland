@@ -89,6 +89,7 @@ static int presenter = PORT_PRESENTER_SDL;
 static uint64_t stat_submitted, stat_overwritten, stat_fresh, stat_stale, stat_gaps[4], stat_left_out, stat_late;
 static double stat_last, stat_sum, stat_sum2, stat_max;
 static uint64_t stat_intervals, stat_vblanks_since, stat_between;
+static uint64_t stat_present_skipped; /* presents left out, the swapchain full (--game-speed: draw_window) */
 
 /* (under the lock) the queue's next place, the oldest left out when it is full */
 static FILE *sim_log;
@@ -968,8 +969,19 @@ static void draw_window(int fresh, int image, uint64_t tag, int overlay) {
     }
 #ifdef KF4_HAVE_VULKAN_PRESENTER
     if (presenter == PORT_PRESENTER_VULKAN) {
-        /* (the presenter draws again with nothing new only for the overlay, as below) */
-        port_vk_present(fresh && !image ? shown : NULL, width, height, fresh && image, tag, overlay);
+        /* (the presenter draws again with nothing new only for the overlay, as below). The game's thread does not wait
+           on vsync at a --game-speed above 1x: its vblanks are shorter than the screen's refresh, and with FIFO's queue
+           full (a catch-up after a hitch runs vblanks back to back, each due one a present) every present waited for a
+           refresh, most of each vblank, and the game fell behind its speed for seconds (38 pictures a second at 1.5x
+           after a quick load, 2026-11-23). A present the swapchain has no image for is left out instead: the next
+           picture comes within a vblank or two. */
+        int no_wait = overlay && !port_options.fast && port_game_speed() > 1.0;
+
+        if (!port_vk_present(fresh && !image ? shown : NULL, width, height, fresh && image, tag, overlay, no_wait) &&
+            fresh) {
+            __atomic_sub_fetch(&pictures_presented, 1, __ATOMIC_RELEASE); /* (not shown after all) */
+            stat_present_skipped++;
+        }
         return;
     }
 #endif
@@ -1038,7 +1050,7 @@ static int thread_shows(void);
 
 void port_video_present(void) {
 #ifdef KF4_HAVE_SDL
-    int fresh, image = 0;
+    int fresh, due, image = 0;
     uint64_t tag = 0;
 
     if (window == NULL && !sim) {
@@ -1072,8 +1084,14 @@ void port_video_present(void) {
        for it, sometimes a little after. Shown at the next vblank instead, the one before was shown
        twice. So while pictures are coming (the last present had one) and none of this vblank's has come,
        the window waits for it, up to half a vblank; not with --fast, which does not wait for the
-       renderer (it is held at most two vblanks behind, pcr_vsync). */
-    if (!port_options.fast && last_fresh && times_set) {
+       renderer (it is held at most two vblanks behind, pcr_vsync), nor at a vblank with no picture
+       (--game-speed above 1x: only the vblanks of 1x's rate of the host have one, port_interp_vblank_due). */
+    LOCK();
+    tag = times_newest;
+    UNLOCK();
+    due = port_options.fast || !times_set || port_interp_vblank_due(tag);
+    tag = 0;
+    if (!port_options.fast && last_fresh && times_set && due) {
         double until = port_wall_seconds() + 0.5 * port_vblank_wall_seconds();
 
         while (__atomic_load_n(&newest_in, __ATOMIC_ACQUIRE) <= times_newest && port_wall_seconds() < until) {
@@ -1082,7 +1100,12 @@ void port_video_present(void) {
     }
     PRESENT_LOCK();
     fresh = take_picture(port_wall_seconds() + 0.001, 0, 1e30, &image, &tag);
-    last_fresh = fresh;
+    if (due) {
+        /* (a vblank with no picture, --game-speed, says nothing of whether pictures are coming: left as it was, or the
+           vblank after each such one did not wait for its picture, and while the pictures came just after their
+           vblanks began, a second in every ten or so at 1.5x, each was left out for the next: 45 a second, 2026-11-23) */
+        last_fresh = fresh;
+    }
     LOCK();
     presented_vblank = times_newest;
     UNLOCK();
@@ -1095,6 +1118,13 @@ void port_video_present(void) {
         } else {
             stat_stale++;
         }
+    }
+    if (!fresh && !due && !port_overlay_each_picture()) {
+        /* a vblank with no picture (--game-speed): the window is not drawn again for an overlay on screen (the
+           minimap, the stats), which would be a present of the last picture each vblank: more than 1x's rate, and
+           a wait on vsync each that slows the game */
+        PRESENT_UNLOCK();
+        return;
     }
     draw_window(fresh, image, tag, 1);
     PRESENT_UNLOCK();
@@ -1459,6 +1489,10 @@ void port_video_print_stats(void) {
             (unsigned long long)(stat_gaps[1] + stat_gaps[2] + stat_gaps[3]), (unsigned long long)stat_gaps[1],
             (unsigned long long)stat_gaps[2], (unsigned long long)stat_gaps[3], (unsigned long long)stat_stale,
             (unsigned long long)stat_between, mean * 1e3, sd * 1e3, stat_max * 1e3, (unsigned long long)stat_late);
+    if (stat_present_skipped) {
+        fprintf(stderr, "[stats] window: %llu presents left out at a game speed above 1x, vsync's queue full\n",
+                (unsigned long long)stat_present_skipped);
+    }
     fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second, %.1f game frames a second\n",
             port_video_pictures_per_second(), port_video_frames_per_second());
     if (port_options.adaptive_sync) {
