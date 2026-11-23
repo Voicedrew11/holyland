@@ -187,6 +187,10 @@ int port_whole_frame(void) {
     return port_options.whole_frame;
 }
 
+int port_whole_fields(void) {
+    return port_options.whole_frame && !port_options.interlaced_menus;
+}
+
 /* (pcr_native.cpp: the mirror image cut at its water, as the game's default) */
 int port_reflection_clip(void) {
     return 1;

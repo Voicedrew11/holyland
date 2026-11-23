@@ -646,7 +646,6 @@ public:
         int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         std::vector<Layer> drawn;
         bool lower = false;
-        WovenField woven;
         if (s) {
             uint32_t rx = rect.x + placed.x, ry = rect.y + placed.y;
             x0 = int32_t(rx * scale_[0]);
@@ -671,7 +670,6 @@ public:
                     drawn.clear();
                     draw_layers(s->image, shown);
                 }
-                woven = woven_field(rect, x0, x1, y1 - y0, dst);
             }
         }
         // (the scene so far submitted without a flush: the caller submits out right after, and both go to the GPU's
@@ -689,12 +687,6 @@ public:
         if (lower) {
             scanout_lower_field(out, *s->image, x0, y0, x1, y1, dst);
             return true;
-        }
-        if (woven.image) {
-            out.blit_image(dst, *s->image, {0, 0, 0}, {int32_t(dst.get_width()), int32_t(dst.get_height()), 1},
-                           {x0, y0, 0}, {x1 - x0, y1 - y0, 1}, 0, 0, 0, 0, 1, VK_FILTER_NEAREST);
-            weave_lower_field(out, woven, x0, dst);
-            return true; // (two buffers read: not scanout_unchanged's)
         }
         // (what it read, for scanout_unchanged: the picture is the same while nothing meets it)
         last_scanout_ = {true, shown_rect, s->image, {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}}};
@@ -5364,79 +5356,6 @@ private:
         return limits;
     }
 
-    // A field-mode picture's lower field to weave in (ShownRect's woven): its buffer's image and the row its rect
-    // begins at. None (image null) unless the scale down is odd: an upper field's row r at scale k is the picture's
-    // line 2r / k, a lower field's 2r / k + 1, so at an odd scale the lower's rows fall between the upper's (the
-    // picture's odd rows from k down); at an even one they fall on the upper's own and add nothing.
-    struct WovenField {
-        ImageHandle image;
-        int32_t y0 = 0;
-    };
-    WovenField woven_field(const ShownRect &rect, int32_t x0, int32_t x1, int32_t rows, const Image &dst) {
-        const int32_t k = int32_t(std::lround(scale_[1]));
-        if (!rect.woven || rect.lower_bp % 32 != 0 || std::fabs(scale_[1] - float(k)) > 1e-3f || k % 2 == 0 ||
-            uint32_t(x1 - x0) != dst.get_width() || dst.get_height() != 2 * uint32_t(rows)) {
-            return {};
-        }
-        Placed placed = colour_target(rect.lower_bp / 32, rect.bw, GSN_PSMCT32, rect.y + rect.h);
-        Target *t = placed.target;
-        if (!t || int32_t((rect.x + placed.x) * scale_[0]) != x0 || rect.x + placed.x + rect.w > t->width() ||
-            rect.y + placed.y + rect.h > t->height) {
-            return {};
-        }
-        const int32_t y0 = int32_t((rect.y + placed.y) * scale_[1]);
-        const VkRect2D shown = {{x0, y0}, {uint32_t(x1 - x0), uint32_t(rows)}};
-        touch(t->image, false, shown, false);
-        draw_layers(t->image, shown);
-        return {t->image, y0};
-    }
-
-    // The lower field's rows into dst's odd rows from the scale's down on (woven_field), over the upper field stretched
-    // there to twice its lines: each held between the upper's rows around it (scn_weave.comp), made into weave_rows_
-    // and copied into place
-    void weave_lower_field(CommandBuffer &out, const WovenField &woven, int32_t x0, const Image &dst) {
-        const int32_t k = int32_t(std::lround(scale_[1]));
-        const uint32_t width = dst.get_width(), height = dst.get_height();
-        const uint32_t count = (height - uint32_t(k) + 1) / 2;
-        if (!weave_rows_ || weave_rows_->get_width() != width || weave_rows_->get_height() != count) {
-            ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(width, count, VK_FORMAT_R8G8B8A8_UNORM);
-            info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-            info.layout = ImageLayout::General;
-            info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-            weave_rows_ = device_.create_image(info, nullptr);
-        }
-        Vulkan::Program *program = drawer_.weave_program();
-        if (!program || !weave_rows_) {
-            return; // (the upper field alone, stretched)
-        }
-        const struct {
-            int32_t lower_origin[2], first_row, width, height;
-        } push = {{x0, woven.y0}, k, int32_t(width), int32_t(height)};
-        out.barrier(VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        out.set_program(program);
-        out.set_texture(0, 0, woven.image->get_view(), StockSampler::NearestClamp);
-        out.set_texture(0, 1, dst.get_view(), StockSampler::NearestClamp);
-        out.set_storage_texture(0, 2, weave_rows_->get_view());
-        out.push_constants(&push, 0, sizeof(push));
-        out.dispatch((width + 63) / 64, count, 1);
-        out.barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        std::vector<VkImageCopy> rows(count);
-        for (uint32_t i = 0; i < count; i++) {
-            VkImageCopy &c = rows[i];
-            c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            c.srcOffset = {0, int32_t(i), 0};
-            c.dstOffset = {0, k + 2 * int32_t(i), 0};
-            c.extent = {width, 1, 1};
-        }
-        device_.get_device_table().vkCmdCopyImage(out.get_command_buffer(), weave_rows_->get_image(),
-                                                  weave_rows_->get_layout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
-                                                  dst.get_image(), dst.get_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-                                                  count, rows.data());
-    }
-
     void scanout_lower_field(CommandBuffer &out, const Image &src, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
                              const Image &dst) {
         int32_t height = int32_t(dst.get_height());
@@ -5456,7 +5375,6 @@ private:
     Device &device_;
     GpuTimes &times_;
     HangNotes &notes_;
-    ImageHandle weave_rows_; // (weave_lower_field's: the odd rows it makes)
     Drawer drawer_;
     TextureStore store_;
     Scene scene_;

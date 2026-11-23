@@ -4,7 +4,7 @@
        "version":  3,
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
-                    "whole_frame": true, "seamless_scroll": true, "flicker_filter": false,
+                    "whole_frame": true, "seamless_scroll": true, "flicker_filter": false, "interlaced_menus": false,
                     "widescreen": false, "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
@@ -377,6 +377,7 @@ void port_settings_load(void) {
     s->whole_frame = read_bool(display, "whole_frame", s->whole_frame);
     s->seamless_scroll = read_bool(display, "seamless_scroll", s->seamless_scroll);
     s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
+    s->interlaced_menus = read_bool(display, "interlaced_menus", s->interlaced_menus);
     s->widescreen = read_bool(display, "widescreen", s->widescreen);
     s->fov = (int)read_number(display, "fov", s->fov, 30, 120);
     {
@@ -569,6 +570,9 @@ void port_settings_load(void) {
     }
     if (!port_options.flicker_filter_forced) {
         port_options.flicker_filter = s->flicker_filter;
+    }
+    if (!port_options.interlaced_menus_forced) {
+        port_options.interlaced_menus = s->interlaced_menus;
     }
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
@@ -772,6 +776,7 @@ void port_settings_save(void) {
     put(display, "whole_frame", cJSON_CreateBool(s->whole_frame));
     put(display, "seamless_scroll", cJSON_CreateBool(s->seamless_scroll));
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
+    put(display, "interlaced_menus", cJSON_CreateBool(s->interlaced_menus));
     put(display, "widescreen", cJSON_CreateBool(s->widescreen));
     put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
     put(display, "fov", cJSON_CreateNumber(s->fov));

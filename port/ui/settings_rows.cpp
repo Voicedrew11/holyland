@@ -181,6 +181,17 @@ void run_setup() {
     port_player_ui_run_setup(); // (when the menu closes: port/ui/player_ui.cpp)
 }
 
+int get_interlaced_menus() {
+    return port_options.interlaced_menus != 0;
+}
+void set_interlaced_menus(int on) {
+    port_settings.interlaced_menus = port_options.interlaced_menus = on;
+    changed();
+}
+bool interlaced_menus_overridden() {
+    return port_options.interlaced_menus != port_settings.interlaced_menus;
+}
+
 const SettingRow display_rows[] = {
     {"Window", "", RowKind::heading},
     {"Fullscreen", "Borderless, at the screen's resolution. F11 also switches it.", RowKind::toggle, on_off, {},
@@ -207,6 +218,12 @@ const SettingRow display_rows[] = {
      RowKind::choice, syncs, {}, get_sync, set_sync, nullptr, nullptr, nullptr, nullptr, sync_overridden},
     {"FPS Counter", "Top right corner. F3 shows and hides it in play.", RowKind::toggle, on_off, {}, get_fps,
      set_fps},
+    {"CRT", "", RowKind::heading},
+    {"Interlaced Menus",
+     "Shows the menus, title and logos as the PS2 sends them to a TV: one field at a time, each a line apart. For a "
+     "CRT; on a flat screen they shimmer.",
+     RowKind::toggle, on_off, {}, get_interlaced_menus, set_interlaced_menus, nullptr, nullptr, nullptr, nullptr,
+     interlaced_menus_overridden},
     {"Setup", "", RowKind::heading},
     {"Run Setup Again", "Opens the first-start setup. Cancel on its first page restores your previous settings.",
      RowKind::action, {}, {}, nullptr, nullptr, run_setup},

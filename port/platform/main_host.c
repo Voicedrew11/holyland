@@ -35,6 +35,8 @@
                          with --widescreen, the renderer draws the 16:9 picture wider still, with
                          square pixels: 4/3 of --native-scale across, rounded up (2, 3, 4, 6); on in
                          a new settings.json, off without one (headless)
+       --interlaced-menus the menus, title and logos a field at a time, as a TV shows them, for a
+                         CRT (port_whole_fields()); off by default
        --flicker-filter  the game's flicker filter, as on the PS2: each row of the picture blended
                          half with the row above (port_flicker_filter()); off by default
        --antialias MODE  the picture's anti-aliasing: off (the picture as drawn; the default without
@@ -437,6 +439,10 @@ static void parse_options(int argc, char **argv) {
             port_options.whole_frame = 0;
             port_options.seamless_scroll = 0;
             port_options.flicker_filter = port_options.flicker_filter_forced = 1;
+            continue;
+        }
+        if (strcmp(option, "--interlaced-menus") == 0) {
+            port_options.interlaced_menus = port_options.interlaced_menus_forced = 1;
             continue;
         }
         if (strcmp(option, "--flicker-filter") == 0) {

@@ -462,6 +462,10 @@ int port_whole_frame(void) {
     return port_options.whole_frame;
 }
 
+int port_whole_fields(void) {
+    return port_options.whole_frame && !port_options.interlaced_menus;
+}
+
 int port_seamless_scroll(void) {
     return port_options.seamless_scroll;
 }
@@ -686,7 +690,7 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
     if (port_frame_interp() && backend) {
         port_interp_keep(path, data, bytes); /* --frame-rate 60 (port/platform/frame_interp.c) */
     }
-    if (port_whole_frame() && backend) {
+    if (port_whole_fields() && backend) {
         port_field_frames_keep(path, data, bytes); /* the fields' screens whole (port/platform/field_frames.c) */
     }
 #ifdef KF4_HAVE_PARALLEL_GS
@@ -1344,7 +1348,7 @@ void port_gs_run_vsync(void) {
             interp_on = 0;
         }
     }
-    if (port_whole_frame()) {
+    if (port_whole_fields()) {
         /* a screen drawn as fields (the menus): the picture just drawn drawn again into the buffer shown,
            for the other field, and given to the renderers as that field first, so that the vblank's
            woven picture is one moment (port/platform/field_frames.c) */

@@ -143,12 +143,6 @@ public:
         return counts_;
     }
 
-    // The weave of a field-mode picture's lower field (scn_weave.comp: set 0's binding 0 the lower field's buffer and
-    // 1 the picture, sampled, 2 the rows made, storage; five ints pushed); null if it could not be made
-    Vulkan::Program *weave_program() const {
-        return weave_;
-    }
-
 private:
     static constexpr uint32_t no_record = 0xFFFFFFFFu;
     static constexpr uint8_t decal_won = 0x2; // (the stencil's bit of a settled decal: pcr_canvas.cpp's)
@@ -311,7 +305,6 @@ private:
     Pending pending_;
     FILE *runs_log_ = nullptr; // (developers', KF4_SCN_RUNS_LOG=FILE: a line a scene recorded, its calls and runs)
     Vulkan::Program *picture_layer_ = nullptr; // (pcr_prim.vert with scn_picture_layer.frag)
-    Vulkan::Program *weave_ = nullptr;         // (weave_program's, made with the others: compute_programs)
     Vulkan::Program *fused_280_ = nullptr;
     // (exact Z's settle: each records vertex shader with pcr_depth_reset.frag)
     std::array<Vulkan::Program *, size_t(Program::count)> depth_reset_rec_{};

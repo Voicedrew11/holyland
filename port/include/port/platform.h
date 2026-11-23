@@ -112,6 +112,9 @@ typedef struct {
                                 are shown in frame mode) */
     int seamless_scroll;     /* the scrolling textures' sprites end on their targets' edges, so the
                                 textures repeat without a seam (port_seamless_scroll(); on by default) */
+    int interlaced_menus;  /* the screens the game draws as fields shown a field at a time, as a TV
+                              shows them, for a CRT (port_whole_fields(); off by default) */
+    int interlaced_menus_forced; /* --interlaced-menus: settings.json does not turn it off */
     int flicker_filter;    /* the game's flicker filter is drawn (port_flicker_filter(): each row half
                                 the row above, for an interlaced TV); off by default, on with
                                 --flicker-filter or --ps2-scanout */

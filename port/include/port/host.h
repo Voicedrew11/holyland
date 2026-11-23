@@ -143,6 +143,12 @@ float port_fov_scale(void);
    picture with the last picture's other, a comb every other vblank. */
 int port_whole_frame(void);
 
+/* port_whole_fields(): 1 while the screens the game draws as fields (the menus, the title, the logos) are drawn
+   whole: port_whole_frame(), and not the Interlaced Menus setting (port_options.interlaced_menus), which shows them a
+   field at a time as a TV does, for a CRT. port/platform/field_frames.c; the PC renderers draw them at twice the scale
+   down (pcr.cpp's drawing_scale). */
+int port_whole_fields(void);
+
 /* port_flicker_filter(): 1 while the game draws its flicker filter (port_options.flicker_filter; off by
    default, on with --flicker-filter, --ps2-scanout or the player menu's Graphics tab). Every frame of play
    Game_BlendScreenOffsetDown blends the picture over itself one row lower at half strength, so that a
