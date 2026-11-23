@@ -2,3 +2,9 @@
 #include "port/version.h"
 
 const char port_version[] = "@KF4_VERSION@";
+
+#ifdef __OPTIMIZE__
+const int port_build_optimized = 1;
+#else
+const int port_build_optimized = 0;
+#endif

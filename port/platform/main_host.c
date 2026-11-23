@@ -228,7 +228,9 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/play_priority.h"
 #include "port/thread_name.h"
+#include "port/version.h"
 #include "port/frame_profiler.h"
 #include "port/profile_run.h"
 #include "port/settings.h"
@@ -1146,6 +1148,12 @@ int main(int argc, char **argv) {
     start_seconds = port_wall_seconds();
     open_log();
     atexit(close_log);
+    if (!port_build_optimized) {
+        fprintf(stderr, "[kf4] THIS BUILD IS NOT OPTIMIZED: it runs several times slower and stutters. Build with "
+                        "CMAKE_BUILD_TYPE RelWithDebInfo or Release (the presets and the launcher do).\n");
+    }
+    port_play_process();
+    port_play_thread(); /* (the game's thread) */
     port_gs_find_vulkan_layers(); /* (before any thread: it sets the Vulkan loader's variables) */
     if (port_options.stats) {
         atexit(print_stats); /* (a run's own end prints them before exit: port_print_stats) */

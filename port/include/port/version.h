@@ -9,6 +9,10 @@ extern "C" {
 #endif
 
 extern const char port_version[];
+/* 1 when the port's code was compiled with the compiler's optimizations (-O1 and up), 0 when not (a Debug build, an
+   IDE's default): such a build runs several times slower and stutters (a player's on Windows, 2026-11-23). The log's
+   first line and the profiler (Shift+P) say so. */
+extern const int port_build_optimized;
 
 #ifdef __cplusplus
 }

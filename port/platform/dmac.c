@@ -44,6 +44,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/play_priority.h"
 #include "port/thread_name.h"
 #include "port/profile.h"
 #include "port/savestate.h"
@@ -519,6 +520,7 @@ static void *dmac_thread(void *unused)
 
     (void)unused;
     port_name_thread("kf4-dma");
+    port_play_thread();
     for (;;) {
         Work work;
 

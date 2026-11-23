@@ -24,6 +24,7 @@
 extern "C" {
 #include "port/platform.h"
 #include "port/profile.h"
+#include "port/version.h"
 #include "port/zones.h"
 }
 
@@ -341,6 +342,9 @@ void draw_screen() {
     read_shown();
     double target = target_per_second();
     float latest = state.shown_count ? state.shown_history[(state.shown_next - 1 + SHOWN_HISTORY) % SHOWN_HISTORY] : 0;
+    if (!port_build_optimized) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1), "This build is not optimized: it runs several times slower");
+    }
     ImGui::Text("Pictures shown: %.0f a second of %.0f", double(latest), target);
     float ordered[SHOWN_HISTORY];
     for (int i = 0; i < state.shown_count; i++) {

@@ -50,6 +50,7 @@
 #include "pcr_shaders.h"
 #include "pcr_sync2.h"
 #include "port/gs_capture_format.h"
+#include "port/play_priority.h"
 #include "port/thread_name.h"
 #include "port/zone_scope.hpp"
 #include "device.hpp"
@@ -2434,6 +2435,7 @@ private:
     void run() {
         Util::register_thread_index(1); // (Granite's command pools: this thread's)
         port_name_thread("kf4-pc-pump");
+        port_play_thread();
         times_ = std::make_unique<pcr::GpuTimes>(device_);
         canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
         canvas_->watch_hangs(hang_notes_, "kf4-pc-pump");
@@ -3259,6 +3261,7 @@ private:
         Util::register_thread_index(0); // (Granite's command pools: this thread's)
         intake_.attach(*device_, hang_notes_);
         port_name_thread("kf4-pc");
+        port_play_thread();
         double idle_from = port_wall_seconds();
         while (std::optional<Message> message = inbox_.take()) {
             const double taken = port_wall_seconds();

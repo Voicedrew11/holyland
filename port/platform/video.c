@@ -35,6 +35,7 @@
 #include "port/host.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/play_priority.h"
 #include "port/thread_name.h"
 #include "port/present_vk.h"
 #include "port/refresh_clock.h"
@@ -1303,6 +1304,7 @@ static void *between_main(void *unused) {
 #endif
     (void)unused;
     port_name_thread("kf4-between");
+    port_play_thread();
     while (!__atomic_load_n(&between_stop, __ATOMIC_ACQUIRE)) {
         if (between_on() && thread_shows()) {
             show_until(port_wall_seconds() + 0.01, 1);

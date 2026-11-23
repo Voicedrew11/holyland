@@ -274,7 +274,7 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 # GS libraries (kf4_gs, built into tests without the port) add to them as well; with them each thread's note for the
 # crash report (port/include/port/crash_note.h), which the GS libraries write too
 add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c port/platform/crash_note.c
-            port/platform/thread_name.c)
+            port/platform/thread_name.c port/platform/play_priority.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
 # the frame profiler's frames, worked out from the zones' rings (port/include/port/zone_record.hpp) on a thread of
