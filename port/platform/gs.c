@@ -12,12 +12,14 @@
    the same, so VIF1 and VU1 run, and then dropped. What the game does never depends on it: the
    picture is all the GS gives back, apart from the textures sceGsExecStoreImage reads, which the
    game only sends to the GS again. */
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gsn.h" /* (GSN_GLYPHS_*: the plain constants only) */
 #include "port/controls.h"
+#include "port/hint_keys.h"
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
@@ -51,6 +53,10 @@ static void first_key_of(int action, char *out, size_t size) {
     }
 }
 
+/* Each face button's key's width in U (GsnGlyphs' order), for the hints drawn in parts: 1 but for the keyboard's
+   (written by the main thread, read by the game's) */
+static _Atomic float face_widths_u[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
 /* The buttons' style and the keys bound to the face buttons, to the renderer (main thread) */
 static void send_glyphs(int glyphs) {
     static const int faces[4] = {ACTION_CROSS, ACTION_CIRCLE, ACTION_SQUARE, ACTION_TRIANGLE};
@@ -58,6 +64,7 @@ static void send_glyphs(int glyphs) {
 
     for (int i = 0; i < 4; i++) {
         first_key_of(faces[i], asked.keys[i], sizeof(asked.keys[i]));
+        atomic_store(&face_widths_u[i], glyphs == GSN_GLYPHS_KEYBOARD ? gsr_key_width_u(asked.keys[i]) : 1.0f);
     }
     gsr_set_glyphs(&asked);
 }
@@ -952,6 +959,31 @@ void port_gs_set_glyphs(int glyphs) {
     if (have_pc) {
         send_glyphs(glyphs);
     }
+#endif
+}
+
+int port_hint_parts(float x0, float x1, float u0, float u1, float v0, float v1, PortHintPart parts[PORT_HINT_PARTS]) {
+#ifdef KF4_HAVE_PARALLEL_GS
+    _Static_assert(PORT_HINT_PARTS == GSN_HINT_PARTS, "a hint's parts");
+    const GsnHintSprite sprite = {x0, x1, u0, u1, v0, v1};
+    float widths_u[4];
+    GsnHintPart out[GSN_HINT_PARTS];
+    int count;
+
+    if (!have_pc) {
+        return 0;
+    }
+    for (int i = 0; i < 4; i++) {
+        widths_u[i] = atomic_load(&face_widths_u[i]);
+    }
+    count = gsr_hint_parts(&sprite, widths_u, out);
+    for (int i = 0; i < count; i++) {
+        parts[i] = (PortHintPart){out[i].x0, out[i].x1, out[i].u0, out[i].u1, out[i].v0, out[i].v1};
+    }
+    return count;
+#else
+    (void)x0, (void)x1, (void)u0, (void)u1, (void)v0, (void)v1, (void)parts;
+    return 0;
 #endif
 }
 

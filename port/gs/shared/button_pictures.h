@@ -8,8 +8,9 @@
 //   measured on the disc (bars, a ring, an outlined square or triangle) with sharp edges, in the symbol's colour;
 // - Xbox: the same body, the Xbox controller's letter for the button in the same place (A for cross, B circle,
 //   X square, Y triangle: SDL's south, east, west and north) in that letter's colour;
-// - Keyboard: a black key in its place, lit as a real one is (sides, a scooped top, a gloss, a shadow under it),
-//   the key (or mouse button) the button is bound to printed on it in Barlow (key_letters.h).
+// - Keyboard: the key or mouse button the button is bound to, as key_pictures.h draws it, in the button's place; on
+//   the hints' sheet a key wider than a letter's is also drawn at its width in a part of the sheet the game leaves
+//   bare, which the game's sprite shows instead (hint_parts).
 // The other buttons (the d-pad's, the shoulders') are left as the disc has them. A new style is a new entry in
 // button_pictures.cpp's table.
 //
@@ -24,6 +25,7 @@
 #include <string_view>
 #include <vector>
 
+#include "key_pictures.h"
 #include "pcr_textures.h"
 
 namespace pcr {
@@ -53,20 +55,24 @@ struct ButtonLooks {
     uint64_t hash() const;
 };
 
-// What the keyboard's button says for a key's name: capitals, five letters at most ("Escape" ESC, "Left Shift" SHIFT,
-// "Up" an arrow, "Mouse left" LMB, "F" itself)
-std::string key_label_text(std::string_view key_name);
-
-// How wide a key is on a real (US) keyboard, in U (a letter key's width): Tab 1.5, Return 2.25; Space 3, shortened
-float key_width_u(std::string_view key_name);
-
-// A key drawn on its own, as the keyboard's buttons draw it, key_width_u wide: RGBA8, straight alpha (255 opaque),
-// rows top down; a U is the button's cell (23 texels), scale finer texels to a texel
-struct KeyPicture {
-    uint32_t width = 0, height = 0;
-    std::vector<uint32_t> texels;
+// A hint the menus draw from the hints' sheet (button_pictures_data.h's "hints", 512 x 512): a sprite from x0 to x1
+// across the screen (any unit) showing the sheet's texels u0 to u1 across, v0 to v1 down
+struct HintSprite {
+    float x0, x1, u0, u1, v0, v1;
 };
-KeyPicture key_picture(std::string_view key_name, uint32_t scale);
+// One part of a hint drawn in parts: the sheet's texels u0 to u1 across, v0 to v1 down, drawn from x0 to x1
+struct HintPart {
+    float x0, x1, u0, u1, v0, v1;
+};
+constexpr size_t hint_part_count = 3;
+constexpr float hint_key_most_u = 3.0f;
+
+// How a hint whose button is a key wider than 1 U is drawn: its part before the button as it was, then the key at its
+// width, from where draw_buttons draws it in a part of the sheet the game leaves bare (a row under the hints' words),
+// then its words after it moved along by as much. A key is drawn there at most hint_key_most_u wide. widths_u: each face button's key's width (FaceButton's order; 1 for any style but the keyboard's).
+// Gives back how many parts it wrote, 0 when the sprite is drawn as it is (no face button in it, or a key 1 U wide).
+size_t hint_parts(const HintSprite &sprite, std::span<const float, face_button_count> widths_u,
+                  std::span<HintPart, hint_part_count> out);
 
 // Whether a decoded texture has the shape of a picture with buttons (one level of indices, a size one of them has)
 bool may_have_buttons(const DecodedTexture &texture);

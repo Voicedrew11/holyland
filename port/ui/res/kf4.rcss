@@ -445,6 +445,39 @@ key {
 	margin-right: 5dp;
 }
 
+/* A key or mouse button, as its picture (key_glyphs.hpp): a black key, as the game's menus draw it, its width a real
+   keyboard's (the image keeps its shape: only its height is given) */
+keycap {
+	display: inline-block;
+	vertical-align: middle;
+	margin-right: 3dp;
+}
+
+keycap img {
+	height: 32dp;
+}
+
+prompt keycap,
+legend keycap,
+#hint keycap {
+	position: relative;
+	top: -4dp; /* (centred on the words' capitals) */
+}
+
+#hint keycap,
+slot keycap,
+tab.end keycap {
+	margin-right: 0;
+}
+
+slot keycap {
+	margin: -6dp 0 -6dp 0; /* (its slot as tall as one with words: the key reaching over its padding) */
+}
+
+slot keycap img {
+	height: 28dp;
+}
+
 /* A controller's button, as its picture (pad_glyphs.hpp): Kenney's fonts, one for each family of controllers */
 pad {
 	display: inline-block;

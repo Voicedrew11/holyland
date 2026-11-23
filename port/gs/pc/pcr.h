@@ -102,6 +102,11 @@ void pcr_set_2d(int mode);
 void pcr_set_font(int font);
 /* The controller's buttons the menus show (GSN_GLYPHS_* and the keys, gsn.h), from the next vblank (any thread) */
 void pcr_set_glyphs(const GsnGlyphs *glyphs);
+/* How wide a key (port_controls_binding_label's name) is on a real keyboard, in U: 1 a letter key's (any thread) */
+float pcr_key_width_u(const char *key_name);
+/* A hint drawn in parts, its button shown as its key at the key's width (widths_u: each face button's, in GsnGlyphs' order):
+   how many parts it wrote, 0 when it is drawn as it is (any thread) */
+int pcr_hint_parts(const GsnHintSprite *sprite, const float widths_u[4], GsnHintPart parts[GSN_HINT_PARTS]);
 /* The picture's anti-aliasing, PORT_AA_* (port/antialias.h; pcr_antialias.h), from the next picture */
 void pcr_set_antialias(int method);
 /* The temporal anti-aliasing's history dropped at the next picture (any thread): a teleport, a state or quick load */

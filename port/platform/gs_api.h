@@ -119,6 +119,12 @@ static inline void gsr_set_font(int font) {
 static inline void gsr_set_glyphs(const GsnGlyphs *glyphs) {
     pcr_set_glyphs(glyphs);
 }
+static inline float gsr_key_width_u(const char *key_name) {
+    return pcr_key_width_u(key_name);
+}
+static inline int gsr_hint_parts(const GsnHintSprite *sprite, const float widths_u[4], GsnHintPart *parts) {
+    return pcr_hint_parts(sprite, widths_u, parts);
+}
 static inline void gsr_set_layer_z(int mode) {
     pcr_set_layer_z(mode);
 }

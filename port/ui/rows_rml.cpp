@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <optional>
 
+#include "key_glyphs.hpp"
+
 extern "C" {
 #include "port/controls.h"
 }
@@ -44,11 +46,16 @@ void slots_rml(std::string &out, const RowSource &rows, const MenuModel &model, 
         out += text == "-" ? "empty" : "";
         out += "\">";
         std::optional<PadButton> button;
+        bool key = false; // (a key or mouse button: its picture)
         if (!rows.listening(tab, row, slot)) {
-            button = pad_button_of_binding(port_controls_binding(rows.row(tab, row).action, slot));
+            int binding = port_controls_binding(rows.row(tab, row).action, slot);
+            button = pad_button_of_binding(binding);
+            key = BINDING_KIND(binding) == BINDING_KEY || BINDING_KIND(binding) == BINDING_MOUSE;
         }
         if (button) {
             out += pad_glyph_rml(family, *button);
+        } else if (key) {
+            out += key_glyph_rml(text);
         } else {
             rml_escaped(out, text);
         }

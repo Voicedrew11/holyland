@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <span>
 
+#include "key_glyphs.hpp"
 #include "rows_rml.hpp"
 
 #include "port/hands.h"
@@ -96,13 +97,14 @@ std::string hands_preview() {
            "</preview>";
 }
 
-// A key's name from its binding (the first slot), in its box
+// The key bound to an action (its first slot) as its picture; a dash in a box when none is
 std::string key_of(int action) {
     char text[32] = "";
     port_controls_binding_label(port_controls_binding(action, 0), text, sizeof(text));
-    std::string out = "<key>";
-    rml_escaped(out, text[0] != 0 ? text : "-");
-    return out + "</key>";
+    if (text[0] == 0) {
+        return "<key>-</key>";
+    }
+    return key_glyph_rml(text);
 }
 
 void line(std::string &out, const std::string &keys, const char *what) {
@@ -125,7 +127,7 @@ std::string controls_preview(const SetupFlow &flow, PadFamily family) {
              key_of(ACTION_LEFT_STICK_UP) + key_of(ACTION_LEFT_STICK_LEFT) + key_of(ACTION_LEFT_STICK_DOWN) +
                  key_of(ACTION_LEFT_STICK_RIGHT),
              "Move and Strafe");
-        line(out, "<key>Mouse</key>", "Look");
+        line(out, key_glyph_rml("Mouse"), "Look");
         line(out, key_of(ACTION_RUN), "Run (Hold)");
         line(out, key_of(ACTION_CROSS), "Interact");
     }
