@@ -3,7 +3,7 @@
 # (docs/port/LAUNCHER.md, "What a release holds"). Writes CONTENT/src:
 #
 #   - this checkout's tracked files that the game's build reads (not docs/, patches/, launcher/,
-#     packaging/, .github/);
+#     .github/, nor packaging/ but for packaging/shared/: the icons built into the game);
 #   - decomp/src/game and src/nonmatching with patches/ applied (the build then needs no git:
 #     KF4_DECOMP_PREPATCHED), and the decomp's libm and libc sources the build compiles;
 #   - paraLLEl-GS with only the parts of Granite the build uses (volk, the Vulkan headers), with the
@@ -35,6 +35,7 @@ copy_tracked() {
 echo "==> the port"
 copy_tracked "$ROOT" "$SRC" . ':!docs' ':!patches' ':!launcher' ':!packaging' ':!.github' ':!decomp' \
     ':!third_party/parallel-gs' ':!*.md'
+copy_tracked "$ROOT" "$SRC" packaging/shared
 cp "$ROOT/LICENSE" "$SRC/" 2>/dev/null || true
 
 echo "==> the decomp, patched"
