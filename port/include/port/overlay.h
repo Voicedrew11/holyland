@@ -36,6 +36,10 @@ int port_overlay_event(const void *sdl_event);
 /* 1 when the overlay draws something this vblank (open, a message, a test picture; not the frame-rate
    counter, which the presenters draw themselves: port_video_counter_draw) */
 int port_overlay_visible(void);
+/* 1 when what is drawn over the picture must be made for each picture on the game's thread: the player menu (RmlUi)
+   or a test picture due. Otherwise ImGui's draw lists made once a vblank serve every picture of it
+   (port_vk_overlay_keep). */
+int port_overlay_each_picture(void);
 /* (port/platform/video.c) draws it over the picture, before the window is presented; the picture is
    at x, y, width x height in the window's pixels. On the Vulkan presenter it only makes the draw
    lists, and port_overlay_draw_data hands them out:
@@ -82,6 +86,9 @@ static inline int port_overlay_holds_input(void) {
     return 0;
 }
 static inline int port_overlay_visible(void) {
+    return 0;
+}
+static inline int port_overlay_each_picture(void) {
     return 0;
 }
 static inline int port_overlay_paused(void) {

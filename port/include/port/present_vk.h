@@ -24,6 +24,11 @@ int port_vk_open(void *sdl_window);
    With overlay (the game's thread), presented with the overlay over it; without, as it is (the pictures
    between vblanks, from a thread of their own, port/platform/video.c). One thread at a time. */
 void port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t height, int image, uint64_t tag, int overlay);
+/* (the game's thread, under video.c's present lock, once a vblank while the pictures' thread shows every picture) The
+   overlay's draw lists made now and kept: the pictures' thread's presents (overlay 0) draw the kept ones over each
+   picture while the overlay is visible, so that the minimap or the extended stats on screen do not take the pictures
+   off their thread. Nothing visible: none kept. */
+void port_vk_overlay_keep(void);
 /* Waits for the screen's refresh (FIFO) or not (immediate, else mailbox), from the next picture */
 void port_vk_set_vsync(int on);
 /* (port/overlay/overlay.cpp) Dear ImGui's Vulkan backend on the presenter's render pass: 1 when up */
