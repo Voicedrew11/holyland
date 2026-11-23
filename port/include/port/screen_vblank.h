@@ -7,7 +7,9 @@
    record of the display's vblanks, where a compositor's or a browser's pacing takes them from:
    - Linux: the kernel's (DRM, libdrm: drmWaitVBlank for no vblank more answers at once with the last one's
      time), on the CRTC whose mode is the window's screen's (its size and rate, else its rate alone);
-   - Windows: the desktop compositor's (DwmGetCompositionTimingInfo), which keeps to the main screen's;
+   - Windows: the kernel's (D3DKMTWaitForVerticalBlankEvent, waited for by a thread of its own), on the screen whose
+     current mode is the window's screen's (its size and rate, else its rate alone); else the desktop compositor's
+     (DwmGetCompositionTimingInfo), which keeps to the main screen's and goes stale in exclusive fullscreen;
    - elsewhere, or without libdrm: none.
 
    port/platform/screen_vblank.c. Any thread. */
