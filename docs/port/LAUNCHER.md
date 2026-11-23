@@ -145,7 +145,7 @@ The player is told, and can let Holyland update itself in one step, as OpenCE's 
 `port/linux/src/updater.c`): download, check, put in place, start again.
 
 **Finding a release.** `launcher/update_check.cpp` asks `GET https://api.github.com/repos/Voicedrew11/holyland/releases/latest`
-(drafts and pre-releases are never "latest") on its own thread, at most once an hour, 10 s at most; the answer goes
+(drafts and pre-releases are never "latest") on its own thread, once each time the launcher starts, 10 s at most; the answer goes
 to `update.json`. No network: the cached answer stands. A URL that is not `https://github.com/` is refused. The rules
 are shared C (`port/platform/update_notice.c`, `tests/update_notice_test.c`): `v` dropped, dotted numbers compared,
 suffixes ignored (Verdite's `UpdateCheck.IsNewer`); a developer's build (no version) is never told.

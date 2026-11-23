@@ -5,7 +5,7 @@
 
    update.json, in the data folder, is the launcher's answer cache. Only the launcher writes it:
      {"checked": 1795000000, "tag": "v0.2.0", "url": "https://github.com/.../releases/tag/v0.2.0"}
-   "checked" is when GitHub was last asked (seconds since 1970). An empty tag means none was found.
+   "checked" is when GitHub last answered (seconds since 1970). An empty tag means none was found.
 
    launcher.json, in the data folder, holds the player's choices:
      {"disc": "/path/to/kf4.iso", "update_check": true, "skipped": "v0.2.0", "setup_done": true}
@@ -26,7 +26,6 @@ extern "C" {
 #endif
 
 #define UPDATE_REPOSITORY "Voicedrew11/holyland"
-#define UPDATE_CHECK_INTERVAL_S 3600 /* at most once an hour, as Verdite's launcher */
 
 typedef struct {
     int64_t checked_s; /* 0: never */
@@ -36,8 +35,8 @@ typedef struct {
 
 typedef enum {
     UPDATE_CHECK_OFF,   /* KF4_UPDATE_CHECK=0, or the player turned it off */
-    UPDATE_CHECK_ON,    /* at most once an hour */
-    UPDATE_CHECK_FORCE, /* KF4_UPDATE_CHECK=force: now, whatever the cache says */
+    UPDATE_CHECK_ON,    /* once each time the launcher starts */
+    UPDATE_CHECK_FORCE, /* KF4_UPDATE_CHECK=force: each start, even when the player turned it off */
 } UpdateCheckMode;
 
 /* update.json's text into `out`. Returns 0 (and an empty `out`) when it is missing or broken. */
@@ -52,9 +51,6 @@ int update_release_parse(const char *github_json, int64_t now_s, UpdateRelease *
 
 /* KF4_UPDATE_CHECK's value (NULL when unset) and the player's "Check for updates at launch" */
 UpdateCheckMode update_check_mode(const char *env_value, int player_wants_checks);
-
-/* whether to ask GitHub now */
-int update_check_due(UpdateCheckMode mode, const UpdateRelease *cache, int64_t now_s);
 
 /* whether to tell the player about `release`: newer than the running version and not the one they
    skipped. A build with no version (a developer's, "") is never told. */
