@@ -123,6 +123,8 @@ set(CMAKE_CXX_COMPILER_RANLIB "${_tools}/llvm/bin/llvm-ranlib" CACHE FILEPATH ""
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld -static-libstdc++ -static-libgcc -Wl,-rpath,\\$ORIGIN") # (\$: past the shell)
 set(CMAKE_SKIP_BUILD_RPATH ON)
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld -static-libstdc++ -static-libgcc")
+# the synchronization2 layer (cmake/vk_sync2_layer.cmake) is a MODULE, which reads its own flags
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld -static-libstdc++ -static-libgcc")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
