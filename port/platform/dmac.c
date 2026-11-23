@@ -44,6 +44,7 @@
 
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/thread_name.h"
 #include "port/profile.h"
 #include "port/savestate.h"
 #include "port/zones.h"

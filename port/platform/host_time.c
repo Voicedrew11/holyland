@@ -5,9 +5,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <time.h>
 #endif
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
 
 #include "port/platform.h"
 
@@ -107,12 +104,3 @@ void port_sleep(double seconds) {
     nanosleep(&delay, NULL);
 }
 #endif
-
-void port_name_thread(const char *name) {
-#ifdef __linux__
-    /* (it fails only for a bad pointer, and a name is a nicety: its result is let go) */
-    (void)prctl(PR_SET_NAME, (unsigned long)name, 0, 0, 0);
-#else
-    (void)name;
-#endif
-}

@@ -9,17 +9,15 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#ifdef __linux__
-#include <pthread.h>
-#endif
 #ifdef _WIN32
-#include <windows.h>
+#include <windows.h> // (QueryPerformanceCounter: the host clock calibrated against)
 #endif
 
 #include "device.hpp"
 
 extern "C" {
 #include "port/profile.h"
+#include "port/thread_name.h"
 #include "port/zones.h"
 }
 
@@ -216,11 +214,8 @@ private:
     }
 
     static std::string thread_name() {
-        char name[32] = "?";
-#ifdef __linux__
-        pthread_getname_np(pthread_self(), name, sizeof(name));
-#endif
-        return name;
+        const char *name = port_thread_name();
+        return name[0] != '\0' ? name : "?";
     }
 
     ZoneId kind_id(GpuWork work) {

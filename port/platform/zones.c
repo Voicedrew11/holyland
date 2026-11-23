@@ -10,14 +10,12 @@
 #define _GNU_SOURCE
 #include <pthread.h>
 #endif
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "port/profile.h"
+#include "port/thread_name.h"
 #include "port/zones.h"
 
 #define RING_BITS 20
@@ -142,14 +140,12 @@ ZoneLane *port_zone_lane_make(const char *name, int gpu) {
 
 /* The calling thread's name, for its lane */
 static void thread_name(char *name, size_t size) {
-#ifdef __linux__
-    char comm[17] = {0};
+    const char *given = port_thread_name();
 
-    if (prctl(PR_GET_NAME, (unsigned long)comm, 0, 0, 0) == 0 && comm[0] != '\0') {
-        snprintf(name, size, "%s", comm);
+    if (given[0] != '\0') {
+        snprintf(name, size, "%s", given);
         return;
     }
-#endif
 #ifdef _WIN32
     snprintf(name, size, "thread %lu", (unsigned long)GetCurrentThreadId());
 #else

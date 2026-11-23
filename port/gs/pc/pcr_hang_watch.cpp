@@ -9,9 +9,7 @@
 #include <mutex>
 #include <thread>
 
-#ifdef __linux__
-#include <pthread.h>
-#endif
+#include "port/thread_name.h"
 
 namespace pcr {
 
@@ -55,9 +53,7 @@ public:
 private:
     // (the watch's thread, "kf4-pc-watch")
     void run() {
-#ifdef __linux__
-        pthread_setname_np(pthread_self(), "kf4-pc-watch");
-#endif
+        port_name_thread("kf4-pc-watch");
         const char *watched = nullptr;
         int looks = 0;
         std::unique_lock<std::mutex> hold(lock_);

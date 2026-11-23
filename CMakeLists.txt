@@ -273,7 +273,8 @@ target_link_libraries(kf4_port PUBLIC ico_audio)
 # the profiler's counters (port/include/port/profile.h, Shift+P): a library of their own, so that the
 # GS libraries (kf4_gs, built into tests without the port) add to them as well; with them each thread's note for the
 # crash report (port/include/port/crash_note.h), which the GS libraries write too
-add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c port/platform/crash_note.c)
+add_library(kf4_profile STATIC port/platform/profile.c port/platform/zones.c port/platform/crash_note.c
+            port/platform/thread_name.c)
 target_include_directories(kf4_profile PUBLIC port/include)
 target_link_libraries(kf4_port PUBLIC kf4_profile)
 # the frame profiler's frames, worked out from the zones' rings (port/include/port/zone_record.hpp) on a thread of
@@ -1130,7 +1131,7 @@ add_executable(pcr_hang_watch_test tests/pcr_hang_watch_test.cpp port/gs/pc/pcr_
 target_include_directories(pcr_hang_watch_test PRIVATE port/gs/pc)
 set_target_properties(pcr_hang_watch_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
-target_link_libraries(pcr_hang_watch_test PRIVATE Threads::Threads)
+target_link_libraries(pcr_hang_watch_test PRIVATE Threads::Threads kf4_profile)
 if(NOT MSVC)
     target_compile_options(pcr_hang_watch_test PRIVATE -Wall -Wextra -Wshadow)
 endif()

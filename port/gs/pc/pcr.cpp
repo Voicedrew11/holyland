@@ -32,9 +32,6 @@
 #include <thread>
 #include <variant>
 #include <vector>
-#ifdef __linux__
-#include <pthread.h>
-#endif
 
 #include "context.hpp"
 #include "pcr_antialias.h"
@@ -53,6 +50,7 @@
 #include "pcr_shaders.h"
 #include "pcr_sync2.h"
 #include "port/gs_capture_format.h"
+#include "port/thread_name.h"
 #include "port/zone_scope.hpp"
 #include "device.hpp"
 #include "thread_id.hpp"
@@ -2435,9 +2433,7 @@ private:
     // ("kf4-pc-pump") The messages, in the order sent, until stop
     void run() {
         Util::register_thread_index(1); // (Granite's command pools: this thread's)
-#ifdef __linux__
-        pthread_setname_np(pthread_self(), "kf4-pc-pump");
-#endif
+        port_name_thread("kf4-pc-pump");
         times_ = std::make_unique<pcr::GpuTimes>(device_);
         canvas_ = std::make_unique<pcr::Canvas>(device_, *times_);
         canvas_->watch_hangs(hang_notes_, "kf4-pc-pump");
@@ -2701,9 +2697,7 @@ public:
 
 private:
     void run() {
-#ifdef __linux__
-        pthread_setname_np(pthread_self(), "kf4-pc-watch");
-#endif
+        port_name_thread("kf4-pc-watch");
         std::unique_lock<std::mutex> hold(lock_);
         for (;;) {
             wake_.wait(hold, [&] { return stopping_ || !pending_.empty(); });
@@ -3264,9 +3258,7 @@ private:
     void run() {
         Util::register_thread_index(0); // (Granite's command pools: this thread's)
         intake_.attach(*device_, hang_notes_);
-#ifdef __linux__
-        pthread_setname_np(pthread_self(), "kf4-pc");
-#endif
+        port_name_thread("kf4-pc");
         double idle_from = port_wall_seconds();
         while (std::optional<Message> message = inbox_.take()) {
             const double taken = port_wall_seconds();

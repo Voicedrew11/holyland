@@ -5,6 +5,7 @@
 //   zones_test
 #include <atomic>
 #include <cstdio>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -12,6 +13,7 @@
 
 extern "C" {
 #include "port/profile.h"
+#include "port/thread_name.h"
 }
 
 namespace {
@@ -203,6 +205,35 @@ void off_writes_nothing() {
     check("off: no lane made", port_zone_lanes() == before);
 }
 
+// A thread's lane is named by the name it gave itself, on every system (Windows had "thread 22004", 2026-11-23)
+void lane_named_by_its_thread() {
+    ZoneId z = port_zone_id("test named", ZONE_WORK);
+    port_zones_want(1);
+    std::string given;
+    std::thread t([&] {
+        port_name_thread("kf4-test-lane");
+        given = port_thread_name();
+        if (port_zone_begin(z)) {
+            port_zone_end(z);
+        }
+    });
+    t.join();
+    port_zones_want(-1);
+    check("the name given is the thread's", given == "kf4-test-lane");
+    bool lane_named = false;
+    for (int i = 0; i < port_zone_lanes(); i++) {
+        lane_named = lane_named || std::string(port_zone_lane_name(i)) == "kf4-test-lane";
+    }
+    check("its lane has its name", lane_named);
+    std::string cut;
+    std::thread longer([&] {
+        port_name_thread("kf4-a-name-longer-than-fifteen");
+        cut = port_thread_name();
+    });
+    longer.join();
+    check("a long name kept from its start", cut.rfind("kf4-a-name-long", 0) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -211,6 +242,7 @@ int main() {
     nesting_and_unmatched();
     gpu_lane_waits();
     ring_read_while_written();
+    lane_named_by_its_thread();
     std::printf("%d of %d failed\n", failed, checked);
     return failed ? 1 : 0;
 }

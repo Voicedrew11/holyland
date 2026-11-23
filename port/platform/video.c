@@ -35,6 +35,7 @@
 #include "port/host.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/thread_name.h"
 #include "port/present_vk.h"
 #include "port/refresh_clock.h"
 #include "port/screen_vblank.h"

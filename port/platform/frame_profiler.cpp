@@ -11,11 +11,9 @@
 #include <string>
 #include <thread>
 #include <vector>
-#ifdef __linux__
-#include <pthread.h>
-#endif
 
 #include "port/zone_record.hpp"
+#include "port/thread_name.h"
 #include "port/zone_scope.hpp"
 
 extern "C" {
@@ -90,9 +88,7 @@ public:
 private:
     // ("kf4-profiler") Four times a second while wanted: the rings read, done frames written and reported
     void run() {
-#ifdef __linux__
-        pthread_setname_np(pthread_self(), "kf4-profiler");
-#endif
+        port_name_thread("kf4-profiler");
         std::unique_lock<std::mutex> hold(control_);
         while (!stopping_) {
             wake_.wait_for(hold, TAKE_EVERY, [&] { return stopping_; });

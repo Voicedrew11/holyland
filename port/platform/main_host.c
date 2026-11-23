@@ -228,6 +228,7 @@
 #include "port/debug.h"
 #include "port/host.h"
 #include "port/platform.h"
+#include "port/thread_name.h"
 #include "port/frame_profiler.h"
 #include "port/profile_run.h"
 #include "port/settings.h"
@@ -1130,6 +1131,7 @@ static const char *read_env(const char *name) {
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+    port_name_thread("kf4"); /* (the game's thread: Linux names it after the program, Windows not at all) */
     parse_options(argc, argv);
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_report);

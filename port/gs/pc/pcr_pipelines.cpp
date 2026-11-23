@@ -26,6 +26,7 @@
 extern "C" {
 #include "port/crash_note.h"
 #include "port/profile.h"
+#include "port/thread_name.h"
 #include "port/zones.h"
 }
 
@@ -421,6 +422,7 @@ bool making_ahead() {
 // tested hardest (a player's crash in AMD's Windows driver at 76% of "Preparing shaders", 2026-11-19), for no gain:
 // the next tick after they are done writes them.
 void saver() {
+    port_name_thread("kf4-pc-save");
     std::unique_lock<std::mutex> hold(store.lock);
     while (!store.stopping) {
         store.wake.wait_for(hold, SAVE_EVERY);
@@ -616,6 +618,7 @@ void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute
     Device *device = warm.device;
     for (unsigned t = 0; t < threads; t++) {
         store.ahead.emplace_back([=] {
+            port_name_thread("kf4-pc-ahead");
             on_warm_thread = true;
             // (Granite's compile log names a thread by its index: these threads request no command buffer, the only
             // other use of it, so the canvas thread's index stands in, as an unregistered thread's would)
