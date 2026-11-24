@@ -41,6 +41,7 @@
 #include <windows.h>
 #else
 #include <link.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #endif
 
@@ -255,6 +256,7 @@ int port_state_exists(int slot) {
 
 static const char *unavailable(void);
 static uint64_t build_id(void);
+static void finish_write(int until_written);
 
 const char *port_state_file_usable(const char *path, long long *time) {
     StateHeader header;
@@ -264,6 +266,7 @@ const char *port_state_file_usable(const char *path, long long *time) {
     if (why != NULL) {
         return why;
     }
+    finish_write(1); /* (a quick save's state may be being written) */
     if (!read_header(path, &header)) {
         return "there is no such state";
     }
@@ -515,14 +518,9 @@ static void load_on_controller(void *arg) {
 /* LZ4's block format: port/platform/lz4_block.c */
 
 /* ---- The file ----------------------------------------------------------------------------------- */
-static int write_state(const char *path, const StateBuffer *buffer) {
-    char temp[1100];
+/* The header of a state taken now: all but the body's hash, which the writer works out */
+static StateHeader header_now(size_t body_size) {
     StateHeader header;
-    FILE *file;
-    uint8_t *packed;
-    uint32_t *table;
-    size_t at;
-    int ok = 1;
 
     memset(&header, 0, sizeof(header));
     memcpy(header.magic, STATE_MAGIC, 8);
@@ -532,18 +530,28 @@ static int write_state(const char *path, const StateBuffer *buffer) {
     header.time = (int64_t)time(NULL);
     header.vblank = port_vblank_count();
     header.ee_cycle = port_ee_cycles();
-    header.body_size = buffer->size;
-    header.body_hash = hash_bytes(0xCBF29CE484222325ull, buffer->data, buffer->size);
+    header.body_size = body_size;
+    return header;
+}
 
+/* (any thread: the state writer's) hashes, packs and writes the state taken; 1 when written */
+static int write_state(const char *path, const StateBuffer *buffer, StateHeader header) {
+    char temp[1100];
+    FILE *file;
+    uint8_t *packed;
+    uint32_t *table;
+    size_t at;
+    int ok = 1;
+
+    header.body_hash = hash_bytes(0xCBF29CE484222325ull, buffer->data, buffer->size);
     snprintf(temp, sizeof(temp), "%s.part", path);
-    file = fopen(temp, "wb");
-    if (file == NULL) {
-        return 0;
-    }
     packed = malloc(BLOCK_SIZE + BLOCK_SIZE / 255 + 16);
     table = malloc(sizeof(uint32_t) << LZ_HASH_BITS);
-    if (packed == NULL || table == NULL) {
-        PORT_FATAL("out of memory for a save state");
+    file = packed != NULL && table != NULL ? fopen(temp, "wb") : NULL;
+    if (file == NULL) {
+        free(packed);
+        free(table);
+        return 0;
     }
     ok = fwrite(&header, sizeof(header), 1, file) == 1;
     for (at = 0; ok && at < buffer->size; at += BLOCK_SIZE) {
@@ -631,6 +639,126 @@ static void describe(char *out, size_t size, int slot, const char *path) {
     }
 }
 
+/* ---- Writing in the background --------------------------------------------------------------------
+   A save takes the state in memory at the safe point (the game waits for that alone), then a thread of
+   its own ("state writer") hashes, packs and writes it, so the game goes on meanwhile. One write at a
+   time: the next save, a load, a look at a file (port_state_file_usable) and the program's exit first
+   wait for the one under way. These run on the EE's thread (its fibers and the host's take turns), but
+   the exit may come from another (the window closed): whoever takes `writing` (an atomic exchange) ends
+   the write, so it is ended once. The writer touches only its Write until it sets `done`. */
+typedef struct {
+    char path[1024];
+    char name[1100];
+    int threaded;      /* written by the writer thread (else here: no thread could be started) */
+    StateBuffer buffer;
+    StateHeader header;
+    uint64_t spu2_frame;
+    double taken_ms;   /* how long the game waited: the state taken in memory */
+    double written_ms; /* the writer's: how long it took */
+    int ok;            /* the writer's: 1 when written */
+    int done;          /* set by the writer when it is through (atomic) */
+} Write;
+
+static Write *writing; /* the write under way, or NULL */
+/* A written state's memory, kept for the next save: memory fresh from the system is handed over a page
+   at a time as it is first written, which made the game wait about 50 ms a save for 77 MB */
+static StateBuffer spare;
+
+static void keep_spare(StateBuffer *done) {
+    if (spare.data == NULL) {
+        spare.data = done->data;
+        spare.capacity = done->capacity;
+    } else {
+        free(done->data);
+    }
+    done->data = NULL;
+}
+#ifdef _WIN32
+static HANDLE writer;
+#else
+static pthread_t writer;
+#endif
+
+static void write_and_mark(Write *w) {
+    double start = port_wall_seconds();
+
+    w->ok = write_state(w->path, &w->buffer, w->header);
+    w->written_ms = (port_wall_seconds() - start) * 1000.0;
+    __atomic_store_n(&w->done, 1, __ATOMIC_RELEASE);
+}
+
+#ifdef _WIN32
+static DWORD WINAPI writer_main(LPVOID arg) {
+    write_and_mark(arg);
+    return 0;
+}
+#else
+static void *writer_main(void *arg) {
+    write_and_mark(arg);
+    return NULL;
+}
+#endif
+
+/* Ends the write under way, if any, and says how it went. until_written 0: only when it is through
+   already (each vblank); else it is waited for. */
+static void finish_write(int until_written) {
+    Write *w = __atomic_load_n(&writing, __ATOMIC_ACQUIRE);
+
+    if (w == NULL || (!until_written && !__atomic_load_n(&w->done, __ATOMIC_ACQUIRE))) {
+        return;
+    }
+    if (__atomic_exchange_n(&writing, NULL, __ATOMIC_ACQ_REL) != w) {
+        return; /* (another thread is ending it) */
+    }
+    if (w->threaded) {
+#ifdef _WIN32
+        WaitForSingleObject(writer, INFINITE);
+        CloseHandle(writer);
+#else
+        pthread_join(writer, NULL);
+#endif
+    }
+    if (!w->ok) {
+        set_message("cannot write the state to %s", w->path);
+    } else {
+        port_event("state saved to %s", w->name);
+        set_message("saved to %s at vblank %llu (%.1f MB, SPU2 frame %llu; the game waited %.0f ms, written in %.0f ms)",
+                    w->name, (unsigned long long)w->header.vblank, (double)w->buffer.size / 1048576.0,
+                    (unsigned long long)w->spu2_frame, w->taken_ms, w->written_ms);
+    }
+    keep_spare(&w->buffer);
+    free(w);
+}
+
+static void finish_at_exit(void) {
+    finish_write(1);
+}
+
+/* Hands a state taken to the writer (or writes it here, if no thread can be started) */
+static void start_write(Write *w) {
+    static int exit_hooked;
+    int started;
+
+    if (!exit_hooked) {
+        exit_hooked = 1;
+        atexit(finish_at_exit);
+    }
+#ifdef _WIN32
+    writer = CreateThread(NULL, 0, writer_main, w, 0, NULL);
+    started = writer != NULL;
+#else
+    started = pthread_create(&writer, NULL, writer_main, w) == 0;
+#endif
+    w->threaded = started;
+    if (!started) {
+        write_and_mark(w);
+    }
+    __atomic_store_n(&writing, w, __ATOMIC_RELEASE);
+    if (!started) {
+        finish_write(1);
+    }
+}
+
 /* 1 when done (or given up), 0 when it has to wait for a later vblank */
 static int save(int slot, const char *file) {
     char path[1024];
@@ -638,12 +766,14 @@ static int save(int slot, const char *file) {
     const char *why = unavailable();
     double start = port_wall_seconds();
     Job job;
+    Write *w;
 
     describe(name, sizeof(name), slot, file);
     if (why != NULL) {
         set_message("%s", why);
         return 1;
     }
+    finish_write(1); /* (one write at a time: the memory of two states is not held) */
     why = port_sif_state_busy();
     if (why == NULL) {
         why = port_mpeg_state_busy();
@@ -654,8 +784,13 @@ static int save(int slot, const char *file) {
     }
     memset(&job, 0, sizeof(job));
     job.buffer.io.bytes = buffer_bytes;
+    job.buffer.data = spare.data;
+    job.buffer.capacity = spare.capacity;
+    spare.data = NULL;
+    spare.capacity = 0;
     port_dmac_call(save_on_controller, &job);
     if (job.busy != NULL) {
+        keep_spare(&job.buffer);
         set_message("waiting to save to %s: %s", name, job.busy);
         return 0;
     }
@@ -664,15 +799,19 @@ static int save(int slot, const char *file) {
     } else {
         slot_path(path, sizeof(path), slot, 1);
     }
-    if (!write_state(path, &job.buffer)) {
-        set_message("cannot write the state to %s", path);
-    } else {
-        port_event("state saved to %s", name);
-        set_message("saved to %s at vblank %llu (%.1f MB, SPU2 frame %llu, %.0f ms)", name,
-                    (unsigned long long)port_vblank_count(), (double)job.buffer.size / 1048576.0,
-                    (unsigned long long)job.spu2_frame, (port_wall_seconds() - start) * 1000.0);
+    w = calloc(1, sizeof(*w));
+    if (w == NULL) {
+        set_message("cannot save to %s: out of memory", name);
+        keep_spare(&job.buffer);
+        return 1;
     }
-    free(job.buffer.data);
+    snprintf(w->path, sizeof(w->path), "%s", path);
+    snprintf(w->name, sizeof(w->name), "%s", name);
+    w->buffer = job.buffer;
+    w->header = header_now(job.buffer.size);
+    w->spu2_frame = job.spu2_frame;
+    w->taken_ms = (port_wall_seconds() - start) * 1000.0;
+    start_write(w);
     return 1;
 }
 
@@ -690,6 +829,7 @@ static int load(int slot, const char *file) {
         set_message("%s", why);
         return 0;
     }
+    finish_write(1); /* (it may be this very file) */
     if (file != NULL) {
         snprintf(path, sizeof(path), "%s", file);
     } else {
@@ -720,6 +860,7 @@ static int load(int slot, const char *file) {
 void port_state_host(void) {
     int kind;
 
+    finish_write(0);
     if (!started) {
         started = 1;
         if (load_pending && !load_at_vblank) {
