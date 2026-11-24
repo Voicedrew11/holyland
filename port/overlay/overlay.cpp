@@ -18,7 +18,6 @@
 // (ui-display:down.down.confirm), written as overlay_ui-<tab>[:keys].png.
 #include <SDL3/SDL.h>
 
-#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -36,7 +35,6 @@
 #include "imgui.h"
 
 #include "automap_view.h" // the automap mod
-#include "profiler.h"     // Shift+P
 #include "update_badge.h" // a new release, found by the launcher
 
 extern "C" {
@@ -75,8 +73,6 @@ SDL_Renderer *renderer; // NULL on the Vulkan presenter
 bool ready;
 bool drawn; // the Vulkan presenter: this vblank's draw lists are ImGui's draw data
 bool overlay_open;
-// ImGui's WantTextInput at the last frame drawn (the drawing thread), for the game's thread
-std::atomic<bool> imgui_typing{false};
 bool show_settings = true;
 bool show_about;
 int page; // an index in `pages`
@@ -803,7 +799,7 @@ void parse_shots(const char *text) {
             shot.page = PAGE_COUNT + 2;
         if (name == "menu") // the game's menu with the extended stats mod's lines: the overlay closed, one a vblank
             shot.page = PAGE_COUNT + 3;
-        if (name == "profiler") // the profiler's panel (Shift+P), the overlay closed: one a vblank
+        if (name == "profiler") // the profiler (Shift+P, the player menu's RmlUi), the overlay closed: one a vblank
             shot.page = PAGE_COUNT + 4;
         if (shot.page < 0) {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no page called %s (display, graphics, controls, "
@@ -834,7 +830,7 @@ void shot_open() {
             std::fprintf(stderr, "[overlay] KF4_OVERLAY_SHOT: no player menu tab %s\n", shot.ui_tab.c_str());
     }
     automap_view_open_for_shot(shot.page == PAGE_COUNT + 1);
-    profiler_show_for_shot(shot.page == PAGE_COUNT + 4);
+    port_player_ui_profiler_show(shot.page == PAGE_COUNT + 4);
     if (shot.page >= PAGE_COUNT) {
         overlay_open = false;
     } else {
@@ -900,11 +896,6 @@ void shot_take() {
 
 bool shot_pending() {
     return shot_next < shots.size() && port_vblank_count() >= shots[shot_next].vblank;
-}
-
-bool is_mouse_event(Uint32 type) {
-    return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_BUTTON_DOWN || type == SDL_EVENT_MOUSE_BUTTON_UP ||
-           type == SDL_EVENT_MOUSE_WHEEL;
 }
 
 bool is_input_event(Uint32 type) {
@@ -991,8 +982,6 @@ extern "C" int port_overlay_event(const void *sdl_event) {
             changed();
             return 1;
         }
-        if (!ImGui::GetIO().WantTextInput && profiler_key(*event))
-            return 1;
     }
     if (event->type == SDL_EVENT_KEY_UP &&
         (event->key.scancode == SDL_SCANCODE_F1 || event->key.scancode == SDL_SCANCODE_GRAVE ||
@@ -1005,20 +994,6 @@ extern "C" int port_overlay_event(const void *sdl_event) {
         ImGui_ImplSDL3_ProcessEvent(event);
         return is_input_event(event->type);
     }
-    // the profiler, the overlay closed: the mouse is its, and the keys while one of its text fields is typed in
-    if (!overlay_open && profiler_visible()) {
-        if (is_mouse_event(event->type)) {
-            ImGui_ImplSDL3_ProcessEvent(event);
-            return 1;
-        }
-        if (is_input_event(event->type) && imgui_typing.load()) {
-            ImGui_ImplSDL3_ProcessEvent(event);
-            return 1;
-        }
-        if (event->type == SDL_EVENT_KEY_UP)
-            ImGui_ImplSDL3_ProcessEvent(event); // (a key let go after typing stopped is let go in ImGui too)
-        return 0;
-    }
     // closed, it takes nothing more (and ImGui's queue is only emptied by a frame drawn)
     if (!overlay_open)
         return 0;
@@ -1029,7 +1004,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
 extern "C" int port_overlay_visible(void) {
     return port_player_ui_visible() || (ready && (overlay_open || shot_pending() || port_stats_overlay_wants() ||
                      (toast_until != 0 && (int32_t)(toast_until - (Uint32)SDL_GetTicks()) > 0) || building_shown() ||
-                     automap_view_visible() || profiler_visible()));
+                     automap_view_visible()));
 }
 
 extern "C" int port_overlay_each_picture(void) {
@@ -1053,10 +1028,6 @@ extern "C" int port_overlay_open(void) {
     return (ready && overlay_open) || port_player_ui_open();
 }
 
-extern "C" int port_overlay_holds_mouse(void) {
-    return ready && !overlay_open && profiler_visible();
-}
-
 extern "C" int port_overlay_holds_input(void) {
     // The layers over the game, top first. The player menu (F1) is over everything, the full map and the extended
     // stats included (the Vulkan presenter draws it after ImGui), and has the input while it is open; under it the
@@ -1065,7 +1036,7 @@ extern "C" int port_overlay_holds_input(void) {
         return 1;
     if (!ready)
         return 0; // (no ImGui: the full map is not drawn, and its key alone closes it, through the game's input)
-    return overlay_open || port_automap_full_open() || (profiler_visible() && imgui_typing.load());
+    return overlay_open || port_automap_full_open();
 }
 
 extern "C" const char *port_overlay_key(void) {
@@ -1098,8 +1069,6 @@ extern "C" void port_overlay_vblank(void) {
     if (!ready)
         return;
     port_stats_overlay_update(); // the extended stats mod (port/overlay/stats_panel.cpp)
-    profiler_step();             // Shift+P (port/overlay/profiler.cpp)
-    // (typing in the profiler's text field blocks the game's keys: port_overlay_holds_input)
 }
 
 extern "C" void port_overlay_draw(int x, int y, int width, int height) {
@@ -1147,7 +1116,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
     draw_toast();
     draw_building();
     port_stats_overlay_draw(overlay_open, x, y, width, height); // the extended stats mod (port/overlay/stats_panel.cpp)
-    profiler_draw();                                            // Shift+P (port/overlay/profiler.cpp)
     if (overlay_open) {
         menu_bar();
         if (show_settings)
@@ -1156,7 +1124,6 @@ extern "C" void port_overlay_draw(int x, int y, int width, int height) {
             about_window();
     }
     (void)x, (void)y, (void)width, (void)height;
-    imgui_typing.store(ImGui::GetIO().WantTextInput);
     ImGui::Render();
     if (renderer == nullptr) {
         drawn = true; // the presenter records it, and takes the test picture

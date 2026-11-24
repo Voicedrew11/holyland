@@ -45,6 +45,7 @@
 #endif
 
 #include "port/audio.h"
+#include "port/file_replace.h"
 #include "port/automap.h"
 #include "port/lz4_block.h"
 #include "port/host.h"
@@ -534,8 +535,7 @@ static int write_state(const char *path, const StateBuffer *buffer) {
         ok = 0;
     }
     if (ok) {
-        remove(path);
-        ok = rename(temp, path) == 0;
+        ok = port_replace_file(temp, path); /* the old file is kept if this fails */
     }
     if (!ok) {
         remove(temp);

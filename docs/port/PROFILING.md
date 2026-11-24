@@ -1,12 +1,15 @@
 # Profiling: where the time goes
 
-Shift+P opens the profiler: one window with the pictures shown against the screen's, the pipelines a draw waited for,
-the frames (below) and, last, the profile run's functions. Three tools, from the broadest to the finest:
+Shift+P shows the profiler: everything at once over the whole window (since 2026-11-24 in RmlUi, the player menu's
+look; before, a Dear ImGui window), with nothing to scroll or open, while the game keeps its keyboard, mouse and
+controller, so you play under it. The pictures shown against the screen's, the PC under the game, the pipelines a draw
+waited for, the frames (below) and the profile run's functions and GPU work. Three tools, from the broadest to the
+finest:
 
 | | what it says | where |
 |---|---|---|
 | **Frames** (Shift+P) | picture by picture: every thread's and the GPU's timed zones on one clock, nested; spikes; self and inclusive times | in game, `KF4_PROFILE`, `KF4_PROFILE_OUT`, `tools/sampler/frames_report.py` |
-| **Profile run** (Shift+P, "Functions and GPU") | each thread's **functions** by share of its CPU time; the **GPU's** time a picture by kind of work and by **shader state** | in game, `--profile-at`, `tools/sampler/profile.py` |
+| **Profile run** (Shift+P; Shift+H starts and stops it) | each thread's **functions** by share of its CPU time; the **GPU's** time a picture by kind of work and by **shader state** | in game, `--profile-at`, `tools/sampler/profile.py` |
 | Radeon GPU Profiler / RenderDoc / Nsight | per-draw, per-instruction GPU detail | outside the game, with `KF4_GPU_LABELS=1` |
 
 ## Frames (2026-11-15)
@@ -14,21 +17,41 @@ the frames (below) and, last, the profile run's functions. Three tools, from the
 Where each picture's time went, thread by thread and on the GPU, in the order it happened. Built after Verdite 2's
 frame profiler (Verdite Core's `FrameProfiler`, `ProfilerPanel`), with the GPU on the same clock as the threads.
 
-**In game:** Shift+P, and recording runs while the window is open; the mouse is the window's while it is open (the keyboard and controller still play).
+**In game:** Shift+P, and recording runs while the profiler shows. It has no mouse and no focus: its own keys are
+Shift and a letter the game leaves free, listed along its bottom:
 
-- A bar a picture: its length (blue, red past the spike line), the GPU's busy time in it (orange), the screen's
-  budget (green). Click a bar to pick that picture; **Newest** goes back to following the newest.
-- **Spikes**: the pictures over the threshold (auto: twice the median and 2 ms), newest first. Click one to pick it.
-- **Timeline**: the picked picture with a quarter of its length either side, every lane that did something, each
-  zone nested under the one it ran in. Wheel zooms about the mouse, drag moves, double-click shows it whole; hover a
-  zone for its name and length. The green lines are the picture's edges (two presents).
-- **Zones**: the picked picture's zones, or each zone's average a picture over the window; **self** is a zone's own
-  time (the column adds up to its lane's busy time), **incl.** adds the zones inside it, **calls** its begins, **most
-  self** the largest in one picture of the window. Filter by name and by lane; **Copy table** copies it as text.
-- The lane table: each lane's ms a picture working, waiting (a zone of kind wait on top) and, for the GPU's lanes,
-  busy. A lane's time with no zone open is idle and counted nowhere.
-- **GPU** menu: the GPU's lanes by kind of work (as `[stats]`), also by shader state, or each draw (a timestamp at
-  every batch: slows the GPU, so compare its totals with by kind).
+| key | does |
+|---|---|
+| Shift+P | show / hide |
+| Shift+O | hold what is shown still to read it (the record goes on) |
+| Shift+U | the timeline's picture: the newest, or the slowest of the last 3 s (held until a slower one comes or it leaves the 3 s) |
+| Shift+Y | the GPU's lanes timed by kind of work, by shader state, or each draw (a timestamp at every batch: slows the GPU, so compare totals with by kind) |
+| Shift+H | the profile run (below): start / stop |
+| Shift+B | save the run |
+| Shift+N | copy everything shown, in full, as text (every zone, every function the run kept) |
+
+From the top:
+
+- **The head**: pictures shown a second against the screen's rate, the CPU's speed and the game's memory, the
+  clock's cost a read, the pipelines made while a draw waited; the last 3 s's pictures a second, average, p99 and
+  longest, and the spike line; the pictures shown a second over the last 30 s.
+- **A bar a picture**: its length (ice, ember past the spike line), the GPU's busy time in it (gold), the screen's
+  time a picture (green line); the timeline's picture lit white.
+- **Timeline**: the newest (or slowest) picture with a quarter of its length either side, every lane that did
+  something, each zone nested under the one it ran in (8 deep at most, fewer when the lanes would not fit), named where
+  its box is wide enough. A scale in ms from the picture's start; the green lines are its edges (two presents).
+- **Lanes**: each lane's ms a picture over the last 3 s, working, waiting (a zone of kind wait on top) and, for the
+  GPU's lanes, busy. A lane's time with no zone open is idle and counted nowhere. Under it the **spikes** (twice the
+  median and 2 ms), newest first.
+- **Zones**: each zone's average a picture over the last 3 s, by self time, as many as fit: **self** is a zone's own
+  time (the column adds up to its lane's busy time), **incl.** adds the zones inside it, **calls** its begins, **most**
+  the largest self in one picture, **pic** its self in the timeline's picture, **%** of the average picture.
+- **Functions** and **GPU**: the profile run's (below).
+
+The tables take as many rows as the window has room for (at least those of a 780 dp high window). Built with the
+Vulkan presenter only, like the player menu: with `--presenter sdl` or `--renderer gs` there is no profiler.
+`KF4_OVERLAY_SHOT=profiler@V` takes a picture of it (`port/ui/profiler_overlay.hpp`; the copy of the record,
+`port/ui/frame_snapshot.hpp`, is tested by `ctest -R ui_frame_snapshot`).
 
 **Without playing** (any run, a window or not):
 
@@ -78,16 +101,16 @@ frames took their place.
 
 ## A profile run
 
-**In game:** Shift+P, then open "Functions and GPU (profile run)" (the window's last section) and
-press **Start**. Play the
-part to look at, then **Stop** (or keep it running: the tables update twice a second). The thread list is by CPU
-time; pick one to see its functions:
+**In game:** Shift+P, then **Shift+H** starts a run. Play the part to look at, then Shift+H again to stop (or keep
+it running: the tables update twice a second). **Functions** shows the busiest threads (by samples), each with its
+top functions by self time:
 
 - **self**: the share of the thread's CPU time spent in the function's own code.
-- **incl.**: the share spent in it or anything it calls. Click a column to sort by it.
+- **incl.**: the share spent in it or anything it calls.
 
-**Save** writes the run to `<data folder>/captures/profile_<vblank>_<time>.txt`. **Copy** puts the tables on the
-clipboard as text. Tick **GPU by shader state** to time the PC renderer's draws by shader state as well (below).
+**GPU** shows the GPU's time a picture by kind of work and, with Shift+Y's shader state on, by shader state (below).
+**Shift+B** writes the run to `<data folder>/captures/profile_<vblank>_<time>.txt`. **Shift+N** puts every thread's
+functions and every GPU row on the clipboard as text, with the frames' tables.
 
 **Without playing:** `--profile-at VBLANK:SECONDS:FILE` starts a run at a vblank and saves it SECONDS of game
 vblanks later; `KF4_GPU_DETAIL=1` turns on the shader-state timing for it. `tools/sampler/profile.py` does the

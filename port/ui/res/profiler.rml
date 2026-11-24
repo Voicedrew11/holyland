@@ -1,0 +1,39 @@
+<rml>
+<head>
+	<title>Holyland profiler</title>
+	<link type="text/rcss" href="profiler.rcss"/>
+</head>
+<!-- The profiler (Shift+P; port/ui/profiler_overlay.cpp fills every element with an id, the charts' through
+     port/ui/profiler_charts.hpp). Everything at once over the whole window: nothing to scroll, and no input of its own
+     but its Shift keys. -->
+<body>
+	<div id="head">
+		<div id="title">Profiler</div>
+		<div id="screen"></div>
+		<div id="summary"></div>
+		<div id="shown-box">
+			<profile-columns id="shown"/>
+			<div id="shown-words"></div>
+		</div>
+	</div>
+	<div id="bars-box">
+		<profile-bars id="bars"/>
+		<div id="bars-words"></div>
+	</div>
+	<div id="timeline-box">
+		<div id="timeline-head"></div>
+		<div id="timeline-names"></div>
+		<div id="timeline-plot">
+			<profile-timeline id="timeline"/>
+			<div id="timeline-words"></div>
+		</div>
+	</div>
+	<div id="tables">
+		<div class="column" id="lanes"></div>
+		<div class="column" id="zones"></div>
+		<div class="column" id="functions"></div>
+		<div class="column" id="gpu"></div>
+	</div>
+	<div id="keys"></div>
+</body>
+</rml>

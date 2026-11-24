@@ -15,6 +15,7 @@
 #include <system_error>
 
 #include "../build_strategy.h"
+#include "../launcher_files.h"
 #include "../platform.h"
 #include "../update_delta.h"
 
@@ -186,6 +187,7 @@ constexpr ExitMeaning kExitMeanings[] = {
     {0xC0000017, "no memory left"},
     {0x80000003, "a breakpoint"},
     {0x00000003, "abort() (a failed assertion, or a C++ error nothing caught)"},
+    {PORT_EXIT_GPU_LOST, kGpuLostMeaning},
 };
 
 constexpr std::size_t kMaxAnswer = 1 << 20;
@@ -257,6 +259,16 @@ std::string start_on_its_own(const fs::path &program, const std::vector<std::wst
     return {};
 }
 
+// a standard stream redirected to a file or a pipe (`holyland > out.txt`, `holyland | more`); a window program started
+// from a console without redirection has none, or the console's own
+bool redirected(DWORD which) {
+    HANDLE handle = GetStdHandle(which);
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE)
+        return false;
+    DWORD type = GetFileType(handle);
+    return type == FILE_TYPE_DISK || type == FILE_TYPE_PIPE;
+}
+
 fs::path with_old(const fs::path &file) {
     fs::path old = file;
     old += ".old";
@@ -269,14 +281,14 @@ bool move_aside(const fs::path &file) {
     if (!fs::exists(file, error))
         return true;
     fs::remove_all(with_old(file), error);
-    return MoveFileExW(file.c_str(), with_old(file).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+    return move_replacing(file, with_old(file));
 }
 
 void move_back(const fs::path &file) {
     std::error_code error;
     if (fs::exists(with_old(file), error)) {
         fs::remove_all(file, error);
-        MoveFileExW(with_old(file).c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+        move_replacing(with_old(file), file);
     }
 }
 
@@ -356,7 +368,7 @@ public:
         std::vector<fs::path> moved;
         for (const fs::path &name : names) {
             if (!move_aside(dir_ / name) ||
-                !MoveFileExW((unpacked / name).c_str(), (dir_ / name).c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                !move_replacing(unpacked / name, dir_ / name)) {
                 why = "cannot put " + name.u8string() + " in place (" + std::to_string(GetLastError()) + ")";
                 moved.push_back(name);
                 for (const fs::path &back : moved)
@@ -566,7 +578,18 @@ public:
                 job = nullptr;
             }
         }
-        ResumeThread(info.hThread);
+        // started suspended so it is in the job before it can start children of its own
+        if (ResumeThread(info.hThread) == static_cast<DWORD>(-1)) {
+            why = "ResumeThread failed (" + std::to_string(GetLastError()) + ")";
+            TerminateProcess(info.hProcess, 1);
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+            if (job != nullptr)
+                CloseHandle(job);
+            if (read_end != nullptr)
+                CloseHandle(read_end);
+            return nullptr;
+        }
         CloseHandle(info.hThread);
         return std::make_unique<WindowsProcess>(info.hProcess, job, read_end);
     }
@@ -693,11 +716,14 @@ public:
     }
 
     void attach_console() const override {
-        // started from a console (cmd, PowerShell): print there; from Explorer there is none
+        // started from a console (cmd, PowerShell): print there; from Explorer there is none. A stream the console
+        // sent to a file or a pipe (`holyland > out.txt`, `2> err.txt`) is kept there.
         if (AttachConsole(ATTACH_PARENT_PROCESS)) {
             FILE *ignored = nullptr;
-            freopen_s(&ignored, "CONOUT$", "w", stdout);
-            freopen_s(&ignored, "CONOUT$", "w", stderr);
+            if (!redirected(STD_OUTPUT_HANDLE))
+                freopen_s(&ignored, "CONOUT$", "w", stdout);
+            if (!redirected(STD_ERROR_HANDLE))
+                freopen_s(&ignored, "CONOUT$", "w", stderr);
         }
     }
 };

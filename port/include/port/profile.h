@@ -1,4 +1,4 @@
-/* The profiler's counters (Shift+P, port/overlay/profiler.cpp; docs/port/PROFILING.md): its clock, the pictures
+/* The profiler's counters (Shift+P, port/ui/profiler_overlay.hpp; docs/port/PROFILING.md): its clock, the pictures
    drawn, the pipelines a draw waited for, and the GPU's time by kind of work and shader state over a profile run.
    Where each picture's time went is the frame profiler's (port/include/port/zones.h).
 

@@ -2034,6 +2034,11 @@ public:
                 (unsigned long long)counts_.unsupported_copies, (unsigned long long)counts_.unsupported_uploads,
                 (unsigned long long)counts_.unsupported_read_backs, (unsigned long long)counts_.uploads_again_passed);
         fprintf(stderr,
+                "[stats] scene renderer kept textures: %.1f MiB at most (%.1f MiB now, cap %llu MiB), %llu let go of "
+                "for size\n",
+                double(counts_.texture_bytes_peak) / double(1 << 20), double(texture_bytes_.live) / double(1 << 20),
+                (unsigned long long)(texture_cap_ >> 20), (unsigned long long)counts_.textures_let_go_for_size);
+        fprintf(stderr,
                 "[stats] scene renderer layers: clears %llu held back: %llu load ops, %llu in a pass, %llu alone, %llu "
                 "dead; %llu alpha resets folded into the frame's clear; layers %llu kept: %llu drawn into the target, "
                 "%llu dead; %llu pictures drawn with them; %llu textures of a frame from its history (%llu made); fills "
@@ -4264,24 +4269,22 @@ private:
     }
 
     // The byte cap is shared by both decoded-texture caches. Ask Granite once for the device-local heap's real
-    // budget (VK_EXT_memory_budget, with its heap-size fallback); an env override can lower it or turn it off.
+    // budget (VK_EXT_memory_budget, with its heap-size fallback); KF4_SCN_TEXTURE_CAP_MIB sets its own, 0 no cap.
     uint64_t texture_cap() {
         if (!texture_cap_set_) {
             texture_cap_set_ = true;
-            const char *over = getenv("KF4_SCN_TEXTURE_CAP_MIB");
-            uint64_t over_mib = over != nullptr ? strtoull(over, nullptr, 10) : 0;
             HeapBudget budgets[VK_MAX_MEMORY_HEAPS]{};
             device_.get_memory_budget(budgets);
             const VkPhysicalDeviceMemoryProperties &props = device_.get_memory_properties();
             uint64_t largest = 0, budget_bytes = 0;
             for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
-                if ((props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                if ((props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
                     props.memoryHeaps[i].size > largest) {
                     largest = props.memoryHeaps[i].size;
                 }
             }
             for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
-                if ((props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                if ((props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
                     props.memoryHeaps[i].size == largest) {
                     budget_bytes = budgets[i].budget_size;
                     if (budget_bytes == 0 && budgets[i].max_size != 0) {
@@ -4290,7 +4293,9 @@ private:
                     break;
                 }
             }
-            texture_cap_ = texture_cap_bytes(budget_bytes, over_mib);
+            texture_cap_ = texture_cap_bytes(budget_bytes, texture_cap_override(getenv("KF4_SCN_TEXTURE_CAP_MIB")));
+            fprintf(stderr, "[scn] kept textures held to %llu MiB (a device-local budget of %llu MiB)\n",
+                    (unsigned long long)(texture_cap_ >> 20), (unsigned long long)(budget_bytes >> 20));
         }
         return texture_cap_;
     }
@@ -4316,33 +4321,46 @@ private:
                 }
             }
         }
-        // The count/age rule above cannot fire before thousands of huge movie-frame images have been made. Keep the
-        // two caches under their byte cap by letting the least recently used image go first.
-        uint64_t cap = texture_cap();
-        while (texture_bytes_.over(cap)) {
-            auto oldest_gpu = textures_.end();
-            auto oldest_sampled = sampled_.end();
-            for (auto it = textures_.begin(); it != textures_.end(); ++it) {
-                if (oldest_gpu == textures_.end() || it->second.used < oldest_gpu->second.used) {
-                    oldest_gpu = it;
-                }
+        counts_.texture_bytes_peak = std::max(counts_.texture_bytes_peak, texture_bytes_.live);
+        // The count/age rule above cannot fire before thousands of huge movie-frame images have been made (issues
+        // 258, 259: each of the opening movie's pictures is a texture of its own, used once). Over the byte cap the
+        // least recently used go, down to three quarters of it so the walk is not made again at the next vblank;
+        // never one drawn in this vblank or the last, which the pictures between may still look up, so the textures
+        // in use are not let go and uploaded again each vblank when they alone pass the cap.
+        const uint64_t cap = texture_cap();
+        if (!texture_bytes_.over(cap)) {
+            return;
+        }
+        struct Old {
+            uint64_t used, hash;
+            bool sampled;
+        };
+        std::vector<Old> olds;
+        for (const auto &[h, t] : textures_) {
+            if (frame_ - t.used > 1) {
+                olds.push_back({t.used, h, false});
             }
-            for (auto it = sampled_.begin(); it != sampled_.end(); ++it) {
-                if (oldest_sampled == sampled_.end() || it->second.used < oldest_sampled->second.used) {
-                    oldest_sampled = it;
-                }
+        }
+        for (const auto &[h, t] : sampled_) {
+            if (frame_ - t.used > 1) {
+                olds.push_back({t.used, h, true});
             }
-            if (oldest_gpu == textures_.end() && oldest_sampled == sampled_.end()) {
+        }
+        std::sort(olds.begin(), olds.end(), [](const Old &x, const Old &y) { return x.used < y.used; });
+        for (const Old &o : olds) {
+            if (!texture_bytes_.over(cap / 4 * 3)) {
                 break;
             }
-            if (oldest_sampled == sampled_.end() ||
-                (oldest_gpu != textures_.end() && oldest_gpu->second.used <= oldest_sampled->second.used)) {
-                texture_gone(vram_diag::Site::gpu_texture, oldest_gpu->second.image_bytes);
-                textures_.erase(oldest_gpu);
+            if (o.sampled) {
+                auto it = sampled_.find(o.hash);
+                texture_gone(vram_diag::Site::sampled_texture, it->second.image_bytes);
+                sampled_.erase(it);
             } else {
-                texture_gone(vram_diag::Site::sampled_texture, oldest_sampled->second.image_bytes);
-                sampled_.erase(oldest_sampled);
+                auto it = textures_.find(o.hash);
+                texture_gone(vram_diag::Site::gpu_texture, it->second.image_bytes);
+                textures_.erase(it);
             }
+            counts_.textures_let_go_for_size++;
         }
     }
 
@@ -5656,6 +5674,7 @@ private:
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0, finer_pictures = 0;
+        uint64_t texture_bytes_peak = 0, textures_let_go_for_size = 0; // (evict_textures)
         uint64_t textures_gpu_levels = 0; // (of textures_sampled: read at the GPU's own level, gpu_levels_for)
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the

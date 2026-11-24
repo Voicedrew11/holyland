@@ -12,11 +12,12 @@
 #include <string>
 
 #include "pcr_hang_notes.h"
+#include "port/exit_codes.h"
 
 namespace pcr {
 
 constexpr int HANG_SECONDS = 15; // (the renderer's)
-constexpr int HANG_EXIT_CODE = 70;
+constexpr int HANG_EXIT_CODE = PORT_EXIT_GPU_LOST;
 
 // The report's text: the wait, and the notes, newest last, each with how long before `now_s` it was made
 std::string hang_report(const HangNotes &notes, const char *where, double waited_s, double now_s);

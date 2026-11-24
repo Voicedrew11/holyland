@@ -7,20 +7,45 @@
 
 namespace scn {
 
-inline constexpr uint64_t texture_budget_default_bytes = uint64_t(512) << 20;
+inline constexpr uint64_t texture_budget_least_bytes = uint64_t(256) << 20;
+inline constexpr uint64_t texture_budget_most_bytes = uint64_t(1) << 30;
 
-// A quarter of the device-local heap's budget, at most 512 MiB. The PS2's own VRAM is 4 MiB: the only reason a
-// decoded texture image gets large is a broad TEX0 (the opening movie declares 1024x1024 for a 640x448 picture),
-// so a few hundred MiB is already far more than a legitimate set of textures. A 0 override means "no cap" (A/B).
-inline uint64_t texture_cap_bytes(uint64_t heap_budget_bytes, uint64_t override_mib) {
-    if (override_mib != 0) {
-        return override_mib > (UINT64_MAX >> 20) ? UINT64_MAX : override_mib << 20;
+// What KF4_SCN_TEXTURE_CAP_MIB asks: unset (or not a number) keeps the default, "0" means no cap (A/B), N MiB a cap
+// of its own.
+struct TextureCapOverride {
+    bool set = false;
+    uint64_t mib = 0;
+};
+
+inline TextureCapOverride texture_cap_override(const char *text) {
+    TextureCapOverride o;
+    if (text == nullptr || *text < '0' || *text > '9') {
+        return o;
+    }
+    o.set = true;
+    for (; *text >= '0' && *text <= '9'; text++) {
+        o.mib = o.mib > (UINT64_MAX >> 20) / 10 ? UINT64_MAX : o.mib * 10 + uint64_t(*text - '0');
+    }
+    return o;
+}
+
+// A quarter of the device-local heap's budget, held between 256 MiB and 1 GiB; 0 is no cap. One map's textures at
+// high settings (native scale at 1440p, finer textures) take about 260 MiB, and seamless scroll draws two maps at
+// once, so the ceiling leaves room for both on a big card. The floor is what an integrated GPU, whose own heap is
+// small but which shares the PC's memory, was measured with (issue 259). The cap only bounds what the cache keeps:
+// a texture drawn in this vblank or the last is never let go (evict_textures in scn_build.cpp), so the movie's
+// pictures, each used once, go a vblank later whatever the cap.
+inline uint64_t texture_cap_bytes(uint64_t heap_budget_bytes, TextureCapOverride over) {
+    if (over.set) {
+        return over.mib > (UINT64_MAX >> 20) ? UINT64_MAX : over.mib << 20;
     }
     if (heap_budget_bytes == 0) {
-        return texture_budget_default_bytes;
+        return texture_budget_least_bytes;
     }
-    uint64_t quarter = heap_budget_bytes / 4;
-    return quarter < texture_budget_default_bytes ? quarter : texture_budget_default_bytes;
+    const uint64_t quarter = heap_budget_bytes / 4;
+    return quarter < texture_budget_least_bytes  ? texture_budget_least_bytes
+           : quarter > texture_budget_most_bytes ? texture_budget_most_bytes
+                                                 : quarter;
 }
 
 struct ByteTracker {

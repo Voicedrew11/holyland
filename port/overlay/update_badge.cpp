@@ -17,6 +17,7 @@
 #include "imgui.h"
 
 extern "C" {
+#include "port/file_replace.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/settings.h"
@@ -74,11 +75,7 @@ void read_skipped() {
 
 // written whole, then put in place, so a crash never leaves half a file (as settings.json)
 bool replace_file(const std::string &from, const std::string &to) {
-#ifdef _WIN32
-    return MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
-#else
-    return std::rename(from.c_str(), to.c_str()) == 0;
-#endif
+    return port_replace_file(from.c_str(), to.c_str()) != 0;
 }
 
 void skip_this_version() {

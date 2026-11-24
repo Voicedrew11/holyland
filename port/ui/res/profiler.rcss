@@ -1,0 +1,311 @@
+/* The profiler's look (profiler.rml, Shift+P): the menu's palette (kf4.rcss) on dark glass over the whole window, so
+   the game shows through. Laid out for 1260 x 780 dp at least (player_ui.cpp fits the dp to the window): the tables'
+   rows are counted for that, so nothing scrolls. Numbers right-aligned in columns of fixed width, names last in a row
+   (clipped by their column).
+
+   Colours:  glass #05060770   panel #0b0d10b0   rule #2f3540   ice #a8c4e8   text #dde3ec   dim #8790a0
+             off #555d6b   ember #c46a4a   gold #d9b36a   green #8fd0a0 */
+
+div, p {
+	display: block;
+}
+
+body {
+	display: block;
+	font-family: Mincho;
+	font-weight: normal;
+	font-size: 11dp;
+	line-height: 13dp;
+	color: #dde3ec;
+	width: 100%;
+	height: 100%;
+	background-color: #05060770;
+}
+
+/* ---- the parts, top to bottom --------------------------------------------------------------------------------------- */
+#head, #bars-box, #timeline-box, #tables, #keys {
+	position: absolute;
+	left: 10dp;
+	right: 10dp;
+}
+
+#head {
+	top: 8dp;
+	height: 44dp;
+}
+
+#bars-box {
+	top: 56dp;
+	height: 108dp;
+}
+
+#timeline-box {
+	top: 170dp;
+	height: 262dp;
+}
+
+#tables {
+	top: 438dp;
+	bottom: 24dp;
+}
+
+#keys {
+	bottom: 5dp;
+	height: 15dp;
+	color: #8790a0;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+/* ---- the head: the title, the screen, the window's figures, the pictures shown a second ------------------------------ */
+#title {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 92dp;
+	font-size: 17dp;
+	line-height: 22dp;
+	letter-spacing: 1.5dp;
+	color: #a8c4e8;
+}
+
+#screen {
+	position: absolute;
+	left: 96dp;
+	top: 0;
+	width: 470dp;
+	height: 44dp;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+#summary {
+	position: absolute;
+	left: 572dp;
+	right: 330dp;
+	top: 0;
+	height: 44dp;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+#shown-box {
+	position: absolute;
+	right: 0;
+	top: 0;
+	width: 320dp;
+	height: 44dp;
+}
+
+profile-columns, profile-bars, profile-timeline {
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+#shown-words, #bars-words, #timeline-words {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+/* a word placed over a chart (its left and top set where it is written) */
+.at {
+	position: absolute;
+	white-space: nowrap;
+	font-size: 9dp;
+	line-height: 10dp;
+	padding: 0 2dp;
+	color: #b4bccb;
+	background-color: #050607b0;
+}
+
+.at.right {
+	text-align: right;
+}
+
+/* ---- the timeline: its line, the lanes' names, the plot ------------------------------------------------------------- */
+#timeline-head {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	height: 14dp;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+#timeline-names {
+	position: absolute;
+	left: 0;
+	top: 14dp;
+	width: 104dp;
+	bottom: 0;
+	overflow: hidden;
+}
+
+#timeline-plot {
+	position: absolute;
+	left: 108dp;
+	right: 0;
+	top: 14dp;
+	bottom: 0;
+	overflow: hidden;
+}
+
+/* a zone's name on its box (its colour is light: the words dark) */
+.span {
+	position: absolute;
+	white-space: nowrap;
+	overflow: hidden;
+	font-size: 8dp;
+	line-height: 9dp;
+	padding-left: 2dp;
+	color: #0b0d10;
+}
+
+.lane-name {
+	position: absolute;
+	left: 0;
+	width: 104dp;
+	white-space: nowrap;
+	overflow: hidden;
+	font-size: 9dp;
+	line-height: 10dp;
+	color: #dde3ec;
+}
+
+/* ---- the tables ----------------------------------------------------------------------------------------------------- */
+.column {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	overflow: hidden;
+	padding: 2dp 6dp 0 6dp;
+	box-sizing: border-box;
+	background-color: #0b0d10b0;
+	border-left: 1dp #2f3540;
+}
+
+#lanes {
+	left: 0;
+	width: 18%;
+	border-left-width: 0;
+}
+
+#zones {
+	left: 18%;
+	width: 37%;
+}
+
+#functions {
+	left: 55%;
+	width: 27%;
+}
+
+#gpu {
+	left: 82%;
+	width: 18%;
+}
+
+h {
+	display: block;
+	color: #a8c4e8;
+	letter-spacing: 1dp;
+	white-space: nowrap;
+	margin-top: 1dp;
+}
+
+h dim {
+	letter-spacing: 0;
+}
+
+.r {
+	display: block;
+	white-space: nowrap;
+	height: 13dp;
+}
+
+.r.top {
+	color: #8790a0;
+}
+
+/* a number, right-aligned */
+n {
+	display: inline-block;
+	width: 38dp;
+	text-align: right;
+	margin-right: 4dp;
+}
+
+n.wide {
+	width: 52dp;
+}
+
+n.narrow {
+	width: 30dp;
+}
+
+/* a lane's name in a table */
+ln {
+	display: inline-block;
+	width: 72dp;
+	overflow: hidden;
+	color: #8790a0;
+	margin-right: 4dp;
+}
+
+ln.wide {
+	width: 80dp;
+	color: #dde3ec;
+}
+
+dim {
+	color: #8790a0;
+}
+
+off {
+	color: #555d6b;
+}
+
+warn {
+	color: #c46a4a;
+}
+
+ice {
+	color: #a8c4e8;
+}
+
+gold {
+	color: #d9b36a;
+}
+
+key {
+	color: #a8c4e8;
+	margin-right: 3dp;
+}
+
+lit {
+	color: #f0f4fa;
+}
+
+/* a space's width, and a gap between items on a line (profiler_overlay.cpp: spaced) */
+sp {
+	display: inline-block;
+	width: 3dp;
+}
+
+g {
+	display: inline-block;
+	width: 14dp;
+}
+
+.gap {
+	display: block;
+	height: 5dp;
+}

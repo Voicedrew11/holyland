@@ -326,6 +326,8 @@ public:
         std::string text = "code " + std::to_string(code);
         if (code > 128 && code < 128 + NSIG)
             text += std::string(", ended by a signal: ") + strsignal(code - 128);
+        else if (code == PORT_EXIT_GPU_LOST)
+            text += std::string(", ") + kGpuLostMeaning;
         return text;
     }
 
