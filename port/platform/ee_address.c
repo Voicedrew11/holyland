@@ -3,7 +3,8 @@
    Below EE_RAM_SIZE an EE address is an offset into game RAM, as on the PS2. The game's own globals
    (its data, its read-only data and its code) live in the program's image, not in game RAM, so they
    get EE addresses too: each section of the program is given a window above EE_STATIC_BASE, in the
-   order the host lists them. A pointer anywhere else (the stack, the C heap) has no EE address. */
+   order the host lists them; so do a mod's plugin's, when it is loaded (port_address_add_module: its buffers are the
+   game's as the program's are). A pointer anywhere else (the stack, the C heap) has no EE address. */
 #ifndef _WIN32
 #define _GNU_SOURCE /* dl_iterate_phdr */
 #endif
@@ -20,7 +21,7 @@
 #include "port/platform.h"
 
 #define EE_STATIC_BASE 0x40000000u
-#define MAX_REGIONS 16
+#define MAX_REGIONS 96
 
 typedef struct {
     uintptr_t start;
@@ -82,6 +83,62 @@ static int add_program_segments(struct dl_phdr_info *info, size_t size, void *da
 
 static void find_sections(void) {
     dl_iterate_phdr(add_program_segments, NULL);
+}
+#endif
+
+/* ---- A plugin's sections (port/platform/mod_api.c) ---- */
+#ifdef _WIN32
+void port_address_add_module(const void *inside) {
+    HMODULE module = NULL;
+    unsigned char *image;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_SECTION_HEADER *section;
+    int i;
+
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)inside, &module)) {
+        return;
+    }
+    image = (unsigned char *)module;
+    nt = (IMAGE_NT_HEADERS *)(image + ((IMAGE_DOS_HEADER *)image)->e_lfanew);
+    section = IMAGE_FIRST_SECTION(nt);
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, section++) {
+        uintptr_t start = (uintptr_t)image + section->VirtualAddress;
+
+        add_region(start, start + section->Misc.VirtualSize);
+    }
+}
+#else
+static int add_module_segments(struct dl_phdr_info *info, size_t size, void *data) {
+    uintptr_t inside = (uintptr_t)data;
+    int i, mine = 0;
+
+    (void)size;
+    for (i = 0; i < info->dlpi_phnum; i++) { /* (the object that holds the address) */
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        uintptr_t start = info->dlpi_addr + ph->p_vaddr;
+
+        if (ph->p_type == PT_LOAD && inside >= start && inside < start + ph->p_memsz) {
+            mine = 1;
+        }
+    }
+    if (!mine) {
+        return 0;
+    }
+    for (i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+
+        if (ph->p_type == PT_LOAD) {
+            uintptr_t start = info->dlpi_addr + ph->p_vaddr;
+
+            add_region(start, start + ph->p_memsz);
+        }
+    }
+    return 1;
+}
+
+void port_address_add_module(const void *inside) {
+    dl_iterate_phdr(add_module_segments, (void *)inside);
 }
 #endif
 

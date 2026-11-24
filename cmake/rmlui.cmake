@@ -34,3 +34,7 @@ target_compile_definitions(kf4_rmlui PUBLIC RMLUI_STATIC_LIB PRIVATE RMLUI_FONT_
 target_link_libraries(kf4_rmlui PRIVATE kf4_freetype)
 target_compile_options(kf4_rmlui PRIVATE -w -O2)
 set_target_properties(kf4_rmlui PROPERTIES CXX_STANDARD 17 POSITION_INDEPENDENT_CODE ON)
+# RmlUi's headers alone, for the mods' plugins (modding/holyland_mod.cmake): they use the program's RmlUi
+add_library(kf4_rmlui_headers INTERFACE)
+target_include_directories(kf4_rmlui_headers SYSTEM INTERFACE ${KF4_RMLUI}/Include)
+target_compile_definitions(kf4_rmlui_headers INTERFACE RMLUI_STATIC_LIB)

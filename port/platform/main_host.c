@@ -237,6 +237,7 @@
 #include "port/thread_name.h"
 #include "port/version.h"
 #include "port/mods.h"
+#include "port/mod_api.h"
 #include "port/frame_profiler.h"
 #include "port/profile_run.h"
 #include "port/settings.h"
@@ -1172,6 +1173,7 @@ int main(int argc, char **argv) {
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, darker-reality, before any use */
+    port_mods_scan(port_options.mods); /* the mods' mod.json: their keys named before the bindings are read */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     if (import_card != NULL) {
         open_save_folder();
@@ -1197,6 +1199,7 @@ int main(int argc, char **argv) {
     port_address_init();
     port_disc_open(port_options.disc);
     port_mods_open(port_options.mods); /* replacement files and text, read in place of the disc's */
+    port_mod_plugins_load(); /* the mods' plugins (port/include/port/mod_api.h) */
     open_save_folder();
     port_kernel_init();
     port_dmac_start();

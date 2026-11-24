@@ -12,6 +12,7 @@
 
 #include "cJSON.h"
 #include "port/mods.h"
+#include "port/controls.h"
 
 #ifndef MODS_TEST
 #include "port/host.h"
@@ -532,42 +533,311 @@ int port_mods_active(const char *name) {
     return 0;
 }
 
-void port_mods_open(const char *folder) {
+/* ---- The mod list ------------------------------------------------------------------------------- */
+#define MOD_MAX 64
+
+static PortMod mod_list[MOD_MAX];
+static int mod_count = -1;          /* -1: not scanned yet */
+static cJSON *mod_choices;          /* settings.json's "mod_list" as read: kept for the mods not here today */
+
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
+#define PLUGIN_SYSTEM "windows-x64"
+#elif defined(__linux__) && defined(__x86_64__)
+#define PLUGIN_SYSTEM "linux-x64"
+#elif defined(__linux__) && defined(__aarch64__)
+#define PLUGIN_SYSTEM "linux-arm64"
+#else
+#define PLUGIN_SYSTEM "other"
+#endif
+
+static void copy_string(char *out, size_t size, const cJSON *object, const char *key) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+
+    if (cJSON_IsString(item)) {
+        snprintf(out, size, "%s", item->valuestring);
+    }
+}
+
+static int json_int(const cJSON *object, const char *key, int fallback) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+
+    return cJSON_IsNumber(item) ? (int)item->valuedouble : cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
+}
+
+static void read_setting(PortMod *mod, const cJSON *item) {
+    PortModSetting *set;
+    const char *type;
+    const cJSON *choice;
+
+    if (mod->setting_count >= PORT_MOD_SETTINGS || !cJSON_IsObject(item)) {
+        return;
+    }
+    set = &mod->settings[mod->setting_count];
+    memset(set, 0, sizeof(*set));
+    copy_string(set->key, sizeof(set->key), item, "key");
+    copy_string(set->label, sizeof(set->label), item, "label");
+    copy_string(set->help, sizeof(set->help), item, "help");
+    if (!set->key[0]) {
+        fprintf(stderr, "[mods] %s: a setting with no \"key\", left out\n", mod->id);
+        return;
+    }
+    if (!set->label[0]) {
+        snprintf(set->label, sizeof(set->label), "%s", set->key);
+    }
+    type = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "type"));
+    set->type = type && strcmp(type, "choice") == 0 ? PORT_MOD_CHOICE
+                : type && strcmp(type, "number") == 0 ? PORT_MOD_NUMBER
+                                                      : PORT_MOD_TOGGLE;
+    set->min = json_int(item, "min", 0);
+    set->max = json_int(item, "max", set->type == PORT_MOD_TOGGLE ? 1 : 100);
+    set->step = json_int(item, "step", 1);
+    cJSON_ArrayForEach(choice, cJSON_GetObjectItemCaseSensitive(item, "choices")) {
+        if (cJSON_IsString(choice) && set->choice_count < PORT_MOD_CHOICES) {
+            snprintf(set->choices[set->choice_count++], sizeof(set->choices[0]), "%s", choice->valuestring);
+        }
+    }
+    if (set->type == PORT_MOD_CHOICE) {
+        if (set->choice_count == 0) {
+            fprintf(stderr, "[mods] %s: setting %s has no choices, left out\n", mod->id, set->key);
+            return;
+        }
+        set->min = 0;
+        set->max = set->choice_count - 1;
+    } else if (set->type == PORT_MOD_TOGGLE) {
+        set->min = 0, set->max = 1;
+    }
+    if (set->step < 1) {
+        set->step = 1;
+    }
+    if (set->max < set->min) {
+        set->max = set->min;
+    }
+    set->fallback = json_int(item, "default", set->min);
+    set->fallback = set->fallback < set->min ? set->min : set->fallback > set->max ? set->max : set->fallback;
+    set->value = set->fallback;
+    mod->setting_count++;
+}
+
+static int next_action = ACTION_MOD_FIRST;
+
+static void read_key(PortMod *mod, const cJSON *item) {
+    PortModKey *key;
+    char id[128], binding[64] = "";
+    const char *given;
+
+    if (mod->key_count >= PORT_MOD_KEYS || !cJSON_IsObject(item)) {
+        return;
+    }
+    key = &mod->keys[mod->key_count];
+    memset(key, 0, sizeof(*key));
+    copy_string(key->key, sizeof(key->key), item, "key");
+    copy_string(key->label, sizeof(key->label), item, "label");
+    if (!key->key[0]) {
+        return;
+    }
+    if (!key->label[0]) {
+        snprintf(key->label, sizeof(key->label), "%s", key->key);
+    }
+    given = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "default"));
+    if (given != NULL && *given) { /* "B" or "key:B", "pad:..." as settings.json has them */
+        snprintf(binding, sizeof(binding), "%s%s", strchr(given, ':') ? "" : "key:", given);
+    }
+    key->action = -1;
+    if (next_action <= ACTION_MOD_LAST) {
+        key->action = next_action++;
+        snprintf(id, sizeof(id), "mod.%s.%s", mod->id, key->key);
+        port_controls_mod_action(key->action, id, key->label, binding[0] ? binding : NULL);
+    } else {
+        fprintf(stderr, "[mods] %s: no key left for %s (16 for all mods)\n", mod->id, key->key);
+    }
+    mod->key_count++;
+}
+
+static void read_manifest(PortMod *mod) {
+    char path[1200];
+    size_t size;
+    unsigned char *text;
+    cJSON *root;
+    const cJSON *item, *plugin;
+
+    snprintf(mod->name, sizeof(mod->name), "%s", mod->id);
+    snprintf(path, sizeof(path), "%s/mod.json", mod->folder);
+    text = read_whole(path, &size);
+    if (text == NULL) {
+        return; /* (a data mod) */
+    }
+    root = cJSON_ParseWithLength((const char *)text, size);
+    free(text);
+    if (root == NULL) {
+        fprintf(stderr, "[mods] %s: mod.json is not JSON, read as a data mod\n", mod->id);
+        return;
+    }
+    copy_string(mod->name, sizeof(mod->name), root, "name");
+    copy_string(mod->version, sizeof(mod->version), root, "version");
+    copy_string(mod->author, sizeof(mod->author), root, "author");
+    copy_string(mod->description, sizeof(mod->description), root, "description");
+    copy_string(mod->holyland, sizeof(mod->holyland), root, "holyland");
+    mod->api = json_int(root, "api", 0);
+    plugin = cJSON_GetObjectItemCaseSensitive(root, "plugin");
+    if (cJSON_IsObject(plugin) && plugin->child != NULL) {
+        const char *mine = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(plugin, PLUGIN_SYSTEM));
+
+        mod->has_plugin = 1;
+        if (mine != NULL) {
+            snprintf(mod->plugin, sizeof(mod->plugin), "%s/%s", mod->folder, mine);
+        }
+    }
+    cJSON_ArrayForEach(item, cJSON_GetObjectItemCaseSensitive(root, "settings")) {
+        read_setting(mod, item);
+    }
+    cJSON_ArrayForEach(item, cJSON_GetObjectItemCaseSensitive(root, "keys")) {
+        read_key(mod, item);
+    }
+    cJSON_Delete(root);
+}
+
+static void mods_folder(const char *folder, char *out, size_t size) {
+    if (folder == NULL) {
+        snprintf(out, size, "%s/mods", port_data_dir());
+    } else {
+        snprintf(out, size, "%s", folder);
+    }
+}
+
+void port_mods_scan(const char *folder) {
     char path[1024];
     char **names;
     int count, i;
 
+    mod_count = 0;
     if (folder != NULL && strcmp(folder, "none") == 0) {
         return;
     }
-    if (folder == NULL) {
-        snprintf(path, sizeof(path), "%s/mods", port_data_dir());
-    } else {
-        snprintf(path, sizeof(path), "%s", folder);
-    }
+    mods_folder(folder, path, sizeof(path));
     if (!is_folder(path)) {
         return;
     }
     names = list_folder(path, &count);
     for (i = 0; i < count; i++) {
-        char mod[2048], part[2100];
+        char mod[2048];
 
         snprintf(mod, sizeof(mod), "%s/%s", path, names[i]);
-        if (names[i][0] != '.' && names[i][0] != '_' && is_folder(mod)) {
-            fprintf(stderr, "[mods] %s\n", names[i]);
-            if (mod_folder_count < 64) {
-                mod_folders[mod_folder_count++] = strdup(mod);
-            }
-            snprintf(part, sizeof(part), "%s/files", mod);
-            if (is_folder(part)) {
-                apply_files(part, "", 0);
-            }
-            snprintf(part, sizeof(part), "%s/text.json", mod);
-            read_text(part);
+        if (names[i][0] != '.' && names[i][0] != '_' && is_folder(mod) && mod_count < MOD_MAX &&
+            strlen(names[i]) < sizeof(mod_list[0].id)) {
+            PortMod *m = &mod_list[mod_count++];
+
+            memset(m, 0, sizeof(*m));
+            snprintf(m->id, sizeof(m->id), "%s", names[i]);
+            snprintf(m->folder, sizeof(m->folder), "%s", mod);
+            read_manifest(m);
+            m->on = !m->has_plugin; /* (a mod with code starts off) */
         }
         free(names[i]);
     }
     free(names);
+    if (mod_choices != NULL) { /* (settings read before the scan) */
+        port_mods_settings_read(mod_choices);
+    }
+}
+
+int port_mods_count(void) {
+    return mod_count < 0 ? 0 : mod_count;
+}
+
+PortMod *port_mods_get(int index) {
+    return index >= 0 && index < port_mods_count() ? &mod_list[index] : NULL;
+}
+
+PortMod *port_mods_by_id(const char *id) {
+    int i;
+
+    for (i = 0; id != NULL && i < port_mods_count(); i++) {
+        if (strcmp(mod_list[i].id, id) == 0) {
+            return &mod_list[i];
+        }
+    }
+    return NULL;
+}
+
+void port_mods_settings_read(const void *json) {
+    const cJSON *list = json;
+    int i, k;
+
+    if (list != mod_choices) {
+        cJSON_Delete(mod_choices);
+        mod_choices = cJSON_IsObject(list) ? cJSON_Duplicate(list, 1) : NULL;
+    }
+    for (i = 0; i < port_mods_count(); i++) {
+        PortMod *m = &mod_list[i];
+        const cJSON *entry = cJSON_GetObjectItemCaseSensitive(mod_choices, m->id);
+        const cJSON *values = cJSON_GetObjectItemCaseSensitive(entry, "settings");
+
+        m->on = json_int(entry, "on", m->on);
+        for (k = 0; k < m->setting_count; k++) {
+            PortModSetting *set = &m->settings[k];
+            int v = json_int(values, set->key, set->value);
+
+            set->value = v < set->min ? set->min : v > set->max ? set->max : v;
+        }
+    }
+}
+
+void port_mods_settings_write(void *json) {
+    cJSON *list = json;
+    int i, k;
+
+    if (mod_choices != NULL) { /* (the mods not here today keep their entries) */
+        const cJSON *entry;
+
+        cJSON_ArrayForEach(entry, mod_choices) {
+            if (port_mods_by_id(entry->string) == NULL && cJSON_GetObjectItemCaseSensitive(list, entry->string) == NULL) {
+                cJSON_AddItemToObject(list, entry->string, cJSON_Duplicate(entry, 1));
+            }
+        }
+    }
+    for (i = 0; i < port_mods_count(); i++) {
+        PortMod *m = &mod_list[i];
+        cJSON *entry = cJSON_CreateObject(), *values = cJSON_CreateObject();
+
+        cJSON_AddBoolToObject(entry, "on", m->on);
+        for (k = 0; k < m->setting_count; k++) {
+            cJSON_AddNumberToObject(values, m->settings[k].key, m->settings[k].value);
+        }
+        cJSON_AddItemToObject(entry, "settings", values);
+        cJSON_DeleteItemFromObjectCaseSensitive(list, m->id);
+        cJSON_AddItemToObject(list, m->id, entry);
+    }
+}
+
+void port_mods_open(const char *folder) {
+    int i;
+
+    if (mod_count < 0) {
+        port_mods_scan(folder);
+    }
+    for (i = 0; i < port_mods_count(); i++) {
+        PortMod *m = &mod_list[i];
+        char part[2100];
+
+        if (!m->on) {
+            fprintf(stderr, "[mods] %s: off (the player menu's Mods page)\n", m->id);
+            continue;
+        }
+        fprintf(stderr, "[mods] %s%s%s\n", m->id, m->version[0] ? " " : "", m->version);
+        m->applied = 1;
+        if (mod_folder_count < 64) {
+            mod_folders[mod_folder_count++] = strdup(m->folder);
+        }
+        for (int k = 0; k < m->key_count; k++) {
+            port_controls_mod_action_used(m->keys[k].action, 1);
+        }
+        snprintf(part, sizeof(part), "%s/files", m->folder);
+        if (is_folder(part)) {
+            apply_files(part, "", 0);
+        }
+        snprintf(part, sizeof(part), "%s/text.json", m->folder);
+        read_text(part);
+    }
     if (text_found) {
         apply_text();
     }

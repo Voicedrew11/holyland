@@ -23,8 +23,10 @@ void port_player_ui_init(void *sdl_window);
 int port_player_ui_event(const void *sdl_event);
 /* 1 when the menu started (it has F1) */
 int port_player_ui_ready(void);
-/* 1 while the menu is open: the keyboard, mouse and controller are its */
+/* 1 while the menu or a mod's page is open: the keyboard, mouse and controller are theirs */
 int port_player_ui_open(void);
+/* 1 while the menu is open and the game is to be paused (a mod's page takes the keys but keeps the game running) */
+int port_player_ui_pauses(void);
 /* 1 when the menu draws something this picture: open, or its hint of the keys that open it (F1, or L3 + R3) */
 int port_player_ui_visible(void);
 /* (port/overlay/overlay.cpp's test pictures) opens the menu on the tab of that id ("display", ...), then presses
@@ -62,6 +64,9 @@ static inline int port_player_ui_ready(void) {
     return 0;
 }
 static inline int port_player_ui_open(void) {
+    return 0;
+}
+static inline int port_player_ui_pauses(void) {
     return 0;
 }
 static inline int port_player_ui_visible(void) {

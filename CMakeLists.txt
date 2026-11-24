@@ -195,6 +195,8 @@ add_library(kf4_port STATIC
     port/platform/screen_vblank.c
     port/platform/disc.c
     port/platform/mods.c
+    port/platform/mod_api.c
+    port/platform/mod_hooks.c
     port/platform/signs.c
     port/platform/disc_image.c
     port/platform/iso9660.c
@@ -247,7 +249,7 @@ add_library(kf4_port STATIC
     port/audio/modmidi.c
     port/audio/modhsyn.c
     port/audio/sdrdrv.c)
-target_include_directories(kf4_port PUBLIC port/include)
+target_include_directories(kf4_port PUBLIC port/include modding/include)
 target_include_directories(kf4_port PRIVATE third_party/cjson)
 include(cmake/libchdr.cmake) # CHD disc images (port/platform/disc_image.c)
 kf4_add_libchdr(${CMAKE_CURRENT_SOURCE_DIR})
@@ -482,7 +484,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     -DOUT=${CMAKE_BINARY_DIR}/ui_assets.cpp -P ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
             DEPENDS ${KF4_UI_FILE_PATHS} ${CMAKE_SOURCE_DIR}/cmake/ui_assets.cmake
             COMMENT "The player menu's files" VERBATIM)
-        add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp
+        add_library(kf4_player_ui STATIC port/ui/player_ui.cpp port/ui/menu_model.cpp port/ui/settings_rows.cpp port/ui/mods_rows.cpp
                     port/ui/setting_row.cpp port/ui/rows_rml.cpp port/ui/setup_pages.cpp port/ui/setup_model.cpp
                     port/ui/setup_view.cpp port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
                     port/ui/pad_glyphs.cpp port/ui/key_glyphs.cpp port/ui/emulator_saves.cpp
@@ -493,7 +495,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     # the menu's Report an Issue (port/include/port/problem_report.h)
                     port/report/problem_report.cpp port/report/system_facts.cpp port/report/pc_facts.cpp
                     port/report/report_bundle.cpp port/report/report_text.cpp port/report/zip_archive.cpp)
-        target_include_directories(kf4_player_ui PRIVATE port/include port/ui port/report ${CMAKE_BINARY_DIR}
+        target_include_directories(kf4_player_ui PRIVATE port/include port/ui port/report modding/include ${CMAKE_BINARY_DIR}
                                    ${CMAKE_SOURCE_DIR}/third_party/libchdr ${CMAKE_SOURCE_DIR}/third_party/cjson)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL KF4_HAVE_VULKAN_PRESENTER)
         target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3 kf4_key_pictures kf4_chdr kf4_zone_record
@@ -650,14 +652,23 @@ target_sources(game_data PRIVATE game/hands.c game/hands_cross.c game/hands_put.
 # the Recollection page scrolling a long text (game/recollection_scroll.c; ui.patch)
 target_sources(game_data PRIVATE game/recollection_scroll.c)
 target_sources(game_data PRIVATE game/menu_sounds.c)
+# the mods' plugins (port/include/port/mod_api.h, modding/include/holyland_mod.h): the game's side of their events
+target_sources(game_data PRIVATE game/mod_events.c)
 target_sources(kf4_port PRIVATE port/platform/hands.c port/platform/hands_rules.c)
 # the game's main is called by the host's (port/platform/main_host.c)
 set_source_files_properties(${KF4_SRC}/src/game/main.c PROPERTIES
     COMPILE_DEFINITIONS "main=kf4_game_main")
 
+# Mods can hook the game's functions (port/platform/mod_hooks.c): each starts with 16 bytes of no-ops a hook writes
+# a jump over. x86-64 with clang or gcc.
+set(KF4_HOOK_FLAGS)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    set(KF4_HOOK_FLAGS -fpatchable-function-entry=16)
+endif()
 # Every game file calls the PS2's math library, not the host's (port/include/port/libm_ps2.h)
 foreach(target ${KF4_GAME_TARGETS} game_host)
-    target_include_directories(${target} PRIVATE ${KF4_SRC}/src/game port/include)
+    target_compile_options(${target} PRIVATE ${KF4_HOOK_FLAGS})
+    target_include_directories(${target} PRIVATE ${KF4_SRC}/src/game port/include modding/include)
     target_compile_options(${target} PRIVATE ${KF4_GAME_FLAGS} ${KF4_EE_FLOAT_FLAGS} ${KF4_GAME_ERRORS}
         -include ${CMAKE_SOURCE_DIR}/port/include/port/libm_ps2.h)
 endforeach()
@@ -696,7 +707,13 @@ set_target_properties(kf4_state_begin kf4_state_end ico_audio ${KF4_GAME_TARGETS
 add_executable(kf4 port/platform/main_host.c $<TARGET_OBJECTS:kf4_state_begin> ${KF4_GAME_OBJECTS}
     $<TARGET_OBJECTS:ico_audio> $<TARGET_OBJECTS:kf4_state_end> $<TARGET_OBJECTS:game_host>)
 target_compile_options(kf4 PRIVATE ${KF4_GAME_FLAGS})
-target_link_libraries(kf4 PRIVATE kf4_port)
+target_link_libraries(kf4 PRIVATE kf4_port ${CMAKE_DL_LIBS})
+# Mods' plugins find the game's functions and variables by name and link against them (modding/): the program
+# exports its symbols (-rdynamic; on Windows every symbol, and an import library, libkf4.dll.a, to link plugins with)
+set_target_properties(kf4 PROPERTIES ENABLE_EXPORTS ON)
+if(MINGW)
+    target_link_options(kf4 PRIVATE -Wl,--export-all-symbols)
+endif()
 if(WIN32)
     # the icon (packaging/shared/holyland.ico) in the .exe, for Explorer, the taskbar and the window
     enable_language(RC)
@@ -1398,4 +1415,13 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:kf4> ${KF4_RUNTIME_DLLS}
             $<TARGET_FILE_DIR:kf4>
         COMMAND_EXPAND_LISTS)
+endif()
+
+# ---- Mods' plugins ----------------------------------------------------------------------------------------------
+# -DKF4_MODS_SRC=<a folder of mods>: the plugin of each mod there with a src/CMakeLists.txt is built with the program,
+# into <mod>/bin/<system>/ (modding/holyland_mod.cmake, docs/port/MODDING.md)
+set(KF4_MODS_SRC "" CACHE PATH "A folder of mods whose plugins to build (each <mod>/src/CMakeLists.txt)")
+set(KF4_ROOT ${CMAKE_SOURCE_DIR})
+if(KF4_MODS_SRC)
+    include(modding/holyland_mod.cmake)
 endif()

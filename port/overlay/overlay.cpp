@@ -350,7 +350,8 @@ extern "C" int port_overlay_holds_input(void) {
 extern "C" int port_overlay_paused(void) {
     // (the first-start setup holds the game still whatever the setting: it opens over the game's start)
     bool pause = port_settings.pause_when_open || port_player_ui_setup_open();
-    return ready && !shot_mode && ((port_player_ui_open() && pause) || port_automap_holds_game());
+    // (port_player_ui_pauses: the menu, or a mod's page in its place)
+    return ready && !shot_mode && ((port_player_ui_pauses() && pause) || port_automap_holds_game());
 }
 
 extern "C" void port_overlay_vblank(void) {

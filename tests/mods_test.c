@@ -60,6 +60,14 @@ int port_zone_begin(ZoneId id) {
 void port_zone_end(ZoneId id) {
     (void)id;
 }
+void port_controls_mod_action(int action, const char *id, const char *label, const char *binding) {
+    (void)action, (void)id, (void)label, (void)binding;
+}
+
+void port_controls_mod_action_used(int action, int used) {
+    (void)action, (void)used;
+}
+
 const char *port_data_dir(void) {
     return data_dir;
 }
@@ -248,6 +256,22 @@ static void make_mods(const char *root) {
     write_file(path, "c", 1);
     snprintf(path, sizeof(path), "%s/c-signs/signs/m0003.png", root);
     write_file(path, "c", 1);
+    /* a mod with code: off until the player turns it on, so its text is not applied ("Code" would be message 0) */
+    snprintf(path, sizeof(path), "%s/d-code", root);
+    make_dir(path);
+    snprintf(path, sizeof(path), "%s/d-code/text.json", root);
+    write_file(path, "{ \"messages\": { \"0\": \"Code\" } }", 31);
+    {
+        const char *manifest =
+            "{ \"name\": \"Coded\", \"version\": \"2.1\", \"api\": 1,\n"
+            "  \"plugin\": { \"windows-x64\": \"bin/a.dll\", \"linux-x64\": \"bin/a.so\" },\n"
+            "  \"settings\": [ { \"key\": \"size\", \"type\": \"choice\", \"choices\": [\"S\", \"M\", \"L\"], \"default\": 1 },\n"
+            "                { \"key\": \"speed\", \"type\": \"number\", \"min\": 1, \"max\": 8, \"default\": 20 } ],\n"
+            "  \"keys\": [ { \"key\": \"open\", \"label\": \"Open\", \"default\": \"B\" } ] }";
+
+        snprintf(path, sizeof(path), "%s/d-code/mod.json", root);
+        write_file(path, manifest, strlen(manifest));
+    }
     snprintf(path, sizeof(path), "%s/_off", root); /* skipped */
     make_dir(path);
     snprintf(path, sizeof(path), "%s/_off/text.json", root);
@@ -326,6 +350,18 @@ static void test_disc(const char *base) {
     CHECK(data != NULL && size == 3 && data[0] == 'x');
     free(data);
     CHECK(!port_disc_replace_member("no/such.file", "x", 1));
+    /* the mod list: d-code read from its mod.json, off (it has a plugin), its settings in range */
+    {
+        PortMod *coded = port_mods_by_id("d-code");
+
+        CHECK(port_mods_count() == 4); /* a-text, b-files, c-signs, d-code (not _off) */
+        CHECK(coded != NULL && !coded->on && !coded->applied && coded->has_plugin && coded->api == 1);
+        CHECK(coded != NULL && strcmp(coded->name, "Coded") == 0 && strcmp(coded->version, "2.1") == 0);
+        CHECK(coded != NULL && coded->setting_count == 2 && coded->settings[0].value == 1 &&
+              coded->settings[0].choice_count == 3 && coded->settings[1].value == 8);
+        CHECK(coded != NULL && coded->key_count == 1 && strcmp(coded->keys[0].label, "Open") == 0);
+        CHECK(port_mods_by_id("a-text") != NULL && port_mods_by_id("a-text")->applied);
+    }
     /* a finer picture goes with the picture in use, whatever the mods' order */
     {
         const char *path = port_mods_find_with("signs/m0001.png", "msg/m0001.tm2");

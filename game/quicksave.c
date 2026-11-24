@@ -40,6 +40,7 @@
 #include "port/platform.h"
 #include "port/automap.h"
 #include "port/hands.h"
+#include "port/mod_api.h"
 #include "port/quicksave.h"
 #include "port/teleport.h"
 #include "port/update_offer.h"
@@ -704,6 +705,7 @@ int Quick_PollTitle(void) {
 
     port_automap_title(); /* the automap mod: the next game may be a new one (game/automap.c) */
     port_hands_title(); /* the hands mod: the same (game/hands.c) */
+    port_mod_title(); /* the mods' plugins: HL_EVENT_TITLE (port/include/port/mod_api.h) */
     port_update_title(); /* a new release: the offer to update, once (port/overlay/update_badge.cpp) */
     if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");

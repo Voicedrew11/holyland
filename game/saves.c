@@ -14,7 +14,7 @@
      not at all: a failed save leaves the save it was to replace as it was.
    - A load puts the data in save_image and leaves the main loop as a card load did.
    The automap and the hands keep their state per save beside it (port_automap_save_file,
-   port_hands_save_file).
+   port_hands_save_file), and the mods' plugins are told (port_mod_save_file).
 
    Runs on the game's thread. Its state is the program's .bss, so a save state holds it. */
 #include <string.h>
@@ -25,6 +25,7 @@
 #include "save/save_card.h"
 #include "port/automap.h"
 #include "port/hands.h"
+#include "port/mod_api.h"
 #include "port/platform.h"
 #include "port/save_files.h"
 
@@ -233,6 +234,7 @@ static s32 do_save(void) {
     card->free_clusters = free_clusters();
     port_automap_save_file(task.save + 1, 1);
     port_hands_save_file(task.save + 1, 1);
+    port_mod_save_file(task.save + 1, 1); /* the mods' plugins: HL_EVENT_SAVE_WRITTEN (port/include/port/mod_api.h) */
     return 1;
 }
 
@@ -249,6 +251,7 @@ static s32 do_load(void) {
     }
     port_automap_save_file(task.save + 1, 0);
     port_hands_save_file(task.save + 1, 0);
+    port_mod_save_file(task.save + 1, 0); /* the mods' plugins: HL_EVENT_SAVE_LOADED */
     save_loaded = 1;
     game_status.bit9 = 1;
     return 1;

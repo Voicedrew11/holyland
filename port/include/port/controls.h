@@ -87,6 +87,8 @@ typedef enum {
                                 spare button (a DualSense's mute key) */
     ACTION_FLY_UP,           /* flying: rise and sink */
     ACTION_FLY_DOWN,
+    ACTION_MOD_FIRST,        /* the mods' keys (mod.json's "keys"): given out at start (port_controls_mod_action) */
+    ACTION_MOD_LAST = ACTION_MOD_FIRST + 15,
     ACTION_COUNT
 } PortAction;
 
@@ -111,6 +113,14 @@ int port_controls_action_used(int action); /* the action means something (its mo
 static inline int port_controls_action_slots(int action) {
     return action == ACTION_RUN ? BINDING_PAD_SLOT : BINDING_SLOTS;
 }
+/* A mod's key: the action `action` (ACTION_MOD_FIRST ...) named id ("mod.kf4-journal.open"), labelled, bound by
+   default to `binding` (port_controls_binding_parse's form, "key:B"; NULL none) */
+void port_controls_mod_action(int action, const char *id, const char *label, const char *binding);
+/* whether a mod's key is in use (its mod is applied): its row shown on Key Bindings */
+void port_controls_mod_action_used(int action, int used);
+/* a mod's key: presses since the last call, and whether held now */
+int port_controls_mod_presses(int action);
+int port_controls_mod_held(int action);
 int port_controls_binding(int action, int slot);
 void port_controls_bind(int action, int slot, int binding);
 int port_controls_is_default(int action);

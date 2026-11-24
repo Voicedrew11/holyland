@@ -169,15 +169,56 @@ static int hands_key_of(int action) {
     }
 }
 
+/* The mods' keys (ACTION_MOD_FIRST ...): named at start from the mods' mod.json (port/platform/mods.c) */
+static char mod_ids[ACTION_MOD_LAST - ACTION_MOD_FIRST + 1][128];
+static char mod_labels[ACTION_MOD_LAST - ACTION_MOD_FIRST + 1][128];
+static int mod_used[ACTION_MOD_LAST - ACTION_MOD_FIRST + 1];
+static volatile int mod_presses[ACTION_MOD_LAST - ACTION_MOD_FIRST + 1];
+static volatile int mod_held[ACTION_MOD_LAST - ACTION_MOD_FIRST + 1];
+
+static int is_mod_action(int action) {
+    return action >= ACTION_MOD_FIRST && action <= ACTION_MOD_LAST;
+}
+
 const char *port_controls_action_label(int action) {
+    if (is_mod_action(action)) {
+        return mod_labels[action - ACTION_MOD_FIRST]; /* (a stable buffer: the menu keeps the pointer) */
+    }
     return action >= 0 && action < ACTION_COUNT ? actions[action].label : "?";
 }
 
 const char *port_controls_action_id(int action) {
+    if (is_mod_action(action)) {
+        return mod_ids[action - ACTION_MOD_FIRST][0] ? mod_ids[action - ACTION_MOD_FIRST] : "mod.unused";
+    }
     return action >= 0 && action < ACTION_COUNT ? actions[action].id : "?";
 }
 
+void port_controls_mod_action_used(int action, int used) {
+    if (is_mod_action(action)) {
+        mod_used[action - ACTION_MOD_FIRST] = used;
+    }
+}
+
+int port_controls_mod_presses(int action) {
+    int presses;
+
+    if (!is_mod_action(action)) {
+        return 0;
+    }
+    presses = mod_presses[action - ACTION_MOD_FIRST];
+    mod_presses[action - ACTION_MOD_FIRST] = 0;
+    return presses;
+}
+
+int port_controls_mod_held(int action) {
+    return is_mod_action(action) && mod_held[action - ACTION_MOD_FIRST];
+}
+
 int port_controls_action_used(int action) {
+    if (is_mod_action(action)) {
+        return mod_used[action - ACTION_MOD_FIRST];
+    }
     if (action == ACTION_STATS_PANEL) {
         return port_stats_options.on;
     }
@@ -210,7 +251,7 @@ int port_controls_action_used(int action) {
    casts, cross uses (and on a controller runs), circle opens the menu, select the shortcut, start
    pauses (Input_SetDefaultControls). In the menus cross chooses, circle goes back, and square and triangle do
    a screen's own things (triangle takes off what is worn). */
-static const int default_bindings[ACTION_COUNT][BINDING_SLOTS] = {
+static int default_bindings[ACTION_COUNT][BINDING_SLOTS] = { /* (the mods' keys' given at start) */
     [ACTION_UP] = {KEY(UP), 0, PAD(DPAD_UP)},
     [ACTION_DOWN] = {KEY(DOWN), 0, PAD(DPAD_DOWN)},
     [ACTION_LEFT] = {KEY(LEFT), 0, PAD(DPAD_LEFT)},
@@ -303,6 +344,25 @@ void port_controls_bind(int action, int slot, int binding) {
     tables_init();
     bindings[action][slot] = binding;
     port_gs_glyph_keys_changed();
+}
+
+void port_controls_mod_action(int action, const char *id, const char *label, const char *binding) {
+    int code = BINDING_NONE, i = action - ACTION_MOD_FIRST;
+
+    if (!is_mod_action(action)) {
+        return;
+    }
+    snprintf(mod_ids[i], sizeof(mod_ids[i]), "%s", id);
+    snprintf(mod_labels[i], sizeof(mod_labels[i]), "%s", label);
+    if (binding != NULL && !port_controls_binding_parse(binding, &code)) {
+        code = BINDING_NONE;
+    }
+    default_bindings[action][0] = code;
+    default_bindings[action][1] = BINDING_NONE;
+    default_bindings[action][2] = BINDING_NONE;
+    if (tables_ready) {
+        memcpy(bindings[action], default_bindings[action], sizeof(bindings[action]));
+    }
 }
 
 int port_controls_is_default(int action) {
@@ -1186,6 +1246,12 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     }
     edges = held & ~pc.previous_actions;
     pc.previous_actions = held;
+    for (action = ACTION_MOD_FIRST; action <= ACTION_MOD_LAST; action++) { /* the mods' keys (holyland_mod.h) */
+        mod_held[action - ACTION_MOD_FIRST] = (held >> action & 1u) != 0;
+        if (edges >> action & 1u) {
+            mod_presses[action - ACTION_MOD_FIRST]++;
+        }
+    }
     pc.run = (held_keys >> ACTION_RUN & 1u) != 0;
     pc.pad_buttons = pad;
 

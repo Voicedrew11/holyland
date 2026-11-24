@@ -20,7 +20,71 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Applies the mods in folder (NULL: <data folder>/mods; "none": none). After port_disc_open. */
+/* ---- The mod list ------------------------------------------------------------------------------------
+
+   A mod may describe itself in <mod>/mod.json (modding/include/holyland_mod.h has the format): its name, version,
+   author, description, the API it needs, its plugin for each system, its settings and its keys. A mod without one
+   is a data mod named by its folder.
+
+   The player turns each mod on or off on the player menu's Mods page (settings.json's "mod_list": {"<mod>": {"on":
+   true, "settings": {"<key>": 1}}}); a mod is on by default unless it has a plugin. On and off take effect at the
+   next start: the files and text are applied, and plugins loaded, once. */
+
+#define PORT_MOD_SETTINGS 16
+#define PORT_MOD_KEYS 8
+#define PORT_MOD_CHOICES 8
+
+typedef enum { PORT_MOD_TOGGLE, PORT_MOD_CHOICE, PORT_MOD_NUMBER } PortModSettingType;
+
+typedef struct {
+    char key[48];
+    char label[96];
+    char help[320];
+    PortModSettingType type;
+    int value, fallback;      /* now, and mod.json's "default" */
+    int min, max, step;       /* a number's */
+    int choice_count;         /* a choice's */
+    char choices[PORT_MOD_CHOICES][48];
+} PortModSetting;
+
+typedef struct {
+    char key[48];
+    char label[96];
+    int action;               /* its PortAction (ACTION_MOD_FIRST ...), -1 none left */
+} PortModKey;
+
+typedef struct {
+    char id[64];              /* the folder's name */
+    char folder[1024];        /* its path */
+    char name[128];           /* mod.json's "name", else the id */
+    char version[32];
+    char author[128];
+    char description[640];
+    char holyland[32];        /* the Holyland it was made for ("0.1.1"), "" any */
+    int api;                  /* the API major it needs, 0 none (a data mod) */
+    char plugin[1100];        /* its plugin for this system, "" none */
+    int has_plugin;           /* it names a plugin for some system */
+    int on;                   /* the player's choice (or the default) */
+    int applied;              /* on at this start: its files and text applied, its plugin loaded if any */
+    int setting_count;
+    PortModSetting settings[PORT_MOD_SETTINGS];
+    int key_count;
+    PortModKey keys[PORT_MOD_KEYS];
+} PortMod;
+
+/* Reads the mods folder's mod.json files (folder as port_mods_open's) and gives the mods' keys their actions. Before
+   port_settings_load, which then reads the player's choices (port_mods_settings_read) and key bindings. */
+void port_mods_scan(const char *folder);
+int port_mods_count(void);
+PortMod *port_mods_get(int index);
+PortMod *port_mods_by_id(const char *id);
+
+/* (port/overlay/settings.c) settings.json's "mod_list" read and written */
+void port_mods_settings_read(const void *mod_list);
+void port_mods_settings_write(void *mod_list);
+
+/* Applies the mods in folder (NULL: <data folder>/mods; "none": none) that are on: their files and text. After
+   port_disc_open. (Scans first if port_mods_scan was not called.) */
 void port_mods_open(const char *folder);
 
 /* The path of `file` in the last applied mod that has it ("journal.json"), NULL when none has: for a mod's own

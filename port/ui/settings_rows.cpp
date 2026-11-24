@@ -728,6 +728,7 @@ struct BindingGroup {
 const BindingGroup binding_groups[] = {
     {ACTION_UP, "PS2 buttons"},   {ACTION_LEFT_STICK_UP, "Walking and looking"}, {ACTION_RUN, "Play"},
     {ACTION_QUICK_SAVE, "Saves"}, {ACTION_GS_CAPTURE, "Debugging"}, {ACTION_SHOW_FPS, "Display and mods"},
+    {ACTION_MOD_FIRST, "Mods' keys"},
 };
 
 const auto binding_rows = [] {
@@ -1489,6 +1490,10 @@ const SettingRow cheats_rows[] = {
      nullptr, cheat_message},
 };
 
+} // namespace
+extern std::array<SettingRow, 160> mod_rows_table; // the Mods page (port/ui/mods_rows.cpp)
+namespace {
+
 bool cheats_shown() {
     return port_settings.cheats_shown != 0; // (the logo's five clicks: port/ui/player_ui.cpp)
 }
@@ -1497,7 +1502,8 @@ const SettingTab tabs[] = {
     {"display", "Display", display_rows},       {"graphics", "Graphics", graphics_rows},
     {"controls", "Controls", controls_rows},    {"keys", "Key Bindings", binding_rows},
     {"gameplay", "Gameplay", gameplay_rows},    {"interface", "Interface", interface_rows},
-    {"general", "General", general_rows},       {"cheats", "Cheats", cheats_rows, cheats_shown},
+    {"general", "General", general_rows},       {"mods", "Mods", mod_rows_table},
+    {"cheats", "Cheats", cheats_rows, cheats_shown},
     {"report", "Report an Issue", report_rows},
 };
 
