@@ -4,8 +4,10 @@
 //
 //   launcher_test
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <system_error>
@@ -14,6 +16,7 @@
 #include "build_key.h"
 #include "build_log.h"
 #include "build_strategy.h"
+#include "crash_report.h"
 #include "disc_check.h"
 #include "launcher_files.h"
 #include "platform.h"
@@ -21,6 +24,7 @@
 #include "self_update.h"
 #include "setup_flow.h"
 #include "update_delta.h"
+#include "zip_archive.hpp"
 
 extern "C" {
 #include "monocypher-ed25519.h"
@@ -684,6 +688,39 @@ void test_update_request() {
     fs::remove_all(dir, error);
 }
 
+// The game stopped: the crash report holds the log that ended, the PC, settings and saves, redacted, and the form's
+// link is titled with how it ended
+void test_crash_report() {
+    const fs::path data = temp_dir("holyland-crash-report");
+    DataPaths paths{data, data / "builds"};
+    const char *home = std::getenv("HOME");
+    write(paths.game_log(), std::string("[gpu] RADV\n[disc] ") + (home ? home : "/home/x") + "/kf4.iso\n[port] crashed\n");
+    write(data / "settings.json", "{\"volume\": 80}\n");
+    write(data / "saves" / "save1.kf4save", "save");
+    write(data / "quicksaves" / "quick0.kf4quick", "quick");
+    const std::optional<CrashReport> made = make_crash_report(paths, {"a segmentation fault", "kf4 --disc x", "0.2.0"});
+    check("crash report made", made.has_value() && fs::exists(made->zip));
+    if (!made)
+        return;
+    std::ifstream in(made->zip, std::ios::binary);
+    std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto entries = report::zip_entries(bytes);
+    std::map<std::string, std::string> files;
+    for (const report::ZipEntry &e : entries.value_or(std::vector<report::ZipEntry>{}))
+        files[e.name] = std::string(e.data.begin(), e.data.end());
+    check("crash report: the log, the PC, settings, saves",
+          files.count("logs/game.log") && files.count("system.txt") && files.count("crash.txt") &&
+              files.count("settings.json") && files["saves/save1.kf4save"] == "save" &&
+              files["saves/quicksaves/quick0.kf4quick"] == "quick");
+    check("crash report: says how it ended", files["crash.txt"].find("a segmentation fault") != std::string::npos);
+    check("crash report: the home folder taken out",
+          home == nullptr || (files["logs/game.log"].find(home) == std::string::npos &&
+                              files["logs/game.log"].find("~/kf4.iso") != std::string::npos));
+    check("crash report: the form titled",
+          made->url.find("title=The%20game%20stopped%3A%20a%20segmentation%20fault") != std::string::npos);
+    check("crash report: the log's end in the form", made->url.find("crashed") != std::string::npos);
+}
+
 int main() {
     test_sha256();
     test_build_key();
@@ -699,6 +736,7 @@ int main() {
     test_delta_file();
     test_delta_tree();
     test_update_request();
+    test_crash_report();
     std::printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;
 }

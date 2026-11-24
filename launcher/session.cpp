@@ -16,6 +16,7 @@
 
 #include "build_key.h"
 #include "build_strategy.h"
+#include "crash_report.h"
 #include "disc_check.h"
 #include "launcher_files.h"
 #include "platform.h"
@@ -26,6 +27,8 @@
 #include "setup_pages.h"
 #include "update_check.h"
 #include "window.h"
+
+#include "report_bundle.hpp" // keep_link_instead (port/report/)
 
 #ifndef HOLYLAND_VERSION
 #define HOLYLAND_VERSION ""
@@ -163,7 +166,7 @@ private:
     int play();
     // an update to `tag` begun (self_update.h); a build going is stopped
     void start_update(std::string tag);
-    void show_game_stopped(int code);
+    void show_game_stopped(int code, const std::vector<std::string> &argv); // (the game's, for a crash report)
 
     // a frame of each screen; returns the next screen
     Screen draw(Screen screen, Window &window);
@@ -400,6 +403,11 @@ int Session::play() {
     // the player's working folder, so that paths given after "--" mean what they meant there
     spec.capture_output = true;
     spec.stop_with_children = false;
+    // the game's log: where the game's Report an Issue reads it (port/report/problem_report.cpp); the run before
+    // kept as game.prev.log, for a report made after a crash
+    std::error_code moved;
+    fs::rename(paths_.game_log(), paths_.game_prev_log(), moved);
+    spec.env.emplace_back("KF4_GAME_LOG", paths_.game_log().u8string());
     std::string why;
     auto game = platform_.start(spec, why);
     if (!game) {
@@ -410,7 +418,7 @@ int Session::play() {
     std::ofstream log(paths_.game_log(), std::ios::trunc);
     while (auto line = game->read_line()) {
         std::fprintf(stdout, "%s\n", line->c_str());
-        log << *line << '\n';
+        log << *line << '\n' << std::flush; // (whole lines in the file as they come: the game's report reads it)
     }
     int code = game->wait();
     if (code != 0) {
@@ -422,11 +430,36 @@ int Session::play() {
     std::fflush(stdout);
     log.close();
     if (code != 0)
-        show_game_stopped(code);
+        show_game_stopped(code, spec.argv);
     return code;
 }
 
-void Session::show_game_stopped(int code) {
+// The game's command line as one line, for a report
+std::string command_line_of(const std::vector<std::string> &argv) {
+    std::string line;
+    for (const std::string &arg : argv) {
+        if (!line.empty())
+            line += ' ';
+        line += arg.find(' ') != std::string::npos ? "\"" + arg + "\"" : arg;
+    }
+    return line;
+}
+
+// Report the problem: the crash report made, the issue form and the report's folder opened; what the page says
+std::string report_crash(const DataPaths &paths, const CrashFacts &facts) {
+    const std::optional<CrashReport> made = make_crash_report(paths, facts);
+    if (!made)
+        return "The report could not be saved in " + (paths.data / "reports").u8string() + ".";
+    std::fprintf(stderr, "[%s] crash report saved: %s\n", kProductId, made->zip.u8string().c_str());
+    if (!report::keep_link_instead(made->zip, made->url)) {
+        if (!SDL_OpenURL(made->url.c_str()))
+            std::fprintf(stderr, "[%s] the browser did not open: %s\n", kProductId, SDL_GetError());
+        open_folder(made->zip.parent_path());
+    }
+    return "Saved " + made->zip.u8string() + ". Drag it into the issue form your browser opened.";
+}
+
+void Session::show_game_stopped(int code, const std::vector<std::string> &argv) {
     std::string why;
     auto window = Window::open(kProductName, why);
     if (!window)
@@ -451,6 +484,9 @@ void Session::show_game_stopped(int code) {
         window->scroll_to_end("log");
         if (window->take_action("open-folder"))
             open_folder(paths_.data);
+        if (window->take_action("report"))
+            window->set_text("report-note", report_crash(paths_, {platform_.describe_exit(code), command_line_of(argv),
+                                                                   launcher_version()}));
         if (window->take_action("close"))
             break;
         window->end_frame();

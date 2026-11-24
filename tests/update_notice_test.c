@@ -69,17 +69,10 @@ static void test_cache(void) {
 }
 
 static void test_when_to_ask(void) {
-    UpdateRelease never = {0}, recent = {10000, "v1", "https://github.com/x"};
-
     check("env 0 turns it off", update_check_mode("0", 1) == UPDATE_CHECK_OFF);
     check("env force", update_check_mode("force", 0) == UPDATE_CHECK_FORCE);
     check("the player's choice", update_check_mode(NULL, 1) == UPDATE_CHECK_ON && update_check_mode("1", 0) == UPDATE_CHECK_OFF);
-    check("never asked: due", update_check_due(UPDATE_CHECK_ON, &never, 5));
-    check("within the hour: not due", !update_check_due(UPDATE_CHECK_ON, &recent, 10000 + UPDATE_CHECK_INTERVAL_S - 1));
-    check("an hour on: due", update_check_due(UPDATE_CHECK_ON, &recent, 10000 + UPDATE_CHECK_INTERVAL_S));
-    check("clock set back: due", update_check_due(UPDATE_CHECK_ON, &recent, 9000));
-    check("force: due", update_check_due(UPDATE_CHECK_FORCE, &recent, 10001));
-    check("off: never", !update_check_due(UPDATE_CHECK_OFF, &never, 5));
+    check("env force overrides the player's off", update_check_mode("force", 0) == UPDATE_CHECK_FORCE);
 }
 
 static void test_when_to_tell(void) {

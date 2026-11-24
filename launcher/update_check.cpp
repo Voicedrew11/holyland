@@ -43,7 +43,8 @@ void UpdateCheck::start(const Platform &platform, const DataPaths &paths, const 
         release_ = cached;
         running_version_ = std::move(running_version);
     }
-    if (mode == UPDATE_CHECK_OFF || !update_check_due(mode, &cached, now_s())) {
+    // every start asks once, however recently the last one did
+    if (mode == UPDATE_CHECK_OFF) {
         done_ = true;
         return;
     }

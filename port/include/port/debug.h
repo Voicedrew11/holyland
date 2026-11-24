@@ -33,6 +33,8 @@ void port_debug_set_message(const char *fmt, ...)
 #endif
     ;
 void port_debug_write_state_dump(void); /* the game's thread, at a vblank */
+/* F10's JSON into an open file (a problem report's game_state.json); the game's thread */
+void port_debug_write_state(FILE *file);
 void port_debug_write_audio_tail(void);
 /* The captures folder, and what the last request did (for the overlay and stderr) */
 const char *port_debug_folder(void);

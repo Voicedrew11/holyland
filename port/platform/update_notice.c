@@ -101,20 +101,6 @@ UpdateCheckMode update_check_mode(const char *env_value, int player_wants_checks
     return player_wants_checks ? UPDATE_CHECK_ON : UPDATE_CHECK_OFF;
 }
 
-int update_check_due(UpdateCheckMode mode, const UpdateRelease *cache, int64_t now_s) {
-    switch (mode) {
-    case UPDATE_CHECK_OFF:
-        return 0;
-    case UPDATE_CHECK_FORCE:
-        return 1;
-    case UPDATE_CHECK_ON:
-        /* a clock set back counts as due */
-        return cache->checked_s <= 0 || now_s < cache->checked_s ||
-               now_s - cache->checked_s >= UPDATE_CHECK_INTERVAL_S;
-    }
-    return 0;
-}
-
 int update_notice_due(const UpdateRelease *release, const char *running_version, const char *skipped_tag) {
     if (running_version == NULL || running_version[0] == 0 || release->tag[0] == 0 || release->url[0] == 0) {
         return 0;

@@ -41,6 +41,11 @@ int port_vk_imgui_init(void);
    stops taking pictures until they are written, then port_debug_set_message says so): the number of
    pictures it will write, or 0 with why not in why. Any thread. */
 int port_vk_flash_write(const char *folder, char *why, size_t size);
+/* The ring's newest picture alone, as folder/0000.png (and pictures.txt), the ring kept and no message shown: 1 when
+   asked for (port_vk_flash_info says when it is written), or 0 with why not in why. Any thread (a problem report). */
+int port_vk_flash_write_newest(const char *folder, char *why, size_t size);
+/* The presenter's GPU, its driver, memory and picture size, a fact a line ("GPU: ...\n"). Any thread. */
+void port_vk_describe(char *out, size_t size);
 /* What the ring holds now: pictures, their size, and the GPU memory it takes (MB); 1 while writing */
 int port_vk_flash_info(int *pictures, int *width, int *height, double *megabytes);
 #endif

@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -64,6 +65,21 @@ struct Hint {
     uint64_t from_ms = 0;  // showing from then (fading in) until then (fading out); until 0: not showing
     uint64_t until_ms = 0;
 };
+
+// A line over the game while the menu is closed (port_player_ui_notice: a problem report's progress). Set from any
+// thread, under its lock; drawn on the game's thread.
+struct Notice {
+    std::mutex lock;
+    std::string text;      // (under lock)
+    uint64_t until_ms = 0; // (under lock) shown until then; 0: not showing
+};
+Notice notice;
+
+// The notice's text while it shows, else empty
+std::string notice_now() {
+    std::lock_guard<std::mutex> hold(notice.lock);
+    return SDL_GetTicks() < notice.until_ms ? notice.text : std::string();
+}
 
 // The clicks on the Holyland logo: five in a row, each soon after the last, show the Cheats tab (or hide it again).
 // Each click lights the logo up for a moment, the fifth for longer.
@@ -117,11 +133,12 @@ struct Menu {
     ui::SetupFlow setup{ui::find_setting_row, emulator_saves.get()};
     bool in_setup = false;     // the setup shows, in place of the settings
     bool setup_wanted = false; // Run setup again was chosen: the setup opens once the press is done
+    bool close_wanted = false; // a row asked the menu to close (Report an Issue): it closes once the press is done
     PointerEvents pointer;
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
-    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml;
+    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml, notice_rml;
     bool body_setup = false; // the document's body.setup, as last set
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
@@ -275,6 +292,10 @@ void press(ui::MenuInput input) {
     if (menu.setup_wanted) {
         start_setup(ui::SetupStart::again);
     }
+    if (menu.close_wanted) {
+        menu.close_wanted = false;
+        set_open(false);
+    }
 }
 
 // Kenney's controller fonts, one family each (pad_glyphs.hpp)
@@ -375,6 +396,10 @@ void PointerEvents::ProcessEvent(Rml::Event &event) {
     }
     if (menu.setup_wanted) {
         start_setup(ui::SetupStart::again);
+    }
+    if (menu.close_wanted) {
+        menu.close_wanted = false;
+        set_open(false);
     }
     menu.scroll_wanted = false;
 }
@@ -809,6 +834,13 @@ void show_state(float hint) {
         std::snprintf(opacity, sizeof(opacity), "%.3f", double(hint));
         element->SetProperty("opacity", opacity);
     }
+    if (Rml::Element *element = document.GetElementById("notice")) {
+        const std::string text = notice_now();
+        std::string rml;
+        escaped(rml, text);
+        set_part("notice", menu.notice_rml, rml);
+        element->SetClass("shown", !text.empty());
+    }
 }
 
 // The right button: on a binding's slot, clears it; anywhere else, Back
@@ -1020,7 +1052,7 @@ extern "C" int port_player_ui_open(void) {
 
 extern "C" int port_player_ui_visible(void) {
     // (a hint waiting for the start of play: port_player_ui_draw watches for it)
-    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f);
+    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f || !notice_now().empty());
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -1089,6 +1121,16 @@ extern "C" int port_player_ui_show(const char *tab_id) {
 
 extern "C" void port_player_ui_run_setup(void) {
     menu.setup_wanted = menu.ready; // (once the press that chose it is done: press, PointerEvents)
+}
+
+extern "C" void port_player_ui_close(void) {
+    menu.close_wanted = menu.ready && menu.open; // (once the press that chose it is done, as Run setup again)
+}
+
+extern "C" void port_player_ui_notice(const char *text, unsigned ms) {
+    std::lock_guard<std::mutex> hold(notice.lock);
+    notice.text = text != nullptr ? text : "";
+    notice.until_ms = SDL_GetTicks() + ms;
 }
 
 extern "C" int port_player_ui_setup_open(void) {

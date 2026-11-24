@@ -26,6 +26,7 @@ struct DataPaths {
     fs::path update_request() const { return data / "update-request.json"; } // the game's ask (self_update.h)
     fs::path build_log() const { return data / "build.log"; }
     fs::path game_log() const { return data / "game.log"; }
+    fs::path game_prev_log() const { return data / "game.prev.log"; } // (the run before)
 };
 
 // The same folders the game uses (port/platform/data_dir.c); nullopt if a path is too long

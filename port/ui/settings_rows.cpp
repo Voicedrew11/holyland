@@ -19,6 +19,7 @@ extern "C" {
 #include "port/live_settings.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
+#include "port/problem_report.h"
 #include "port/quicksave.h"
 #include "port/scene_depth.h"
 #include "port/settings.h"
@@ -1267,6 +1268,15 @@ const SettingRow general_rows[] = {
      set_pause},
 };
 
+const SettingRow report_rows[] = {
+    {"Make a Report",
+     "Saves a report file (.zip) and opens GitHub's issue form in your browser. Drag the file into the form.\n"
+     "It holds the game's log, your PC's details, your settings, a picture of the game and your saves, with your "
+     "user and computer names taken out. The game sends nothing itself.",
+     RowKind::action, {}, {}, nullptr, nullptr, port_report_start, nullptr, nullptr, nullptr, nullptr,
+     port_report_message},
+};
+
 const SettingRow cheats_rows[] = {
     {"Cheats", "", RowKind::heading},
     {"Invincible", "No HP lost. Off again at the next start.", RowKind::toggle, on_off, {}, get_invincible,
@@ -1326,6 +1336,7 @@ const SettingTab tabs[] = {
     {"controls", "Controls", controls_rows},    {"keys", "Key Bindings", binding_rows},
     {"gameplay", "Gameplay", gameplay_rows},    {"interface", "Interface", interface_rows},
     {"general", "General", general_rows},       {"cheats", "Cheats", cheats_rows, cheats_shown},
+    {"report", "Report an Issue", report_rows},
 };
 
 bool tab_shown(const SettingTab &tab) {
