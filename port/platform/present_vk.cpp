@@ -452,6 +452,40 @@ void wait_queue() {
     gsr_queue_unlock();
 }
 
+// A new surface for the window, after one was lost: false if none can be made now (logged once until one is; tried
+// again at each picture by make_swapchain)
+bool make_surface() {
+    static bool failing;
+    if (!SDL_Vulkan_CreateSurface(pr.window, pr.instance, nullptr, &pr.surface)) {
+        if (!failing) {
+            std::fprintf(stderr, "[present] no Vulkan surface for the window: %s; tried again at each picture\n",
+                         SDL_GetError());
+        }
+        failing = true;
+        pr.surface = VK_NULL_HANDLE;
+        return false;
+    }
+    VkBool32 supported = VK_FALSE;
+    VkResult asked = vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
+    if (asked != VK_SUCCESS || !supported) {
+        check(asked, "vkGetPhysicalDeviceSurfaceSupportKHR");
+        if (!failing) {
+            std::fprintf(stderr, "[present] the new surface cannot be presented to (VkResult %d); tried again at each "
+                                 "picture\n",
+                         int(asked));
+        }
+        failing = true;
+        vk.vkDestroySurfaceKHR(pr.instance, pr.surface, nullptr);
+        pr.surface = VK_NULL_HANDLE;
+        return false;
+    }
+    if (failing) {
+        std::fprintf(stderr, "[present] the window has a surface again\n");
+    }
+    failing = false;
+    return true;
+}
+
 // (VK_ERROR_SURFACE_LOST_KHR) The window's surface made again, and the swapchain at the next picture: without it
 // every acquire after a lost surface fails and the window stays black or frozen
 void remake_surface() {
@@ -467,18 +501,25 @@ void remake_surface() {
     }
     pr.stale = true;
     std::fprintf(stderr, "[present] the window's surface was lost: made again\n");
-    if (!SDL_Vulkan_CreateSurface(pr.window, pr.instance, nullptr, &pr.surface)) {
-        std::fprintf(stderr, "[present] no Vulkan surface for the window: %s\n", SDL_GetError());
-        pr.surface = VK_NULL_HANDLE;
-        return;
+    make_surface();
+}
+
+// (vkQueueSubmit failed, with the queue lock held: out of memory, as a lost GPU has ended the game) The frame put
+// back as if it had run: its fence was reset and nothing would signal it, so the next wait for it would never
+// return, the game held on its last picture with its sound going on. An empty batch takes the swapchain image's
+// semaphore and signals the fence; the image is not presented, so the swapchain is made again.
+void frame_not_submitted(Frame &f) {
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo empty = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    empty.waitSemaphoreCount = 1;
+    empty.pWaitSemaphores = &f.acquired;
+    empty.pWaitDstStageMask = &stage;
+    VkResult result = vk.vkQueueSubmit(pr.queue, 1, &empty, f.done);
+    if (result != VK_SUCCESS) {
+        check(result, "vkQueueSubmit (an empty batch)");
+        device_lost("nothing can be submitted to the GPU's queue"); // (rather than wait for ever)
     }
-    VkBool32 supported = VK_FALSE;
-    VkResult asked = vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
-    if (asked != VK_SUCCESS || !supported) {
-        std::fprintf(stderr, "[present] the new surface cannot be presented to (VkResult %d)\n", int(asked));
-        vk.vkDestroySurfaceKHR(pr.instance, pr.surface, nullptr);
-        pr.surface = VK_NULL_HANDLE;
-    }
+    pr.stale = true;
 }
 
 // (an acquire's or a present's result, past out of date and suboptimal) A swapchain or surface that cannot be used
@@ -492,6 +533,24 @@ void swapchain_error(VkResult result, const char *where) {
     if (result < 0) {
         pr.stale = true;
     }
+}
+
+// The longest a picture waits for a swapchain image: a compositor or driver that stops giving them back (a hidden
+// window on some, a swapchain gone bad) held the game on its last picture for good, with its sound going on
+constexpr uint64_t ACQUIRE_MOST_NS = 1'000'000'000;
+
+// (an acquire that waited ACQUIRE_MOST_NS for nothing) The picture not shown, and the swapchain made again at the
+// next; the first few in the log
+void acquire_timed_out() {
+    enum { LOGGED_MOST = 4 };
+    static int logged;
+    if (logged < LOGGED_MOST) {
+        logged++;
+        std::fprintf(stderr, "[present] no swapchain image for %llu ms: the picture not shown, the swapchain made "
+                             "again%s\n",
+                     (unsigned long long)(ACQUIRE_MOST_NS / 1000000), logged == LOGGED_MOST ? " (no more logged)" : "");
+    }
+    pr.stale = true;
 }
 
 // The swapchain mode asked for over vsync's (Presenter::mode_wanted), from the options as they are now
@@ -519,8 +578,8 @@ void swapchain_failed(const char *why, VkResult result) {
 // is minimised, or it failed). Made again at the next picture until it is made.
 bool make_swapchain() {
     pr.stale = true;
-    if (pr.surface == VK_NULL_HANDLE) {
-        return false; // (lost, and not made again: remake_surface logged it)
+    if (pr.surface == VK_NULL_HANDLE && !make_surface()) {
+        return false; // (lost, and not made again yet: logged)
     }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
@@ -1721,7 +1780,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     fold_check_read(f);
     uint32_t index = 0;
     waiting = port_zone_begin(present_image_zone);
-    VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, no_wait ? 0 : UINT64_MAX, f.acquired,
+    VkResult result = vk.vkAcquireNextImageKHR(pr.device, pr.swapchain, no_wait ? 0 : ACQUIRE_MOST_NS, f.acquired,
                                                VK_NULL_HANDLE, &index);
     if (waiting) {
         port_zone_end(present_image_zone);
@@ -1729,6 +1788,10 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     if (no_wait && (result == VK_TIMEOUT || result == VK_NOT_READY)) {
         skipped_waiting(image, tag);
         return 0;
+    }
+    if (result == VK_TIMEOUT || result == VK_NOT_READY) {
+        acquire_timed_out();
+        return 1;
     }
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         pr.stale = true;
@@ -2036,11 +2099,15 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     vk.vkResetFences(pr.device, 1, &f.done);
     int queueing = port_zone_begin(present_queue_zone);
     gsr_queue_lock();
-    check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done), "vkQueueSubmit");
+    VkResult submitted = vk.vkQueueSubmit(pr.queue, 1, &submit, f.done);
+    if (submitted != VK_SUCCESS) {
+        check(submitted, "vkQueueSubmit");
+        frame_not_submitted(f);
+    }
     if (have_scanout) {
         gsr_scanout_release(); // (submitted: whatever the PC renderer writes into it next comes after)
     }
-    result = vk.vkQueuePresentKHR(pr.queue, &present);
+    result = submitted == VK_SUCCESS ? vk.vkQueuePresentKHR(pr.queue, &present) : VK_SUCCESS;
     gsr_queue_unlock();
     if (queueing) {
         port_zone_end(present_queue_zone);

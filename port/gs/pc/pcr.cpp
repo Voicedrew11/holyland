@@ -713,7 +713,16 @@ std::optional<PictureSize> picture_size(const VblankPicture &v, bool extra, uint
     if (extra && !whole) {
         return std::nullopt;
     }
-    if (lines == 0 || size_t(rect.w) * sx * lines * sy > PORT_GS_FRAME_PIXELS) {
+    if (lines == 0) {
+        return std::nullopt;
+    }
+    if (size_t(rect.w) * sx * lines * sy > PORT_GS_FRAME_PIXELS) {
+        // (not met at the game's own sizes and the scales allowed: in a player's log it says why the window is black)
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) {
+            fprintf(stderr, "[pcr] a %ux%u picture at scale %ux%u is over the most pixels a picture has: not shown\n",
+                    rect.w, lines, sx, sy);
+        }
         return std::nullopt;
     }
     return PictureSize{rect.w * sx, lines * sy};

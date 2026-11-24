@@ -417,6 +417,29 @@ static void pss_pes_packet(PssBits *b, PesPacket *pkt) {
     }
 }
 
+/* 1 if the bytes at b->pos, all four of them in the `size` bytes there are, start no packet or pack: a sector the
+   disc could not read, given as zeros (port_disc_read). PSS packs are whole sectors, so the next one starts one. */
+static int pss_starts_nothing(const PssBits *b, int size) {
+    return b->pos + 32 <= (uint64_t)size * 8 && pss_next(b, 24) != 1;
+}
+
+/* Bytes that start nothing skipped, to the next start code (or the last three bytes, which may begin one). Without
+   it the demultiplexing stopped at them having used nothing, and the movie's reader (gfx/movie.c) gave the same
+   bytes again for ever: a black screen with the movie's sound going on. Returns 1 if any were skipped. */
+static int pss_skip_unreadable(PssBits *b, int size) {
+    uint64_t from = b->pos;
+
+    while (pss_starts_nothing(b, size)) {
+        b->pos += 8;
+    }
+    if (b->pos == from) {
+        return 0;
+    }
+    port_event("movie: %llu bytes that start no packet skipped (a sector that could not be read?)",
+               (unsigned long long)((b->pos - from) >> 3));
+    return 1;
+}
+
 int sceMpegDemuxPssRing(sceMpeg *mp, void *buf, int size, void *ring, int ring_size) {
     MpegState *s = state_of(mp);
     PssBits b;
@@ -440,6 +463,9 @@ int sceMpegDemuxPssRing(sceMpeg *mp, void *buf, int size, void *ring, int ring_s
         }
     }
     do {
+        if (go_on && pss_skip_unreadable(&b, size)) {
+            consumed = (int)(b.pos >> 3);
+        }
         if (pss_next(&b, 32) == 0x1BA) {
             pss_pack_header(&b);
         }
@@ -473,7 +499,7 @@ int sceMpegDemuxPssRing(sceMpeg *mp, void *buf, int size, void *ring, int ring_s
         if (b.pos > (uint64_t)size * 8) {
             break;
         }
-    } while (pss_next(&b, 32) == 0x1BA);
+    } while (pss_next(&b, 32) == 0x1BA || (go_on && pss_starts_nothing(&b, size)));
     return consumed;
 }
 
