@@ -13,6 +13,7 @@
 #include <optional>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include "build_key.h"
 #include "build_strategy.h"
@@ -280,7 +281,8 @@ int Session::build_only() {
         std::fprintf(stderr, "[%s] already built: %s\n", kProductId, game_path().u8string().c_str());
         return 0;
     }
-    fs::remove_all(build_dir(), error);
+    if (std::string left = remove_tree(build_dir()); !left.empty())
+        std::fprintf(stderr, "[%s] %s\n", kProductId, left.c_str());
     ConsoleBuild progress(paths_.build_log());
     BuildResult result =
         platform_.build_strategy().build(platform_, BuildRequest{content_, build_dir(), launcher_version()}, progress);
@@ -313,6 +315,8 @@ void open_folder(const fs::path &folder) {
 }
 
 Screen Session::first_screen() {
+    if (build_ready()) // what an earlier start could not remove (Windows players found every old build left behind, #247)
+        remove_old_builds();
     setup_ = std::make_unique<SetupFlow>(setup_pages());
     if (!setup_->finished())
         return Screen::setup;
@@ -373,8 +377,7 @@ void Session::start_build() {
         build_->cancel();
         build_thread_.join();
     }
-    std::error_code error;
-    fs::remove_all(build_dir(), error);
+    remove_tree(build_dir());
     build_ = std::make_unique<BuildRun>(paths_.build_log());
     BuildRequest request{content_, build_dir(), launcher_version()};
     BuildRun *run = build_.get();
@@ -386,13 +389,17 @@ void Session::start_build() {
     });
 }
 
+// the builds of other releases, and the objects of this one if their removal failed (build_local.cpp)
 void Session::remove_old_builds() {
     std::error_code error;
+    std::vector<fs::path> old = {build_dir() / "obj"};
     for (fs::directory_iterator it(paths_.builds, error), end; !error && it != end; it.increment(error)) {
-        if (it->path().filename() != key_ && it->is_directory(error)) {
-            std::error_code ignored;
-            fs::remove_all(it->path(), ignored);
-        }
+        if (it->path().filename() != key_ && it->is_directory(error))
+            old.push_back(it->path());
+    }
+    for (const fs::path &dir : old) {
+        if (std::string left = remove_tree(dir); !left.empty()) // (one still in use stays until a later start)
+            std::fprintf(stderr, "[%s] %s\n", kProductId, left.c_str());
     }
 }
 

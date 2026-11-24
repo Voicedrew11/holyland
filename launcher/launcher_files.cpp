@@ -149,4 +149,25 @@ bool write_choices(const fs::path &file, const LauncherChoices &choices) {
     return write_file_atomically(file, out);
 }
 
+std::string remove_tree(const fs::path &dir) {
+    std::error_code error;
+    if (!fs::exists(fs::symlink_status(dir, error)))
+        return {};
+    // writable first, folders as well as files (fs::permissions on Windows clears the read-only attribute)
+    fs::permissions(dir, fs::perms::owner_all, fs::perm_options::add, error);
+    for (fs::recursive_directory_iterator it(dir, error), end; !error && it != end; it.increment(error)) {
+        std::error_code ignored;
+        if (it->is_symlink(ignored))
+            continue;
+        fs::perms wanted = it->is_directory(ignored) ? fs::perms::owner_all : fs::perms::owner_write;
+        fs::permissions(it->path(), wanted, fs::perm_options::add, ignored);
+    }
+    fs::remove_all(dir, error);
+    if (error)
+        return "cannot remove " + dir.u8string() + ": " + error.message();
+    if (fs::exists(fs::symlink_status(dir, error)))
+        return "cannot remove " + dir.u8string();
+    return {};
+}
+
 } // namespace launcher
