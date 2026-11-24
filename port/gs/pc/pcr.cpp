@@ -2682,9 +2682,12 @@ public:
     }
 
     // (kf4-pc) Whether a picture between is made (PictureBudget::admit, under the lock)
-    bool admit(pcr::PictureKind kind, double now_s, double shown_s, double phase, double vblank_s, bool next_frame) {
+    bool admit(pcr::PictureKind kind, double now_s, double shown_s, double phase, double vblank_s, bool next_frame,
+               bool allow_own_recovery) {
         std::lock_guard<std::mutex> hold(lock_);
-        return budget_.admit(kind, now_s, queue_.free_s(), shown_s, phase, vblank_s, next_frame);
+        // Recovery must not queue behind work whose predicted completion has passed but whose fence is still pending.
+        return budget_.admit(kind, now_s, queue_.free_s(), shown_s, phase, vblank_s, next_frame,
+                             allow_own_recovery && queue_.in_flight() == 0);
     }
 
     // --stats (the threads idle)
@@ -3656,7 +3659,9 @@ private:
         if (budget_on_ && p.picture.shown_s > 0) {
             // (slice 5) begun no sooner than its cost before its time (and where the next vblank's own picture is a game
             // frame's, before that one's GPU work); left out, with the picture that would show it, when it would not be
-            // ready then. The game frame's first vblank's own picture is the frame's, unless the mouse turned it.
+            // ready then. At <=60 Hz, allow a bounded recovery of the vblank's own camera image if the GPU is idle
+            // and the following picture still has room. Extra pictures and higher rates retain their strict deadline.
+            // The game frame's first vblank's own picture is the frame's, unless the mouse turned it.
             const double shown = p.picture.shown_s, phase = p.picture.phase;
             if (phase == 0 && p.picture.t == 0) {
                 frames_shown_lately_ = false; // (the frame's own vblank shown as a picture between: the mouse)
@@ -3668,7 +3673,8 @@ private:
                        }),
                        true);
             const double now = port_wall_seconds();
-            if (!watch_.admit(kind, now, shown, phase, port_vblank_wall_seconds(), next_frame)) {
+            if (!watch_.admit(kind, now, shown, phase, port_vblank_wall_seconds(), next_frame,
+                              port_frame_rate_hz() <= 60)) {
                 between_left_out_ = true;
                 // (the frame's own picture instead only where no picture between reaches the screen: where the others
                 // do, the frame's own shows its camera before the mouse's turn, two game frames behind the pictures

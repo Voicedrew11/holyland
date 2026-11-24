@@ -101,8 +101,9 @@ struct Spike {
 // clocks: a GPU that lowers its clocks when it has been busy less than 30% of the time lately (over about 200 ms), its
 // work then 1.8 times as long (an AMD APU's 400 MHz for 1800: busy half the time it kept 1800, a sixth 400)
 Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks, Spike spike = {}, int per = 4,
-             bool asked = false, bool clocks = false) {
-    const double v = 1001.0 / 60000.0, cpu = 0.001;
+             bool asked = false, bool clocks = false, bool recovery = false, double packet_ms = 0,
+             double cpu_ms = 1.0) {
+    const double v = 1001.0 / 60000.0, cpu = cpu_ms / 1000.0;
     PictureBudget b;
     GpuQueueTime q;
     struct Flight {
@@ -124,11 +125,15 @@ Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks, Spike sp
             now = std::max({now, asked ? shown - v : 0.0, (frame ? b.begin_at_s(kind, shown)
                                        : b.between_begin_at_s(kind, shown, phase, v, next_frame)) +
                                     woke});
+            if (n % 2 == 0 && k == 0 && packet_ms > 0) {
+                now = std::max(now, shown - v + packet_ms / 1000.0);
+            }
             while (!flights.empty() && flights.front().done <= now) {
                 q.done(flights.front().serial, flights.front().done);
                 flights.erase(flights.begin());
             }
-            if (!frame && !b.admit(kind, now, q.free_s(), shown, phase, v, next_frame)) {
+            if (!frame && !b.admit(kind, now, q.free_s(), shown, phase, v, next_frame,
+                                    recovery && per == 1 && q.in_flight() == 0)) {
                 r.left_out += n >= 8;
                 continue;
             }
@@ -164,6 +169,79 @@ Run simulate(double gpu_ms, double frame_ms, bool turning, int vblanks, Spike sp
         }
     }
     return r;
+}
+
+void own_recovery_limits() {
+    PictureBudget b;
+    const double v = 1001.0 / 60000.0, shown = 10.0, late_start = shown - 0.003;
+    const PictureKind own = PictureKind::between_own;
+    CHECK(!b.recover_own(own, late_start, 0, shown, 0, v, false)); // no measurements yet
+    b.made(own, 0.002, 0.006);
+    CHECK(!b.fits(own, late_start, 0, shown, 0, v, false));
+    CHECK(b.recover_own(own, late_start, 0, shown, 0, v, false));
+    CHECK(b.admit(own, late_start, 0, shown, 0, v, false, true));
+    CHECK(b.admit(own, shown - 0.012, 0, shown, 0, v, false, true));
+    CHECK(!b.admit(own, late_start, 0, shown, 0, v, false, false));
+    CHECK(!b.recover_own(own, late_start, late_start + 0.001, shown, 0, v, false)); // GPU busy
+    CHECK(!b.recover_own(own, shown, 0, shown, 0, v, false)); // stale, cannot finish in the window
+    CHECK(!b.recover_own(PictureKind::between, late_start, 0, shown, 0, v, false));
+    CHECK(!b.recover_own(own, late_start, 0, shown, 0.5, v, false));
+    CHECK(!b.recover_own(own, late_start, 0, shown, 0, 0, false));
+    CHECK(!b.recover_own(own, late_start, 0, shown, 0, -v, false));
+    CHECK(!b.recover_own(own, late_start, 0, shown, 0, v, true)); // reserve the unmeasured next frame
+    b.made(PictureKind::frame, 0.001, 0.003);
+    b.made(PictureKind::scene, 0, 0.001);
+    CHECK(b.recover_own(own, late_start, 0, shown, 0, v, true));
+    // The boundary includes submit/wakeup slack and reserves a whole following picture.
+    const double end = b.own_recovery_deadline_s(shown, v, false);
+    const double start = end - b.ready_s(own);
+    CHECK(b.recover_own(own, start - 1e-6, 0, shown, 0, v, false));
+    CHECK(!b.recover_own(own, start + 1e-6, 0, shown, 0, v, false));
+    CHECK(end <= shown + 0.5 * v);
+    CHECK(end + b.ready_s(own) <= shown + v + 1e-9);
+    PictureBudget slow;
+    slow.made(own, 0.002, 0.020);
+    CHECK(!slow.recover_own(own, late_start, 0, shown, 0, v, false));
+    PictureBudget cpu;
+    cpu.made(own, 0.020, 0.002);
+    CHECK(!cpu.recover_own(own, late_start, 0, shown, 0, v, false));
+}
+
+void packet_delay_recovers() {
+    // 12.6 ms of packet intake every game frame delays that vblank's camera image. Both images still fit
+    // in the game's 33.37 ms frame, but the old deadline drops one of each pair indefinitely.
+    const int count = 600 - 8;
+    Run before = simulate(6.0, 3.0, true, 600, {}, 1, true, false, false, 12.6);
+    Run after = simulate(6.0, 3.0, true, 600, {}, 1, true, false, true, 12.6);
+    CHECK(before.left_out >= count / 2 - 2);
+    CHECK(after.left_out == 0 && after.made == count);
+    CHECK(after.most_gap_ms < 17.0);
+    // A sustained CPU intake overload must still drop stale work, not accumulate an unbounded catch-up queue.
+    Run overload = simulate(6.0, 3.0, true, 600, {}, 1, true, false, true, 30.0);
+    CHECK(overload.left_out >= count / 2 - 2);
+    // Costs exceeding a vblank still use the existing drop/retry policy, even with recovery enabled.
+    for (double gpu_ms : {20.0, 40.0}) {
+        Run strict = simulate(gpu_ms, 3.0, true, 600, {}, 1, true);
+        Run slow = simulate(gpu_ms, 3.0, true, 600, {}, 1, true, false, true);
+        CHECK(slow.made == strict.made && slow.left_out == strict.left_out && slow.late == strict.late);
+    }
+    // Slow command recording is also overload, even with a fast GPU. Keep the same rejection/retry policy.
+    for (double cpu_ms : {20.0, 40.0}) {
+        Run strict = simulate(2.0, 3.0, true, 600, {}, 1, true, false, false, 0, cpu_ms);
+        Run slow = simulate(2.0, 3.0, true, 600, {}, 1, true, false, true, 0, cpu_ms);
+        CHECK(slow.made == strict.made && slow.left_out == strict.left_out && slow.late == strict.late);
+    }
+    // The renderer does not opt in above 60 Hz, including each vblank's own image at those rates.
+    for (int per : {2, 4}) {
+        Run strict = simulate(7.0, 3.0, true, 600, {}, per, true, false, false, 12.6);
+        Run high_rate = simulate(7.0, 3.0, true, 600, {}, per, true, false, true, 12.6);
+        CHECK(high_rate.made == strict.made && high_rate.left_out == strict.left_out && high_rate.late == strict.late);
+    }
+    // Recovery must not stop the existing retry from relearning costs after a load or lowered GPU clocks.
+    Run spike = simulate(12.0, 3.0, true, 600, {100, 130, 25.0}, 1, true, true, true);
+    CHECK(spike.own_after >= 130 && spike.own_after <= 192);
+    std::printf("packet intake: %d/%d made before/after, %d left out under sustained overload\n",
+                before.made, after.made, overload.left_out);
 }
 
 void slow_gpu() {
@@ -230,6 +308,8 @@ int main() {
     queue_time();
     slow_gpu();
     spike_recovers();
+    own_recovery_limits();
+    packet_delay_recovers();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

@@ -6,7 +6,8 @@
 // - begins a picture no sooner than its predicted cost before it is shown (begin_at_s): the picture is the world and the
 //   hand of then, not of a vblank before (the late turn of slice 4b: docs/plans/scene-slice4-results.md, "4b");
 // - leaves out a picture between that would not be ready by its time, or would make the game frame's own picture after
-//   it late (fits): never waited for, never queued behind the GPU's work. A game frame's own picture is always made.
+//   it late (fits). At <=60 Hz a measured, slightly late own camera image can be recovered within a bounded window
+//   with no GPU backlog and room reserved for the next picture. A game frame's own picture is always made.
 //
 // Header only, no locks (the caller's), no globals.
 #pragma once
@@ -153,7 +154,28 @@ public:
               bool next_frame) const {
         return done_s(kind, now_s, gpu_free_s) <= deadline_s(shown_s, phase, vblank_s, next_frame);
     }
-    // Whether a picture between of kind begun at now_s is made: when it fits; and, left out for retry_after_s, for
+
+    // At <=60 Hz the vblank's own picture is the camera update, not an optional extra. Packet intake can
+    // delay it past the ideal start even when there is capacity to render every vblank. Recover it only with
+    // measured costs, no GPU backlog, and room to finish before the next picture needs to start. Never move
+    // the scheduled start: on-time pictures still take the mouse as late as before. Half a vblank bounds the
+    // lateness; reserving the next picture's full cost tightens that bound on slower machines.
+    double own_recovery_deadline_s(double shown_s, double vblank_s, bool next_frame) const {
+        double next_cost = ready_s(PictureKind::between_own);
+        if (next_frame) {
+            next_cost = std::max(next_cost, ready_s(PictureKind::frame) + gpu_s(PictureKind::scene));
+        }
+        return std::min(shown_s + 0.5 * vblank_s, shown_s + vblank_s - next_cost);
+    }
+
+    bool recover_own(PictureKind kind, double now_s, double gpu_free_s, double shown_s, double phase,
+                     double vblank_s, bool next_frame) const {
+        return kind == PictureKind::between_own && phase == 0 && measured(kind) && vblank_s > 0 &&
+               gpu_free_s <= now_s &&
+               done_s(kind, now_s, gpu_free_s) + SLACK_S <= own_recovery_deadline_s(shown_s, vblank_s, next_frame);
+    }
+    // Whether a picture between of kind begun at now_s is made: when it fits (or can recover the own camera image);
+    // and, left out for retry_after_s, for
     // RETRY_RUN_S anyway where the GPU is done with the work before it by its time (a retry), the kind's times then
     // those of the retry's pictures begun after RETRY_WARM_S into it.
     // Otherwise a cost met for a moment (a change of settings, a load, a spell) left the kind out for good: never made,
@@ -163,13 +185,16 @@ public:
     // left it out again. Each retry that does not fit waits twice as long as the one before, to RETRY_MOST_S: a GPU too
     // slow for the kind has a retry's late pictures that seldom.
     bool admit(PictureKind kind, double now_s, double gpu_free_s, double shown_s, double phase, double vblank_s,
-               bool next_frame) {
+               bool next_frame, bool allow_own_recovery = false) {
         const size_t k = size_t(kind);
         if (retry_from_s_[k] >= 0 && now_s >= retry_from_s_[k] && now_s < retry_from_s_[k] + RETRY_RUN_S) {
             return gpu_free_s <= shown_s; // (a retry: made where the GPU is done before its time, so that one late is
                                           // not queued behind another)
         }
-        if (fits(kind, now_s, gpu_free_s, shown_s, phase, vblank_s, next_frame)) {
+        const bool on_time = fits(kind, now_s, gpu_free_s, shown_s, phase, vblank_s, next_frame);
+        const bool recovery = !on_time && allow_own_recovery &&
+                              recover_own(kind, now_s, gpu_free_s, shown_s, phase, vblank_s, next_frame);
+        if (on_time || recovery) {
             left_since_s_[k] = -1;
             retry_after_s_[k] = RETRY_FIRST_S;
             return true;
