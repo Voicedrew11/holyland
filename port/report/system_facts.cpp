@@ -163,17 +163,6 @@ std::string system_facts() {
            display_facts() + window_facts() + sound_facts() + controller_facts() + disk_facts(port_data_dir());
 }
 
-std::string system_summary() {
-    std::string out = build_facts() + os_facts() + cpu_facts();
-    char gpu[1024];
-    port_vk_describe(gpu, sizeof(gpu));
-    const char *end = std::strchr(gpu, '\n');
-    out.append(gpu, end != nullptr ? size_t(end - gpu + 1) : std::strlen(gpu));
-    out += format("Renderer: %s; frame rate %s\n", renderer_name(port_options.renderer),
-                  frame_rate_name(port_options.frame_rate, port_options.frame_rate_cap).c_str());
-    return out;
-}
-
 std::string run_facts() {
     std::string out = format("Running for: %.0f s\nVblanks: %llu\n", port_wall_seconds(),
                              (unsigned long long)port_vblank_count());

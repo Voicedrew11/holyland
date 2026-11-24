@@ -57,6 +57,25 @@ body.closed #hint.shown {
 	display: block;
 }
 
+/* a plate low in the middle (clear of the game's gauges, top left), on the hint's soft box: a problem report's progress */
+#notice {
+	display: none;
+	position: absolute;
+	bottom: 48dp;
+	left: 15%;
+	width: 70%;
+	padding: 12dp 34dp 12dp 34dp;
+	text-align: center;
+	font-size: 17dp;
+	color: #c8d6ea;
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 18dp 30dp 18dp 30dp);
+	image-color: #050607f0;
+}
+
+body.closed #notice.shown {
+	display: block;
+}
+
 #hint key {
 	margin-right: 0;
 }

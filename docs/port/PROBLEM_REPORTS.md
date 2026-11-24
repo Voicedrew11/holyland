@@ -25,16 +25,36 @@ There is no screenshot, game state or quick save: the game is gone. Tested in `l
    (`port_vk_flash_write_newest`), a quick save to a file (`port_quick_request_save_file`), F10's game state is
    written, and the system's, run's and environment's facts are taken. The menu closes, so the game is in play for
    the quick save and the browser gets the screen.
-2. On a thread of its own ("problem report"): it waits up to 3 s for the picture and 8 s for the quick save, zips
+2. On a thread of its own ("problem report"): it waits up to 3 s for the picture and 2.5 s for the quick save (the
+   game drops a quick save it has not taken in 60 vblanks, so longer gains nothing), zips
    everything into `<data folder>/reports/holyland-report-<time>.zip`, opens the form and the folder (`SDL_OpenURL`),
    and the row's note says where the zip is.
+
+The menu closes at once, so the game shows a notice of its own while the report is made ("Making a report: a few
+seconds...") and after ("Report saved: <zip>. Drag it into the GitHub form in your browser"), for 15 s:
+`port_player_ui_notice`, a plate low in the middle drawn by the player menu while it is closed, settable from any
+thread. In play a report takes about half a second; where the game cannot quick save (a menu, the title screen) about
+2.5 s.
+
+## The form
+
+`.github/ISSUE_TEMPLATE/report.yml`: What happened (required), How to make it happen, What kind of problem and How
+often (required lists), Where in the game, Since when, Screenshots or video, Report file (.zip) (required), Details,
+Anything else. The link fills in (by the boxes' ids, `report::issue_url`):
+- **Where in the game** from F10's dump: "Map 63 (Palace of Oath Exterior), at x, y, z. Level 1, HP 50/50, MP 0/0", or
+  "Not in a map" (the map's name: `port_teleport_map_name`);
+- **Details**: the zip's name, the whole of `system.txt` and `game.txt`'s run facts (the crash report: how the game
+  ended, the launcher's version, the PC, the log's last 25 lines);
+- **title** (the crash report: "The game stopped: <how>").
+The same texts go as a plain issue's body too, for when the form is not on the default branch; that body is cut first
+when the link would pass 8000 bytes.
 
 ## What the zip holds
 
 | File | What |
 |---|---|
 | `system.txt` | the build (version, commit, optimized or not, compiler), SDL, the system and session (Wayland or X11, desktop, AppImage, gamescope, Wine), CPU and its instruction sets, memory (the PC's and the game's), the GPU, its driver and memory, each display (size, refresh, scale), the window (size, fullscreen), sound, controllers, free disk space |
-| `game.txt` | running time, vblanks, the disc's file name, renderer, presenter, frame rate, the refresh seen; and what the report could not take |
+| `game.txt` | where in the game, running time, vblanks, the disc's file name, renderer, presenter, frame rate, the refresh seen; and what the report could not take |
 | `game_state.json` | F10's dump: the last events and the game's state |
 | `settings.json` | the settings file as it is |
 | `environment.txt` | the command line and the variables that change the game, SDL, the Vulkan loader or a GPU driver (`KF4_`, `SDL_`, `VK_`, `RADV_`, `MESA_`, `DXVK_`, `LD_PRELOAD`, ...) |

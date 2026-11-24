@@ -490,7 +490,7 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     port/report/problem_report.cpp port/report/system_facts.cpp port/report/pc_facts.cpp
                     port/report/report_bundle.cpp port/report/report_text.cpp port/report/zip_archive.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui port/report ${CMAKE_BINARY_DIR}
-                                   ${CMAKE_SOURCE_DIR}/third_party/libchdr)
+                                   ${CMAKE_SOURCE_DIR}/third_party/libchdr ${CMAKE_SOURCE_DIR}/third_party/cjson)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL KF4_HAVE_VULKAN_PRESENTER)
         target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3 kf4_key_pictures kf4_chdr)
         add_dependencies(kf4_player_ui kf4_build_rev) # (build_rev.h: the report's build line)

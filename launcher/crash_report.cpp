@@ -71,13 +71,13 @@ std::optional<CrashReport> make_crash_report(const DataPaths &paths, const Crash
     const std::optional<std::filesystem::path> zip = bundle.write(paths.data / "reports", "holyland-crash-" + stamp);
     if (!zip)
         return std::nullopt;
-    std::string details = "Launcher: " + version_text(facts.launcher_version) + "\n" + system +
-                          "Report file: " + zip->filename().u8string() + "\n";
+    std::string details = "Report file: " + zip->filename().u8string() + "\n\nThe game stopped: " + facts.ended +
+                          "\nLauncher: " + version_text(facts.launcher_version) + "\n" + system;
     if (auto log = report::read_text(paths.game_log()))
         details += "\nThe log's end:\n" + last_lines(*log, kLogLinesInLink);
     const std::string title = "The game stopped: " + facts.ended;
     const std::string url = report::issue_url(
-        {UPDATE_REPOSITORY, bundle.redacted(title), "", bundle.redacted(details)}, kLinkBytes);
+        {UPDATE_REPOSITORY, bundle.redacted(title), "", "", bundle.redacted(details)}, kLinkBytes);
     return CrashReport{*zip, url};
 }
 

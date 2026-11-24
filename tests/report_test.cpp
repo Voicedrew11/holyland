@@ -45,19 +45,24 @@ void links() {
     check("a Windows folder's link", report::file_link("C:/Users/x") == "file:///C:/Users/x");
     check("url_encode keeps the unreserved", report::url_encode("a-Z_0.~") == "a-Z_0.~");
     check("url_encode escapes the rest", report::url_encode("a b\n&=é") == "a%20b%0A%26%3D%C3%A9");
-    const std::string url = report::issue_url({"o/r", "", "", "line one\nline two"}, 8000);
+    const std::string url = report::issue_url({"o/r", "", "", "", "line one\nline two"}, 8000);
     check("the form's link", url.rfind("https://github.com/o/r/issues/new?template=report.yml&details=line%20one%0Aline%20two&body=", 0) == 0);
     check("a plain issue's text too, for when the form is missing",
           url.find("&body=Please%20drag") != std::string::npos && url.find("%60%60%60%0Aline%20one%0Aline%20two") != std::string::npos);
     std::string long_details;
     for (int k = 0; k < 2000; k++)
         long_details += "detail line " + std::to_string(k) + "\n";
-    const std::string cut = report::issue_url({"o/r", "Title", "what", long_details}, 4000);
+    const std::string cut = report::issue_url({"o/r", "Title", "what", "map 63", long_details}, 4000);
     check("a long link is cut to fit", cut.size() <= 4000);
     check("the cut keeps the title and what happened",
           cut.find("&title=Title") != std::string::npos && cut.find("&what=what") != std::string::npos);
     check("the cut says so", cut.find(report::url_encode("(cut short")) != std::string::npos);
-    const std::string tiny = report::issue_url({"o/r", "", std::string(3000, 'w'), long_details}, 300);
+    check("the plain issue's text goes before the form's boxes",
+          cut.find("&body=") == std::string::npos && cut.find("&where=map%2063") != std::string::npos);
+    const std::string roomy = report::issue_url({"o/r", "", "w", "map 63", "d"}, 8000);
+    check("with room, the plain text holds every box",
+          roomy.find("&body=w%0A%0AWhere%3A%20map%2063") != std::string::npos);
+    const std::string tiny = report::issue_url({"o/r", "", std::string(3000, 'w'), "", long_details}, 300);
     check("what happened is cut last, and the link still fits", tiny.size() <= 300);
 }
 

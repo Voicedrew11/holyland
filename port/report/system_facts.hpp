@@ -11,9 +11,6 @@ namespace report {
 // windows, sound and controllers
 std::string system_facts();
 
-// The report form's Details: the few lines of system_facts a reader wants before opening the zip
-std::string system_summary();
-
 // game.txt: how long the game has run, its vblanks, and the options that change what it does
 std::string run_facts();
 

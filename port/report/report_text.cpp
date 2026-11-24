@@ -128,26 +128,37 @@ std::string file_link(std::string_view generic_path) {
 
 namespace {
 
-std::string form_url(const IssueForm &form, std::string_view what, std::string_view details) {
+// The parts of the link that can be cut, as they are now
+struct LinkParts {
+    std::string what, where, details, body;
+};
+
+std::string form_url(const IssueForm &form, const LinkParts &parts) {
     std::string url = "https://github.com/";
     url += form.repository;
     url += "/issues/new?template=report.yml";
-    if (!form.title.empty())
-        url += "&title=" + url_encode(form.title);
-    if (!what.empty())
-        url += "&what=" + url_encode(what);
-    if (!details.empty())
-        url += "&details=" + url_encode(details);
-    // the same as a plain issue's text, for when the form is not there (GitHub reads forms from the default branch
-    // only) and the template is ignored; the form ignores it
-    std::string body;
-    if (!what.empty())
-        body += std::string(what) + "\n\n";
-    body += "Please drag the report file (.zip) in here.\n";
-    if (!details.empty())
-        body += "\n```\n" + std::string(details) + "\n```\n";
-    url += "&body=" + url_encode(body);
+    const std::pair<const char *, std::string_view> fields[] = {
+        {"title", form.title}, {"what", parts.what}, {"where", parts.where}, {"details", parts.details},
+        {"body", parts.body}};
+    for (const auto &[id, text] : fields) {
+        if (!text.empty())
+            url += std::string("&") + id + "=" + url_encode(text);
+    }
     return url;
+}
+
+// A plain issue's text, for when the form is not there (GitHub reads forms from the default branch only): the
+// boxes' texts in one. The form ignores it.
+std::string plain_body(const IssueForm &form) {
+    std::string body;
+    if (!form.what.empty())
+        body += std::string(form.what) + "\n\n";
+    if (!form.where.empty())
+        body += "Where: " + std::string(form.where) + "\n\n";
+    body += "Please drag the report file (.zip) and a screenshot of the problem in here.\n";
+    if (!form.details.empty())
+        body += "\n```\n" + std::string(form.details) + "\n```\n";
+    return body;
 }
 
 // The text cut to its first `bytes` at a line's end, with a note
@@ -163,17 +174,30 @@ std::string cut(std::string_view text, std::size_t bytes) {
 
 } // namespace
 
+namespace {
+
+// Cuts `text` (one of parts') until the link fits or it is gone, 64 bytes at a time at a line's end
+void cut_to_fit(const IssueForm &form, LinkParts &parts, std::string &text, std::string_view whole,
+                std::size_t max_bytes, std::string &url) {
+    for (std::size_t keep = whole.size(); url.size() > max_bytes && keep > 0;) {
+        keep = keep > 64 ? keep - 64 : 0;
+        text = keep > 0 ? cut(whole, keep) : std::string();
+        url = form_url(form, parts);
+    }
+}
+
+} // namespace
+
 std::string issue_url(const IssueForm &form, std::size_t max_bytes) {
-    std::string url = form_url(form, form.what, form.details);
-    // Details cut first, a line at a time (an encoded byte can take three in the link), then What happened
-    for (std::size_t keep = form.details.size(); url.size() > max_bytes && keep > 0;) {
-        keep = keep > 64 ? keep - 64 : 0;
-        url = form_url(form, form.what, keep > 0 ? cut(form.details, keep) : std::string());
-    }
-    for (std::size_t keep = form.what.size(); url.size() > max_bytes && keep > 0;) {
-        keep = keep > 64 ? keep - 64 : 0;
-        url = form_url(form, keep > 0 ? cut(form.what, keep) : std::string(), {});
-    }
+    const std::string body = plain_body(form);
+    LinkParts parts{std::string(form.what), std::string(form.where), std::string(form.details), body};
+    std::string url = form_url(form, parts);
+    // the plain issue's text first (the form, once on the default branch, ignores it), then Details, then Where and
+    // What happened
+    cut_to_fit(form, parts, parts.body, body, max_bytes, url);
+    cut_to_fit(form, parts, parts.details, form.details, max_bytes, url);
+    cut_to_fit(form, parts, parts.where, form.where, max_bytes, url);
+    cut_to_fit(form, parts, parts.what, form.what, max_bytes, url);
     return url;
 }
 

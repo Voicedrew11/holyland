@@ -34,6 +34,9 @@ int port_player_ui_show(const char *tab_id);
 void port_player_ui_run_setup(void);
 /* (a row that hands the screen back: Report an Issue) the menu closes once the press that chose the row is done */
 void port_player_ui_close(void);
+/* (any thread: a problem report's progress) a line shown over the game while the menu is closed, for ms; a newer one
+   takes its place */
+void port_player_ui_notice(const char *text, unsigned ms);
 /* 1 while the setup shows: the game is held still under it, whatever "Pause while open" says */
 int port_player_ui_setup_open(void);
 /* (the presenter, before it draws) lays the menu out for a window of width x height pixels and records its
@@ -60,6 +63,9 @@ static inline int port_player_ui_show(const char *tab_id) {
 static inline void port_player_ui_run_setup(void) {
 }
 static inline void port_player_ui_close(void) {
+}
+static inline void port_player_ui_notice(const char *text, unsigned ms) {
+    (void)text, (void)ms;
 }
 static inline int port_player_ui_setup_open(void) {
     return 0;

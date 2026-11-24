@@ -29,10 +29,12 @@ struct IssueForm {
     std::string_view repository; // "owner/name"
     std::string_view title;
     std::string_view what;    // the form's "What happened"
+    std::string_view where;   // the form's "Where in the game"
     std::string_view details; // the form's "Details"
 };
-// The form's link, at most max_bytes long: Details cut first (at a line's end, with a note), then What happened. The
-// same text also goes as a plain issue's body, which GitHub shows when the form is not on the default branch.
+// The form's link, at most max_bytes long. The boxes' texts also go in one as a plain issue's body, which GitHub shows
+// when the form is not on the default branch. Cut to fit (each at a line's end, with a note): that body first, then
+// Details, then Where, then What happened.
 std::string issue_url(const IssueForm &form, std::size_t max_bytes);
 
 // A local folder or file as a file:// link, each byte that needs it escaped ("/a b" -> "file:///a%20b";

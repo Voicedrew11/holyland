@@ -1,27 +1,91 @@
-# The problem report. The game's Report an Issue (the F1 menu's tab) opens this form with "Details" filled in
-# (port/report/problem_report.cpp) and shows the folder that holds the report's .zip. GitHub cannot attach a file from a
-# link, so the zip box is required: the issue cannot be sent without something in it.
+# The problem report. The game's Report an Issue (the F1 menu's tab) and the launcher's Report the problem (when the game
+# stops) open this form with "Where in the game" and "Details" filled in (port/report/report_text.cpp issue_url, by the
+# boxes' ids) and show the folder that holds the report's .zip. GitHub cannot attach a file from a link, so the zip box
+# is required: the issue cannot be sent without something in it. A box's id is the link's name for it: change one only
+# with the code.
 name: Problem report
 description: Something went wrong in the game or the launcher.
 body:
   - type: markdown
     attributes:
       value: |
-        The quickest way to report is from the game: press **F1**, open **Report an Issue** and choose **Make a Report**. It fills this in and saves a report file (.zip) with the game's log and your PC's details.
+        Thanks for reporting. The quickest way is from the game: press **F1**, open **Report an Issue** and choose **Make a Report**. When the game crashes, the launcher's **Report the problem** does the same. Either fills in parts of this form and saves a report file (.zip) with the game's log, your PC's details, your settings and your saves.
+
+        One problem per issue, please. Search the [open issues](https://github.com/Voicedrew11/holyland/issues) first: if yours is there, add to it instead.
   - type: textarea
     id: what
     attributes:
       label: What happened
-      description: What you were doing, what went wrong, and what you expected.
+      description: Describe the problem in your own words. What did you see or hear, and what did you expect instead?
+      placeholder: |
+        Example: after opening a door in the Catacombs, the walls flickered black for a second each time I turned.
     validations:
       required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps that lead to it, as exactly as you can. If you don't know, say what you were doing just before.
+      placeholder: |
+        1. Load the save by the Catacombs entrance
+        2. Walk through the door on the left
+        3. Turn around
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem
+      options:
+        - The game crashed or froze
+        - Graphics (wrong, missing or flickering pictures)
+        - Speed (stutter, slow, uneven frame pacing)
+        - Sound or music
+        - Controls (keyboard, mouse or controller)
+        - Gameplay (something the game does wrong)
+        - Saves or quick saves
+        - The menu or settings
+        - The launcher, building or updates
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: often
+    attributes:
+      label: How often
+      options:
+        - Every time
+        - Often
+        - Sometimes
+        - It happened once
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where in the game
+      description: The map and place. Filled in by the game when it can; add the area's name if you know it.
+      placeholder: "Example: Map 06 (The King's Throne, Upper), by the save point"
+  - type: input
+    id: since
+    attributes:
+      label: Since when
+      description: Did it start after an update or a settings change? Which version worked, if one did?
+      placeholder: "Example: since 0.1.4; 0.1.3 was fine"
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or video
+      description: >-
+        Drag a screenshot or a short video of the problem into this box. The report has the game's last picture, but
+        yours shows what you saw, when you saw it. For a flicker or a stutter a video helps most.
+      placeholder: Drag pictures or a video here.
   - type: textarea
     id: zip
     attributes:
       label: Report file (.zip)
       description: >-
-        Drag the report's .zip into this box. When you report from the game, the folder that holds it opens on its
-        own. It has the logs we need to find the problem: without it we usually can't.
+        Drag the report's .zip into this box. When you report from the game or the launcher, the folder that holds it
+        opens on its own (the "reports" folder in Holyland's data folder). It has the logs we need to find the problem:
+        without it we usually can't.
       placeholder: Drag the .zip here.
     validations:
       required: true
@@ -29,5 +93,10 @@ body:
     id: details
     attributes:
       label: Details
-      description: Filled in by the game. Leave it as it is.
+      description: Filled in by the game or the launcher (your PC, the build and the settings that matter). Leave it as it is.
       render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Other software running (overlays, recorders, mods), a controller adapter, an unusual screen setup, or anything you tried that helped.
