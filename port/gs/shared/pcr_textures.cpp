@@ -452,6 +452,21 @@ struct TextureStore::State {
     std::vector<std::vector<Owner>> block_owners = std::vector<std::vector<Owner>>(kBlocks);
     // the count when a page was last drawn into or copied over, in its low 24 bits and in its top byte
     std::array<uint64_t, kPages> drawn_low_at{}, drawn_top_at{};
+    // Native batches repeatedly draw the same colour/depth rectangles. Keep only their address mapping,
+    // never their contents or validity: every draw still updates the sequence and invalidates signatures.
+    struct DrawPages {
+        bool valid = false;
+        VramRect rect;
+        std::bitset<kPages> pages;
+        std::array<uint16_t, kPages> indices{};
+        uint32_t count = 0;
+        bool matches(const VramRect &r) const {
+            return valid && rect.bp == r.bp && rect.bw == r.bw && rect.psm == r.psm &&
+                   rect.x == r.x && rect.y == r.y && rect.width_px == r.width_px && rect.height_px == r.height_px;
+        }
+    };
+    std::array<DrawPages, 2> draw_pages;
+    uint32_t next_draw_pages = 0;
     // a stretch's watch of its reads: the blocks written in it (the CLUT buffer last), and the reads noted so far
     // (mutable: a read notes itself from the const methods too)
     mutable bool watching = false;
@@ -1001,7 +1016,7 @@ bool TextureStore::upload_again(uint64_t chunk) {
     return true;
 }
 
-void TextureStore::drawn(const VramRect &rect) {
+std::bitset<512> TextureStore::drawn(const VramRect &rect) {
     State &s = *state_;
     VramRect r = rect;
     if (!gsn_psm_valid(r.psm)) {
@@ -1009,9 +1024,31 @@ void TextureStore::drawn(const VramRect &rect) {
     }
     uint8_t parts = word_parts(r.psm);
     uint64_t now = ++s.seq;
+    State::DrawPages *mapped = nullptr;
+    for (auto &entry : s.draw_pages) {
+        if (entry.matches(r)) {
+            mapped = &entry;
+            break;
+        }
+    }
+    if (!mapped) {
+        mapped = &s.draw_pages[s.next_draw_pages];
+        s.next_draw_pages ^= 1;
+        mapped->rect = r;
+        mapped->valid = true;
+        mapped->pages.reset();
+        mapped->count = 0;
+        each_page(r, [&](uint32_t page) {
+            if (!mapped->pages[page]) {
+                mapped->pages.set(page);
+                mapped->indices[mapped->count++] = uint16_t(page);
+            }
+        });
+    }
     // (the draw writes the page's marks, not any block's owners: no block is written here; only the rectangle's pages
     // are walked, not all of them: a picture drawn again marks every batch's)
-    each_page(r, [&](uint32_t page) {
+    for (uint32_t i = 0; i < mapped->count; i++) {
+        uint32_t page = mapped->indices[i];
         s.changed(page);
         if (parts & kLowParts) {
             s.drawn_low_at[page] = now;
@@ -1019,7 +1056,8 @@ void TextureStore::drawn(const VramRect &rect) {
         if (parts & kTopParts) {
             s.drawn_top_at[page] = now;
         }
-    });
+    }
+    return mapped->pages;
 }
 
 void TextureStore::copied(const TransferRegs &regs) {

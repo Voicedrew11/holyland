@@ -179,8 +179,9 @@ public:
     std::shared_ptr<const std::vector<uint8_t>> chunk_bytes(uint64_t chunk) const;
     bool upload_again(uint64_t chunk);
 
-    // A surface drawn into over this rectangle (in its format: a 24-bit one leaves the top byte the uploads')
-    void drawn(const VramRect &rect);
+    // A surface drawn into over this rectangle (in its format: a 24-bit one leaves the top byte the uploads').
+    // Returns its pages for callers checking texture overlap, without another walk of the rectangle.
+    std::bitset<512> drawn(const VramRect &rect);
     // A local-to-local transfer: when every pixel it reads is the uploads', an upload of what it writes (made
     // as the GS makes the copy); else its destination drawn over
     void copied(const TransferRegs &regs);
