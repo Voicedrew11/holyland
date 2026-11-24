@@ -32,7 +32,7 @@ struct DiscImage {
 typedef struct Format {
     int (*claims)(FILE *file);
     DiscImageResult (*open)(DiscImage *image);
-    int (*read)(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out);
+    uint32_t (*read)(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out); /* sectors read */
     void (*close)(DiscImage *image);
 } Format;
 
@@ -55,7 +55,7 @@ static DiscImageResult iso_open(DiscImage *image) {
     return DISC_IMAGE_OK;
 }
 
-static int iso_read(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out) {
+static uint32_t iso_read(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out) {
     size_t bytes = (size_t)sectors * DISC_IMAGE_SECTOR_SIZE;
     size_t got = 0;
 
@@ -65,7 +65,7 @@ static int iso_read(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned c
     if (got < bytes) {
         memset(out + got, 0, bytes - got);
     }
-    return got > 0;
+    return (uint32_t)((got + DISC_IMAGE_SECTOR_SIZE - 1) / DISC_IMAGE_SECTOR_SIZE); /* (a sector read in part counts) */
 }
 
 static void iso_close(DiscImage *image) {
@@ -194,14 +194,14 @@ static int chd_read_sector(DiscImage *image, uint32_t lsn, unsigned char *out) {
     return 1;
 }
 
-static int chd_read_image(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out) {
-    int any = 0;
+static uint32_t chd_read_image(DiscImage *image, uint32_t lsn, uint32_t sectors, unsigned char *out) {
+    uint32_t read = 0;
     uint32_t i;
 
     for (i = 0; i < sectors; i++) {
-        any |= chd_read_sector(image, lsn + i, out + (size_t)i * DISC_IMAGE_SECTOR_SIZE);
+        read += (uint32_t)chd_read_sector(image, lsn + i, out + (size_t)i * DISC_IMAGE_SECTOR_SIZE);
     }
-    return any;
+    return read;
 }
 
 static void chd_close_image(DiscImage *image) {
@@ -257,7 +257,7 @@ const char *disc_image_result_text(DiscImageResult result) {
     return "unknown";
 }
 
-int disc_image_read(DiscImage *image, uint32_t lsn, uint32_t sectors, void *buffer) {
+uint32_t disc_image_read(DiscImage *image, uint32_t lsn, uint32_t sectors, void *buffer) {
     return image->format->read(image, lsn, sectors, buffer);
 }
 

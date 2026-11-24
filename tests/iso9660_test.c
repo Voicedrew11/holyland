@@ -123,6 +123,7 @@ static void check_listing(const char *what, DiscImage *image) {
     Listing l;
     uint32_t sectors = 0;
     unsigned char buffer[ISO9660_SECTOR_SIZE];
+    unsigned char across[4 * ISO9660_SECTOR_SIZE];
     char name[96];
 
     snprintf(name, sizeof(name), "%s: lists", what);
@@ -137,6 +138,10 @@ static void check_listing(const char *what, DiscImage *image) {
     memset(buffer, 0xAA, sizeof(buffer));
     snprintf(name, sizeof(name), "%s: past the end: zeros, nothing read", what);
     check(name, image != NULL && !disc_image_read(image, 999, 1, buffer) && buffer[0] == 0 && buffer[2047] == 0);
+    memset(across, 0xAA, sizeof(across));
+    snprintf(name, sizeof(name), "%s: across the end: the sectors read counted, zeros after", what);
+    check(name, image != NULL && disc_image_read(image, SECTORS - 2, 4, across) == 2 &&
+                    across[2 * ISO9660_SECTOR_SIZE] == 0 && across[sizeof(across) - 1] == 0);
 }
 
 static void test_good(void) {

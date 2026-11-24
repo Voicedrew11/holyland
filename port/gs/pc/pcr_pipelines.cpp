@@ -77,6 +77,13 @@ struct Record {
 };
 constexpr size_t RECORDS_MOST = 4096;           // (the list's length at most: the oldest dropped past it)
 constexpr size_t CACHE_BYTES_MOST = 256u << 20; // (a cache file larger than this is not read: made afresh)
+// (no pipeline made before play for this long: the driver is stuck on one, and play goes on without the rest)
+constexpr int64_t PRECOMPILE_STALL_NS = 30'000'000'000;
+
+int64_t steady_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 struct Warm {
     std::mutex lock;
@@ -112,6 +119,7 @@ struct Store {
     std::atomic<size_t> ahead_total{0};
     std::atomic<unsigned> ahead_threads{0};
     std::chrono::steady_clock::time_point ahead_start;
+    std::atomic<int64_t> ahead_progress_ns{0}; // (steady clock: when the last pipeline ahead was made, or the start)
     std::mutex hashes_lock;
     std::unordered_set<uint64_t> hashes; // (the pipelines asked of the threads making ahead: each made once)
     // made before play (precompile): asked for with the settings, started once the canvas's programs are known too
@@ -615,6 +623,7 @@ void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute
     auto next = std::make_shared<std::atomic<size_t>>(0);
     store.ahead_total = total;
     store.ahead_start = std::chrono::steady_clock::now();
+    store.ahead_progress_ns = steady_ns();
     Device *device = warm.device;
     for (unsigned t = 0; t < threads; t++) {
         store.ahead.emplace_back([=] {
@@ -655,6 +664,7 @@ void start_ahead(const std::vector<Record> &list, std::vector<Program *> compute
                     make_ahead(*device, job.record, job.program);
                 }
                 port_crash_note_set("");
+                store.ahead_progress_ns = steady_ns();
                 if (++store.ahead_done == total) {
                     store.ahead_wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                               std::chrono::steady_clock::now() - store.ahead_start)
@@ -969,7 +979,18 @@ bool precompile_running() {
         }
         return store.pre_wanted;
     }
-    return store.ahead_done.load() < store.ahead_total.load() && !store.ahead_stop;
+    if (store.ahead_done.load() >= store.ahead_total.load() || store.ahead_stop) {
+        return false;
+    }
+    // (a driver that never returns from one pipeline: the game is not held on a black screen for it)
+    if (steady_ns() - store.ahead_progress_ns.load() > PRECOMPILE_STALL_NS && !store.pre_gave_up.exchange(true)) {
+        fprintf(stderr,
+                "[pcr] the pipelines before play stopped at %zu of %zu: no pipeline made for %lld s, not waited for\n",
+                size_t(store.ahead_done.load()), store.ahead_total.load(),
+                (long long)(PRECOMPILE_STALL_NS / 1000000000));
+        return false;
+    }
+    return !store.pre_gave_up;
 }
 
 bool precompile_progress(int *done, int *total) {

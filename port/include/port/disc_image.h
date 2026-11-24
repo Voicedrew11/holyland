@@ -38,8 +38,9 @@ DiscImageResult disc_image_open(FILE *file, DiscImage **image);
 const char *disc_image_result_text(DiscImageResult result);
 
 /* Reads `sectors` sectors from `lsn` into `buffer` (sectors * DISC_IMAGE_SECTOR_SIZE bytes). Past the end of
-   the image, or where the image cannot be read, reads zeros. Returns 1 if anything was read, else 0. */
-int disc_image_read(DiscImage *image, uint32_t lsn, uint32_t sectors, void *buffer);
+   the image, or where the image cannot be read, reads zeros. Returns the sectors read from the image (0 when
+   none was; fewer than `sectors` when some are zeros because they could not be read). */
+uint32_t disc_image_read(DiscImage *image, uint32_t lsn, uint32_t sectors, void *buffer);
 
 /* what the image is, for the log: "ISO image", "CHD (DVD)", "CHD (CD, MODE2_RAW)" */
 const char *disc_image_format(const DiscImage *image);

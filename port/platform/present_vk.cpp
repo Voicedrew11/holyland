@@ -202,6 +202,9 @@ struct Presenter {
     VkSurfaceFormatKHR format = {};
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkExtent2D extent = {};
+    int made_for_w = -1, made_for_h = -1; // (the window's size in pixels the swapchain was made for: its extent is the
+                                          // surface's, which may differ, and it is not made again for each picture)
+    bool failing = false;                 // (making the swapchain failed, logged once until one is made)
     bool can_read = false; // the swapchain's images can be copied from (KF4_OVERLAY_SHOT)
     std::vector<SwapImage> images;
     bool stale = true;     // the swapchain is to be made again (a new size, vsync, or out of date)
@@ -449,6 +452,48 @@ void wait_queue() {
     gsr_queue_unlock();
 }
 
+// (VK_ERROR_SURFACE_LOST_KHR) The window's surface made again, and the swapchain at the next picture: without it
+// every acquire after a lost surface fails and the window stays black or frozen
+void remake_surface() {
+    wait_queue();
+    drop_swapchain_images();
+    if (pr.swapchain != VK_NULL_HANDLE) {
+        vk.vkDestroySwapchainKHR(pr.device, pr.swapchain, nullptr);
+        pr.swapchain = VK_NULL_HANDLE;
+    }
+    if (pr.surface != VK_NULL_HANDLE) {
+        vk.vkDestroySurfaceKHR(pr.instance, pr.surface, nullptr);
+        pr.surface = VK_NULL_HANDLE;
+    }
+    pr.stale = true;
+    std::fprintf(stderr, "[present] the window's surface was lost: made again\n");
+    if (!SDL_Vulkan_CreateSurface(pr.window, pr.instance, nullptr, &pr.surface)) {
+        std::fprintf(stderr, "[present] no Vulkan surface for the window: %s\n", SDL_GetError());
+        pr.surface = VK_NULL_HANDLE;
+        return;
+    }
+    VkBool32 supported = VK_FALSE;
+    VkResult asked = vk.vkGetPhysicalDeviceSurfaceSupportKHR(pr.gpu, pr.family, pr.surface, &supported);
+    if (asked != VK_SUCCESS || !supported) {
+        std::fprintf(stderr, "[present] the new surface cannot be presented to (VkResult %d)\n", int(asked));
+        vk.vkDestroySurfaceKHR(pr.instance, pr.surface, nullptr);
+        pr.surface = VK_NULL_HANDLE;
+    }
+}
+
+// (an acquire's or a present's result, past out of date and suboptimal) A swapchain or surface that cannot be used
+// is made again at the next picture, not used again as it is
+void swapchain_error(VkResult result, const char *where) {
+    check(result, where);
+    if (result == VK_ERROR_SURFACE_LOST_KHR) {
+        remake_surface();
+        return;
+    }
+    if (result < 0) {
+        pr.stale = true;
+    }
+}
+
 // The swapchain mode asked for over vsync's (Presenter::mode_wanted), from the options as they are now
 int wanted_mode() {
     if (port_options.adaptive_sync) {
@@ -460,13 +505,30 @@ int wanted_mode() {
     return port_options.tearing ? 2 : 1;
 }
 
+// A swapchain that could not be made, in the log once until one is made: nothing is presented meanwhile, and the
+// window shows black or the last picture
+void swapchain_failed(const char *why, VkResult result) {
+    if (!pr.failing) {
+        std::fprintf(stderr, "[present] no swapchain: %s (VkResult %d); nothing is shown until one is made\n", why,
+                     int(result));
+    }
+    pr.failing = true;
+}
+
 // The swapchain for the window's size and the vsync setting: false if there is none now (the window
-// is minimised, or it failed)
+// is minimised, or it failed). Made again at the next picture until it is made.
 bool make_swapchain() {
+    pr.stale = true;
+    if (pr.surface == VK_NULL_HANDLE) {
+        return false; // (lost, and not made again: remake_surface logged it)
+    }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
     VkSurfaceCapabilitiesKHR caps;
-    if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pr.gpu, pr.surface, &caps) != VK_SUCCESS) {
+    VkResult asked = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pr.gpu, pr.surface, &caps);
+    if (asked != VK_SUCCESS) {
+        check(asked, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        swapchain_failed("the window's surface could not be asked about", asked);
         return false;
     }
     VkExtent2D extent = caps.currentExtent;
@@ -524,7 +586,7 @@ bool make_swapchain() {
         usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
     if ((caps.supportedUsageFlags & usage) != usage) {
-        std::fprintf(stderr, "[present] the swapchain's images cannot be drawn into by a copy\n");
+        swapchain_failed("the swapchain's images cannot be drawn into by a copy", VK_SUCCESS);
         return false;
     }
     VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -561,11 +623,15 @@ bool make_swapchain() {
         pr.swapchain = VK_NULL_HANDLE;
     }
     if (result != VK_SUCCESS) {
-        std::fprintf(stderr, "[present] no swapchain (%d)\n", int(result));
+        check(result, "vkCreateSwapchainKHR");
+        swapchain_failed("vkCreateSwapchainKHR failed", result);
         return false;
     }
     pr.swapchain = swapchain;
     pr.extent = extent;
+    pr.made_for_w = drawable_w;
+    pr.made_for_h = drawable_h;
+    pr.failing = false;
 
     vk.vkGetSwapchainImagesKHR(pr.device, swapchain, &count, nullptr);
     std::vector<VkImage> list(count);
@@ -1535,7 +1601,9 @@ extern "C" int port_vk_open(void *sdl_window) {
     }
 #ifdef KF4_HAVE_PLAYER_UI
     UiVkSetup ui_setup = {pr.get_instance_proc_addr, pr.instance, pr.gpu, pr.device, pr.pass, FRAMES};
-    ui_vk_open(ui_setup); // (logged when it cannot: the player menu is then not drawn)
+    if (!ui_vk_open(ui_setup)) { // (logged)
+        port_player_ui_cannot_draw();
+    }
 #endif
     static bool waits;
     if (!waits) {
@@ -1632,8 +1700,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     }
     pr.mode_wanted = wanted_mode();
     if (pr.stale || pr.vsync_made != pr.vsync_wanted || pr.mode_made != pr.mode_wanted ||
-        pr.extent.width != uint32_t(drawable_w) ||
-        pr.extent.height != uint32_t(drawable_h)) {
+        pr.made_for_w != drawable_w || pr.made_for_h != drawable_h) {
         if (!make_swapchain()) {
             return 1;
         }
@@ -1670,7 +1737,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     if (result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true; // (drawn all the same, and made again for the next)
     } else if (result != VK_SUCCESS) {
-        check(result, "vkAcquireNextImageKHR");
+        swapchain_error(result, "vkAcquireNextImageKHR");
         return 1;
     }
     SwapImage &target = pr.images[index];
@@ -1982,7 +2049,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true;
     } else {
-        check(result, "vkQueuePresentKHR");
+        swapchain_error(result, "vkQueuePresentKHR");
     }
     if (shot) {
         read_window(f);
