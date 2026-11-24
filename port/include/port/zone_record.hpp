@@ -11,7 +11,7 @@
 // (a GPU lane with nothing to do). Done frames are kept keep_seconds; each lane's zones as spans (for the timeline)
 // the last timeline_seconds, and those of the frames kept (keep_frame: spikes, the frame picked) until let go.
 //
-// One thread works it (take: "kf4-profiler"); readers hold the owner's lock (port/overlay/frames_view.cpp).
+// One thread works it (take: "kf4-profiler"); readers hold the owner's lock (port/ui/frame_snapshot.hpp).
 // port/platform/zone_record.cpp, kf4_zone_record.
 #pragma once
 

@@ -33,6 +33,8 @@
 #include "menu_model.hpp"
 #include "key_glyphs.hpp"
 #include "pad_glyphs.hpp"
+#include "profiler_charts.hpp"
+#include "profiler_overlay.hpp"
 #include "rows_rml.hpp"
 #include "settings_rows.hpp"
 #include "setup_model.hpp"
@@ -152,6 +154,8 @@ struct Menu {
     bool was_listening = false; // a binding's slot waited for a key last picture
     Hint hint;
     LogoClicks logo_clicks;
+    // the profiler (Shift+P): its own document under the menu's, shown while the game plays on
+    ui::ProfilerOverlay profiler;
     // the window's pixels for each of SDL's window units (a HiDPI screen: 2)
     float pixels_per_unit = 1.0f;
     bool drawn = false;
@@ -927,6 +931,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
         std::fprintf(stderr, "[ui] RmlUi did not start: no player menu\n");
         return;
     }
+    ui::register_profiler_charts();
     menu.context = Rml::CreateContext("menu", Rml::Vector2i(1280, 720));
     if (menu.context == nullptr || !ui::load_fonts() || !load_pad_fonts() ||
         (menu.document = menu.context->LoadDocument("menu.rml")) == nullptr) {
@@ -939,6 +944,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     menu.document->AddEventListener(Rml::EventId::Mouseover, &menu.pointer);
     menu.document->AddEventListener(Rml::EventId::Mousedown, &menu.pointer);
     menu.document->Show();
+    menu.profiler.load(*menu.context); // (without it, no profiler; the menu all the same)
     menu.model.open_at(0);
     menu.ready = true;
     // the setup's tables against the menu's rows (setup_pages.hpp)
@@ -966,6 +972,10 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         }
     }
     hint_follows(event);
+    if (menu.profiler.event(event)) {
+        menu.document->PullToFront(); // (the menu stays over the profiler)
+        return 1;
+    }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
         if (event.key.mod & SDL_KMOD_SHIFT) {
             return 0; // (the developers' overlay)
@@ -1052,7 +1062,8 @@ extern "C" int port_player_ui_open(void) {
 
 extern "C" int port_player_ui_visible(void) {
     // (a hint waiting for the start of play: port_player_ui_draw watches for it)
-    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f || !notice_now().empty());
+    return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f || !notice_now().empty() ||
+                          menu.profiler.shown());
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -1133,6 +1144,13 @@ extern "C" void port_player_ui_notice(const char *text, unsigned ms) {
     notice.until_ms = SDL_GetTicks() + ms;
 }
 
+extern "C" void port_player_ui_profiler_show(int shown) {
+    if (menu.ready && shown != int(menu.profiler.shown())) {
+        menu.profiler.show(shown != 0);
+        menu.document->PullToFront();
+    }
+}
+
 extern "C" int port_player_ui_setup_open(void) {
     return menu.ready && menu.open && menu.in_setup;
 }
@@ -1142,10 +1160,10 @@ extern "C" void port_player_ui_draw(int width, int height) {
     if (!port_player_ui_visible() || width <= 0 || height <= 0) {
         return;
     }
-    if (menu.hint.waiting) {
-        if (port_vblank_count() < HINT_START_VBLANK) {
-            return;
-        }
+    if (menu.hint.waiting && port_vblank_count() < HINT_START_VBLANK && !menu.profiler.shown()) {
+        return;
+    }
+    if (menu.hint.waiting && port_vblank_count() >= HINT_START_VBLANK) {
         menu.hint.waiting = false;
         // play has started: the hint for the controller already connected, if one is (L3 + R3 is the harder to guess)
         if (SDL_Gamepad *pad = first_pad()) {
@@ -1167,6 +1185,7 @@ extern "C" void port_player_ui_draw(int width, int height) {
     menu.context->SetDimensions(Rml::Vector2i(width, height));
     menu.context->SetDensityIndependentPixelRatio(dp);
     show_state(hint_opacity());
+    menu.profiler.update();
     if (menu.open) {
         pad_repeat();
         play_cue();

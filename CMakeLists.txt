@@ -381,10 +381,7 @@ if(KF4_USE_SDL AND SDL3_FOUND)
     target_include_directories(imgui PUBLIC third_party/imgui)
     target_link_libraries(imgui PUBLIC SDL3::SDL3)
     set_target_properties(imgui PROPERTIES CXX_STANDARD 11)
-    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/update_badge.cpp port/overlay/automap_view.cpp
-                   port/overlay/profiler.cpp
-                   port/overlay/frames_view.cpp
-                   port/overlay/profile_run_view.cpp)
+    target_sources(kf4_port PRIVATE port/overlay/overlay.cpp port/overlay/update_badge.cpp port/overlay/automap_view.cpp)
     target_link_libraries(kf4_port PRIVATE imgui)
 else()
     message(STATUS "SDL3 not used: the pad takes only a pad script (--input), and there is no window")
@@ -486,6 +483,9 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     port/ui/setting_row.cpp port/ui/rows_rml.cpp port/ui/setup_pages.cpp port/ui/setup_model.cpp
                     port/ui/setup_view.cpp port/ui/ui_render.cpp port/ui/ui_ties.cpp port/ui/game_menu_art.cpp
                     port/ui/pad_glyphs.cpp port/ui/key_glyphs.cpp port/ui/emulator_saves.cpp
+                    # the profiler (Shift+P, port/ui/profiler_overlay.hpp)
+                    port/ui/profiler_overlay.cpp port/ui/profiler_charts.cpp port/ui/frame_snapshot.cpp
+                    port/ui/run_snapshot.cpp
                     ${CMAKE_BINARY_DIR}/ui_assets.cpp
                     # the menu's Report an Issue (port/include/port/problem_report.h)
                     port/report/problem_report.cpp port/report/system_facts.cpp port/report/pc_facts.cpp
@@ -493,7 +493,8 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui port/report ${CMAKE_BINARY_DIR}
                                    ${CMAKE_SOURCE_DIR}/third_party/libchdr ${CMAKE_SOURCE_DIR}/third_party/cjson)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL KF4_HAVE_VULKAN_PRESENTER)
-        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3 kf4_key_pictures kf4_chdr)
+        target_link_libraries(kf4_player_ui PRIVATE kf4_rmlui SDL3::SDL3 kf4_key_pictures kf4_chdr kf4_zone_record
+                              kf4_sampler)
         add_dependencies(kf4_player_ui kf4_build_rev) # (build_rev.h: the report's build line)
         target_compile_options(kf4_player_ui PRIVATE -Wall -Wextra -Wshadow)
         set_target_properties(kf4_player_ui PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -1014,6 +1015,17 @@ if(KF4_TESTS)
 endif()
 
 # The player menu's moving about (port/ui/menu_model.hpp): focus, lists, tabs and the pointer, on stand-in rows
+# the profiler's copy of the frame profiler's record (port/ui/frame_snapshot.hpp)
+add_executable(ui_frame_snapshot_test tests/ui_frame_snapshot_test.cpp port/ui/frame_snapshot.cpp)
+target_include_directories(ui_frame_snapshot_test PRIVATE port/ui)
+target_link_libraries(ui_frame_snapshot_test PRIVATE kf4_zone_record)
+set_target_properties(ui_frame_snapshot_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(ui_frame_snapshot_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME ui_frame_snapshot COMMAND ui_frame_snapshot_test)
+endif()
 add_executable(ui_menu_test tests/ui_menu_test.cpp port/ui/menu_model.cpp)
 target_include_directories(ui_menu_test PRIVATE port/ui)
 set_target_properties(ui_menu_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

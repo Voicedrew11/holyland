@@ -8,7 +8,7 @@
      KF4_PROFILE_SPIKE=MS     a line on stderr for each frame longer than MS, with its largest zones
      KF4_GPU_DETAIL=1|2       the GPU's lanes by shader state (1) or each draw (2), not only by kind of work
 
-   Shift+P's "Frames" (port/overlay/frames_view.cpp) wants it while it is open.
+   The profiler (Shift+P, port/ui/profiler_overlay.hpp) wants it while it shows.
    port/platform/frame_profiler.cpp, kf4_zone_record. */
 #ifndef PORT_FRAME_PROFILER_H
 #define PORT_FRAME_PROFILER_H

@@ -164,6 +164,9 @@ still chooses).
 | `port/platform/present_vk_ui.hpp/.cpp` | the Vulkan presenter's drawing of a `ui::Frame`: pipeline, textures, buffers |
 | `port/ui/shaders/ui.vert`, `ui.frag`, `ui_spirv.h` | its shaders; `tools/ui_shaders.sh` writes `ui_spirv.h` (committed) |
 | `port/ui/res/menu.rml`, `kf4.rcss` | the document and its look |
+| `port/ui/profiler_overlay.hpp/.cpp`, `res/profiler.rml`, `res/profiler.rcss` | the profiler (Shift+P): a second document in the menu's context, under the menu, shown while the game keeps its input (docs/port/PROFILING.md) |
+| `port/ui/profiler_charts.hpp/.cpp` | its charts: elements that draw their own rectangles (`<profile-bars>`, `<profile-columns>`, `<profile-timeline>`) |
+| `port/ui/frame_snapshot.hpp/.cpp`, `run_snapshot.hpp/.cpp` | what it shows, copied out of the frame profiler's record and the profile run: `tests/ui_frame_snapshot_test.cpp` |
 | `port/ui/art/*.png`, `tools/ui_ornaments.py`, `tools/ui_masks.py`, `port/ui/res/*.alpha` | the logo and the ornaments (the window's corners, the soft box the sidebar's shade fades with): `ui_ornaments.py` draws the ornaments, `ui_masks.py` makes the alpha masks the game carries from its table (all committed; run them after changing a picture) |
 | `port/ui/game_menu_art.hpp/.cpp` | the game's own menu art: `menu/menu.tmx`'s textures read from the disc and decoded for RmlUi (`game-menu/<tbp>-<look>.tex`): `tests/ui_game_art_test.cpp` |
 | `port/ui/res/fonts/` | `HolylandMincho.ttf`, every word: IPA P Mincho (the proportional cut of the Mincho the game's own letters are drawn again from, `tools/make_font_letters.py`) cut down to its Latin letters, without embedded bitmaps (so every size is anti-aliased), and renamed as the IPA Font License asks of a changed font (`tools/make_menu_font.py`, `IPA_Font_License_Agreement_v1.0.txt`); one weight, no italic; `kenney_input_{xbox_series,playstation_series,nintendo_switch}.ttf` (controller pictures, Kenney's Input Prompts 1.5, CC0: `CC0-Kenney-Input-Prompts.txt`; their glyphs are in the private use area from U+E000, so each is its own family) |
@@ -232,8 +235,9 @@ Still in ImGui (`port/overlay/`), to move over one at a time:
    (`port_player_ui_visible`).
 5. **In-play views**: the automap's full map and minimap, the stats panel over the game's menu. These need images
    (`LoadTexture` / textures the game makes) in the recorder.
-6. **Developer tools**: the Developer page, the profiler (Shift+P) and the frame views. These can stay in ImGui
-   longest, or become an RmlUi developer tab. Once they are moved, `third_party/imgui` and the ImGui backends
+6. **Developer tools**: the Developer page and the frame views. ~~The profiler (Shift+P)~~: moved on 2026-11-24, an
+   RmlUi overlay of its own in the menu's context (`port/ui/profiler_overlay.hpp`, `res/profiler.rml`,
+   docs/port/PROFILING.md). The rest can stay in ImGui longest, or become an RmlUi developer tab. Once they are moved, `third_party/imgui` and the ImGui backends
    go.
 7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (the launcher does
    this already: `launcher/window.cpp`, `Window::State::draw`) (premultiplied blend
