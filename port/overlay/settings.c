@@ -62,6 +62,7 @@
 #include "port/antialias.h"
 #include "port/audio.h"
 #include "port/automap.h"
+#include "port/file_replace.h"
 #include "port/hands.h"
 #include "port/controls.h"
 #include "port/scene_depth.h"
@@ -844,15 +845,10 @@ void port_settings_save(void) {
     fputc('\n', file);
     fclose(file);
     cJSON_free(text);
-#ifdef _WIN32
-    if (!MoveFileExA(temporary, port_settings_path(), MOVEFILE_REPLACE_EXISTING)) {
+    if (!port_replace_file(temporary, port_settings_path())) {
         fprintf(stderr, "[settings] cannot replace %s\n", port_settings_path());
+        remove(temporary);
     }
-#else
-    if (rename(temporary, port_settings_path()) != 0) {
-        fprintf(stderr, "[settings] cannot replace %s: %s\n", port_settings_path(), strerror(errno));
-    }
-#endif
 }
 
 void port_settings_changed(void) {

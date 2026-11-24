@@ -116,8 +116,11 @@ if(LAUNCHER_WINDOW)
         # the icon (packaging/shared/holyland.ico) in the .exe, for Explorer, the taskbar and the window
         enable_language(RC)
         set(HOLYLAND_ICON ${ROOT}/packaging/shared/holyland.ico)
+        set(HOLYLAND_MANIFEST ${ROOT}/packaging/shared/holyland.manifest)
         configure_file(${ROOT}/packaging/shared/holyland.rc.in ${CMAKE_CURRENT_BINARY_DIR}/holyland.rc @ONLY)
         target_sources(launcher PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/holyland.rc)
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/holyland.rc PROPERTIES
+            OBJECT_DEPENDS "${HOLYLAND_ICON};${HOLYLAND_MANIFEST}")
         # a window program: no console window of its own (it prints into one it was started from)
         target_link_options(launcher PRIVATE -mwindows)
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

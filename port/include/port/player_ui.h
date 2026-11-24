@@ -2,7 +2,8 @@
    game's picture. F1 (or a controller's L3 + R3) opens and closes it; the developers' overlay (Dear ImGui,
    port/include/port/overlay.h) moved to Shift+F1 (or `). Like the overlay it exists only with a window and
    settings.json (port_settings_active): never in a headless run or with a pad script, so tests stay the same.
-   KF4_OVERLAY_SHOT's pages ui-<tab> open it for test pictures.
+   KF4_OVERLAY_SHOT's pages ui-<tab> open it for test pictures. The profiler (Shift+P, port/ui/profiler_overlay.hpp)
+   is drawn in the same context, under the menu, and leaves the game its input.
 
    Drawn by the Vulkan presenter (port/platform/present_vk.cpp), which takes this picture's triangles from
    player_ui_frame (port/ui/ui_frame.hpp). All on the game's thread. */
@@ -39,6 +40,9 @@ void port_player_ui_close(void);
 void port_player_ui_notice(const char *text, unsigned ms);
 /* 1 while the setup shows: the game is held still under it, whatever "Pause while open" says */
 int port_player_ui_setup_open(void);
+/* (port/overlay/overlay.cpp's test pictures: profiler@V) the profiler (Shift+P, port/ui/profiler_overlay.hpp) shown
+   or hidden */
+void port_player_ui_profiler_show(int shown);
 /* (the presenter, before it draws) lays the menu out for a window of width x height pixels and records its
    triangles: player_ui_frame */
 void port_player_ui_draw(int width, int height);
@@ -69,6 +73,9 @@ static inline void port_player_ui_notice(const char *text, unsigned ms) {
 }
 static inline int port_player_ui_setup_open(void) {
     return 0;
+}
+static inline void port_player_ui_profiler_show(int shown) {
+    (void)shown;
 }
 static inline void port_player_ui_draw(int width, int height) {
     (void)width, (void)height;
