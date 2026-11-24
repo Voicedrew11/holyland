@@ -133,11 +133,18 @@ void port_state_request_save(int slot) {
 }
 
 static char request_path[1100]; /* (a save to a file: port_state_request_save_file) */
+static char request_load_path[1100]; /* (a load from a file: port_state_request_load_file) */
 
 void port_state_request_save_file(const char *path) {
     snprintf(request_path, sizeof(request_path), "%s", path);
     __atomic_store_n(&request_slot, -1, __ATOMIC_RELAXED);
     __atomic_store_n(&request, REQUEST_SAVE, __ATOMIC_RELEASE);
+}
+
+void port_state_request_load_file(const char *path) {
+    snprintf(request_load_path, sizeof(request_load_path), "%s", path);
+    __atomic_store_n(&request_slot, -1, __ATOMIC_RELAXED);
+    __atomic_store_n(&request, REQUEST_LOAD, __ATOMIC_RELEASE);
 }
 
 void port_state_request_load(int slot) {
@@ -244,6 +251,30 @@ int port_state_exists(int slot) {
 
     slot_path(path, sizeof(path), slot, 0);
     return read_header(path, &header);
+}
+
+static const char *unavailable(void);
+static uint64_t build_id(void);
+
+const char *port_state_file_usable(const char *path, long long *time) {
+    StateHeader header;
+    const char *why = unavailable();
+
+    *time = 0;
+    if (why != NULL) {
+        return why;
+    }
+    if (!read_header(path, &header)) {
+        return "there is no such state";
+    }
+    if (header.version != STATE_VERSION || header.header_size != sizeof(header)) {
+        return "it is a save state of another version";
+    }
+    if (header.build_id != build_id()) {
+        return "it was saved by another build of the program";
+    }
+    *time = (long long)header.time;
+    return NULL;
 }
 
 long long port_state_time(int slot) {
@@ -674,6 +705,7 @@ static int load(int slot, const char *file) {
     }
     port_dmac_call(load_on_controller, &job);
     free(job.buffer.data);
+    port_gs_interp_cut_reset(); /* no picture between the place left and the state's */
     /* the save points before the state's vblank have passed */
     while (save_at_next < save_at_count && save_at[save_at_next].vblank < port_vblank_count()) {
         save_at_next++;
@@ -703,8 +735,10 @@ void port_state_host(void) {
     }
     kind = __atomic_load_n(&request, __ATOMIC_ACQUIRE);
     if (kind == REQUEST_LOAD) {
+        int slot = __atomic_load_n(&request_slot, __ATOMIC_RELAXED);
+
         __atomic_store_n(&request, REQUEST_NONE, __ATOMIC_RELEASE);
-        load(__atomic_load_n(&request_slot, __ATOMIC_RELAXED), NULL);
+        load(slot, slot < 0 ? request_load_path : NULL);
     } else if (kind == REQUEST_SAVE) {
         int slot = __atomic_load_n(&request_slot, __ATOMIC_RELAXED);
 

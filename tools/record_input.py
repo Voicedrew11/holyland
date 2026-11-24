@@ -116,7 +116,9 @@ def record(args, extra):
             shutil.copy2(os.path.join(data, name), start)
     for name in START_DIRS:
         if os.path.isdir(os.path.join(data, name)):
-            shutil.copytree(os.path.join(data, name), os.path.join(start, name), dirs_exist_ok=True)
+            # (not the quick saves' exact states: a replay loads a quick save's image, by its file)
+            shutil.copytree(os.path.join(data, name), os.path.join(start, name), dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("*.kf4state"))
     quick_copy = None
     if quick != "none":
         os.makedirs(os.path.join(start, "quicksaves"), exist_ok=True)

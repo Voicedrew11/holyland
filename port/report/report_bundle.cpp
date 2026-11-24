@@ -75,7 +75,8 @@ void ReportBundle::add_save(const std::string &name, const fs::path &path) {
 void ReportBundle::add_save_folder(const std::string &prefix, const fs::path &folder) {
     std::error_code error;
     for (const fs::directory_entry &entry : fs::directory_iterator(folder, error)) {
-        if (entry.is_regular_file(error))
+        // (not a quick save's exact state: about 13 MB, and it loads only in the build that made it)
+        if (entry.is_regular_file(error) && entry.path().extension() != ".kf4state")
             add_save(prefix + utf8_name(entry.path()), entry.path());
     }
 }

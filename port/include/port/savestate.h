@@ -14,6 +14,12 @@ void port_state_request_load(int slot);
 /* A save to a file (the flash recorder's folder: port/debug/debug.c); path is copied */
 void port_state_request_save_file(const char *path);
 
+/* A load from a file (a quick save's exact state: port/platform/quicksave.c); path is copied */
+void port_state_request_load_file(const char *path);
+/* Whether the state in `path` loads in this program (NULL), or why not, without reading the state:
+   the file's header and this build's id. *time: when it was written (seconds since 1970). */
+const char *port_state_file_usable(const char *path, long long *time);
+
 /* Whether `slot` has a state, and when it was written (seconds since 1970, 0 if none). */
 int port_state_exists(int slot);
 long long port_state_time(int slot);
