@@ -95,8 +95,8 @@ Test scripts in `tools/` (see `tools/README.md`): `boot_test.py`, `frame_test.py
   the first-start setup in the same window (`setup_pages.cpp`, shown once per `SETUP_VERSION`; `KF4_SETUP=1` forces it),
   drawn by the Vulkan presenter (`port/platform/present_vk_ui.cpp`): `docs/port/PLAYER_UI.md`, with the plan to
   retire ImGui. The launcher's window uses the same RmlUi code on SDL's renderer (`launcher/window.h`).
-- `port/overlay/`: the ImGui overlay, now the developers' (Shift+F1 where the player menu is): settings, stats
-  panels, profiler, automap view.
+- `port/overlay/`: what ImGui still draws over the game (the automap's views, the extended stats), the settings file
+  (`settings.c`); the developers' ImGui window (Shift+F1) was removed on 2026-11-24 (teleport is in Cheats).
 - `launcher/`: **Holyland**, the launcher players get (its own CMake project, `cd launcher && cmake --preset
   linux`): builds the game on the player's computer from a release's source and shipped tools, then plays it;
   update notices. `packaging/` makes the releases (AppImage, Windows zip and installer), `.github/workflows/release.yml`

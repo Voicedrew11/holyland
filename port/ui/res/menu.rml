@@ -7,8 +7,11 @@
 <body>
 	<!-- the keys that open the menu, until the player has found it (player_ui.cpp: hint_rml) -->
 	<div id="hint"></div>
-	<!-- a line over the game while the menu is closed: a problem report's progress (player_ui.cpp: port_player_ui_notice) -->
+	<!-- a line over the game while the menu is closed: a problem report's progress, a save state's or a quick save's
+	     message, the debugging tools' (player_ui.cpp: port_player_ui_notice) -->
 	<div id="notice"></div>
+	<!-- "Preparing shaders... N%" while the game waits for the pipelines made before play (player_ui.cpp: building_now) -->
+	<div id="building"></div>
 	<div id="shade"></div>
 	<div id="window">
 		<!-- the game's own panel and frame, from the disc's menu/menu.tmx (body.game-art; port/ui/game_menu_art.hpp) -->

@@ -1225,7 +1225,7 @@ int flash_writer(void *) {
         port_debug_set_message("flash recorder: wrote %u of %u pictures to %s", done, fl.n, fl.folder);
     }
     if (!fl.newest_only) {
-        port_overlay_notify_debug();
+        port_player_ui_notice(port_debug_message(), 4000); // (this thread set it just now)
     }
     fl.writing.store(0);
     return 0;

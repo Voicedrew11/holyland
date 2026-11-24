@@ -14,7 +14,7 @@
 
 #include "port/audio.h"
 #include "port/debug.h"
-#include "port/overlay.h"
+#include "port/player_ui.h"
 #include "port/platform.h"
 #include "port/problem_report.h"
 #include "port/quicksave.h"
@@ -319,5 +319,5 @@ void port_debug_flash_record(void) {
     } else {
         port_debug_set_message("flash recorder: no pictures (%s); the GS capture and saves go to %s", why, folder);
     }
-    port_overlay_notify_debug();
+    port_player_ui_notice(port_debug_message(), 4000);
 }

@@ -1,8 +1,8 @@
-/* The developers' overlay (port/overlay/overlay.cpp): Dear ImGui over the game's picture, ` (the backtick), or F1
-   (Shift+F1 where the player menu, port/include/port/player_ui.h, has F1; port_overlay_open, _visible and _paused
-   count the menu too). It exists
-   only with a window (SDL3), and never in a headless run or with a pad script (--input), so tests
-   stay the same; KF4_OVERLAY_SHOT is the exception, for pictures of it (docs/port/README.md). */
+/* The layer over the game's picture (port/overlay/overlay.cpp): the player menu (RmlUi, port/include/port/player_ui.h)
+   and under it what Dear ImGui still draws (the automap's full map and minimap, the extended stats). port_overlay_open,
+   _visible and _paused count the menu. It exists only with a window (SDL3), and never in a headless run or with a pad
+   script (--input), so tests stay the same; KF4_OVERLAY_SHOT is the exception, for pictures of it
+   (docs/port/README.md). */
 #ifndef PORT_OVERLAY_H
 #define PORT_OVERLAY_H
 
@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-/* The game's state for the Developer page (game/state_log.c) */
+/* The game's state (game/state_log.c): the player menu's teleport starts on the player's map */
 typedef struct {
     unsigned frame;     /* the game's frame counter */
     int menu;           /* main_menu_state */
@@ -55,24 +55,15 @@ void port_overlay_vblank(void);
    vblank's drawing, goes to port_overlay_shot as RGBA (R in the low byte) */
 int port_overlay_shot_due(void);
 void port_overlay_shot(const unsigned int *rgba, int width, int height);
-/* 1 while it is open: the keyboard, mouse and controller go to it, not to the game */
+/* 1 while the player menu is open: the keyboard, mouse and controller go to it, not to the game */
 int port_overlay_open(void);
-/* 1 while a layer over the game has the keyboard, mouse and controller: the player menu, this overlay, the automap's
+/* 1 while a layer over the game has the keyboard, mouse and controller: the player menu, the automap's
    full map. The one place that decides (port/sdk/controls.c blocks the
    game and lets the mouse go from it at each vblank; port/sdk/libpad.c leaves out the controller's sticks): the
    layers only open and close. */
 int port_overlay_holds_input(void);
-/* The key that opens it, and so gives its windows (the profiler, the extended stats) the mouse: "Shift+F1 or `"
-   where the player menu has F1, else "F1 or `" (the backtick opens it everywhere) */
-const char *port_overlay_key(void);
-/* The game holds still while the overlay or the player menu is open (the player menu's "Pause while open") */
+/* The game holds still while the player menu is open (its "Pause while open") or the full map is */
 int port_overlay_paused(void);
-/* (port/sdk/controls.c) a save state was asked for by its key: shows port_state_message() a while */
-void port_overlay_notify_state(void);
-/* (port/sdk/controls.c) a quick save or load was asked for by its key: shows port_quick_message() a while */
-void port_overlay_notify_quick(void);
-/* (port/debug/debug.c) the flash recorder's key: shows port_debug_message() a while (any thread) */
-void port_overlay_notify_debug(void);
 #else
 static inline void port_overlay_vblank(void) {
 }
@@ -90,12 +81,6 @@ static inline int port_overlay_each_picture(void) {
 }
 static inline int port_overlay_paused(void) {
     return 0;
-}
-static inline void port_overlay_notify_state(void) {
-}
-static inline void port_overlay_notify_quick(void) {
-}
-static inline void port_overlay_notify_debug(void) {
 }
 #endif
 

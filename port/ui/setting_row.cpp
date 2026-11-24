@@ -51,7 +51,8 @@ void row_step(const SettingRow &r, int delta) {
     int value = r.get();
     int steps = (value - r.range.min) / r.range.step + (delta > 0 ? 1 : ((value - r.range.min) % r.range.step ? 0 : -1));
     int next = r.range.min + steps * r.range.step;
-    next = next < r.range.min ? r.range.min : next > r.range.max ? r.range.max : next;
+    const int max = row_range_max(r);
+    next = next < r.range.min ? r.range.min : next > max ? max : next;
     if (next != value) {
         r.set(next);
     }
@@ -101,11 +102,16 @@ std::string row_value_text(const SettingRow &r) {
 }
 
 float row_number_fraction(const SettingRow &r) {
-    if (r.kind != RowKind::number || r.range.max <= r.range.min || r.get == nullptr) {
+    const int max = row_range_max(r);
+    if (r.kind != RowKind::number || max <= r.range.min || r.get == nullptr) {
         return 0.0f;
     }
-    float f = float(r.get() - r.range.min) / float(r.range.max - r.range.min);
+    float f = float(r.get() - r.range.min) / float(max - r.range.min);
     return f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f;
+}
+
+int row_range_max(const SettingRow &r) {
+    return r.range_max != nullptr ? r.range_max() : r.range.max;
 }
 
 } // namespace ui

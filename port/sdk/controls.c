@@ -18,7 +18,7 @@
    screen that takes pointing (port/include/port/menu_pointer.h) the mouse is let go: the pointer moves the
    cursor to the line under it and the left button chooses the line clicked; a click on nothing does nothing.
    Elsewhere out of play (a message, a cutscene) the mouse stays held and the cursor hidden. A menu over the
-   game (the player menu, the developers' overlay) or another window lets it go; a click in play takes it back.
+   game (the player menu, the full map) or another window lets it go; a click in play takes it back.
 
    While the mouse is let go its cursor shows only while the mouse is what is being used: a key or a controller
    hides it, moving or clicking the mouse shows it again.
@@ -48,6 +48,7 @@
 #include "port/mouse_lead.h"
 #include "port/cinematic.h"
 #include "port/overlay.h"
+#include "port/player_ui.h"
 #include "port/platform.h"
 #include "port/present_vk.h"
 #include "port/savestate.h"
@@ -807,7 +808,7 @@ static void set_captured(int captured) {
     update_cursor();
 }
 
-/* The game blocked while a layer over it (the player menu, the developers' overlay, the full map, the profiler's
+/* The game blocked while a layer over it (the player menu, the full map, the profiler's
    text field) holds the input, and the mouse let go. Only port_controls_read sets it, from port_overlay_holds_input
    at each vblank: one place decides, so a layer opened over another (F1 over the map) and closed again, or one that
    closes while nothing is drawn, cannot leave it wrong. */
@@ -1189,22 +1190,22 @@ void port_controls_read(unsigned int *buttons, int axis[4], void *sdl_controller
     if (edges >> ACTION_QUICK_SAVE & 1u) {
         port_pad_record_note("save state (a replay does not take it)");
         port_state_request_save(0);
-        port_overlay_notify_state();
+        port_player_ui_notice_follow(port_state_message, 2500);
     }
     if (edges >> ACTION_QUICK_LOAD & 1u) {
         port_pad_record_note("load state: a replay goes wrong from here");
         port_state_request_load(0);
-        port_overlay_notify_state();
+        port_player_ui_notice_follow(port_state_message, 2500);
     }
     if (edges >> ACTION_GAME_SAVE & 1u) {
         port_pad_record_event("game_save", port_quick_slot());
         port_quick_request_save(port_quick_slot());
-        port_overlay_notify_quick();
+        port_player_ui_notice_follow(port_quick_message, 3000);
     }
     if (edges >> ACTION_GAME_LOAD & 1u) {
         port_pad_record_event("game_load", port_quick_slot());
         port_quick_request_load(port_quick_slot());
-        port_overlay_notify_quick();
+        port_player_ui_notice_follow(port_quick_message, 3000);
     }
     if (edges >> ACTION_GS_CAPTURE & 1u) {
         port_debug_request_gs_capture();

@@ -1,6 +1,7 @@
 /* The player menu (port/ui/): Holyland's own settings, drawn with RmlUi in King's Field IV's look, over the
-   game's picture. F1 (or a controller's L3 + R3) opens and closes it; the developers' overlay (Dear ImGui,
-   port/include/port/overlay.h) moved to Shift+F1 (or `). Like the overlay it exists only with a window and
+   game's picture. F1 (or a controller's L3 + R3) opens and closes it. While it is closed it shows the notices over
+   the game (the keys' save states and quick saves, the debugging tools' messages, a problem report's progress) and
+   "Preparing shaders" while the game waits for the pipelines made before play. It exists only with a window and
    settings.json (port_settings_active): never in a headless run or with a pad script, so tests stay the same.
    KF4_OVERLAY_SHOT's pages ui-<tab> open it for test pictures. The profiler (Shift+P, port/ui/profiler_overlay.hpp)
    is drawn in the same context, under the menu, and leaves the game its input.
@@ -20,7 +21,7 @@ extern "C" {
 void port_player_ui_init(void *sdl_window);
 /* (port/overlay/overlay.cpp, each SDL event) 1 when the menu took it, and nothing else may see it */
 int port_player_ui_event(const void *sdl_event);
-/* 1 when the menu started (it has F1, and the developers' overlay Shift+F1 or `) */
+/* 1 when the menu started (it has F1) */
 int port_player_ui_ready(void);
 /* 1 while the menu is open: the keyboard, mouse and controller are its */
 int port_player_ui_open(void);
@@ -38,6 +39,9 @@ void port_player_ui_close(void);
 /* (any thread: a problem report's progress) a line shown over the game while the menu is closed, for ms; a newer one
    takes its place */
 void port_player_ui_notice(const char *text, unsigned ms);
+/* (the game's thread) the same, its text read again from text() each picture it shows: a message that changes as
+   its request is taken (port_state_message, port_quick_message) */
+void port_player_ui_notice_follow(const char *(*text)(void), unsigned ms);
 /* 1 while the setup shows: the game is held still under it, whatever "Pause while open" says */
 int port_player_ui_setup_open(void);
 /* (the presenter, when its drawing of the menu did not start) the menu stopped and never started again: an open
@@ -72,6 +76,9 @@ static inline void port_player_ui_run_setup(void) {
 static inline void port_player_ui_close(void) {
 }
 static inline void port_player_ui_notice(const char *text, unsigned ms) {
+    (void)text, (void)ms;
+}
+static inline void port_player_ui_notice_follow(const char *(*text)(void), unsigned ms) {
     (void)text, (void)ms;
 }
 static inline int port_player_ui_setup_open(void) {

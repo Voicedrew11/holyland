@@ -161,7 +161,7 @@ void problem(std::string &out, const char *tab_id, const char *label, const char
 // The value is one the row can hold: one of its choices, or in its range
 bool holds(const SettingRow &row, int value) {
     if (row.kind == RowKind::number) {
-        return value >= row.range.min && value <= row.range.max;
+        return value >= row.range.min && value <= row_range_max(row);
     }
     return row_choice_index(row, value) >= 0;
 }

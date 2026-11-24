@@ -3,7 +3,7 @@
    The GS's scanout (port/platform/gs.c) is read back on the DMA controller's thread (or, under the PC renderer, kept on the GPU) and queued here with its time; the window shows each when it is due (at each
    vblank the game's thread, waiting a little for the vblank's own; with --frame-rate above 60 the
    pictures between too, "The pictures between") in an SDL window, scaled to fit it at the TV's 4:3 (or stretched, by the settings), with
-   the player menu (F1) and the developers' overlay over it. That is
+   the player menu (F1), the automap and the extended stats over it. That is
    SDL_Renderer's work, or with --presenter vulkan a swapchain's on the PC renderer's own device
    (port/platform/present_vk.cpp), which takes the PC renderer's picture as the image it is on the GPU
    (port_video_submit_image) and the others' pixels as they are here. A dumped frame is

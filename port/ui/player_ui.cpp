@@ -68,19 +68,35 @@ struct Hint {
     uint64_t until_ms = 0;
 };
 
-// A line over the game while the menu is closed (port_player_ui_notice: a problem report's progress). Set from any
-// thread, under its lock; drawn on the game's thread.
+// A line over the game while the menu is closed (port_player_ui_notice: a problem report's progress, the keys' save
+// states and quick saves, the debugging tools' messages). Set from any thread, under its lock; drawn on the game's
+// thread.
 struct Notice {
     std::mutex lock;
-    std::string text;      // (under lock)
-    uint64_t until_ms = 0; // (under lock) shown until then; 0: not showing
+    std::string text;                      // (under lock)
+    const char *(*follow)(void) = nullptr; // (under lock) read again for each picture in place of text; game's thread
+    uint64_t until_ms = 0;                 // (under lock) shown until then; 0: not showing
 };
 Notice notice;
 
 // The notice's text while it shows, else empty
 std::string notice_now() {
     std::lock_guard<std::mutex> hold(notice.lock);
-    return SDL_GetTicks() < notice.until_ms ? notice.text : std::string();
+    if (SDL_GetTicks() >= notice.until_ms) {
+        return {};
+    }
+    return notice.follow != nullptr ? std::string(notice.follow()) : notice.text;
+}
+
+// "Preparing shaders... 40%" while the game waits for the renderer's pipelines made before play, else empty
+std::string building_now() {
+    int done = 0, total = 0;
+    if (!port_gs_shaders_building(&done, &total) || total <= 0) {
+        return {};
+    }
+    char text[64];
+    std::snprintf(text, sizeof(text), "Preparing shaders... %d%%", done * 100 / total);
+    return text;
 }
 
 // The clicks on the Holyland logo: five in a row, each soon after the last, show the Cheats tab (or hide it again).
@@ -141,7 +157,7 @@ struct Menu {
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
     // what each part of the page was last given, so RmlUi lays out again only what changed
-    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml, notice_rml;
+    std::string tabs_rml, heading_rml, version_rml, rows_rml, help_rml, prompts_rml, hint_rml, notice_rml, building_rml;
     bool body_setup = false; // the document's body.setup, as last set
     int scrolled_row = -2; // the row last scrolled into view
     bool scroll_wanted = false;
@@ -846,6 +862,11 @@ void show_state(float hint) {
         set_part("notice", menu.notice_rml, rml);
         element->SetClass("shown", !text.empty());
     }
+    if (Rml::Element *element = document.GetElementById("building")) {
+        const std::string text = building_now();
+        set_part("building", menu.building_rml, text);
+        element->SetClass("shown", !text.empty());
+    }
 }
 
 // The right button: on a binding's slot, clears it; anywhere else, Back
@@ -956,7 +977,7 @@ extern "C" void port_player_ui_init(void *sdl_window) {
     // the hint from the start of play (show_hint: not under a pad script)
     menu.hint.waiting = port_options.input == nullptr;
     std::atexit(quit);
-    std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu; Shift+F1 or ` the developers' overlay\n");
+    std::fprintf(stderr, "[ui] F1 (or L3 + R3) opens the menu\n");
 }
 
 extern "C" int port_player_ui_event(const void *sdl_event) {
@@ -978,9 +999,6 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
         return 1;
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F1) {
-        if (event.key.mod & SDL_KMOD_SHIFT) {
-            return 0; // (the developers' overlay)
-        }
         if (!event.key.repeat && !menu.in_setup) { // (the setup closes from its own pages only)
             menu.device = Device::keyboard;
             toggle_open(!menu.open);
@@ -995,8 +1013,8 @@ extern "C" int port_player_ui_event(const void *sdl_event) {
     }
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN: {
-        if (event.key.scancode == SDL_SCANCODE_F11 || event.key.scancode == SDL_SCANCODE_GRAVE) {
-            return 0; // (full screen, and the developers' overlay: the overlay's keys, the menu open or not)
+        if (event.key.scancode == SDL_SCANCODE_F11) {
+            return 0; // (full screen: port/overlay/overlay.cpp's key, the menu open or not)
         }
         int input = key_input(event.key.scancode, event.key.mod);
         if (input >= 0 && (!event.key.repeat || repeats(input))) {
@@ -1064,7 +1082,7 @@ extern "C" int port_player_ui_open(void) {
 extern "C" int port_player_ui_visible(void) {
     // (a hint waiting for the start of play: port_player_ui_draw watches for it)
     return menu.ready && (menu.open || menu.hint.waiting || hint_opacity() > 0.0f || !notice_now().empty() ||
-                          menu.profiler.shown());
+                          !building_now().empty() || menu.profiler.shown());
 }
 
 extern "C" int port_player_ui_show(const char *tab_id) {
@@ -1142,6 +1160,14 @@ extern "C" void port_player_ui_close(void) {
 extern "C" void port_player_ui_notice(const char *text, unsigned ms) {
     std::lock_guard<std::mutex> hold(notice.lock);
     notice.text = text != nullptr ? text : "";
+    notice.follow = nullptr;
+    notice.until_ms = SDL_GetTicks() + ms;
+}
+
+extern "C" void port_player_ui_notice_follow(const char *(*text)(void), unsigned ms) {
+    std::lock_guard<std::mutex> hold(notice.lock);
+    notice.text.clear();
+    notice.follow = text;
     notice.until_ms = SDL_GetTicks() + ms;
 }
 

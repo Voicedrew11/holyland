@@ -85,7 +85,7 @@
                          (objects and picked), skinned (or entities), arm, sky, effects, shadows,
                          reflection, water, passes, items, objects, picked, gold. off is
                          the game as without it. The default is on, unless settings.json says "native_draw":
-                         "off". The overlay's Developer page changes the kinds live
+                         "off". A list of kinds is this run's
        --native-wave-uvs ps2|gpu|cpu|late
                          with --native-draw map, the wave UVs of the water records: ps2 (the default: the
                          PS2 path's picture, late, or gpu with the test wait), gpu (the frame's offsets
@@ -194,7 +194,7 @@
        --teleport [VBLANK:]MAP[:PLACE]
                          once in play (from VBLANK), put the player in that map at its PLACE-th place
                          (0, the map's start, when left out; VBLANK:MAP:PLACE with a vblank), keeping
-                         the game's progress, as the overlay's Developer page does (port/platform/teleport.c)
+                         the game's progress, as the menu's Cheats > Teleport does (port/platform/teleport.c)
        --gs-capture-at VBLANK[:N],...
                          write a GS frame capture of N vblanks (2 when left out) from these vblanks,
                          for kf4-gsreplay (port/debug/gs_capture.c; F9 does the same)

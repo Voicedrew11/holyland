@@ -41,6 +41,7 @@ struct SettingRow {
     bool (*overridden)() = nullptr; // the command line chose this run's value: the row says so
     const char *(*note)() = nullptr; // a line under the help, that changes (the cheats' last message); nullptr: none
     int action = -1;                 // binding: its PortAction (port/include/port/controls.h); shown while it is used
+    int (*range_max)() = nullptr;    // a number's top, when it is known only in play (the disc's maps); nullptr: range.max
 };
 
 struct SettingTab {
@@ -68,6 +69,8 @@ void row_activate(const SettingRow &row);           // an action's
 std::string row_value_text(const SettingRow &row);
 // a number's place in its range, 0 to 1 (for its bar)
 float row_number_fraction(const SettingRow &row);
+// a number's top: range_max's, else range.max
+int row_range_max(const SettingRow &row);
 
 // Rows the view can write (port/ui/rows_rml.hpp): the model's rows, with each one's SettingRow and texts
 class RowSource : public MenuRows {

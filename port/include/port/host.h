@@ -243,7 +243,7 @@ int port_draw_distance_sky(void);
 #define PORT_DRAW_DISTANCE_MAX_FOG 1024.0f
 
 /* port_native_draw(kind): 1 while that kind of draw goes to the renderer core (docs/port/NATIVE_DRAW.md):
-   --native-draw on or a list of kinds, the overlay's Developer page, or settings.json's display.native_draw
+   --native-draw on or a list of kinds, or settings.json's display.native_draw
    (PORT_ND_ACCEPTED); off by default. The patched draw
    code then queues, where it would have queued a model part's packets, a GS register write to
    PORT_GS_REG_NATIVE_DRAW (another address the GS does not have) naming a draw in the core's side

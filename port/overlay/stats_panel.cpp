@@ -262,7 +262,8 @@ void effects_section(const PortStatsSnapshot &s) {
     }
 }
 
-void panel(bool overlay_open) {
+// (drawn over the game, never taking the mouse: nothing in it is pressed)
+void panel() {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     float em = ImGui::GetFontSize();
     float column = em * 17.0f;
@@ -271,9 +272,7 @@ void panel(bool overlay_open) {
                             ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.86f);
     ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
-                             ImGuiWindowFlags_NoCollapse;
-    if (!overlay_open)
-        flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav;
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav;
     if (!ImGui::Begin("Extended stats", nullptr, flags)) {
         ImGui::End();
         return;
@@ -405,7 +404,7 @@ extern "C" void port_stats_overlay_fonts(void) {
     stats_menus_fonts();
 }
 
-extern "C" void port_stats_overlay_draw(int overlay_open, int x, int y, int width, int height) {
+extern "C" void port_stats_overlay_draw(int x, int y, int width, int height) {
     if (!port_stats_options.on || !snap.valid)
         return;
     uint32_t mxcsr = port_host_float_begin(); // the numbers are formatted in the host's rounding
@@ -416,6 +415,6 @@ extern "C" void port_stats_overlay_draw(int overlay_open, int x, int y, int widt
         target_bar();
     }
     if (panel_shown())
-        panel(overlay_open != 0);
+        panel();
     port_host_float_end(mxcsr);
 }

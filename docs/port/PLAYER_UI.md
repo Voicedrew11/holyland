@@ -2,8 +2,8 @@
 
 The menu players use: Holyland's settings in King's Field IV's look, drawn with
 [RmlUi](https://github.com/mikke89/RmlUi) over the game. **F1** (or a controller's **L3 + R3**) opens and closes it. The
-Dear ImGui overlay is now the developers' (**Shift+F1**), and the long-term goal is to retire ImGui entirely (the
-plan is below).
+developers' Dear ImGui window (Shift+F1) was removed on 2026-11-24; ImGui still draws the automap and the extended
+stats, and the goal is to retire it entirely (the plan is below).
 
 Started 2026-11-18 on `feat/player-ui`. Look and layout drew on Soulbrandt's (the Demon's Souls PC port) for what a
 port's menu needs to do: settings as data, a help panel, and moving by keyboard, controller and mouse alike. Its look
@@ -17,8 +17,16 @@ is not borrowed.
   for what you can do now: the keyboard's, or the controller's once it was used.
 - Every player's setting the overlay had is here: the window size, the PS2's picture fixes, instant mouse look and
   the mouse in menus, the key bindings, the extended stats, the automap and its map help, the hands, the update notice
-  (shown only when one is due) and the cheats. Left in the overlay only: the overlay's size, the presenter, save states,
-  native draw kinds, the debugging tools and teleport.
+  (shown only when one is due), the cheats and teleport (Cheats > Teleport: a map of the disc's and a place in it,
+  read from the map's file; `port/include/port/teleport.h`). What only the developers' window had and is now gone:
+  its own size (settings.json's `overlay.scale` still sizes the automap's and the stats' text), the presenter
+  (`--presenter`, settings.json's `display.presenter`), the save-state slots (F5 / F7 keep the quick slot), native
+  draw's kinds (`--native-draw`), the debugging tools' buttons (their keys stay: F8, F9 ...), the flash recorder's
+  switch (`--flash-recorder`), the rates and the game's readout (Shift+P's profiler, Report an Issue).
+- **Notices** while the menu is closed (`#notice`, low in the middle): a save state's or quick save's message from its
+  key, read again each picture as the request is taken (`port_player_ui_notice_follow`), the debugging tools' messages
+  and a problem report's progress (`port_player_ui_notice`). "Preparing shaders... N%" (`#building`, in the middle)
+  while the game waits for the pipelines made before play (`port_gs_shaders_building`).
 - **Key bindings**: a row for each action in use, with its three slots (two keys or mouse buttons, a controller
   button). Left / Right choose the slot, Enter (or a click on a slot) waits for the next key or button
   (`port_controls_listen`; `port/sdk/controls.c` takes it before the menu sees it), Delete (a controller's Square,
@@ -228,17 +236,15 @@ picture.
 Still in ImGui (`port/overlay/`), to move over one at a time:
 
 1. ~~**Key bindings**~~, 2. ~~**the mods' own settings**~~, 3. ~~**window size and the PS2 picture fixes**~~: moved
-   on 2026-11-20 (the Key Bindings, Gameplay, Map, Hands, Display and Graphics sections). The overlay still has them
-   too, for developers, until it goes.
-4. **Notices**: the save-state, quick-save and debug toasts, the "building pipelines" notice, the update note and
-   badge (`update_badge.cpp`). These are a toast layer in RmlUi, visible while the menu is closed
-   (`port_player_ui_visible`).
+   on 2026-11-20 (the Key Bindings, Gameplay, Map, Hands, Display and Graphics sections).
+4. ~~**Notices**~~: moved on 2026-11-24 (the save-state, quick-save and debug toasts, "Preparing shaders"); the
+   update notice already was the menu's (General) and the title's pop-up.
 5. **In-play views**: the automap's full map and minimap, the stats panel over the game's menu. These need images
    (`LoadTexture` / textures the game makes) in the recorder.
-6. **Developer tools**: the Developer page and the frame views. ~~The profiler (Shift+P)~~: moved on 2026-11-24, an
-   RmlUi overlay of its own in the menu's context (`port/ui/profiler_overlay.hpp`, `res/profiler.rml`,
-   docs/port/PROFILING.md). The rest can stay in ImGui longest, or become an RmlUi developer tab. Once they are moved, `third_party/imgui` and the ImGui backends
-   go.
+6. ~~**Developer tools**~~: the profiler (Shift+P) moved on 2026-11-24, an RmlUi overlay of its own in the menu's
+   context (`port/ui/profiler_overlay.hpp`, `res/profiler.rml`, docs/port/PROFILING.md); teleport moved to Cheats the
+   same day and the rest of the developers' window (Shift+F1) was removed. Once item 5 is moved, `third_party/imgui`
+   and the ImGui backends go.
 7. **The SDL presenter** (`--presenter sdl`): draw `ui::Frame` with `SDL_RenderGeometryRaw` (the launcher does
    this already: `launcher/window.cpp`, `Window::State::draw`) (premultiplied blend
    mode), so the menu exists there too.

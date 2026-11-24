@@ -17,6 +17,7 @@ extern "C" {
 #include "port/hands.h"
 #include "port/host.h"
 #include "port/live_settings.h"
+#include "port/overlay.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/problem_report.h"
@@ -24,8 +25,8 @@ extern "C" {
 #include "port/scene_depth.h"
 #include "port/settings.h"
 #include "port/stats.h"
+#include "port/teleport.h"
 #include "port/twin_stick.h"
-#include "port/walk_keys.h"
 #include "port/walk_keys.h"
 }
 
@@ -1164,6 +1165,82 @@ void describe_hundredths_s(int hundredths, char *out, size_t size) {
 }
 const char cheat_help[] = "Applied once you are in play (not in a menu or message). A save made after keeps it.";
 
+// Teleport (port/include/port/teleport.h): a map of the disc's and a place in it, read from the map's file
+struct TeleportChoice {
+    int map_index = -1; // in the disc's maps; -1: not chosen yet (the player's map, when first asked)
+    int place = 0;
+    int places_for = -1; // the map `places` holds
+    int place_count = 0;
+    PortTeleportPlace places[PORT_TELEPORT_PLACES] = {};
+};
+TeleportChoice teleport;
+
+bool teleport_maps_found() {
+    return port_teleport_map_count() > 0;
+}
+int teleport_map_top() {
+    return port_teleport_map_count() - 1;
+}
+int get_teleport_map() {
+    const int count = port_teleport_map_count();
+    if (teleport.map_index >= 0 && teleport.map_index < count) {
+        return teleport.map_index;
+    }
+    PortGameReadout game;
+    kf4_game_readout(&game);
+    teleport.map_index = 0;
+    for (int i = 0; i < count; i++) {
+        if (port_teleport_map(i) == (game.map_tag & 0xFF)) {
+            teleport.map_index = i;
+        }
+    }
+    return teleport.map_index;
+}
+void set_teleport_map(int index) {
+    teleport.map_index = index;
+    teleport.place = 0;
+}
+// the map's number on the row (its name is too long beside the bar) and its name under the help
+void describe_teleport_map(int index, char *out, size_t size) {
+    std::snprintf(out, size, "%03d", port_teleport_map(index));
+}
+const char *teleport_map_name() {
+    return port_teleport_map_name(port_teleport_map(get_teleport_map()));
+}
+// the chosen map's places, read from the disc when the map changes
+int teleport_place_count() {
+    const int map = port_teleport_map(get_teleport_map());
+    if (teleport.places_for != map) {
+        teleport.place_count = port_teleport_places(map, teleport.places);
+        teleport.places_for = map;
+    }
+    return teleport.place_count;
+}
+bool teleport_places_found() {
+    return teleport_place_count() > 0;
+}
+int teleport_place_top() {
+    return teleport_place_count() - 1;
+}
+int get_teleport_place() {
+    if (teleport.place >= teleport_place_count()) {
+        teleport.place = 0;
+    }
+    return teleport.place;
+}
+void set_teleport_place(int place) {
+    teleport.place = place;
+}
+void describe_teleport_place(int place, char *out, size_t size) {
+    std::snprintf(out, size, "%s", place < teleport_place_count() ? teleport.places[place].label : "");
+}
+void teleport_go() {
+    port_teleport_request(port_teleport_map(get_teleport_map()), get_teleport_place());
+}
+const char *teleport_message() {
+    return port_quick_message();
+}
+
 
 // ---- The tabs' rows (after every get / set above) ------------------------------------------------------------------
 const SettingRow gameplay_rows[] = {
@@ -1312,6 +1389,36 @@ const SettingRow cheats_rows[] = {
      get_map_secrets, set_map_secrets, nullptr, nullptr, nullptr, automap_on},
     {"Show Lock Hints", "What each lock needs and whether you have it, and notes for puzzles (a blue ?).",
      RowKind::toggle, on_off, {}, get_map_hints, set_map_hints, nullptr, nullptr, nullptr, automap_on},
+    {"Teleport", "", RowKind::heading, {}, {}, nullptr, nullptr, nullptr, nullptr, teleport_maps_found},
+    {.label = "Map",
+     .help = "Any map on the disc.",
+     .kind = RowKind::number,
+     .range = {0, 0, 1},
+     .get = get_teleport_map,
+     .set = set_teleport_map,
+     .describe = describe_teleport_map,
+     .shown = teleport_maps_found,
+     .note = teleport_map_name,
+     .range_max = teleport_map_top},
+    {.label = "Place",
+     .help = "Start: where the map puts you when you arrive without a door or stairs.\nItem: where one of the map's "
+             "items lies.\nFloor: the middle of a large floor.",
+     .kind = RowKind::number,
+     .range = {0, 0, 1},
+     .get = get_teleport_place,
+     .set = set_teleport_place,
+     .describe = describe_teleport_place,
+     .shown = teleport_maps_found,
+     .enabled = teleport_places_found,
+     .range_max = teleport_place_top},
+    {.label = "Teleport",
+     .help = "Takes you there when the menu closes, with your items, stats and progress. A map you could not reach "
+             "yet may not behave as in a real playthrough.",
+     .kind = RowKind::action,
+     .act = teleport_go,
+     .shown = teleport_maps_found,
+     .enabled = teleport_places_found,
+     .note = teleport_message},
     {"Give", "", RowKind::heading},
     {"Spell Level", "The level spells are given at (1 to 3). Known spells change to it too.", RowKind::number, {},
      {1, 3, 1}, get_spell_level, set_spell_level},

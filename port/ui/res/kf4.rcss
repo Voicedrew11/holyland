@@ -57,7 +57,8 @@ body.closed #hint.shown {
 	display: block;
 }
 
-/* a plate low in the middle (clear of the game's gauges, top left), on the hint's soft box: a problem report's progress */
+/* a plate low in the middle (clear of the game's gauges, top left), on the hint's soft box: a problem report's progress,
+   a save state's or quick save's message, the debugging tools' */
 #notice {
 	display: none;
 	position: absolute;
@@ -66,6 +67,7 @@ body.closed #hint.shown {
 	width: 70%;
 	padding: 12dp 34dp 12dp 34dp;
 	text-align: center;
+	word-break: break-word; /* (a captures folder's path has no spaces) */
 	font-size: 17dp;
 	color: #c8d6ea;
 	decorator: ninepatch(soft-box-outer, soft-box-inner, 18dp 30dp 18dp 30dp);
@@ -73,6 +75,25 @@ body.closed #hint.shown {
 }
 
 body.closed #notice.shown {
+	display: block;
+}
+
+/* the same plate in the middle of the picture: the game holds still on a black picture until the shaders are made */
+#building {
+	display: none;
+	position: absolute;
+	top: 46%;
+	left: 30%;
+	width: 40%;
+	padding: 12dp 34dp 12dp 34dp;
+	text-align: center;
+	font-size: 17dp;
+	color: #c8d6ea;
+	decorator: ninepatch(soft-box-outer, soft-box-inner, 18dp 30dp 18dp 30dp);
+	image-color: #050607f0;
+}
+
+body.closed #building.shown {
 	display: block;
 }
 

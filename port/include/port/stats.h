@@ -44,7 +44,7 @@ void port_stats_settings_write(void *mods);
 void port_stats_overlay_update(void);            /* once a vblank, the game's thread: tracks and reads */
 int port_stats_overlay_wants(void);              /* something of it is drawn this vblank (any thread) */
 /* draws it, inside the overlay's ImGui frame; x, y, width, height: the game's picture in the window */
-void port_stats_overlay_draw(int overlay_open, int x, int y, int width, int height);
+void port_stats_overlay_draw(int x, int y, int width, int height);
 void port_stats_overlay_fonts(void);             /* adds its font to the overlay's, once at start */
 
 /* ---- The game's side (game/stats.c) ---------------------------------------------------------- */
