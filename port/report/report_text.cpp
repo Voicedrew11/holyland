@@ -138,6 +138,15 @@ std::string form_url(const IssueForm &form, std::string_view what, std::string_v
         url += "&what=" + url_encode(what);
     if (!details.empty())
         url += "&details=" + url_encode(details);
+    // the same as a plain issue's text, for when the form is not there (GitHub reads forms from the default branch
+    // only) and the template is ignored; the form ignores it
+    std::string body;
+    if (!what.empty())
+        body += std::string(what) + "\n\n";
+    body += "Please drag the report file (.zip) in here.\n";
+    if (!details.empty())
+        body += "\n```\n" + std::string(details) + "\n```\n";
+    url += "&body=" + url_encode(body);
     return url;
 }
 

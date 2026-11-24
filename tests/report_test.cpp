@@ -46,7 +46,9 @@ void links() {
     check("url_encode keeps the unreserved", report::url_encode("a-Z_0.~") == "a-Z_0.~");
     check("url_encode escapes the rest", report::url_encode("a b\n&=é") == "a%20b%0A%26%3D%C3%A9");
     const std::string url = report::issue_url({"o/r", "", "", "line one\nline two"}, 8000);
-    check("the form's link", url == "https://github.com/o/r/issues/new?template=report.yml&details=line%20one%0Aline%20two");
+    check("the form's link", url.rfind("https://github.com/o/r/issues/new?template=report.yml&details=line%20one%0Aline%20two&body=", 0) == 0);
+    check("a plain issue's text too, for when the form is missing",
+          url.find("&body=Please%20drag") != std::string::npos && url.find("%60%60%60%0Aline%20one%0Aline%20two") != std::string::npos);
     std::string long_details;
     for (int k = 0; k < 2000; k++)
         long_details += "detail line " + std::to_string(k) + "\n";

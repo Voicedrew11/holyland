@@ -31,7 +31,8 @@ struct IssueForm {
     std::string_view what;    // the form's "What happened"
     std::string_view details; // the form's "Details"
 };
-// The form's link, at most max_bytes long: Details cut first (at a line's end, with a note), then What happened
+// The form's link, at most max_bytes long: Details cut first (at a line's end, with a note), then What happened. The
+// same text also goes as a plain issue's body, which GitHub shows when the form is not on the default branch.
 std::string issue_url(const IssueForm &form, std::size_t max_bytes);
 
 // A local folder or file as a file:// link, each byte that needs it escaped ("/a b" -> "file:///a%20b";
