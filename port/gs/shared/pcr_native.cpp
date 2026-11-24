@@ -267,6 +267,7 @@ private:
                 // (program 0x000 leaves the mesh's colours' alpha in RGBAQ as it is: vu1_000_maths.h's lit_colour, the
                 // lights' w 1; the batch's least and most are render.cpp's)
                 nb.alpha_is_one = !shadow && b.alpha_lo == 0x80 && b.alpha_hi == 0x80;
+                nb.alpha_lo = shadow ? 0 : uint8_t(b.alpha_lo);
                 name_picture(nb);
                 canvas.native_batch(front.registers(), prim, nb);
                 counts_.triangles += n;

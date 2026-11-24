@@ -1974,6 +1974,11 @@ public:
                 per(d.draw_calls_by[2]), per(d.draw_calls_by[3]), per(d.draw_calls_by[4]),
                 (unsigned long long)d.indirect_calls, per(d.indirect_calls), (unsigned long long)d.indirect_draws,
                 per(d.indirect_draws), (unsigned long long)d.settled_runs, per(d.settled_runs));
+        fprintf(stderr,
+                "[stats] scene renderer depth tests: %llu calls before the shader, %llu after it for an alpha test; "
+                "%llu batches' alpha tests no pixel fails, drawn without them\n",
+                (unsigned long long)d.early_calls, (unsigned long long)d.late_alpha_calls,
+                (unsigned long long)counts_.alpha_tests_passed);
         fprintf(stderr, "[stats] scene renderer fast path (SCN_FAST): %llu of %llu calls (%.1f%%)\n",
                 (unsigned long long)d.fast_calls, (unsigned long long)d.calls,
                 d.calls ? 100.0 * double(d.fast_calls) / double(d.calls) : 0.0);
@@ -4517,6 +4522,44 @@ private:
         return {lo, hi};
     }
 
+    // Whether every pixel of a batch passes its alpha test (TEST's ATST and AREF; ATE set). The pixel's alpha is its
+    // corners' (between their least and most, as interpolated or the kick's), through the texture function with the
+    // texture's where TCC takes it (pcr_prim.h's PCR_TEXTURE_AND_FOG; the fog leaves alpha as it is). Only the least
+    // alpha is known (a native batch's corners: program 0x000's, NativeBatch::alpha_lo; the texture's: a sampled one's
+    // colours, a step less for a filter's rounding), so only the tests an alpha above a bound passes: GREATER, GEQUAL,
+    // NOTEQUAL. The world's draws test alpha > 0 to cut what their meshes or textures give alpha 0; where none has it,
+    // the test is the shader's discard alone, which keeps the GPU's depth test until after the shader.
+    static bool alpha_test_passes(const Batch &b) {
+        const DrawState &s = b.state;
+        uint32_t atst = bits(s.test, 1, 3), aref = bits(s.test, 4, 8);
+        if ((atst != 5 && atst != 6 && atst != 7) || b.texture_later) {
+            return false;
+        }
+        uint32_t vlo;
+        if (b.native) {
+            if (b.nb.program != NativeProgram::vu1_000) {
+                return false; // (0x280's and 0x700's alpha are the draw's colour scale's: not known here)
+            }
+            vlo = b.nb.alpha_lo;
+        } else {
+            if (b.vertices.empty()) {
+                return false;
+            }
+            vlo = 255;
+            for (const Vertex &v : b.vertices) {
+                vlo = std::min<uint32_t>(vlo, v.rgba[3]);
+            }
+        }
+        uint32_t lo = vlo;
+        if (bits(s.prim, 4, 1) && bits(s.tex0, 34, 1)) {
+            uint32_t tlo = b.texture.ok ? b.texture.alpha_lo : 0;
+            tlo = tlo > 0 ? tlo - 1 : 0;
+            uint32_t tfx = bits(s.tex0, 35, 2);
+            lo = tfx == 0 ? std::min(255u, (vlo * tlo) >> 7) : tfx == 2 ? std::min(255u, vlo + tlo) : tlo;
+        }
+        return atst == 5 ? lo >= aref : lo > aref;
+    }
+
     // (exact Z, pcr_canvas.cpp's) A decal: a blended draw Z tested GEQUAL whose blend shows what is under it somewhere
     // (not blend_covers): tested with the top fine part of its whole Z, so that it ties with a surface of its whole Z
     // under it whatever their fine parts, as on the GS (pcr_exact_z.h's pcr_whole_depth)
@@ -4825,6 +4868,12 @@ private:
         uint32_t ztst = bits(s.test, 17, 2);
         bool ate = bits(s.test, 0, 1) != 0;
         uint32_t atst = bits(s.test, 1, 3), afail = bits(s.test, 12, 2);
+        if (ate && atst != 1 && passes_test_on_ && alpha_test_passes(b)) {
+            // (an alpha test no pixel of the batch can fail is none: the draw's pixels the same, and its depth tested
+            // before the shader, pcr_prim_early.frag, not after it; most of the world's draws test alpha > 0)
+            ate = false;
+            counts_.alpha_tests_passed++;
+        }
         bool zwrite = zte && bits(s.zbuf, 32, 1) == 0;
         struct PassBits {
             uint32_t mode;
@@ -5426,6 +5475,8 @@ private:
     std::array<uint32_t, 2> scale_ = {1, 1}, pending_scale_ = {1, 1};
     int lod_mode_ = 0, mode_2d_ = 0;
     uint32_t aniso_ = 1;
+    // (alpha_test_passes: an alpha test no pixel fails drawn as none; KF4_SCN_PASSED_TESTS=0: kept, to compare)
+    const bool passes_test_on_ = !getenv("KF4_SCN_PASSED_TESTS") || atoi(getenv("KF4_SCN_PASSED_TESTS")) != 0;
     uint64_t frame_ = 0, vblank_ = 0;
     uint64_t clut_serial_ = 0;
     uint64_t store_events_ = 0; // (anything that may change what the store answers: uploads, copies, CLUT loads; draws invalidate the last native batch's texture by its pages)
@@ -5529,6 +5580,7 @@ private:
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0, finer_pictures = 0;
         uint64_t textures_gpu_levels = 0; // (of textures_sampled: read at the GPU's own level, gpu_levels_for)
+        uint64_t alpha_tests_passed = 0;  // (batches whose alpha test no pixel fails, drawn without it: alpha_test_passes)
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
                                                              // pair before's materials again)

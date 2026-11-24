@@ -138,6 +138,7 @@ public:
         // (each vertex once) the jobs placed, the vertices in them, the draws that share a job with one before
         uint64_t place_jobs = 0, placed_vertices = 0, place_shared = 0, place_dispatches = 0;
         uint64_t settled_runs = 0; // (exact Z: the runs of decals settled, settle_run)
+        uint64_t early_calls = 0, late_alpha_calls = 0; // (plain passes' calls: depth tested before the shader; after it, an alpha test's)
         uint64_t fast_calls = 0;   // (the calls drawn by the fast path, SCN_FAST)
         // (the materials of the records not drawn by it, by the first reason: a picture's layer, fused, DATE, blend in
         // the shader, 2D smooth, decal losses, not sampled (and by source kind), no table)

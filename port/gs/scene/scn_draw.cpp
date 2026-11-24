@@ -1327,6 +1327,12 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.zwrite = false;
         }
         counts_.fast_calls += key.program == fast_rec_[v] || key.program == fast_early_rec_[v] ? 1 : 0;
+        if (pass.kind == PassKind::plain && !m.picture_layer) {
+            // (--stats: the world's calls whose depth test is before the shader, and those after it for an alpha test)
+            const bool before = ap.mode == 0 && !(m.push.flags & pcr::F_DATE);
+            counts_.early_calls += before ? 1 : 0;
+            counts_.late_alpha_calls += ap.mode != 0 ? 1 : 0;
+        }
         canonical(key);
         if (records && joins(key, rec + i)) {
             // (the open run's state is this call's: nothing set)

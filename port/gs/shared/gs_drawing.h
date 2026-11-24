@@ -50,6 +50,10 @@ struct NativeBatch {
     // which the lights do not touch). False when not known. A blend by As that is then the source alone is drawn
     // without the blend (pcr_canvas.cpp's blend_is_source).
     bool alpha_is_one = false;
+    // The least alpha any corner has as the program leaves it in RGBAQ (program 0x000: its mesh's colours' alpha, VU1's
+    // min(1 * a, 255) and FTOI0, below 0 as 0: render.cpp's batch's alpha_lo); 0 when not known. A pixel's alpha with
+    // TCC 0 is its corners' between them, so an alpha test it passes always passes (scn_build.cpp's alpha_test_passes).
+    uint8_t alpha_lo = 0;
     // (developers' counters, KF4_PC_TIES and KF4_PC_OVERDRAW: pcr_canvas.cpp; the scene's DATE: scn_build.cpp) the draw it
     // is of: its RdDraw's kind (RD_KIND_*) and identity (port/include/port/render.h: the owner's EE address, the part, a
     // slot)
