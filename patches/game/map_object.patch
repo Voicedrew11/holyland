@@ -84,7 +84,7 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a72
  
  void Vector_Copy(void *, void *);
  void MapObject_UpdateOpeningDoor(MapObject *);
-@@ -15,11 +16,22 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
+@@ -15,11 +16,35 @@ void ModelMatrix_Build(ModelInstance *, Vector4 *, Vector4 *, f32 *);
  void ModelMatrix_BuildPartLocal(ModelInstance *, ModelPart *, ModelPart *);
  void Model_MultiplyChildMatrices(ModelPart *);
  void sceVu0CopyMatrix(void *, void *);
@@ -97,9 +97,22 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a72
  extern u8 item_counts[];
  extern float player_state[];
  
++/* PC: the one door --door-speed leaves at the PS2's speed: "the black door" in map 0x22 (The Mansion of Howling
++   Winds, Interior), object definition 194, at (4400, 640, -350). */
++#include "map/map.h"
++extern s32 current_map_slot;
++extern MapSlot map_slots[];
++
++static int DoorKeepsOriginalSpeed(MapObject *object) {
++    MapObjectUnk08 *source = object->source;
++
++    return map_slots[current_map_slot & 1].tag == 0x22 && source->def_index == 194 && source->position.x == 4400.0f &&
++           source->position.y == 640.0f && source->position.z == -350.0f;
++}
++
 +/* PC: --door-speed (port/host.h): the animation's steps this game frame, not past its end */
 +static void StepDoorAnim(MapObject *object) {
-+    int steps = port_door_speed();
++    int steps = DoorKeepsOriginalSpeed(object) ? 1 : port_door_speed();
 +
 +    do {
 +        ((int (*)(char *))MapObject_StepAnim)((char *)object); // match: it returns a value
@@ -109,7 +122,7 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a72
  /* Start handler of the door-like kinds: closed (animation 4) or already open
     (animation 5). Kind 6 remembers where its second part sits and, when it starts
     open, is run until it gets there. */
-@@ -118,7 +130,7 @@ void MapObject_UpdateOpeningDoor(MapObject *object) {
+@@ -118,7 +143,7 @@ void MapObject_UpdateOpeningDoor(MapObject *object) {
          work->timer--;
      }
      if (MODEL_CHANNEL(object->model)->frame != 0) {
@@ -118,7 +131,7 @@ index ca11e10ff92986756121d2db0239f82cd2f37acd..f6d69450595deb74da34c9f68db68a72
          kind = object->definition->kind;
          if (kind == 6) {
              Vector_Subtract(&delta, object->model->parts[1].position, work);
-@@ -193,7 +205,7 @@ void MapObject_UpdateClosingDoor(MapObject *object) {
+@@ -193,7 +218,7 @@ void MapObject_UpdateClosingDoor(MapObject *object) {
          work->timer--;
      }
      if (MODEL_CHANNEL(object->model)->frame != 0) {
