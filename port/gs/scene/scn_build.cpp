@@ -32,6 +32,8 @@
 #include "pcr_textures.h"
 #include "scn_draw.h"
 #include "scn_scene.h"
+#include "scn_texture_budget.h"
+#include "scn_vram_diag.h"
 
 extern "C" {
 #include "gsn.h"
@@ -127,6 +129,7 @@ struct GpuTexture {
     ImageHandle image;
     uint32_t levels = 1;
     uint64_t used = 0;
+    uint64_t image_bytes = 0; // (what create_image was asked for, mips included: the cache's byte accounting)
 };
 
 struct SampledTexture {
@@ -139,6 +142,7 @@ struct SampledTexture {
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: finer_pictures.h)
     uint64_t finer_asked = 0; // (what was asked to be finer, where it may be a finer picture: FinerAsked::hash)
     uint64_t used = 0;
+    uint64_t image_bytes = 0;
     uint8_t alpha_lo = 0, alpha_hi = 255;
     bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, uint64_t asked) const {
         return key == k && texa == t && clut == c && finer_asked == asked;
@@ -538,9 +542,19 @@ public:
         store_.forget();
         colour_.clear();
         depth_.clear();
+        for (const auto &kv : textures_) {
+            texture_gone(vram_diag::Site::gpu_texture, kv.second.image_bytes);
+        }
+        for (const auto &kv : sampled_) {
+            texture_gone(vram_diag::Site::sampled_texture, kv.second.image_bytes);
+        }
+        for (const auto &kv : target_copies_) {
+            vram_diag::released(vram_diag::Site::target_copy, kv.second.image_bytes);
+        }
         textures_.clear();
         sampled_.clear();
         target_copies_.clear();
+        texture_bytes_ = ByteTracker{};
         clut_serial_++;
         store_events_++;
         last_native_ = {};
@@ -806,6 +820,7 @@ public:
         frame_++;
         evict_textures();
         let_go_of_idle_depth();
+        vram_diag::tick();
     }
 
     // ---- (slice 5) The packets taken ahead of the pictures between (docs/plans/scene-slice5-results.md) ----
@@ -1445,7 +1460,12 @@ public:
         info.usage |= stand_in_usage;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         counts_.stand_ins_made++;
-        return device_.create_image(info, nullptr);
+        ImageHandle made = device_.create_image(info, nullptr);
+        if (made) {
+            vram_diag::created(vram_diag::Site::stand_in,
+                               vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
+        }
+        return made;
     }
     void stand_in_back(ImageHandle image) {
         if (image) {
@@ -1714,6 +1734,10 @@ public:
                 info.usage |= stand_in_usage; // (started by a clear or a copy, copied from to the picture)
                 info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
                 si.image = device_.create_image(info, nullptr);
+                if (si.image) {
+                    vram_diag::created(vram_diag::Site::stand_in,
+                                       vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
+                }
                 counts_.stand_ins_made++;
             }
             if (!si.image) {
@@ -3122,6 +3146,8 @@ private:
             if (!history_.image) {
                 return nullptr;
             }
+            vram_diag::created(vram_diag::Site::history,
+                               vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
         }
         history_.layer = l.serial;
         // (the frame's own pixels, its clears held back drawn: not the layer, which is drawn into the history)
@@ -3338,7 +3364,11 @@ private:
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
         ImageHandle image = device_.create_image(info, nullptr);
-        if (!image) {
+        if (image) {
+            vram_diag::created(vram_diag::Site::target,
+                               vram_diag::approx_bytes(info.width, info.height, info.levels,
+                                                       info.format == VK_FORMAT_D16_UNORM ? 2 : 4));
+        } else {
             fprintf(stderr, "[scn] no image for a %ux%u target\n", width, height);
         }
         return image;
@@ -3552,6 +3582,8 @@ private:
         if (!staged) {
             return;
         }
+        vram_diag::created(vram_diag::Site::staged_upload,
+                           vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
         int32_t dx = int32_t(x * scale_[0]), dy = int32_t(y * scale_[1]);
         int32_t dw = int32_t(std::min(w, s.width() - std::min(x, s.width())) * scale_[0]);
         int32_t dh = int32_t(std::min(h, s.height - std::min(y, s.height)) * scale_[1]);
@@ -3664,6 +3696,8 @@ private:
         if (!one || !buffer) {
             return false;
         }
+        vram_diag::created(vram_diag::Site::readback,
+                           vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
         CommandBufferHandle c = device_.request_command_buffer();
         times_.begin(*c, GpuWork::copy);
         c->barrier(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -3895,10 +3929,16 @@ private:
         if (!image) {
             return nullptr;
         }
+        uint64_t bytes = vram_diag::approx_bytes(info.width, info.height, info.levels, index ? 1 : 4);
+        texture_added(vram_diag::Site::gpu_texture, bytes);
         counts_.textures_uploaded++;
         GpuTexture &t = textures_[h];
+        if (t.image) { // (a hash collision with a different key replaced the old image)
+            texture_gone(vram_diag::Site::gpu_texture, t.image_bytes);
+        }
         t.key = a.key;
         t.image = image;
+        t.image_bytes = bytes;
         t.levels = d.levels;
         t.used = frame_;
         return &t;
@@ -3979,12 +4019,18 @@ private:
         if (!image) {
             return nullptr;
         }
+        uint64_t bytes = vram_diag::approx_bytes(info.width, info.height, info.levels, 4);
+        texture_added(vram_diag::Site::sampled_texture, bytes);
         counts_.textures_uploaded++;
         SampledTexture &t = sampled_[h];
+        if (t.image) { // (a hash collision with a different key replaced the old image)
+            texture_gone(vram_diag::Site::sampled_texture, t.image_bytes);
+        }
         t.key = a.key;
         t.texa = texa;
         t.clut = clut.rgba;
         t.image = image;
+        t.image_bytes = bytes;
         t.levels = d.levels;
         t.image_levels = uint32_t(data.size());
         t.finer = finer;
@@ -4143,6 +4189,8 @@ private:
                 target_copies_.erase(key);
                 return b;
             }
+            kept.image_bytes = vram_diag::approx_bytes(info.width, info.height, info.levels, 4);
+            vram_diag::created(vram_diag::Site::target_copy, kept.image_bytes);
             clear_first = w < cols || h < rows;
         } else {
             clear_first = kept.w > pw || kept.h > ph;
@@ -4201,18 +4249,99 @@ private:
     struct TargetCopy {
         ImageHandle image;
         uint32_t w = 0, h = 0; // (pixels: what copies wrote into it since it was cleared)
+        uint64_t image_bytes = 0;
     };
     std::unordered_map<uint64_t, TargetCopy> target_copies_;
+
+    void texture_added(vram_diag::Site site, uint64_t bytes) {
+        vram_diag::created(site, bytes);
+        texture_bytes_.add(bytes);
+    }
+
+    void texture_gone(vram_diag::Site site, uint64_t bytes) {
+        vram_diag::released(site, bytes);
+        texture_bytes_.remove(bytes);
+    }
+
+    // The byte cap is shared by both decoded-texture caches. Ask Granite once for the device-local heap's real
+    // budget (VK_EXT_memory_budget, with its heap-size fallback); an env override can lower it or turn it off.
+    uint64_t texture_cap() {
+        if (!texture_cap_set_) {
+            texture_cap_set_ = true;
+            const char *over = getenv("KF4_SCN_TEXTURE_CAP_MIB");
+            uint64_t over_mib = over != nullptr ? strtoull(over, nullptr, 10) : 0;
+            HeapBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+            device_.get_memory_budget(budgets);
+            const VkPhysicalDeviceMemoryProperties &props = device_.get_memory_properties();
+            uint64_t largest = 0, budget_bytes = 0;
+            for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
+                if ((props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                    props.memoryHeaps[i].size > largest) {
+                    largest = props.memoryHeaps[i].size;
+                }
+            }
+            for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
+                if ((props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                    props.memoryHeaps[i].size == largest) {
+                    budget_bytes = budgets[i].budget_size;
+                    if (budget_bytes == 0 && budgets[i].max_size != 0) {
+                        budget_bytes = budgets[i].max_size - budgets[i].max_size / 4;
+                    }
+                    break;
+                }
+            }
+            texture_cap_ = texture_cap_bytes(budget_bytes, over_mib);
+        }
+        return texture_cap_;
+    }
 
     void evict_textures() {
         if (textures_.size() >= 4096) {
             for (auto it = textures_.begin(); it != textures_.end();) {
-                it = frame_ - it->second.used > 120 ? textures_.erase(it) : std::next(it);
+                if (frame_ - it->second.used > 120) {
+                    texture_gone(vram_diag::Site::gpu_texture, it->second.image_bytes);
+                    it = textures_.erase(it);
+                } else {
+                    it = std::next(it);
+                }
             }
         }
         if (sampled_.size() >= 4096) {
             for (auto it = sampled_.begin(); it != sampled_.end();) {
-                it = frame_ - it->second.used > 120 ? sampled_.erase(it) : std::next(it);
+                if (frame_ - it->second.used > 120) {
+                    texture_gone(vram_diag::Site::sampled_texture, it->second.image_bytes);
+                    it = sampled_.erase(it);
+                } else {
+                    it = std::next(it);
+                }
+            }
+        }
+        // The count/age rule above cannot fire before thousands of huge movie-frame images have been made. Keep the
+        // two caches under their byte cap by letting the least recently used image go first.
+        uint64_t cap = texture_cap();
+        while (texture_bytes_.over(cap)) {
+            auto oldest_gpu = textures_.end();
+            auto oldest_sampled = sampled_.end();
+            for (auto it = textures_.begin(); it != textures_.end(); ++it) {
+                if (oldest_gpu == textures_.end() || it->second.used < oldest_gpu->second.used) {
+                    oldest_gpu = it;
+                }
+            }
+            for (auto it = sampled_.begin(); it != sampled_.end(); ++it) {
+                if (oldest_sampled == sampled_.end() || it->second.used < oldest_sampled->second.used) {
+                    oldest_sampled = it;
+                }
+            }
+            if (oldest_gpu == textures_.end() && oldest_sampled == sampled_.end()) {
+                break;
+            }
+            if (oldest_sampled == sampled_.end() ||
+                (oldest_gpu != textures_.end() && oldest_gpu->second.used <= oldest_sampled->second.used)) {
+                texture_gone(vram_diag::Site::gpu_texture, oldest_gpu->second.image_bytes);
+                textures_.erase(oldest_gpu);
+            } else {
+                texture_gone(vram_diag::Site::sampled_texture, oldest_sampled->second.image_bytes);
+                sampled_.erase(oldest_sampled);
             }
         }
     }
@@ -4630,6 +4759,9 @@ private:
         if (!copy) {
             return copy;
         }
+        vram_diag::created(vram_diag::Site::rect_copy,
+                           vram_diag::approx_bytes(info.width, info.height, info.levels,
+                                                   info.format == VK_FORMAT_D16_UNORM ? 2 : 4));
         op_copy(copy, {0, 0, 0}, s.image, {rect.offset.x, rect.offset.y, 0}, {rect.extent.width, rect.extent.height, 1},
                 false, work);
         return copy;
@@ -5252,6 +5384,10 @@ private:
             info.layout = ImageLayout::General;
             info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
             first_image_ = device_.create_image(info, nullptr);
+            if (first_image_) {
+                vram_diag::created(vram_diag::Site::first_pass,
+                                   vram_diag::approx_bytes(info.width, info.height, info.levels, 4));
+            }
             first_generation_ = first_generations;
             run_.cleared = false;
         }
@@ -5420,6 +5556,10 @@ private:
     std::vector<std::unique_ptr<Target>> colour_, depth_;
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
+    // VRAM held by the two decoded-texture image caches, and the byte cap they share (0: never evict by bytes).
+    ByteTracker texture_bytes_;
+    uint64_t texture_cap_ = 0;
+    bool texture_cap_set_ = false;
     std::unordered_map<uint32_t, SamplerHandle> samplers_;
     std::unordered_map<uint32_t, SamplerHandle> gpu_levels_samplers_; // (gpu_levels_sampler's)
     Batch batch_;
