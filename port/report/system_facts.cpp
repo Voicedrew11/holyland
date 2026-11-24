@@ -57,6 +57,7 @@ std::string env_or(const char *name, const char *otherwise) {
     return value != nullptr && value[0] != 0 ? value : otherwise;
 }
 
+#ifndef _WIN32
 // The first line of a file that starts with `key`, after it; "" when none
 std::string line_after(const char *path, std::string_view key) {
     std::ifstream in(path);
@@ -73,6 +74,7 @@ std::string unquoted(std::string text) {
         return text.substr(1, text.size() - 2);
     return text;
 }
+#endif
 
 #ifdef _WIN32
 std::string narrow(const wchar_t *text) {
