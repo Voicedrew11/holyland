@@ -16,6 +16,7 @@
 #include "port/debug.h"
 #include "port/overlay.h"
 #include "port/platform.h"
+#include "port/problem_report.h"
 #include "port/quicksave.h"
 #include "port/savestate.h"
 #include "port/settings.h"
@@ -82,8 +83,9 @@ const char *port_debug_capture_path(const char *stem, uint64_t vblank, const cha
     return out;
 }
 
-/* KF4_DEBUG_AT=state@VBLANK,audio@VBLANK,gs@VBLANK,flash@VBLANK,...: press F10, F12, F9 or F8 at those vblanks, for
-   checking the tools without anyone at the keyboard (in vblank order). Run on the game's thread at the
+/* KF4_DEBUG_AT=state@VBLANK,audio@VBLANK,gs@VBLANK,flash@VBLANK,report@VBLANK,...: press F10, F12, F9 or F8, or
+   choose the player menu's Report an Issue (port/include/port/problem_report.h), at those vblanks, for checking the
+   tools without anyone at the keyboard (in vblank order). Run on the game's thread at the
    vblank, from the GS capture's per-vblank note (port/platform/gs.c): a --headless run draws for it. */
 #define DEBUG_AT 16
 static struct {
@@ -107,6 +109,8 @@ void port_debug_at_vblank(uint64_t vblank) {
             port_debug_flash_record();
         } else if (what == 'a') {
             port_debug_write_audio_tail();
+        } else if (what == 'r') {
+            port_report_start();
         } else {
             port_debug_request_gs_capture();
         }
@@ -120,8 +124,9 @@ void port_debug_init(const char *gs_capture_at) {
     while (p != NULL && *p && debug_at_count < DEBUG_AT) {
         const char *at = strchr(p, '@');
 
-        if (at == NULL || (*p != 's' && *p != 'a' && *p != 'g' && *p != 'f')) {
-            fprintf(stderr, "KF4_DEBUG_AT wants state@VBLANK, audio@VBLANK, gs@VBLANK or flash@VBLANK joined by commas\n");
+        if (at == NULL || (*p != 's' && *p != 'a' && *p != 'g' && *p != 'f' && *p != 'r')) {
+            fprintf(stderr, "KF4_DEBUG_AT wants state@VBLANK, audio@VBLANK, gs@VBLANK, flash@VBLANK or report@VBLANK "
+                            "joined by commas\n");
             exit(2);
         }
         debug_at[debug_at_count].what = *p;
@@ -170,19 +175,10 @@ static void json_string(FILE *file, const char *text) {
     fputc('"', file);
 }
 
-void port_debug_write_state_dump(void) {
-    char path[1200];
-    FILE *file;
+void port_debug_write_state(FILE *file) {
     uint64_t first = event_count > EVENTS ? event_count - EVENTS : 0, n;
-    uint32_t mode;
+    uint32_t mode = port_host_float_begin(); /* the numbers as printf writes them in the host's mode */
 
-    port_debug_capture_path("state", port_vblank_count(), "json", path, sizeof(path));
-    file = fopen(path, "w");
-    if (file == NULL) {
-        port_debug_set_message("cannot write %s", path);
-        return;
-    }
-    mode = port_host_float_begin(); /* the numbers as printf writes them in the host's mode */
     fprintf(file, "{\n  \"vblank\": %llu,\n  \"events\": [", (unsigned long long)port_vblank_count());
     for (n = first; n < event_count; n++) {
         fprintf(file, "%s\n    ", n == first ? "" : ",");
@@ -191,8 +187,21 @@ void port_debug_write_state_dump(void) {
     fprintf(file, "\n  ],\n");
     kf4_game_dump(file);
     fprintf(file, "}\n");
-    fclose(file);
     port_host_float_end(mode);
+}
+
+void port_debug_write_state_dump(void) {
+    char path[1200];
+    FILE *file;
+
+    port_debug_capture_path("state", port_vblank_count(), "json", path, sizeof(path));
+    file = fopen(path, "w");
+    if (file == NULL) {
+        port_debug_set_message("cannot write %s", path);
+        return;
+    }
+    port_debug_write_state(file);
+    fclose(file);
     port_debug_set_message("game state written: %s", path);
 }
 

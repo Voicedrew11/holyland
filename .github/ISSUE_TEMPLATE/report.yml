@@ -1,0 +1,33 @@
+# The problem report. The game's Report an Issue (F1 > General) opens this form with "Details" filled in
+# (port/report/problem_report.cpp) and shows the folder that holds the report's .zip. GitHub cannot attach a file from a
+# link, so the zip box is required: the issue cannot be sent without something in it.
+name: Problem report
+description: Something went wrong in the game or the launcher.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The quickest way to report is from the game: press **F1**, then **General > Report an Issue**. It fills this in and saves a report file (.zip) with the game's log and your PC's details.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you were doing, what went wrong, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: zip
+    attributes:
+      label: Report file (.zip)
+      description: >-
+        Drag the report's .zip into this box. When you report from the game, the folder that holds it opens on its
+        own. It has the logs we need to find the problem: without it we usually can't.
+      placeholder: Drag the .zip here.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Filled in by the game. Leave it as it is.
+      render: text

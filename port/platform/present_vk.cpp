@@ -838,6 +838,7 @@ struct Flash {
     char folder[1100] = {};
     std::atomic<int> wanted{0};
     std::atomic<int> writing{0};
+    bool newest_only = false; // (set before wanted) the newest picture alone, the ring kept, no message (a report's)
     SDL_Thread *thread = nullptr;
     // the writer's copy of the ring's order
     uint32_t first = 0, n = 0;
@@ -1041,14 +1042,20 @@ int flash_writer(void *) {
     if (pool != VK_NULL_HANDLE) {
         vk.vkDestroyCommandPool(pr.device, pool, nullptr); // (and its command buffer)
     }
-    if (done == fl.n && ok) {
+    if (fl.newest_only) {
+        if (done != fl.n || !ok) {
+            std::fprintf(stderr, "[present] the newest picture could not be written to %s\n", fl.folder);
+        }
+    } else if (done == fl.n && ok) {
         port_debug_set_message("recorded %u pictures (the last %.1f s, %u x %u) in %s, written in %.1f s", done,
                                fl.n ? fl.written[fl.n - 1].seconds - fl.written[0].seconds : 0.0, fl.width, fl.height, fl.folder,
                                port_wall_seconds() - start);
     } else {
         port_debug_set_message("flash recorder: wrote %u of %u pictures to %s", done, fl.n, fl.folder);
     }
-    port_overlay_notify_debug();
+    if (!fl.newest_only) {
+        port_overlay_notify_debug();
+    }
     fl.writing.store(0);
     return 0;
 }
@@ -1067,13 +1074,15 @@ void flash_start_writer() {
     if (fl.image == VK_NULL_HANDLE || fl.count == 0) {
         return;
     }
-    fl.n = fl.count;
-    fl.first = (fl.head + fl.layers - fl.count) % fl.layers;
+    fl.n = fl.newest_only ? 1 : fl.count;
+    fl.first = (fl.head + fl.layers - fl.n) % fl.layers;
     fl.written.resize(fl.n);
     for (uint32_t k = 0; k < fl.n; k++) {
         fl.written[k] = fl.pictures[(fl.first + k) % fl.layers];
     }
-    fl.count = 0; // (the next pictures start a new ring)
+    if (!fl.newest_only) {
+        fl.count = 0; // (the next pictures start a new ring)
+    }
     fl.writing.store(1);
     fl.thread = SDL_CreateThread(flash_writer, "flash recorder", nullptr);
     if (fl.thread == nullptr) {
@@ -1964,7 +1973,8 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     return 1;
 }
 
-extern "C" int port_vk_flash_write(const char *folder, char *why, size_t size) {
+// The ring's checks before a write: true when one can be asked for, else false with why
+static bool flash_can_write(char *why, size_t size) {
     if (!pr.up) {
         std::snprintf(why, size, "the Vulkan presenter is not up");
         return 0;
@@ -1981,10 +1991,55 @@ extern "C" int port_vk_flash_write(const char *folder, char *why, size_t size) {
         std::snprintf(why, size, "none presented yet");
         return 0;
     }
+    return true;
+}
+
+extern "C" int port_vk_flash_write(const char *folder, char *why, size_t size) {
+    if (!flash_can_write(why, size)) {
+        return 0;
+    }
     std::snprintf(fl.folder, sizeof(fl.folder), "%s", folder);
     int pictures = int(fl.count);
+    fl.newest_only = false;
     fl.wanted.store(1);
     return pictures;
+}
+
+extern "C" int port_vk_flash_write_newest(const char *folder, char *why, size_t size) {
+    if (!flash_can_write(why, size)) {
+        return 0;
+    }
+    std::snprintf(fl.folder, sizeof(fl.folder), "%s", folder);
+    fl.newest_only = true;
+    fl.wanted.store(1);
+    return 1;
+}
+
+extern "C" void port_vk_describe(char *out, size_t size) {
+    if (!pr.up || pr.gpu == VK_NULL_HANDLE) {
+        std::snprintf(out, size, "(the Vulkan presenter is not up)\n");
+        return;
+    }
+    VkPhysicalDeviceProperties props;
+    vk.vkGetPhysicalDeviceProperties(pr.gpu, &props);
+    VkPhysicalDeviceMemoryProperties memory;
+    vk.vkGetPhysicalDeviceMemoryProperties(pr.gpu, &memory);
+    double local_mb = 0;
+    for (uint32_t k = 0; k < memory.memoryHeapCount; k++) {
+        if (memory.memoryHeaps[k].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            local_mb += double(memory.memoryHeaps[k].size) / 1048576.0;
+        }
+    }
+    static const char *const kinds[] = {"other", "integrated", "discrete", "virtual", "CPU"};
+    std::snprintf(out, size,
+                  "GPU: %s (%s; vendor 0x%04x, device 0x%04x)\n"
+                  "GPU driver version: 0x%08x; Vulkan %u.%u.%u\n"
+                  "GPU memory (device-local heaps): %.0f MB\n"
+                  "Presenting: %u x %u\n",
+                  props.deviceName, props.deviceType < 5 ? kinds[props.deviceType] : "?", props.vendorID,
+                  props.deviceID, props.driverVersion, VK_API_VERSION_MAJOR(props.apiVersion),
+                  VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion), local_mb,
+                  pr.extent.width, pr.extent.height);
 }
 
 extern "C" int port_vk_flash_info(int *pictures, int *width, int *height, double *megabytes) {

@@ -400,6 +400,11 @@ int Session::play() {
     // the player's working folder, so that paths given after "--" mean what they meant there
     spec.capture_output = true;
     spec.stop_with_children = false;
+    // the game's log: where the game's Report an Issue reads it (port/report/problem_report.cpp); the run before
+    // kept as game.prev.log, for a report made after a crash
+    std::error_code moved;
+    fs::rename(paths_.game_log(), paths_.game_prev_log(), moved);
+    spec.env.emplace_back("KF4_GAME_LOG", paths_.game_log().u8string());
     std::string why;
     auto game = platform_.start(spec, why);
     if (!game) {
@@ -410,7 +415,7 @@ int Session::play() {
     std::ofstream log(paths_.game_log(), std::ios::trunc);
     while (auto line = game->read_line()) {
         std::fprintf(stdout, "%s\n", line->c_str());
-        log << *line << '\n';
+        log << *line << '\n' << std::flush; // (whole lines in the file as they come: the game's report reads it)
     }
     int code = game->wait();
     if (code != 0) {

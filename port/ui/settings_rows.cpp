@@ -19,6 +19,7 @@ extern "C" {
 #include "port/live_settings.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
+#include "port/problem_report.h"
 #include "port/quicksave.h"
 #include "port/scene_depth.h"
 #include "port/settings.h"
@@ -1265,6 +1266,13 @@ const SettingRow general_rows[] = {
     {"Menu", "", RowKind::heading},
     {"Pause While Open", "The game holds still while this menu is open.", RowKind::toggle, on_off, {}, get_pause,
      set_pause},
+    {"Problems", "", RowKind::heading},
+    {"Report an Issue",
+     "Saves a report file (.zip) and opens GitHub's issue form in your browser. Drag the file into the form.\n"
+     "It holds the game's log, your PC's details, your settings, a picture of the game and your saves, with your "
+     "user and computer names taken out. The game sends nothing itself.",
+     RowKind::action, {}, {}, nullptr, nullptr, port_report_start, nullptr, nullptr, nullptr, nullptr,
+     port_report_message},
 };
 
 const SettingRow cheats_rows[] = {

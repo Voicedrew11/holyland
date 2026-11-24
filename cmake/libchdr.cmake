@@ -12,6 +12,8 @@ function(kf4_add_libchdr root)
     # bytes out), and each hunk's checksum checked
     target_compile_definitions(kf4_chdr PRIVATE WANT_RAW_DATA_SECTOR=1 WANT_SUBCODE=1 VERIFY_BLOCK_CRC=1
         LOWRAM_TARGET=0)
+    # miniz's deflate too (unity.c leaves it out unless asked): the problem report's zip (port/report/zip_archive.cpp)
+    target_compile_definitions(kf4_chdr PRIVATE MINIZ_DEFLATE_APIS)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(kf4_chdr PRIVATE -w) # third-party code: its warnings are not ours to fix
     endif()

@@ -117,6 +117,7 @@ struct Menu {
     ui::SetupFlow setup{ui::find_setting_row, emulator_saves.get()};
     bool in_setup = false;     // the setup shows, in place of the settings
     bool setup_wanted = false; // Run setup again was chosen: the setup opens once the press is done
+    bool close_wanted = false; // a row asked the menu to close (Report an Issue): it closes once the press is done
     PointerEvents pointer;
     Rml::Context *context = nullptr;
     Rml::ElementDocument *document = nullptr;
@@ -275,6 +276,10 @@ void press(ui::MenuInput input) {
     if (menu.setup_wanted) {
         start_setup(ui::SetupStart::again);
     }
+    if (menu.close_wanted) {
+        menu.close_wanted = false;
+        set_open(false);
+    }
 }
 
 // Kenney's controller fonts, one family each (pad_glyphs.hpp)
@@ -375,6 +380,10 @@ void PointerEvents::ProcessEvent(Rml::Event &event) {
     }
     if (menu.setup_wanted) {
         start_setup(ui::SetupStart::again);
+    }
+    if (menu.close_wanted) {
+        menu.close_wanted = false;
+        set_open(false);
     }
     menu.scroll_wanted = false;
 }
@@ -1089,6 +1098,10 @@ extern "C" int port_player_ui_show(const char *tab_id) {
 
 extern "C" void port_player_ui_run_setup(void) {
     menu.setup_wanted = menu.ready; // (once the press that chose it is done: press, PointerEvents)
+}
+
+extern "C" void port_player_ui_close(void) {
+    menu.close_wanted = menu.ready && menu.open; // (once the press that chose it is done, as Run setup again)
 }
 
 extern "C" int port_player_ui_setup_open(void) {
