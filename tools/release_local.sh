@@ -60,7 +60,9 @@ fi
 export HOLYLAND_VERSION="$NEW"
 WORK="$ROOT/out/release-$NEW"
 DIST="$WORK/dist"
-rm -rf "$WORK"
+# (a run before left the AppDir's content read-only, as a release's is)
+[ -d "$WORK" ] && chmod -R u+w "$WORK"
+rm -rf "$ROOT/out/release-$NEW"
 mkdir -p "$DIST"
 
 say "the AppImage, on Ubuntu 22.04"
@@ -69,13 +71,12 @@ tools_id="$(cat packaging/toolchain.lock packaging/fetch.sh packaging/linux/tool
     packaging/linux/libxml2-stub/* | sha256sum | cut -c1-16)"
 # (label=disable: the tree is not relabelled for the container; keep-id: what it writes is the owner's)
 podman run --rm --userns=keep-id --security-opt label=disable -v "$ROOT:$ROOT" -w "$ROOT" \
-    -e HOME="$WORK/home" -e HOLYLAND_VERSION -e OUT="$DIST" -e APPIMAGE_EXTRACT_AND_RUN=1 \
+    -e HOME="$WORK/home" -e HOLYLAND_VERSION -e OUT="$WORK/linux" -e APPIMAGE_EXTRACT_AND_RUN=1 \
     -e HOLYLAND_TOOLCHAIN_CACHE="$ROOT/out/toolchain-linux-$tools_id" \
     holyland-release-linux bash -c 'mkdir -p "$HOME" && git config --global --add safe.directory "*" &&
         packaging/linux/build-appimage.sh'
 APPIMAGE="$DIST/$NAME-$NEW-x86_64.AppImage"
-[ -f "$APPIMAGE" ] || fail "no AppImage made"
-rm -rf "$DIST/$NAME.AppDir" "$DIST/$APP_ID-blank.png"
+cp "$WORK/linux/$NAME-$NEW-x86_64.AppImage" "$APPIMAGE" || fail "no AppImage made"
 
 say "a player's build from it"
 PLAYER="$WORK/player"
@@ -99,10 +100,9 @@ cat > "$SHIMS/iscc" <<SH
 WINEDEBUG=-all exec wine "$ISCC_EXE" "\$@"
 SH
 chmod +x "$SHIMS/cygpath" "$SHIMS/iscc"
-PATH="$SHIMS:$PATH" OUT="$DIST" LLVM_MINGW="$LLVM_MINGW" packaging/windows/build-windows.sh
-[ -f "$DIST/$NAME-$NEW-win-x64.zip" ] || fail "no Windows zip made"
-[ -f "$DIST/$NAME-$NEW-win-x64-setup.exe" ] || fail "no Windows installer made"
-rm -rf "$DIST/win-x64"
+PATH="$SHIMS:$PATH" OUT="$WORK/windows" LLVM_MINGW="$LLVM_MINGW" packaging/windows/build-windows.sh
+cp "$WORK/windows/$NAME-$NEW-win-x64.zip" "$DIST/" || fail "no Windows zip made"
+cp "$WORK/windows/$NAME-$NEW-win-x64-setup.exe" "$DIST/" || fail "no Windows installer made"
 
 say "deltas from the last releases"
 cmake -S launcher -B out/delta-check -G Ninja -DLAUNCHER_WINDOW=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
