@@ -39,7 +39,9 @@ say "checks"
 command -v podman >/dev/null || fail "no podman"
 command -v wine >/dev/null && [ -f "$ISCC_EXE" ] || fail "no Inno Setup in Wine at $ISCC_EXE"
 [ -n "$LLVM_MINGW" ] && [ -x "$LLVM_MINGW/bin/x86_64-w64-mingw32-clang" ] || fail "no llvm-mingw (set LLVM_MINGW)"
-[ -n "${RELEASE_SIGNING_KEY:-}" ] || [ -f "$KEY_FILE" ] || fail "no release key at $KEY_FILE"
+HAVE_KEY=1
+[ -n "${RELEASE_SIGNING_KEY:-}" ] || [ -f "$KEY_FILE" ] || HAVE_KEY=0
+[ "$HAVE_KEY" = 1 ] || [ "$UPLOAD" = 0 ] || fail "no release key at $KEY_FILE"
 [ -z "$(git status --porcelain --untracked-files=no --ignore-submodules=dirty)" ] || fail "the working tree has changes"
 git submodule status | grep -q '^[-+]' &&
     fail "the submodules are not at their commits: git submodule update --init --recursive"
@@ -121,7 +123,11 @@ gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases --limit 2
 say "checksums, signed"
 (cd "$DIST" && sha256sum -- * > SHA256SUMS)
 cat "$DIST/SHA256SUMS"
-RELEASE_SIGNING_KEY="${RELEASE_SIGNING_KEY:-$(cat "$KEY_FILE")}" tools/release_sign.sh sign "$DIST/SHA256SUMS"
+if [ "$HAVE_KEY" = 1 ]; then
+    RELEASE_SIGNING_KEY="${RELEASE_SIGNING_KEY:-$(cat "$KEY_FILE")}" tools/release_sign.sh sign "$DIST/SHA256SUMS"
+else
+    echo "NOT SIGNED: no release key (allowed with --no-upload only)"
+fi
 ls -la "$DIST"
 
 if [ "$UPLOAD" = 0 ]; then
