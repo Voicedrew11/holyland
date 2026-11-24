@@ -201,6 +201,11 @@ int port_interp_behind_lately(void) {
     return 0;
 }
 
+/* (pcr.cpp's camera budget: replay is untimed and has no interpolated pictures) */
+int port_frame_rate_hz(void) {
+    return 60;
+}
+
 static uint32_t current_program = 0xFFFFFFFEu; /* the VU1 program last started (KF4GS_MSCNT: MSCNT) */
 static uint32_t current_kick;
 
