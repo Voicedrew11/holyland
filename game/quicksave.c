@@ -13,6 +13,12 @@
    saved map is set up, GameLoop_Run calls Quick_RestoreNeighbour, which asks the game's background
    load for the neighbouring map that was loaded when the save was taken (the file keeps which).
 
+   The save image does not hold the live world of the maps set up (PortQuickMap): the game makes it
+   again each time it sets a map up, so the enemies killed would come back and the herbs picked grow
+   again. A quick save keeps it, and a load puts it back once the maps are set up (Quick_RestoreNeighbour).
+   A slot's exact state (port_quick_load_exact) holds all of it and more; this is what a load keeps when
+   the state cannot be loaded (another build).
+
    The patched game calls Quick_PollGame once a frame at the end of the main loop, and Quick_PollTitle
    once a frame on the title screens; both return at once when nothing is asked for. */
 #include <stdio.h>
@@ -21,7 +27,10 @@
 
 #include "common.h"
 #include "core/game.h"
+#include "entity/entity.h"
+#include "item/item.h"
 #include "map/map.h"
+#include "model/model.h"
 #include "map_object/map_object.h"
 #include "player/player.h"
 #include "gfx/screen.h"
@@ -53,6 +62,13 @@ extern ClockTime current_play_time;
 extern MapLoadState map_load_state;
 
 extern void (*map_load_steps[])(void);
+extern Entity entity_pool[][0x80];
+extern int map_spawn_counts[2];
+extern ItemNode *lying_items;
+extern s32 map_fixed_item_counts[2];
+
+ItemNode *MapItem_Unlink(ItemNode *node);
+int MapItem_PlaceFixed(int map, int index);
 
 void Entity_UpdatePool(void);
 void GameLoop_RunSoundLoads(void);
@@ -70,6 +86,8 @@ static int neighbour_due;
 static PortQuickInfo loaded_info;
 /* a dead end's way in (port_map_way_in): the request the game's load steps read while it loads */
 static MapLoadRequest way_in;
+
+static void restore_world(const PortQuickInfo *info);
 
 /* The neighbouring map. The game keeps the map the player is in in one slot (current_map_slot) and
    the map next to it in the other, and MapLoad_Update (map/map_load.c) streams it in two stages:
@@ -229,19 +247,13 @@ static void run_neighbour_load(int set_up) {
    the neighbouring map the game had, as MapLoad_Update asks for one, and runs the game's load steps to
    where they were: read (resting at step 5), or on through the set-up, as MapLoad_Update does when the
    player stands where the neighbour is needed (without drawing: the screen is black, about to fade
-   in). Loading a save point's save does nothing here. A made-up file's player is put on the floor first. */
-void Quick_RestoreNeighbour(void) {
+   in). Loading a save point's save does nothing here. A made-up file's player is put on the floor first,
+   and once the neighbour is set up the two maps are given their kept live world (restore_world). */
+static void restore_neighbour(void) {
     MapSlot *current = &map_slots[current_map_slot & 1];
     MapLoadRequest *origins = (MapLoadRequest *)current->origins;
     int origin, map, set_up;
 
-    if (!neighbour_due) {
-        return;
-    }
-    neighbour_due = 0;
-    if (loaded_info.made_up) {
-        put_on_floor();
-    }
     if (loaded_info.neighbour_known) {
         origin = loaded_info.neighbour_origin;
         map = loaded_info.neighbour_map;
@@ -279,6 +291,159 @@ void Quick_RestoreNeighbour(void) {
                map_load_state.step == 0 ? "set up" : map_load_state.step == 5 ? "read" : "not read (the drive stayed busy)");
 }
 
+void Quick_RestoreNeighbour(void) {
+    if (!neighbour_due) {
+        return;
+    }
+    neighbour_due = 0;
+    if (loaded_info.made_up) {
+        put_on_floor();
+    }
+    restore_neighbour();
+    restore_world(&loaded_info);
+}
+
+/* ---- The live world of the maps set up ------------------------------------------------------- */
+#define SPAWN_DEAD_BITS (ENTITY_FLAG_NO_RESPAWN | ENTITY_FLAG_100)
+
+/* A spawn's entity as a quick save keeps it: dead, not alive (bit 1) or dying (the dying field); then
+   whether it may come back. One that is dying is kept as dead, its death's flags set as they will be. */
+static u8 spawn_state(const Entity *entity) {
+    u64 flags = entity->flags;
+    u8 state;
+
+    if ((flags & ENTITY_FLAG_LIVE) && (flags & ENTITY_FLAG_DYING_MASK) == 0) {
+        return 0;
+    }
+    if ((flags & ENTITY_FLAG_LIVE) && (flags & ENTITY_FLAG_DYING_MASK) != ENTITY_FLAG_DYING_MASK) {
+        return PORT_QUICK_SPAWN_DEAD | PORT_QUICK_SPAWN_NO_RESPAWN | PORT_QUICK_SPAWN_ROLLED;
+    }
+    state = PORT_QUICK_SPAWN_DEAD;
+    if (flags & ENTITY_FLAG_NO_RESPAWN) {
+        state |= PORT_QUICK_SPAWN_NO_RESPAWN;
+    }
+    if (flags & ENTITY_FLAG_100) {
+        state |= PORT_QUICK_SPAWN_ROLLED;
+    }
+    return state;
+}
+
+/* The fixed items of a map slot lying in it now: a bit per item */
+static u64 fixed_items_lying(int slot) {
+    const ItemNode *node;
+    u64 lying = 0;
+
+    for (node = lying_items; node != NULL; node = node->next) {
+        if ((int)(node->flags & 1) == slot && node->def != NULL && node->index >= 0 &&
+            node->index < PORT_QUICK_FIXED_ITEMS) {
+            lying |= 1ull << node->index;
+        }
+    }
+    return lying;
+}
+
+/* Keeps one set-up map slot's live world */
+static void keep_map(PortQuickMap *map, int slot) {
+    int i;
+
+    memset(map, 0, sizeof(*map));
+    map->tag = map_slots[slot].tag;
+    map->spawn_count = map_spawn_counts[slot];
+    map->item_count = map_fixed_item_counts[slot];
+    map->items_lying = fixed_items_lying(slot);
+    for (i = 0; i < map->spawn_count && i < PORT_QUICK_SPAWNS; i++) {
+        map->spawns[i] = spawn_state(&entity_pool[slot][i]);
+    }
+}
+
+static void keep_world(PortQuickInfo *info) {
+    int slot;
+
+    info->map_count = 0;
+    for (slot = 0; slot < 2; slot++) {
+        if (map_slots[slot].loaded) {
+            keep_map(&info->maps[info->map_count++], slot);
+        }
+    }
+}
+
+/* Puts a kept map's spawns back on the slot's fresh entities: the dead stay dead as they were (they
+   are not alive yet, as every spawn is when a map is set up: Entity_InitFromMapSpawns) */
+static void restore_spawns(const PortQuickMap *map, int slot) {
+    int i;
+
+    for (i = 0; i < map->spawn_count; i++) {
+        Entity *entity = &entity_pool[slot][i];
+
+        if (!(map->spawns[i] & PORT_QUICK_SPAWN_DEAD)) {
+            continue;
+        }
+        entity->flags &= ~(u64)SPAWN_DEAD_BITS;
+        if (map->spawns[i] & PORT_QUICK_SPAWN_NO_RESPAWN) {
+            entity->flags |= ENTITY_FLAG_NO_RESPAWN;
+        }
+        if (map->spawns[i] & PORT_QUICK_SPAWN_ROLLED) {
+            entity->flags |= ENTITY_FLAG_100;
+        }
+    }
+}
+
+/* Puts a kept map's fixed items back as they lay, in place of the roll the set-up made */
+static void restore_items(const PortQuickMap *map, int slot) {
+    ItemNode *node = lying_items;
+    int i;
+
+    while (node != NULL) {
+        if ((int)(node->flags & 1) == slot && node->def != NULL && node->index >= 0 &&
+            node->index < PORT_QUICK_FIXED_ITEMS && !(map->items_lying >> node->index & 1)) {
+            node = MapItem_Unlink(node);
+        } else {
+            node = node->next;
+        }
+    }
+    for (i = 0; i < map->item_count; i++) {
+        if (map->items_lying >> i & 1) {
+            MapItem_PlaceFixed(slot, i); /* (does nothing for one lying already) */
+        }
+    }
+}
+
+static int count_dead(const PortQuickMap *map) {
+    int i, dead = 0;
+
+    for (i = 0; i < map->spawn_count; i++) {
+        dead += (map->spawns[i] & PORT_QUICK_SPAWN_DEAD) != 0;
+    }
+    return dead;
+}
+
+/* A quick load's set-up maps given their kept live world, each that is the map it was kept for */
+static void restore_world(const PortQuickInfo *info) {
+    int slot, i;
+
+    for (slot = 0; slot < 2; slot++) {
+        for (i = 0; i < info->map_count && map_slots[slot].loaded; i++) {
+            const PortQuickMap *map = &info->maps[i];
+
+            if (map->tag != map_slots[slot].tag) {
+                continue;
+            }
+            if (map->spawn_count != map_spawn_counts[slot] || map->item_count != map_fixed_item_counts[slot] ||
+                map->spawn_count > PORT_QUICK_SPAWNS || map->item_count > PORT_QUICK_FIXED_ITEMS) {
+                port_event("quick load: map %02X's kept world does not fit it (%d spawns, %d items kept; %d, %d)",
+                           map->tag, map->spawn_count, map->item_count, map_spawn_counts[slot],
+                           map_fixed_item_counts[slot]);
+                break;
+            }
+            restore_spawns(map, slot);
+            restore_items(map, slot);
+            port_event("quick load: map %02X's enemies and items as they were (%d of %d spawns not alive, %d of %d fixed "
+                       "items lying)", map->tag, count_dead(map), map->spawn_count, __builtin_popcountll(map->items_lying),
+                       map->item_count);
+            break;
+        }
+    }
+}
 
 static void fill_info(PortQuickInfo *info) {
     memset(info, 0, sizeof(*info));
@@ -299,6 +464,7 @@ static void fill_info(PortQuickInfo *info) {
     info->play_seconds = current_play_time.sec + (current_play_time.min + (current_play_time.hour + current_play_time.mday * 99u) * 60u) * 60u;
     info->neighbour_known = 1;
     info->neighbour_origin = neighbour_origin(&info->neighbour_map, &info->neighbour_set_up);
+    keep_world(info);
 }
 
 /* Why the player is not in control now (NULL: he is); the cheats (game/cheats.c) ask too */
@@ -491,6 +657,7 @@ static void teleport(void) {
         return;
     }
     info.made_up = 1;
+    info.map_count = 0; /* a new map: as it sets up */
     info.neighbour_known = 0;
     info.neighbour_origin = -1;
     info.neighbour_map = -1;
@@ -526,7 +693,7 @@ void Quick_PollGame(void) {
             port_quick_refuse("the game is leaving play");
             return;
         }
-        if (quick_load_image()) {
+        if (!port_quick_load_exact() && quick_load_image()) {
             leave_for_image();
         }
     }
@@ -541,7 +708,7 @@ int Quick_PollTitle(void) {
     if (wanted == PORT_QUICK_SAVE || wanted == PORT_QUICK_TELEPORT) {
         port_quick_refuse("no game is being played");
     } else if (wanted == PORT_QUICK_LOAD) {
-        return quick_load_image();
+        return !port_quick_load_exact() && quick_load_image();
     }
     return 0;
 }

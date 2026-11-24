@@ -215,6 +215,7 @@ add_library(kf4_port STATIC
     port/sdk/walk_keys.c
     port/sdk/libsdr.c
     port/platform/savestate.c
+    port/platform/quick_info.c
     port/platform/quicksave.c
     port/platform/teleport.c
     port/platform/cheats.c
@@ -946,6 +947,16 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME save_files COMMAND save_files_test)
+endif()
+
+# a quick save's PC block packed and back, and the older blocks (port/platform/quick_info.c)
+add_executable(quick_info_test tests/quick_info_test.c port/platform/quick_info.c)
+target_include_directories(quick_info_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(quick_info_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME quick_info COMMAND quick_info_test)
 endif()
 
 # Twin-stick controls: the sticks as the game's buttons and the speeds they set (port/sdk/twin_stick.c)

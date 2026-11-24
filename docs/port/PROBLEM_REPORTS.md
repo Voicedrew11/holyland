@@ -63,7 +63,7 @@ when the link would pass 8000 bytes.
 | `logs/build.log` | the end of the launcher's build of the game |
 | `screenshot.png` | the newest picture shown, at the flash recorder's size (540 rows): the game's, not the menu |
 | `saves/quick-now.kf4quick` | a quick save where the player stood (`--quick-load FILE` loads it) |
-| `saves/`, `saves/quicksaves/` | the save points' saves and the quick saves (8 MB a file, 32 MB in all at most) |
+| `saves/`, `saves/quicksaves/` | the save points' saves and the quick saves (8 MB a file, 32 MB in all at most); not the quick saves' exact states (`*.kf4state`, about 10 MB each, loadable only in the player's build) |
 
 **The log** is the launcher's: it already copies what the game prints into `game.log`, and now flushes each line,
 keeps the run before as `game.prev.log`, and tells the game where it is (`KF4_GAME_LOG`). A game started without the

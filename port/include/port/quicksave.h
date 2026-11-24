@@ -7,7 +7,13 @@
    player's position, heading and look, HP and MP, the stats, the items, the flags of the world), with
    a small PC header. Loading puts that image where loading a save puts it and leaves the game's
    main loop as a card load does, so the game restarts the session from it (GameLoop_ResetSystems,
-   GameLoop_Run on the saved map). The save point's saves (game/saves.c) are not touched either way. */
+   GameLoop_Run on the saved map). The save point's saves (game/saves.c) are not touched either way.
+
+   A quick save to a slot also takes an exact save state beside it, and a load from the slot uses
+   that when the build that made it loads it (port_quick_load_exact): everything comes back as it was,
+   the enemies where they stood, an event half played. After an update the state no longer loads and
+   the image is loaded instead, with the live world of the two map slots put back (PortQuickMap): the
+   enemies killed stay dead and the items taken stay taken. */
 #ifndef PORT_QUICKSAVE_H
 #define PORT_QUICKSAVE_H
 
@@ -19,6 +25,24 @@ extern "C" {
 #endif
 
 #define PORT_QUICK_SLOTS 10
+#define PORT_QUICK_SPAWNS 128     /* entity_pool's per map slot */
+#define PORT_QUICK_FIXED_ITEMS 64 /* fixed_items' per map slot */
+
+/* One set-up map's live world as the save image does not hold it (game/quicksave.c). The game sets a
+   map's enemies and fixed items up afresh each time it sets the map up: every spawn may come back as
+   the player nears it (EntityAi_ShouldRespawn), and the fixed items are rolled again
+   (MapItem_RollFixedItems). While a map stays set up, a spawn killed with ENTITY_FLAG_NO_RESPAWN stays
+   dead and a herb picked stays picked. */
+#define PORT_QUICK_SPAWN_DEAD 1u       /* not alive, or dying */
+#define PORT_QUICK_SPAWN_NO_RESPAWN 2u /* ENTITY_FLAG_NO_RESPAWN */
+#define PORT_QUICK_SPAWN_ROLLED 4u     /* ENTITY_FLAG_100: its respawn roll was taken while the player was near */
+typedef struct {
+    int32_t tag;          /* MapSlot.tag */
+    int32_t spawn_count;  /* map_spawn_counts: a load checks it against the map's, as a check of the file */
+    int32_t item_count;   /* map_fixed_item_counts: the same */
+    uint64_t items_lying; /* bit i: fixed item i is lying in the map (on lying_items) */
+    uint8_t spawns[PORT_QUICK_SPAWNS]; /* PORT_QUICK_SPAWN_ bits per spawn record */
+} PortQuickMap;
 
 /* What a quick save says about itself (the file's PC block), for the overlay and the checks */
 typedef struct {
@@ -41,6 +65,10 @@ typedef struct {
        bit 1. Loading it puts the player on the floor under (or else over) the position, as the
        game would not, and works the neighbour out from there. Never set by a quick save. */
     int32_t made_up;
+    /* The two map slots' live world, which the game makes again each time it sets a map up, and so
+       which loading the save image alone would make again: map_count 0 for a file older than it. */
+    int32_t map_count;
+    PortQuickMap maps[2];
 } PortQuickInfo;
 
 /* Asks for a quick save to `slot`, or a load from it, taken where the game can (in play for a save;
@@ -78,6 +106,12 @@ void port_quick_vblank(void);
 
 /* What is asked for now (PORT_QUICK_) */
 int port_quick_wanted(void);
+/* (PORT_QUICK_LOAD, before the game's own load) A quick save slot keeps an exact save state beside
+   its image (quick<N>.kf4state, port/include/port/savestate.h), taken a vblank after it. When this
+   build made that state, after the image, the load is handed to the save states and this returns 1:
+   the whole game comes back as it was. Otherwise (another build: after an update) 0, and the game
+   loads the image. */
+int port_quick_load_exact(void);
 /* The game cannot do it now: why. A key's request is dropped; the command line's waits. */
 void port_quick_refuse(const char *why);
 /* Writes the save image and the info as the requested slot or file: 1 when written */

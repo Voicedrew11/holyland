@@ -16,11 +16,19 @@
          neighbouring map (0xFFFF: none), u8 the current map's origin that leads to it (0xFF: none),
          u8 flags: bit 0 it was set up, not only read, bit 1 the file was made by a tool
          (tools/map_tour.py), not by the game: the neighbour is worked out from the position, and
-         the player put on the floor there (QUICK_INFO_SIZE, 68 bytes). The block's size
+         the player put on the floor there (68 bytes); then u8 how many maps' live worlds follow (0 to 2),
+         3 bytes 0, and per map (140 bytes): u8 its tag, u8 its spawn count, u8 its
+         fixed item count, u8 0, u64 a bit per fixed item lying in it, u8[128] PORT_QUICK_SPAWN_ bits
+         per spawn (PORT_QUICK_INFO_SIZE, 352 bytes, packed by port/platform/quick_info.c; a file without them loads with the world made afresh,
+         as the game makes it when it sets a map up). The block's size
          is the format's minor version: a later one may append more, and a reader takes what it knows
          and skips the rest, so a file of any block size loads in every build of format version 1 (a
          64-byte one with no neighbour known: the game works it out from the position).
-         then the save image, exactly as Game_WriteSaveImage made it (the bytes a save point's save holds). */
+         then the save image, exactly as Game_WriteSaveImage made it (the bytes a save point's save holds).
+
+   Beside a slot's file, quick<N>.kf4state: the save state taken at the vblank after it (port/platform/
+   savestate.c), which a load from the slot uses when this build made it (port_quick_load_exact). A save
+   removes the slot's old state first, so a state is never older than its image. */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -38,14 +46,16 @@
 #include "port/file_replace.h"
 #include "port/automap.h"
 #include "port/hands.h"
+#include "port/quick_info.h"
 #include "port/quicksave.h"
+#include "port/savestate.h"
 #include "port/settings.h"
 
 #define QUICK_MAGIC "KF4QUICK"
 #define QUICK_VERSION 1u
 #define QUICK_HEADER_SIZE 40u
-#define QUICK_INFO_SIZE 68u     /* the PC block written now */
-#define QUICK_INFO_SIZE_MIN 64u /* the first files' (no neighbour) */
+#define QUICK_INFO_SIZE PORT_QUICK_INFO_SIZE
+#define QUICK_INFO_SIZE_MIN PORT_QUICK_INFO_SIZE_MIN
 #define QUICK_IMAGE_MAGIC 0x15400u
 #define QUICK_IMAGE_MAX 0x20000u
 #define REQUEST_VBLANKS 60 /* a key's request that the game has not taken by then is dropped */
@@ -125,6 +135,11 @@ static void slot_path(char *out, size_t size, int slot, int create) {
     snprintf(out + strlen(out), size - strlen(out), "/quick%d.kf4quick", slot);
 }
 
+/* the slot's exact state, beside its file */
+static void state_path(char *out, size_t size, int slot) {
+    snprintf(out, size, "%s/quicksaves/quick%d.kf4state", port_data_dir(), slot);
+}
+
 static void target_path(char *out, size_t size, const Request *r, int create) {
     if (r->path != NULL) {
         snprintf(out, size, "%s", r->path);
@@ -156,27 +171,12 @@ static void put64(uint8_t *p, uint64_t v) {
     put32(p + 4, (uint32_t)(v >> 32));
 }
 
-static void putf(uint8_t *p, float f) {
-    uint32_t v;
-
-    memcpy(&v, &f, 4);
-    put32(p, v);
-}
-
 static uint32_t get32(const uint8_t *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
 static uint64_t get64(const uint8_t *p) {
     return (uint64_t)get32(p) | (uint64_t)get32(p + 4) << 32;
-}
-
-static float getf(const uint8_t *p) {
-    uint32_t v = get32(p);
-    float f;
-
-    memcpy(&f, &v, 4);
-    return f;
 }
 
 static uint64_t hash_bytes(uint64_t h, const uint8_t *data, size_t size) {
@@ -186,58 +186,6 @@ static uint64_t hash_bytes(uint64_t h, const uint8_t *data, size_t size) {
         h = (h ^ data[i]) * 0x100000001B3ull;
     }
     return h;
-}
-
-static void pack_info(uint8_t *p, const PortQuickInfo *info) {
-    int i;
-
-    memset(p, 0, QUICK_INFO_SIZE);
-    put64(p + 0, (uint64_t)info->time);
-    put32(p + 8, (uint32_t)info->map_tag);
-    for (i = 0; i < 3; i++) {
-        putf(p + 12 + 4 * i, info->position[i]);
-        putf(p + 24 + 4 * i, info->rotation[i]);
-    }
-    put32(p + 36, (uint32_t)info->hp);
-    put32(p + 40, (uint32_t)info->hp_max);
-    put32(p + 44, (uint32_t)info->mp);
-    put32(p + 48, (uint32_t)info->mp_max);
-    put32(p + 52, (uint32_t)info->level);
-    put32(p + 56, (uint32_t)info->gold);
-    put32(p + 60, info->play_seconds);
-    p[64] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_map);
-    p[65] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_map >> 8);
-    p[66] = (uint8_t)(info->neighbour_origin < 0 ? 0xFF : info->neighbour_origin);
-    p[67] = (uint8_t)(info->neighbour_origin >= 0 && info->neighbour_set_up);
-}
-
-static void unpack_info(const uint8_t *p, uint32_t size, PortQuickInfo *info) {
-    int i;
-
-    memset(info, 0, sizeof(*info));
-    info->time = (int64_t)get64(p + 0);
-    info->map_tag = (int32_t)get32(p + 8);
-    for (i = 0; i < 3; i++) {
-        info->position[i] = getf(p + 12 + 4 * i);
-        info->rotation[i] = getf(p + 24 + 4 * i);
-    }
-    info->hp = (int32_t)get32(p + 36);
-    info->hp_max = (int32_t)get32(p + 40);
-    info->mp = (int32_t)get32(p + 44);
-    info->mp_max = (int32_t)get32(p + 48);
-    info->level = (int32_t)get32(p + 52);
-    info->gold = (int32_t)get32(p + 56);
-    info->play_seconds = get32(p + 60);
-    info->neighbour_origin = info->neighbour_map = -1;
-    if (size >= QUICK_INFO_SIZE) {
-        info->neighbour_known = !(p[67] & 2);
-        info->made_up = (p[67] & 2) != 0;
-        if (p[66] != 0xFF && !info->made_up) {
-            info->neighbour_origin = p[66];
-            info->neighbour_map = p[64] | p[65] << 8;
-            info->neighbour_set_up = p[67] & 1;
-        }
-    }
 }
 
 /* Checks a header: NULL, or why the file is not one this program reads */
@@ -292,7 +240,7 @@ static uint8_t *read_file(const char *path, size_t *size, PortQuickInfo *info, c
         free(body);
         return NULL;
     }
-    unpack_info(body, info_size, info);
+    port_quick_info_unpack(body, info_size, info);
     image = malloc(image_size);
     if (image == NULL) {
         free(body);
@@ -320,7 +268,7 @@ int port_quick_info(int slot, PortQuickInfo *info) {
     ok = fread(head, sizeof(head), 1, file) == 1 && check_header(head, &image_size, &info_size) == NULL;
     fclose(file);
     if (ok) {
-        unpack_info(head + QUICK_HEADER_SIZE, QUICK_INFO_SIZE_MIN, info);
+        port_quick_info_unpack(head + QUICK_HEADER_SIZE, QUICK_INFO_SIZE_MIN, info);
     }
     return ok;
 }
@@ -410,10 +358,11 @@ void port_quick_vblank(void) {
 }
 
 int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *game_info) {
-    char path[1024], temp[1100], name[1100];
+    char path[1024], temp[1100], name[1100], state[1100];
     uint8_t header[QUICK_HEADER_SIZE];
     uint8_t info[QUICK_INFO_SIZE];
     PortQuickInfo stamped = *game_info;
+    int slot = request.path == NULL ? request.slot : -1;
     FILE *file;
     int ok;
 
@@ -424,7 +373,7 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         return 0;
     }
     stamped.time = (int64_t)time(NULL);
-    pack_info(info, &stamped);
+    port_quick_info_pack(info, &stamped);
     memset(header, 0, sizeof(header));
     memcpy(header, QUICK_MAGIC, 8);
     put32(header + 8, QUICK_VERSION);
@@ -435,6 +384,10 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
     put64(header + 32, hash_bytes(hash_bytes(0xCBF29CE484222325ull, info, sizeof(info)), image, size));
 
     target_path(path, sizeof(path), &request, 1);
+    if (slot >= 0) {
+        state_path(state, sizeof(state), slot);
+        remove(state); /* (none yet is fine) never left older than the image */
+    }
     snprintf(temp, sizeof(temp), "%s.part", path);
     file = fopen(temp, "wb");
     ok = file != NULL;
@@ -453,6 +406,9 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
     }
     port_automap_quick_saved(path); /* the automap mod: the explored maps kept with the save */
     port_hands_quick_saved(path); /* the hands mod: the hands kept with the save */
+    if (slot >= 0) {
+        port_state_request_save_file(state); /* at the next vblank: the exact state */
+    }
     port_event("quick saved to %s: map %02X pos %.2f,%.2f,%.2f heading %.3f look %.3f hp %d mp %d neighbour %02X "
                "(origin %d, %s)", name, stamped.map_tag, stamped.position[0], stamped.position[1], stamped.position[2],
                stamped.rotation[1], stamped.rotation[0], stamped.hp, stamped.mp, stamped.neighbour_map & 0xFFFF,
@@ -479,6 +435,40 @@ uint8_t *port_quick_read(size_t *size, PortQuickInfo *info) {
     port_automap_quick_loading(path); /* the automap mod: the save's explored maps brought back */
     port_hands_quick_loading(path); /* the hands mod: the save's hands brought back */
     return image;
+}
+
+int port_quick_load_exact(void) {
+    char path[1024], state[1100], name[1100];
+    PortQuickInfo info;
+    long long state_time;
+    const char *why;
+    uint8_t *image;
+    size_t size;
+
+    if (request.kind != PORT_QUICK_LOAD || request.path != NULL) {
+        return 0;
+    }
+    request_name(name, sizeof(name), &request);
+    state_path(state, sizeof(state), request.slot);
+    why = port_state_file_usable(state, &state_time);
+    if (why != NULL) {
+        port_event("quick load of %s: no exact state (%s): the game loads its save image", name, why);
+        return 0;
+    }
+    target_path(path, sizeof(path), &request, 0);
+    image = read_file(path, &size, &info, &why); /* the slot's file must be whole too, and not newer */
+    free(image);
+    if (image == NULL || state_time < info.time) {
+        port_event("quick load of %s: its exact state %s: the game loads its save image", name,
+                   image == NULL ? "has no good quick save beside it" : "is older than the quick save");
+        return 0;
+    }
+    request.kind = PORT_QUICK_NONE;
+    expected = info;
+    port_state_request_load_file(state);
+    port_event("quick load of %s: its exact state", name);
+    set_message("loaded %s: map %02X, level %d, HP %d/%d", name, info.map_tag, info.level, info.hp, info.hp_max);
+    return 1;
 }
 
 void port_quick_loaded(int ok) {
