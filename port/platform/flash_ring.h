@@ -19,18 +19,31 @@ constexpr uint64_t FLASH_RING_LEAST_BYTES = 64ull << 20; // (the most never held
 
 constexpr uint64_t FLASH_RING_MOST_BYTES_INTEGRATED = 128ull << 20;
 
-// The most bytes of the ring on a GPU whose device-local heap is heap_bytes (0: not known): a quarter of it, at most
+// The most bytes of the ring on a GPU whose device-local heap is heap_bytes (0: not known): a sixteenth of it, at most
 // FLASH_RING_MOST_BYTES (FLASH_RING_MOST_BYTES_INTEGRATED on an integrated GPU) and at least FLASH_RING_LEAST_BYTES.
 // An integrated GPU's memory is the system's, and its own carve-out small (512 MB on a Ryzen 5 5625U, though RADV
 // names a heap of several GB): a 512 MB ring there (776 MB as allocated) took more than the carve-out by itself
-// (2026-11-18).
+// (2026-11-18). A sixteenth, not a quarter: on a 3 GB GTX 1050 a quarter let the ring take 728 MB as allocated,
+// with the desktop holding 900 MB, and the game ran out of memory and showed black (issue 261). A card of 8 GB or
+// more keeps the most.
 inline uint64_t flash_ring_most_bytes(uint64_t heap_bytes, bool integrated) {
     const uint64_t most = integrated ? FLASH_RING_MOST_BYTES_INTEGRATED : FLASH_RING_MOST_BYTES;
     if (heap_bytes == 0) {
         return most;
     }
-    const uint64_t quarter = heap_bytes / 4;
-    return quarter > most ? most : quarter < FLASH_RING_LEAST_BYTES ? FLASH_RING_LEAST_BYTES : quarter;
+    const uint64_t share = heap_bytes / 16;
+    return share > most ? most : share < FLASH_RING_LEAST_BYTES ? FLASH_RING_LEAST_BYTES : share;
+}
+
+// The pictures a ring made with `layers` keeps in most_bytes when the driver allocated allocated_bytes for it: the
+// driver lays each picture out in its own way (NVIDIA: 728 MB for a ring of 512 MB of texels, 1035 pictures of 480 x
+// 270), so the most is held to what is allocated, not to the texels. At least 2.
+inline uint32_t flash_ring_layers_allocated(uint32_t layers, uint64_t allocated_bytes, uint64_t most_bytes) {
+    if (allocated_bytes <= most_bytes || layers <= 2) {
+        return layers;
+    }
+    const uint64_t fit = uint64_t(layers) * most_bytes / allocated_bytes;
+    return fit < 2 ? 2 : uint32_t(fit);
 }
 
 constexpr double FLASH_RING_REMAKE_SECONDS = 10.0;

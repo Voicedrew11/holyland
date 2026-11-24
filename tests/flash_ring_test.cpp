@@ -68,12 +68,14 @@ void always_within() {
     }
 }
 
-// A GPU with little memory of its own: a quarter of its heap, within the least and the most
+// A GPU with little memory of its own: a sixteenth of its heap, within the least and the most
 void held_to_the_heap() {
     CHECK(flash_ring_most_bytes(0, false) == FLASH_RING_MOST_BYTES);                // (not known: as before)
     CHECK(flash_ring_most_bytes(16ull << 30, false) == FLASH_RING_MOST_BYTES);      // (a 16 GB card)
-    CHECK(flash_ring_most_bytes(1ull << 30, false) == 256ull << 20);                // (a 1 GB card)
-    CHECK(flash_ring_most_bytes(64ull << 20, false) == FLASH_RING_LEAST_BYTES);     // (never below the least)
+    CHECK(flash_ring_most_bytes(8ull << 30, false) == FLASH_RING_MOST_BYTES);       // (an 8 GB card)
+    CHECK(flash_ring_most_bytes(3318ull << 20, false) < 208ull << 20);              // (issue 261's 3 GB card)
+    CHECK(flash_ring_most_bytes(2ull << 30, false) == 128ull << 20);                // (a 2 GB card)
+    CHECK(flash_ring_most_bytes(512ull << 20, false) == FLASH_RING_LEAST_BYTES);     // (never below the least)
     CHECK(flash_ring_most_bytes(0, true) == FLASH_RING_MOST_BYTES_INTEGRATED);      // (integrated: the system's memory)
     CHECK(flash_ring_most_bytes(8ull << 30, true) == FLASH_RING_MOST_BYTES_INTEGRATED);
     const uint64_t most = flash_ring_most_bytes(8ull << 30, true);
@@ -82,6 +84,18 @@ void held_to_the_heap() {
     CHECK(s.height == FLASH_RING_FEWEST_ROWS); // (smaller pictures first, then fewer)
     CHECK(s.layers < 1000);
     CHECK(flash_ring_size(2.0f, 60, 540, 1920, 1080, most).bytes() <= most);
+}
+
+// Held to what the driver allocated, not the texels: issue 261's ring, 1035 pictures of 480 x 270 (512 MB of texels)
+// allocated as 728 MB
+void held_to_the_allocation() {
+    const uint64_t most = 512ull << 20, allocated = 728ull << 20;
+    const uint32_t layers = flash_ring_layers_allocated(1035, allocated, most);
+    CHECK(layers < 1035);
+    CHECK(uint64_t(layers) * (allocated / 1035) <= most); // (the same layout a picture)
+    CHECK(flash_ring_layers_allocated(1035, most, most) == 1035); // (fits: as made)
+    CHECK(flash_ring_layers_allocated(2, allocated, most) == 2);  // (never fewer than 2)
+    CHECK(flash_ring_layers_allocated(100, 100ull << 30, 64ull << 20) == 2);
 }
 
 // The rate a ring was made for is kept while the rate found stays within a third of it, and for a while whatever it is
@@ -101,6 +115,7 @@ void rate_kept_near() {
 
 int main() {
     held_to_the_heap();
+    held_to_the_allocation();
     rate_kept_near();
     as_asked_when_it_fits();
     smaller_pictures_first();

@@ -967,6 +967,7 @@ struct Flash {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint32_t width = 0, height = 0, layers = 0;
+    uint32_t layers_asked = 0; // (flash_ring_size's: layers is fewer when the driver's layout took more than the most)
     bool fresh = false; // made, and not yet in its layout (GENERAL)
     uint32_t head = 0, count = 0;
     std::vector<FlashPicture> pictures;
@@ -1006,8 +1007,20 @@ void flash_free() {
     }
     fl.image = VK_NULL_HANDLE;
     fl.memory = VK_NULL_HANDLE;
-    fl.layers = fl.width = fl.height = fl.head = fl.count = 0;
+    fl.layers = fl.layers_asked = fl.width = fl.height = fl.head = fl.count = 0;
     fl.megabytes = 0;
+}
+
+// The ring's image made (fl.image) and what memory it needs: false, and logged, when it could not be made
+bool flash_image(const VkImageCreateInfo &info, VkMemoryRequirements &req) {
+    if (vk.vkCreateImage(pr.device, &info, nullptr, &fl.image) != VK_SUCCESS) {
+        fl.image = VK_NULL_HANDLE;
+        std::fprintf(stderr, "[present] the flash recorder's ring (%u x %u x %u) could not be made\n", info.extent.width,
+                     info.extent.height, info.arrayLayers);
+        return false;
+    }
+    vk.vkGetImageMemoryRequirements(pr.device, fl.image, &req);
+    return true;
 }
 
 // The ring for a picture of w x h (its place in the window): false when there is none (off, or not made)
@@ -1039,7 +1052,7 @@ bool flash_ring(int w, int h) {
     }
     const FlashRingSize size = flash_ring_size(seconds, hz, rows, w, h, fl.most_bytes);
     const uint32_t layers = size.layers, width = size.width, height = size.height;
-    if (fl.image != VK_NULL_HANDLE && fl.layers == layers && fl.width == width && fl.height == height) {
+    if (fl.image != VK_NULL_HANDLE && fl.layers_asked == layers && fl.width == width && fl.height == height) {
         return true;
     }
     if (fl.writing.load() || (fl.failed && fl.seconds_made == seconds && fl.height_made == rows)) {
@@ -1061,13 +1074,20 @@ bool flash_ring(int w, int h) {
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vk.vkCreateImage(pr.device, &info, nullptr, &fl.image) != VK_SUCCESS) {
-        fl.image = VK_NULL_HANDLE;
-        std::fprintf(stderr, "[present] the flash recorder's ring (%u x %u x %u) could not be made\n", width, height, layers);
+    VkMemoryRequirements req;
+    if (!flash_image(info, req)) {
         return false;
     }
-    VkMemoryRequirements req;
-    vk.vkGetImageMemoryRequirements(pr.device, fl.image, &req);
+    // (held to the most as allocated: a driver's layout of the pictures can take far more than their texels)
+    const uint32_t fitting = flash_ring_layers_allocated(layers, req.size, fl.most_bytes);
+    if (fitting != layers) {
+        vk.vkDestroyImage(pr.device, fl.image, nullptr);
+        fl.image = VK_NULL_HANDLE;
+        info.arrayLayers = fitting;
+        if (!flash_image(info, req)) {
+            return false;
+        }
+    }
     VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     alloc.allocationSize = req.size;
     int type = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -1078,19 +1098,27 @@ bool flash_ring(int w, int h) {
         std::fprintf(stderr, "[present] no GPU memory for the flash recorder's ring (%.0f MB)\n", double(req.size) / 1048576.0);
         return false;
     }
-    vk.vkBindImageMemory(pr.device, fl.image, fl.memory, 0);
+    if (vk.vkBindImageMemory(pr.device, fl.image, fl.memory, 0) != VK_SUCCESS) {
+        vk.vkDestroyImage(pr.device, fl.image, nullptr);
+        vk.vkFreeMemory(pr.device, fl.memory, nullptr);
+        fl.image = VK_NULL_HANDLE;
+        fl.memory = VK_NULL_HANDLE;
+        std::fprintf(stderr, "[present] the flash recorder's ring could not be bound to its memory\n");
+        return false;
+    }
     fl.failed = false;
     fl.fresh = true;
     fl.width = width;
     fl.height = height;
-    fl.layers = layers;
+    fl.layers = info.arrayLayers;
+    fl.layers_asked = layers;
     fl.head = fl.count = 0;
     fl.megabytes = double(req.size) / 1048576.0;
-    fl.pictures.assign(layers, FlashPicture());
+    fl.pictures.assign(fl.layers, FlashPicture());
     std::fprintf(stderr,
                  "[present] flash recorder: the last %u pictures kept on the GPU at %u x %u (%.0f MB; at most %.0f MB, "
                  "for %d a second)\n",
-                 layers, width, height, fl.megabytes, double(fl.most_bytes) / 1048576.0, hz);
+                 fl.layers, width, height, fl.megabytes, double(fl.most_bytes) / 1048576.0, hz);
     return true;
 }
 
