@@ -1,5 +1,5 @@
 # A published release supersedes the preview, so the rolling `preview` prerelease (release.yml's preview job) and its
-# tag go once one is: on publishing, not on the draft release.yml opens, so the preview stays up until the release is
+# tag go once one is: on publishing, not on the draft tools/release_local.sh opens, so the preview stays up until the release is
 # live (as Verdite3's).
 name: preview-cleanup
 

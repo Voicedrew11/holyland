@@ -1,7 +1,7 @@
-# A release (docs/port/LAUNCHER.md, "Making a release"): on a vMAJOR.MINOR.PATCH tag (tools/release.sh), the
-# Linux AppImage, the Windows zip and installer, into a DRAFT release; publishing the draft is what players'
-# launchers are told about. A preview (tools/prerelease.sh, "Previews") builds the same packages into the rolling,
-# password-protected `preview` prerelease instead. Each job also builds the game from the package exactly as a player's launcher
+# Previews and the packages' checks (docs/port/LAUNCHER.md). A release (vMAJOR.MINOR.PATCH) is no longer made here:
+# tools/release_local.sh builds it on the owner's computer and opens the draft, so pushing a v tag starts nothing.
+# A preview (tools/prerelease.sh, "Previews") builds the Linux AppImage, the Windows zip and installer into the rolling,
+# password-protected `preview` prerelease. Each job also builds the game from the package exactly as a player's launcher
 # does (--build-only: the shipped tools, the read-only source, no git), so a release that cannot build is
 # never made.
 #
@@ -14,7 +14,7 @@ on:
   push:
     # preview-<commit>: tools/prerelease.sh's request for a preview, from any branch (a workflow started by
     # hand runs only once this file is on the default branch); the preview job deletes it
-    tags: ["v*", "preview-*"]
+    tags: ["preview-*"]
     branches: [main]
     paths:
       - packaging/toolchain.lock
@@ -58,9 +58,7 @@ jobs:
             libxfixes-dev libxi-dev libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev \
             libdecor-0-dev libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev
       - name: The version
-        run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
-          bash tools/version.sh
+        run: bash tools/version.sh
       - name: Restore the tools
         id: tools
         uses: actions/cache/restore@v4
@@ -108,9 +106,7 @@ jobs:
           git -C third_party/parallel-gs submodule update --init Granite
           git -C third_party/parallel-gs/Granite submodule update --init third_party/volk third_party/khronos/vulkan-headers
       - name: The version
-        run: |
-          case "$GITHUB_REF" in refs/tags/v*) echo "HOLYLAND_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV" ;; esac
-          bash tools/version.sh
+        run: bash tools/version.sh
       - name: Inno Setup on PATH
         run: echo "C:/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
       - name: Restore the downloads
@@ -168,57 +164,6 @@ jobs:
           fi
       - name: Installed and updated as a player's, then built
         run: packaging/windows/update_test.sh dist "${OLD_SETUP:-}"
-
-  release:
-    needs: [linux, windows, windows-update]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      # Deltas (launcher/update_delta.h, docs/port/LAUNCHER.md "Deltas"): from each of the last DELTA_RELEASES
-      # published releases, made by packaging/make_deltas.sh and each checked with the launcher's own code
-      # (launcher_delta_check) to make this release's file exactly. A delta that fails its check fails the release.
-      - name: Deltas from the last releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DELTA_RELEASES: 3
-        run: |
-          set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y ninja-build zstd zip unzip
-          cmake -S launcher -B out/delta-check -G Ninja -DLAUNCHER_WINDOW=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build out/delta-check
-          ctest --test-dir out/delta-check --output-on-failure
-          gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 20 \
-              --json tagName -q '.[].tagName' |
-              awk -v this="$GITHUB_REF_NAME" -v most="$DELTA_RELEASES" '$0 != this && /^v[0-9]/ && n < most { print; n++ }' |
-          while read -r tag; do
-              old="$RUNNER_TEMP/old/$tag"
-              mkdir -p "$old"
-              gh release download "$tag" --repo "$GITHUB_REPOSITORY" -D "$old" -p '*-x86_64.AppImage' -p '*-win-x64.zip' ||
-                  { echo "$tag: no files to make deltas from"; continue; }
-              packaging/make_deltas.sh dist "$old" "${tag#v}"
-              packaging/check_deltas.sh dist "$old" "${tag#v}" out/delta-check/launcher_delta_check
-              rm -rf "$old"
-          done
-          ls -la dist
-      # SHA256SUMS of every file, signed with the release key (tools/release_sign.sh): players' launchers install
-      # an update only when both check out (docs/port/LAUNCHER.md, "Updates"). No key, no release.
-      - name: Checksums, signed
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: |
-          (cd dist && sha256sum -- * > SHA256SUMS)
-          cat dist/SHA256SUMS
-          tools/release_sign.sh sign dist/SHA256SUMS
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: dist/*
 
   # The preview: one prerelease under the tag `preview`, a build handed to testers, replaced whole on every run, so
   # there is never more than one and its download links never change (as Verdite3's). Each package is zipped with the

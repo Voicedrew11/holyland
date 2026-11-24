@@ -216,11 +216,11 @@ The next start removes what an update left (`remove_leftovers`: `.old` files, a 
 an AppImage in a folder it cannot write, or an extracted AppImage cannot update itself: Update then ends on the failed
 page, whose Download page opens the release.
 
-**Signing a release.** The release workflow's `release` job writes `SHA256SUMS` over every file and signs it with
-`tools/release_sign.sh` and the `RELEASE_SIGNING_KEY` repository secret (a PEM Ed25519 private key); with no secret it
-fails, so no unsigned release is made. The private key was made on 2026-11-22 and is kept by the owner, outside the
+**Signing a release.** `tools/release_local.sh` writes `SHA256SUMS` over every file and signs it with
+`tools/release_sign.sh` and the owner's key (a PEM Ed25519 private key, `~/.config/holyland-release/release-signing-key.pem`
+or `RELEASE_SIGNING_KEY`); with no key it fails, so no unsigned release is made. The private key was made on 2026-11-22 and is kept by the owner, outside the
 repository. A new key: `openssl genpkey -algorithm ed25519`, `tools/release_sign.sh public-key KEY.pem` into
-`deploy/release-key.pub` and `launcher/release_key.h`, the secret replaced; launchers built before it never update to
+`deploy/release-key.pub` and `launcher/release_key.h`, the key file replaced; launchers built before it never update to
 a release signed with the new one.
 
 **Testing.** `KF4_UPDATE_CHECK=0` turns the check off, `=force` ignores the hour. `KF4_UPDATE_URL` (a test only;
@@ -237,12 +237,20 @@ launcher is built with `-DHOLYLAND_VERSION`, and passes it to the game's build a
 
 ## Making a release
 
-1. `tools/release.sh X.Y.Z` tags HEAD (it never pushes).
-2. Check a launcher-built `kf4` against a developer's build: `tools/build_compare.py --exe out/linux-clang/kf4
+Releases are built on the owner's computer, not on GitHub's runners (since 0.1.5; the release workflow now makes
+only previews, and a pushed `v` tag starts nothing).
+
+1. Check a launcher-built `kf4` against a developer's build: `tools/build_compare.py --exe out/linux-clang/kf4
    --exe <builds>/<key>/kf4 --keep out/compare`.
-3. `git push origin vX.Y.Z`: `.github/workflows/release.yml` builds the AppImage (on Ubuntu 22.04), the Windows zip
-   and installer, builds the game from each package with `--build-only` as a player would, and opens a **draft**
-   release. Publishing the draft is what players' launchers see.
+2. `tools/release_local.sh X.Y.Z` on a pushed `main`: tags HEAD (`tools/release.sh`), builds the AppImage in an
+   Ubuntu 22.04 container (`packaging/linux/Containerfile`, podman), the Windows zip (llvm-mingw cross-compiling the
+   launcher) and installer (Inno Setup in Wine), builds the game from the AppImage with `--build-only` as a player
+   would, makes and checks the deltas from the last three releases, signs `SHA256SUMS`, pushes the tag and opens a
+   **draft** release. `--no-upload` stops before pushing; the files are in `out/release-X.Y.Z/dist`. Publishing the
+   draft is what players' launchers see.
+3. Not done locally: a player's build from the Windows packages and the installer's update over the last release
+   (`packaging/windows/update_test.sh`), which need Windows. A preview (`tools/prerelease.sh`) of the same commit
+   still runs both on GitHub's Windows runner.
 
 By hand: `packaging/linux/build-appimage.sh [SDL3_PREFIX]` (on Ubuntu 22.04, or with an SDL3 built there, e.g. in
 `podman run ubuntu:22.04`), `packaging/windows/build-windows.sh` (Git Bash; or on Linux with `LLVM_MINGW` set to

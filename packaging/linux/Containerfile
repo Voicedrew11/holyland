@@ -1,0 +1,10 @@
+# The machine a Linux release is made on (tools/release_local.sh): Ubuntu 22.04, the oldest Linux a release
+# supports, with what SDL3's build needs (packaging/linux/build-sdl3.sh) and what build-appimage.sh runs. The same
+# packages the release workflow's Linux job installed on GitHub's ubuntu-22.04.
+FROM docker.io/library/ubuntu:22.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl git xz-utils zstd unzip file python3 build-essential ninja-build cmake libfuse2 desktop-file-utils \
+        libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxtst-dev libxfixes-dev libxi-dev libxss-dev \
+        libxinerama-dev libxkbcommon-dev libwayland-dev libegl-dev libdecor-0-dev libpulse-dev libasound2-dev \
+        libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev libgbm-dev \
+    && rm -rf /var/lib/apt/lists/*
