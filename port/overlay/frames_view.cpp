@@ -359,6 +359,13 @@ void draw_screen() {
         std::snprintf(cpu, sizeof(cpu), "CPU: %.0f MHz (most %.0f)", load.cpu_mhz, load.cpu_most_mhz);
     }
     ImGui::Text("%s   Game's memory: %.0f MB", cpu, load.memory_mb);
+    const PortClockCost clock = port_clock_cost();
+    if (clock.read_ns >= PORT_CLOCK_SLOW_NS) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1), "Clock: %.0f ns a read (%.3f MHz): slow, the game's threads run slower",
+                           clock.read_ns, clock.counter_mhz);
+    } else {
+        ImGui::Text("Clock: %.0f ns a read (%.3f MHz)", clock.read_ns, clock.counter_mhz);
+    }
     float ordered[SHOWN_HISTORY];
     for (int i = 0; i < state.shown_count; i++) {
         ordered[i] = state.shown_history[(state.shown_next - state.shown_count + i + SHOWN_HISTORY) % SHOWN_HISTORY];

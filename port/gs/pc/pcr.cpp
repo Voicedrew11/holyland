@@ -751,22 +751,21 @@ struct Stats {
 // packet to its pictures between handed their frame (ready: what a picture between of it waits for at the soonest)
 class IntakeTimes {
 public:
-    using Clock = std::chrono::steady_clock;
-
-    void packet_taken(Clock::time_point start, Clock::time_point end) {
+    // (port_wall_seconds' times: the clock read once a packet, not again for this; it can be slow, port_clock_cost)
+    void packet_taken(double start_s, double end_s) {
         if (!in_frame_) {
             in_frame_ = true;
-            first_ = start;
+            first_s_ = start_s;
         }
-        busy_ += end - start;
+        busy_s_ += end_s - start_s;
     }
 
-    void frame_taken(Clock::time_point end) {
+    void frame_taken(double end_s) {
         if (in_frame_ && frames_.size() < MOST) {
-            frames_.push_back({ms(busy_), ms(end - first_)});
+            frames_.push_back({ms(busy_s_), ms(end_s - first_s_)});
         }
         in_frame_ = false;
-        busy_ = {};
+        busy_s_ = 0;
     }
 
     // "mean, median, 95th and 99th percentile, most", busy then ready
@@ -801,12 +800,11 @@ private:
     struct Frame {
         float busy, ready;
     };
-    static float ms(Clock::duration d) {
-        return std::chrono::duration<float, std::milli>(d).count();
+    static float ms(double s) {
+        return float(s * 1000.0);
     }
     bool in_frame_ = false;
-    Clock::time_point first_;
-    Clock::duration busy_{};
+    double first_s_ = 0, busy_s_ = 0;
     std::vector<Frame> frames_;
 };
 
@@ -3269,8 +3267,9 @@ private:
             struct Done {
                 Renderer &r;
                 double &idle_from;
+                double ended_s = 0; // (a packet's end, already read: the clock is read once a packet)
                 ~Done() {
-                    idle_from = port_wall_seconds();
+                    idle_from = ended_s > 0 ? ended_s : port_wall_seconds();
                 }
             } done_at{*this, idle_from};
             if (ahead_force_) {
@@ -3284,7 +3283,7 @@ private:
                 }
             }
             if (GifPacket *packet = std::get_if<GifPacket>(&*message)) {
-                take_packet(*packet, taken);
+                done_at.ended_s = take_packet(*packet, taken);
                 inbox_.done(packet->bytes.size());
             } else if (VblankPicture *v = std::get_if<VblankPicture>(&*message)) {
                 if (v->want & GSN_EXTRA) {
@@ -3307,8 +3306,10 @@ private:
                 direct_serial_.store(0, std::memory_order_release); // (a new frame: its walk not the pump's yet)
                 out_->frame_taken(intake_.drawing(), **frame);
                 intake_.take_frame(std::move(*frame));
-                intake_times.frame_taken(IntakeTimes::Clock::now());
-                note(DOING_FRAME, taken, port_wall_seconds());
+                const double frame_end_s = port_wall_seconds();
+                intake_times.frame_taken(frame_end_s);
+                note(DOING_FRAME, taken, frame_end_s);
+                done_at.ended_s = frame_end_s;
                 inbox_.done(0);
             } else if (InterpPicture *p = std::get_if<InterpPicture>(&*message)) {
                 picture_taken_for_ahead();
@@ -3325,18 +3326,19 @@ private:
     }
 
     // (kf4-pc) A packet of the GS's input taken in (begun at from_s): in its turn, or ahead of the pictures before it
-    // (take_packets_ahead)
-    void take_packet(const GifPacket &packet, double from_s) {
+    // (take_packets_ahead). Its end, the one read of the clock it makes: ~28 000 packets a second, and a clock can cost
+    // 1 to 2 us a read on Windows (port_clock_cost)
+    double take_packet(const GifPacket &packet, double from_s) {
         stats.packets++;
         stats.bytes += packet.bytes.size();
-        const auto start = IntakeTimes::Clock::now();
         intake_.feed(packet.path, packet.bytes);
-        intake_times.packet_taken(start, IntakeTimes::Clock::now());
         const double to = port_wall_seconds();
+        intake_times.packet_taken(from_s, to);
         note(DOING_PACKETS, from_s, to);
         if (ahead_on_) {
             packet_s_.add(to - from_s);
         }
+        return to;
     }
 
     // (KF4_SCN_AHEAD_FORCE's, kf4-pc) A packet sent past the pictures between held back taken ahead of them as

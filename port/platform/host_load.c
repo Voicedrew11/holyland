@@ -154,3 +154,28 @@ PortHostLoad port_host_load(void) {
     }
     return last;
 }
+
+PortClockCost port_clock_cost(void) {
+    enum { READS = 4096, TRIES = 5 };
+    static PortClockCost cost;
+    static int measured;
+    double least_s = 1e30;
+
+    if (measured) {
+        return cost;
+    }
+    measured = 1;
+    for (int t = 0; t < TRIES; t++) {
+        const uint64_t from = port_ticks();
+        uint64_t last = from;
+
+        for (int i = 0; i < READS; i++) {
+            last = port_ticks();
+        }
+        const double s = (double)(last - from) / port_ticks_per_second();
+        least_s = s < least_s ? s : least_s;
+    }
+    cost.read_ns = least_s * 1e9 / READS;
+    cost.counter_mhz = port_ticks_per_second() / 1e6;
+    return cost;
+}

@@ -21,6 +21,21 @@ typedef struct {
    overlay's: the game's thread). */
 PortHostLoad port_host_load(void);
 
+/* What one read of the clock costs (port_ticks, Windows's QueryPerformanceCounter). The renderer and the pacing read it
+   about 200 000 times a second: at the usual 20 to 40 ns that is nothing, but a Windows forced onto the HPET timer
+   (bcdedit's useplatformclock, a "tweak" some guides give) takes 1 to 2 us a read, and every thread slows
+   (2026-11-24: a player's Ryzen 5 3600 at 4.1 GHz ran every thread about 3.4 times slower than here). */
+typedef struct {
+    double read_ns;     /* one read, the least of a few tries */
+    double counter_mhz; /* the counter's rate: 10 is Windows's TSC, 14.318 the HPET, 3.580 the ACPI timer */
+} PortClockCost;
+
+/* A clock this slow a read is named in the log and the profiler */
+#define PORT_CLOCK_SLOW_NS 250.0
+
+/* Measured at the first call (a millisecond or so); the main thread's first call comes before the others start */
+PortClockCost port_clock_cost(void);
+
 #ifdef __cplusplus
 }
 #endif
