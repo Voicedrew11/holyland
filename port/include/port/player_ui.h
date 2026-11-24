@@ -40,6 +40,9 @@ void port_player_ui_close(void);
 void port_player_ui_notice(const char *text, unsigned ms);
 /* 1 while the setup shows: the game is held still under it, whatever "Pause while open" says */
 int port_player_ui_setup_open(void);
+/* (the presenter, when its drawing of the menu did not start) the menu stopped and never started again: an open
+   menu or setup nobody can see would take the input and hold the game still on a picture with nothing over it */
+void port_player_ui_cannot_draw(void);
 /* (port/overlay/overlay.cpp's test pictures: profiler@V) the profiler (Shift+P, port/ui/profiler_overlay.hpp) shown
    or hidden */
 void port_player_ui_profiler_show(int shown);
@@ -73,6 +76,8 @@ static inline void port_player_ui_notice(const char *text, unsigned ms) {
 }
 static inline int port_player_ui_setup_open(void) {
     return 0;
+}
+static inline void port_player_ui_cannot_draw(void) {
 }
 static inline void port_player_ui_profiler_show(int shown) {
     (void)shown;

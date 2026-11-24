@@ -349,6 +349,9 @@ void port_settings_load(void) {
     s->window_height = (int)read_number(display, "window_scale", s->window_height / 448, 1, 4) * 448;
     s->window_height = (int)read_number(display, "window_height", s->window_height, 448, 4320);
     s->window_width = (int)read_number(display, "window_width", s->window_width, 0, 7680);
+    if (s->window_width > 0 && s->window_width < 640) {
+        s->window_width = 640; /* (0: from the height; a few pixels across was a window nobody could see) */
+    }
     s->fullscreen = read_bool(display, "fullscreen", s->fullscreen);
     aspect = read_string(display, "aspect");
     if (aspect != NULL) {

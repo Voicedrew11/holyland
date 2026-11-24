@@ -469,10 +469,17 @@ static void vblank_start(void) {
 
             mode = port_host_float_begin();
             port_video_show_blank();
+            double logged = t0;
             while (port_gs_shaders_running()) {
                 port_sleep(1.0 / 60.0);
                 port_pad_poll();
                 port_video_present();
+                if (port_wall_seconds() - logged >= 10.0) {
+                    int done = 0, total = 0;
+                    logged = port_wall_seconds();
+                    port_gs_shaders_building(&done, &total);
+                    fprintf(stderr, "[gs] building shaders: %d of %d after %.0f s\n", done, total, logged - t0);
+                }
             }
             port_host_float_end(mode);
             pace_start_wall = port_wall_seconds() - host_seconds((double)ee_cycle / (double)EE_BUS_HZ);

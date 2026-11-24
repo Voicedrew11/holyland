@@ -81,8 +81,18 @@ static void add_file(const char *path, const char *host_path, uint32_t lsn, uint
     f->is_member = is_member;
 }
 
-static int read_image(uint32_t lsn, uint32_t sectors, void *buffer) {
-    return disc_image_read(image, lsn, sectors, buffer);
+/* a read from the disc: ok as port_disc_read returns it; unread, the sectors in it given as zeros because the
+   image or a file of an extracted disc could not be read (not the bytes after a file's end) */
+typedef struct {
+    int ok;
+    uint32_t unread;
+} DiscRead;
+
+static DiscRead read_image(uint32_t lsn, uint32_t sectors, void *buffer) {
+    uint32_t read = disc_image_read(image, lsn, sectors, buffer);
+    DiscRead result = {read > 0, sectors - read};
+
+    return result;
 }
 
 static uint32_t le32(const unsigned char *p) {
@@ -357,13 +367,31 @@ static pthread_mutex_t read_lock = PTHREAD_MUTEX_INITIALIZER;
 #define READ_UNLOCK() pthread_mutex_unlock(&read_lock)
 #endif
 
-static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
+static DiscRead disc_read(uint32_t lsn, uint32_t sectors, void *buffer);
 
 double port_hitch_disc_ms; /* (KF4_HITCH_MS, measure) */
 uint64_t port_hitch_disc_bytes;
 
+/* (with the read lock) The first reads that gave zeros for sectors that could not be read, in the log: a damaged
+   or cut-short image or a missing file, which the game would otherwise parse as zeros without a word */
+static void log_unread(uint32_t lsn, uint32_t sectors, DiscRead result) {
+    enum { LOGGED_MOST = 8 };
+    static int logged;
+
+    if (result.ok && result.unread == 0) {
+        return;
+    }
+    if (logged >= LOGGED_MOST) {
+        return;
+    }
+    logged++;
+    fprintf(stderr, "[disc] sectors %u..%u: %u could not be read, given as zeros (a damaged or cut-short image?)%s\n",
+            lsn, lsn + sectors - 1, result.ok ? result.unread : sectors,
+            logged == LOGGED_MOST ? "; no more of these logged" : "");
+}
+
 int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
-    int result;
+    DiscRead result;
     double t0 = port_wall_seconds();
     static ZoneId zone;
     int zoned;
@@ -374,20 +402,23 @@ int port_disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     zoned = port_zone_begin(zone);
     READ_LOCK();
     result = disc_read(lsn, sectors, buffer);
+    log_unread(lsn, sectors, result);
     READ_UNLOCK();
     if (zoned) {
         port_zone_end(zone);
     }
     port_hitch_disc_ms += (port_wall_seconds() - t0) * 1e3;
     port_hitch_disc_bytes += (uint64_t)sectors * 2048;
-    return result;
+    return result.ok;
 }
 
-static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
+static DiscRead disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
     unsigned char *out = buffer;
+    DiscRead result = {1, 0};
 
     if (lsn >= disc_sectors) {
-        return 0;
+        result.ok = 0;
+        return result;
     }
     if (image != NULL) {
         return read_image(lsn, sectors, buffer);
@@ -397,6 +428,7 @@ static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
         const DiscFile *f = host_file_at(lsn);
         uint32_t run;
         size_t want, got = 0;
+        uint64_t in_file;
 
         if (f == NULL) {
             memset(out, 0, DISC_SECTOR_SIZE);
@@ -413,6 +445,12 @@ static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
             run = 1;
         }
         want = (size_t)run * DISC_SECTOR_SIZE;
+        /* (the file's own bytes in the run: the rest of its last sector is zeros on the disc too) */
+        in_file = (uint64_t)(lsn - f->lsn) * DISC_SECTOR_SIZE;
+        in_file = f->size > in_file ? f->size - in_file : 0;
+        if (in_file > want) {
+            in_file = want;
+        }
         if (open_host_entry != f) {
             if (open_host_file != NULL) {
                 fclose(open_host_file);
@@ -431,11 +469,14 @@ static int disc_read(uint32_t lsn, uint32_t sectors, void *buffer) {
         if (got < want) {
             memset(out + got, 0, want - got);
         }
+        if (got < in_file) {
+            result.unread += (uint32_t)((in_file - got + DISC_SECTOR_SIZE - 1) / DISC_SECTOR_SIZE);
+        }
         out += want;
         lsn += run;
         sectors -= run;
     }
-    return 1;
+    return result;
 }
 
 const char *port_disc_name_at(uint32_t lsn, uint32_t *first_lsn) {

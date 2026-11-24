@@ -123,6 +123,7 @@ public:
 
 struct Menu {
     bool ready = false;
+    bool undrawable = false; // (port_player_ui_cannot_draw) the presenter cannot draw it: never started
     bool open = false;
     SDL_Window *window = nullptr;
     ui::SystemTies system;
@@ -919,7 +920,7 @@ const ui::Frame *player_ui_frame() {
 }
 
 extern "C" void port_player_ui_init(void *sdl_window) {
-    if (menu.ready || !port_settings_active()) {
+    if (menu.ready || menu.undrawable || !port_settings_active()) {
         return;
     }
     menu.window = static_cast<SDL_Window *>(sdl_window);
@@ -1149,6 +1150,16 @@ extern "C" void port_player_ui_profiler_show(int shown) {
         menu.profiler.show(shown != 0);
         menu.document->PullToFront();
     }
+}
+
+extern "C" void port_player_ui_cannot_draw(void) {
+    menu.undrawable = true;
+    if (menu.ready) {
+        std::fprintf(stderr, "[ui] the menu cannot be drawn: it is stopped (no F1 menu, no first-start setup)\n");
+    }
+    menu.open = false;
+    menu.in_setup = false;
+    quit();
 }
 
 extern "C" int port_player_ui_setup_open(void) {

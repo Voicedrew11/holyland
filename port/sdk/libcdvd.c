@@ -184,8 +184,11 @@ int sceCdStRead(unsigned int sectors, void *buffer, unsigned int mode, unsigned 
     if (error) {
         *error = 0;
     }
+    /* Sectors that cannot be read (past the disc's end, an image cut short: logged by port_disc_read) are zeros
+       and the stream goes on. On the PS2 a failed read is retried; here a retry reads the same file the same way,
+       and a stream that gave nothing and no error left the movie's reader (gfx/movie.c) waiting for ever. */
     if (!port_disc_read(stream_lsn, sectors, buffer)) {
-        return 0;
+        memset(buffer, 0, (size_t)sectors * 0x800);
     }
     stream_lsn += sectors;
     return (int)sectors;

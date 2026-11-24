@@ -3368,7 +3368,7 @@ private:
                             : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
         info.layout = ImageLayout::General;
         info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
-        ImageHandle image = device_.create_image(info, nullptr);
+        ImageHandle image = make_image(info, nullptr);
         if (image) {
             vram_diag::created(vram_diag::Site::target,
                                vram_diag::approx_bytes(info.width, info.height, info.levels,
@@ -3930,7 +3930,7 @@ private:
             data[l].row_length = d.level_width(l);
             data[l].image_height = d.level_height(l);
         }
-        ImageHandle image = device_.create_image(info, data.data());
+        ImageHandle image = make_image(info, data.data());
         if (!image) {
             return nullptr;
         }
@@ -4020,7 +4020,7 @@ private:
             ImageCreateInfo::immutable_2d_image(d.width_px * finer, d.height_px * finer, VK_FORMAT_R8G8B8A8_UNORM);
         info.levels = uint32_t(data.size());
         info.misc = 0;
-        ImageHandle image = device_.create_image(info, data.data());
+        ImageHandle image = make_image(info, data.data());
         if (!image) {
             return nullptr;
         }
@@ -4298,6 +4298,47 @@ private:
                     (unsigned long long)(texture_cap_ >> 20), (unsigned long long)(budget_bytes >> 20));
         }
         return texture_cap_;
+    }
+
+    // An image made, or when the GPU has no memory for it, made again once the textures no draw of this vblank uses
+    // are let go. Without it a GPU memory filled over a long play (the textures are kept by count, not size) drew
+    // every picture black, a target not made, while the game and its sound went on.
+    ImageHandle make_image(const ImageCreateInfo &info, const ImageInitialData *data) {
+        ImageHandle image = device_.create_image(info, data);
+        if (image) {
+            return image;
+        }
+        size_t freed = free_unused_textures();
+        static std::atomic<int> logged{0};
+        if (logged.fetch_add(1) < 4) {
+            fprintf(stderr, "[scn] no GPU memory for a %ux%u image: %zu textures not used now let go, made again\n",
+                    info.width, info.height, freed);
+        }
+        return freed ? device_.create_image(info, data) : image;
+    }
+
+    // The textures no draw of this vblank uses let go (Granite frees them once the GPU is past them): how many
+    size_t free_unused_textures() {
+        size_t freed = 0;
+        for (auto it = textures_.begin(); it != textures_.end();) {
+            if (it->second.used == frame_) {
+                it = std::next(it);
+                continue;
+            }
+            texture_gone(vram_diag::Site::gpu_texture, it->second.image_bytes);
+            it = textures_.erase(it);
+            freed++;
+        }
+        for (auto it = sampled_.begin(); it != sampled_.end();) {
+            if (it->second.used == frame_) {
+                it = std::next(it);
+                continue;
+            }
+            texture_gone(vram_diag::Site::sampled_texture, it->second.image_bytes);
+            it = sampled_.erase(it);
+            freed++;
+        }
+        return freed;
     }
 
     void evict_textures() {
