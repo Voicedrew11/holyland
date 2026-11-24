@@ -1266,8 +1266,10 @@ const SettingRow general_rows[] = {
     {"Menu", "", RowKind::heading},
     {"Pause While Open", "The game holds still while this menu is open.", RowKind::toggle, on_off, {}, get_pause,
      set_pause},
-    {"Problems", "", RowKind::heading},
-    {"Report an Issue",
+};
+
+const SettingRow report_rows[] = {
+    {"Make a Report",
      "Saves a report file (.zip) and opens GitHub's issue form in your browser. Drag the file into the form.\n"
      "It holds the game's log, your PC's details, your settings, a picture of the game and your saves, with your "
      "user and computer names taken out. The game sends nothing itself.",
@@ -1334,6 +1336,7 @@ const SettingTab tabs[] = {
     {"controls", "Controls", controls_rows},    {"keys", "Key Bindings", binding_rows},
     {"gameplay", "Gameplay", gameplay_rows},    {"interface", "Interface", interface_rows},
     {"general", "General", general_rows},       {"cheats", "Cheats", cheats_rows, cheats_shown},
+    {"report", "Report an Issue", report_rows},
 };
 
 bool tab_shown(const SettingTab &tab) {

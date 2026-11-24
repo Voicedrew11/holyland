@@ -46,7 +46,7 @@ constexpr auto kQuickSaveWait = std::chrono::seconds(8);
 constexpr auto kPreviousLogAge = std::chrono::hours(24);
 
 constexpr const char *kReadme =
-    "A Holyland problem report (made by the game's Report an Issue, F1 > General).\n\n"
+    "A Holyland problem report (made by the game's Report an Issue, in the F1 menu).\n\n"
     "system.txt        the build, the system, the CPU, memory, the GPU, displays, window, sound, controllers\n"
     "game.txt          the run: how long, the options; and what the report could not take\n"
     "game_state.json   the game's state (the F10 key's dump)\n"

@@ -1,6 +1,6 @@
 # Problem reports
 
-**Report an Issue** (F1 > General > Problems) saves a report file and opens the repository's issue form, filled in.
+**Report an Issue** (its own tab in the F1 menu's sidebar, last: its Make a Report row) saves a report file and opens the repository's issue form, filled in.
 Modelled on Soulbrandt's (the Demon's Souls port): a link can fill in an issue's text but cannot attach a file, so
 the player drags the zip into the form, whose "Report file (.zip)" box is required.
 

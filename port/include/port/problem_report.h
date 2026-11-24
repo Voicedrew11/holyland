@@ -1,5 +1,5 @@
 /* The problem report (port/report/problem_report.cpp; docs/port/PROBLEM_REPORTS.md): the player menu's "Report an
-   Issue". It saves <data folder>/reports/holyland-report-<time>.zip and opens the repository's issue form in the
+   Issue" tab. It saves <data folder>/reports/holyland-report-<time>.zip and opens the repository's issue form in the
    browser, filled in, with the folder that holds the zip. GitHub cannot attach a file from a link, so the player drags
    the zip into the form. Nothing is sent by the game.
 

@@ -1,4 +1,4 @@
-# The problem report. The game's Report an Issue (F1 > General) opens this form with "Details" filled in
+# The problem report. The game's Report an Issue (the F1 menu's tab) opens this form with "Details" filled in
 # (port/report/problem_report.cpp) and shows the folder that holds the report's .zip. GitHub cannot attach a file from a
 # link, so the zip box is required: the issue cannot be sent without something in it.
 name: Problem report
@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The quickest way to report is from the game: press **F1**, then **General > Report an Issue**. It fills this in and saves a report file (.zip) with the game's log and your PC's details.
+        The quickest way to report is from the game: press **F1**, open **Report an Issue** and choose **Make a Report**. It fills this in and saves a report file (.zip) with the game's log and your PC's details.
   - type: textarea
     id: what
     attributes:
