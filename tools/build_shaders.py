@@ -65,7 +65,11 @@ SCENE_AGAIN = [
      ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_PLACED"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]] + [
     # (developers' bound, KF4_SCN_ND_EMPTY: the native draws of 0x000 and 0x280 with no maths)
     (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_empty",
-     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_ND_EMPTY"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]]
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_ND_EMPTY"]) for name in ["pcr_nd000.vert", "pcr_nd280.vert"]] + [
+    # (the fast path, pcr_prim.h's SCN_FAST: the pixel of the draws sampled from the table with none of the GS's own
+    # texture reads, 2D smooth, DATE or blend in the shader; scn_draw.cpp's fast_ok)
+    (os.path.join(PC_SHADERS, name), "scn_" + name.replace(".", "_") + "_fast",
+     ["-DPCR_RECORDS", "-DPCR_DRAWS_APART", "-DSCN_FAST"]) for name in ["pcr_prim.frag", "pcr_prim_early.frag"]]
 # (the scene renderer's exact Z, pcr_common.h's: each of those but the bound again with PCR_EXACT_Z, as <symbol>_xz; the
 # placed native draws work out their triangles' planes in the vertex stage, pcr_nd000.vert's scn_corner)
 SCENE_AGAIN += [(path, symbol + "_xz", defines + ["-DPCR_EXACT_Z"]) for path, symbol, defines in SCENE_AGAIN

@@ -187,6 +187,8 @@ void Drawer::make_programs() {
     (exact_z_ ? SCN_REC_SHADER_ONE(name##_xz, layout) : SCN_REC_SHADER_ONE(name, layout))
     Shader *fs_rec = SCN_REC_SHADER(pcr_prim_frag_rec, &frag), *efs_rec = SCN_REC_SHADER(pcr_prim_early_frag_rec, &frag);
     Shader *idfs_rec = SCN_REC_SHADER(first_draw_frag_rec, &frag);
+    Shader *fastfs_rec = fast_on_ ? SCN_REC_SHADER(pcr_prim_frag_fast, &frag) : nullptr;
+    Shader *fastefs_rec = fast_on_ ? SCN_REC_SHADER(pcr_prim_early_frag_fast, &frag) : nullptr;
     Shader *firstfs_rec = SCN_REC_SHADER(prim_first_frag_rec, &first);
     Shader *vs_rec[size_t(Program::count)] = {
         SCN_REC_SHADER(pcr_prim_vert_rec, &vert),        SCN_REC_SHADER(pcr_nd000_vert_rec, &batch_vert),
@@ -249,6 +251,10 @@ void Drawer::make_programs() {
         first_[v] = device_.request_program(vs[v], firstfs);
         plain_rec_[v] = device_.request_program(vs_rec[v], fs_rec);
         early_rec_[v] = device_.request_program(vs_rec[v], efs_rec);
+        if (fastfs_rec && fastefs_rec) {
+            fast_rec_[v] = device_.request_program(vs_rec[v], fastfs_rec);
+            fast_early_rec_[v] = device_.request_program(vs_rec[v], fastefs_rec);
+        }
         first_id_rec_[v] = device_.request_program(vs_rec[v], idfs_rec);
         first_rec_[v] = device_.request_program(vs_rec[v], firstfs_rec);
     }
@@ -352,6 +358,23 @@ void Drawer::prepare(const Scene &scene) {
         } else {
             p.table_pool.reset();
             return; // (no table: every draw with its own set 1)
+        }
+    }
+    p.fast.assign(scene.materials.size(), 0);
+    for (size_t i = 0; i < scene.materials.size(); i++) {
+        p.fast[i] = eligible[i] && fast_ok(scene.materials[i], table_of[i]) ? 1 : 0;
+        if (eligible[i] && !p.fast[i]) {
+            // (why not: the first reason fast_ok meets, for --stats)
+            const Material &m = scene.materials[i];
+            const uint32_t f = m.push.flags;
+            const uint32_t why = m.picture_layer ? 0 : m.fuse != no_material ? 1 : (f & pcr::F_DATE) ? 2
+                                 : (f & pcr::F_SHADER_BLEND) ? 3
+                                 : (f & pcr::F_SMOOTH_2D) && m.program == Program::gif ? 4
+                                 : (f & pcr::F_DECAL_LOSS) ? 5 : ((f >> pcr::F_SRC_SHIFT) & 7u) != pcr::SRC_SAMPLED ? 6 : 7;
+            counts_.fast_why[why]++;
+            if (why == 6) {
+                counts_.fast_src[(f >> pcr::F_SRC_SHIFT) & 7u]++;
+            }
         }
     }
     // the CLUTs, 256 colours each, in the scene's order (Scene::cluts holds each once a run of draws)
@@ -477,6 +500,24 @@ void Drawer::prepare(const Scene &scene) {
 }
 
 // (an unblended pass that writes no alpha: its alpha out 1.0 from its record, pcr_common.h's SCN_ALPHA_ONE)
+bool Drawer::fast_ok(const Material &m, uint32_t table) const {
+    const uint32_t f = m.push.flags;
+    if (m.picture_layer || m.fuse != no_material || m.surface || m.dest ||
+        (f & (pcr::F_DATE | pcr::F_SHADER_BLEND | pcr::F_DECAL_LOSS)) != 0) {
+        return false;
+    }
+    // (the 2D smooth applies only where the primitive has its texels' rectangle, v_rect: the GIF's; the native draws'
+    // vertex shaders give none, PCR_NO_RECT, so for them the flag changes nothing)
+    if ((f & pcr::F_SMOOTH_2D) != 0 && m.program == Program::gif) {
+        return false;
+    }
+    if ((f & pcr::F_TME) == 0) {
+        return true; // (no texture: the source never read)
+    }
+    // (sampled by the GPU from the table: pcr_prim.h's PCR_SRC_SAMPLED with from_table)
+    return ((f >> pcr::F_SRC_SHIFT) & 7u) == pcr::SRC_SAMPLED && m.sampled && table != no_record;
+}
+
 bool Drawer::alpha_one(const Material &m, uint32_t pass) {
     return !m.blend.enable && (m.passes[pass].mask & 0x8u) == 0;
 }
@@ -1250,7 +1291,10 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.mask = 0x1;
         } else {
             bool early = ap.mode == 0 && !(m.push.flags & pcr::F_DATE);
+            const bool fast = records && pass.kind == PassKind::plain && d.material < prepared_.fast.size() &&
+                              prepared_.fast[d.material] && fast_rec_[v] && fast_early_rec_[v];
             key.program = m.fuse != no_material && records ? fused_280_
+                          : fast && !m.picture_layer      ? (early ? fast_early_rec_[v] : fast_rec_[v])
                           : m.picture_layer               ? picture_layer_
                           : pass.kind == PassKind::darken ? (records ? first_rec_[v] : first_[v])
                           : early                         ? (records ? early_rec_[v] : early_[v])
@@ -1282,6 +1326,7 @@ void Drawer::record_draw(const Scene &scene, const Pass &pass, uint32_t index, C
             key.stencil = RunKey::Stencil::own_after;
             key.zwrite = false;
         }
+        counts_.fast_calls += key.program == fast_rec_[v] || key.program == fast_early_rec_[v] ? 1 : 0;
         canonical(key);
         if (records && joins(key, rec + i)) {
             // (the open run's state is this call's: nothing set)
@@ -1336,7 +1381,7 @@ bool Drawer::settles(const Pass &pass, const Material &m, uint32_t record) const
 // through to the sky; 2026-11-21.)
 void Drawer::settle_run(const Pending &r, CommandBuffer &c) {
     size_t v = 0;
-    while (v < size_t(Program::count) && r.key.program != early_rec_[v] && r.key.program != plain_rec_[v]) {
+    while (v < size_t(Program::count) && !records_program(r.key.program, v)) {
         v++;
     }
     if (v == size_t(Program::count) || !depth_reset_rec_[v] || prepared_.own_offset == 0) {
@@ -1403,7 +1448,7 @@ void Drawer::own_depth_after(const Pending &r, CommandBuffer &c) {
 
 void Drawer::own_depth(const Pending &r, VkCompareOp compare, CommandBuffer &c) {
     size_t v = 0;
-    while (v < size_t(Program::count) && r.key.program != early_rec_[v] && r.key.program != plain_rec_[v]) {
+    while (v < size_t(Program::count) && !records_program(r.key.program, v)) {
         v++;
     }
     if (v == size_t(Program::count) || !depth_reset_rec_[v] || prepared_.own_offset == 0) {
@@ -1528,7 +1573,8 @@ std::vector<DeferredPipelineCompile> Drawer::pipeline_set(std::span<const VkForm
     std::vector<Vulkan::Program *> firsts, others;
     for (size_t v = 0; v < size_t(Program::count); v++) {
         firsts.insert(firsts.end(), {first_id_[v], first_id_rec_[v]});
-        others.insert(others.end(), {plain_[v], early_[v], first_[v], plain_rec_[v], early_rec_[v], first_rec_[v]});
+        others.insert(others.end(), {plain_[v], early_[v], first_[v], plain_rec_[v], early_rec_[v], first_rec_[v],
+                                     fast_rec_[v], fast_early_rec_[v]});
         if (flat_on_) {
             others.insert(others.end(), {flat_[v], flat_rec_[v]});
         }

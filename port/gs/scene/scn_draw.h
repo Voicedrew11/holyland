@@ -138,6 +138,10 @@ public:
         // (each vertex once) the jobs placed, the vertices in them, the draws that share a job with one before
         uint64_t place_jobs = 0, placed_vertices = 0, place_shared = 0, place_dispatches = 0;
         uint64_t settled_runs = 0; // (exact Z: the runs of decals settled, settle_run)
+        uint64_t fast_calls = 0;   // (the calls drawn by the fast path, SCN_FAST)
+        // (the materials of the records not drawn by it, by the first reason: a picture's layer, fused, DATE, blend in
+        // the shader, 2D smooth, decal losses, not sampled (and by source kind), no table)
+        std::array<uint64_t, 8> fast_why{}, fast_src{};
     };
     const Counts &counts() const {
         return counts_;
@@ -170,6 +174,7 @@ private:
         };
         std::vector<Placing> placings;
         uint32_t own_offset = 0; // (exact Z's settled decals: record r's own depth at r + own_offset; 0: none)
+        std::vector<uint8_t> fast; // (by material: drawn by the fast path, fast_ok)
     };
     // A call as a run sees it: what must be the same for two calls to be one indirect draw
     struct RunKey {
@@ -294,6 +299,17 @@ private:
     std::array<Vulkan::Program *, size_t(Program::count)> plain_{}, early_{}, first_id_{}, first_{};
     // (the same reading the draw's fields from the scene's records: PCR_RECORDS)
     std::array<Vulkan::Program *, size_t(Program::count)> plain_rec_{}, early_rec_{}, first_id_rec_{}, first_rec_{};
+    // (the fast path, pcr_prim.h's SCN_FAST: plain_rec_'s and early_rec_'s pixel for the materials fast_ok passes, with
+    // what they never use compiled out; KF4_SCN_FAST=0: not, to compare)
+    std::array<Vulkan::Program *, size_t(Program::count)> fast_rec_{}, fast_early_rec_{};
+    const bool fast_on_ = !getenv("KF4_SCN_FAST") || atoi(getenv("KF4_SCN_FAST")) != 0;
+    // Whether a material drawn from the records is drawn the same by the fast path: its texture sampled from the
+    // scene's table, or none, and nothing else the fast path leaves out (pcr_prim.h's SCN_FAST)
+    bool fast_ok(const Material &m, uint32_t table) const;
+    // (programs a settle or own depth may meet: the records' plain and early ones, the fast path's too)
+    bool records_program(const Vulkan::Program *p, size_t v) const {
+        return p == early_rec_[v] || p == plain_rec_[v] || (p && (p == fast_rec_[v] || p == fast_early_rec_[v]));
+    }
     bool records_on_ = !getenv("KF4_SCN_RECORDS") || atoi(getenv("KF4_SCN_RECORDS")) != 0;
     // (3b: indirect draws possible here and not switched off, KF4_SCN_INDIRECT=0; the most commands one may have)
     bool indirect_on_ = !getenv("KF4_SCN_INDIRECT") || atoi(getenv("KF4_SCN_INDIRECT")) != 0;

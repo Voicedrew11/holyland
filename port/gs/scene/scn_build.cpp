@@ -1974,6 +1974,18 @@ public:
                 per(d.draw_calls_by[2]), per(d.draw_calls_by[3]), per(d.draw_calls_by[4]),
                 (unsigned long long)d.indirect_calls, per(d.indirect_calls), (unsigned long long)d.indirect_draws,
                 per(d.indirect_draws), (unsigned long long)d.settled_runs, per(d.settled_runs));
+        fprintf(stderr, "[stats] scene renderer fast path (SCN_FAST): %llu of %llu calls (%.1f%%)\n",
+                (unsigned long long)d.fast_calls, (unsigned long long)d.calls,
+                d.calls ? 100.0 * double(d.fast_calls) / double(d.calls) : 0.0);
+        fprintf(stderr,
+                "[stats] scene renderer fast path left out (materials): layer %llu, fused %llu, DATE %llu, shader blend "
+                "%llu, 2D smooth %llu, decal losses %llu, not sampled %llu (CT32 %llu, CT24 %llu, CT16 %llu, index %llu, "
+                "surface %llu), no table %llu\n",
+                (unsigned long long)d.fast_why[0], (unsigned long long)d.fast_why[1], (unsigned long long)d.fast_why[2],
+                (unsigned long long)d.fast_why[3], (unsigned long long)d.fast_why[4], (unsigned long long)d.fast_why[5],
+                (unsigned long long)d.fast_why[6], (unsigned long long)d.fast_src[0], (unsigned long long)d.fast_src[1],
+                (unsigned long long)d.fast_src[2], (unsigned long long)d.fast_src[3], (unsigned long long)d.fast_src[4],
+                (unsigned long long)d.fast_why[7]);
         fprintf(stderr,
                 "[stats] scene renderer vertices placed once (0x000, 0x280): %llu jobs (%.1f a scene, %llu draws sharing "
                 "one before them), %llu vertices (%.1f a scene), %llu dispatches\n",

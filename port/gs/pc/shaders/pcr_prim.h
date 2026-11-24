@@ -97,8 +97,22 @@ layout(set = 2, binding = 0) uniform texture2D u_table[];
 layout(set = 2, binding = 0) uniform utexture2D u_table_uint[];
 layout(set = 0, binding = 16) uniform sampler u_samplers[16]; // (0: nearest, clamped: the texels' texelFetch)
 
+// (SCN_FAST, the scene renderer's fast path: scn_draw.cpp's fast_ok) The same pixel for the draws that need none of
+// what it leaves out: the texture sampled by the GPU from the scene's table (or none), no 2D smooth, no DATE, no blend in
+// the shader, no developers' decal losses. Those paths compiled out, the shader is short and holds fewer registers
+// (more waves a SIMD to hide the texture reads' latency); what is left is the same code, so the same results.
+#ifdef SCN_FAST
+#ifdef SCN_FUSE_280
+#error "SCN_FAST: not with the fused 0x280"
+#endif
+#endif
+
 bool from_table() {
+#ifdef SCN_FAST
+    return true;
+#else
     return (pc.table & 0xFFFFu) != PCR_NO_TABLE;
+#endif
 }
 
 // The texels (u_texels or the table's)
@@ -183,7 +197,11 @@ void trace(uint outcome, uvec4 c) {
 }
 
 uint src_kind() {
+#ifdef SCN_FAST
+    return PCR_SRC_SAMPLED;
+#else
     return (pc.flags >> PCR_F_SRC_SHIFT) & 7u;
+#endif
 }
 
 uvec4 unpack_rgba(uint c) {
@@ -380,6 +398,9 @@ vec4 sampled_footprint(vec2 uv, float finer) {
 // texels the primitive covers (v_rect: a letter's cell of a sheet of letters; past it, the letters beside it bled in),
 // and the result inside the four texels around the place (no ring: no colour or alpha they do not have).
 bool smooth_2d_applies(float lod) {
+#ifdef SCN_FAST
+    return false;
+#endif
     if ((pc.flags & PCR_F_SMOOTH_2D) == 0u || v_rect.x == PCR_NO_RECT || lod > 0.0 || (pc.tex1 & 1u) != 0u ||
         src_kind() == PCR_SRC_SURFACE) {
         return false;
@@ -723,7 +744,7 @@ void main() {
         uv_dx = dFdx(uv);
         uv_dy = dFdy(uv);
     }
-#ifndef PCR_EARLY
+#if !defined(PCR_EARLY) && !defined(SCN_FAST)
     if ((pc.flags & PCR_F_DATE) != 0u) {
         uint da = destination().a;
         if (((da >> 7) & 1u) != ((pc.flags & PCR_F_DATM) != 0u ? 1u : 0u)) {
@@ -769,6 +790,13 @@ void main() {
         rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended_over(c, cd) : c.rgb;
         a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
     }
+#elif defined(SCN_FAST)
+    uvec3 rgb = c.rgb;
+    if ((pc.flags & PCR_F_PREMUL) != 0u) {
+        uint k = (pc.flags & PCR_F_C_FIX) != 0u ? pc.clamp_hi >> 24 : c.a;
+        rgb = min((rgb * k) >> 7, uvec3(255u));
+    }
+    uint a = (pc.flags & PCR_F_FBA) != 0u ? c.a | 0x80u : c.a;
 #else
     uvec3 rgb = (pc.flags & PCR_F_SHADER_BLEND) != 0u ? blended(c) : c.rgb;
     if ((pc.flags & PCR_F_PREMUL) != 0u) {
@@ -822,9 +850,11 @@ void main() {
     }
 #endif
     trace(PCR_TRACE_SHADED, uvec4(rgb, c.a));
+#ifndef SCN_FAST
     if ((pc.flags & PCR_F_DECAL_LOSS) != 0u) {
         o_color = vec4(16.0 / 255.0, 0.0, 16.0 / 255.0, 1.0);
     }
+#endif
 }
 #if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
 void main() {
