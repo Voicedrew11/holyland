@@ -4893,13 +4893,11 @@ private:
         int32_t y0 = std::max(box.y0, int32_t(scay0)), y1 = std::min(box.y1, int32_t(scay1));
         if (x1 >= x0 && y1 >= y0) {
             VramRect drawn = {fbp * 32, fbw, fpsm, uint32_t(x0), uint32_t(y0), uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)};
-            store_.drawn(drawn);
-            std::bitset<512> pages = pages_of(drawn);
+            std::bitset<512> pages = store_.drawn(drawn);
             if (wrote_z) {
                 VramRect z = {bits(s.zbuf, 0, 9) * 32, fbw, z_psm(s.zbuf), uint32_t(x0), uint32_t(y0),
                               uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1)};
-                store_.drawn(z);
-                pages |= pages_of(z);
+                pages |= store_.drawn(z);
             }
             // (the last native batch's texture kept only while nothing is drawn over its pages)
             if (last_native_.valid && (pages & last_native_.pages).any()) {

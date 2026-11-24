@@ -791,6 +791,7 @@ bool pages_of_rules(uint64_t seed) {
                                 GSN_PSMT8H,  GSN_PSMT4HL, GSN_PSMT4HH, GSN_PSMZ32,   GSN_PSMZ24, GSN_PSMZ16,
                                 GSN_PSMZ16S};
     Rng rng{seed * 0x9E3779B97F4A7C15ull + 7};
+    pcr::TextureStore store;
     for (int round = 0; round < 3000; round++) {
         pcr::VramRect r;
         r.psm = formats[rng.below(std::size(formats))];
@@ -808,7 +809,14 @@ bool pages_of_rules(uint64_t seed) {
             }
         }
         std::bitset<512> got = pcr::pages_of(r);
-        if (got != want) {
+        // Alternate colour/depth-like rectangles to exercise both retained mappings. The pixel-address
+        // oracle above covers formats, unaligned bases, zero widths and coordinate/VRAM wrapping.
+        pcr::VramRect other = r;
+        other.bp ^= 0x1000;
+        auto drawn = store.drawn(r);
+        store.drawn(other);
+        auto drawn_again = store.drawn(r);
+        if (got != want || drawn != want || drawn_again != want) {
             printf("pcr_textures_test: pages_of, seed %llu round %d: psm 0x%x bp 0x%x bw %u (%u, %u) %ux%u: %zu pages, "
                    "not %zu\n",
                    (unsigned long long)seed, round, r.psm, r.bp, r.bw, r.x, r.y, r.width_px, r.height_px, got.count(),
@@ -902,6 +910,55 @@ bool signatures_of_uploads() {
         as_empty = as_empty && store.page_signature(p) == empty.page_signature(p);
     }
     return expect_true(as_empty, "forget did not return every page to the empty store's answer, the CLUT buffer included") && ok;
+}
+
+// Reusing the colour/depth address mappings must not reuse their invalidation result. Uploads between
+// identical draws still become drawn surfaces, and CT24 must leave the aliased high-byte texture intact.
+bool cached_draw_invalidation() {
+    Rng rng{29};
+    pcr::TextureStore store;
+    const uint32_t bp = 5 * 32;
+    const pcr::VramRect colour{bp, 1, GSN_PSMCT24, 0, 0, 64, 32};
+    const pcr::VramRect depth{40 * 32, 1, GSN_PSMZ24, 0, 0, 64, 32};
+    pcr::TextureRegs low, high;
+    low.tex0 = tex0_of(bp, 1, GSN_PSMCT24, 6, 5);
+    high.tex0 = tex0_of(bp, 1, GSN_PSMT8H, 6, 5);
+    bool ok = true;
+    // A rectangle covering all 512 pages fills the bounded index array exactly, including on a cache hit.
+    const pcr::VramRect all_pages{0, 16, GSN_PSMCT32, 0, 0, 1024, 1024};
+    ok = expect_true(store.drawn(all_pages).all() && store.drawn(all_pages).all(),
+                     "full-VRAM cached draw did not cover every page") && ok;
+    store.forget();
+    auto bytes = bytes_from(rng, 8192);
+    for (int pass = 0; pass < 4; pass++) {
+        if (pass == 2) {
+            // Evict both mappings, then rebuild them, without changing any pixels.
+            store.drawn({1, 1, GSN_PSMCT32, 0, 0, 0, 0});
+            store.drawn({2, 1, GSN_PSMCT32, 0, 0, 0, 0});
+        }
+        if (pass == 3) {
+            store.forget();
+        }
+        store.upload(upload_regs(bp, 1, GSN_PSMCT32, 64, 32), bytes);
+        ok = expect_true(store.resolve(low, 64, 32).source == TextureSource::FromUploads,
+                         "upload between cached draws did not restore low bits") && ok;
+        const auto before = signatures_of(store);
+        store.drawn(colour);
+        store.drawn(depth);
+        store.drawn(colour);
+        const auto changed = pages_changed(before, signatures_of(store));
+        ok = expect_true(changed[5] && (changed & ~pages_of_list({5, 40})).none(),
+                         "cached draw invalidated the wrong pages") && ok;
+        ok = expect_true(store.resolve(low, 64, 32).source == TextureSource::DrawnSurface,
+                         "cached draw left a stale uploaded texture") && ok;
+        ok = expect_true(store.resolve(high, 64, 32).source == TextureSource::FromUploads,
+                         "cached CT24 draw overwrote the high-byte alias") && ok;
+    }
+    // Unknown formats use the full CT32 word, including the high-byte alias.
+    store.drawn({bp, 1, 0x3f, 0, 0, 64, 32});
+    ok = expect_true(store.resolve(high, 64, 32).source == TextureSource::DrawnSurface,
+                     "unknown draw format did not invalidate the full word") && ok;
+    return ok;
 }
 
 // A stretch's reads: a resolve over two uploaded pages reads exactly those, with their signatures then; an upload
@@ -1126,6 +1183,7 @@ int main(int argc, char **argv) {
         seeds = {1, 2, 3, 4, 5, 6};
     }
     bool ok = colour_texels_rules();
+    ok = cached_draw_invalidation() && ok;
     ok = signatures_of_uploads() && ok;
     ok = watched_reads() && ok;
     ok = read_before_write() && ok;
