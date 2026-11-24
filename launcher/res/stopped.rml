@@ -8,8 +8,10 @@
 		<h1 class="error">The game stopped unexpectedly</h1>
 		<p id="why"></p>
 		<div id="log" class="log"></div>
+		<p id="report-note"></p>
 		<div class="buttons">
 			<span class="button" data-action="open-folder">Open the log's folder</span>
+			<span class="button" data-action="report">Report the problem</span>
 			<span class="button main" data-action="close">Close</span>
 		</div>
 	</div>

@@ -1,7 +1,8 @@
 # Holyland, the launcher (launcher/product.h, docs/port/LAUNCHER.md): builds King's Field IV's PC port on the player's computer
 # from a release's source and tools, then plays it. Its own project: it needs neither the decomp nor the
 # game's build, only SDL3 and a few files the game shares with it (port/platform/data_dir.c, disc_image.c (and third_party/libchdr), iso9660.c,
-# update_notice.c, the player menu's RmlUi code (port/ui/) and its fonts and logo, third_party/rmlui, freetype and cjson).
+# update_notice.c, the problem report's parts (port/report/), the player menu's RmlUi code (port/ui/) and its fonts and
+# logo, third_party/rmlui, freetype and cjson).
 #
 #   cd launcher && cmake --preset linux && cmake --build --preset linux && ctest --test-dir ../out/launcher-linux
 cmake_minimum_required(VERSION 3.21)
@@ -31,8 +32,13 @@ add_library(launcher_core STATIC
     ${ROOT}/third_party/cjson/cJSON.c
     ${ROOT}/third_party/monocypher/monocypher.c
     ${ROOT}/third_party/monocypher/monocypher-ed25519.c
+    ${ROOT}/port/report/pc_facts.cpp       # the crash report (crash_report.h): what the game's report shares
+    ${ROOT}/port/report/report_bundle.cpp
+    ${ROOT}/port/report/report_text.cpp
+    ${ROOT}/port/report/zip_archive.cpp
     build_key.cpp
     build_log.cpp
+    crash_report.cpp
     build_local.cpp
     disc_check.cpp
     launcher_files.cpp
@@ -42,7 +48,9 @@ add_library(launcher_core STATIC
     update_check.cpp
     update_delta.cpp)
 target_include_directories(launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ROOT}/port/include ${ROOT}/third_party/cjson
-                           ${ROOT}/third_party/monocypher)
+                           ${ROOT}/third_party/monocypher ${ROOT}/port/report)
+# miniz's deflate for the crash report's zip (port/report/zip_archive.cpp): libchdr's copy, built into kf4_chdr
+target_include_directories(launcher_core PRIVATE ${ROOT}/third_party/libchdr)
 # zstd's decoder for file patches (update_delta.h): libchdr's copy, built into kf4_chdr
 target_include_directories(launcher_core PRIVATE ${ROOT}/third_party/libchdr/deps/zstd-1.5.7)
 target_compile_options(launcher_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${LAUNCHER_WARNINGS}>)

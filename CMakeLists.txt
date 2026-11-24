@@ -487,8 +487,8 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
                     port/ui/pad_glyphs.cpp port/ui/key_glyphs.cpp port/ui/emulator_saves.cpp
                     ${CMAKE_BINARY_DIR}/ui_assets.cpp
                     # the menu's Report an Issue (port/include/port/problem_report.h)
-                    port/report/problem_report.cpp port/report/system_facts.cpp port/report/report_text.cpp
-                    port/report/zip_archive.cpp)
+                    port/report/problem_report.cpp port/report/system_facts.cpp port/report/pc_facts.cpp
+                    port/report/report_bundle.cpp port/report/report_text.cpp port/report/zip_archive.cpp)
         target_include_directories(kf4_player_ui PRIVATE port/include port/ui port/report ${CMAKE_BINARY_DIR}
                                    ${CMAKE_SOURCE_DIR}/third_party/libchdr)
         target_compile_definitions(kf4_player_ui PRIVATE KF4_HAVE_PLAYER_UI KF4_HAVE_SDL KF4_HAVE_VULKAN_PRESENTER)
@@ -1022,9 +1022,10 @@ if(KF4_TESTS)
     add_test(NAME ui_setup COMMAND ui_setup_test)
 endif()
 
-# The problem report's parts (port/report/report_text.hpp, zip_archive.hpp): redaction, the issue link, a log's
-# start and end, and a zip read back
-add_executable(report_test tests/report_test.cpp port/report/report_text.cpp port/report/zip_archive.cpp)
+# The problem report's parts (port/report/report_text.hpp, zip_archive.hpp, report_bundle.hpp): redaction, the issue
+# link, a log's start and end, a zip read back, a bundle's saves budget
+add_executable(report_test tests/report_test.cpp port/report/report_text.cpp port/report/zip_archive.cpp
+               port/report/report_bundle.cpp)
 target_include_directories(report_test PRIVATE port/report ${CMAKE_SOURCE_DIR}/third_party/libchdr)
 target_link_libraries(report_test PRIVATE kf4_chdr)
 set_target_properties(report_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

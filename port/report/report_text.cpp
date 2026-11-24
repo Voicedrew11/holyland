@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <vector>
 
 namespace report {
 namespace {
@@ -77,7 +76,7 @@ std::string without_mail(std::string text) {
 
 } // namespace
 
-std::string redact(std::string_view text, std::span<const Redaction> words) {
+std::string redact(std::string_view text, const std::vector<Redaction> &words) {
     std::vector<const Redaction *> order;
     for (const Redaction &r : words) {
         if (!r.word.empty())
@@ -113,6 +112,18 @@ std::string url_encode(std::string_view text) {
         }
     }
     return out;
+}
+
+std::string file_link(std::string_view generic_path) {
+    std::string link = !generic_path.empty() && generic_path.front() == '/' ? "file://" : "file:///";
+    for (char c : generic_path) {
+        const auto b = static_cast<unsigned char>(c);
+        if (c == '/' || c == ':' || b >= 0x80)
+            link += c;
+        else
+            link += url_encode(std::string_view(&c, 1));
+    }
+    return link;
 }
 
 namespace {

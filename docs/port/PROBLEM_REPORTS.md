@@ -4,9 +4,20 @@
 Modelled on Soulbrandt's (the Demon's Souls port): a link can fill in an issue's text but cannot attach a file, so
 the player drags the zip into the form, whose "Report file (.zip)" box is required.
 
-Code: `port/report/` (`problem_report.cpp` the flow, `system_facts.cpp` what it says about the PC, `report_text.cpp`
-redaction and the link, `zip_archive.cpp` the zip), `port/include/port/problem_report.h`, the form
-`.github/ISSUE_TEMPLATE/report.yml` (GitHub reads it from the default branch only).
+Code: `port/report/` (`problem_report.cpp` the game's flow, `system_facts.cpp` the game's own facts: GPU, displays,
+the run), and the parts the launcher builds too (C++17, no SDL or game): `pc_facts.cpp` the PC, `report_bundle.cpp`
+the files on their way into the zip, `report_text.cpp` redaction and the link, `zip_archive.cpp` the zip. Also
+`port/include/port/problem_report.h`, `launcher/crash_report.h`, and the form `.github/ISSUE_TEMPLATE/report.yml`
+(GitHub reads it from the default branch only).
+
+## When the game crashes
+
+The launcher's "The game stopped unexpectedly" page has **Report the problem**. The game cannot report its own crash,
+so the launcher makes `<data folder>/reports/holyland-crash-<time>.zip` from what it kept (`launcher/crash_report.h`):
+`crash.txt` (how the game ended, the launcher's version, the game's command line), `system.txt` (the PC; the GPU is in
+the log's first lines), `environment.txt`, `settings.json`, the log of the run that stopped and the one before, the
+build log and the saves. The form opens titled "The game stopped: <how>", with the log's last 25 lines in Details.
+There is no screenshot, game state or quick save: the game is gone. Tested in `launcher_test` (`test_crash_report`).
 
 ## What happens
 
@@ -52,4 +63,5 @@ default name such as Fedora's `fedora` is left, or it would take the system's na
 - A run as the launcher's: `KF4_DATA_DIR=<scratch> KF4_GAME_LOG=<scratch>/game.log KF4_REPORT_NO_OPEN=1
   KF4_DEBUG_AT=report@2400 kf4 --disc ... --input tests/newgame.pad --teleport 1900:009 --invincible --no-audio
   --saves <scratch>/saves --frames 2900 > <scratch>/game.log 2>&1` (a window: the picture needs the Vulkan presenter).
-- `report_test`: redaction, the link and its cutting, a log's start and end, a zip read back.
+- `report_test`: redaction, the link and its cutting, a log's start and end, a zip read back, a bundle's redaction
+  and saves budget. `KF4_REPORT_NO_OPEN=1` works for the launcher's crash report too.

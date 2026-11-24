@@ -106,16 +106,16 @@ void put_central_header(std::vector<std::uint8_t> &out, const ZipEntry &entry, c
     out.insert(out.end(), entry.name.begin(), entry.name.end());
 }
 
-std::uint32_t get16(std::span<const std::uint8_t> in, std::size_t at) {
+std::uint32_t get16(const std::vector<std::uint8_t> &in, std::size_t at) {
     return std::uint32_t(in[at]) | std::uint32_t(in[at + 1]) << 8;
 }
 
-std::uint32_t get32(std::span<const std::uint8_t> in, std::size_t at) {
+std::uint32_t get32(const std::vector<std::uint8_t> &in, std::size_t at) {
     return get16(in, at) | get16(in, at + 2) << 16;
 }
 
 // One entry read back from its central header at `at`: nullopt when anything in it is out of place
-std::optional<ZipEntry> read_entry(std::span<const std::uint8_t> in, std::size_t at, std::size_t *next) {
+std::optional<ZipEntry> read_entry(const std::vector<std::uint8_t> &in, std::size_t at, std::size_t *next) {
     if (at + 46 > in.size() || get32(in, at) != kCentralHeader)
         return std::nullopt;
     const std::uint32_t method = get16(in, at + 10), crc = get32(in, at + 16);
@@ -151,7 +151,7 @@ std::optional<ZipEntry> read_entry(std::span<const std::uint8_t> in, std::size_t
 
 } // namespace
 
-std::optional<std::vector<std::uint8_t>> zip_archive(std::span<const ZipEntry> entries, std::time_t made) {
+std::optional<std::vector<std::uint8_t>> zip_archive(const std::vector<ZipEntry> &entries, std::time_t made) {
     if (entries.size() > 0xFFFF)
         return std::nullopt;
     const std::uint32_t when = dos_date_time(made);
@@ -188,7 +188,7 @@ std::optional<std::vector<std::uint8_t>> zip_archive(std::span<const ZipEntry> e
     return out;
 }
 
-std::optional<std::vector<ZipEntry>> zip_entries(std::span<const std::uint8_t> archive) {
+std::optional<std::vector<ZipEntry>> zip_entries(const std::vector<std::uint8_t> &archive) {
     if (archive.size() < 22)
         return std::nullopt;
     const std::size_t end = archive.size() - 22; // (zip_archive writes no comment)

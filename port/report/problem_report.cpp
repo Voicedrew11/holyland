@@ -16,9 +16,10 @@
 #include <thread>
 #include <vector>
 
+#include "pc_facts.hpp"
+#include "report_bundle.hpp"
 #include "report_text.hpp"
 #include "system_facts.hpp"
-#include "zip_archive.hpp"
 
 extern "C" {
 #include "port/debug.h"
@@ -40,8 +41,6 @@ constexpr std::size_t kLogHeadLines = 300;          // a log's start: the build,
 constexpr std::size_t kLogTailBytes = 3u << 20;     // and its end: what happened last
 constexpr std::size_t kPreviousLogTailBytes = 1u << 20;
 constexpr std::size_t kBuildLogTailBytes = 256u << 10;
-constexpr std::uintmax_t kSaveFileBytes = 8u << 20; // a save file bigger than this is not a save
-constexpr std::uintmax_t kSavesBytes = 32u << 20;
 constexpr auto kPictureWait = std::chrono::seconds(3);
 constexpr auto kQuickSaveWait = std::chrono::seconds(8);
 constexpr auto kPreviousLogAge = std::chrono::hours(24);
@@ -84,36 +83,6 @@ void set_message(const std::string &text) {
     state.message = text;
 }
 
-std::string timestamp() {
-    std::time_t now = std::time(nullptr);
-    std::tm local{};
-#ifdef _WIN32
-    localtime_s(&local, &now);
-#else
-    localtime_r(&now, &local);
-#endif
-    char text[32];
-    std::strftime(text, sizeof(text), "%Y%m%d-%H%M%S", &local);
-    return text;
-}
-
-std::optional<std::string> read_text(const fs::path &path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        return std::nullopt;
-    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-}
-
-std::vector<std::uint8_t> bytes_of(const std::string &text) {
-    return {text.begin(), text.end()};
-}
-
-bool fresh(const fs::path &path, std::chrono::hours age) {
-    std::error_code error;
-    const auto written = fs::last_write_time(path, error);
-    return !error && fs::file_time_type::clock::now() - written < age;
-}
-
 // ---- The game's thread ------------------------------------------------------------------------------------------
 
 void take_game_state(const Taken &taken) {
@@ -127,7 +96,7 @@ void take_game_state(const Taken &taken) {
 
 Taken take() {
     Taken t;
-    t.stamp = timestamp();
+    t.stamp = report::report_timestamp();
     t.reports = fs::path(port_data_dir()) / "reports";
     t.parts = t.reports / ("holyland-report-" + t.stamp + ".parts");
     std::error_code error;
@@ -142,7 +111,7 @@ Taken take() {
     t.system = report::system_facts();
     t.summary = report::system_summary();
     t.run = report::run_facts();
-    t.environment = report::environment_facts();
+    t.environment = report::environment_facts(report::this_command_line());
     t.words = report::private_words();
     t.settings = port_settings_path();
     const char *log = std::getenv("KF4_GAME_LOG"); // (set by the launcher, which writes it)
@@ -182,140 +151,73 @@ bool quick_save_written(const fs::path &parts) {
     return fs::exists(parts / "quick-now.kf4quick", error);
 }
 
-struct Entries {
-    std::vector<report::ZipEntry> list;
-    std::uintmax_t save_bytes = 0;
-    const std::vector<report::Redaction> *words;
-
-    void text(const std::string &name, const std::string &body) {
-        list.push_back({name, bytes_of(report::redact(body, *words))});
-    }
-    // a save file as it is, within the saves' budget
-    void save(const std::string &name, const fs::path &path) {
-        std::error_code error;
-        const std::uintmax_t size = fs::file_size(path, error);
-        if (error || size > kSaveFileBytes || save_bytes + size > kSavesBytes)
-            return;
-        if (auto body = read_text(path)) {
-            save_bytes += body->size();
-            list.push_back({name, bytes_of(*body)});
-        }
-    }
-    void save_folder(const std::string &prefix, const fs::path &folder) {
-        std::error_code error;
-        for (const fs::directory_entry &entry : fs::directory_iterator(folder, error)) {
-            if (entry.is_regular_file(error))
-                save(prefix + entry.path().filename().string(), entry.path());
-        }
-    }
-};
-
-void add_logs(Entries &e, const Taken &t, std::string &notes) {
+void add_logs(report::ReportBundle &bundle, const Taken &t, std::string &notes) {
     if (!t.game_log.empty()) {
-        if (auto log = read_text(t.game_log))
-            e.text("logs/game.log", report::head_and_tail(*log, kLogHeadLines, kLogTailBytes));
-        else
+        if (!bundle.add_log("logs/game.log", t.game_log, kLogHeadLines, kLogTailBytes))
             notes += "No log: " + t.game_log.string() + " could not be read\n";
         const fs::path previous = t.game_log.parent_path() / "game.prev.log";
-        if (fresh(previous, kPreviousLogAge)) {
-            if (auto log = read_text(previous))
-                e.text("logs/game.prev.log", report::head_and_tail(*log, kLogHeadLines, kPreviousLogTailBytes));
-        }
+        if (report::written_within(previous, kPreviousLogAge))
+            bundle.add_log("logs/game.prev.log", previous, kLogHeadLines, kPreviousLogTailBytes);
     }
-    if (auto log = read_text(t.build_log))
-        e.text("logs/build.log", report::head_and_tail(*log, 40, kBuildLogTailBytes));
+    bundle.add_log("logs/build.log", t.build_log, 40, kBuildLogTailBytes);
 }
 
-void add_saves(Entries &e, const Taken &t, std::string &notes) {
+void add_saves(report::ReportBundle &bundle, const Taken &t, std::string &notes) {
     if (quick_save_written(t.parts)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300)); // (its write finished: it is put in place whole)
-        e.save("saves/quick-now.kf4quick", t.parts / "quick-now.kf4quick");
+        bundle.add_save("saves/quick-now.kf4quick", t.parts / "quick-now.kf4quick");
     } else {
         notes += "No quick save where you stood: the game could not save then (a menu, a message or an event)\n";
     }
     if (!t.saves_folder.empty())
-        e.save_folder("saves/", t.saves_folder);
-    e.save_folder("saves/quicksaves/", t.quick_folder);
+        bundle.add_save_folder("saves/", t.saves_folder);
+    bundle.add_save_folder("saves/quicksaves/", t.quick_folder);
 }
 
-std::vector<report::ZipEntry> gather(const Taken &t) {
+report::ReportBundle gather(const Taken &t) {
     std::string notes = t.notes;
-    Entries e{{}, 0, &t.words};
-    e.list.push_back({"README.txt", bytes_of(kReadme)});
-    e.text("system.txt", t.system);
-    e.text("environment.txt", t.environment);
-    if (auto settings = read_text(t.settings))
-        e.text("settings.json", *settings);
-    if (auto state_json = read_text(t.parts / "game_state.json"))
-        e.text("game_state.json", *state_json);
-    add_logs(e, t, notes);
-    if (t.picture_asked && wait_for([&] { return picture_written(t.parts); }, kPictureWait)) {
-        if (auto png = read_text(t.parts / "0000.png"))
-            e.list.push_back({"screenshot.png", bytes_of(*png)});
-    } else if (t.picture_asked) {
+    report::ReportBundle bundle(t.words);
+    bundle.add_text("README.txt", kReadme);
+    bundle.add_text("system.txt", t.system);
+    bundle.add_text("environment.txt", t.environment);
+    if (auto settings = report::read_text(t.settings))
+        bundle.add_text("settings.json", *settings);
+    if (auto state_json = report::read_text(t.parts / "game_state.json"))
+        bundle.add_text("game_state.json", *state_json);
+    add_logs(bundle, t, notes);
+    if (t.picture_asked && wait_for([&] { return picture_written(t.parts); }, kPictureWait))
+        bundle.add_file("screenshot.png", t.parts / "0000.png");
+    else if (t.picture_asked)
         notes += "No screenshot: the picture was not written in time\n";
-    }
     if (t.quick_save_asked)
         wait_for([&] { return quick_save_written(t.parts); }, kQuickSaveWait);
-    add_saves(e, t, notes);
-    e.text("game.txt", t.run + (notes.empty() ? "" : "\nNot in this report:\n" + notes));
-    return e.list;
-}
-
-bool write_whole(const fs::path &path, const std::vector<std::uint8_t> &bytes) {
-    const fs::path part = path.string() + ".tmp";
-    {
-        std::ofstream out(part, std::ios::binary | std::ios::trunc);
-        out.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
-        if (!out.flush())
-            return false;
-    }
-    std::error_code error;
-    fs::rename(part, path, error);
-    return !error;
-}
-
-// A folder as a file:// link, each byte that needs it escaped
-std::string folder_link(const fs::path &folder) {
-    std::string path = folder.generic_string();
-    std::string link = path.front() == '/' ? "file://" : "file:///";
-    for (char c : path) {
-        const auto b = static_cast<unsigned char>(c);
-        if (c == '/' || c == ':' || b >= 0x80)
-            link += c;
-        else
-            link += report::url_encode(std::string_view(&c, 1));
-    }
-    return link;
+    add_saves(bundle, t, notes);
+    bundle.add_text("game.txt", t.run + (notes.empty() ? "" : "\nNot in this report:\n" + notes));
+    return bundle;
 }
 
 void open_form(const std::string &url, const fs::path &zip) {
-    const char *no_open = std::getenv("KF4_REPORT_NO_OPEN");
-    if (no_open != nullptr && no_open[0] == '1') {
-        std::ofstream(zip.string() + ".url.txt") << url << "\n";
+    if (report::keep_link_instead(zip, url))
         return;
-    }
     if (!SDL_OpenURL(url.c_str()))
         std::fprintf(stderr, "[report] the browser did not open: %s\n", SDL_GetError());
-    if (!SDL_OpenURL(folder_link(zip.parent_path()).c_str()))
+    if (!SDL_OpenURL(report::file_link(zip.parent_path().generic_string()).c_str()))
         std::fprintf(stderr, "[report] the folder did not open: %s\n", SDL_GetError());
 }
 
 void make_report(const Taken &t) {
-    const std::vector<report::ZipEntry> entries = gather(t);
-    const fs::path zip = t.reports / ("holyland-report-" + t.stamp + ".zip");
-    const auto archive = report::zip_archive(entries, std::time(nullptr));
+    const report::ReportBundle bundle = gather(t);
     std::error_code error;
     fs::remove_all(t.parts, error);
-    if (!archive || !write_whole(zip, *archive)) {
+    const std::optional<fs::path> zip = bundle.write(t.reports, "holyland-report-" + t.stamp);
+    if (!zip) {
         set_message("The report could not be saved in " + t.reports.string() + ".");
         return;
     }
-    const std::string details = t.summary + "Report file: " + zip.filename().string() + "\n";
-    const std::string url = report::issue_url(
-        {UPDATE_REPOSITORY, "", "", report::redact(details, t.words)}, kLinkBytes);
-    open_form(url, zip);
-    set_message("Saved " + zip.string() + ". Drag it into the issue form your browser opened.");
+    const std::string details = t.summary + "Report file: " + zip->filename().string() + "\n";
+    const std::string url = report::issue_url({UPDATE_REPOSITORY, "", "", bundle.redacted(details)}, kLinkBytes);
+    open_form(url, *zip);
+    set_message("Saved " + zip->string() + ". Drag it into the issue form your browser opened.");
 }
 
 int report_thread(void *data) {
