@@ -1111,6 +1111,17 @@ if(KF4_TESTS)
     add_test(NAME pcr_copy_pool COMMAND pcr_copy_pool_test)
 endif()
 
+# The scene renderer's texture-image VRAM cap (port/gs/scene/scn_texture_budget.h)
+add_executable(scn_texture_budget_test tests/scn_texture_budget_test.cpp)
+target_include_directories(scn_texture_budget_test PRIVATE port/gs/scene)
+set_target_properties(scn_texture_budget_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(NOT MSVC)
+    target_compile_options(scn_texture_budget_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME scn_texture_budget COMMAND scn_texture_budget_test)
+endif()
+
 # The flash recorder's ring size (port/platform/flash_ring.h): held to its most bytes at any frame rate
 add_executable(flash_ring_test tests/flash_ring_test.cpp)
 target_include_directories(flash_ring_test PRIVATE port/platform)
