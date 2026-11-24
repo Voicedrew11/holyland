@@ -391,7 +391,9 @@ public:
     int claim() {
         std::lock_guard<std::mutex> hold(lock_);
         int slot = (written_ + 1) % SCANOUT_SLOTS;
-        if (slot == taken_) {
+        // (nor the newest published: after pictures that could not be made, a claim came round to it and emptied it,
+        // and the presenter, finding no picture there, showed black until one could be made again)
+        while (slot == taken_ || slot == newest_) {
             slot = (slot + 1) % SCANOUT_SLOTS;
         }
         Slot &s = slots_[slot];
@@ -500,8 +502,13 @@ public:
     }
 
     // (the PC renderer's thread) Once the commands writing the slot are on the queue: the presenter may take it
+    // A slot with no picture in it (a repeat of one claimed since, whose picture could not be made) is not published:
+    // the presenter keeps the newest that has one.
     void publish(int slot, uint64_t tag, const GsnPictureTurn &turn) {
         std::lock_guard<std::mutex> hold(lock_);
+        if (!slots_[slot].whole_valid && !slots_[slot].scaled_valid) {
+            return;
+        }
         slots_[slot].serial = ++serial_;
         slots_[slot].tag = tag;
         slots_[slot].turn = turn;
