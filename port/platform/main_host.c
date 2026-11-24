@@ -227,6 +227,7 @@
 #include "port/audio.h"
 #include "port/debug.h"
 #include "port/host.h"
+#include "port/host_load.h"
 #include "port/platform.h"
 #include "port/play_priority.h"
 #include "port/thread_name.h"
@@ -1130,6 +1131,18 @@ static const char *read_env(const char *name) {
     return getenv(name);
 }
 
+/* The clock's cost a read, for a player's log (port_clock_cost: a Windows forced onto the HPET slows every thread) */
+static void log_clock_cost(void) {
+    const PortClockCost clock = port_clock_cost();
+
+    fprintf(stderr, "[kf4] the clock: %.0f ns a read, its counter at %.3f MHz\n", clock.read_ns, clock.counter_mhz);
+    if (clock.read_ns >= PORT_CLOCK_SLOW_NS) {
+        fprintf(stderr, "[kf4] THE CLOCK IS SLOW TO READ on this PC: every thread of the game reads it often and runs "
+                        "slower. On Windows this is the HPET forced on: in an administrator's command prompt, "
+                        "\"bcdedit /deletevalue useplatformclock\", then restart.\n");
+    }
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -1154,6 +1167,7 @@ int main(int argc, char **argv) {
     }
     port_play_process();
     port_play_thread(); /* (the game's thread) */
+    log_clock_cost();
     port_gs_find_vulkan_layers(); /* (before any thread: it sets the Vulkan loader's variables) */
     if (port_options.stats) {
         atexit(print_stats); /* (a run's own end prints them before exit: port_print_stats) */
