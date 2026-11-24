@@ -13,6 +13,10 @@
 #include <system_error>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "build_key.h"
 #include "build_log.h"
 #include "build_strategy.h"
@@ -155,6 +159,32 @@ void test_choices() {
     check("unknown keys kept", read_file(file).value_or("").find("future_key") != std::string::npos);
     write(file, "{broken");
     check("broken means defaults", read_choices(file).update_check && read_choices(file).disc.empty());
+    fs::remove_all(dir);
+}
+
+// a build's folder as the game's configure leaves it, decomp_src/ read-only (CMakeLists.txt), and a read-only folder,
+// which on Linux stops fs::remove_all as a read-only file can on Windows (the builds left behind, #247)
+void test_remove_tree() {
+    fs::path dir = temp_dir("holyland_launcher_test_remove");
+    write(dir / "build/obj/decomp_src/src/game/a.c", "c");
+    write(dir / "build/kf4", "game");
+    fs::permissions(dir / "build/obj/decomp_src/src/game/a.c", fs::perms::owner_write, fs::perm_options::remove);
+    fs::permissions(dir / "build/obj/decomp_src/src/game",
+                    fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write, fs::perm_options::remove);
+    check("a tree with read-only files and folders removed",
+          remove_tree(dir / "build").empty() && !fs::exists(dir / "build"));
+    check("a missing tree is removed already", remove_tree(dir / "missing").empty());
+#ifdef _WIN32
+    // a file another program has open, as an antivirus has a new kf4.exe: said, and removed once it is closed
+    write(dir / "busy/kf4.exe", "game");
+    HANDLE held = CreateFileW((dir / "busy/kf4.exe").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    check("a test file held open", held != INVALID_HANDLE_VALUE);
+    std::string why = remove_tree(dir / "busy");
+    check("a tree with a file held open is not removed, and why said", !why.empty() && fs::exists(dir / "busy/kf4.exe"));
+    CloseHandle(held);
+    check("then removed once it is closed", remove_tree(dir / "busy").empty() && !fs::exists(dir / "busy"));
+#endif
     fs::remove_all(dir);
 }
 
@@ -729,6 +759,7 @@ int main() {
     test_disc_folder();
     test_disc_chd();
     test_choices();
+    test_remove_tree();
     test_rml_escaped();
     test_setup_flow();
     test_local_build();

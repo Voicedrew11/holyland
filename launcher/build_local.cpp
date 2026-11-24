@@ -1,12 +1,15 @@
 // The desktop systems' build (build_strategy.h): the release's source configured with CMake and built with
 // Ninja, with the tools the release ships, as the developers' release preset builds it (CMakePresets.json
 // "release": LTO, no frame pointers), then the game's files kept and the rest removed.
+#include <chrono>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "build_log.h"
 #include "build_strategy.h"
+#include "launcher_files.h"
 #include "platform.h"
 
 namespace launcher {
@@ -123,7 +126,15 @@ BuildResult LocalCMakeBuild::build(const Platform &platform, const BuildRequest 
     }
     if (std::string failed = keep_vulkan_layers(obj, request.build_dir); !failed.empty())
         return {false, failed};
-    fs::remove_all(obj, error); // the objects are big and never used again; a failure here is harmless
+    // the objects are big and never used again. An antivirus may still be reading the new program: a few tries, and
+    // what is left after them goes at the next start (session.cpp, remove_old_builds)
+    std::string left = remove_tree(obj);
+    for (int tries = 1; !left.empty() && tries < 4; tries++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        left = remove_tree(obj);
+    }
+    if (!left.empty())
+        progress.log_line("(" + left + "; it goes at the next start)");
     return {true, {}};
 }
 

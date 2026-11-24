@@ -50,4 +50,9 @@ std::string file_sha256(const fs::path &file);
 // a file written whole and then put in place, so a crash never leaves half of it
 bool write_file_atomically(const fs::path &file, const std::string &text);
 
+// `dir` and everything in it removed, read-only files and folders made writable first (the game's build makes its copy
+// of the decomp read-only: CMakeLists.txt, decomp_src/); "" when nothing of it is left, else why not (on Windows, a
+// file another program has open, such as an antivirus scanning a new kf4.exe, cannot be deleted until it is closed)
+std::string remove_tree(const fs::path &dir);
+
 } // namespace launcher
