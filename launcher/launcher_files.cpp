@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <system_error>
 
@@ -23,9 +24,27 @@ namespace launcher {
 
 namespace {
 
+#ifdef _WIN32
+// the environment's value as UTF-8, whatever the code page (getenv gives the ANSI one, which fs::u8path throws
+// on); nullptr when it is not set
+const char *read_env(const char *name) {
+    static std::map<std::string, std::string> read; // keeps each returned value alive (main thread only)
+    std::wstring wide_name(name, name + std::strlen(name)); // (the names are ASCII)
+    DWORD n = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);
+    if (n == 0)
+        return nullptr;
+    std::wstring value(n, L'\0');
+    n = GetEnvironmentVariableW(wide_name.c_str(), value.data(), n);
+    value.resize(n);
+    std::string &text = read[name];
+    text = fs::path(value).u8string();
+    return text.c_str();
+}
+#else
 const char *read_env(const char *name) {
     return std::getenv(name);
 }
+#endif
 
 const char *string_item(const cJSON *root, const char *name) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
