@@ -47,6 +47,7 @@ extern "C" {
 #include "port/mouse_lead.h"
 #include "port/overlay.h"
 #include "port/debug.h"
+#include "port/exit_codes.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
 #include "port/present_vk.h"
@@ -293,10 +294,27 @@ KeptOverlay kept_overlay;
 
 void fold_check_print(); // (KF4_PRESENT_FOLD_CHECK's, below)
 
-void check(VkResult result) {
-    if (result < 0) {
-        std::fprintf(stderr, "[present] Vulkan error %d\n", int(result));
+// A lost device (the driver reset the GPU: on Windows a "TDR", or a driver update or crash) never comes back, and
+// every wait and submit after it fails at once: the game would go on behind a frozen picture. It ends, as the PC
+// renderer's hang watch does, with the code the launcher's crash page explains.
+[[noreturn]] void device_lost(const char *where) {
+    std::fprintf(stderr, "[present] the GPU was lost (%s): its driver reset it or stopped; the game ends\n", where);
+    std::fflush(stderr);
+    std::_Exit(PORT_EXIT_GPU_LOST);
+}
+
+void check(VkResult result, const char *where) {
+    if (result == VK_ERROR_DEVICE_LOST) {
+        device_lost(where);
     }
+    if (result < 0) {
+        std::fprintf(stderr, "[present] Vulkan error %d (%s)\n", int(result), where);
+    }
+}
+
+// (the ImGui overlay's Vulkan calls: ImGui_ImplVulkan's callback)
+void check_overlay(VkResult result) {
+    check(result, "the overlay");
 }
 
 // ---- Memory --------------------------------------------------------------------------------------
@@ -366,7 +384,7 @@ void free_buffer(VkBuffer *buffer, VkDeviceMemory *memory) {
 // Every command buffer of the presenter's has run
 void wait_frames() {
     for (Frame &f : pr.frames) {
-        vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
+        check(vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX), "waiting for a frame");
     }
 }
 
@@ -1416,7 +1434,7 @@ void add_square(void *context, int x, int y, int width, int height, unsigned int
 
 // The window read back after the frame (KF4_OVERLAY_SHOT), as RGBA
 void read_window(Frame &f) {
-    vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
+    check(vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX), "waiting for a frame");
     uint32_t w = pr.extent.width, h = pr.extent.height;
     std::vector<uint32_t> pixels(size_t(w) * h);
     const uint32_t *in = static_cast<const uint32_t *>(pr.readback_map);
@@ -1559,7 +1577,7 @@ extern "C" int port_vk_imgui_init(void) {
     info.PipelineInfoMain.RenderPass = pr.pass;
     info.PipelineInfoMain.Subpass = 0;
     info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    info.CheckVkResultFn = check;
+    info.CheckVkResultFn = check_overlay;
     pr.imgui = ImGui_ImplVulkan_Init(&info);
     return pr.imgui;
 }
@@ -1627,7 +1645,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
         return 0;
     }
     int waiting = port_zone_begin(present_frame_zone);
-    vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX);
+    check(vk.vkWaitForFences(pr.device, 1, &f.done, VK_TRUE, UINT64_MAX), "waiting for a frame");
     if (waiting) {
         port_zone_end(present_frame_zone);
     }
@@ -1652,7 +1670,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     if (result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true; // (drawn all the same, and made again for the next)
     } else if (result != VK_SUCCESS) {
-        check(result);
+        check(result, "vkAcquireNextImageKHR");
         return 1;
     }
     SwapImage &target = pr.images[index];
@@ -1951,7 +1969,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     vk.vkResetFences(pr.device, 1, &f.done);
     int queueing = port_zone_begin(present_queue_zone);
     gsr_queue_lock();
-    check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done));
+    check(vk.vkQueueSubmit(pr.queue, 1, &submit, f.done), "vkQueueSubmit");
     if (have_scanout) {
         gsr_scanout_release(); // (submitted: whatever the PC renderer writes into it next comes after)
     }
@@ -1964,7 +1982,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         pr.stale = true;
     } else {
-        check(result);
+        check(result, "vkQueuePresentKHR");
     }
     if (shot) {
         read_window(f);

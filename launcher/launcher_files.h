@@ -47,6 +47,12 @@ std::optional<std::string> read_file(const fs::path &file);
 // a file's SHA-256 in hex; "" when it cannot be read
 std::string file_sha256(const fs::path &file);
 
+// `from` renamed to `to` in one step, replacing a `to` that is there. On Windows tried again for up to a second while
+// another program has either file open (a virus scanner opening a file the moment it is written, a cloud folder's
+// sync): the open lasts milliseconds, and without the retry an update or a write fails outright. As the game's
+// port_replace_file (port/include/port/file_replace.h), with UTF-16 paths.
+bool move_replacing(const fs::path &from, const fs::path &to);
+
 // a file written whole and then put in place, so a crash never leaves half of it
 bool write_file_atomically(const fs::path &file, const std::string &text);
 

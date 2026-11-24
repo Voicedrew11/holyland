@@ -85,6 +85,27 @@ std::string file_sha256(const fs::path &file) {
     return failed ? std::string() : to_hex(hasher.finish());
 }
 
+#ifdef _WIN32
+bool move_replacing(const fs::path &from, const fs::path &to) {
+    DWORD waited_ms = 0, pause_ms = 10;
+    for (;;) {
+        if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return true;
+        DWORD error = GetLastError();
+        bool held_open = error == ERROR_SHARING_VIOLATION || error == ERROR_ACCESS_DENIED || error == ERROR_LOCK_VIOLATION;
+        if (!held_open || waited_ms >= 1000)
+            return false;
+        Sleep(pause_ms);
+        waited_ms += pause_ms;
+        pause_ms = pause_ms < 200 ? pause_ms * 2 : pause_ms;
+    }
+}
+#else
+bool move_replacing(const fs::path &from, const fs::path &to) {
+    return std::rename(from.c_str(), to.c_str()) == 0;
+}
+#endif
+
 bool write_file_atomically(const fs::path &file, const std::string &text) {
     std::error_code error;
     fs::create_directories(file.parent_path(), error);
@@ -99,11 +120,7 @@ bool write_file_atomically(const fs::path &file, const std::string &text) {
         if (!out)
             return false;
     }
-#ifdef _WIN32
-    bool moved = MoveFileExW(temp.wstring().c_str(), file.wstring().c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
-#else
-    bool moved = std::rename(temp.string().c_str(), file.string().c_str()) == 0;
-#endif
+    bool moved = move_replacing(temp, file);
     if (!moved)
         fs::remove(temp, error);
     return moved;

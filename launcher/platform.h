@@ -13,7 +13,13 @@
 #include <utility>
 #include <vector>
 
+#include "port/exit_codes.h" // PORT_EXIT_GPU_LOST
+
 namespace launcher {
+
+// PORT_EXIT_GPU_LOST in words, on every system (describe_exit)
+inline constexpr const char *kGpuLostMeaning =
+    "the GPU stopped answering or its driver reset it (a driver crash or update, or Windows' GPU timeout)";
 
 namespace fs = std::filesystem;
 class BuildStrategy;
