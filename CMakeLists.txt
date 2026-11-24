@@ -198,6 +198,7 @@ add_library(kf4_port STATIC
     port/platform/iso9660.c
     port/platform/ipu.c
     port/platform/host_time.c
+    port/platform/file_replace.c
     port/platform/host_load.c
     port/platform/int_divide.c
     port/math/libvu0.c
@@ -692,8 +693,11 @@ if(WIN32)
     # the icon (packaging/shared/holyland.ico) in the .exe, for Explorer, the taskbar and the window
     enable_language(RC)
     set(HOLYLAND_ICON ${CMAKE_SOURCE_DIR}/packaging/shared/holyland.ico)
+    set(HOLYLAND_MANIFEST ${CMAKE_SOURCE_DIR}/packaging/shared/holyland.manifest)
     configure_file(packaging/shared/holyland.rc.in ${CMAKE_BINARY_DIR}/holyland.rc @ONLY)
     target_sources(kf4 PRIVATE ${CMAKE_BINARY_DIR}/holyland.rc)
+    set_source_files_properties(${CMAKE_BINARY_DIR}/holyland.rc PROPERTIES
+        OBJECT_DEPENDS "${HOLYLAND_ICON};${HOLYLAND_MANIFEST}")
     target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
 else()
     target_link_options(kf4 PRIVATE -no-pie)
@@ -794,6 +798,17 @@ if(KF4_TESTS)
 endif()
 
 # The update notice's rules and the data folder's place, shared by the game and the launcher
+# A file put in place of an old one in one step, and on Windows once another program lets go of it
+# (port/platform/file_replace.c)
+add_executable(file_replace_test tests/file_replace_test.c port/platform/file_replace.c)
+target_include_directories(file_replace_test PRIVATE port/include)
+if(NOT WIN32)
+    target_compile_options(file_replace_test PRIVATE -Wall -Wextra -Wshadow)
+endif()
+if(KF4_TESTS)
+    add_test(NAME file_replace COMMAND file_replace_test ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+
 # (port/platform/update_notice.c, data_dir.c; docs/port/LAUNCHER.md)
 add_executable(update_notice_test tests/update_notice_test.c port/platform/update_notice.c port/platform/data_dir.c
     third_party/cjson/cJSON.c)

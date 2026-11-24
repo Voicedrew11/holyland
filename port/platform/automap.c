@@ -11,6 +11,7 @@
 #endif
 
 #include "cJSON.h"
+#include "port/file_replace.h"
 #include "port/automap.h"
 #include "port/platform.h"
 #include "port/settings.h"
@@ -178,11 +179,7 @@ static int write_state(const char *name) {
     }
     free(data);
     if (ok) {
-#ifdef _WIN32
-        ok = MoveFileExA(temp, path, MOVEFILE_REPLACE_EXISTING) != 0;
-#else
-        ok = rename(temp, path) == 0;
-#endif
+        ok = port_replace_file(temp, path);
     }
     if (!ok) {
         remove(temp);

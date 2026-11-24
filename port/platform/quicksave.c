@@ -35,6 +35,7 @@
 #endif
 
 #include "port/platform.h"
+#include "port/file_replace.h"
 #include "port/automap.h"
 #include "port/hands.h"
 #include "port/quicksave.h"
@@ -443,8 +444,7 @@ int port_quick_write(const uint8_t *image, size_t size, const PortQuickInfo *gam
         ok = fclose(file) == 0 && ok;
     }
     if (ok) {
-        remove(path);
-        ok = rename(temp, path) == 0;
+        ok = port_replace_file(temp, path); /* the old file is kept if this fails */
     }
     if (!ok) {
         remove(temp);

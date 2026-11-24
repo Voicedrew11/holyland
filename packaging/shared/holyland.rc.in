@@ -1,3 +1,5 @@
-// The program's icon on Windows (Explorer, the taskbar, and SDL's window, which takes the .exe's first icon).
-// CMake fills in the absolute path, as windres and llvm-rc resolve relative ones differently.
+// The program's icon and manifest on Windows (Explorer, the taskbar, and SDL's window, which takes the .exe's
+// first icon; the manifest: packaging/shared/holyland.manifest).
+// CMake fills in the absolute paths, as windres and llvm-rc resolve relative ones differently.
 1 ICON "@HOLYLAND_ICON@"
+1 24 "@HOLYLAND_MANIFEST@"
