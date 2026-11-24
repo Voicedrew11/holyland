@@ -169,6 +169,35 @@ bool sync_overridden() {
     return port_options.adaptive_sync != port_settings.adaptive_sync;
 }
 
+// The scene renderer's budget (port_options.skip_late_frames): from the next start, so the setting's own value shown
+int get_skip_late() {
+    return port_settings.skip_late_frames != 0;
+}
+void set_skip_late(int on) {
+    port_settings.skip_late_frames = on;
+    changed();
+}
+bool frames_between() {
+    return port_options.frame_rate != 30 && port_options.renderer == PORT_RENDERER_SCENE;
+}
+
+// Exclusive fullscreen (port_options.exclusive_fullscreen, live; Windows only)
+const Choice exclusives[] = {{"Auto", PORT_EXCLUSIVE_AUTO}, {"On", PORT_EXCLUSIVE_ON}, {"Off", PORT_EXCLUSIVE_OFF}};
+int get_exclusive() {
+    return port_options.exclusive_fullscreen;
+}
+void set_exclusive(int choice) {
+    port_settings.exclusive_fullscreen = port_options.exclusive_fullscreen = choice;
+    changed();
+}
+bool exclusive_possible() {
+#ifdef _WIN32
+    return port_settings.fullscreen != 0;
+#else
+    return false;
+#endif
+}
+
 int get_fps() {
     return port_options.show_fps != 0;
 }
@@ -196,6 +225,10 @@ const SettingRow display_rows[] = {
     {"Window", "", RowKind::heading},
     {"Fullscreen", "Borderless, at the screen's resolution. F11 also switches it.", RowKind::toggle, on_off, {},
      get_fullscreen, set_fullscreen},
+    {"Exclusive Fullscreen",
+     "Lets the game take over the screen while fullscreen; some graphics chips then keep their speed up more steadily."
+     "\nAuto: on AMD graphics.\nOn: on any graphics that support it.\nOff: never.",
+     RowKind::choice, exclusives, {}, get_exclusive, set_exclusive, nullptr, nullptr, exclusive_possible},
     {"Window Size",
      "The window's size when not fullscreen. The width follows the aspect ratio (4:3, or 16:9 with widescreen). The "
      "window can also be resized by dragging its edges.",
@@ -216,6 +249,11 @@ const SettingRow display_rows[] = {
      "Off: can tear.\nOn: waits for the screen's refresh.\nAdaptive: FreeSync or G-Sync (must be on in your system's "
      "display settings too).",
      RowKind::choice, syncs, {}, get_sync, set_sync, nullptr, nullptr, nullptr, nullptr, sync_overridden},
+    {"Skip Late Frames",
+     "Above 30 FPS: an interpolated frame that would be late is skipped, so the view keeps up with the mouse.\nOff: "
+     "every frame is shown, up to a refresh late. Smoother on graphics chips that slow down when given less work, "
+     "with a little more lag. From the next start.",
+     RowKind::toggle, on_off, {}, get_skip_late, set_skip_late, nullptr, nullptr, frames_between},
     {"FPS Counter", "Top right corner. F3 shows and hides it in play.", RowKind::toggle, on_off, {}, get_fps,
      set_fps},
     {"CRT", "", RowKind::heading},

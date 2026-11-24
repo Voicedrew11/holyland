@@ -42,6 +42,13 @@
 #include "present_vk_ui.hpp"
 #endif
 
+#ifdef _WIN32
+extern "C" __declspec(dllimport) void *__stdcall MonitorFromWindow(void *hwnd, unsigned long flags);
+#endif
+// (VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT, declared only with the Win32 platform's headers: the screen taken
+// back, Alt-Tab: the swapchain made again)
+constexpr VkResult FULL_SCREEN_EXCLUSIVE_LOST = VkResult(-1000255000);
+
 extern "C" {
 #include "gs_api.h"
 #include "port/mouse_lead.h"
@@ -204,6 +211,10 @@ struct Presenter {
     bool can_read = false; // the swapchain's images can be copied from (KF4_OVERLAY_SHOT)
     std::vector<SwapImage> images;
     bool stale = true;     // the swapchain is to be made again (a new size, vsync, or out of date)
+    // full-screen exclusive (exclusive_wanted): as the swapchain was made (0 not said, 1 allowed, 2 disallowed, 3 the
+    // game's to take), and whether taking it failed (not tried again until the window has lost its focus)
+    int exclusive_made = 0;
+    bool exclusive_failed = false;
     int vsync_made = -1;
     int vsync_wanted = 0;
     // the mode chosen over vsync's (wanted_mode): 0 none, 1 mailbox (unlocked), 2 immediate (unlocked --tearing),
@@ -322,6 +333,18 @@ uint64_t device_local_heap_bytes() {
         }
     }
     return most;
+}
+
+// A memory type of bits on a heap that is not device-local (an integrated GPU's system memory); -1: none
+int system_memory_type(uint32_t bits) {
+    VkPhysicalDeviceMemoryProperties props;
+    vk.vkGetPhysicalDeviceMemoryProperties(pr.gpu, &props);
+    for (uint32_t i = 0; i < props.memoryTypeCount; i++) {
+        if ((bits & (1u << i)) && !(props.memoryHeaps[props.memoryTypes[i].heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+            return int(i);
+        }
+    }
+    return -1;
 }
 
 // A buffer the CPU writes or reads, mapped for good
@@ -444,6 +467,43 @@ int wanted_mode() {
 
 // The swapchain for the window's size and the vsync setting: false if there is none now (the window
 // is minimised, or it failed)
+// Full-screen exclusive for the swapchain: 0 not said (the driver's own choice), 1 allowed, 2 disallowed, 3 the game
+// takes it (application controlled). On a 7730U (AMD, Windows 11; 2026-11-24) a full-screen window not said drew every
+// picture of about half the runs about 1.4 times as slowly as the others, the whole run (the game's work the same):
+// AMD's logging showed those runs' GPU at its 400 MHz idle clock far more often, the budget's left-out pictures between
+// (pcr_budget.h) giving it less to do. Disallowed, 0 runs of 5 fast; taken by the game, 8 of 10: the driver keeps its
+// clocks up more readily for a game holding the screen. It makes a slow run less likely, not impossible (Skip Late
+// Frames off, settings.json display.skip_late_frames, is what ends them). So, the setting's auto: taken in a
+// full-screen window with the focus on AMD's GPUs (the only ones measured; Granite has it broken on Intel's Windows
+// driver), unless taking it failed since the focus came; otherwise not said, as before. On: any GPU whose driver has
+// it; off: never. KF4_FSE=app / allowed / disallowed / off: that, whatever the window and the setting.
+int exclusive_wanted() {
+#ifdef _WIN32
+    static const char *forced = getenv("KF4_FSE");
+    if (forced) {
+        return strcmp(forced, "app") == 0 ? 3 : strcmp(forced, "allowed") == 0 ? 1 : strcmp(forced, "off") == 0 ? 0 : 2;
+    }
+    static int supported = -1, amd = 0;
+    if (supported < 0) {
+        VkPhysicalDeviceProperties props;
+        vk.vkGetPhysicalDeviceProperties(pr.gpu, &props);
+        supported = vk.vkGetDeviceProcAddr(pr.device, "vkAcquireFullScreenExclusiveModeEXT") != nullptr;
+        amd = props.vendorID == 0x1002;
+    }
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(pr.window);
+    if (!(flags & SDL_WINDOW_INPUT_FOCUS)) {
+        pr.exclusive_failed = false; // (tried again once the focus is back)
+        return 0;
+    }
+    // (the setting, live: port_options.exclusive_fullscreen)
+    const int setting = port_options.exclusive_fullscreen;
+    const bool wanted = setting == PORT_EXCLUSIVE_ON || (setting == PORT_EXCLUSIVE_AUTO && amd);
+    return supported && wanted && (flags & SDL_WINDOW_FULLSCREEN) && !pr.exclusive_failed ? 3 : 0;
+#else
+    return 0;
+#endif
+}
+
 bool make_swapchain() {
     int drawable_w = 0, drawable_h = 0;
     SDL_GetWindowSizeInPixels(pr.window, &drawable_w, &drawable_h);
@@ -535,6 +595,31 @@ bool make_swapchain() {
     info.presentMode = mode;
     info.clipped = VK_TRUE;
     info.oldSwapchain = pr.swapchain;
+    // Full-screen exclusive (VK_EXT_full_screen_exclusive; exclusive_wanted): the swapchain the game's to take, and
+    // taken. (The structures declared here: vulkan.h has them only with the Win32 platform's headers.)
+    struct {
+        VkStructureType sType;
+        const void *pNext;
+        void *hmonitor;
+    } fse_win32 = {VkStructureType(1000255001), nullptr, nullptr};
+    struct {
+        VkStructureType sType;
+        const void *pNext;
+        int32_t fullScreenExclusive; // 1 allowed, 2 disallowed, 3 application controlled
+    } fse = {VkStructureType(1000255000), nullptr, 0};
+    const int exclusive = exclusive_wanted();
+    if (exclusive != 0) {
+        fse.fullScreenExclusive = exclusive;
+#ifdef _WIN32
+        if (exclusive == 3) {
+            void *hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(pr.window), SDL_PROP_WINDOW_WIN32_HWND_POINTER,
+                                                nullptr);
+            fse_win32.hmonitor = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+            fse.pNext = &fse_win32;
+        }
+#endif
+        info.pNext = &fse;
+    }
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkResult result = vk.vkCreateSwapchainKHR(pr.device, &info, nullptr, &swapchain);
     drop_swapchain_images();
@@ -545,6 +630,21 @@ bool make_swapchain() {
     if (result != VK_SUCCESS) {
         std::fprintf(stderr, "[present] no swapchain (%d)\n", int(result));
         return false;
+    }
+    pr.exclusive_made = exclusive;
+    if (exclusive == 3) {
+        typedef VkResult(VKAPI_PTR * Acquire)(VkDevice, VkSwapchainKHR);
+        Acquire acquire =
+            reinterpret_cast<Acquire>(vk.vkGetDeviceProcAddr(pr.device, "vkAcquireFullScreenExclusiveModeEXT"));
+        VkResult taken = acquire ? acquire(pr.device, swapchain) : VK_ERROR_EXTENSION_NOT_PRESENT;
+        if (taken != VK_SUCCESS) {
+            pr.exclusive_failed = true; // (the swapchain made again without, below; tried again with the focus back)
+            pr.stale = true;
+        }
+        std::fprintf(stderr, "[present] full-screen exclusive %s (%d)\n", taken == VK_SUCCESS ? "taken" : "not taken",
+                     int(taken));
+    } else if (exclusive != 0) {
+        std::fprintf(stderr, "[present] full-screen exclusive %s\n", exclusive == 1 ? "allowed" : "disallowed");
     }
     pr.swapchain = swapchain;
     pr.extent = extent;
@@ -828,6 +928,7 @@ struct Flash {
     uint32_t head = 0, count = 0;
     std::vector<FlashPicture> pictures;
     double megabytes = 0;
+    bool in_system = false; // (its memory the system's, not the GPU's own heap: an integrated GPU's)
     float seconds_made = 0;
     int height_made = 0;
     int hz_made = 0;           // (the pictures a second it was made for: flash_ring_keeps_rate)
@@ -926,9 +1027,29 @@ bool flash_ring(int w, int h) {
     vk.vkGetImageMemoryRequirements(pr.device, fl.image, &req);
     VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     alloc.allocationSize = req.size;
-    int type = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    // (on an integrated GPU, in the system's memory when it can be: the GPU's own heap there is a small carve-out of
+    // the same RAM, 256 MB on a Ryzen 7 7730U with AMD's Windows driver, and the ring, written once a picture and read
+    // only at F8, took a quarter of it from the renderer, whose surfaces then went over Granite's budget)
+    VkPhysicalDeviceProperties gpu_props;
+    vk.vkGetPhysicalDeviceProperties(pr.gpu, &gpu_props);
+    int type = gpu_props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU && !getenv("KF4_FLASH_DEVICE_LOCAL")
+                   ? system_memory_type(req.memoryTypeBits)
+                   : -1;
+    fl.in_system = type >= 0;
+    if (type < 0) {
+        type = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
     alloc.memoryTypeIndex = uint32_t(type < 0 ? memory_type(req.memoryTypeBits, 0) : type);
-    if (vk.vkAllocateMemory(pr.device, &alloc, nullptr, &fl.memory) != VK_SUCCESS) {
+    VkResult allocated = vk.vkAllocateMemory(pr.device, &alloc, nullptr, &fl.memory);
+    if (allocated != VK_SUCCESS && fl.in_system) {
+        // (the system's memory refused: the GPU's own, as before)
+        fl.in_system = false;
+        type = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc.memoryTypeIndex = uint32_t(type < 0 ? memory_type(req.memoryTypeBits, 0) : type);
+        allocated = vk.vkAllocateMemory(pr.device, &alloc, nullptr, &fl.memory);
+    }
+    if (allocated != VK_SUCCESS) {
+        fl.memory = VK_NULL_HANDLE;
         vk.vkDestroyImage(pr.device, fl.image, nullptr);
         fl.image = VK_NULL_HANDLE;
         std::fprintf(stderr, "[present] no GPU memory for the flash recorder's ring (%.0f MB)\n", double(req.size) / 1048576.0);
@@ -944,9 +1065,10 @@ bool flash_ring(int w, int h) {
     fl.megabytes = double(req.size) / 1048576.0;
     fl.pictures.assign(layers, FlashPicture());
     std::fprintf(stderr,
-                 "[present] flash recorder: the last %u pictures kept on the GPU at %u x %u (%.0f MB; at most %.0f MB, "
+                 "[present] flash recorder: the last %u pictures kept %s at %u x %u (%.0f MB; at most %.0f MB, "
                  "for %d a second)\n",
-                 layers, width, height, fl.megabytes, double(fl.most_bytes) / 1048576.0, hz);
+                 layers, fl.in_system ? "in the system's memory" : "on the GPU", width, height, fl.megabytes,
+                 double(fl.most_bytes) / 1048576.0, hz);
     return true;
 }
 
@@ -1605,6 +1727,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
     }
     pr.mode_wanted = wanted_mode();
     if (pr.stale || pr.vsync_made != pr.vsync_wanted || pr.mode_made != pr.mode_wanted ||
+        pr.exclusive_made != exclusive_wanted() ||
         pr.extent.width != uint32_t(drawable_w) ||
         pr.extent.height != uint32_t(drawable_h)) {
         if (!make_swapchain()) {
@@ -1636,7 +1759,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
         skipped_waiting(image, tag);
         return 0;
     }
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == FULL_SCREEN_EXCLUSIVE_LOST) {
         pr.stale = true;
         return 1;
     }
@@ -1952,7 +2075,7 @@ extern "C" int port_vk_present(const uint32_t *pixels, uint32_t width, uint32_t 
         port_zone_end(present_queue_zone);
     }
     port_zone_picture(); // (the frame profiler's frames end here)
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || result == FULL_SCREEN_EXCLUSIVE_LOST) {
         pr.stale = true;
     } else {
         check(result);

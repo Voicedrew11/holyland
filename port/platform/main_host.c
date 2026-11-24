@@ -414,6 +414,7 @@ static void parse_options(int argc, char **argv) {
     port_options.native_wave_uvs = PORT_WAVE_UVS_PS2;
     port_options.native_sky = PORT_SKY_MODERN;
     port_options.reflection_clip = 1;
+    port_options.skip_late_frames = 1;
     port_options.renderer = PORT_RENDERER_SCENE;
     port_options.presenter = PORT_PRESENTER_VULKAN;
     port_options.vu1 = PORT_VU1_HLE; /* the same results as the interpreter, to the bit, in a fifth of the time */

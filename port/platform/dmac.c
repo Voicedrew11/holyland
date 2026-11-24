@@ -40,6 +40,7 @@
 #endif
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "port/host.h"
@@ -584,10 +585,37 @@ void port_dmac_game_sleeps(int sleeps) {
     wake_thread(); /* (spinning again before the game can start a channel) */
 }
 
+/* port_dmac_wait spins this long, then sleeps in WAIT_NAP_SECONDS steps (a high-resolution timer: port_sleep). The
+   game's thread waits here for the GS to take a frame's packets, 10 ms of every 16.7 at map 009 on a Ryzen 7 7730U
+   (2026-11-23): spun, that was a core at full power on a chip whose CPU and GPU share 15 W. KF4_DMA_WAIT_SPIN=1:
+   spun throughout, as before. */
+#define WAIT_SPIN_SECONDS 100e-6
+#define WAIT_NAP_SECONDS 100e-6
+
 void port_dmac_wait(int channel) {
+    static int spin_only = -1;
+    double start = 0;
+    int n = 0;
+
+    if (spin_only < 0) {
+        const char *env = getenv("KF4_DMA_WAIT_SPIN");
+
+        spin_only = env != NULL && env[0] == '1';
+    }
     port_dmac_wake();
     while (__atomic_load_n(chcr[channel], __ATOMIC_ACQUIRE) & CHCR_STR) {
-        cpu_relax();
+        if (spin_only || ++n < 64) {
+            cpu_relax();
+            continue;
+        }
+        n = 0;
+        if (start == 0) {
+            start = port_wall_seconds();
+        } else if (port_wall_seconds() - start > WAIT_SPIN_SECONDS) {
+            port_sleep(WAIT_NAP_SECONDS);
+        } else {
+            cpu_relax();
+        }
     }
 }
 

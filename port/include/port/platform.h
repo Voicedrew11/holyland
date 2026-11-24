@@ -139,6 +139,10 @@ typedef struct {
 #define PORT_FRAME_RATE_UNLOCKED 1000001
 /* the most pictures a vblank the schedule holds (port_interp_schedule, gs.c's room): ~7,670 a second, no cap in practice */
 #define PORT_INTERP_MOST_A_VBLANK 128
+/* port_options.exclusive_fullscreen: auto (AMD's GPUs, the only ones measured), on (any GPU whose driver has it), off */
+#define PORT_EXCLUSIVE_AUTO 0
+#define PORT_EXCLUSIVE_ON 1
+#define PORT_EXCLUSIVE_OFF 2
     int frame_rate;
     int frame_rate_cap; /* --frame-rate-cap (developers', test runs): unlocked no faster than this; 0, none, otherwise */
     /* --tearing or settings.json: unlocked's swapchain immediate (tearing, the least latency; a VRR screen's), not
@@ -223,6 +227,16 @@ typedef struct {
        default; settings.json display.reflection_clip, live from the player menu's Graphics tab */
     int reflection_clip;
     int reflection_clip_forced; /* --reflection-clip: this run's, whatever settings.json says */
+    /* settings.json display.skip_late_frames, from the next start (the player menu's Display tab): above 30 a second,
+       the scene renderer's budget (port/gs/pc/pcr_budget.h) begins each picture between as late as it can and leaves
+       out one it would have late, the picture before shown again. Off: no budget, every picture between made, shown
+       up to a refresh late: steadier on a GPU whose clocks fall when it has less to do (a 7730U's, 2026-11-24), a
+       refresh more of lag. On by default; KF4_SCN_BUDGET=0 / 1 over it. */
+    int skip_late_frames;
+    /* settings.json display.exclusive_fullscreen, live (the player menu's Display tab): PORT_EXCLUSIVE_ (Windows; the
+       swapchain the game's to take while full screen with the focus, VK_EXT_full_screen_exclusive:
+       port/platform/present_vk.cpp's exclusive_wanted). Auto by default; KF4_FSE over it. */
+    int exclusive_fullscreen;
     const char *dump_frames; /* --dump-frames: the vblanks whose picture is written, "N,N,..." */
     const char *dump_dir;    /* --dump-dir: where they go (default: the current directory) */
     const char *saves;       /* --saves: the save folder (port/include/port/save_files.h), or "none" */

@@ -2758,6 +2758,71 @@ public:
     // The device (with the presenter's extensions when present_wanted, on a GPU and queue that can present to
     // make_surface's window when given), and the thread. False without one.
     // hang_folder: where a GPU hang's report goes (pcr_hang_reports_in)
+    // KF4_GPU_PROBE=1: before anything else uses the device, the same fixed work timed on the GPU (40 rounds of a 64 MB
+    // buffer filled, then copied), its first and last rounds said. On a 7730U some runs drew every picture about 1.5
+    // times as slowly as others from their first second to their last, the game's work the same (2026-11-24): this
+    // tells a GPU running slowly (the probe slow too) from the game's own setup (the probe the same).
+    void gpu_probe() {
+        const char *on = getenv("KF4_GPU_PROBE");
+        if (!(on && strcmp(on, "1") == 0)) {
+            return;
+        }
+        gpu_probe_in(BufferDomain::Device, "device");
+        gpu_probe_in(BufferDomain::Host, "host");
+        gpu_probe_in(BufferDomain::CachedHost, "cached host");
+    }
+    void gpu_probe_in(BufferDomain domain, const char *name) {
+        constexpr int ROUNDS = 40;
+        constexpr VkDeviceSize BYTES = VkDeviceSize(64) << 20;
+        BufferCreateInfo info = {};
+        info.domain = domain;
+        info.size = BYTES;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        BufferHandle from = device_->create_buffer(info), to = device_->create_buffer(info);
+        if (!from || !to) {
+            fprintf(stderr, "[gpu probe] no buffers\n");
+            return;
+        }
+        std::vector<QueryPoolHandle> times;
+        CommandBufferHandle cmd = device_->request_command_buffer();
+        for (int i = 0; i < ROUNDS; i++) {
+            times.push_back(cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT));
+            cmd->fill_buffer(*from, uint32_t(i));
+            cmd->barrier(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            times.push_back(cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT));
+            cmd->copy_buffer(*to, *from);
+            cmd->barrier(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        }
+        times.push_back(cmd->write_timestamp(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT));
+        device_->submit(cmd);
+        device_->wait_idle(); // (the frame contexts begun again: the timestamps read)
+        const double ms_a_tick = double(device_->get_gpu_properties().limits.timestampPeriod) * 1e-6;
+        std::vector<double> fill, copy;
+        for (int i = 0; i < ROUNDS; i++) {
+            const QueryPoolHandle &a = times[size_t(2 * i)], &b = times[size_t(2 * i + 1)], &c = times[size_t(2 * i + 2)];
+            if (!a || !b || !c || !a->is_signalled() || !b->is_signalled() || !c->is_signalled()) {
+                fprintf(stderr, "[gpu probe] no timestamps\n");
+                return;
+            }
+            fill.push_back(double(b->get_timestamp_ticks() - a->get_timestamp_ticks()) * ms_a_tick);
+            copy.push_back(double(c->get_timestamp_ticks() - b->get_timestamp_ticks()) * ms_a_tick);
+        }
+        const auto median = [](std::vector<double> v, size_t from, size_t count) {
+            std::vector<double> part(v.begin() + std::ptrdiff_t(from), v.begin() + std::ptrdiff_t(from + count));
+            std::nth_element(part.begin(), part.begin() + std::ptrdiff_t(count / 2), part.end());
+            return part[count / 2];
+        };
+        const double mb = double(BYTES) / double(1 << 20);
+        fprintf(stderr,
+                "[gpu probe] %s: %d rounds of %.0f MB: fill %.3f ms first 5, %.3f ms last 10 (%.1f GB/s); copy %.3f ms first 5, "
+                "%.3f ms last 10 (%.1f GB/s read + written)\n",
+                name, ROUNDS, mb, median(fill, 0, 5), median(fill, ROUNDS - 10, 10),
+                mb / 1024.0 / (median(fill, ROUNDS - 10, 10) * 1e-3), median(copy, 0, 5), median(copy, ROUNDS - 10, 10),
+                2.0 * mb / 1024.0 / (median(copy, ROUNDS - 10, 10) * 1e-3));
+    }
+
     bool open(bool present_wanted, PcrMakeSurface make_surface, const std::string &hang_folder) {
         if (!Context::init_loader(nullptr)) {
             fprintf(stderr, "[pcr] no Vulkan loader\n");
@@ -2778,6 +2843,8 @@ public:
         }
         // a frame context a picture: with four, the thread waits at a picture for the GPU's work of four before
         device_->init_frame_contexts(4);
+        gpu_probe();
+        start_memory_log();
         // the pipelines kept between runs (pcr_pipelines.h): before anything draws, so that every pipeline is made
         // through the cache
         if (!pipeline_cache_path_before_open().empty()) {
@@ -2857,6 +2924,54 @@ public:
             pump_->stop();
         }
         watch_.stop();
+        if (memory_log_.joinable()) {
+            memory_log_stop_.store(true, std::memory_order_release);
+            memory_log_.join();
+        }
+    }
+
+    // KF4_GPU_MEMORY_LOG=FILE: each heap's budget, the driver's usage and Granite's own (MB) four times a second, with
+    // the seconds since the device was made: what of the game's memory the driver keeps where (diagnosis, 2026-11-24)
+    std::thread memory_log_;
+    std::atomic<bool> memory_log_stop_{false};
+    void start_memory_log() {
+        const char *path = getenv("KF4_GPU_MEMORY_LOG");
+        if (!(path && *path)) {
+            return;
+        }
+        FILE *f = fopen(path, "w");
+        if (!f) {
+            return;
+        }
+        VkPhysicalDeviceMemoryProperties props;
+        vkGetPhysicalDeviceMemoryProperties(device_->get_physical_device(), &props);
+        for (uint32_t i = 0; i < props.memoryHeapCount; i++) {
+            fprintf(f, "# heap %u: %.0f MB, flags %x\n", i, double(props.memoryHeaps[i].size) / 1048576.0,
+                    props.memoryHeaps[i].flags);
+        }
+        for (uint32_t i = 0; i < props.memoryTypeCount; i++) {
+            fprintf(f, "# type %u: heap %u, flags %x\n", i, props.memoryTypes[i].heapIndex,
+                    props.memoryTypes[i].propertyFlags);
+        }
+        fprintf(f, "# seconds, then per heap: budget, driver's usage, Granite's (MB)\n");
+        fflush(f);
+        const uint32_t heaps = props.memoryHeapCount;
+        const double start = port_wall_seconds();
+        memory_log_ = std::thread([this, f, heaps, start] {
+            while (!memory_log_stop_.load(std::memory_order_acquire)) {
+                HeapBudget budget[VK_MAX_MEMORY_HEAPS] = {};
+                device_->get_memory_budget(budget);
+                fprintf(f, "%.2f", port_wall_seconds() - start);
+                for (uint32_t i = 0; i < heaps; i++) {
+                    fprintf(f, "  %.0f %.0f %.0f", double(budget[i].budget_size) / 1048576.0,
+                            double(budget[i].device_usage) / 1048576.0, double(budget[i].tracked_usage) / 1048576.0);
+                }
+                fprintf(f, "\n");
+                fflush(f);
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+            fclose(f);
+        });
     }
 
     // vblanks: gs.c's own at a vblank (GifPacket::vblanks)
@@ -3824,10 +3939,12 @@ private:
 
     // KF4_SCN_BUDGET=0: the scene renderer's pictures as before slice 5 (each made as it is taken, gs.c's cut). Only for
     // a window's pictures: never in a run without one or that dumps frames (whose pictures must not depend on time).
+    // (settings.json display.skip_late_frames, port_options.skip_late_frames; KF4_SCN_BUDGET=0 / 1 over it)
     static bool budget_wanted() {
         const char *e = getenv("KF4_SCN_BUDGET");
-        return drawing_maker() != nullptr && !(e && strcmp(e, "0") == 0) && !port_options.headless &&
-               !port_options.fast && !port_options.dump_frames;
+        const bool wanted = e && *e ? strcmp(e, "0") != 0 : port_options.skip_late_frames != 0;
+        return drawing_maker() != nullptr && wanted && !port_options.headless && !port_options.fast &&
+               !port_options.dump_frames;
     }
     // KF4_SCN_REPEAT=0: every vblank's picture made, as before slice 5
     static bool repeat_wanted() {

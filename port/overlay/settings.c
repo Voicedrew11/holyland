@@ -6,7 +6,7 @@
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false, "interlaced_menus": false,
                     "widescreen": false, "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
-                    "adaptive_sync": false,
+                    "adaptive_sync": false, "skip_late_frames": true, "exclusive_fullscreen": "auto",
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "off", "native_lod": "scale",
                     "native_aniso": 1, "native_2d": "smooth", "font": "ps2", "glyphs": "auto",
@@ -108,6 +108,7 @@ PortSettings port_settings = {
     .native_draw = 1, /* on: PORT_ND_ACCEPTED */
     .native_sky = PORT_SKY_PS2,
     .reflection_clip = 1,
+    .skip_late_frames = 1,
 };
 
 /* (the doors' animation: src/game/map_object/door.c, via port/host.h) */
@@ -400,6 +401,13 @@ void port_settings_load(void) {
         }
         s->tearing = read_bool(display, "tearing", s->tearing);
         s->adaptive_sync = read_bool(display, "adaptive_sync", s->adaptive_sync);
+        s->skip_late_frames = read_bool(display, "skip_late_frames", s->skip_late_frames);
+        const char *exclusive = read_string(display, "exclusive_fullscreen");
+        if (exclusive != NULL) {
+            s->exclusive_fullscreen = strcmp(exclusive, "on") == 0    ? PORT_EXCLUSIVE_ON
+                                      : strcmp(exclusive, "off") == 0 ? PORT_EXCLUSIVE_OFF
+                                                                      : PORT_EXCLUSIVE_AUTO;
+        }
     }
     {
         const char *draw_distance = read_string(display, "draw_distance");
@@ -613,6 +621,8 @@ void port_settings_load(void) {
     if (!port_options.adaptive_sync_forced) {
         port_options.adaptive_sync = s->adaptive_sync;
     }
+    port_options.skip_late_frames = s->skip_late_frames;
+    port_options.exclusive_fullscreen = s->exclusive_fullscreen;
     if (!port_options.draw_distance_forced) {
         port_options.draw_distance = s->draw_distance;
     }
@@ -785,6 +795,10 @@ void port_settings_save(void) {
                                                                            : cJSON_CreateNumber(s->frame_rate));
     put(display, "tearing", cJSON_CreateBool(s->tearing));
     put(display, "adaptive_sync", cJSON_CreateBool(s->adaptive_sync));
+    put(display, "skip_late_frames", cJSON_CreateBool(s->skip_late_frames));
+    put(display, "exclusive_fullscreen", cJSON_CreateString(s->exclusive_fullscreen == PORT_EXCLUSIVE_ON    ? "on"
+                                                            : s->exclusive_fullscreen == PORT_EXCLUSIVE_OFF ? "off"
+                                                                                                            : "auto"));
     put(display, "draw_distance", cJSON_CreateString(port_draw_distance_name(s->draw_distance)));
     put(display, "draw_distance_sky", cJSON_CreateString(s->draw_distance_sky ? "push" : "ps2"));
     put(display, "native_scale", s->native_scale >= 1 ? cJSON_CreateNumber(s->native_scale) : cJSON_CreateString("auto"));
