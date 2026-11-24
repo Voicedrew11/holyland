@@ -127,6 +127,7 @@ struct GpuTexture {
     ImageHandle image;
     uint32_t levels = 1;
     uint64_t used = 0;
+    uint64_t bytes = 0; // (its image's texels, every level: what the cache's budget counts)
 };
 
 struct SampledTexture {
@@ -139,6 +140,7 @@ struct SampledTexture {
     uint32_t finer = 1; // (the image this many times the texture's texels across and down: finer_pictures.h)
     uint64_t finer_asked = 0; // (what was asked to be finer, where it may be a finer picture: FinerAsked::hash)
     uint64_t used = 0;
+    uint64_t bytes = 0; // (its image's texels, every level: what the cache's budget counts)
     uint8_t alpha_lo = 0, alpha_hi = 255;
     bool made_from(const TextureKey &k, uint64_t t, const std::array<uint32_t, 256> &c, uint64_t asked) const {
         return key == k && texa == t && clut == c && finer_asked == asked;
@@ -540,6 +542,7 @@ public:
         depth_.clear();
         textures_.clear();
         sampled_.clear();
+        texture_bytes_ = 0;
         target_copies_.clear();
         clut_serial_++;
         store_events_++;
@@ -2009,6 +2012,11 @@ public:
                 (unsigned long long)counts_.unsupported_blends, (unsigned long long)counts_.unsupported_texture_on_target,
                 (unsigned long long)counts_.unsupported_copies, (unsigned long long)counts_.unsupported_uploads,
                 (unsigned long long)counts_.unsupported_read_backs, (unsigned long long)counts_.uploads_again_passed);
+        fprintf(stderr,
+                "[stats] scene renderer kept textures: %.1f MiB at most (%.1f MiB now, budget %llu MiB), %llu let go of "
+                "for size\n",
+                double(counts_.texture_bytes_peak) / double(1 << 20), double(texture_bytes_) / double(1 << 20),
+                (unsigned long long)(texture_budget >> 20), (unsigned long long)counts_.textures_let_go_for_size);
         fprintf(stderr,
                 "[stats] scene renderer layers: clears %llu held back: %llu load ops, %llu in a pass, %llu alone, %llu "
                 "dead; %llu alpha resets folded into the frame's clear; layers %llu kept: %llu drawn into the target, "
@@ -3896,11 +3904,17 @@ private:
             return nullptr;
         }
         counts_.textures_uploaded++;
+        uint64_t bytes = 0;
+        for (uint32_t l = 0; l < d.levels; l++) {
+            bytes += uint64_t(d.level_width(l)) * d.level_height(l) * (index ? 1 : 4);
+        }
         GpuTexture &t = textures_[h];
+        kept_texture(t.bytes, bytes); // (t.bytes: an entry of the same hash made from other texels, replaced)
         t.key = a.key;
         t.image = image;
         t.levels = d.levels;
         t.used = frame_;
+        t.bytes = bytes;
         return &t;
     }
 
@@ -3980,7 +3994,13 @@ private:
             return nullptr;
         }
         counts_.textures_uploaded++;
+        uint64_t bytes = 0;
+        for (const ImageInitialData &level : data) {
+            bytes += uint64_t(level.row_length) * level.image_height * 4;
+        }
         SampledTexture &t = sampled_[h];
+        kept_texture(t.bytes, bytes); // (t.bytes: an entry of the same hash made from other texels, replaced)
+        t.bytes = bytes;
         t.key = a.key;
         t.texa = texa;
         t.clut = clut.rgba;
@@ -4204,16 +4224,74 @@ private:
     };
     std::unordered_map<uint64_t, TargetCopy> target_copies_;
 
+    // The textures kept for their next use: let go of those unused for 120 game frames once there are 4096 of a kind,
+    // and of the least recently used while all of them hold more than texture_budget. Without the budget a movie
+    // filled the GPU's memory: each of its pictures is a texture of its own, used once (issue 259: 7.2 GB on a Vega 7 with
+    // 256 MB of its own, then the whole PC hung). A draw's material holds its own image, so a texture let go of here
+    // is still drawn by the scenes that use it; it is made again only if a later frame asks for it.
+    static constexpr uint64_t texture_budget = 256ull << 20;
+
+    void kept_texture(uint64_t replaced_bytes, uint64_t bytes) {
+        texture_bytes_ = texture_bytes_ - replaced_bytes + bytes;
+        counts_.texture_bytes_peak = std::max(counts_.texture_bytes_peak, texture_bytes_);
+    }
+
     void evict_textures() {
         if (textures_.size() >= 4096) {
             for (auto it = textures_.begin(); it != textures_.end();) {
-                it = frame_ - it->second.used > 120 ? textures_.erase(it) : std::next(it);
+                if (frame_ - it->second.used > 120) {
+                    texture_bytes_ -= it->second.bytes;
+                    it = textures_.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
         if (sampled_.size() >= 4096) {
             for (auto it = sampled_.begin(); it != sampled_.end();) {
-                it = frame_ - it->second.used > 120 ? sampled_.erase(it) : std::next(it);
+                if (frame_ - it->second.used > 120) {
+                    texture_bytes_ -= it->second.bytes;
+                    it = sampled_.erase(it);
+                } else {
+                    ++it;
+                }
             }
+        }
+        if (texture_bytes_ <= texture_budget) {
+            return;
+        }
+        // (down to three quarters of the budget, so that this walk is not made again at the next frame; never a
+        // texture of the frame just drawn, which the pictures between it and the next may still look up)
+        struct Old {
+            uint64_t used, hash;
+            bool sampled;
+        };
+        std::vector<Old> olds;
+        for (const auto &[h, t] : textures_) {
+            if (t.used + 1 < frame_) {
+                olds.push_back({t.used, h, false});
+            }
+        }
+        for (const auto &[h, t] : sampled_) {
+            if (t.used + 1 < frame_) {
+                olds.push_back({t.used, h, true});
+            }
+        }
+        std::sort(olds.begin(), olds.end(), [](const Old &a, const Old &b) { return a.used < b.used; });
+        for (const Old &o : olds) {
+            if (texture_bytes_ <= texture_budget / 4 * 3) {
+                break;
+            }
+            if (o.sampled) {
+                auto it = sampled_.find(o.hash);
+                texture_bytes_ -= it->second.bytes;
+                sampled_.erase(it);
+            } else {
+                auto it = textures_.find(o.hash);
+                texture_bytes_ -= it->second.bytes;
+                textures_.erase(it);
+            }
+            counts_.textures_let_go_for_size++;
         }
     }
 
@@ -5420,6 +5498,7 @@ private:
     std::vector<std::unique_ptr<Target>> colour_, depth_;
     std::unordered_map<uint64_t, GpuTexture> textures_;
     std::unordered_map<uint64_t, SampledTexture> sampled_;
+    uint64_t texture_bytes_ = 0; // (what textures_ and sampled_ hold: evict_textures keeps it to texture_budget)
     std::unordered_map<uint32_t, SamplerHandle> samplers_;
     std::unordered_map<uint32_t, SamplerHandle> gpu_levels_samplers_; // (gpu_levels_sampler's)
     Batch batch_;
@@ -5516,6 +5595,7 @@ private:
                  copies_between_targets = 0, depth_aliases_cleared = 0;
         uint64_t textures_uploaded = 0, textures_sampled = 0, textures_from_targets = 0, textures_missing = 0,
                  textures_reused = 0, finer_pictures = 0;
+        uint64_t texture_bytes_peak = 0, textures_let_go_for_size = 0; // (evict_textures)
         uint64_t textures_gpu_levels = 0; // (of textures_sampled: read at the GPU's own level, gpu_levels_for)
         uint64_t shader_blends = 0, read_backs = 0;
         uint64_t fuse_firsts = 0, fused = 0, fused_same = 0; // (slice 3d: first passes, pairs drawn as one, of them the
