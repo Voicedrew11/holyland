@@ -5,7 +5,9 @@
      the magic button), and five hotkeys hold an item or a spell each; the hotkey in use is the game's own
      shortcut (PlayerState.shortcut, used with Select).
    - One press swaps the weapon (1, R; the d-pad's Right in play), one the spell (2; d-pad Left), one steps to
-     the next hotkey that holds something (3; d-pad Down, Up the previous). Rebindable.
+     the next hotkey that holds something (3; d-pad Down, Up the previous). Rebindable. A hand's slot may be
+     empty and is swapped to like any other: the bare fist in the right hand, no spell in the left (the rows'
+     own empty entries, put in a slot with the "Put in" box; a slot with nothing yet is empty too).
    - The shield is worn, not used, so it has no slot: a two-handed weapon or a bow puts it away, and the
      swap back to a one-handed weapon puts it on again.
    - On the equipment screen Cross on an item of the Weapon, Magic or Shortcut row opens a "Put in" box of

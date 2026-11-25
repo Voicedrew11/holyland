@@ -117,7 +117,8 @@ typedef struct {
     MenuItemList *row;                         /* its row of the equipment screen */
     int (*held)(void);                         /* the value the game holds */
     int (*kept)(int value);                    /* may stay in a slot (owned, learned) */
-    int (*usable)(int value);                  /* may be swapped to (kept, and not empty) */
+    int (*usable)(int value);                  /* may be swapped to: for the hands, empty too (the bare hand, no
+                                                  spell); for the hotkeys, not empty */
     MenuItem *(*entry)(int value);             /* its item of the row's ring of entries */
     int (*value_of)(const MenuItem *item);     /* the value of an item of the row */
     void (*put_in_hand)(int value);            /* the game holds it, as its menu would have equipped it */
@@ -127,9 +128,6 @@ static int weapon_held(void) {
     return player_state.weapon;
 }
 
-static int weapon_usable(int weapon) {
-    return weapon != 0 && weapon_owned(weapon);
-}
 
 static MenuItem *weapon_entry(int weapon) {
     return &weapon_entries[weapon];
@@ -148,13 +146,28 @@ static void cap_hp_mp(void) {
     }
 }
 
+/* The menu's closing (GameLoop_OpenRequestedMenu): a weapon with magic of its own charges it (not a bow) */
+static void charge_weapon_magic(int weapon) {
+    PlayerItemDef *def = &weapon_defs[weapon];
+
+    if (def->action_handler_index == 2) {
+        return;
+    }
+    if (def->first_magic_id != 0xFFFF) {
+        player_state.magic_gauge = 0;
+        player_state.charging_magic = def->first_magic_id;
+    } else if (def->second_magic_id != 0xFFFF && weapon_level_records[weapon].level_index + 1 == 3) {
+        player_state.magic_gauge = 0;
+        player_state.charging_magic = def->second_magic_id;
+    }
+}
+
 /* The equipment screen's Cross on a weapon (Menu_UpdateEquip), the shield put away or back on, and the menu's
    closing (GameLoop_OpenRequestedMenu): the arm models, the strength gauge emptied, the weapon's magic
    charged */
 static void weapon_put_in_hand(int weapon) {
     int old = player_state.weapon;
     int *away = &port_hands_state.shield_away;
-    PlayerItemDef *def;
 
     player_state.weapon = weapon;
     if (!one_handed(weapon) && player_state.equipment[EQUIP_SHIELD] != ITEM_WORN_INDEX(ITEM_SHIELD_NONE)) {
@@ -172,17 +185,7 @@ static void weapon_put_in_hand(int weapon) {
         return;
     }
     player_state.power_gauge = 0;
-    def = &weapon_defs[weapon];
-    if (def->action_handler_index == 2) {
-        return;
-    }
-    if (def->first_magic_id != 0xFFFF) {
-        player_state.magic_gauge = 0;
-        player_state.charging_magic = def->first_magic_id;
-    } else if (def->second_magic_id != 0xFFFF && weapon_level_records[weapon].level_index + 1 == 3) {
-        player_state.magic_gauge = 0;
-        player_state.charging_magic = def->second_magic_id;
-    }
+    charge_weapon_magic(weapon);
 }
 
 static int spell_held(void) {
@@ -193,9 +196,6 @@ static int spell_kept(int spell) {
     return spell == 0 || battle_spell(spell);
 }
 
-static int spell_usable(int spell) {
-    return battle_spell(spell);
-}
 
 static MenuItem *spell_entry(int spell) {
     return &spell_entries[spell];
@@ -205,11 +205,21 @@ static int spell_value(const MenuItem *item) {
     return item->item_number;
 }
 
-/* the menu's closing (GameLoop_OpenRequestedMenu): the new spell charges from empty */
+/* the menu's closing (GameLoop_OpenRequestedMenu): the new spell charges from empty. The left hand emptied
+   charges what charges with no spell: the hotkey's spell, else the weapon's own magic. */
 static void spell_put_in_hand(int spell) {
     player_state.equipped_magic = spell;
-    player_state.charging_magic = spell;
-    player_state.magic_gauge = 0;
+    if (spell != 0) {
+        player_state.charging_magic = spell;
+        player_state.magic_gauge = 0;
+        return;
+    }
+    if (player_state.shortcut_type == HOTKEY_SPELL) {
+        player_state.magic_gauge = 0;
+        player_state.charging_magic = player_state.shortcut;
+        return;
+    }
+    charge_weapon_magic(player_state.weapon);
 }
 
 static int hotkey_held(void) {
@@ -263,9 +273,9 @@ static void hotkey_put_in_hand(int value) {
 }
 
 static const HandRules rules[HAND_COUNT] = {
-    [HAND_WEAPON] = {"weapon", &equip_weapon_list, weapon_held, weapon_owned, weapon_usable, weapon_entry, weapon_value,
+    [HAND_WEAPON] = {"weapon", &equip_weapon_list, weapon_held, weapon_owned, weapon_owned, weapon_entry, weapon_value,
                      weapon_put_in_hand},
-    [HAND_SPELL] = {"spell", &equip_spell_list, spell_held, spell_kept, spell_usable, spell_entry, spell_value,
+    [HAND_SPELL] = {"spell", &equip_spell_list, spell_held, spell_kept, spell_kept, spell_entry, spell_value,
                     spell_put_in_hand},
     [HAND_HOTKEY] = {"hotkey", &equip_shortcut_list, hotkey_held, hotkey_kept, hotkey_usable, hotkey_entry, hotkey_value,
                      hotkey_put_in_hand},
@@ -432,8 +442,8 @@ static int take(HandsKey key, unsigned long long pressed) {
         return 1;
     }
     slot = hand_next_slot(&port_hands_state.hands[kind], kind, key == HANDS_KEY_HOTKEY_PREVIOUS ? -1 : 1, usable_in, NULL);
-    if (slot < 0) {
-        refuse(kind, "no other slot holds anything");
+    if (slot < 0 || port_hands_state.hands[kind].slots[slot] == rules[kind].held()) {
+        refuse(kind, "no other slot holds anything else");
         return 1;
     }
     change(kind, slot);
