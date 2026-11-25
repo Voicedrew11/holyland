@@ -35,7 +35,8 @@ extern "C" {
 
 /* The main thread, at start, before any other thread (it writes the process's environment): lets the Vulkan loader
    find the layers built with the game beside it, the one that adds VK_KHR_synchronization2 to a driver without it
-   (pcr_sync2.h). Before pcr_open. */
+   (pcr_sync2.h), and turns off a system layer that stops the program (AMD's switchable graphics on Windows). Before
+   pcr_open. */
 void pcr_find_vulkan_layers(void);
 /* Opening: shared_context must be NULL (the PC renderer runs on a device of its own). 0 without a Vulkan
    device it can use. pcr_enable_present, before: the presenter's surface and swapchain extensions. */

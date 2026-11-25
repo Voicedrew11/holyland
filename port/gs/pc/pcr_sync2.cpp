@@ -169,7 +169,30 @@ Vulkan::InstanceFactory &layer_instance_factory() {
 
 } // namespace pcr::sync2
 
+namespace {
+
+// AMD's switchable graphics layer (VK_LAYER_AMD_switchable_graphics, an implicit layer AMD's Windows driver installs on
+// a computer with an AMD GPU and another one, as on laptops with a Ryzen and an NVIDIA card) hands the game a GPU the
+// Vulkan loader does not know: the loader stops the program at the first question about it ("vkGetPhysicalDeviceProperties:
+// Invalid physicalDevice", then a fast fail 0xC0000409; issue 268). The layer has its own variable that turns it off,
+// set here unless the player set it. The GPU is then chosen by the loader's order and Granite's (a discrete GPU first).
+void turn_off_broken_layers() {
+#ifdef _WIN32
+    const wchar_t *variable = L"DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1";
+    if (GetEnvironmentVariableW(variable, nullptr, 0) > 0) {
+        return;
+    }
+    if (!SetEnvironmentVariableW(variable, L"1")) {
+        fprintf(stderr, "[pcr] could not turn off AMD's switchable graphics layer (error %lu)\n",
+                static_cast<unsigned long>(GetLastError()));
+    }
+#endif
+}
+
+} // namespace
+
 // (pcr.h) The main thread, at start
 extern "C" void pcr_find_vulkan_layers(void) {
+    turn_off_broken_layers();
     pcr::sync2::let_loader_find_layer();
 }
