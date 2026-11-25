@@ -8,6 +8,8 @@
 [![Downloads](https://img.shields.io/github/downloads/Voicedrew11/holyland/total)](https://github.com/Voicedrew11/holyland/releases)
 [![Discord](https://img.shields.io/discord/1553561882843947149?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/R4EKCs8RWH)
 
+<a href="https://recomplauncher.com/game/holyland"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 Holyland is a native PC port of King's Field: The Ancient City (*King's Field IV*), built from the [kfiv-decomp](https://github.com/Voicedrew11/kfiv-decomp) decompilation of the PlayStation 2 game.
 
 ## Features

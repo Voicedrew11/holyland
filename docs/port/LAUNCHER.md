@@ -271,6 +271,23 @@ AppImage, the Windows zip, the installer) is in a zip locked with the `PREVIEW_P
 - `preview-cleanup.yml` deletes the preview when a release is published.
 - Change the password: `gh secret set PREVIEW_PASSWORD`, then a new preview.
 
+## RecompLauncher
+
+[RecompLauncher](https://github.com/elripalda/RecompLauncher) installs, sets up and starts Holyland from its
+releases, by `recomplauncher.json` (its guide: that repository's `docs/DEVELOPERS.md`). The file is at the top of
+the repository; `build-appimage.sh` puts it at the AppImage's root and `build-windows.sh` beside `holyland.exe`
+(and `payload.sh` leaves it out of `content/src`, so editing it never changes the build key).
+
+- The player's disc: `check.ids` (the disc's serial; a `.chd` is taken because the label names it) and the Redump
+  dump of the USA disc for the verified badge (Redump disc 27994: 3464921088 bytes, CRC-32 `879215a7`).
+- Its setup step runs `holyland --prepare`: `--build-only` with `progress 0.40 TEXT` lines on stdout.
+- Play runs `holyland --disc <the disc>`, with `KF4_DATA_DIR` at RecompLauncher's `{data}` and `KF4_BUILDS_DIR` at
+  `{data}/cache/builds` (its backups leave `cache` out). A player's own `~/.local/share/holyland` is not used there.
+- RecompLauncher sets `RECOMPLAUNCHER=1` in every game it starts and installs the releases itself, so then the
+  launcher asks GitHub nothing and the game offers no update (`update_left_to_recomplauncher`).
+- Its game page shows Fullscreen, Frame Rate, Vertical Sync, Widescreen and Anti-Aliasing, written into
+  `settings.json` (`display/...`). Renaming one of those keys means changing the file too.
+
 ## Not done
 
 - macOS, iOS, Android (see Platforms).

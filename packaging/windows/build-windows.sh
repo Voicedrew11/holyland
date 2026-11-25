@@ -4,6 +4,7 @@
 #
 #   <APP_ID>.exe, SDL3.dll     the launcher (built here with the release's own llvm-mingw)
 #   content\                   the game's source, the tools, manifest.txt
+#   recomplauncher.json        how RecompLauncher sets the game up and starts it (docs/port/LAUNCHER.md)
 #
 # Runs in Git Bash on Windows (the release workflow), or on Linux with LLVM_MINGW pointing at llvm-mingw's
 # Linux build to cross-compile the launcher (no installer there). The game's tree
@@ -48,6 +49,7 @@ esac
 cp "$B/$APP_ID.exe" "$STAGE/"
 cp "$T/SDL3/x86_64-w64-mingw32/bin/SDL3.dll" "$STAGE/"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE.txt"
+cp "$ROOT/recomplauncher.json" "$STAGE/"
 "$ROOT/packaging/manifest.sh" "$CONTENT"
 
 # One past date on every file. A zip keeps local times with no time zone and Windows' own "Extract all" reads them

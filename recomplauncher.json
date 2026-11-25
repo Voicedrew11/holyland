@@ -1,0 +1,102 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Holyland",
+  "repo": "Voicedrew11/holyland",
+  "inputs": [
+    {
+      "id": "game",
+      "role": "game",
+      "label": "Your King's Field: The Ancient City disc, the USA release (SLUS-20318): an .iso or .chd image, or the disc's files in a folder.",
+      "formats": [{ "type": "file", "extensions": ["iso", "chd"] }, { "type": "folder" }],
+      "check": { "ids": ["SLUS-20318"] },
+      "dumps": [{ "name": "USA", "size": 3464921088, "crc32": "879215a7" }]
+    }
+  ],
+  "start": {
+    "program": ["holyland.exe", "Holyland-x86_64.AppImage"],
+    "args": ["--disc", "{input:game}"],
+    "env": { "KF4_DATA_DIR": "{data}", "KF4_BUILDS_DIR": "{data}/cache/builds" }
+  },
+  "prepare": {
+    "program": ["holyland.exe", "Holyland-x86_64.AppImage"],
+    "args": ["--prepare"],
+    "label": "Building the game on your PC from this release's source",
+    "env": { "KF4_DATA_DIR": "{data}", "KF4_BUILDS_DIR": "{data}/cache/builds" }
+  },
+  "saves": ["{data}/saves", "{data}/quicksaves"],
+  "folders": {
+    "saves": [{ "path": "{data}/saves" }],
+    "logs": [{ "path": "{data}" }]
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "json",
+      "file": [{ "path": "{data}/settings.json" }]
+    }
+  ],
+  "settings": [
+    {
+      "id": "fullscreen", "label": "Fullscreen", "group": "Display",
+      "help": "Borderless, at the screen's resolution. F11 also switches it.",
+      "choices": [
+        { "label": "Off", "set": { "display/fullscreen": "false" } },
+        { "label": "On", "set": { "display/fullscreen": "true" } }
+      ],
+      "defaults": { "display/fullscreen": "false" }
+    },
+    {
+      "id": "frame_rate", "label": "Frame Rate", "group": "Display",
+      "help": "30 FPS is the original. Higher rates add interpolated frames; game logic stays at 30 FPS.",
+      "choices": [
+        { "label": "30", "set": { "display/frame_rate": "30" } },
+        { "label": "60", "set": { "display/frame_rate": "60" } },
+        { "label": "120", "set": { "display/frame_rate": "120" } },
+        { "label": "144", "set": { "display/frame_rate": "144" } },
+        { "label": "165", "set": { "display/frame_rate": "165" } },
+        { "label": "240", "set": { "display/frame_rate": "240" } },
+        { "label": "Refresh Rate", "set": { "display/frame_rate": "\"monitor\"" } },
+        { "label": "Unlocked", "set": { "display/frame_rate": "\"unlocked\"" } }
+      ],
+      "defaults": { "display/frame_rate": "30" }
+    },
+    {
+      "id": "sync", "label": "Vertical Sync", "group": "Display",
+      "help": "Off can tear. On waits for the screen's refresh. Adaptive is FreeSync or G-Sync, which must be on in your system's display settings too.",
+      "choices": [
+        { "label": "Off", "set": { "display/vsync": "false", "display/tearing": "true", "display/adaptive_sync": "false" } },
+        { "label": "On", "set": { "display/vsync": "true", "display/tearing": "false", "display/adaptive_sync": "false" } },
+        { "label": "Adaptive", "set": { "display/adaptive_sync": "true" } }
+      ],
+      "defaults": { "display/vsync": "false", "display/tearing": "false", "display/adaptive_sync": "false" }
+    },
+    {
+      "id": "widescreen", "label": "Widescreen", "group": "Graphics",
+      "help": "16:9 view. Menus and messages stay 4:3.",
+      "choices": [
+        { "label": "Off", "set": { "display/widescreen": "false" } },
+        { "label": "On", "set": { "display/widescreen": "true" } }
+      ],
+      "defaults": { "display/widescreen": "false" }
+    },
+    {
+      "id": "antialias", "label": "Anti-Aliasing", "group": "Graphics",
+      "help": "FXAA is fastest and slightly soft. SMAA is sharper. SMAA T2x has less shimmer in motion.",
+      "choices": [
+        { "label": "Off", "set": { "display/antialias": "\"off\"" } },
+        { "label": "FXAA", "set": { "display/antialias": "\"fxaa\"" } },
+        { "label": "SMAA", "set": { "display/antialias": "\"smaa\"" } },
+        { "label": "SMAA T2x", "set": { "display/antialias": "\"smaa_t2x\"" } }
+      ],
+      "defaults": { "display/antialias": "\"off\"" }
+    }
+  ],
+  "actions": [
+    { "id": "saves", "label": "Saves", "help": "Your saves.", "open": "saves" }
+  ],
+  "system": {
+    "windows": { "version": "10", "graphics": { "vulkan": "1.2" } },
+    "linux": { "glibc": "2.35", "graphics": { "vulkan": "1.2" } }
+  }
+}
