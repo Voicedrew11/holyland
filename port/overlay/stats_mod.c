@@ -6,18 +6,29 @@
      "extended_stats_panel": true,         the stats panel, on its key (F6)
      "extended_stats_damage": true,        the hit log and the target's health bar
      "extended_stats_durability": true,    the equipment's wear (the menus and the panel)
-     "extended_stats_timers": true         the ailments and timed effects running, on screen by the minimap
+     "extended_stats_timers": true,        the ailments and timed effects running, on screen by the minimap
+     "extended_stats_bar_place": "top"     where the target's health bar is: "top", "top_left" (under the HUD),
+                                           "top_right" or "bottom"
 
    "extended_stats_status_screen" (the panel opening with the Status screen, which the menus' lines
    replaced) is no longer read, and is taken out of the file when it is written.
 
    The parts only count while the mod is on; off, nothing of it is drawn, and it never changes the game. */
 #include <stdio.h>
+#include <string.h>
 
 #include "cJSON.h"
 #include "port/stats.h"
 
-PortStatsOptions port_stats_options = {0, 0, 1, 1, 1, 1, 1}; /* on, forced, menus, panel, damage, durability, timers */
+PortStatsOptions port_stats_options = {0, 0, 1, 1, 1, 1, 1, PORT_STATS_BAR_TOP}; /* on, forced, menus, panel, damage,
+                                                                                  durability, timers, bar_place */
+
+const char *const port_stats_bar_place_names[PORT_STATS_BAR_PLACE_COUNT] = {
+    [PORT_STATS_BAR_TOP] = "top",
+    [PORT_STATS_BAR_TOP_LEFT] = "top_left",
+    [PORT_STATS_BAR_TOP_RIGHT] = "top_right",
+    [PORT_STATS_BAR_BOTTOM] = "bottom",
+};
 
 static int panel_open;
 /* What the player chose (settings.json, the player menu's Interface tab); --extended-stats leaves it as it was */
@@ -47,6 +58,21 @@ static int read_bool(const cJSON *mods, const char *key, int fallback) {
     return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
 }
 
+static void read_bar_place(const cJSON *mods, PortStatsBarPlace *place) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(mods, "extended_stats_bar_place");
+    int i;
+
+    if (!cJSON_IsString(item)) {
+        return;
+    }
+    for (i = 0; i < PORT_STATS_BAR_PLACE_COUNT; i++) {
+        if (strcmp(item->valuestring, port_stats_bar_place_names[i]) == 0) {
+            *place = (PortStatsBarPlace)i;
+            return;
+        }
+    }
+}
+
 void port_stats_settings_read(const void *mods_json) {
     const cJSON *mods = (const cJSON *)mods_json;
     PortStatsOptions *o = &port_stats_options;
@@ -60,16 +86,20 @@ void port_stats_settings_read(const void *mods_json) {
     o->damage = read_bool(mods, "extended_stats_damage", o->damage);
     o->durability = read_bool(mods, "extended_stats_durability", o->durability);
     o->timers = read_bool(mods, "extended_stats_timers", o->timers);
+    read_bar_place(mods, &o->bar_place);
 }
 
-static void put(cJSON *mods, const char *key, int value) {
-    cJSON *item = cJSON_CreateBool(value);
+static void put_item(cJSON *mods, const char *key, cJSON *item) {
 
     if (cJSON_GetObjectItemCaseSensitive(mods, key) != NULL) {
         cJSON_ReplaceItemInObjectCaseSensitive(mods, key, item);
     } else {
         cJSON_AddItemToObject(mods, key, item);
     }
+}
+
+static void put(cJSON *mods, const char *key, int value) {
+    put_item(mods, key, cJSON_CreateBool(value));
 }
 
 void port_stats_settings_write(void *mods_json) {
@@ -83,4 +113,5 @@ void port_stats_settings_write(void *mods_json) {
     put(mods, "extended_stats_damage", o->damage);
     put(mods, "extended_stats_durability", o->durability);
     put(mods, "extended_stats_timers", o->timers);
+    put_item(mods, "extended_stats_bar_place", cJSON_CreateString(port_stats_bar_place_names[o->bar_place]));
 }

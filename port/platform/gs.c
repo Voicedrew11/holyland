@@ -454,6 +454,10 @@ int port_widescreen(void) {
     return port_options.widescreen;
 }
 
+int port_widescreen_hud_at_edge(void) {
+    return port_options.widescreen && !port_options.widescreen_hud_centred;
+}
+
 int port_sharp_font(void) {
     return port_options.font == 1; /* GSN_FONT_SHARP */
 }

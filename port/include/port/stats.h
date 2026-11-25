@@ -7,9 +7,11 @@
    - game/stats.c (built with the game code) reads the game's state into a PortStatsSnapshot and
      watches the hits (port_stats_track, once a vblank, on the game's thread);
    - port/overlay/stats_mod.c keeps the switches and their settings.json keys;
-   - port/overlay/stats_panel.cpp draws the lines it adds to the game's own menus, the panel, the hit
-     log and the target's health bar with Dear ImGui (its switches are rows of the player menu's Interface tab);
-     port/overlay/stats_timers.cpp the ailments and timed effects running, by the minimap. */
+   - port/overlay/stats_panel.cpp draws the lines it adds to the game's own menus, the panel and the hit
+     log with Dear ImGui (its switches are rows of the player menu's Interface tab);
+     port/overlay/stats_timers.cpp the ailments and timed effects running, by the minimap;
+   - game/stats_bar.c draws the health bar of the creature last hit with the game's own HUD pictures, after
+     the HUD (Hud_Draw), where the player chose (PortStatsBarPlace). */
 #ifndef PORT_STATS_H
 #define PORT_STATS_H
 
@@ -18,6 +20,17 @@ extern "C" {
 #endif
 
 /* ---- The switches (port/overlay/stats_mod.c) ------------------------------------------------- */
+/* where the health bar of the creature last hit is ("extended_stats_bar_place") */
+typedef enum {
+    PORT_STATS_BAR_TOP,          /* the top middle */
+    PORT_STATS_BAR_TOP_LEFT,     /* under the HUD */
+    PORT_STATS_BAR_TOP_RIGHT,
+    PORT_STATS_BAR_BOTTOM,       /* the bottom middle */
+    PORT_STATS_BAR_PLACE_COUNT
+} PortStatsBarPlace;
+/* their names in settings.json, by PortStatsBarPlace */
+extern const char *const port_stats_bar_place_names[PORT_STATS_BAR_PLACE_COUNT];
+
 typedef struct {
     int on;            /* the mod as a whole ("extended_stats") */
     int forced;        /* --extended-stats: on for this run whatever settings.json says */
@@ -27,6 +40,7 @@ typedef struct {
     int durability;    /* the equipment's wear in the panel ("extended_stats_durability") */
     int timers;        /* the ailments and timed effects running, on screen by the minimap
                           ("extended_stats_timers") */
+    PortStatsBarPlace bar_place; /* where the target's health bar is (part of `damage`) */
 } PortStatsOptions;
 extern PortStatsOptions port_stats_options;
 

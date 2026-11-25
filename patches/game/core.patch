@@ -894,7 +894,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011eee1b95e32 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..01248fe403537ffa4097e74087a3a9753b56f968 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -9,6 +9,7 @@
@@ -984,7 +984,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
  void Packet_BeginGsRegisters(void);
  void Packet_AddGsRegister(int, s64);
  void Packet_EndGsRegisters(void);
-@@ -153,20 +148,40 @@ void GsDraw_QueueTexturedSprite(void *);
+@@ -153,20 +148,41 @@ void GsDraw_QueueTexturedSprite(void *);
  void PlayTime_Update(void);
  void Input_PauseRumble(void);
  void Input_ResumeRumble(void);
@@ -998,6 +998,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
 +void FrameInterp_EndWorld(void); /* PC: */
 +void FrameInterp_BeginArm(void); /* PC: */
 +void Hands_DrawCross(void); /* PC: the hands mod's cross (game/hands_cross.c) */
++void StatsBar_Draw(void); /* PC: the extended stats' enemy health bar (game/stats_bar.c) */
 +int NativeDraw_Brightness(int); /* PC: --native-draw passes (game/native_draw/nd_passes.c) */
 +int NativeDraw_TintScreen(int, int, int); /* PC: */
 +int NativeDraw_FillScreen(int, int, int, int, s64); /* PC: */
@@ -1029,7 +1030,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
  extern MapDrawStateOverlays map_draw_state;
  extern int message_dim_alpha;
  extern int current_map_slot;
-@@ -237,6 +252,7 @@ void GameLoop_Run(int arg) {
+@@ -237,6 +253,7 @@ void GameLoop_Run(int arg) {
          save_loaded = 0;
          PlayTime_Resume(save_play_time[0]);
          Game_StartFadeIn(0, 0, 0, 0x1E);
@@ -1037,7 +1038,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      }
      map_load_state.flags.raw |= 1;
      Packet_SwapBuffers();
-@@ -250,6 +266,9 @@ void GameLoop_Run(int arg) {
+@@ -250,6 +267,9 @@ void GameLoop_Run(int arg) {
          Timer_Restart();
          if (!(game_status.bit12 && game_status.bit13)) {
              Packet_SendChain();
@@ -1047,7 +1048,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
              Timer_GetTicks();
              Packet_SwapBuffers();
              DrawList_Clear();
-@@ -290,6 +309,7 @@ void GameLoop_Run(int arg) {
+@@ -290,6 +310,7 @@ void GameLoop_Run(int arg) {
          Splash_Update();
          ItemEffect_Update();
          GameLoop_UpdateCamera();
@@ -1055,7 +1056,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
          GameLoop_SetCameraMatrices(0, 0);
          GsDraw_QueueVu1Matrix(world_screen_matrix);
          WeaponTrail_Update();
-@@ -302,11 +322,12 @@ void GameLoop_Run(int arg) {
+@@ -302,11 +323,12 @@ void GameLoop_Run(int arg) {
          GameLoop_OpenRequestedMenu();
          MapChange_RunToEnd();
          GameLoop_UpdatePause();
@@ -1072,7 +1073,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      Input_StopRumble();
      Message_CloseBox();
      Message_ClearNotices();
-@@ -332,13 +353,15 @@ void GameLoop_Run(int arg) {
+@@ -332,13 +354,15 @@ void GameLoop_Run(int arg) {
  
  /* Draws one frame of the game: the world (once, or with a second view first for the modes 1 and 2), the screen
     tints, the overlays MapDrawState asks for, the fades and the pause shade. */
@@ -1089,7 +1090,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      Wobble_AdvanceSines();
      func_001095D0();
      GsDraw_ResetDrawTarget();
-@@ -457,6 +480,9 @@ int GameLoop_DrawFrame(int arg) {
+@@ -457,6 +481,9 @@ int GameLoop_DrawFrame(int arg) {
      }
      GameLoop_SetCameraMatrices(0, 0);
      GsDraw_QueueVu1Matrix(world_screen_matrix);
@@ -1099,7 +1100,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      if ((s32)(player_state.status_bits >> 39) & 1) {
          GsDraw_CopyFrame(0x2BC0);
          tinted = TRUE;
-@@ -473,24 +499,36 @@ int GameLoop_DrawFrame(int arg) {
+@@ -473,24 +500,36 @@ int GameLoop_DrawFrame(int arg) {
      }
      Player_DrawScreenFade();
      if (map_draw_state.bit44) {
@@ -1142,7 +1143,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
          Game_ShiftScreenByViewTurn();
      }
      GsDraw_ClearDepth();
-@@ -498,20 +536,30 @@ int GameLoop_DrawFrame(int arg) {
+@@ -498,20 +537,31 @@ int GameLoop_DrawFrame(int arg) {
          Effect_UploadTextures();
      }
      DrawList_Draw(3, 0);
@@ -1164,6 +1165,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
          }
      }
      Hud_Draw();
++    StatsBar_Draw();   /* PC: the extended stats mod (before the cross, whose pictures go over gage.tx2) */
 +    Hands_DrawCross(); /* PC: the hands mod */
      if (map_draw_state.screen_fill_alpha > 0) {
 -        // match: the last argument is passed as the 64-bit word
@@ -1178,7 +1180,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      }
      Game_DrawFade();
      Splash_Draw();
-@@ -529,14 +577,22 @@ int GameLoop_DrawFrame(int arg) {
+@@ -529,14 +579,22 @@ int GameLoop_DrawFrame(int arg) {
          }
      }
      if (message_dim_alpha != 0) {
@@ -1204,7 +1206,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
      func_001095D8();
  }
  
-@@ -656,14 +712,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -656,14 +714,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
      f32 other[16];
      f32 translation[4];
      f32 angle;
@@ -1231,7 +1233,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +768,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +770,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1239,7 +1241,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..422b8409bf029c8f17cb43e3f1f011ee
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +795,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +797,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:
