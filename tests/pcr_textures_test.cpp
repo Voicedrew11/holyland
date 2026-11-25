@@ -1172,6 +1172,43 @@ bool kept_answers() {
     return expect_true(kept_since(kept) == 0, "an answer kept from before forget was used") && ok;
 }
 
+// ---- A read-back part drawn over (issue 245) ------------------------------------------------------
+// The effects' area as King's Field IV has it: uploaded whole (the effects' textures sent each frame), a picture copied
+// over all of it (a map change's), then sfx.tmx's textures uploaded into most of it, but not all; then read back
+// whole, as Effect_CaptureTextures reads it. read_back refuses it (part is the draw's); read_back_uploads gives the
+// textures uploaded since the draw as the GS has them, and zeroes where only the draw is.
+bool read_back_part_drawn() {
+    Rng rng{31};
+    pcr::TextureStore store;
+    const uint32_t bp = 0x2E40, bw = 2, psm = GSN_PSMCT32, w = 128, h = 64; // (8 KB pages: 2 wide, 2 high)
+    const uint32_t textures_h = 48;                                         // the textures: the top 48 rows of 64
+    bool ok = true;
+    store.upload(upload_regs(bp, bw, psm, w, h), bytes_from(rng, size_t(w) * h * 4));
+    store.drawn(pcr::VramRect{bp, bw, psm, 0, 0, w, h});
+    std::vector<uint8_t> textures = bytes_from(rng, size_t(w) * textures_h * 4);
+    store.upload(upload_regs(bp, bw, psm, w, textures_h), textures);
+
+    const pcr::TransferRegs whole{bitbltbuf_of(bp, bw, psm) >> 32, 0, uint64_t(w) | uint64_t(h) << 32};
+    std::vector<uint8_t> out;
+    ok = expect_true(!store.read_back(whole, out), "a read-back part drawn over was answered whole") && ok;
+    ok = expect_true(store.read_back_uploads(whole, out), "a read-back part drawn over had no answer from its uploads") && ok;
+    ok = expect_true(out.size() == size_t(w) * h * 4, "the read-back's answer is not the rectangle's size") && ok;
+    if (out.size() != size_t(w) * h * 4) {
+        return false;
+    }
+    // (PSMCT32 read back row by row, as it was uploaded)
+    ok = expect_true(std::equal(textures.begin(), textures.end(), out.begin()),
+                     "the textures uploaded since the draw are not what was read back") && ok;
+    ok = expect_true(std::all_of(out.begin() + textures.size(), out.end(), [](uint8_t b) { return b == 0; }),
+                     "where only the draw is, the read-back is not zeroes") && ok;
+    ok = expect_true(store.counts().read_backs_uploads == 1, "read_back_uploads' answer not counted") && ok;
+
+    // nothing of it the uploads': no answer
+    store.drawn(pcr::VramRect{bp, bw, psm, 0, 0, w, h});
+    return expect_true(!store.read_back_uploads(whole, out) && out.empty(), "a read-back all drawn over was answered") &&
+           ok;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1191,6 +1228,7 @@ int main(int argc, char **argv) {
     ok = reupload_in_stretch() && ok;
     ok = partly_written_page() && ok;
     ok = kept_answers() && ok;
+    ok = read_back_part_drawn() && ok;
     for (uint64_t seed : seeds) {
         ok = run_seed(seed) && ok;
         ok = vram_round_trip(seed) && ok;

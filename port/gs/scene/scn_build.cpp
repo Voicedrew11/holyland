@@ -516,8 +516,23 @@ public:
             counts_.read_backs++;
             return;
         }
+        if (store_.read_back_uploads(regs, fifo_)) {
+            counts_.read_backs++;
+            note_partial_read_back(t);
+            return;
+        }
         counts_.unsupported_read_backs++;
         fifo_.clear();
+    }
+
+    // (the first few logged: a read-back answered as far as the uploads go, the effects' textures after a map change's
+    // picture copy over them; issue 245)
+    void note_partial_read_back(const TransferRegisters &t) {
+        if (partial_read_backs_logged_ < 4) {
+            partial_read_backs_logged_++;
+            fprintf(stderr, "[scn] a read-back of %#x (%ux%u) part drawn over: answered from its uploads\n",
+                    unsigned(t.bitbltbuf & 0x3FFF), unsigned(t.trxreg & 0xFFF), unsigned((t.trxreg >> 32) & 0xFFF));
+        }
     }
 
     void read_fifo(void *dst, uint32_t qwords) override {
@@ -5726,6 +5741,7 @@ private:
         uint64_t unsupported_shapes = 0, unsupported_blends = 0, unsupported_texture_on_target = 0,
                  unsupported_copies = 0, unsupported_uploads = 0, unsupported_read_backs = 0, uploads_again_passed = 0;
     } counts_;
+    int partial_read_backs_logged_ = 0; // (note_partial_read_back's lines so far)
 };
 
 std::unique_ptr<Drawing> make_builder(Device &device, GpuTimes &times, HangNotes &notes) {

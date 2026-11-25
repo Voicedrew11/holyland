@@ -148,6 +148,7 @@ struct TextureStoreCounts {
     uint64_t clut_loads = 0, clut_decodes = 0, clut_hits = 0;
     uint64_t copies_as_uploads = 0; // local copies whose source was uploads': uploads of what they wrote
     uint64_t read_backs = 0, read_backs_refused = 0;
+    uint64_t read_backs_uploads = 0; // read_back_uploads' answers (a read-back read_back refused, as far as uploads go)
     uint64_t uploads_again = 0; // (of uploads: made again from their chunk)
 };
 
@@ -190,6 +191,13 @@ public:
     // them (packed as for host-to-local, zeroes past the last pixel) into out, which is resized to whole qwords;
     // false (out left empty) when part of it is no upload's or was drawn over
     bool read_back(const TransferRegs &regs, std::vector<uint8_t> &out);
+    // A local-to-host transfer that read_back refused, answered as far as the uploads go: their pixels where they
+    // still hold, zeroes where no upload is (and, where a draw has covered part of an upload, that upload's bytes or
+    // zeroes). For the game's read-backs of a texture area a draw has covered in part: King's Field IV's
+    // Effect_CaptureTextures reads 0x2E40 back after sfx.tmx's uploads, which leave 18 of its blocks to what was
+    // there (a map change's picture copied over it), and without an answer the effects were blank until the next
+    // start. false (out left empty) when no pixel of it is an upload's.
+    bool read_back_uploads(const TransferRegs &regs, std::vector<uint8_t> &out);
 
     // The texture a draw samples. cols_read and rows_read: the texels of level 0 its draws read across and
     // down (1 << tw and 1 << th when not known); without mipmaps and not REGION_REPEAT, the texture is

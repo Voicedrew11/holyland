@@ -617,6 +617,11 @@ public:
             counts_.read_backs_from_surfaces++;
             return;
         }
+        // (part drawn over: as far as the uploads go, as the scene renderer answers it; issue 245)
+        if (store_.read_back_uploads(regs, fifo_)) {
+            counts_.read_backs_from_uploads++;
+            return;
+        }
         counts_.unsupported_read_backs++;
         fifo_.clear();
     }
