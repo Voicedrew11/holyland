@@ -133,6 +133,48 @@ private:
     int last_tenth_ = -1;
 };
 
+// The build's progress as RecompLauncher's setup step reads it (--prepare): "progress 0.40 Building the game" on
+// stdout, a line each time the stage or the whole percent changes; everything else goes on to `console`. From the
+// build's own thread.
+class ProgressLines final : public BuildProgress {
+public:
+    explicit ProgressLines(BuildProgress &console) : console_(console) {}
+    void stage(std::string_view what) override {
+        console_.stage(what);
+        stage_ = what;
+        print(fraction_);
+    }
+    void steps(int done, int total) override {
+        console_.steps(done, total);
+        if (total <= 0)
+            return;
+        // (the compiler's steps are most of the time; preparing before them and finishing after are a little each)
+        double fraction = 0.05 + 0.9 * done / total;
+        if ((int)(fraction * 100) != (int)(fraction_ * 100))
+            print(fraction);
+    }
+    void log_line(std::string_view line) override { console_.log_line(line); }
+    bool cancelled() const override { return console_.cancelled(); }
+    void running(ChildProcess *process) override { console_.running(process); }
+
+    // the last line: the game is ready to play
+    static void print_done(const char *what) {
+        std::printf("progress 1 %s\n", what);
+        std::fflush(stdout);
+    }
+
+private:
+    void print(double fraction) {
+        fraction_ = fraction;
+        std::printf("progress %.2f %s\n", fraction, stage_.c_str());
+        std::fflush(stdout);
+    }
+
+    BuildProgress &console_;
+    std::string stage_ = "Starting";
+    double fraction_ = 0;
+};
+
 // play, quit and restarted end the window: the game, nothing, or the new release started (this launcher exits)
 enum class Screen { setup, building, build_failed, home, updating, update_failed, play, quit, restarted };
 
@@ -279,11 +321,15 @@ int Session::build_only() {
     key_ = build_key(launcher_version(), manifest_of(content_), tools ? tools->id : "none");
     if (build_ready()) {
         std::fprintf(stderr, "[%s] already built: %s\n", kProductId, game_path().u8string().c_str());
+        if (options_.progress_lines)
+            ProgressLines::print_done("Already built");
         return 0;
     }
     if (std::string left = remove_tree(build_dir()); !left.empty())
         std::fprintf(stderr, "[%s] %s\n", kProductId, left.c_str());
-    ConsoleBuild progress(paths_.build_log());
+    ConsoleBuild console(paths_.build_log());
+    ProgressLines lines(console);
+    BuildProgress &progress = options_.progress_lines ? static_cast<BuildProgress &>(lines) : console;
     BuildResult result =
         platform_.build_strategy().build(platform_, BuildRequest{content_, build_dir(), launcher_version()}, progress);
     if (!result.ok) {
@@ -293,6 +339,8 @@ int Session::build_only() {
     }
     remove_old_builds();
     std::fprintf(stderr, "[%s] built: %s\n", kProductId, game_path().u8string().c_str());
+    if (options_.progress_lines)
+        ProgressLines::print_done("Built");
     return 0;
 }
 

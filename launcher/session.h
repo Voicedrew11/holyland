@@ -11,6 +11,8 @@ namespace launcher {
 struct LaunchOptions {
     bool show_launcher = false;          // --launcher: the launcher's window instead of going straight in
     bool build_only = false;             // --build-only: build this release's game if needed, no window, no disc
+    bool progress_lines = false;         // --prepare: as --build-only, with "progress 0.40 Building the game" lines
+                                         // on stdout (RecompLauncher's setup step, recomplauncher.json)
     std::string disc;                    // --disc PATH, or a path given alone
     std::vector<std::string> game_args;  // after "--": passed to the game
     std::vector<std::string> args;       // every argument as given: the new launcher's, after an update

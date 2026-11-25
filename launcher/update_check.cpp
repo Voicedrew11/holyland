@@ -44,7 +44,7 @@ void UpdateCheck::start(const Platform &platform, const DataPaths &paths, const 
         running_version_ = std::move(running_version);
     }
     // every start asks once, however recently the last one did
-    if (mode == UPDATE_CHECK_OFF) {
+    if (mode == UPDATE_CHECK_OFF || update_left_to_recomplauncher(std::getenv("RECOMPLAUNCHER"))) {
         done_ = true;
         return;
     }

@@ -52,6 +52,11 @@ int update_release_parse(const char *github_json, int64_t now_s, UpdateRelease *
 /* KF4_UPDATE_CHECK's value (NULL when unset) and the player's "Check for updates at launch" */
 UpdateCheckMode update_check_mode(const char *env_value, int player_wants_checks);
 
+/* RECOMPLAUNCHER's value (NULL when unset). 1 when RecompLauncher started this copy (it sets RECOMPLAUNCHER=1 for every
+   game it starts) and so installs Holyland's releases itself: this copy then neither asks GitHub nor offers an update,
+   or the two would replace the same files. */
+int update_left_to_recomplauncher(const char *recomplauncher_env);
+
 /* whether to tell the player about `release`: newer than the running version and not the one they
    skipped. A build with no version (a developer's, "") is never told. */
 int update_notice_due(const UpdateRelease *release, const char *running_version, const char *skipped_tag);

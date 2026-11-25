@@ -73,6 +73,9 @@ static void test_when_to_ask(void) {
     check("env force", update_check_mode("force", 0) == UPDATE_CHECK_FORCE);
     check("the player's choice", update_check_mode(NULL, 1) == UPDATE_CHECK_ON && update_check_mode("1", 0) == UPDATE_CHECK_OFF);
     check("env force overrides the player's off", update_check_mode("force", 0) == UPDATE_CHECK_FORCE);
+    check("RecompLauncher installs the updates", update_left_to_recomplauncher("1"));
+    check("not started by RecompLauncher", !update_left_to_recomplauncher(NULL) && !update_left_to_recomplauncher("") &&
+                                               !update_left_to_recomplauncher("0"));
 }
 
 static void test_when_to_tell(void) {
