@@ -211,7 +211,8 @@ bool update_badge_poll(unsigned now_ms) {
     std::string text = read_small(data_path("update.json"));
     update_cache_parse(text.empty() ? nullptr : text.c_str(), &release);
     read_skipped();
-    due = update_notice_due(&release, port_version, skipped.c_str()) != 0;
+    due = update_notice_due(&release, port_version, skipped.c_str()) != 0 &&
+          !update_left_to_recomplauncher(std::getenv("RECOMPLAUNCHER"));
     if (due)
         std::fprintf(stderr, "[update] %s %s is out (this is %s): %s\n", kProductName, release.tag, port_version, release.url);
     return due;

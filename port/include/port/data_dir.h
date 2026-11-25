@@ -21,12 +21,14 @@ typedef enum { DATA_DIR_WINDOWS, DATA_DIR_POSIX } DataDirSystem;
 
 typedef const char *(*DataDirEnv)(const char *name);
 
-/* KF4_DATA_DIR, else %APPDATA%\holyland, else $XDG_DATA_HOME/holyland, else
-   ~/.local/share/holyland, else "holyland" (relative to the working folder) */
+/* KF4_DATA_DIR, else (started by RecompLauncher) RECOMPLAUNCHER_DATA, else %APPDATA%\holyland, else
+   $XDG_DATA_HOME/holyland, else ~/.local/share/holyland, else "holyland" (relative to the working folder).
+   Under RecompLauncher a player's usual folder is kept instead when it has a saves folder and RecompLauncher's has
+   none (docs/port/LAUNCHER.md, "RecompLauncher"). */
 int data_dir_resolve(DataDirSystem system, DataDirEnv env, char *out, size_t out_size);
 
-/* KF4_BUILDS_DIR, else %LOCALAPPDATA%\holyland\builds, else $XDG_DATA_HOME/holyland/builds, else
-   ~/.local/share/holyland/builds, else <data folder>/builds */
+/* KF4_BUILDS_DIR, else (KF4_DATA_DIR unset) RECOMPLAUNCHER_DATA/cache/builds, else %LOCALAPPDATA%\holyland\builds,
+   else $XDG_DATA_HOME/holyland/builds, else ~/.local/share/holyland/builds, else <data folder>/builds */
 int data_dir_resolve_builds(DataDirSystem system, DataDirEnv env, char *out, size_t out_size);
 
 /* Moves the folders of earlier versions to where they are now, before either folder is used: call it once,

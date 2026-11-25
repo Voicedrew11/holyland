@@ -5,6 +5,7 @@
 #   usr/bin/<APP_ID>                  the launcher (built here with the release's own tools)
 #   usr/bin/libSDL3.so.0              its SDL3 (packaging/linux/build-sdl3.sh)
 #   usr/share/<APP_ID>/content/       the game's source, the tools, manifest.txt
+#   recomplauncher.json               how RecompLauncher sets the game up and starts it (docs/port/LAUNCHER.md)
 #
 # It does NOT need the disc: the game is built on the player's computer. Run it on Ubuntu 22.04 (the release
 # workflow does) or give an SDL3 built there: packaging/linux/build-appimage.sh [SDL3_PREFIX]. The game's tree
@@ -94,6 +95,7 @@ PY
 fi
 cp "$ICON" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_ID.png"
 cp "$ICON" "$APPDIR/$APP_ID.png"
+cp "$ROOT/recomplauncher.json" "$APPDIR/"
 mkdir -p "$APPDIR/usr/share/doc/$APP_ID"
 [ -f "$ROOT/LICENSE" ] && cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/$APP_ID/"
 

@@ -53,6 +53,7 @@
 #include "port/platform.h"
 #include "port/sanitize.h"
 #include "port/savestate.h"
+#include "port/settings.h"
 #include "spu2.h"
 
 /* The parts hand over whole regions: with ASan, the globals' image holds the redzones between them,
@@ -180,11 +181,13 @@ static void make_folder(const char *path) {
 static void state_folder(char *out, size_t size, int create) {
     const char *parts[] = {"holyland", "states"};
     const char *data_dir = getenv("KF4_DATA_DIR");
+    const char *recomplauncher = getenv("RECOMPLAUNCHER_DATA");
     size_t i;
 
-    /* KF4_DATA_DIR moves the settings (port/overlay/settings.c) and the states together */
-    if (data_dir != NULL && *data_dir) {
-        snprintf(out, size, "%s", data_dir);
+    /* KF4_DATA_DIR, or RecompLauncher's folder (port/include/port/data_dir.h), moves the settings
+       (port/overlay/settings.c) and the states together */
+    if ((data_dir != NULL && *data_dir) || (recomplauncher != NULL && *recomplauncher)) {
+        snprintf(out, size, "%s", port_data_dir());
         if (create) {
             make_folder(out);
         }

@@ -101,6 +101,10 @@ UpdateCheckMode update_check_mode(const char *env_value, int player_wants_checks
     return player_wants_checks ? UPDATE_CHECK_ON : UPDATE_CHECK_OFF;
 }
 
+int update_left_to_recomplauncher(const char *recomplauncher_env) {
+    return recomplauncher_env != NULL && strcmp(recomplauncher_env, "1") == 0;
+}
+
 int update_notice_due(const UpdateRelease *release, const char *running_version, const char *skipped_tag) {
     if (running_version == NULL || running_version[0] == 0 || release->tag[0] == 0 || release->url[0] == 0) {
         return 0;

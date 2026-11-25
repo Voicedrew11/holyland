@@ -34,7 +34,7 @@ copy_tracked() {
 
 echo "==> the port"
 copy_tracked "$ROOT" "$SRC" . ':!docs' ':!patches' ':!launcher' ':!packaging' ':!.github' ':!decomp' \
-    ':!third_party/parallel-gs' ':!*.md'
+    ':!third_party/parallel-gs' ':!*.md' ':!recomplauncher.json'
 copy_tracked "$ROOT" "$SRC" packaging/shared
 cp "$ROOT/LICENSE" "$SRC/" 2>/dev/null || true
 

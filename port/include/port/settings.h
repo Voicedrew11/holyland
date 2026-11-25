@@ -117,6 +117,11 @@ const char *port_settings_path(void);
 void port_settings_apply_audio(void);
 /* Puts the display settings into the window: its size, full screen, vsync (port/platform/video.c) */
 void port_video_apply_settings(void);
+/* Whether the window is full screen: the setting, or this run's start in RecompLauncher's Big Picture mode
+   (RECOMPLAUNCHER_MODE=bigpicture), which settings.json never keeps (port/platform/video.c) */
+int port_video_fullscreen(void);
+/* The player's choice (F11, the menu): the setting, put into the window; Big Picture's start no longer counts */
+void port_video_set_fullscreen(int on);
 
 #ifdef __cplusplus
 }

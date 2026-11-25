@@ -1,7 +1,7 @@
 // Holyland, the launcher (launcher/product.h; docs/port/LAUNCHER.md). Builds King's Field IV's PC port on the player's computer
 // from the release's source and tools, then plays it.
 //
-//   holyland [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]
+//   holyland [--launcher | --build-only | --prepare] [--disc PATH | PATH] [-- game options...]
 
 #include <cstdio>
 #include <cstring>
@@ -20,10 +20,11 @@
 namespace {
 
 void usage() {
-    std::printf("%s [--launcher | --build-only] [--disc PATH | PATH] [-- game options...]\n"
+    std::printf("%s [--launcher | --build-only | --prepare] [--disc PATH | PATH] [-- game options...]\n"
                 "  --launcher    show the launcher (disc, rebuild, update checks) instead of starting the game\n"
                 "  --disc PATH   the disc to play: an .iso or .chd, or an extracted disc's folder\n"
                 "  --build-only  build the game for this release if it is not built, with no window (tests, CI)\n"
+                "  --prepare     --build-only, with its progress as \"progress 0.40 TEXT\" lines (RecompLauncher's setup)\n"
                 "  --version     print the version\n"
                 "  -- ...        everything after is passed to the game (kf4 --help lists it)\n",
                 launcher::kProductId);
@@ -44,6 +45,9 @@ static int launcher_main(int argc, char **argv) {
             options.show_launcher = true;
         } else if (std::strcmp(argv[i], "--build-only") == 0) {
             options.build_only = true;
+        } else if (std::strcmp(argv[i], "--prepare") == 0) {
+            options.build_only = true;
+            options.progress_lines = true;
         } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
             options.disc = argv[++i];
         } else if (std::strcmp(argv[i], "--version") == 0) {

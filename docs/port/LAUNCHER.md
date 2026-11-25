@@ -271,6 +271,31 @@ AppImage, the Windows zip, the installer) is in a zip locked with the `PREVIEW_P
 - `preview-cleanup.yml` deletes the preview when a release is published.
 - Change the password: `gh secret set PREVIEW_PASSWORD`, then a new preview.
 
+## RecompLauncher
+
+[RecompLauncher](https://github.com/elripalda/RecompLauncher) installs, sets up and starts Holyland from its
+releases, by `recomplauncher.json` (its guide: that repository's `docs/DEVELOPERS.md`). The file is at the top of
+the repository; `build-appimage.sh` puts it at the AppImage's root and `build-windows.sh` beside `holyland.exe`
+(and `payload.sh` leaves it out of `content/src`, so editing it never changes the build key).
+
+- The player's disc: `check.ids` (the disc's serial; a `.chd` is taken because the label names it) and the Redump
+  dump of the USA disc for the verified badge (Redump disc 27994: 3464921088 bytes, CRC-32 `879215a7`).
+- Its setup step runs `holyland --prepare`: `--build-only` with `progress 0.40 TEXT` lines on stdout.
+- Play runs `holyland --disc <the disc>`. RecompLauncher gives its folder for the game (`{data}`, `<install>/recompdata`)
+  as `RECOMPLAUNCHER_DATA`, and the data folder rule (`port/include/port/data_dir.h`) takes it: settings, saves, quick
+  saves, save states and logs go there, and the builds in `{data}/cache/builds` (its backups leave `cache` out). A
+  player from before keeps their usual folder (`~/.local/share/holyland`, `%APPDATA%\holyland`): it is used when it has
+  a `saves` folder and RecompLauncher's has none, nothing moved or copied (as Super Odyssey's port does). The builds
+  still go in RecompLauncher's folder. `recomplauncher.json` lists both places for saves, settings and logs, each
+  `if` its `saves` folder is there, the same rule.
+- RecompLauncher sets `RECOMPLAUNCHER=1` in every game it starts and installs the releases itself, so then the
+  launcher asks GitHub nothing and the game offers no update (`update_left_to_recomplauncher`).
+- Started from its Big Picture mode (`RECOMPLAUNCHER_MODE=bigpicture`, a controller on the couch), the game opens full
+  screen for that run whatever `settings.json` says, and never writes it there; F11 or the menu's Fullscreen is the
+  player's choice again (`port_video_fullscreen`, `port/platform/video.c`).
+- Its game page shows Fullscreen, Frame Rate, Vertical Sync, Widescreen and Anti-Aliasing, written into
+  `settings.json` (`display/...`). Renaming one of those keys means changing the file too.
+
 ## Not done
 
 - macOS, iOS, Android (see Platforms).
