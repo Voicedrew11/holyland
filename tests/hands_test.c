@@ -25,6 +25,14 @@ static int not_empty(HandKind kind, int value, const void *context) {
     return value != 0;
 }
 
+/* the hands' rule in game/hands.c: an empty slot (the bare fist, no spell) is swapped to too */
+static int any(HandKind kind, int value, const void *context) {
+    (void)kind;
+    (void)value;
+    (void)context;
+    return 1;
+}
+
 /* a hotkey of an item holds something only while one is owned */
 static int owned(HandKind kind, int value, const void *context) {
     const unsigned char *counts = context;
@@ -63,6 +71,10 @@ static void stepping(void) {
     check("the other weapon", hand_next_slot(&weapons, HAND_WEAPON, 1, not_empty, NULL) == 1);
     check("the other weapon, backwards", hand_next_slot(&weapons, HAND_WEAPON, -1, not_empty, NULL) == 1);
     check("no other weapon: none", hand_next_slot(&one_weapon, HAND_WEAPON, 1, not_empty, NULL) == -1);
+    check("an empty slot taken: the bare fist", hand_next_slot(&one_weapon, HAND_WEAPON, 1, any, NULL) == 1);
+    one_weapon.out = 1;
+    check("and back from the fist", hand_next_slot(&one_weapon, HAND_WEAPON, -1, any, NULL) == 0);
+    one_weapon.out = 0;
     check("the next hotkey skips an empty one", hand_next_slot(&hotkeys, HAND_HOTKEY, 1, not_empty, NULL) == 3);
     check("the previous hotkey", hand_next_slot(&hotkeys, HAND_HOTKEY, -1, not_empty, NULL) == 0);
     counts[3] = 1;
