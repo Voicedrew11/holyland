@@ -105,6 +105,7 @@ struct Row {
     std::string label, value; // ROW_PAIR: label left, value right; ROW_TEXT, ROW_HEAD: label alone
     ImVec4 colour = colour_text;
     float fraction = -1.0f; // ROW_PAIR: a bar under it, 0 to 1
+    bool divider_before = false; // a short rule between equipment effect groups
 };
 
 struct Block {
@@ -167,6 +168,18 @@ Layout layout(const Block &b, const Frame &f, float size, bool force) {
     auto room = [&]() { return y + pitch <= hi.y + pitch * 0.25f; };
     out.top = y;
     for (const Row &row : b.rows) {
+        if (row.divider_before) {
+            float spacing = std::max(2.0f, std::floor(size * 0.5f));
+            if (y + spacing + pitch > hi.y + pitch * 0.25f) {
+                out.fits = false;
+                break;
+            }
+            float right = right_at(y);
+            out.bars.push_back({lo.x, lo.x + (right - lo.x) * 0.65f,
+                                std::floor(y + spacing * 0.5f),
+                                std::max(1.0f, std::floor(size * 0.06f)), 1.0f});
+            y += spacing;
+        }
         if (!room()) {
             out.fits = false;
             break;
@@ -413,8 +426,24 @@ void equipment(ImDrawList *dl, const Frame &f, const PortStatsSnapshot &s, float
     // right of it: what is worn does that the game never says
     right.rows.push_back(head("Effects"));
     size_t before = right.rows.size();
-    for (int i = 0; i < s.effect_count; i++)
-        right.rows.push_back(line(s.effects[i].text));
+    // Data bonuses and code-defined effects arrive separately. Keep the same item's
+    // descriptions together, in first-seen order, with a rule only between items.
+    std::vector<std::string> items;
+    for (int i = 0; i < s.effect_count; i++) {
+        std::string item = s.effects[i].item;
+        if (!item.empty() && std::find(items.begin(), items.end(), item) != items.end())
+            continue;
+        items.push_back(item);
+        Row first = line(s.effects[i].text);
+        first.divider_before = right.rows.size() > before;
+        right.rows.push_back(first);
+        if (!item.empty())
+            for (int j = i + 1; j < s.effect_count; j++)
+                if (item == s.effects[j].item)
+                    right.rows.push_back(line(s.effects[j].text));
+    }
+    // The following rates are totals across equipment, so keep them in their own group.
+    size_t rates_begin = right.rows.size();
     if (s.hp_regen_period)
         right.rows.push_back(line(format("HP +1 every %.1f s", seconds(s.hp_regen_period)), colour_good));
     if (s.hp_drain_period)
@@ -423,6 +452,8 @@ void equipment(ImDrawList *dl, const Frame &f, const PortStatsSnapshot &s, float
         right.rows.push_back(line(format("MP +1 every %.1f s", seconds(s.mp_regen_period)), colour_good));
     if (s.mp_drain_period)
         right.rows.push_back(line(format("MP -1 every %.1f s", seconds(s.mp_drain_period)), colour_bad));
+    if (rates_begin > before && right.rows.size() > rates_begin)
+        right.rows[rates_begin].divider_before = true;
     if (right.rows.size() == before)
         right.rows.push_back(line("none", colour_label));
 
