@@ -654,10 +654,9 @@ void port_video_present(void);
 void port_video_show_blank(void);
 /* --stats: how the pictures reached the window */
 void port_video_print_stats(void);
-/* The new pictures presented to the window a second (by the game's thread or the pictures' own), and
-   the game's own frames a second, sampled twice a second; 0 with no window */
+/* The new pictures presented to the window a second (by the game's thread or the pictures' own),
+   sampled twice a second; 0 with no window */
 double port_video_pictures_per_second(void);
-double port_video_frames_per_second(void);
 /* The frame-rate counter (port_options.show_fps), drawn by the presenters over the picture at x, y,
    width x height in the window's pixels, as squares (fill: rgba with R in the low byte, alpha in the high);
    port_video_counter_height: how far down from the picture's top margin it reaches (0: not shown) */

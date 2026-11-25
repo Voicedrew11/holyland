@@ -725,38 +725,29 @@ static void fill_rect(void *context, int x, int y, int width, int height, unsign
 #ifdef KF4_HAVE_SDL
 /* ---- The frame-rate counter (F3, --show-fps, the player menu's Display tab) ----------------------- */
 /* The new pictures presented to the window, by either thread (draw_window, under PRESENT_LOCK; the
-   last one drawn again for the overlay is not counted), and the rates sampled from them and from the
-   game's frame counter twice a second on the game's thread (port_video_vblank). The counter is drawn
+   last one drawn again for the overlay is not counted), and their rate sampled twice a second on the
+   game's thread (port_video_vblank). The counter is drawn
    by the presenters with plain squares: not with
    ImGui, whose frame is the game thread's, so it never takes the pictures between from their own
    thread (thread_shows). */
 static uint64_t pictures_presented;
 static double rate_wall;
 static uint64_t rate_pictures;
-static unsigned rate_frames;
-static double pictures_rate, frames_rate; /* (read by both threads: __atomic_load) */
+static double pictures_rate; /* (read by both threads: __atomic_load) */
 
 static void sample_rates(void) {
     double now = port_wall_seconds(), span = now - rate_wall, rate;
     uint64_t pictures = __atomic_load_n(&pictures_presented, __ATOMIC_ACQUIRE);
-    PortGameReadout game;
 
     if (rate_wall > 0 && span < 0.5) {
         return;
     }
-    kf4_game_readout(&game);
     if (rate_wall > 0) {
         rate = (double)(pictures - rate_pictures) / span;
         __atomic_store(&pictures_rate, &rate, __ATOMIC_RELEASE);
-        /* (the menus, the title and the movies have loops of their own, which the play's frame counter
-           does not count: their pictures are the game's own, none between, so the counter says one rate,
-           not "0 GAME") */
-        rate = game.frame != rate_frames ? (double)(game.frame - rate_frames) / span : pictures_rate;
-        __atomic_store(&frames_rate, &rate, __ATOMIC_RELEASE);
     }
     rate_wall = now;
     rate_pictures = pictures;
-    rate_frames = game.frame;
 }
 #endif
 
@@ -764,14 +755,6 @@ double port_video_pictures_per_second(void) {
     double rate = 0;
 #ifdef KF4_HAVE_SDL
     __atomic_load(&pictures_rate, &rate, __ATOMIC_ACQUIRE);
-#endif
-    return rate;
-}
-
-double port_video_frames_per_second(void) {
-    double rate = 0;
-#ifdef KF4_HAVE_SDL
-    __atomic_load(&frames_rate, &rate, __ATOMIC_ACQUIRE);
 #endif
     return rate;
 }
@@ -785,20 +768,13 @@ int port_video_counter_shown(void) {
 }
 
 #ifdef KF4_HAVE_SDL
-/* 5 x 7 glyphs, a row a byte (bit 4 the left column), for what the counter says */
-static const char counter_chars[] = "0123456789FPSGAMECUT ";
-static const uint8_t counter_glyphs[][7] = {
+/* 5 x 7 glyphs for the digits, a row a byte (bit 4 the left column) */
+static const uint8_t counter_digits[10][7] = {
     {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
     {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},
     {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
     {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
     {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
-    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}, {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
-    {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}, {0x0F, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0F},
-    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
-    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E},
-    {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
-    {0, 0, 0, 0, 0, 0, 0},
 };
 
 /* The counter's size in a picture `height` pixels high: a glyph's pixel, and the margin to the
@@ -808,17 +784,20 @@ static void counter_metrics(int height, int *cell, int *margin) {
     *margin = height * 3 / 100 > *cell * 2 ? height * 3 / 100 : *cell * 2;
 }
 
-/* A line of the counter's text, its right edge at `right`: each row's runs of cells as one square */
-static void counter_line(void (*fill)(void *, int, int, int, int, unsigned int), void *context, const char *text,
-                         int right, int top, int cell, unsigned int rgba) {
-    int n = (int)strlen(text), i;
+/* The number's digits, its right edge at `right`: each row's runs of cells as one square */
+static void counter_number(void (*fill)(void *, int, int, int, int, unsigned int), void *context, const char *digits,
+                           int right, int top, int cell, unsigned int rgba) {
+    int n = (int)strlen(digits), i;
     int left = right - (n * 6 - 1) * cell;
 
     for (i = 0; i < n; i++) {
-        const char *at = strchr(counter_chars, text[i]);
-        const uint8_t *glyph = counter_glyphs[at != NULL && *at != 0 ? at - counter_chars : (int)sizeof(counter_chars) - 2];
+        const uint8_t *glyph;
         int row, column;
 
+        if (digits[i] < '0' || digits[i] > '9') {
+            continue;
+        }
+        glyph = counter_digits[digits[i] - '0'];
         for (row = 0; row < 7; row++) {
             for (column = 0; column < 5;) {
                 int run = 0;
@@ -837,46 +816,28 @@ static void counter_line(void (*fill)(void *, int, int, int, int, unsigned int),
     }
 }
 
-/* The counter's lines: the pictures shown a second; and the game's own frames a second when they
-   differ (the pictures between of --frame-rate, or a vblank's picture shown twice), with "CUT N" while
-   the renderer, behind, draws N pictures between a vblank fewer (port_gs_run_vsync's cut) */
-static int counter_text(char lines[2][24]) {
-    double pictures = port_video_pictures_per_second(), frames = port_video_frames_per_second();
-    int cut = port_interp_cut();
-
-    snprintf(lines[0], sizeof(lines[0]), "%.0f FPS", pictures);
-    if (cut > 0) {
-        snprintf(lines[1], sizeof(lines[1]), "%.0f GAME CUT %d", frames, cut);
-        return 2;
-    }
-    if (fabs(pictures - frames) >= 1.5) {
-        snprintf(lines[1], sizeof(lines[1]), "%.0f GAME", frames);
-        return 2;
-    }
-    return 1;
-}
-
 int port_video_counter_height(int height) {
-    char lines[2][24];
     int cell, margin;
 
     if (!port_video_counter_shown()) {
         return 0;
     }
     counter_metrics(height, &cell, &margin);
-    return (counter_text(lines) * 9 + 2) * cell;
+    return 11 * cell;
 }
 
+/* The pictures shown a second, alone: a number in the HUD area's top right corner */
 void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned int), void *context, int x, int y,
                              int width, int height) {
-    char lines[2][24];
-    int cell, margin, count, widest = 0, i, right, top;
+    char digits[16];
+    int cell, margin, wide, right, top;
+    double rate = port_video_pictures_per_second();
 
     if (!port_video_counter_shown() || width < 64 || height < 64) {
         return;
     }
     counter_metrics(height, &cell, &margin);
-    count = counter_text(lines);
+    snprintf(digits, sizeof(digits), "%.0f", rate < 0 ? 0.0 : rate > 99999 ? 99999.0 : rate);
     {
         /* in the HUD's area, as the game's gauges and the minimap are */
         int inset = (int)((float)width * (1.0f - port_hud_fraction()) * 0.5f);
@@ -884,20 +845,13 @@ void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned i
         x += inset;
         width -= 2 * inset;
     }
-    for (i = 0; i < count; i++) {
-        int w = ((int)strlen(lines[i]) * 6 - 1) * cell;
-
-        widest = w > widest ? w : widest;
-    }
+    wide = ((int)strlen(digits) * 6 - 1) * cell;
     /* the HUD area's top right corner (the widescreen HUD goes top left), on a dark square: opaque, as
        the Vulkan presenter draws squares by clearing them */
     right = x + width - margin;
     top = y + margin;
-    fill(context, right - widest - cell * 4, top, widest + cell * 4, (count * 9 + 2) * cell, 0xFF100C0Cu);
-    for (i = 0; i < count; i++) {
-        counter_line(fill, context, lines[i], right - cell * 2, top + cell * 2 + i * 9 * cell, cell,
-                     i == 0 ? 0xFF8CEBFFu : 0xFFB4B4B4u);
-    }
+    fill(context, right - wide - cell * 4, top, wide + cell * 4, 11 * cell, 0xFF100C0Cu);
+    counter_number(fill, context, digits, right - cell * 2, top + cell * 2, cell, 0xFF8CEBFFu);
 }
 #endif
 
@@ -1556,8 +1510,7 @@ void port_video_print_stats(void) {
         fprintf(stderr, "[stats] window: %llu presents left out at a game speed above 1x, vsync's queue full\n",
                 (unsigned long long)stat_present_skipped);
     }
-    fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second, %.1f game frames a second\n",
-            port_video_pictures_per_second(), port_video_frames_per_second());
+    fprintf(stderr, "[stats] window: the last half second, %.1f pictures a second\n", port_video_pictures_per_second());
     if (port_options.adaptive_sync) {
         fprintf(stderr, "[stats] window: adaptive sync, up to %d pictures a second (the screen named %d Hz)\n",
                 adaptive_sync_cap_hz(port_video_refresh_rate()), port_video_refresh_rate());
