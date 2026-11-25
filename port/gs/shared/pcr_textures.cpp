@@ -1139,6 +1139,43 @@ bool TextureStore::read_back(const TransferRegs &regs, std::vector<uint8_t> &out
     return true;
 }
 
+bool TextureStore::read_back_uploads(const TransferRegs &regs, std::vector<uint8_t> &out) {
+    State &s = *state_;
+    out.clear();
+    uint32_t width = field(regs.trxreg, 0, 12), height = field(regs.trxreg, 32, 12);
+    uint32_t spsm = field(regs.bitbltbuf, 24, 6);
+    if (width == 0 || height == 0 || !gsn_psm_valid(spsm)) {
+        return false;
+    }
+    const VramRect r = wrapped({field(regs.bitbltbuf, 0, 14), field(regs.bitbltbuf, 16, 6), spsm,
+                                field(regs.trxpos, 0, 11), field(regs.trxpos, 16, 11), width, height});
+    // the uploads with a part in it that no draw has covered since
+    std::vector<uint64_t> live;
+    each_block(r, [&](uint32_t block, uint32_t x, uint32_t y) {
+        const Cover need = cover_in_block(r, x, y);
+        const uint32_t page = block / kBlocksPerPage;
+        s.note_read(block);
+        for (const Owner &o : s.block_owners[block]) {
+            const Cover theirs = both(o.cover, need);
+            if (any(theirs) && !s.drawn_over(page, o.seq, word_parts_in(theirs)) &&
+                std::find(live.begin(), live.end(), o.chunk) == live.end()) {
+                live.push_back(o.chunk);
+            }
+        }
+        return true;
+    });
+    if (live.empty()) {
+        return false;
+    }
+    s.sort_by_upload(live);
+    s.write_chunks(live, std::span<const VramRect>(&r, 1));
+    size_t bytes = (size_t(width) * height * uint32_t(gsn_psm_bits(spsm)) + 7) / 8;
+    out.resize((bytes + 15) / 16 * 16);
+    gsn_vram_read_image(s.scratch.data(), regs.bitbltbuf, regs.trxpos, regs.trxreg, out.data(), out.size() / 16);
+    s.counts.read_backs_uploads++;
+    return true;
+}
+
 TextureAnswer TextureStore::resolve(const TextureRegs &regs, uint32_t cols_read, uint32_t rows_read) {
     State &s = *state_;
     s.counts.resolves++;
