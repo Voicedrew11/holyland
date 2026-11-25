@@ -634,8 +634,10 @@ list(APPEND KF4_GAME_TARGETS game_data)
 # from one run, or one moment, to another. A part that matters to a state writes it itself (the automap's
 # fog of war: Automap_State, port/platform/savestate.c).
 add_library(game_host OBJECT game/automap.c game/automap_guide.c game/automap_script.c)
+# drawing over the HUD with the GS's own primitives (the hands mod's cross, the extended stats' enemy bar)
+target_sources(game_data PRIVATE game/hud_packet.c)
 # the extended stats mod (port/include/port/stats.h, docs/port/EXTENDED_STATS.md)
-target_sources(game_data PRIVATE game/stats.c)
+target_sources(game_data PRIVATE game/stats.c game/stats_bar.c)
 target_sources(kf4_port PRIVATE port/overlay/stats_mod.c)
 if(TARGET imgui)
     target_sources(kf4_port PRIVATE port/overlay/stats_panel.cpp port/overlay/stats_menus.cpp

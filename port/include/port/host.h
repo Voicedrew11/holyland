@@ -121,6 +121,9 @@ void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__(
    switch off it is never sent). The GS front end squeezes that 2D horizontally to keep its 4:3 shape;
    everything drawn by PATH3 (the menus, the title) is 2D and squeezed without being told. */
 int port_widescreen(void);
+/* 1 while the HUD of the top left is drawn at the 16:9 picture's left edge (the widescreen picture on, its HUD not
+   centred: PORT_WIDESCREEN_HUD_LEFT below), so the top middle of the picture is clear of it. port/platform/gs.c. */
+int port_widescreen_hud_at_edge(void);
 /* Whether the sharper font is asked (--font sharp, the player menu's Font; port_options.font): the menus' one-letter
    words (a colon, a slash) are then drawn a letter wide, not stretched (the MenuDraw_Word patch). port/platform/gs.c. */
 int port_sharp_font(void);

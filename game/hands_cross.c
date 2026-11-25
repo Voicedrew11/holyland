@@ -32,25 +32,16 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "hands_cross.h"
+#include "hud_packet.h"
 
 extern PlayerState player_state;
 extern u8 item_counts[ITEM_COUNT];
 extern LevelDef item_name_defs[ITEM_COUNT];
 extern char game_options[0x10];
 extern MapDrawState map_draw_state;
-extern int packet_quadwords_used; /* gfx/packet_buffer.c */
-extern int packet_buffers_size;
-u32 *Packet_Alloc(int quadwords);
-void Packet_AppendToChain(u32 *packet, u32 *packet_end);
-void GsDraw_QueueFlush(void);
-void TextureTable_QueueAll(TextureTableHeader *table);
-extern sptr menu_heap;
-sptr Message_GetFontTexture(sptr font_base); /* ui/message.c: font.tmr, the game's font */
 void Widescreen_Mark(int what);
 
 /* ---- The layout, in the HUD's 640 x 448 (Hud_InitSprite: x + 1728, y + 1824 in GS pixels) ---------------- */
-#define GS_X0 1728
-#define GS_Y0 1824
 #define CARD_W 70        /* three cards and their gaps: the HUD frame's width (218) */
 #define CARD_GAP 3
 #define CROSS_W (3 * CARD_W + 2 * CARD_GAP)
@@ -111,36 +102,7 @@ static const HandKind card_hands[CARD_COUNT] = {
    each card's picture goes there in turn, drawn before the next is sent (the GS does them in order) */
 #define PICTURE_TBP 0x3640
 
-/* ---- The frame: pieces of gage.tx2 (hud_sprites[0]: 256 x 128 PSMT8, its CLUT with it) -------------------- */
-/* hud_sprites[0]'s TEX0 with the CLUT always loaded (CLD 1): the HUD's sprites after it load their own */
-#define GAGE_TEX0 ((0x4007DA85E1313640ull & ~(7ull << 61)) | (1ull << 61))
-#define GAGE_GREY 0x5A    /* hud_sprites[0]'s colour */
-#define GAGE_CLAMP 5      /* CLAMP_1 as Hud_Draw draws it: clamped both ways (the bar's edge is the picture's) */
-#define EDGE_TEXELS 9     /* the bar's edge: stone, then a gold line three texels wide */
-#define TEXEL_PX 0.8f     /* the HUD's frame is drawn at 0.85 across, 0.7 down */
-#define EDGE_PX (EDGE_TEXELS * TEXEL_PX)
-
-/* A piece of gage.tx2, in texels; u0 > u1 or v0 > v1 draws it mirrored */
-typedef struct {
-    float u0, v0, u1, v1;
-} Piece;
-
-/* the long bar's top right: its corner, its right side, its top; the other sides are these mirrored */
-static const Piece edge_corner = {247, 20, 256, 29};
-static const Piece edge_side = {247, 32, 256, 56};
-static const Piece edge_top = {110, 20, 190, 29};
-
-static Piece mirrored(Piece p, int across, int down) {
-    Piece m = p;
-
-    if (across) {
-        m.u0 = p.u1, m.u1 = p.u0;
-    }
-    if (down) {
-        m.v0 = p.v1, m.v1 = p.v0;
-    }
-    return m;
-}
+#define EDGE_PX HUD_GAGE_EDGE /* the frame's stone and gold edge (gage.tx2's long bar) */
 
 typedef struct {
     int key;                               /* what it shows: the model's file (MODEL_KEY), 0 nothing */
@@ -254,72 +216,9 @@ static void update_pictures(void) {
     }
 }
 
-/* ---- The GIF data -------------------------------------------------------------------------------------------- */
-#define GS_PRIM 0x00
-#define GS_RGBAQ 0x01
-#define GS_ST 0x02
-#define GS_UV 0x03
-#define GS_XYZ2 0x05
-#define GS_TEX0_1 0x06
-#define GS_TEX1_1 0x14
-#define GS_CLAMP_1 0x08
-#define GS_TEXFLUSH 0x3F
-#define GS_ALPHA_1 0x42
-#define GS_TEST_1 0x47
-#define GS_BITBLTBUF 0x50
-#define GS_TRXPOS 0x51
-#define GS_TRXREG 0x52
-#define GS_TRXDIR 0x53
-
-#define PRIM_SPRITE 6
-#define PRIM_TME 0x10
-#define PRIM_ABE 0x40
-#define PRIM_FST 0x100
-
-typedef struct {
-    u64 *at;
-    u64 *end;
-    u64 *tag;  /* the A+D tag being filled (NULL: none) */
-} Gif;
-
-/* An A+D register write; the tag in front of a run of them counts them */
-static void gif_ad(Gif *g, int reg, u64 value) {
-    if (g->tag == NULL) {
-        g->tag = g->at;
-        g->tag[0] = 0;
-        g->tag[1] = 0xE; /* REGS: A+D */
-        g->at += 2;
-    }
-    g->at[0] = value;
-    g->at[1] = (u64)reg;
-    g->at += 2;
-    g->tag[0] += 1;                     /* NLOOP */
-    g->tag[0] |= (u64)1 << 60;          /* NREG 1 */
-}
-
-/* The picture as a GIF IMAGE transfer to GS memory at `tbp`, 128 wide (BW 2) */
-static void gif_picture(Gif *g, int tbp, const u32 *pixels) {
-    int quadwords = PICTURE_W * PICTURE_H * 4 / 16;
-
-    gif_ad(g, GS_BITBLTBUF, ((u64)tbp << 32) | ((u64)(PICTURE_W / 64) << 48));
-    gif_ad(g, GS_TRXPOS, 0);
-    gif_ad(g, GS_TRXREG, (u64)PICTURE_W | ((u64)PICTURE_H << 32));
-    gif_ad(g, GS_TRXDIR, 0);
-    g->tag = NULL;
-    g->at[0] = (u64)quadwords | ((u64)2 << 58); /* FLG IMAGE */
-    g->at[1] = 0;
-    g->at += 2;
-    memcpy(g->at, pixels, (size_t)quadwords * 16);
-    g->at += quadwords * 2;
-}
-
-static u64 rgba(int r, int g, int b, int a) {
-    return (u64)(r & 0xFF) | (u64)(g & 0xFF) << 8 | (u64)(b & 0xFF) << 16 | (u64)(a & 0xFF) << 24 | (u64)0x3F800000 << 32;
-}
-
 /* Where this frame's cross is and its shape: its top left in the HUD's 640 x 448, its scale, its cards' height
    and the middle card's drop. Everything below is laid out in the cross's own units (CROSS_W wide, card_h + drop
-   high, from its top left) and placed by xyz. */
+   high, from its top left), which the packet places. */
 typedef struct {
     float x, y, scale;
     float card_h, drop;
@@ -339,36 +238,9 @@ static Place place_of(const PortHandsOptions *o) {
     return p;
 }
 
-/* a point of the cross, in its own units, as the GS's XYZ2 */
-static u64 xyz(float x, float y) {
-    u64 gx = (u64)(int)((GS_X0 + place.x + x * place.scale) * 16.0f + 0.5f) & 0xFFFF;
-    u64 gy = (u64)(int)((GS_Y0 + place.y + y * place.scale) * 16.0f + 0.5f) & 0xFFFF;
-
-    return gx | gy << 16;
-}
-
-static void gif_rect(Gif *g, float x0, float y0, float x1, float y1, u64 colour) {
-    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_ABE);
-    gif_ad(g, GS_RGBAQ, colour);
-    gif_ad(g, GS_XYZ2, xyz(x0, y0));
-    gif_ad(g, GS_XYZ2, xyz(x1, y1));
-}
-
-/* a frame one pixel wide inside the box */
-static void gif_frame(Gif *g, float x0, float y0, float x1, float y1, u64 colour) {
-    gif_rect(g, x0, y0, x1, y0 + 1, colour);
-    gif_rect(g, x0, y1 - 1, x1, y1, colour);
-    gif_rect(g, x0, y0 + 1, x0 + 1, y1 - 1, colour);
-    gif_rect(g, x1 - 1, y0 + 1, x1, y1 - 1, colour);
-}
-
 /* ---- The cards ------------------------------------------------------------------------------------------------ */
-typedef struct {
-    float x0, y0, x1, y1;
-} Box;
-
-static Box card_box(int card) {
-    Box box;
+static HudBox card_box(int card) {
+    HudBox box;
 
     box.x0 = (float)(card * (CARD_W + CARD_GAP));
     box.x1 = box.x0 + CARD_W;
@@ -406,19 +278,9 @@ static float cross_alpha(void) {
     return 1.0f - (1.0f - FADED) * t;
 }
 
-/* a piece of gage.tx2 drawn over x0, y0 to x1, y1 (GAGE_TEX0 set) */
-static void gif_piece(Gif *g, Piece p, float x0, float y0, float x1, float y1, u64 colour) {
-    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE | PRIM_FST);
-    gif_ad(g, GS_RGBAQ, colour);
-    gif_ad(g, GS_UV, (u64)(int)(p.u0 * 16.0f) | (u64)(int)(p.v0 * 16.0f) << 16);
-    gif_ad(g, GS_XYZ2, xyz(x0, y0));
-    gif_ad(g, GS_UV, (u64)(int)(p.u1 * 16.0f) | (u64)(int)(p.v1 * 16.0f) << 16);
-    gif_ad(g, GS_XYZ2, xyz(x1, y1));
-}
-
 /* the card's box, one larger while it pulses */
-static Box drawn_box(int card) {
-    Box b = card_box(card);
+static HudBox drawn_box(int card) {
+    HudBox b = card_box(card);
     float grow = since(hands_feedback.changed_vblank[card_hands[card]], PULSE_VBLANKS) < 1.0f ? 1.0f : 0.0f;
 
     b.x0 -= grow, b.y0 -= grow, b.x1 += grow, b.y1 += grow;
@@ -426,38 +288,32 @@ static Box drawn_box(int card) {
 }
 
 /* The card's frame: a dark inside the scene shows through, the bar's stone and gold edge round it, warmer while
-   it pulses, red while refused. GAGE_TEX0 set. */
-static void draw_card_frame(Gif *g, int card, float alpha) {
+   it pulses, red while refused. gage.tx2 in use. */
+static void draw_card_frame(HudPacket *g, int card, float alpha) {
     HandKind kind = card_hands[card];
-    Box b = drawn_box(card);
+    HudBox b = drawn_box(card);
     float pulse = 1.0f - since(hands_feedback.changed_vblank[kind], PULSE_VBLANKS);
     float flash = 1.0f - since(hands_feedback.refused_vblank[kind], FLASH_VBLANKS);
     int a = (int)(0x80 * alpha);
-    u64 stone = rgba(GAGE_GREY + (int)(0x38 * pulse), GAGE_GREY + (int)(0x1C * pulse), GAGE_GREY, a);
-    float ix0 = b.x0 + EDGE_PX, iy0 = b.y0 + EDGE_PX, ix1 = b.x1 - EDGE_PX, iy1 = b.y1 - EDGE_PX;
+    u64 stone = hud_rgba(HUD_GAGE_GREY + (int)(0x38 * pulse), HUD_GAGE_GREY + (int)(0x1C * pulse), HUD_GAGE_GREY, a);
+    HudBox inside = {b.x0 + EDGE_PX, b.y0 + EDGE_PX, b.x1 - EDGE_PX, b.y1 - EDGE_PX};
 
-    gif_rect(g, ix0, iy0, ix1, iy1, rgba(0x08, 0x07, 0x06, a * INSIDE_ALPHA / 0x80));
-    gif_piece(g, mirrored(edge_corner, 1, 0), b.x0, b.y0, ix0, iy0, stone);
-    gif_piece(g, edge_corner, ix1, b.y0, b.x1, iy0, stone);
-    gif_piece(g, mirrored(edge_corner, 1, 1), b.x0, iy1, ix0, b.y1, stone);
-    gif_piece(g, mirrored(edge_corner, 0, 1), ix1, iy1, b.x1, b.y1, stone);
-    gif_piece(g, edge_top, ix0, b.y0, ix1, iy0, stone);
-    gif_piece(g, mirrored(edge_top, 0, 1), ix0, iy1, ix1, b.y1, stone);
-    gif_piece(g, mirrored(edge_side, 1, 0), b.x0, iy0, ix0, iy1, stone);
-    gif_piece(g, edge_side, ix1, iy0, b.x1, iy1, stone);
+    HudPacket_Rect(g, inside, hud_rgba(0x08, 0x07, 0x06, a * INSIDE_ALPHA / 0x80));
+    HudPacket_GageEdge(g, b, stone);
     if (flash > 0.0f) {
         /* over the gold line, the inner third of the edge */
         float in = EDGE_PX / 3.0f;
+        u64 red = hud_rgba(0xC8, 0x20, 0x18, (int)(a * flash));
 
-        gif_frame(g, ix0 - in, iy0 - in, ix1 + in, iy1 + in, rgba(0xC8, 0x20, 0x18, (int)(a * flash)));
-        gif_frame(g, ix0 - in + 1, iy0 - in + 1, ix1 + in - 1, iy1 + in - 1, rgba(0xC8, 0x20, 0x18, (int)(a * flash)));
+        HudPacket_Frame(g, (HudBox){inside.x0 - in, inside.y0 - in, inside.x1 + in, inside.y1 + in}, red);
+        HudPacket_Frame(g, (HudBox){inside.x0 - in + 1, inside.y0 - in + 1, inside.x1 + in - 1, inside.y1 + in - 1}, red);
     }
 }
 
 /* The card's picture, square (it is stored at half height), as large as fits inside the frame */
-static void draw_card_picture(Gif *g, int card, float alpha) {
+static void draw_card_picture(HudPacket *g, int card, float alpha) {
     CardPicture *p = &pictures[card];
-    Box b = drawn_box(card);
+    HudBox b = drawn_box(card);
     float pulse = 1.0f - since(hands_feedback.changed_vblank[card_hands[card]], PULSE_VBLANKS);
     float side = (b.x1 - b.x0) - 2.0f * EDGE_PX;
     float x0, y0;
@@ -471,37 +327,17 @@ static void draw_card_picture(Gif *g, int card, float alpha) {
     }
     x0 = (b.x0 + b.x1 - side) * 0.5f;
     y0 = (b.y0 + b.y1 - side) * 0.5f;
-    gif_picture(g, PICTURE_TBP, p->pixels);
-    gif_ad(g, GS_TEXFLUSH, 0);
+    HudPacket_Image(g, PICTURE_TBP, PICTURE_W, PICTURE_H, p->pixels);
+    HudPacket_Register(g, HUD_GS_TEXFLUSH, 0);
     /* TEX0: TBP0, TBW 2, PSMCT32, TW 7 (128), TH 6 (64), TCC (RGBA), TFX modulate */
-    gif_ad(g, GS_TEX0_1, (u64)PICTURE_TBP | (u64)(PICTURE_W / 64) << 14 | (u64)7 << 26 | (u64)6 << 30 | (u64)1 << 34);
-    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE | PRIM_FST);
-    gif_ad(g, GS_RGBAQ, rgba(bright, bright, bright, (int)(0x80 * alpha)));
+    HudPacket_Register(g, HUD_GS_TEX0_1, (u64)PICTURE_TBP | (u64)(PICTURE_W / 64) << 14 | (u64)7 << 26 | (u64)6 << 30 | (u64)1 << 34);
     /* the middle of the picture: the pictures leave a margin round the item, which the card's edge does already */
-    gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * MARGIN) | (u64)(PICTURE_H * 16 * MARGIN) << 16);
-    gif_ad(g, GS_XYZ2, xyz(x0, y0));
-    gif_ad(g, GS_UV, (u64)(PICTURE_W * 16 * (1 - MARGIN)) | (u64)(PICTURE_H * 16 * (1 - MARGIN)) << 16);
-    gif_ad(g, GS_XYZ2, xyz(x0 + side, y0 + side));
+    HudPacket_Texels(g, PICTURE_W * MARGIN, PICTURE_H * MARGIN, PICTURE_W * (1 - MARGIN), PICTURE_H * (1 - MARGIN),
+                     (HudBox){x0, y0, x0 + side, y0 + side}, hud_rgba(bright, bright, bright, (int)(0x80 * alpha)));
 }
 
-/* the quadwords the cross's packet can take at most: the frames, and the pictures with their registers */
-/* each card's frame: its inside and 8 pieces, 6 registers each at most, and the flash's two frames of 4 rectangles
-   of 4 */
-#define FRAME_QUADWORDS (CARD_COUNT * (9 * 6 + 3 * 4 * 4) + 16)
-#define PICTURE_QUADWORDS (PICTURE_W * PICTURE_H * 4 / 16 + 16)
-#define CROSS_QUADWORDS (FRAME_QUADWORDS + CARD_COUNT * PICTURE_QUADWORDS + COUNT_QUADWORDS + 8)
-
-/* ---- The count: the hotkey's items carried, in the game's own font (ui/message.c, Message_DrawGlyph) ---------- */
-/* font.tmr's second page, where its half-width glyphs are: 10 x 20 texels each, 50 a row from t 460 of 512 */
-#define FONT_TEX0 0x4007FC2665423B40ull
-#define GLYPH_W 10
-#define GLYPH_H 20
-#define GLYPH_COLUMNS 50
-#define GLYPH_TOP 460
-#define FONT_SIZE 512.0f
+/* ---- The count: the hotkey's items carried, in the game's own font ---------------------------------------------- */
 #define COUNT_DIGITS 4
-/* glyphs and their shadows, 6 registers each, and the registers round them */
-#define COUNT_QUADWORDS (2 * COUNT_DIGITS * 6 + 8)
 
 /* the hotkey's count, -1 none to show (a spell, an empty hotkey) */
 static int hotkey_count(void) {
@@ -511,53 +347,29 @@ static int hotkey_count(void) {
     return HOTKEY_TYPE(value) == HOTKEY_ITEM ? item_counts[HOTKEY_NUMBER(value)] : -1;
 }
 
-/* one half-width glyph of the font (an ASCII character) with its top left at x, y (FONT_TEX0 set) */
-static void gif_glyph(Gif *g, char c, float x, float y, u64 colour) {
-    int index = c - 0x20;
-    float s0 = (float)(index % GLYPH_COLUMNS * GLYPH_W) / FONT_SIZE;
-    float t0 = (float)(GLYPH_TOP + index / GLYPH_COLUMNS * GLYPH_H) / FONT_SIZE;
-    float s1 = s0 + GLYPH_W / FONT_SIZE, t1 = t0 + GLYPH_H / FONT_SIZE;
-    union {
-        float f;
-        u32 u;
-    } a, b;
-
-    gif_ad(g, GS_PRIM, PRIM_SPRITE | PRIM_TME | PRIM_ABE); /* ST, as the game's text */
-    gif_ad(g, GS_RGBAQ, colour);
-    a.f = s0, b.f = t0;
-    gif_ad(g, GS_ST, (u64)a.u | (u64)b.u << 32);
-    gif_ad(g, GS_XYZ2, xyz(x, y));
-    a.f = s1, b.f = t1;
-    gif_ad(g, GS_ST, (u64)a.u | (u64)b.u << 32);
-    gif_ad(g, GS_XYZ2, xyz(x + GLYPH_W, y + GLYPH_H));
-}
-
 /* The count at the bottom right inside the hotkey's card, white with a dark shadow as over the scene. The font is
    in GS memory (Hands_DrawCross queued it). */
-static void draw_count(Gif *g, int count, float alpha) {
-    Box b = drawn_box(CARD_HOTKEY);
+static void draw_count(HudPacket *g, int count, float alpha) {
+    HudBox b = drawn_box(CARD_HOTKEY);
     char digits[COUNT_DIGITS + 1];
-    int a = (int)(0x80 * alpha);
-    int n = snprintf(digits, sizeof(digits), "%d", count);
-    float x = b.x1 - EDGE_PX - 1.0f - (float)(n * GLYPH_W);
-    float y = b.y1 - EDGE_PX - (float)GLYPH_H; /* the digits reach the cell's bottom: clear of the gold line */
-    int i;
 
-    gif_ad(g, GS_TEXFLUSH, 0);
-    gif_ad(g, GS_TEX0_1, FONT_TEX0);
-    gif_ad(g, GS_TEX1_1, 0); /* as the game's text */
-    gif_ad(g, GS_CLAMP_1, 0);
-    for (i = 0; i < n; i++) {
-        gif_glyph(g, digits[i], x + (float)(i * GLYPH_W) + 1.0f, y + 1.0f, rgba(0, 0, 0, a * 3 / 4));
-        gif_glyph(g, digits[i], x + (float)(i * GLYPH_W), y, rgba(0x80, 0x80, 0x80, a));
-    }
+    snprintf(digits, sizeof(digits), "%d", count);
+    HudPacket_UseFont(g);
+    /* the digits reach the cell's bottom: clear of the gold line */
+    HudPacket_Text(g, digits, b.x1 - EDGE_PX - 1.0f - hud_text_width(digits, 1.0f), b.y1 - EDGE_PX - HUD_GLYPH_H, 1.0f,
+                   hud_rgba(0x80, 0x80, 0x80, (int)(0x80 * alpha)));
 }
 
+/* the quadwords the cross's packet can take at most: each card's frame (its inside, its edge and the flash's two
+   frames), each picture with its registers, and the count */
+#define CROSS_QUADWORDS                                                                                              \
+    (HUD_QUADWORDS_USE + CARD_COUNT * (HUD_QUADWORDS_RECT + HUD_QUADWORDS_GAGE_EDGE + 2 * HUD_QUADWORDS_FRAME) +    \
+     CARD_COUNT * (HUD_QUADWORDS_IMAGE(PICTURE_W, PICTURE_H) + 2 + HUD_QUADWORDS_TEXELS) + HUD_QUADWORDS_USE +       \
+     HUD_QUADWORDS_TEXT(COUNT_DIGITS))
+
 void Hands_DrawCross(void) {
-    u32 *start;
-    Gif g;
+    HudPacket g;
     float alpha;
-    int quadwords;
     int card;
     int count;
 
@@ -565,33 +377,19 @@ void Hands_DrawCross(void) {
         return;
     }
     update_pictures();
-    /* a packet buffer that could not take the cross leaves it out (the game's would overflow, and hang) */
-    if (packet_quadwords_used + CROSS_QUADWORDS + 64 > packet_buffers_size / 16) {
+    if (!HudPacket_Fits(CROSS_QUADWORDS)) {
         return;
     }
     alpha = cross_alpha();
     count = hotkey_count();
     place = place_of(&port_hands);
     Widescreen_Mark(corner_places[port_hands.corner].widescreen);
-    GsDraw_QueueFlush(); /* the VU1's own GIF packets out before ours (as TextureTable_QueueAll does) */
     if (count >= 0) {
-        /* the font to GS memory, as Message_Draw sends it: its page (0x3B40) and CLUTs (0x3FE0) are clear of
-           gage.tx2 and the pictures (0x3640), and the game's text sends it again before drawing from it */
-        TextureTable_QueueAll((TextureTableHeader *)Message_GetFontTexture(menu_heap));
+        HudPacket_QueueFont();
     }
-    /* a DMA tag, a quadword of VIF codes (NOP, NOP, NOP, DIRECT: as the game's own packets, the VIF codes in the data),
-       the GIF data, and a quadword for the chain's next tag */
-    start = Packet_Alloc(2 + CROSS_QUADWORDS + 1);
-    g.at = (u64 *)(start + 8);
-    g.end = g.at + CROSS_QUADWORDS * 2;
-    g.tag = NULL;
-    gif_ad(&g, GS_ALPHA_1, 0x44); /* (Cs - Cd) * As + Cd */
-    gif_ad(&g, GS_TEST_1, 0x31001); /* the HUD's: no Z written */
+    HudPacket_Begin(&g, CROSS_QUADWORDS, (HudPlace){place.x, place.y, place.scale});
     /* the frames first, while gage.tx2 is in GS memory; the pictures go over it */
-    gif_ad(&g, GS_TEXFLUSH, 0);
-    gif_ad(&g, GS_TEX0_1, GAGE_TEX0);
-    gif_ad(&g, GS_TEX1_1, 0x60); /* bilinear up and down */
-    gif_ad(&g, GS_CLAMP_1, GAGE_CLAMP);
+    HudPacket_UseGage(&g);
     for (card = 0; card < CARD_COUNT; card++) {
         draw_card_frame(&g, card, alpha);
     }
@@ -601,17 +399,6 @@ void Hands_DrawCross(void) {
     if (count >= 0) {
         draw_count(&g, count, alpha);
     }
-    gif_ad(&g, GS_CLAMP_1, 0);    /* as Hud_Draw leaves them */
-    gif_ad(&g, GS_ALPHA_1, 0x48);
-    g.tag[0] |= (u64)1 << 15; /* EOP */
-    quadwords = (int)(g.at - (u64 *)(start + 8)) / 2;
-    if (g.at > g.end) {
-        port_event("hands: the cross's packet ran over (%d quadwords)", quadwords); /* (cannot be: CROSS_QUADWORDS) */
-    }
-    start[0] = 0x10000000u | (u32)(quadwords + 1); /* DMA cnt */
-    start[1] = start[2] = start[3] = 0;
-    start[4] = start[5] = start[6] = 0;             /* VIF NOP */
-    start[7] = 0x50000000u | (u32)quadwords;        /* VIF DIRECT */
-    Packet_AppendToChain(start, start + 8 + quadwords * 4);
+    HudPacket_End(&g);
     Widescreen_Mark(PORT_WIDESCREEN_3D);
 }

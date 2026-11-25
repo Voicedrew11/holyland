@@ -5,8 +5,8 @@
 //   - the stats panel: what the game keeps about the player and never shows, with bars toward the next
 //     level, the next point of Physical and Magic Power, the weapon's and the spells' levels, and the
 //     equipment's wear; shown and hidden by its key (F6);
-//   - the hit log (bottom left: each hit dealt and taken, the real damage) and the health bar of the
-//     creature last hit (top middle);
+//   - the hit log (bottom left: each hit dealt and taken, the real damage); the health bar of the creature
+//     last hit is the game's own drawing (game/stats_bar.c);
 //   - its section of the player menu's Gameplay tab.
 // Everything runs on the game's thread at the vblank. The panel never takes the keyboard, mouse or
 // controller from the game: it takes input only while the overlay is open (to move it).
@@ -45,7 +45,6 @@ const char *const slot_names[PORT_STATS_SLOTS] = {"Weapon", "Shield", "Helm",   
                                                   "Boots",  "Ring",   "Bracelet", "Amulet"};
 
 const unsigned long long LOG_VBLANKS = 60 * 5;    // a hit stays in the log 5 seconds
-const unsigned long long TARGET_VBLANKS = 60 * 6; // the target's bar, 6 seconds after the last hit
 const int LOG_LINES = 7;
 
 PortStatsSnapshot snap;   // the game's thread's, read at the vblank (port_stats_overlay_update)
@@ -331,29 +330,6 @@ void hit_log() {
     }
 }
 
-void target_bar() {
-    PortStatsHit t;
-    if (!port_stats_target(&t, TARGET_VBLANKS) || t.max <= 0)
-        return;
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImDrawList *draw = ImGui::GetBackgroundDrawList();
-    ImFont *font = ImGui::GetFont();
-    float size = viewport->Size.y / 36.0f > 14.0f ? viewport->Size.y / 36.0f : 14.0f;
-    float width = viewport->Size.x * 0.3f, height = size * 0.7f;
-    float x = viewport->Pos.x + (viewport->Size.x - width) * 0.5f, y = viewport->Pos.y + size * 1.2f;
-    float fraction = (float)t.left / (float)t.max;
-    char text[64];
-
-    if (fraction > 1.0f)
-        fraction = 1.0f;
-    draw->AddRectFilled(ImVec2(x - 2, y - 2), ImVec2(x + width + 2, y + height + 2), IM_COL32(0, 0, 0, 170), 3.0f);
-    draw->AddRectFilled(ImVec2(x, y), ImVec2(x + width * fraction, y + height), IM_COL32(190, 50, 40, 230), 2.0f);
-    std::snprintf(text, sizeof(text), "%d / %d", t.left, t.max);
-    ImVec2 extent = font->CalcTextSizeA(size * 0.8f, FLT_MAX, 0.0f, text);
-    draw->AddText(font, size * 0.8f, ImVec2(x + (width - extent.x) * 0.5f, y + height + size * 0.15f),
-                  IM_COL32(255, 235, 200, 255), text);
-}
-
 bool panel_shown() {
     return port_stats_options.on && port_stats_options.panel && snap.valid && port_stats_panel_open();
 }
@@ -385,8 +361,7 @@ extern "C" void port_stats_overlay_update(void) {
     if (!want && port_stats_options.damage && snap.valid) {
         PortStatsHit h;
         unsigned long long now = port_vblank_count();
-        want = port_stats_hits(&h, 1, now > LOG_VBLANKS ? now - LOG_VBLANKS : 0) > 0 ||
-               port_stats_target(&h, TARGET_VBLANKS);
+        want = port_stats_hits(&h, 1, now > LOG_VBLANKS ? now - LOG_VBLANKS : 0) > 0;
     }
     static const bool log = std::getenv("KF4_STATS_LOG") != nullptr;
     if (log && want != wanted.load(std::memory_order_relaxed))
@@ -412,7 +387,6 @@ extern "C" void port_stats_overlay_draw(int x, int y, int width, int height) {
     stats_timers_draw(x, y, width, height);
     if (port_stats_options.damage && !snap.in_menu) {
         hit_log();
-        target_bar();
     }
     if (panel_shown())
         panel();
