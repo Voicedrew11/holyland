@@ -44,11 +44,10 @@ const Choice on_off[] = {{"Off", 0}, {"On", 1}};
 
 // ---- Display --------------------------------------------------------------------------------------------------------
 int get_fullscreen() {
-    return port_settings.fullscreen != 0;
+    return port_video_fullscreen();
 }
 void set_fullscreen(int on) {
-    port_settings.fullscreen = on;
-    port_video_apply_settings();
+    port_video_set_fullscreen(on);
     changed();
 }
 
@@ -96,7 +95,7 @@ void describe_window_size(int index, char *out, size_t size) {
     std::snprintf(out, size, index >= 0 ? "%d x %d" : "%d x %d (resized)", window_width(width, height), height);
 }
 bool windowed() {
-    return port_settings.fullscreen == 0;
+    return !port_video_fullscreen();
 }
 
 const Choice shapes[] = {{"Keep", ASPECT_4_3}, {"Stretch", ASPECT_STRETCH}};

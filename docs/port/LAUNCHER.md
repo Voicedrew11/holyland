@@ -290,6 +290,9 @@ the repository; `build-appimage.sh` puts it at the AppImage's root and `build-wi
   `if` its `saves` folder is there, the same rule.
 - RecompLauncher sets `RECOMPLAUNCHER=1` in every game it starts and installs the releases itself, so then the
   launcher asks GitHub nothing and the game offers no update (`update_left_to_recomplauncher`).
+- Started from its Big Picture mode (`RECOMPLAUNCHER_MODE=bigpicture`, a controller on the couch), the game opens full
+  screen for that run whatever `settings.json` says, and never writes it there; F11 or the menu's Fullscreen is the
+  player's choice again (`port_video_fullscreen`, `port/platform/video.c`).
 - Its game page shows Fullscreen, Frame Rate, Vertical Sync, Widescreen and Anti-Aliasing, written into
   `settings.json` (`display/...`). Renaming one of those keys means changing the file too.
 

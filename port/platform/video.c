@@ -487,6 +487,28 @@ static void read_refresh_rate(void) {
 }
 #endif
 
+/* Started in RecompLauncher's Big Picture mode, played with a controller from the couch: full screen for this run,
+   whatever settings.json says, until the player switches it (port_video_set_fullscreen). Read when the window opens. */
+static int big_picture_fullscreen;
+
+int port_video_fullscreen(void) {
+#ifdef KF4_HAVE_SDL
+    return port_settings.fullscreen != 0 || big_picture_fullscreen;
+#else
+    return 0; /* (no window) */
+#endif
+}
+
+void port_video_set_fullscreen(int on) {
+    big_picture_fullscreen = 0;
+#ifdef KF4_HAVE_SDL
+    port_settings.fullscreen = on;
+    port_video_apply_settings();
+#else
+    (void)on;
+#endif
+}
+
 void port_video_apply_settings(void) {
 #ifdef KF4_HAVE_SDL
     int width, height;
@@ -495,8 +517,8 @@ void port_video_apply_settings(void) {
         return;
     }
     read_refresh_rate();
-    SDL_SetWindowFullscreen(window, port_settings.fullscreen != 0); /* (the desktop's mode: no mode was set) */
-    if (!port_settings.fullscreen) {
+    SDL_SetWindowFullscreen(window, port_video_fullscreen() != 0); /* (the desktop's mode: no mode was set) */
+    if (!port_video_fullscreen()) {
         window_size(&width, &height);
         SDL_SetWindowSize(window, width, height);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -518,7 +540,12 @@ static SDL_Window *make_window(SDL_WindowFlags flags) {
     int width, height;
 
     window_size(&width, &height);
-    if (port_settings.fullscreen) {
+    {
+        const char *mode = getenv("RECOMPLAUNCHER_MODE");
+
+        big_picture_fullscreen = mode != NULL && strcmp(mode, "bigpicture") == 0;
+    }
+    if (port_video_fullscreen()) {
         flags |= SDL_WINDOW_FULLSCREEN; /* (the desktop's mode) */
     }
     /* pictures of the overlay for tests (KF4_OVERLAY_SHOT) need no window on the screen */

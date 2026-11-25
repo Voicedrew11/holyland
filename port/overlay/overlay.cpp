@@ -293,8 +293,7 @@ extern "C" int port_overlay_event(const void *sdl_event) {
     if (!ready)
         return 0;
     if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat && event->key.scancode == SDL_SCANCODE_F11) {
-        port_settings.fullscreen = !port_settings.fullscreen;
-        port_video_apply_settings();
+        port_video_set_fullscreen(!port_video_fullscreen());
         port_settings_changed();
         return 1;
     }
