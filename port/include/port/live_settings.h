@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    PORT_LIVE_WIDESCREEN,        /* 0 or 1: the 16:9 picture */
+    PORT_LIVE_WIDESCREEN,        /* PORT_SHAPE_ (port/include/port/widescreen.h): 0 off, 1 16:9, ... */
     PORT_LIVE_NATIVE_WIDESCREEN, /* 0 or 1: with widescreen, the renderer's picture drawn with more pixels across */
     PORT_LIVE_NATIVE_SCALE,      /* 0 (auto) or 1 to 4: the renderer's resolution, times the PS2's */
     PORT_LIVE_FRAME_RATE,        /* pictures a second: 30 to 240, PORT_FRAME_RATE_MONITOR or _UNLOCKED */

@@ -419,14 +419,15 @@ static void image_data(size_t qwords) {
 }
 
 /* ---- Widescreen ------------------------------------------------------------------------------
-   With port_widescreen() on, the game draws its 3D world with a 16:9 field of view into the same
-   640x448 frame, and the window shows that frame at 16:9 (GameLoop_SetCameraMatrices, patched: the
-   frame's projection three quarters as wide, and the water's reflection's with it, which the water
+   With port_widescreen() on, the game draws its 3D world with a field of view of the picture's shape
+   (port_picture_shape(): 16:9, 21:9, the window's, ...) into the same 640x448 frame, and the window shows that
+   frame at the shape (GameLoop_SetCameraMatrices, patched: the frame's projection port_widescreen_squeeze() as
+   wide, three quarters at 16:9, and the water's reflection's with it, which the water
    looks up by the place on the screen). Its 2D was laid out for 4:3, so it is
-   squeezed here to three quarters of its width, as the vertices go by, which keeps its shape:
+   squeezed here by the same fraction of its width, as the vertices go by, which keeps its shape:
    - into the middle of the frame (PORT_WIDESCREEN_2D): the menus, the title, the message boxes;
-   - or, for the HUD of the top left, against the frame's left edge, unless the player wants it
-     centred (PORT_WIDESCREEN_HUD_LEFT, port_options.widescreen_hud_centred).
+   - or, for the HUD of the top left, against the left edge of the HUD's area (the picture's edges, a 16:9 or 21:9
+     middle, or centred: PORT_WIDESCREEN_HUD_LEFT and _RIGHT, port_options.widescreen_hud, port_hud_fraction()).
    What the packet chain (PATH1 and PATH2) draws is what the game last said with an A+D write to
    PORT_GS_REG_WIDESCREEN (game/widescreen.c; sent only while the switch is on); PATH3 carries nothing
    but 2D (the menus and the title), so it is squeezed unless told otherwise.
@@ -447,15 +448,44 @@ static void image_data(size_t qwords) {
    middle of that frame, and its black clear, which reaches the edges, becomes the bars.
    With the switch off nothing here runs, and the packets go to the GS untouched. */
 static uint32_t draw_offset_x2 = 0x6C00; /* XYOFFSET_2's */
+static PortShape squeeze_shape = {4, 3}; /* the picture's shape, taken once a port_gs_gif */
+static int squeeze_hud_area;              /* the HUD's area (PORT_HUD_), taken with it */
+static int squeeze_hud_inset;             /* its edges' distance in from the picture's, in the frame's 12.4 */
 static uint32_t frame_fbp[2];            /* FRAME_1's and FRAME_2's FBP as last written (these two are
                                             not in save states: the game writes them again each frame) */
 
 int port_widescreen(void) {
-    return port_options.widescreen;
+    return port_options.widescreen != PORT_SHAPE_4_3;
+}
+
+/* The window's size in pixels as last presented, across << 16 | down (0: none yet), for Fill: written by the main
+   thread at each present, read by the game's and the GS's threads */
+static uint32_t window_seen;
+
+void port_widescreen_window_seen(int width, int height) {
+    uint32_t seen = width > 0 && height > 0 && width < 65536 && height < 65536 ? (uint32_t)width << 16 | (uint32_t)height : 0;
+
+    __atomic_store_n(&window_seen, seen, __ATOMIC_RELAXED);
+}
+
+PortShape port_picture_shape(void) {
+    uint32_t seen = __atomic_load_n(&window_seen, __ATOMIC_RELAXED);
+
+    return port_shape_of(port_options.widescreen, (int)(seen >> 16), (int)(seen & 0xFFFF));
+}
+
+float port_widescreen_squeeze(void) {
+    PortShape shape = port_picture_shape();
+
+    return (float)port_shape_squeeze_num(shape) / (float)port_shape_squeeze_den(shape);
 }
 
 int port_widescreen_hud_at_edge(void) {
-    return port_options.widescreen && !port_options.widescreen_hud_centred;
+    return port_widescreen() && port_options.widescreen_hud != PORT_HUD_CENTRED;
+}
+
+float port_hud_fraction(void) {
+    return port_widescreen() ? (float)port_shape_hud_fraction(port_picture_shape(), port_options.widescreen_hud) : 1.0f;
 }
 
 int port_sharp_font(void) {
@@ -515,6 +545,7 @@ static void squeeze_x(int path, uint8_t *data) {
     int x = data[0] | (data[1] << 8);
     int anchor = 0x8000;
     int shift = 0; /* the frame's place in this context's coordinates, from context 1's */
+    int moved = 0; /* the HUD's from the picture's edge to its area's (12.4) */
 
     if ((p->prim & 0x200) && frame_fbp[1] == frame_fbp[0]) {
         shift = (int)draw_offset_x2 - (int)draw_offset_x; /* context 2, into the frame (above) */
@@ -532,14 +563,16 @@ static void squeeze_x(int path, uint8_t *data) {
     if ((p->prim & 0x10) && is_frame_picture(p->tbp[(p->prim >> 9) & 1])) {
         return;
     }
-    if (mode == PORT_WIDESCREEN_HUD_LEFT && !port_options.widescreen_hud_centred) {
-        anchor = 0x6C00;
+    if (mode == PORT_WIDESCREEN_HUD_LEFT && squeeze_hud_area != PORT_HUD_CENTRED) {
+        anchor = 0x6C00; /* (then moved in from the edge to the HUD area's) */
+        moved = squeeze_hud_inset;
     }
-    if (mode == PORT_WIDESCREEN_HUD_RIGHT && !port_options.widescreen_hud_centred) {
+    if (mode == PORT_WIDESCREEN_HUD_RIGHT && squeeze_hud_area != PORT_HUD_CENTRED) {
         anchor = 0x9400;
+        moved = -squeeze_hud_inset;
     }
     anchor += shift;
-    x = anchor + (x - anchor) * 3 / 4;
+    x = port_shape_squeeze_x(squeeze_shape, x, anchor) + moved;
     data[0] = (uint8_t)x;
     data[1] = (uint8_t)(x >> 8);
 }
@@ -669,7 +702,7 @@ int port_gs_path_idle(int path) {
 void port_gs_gif(int path, const void *data, size_t bytes) {
     uint64_t start = port_options.stats ? port_ticks() : 0;
 
-    if (port_options.widescreen) {
+    if (port_widescreen()) {
         /* a copy, squeezed (the game's packets are its own, and may be sent again) */
         static uint64_t *copy;
         static size_t copy_bytes;
@@ -684,6 +717,9 @@ void port_gs_gif(int path, const void *data, size_t bytes) {
         }
         memcpy(copy, data, bytes);
         data = copy;
+        squeeze_shape = port_picture_shape();
+        squeeze_hud_area = port_options.widescreen_hud;
+        squeeze_hud_inset = (int)(0x1400 * (1.0 - port_shape_hud_fraction(squeeze_shape, squeeze_hud_area)) + 0.5);
         read_gif(path, copy, bytes / 16, 1);
     } else {
         read_gif(path, (uint64_t *)data, bytes / 16, 0);
@@ -1073,17 +1109,18 @@ void port_gs_set_antialias(int method) {
 #endif
 }
 
-/* --native-widescreen: the widescreen picture is the GS's 640x448 shown at 16:9, its 3D drawn with a
-   16:9 field of view and its 2D squeezed (above). The PC renderer draws it as it is, only with more
-   pixels across than down: 4/3 of --native-scale, rounded up (1x: 2, 2x: 3, 3x: 4, exactly 4/3; 4x: 6),
+/* --native-widescreen: the widescreen picture is the GS's 640x448 shown at its shape (16:9, ...), its 3D drawn with
+   that field of view and its 2D squeezed (above). The PC renderer draws it as it is, only with more pixels across
+   than down: the shape's width over 4:3's times --native-scale, rounded up (16:9: 1x 2, 2x 3, 3x 4, 4x 6;
+   port_shape_scale_x),
    so that a GS pixel's width on the 16:9 screen is never more than one of the target's pixels'
    height, and the window shrinks the picture across instead of stretching it. Nothing in the game or
    the GS's coordinates changes: the targets are only drawn finer across. */
 int port_gs_native_scale_x(void) {
     int s = port_gs_native_scale();
 
-    if (port_options.native_widescreen && port_options.widescreen) {
-        return (4 * s + 2) / 3;
+    if (port_options.native_widescreen && port_widescreen()) {
+        return port_shape_scale_x(port_picture_shape(), s);
     }
     return s;
 }

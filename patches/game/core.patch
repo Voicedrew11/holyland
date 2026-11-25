@@ -894,7 +894,7 @@ index a865b608d3deba4297c0ebe4440d53c66f45be2f..45d537fddca1082bf211ca65d5a1e550
  /* the 0x20 bytes in front of a strip's points as the four words PoolPartFile_Expand copies them as */
  typedef union {
 diff --git a/src/game/core/game_loop.c b/src/game/core/game_loop.c
-index 4e157dccb6c9fafec8f4f098024e3983189adf2e..01248fe403537ffa4097e74087a3a9753b56f968 100644
+index 4e157dccb6c9fafec8f4f098024e3983189adf2e..163b180fc60b3ffb167cf31764f5e78bef37d2df 100644
 --- a/src/game/core/game_loop.c
 +++ b/src/game/core/game_loop.c
 @@ -9,6 +9,7 @@
@@ -1206,7 +1206,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..01248fe403537ffa4097e74087a3a975
      func_001095D8();
  }
  
-@@ -656,14 +714,23 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -656,14 +714,24 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
      f32 other[16];
      f32 translation[4];
      f32 angle;
@@ -1215,25 +1215,26 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..01248fe403537ffa4097e74087a3a975
      switch (projection) {
      case 0:
 -        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f, 65535.0f);
-+        /* PC: --fov scales both fields; --widescreen: three quarters as wide, so the 640 columns span a 16:9 view */
++        /* PC: --fov scales both fields; --widescreen: port_widescreen_squeeze() as wide (three quarters at 16:9), so the
++           640 columns span the wide picture's view */
 +        /* PC: --draw-distance: the far plane further (game/draw_distance.c) */
-+        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, fov * (port_widescreen() ? 0.75f : 1.0f), fov, 2048.0f,
++        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, fov * port_widescreen_squeeze(), fov, 2048.0f,
 +                               2048.0f, 1.0f, 1048560.0f, 1.0f, DrawDistance_FarZ(65535.0f));
          break;
      case 1:
 -        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, 0.4f, 0.5714286f, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f,
 -                               65535.0f);
-+        /* PC: --fov scales both fields. --widescreen: the reflection's picture three quarters as wide too. The water
++        /* PC: --fov scales both fields. --widescreen: the reflection's picture as much narrower too. The water
 +           looks it up by the place on the screen (Wobble_DrawRippledModel: the whole frame is the whole picture),
 +           so its 256 columns have to span what the frame's 640 do: left at 0.4, a reflection lay a third further
 +           from the screen's middle than what it reflects. */
-+        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, fov * (port_widescreen() ? 0.4f * 0.75f : 0.4f),
++        sceVu0ViewScreenMatrix(view_screen_matrix, 512.0f, fov * (0.4f * port_widescreen_squeeze()),
 +                               0.5714286f * fov, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f,
 +                               DrawDistance_FarZ(65535.0f)); /* PC: --draw-distance */
          break;
      }
      translation[0] = -camera_state.position[0];
-@@ -703,6 +770,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
+@@ -703,6 +771,7 @@ void GameLoop_SetCameraMatrices(int projection, int mode) {
          sceVu0MulMatrix(world_screen_matrix, view_screen_matrix, local);
          break;
      }
@@ -1241,7 +1242,7 @@ index 4e157dccb6c9fafec8f4f098024e3983189adf2e..01248fe403537ffa4097e74087a3a975
  }
  
  /* Runs the queued sound loads, one at a time. */
-@@ -729,7 +797,7 @@ void GameLoop_RunSoundLoads(void) {
+@@ -729,7 +798,7 @@ void GameLoop_RunSoundLoads(void) {
      }
      switch (sound_load_queue.step) {
      case 1:

@@ -417,10 +417,11 @@ int port_video_refresh_rate(void) {
 
 #ifdef KF4_HAVE_SDL
 /* The picture's place in a window of out_w x out_h pixels: the TV's 4:3, whatever the scanout's size;
-   with --widescreen a 16:9 TV's (the game drew its picture squeezed for it, port/platform/gs.c); or
-   the whole window, stretched */
+   with widescreen the picture's shape (16:9, ..., or with Fill the window's: the game drew its picture squeezed for
+   it, port/platform/gs.c); or the whole window, stretched */
 void port_video_fit(int out_w, int out_h, int *x, int *y, int *width, int *height) {
-    double aspect = port_options.widescreen ? 16.0 / 9.0 : 4.0 / 3.0;
+    PortShape shape = port_picture_shape();
+    double aspect = (double)shape.across / shape.down;
 
     if (port_settings.aspect == ASPECT_STRETCH) {
         *width = out_w;
@@ -452,14 +453,14 @@ void *port_video_window(void) {
 }
 
 /* the window's size in windowed mode: the height the settings say, and the width they say (a
-   monitor's size, which the picture is fitted into) or as wide as the picture's shape (4:3, or 16:9
-   with --widescreen) at that height */
+   monitor's size, which the picture is fitted into) or as wide as the picture's shape (4:3, or the
+   widescreen shape; Fill's 16:9) at that height */
 static void window_size(int *width, int *height) {
     int h = port_settings.window_height < 448 ? 448 : port_settings.window_height;
+    PortShape shape = port_shape_of(port_options.widescreen, 0, 0);
 
     *width = port_settings.window_width > 0 ? port_settings.window_width
-             : port_options.widescreen     ? (h * 16 + 8) / 9
-                                            : (h * 4 + 2) / 3;
+                                            : (h * shape.across + shape.down / 2) / shape.down;
     *height = h;
 }
 #endif
@@ -876,12 +877,19 @@ void port_video_counter_draw(void (*fill)(void *, int, int, int, int, unsigned i
     }
     counter_metrics(height, &cell, &margin);
     count = counter_text(lines);
+    {
+        /* in the HUD's area, as the game's gauges and the minimap are */
+        int inset = (int)((float)width * (1.0f - port_hud_fraction()) * 0.5f);
+
+        x += inset;
+        width -= 2 * inset;
+    }
     for (i = 0; i < count; i++) {
         int w = ((int)strlen(lines[i]) * 6 - 1) * cell;
 
         widest = w > widest ? w : widest;
     }
-    /* the picture's top right corner (the widescreen HUD goes top left), on a dark square: opaque, as
+    /* the HUD area's top right corner (the widescreen HUD goes top left), on a dark square: opaque, as
        the Vulkan presenter draws squares by clearing them */
     right = x + width - margin;
     top = y + margin;
@@ -1115,6 +1123,7 @@ void port_video_present(void) {
 
         out_w = out_h = 0;
         SDL_GetWindowSizeInPixels(window, &out_w, &out_h);
+        port_widescreen_window_seen(out_w, out_h); /* (Fill's shape) */
         if (out_w > 0 && out_h > 0) {
             port_video_fit(out_w, out_h, &x, &y, &w, &h);
             __atomic_store_n(&picture_out_height, h, __ATOMIC_RELEASE);

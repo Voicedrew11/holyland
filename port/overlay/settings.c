@@ -5,7 +5,7 @@
        "display":  {"window_height": 896, "window_width": 0, "fullscreen": false, "aspect": "4:3", "vsync": false, "smooth": true,
                     "deinterlace": true, "progressive": true, "anti_blur": true, "adapt_width": true,
                     "whole_frame": true, "seamless_scroll": true, "flicker_filter": false, "interlaced_menus": false,
-                    "widescreen": false, "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
+                    "widescreen": "off", "widescreen_hud": "corner", "fov": 64, "frame_rate": 30, "tearing": false,
                     "adaptive_sync": false,
                     "draw_distance": "1", "draw_distance_sky": "ps2",
                     "native_scale": "auto", "native_widescreen": true, "antialias": "off", "native_lod": "scale",
@@ -60,6 +60,7 @@
 
 #include "cJSON.h"
 #include "port/antialias.h"
+#include "port/widescreen.h"
 #include "port/audio.h"
 #include "port/automap.h"
 #include "port/file_replace.h"
@@ -382,13 +383,28 @@ void port_settings_load(void) {
     s->seamless_scroll = read_bool(display, "seamless_scroll", s->seamless_scroll);
     s->flicker_filter = read_bool(display, "flicker_filter", s->flicker_filter);
     s->interlaced_menus = read_bool(display, "interlaced_menus", s->interlaced_menus);
-    s->widescreen = read_bool(display, "widescreen", s->widescreen);
+    {
+        /* a shape's name (port/include/port/widescreen.h), or from before the shapes true (16:9) or false */
+        const cJSON *wide = cJSON_GetObjectItemCaseSensitive(display, "widescreen");
+        int shape = cJSON_IsString(wide) ? port_shape_from_name(wide->valuestring) : -1;
+
+        if (cJSON_IsBool(wide)) {
+            shape = cJSON_IsTrue(wide) ? PORT_SHAPE_16_9 : PORT_SHAPE_4_3;
+        }
+        if (shape >= 0) {
+            s->widescreen = shape;
+        }
+    }
     s->fov = (int)read_number(display, "fov", s->fov, 30, 120);
     {
         const char *hud = read_string(display, "widescreen_hud");
 
         if (hud != NULL) {
-            s->widescreen_hud_centred = strcmp(hud, "centred") == 0;
+            int area = port_hud_area_from_name(hud);
+
+            if (area >= 0) {
+                s->widescreen_hud = area;
+            }
         }
     }
     {
@@ -580,7 +596,7 @@ void port_settings_load(void) {
     }
     if (!port_options.widescreen_forced) {
         port_options.widescreen = s->widescreen;
-        port_options.widescreen_hud_centred = s->widescreen_hud_centred;
+        port_options.widescreen_hud = s->widescreen_hud;
     }
     if (!port_options.fov_forced) {
         port_options.fov = s->fov;
@@ -781,8 +797,12 @@ void port_settings_save(void) {
     put(display, "seamless_scroll", cJSON_CreateBool(s->seamless_scroll));
     put(display, "flicker_filter", cJSON_CreateBool(s->flicker_filter));
     put(display, "interlaced_menus", cJSON_CreateBool(s->interlaced_menus));
-    put(display, "widescreen", cJSON_CreateBool(s->widescreen));
-    put(display, "widescreen_hud", cJSON_CreateString(s->widescreen_hud_centred ? "centred" : "corner"));
+    put(display, "widescreen", cJSON_CreateString(port_shape_choice(s->widescreen) != NULL
+                                                      ? port_shape_choice(s->widescreen)->name
+                                                      : port_shape_choice(PORT_SHAPE_4_3)->name));
+    put(display, "widescreen_hud", cJSON_CreateString(port_hud_area(s->widescreen_hud) != NULL
+                                                          ? port_hud_area(s->widescreen_hud)->name
+                                                          : port_hud_area(PORT_HUD_EDGES)->name));
     put(display, "fov", cJSON_CreateNumber(s->fov));
     put(display, "frame_rate", s->frame_rate == PORT_FRAME_RATE_MONITOR    ? cJSON_CreateString("monitor")
                                : s->frame_rate == PORT_FRAME_RATE_UNLOCKED ? cJSON_CreateString("unlocked")

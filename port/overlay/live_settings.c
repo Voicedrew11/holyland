@@ -11,9 +11,12 @@
 #include "port/host.h"
 #include "port/platform.h"
 #include "port/settings.h"
+#include "port/widescreen.h"
 
-static double set_widescreen(double on) {
-    port_settings.widescreen = port_options.widescreen = on != 0;
+/* a shape: PORT_SHAPE_ (port/include/port/widescreen.h) */
+static double set_widescreen(double shape) {
+    int whole = shape < 0 ? PORT_SHAPE_4_3 : shape >= PORT_SHAPE_COUNT ? PORT_SHAPE_COUNT - 1 : (int)shape;
+    port_settings.widescreen = port_options.widescreen = whole;
     port_video_apply_settings();
     return port_options.widescreen;
 }

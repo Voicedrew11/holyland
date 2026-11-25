@@ -114,7 +114,7 @@ index 304150659bbc58d3906b3f06ea4d296c605830b6..7bf73550a34875ee71c43c3c49921af0
  
  #endif
 diff --git a/src/game/ui/map_viewer.c b/src/game/ui/map_viewer.c
-index bf418608acb7435fefdee97b9c274838dc07670e..7d32ecb4a24f5cc32aabc5227f0f197cd5c8b0f0 100644
+index bf418608acb7435fefdee97b9c274838dc07670e..7ef561cf365c8865260200fbbc7990655c9ef655 100644
 --- a/src/game/ui/map_viewer.c
 +++ b/src/game/ui/map_viewer.c
 @@ -12,6 +12,10 @@
@@ -261,7 +261,7 @@ index bf418608acb7435fefdee97b9c274838dc07670e..7d32ecb4a24f5cc32aabc5227f0f197c
  
 -        sceVu0ViewScreenMatrix(view_screen, 512.0f, 1.0f, 1.0f, 2048.0f, 2048.0f, 1.0f, 1048560.0f, 1.0f, 65535.0f);
 +        /* PC: --widescreen: the map is as wide as the world's view; its frame stretches, its panel does not */
-+        sceVu0ViewScreenMatrix(view_screen, 512.0f, port_widescreen() ? 0.75f : 1.0f, 1.0f, 2048.0f, 2048.0f, 1.0f,
++        sceVu0ViewScreenMatrix(view_screen, 512.0f, port_widescreen_squeeze(), 1.0f, 2048.0f, 2048.0f, 1.0f,
 +                               1048560.0f, 1.0f, 65535.0f);
          do {
              VuVector4 move;

@@ -23,6 +23,7 @@
 extern "C" {
 #include "port/automap.h"
 #include "port/controls.h"
+#include "port/host.h"
 #include "port/platform.h"
 #include "port/player_ui.h"
 }
@@ -991,8 +992,12 @@ void picture(int x, int y, int width, int height, ImVec2 &p0, ImVec2 &p1) {
     }
 }
 
-// the minimap's square in the picture g0-g1, from the settings (also with it off)
+// the minimap's square in the picture g0-g1, from the settings (also with it off): in the HUD's area, as the game's
+// gauges are (port_hud_fraction)
 void minimap_square(ImVec2 g0, ImVec2 g1, ImVec2 &lo, ImVec2 &hi) {
+    float inset = (g1.x - g0.x) * (1.0f - port_hud_fraction()) * 0.5f;
+    g0.x += inset;
+    g1.x -= inset;
     float gh = g1.y - g0.y;
     float side = gh * (float)port_automap.minimap_size / 100.0f, margin = gh * 0.025f;
     int corner = port_automap.minimap_corner;
