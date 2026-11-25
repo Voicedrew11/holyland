@@ -116,7 +116,7 @@ game, in the menu's own window, not in the launcher.
 - **Controls**: Input Device (keyboard and mouse, or a controller: chosen from whether one is connected) only
   chooses which rows the page shows; both always work.
 - **Previews** (`port/ui/setup_view.cpp`), over the focused row's help: what the sticks and keys do (Controls); a
-  screen of the monitor's shape with the 4:3 or 16:9 picture and the gauges (Display); the hands' three cards at their
+  screen of the monitor's shape with the 4:3 or wide picture and the gauges (Display); the hands' three cards at their
   corner, size, layout and shape (Quick Slots), in the game's proportions (game/hands_cross.c's, on a 4:3 HUD also in
   widescreen); each page's choices (Finish).
   Boxes the style sheet draws (`body.setup` in `kf4.rcss`), from the settings as they are now.
@@ -128,7 +128,7 @@ The presets, for the owner to look over:
 | row | Original | Balanced | Modern |
 |---|---|---|---|
 | frame rate | 30 | the monitor's | the monitor's |
-| widescreen | off | off | on |
+| widescreen | off | off | Fill Screen |
 | anti-aliasing | FXAA | SMAA | SMAA T2x |
 | font | Original | IPA Mincho | IPA Mincho |
 | twin-stick | off | on | on |

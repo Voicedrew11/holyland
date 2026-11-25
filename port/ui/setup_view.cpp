@@ -3,6 +3,7 @@
 // on it what the page changes, at the places and sizes the settings give.
 #include "setup_view.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <span>
 
@@ -13,6 +14,7 @@
 
 extern "C" {
 #include "port/controls.h"
+#include "port/host.h"
 #include "port/platform.h"
 #include "port/twin_stick.h"
 }
@@ -37,12 +39,15 @@ std::string caption(const char *text) {
     return out + "</caption>";
 }
 
-// The game's picture in a 16:9 screen: the whole of it in widescreen, the 4:3 middle else (in percent of the screen)
+// The game's picture in a 16:9 screen, in percent of the screen: as wide as its shape, centred (a shape wider than
+// 16:9 shown whole across, its bars above and below left out)
 struct Picture {
     float left, width;
 };
 Picture picture() {
-    return port_options.widescreen ? Picture{0.0f, 100.0f} : Picture{12.5f, 75.0f};
+    PortShape shape = port_picture_shape();
+    float width = std::min(100.0f, 100.0f * float(shape.across) * 9.0f / (float(shape.down) * 16.0f));
+    return Picture{(100.0f - width) / 2.0f, width};
 }
 
 // A screen of the monitor's shape, with the picture in it and the marks inside the picture
@@ -53,13 +58,15 @@ std::string monitor(const std::string &marks) {
 
 // The health and magic gauges' place: the picture's top left, or the 4:3 middle's in widescreen with Centred
 std::string gauges() {
-    float left = port_options.widescreen && port_options.widescreen_hud_centred ? 12.5f : 3.0f;
+    Picture p = picture();
+    float area_left = p.left + p.width * (1.0f - port_hud_fraction()) / 2.0f; // (the HUD's area's left edge)
+    float left = port_widescreen() && port_options.widescreen_hud == PORT_HUD_CENTRED ? area_left : area_left + 3.0f;
     return placed("mark", "gauges", left, 4.0f, 22.0f, 5.0f);
 }
 
 std::string screen_preview() {
-    const char *text = port_options.widescreen ? "16:9 shows more at the sides. Menus and messages stay 4:3."
-                                               : "4:3 with black bars at the sides.";
+    const char *text = port_widescreen() ? "Shows more at the sides. Menus and messages stay 4:3."
+                                         : "4:3 with black bars at the sides.";
     return "<preview>" + monitor(gauges()) + caption(text) + "</preview>";
 }
 
@@ -71,11 +78,12 @@ std::string hands_preview() {
     }
     // The game's cards (game/hands_cross.c) are in the HUD's 640 x 448, drawn on a 4:3 picture's shape also in
     // widescreen: each is 70 wide, 80 high tall and 70 square, 3 apart, the middle one 24 lower in the cross.
-    // Here in percent of the picture's height and width, which in widescreen is 16 for 9, not 4 for 3; drawn
+    // Here in percent of the picture's height and width, which in widescreen is the wide shape's (16 for 9, ...), not 4 for 3; drawn
     // larger than the game's, to be seen in the small screen (the caption says so).
     const float larger = 1.25f;
     float scale = port_hands.scale * larger;
-    float picture_aspect = port_options.widescreen ? 16.0f / 9.0f : 4.0f / 3.0f;
+    PortShape shape = port_picture_shape();
+    float picture_aspect = float(shape.across) / float(shape.down);
     float across = 100.0f * (4.0f / 3.0f) / 640.0f / picture_aspect * scale; // (a HUD unit across, in percent)
     float down = 100.0f / 448.0f * scale;                                     // (a HUD unit down)
     float card_h = port_hands.cards == PORT_HANDS_CARDS_SQUARE ? 70.0f : 80.0f;

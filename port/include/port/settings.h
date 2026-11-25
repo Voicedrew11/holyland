@@ -38,8 +38,8 @@ typedef struct {
     int seamless_scroll;   /* the scrolling textures without a seam (port_options.seamless_scroll; on) */
     int flicker_filter;    /* the game's flicker filter, as on the PS2 (port_options.flicker_filter; off) */
     int interlaced_menus;  /* the menus a field at a time, for a CRT (port_options.interlaced_menus; off) */
-    int widescreen;        /* the opt-in 16:9 picture (port_options.widescreen) */
-    int widescreen_hud_centred; /* with it, the HUD in the 4:3 middle instead of the 16:9 corner */
+    int widescreen;        /* the opt-in wide picture: PORT_SHAPE_ (port_options.widescreen; "off", "16:9", ...) */
+    int widescreen_hud;    /* with it, the HUD's area: PORT_HUD_ (port_options.widescreen_hud; "corner", "16:9", ...) */
     int fov;               /* the 3D view's horizontal field, degrees at 4:3 (port_options.fov; 64, the game's) */
     int frame_rate;        /* 30 (the PS2's), or the opt-in higher rates, interpolated: pictures a second, or
                               PORT_FRAME_RATE_MONITOR or _UNLOCKED (port_options.frame_rate) */

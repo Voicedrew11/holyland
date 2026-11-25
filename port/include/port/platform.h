@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "port/widescreen.h"
+
 /* ---- Start-up -------------------------------------------------------------------------------- */
 
 /* Allocates game RAM and resets the scratchpad, register pages and VU0 (port/platform/memory.c). */
@@ -119,11 +121,11 @@ typedef struct {
                                 the row above, for an interlaced TV); off by default, on with
                                 --flicker-filter or --ps2-scanout */
     int flicker_filter_forced;
-    /* The opt-in 16:9 picture (port_widescreen(), port/platform/gs.c): off by default, turned on by
-       --widescreen or settings.json, live from the overlay. */
+    /* The opt-in wide picture (port_widescreen(), port/platform/gs.c): PORT_SHAPE_ (port/include/port/widescreen.h),
+       PORT_SHAPE_4_3 (off) by default; --widescreen[=SHAPE] or settings.json, live from the player menu. */
     int widescreen;
-    int widescreen_forced;   /* --widescreen: on for this run whatever settings.json says */
-    int widescreen_hud_centred; /* the HUD stays in the 4:3 middle instead of the 16:9 corner */
+    int widescreen_forced;   /* --widescreen: this shape for this run whatever settings.json says */
+    int widescreen_hud;      /* the HUD's area in the wide picture: PORT_HUD_ (the edges, a middle, centred) */
     /* --fov: the 3D view's horizontal field, in degrees at 4:3 (64, the game's own, by default; wider
        sees more at the sides, narrower zooms in). The game scales its projection by port_fov_scale(),
        and widescreen widens it further. Live from the settings. */
@@ -450,8 +452,12 @@ int port_gs_native_scale(void);
    at each present, read by the GS's thread */
 int port_video_picture_height(void);
 /* The renderer's scale across: native_scale, or with --native-widescreen (and widescreen on) the
-   smallest whole number at least 4/3 of it */
+   smallest whole number at least the shape's width over 4:3's times it (port_shape_scale_x) */
 int port_gs_native_scale_x(void);
+/* The picture's shape now (port_options.widescreen; Fill's follows the window): any thread. port/platform/gs.c. */
+PortShape port_picture_shape(void);
+/* The window's size in pixels, for Fill (main thread, at each present) */
+void port_widescreen_window_seen(int width, int height);
 /* The picture's anti-aliasing (port_options.antialias: PORT_AA_*), from the next picture */
 void port_gs_set_antialias(int method);
 /* The renderer's mipmap levels (port_options.native_lod), from the next draw */

@@ -115,6 +115,8 @@
                          with a seam where they repeat (port_seamless_scroll())
        --ps2-scanout     turn them all off (and --flicker-filter on)
        --widescreen      the opt-in 16:9 picture: a wider view, the 2D kept at 4:3 (port/platform/gs.c)
+       --widescreen=SHAPE
+                         the same at another shape: off, 16:9, 16:10, 21:9, 32:9, or fill (the window's)
        --fov N           the 3D view's horizontal field in degrees at 4:3 (64, the game's own, by
                          default; 30 to 120). Widescreen widens it further; applies at once
        --widescreen-hud-centred
@@ -322,7 +324,7 @@ static void usage(const char *program) {
             "          [--audio-dump FILE] [--no-audio] [--saves DIR|none] [--import-card FILE]\n"
             "          [--record-input FILE] [--state-save-at VBLANK[:SLOT|:FILE],...]\n"
             "          [--state-load [VBLANK:]SLOT|FILE] [--quick-save-at VBLANK[:SLOT|:FILE],...]\n"
-            "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen] [--widescreen-hud-centred] [--fov N]\n"
+            "          [--quick-load [VBLANK:]SLOT|FILE,...] [--widescreen[=SHAPE]] [--widescreen-hud-centred] [--fov N]\n"
             "          [--gs-capture-at VBLANK[:N],...] [--profile-at VBLANK:SECONDS:FILE] [--flash-recorder off|on|SECONDS[,HEIGHT]] [--myus-necklace] [--no-hit-jolt] [--auto-loot-gold] [--extended-stats] [--automap] [--automap-cheats] [--hands] [--show-fps] [--invincible] [--cinematic-camera] [--enemies-ignore] [--cheats LIST] [--fpu-round zero|nearest]\n"
             "          [--teleport [VBLANK:]MAP[:PLACE]] [--renderer scene|pc|gs]\n"
             "          [--presenter vulkan|sdl] [--native-scale auto|1-4] [--native-widescreen] [--no-native-widescreen]\n"
@@ -478,10 +480,22 @@ static void parse_options(int argc, char **argv) {
             continue;
         }
         if (strcmp(option, "--widescreen") == 0 || strcmp(option, "--widescreen-hud-centred") == 0) {
-            port_options.widescreen = port_options.widescreen_forced = 1;
+            port_options.widescreen = PORT_SHAPE_16_9;
+            port_options.widescreen_forced = 1;
             if (strcmp(option, "--widescreen-hud-centred") == 0) {
-                port_options.widescreen_hud_centred = 1;
+                port_options.widescreen_hud = PORT_HUD_CENTRED;
             }
+            continue;
+        }
+        if (strncmp(option, "--widescreen=", 13) == 0) {
+            int shape = port_shape_from_name(option + 13);
+
+            if (shape < 0) {
+                fprintf(stderr, "--widescreen= wants off, 16:9, 16:10, 21:9, 32:9 or fill, not %s\n", option + 13);
+                exit(2);
+            }
+            port_options.widescreen = shape;
+            port_options.widescreen_forced = 1;
             continue;
         }
         if (strcmp(option, "--native-widescreen") == 0 || strcmp(option, "--no-native-widescreen") == 0) {

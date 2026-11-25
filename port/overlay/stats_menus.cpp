@@ -85,9 +85,10 @@ Frame frame_of(int x, int y, int width, int height) {
         px = vp->Pos.x, py = vp->Pos.y, pw = vp->Size.x, ph = vp->Size.y;
     }
     Frame f;
-    if (port_widescreen()) { // the menus keep their 4:3 shape in the middle (docs/port/README.md, "Widescreen")
-        f.x0 = px + pw * 0.125f;
-        f.sx = pw * 0.75f / 640.0f;
+    if (port_widescreen()) { // the menus keep their 4:3 shape in the middle (port/platform/gs.c, "Widescreen")
+        float squeeze = port_widescreen_squeeze();
+        f.x0 = px + pw * (1.0f - squeeze) / 2.0f;
+        f.sx = pw * squeeze / 640.0f;
     } else {
         f.x0 = px;
         f.sx = pw / 640.0f;

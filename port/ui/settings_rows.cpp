@@ -28,6 +28,7 @@ extern "C" {
 #include "port/teleport.h"
 #include "port/twin_stick.h"
 #include "port/walk_keys.h"
+#include "port/widescreen.h"
 }
 
 #include "../overlay/update_badge.h"
@@ -67,7 +68,8 @@ int window_width(int width, int height) {
     if (width > 0) {
         return width;
     }
-    return port_options.widescreen ? (height * 16 + 8) / 9 : (height * 4 + 2) / 3;
+    PortShape shape = port_shape_of(port_options.widescreen, 0, 0); // (Fill's: 16:9)
+    return (height * shape.across + shape.down / 2) / shape.down;
 }
 int get_window_size() {
     for (size_t i = 0; i < std::size(window_sizes); i++) {
@@ -98,12 +100,51 @@ bool windowed() {
     return !port_video_fullscreen();
 }
 
-const Choice shapes[] = {{"Keep", ASPECT_4_3}, {"Stretch", ASPECT_STRETCH}};
-int get_shape() {
+// Stretch to Window: on_off's 0 and 1 are ASPECT_4_3 and ASPECT_STRETCH
+static_assert(ASPECT_4_3 == 0 && ASPECT_STRETCH == 1);
+int get_stretch() {
     return port_settings.aspect;
 }
-void set_shape(int aspect) {
+void set_stretch(int aspect) {
     port_settings.aspect = aspect;
+    changed();
+}
+
+// (in port/widescreen.h's order: a shape is one entry there)
+const std::array<Choice, PORT_SHAPE_COUNT> widescreen_shapes = [] {
+    std::array<Choice, PORT_SHAPE_COUNT> choices{};
+    for (int c = 0; c < PORT_SHAPE_COUNT; c++) {
+        choices[size_t(c)] = {port_shape_choice(c)->label, c};
+    }
+    return choices;
+}();
+int get_widescreen() {
+    return port_options.widescreen;
+}
+void set_widescreen(int shape) {
+    port_live_set(PORT_LIVE_WIDESCREEN, shape);
+}
+bool widescreen_overridden() {
+    return port_options.widescreen != port_settings.widescreen;
+}
+
+// (widest first; a value is port/widescreen.h's PORT_HUD_, an area is one entry there)
+const std::array<Choice, PORT_HUD_COUNT> hud_areas = [] {
+    constexpr int order[PORT_HUD_COUNT] = {PORT_HUD_EDGES, PORT_HUD_21_9, PORT_HUD_16_9, PORT_HUD_CENTRED};
+    std::array<Choice, PORT_HUD_COUNT> choices{};
+    for (size_t i = 0; i < choices.size(); i++) {
+        choices[i] = {port_hud_area(order[i])->label, order[i]};
+    }
+    return choices;
+}();
+bool widescreen_on() {
+    return port_widescreen() != 0;
+}
+int get_hud() {
+    return port_options.widescreen_hud;
+}
+void set_hud(int area) {
+    port_settings.widescreen_hud = port_options.widescreen_hud = area;
     changed();
 }
 
@@ -198,12 +239,22 @@ const SettingRow display_rows[] = {
     {"Fullscreen", "Borderless, at the screen's resolution. F11 also switches it.", RowKind::toggle, on_off, {},
      get_fullscreen, set_fullscreen},
     {"Window Size",
-     "The window's size when not fullscreen. The width follows the aspect ratio (4:3, or 16:9 with widescreen). The "
-     "window can also be resized by dragging its edges.",
+     "The window's size when not fullscreen. The width follows Widescreen (16:9 with Fill Screen). The window can "
+     "also be resized by dragging its edges.",
      RowKind::choice, window_size_choices, {}, get_window_size, set_window_size, nullptr, describe_window_size, nullptr,
      windowed},
-    {"Aspect Ratio", "Keep: 4:3 (16:9 with widescreen), with black bars.\nStretch: fill the window.", RowKind::choice,
-     shapes, {}, get_shape, set_shape},
+    {"Picture", "", RowKind::heading},
+    {"Widescreen",
+     "Shows more at the sides. Menus and messages stay 4:3.\nFill Screen: the shape of your window or screen, with "
+     "no black bars.",
+     RowKind::choice, widescreen_shapes, {}, get_widescreen, set_widescreen, nullptr, nullptr, nullptr, nullptr,
+     widescreen_overridden},
+    {"HUD Area",
+     "Where the health and magic bars, quick slots, minimap and FPS counter sit in widescreen: at the screen's edges, "
+     "or nearer the middle on a very wide screen. 4:3 keeps them beside the menus.",
+     RowKind::choice, hud_areas, {}, get_hud, set_hud, nullptr, nullptr, widescreen_on},
+    {"Stretch to Window", "Off: the picture keeps its shape, with black bars where the window's differs.\nOn: "
+     "stretched to fill the window.", RowKind::toggle, on_off, {}, get_stretch, set_stretch},
     {"Scaling Filter",
      "How the picture is scaled to the window.\nNearest: blocky pixels.\nBilinear: smooth.\nBicubic: sharp "
      "edges, clean downscaling.",
@@ -231,24 +282,6 @@ const SettingRow display_rows[] = {
 };
 
 // ---- Graphics -------------------------------------------------------------------------------------------------------
-int get_widescreen() {
-    return port_options.widescreen != 0;
-}
-void set_widescreen(int on) {
-    port_live_set(PORT_LIVE_WIDESCREEN, on);
-}
-
-const Choice huds[] = {{"Corner", 0}, {"Centred", 1}};
-bool widescreen_on() {
-    return port_options.widescreen != 0;
-}
-int get_hud() {
-    return port_options.widescreen_hud_centred != 0;
-}
-void set_hud(int centred) {
-    port_settings.widescreen_hud_centred = port_options.widescreen_hud_centred = centred;
-    changed();
-}
 int get_fov() {
     return port_options.fov;
 }
@@ -554,10 +587,6 @@ const SettingRow graphics_rows[] = {
      RowKind::choice, scene_depths, {}, get_scene_depth, set_scene_depth, nullptr, describe_scene_depth,
      scene_renderer, nullptr, scene_depth_overridden, scene_depth_note},
     {"View", "", RowKind::heading},
-    {"Widescreen", "16:9 view. Menus and messages stay 4:3.", RowKind::toggle, on_off, {},
-     get_widescreen, set_widescreen},
-    {"HUD Position", "Position of the health and magic bars in 16:9.", RowKind::choice, huds, {}, get_hud, set_hud,
-     nullptr, nullptr, widescreen_on},
     {"Field of View", "Horizontal, in degrees at 4:3. 64 is the PS2's.", RowKind::number, {}, {30, 120, 1}, get_fov,
      set_fov, nullptr, describe_fov, nullptr, nullptr, fov_overridden},
     {"World", "", RowKind::heading},

@@ -260,7 +260,7 @@ static void start(uint64_t vblank, int vblanks) {
              "widescreen_hud_centred=%d\nwhole_frame=%d\nflicker_filter=%d\n",
              KF4GS_VERSION, (unsigned long long)vblank, vblanks, (unsigned long long)best, game, KF4_BUILD_REV,
              __DATE__, __TIME__, port_options.deinterlace, port_options.progressive, port_options.anti_blur,
-             port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud_centred,
+             port_options.adapt_width, port_options.widescreen, port_options.widescreen_hud == PORT_HUD_CENTRED,
              port_options.whole_frame, port_options.flicker_filter);
     put(KF4GS_META, meta, strlen(meta));
 #ifdef KF4_HAVE_PARALLEL_GS

@@ -981,7 +981,7 @@ void port_controls_sample_mouse(void) {
 }
 
 /* Where the mouse is over the menus' 4:3 2D, as a fraction (port_menu_pointer_mouse): 0 when it is not over
-   the window. With --widescreen the 2D is squeezed into the middle three quarters (port/platform/gs.c). */
+   the window. With widescreen the 2D is squeezed into the picture's 4:3 middle (port/platform/gs.c). */
 static int mouse_over_2d(double *x, double *y) {
     SDL_Window *window = SDL_GetMouseFocus();
     float mouse_x = 0.0f, mouse_y = 0.0f;
@@ -998,8 +998,11 @@ static int mouse_over_2d(double *x, double *y) {
     }
     *x = (mouse_x - place_x + 0.5) / place_w;
     *y = (mouse_y - place_y + 0.5) / place_h;
-    if (port_options.widescreen) {
-        *x = (*x - 0.125) / 0.75;
+    if (port_widescreen()) {
+        PortShape shape = port_picture_shape();
+        double squeeze = (double)port_shape_squeeze_num(shape) / (double)port_shape_squeeze_den(shape);
+
+        *x = (*x - (1.0 - squeeze) / 2.0) / squeeze;
     }
     return 1;
 }

@@ -114,8 +114,8 @@ void port_fatal(const char *file, int line, const char *fmt, ...) __attribute__(
    Each is off by default (but port_whole_frame(), below), and the game code does exactly what it did
    on the PS2 while it is off.
 
-   port_widescreen(): 1 while the opt-in 16:9 picture is on (--widescreen, or the overlay's Display
-   page; port/platform/gs.c). The game's patches then widen the 3D projection, and tell the GS front
+   port_widescreen(): 1 while the opt-in wide picture is on (16:9, 21:9, ... or the window's shape: --widescreen, or
+   the player menu's Display tab; port/platform/gs.c). The game's patches then widen the 3D projection, and tell the GS front
    end which of the 2D they draw by PATH2 is the HUD and which is centred 2D, with an A+D write to
    PORT_GS_REG_WIDESCREEN, a GS register address the GS does not have (the GS ignores it; with the
    switch off it is never sent). The GS front end squeezes that 2D horizontally to keep its 4:3 shape;
@@ -124,6 +124,13 @@ int port_widescreen(void);
 /* 1 while the HUD of the top left is drawn at the 16:9 picture's left edge (the widescreen picture on, its HUD not
    centred: PORT_WIDESCREEN_HUD_LEFT below), so the top middle of the picture is clear of it. port/platform/gs.c. */
 int port_widescreen_hud_at_edge(void);
+/* With widescreen on, the width of the picture's 4:3 middle as a fraction of the picture's (3/4 at 16:9; 1 while
+   off): the game's projection across is scaled by it to widen the view to the picture's shape. port/platform/gs.c. */
+float port_widescreen_squeeze(void);
+/* The HUD's area (port_options.widescreen_hud) as a fraction of the picture's width, centred: 1 for the picture's
+   edges and while widescreen is off. The overlay's HUD (the minimap, the frame-rate counter) lays out in it as the
+   game's does. port/platform/gs.c. */
+float port_hud_fraction(void);
 /* Whether the sharper font is asked (--font sharp, the player menu's Font; port_options.font): the menus' one-letter
    words (a colon, a slash) are then drawn a letter wide, not stretched (the MenuDraw_Word patch). port/platform/gs.c. */
 int port_sharp_font(void);

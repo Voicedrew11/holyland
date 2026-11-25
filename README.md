@@ -14,7 +14,7 @@ Holyland is a native PC port of King's Field: The Ancient City (*King's Field IV
 
 ## Features
 
-- Widescreen support (16:9)
+- Widescreen support (16:9, 16:10, 21:9, 32:9, or the shape of your screen)
 - Internal resolution up to 8x
 - Anti-aliasing (FXAA, SMAA, SMAA T2x)
 - Anisotropic filtering

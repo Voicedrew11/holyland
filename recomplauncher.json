@@ -89,13 +89,17 @@
       "defaults": { "display/vsync": "false", "display/tearing": "false", "display/adaptive_sync": "false" }
     },
     {
-      "id": "widescreen", "label": "Widescreen", "group": "Graphics",
-      "help": "16:9 view. Menus and messages stay 4:3.",
+      "id": "widescreen", "label": "Widescreen", "group": "Display",
+      "help": "Shows more at the sides. Menus and messages stay 4:3. Fill Screen: the shape of your screen, with no black bars.",
       "choices": [
-        { "label": "Off", "set": { "display/widescreen": "false" } },
-        { "label": "On", "set": { "display/widescreen": "true" } }
+        { "label": "Off", "set": { "display/widescreen": "\"off\"" } },
+        { "label": "16:9", "set": { "display/widescreen": "\"16:9\"" } },
+        { "label": "16:10", "set": { "display/widescreen": "\"16:10\"" } },
+        { "label": "21:9", "set": { "display/widescreen": "\"21:9\"" } },
+        { "label": "32:9", "set": { "display/widescreen": "\"32:9\"" } },
+        { "label": "Fill Screen", "set": { "display/widescreen": "\"fill\"" } }
       ],
-      "defaults": { "display/widescreen": "false" }
+      "defaults": { "display/widescreen": "\"off\"" }
     },
     {
       "id": "antialias", "label": "Anti-Aliasing", "group": "Graphics",

@@ -40,7 +40,7 @@ const SetupRowRef controls_rows[] = {
 };
 
 const SetupRowRef picture_rows[] = {
-    {"display", "Frame Rate"},     {"graphics", "Widescreen"}, {"graphics", "HUD Position"},
+    {"display", "Frame Rate"},     {"display", "Widescreen"}, {"display", "HUD Area"},
     {"graphics", "Anti-Aliasing"}, {"graphics", "Font"},       own(SetupOwn::next),
 };
 
@@ -91,7 +91,7 @@ const SetupPage pages[] = {
 // ---- The presets: Original, Balanced, Modern ----------------------------------------------------------------------
 const PresetValue presets[] = {
     {"display", "Frame Rate", {30, PORT_FRAME_RATE_MONITOR, PORT_FRAME_RATE_MONITOR}},
-    {"graphics", "Widescreen", {0, 0, 1}},
+    {"display", "Widescreen", {PORT_SHAPE_4_3, PORT_SHAPE_4_3, PORT_SHAPE_FILL}},
     {"graphics", "Anti-Aliasing", {PORT_AA_FXAA, PORT_AA_SMAA, PORT_AA_SMAA_T2X}},
     {"graphics", "Font", {0, 1, 1}}, // (gsn.h's GSN_FONT_: the PS2's, IPA Mincho)
     {"graphics", "Glyphs", {0, PORT_GLYPHS_AUTO, PORT_GLYPHS_AUTO}}, // (the disc's; what the player uses, sharp)
@@ -108,7 +108,7 @@ const GrantedValue granted[] = {
     {"display", "Fullscreen", 1, false},         // (at the screen's own size)
     {"display", "Vertical Sync", 1, false},      // (On)
     {"display", "Scaling Filter", PORT_SCALING_BEST, false},
-    {"display", "Aspect Ratio", ASPECT_4_3, false},
+    {"display", "Stretch to Window", ASPECT_4_3, false}, // (Off: the picture keeps its shape)
     {"graphics", "Internal Resolution", 0, false}, // (Auto: from the screen's height)
     {"graphics", "Anisotropic Filtering", 16, false},
     {"graphics", "Texture LOD", 1, false}, // (Auto)
@@ -123,7 +123,7 @@ const GrantedValue granted[] = {
 // ---- The setup's own rows -----------------------------------------------------------------------------------------
 const char ps2_text[] = "30 FPS, 4:3, original controls and font. Resolution matches your display.";
 const char balanced_text[] = "Refresh-rate FPS, 4:3, twin-stick controls, sharp font and SMAA.";
-const char modern_text[] = "Balanced with 16:9, quick slots, auto-loot gold and SMAA T2x.";
+const char modern_text[] = "Balanced with widescreen, quick slots, auto-loot gold and SMAA T2x.";
 const Choice devices[] = {{"Keyboard & Mouse", 0}, {"Controller", 1}};
 
 struct OwnRow {
