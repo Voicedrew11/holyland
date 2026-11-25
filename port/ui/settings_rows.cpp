@@ -857,8 +857,15 @@ void set_damage(int on) {
     port_stats_options.damage = on;
     changed();
 }
-bool damage_on() {
-    return port_stats_options.on != 0 && port_stats_options.damage != 0;
+int get_bar() {
+    return port_stats_options.bar != 0;
+}
+void set_bar(int on) {
+    port_stats_options.bar = on;
+    changed();
+}
+bool bar_on() {
+    return port_stats_options.on != 0 && port_stats_options.bar != 0;
 }
 const Choice bar_places[] = {{"Top", PORT_STATS_BAR_TOP},
                              {"Top Left", PORT_STATS_BAR_TOP_LEFT},
@@ -1329,10 +1336,12 @@ const SettingRow interface_rows[] = {
      RowKind::toggle, on_off, {}, get_durability, set_durability, nullptr, nullptr, nullptr, stats_on},
     {"Ailment Timers", "Running ailments and timed spell and item effects, with seconds left, beside the minimap.",
      RowKind::toggle, on_off, {}, get_timers, set_timers, nullptr, nullptr, nullptr, stats_on},
-    {"Hit Log", "Each hit's real damage and the HP left (bottom left), and the last enemy hit's health bar.",
-     RowKind::toggle, on_off, {}, get_damage, set_damage, nullptr, nullptr, nullptr, stats_on},
+    {"Hit Log", "Each hit's real damage and the HP left (bottom left).", RowKind::toggle, on_off, {}, get_damage,
+     set_damage, nullptr, nullptr, nullptr, stats_on},
+    {"Enemy Health Bar", "The health of the last enemy you hit, for a few seconds after each hit.", RowKind::toggle,
+     on_off, {}, get_bar, set_bar, nullptr, nullptr, nullptr, stats_on},
     {"Enemy Health Position", "Top Left places the bar below the health and magic bars.", RowKind::choice,
-     bar_places, {}, get_bar_place, set_bar_place, nullptr, nullptr, nullptr, damage_on},
+     bar_places, {}, get_bar_place, set_bar_place, nullptr, nullptr, nullptr, bar_on},
     {"Stats Panel", "Everything in one panel, on its key (F6 unless changed).", RowKind::toggle, on_off, {},
      get_stats_panel, set_stats_panel, nullptr, nullptr, nullptr, stats_on},
 };

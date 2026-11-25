@@ -36,11 +36,12 @@ typedef struct {
     int forced;        /* --extended-stats: on for this run whatever settings.json says */
     int menus;         /* its lines in the game's own menus ("extended_stats_menus") */
     int panel;         /* the stats panel, on its key ("extended_stats_panel") */
-    int damage;        /* the hit log and the target's health bar ("extended_stats_damage") */
+    int damage;        /* the hit log ("extended_stats_damage") */
     int durability;    /* the equipment's wear in the panel ("extended_stats_durability") */
     int timers;        /* the ailments and timed effects running, on screen by the minimap
                           ("extended_stats_timers") */
-    PortStatsBarPlace bar_place; /* where the target's health bar is (part of `damage`) */
+    int bar;           /* the health bar of the creature last hit ("extended_stats_bar") */
+    PortStatsBarPlace bar_place; /* where it is */
 } PortStatsOptions;
 extern PortStatsOptions port_stats_options;
 

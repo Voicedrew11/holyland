@@ -1,6 +1,6 @@
 /* stats_bar.c: PC-only. The extended stats mod's health bar of the creature last hit (game/stats_bar.h): a long bar
    framed as the HUD's own (gage.tx2's stone and gold edge round a dark inside), filled with the HUD bars' picture in
-   red, and the HP left and the most under it in the game's font. Drawn as the HUD is (game/hud_packet.h), where the
+   red, and the HP left and the most written across its middle in the game's font. Drawn as the HUD is (game/hud_packet.h), where the
    player chose (port_stats_options.bar_place): at the top middle (moved right of the HUD where they would touch),
    under the HUD, at the top right or at the bottom middle, 16 from the edge as the HUD's frame is.
 
@@ -31,26 +31,22 @@ void Widescreen_Mark(int what);
 #define MIDDLE_X ((HUD_WIDTH - BAR_W) / 2)
 /* at 4:3 (or with the widescreen HUD centred) the top's bar goes as near the middle as clears the HUD's frame */
 #define BESIDE_HUD_X (HUD_FRAME_RIGHT + BESIDE_GAP)
-#define BAR_H (2.0f * HUD_GAGE_EDGE + 10.0f) /* the edge round an inside as tall as the HUD's bars (10 and 11) */
 #define TEXT_SIZE 0.7f                        /* the font's glyphs at 7 x 14 */
-#define TEXT_GAP 2.0f
-#define GROUP_H (BAR_H + TEXT_GAP + HUD_GLYPH_H * TEXT_SIZE)
+#define BAR_H (2.0f * HUD_GAGE_EDGE + HUD_GLYPH_H * TEXT_SIZE) /* the edge round an inside as tall as the numbers */
 #define HUD_FRAME_BOTTOM 106.0f /* the HUD's frame: 128 texels drawn at 0.7 down, from 16 */
 #define BELOW_GAP 8.0f
 
-/* Each place: where the bar's group goes in the HUD's 640 x 448, whether its numbers go above the bar (at the
-   bottom) and how --widescreen moves it */
+/* Each place: where the bar goes in the HUD's 640 x 448 and how --widescreen moves it */
 typedef struct {
     float x, y;
-    int text_above;
     int widescreen;
 } BarPlace;
 
 static const BarPlace bar_places[PORT_STATS_BAR_PLACE_COUNT] = {
-    [PORT_STATS_BAR_TOP] = {MIDDLE_X, HUD_MARGIN, 0, PORT_WIDESCREEN_2D},
-    [PORT_STATS_BAR_TOP_LEFT] = {HUD_MARGIN, HUD_FRAME_BOTTOM + BELOW_GAP, 0, PORT_WIDESCREEN_HUD_LEFT},
-    [PORT_STATS_BAR_TOP_RIGHT] = {HUD_WIDTH - HUD_MARGIN - BAR_W, HUD_MARGIN, 0, PORT_WIDESCREEN_HUD_RIGHT},
-    [PORT_STATS_BAR_BOTTOM] = {(HUD_WIDTH - BAR_W) / 2, HUD_HEIGHT - HUD_MARGIN - GROUP_H, 1, PORT_WIDESCREEN_2D},
+    [PORT_STATS_BAR_TOP] = {MIDDLE_X, HUD_MARGIN, PORT_WIDESCREEN_2D},
+    [PORT_STATS_BAR_TOP_LEFT] = {HUD_MARGIN, HUD_FRAME_BOTTOM + BELOW_GAP, PORT_WIDESCREEN_HUD_LEFT},
+    [PORT_STATS_BAR_TOP_RIGHT] = {HUD_WIDTH - HUD_MARGIN - BAR_W, HUD_MARGIN, PORT_WIDESCREEN_HUD_RIGHT},
+    [PORT_STATS_BAR_BOTTOM] = {(HUD_WIDTH - BAR_W) / 2, HUD_HEIGHT - HUD_MARGIN - BAR_H, PORT_WIDESCREEN_2D},
 };
 
 /* ---- The timing, in vblanks (60 a second) ------------------------------------------------------------------------ */
@@ -61,10 +57,10 @@ static const BarPlace bar_places[PORT_STATS_BAR_PLACE_COUNT] = {
 /* ---- The colours (the GS's: 0x80 is full) -------------------------------------------------------------------------- */
 #define INSIDE_ALPHA 0x68 /* as the hands mod's cards: lava and torchlight behind do not show through */
 
-#define TEXT_CHARS 24
+#define TEXT_CHARS 11 /* an int's digits */
 #define BAR_QUADWORDS                                                                                               \
     (2 * HUD_QUADWORDS_USE + HUD_QUADWORDS_RECT + HUD_QUADWORDS_GAGE_EDGE + 2 * HUD_QUADWORDS_TEXELS + 2 +          \
-     HUD_QUADWORDS_USE + HUD_QUADWORDS_TEXT(TEXT_CHARS))
+     HUD_QUADWORDS_USE + HUD_QUADWORDS_TEXT(2 * TEXT_CHARS + 1))
 
 /* KF4_STATS_BAR_TEST's target, read once; 0 when unset */
 static int test_target(PortStatsHit *out) {
@@ -106,8 +102,8 @@ static float bar_alpha(unsigned long long since_hit) {
 }
 
 /* the bar: its frame, the HP left in red, the HP the last hit took lighter after it */
-static void draw_bar(HudPacket *p, const PortStatsHit *t, float y, float alpha, unsigned long long since_hit) {
-    HudBox box = {0, y, BAR_W, y + BAR_H};
+static void draw_bar(HudPacket *p, const PortStatsHit *t, float alpha, unsigned long long since_hit) {
+    HudBox box = {0, 0, BAR_W, BAR_H};
     HudBox inside = {box.x0 + HUD_GAGE_EDGE, box.y0 + HUD_GAGE_EDGE, box.x1 - HUD_GAGE_EDGE, box.y1 - HUD_GAGE_EDGE};
     float width = inside.x1 - inside.x0;
     float left = fraction_of(t->left, t->max);
@@ -131,14 +127,21 @@ static void draw_bar(HudPacket *p, const PortStatsHit *t, float y, float alpha, 
     }
 }
 
-/* "left / most", centred under (or over) the bar, in the game's font */
-static void draw_numbers(HudPacket *p, const PortStatsHit *t, float y, float alpha) {
-    char text[TEXT_CHARS + 1];
+/* "left/most" across the bar's middle, in the game's font, over the fill. The slash stays at the middle, the HP left
+   ending at it and the most starting after it, so the numbers stay put as the HP falls instead of the whole line
+   moving to stay centred. */
+static void draw_numbers(HudPacket *p, const PortStatsHit *t, float alpha) {
+    float y = HUD_GAGE_EDGE;
+    char left[TEXT_CHARS + 1], most[TEXT_CHARS + 1];
+    float slash_x = (BAR_W - hud_text_width("/", TEXT_SIZE)) / 2;
+    u64 colour = hud_rgba(0x80, 0x78, 0x68, (int)(0x80 * alpha));
 
-    snprintf(text, sizeof(text), "%d / %d", t->left < 0 ? 0 : t->left, t->max);
+    snprintf(left, sizeof(left), "%d", t->left < 0 ? 0 : t->left);
+    snprintf(most, sizeof(most), "%d", t->max);
     HudPacket_UseFont(p);
-    HudPacket_Text(p, text, (BAR_W - hud_text_width(text, TEXT_SIZE)) / 2, y, TEXT_SIZE,
-                   hud_rgba(0x80, 0x78, 0x68, (int)(0x80 * alpha)));
+    HudPacket_Text(p, left, slash_x - hud_text_width(left, TEXT_SIZE), y, TEXT_SIZE, colour);
+    slash_x += HudPacket_Text(p, "/", slash_x, y, TEXT_SIZE, colour);
+    HudPacket_Text(p, most, slash_x, y, TEXT_SIZE, colour);
 }
 
 void StatsBar_Draw(void) {
@@ -147,9 +150,8 @@ void StatsBar_Draw(void) {
     PortStatsHit t;
     HudPacket p;
     float alpha;
-    float text_y = HUD_GLYPH_H * TEXT_SIZE + TEXT_GAP;
 
-    if (!port_stats_options.on || !port_stats_options.damage || game_options[9] == 0 || map_draw_state.hud_shown == 0) {
+    if (!port_stats_options.on || !port_stats_options.bar || game_options[9] == 0 || map_draw_state.hud_shown == 0) {
         return;
     }
     if (!test_target(&t) && (!port_stats_target(&t, SHOWN_VBLANKS) || t.max <= 0)) {
@@ -166,13 +168,8 @@ void StatsBar_Draw(void) {
     Widescreen_Mark(place.widescreen);
     HudPacket_QueueFont();
     HudPacket_Begin(&p, BAR_QUADWORDS, (HudPlace){place.x, place.y, 1.0f});
-    if (place.text_above) {
-        draw_bar(&p, &t, text_y, alpha, since_hit);
-        draw_numbers(&p, &t, 0, alpha);
-    } else {
-        draw_bar(&p, &t, 0, alpha, since_hit);
-        draw_numbers(&p, &t, BAR_H + TEXT_GAP, alpha);
-    }
+    draw_bar(&p, &t, alpha, since_hit);
+    draw_numbers(&p, &t, alpha);
     HudPacket_End(&p);
     Widescreen_Mark(PORT_WIDESCREEN_3D);
 }
