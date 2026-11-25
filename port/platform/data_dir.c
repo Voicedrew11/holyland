@@ -84,7 +84,51 @@ static int resolve(const Rule *rules, size_t count, FolderName name, DataDirSyst
 
 #define COUNT(rules) (sizeof(rules) / sizeof((rules)[0]))
 
+static int exists(const char *path) {
+    struct stat info;
+
+    return stat(path, &info) == 0;
+}
+
+/* `folder` + the system's separator + `name` into `out`; 1, or 0 if it did not fit */
+static int join(DataDirSystem system, const char *folder, const char *name, char *out, size_t out_size) {
+    int n = snprintf(out, out_size, system == DATA_DIR_WINDOWS ? "%s\\%s" : "%s/%s", folder, name);
+
+    return n >= 0 && (size_t)n < out_size;
+}
+
+/* whether `folder` holds a saves folder */
+static int has_saves(DataDirSystem system, const char *folder) {
+    char saves[1100];
+
+    return join(system, folder, "saves", saves, sizeof(saves)) && exists(saves);
+}
+
+/* Started by RecompLauncher (RECOMPLAUNCHER_DATA: its folder for the game, <install>/recompdata): its folder, so it
+   moves, backs up and removes the game's files with the game; unless only the usual folder (the rules after
+   KF4_DATA_DIR's) has saves, a player's from before: those stay where they are, nothing moved or copied. Saves in
+   RecompLauncher's folder keep it there, whatever appears in the usual one later. */
+static int resolve_for_recomplauncher(const char *given, DataDirSystem system, DataDirEnv env, char *out,
+                                      size_t out_size) {
+    char usual[1024];
+    int n;
+
+    if (!has_saves(system, given) &&
+        resolve(data_rules + 1, COUNT(data_rules) - 1, NAME_NOW, system, env, usual, sizeof(usual)) == 1 &&
+        has_saves(system, usual)) {
+        n = snprintf(out, out_size, "%s", usual);
+    } else {
+        n = snprintf(out, out_size, "%s", given);
+    }
+    return n >= 0 && (size_t)n < out_size;
+}
+
 int data_dir_resolve(DataDirSystem system, DataDirEnv env, char *out, size_t out_size) {
+    const char *recomplauncher = nonempty(env, "RECOMPLAUNCHER_DATA");
+
+    if (nonempty(env, "KF4_DATA_DIR") == NULL && recomplauncher != NULL) {
+        return resolve_for_recomplauncher(recomplauncher, system, env, out, out_size);
+    }
     return resolve(data_rules, COUNT(data_rules), NAME_NOW, system, env, out, out_size) == 1;
 }
 
@@ -103,23 +147,23 @@ static int builds_parent(DataDirSystem system, DataDirEnv env, char *out, size_t
 
 int data_dir_resolve_builds(DataDirSystem system, DataDirEnv env, char *out, size_t out_size) {
     const char *given = nonempty(env, "KF4_BUILDS_DIR");
+    const char *recomplauncher = nonempty(env, "RECOMPLAUNCHER_DATA");
     char parent[1024];
     int n;
 
     if (given != NULL) {
         n = snprintf(out, out_size, "%s", given);
+    } else if (recomplauncher != NULL && nonempty(env, "KF4_DATA_DIR") == NULL) {
+        /* always RecompLauncher's, even for a player whose saves stay in the usual folder: removed with the game, and
+           in its cache folder, which its backups leave out */
+        n = snprintf(out, out_size, system == DATA_DIR_WINDOWS ? "%s\\cache\\builds" : "%s/cache/builds",
+                     recomplauncher);
     } else if (builds_parent(system, env, parent, sizeof(parent))) {
         n = snprintf(out, out_size, system == DATA_DIR_WINDOWS ? "%s\\builds" : "%s/builds", parent);
     } else {
         return 0;
     }
     return n >= 0 && (size_t)n < out_size;
-}
-
-static int exists(const char *path) {
-    struct stat info;
-
-    return stat(path, &info) == 0;
 }
 
 /* moves the folder of the first rule that applies from its old name to its name now; 1 if it moved */

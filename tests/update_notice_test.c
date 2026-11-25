@@ -147,6 +147,13 @@ static void test_data_dir(void) {
     check("nothing set", resolves(DATA_DIR_POSIX, nothing, "holyland", "holyland/builds"));
     test_env = linux_home;
     check("too long", !data_dir_resolve(DATA_DIR_POSIX, lookup, tiny, sizeof(tiny)));
+    {
+        static const char *const windows_rl[] = {"APPDATA=C:\\U\\R", "LOCALAPPDATA=C:\\U\\L",
+                                                 "RECOMPLAUNCHER_DATA=C:\\Games\\Holyland\\recompdata", NULL};
+
+        check("windows, RecompLauncher", resolves(DATA_DIR_WINDOWS, windows_rl, "C:\\Games\\Holyland\\recompdata",
+                                                  "C:\\Games\\Holyland\\recompdata\\cache\\builds"));
+    }
 }
 
 #ifndef _WIN32
@@ -249,6 +256,51 @@ static void test_move_old_folders(void) {
         if (remove(path) != 0) {
             rmdir(path);
         }
+    }
+    check("scratch folder emptied", rmdir(home) == 0);
+}
+
+/* started by RecompLauncher (RECOMPLAUNCHER_DATA): its folder, unless only the usual one has saves */
+static void test_recomplauncher_folder(void) {
+    char home[] = "/tmp/data_dir_test_XXXXXX";
+    char env_home[64], env_rl[96], usual[160], usual_saves[160], rl[160], rl_saves[160], builds[200], path[256];
+    const char *env[] = {env_home, env_rl, NULL};
+    const char *env_given[] = {env_home, env_rl, "KF4_DATA_DIR=/tmp/run", NULL};
+    static const char *const made[] = {"/.local", "/.local/share", "/.local/share/holyland"};
+    size_t i;
+
+    if (mkdtemp(home) == NULL) {
+        check("scratch folder", 0);
+        return;
+    }
+    snprintf(env_home, sizeof(env_home), "HOME=%s", home);
+    in_home(rl, sizeof(rl), home, "/recompdata");
+    snprintf(env_rl, sizeof(env_rl), "RECOMPLAUNCHER_DATA=%s", rl);
+    in_home(rl_saves, sizeof(rl_saves), home, "/recompdata/saves");
+    in_home(usual, sizeof(usual), home, "/.local/share/holyland");
+    in_home(usual_saves, sizeof(usual_saves), home, "/.local/share/holyland/saves");
+    snprintf(builds, sizeof(builds), "%s/cache/builds", rl);
+
+    check("a new player: RecompLauncher's folder, builds in its cache", resolves(DATA_DIR_POSIX, env, rl, builds));
+    for (i = 0; i < sizeof(made) / sizeof(made[0]); i++) {
+        in_home(path, sizeof(path), home, made[i]);
+        mkdir(path, 0755);
+    }
+    check("a usual folder without saves: still RecompLauncher's", resolves(DATA_DIR_POSIX, env, rl, builds));
+    mkdir(usual_saves, 0755);
+    check("a player from before: the usual folder, builds still RecompLauncher's",
+          resolves(DATA_DIR_POSIX, env, usual, builds));
+    check("KF4_DATA_DIR still wins", resolves(DATA_DIR_POSIX, env_given, "/tmp/run", "/tmp/run/builds"));
+    mkdir(rl, 0755);
+    mkdir(rl_saves, 0755);
+    check("saves in RecompLauncher's folder keep it there", resolves(DATA_DIR_POSIX, env, rl, builds));
+
+    rmdir(rl_saves);
+    rmdir(rl);
+    rmdir(usual_saves);
+    for (i = sizeof(made) / sizeof(made[0]); i-- > 0;) {
+        in_home(path, sizeof(path), home, made[i]);
+        rmdir(path);
     }
     check("scratch folder emptied", rmdir(home) == 0);
 }
@@ -368,6 +420,7 @@ int main(void) {
     test_data_dir();
 #ifndef _WIN32
     test_move_old_folders();
+    test_recomplauncher_folder();
 #endif
     printf("%d/%d passed\n", checked - failed, checked);
     return failed != 0;
