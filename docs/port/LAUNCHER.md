@@ -281,8 +281,13 @@ the repository; `build-appimage.sh` puts it at the AppImage's root and `build-wi
 - The player's disc: `check.ids` (the disc's serial; a `.chd` is taken because the label names it) and the Redump
   dump of the USA disc for the verified badge (Redump disc 27994: 3464921088 bytes, CRC-32 `879215a7`).
 - Its setup step runs `holyland --prepare`: `--build-only` with `progress 0.40 TEXT` lines on stdout.
-- Play runs `holyland --disc <the disc>`, with `KF4_DATA_DIR` at RecompLauncher's `{data}` and `KF4_BUILDS_DIR` at
-  `{data}/cache/builds` (its backups leave `cache` out). A player's own `~/.local/share/holyland` is not used there.
+- Play runs `holyland --disc <the disc>`. RecompLauncher gives its folder for the game (`{data}`, `<install>/recompdata`)
+  as `RECOMPLAUNCHER_DATA`, and the data folder rule (`port/include/port/data_dir.h`) takes it: settings, saves, quick
+  saves, save states and logs go there, and the builds in `{data}/cache/builds` (its backups leave `cache` out). A
+  player from before keeps their usual folder (`~/.local/share/holyland`, `%APPDATA%\holyland`): it is used when it has
+  a `saves` folder and RecompLauncher's has none, nothing moved or copied (as Super Odyssey's port does). The builds
+  still go in RecompLauncher's folder. `recomplauncher.json` lists both places for saves, settings and logs, each
+  `if` its `saves` folder is there, the same rule.
 - RecompLauncher sets `RECOMPLAUNCHER=1` in every game it starts and installs the releases itself, so then the
   launcher asks GitHub nothing and the game offers no update (`update_left_to_recomplauncher`).
 - Its game page shows Fullscreen, Frame Rate, Vertical Sync, Widescreen and Anti-Aliasing, written into

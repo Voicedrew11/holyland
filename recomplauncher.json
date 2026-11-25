@@ -15,25 +15,42 @@
   ],
   "start": {
     "program": ["holyland.exe", "Holyland-x86_64.AppImage"],
-    "args": ["--disc", "{input:game}"],
-    "env": { "KF4_DATA_DIR": "{data}", "KF4_BUILDS_DIR": "{data}/cache/builds" }
+    "args": ["--disc", "{input:game}"]
   },
   "prepare": {
     "program": ["holyland.exe", "Holyland-x86_64.AppImage"],
     "args": ["--prepare"],
-    "label": "Building the game on your PC from this release's source",
-    "env": { "KF4_DATA_DIR": "{data}", "KF4_BUILDS_DIR": "{data}/cache/builds" }
+    "label": "Building the game on your PC from this release's source"
   },
-  "saves": ["{data}/saves", "{data}/quicksaves"],
+  "saves": [
+    "{data}/saves", "{data}/quicksaves",
+    "{local}/holyland/saves", "{local}/holyland/quicksaves",
+    "{config}/holyland/saves", "{config}/holyland/quicksaves"
+  ],
   "folders": {
-    "saves": [{ "path": "{data}/saves" }],
-    "logs": [{ "path": "{data}" }]
+    "saves": [
+      { "path": "{data}/saves", "if": "{data}/saves" },
+      { "path": "{local}/holyland/saves", "if": "{local}/holyland/saves" },
+      { "path": "{config}/holyland/saves", "if": "{config}/holyland/saves" },
+      { "path": "{data}/saves" }
+    ],
+    "logs": [
+      { "path": "{data}", "if": "{data}/saves" },
+      { "path": "{local}/holyland", "if": "{local}/holyland/saves" },
+      { "path": "{config}/holyland", "if": "{config}/holyland/saves" },
+      { "path": "{data}" }
+    ]
   },
   "config": [
     {
       "id": "main",
       "format": "json",
-      "file": [{ "path": "{data}/settings.json" }]
+      "file": [
+        { "path": "{data}/settings.json", "if": "{data}/saves" },
+        { "path": "{local}/holyland/settings.json", "if": "{local}/holyland/saves" },
+        { "path": "{config}/holyland/settings.json", "if": "{config}/holyland/saves" },
+        { "path": "{data}/settings.json" }
+      ]
     }
   ],
   "settings": [
