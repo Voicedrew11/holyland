@@ -465,6 +465,9 @@ int port_quick_load_exact(void) {
     }
     request.kind = PORT_QUICK_NONE;
     expected = info;
+    /* the mods' files live outside the state, as for an image load (port_quick_read) */
+    port_automap_quick_loading(path); /* the automap mod: the save's explored maps brought back */
+    port_hands_quick_loading(path); /* the hands mod: the save's hands brought back */
     port_state_request_load_file(state);
     port_event("quick load of %s: its exact state", name);
     set_message("loaded %s: map %02X, level %d, HP %d/%d", name, info.map_tag, info.level, info.hp, info.hp_max);
