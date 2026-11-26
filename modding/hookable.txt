@@ -1,0 +1,9 @@
+# The game's functions a mod may hook (docs/port/MODDING.md, "Hooks"): one C prototype per line, as the game
+# defines it. Each is built so that a hook catches every call to it (cmake/mod_hookable.cmake), and the build fails
+# if a patch changes its signature. Holyland's hook refuses a function not listed here.
+#
+# Adding one is a line here (it changes the game interface ID: update modding/game_interface.txt). Only functions
+# the game exports (not static) can be listed.
+
+# core: the game's reading of the pad, once each game frame (input/input.c)
+void Input_Update(void)

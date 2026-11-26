@@ -27,9 +27,10 @@
 
    Stability: everything in HlApi keeps its meaning for the whole of API 1; later minor versions only add to the end
    of the table (check api->minor, or api->size, before using what a later minor added). The game's own functions
-   and structures (api->symbol, hooks) are the decompilation's and may change with any Holyland release: a mod that
-   uses them is built for the Holyland it names in mod.json ("holyland": "0.2.1"), and Holyland warns when that
-   differs. docs/port/MODDING.md. */
+   and structures (api->symbol, hooks, the game's headers) are the decompilation's, which Holyland keeps at one
+   version: they change only when the game interface ID changes (modding/game_interface.txt), not with every
+   release. A plugin built with holyland_add_mod carries the ID it was built for, and Holyland warns when it differs.
+   docs/port/MODDING.md. */
 #ifndef HOLYLAND_MOD_H
 #define HOLYLAND_MOD_H
 
@@ -126,8 +127,9 @@ typedef struct HlApi {
     /* a function or variable of the game or of Holyland by name ("Model_SetUpSkinned", "game_status"), NULL none */
     void *(*symbol)(const char *name);
     /* Replaces the game function `name` with `replacement` (the same signature); *original receives what to call for
-       the function as it was (the game's own, or an earlier mod's replacement). Returns 1, or 0 when the function
-       is not there or cannot be replaced (inlined into its callers). Only in hl_mod_init or HL_EVENT_START. */
+       the function as it was (the game's own, or an earlier mod's replacement). Every call to it is caught. Returns
+       1, or 0 when the function is not in modding/hookable.txt (the game functions built to be hooked; ask for one
+       to be added). Only in hl_mod_init or HL_EVENT_START. */
     int (*hook)(HlMod *mod, const char *name, void *replacement, void **original);
 
     /* -- The menus (HL_THREAD_UI) -- */
@@ -145,6 +147,10 @@ typedef struct HlApi {
 /* The plugin's one export */
 typedef int (*HlModInit)(const HlApi *api, HlMod *mod);
 #define HL_MOD_INIT_NAME "hl_mod_init"
+
+/* The game interface ID the plugin was built for (modding/game_interface.txt): holyland_add_mod adds it to the plugin
+   as this exported string; Holyland reads it before hl_mod_init and warns when it is not its own */
+#define HL_MOD_GAME_INTERFACE_NAME "hl_mod_game_interface"
 
 #ifdef __cplusplus
 }

@@ -17,7 +17,6 @@ player menu's **Mods** page; a mod with code starts off.
 ```json
 {
   "name": "Journal", "version": "1.0", "author": "...", "description": "...",
-  "holyland": "0.2.1",
   "api": 1,
   "plugin": { "windows-x64": "bin/windows-x64/journal.dll", "linux-x64": "bin/linux-x64/journal.so" },
   "settings": [
@@ -36,8 +35,8 @@ player menu's **Mods** page; a mod with code starts off.
   key's name (`"B"`, `"F7"`) or a binding as `settings.json` writes them (`"key:B"`, `"pad:..."`). 16 keys for all
   mods together.
 - **plugin** names the plugin for each system; a mod whose plugin is not built for this one still gives its data.
-  **api** is the API major it was built for (Holyland refuses another); **holyland** the release it was built
-  against (Holyland warns when it differs: see "Stability").
+  **api** is the API major it was built for (Holyland refuses another). Which game it was built against needs no
+  field: the plugin carries it (see "Stability").
 
 On and off, and a mod's plugin, take effect at the next start.
 
@@ -65,9 +64,23 @@ events on the menus' thread.
 
 The game's code is compiled with `-fpatchable-function-entry=16`: each of its functions starts with 16 bytes of
 no-ops. A hook writes a jump to the mod's function over them, and the original is the code after them
-(`port/platform/mod_hooks.c`). Only the game's own functions can be hooked (not Holyland's, not the C library), and
-only where the compiler did not fold them into their callers: `hook` returns 0 then. Hooks are made in `hl_mod_init` or
-at `HL_EVENT_START`.
+(`port/platform/mod_hooks.c`). Hooks are made in `hl_mod_init` or at `HL_EVENT_START`.
+
+The functions that can be hooked are listed in [`modding/hookable.txt`](../../modding/hookable.txt), one C prototype
+a line. The compiler may copy a function's body into some of its callers (inlining) and not others, and a hook on it
+would then catch only some of its calls, with nothing to say so. So each listed function is built never to be inlined
+or copied (`cmake/mod_hookable.cmake` marks it `noinline`, and `noipa` on gcc, at configure), and a hook on it catches
+every call. `hook` refuses a function that is not listed (it returns 0 and says so in the log).
+
+Two mods may hook the same function. They chain: the later mod's replacement runs first, and its original is the
+earlier mod's. Both work when each calls its original; a mod that doesn't cuts out the ones hooked before it. That can
+be meant (a mod replacing what the game does), so a shared hook is not refused, but Holyland reports it: the log names
+the mods when the second one hooks, and the Mods page says under each one which other mods change the same part of
+the game. A mod cannot hook one function twice.
+
+The build also checks each listed prototype against the game's definition: a patch that changes one fails to
+compile. Adding a function is a line in the list (it must be one the game exports, not `static`); mod makers ask for
+the ones they need.
 
 ### Building one
 
@@ -101,9 +114,16 @@ sandbox it. What Holyland does instead:
 
 - **API 1** keeps its meaning: later minor versions only add to the end of `HlApi`. A plugin that uses only the API
   works with every Holyland of API 1.
-- **The game's own functions and structures** (`symbol`, hooks, the game's headers) are the decompilation's, and can
-  change with any Holyland release. A plugin that uses them names the release in `"holyland"`, and is built again for a
-  new one.
+- **The game's own functions and structures** (`symbol`, hooks, the game's headers) are the decompilation's. Holyland
+  keeps the decompilation at one version, so they change only when Holyland's own patches change them, not with each
+  release.
+- **The game interface ID** says which game a plugin was built against: a hash of the game's headers as patched, the
+  hookable list and RmlUi's version (`cmake/mod_hookable.cmake`). `holyland_add_mod` builds it into the plugin
+  (`hl_mod_game_interface`), and Holyland warns in the log when a plugin's is not its own. A plugin built for an
+  older Holyland with the same ID needs nothing done.
+- **For Holyland's developers**: `modding/game_interface.txt` holds the ID last accepted, and the `mods_game_interface`
+  test fails when the build's differs: a patch to a game header, a change to the hookable list or an RmlUi update.
+  When that is meant, write the new ID there and tell mod makers in the release notes that plugins need rebuilding.
 
 ## Not done yet
 
@@ -114,8 +134,7 @@ sandbox it. What Holyland does instead:
   with the save.
 - **A crash in a plugin** ends the game like any crash. The crash report does not name the mod, and a plugin that
   crashes is not turned off for the next start.
-- **Inlined functions** cannot be hooked (`hook` returns 0). Which ones a mod will want is learned as mods are
-  written; such a function can be marked `noinline` in its patch, or given an event.
+- **The hookable list** starts small (`Input_Update`, for the example). It grows as mods ask for functions.
 - **Scripting** (Lua) is not part of API 1; it could be added on top of the same API (see the pull request that added
   this).
 
@@ -128,5 +147,8 @@ sandbox it. What Holyland does instead:
 | `port/platform/mods.c` | the mod list (`mod.json`), on and off, settings; files and text (MODS.md) |
 | `port/platform/mod_api.c` | loading plugins, the API, events, game memory |
 | `port/platform/mod_hooks.c` | hooks |
+| `modding/hookable.txt` | the game functions that can be hooked |
+| `cmake/mod_hookable.cmake` | marks them at configure; the game interface ID |
+| `modding/game_interface.txt` | the ID last accepted (the `mods_game_interface` test) |
 | `game/mod_events.c` | the game's side of the events (`core.patch` calls it each frame) |
 | `port/ui/mods_rows.cpp` | the Mods page |

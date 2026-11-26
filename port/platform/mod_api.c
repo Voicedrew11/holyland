@@ -325,6 +325,16 @@ static void *library_symbol(void *library, const char *name) {
 #endif
 }
 
+/* A plugin built for another game interface (the game's headers, the hookable functions, RmlUi: modding/
+   game_interface.txt) may misread the game or miss its hooks. One built without holyland_add_mod has no ID. */
+static void warn_game_interface(const char *mod_id, const char *built_for) {
+    if (built_for == NULL || strcmp(built_for, KF4_GAME_INTERFACE) == 0) {
+        return;
+    }
+    fprintf(stderr, "[mods] %s: built for the game interface %.16s, this Holyland has %s: if it uses the game's own "
+                    "functions or structures, it needs building again\n", mod_id, built_for, KF4_GAME_INTERFACE);
+}
+
 void port_mod_plugins_load(void) {
     int i;
 
@@ -347,10 +357,6 @@ void port_mod_plugins_load(void) {
                     info->api, HL_API_MAJOR);
             continue;
         }
-        if (info->holyland[0] && strcmp(info->holyland, api_holyland_version()) != 0) {
-            fprintf(stderr, "[mods] %s: made for Holyland %s, this is %s: if it uses the game's own functions, they "
-                            "may have changed\n", info->id, info->holyland, api_holyland_version());
-        }
         mod = &plugins[plugin_count];
         memset(mod, 0, sizeof(*mod));
         mod->info = info;
@@ -359,6 +365,7 @@ void port_mod_plugins_load(void) {
             fprintf(stderr, "[mods] %s: %s could not be loaded: %s\n", info->id, info->plugin, why);
             continue;
         }
+        warn_game_interface(info->id, library_symbol(mod->library, HL_MOD_GAME_INTERFACE_NAME));
         init = (HlModInit)library_symbol(mod->library, HL_MOD_INIT_NAME);
         if (init == NULL) {
             fprintf(stderr, "[mods] %s: %s has no %s\n", info->id, info->plugin, HL_MOD_INIT_NAME);

@@ -578,6 +578,23 @@ else()
     endforeach()
 endif()
 
+# mods: the functions they may hook made hookable everywhere, and the game's interface for them as one ID
+# (cmake/mod_hookable.cmake, docs/port/MODDING.md "Hooks" and "Stability")
+include(cmake/mod_hookable.cmake)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/modding/hookable.txt)
+kf4_mods_mark_hookable(${KF4_STAGE}/src/game ${CMAKE_SOURCE_DIR}/modding/hookable.txt
+    ${CMAKE_BINARY_DIR}/mod_hookable_names.c)
+kf4_mods_game_interface(${KF4_STAGE}/src/game ${CMAKE_SOURCE_DIR}/modding/hookable.txt
+    ${CMAKE_SOURCE_DIR}/cmake/rmlui.cmake KF4_GAME_INTERFACE)
+file(STRINGS ${CMAKE_SOURCE_DIR}/modding/game_interface.txt KF4_GAME_INTERFACE_ACCEPTED REGEX "^[0-9a-f]+$")
+if(NOT KF4_GAME_INTERFACE STREQUAL KF4_GAME_INTERFACE_ACCEPTED)
+    message(WARNING "The game's interface for mods is ${KF4_GAME_INTERFACE}, not ${KF4_GAME_INTERFACE_ACCEPTED} "
+        "(modding/game_interface.txt): see the mods_game_interface test")
+endif()
+target_sources(kf4_port PRIVATE ${CMAKE_BINARY_DIR}/mod_hookable_names.c)
+set_property(SOURCE port/platform/mod_api.c APPEND PROPERTY COMPILE_DEFINITIONS
+    "KF4_GAME_INTERFACE=\"${KF4_GAME_INTERFACE}\"")
+
 # sync the staging copy into decomp_src/. COPY_FILE leaves a file alone when it is already the same,
 # so its timestamp, and the object built from it, survive. (The .git is at the staging root, not under src.)
 # decomp_src/ is kept read-only between configures (see below), so make it writable for the sync.
@@ -869,6 +886,15 @@ if(KF4_TESTS)
     add_test(NAME mpeg_demux COMMAND mpeg_demux_test)
 endif()
 
+# Mods' hooks (port/platform/mod_hooks.c), on functions with the game's hook pad, found by name as in kf4
+if(KF4_HOOK_FLAGS AND NOT WIN32)
+    add_executable(mod_hooks_test tests/mod_hooks_test.c port/platform/mod_hooks.c)
+    target_include_directories(mod_hooks_test PRIVATE port/include modding/include)
+    target_compile_options(mod_hooks_test PRIVATE ${KF4_HOOK_FLAGS} -Wall -Wextra -Wshadow)
+    target_link_libraries(mod_hooks_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    set_target_properties(mod_hooks_test PROPERTIES ENABLE_EXPORTS ON INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
+
 # Mods (port/platform/mods.c): the text code, the rebuilt message table and name records, and a small extracted
 # disc whose KF4.DAT members a mods folder replaces, read back as the game reads them (with port/platform/disc.c)
 add_executable(mods_test tests/mods_test.c port/platform/mods.c port/platform/disc.c port/platform/disc_image.c
@@ -880,6 +906,13 @@ if(NOT WIN32)
 endif()
 if(KF4_TESTS)
     add_test(NAME mods COMMAND mods_test ${CMAKE_CURRENT_BINARY_DIR}/mods_test_tmp)
+    # mods' hooks: listed functions only, chained, shares (port/platform/mod_hooks.c); x86-64 Linux (the code writes)
+    if(KF4_HOOK_FLAGS AND NOT WIN32)
+        add_test(NAME mod_hooks COMMAND mod_hooks_test)
+    endif()
+    # a change to what mods are built against is meant, not by the way (cmake/mod_hookable.cmake)
+    add_test(NAME mods_game_interface COMMAND ${CMAKE_COMMAND} -DEXPECTED_FILE=${CMAKE_SOURCE_DIR}/modding/game_interface.txt
+        -DACTUAL=${KF4_GAME_INTERFACE} -P ${CMAKE_SOURCE_DIR}/cmake/check_game_interface.cmake)
 endif()
 
 # The picture's anti-aliasing methods by name (port/include/port/antialias.h, header only)

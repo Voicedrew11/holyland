@@ -676,7 +676,6 @@ static void read_manifest(PortMod *mod) {
     copy_string(mod->version, sizeof(mod->version), root, "version");
     copy_string(mod->author, sizeof(mod->author), root, "author");
     copy_string(mod->description, sizeof(mod->description), root, "description");
-    copy_string(mod->holyland, sizeof(mod->holyland), root, "holyland");
     mod->api = json_int(root, "api", 0);
     plugin = cJSON_GetObjectItemCaseSensitive(root, "plugin");
     if (cJSON_IsObject(plugin) && plugin->child != NULL) {

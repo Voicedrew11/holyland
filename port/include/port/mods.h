@@ -60,7 +60,6 @@ typedef struct {
     char version[32];
     char author[128];
     char description[640];
-    char holyland[32];        /* the Holyland it was made for ("0.1.1"), "" any */
     int api;                  /* the API major it needs, 0 none (a data mod) */
     char plugin[1100];        /* its plugin for this system, "" none */
     int has_plugin;           /* it names a plugin for some system */

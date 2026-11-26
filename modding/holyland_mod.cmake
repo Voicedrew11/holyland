@@ -9,8 +9,8 @@
 #   SDL      it uses SDL3 (input events)
 #
 # The plugin is written to <mod>/bin/<system>/ (windows-x64, linux-x64), where mod.json names it. It links against
-# the program (its exported functions and variables: Holyland, the game, RmlUi, cJSON), so it is made for this
-# Holyland: build it again with each release.
+# the program's exports (Holyland, the game, RmlUi, cJSON) by name. It carries the game interface ID it was built for
+# (hl_mod_game_interface: cmake/mod_hookable.cmake), and needs building again only when Holyland's differs.
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(HOLYLAND_MOD_SYSTEM windows-x64)
@@ -37,7 +37,13 @@ function(holyland_add_mod)
         message(STATUS "Mod plugin: ${mod_id} left out: it needs RmlUi, and this Holyland is built without the player menu")
         return()
     endif()
-    add_library(${target} MODULE ${MOD_SOURCES})
+    set(interface_c ${CMAKE_CURRENT_BINARY_DIR}/hl_mod_game_interface.c)
+    file(CONFIGURE OUTPUT ${interface_c} CONTENT
+"#include \"holyland_mod.h\"
+/* the game interface this plugin is built for (modding/holyland_mod.cmake) */
+HL_EXPORT const char hl_mod_game_interface[] = \"@KF4_GAME_INTERFACE@\";
+" @ONLY)
+    add_library(${target} MODULE ${MOD_SOURCES} ${interface_c})
     set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME ${MOD_OUTPUT}
         LIBRARY_OUTPUT_DIRECTORY ${mod_folder}/bin/${HOLYLAND_MOD_SYSTEM}
         RUNTIME_OUTPUT_DIRECTORY ${mod_folder}/bin/${HOLYLAND_MOD_SYSTEM}

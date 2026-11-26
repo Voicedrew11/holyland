@@ -43,6 +43,14 @@ float port_player_ui_scale(void);
 
 /* Hooks (port/platform/mod_hooks.c): `name`'s function replaced, *original what to call for it as it was */
 int port_mod_hook(const char *mod_id, const char *name, void *replacement, void **original);
+/* A game function this mod hooked that other mods hooked too: they chain, and work together when each calls its
+   original (port/platform/mod_hooks.c) */
+typedef struct {
+    char function[96];
+    char others[256]; /* the other mods' ids, one a line */
+} PortModHookShare;
+/* The functions `mod_id` hooked that other mods hooked too, up to `max` of them: how many (any thread) */
+int port_mod_hooks_shared(const char *mod_id, PortModHookShare *out, int max);
 /* A function or variable of the program by name, NULL none */
 void *port_mod_symbol(const char *name);
 

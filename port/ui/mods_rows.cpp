@@ -10,6 +10,7 @@
 #include "settings_rows.hpp"
 
 extern "C" {
+#include "port/mod_api.h"
 #include "port/mods.h"
 #include "port/settings.h"
 }
@@ -70,6 +71,30 @@ bool shown_at(size_t n) {
     default:
         return false;
     }
+}
+
+/* The game functions this mod changes that other mods change too (port_mod_hooks_shared), as the page says it */
+std::string shared_hooks(const PortMod *mod) {
+    PortModHookShare shares[8];
+    int count = mod->applied ? port_mod_hooks_shared(mod->id, shares, 8) : 0;
+    std::string text;
+
+    for (int i = 0; i < count; i++) {
+        std::string names, others = shares[i].others;
+        size_t at = 0;
+
+        while (at < others.size()) {
+            size_t end = others.find('\n', at);
+            std::string id = others.substr(at, end == std::string::npos ? std::string::npos : end - at);
+            const PortMod *other = port_mods_by_id(id.c_str());
+
+            names += (names.empty() ? "" : ", ") + std::string(other != nullptr ? other->name : id.c_str());
+            at = end == std::string::npos ? others.size() : end + 1;
+        }
+        text += "\nChanges the same part of the game as " + names + " (" + shares[i].function +
+                "). They usually work together; if something from one of them stops working, try turning the other off.";
+    }
+    return text;
 }
 
 const char *note_at(size_t n) {
@@ -134,6 +159,7 @@ void fill_mod_rows() {
                 about += " It has no plugin for this system, so only its files and text are used.";
             }
         }
+        about += shared_hooks(mod);
         about += std::string(about.empty() ? "" : "\n") + "On and off take effect at the next start.";
         if (Slot *slot = add(Part::heading, m, -1)) {
             slot->label = std::string(mod->name) + (mod->version[0] ? std::string("  ") + mod->version : "");
