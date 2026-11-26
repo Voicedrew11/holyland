@@ -11,7 +11,11 @@
 #include "Textures/SearchTex.h"
 #include "command_buffer.hpp"
 #include "pcr_pipelines.h"
+#ifdef KF4_MACOS_SHADERS // (macOS: the shaders made with PCR_MOLTENVK in the build folder, docs/port/MACOS.md)
+#include "macos_shaders/pcr_shaders.h"
+#else
 #include "pcr_shaders.h"
+#endif
 
 using namespace Vulkan;
 

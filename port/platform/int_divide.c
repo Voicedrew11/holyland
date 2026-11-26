@@ -198,6 +198,41 @@ void port_int_divide_init(void) {
 }
 #endif
 
+#elif defined(__aarch64__) && defined(__APPLE__)
+/* arm64 macOS: the division needs no help but by zero, which the compiler checks before each of the game's divisions
+   (CMakeLists.txt: -fsanitize-trap=integer-divide-by-zero) with a BRK of UBSan's divide check, #0x5503. Its SIGTRAP
+   says where, as x86's does, and the program ends there. */
+#include <signal.h>
+#include <sys/ucontext.h>
+
+#define BRK_DIVIDE_CHECK (0xD4200000u | (0x5503u << 5)) /* brk #0x5503 */
+
+static void int_divide_handler(int sig, siginfo_t *si, void *context) {
+    ucontext_t *uc = context;
+    uint64_t pc = (uint64_t)uc->uc_mcontext->__ss.__pc;
+    uint32_t insn;
+
+    (void)si;
+    memcpy(&insn, (const void *)(uintptr_t)pc, sizeof(insn));
+    if (insn == BRK_DIVIDE_CHECK) {
+        fprintf(stderr,
+                "[port] integer division by zero at %p: the PS2 stops at this division too (ee-gcc's divide "
+                "check, break 7)\n",
+                (void *)(uintptr_t)pc);
+    }
+    /* as if there were no handler: the default action when the instruction runs again */
+    signal(sig, SIG_DFL);
+}
+
+void port_int_divide_init(void) {
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = int_divide_handler;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTRAP, &sa, NULL);
+}
 #else
 void port_int_divide_init(void) {
 }

@@ -269,6 +269,12 @@ void port_fiber_delete(PortFiber *fiber);
 /* Saves the running fiber in from and runs to. */
 void port_fiber_switch(PortFiber *from, PortFiber *to);
 
+#ifdef __APPLE__
+/* macOS: gives Granite and SDL the one Vulkan library to load (port/platform/vulkan_library_macos.c); main calls
+   it before either loads Vulkan */
+void port_vulkan_choose_library(void);
+#endif
+
 /* ---- The EE's integer division (port/platform/int_divide.c) --------------------------------
    INT_MIN / -1 gives INT_MIN and remainder 0, as the EE's DIV does, where x86's IDIV traps; a division
    by zero says where it was before the program ends (the PS2 stops there too: ee-gcc's break 7). */
@@ -284,9 +290,19 @@ void port_int_divide_init(void);
    +-inf or a NaN).
    Host code on the game's fibers that formats or parses numbers runs in the host's mode: the C
    library's printf and strtod round as MXCSR says (UCRT's do). */
+#if defined(__aarch64__)
+/* arm64 (macOS): the modes are FPCR's. Round toward zero (RMode 3) and FZ, which flushes denormal operands
+   and results alike: MXCSR's FTZ and DAZ together. In that rounding a result is tiny before rounding exactly
+   when it is after, so where x86 and ARM detect tininess differs nowhere here. FPCR keeps no flags (FPSR has
+   them). */
+#define PORT_MXCSR_EE 0x01C00000u /* FPCR: round toward zero, flush to zero */
+#define PORT_MXCSR_HOST 0u        /* FPCR: round to nearest, denormals */
+#define PORT_MXCSR_FLAGS 0u
+#else
 #define PORT_MXCSR_EE 0xFFC0u   /* exceptions masked, round toward zero, FTZ, DAZ */
 #define PORT_MXCSR_HOST 0x1F80u /* exceptions masked, round to nearest */
 #define PORT_MXCSR_FLAGS 0x003Fu
+#endif
 extern int port_fpu_round_nearest; /* --fpu-round nearest */
 /* The MXCSR an EE thread's fiber starts with. */
 uint32_t port_ee_mxcsr(void);
@@ -301,6 +317,18 @@ static inline uint32_t port_host_float_begin(void) {
 }
 static inline void port_host_float_end(uint32_t saved) {
     _mm_setcsr(saved);
+}
+#elif defined(__aarch64__)
+/* the same with FPCR (its modes fit in its low word) */
+static inline uint32_t port_host_float_begin(void) {
+    uint64_t saved;
+
+    __asm__ volatile("mrs %0, fpcr" : "=r"(saved));
+    __asm__ volatile("msr fpcr, %0" : : "r"((uint64_t)PORT_MXCSR_HOST));
+    return (uint32_t)saved;
+}
+static inline void port_host_float_end(uint32_t saved) {
+    __asm__ volatile("msr fpcr, %0" : : "r"((uint64_t)saved));
 }
 #else
 static inline uint32_t port_host_float_begin(void) {

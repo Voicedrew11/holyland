@@ -990,6 +990,9 @@ int DeleteSema(int id) {
     return id;
 }
 
+#ifdef __APPLE__
+#define signal kernel_sema_signal /* (macOS's <stdlib.h> declares the C library's signal()) */
+#endif
 /* Signals a semaphore: hands it to its first waiter, or counts it. */
 static int signal(int id) {
     Sema *s = sema_of(id);

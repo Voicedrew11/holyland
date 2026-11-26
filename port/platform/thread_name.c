@@ -57,6 +57,9 @@ static void set_name(const char *name) {
 
     snprintf(cut, sizeof(cut), "%s", name);
     (void)pthread_setname_np(pthread_self(), cut);
+#elif defined(__APPLE__)
+    /* (macOS names the calling thread only, and keeps up to 63 bytes: the whole name) */
+    (void)pthread_setname_np(name);
 #else
     (void)name;
 #endif
@@ -65,6 +68,10 @@ static void set_name(const char *name) {
 static void get_name(char *name, size_t size) {
     name[0] = '\0';
 #ifdef __linux__
+    if (pthread_getname_np(pthread_self(), name, size) != 0) {
+        name[0] = '\0';
+    }
+#elif defined(__APPLE__)
     if (pthread_getname_np(pthread_self(), name, size) != 0) {
         name[0] = '\0';
     }

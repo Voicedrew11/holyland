@@ -2974,6 +2974,12 @@ static uint32_t port_float_mode(uint32_t mode) {
 
     _mm_setcsr(mode);
     return saved;
+#elif defined(__aarch64__)
+    uint64_t saved; /* (FPCR: port/include/port/platform.h) */
+
+    __asm__ volatile("mrs %0, fpcr" : "=r"(saved));
+    __asm__ volatile("msr fpcr, %0" : : "r"((uint64_t)mode));
+    return (uint32_t)saved;
 #else
     (void)mode;
     return 0;

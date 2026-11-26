@@ -13,7 +13,7 @@ running needs the owner's disc image (`--disc <iso, chd or folder>` or `KF4_DISC
 
 ```sh
 git submodule update --init                # decomp/ and third_party/parallel-gs
-cmake --preset linux-clang                 # or linux-gcc, windows-clang (llvm-mingw); output in out/<preset>/
+cmake --preset linux-clang                 # or linux-gcc, windows-clang (llvm-mingw), macos-clang; output in out/<preset>/
 cmake --build out/linux-clang
 ctest --test-dir out/linux-clang           # all unit tests
 ctest --test-dir out/linux-clang -R pcr_gif   # one test (names: add_test in CMakeLists.txt)
@@ -24,6 +24,8 @@ out/linux-clang/kf4 --help                 # every option
 - Release builds: the `*-release` presets (LTO, no frame pointers, `KF4_PLAYER_BUILD`: Depth fixed at Low) and `tools/pgo_train.py` (PGO); check one against
   the developers' build with `tools/build_compare.py` (`tools/README.md`, "A release build").
 - The game code is GNU C: MSVC `cl` cannot build it.
+- macOS (Apple Silicon, MoltenVK): `docs/port/MACOS.md` (Homebrew's cmake ninja glslang sdl3 molten-vk; everything
+  for it is behind `__APPLE__`/`__aarch64__` or `if(APPLE)`, so Windows and Linux build as without it).
 - SDL3 (3.2 or newer; releases pin 3.4.20 in `packaging/toolchain.lock`): Fedora's `SDL3-devel`, or `-DSDL3_DIR=<its lib/cmake/SDL3>`
   (Windows: SDL3's MinGW build). Without it the game builds with no window, input or sound.
 - Sanitizers: `-DKF4_SANITIZE=address,undefined` (or `thread`). Use clang (`out/linux-clang-asan`,

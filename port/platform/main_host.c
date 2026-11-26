@@ -1161,6 +1161,9 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     port_name_thread("kf4"); /* (the game's thread: Linux names it after the program, Windows not at all) */
+#ifdef __APPLE__
+    port_vulkan_choose_library(); /* (before anything loads Vulkan: MoltenVK, beside the program or Homebrew's) */
+#endif
     parse_options(argc, argv);
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crash_report);

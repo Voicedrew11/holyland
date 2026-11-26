@@ -21,7 +21,11 @@
 #include <vector>
 
 #include "pcr_dynamic_state.h"
+#ifdef KF4_MACOS_SHADERS // (macOS: the shaders made with PCR_MOLTENVK in the build folder, docs/port/MACOS.md)
+#include "macos_shaders/pcr_shaders.h"
+#else
 #include "pcr_shaders.h"
+#endif
 #include "pcr_gpu_time.h"
 #include "pcr_hang_watch.h"
 #include "pcr_pipelines.h"

@@ -12,6 +12,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #else
 #include <link.h>
 #endif
@@ -59,6 +62,26 @@ static void find_sections(void) {
         uintptr_t size = section->Misc.VirtualSize;
 
         add_region(start, start + size);
+    }
+}
+#elif defined(__APPLE__)
+/* macOS: the program's own segments, from its Mach-O header (the slide is ASLR's), as Linux lists its PT_LOADs;
+   not __PAGEZERO (4 GiB of nothing) nor __LINKEDIT (the loader's tables) */
+static void find_sections(void) {
+    extern const struct mach_header_64 _mh_execute_header;
+    const struct mach_header_64 *mh = &_mh_execute_header;
+    const intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    const struct load_command *lc = (const struct load_command *)(mh + 1);
+    uint32_t i;
+
+    for (i = 0; i < mh->ncmds; i++, lc = (const struct load_command *)((const char *)lc + lc->cmdsize)) {
+        const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
+
+        if (lc->cmd != LC_SEGMENT_64 || seg->vmsize == 0 || strcmp(seg->segname, "__PAGEZERO") == 0 ||
+            strcmp(seg->segname, "__LINKEDIT") == 0) {
+            continue;
+        }
+        add_region((uintptr_t)(seg->vmaddr + slide), (uintptr_t)(seg->vmaddr + slide + seg->vmsize));
     }
 }
 #else

@@ -2,7 +2,10 @@
 """Compiles the PC renderer's shaders (port/gs/pc/shaders/) to SPIR-V and writes them into port/gs/pc/pcr_shaders.h.
 The file is committed: building the port needs no shader compiler, only changing a shader does.
 
-    python tools/build_shaders.py [--glslang PATH]
+    python tools/build_shaders.py [--glslang PATH] [--define NAME ...] [--pc-out FILE] [--scene-out FILE]
+
+--define adds a define to every shader, and --pc-out and --scene-out write the two files elsewhere: macOS's build
+makes its own with --define PCR_MOLTENVK into its build folder (docs/port/MACOS.md); the committed files have none.
 
 glslang is Khronos' glslangValidator (or `glslang`): from the Vulkan SDK, a distribution's glslang
 package, or built from third_party/parallel-gs/Granite/third_party/glslang. Without --glslang it is
@@ -77,14 +80,18 @@ SCENE_AGAIN = [(path, symbol, defines + ["-DSCN_NO_TRACE"]) for path, symbol, de
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--glslang")
+    parser.add_argument("--define", action="append", default=[])
+    parser.add_argument("--pc-out", default=PC_OUT)
+    parser.add_argument("--scene-out", default=SCENE_OUT)
     args = parser.parse_args()
     glslang = find_glslang(args.glslang)
-    build(glslang, PC_SHADERS, PC_OUT, "pcr_spv_", "The PC renderer's shaders", "port/gs/pc/shaders/")
-    build(glslang, SCENE_SHADERS, SCENE_OUT, "scn_spv_", "The scene renderer's shaders", "port/gs/scene/shaders/",
-          again=SCENE_AGAIN, includes=[PC_SHADERS])
+    extra = ["-D" + d for d in args.define]
+    build(glslang, PC_SHADERS, args.pc_out, "pcr_spv_", "The PC renderer's shaders", "port/gs/pc/shaders/", extra=extra)
+    build(glslang, SCENE_SHADERS, args.scene_out, "scn_spv_", "The scene renderer's shaders", "port/gs/scene/shaders/",
+          again=SCENE_AGAIN, includes=[PC_SHADERS], extra=extra)
 
 
-def build(glslang, folder, target, prefix, what, where, again=(), includes=()):
+def build(glslang, folder, target, prefix, what, where, again=(), includes=(), extra=()):
     sources = sorted(f for f in os.listdir(folder) if f.endswith((".vert", ".frag", ".comp")))
     lines = [
         "/* %s as SPIR-V, made by tools/build_shaders.py from %s." % (what, where),
@@ -111,7 +118,7 @@ def build(glslang, folder, target, prefix, what, where, again=(), includes=()):
             if name.endswith(".vert"):
                 defines = defines + ["-DPCR_STAGE_VERTEX"]
             cmd = [glslang, "-V", "--target-env", "vulkan1.1", "-I" + folder] + ["-I" + i for i in includes] + [
-                "-I" + SHARED, "-I" + SMAA] + defines + ["-o", out, os.path.join(folder, name)]
+                "-I" + SHARED, "-I" + SMAA] + defines + list(extra) + ["-o", out, os.path.join(folder, name)]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 sys.exit("%s failed:\n%s%s" % (symbol, result.stdout, result.stderr))
@@ -124,7 +131,8 @@ def build(glslang, folder, target, prefix, what, where, again=(), includes=()):
             lines.append("")
     with open(target, "w", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %s (%d shaders)" % (os.path.relpath(target, ROOT), len(made)))
+    print("wrote %s (%d shaders)" % (os.path.relpath(target, ROOT) if os.path.abspath(target).startswith(ROOT) else target,
+                                     len(made)))
 
 
 if __name__ == "__main__":

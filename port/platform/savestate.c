@@ -39,6 +39,10 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/loader.h>
+#include <pthread.h>
+#include <sys/stat.h>
 #else
 #include <link.h>
 #include <pthread.h>
@@ -330,6 +334,28 @@ static uint64_t compute_build_id(void) {
     }
     return hash;
 }
+#elif defined(__APPLE__)
+/* macOS: the program's segment commands (their addresses as linked, without ASLR's slide) and its code */
+static uint64_t compute_build_id(void) {
+    extern const struct mach_header_64 _mh_execute_header;
+    const struct mach_header_64 *mh = &_mh_execute_header;
+    const struct load_command *lc = (const struct load_command *)(mh + 1);
+    uint64_t hash = 0xCBF29CE484222325ull;
+    uint32_t i;
+
+    for (i = 0; i < mh->ncmds; i++, lc = (const struct load_command *)((const char *)lc + lc->cmdsize)) {
+        const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
+
+        if (lc->cmd != LC_SEGMENT_64) {
+            continue;
+        }
+        hash = hash_bytes(hash, seg, sizeof(*seg));
+        if (strcmp(seg->segname, "__TEXT") == 0) {
+            hash = hash_bytes(hash, mh, (size_t)seg->vmsize);
+        }
+    }
+    return hash;
+}
 #else
 static int hash_program(struct dl_phdr_info *info, size_t size, void *data) {
     uint64_t *hash = data;
@@ -368,6 +394,11 @@ static uint64_t build_id(void) {
 
 /* ---- Why there can be no state at all in this run (NULL: there can) ---------------------------- */
 static const char *unavailable(void) {
+#ifdef __APPLE__
+    /* the program is linked position independent with ASLR there (CMakeLists.txt): the pointers to its globals
+       and code a state holds would point elsewhere in the next run */
+    return "save states are off on macOS: the program is not at a fixed address";
+#endif
     if (!port_memory_fixed()) {
         return "save states are off: game RAM is not at its fixed address";
     }

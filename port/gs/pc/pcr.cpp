@@ -47,7 +47,11 @@
 #include "pcr_late.h"
 #include "pcr_pipelines.h"
 #include "pcr_shell.h"
+#ifdef KF4_MACOS_SHADERS // (macOS: the shaders made with PCR_MOLTENVK in the build folder, docs/port/MACOS.md)
+#include "macos_shaders/pcr_shaders.h"
+#else
 #include "pcr_shaders.h"
+#endif
 #include "pcr_sync2.h"
 #include "port/gs_capture_format.h"
 #include "port/play_priority.h"

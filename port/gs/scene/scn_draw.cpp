@@ -9,8 +9,16 @@
 #include <unordered_set>
 
 #include "pcr_dynamic_state.h"
+#ifdef KF4_MACOS_SHADERS // (macOS: the shaders made with PCR_MOLTENVK in the build folder, docs/port/MACOS.md)
+#include "macos_shaders/pcr_shaders.h"
+#else
 #include "pcr_shaders.h"
+#endif
+#ifdef KF4_MACOS_SHADERS
+#include "macos_shaders/scn_shaders.h"
+#else
 #include "scn_shaders.h"
+#endif
 
 extern "C" {
 #include "port/platform.h"

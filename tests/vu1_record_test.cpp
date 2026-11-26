@@ -13,7 +13,9 @@
 #include <fenv.h>
 #include <math.h>
 #include <stdarg.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <xmmintrin.h>
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -383,7 +385,9 @@ int main() {
         vu.vf[0][3] = 0x3F800000u; // (vf00: 0, 0, 0, 1)
         // (as vu1.c runs a program: rounding toward zero, denormals read as zero, every exception masked)
         fesetround(FE_TOWARDZERO);
+#if VU_DAZ
         _mm_setcsr(_mm_getcsr() | 0x1F80u | MXCSR_DAZ);
+#endif
         uint64_t pairs = vu1_hle_run(&vu, data_mem, 0, top);
         fesetround(FE_TONEAREST);
         if (pairs == 0) {
@@ -412,7 +416,9 @@ int main() {
         memset(&vu, 0, sizeof(vu));
         vu.vf[0][3] = 0x3F800000u;
         fesetround(FE_TOWARDZERO);
+#if VU_DAZ
         _mm_setcsr(_mm_getcsr() | 0x1F80u | MXCSR_DAZ);
+#endif
         pairs = vu1_hle_280_run(&vu, data_mem, 0x280, top);
         fesetround(FE_TONEAREST);
         if (pairs == 0) {

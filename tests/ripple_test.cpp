@@ -13,7 +13,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#if defined(__x86_64__) || defined(__i386__)
 #include <xmmintrin.h>
+#else
+#include <cfenv> // (arm64: the rounding mode through fesetround)
+#endif
 
 #include <vector>
 
@@ -128,7 +132,9 @@ static float game_t(int32_t y) {
 }
 
 int main() {
+#if defined(__x86_64__) || defined(__i386__)
     const unsigned csr = _mm_getcsr();
+#endif
     // the record's matrix
     for (int trial = 0; trial < 2000; trial++) {
         RdDraw d;
@@ -205,9 +211,15 @@ int main() {
         int bad = 0;
         for (int64_t x = -1; x <= 0xFFFF; x++) {
             int32_t xi = x < 0 ? int32_t(0x80000000u) : int32_t(x);
+#if defined(__x86_64__) || defined(__i386__)
             _mm_setcsr((csr & ~_MM_ROUND_MASK) | (nearest ? _MM_ROUND_NEAREST : _MM_ROUND_TOWARD_ZERO));
             float ws = game_s(xi), wt = game_t(xi);
             _mm_setcsr(csr);
+#else
+            std::fesetround(nearest ? FE_TONEAREST : FE_TOWARDZERO);
+            float ws = game_s(xi), wt = game_t(xi);
+            std::fesetround(FE_TONEAREST);
+#endif
             float gs = shader_game_div(shader_game_float(int32_t(uint32_t(xi) - 0x6C00u), nearest), 10240.0f,
                                        bits_float(0x38CCCCCDu), nearest);
             float gt = shader_game_div(shader_game_float(int32_t(uint32_t(xi) - 0x7200u), nearest), 7168.0f,

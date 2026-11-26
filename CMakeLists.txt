@@ -61,6 +61,13 @@ endif()
 if(WIN32)
     list(APPEND KF4_GAME_FLAGS -mno-ms-bitfields)
 endif()
+# arm64 (macOS): ARM's division never traps. INT_MIN / -1 gives INT_MIN and remainder 0, as the EE's DIV does (what
+# port/platform/int_divide.c's handler makes of x86's trap), but a division by zero gives 0, where ee-gcc's check before
+# every division stops the PS2 (break 7) and x86 traps. The compiler puts that check before each of the game's divisions
+# here, as a trap that int_divide.c reports the same way.
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+    list(APPEND KF4_GAME_FLAGS -fsanitize=integer-divide-by-zero -fsanitize-trap=integer-divide-by-zero)
+endif()
 # The game's threads run with denormals flushed (MXCSR's FTZ and DAZ, as the EE's FPU: port/platform/
 # fiber.c), which the compiler is told, or it may turn a test of a float's bits into a comparison with
 # 0.0 that a denormal then passes (clang does in newlib's sqrtf). Only the code that runs there.
@@ -317,6 +324,10 @@ if(NOT WIN32)
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(kf4_port PUBLIC Threads::Threads)
+# macOS: the Vulkan library Granite and SDL load (MoltenVK: port/platform/vulkan_library_macos.c, docs/port/MACOS.md)
+if(APPLE)
+    target_sources(kf4_port PRIVATE port/platform/vulkan_library_macos.c)
+endif()
 if(WIN32)
     target_link_libraries(kf4_port PUBLIC winmm pdh powrprof) # (pdh, powrprof: host_load.c)
 else()
@@ -447,14 +458,45 @@ if(KF4_USE_PARALLEL_GS AND EXISTS ${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Gr
     target_link_libraries(kf4_port PUBLIC kf4_pc)
     # Khronos's synchronization2 layer in vk_layers/ beside kf4, for a driver without VK_KHR_synchronization2, which
     # Granite cannot do without (port/gs/pc/pcr_sync2.h); built whenever kf4 is
-    include(cmake/vk_sync2_layer.cmake)
-    kf4_vk_sync2_layer(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
-    add_dependencies(kf4_pc kf4_vk_sync2_layer)
+    # (not on macOS: MoltenVK has VK_KHR_synchronization2 itself, and the layer is an ELF one)
+    if(NOT APPLE)
+        include(cmake/vk_sync2_layer.cmake)
+        kf4_vk_sync2_layer(${CMAKE_SOURCE_DIR}/third_party/parallel-gs/Granite/third_party/khronos/vulkan-headers/include)
+        add_dependencies(kf4_pc kf4_vk_sync2_layer)
+    endif()
     # the scene renderer (port/gs/scene/, docs/plans/scene-renderer-design.md: --renderer scene, developers' only), under
     # the PC renderer's shell
     file(GLOB KF4_SCENE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/scene/*.cpp)
     add_library(kf4_scene STATIC ${KF4_SCENE_SOURCES})
     target_include_directories(kf4_scene PRIVATE port/include PUBLIC port/gs/scene)
+    # macOS (docs/port/MACOS.md): the renderers' shaders made again with PCR_MOLTENVK (port/gs/pc/shaders/pcr_prim.h:
+    # around a bug in MoltenVK's SPIR-V to Metal), by tools/build_shaders.py into the build folder at build time, and
+    # taken instead of the committed pcr_shaders.h and scn_shaders.h (KF4_MACOS_SHADERS). Needs glslangValidator.
+    if(APPLE)
+        find_program(KF4_MACOS_GLSLANG glslangValidator)
+        if(NOT KF4_MACOS_GLSLANG)
+            message(FATAL_ERROR "macOS builds make the renderers' shaders (PCR_MOLTENVK): install glslangValidator "
+                                "(brew install glslang)")
+        endif()
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        file(GLOB KF4_SHADER_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/port/gs/pc/shaders/*
+             ${CMAKE_SOURCE_DIR}/port/gs/scene/shaders/* ${CMAKE_SOURCE_DIR}/port/render/shaders/*)
+        set(KF4_MACOS_SHADERS_DIR ${CMAKE_BINARY_DIR}/macos_shaders)
+        add_custom_command(OUTPUT ${KF4_MACOS_SHADERS_DIR}/pcr_shaders.h ${KF4_MACOS_SHADERS_DIR}/scn_shaders.h
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${KF4_MACOS_SHADERS_DIR}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/build_shaders.py --glslang ${KF4_MACOS_GLSLANG}
+                    --define PCR_MOLTENVK --pc-out ${KF4_MACOS_SHADERS_DIR}/pcr_shaders.h
+                    --scene-out ${KF4_MACOS_SHADERS_DIR}/scn_shaders.h
+            DEPENDS ${KF4_SHADER_SOURCES} ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
+            COMMENT "The renderers' shaders for macOS (PCR_MOLTENVK)")
+        add_custom_target(kf4_macos_shaders DEPENDS ${KF4_MACOS_SHADERS_DIR}/pcr_shaders.h
+                          ${KF4_MACOS_SHADERS_DIR}/scn_shaders.h)
+        foreach(target kf4_pc kf4_scene)
+            add_dependencies(${target} kf4_macos_shaders)
+            target_compile_definitions(${target} PRIVATE KF4_MACOS_SHADERS)
+            target_include_directories(${target} PRIVATE ${CMAKE_BINARY_DIR})
+        endforeach()
+    endif()
     target_link_libraries(kf4_scene PRIVATE parallel-gs kf4_pc kf4_pc_gif kf4_pc_textures kf4_profile)
     target_compile_options(kf4_scene PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
     set_target_properties(kf4_scene PROPERTIES CXX_STANDARD 20)
@@ -570,6 +612,24 @@ else()
             WORKING_DIRECTORY ${KF4_STAGE} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
         if(NOT rc EQUAL 0)
             message(FATAL_ERROR "patch ${patch} does not apply to decomp/ at its pin:\n${out}")
+        endif()
+    endforeach()
+endif()
+
+# macOS (docs/port/MACOS.md): a few of the game's globals name their ELF section (__attribute__((section(".bss"))),
+# kept from the decomp's matching); Mach-O names a segment and a section. The staging copy gets the Mach-O names
+# for them: .bss and .data in __DATA, .rodata in __DATA_CONST,__const (it holds pointers, which a
+# position-independent program relocates: __TEXT takes none). Elsewhere the copy is as the patches leave it.
+if(APPLE)
+    file(GLOB_RECURSE KF4_STAGED_C LIST_DIRECTORIES false ${KF4_STAGE}/src/*.c ${KF4_STAGE}/src/*.h)
+    foreach(file ${KF4_STAGED_C})
+        file(READ ${file} text)
+        string(FIND "${text}" "section(\"." at)
+        if(NOT at EQUAL -1)
+            string(REPLACE "section(\".bss\")" "section(\"__DATA,__bss\")" text "${text}")
+            string(REPLACE "section(\".data\")" "section(\"__DATA,__data\")" text "${text}")
+            string(REPLACE "section(\".rodata\")" "section(\"__DATA_CONST,__const\")" text "${text}")
+            file(WRITE ${file} "${text}")
         endif()
     endforeach()
 endif()
@@ -703,6 +763,9 @@ if(WIN32)
     set_source_files_properties(${CMAKE_BINARY_DIR}/holyland.rc PROPERTIES
         OBJECT_DEPENDS "${HOLYLAND_ICON};${HOLYLAND_MANIFEST}")
     target_link_options(kf4 PRIVATE -Wl,--disable-dynamicbase)
+elseif(APPLE)
+    # arm64 macOS links every program position independent, with ASLR: save states, which need the program at a
+    # fixed address, are off there (port/platform/savestate.c); quick saves work (docs/port/MACOS.md)
 else()
     target_link_options(kf4 PRIVATE -no-pie)
 endif()
@@ -758,6 +821,13 @@ if(TARGET kf4_gs)
     target_link_libraries(gsn_vram_test PRIVATE kf4_gs)
     if(KF4_TESTS)
         add_test(NAME gsn_vram COMMAND gsn_vram_test)
+        if(APPLE)
+            # (Granite finds no Vulkan library on macOS's search path: the loader's or MoltenVK's, Homebrew's)
+            find_library(KF4_MACOS_VULKAN NAMES vulkan.1 MoltenVK PATHS /opt/homebrew/lib /usr/local/lib)
+            if(KF4_MACOS_VULKAN)
+                set_tests_properties(gsn_vram PROPERTIES ENVIRONMENT GRANITE_VULKAN_LIBRARY=${KF4_MACOS_VULKAN})
+            endif()
+        endif()
         set_tests_properties(gsn_vram PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endif()

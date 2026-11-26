@@ -27,6 +27,12 @@
       "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++", "KF4_FRAME_POINTERS": "ON" }
     },
     {
+      "name": "macos-clang",
+      "displayName": "macOS (Apple Silicon), Apple's clang (docs/port/MACOS.md)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++", "KF4_FRAME_POINTERS": "ON" }
+    },
+    {
       "name": "release",
       "hidden": true,
       "cacheVariables": { "KF4_FRAME_POINTERS": "OFF", "KF4_LTO": "ON", "KF4_PLAYER_BUILD": "ON" }
@@ -45,6 +51,11 @@
       "name": "linux-clang-release",
       "displayName": "Linux, clang, release (LTO, no frame pointers)",
       "inherits": [ "release", "linux-clang" ]
+    },
+    {
+      "name": "macos-clang-release",
+      "displayName": "macOS (Apple Silicon), clang, release (LTO, no frame pointers)",
+      "inherits": [ "release", "macos-clang" ]
     }
   ],
   "buildPresets": [
@@ -53,6 +64,8 @@
     { "name": "linux-clang", "configurePreset": "linux-clang" },
     { "name": "windows-clang-release", "configurePreset": "windows-clang-release" },
     { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" },
-    { "name": "linux-clang-release", "configurePreset": "linux-clang-release" }
+    { "name": "linux-clang-release", "configurePreset": "linux-clang-release" },
+    { "name": "macos-clang", "configurePreset": "macos-clang" },
+    { "name": "macos-clang-release", "configurePreset": "macos-clang-release" }
   ]
 }

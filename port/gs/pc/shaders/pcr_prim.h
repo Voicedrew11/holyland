@@ -156,6 +156,17 @@ bool traced() {
     return pc.trace_xy != PCR_NO_TRACE && uvec2(gl_FragCoord.xy) == uvec2(pc.trace_xy & 0xFFFFu, pc.trace_xy >> 16);
 }
 
+// (PCR_MOLTENVK, the shaders as macOS's build makes them, docs/port/MACOS.md: MoltenVK's SPIR-V to Metal turns
+// gl_SampleMaskIn read in a function other than main() into Metal that does not compile (the function takes an array,
+// the call passes a number). main() reads it into pcr_sample_mask_in, and trace() reads that. Elsewhere the trace reads
+// gl_SampleMaskIn itself, as it always did.)
+#ifdef PCR_MOLTENVK
+uint pcr_sample_mask_in;
+#define PCR_SAMPLE_MASK_IN pcr_sample_mask_in
+#else
+#define PCR_SAMPLE_MASK_IN uint(gl_SampleMaskIn[0])
+#endif
+
 // (SCN_NO_TRACE, the scene renderer's shaders, which never trace: none, so that the shader writes no memory. One that
 // may write memory is shaded at every pixel its triangle covers, the GPU's early and hierarchical depth tests not let
 // cull it (RADV: LATE_Z, EXEC_ON_HIER_FAIL), unless it asks for its tests before it, which exact Z's depth written by
@@ -178,7 +189,7 @@ void trace(uint outcome, uvec4 c) {
     uint decal = (pc.flags & PCR_F_DECAL) != 0u ? 1u : 0u; // (marked)
     u_trace.rec[i * 3u] = uvec4(pc.trace_draw, uint(gl_PrimitiveID), floatBitsToUint(gl_FragCoord.z / pc.zscale),
                                 floatBitsToUint(trace_dz.x));
-    u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), uint(gl_SampleMaskIn[0]), uint(sample_id), rgba);
+    u_trace.rec[i * 3u + 1u] = uvec4(floatBitsToUint(trace_dz.y), PCR_SAMPLE_MASK_IN, uint(sample_id), rgba);
     u_trace.rec[i * 3u + 2u] = uvec4(pass | outcome << 4 | decal << 8, 0u, 0u, 0u);
 }
 
@@ -697,6 +708,9 @@ void pcr_shade() {
 #else
 void main() {
 #endif
+#if defined(PCR_MOLTENVK) && !(defined(PCR_RECORDS) && defined(PCR_DRAWS_APART))
+    pcr_sample_mask_in = uint(gl_SampleMaskIn[0]); // (main() itself: PCR_MOLTENVK above)
+#endif
 #ifdef PCR_RECORDS
     pcr_take_record();
 #endif
@@ -828,6 +842,9 @@ void main() {
 }
 #if defined(PCR_RECORDS) && defined(PCR_DRAWS_APART)
 void main() {
+#ifdef PCR_MOLTENVK
+    pcr_sample_mask_in = uint(gl_SampleMaskIn[0]); // (PCR_MOLTENVK above)
+#endif
     PCR_EACH_RECORD(pcr_shade());
 }
 #endif

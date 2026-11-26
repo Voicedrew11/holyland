@@ -7,7 +7,11 @@
 #include <vector>
 
 #include "pcr_gpu_time.h"
+#ifdef KF4_MACOS_SHADERS // (macOS: the shaders made with PCR_MOLTENVK in the build folder, docs/port/MACOS.md)
+#include "macos_shaders/pcr_shaders.h"
+#else
 #include "pcr_shaders.h"
+#endif
 
 namespace pcr {
 
