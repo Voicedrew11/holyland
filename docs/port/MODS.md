@@ -6,7 +6,10 @@ of the disc's. Nothing on the disc changes, and taking a mod's folder away puts 
 ## Where
 
 `<data folder>/mods/` (on Windows `%APPDATA%\holyland\mods\`, on Linux `~/.local/share/holyland/mods/`),
-or the folder given with `--mods DIR`. `--mods none` turns mods off for a run.
+or the folder given with `--mods DIR`. `--mods none` turns mods off for a run. A scripted run
+(`--headless` or `--input`) has no mods unless `--mods DIR` names a folder, the way it reads no `settings.json`, so
+tests and picture comparisons play the disc as it is; `KF4_READ_SETTINGS=1` (or `KF4_OVERLAY_SHOT`) reads the data
+folder's mods too.
 
 Each folder inside is one mod. They are applied in name order, so where two mods change the same thing the later
 one wins. A folder whose name starts with `.` or `_` is skipped: rename `kf4-retranslation` to

@@ -180,7 +180,8 @@
                          and exit; a save is never replaced (no --disc needed). The first-start
                          setup's Emulator Saves page does the same.
        --mods DIR        the folder of mods: replacement game files and text, one folder each (by default
-                         mods in the data folder; port/include/port/mods.h); "none": no mods
+                         mods in the data folder; port/include/port/mods.h); "none": no mods. A run with
+                         --headless or --input has none unless --mods names a folder (or KF4_READ_SETTINGS=1)
        --record-input F  write what the pad and keyboard send as a pad script, to replay with --input
                          with the turns mouse look, the run key and twin-stick give the game (the
                          sound follows the game's clock); replay from the same start: --clock,
@@ -1173,6 +1174,12 @@ int main(int argc, char **argv) {
 #endif
     port_int_divide_init(); /* INT_MIN / -1 as the EE gives it */
     data_dir_move_old_folders(data_dir_this_system(), read_env); /* from the old name, darker-reality, before any use */
+    if (port_options.mods == NULL && (port_options.headless || port_options.input != NULL) &&
+        getenv("KF4_READ_SETTINGS") == NULL && getenv("KF4_OVERLAY_SHOT") == NULL) {
+        /* a scripted run (a pad script, or headless) has no mods unless --mods names a folder, as it reads no
+           settings.json (port/overlay/settings.c): the tests and picture comparisons play the disc as it is */
+        port_options.mods = "none";
+    }
     port_mods_scan(port_options.mods); /* the mods' mod.json: their keys named before the bindings are read */
     port_settings_load(); /* settings.json, where the command line left an option alone */
     if (import_card != NULL) {
