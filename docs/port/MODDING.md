@@ -134,7 +134,7 @@ sandbox it. What Holyland does instead:
   with the save.
 - **A crash in a plugin** ends the game like any crash. The crash report does not name the mod, and a plugin that
   crashes is not turned off for the next start.
-- **The hookable list** starts small (`Input_Update`, for the example). It grows as mods ask for functions.
+- **The hookable list** starts with the example's `Input_Update` and the Journal's five; it grows as mods ask.
 - **Scripting** (Lua) is not part of API 1; it could be added on top of the same API (see the pull request that added
   this).
 

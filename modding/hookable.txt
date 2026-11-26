@@ -7,3 +7,12 @@
 
 # core: the game's reading of the pad, once each game frame (input/input.c)
 void Input_Update(void)
+
+# combat and deaths (the Journal mod: kills and hits; player/attack.c, entity/entity_events.c)
+void Attack_HitPlayer(Unk1B1470Request *request, Unk1B1470Extra *extra)
+void Attack_HitEntity(Unk1B1470Request *request, Unk1B1470Extra *extra, Entity *entity, f32 scale)
+void EntityEvent_OnDeath(Entity *entity)
+
+# items dropped (the Journal mod; item/map_item.c)
+s32 MapItem_DropFromEnemy(Entity *entity)
+s32 MapItem_Drop(s32 map, s32 item, s32 priority, f32 *position, f32 floor_y, f32 *offset, f32 *rotation, f32 *scale, u32 order)
